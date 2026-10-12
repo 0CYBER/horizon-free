@@ -88,6 +88,8 @@ pub enum LookKind {
     SmoothSwimming(f32),
     /// Look controls that never reset pitch (e.g. ghasts keep their own).
     Fixed,
+    /// `HappyGhast.HappyGhastLookControl`.
+    HappyGhast,
 }
 #[derive(Clone, Debug, Default)]
 pub struct LookControl {
@@ -307,8 +309,12 @@ impl Mob {
     /// LookControl.tick (and SmoothSwimmingLookControl).
     pub fn look_control_tick(&mut self) {
         let look = self.ai.look.clone();
+        if look.kind == LookKind::HappyGhast {
+            return super::happy_ghast::look_control(self);
+        }
         let (x_d, y_d) = self.look_angles(look.wanted);
         match look.kind {
+            LookKind::HappyGhast => {}
             LookKind::SmoothSwimming(max) => {
                 if look.cooldown > 0 {
                     self.ai.look.cooldown -= 1;

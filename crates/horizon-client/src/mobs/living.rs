@@ -92,6 +92,22 @@ impl MobWorld<'_> {
         out.eye_in_water = fluid == Fluid::Water && eye_y < f64::from(ey) + h + 0.111_111_11;
         out
     }
+    /// `BlockState.getCollisionShape(level, pos)` (the empty collision
+    /// context) as boxes in the world.
+    pub fn block_collision_boxes(&self, x: i32, y: i32, z: i32) -> Vec<Aabb> {
+        let mut scene = SceneCollisions {
+            world: self.world,
+            binding: self.collision,
+        };
+        let state = self.world.block(x, y, z);
+        let at = horizon_core::position::BlockPos::new(x, y, z);
+        let context = horizon_world::collision_context::CollisionContext::empty(false);
+        let offset = Vec3::new(f64::from(x), f64::from(y), f64::from(z));
+        self.collision
+            .collision_shape_with_context(&mut scene, state, at, &context)
+            .map(|shape| shape.boxes().iter().map(|b| b.move_by(offset)).collect())
+            .unwrap_or_default()
+    }
     pub fn no_collision(&self, b: Aabb) -> bool {
         let mut scene = SceneCollisions {
             world: self.world,
@@ -380,14 +396,21 @@ impl Mob {
             self.travel_in_air(w, input, events);
         }
     }
-    /// LivingEntity.travelFlying (ghast 0.02, phantom 0.2): no gravity, 0.91 drag.
+    /// LivingEntity.travelFlying: no gravity, `0.91F` drag in the air,
+    /// `0.8F` in water and 0.5 in lava. A happy ghast swims as fast as it
+    /// flies (`HappyGhast.travel`); the others at 0.02.
     fn travel_flying(&mut self, w: &MobWorld, input: Vec3, events: &mut Vec<MobEvent>) {
-        let (speed, drag) = if self.fluids.in_water {
-            (0.02, 0.8)
-        } else if self.fluids.in_lava {
-            (0.02, 0.5)
+        let fluid_speed = if self.species() == super::Species::HappyGhast {
+            self.kind.air_speed
         } else {
-            (self.kind.air_speed, 0.91)
+            0.02
+        };
+        let (speed, drag) = if self.fluids.in_water {
+            (fluid_speed, f64::from(0.8_f32))
+        } else if self.fluids.in_lava {
+            (fluid_speed, 0.5)
+        } else {
+            (self.kind.air_speed, f64::from(0.91_f32))
         };
         self.move_relative(speed, input);
         self.do_move(w, events);

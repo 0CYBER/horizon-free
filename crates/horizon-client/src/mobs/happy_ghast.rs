@@ -5,7 +5,7 @@
 use super::{
     Mob, MobEvent, MobWorld,
     anim::{Poses, State},
-    control::{MoveKind, Operation},
+    control::{LookKind, MoveKind, Operation},
     goals::{Cx, Float, Goal, LOOK, MOVE, goal_clone},
     nav::NavKind,
 };
@@ -35,6 +35,7 @@ fn setup(m: &mut Mob, baby: bool) {
     m.ai.nav.stop();
     m.ai.mov.operation = Operation::Wait;
     if baby {
+        m.ai.look.kind = LookKind::Default;
         m.ai.mov.kind = MoveKind::Flying {
             max_turn: 180.0,
             hovers: true,
@@ -50,8 +51,9 @@ fn setup(m: &mut Mob, baby: bool) {
     }
     m.ai.mov.kind = MoveKind::Custom;
     m.ai.nav.kind = NavKind::Ground;
+    m.ai.look.kind = LookKind::HappyGhast;
     let g = &mut m.ai.goals;
-    g.add(3, Float);
+    g.add(3, HappyGhastFloat);
     g.add(4, GhastTempt::default());
     g.add(5, FloatAround { blocks: 16 });
 }
@@ -81,58 +83,233 @@ fn within_home(m: &Mob, p: Vec3) -> bool {
     );
     dx * dx + dy * dy + dz * dz < r * r
 }
-/// `Ghast.GhastMoveControl` with the careful block checks: a push toward
-/// the wanted point every few ticks while the way is clear.
+/// `isOnStillTimeout`: a player standing on it (or just off it) holds it
+/// still (`serverStillTimeout`, kept in `counter`).
+pub fn on_still_timeout(m: &Mob) -> bool {
+    !m.is_baby() && m.extra.counter > 0
+}
+/// `Mob.stopInPlace`.
+fn stop_in_place(m: &mut Mob) {
+    m.ai.nav.stop();
+    m.ai.xxa = 0.0;
+    m.ai.yya = 0.0;
+    m.ai.zza = 0.0;
+    m.ai.speed = 0.0;
+    m.velocity = Vec3::ZERO;
+}
+/// `Ghast.GhastMoveControl(careful)`: held still on a still timeout, else
+/// a push toward the wanted point every 2 to 6 ticks while the way there
+/// is clear.
 pub fn move_control(m: &mut Mob, w: &MobWorld) {
+    if on_still_timeout(m) {
+        m.ai.mov.operation = Operation::Wait;
+        stop_in_place(m);
+    }
     if m.ai.mov.operation != Operation::MoveTo {
         return;
     }
+    // floatDuration-- <= 0
+    let duration = m.extra.counter2;
     m.extra.counter2 -= 1;
-    if m.extra.counter2 > 0 {
+    if duration > 0 {
         return;
     }
     m.extra.counter2 += m.random.next_int_bound(5).unwrap_or(0) + 2;
     let [wx, wy, wz] = m.ai.mov.wanted;
     let travel = Vec3::new(wx - m.position.x, wy - m.position.y, wz - m.position.z);
-    let len = travel.length();
-    if len < 1.0e-6 {
-        return;
-    }
-    let b = m.bounds();
-    let steps = len.ceil() as i32;
-    let clear = (1..=steps).all(|i| {
-        let f = f64::from(i) / f64::from(steps);
-        let d = Vec3::new(travel.x * f, travel.y * f, travel.z * f);
-        let at = Aabb::new(
-            b.min_position().add_vector(d),
-            b.max_position().add_vector(d),
-        );
-        w.no_collision(at) && !touches_fluid(w, at)
-    });
-    if clear {
-        let speed = AIR_SPEED;
-        m.velocity = m.velocity.add_vector(Vec3::new(
-            travel.x / len * f64::from(speed),
-            travel.y / len * f64::from(speed),
-            travel.z / len * f64::from(speed),
-        ));
+    if can_reach(m, w, travel) {
+        // travel.normalize().scale(FLYING_SPEED * 5 / 3)
+        let len = (travel.x * travel.x + travel.y * travel.y + travel.z * travel.z).sqrt();
+        let unit = if len < f64::from(1.0e-5_f32) {
+            Vec3::ZERO
+        } else {
+            Vec3::new(travel.x / len, travel.y / len, travel.z / len)
+        };
+        let speed = FLYING_SPEED * 5.0 / 3.0;
+        m.velocity =
+            m.velocity
+                .add_vector(Vec3::new(unit.x * speed, unit.y * speed, unit.z * speed));
     } else {
         m.ai.mov.operation = Operation::Wait;
     }
 }
-/// A careful ghast does not float into water or lava.
-fn touches_fluid(w: &MobWorld, b: Aabb) -> bool {
-    let (lo, hi) = (b.min_position(), b.max_position());
+/// `EntityDimensions.makeBoundingBox` at another position.
+fn bounds_at(m: &Mob, p: Vec3) -> Aabb {
+    let half = f64::from(m.width()) / 2.0;
+    let h = f64::from(m.height());
+    Aabb::new(
+        Vec3::new(p.x - half, p.y, p.z - half),
+        Vec3::new(p.x + half, p.y + h, p.z + half),
+    )
+}
+/// `GhastMoveControl.canReach`: every block around the destination box can
+/// be crossed, and so can every block the box sweeps through on the way.
+fn can_reach(m: &Mob, w: &MobWorld, travel: Vec3) -> bool {
+    let aabb = m.bounds();
+    let dest = aabb.move_by(travel);
+    let around = dest.inflate(Vec3::new(1.0, 1.0, 1.0));
+    let (lo, hi) = (around.min_position(), around.max_position());
     for x in lo.x.floor() as i32..=hi.x.floor() as i32 {
         for y in lo.y.floor() as i32..=hi.y.floor() as i32 {
             for z in lo.z.floor() as i32..=hi.z.floor() as i32 {
-                if w.fluid(x, y, z) != crate::blocks::Fluid::None {
-                    return true;
+                if !traversal_possible(m, w, None, [x, y, z], false, false) {
+                    return false;
                 }
             }
         }
     }
-    false
+    let (water, lava) = (m.fluids.in_water, m.fluids.in_lava);
+    let start = m.position;
+    let end = start.add_vector(travel);
+    horizon_core::geometry::sweep_intersected_blocks(start, end, dest, 1 << 22, |p, _| {
+        let at = [p.x, p.y, p.z];
+        let unit = Aabb::new(
+            Vec3::new(f64::from(at[0]), f64::from(at[1]), f64::from(at[2])),
+            Vec3::new(
+                f64::from(at[0]) + 1.0,
+                f64::from(at[1]) + 1.0,
+                f64::from(at[2]) + 1.0,
+            ),
+        );
+        aabb.intersects(unit) || traversal_possible(m, w, Some((start, end)), at, water, lava)
+    })
+    .unwrap_or(false)
+}
+/// `GhastMoveControl.blockTraversalPossible` for a careful ghast: air, or no
+/// collision (along the way when `along` is given), never a
+/// `#happy_ghast_avoids` block, and a fluid only where the ghast already is.
+fn traversal_possible(
+    m: &Mob,
+    w: &MobWorld,
+    along: Option<(Vec3, Vec3)>,
+    p: [i32; 3],
+    through_water: bool,
+    through_lava: bool,
+) -> bool {
+    let state = w.world.block(p[0], p[1], p[2]);
+    if w.facts.is_air(state) {
+        return true;
+    }
+    let boxes = w.block_collision_boxes(p[0], p[1], p[2]);
+    let no_collisions = match along {
+        Some((from, to)) => !bounds_at(m, from).collided_along_vector(to.subtract(from), &boxes),
+        None => boxes.is_empty(),
+    };
+    if w.has_tag(
+        "minecraft:happy_ghast_avoids",
+        w.block_name(p[0], p[1], p[2]),
+    ) {
+        return false;
+    }
+    let (fluid, height) = w.fluid_height(p[0], p[1], p[2]);
+    if fluid != crate::blocks::Fluid::None {
+        let collided = match along {
+            None => true,
+            // collidedWithFluid: the fluid's own height.
+            Some((from, to)) => {
+                let fluid_box = Aabb::new(
+                    Vec3::new(f64::from(p[0]), f64::from(p[1]), f64::from(p[2])),
+                    Vec3::new(
+                        f64::from(p[0]) + 1.0,
+                        f64::from(p[1]) + height,
+                        f64::from(p[2]) + 1.0,
+                    ),
+                );
+                bounds_at(m, from).collided_along_vector(to.subtract(from), &[fluid_box])
+            }
+        };
+        if collided {
+            return match fluid {
+                crate::blocks::Fluid::Water => through_water,
+                _ => through_lava,
+            };
+        }
+    }
+    no_collisions
+}
+/// `HappyGhast.HappyGhastLookControl`: square to the world on a still
+/// timeout, face what it looks at, else face its motion
+/// (`Ghast.faceMovementDirection`).
+pub fn look_control(m: &mut Mob) {
+    use horizon_core::geometry::trig;
+    let to_deg = 180.0_f32 / std::f32::consts::PI;
+    if on_still_timeout(m) {
+        // Mth.wrapDegrees90
+        let mut close = m.yaw % 90.0;
+        if close >= 45.0 {
+            close -= 90.0;
+        }
+        if close < -45.0 {
+            close += 90.0;
+        }
+        m.yaw -= close;
+        m.head_yaw = m.yaw;
+    } else if m.ai.look.cooldown > 0 {
+        m.ai.look.cooldown -= 1;
+        let [wx, _, wz] = m.ai.look.wanted;
+        m.yaw = -(trig::atan2(wx - m.position.x, wz - m.position.z) as f32) * to_deg;
+        m.body_yaw = m.yaw;
+        m.head_yaw = m.body_yaw;
+    } else if m.ai.target.is_none() {
+        let v = m.velocity;
+        m.yaw = -(trig::atan2(v.x, v.z) as f32) * to_deg;
+        m.body_yaw = m.yaw;
+    }
+}
+/// `HappyGhast.tick`'s still timeout: it runs out (after the first three
+/// seconds) unless a player stands on top (`scanPlayerAboveGhast`).
+pub fn still_tick(m: &mut Mob, w: &MobWorld) {
+    if m.is_baby() {
+        m.extra.counter = 0;
+        return;
+    }
+    if m.extra.counter > 0 && m.age > 60 {
+        m.extra.counter -= 1;
+    }
+    if player_above(m, w) {
+        m.extra.counter = 10;
+    }
+}
+/// `scanPlayerAboveGhast`: a player (not one riding a happy ghast) within
+/// a block around the top, up to half the ghast's height above it.
+pub fn player_above(m: &Mob, w: &MobWorld) -> bool {
+    let Some(p) = w.player.as_ref().filter(|p| !p.spectator) else {
+        return false;
+    };
+    if m.rider.is_some() {
+        return false;
+    }
+    let b = m.bounds();
+    let (lo, hi) = (b.min_position(), b.max_position());
+    let area = Aabb::new(
+        Vec3::new(lo.x - 1.0, hi.y - f64::from(1.0e-5_f32), lo.z - 1.0),
+        Vec3::new(hi.x + 1.0, hi.y + (hi.y - lo.y) / 2.0, hi.z + 1.0),
+    );
+    area.contains(p.position)
+}
+/// `HappyGhastFloatGoal`: a `FloatGoal` off a still timeout.
+#[derive(Clone, Debug)]
+struct HappyGhastFloat;
+impl Goal for HappyGhastFloat {
+    goal_clone!();
+    fn name(&self) -> &'static str {
+        "HappyGhastFloatGoal"
+    }
+    fn flags(&self) -> u8 {
+        Float.flags()
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        !on_still_timeout(m) && Float.can_use(m, cx)
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        Float.can_use(m, cx)
+    }
+    fn every_tick(&self) -> bool {
+        true
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        Float.tick(m, cx)
+    }
 }
 /// `TemptGoal.ForNonPathfinders`: drift toward a player holding food, or
 /// food and harnesses for a bare adult.
@@ -149,6 +326,9 @@ impl GhastTempt {
 }
 impl Goal for GhastTempt {
     goal_clone!();
+    fn name(&self) -> &'static str {
+        "ForNonPathfinders"
+    }
     fn flags(&self) -> u8 {
         MOVE | LOOK
     }
@@ -225,6 +405,9 @@ impl FloatAround {
 }
 impl Goal for FloatAround {
     goal_clone!();
+    fn name(&self) -> &'static str {
+        "RandomFloatAroundGoal"
+    }
     fn flags(&self) -> u8 {
         MOVE
     }
@@ -240,34 +423,35 @@ impl Goal for FloatAround {
     fn can_continue(&mut self, _: &mut Mob, _: &mut Cx) -> bool {
         false
     }
+    /// `getSuitableFlyToPosition`: the first of 64 random points within 16
+    /// blocks (and home) that is good; failing that, the last point, kept
+    /// below the motion-blocking surface.
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         let c = m.position;
-        let mut result: Option<Vec3> = None;
-        for _ in 0..64 {
-            let r = &mut m.random;
-            let t = Vec3::new(
-                c.x + f64::from(r.next_float() * 2.0 - 1.0) * 16.0,
-                c.y + f64::from(r.next_float() * 2.0 - 1.0) * 16.0,
-                c.z + f64::from(r.next_float() * 2.0 - 1.0) * 16.0,
-            );
-            result = Some(t);
-            if within_home(m, t) && self.good(cx.w, t) {
-                break;
-            }
-            result = None;
-        }
-        let mut t = result.unwrap_or_else(|| {
+        let choose = |m: &mut Mob| {
             let r = &mut m.random;
             Vec3::new(
-                c.x + f64::from(r.next_float() * 2.0 - 1.0) * 16.0,
-                c.y + f64::from(r.next_float() * 2.0 - 1.0) * 16.0,
-                c.z + f64::from(r.next_float() * 2.0 - 1.0) * 16.0,
+                c.x + f64::from((r.next_float() * 2.0 - 1.0) * 16.0),
+                c.y + f64::from((r.next_float() * 2.0 - 1.0) * 16.0),
+                c.z + f64::from((r.next_float() * 2.0 - 1.0) * 16.0),
             )
-        });
+        };
+        let mut result: Option<Vec3> = None;
+        for _ in 0..64 {
+            let t = choose(m);
+            result = within_home(m, t).then_some(t);
+            if let Some(t) = result
+                && self.good(cx.w, t)
+            {
+                m.ai.mov.set_wanted(t.x, t.y, t.z, 1.0);
+                return;
+            }
+        }
+        let mut t = result.unwrap_or_else(|| choose(m));
         let top =
             cx.w.motion_blocking_height(t.x.floor() as i32, t.z.floor() as i32);
         if top < t.y.floor() as i32 && top > crate::chunk::MIN_Y {
-            t.y = c.y - (c.y - t.y).abs();
+            t.y = m.position.y - (m.position.y - t.y).abs();
         }
         m.ai.mov.set_wanted(t.x, t.y, t.z, 1.0);
     }
@@ -302,13 +486,17 @@ pub fn ridden(m: &mut Mob) {
     m.ai.zza = forward * scale;
     m.ai.mov.operation = Operation::Wait;
 }
-/// `HappyGhast.aiStep`, `tick` and `checkRestriction`: the adult/baby
-/// setup at the age boundary, the home, face-the-motion and slow healing.
-pub fn ai_step(m: &mut Mob, w: &MobWorld) {
+/// The adult or ghastling setup for its age (`ageBoundaryReached`).
+pub fn ensure_setup(m: &mut Mob) {
     let baby = m.is_baby();
     if m.extra.scratch[0] != if baby { 1 } else { 2 } {
         setup(m, baby);
     }
+}
+/// `HappyGhast.aiStep`, `tick` and `checkRestriction`: the adult/baby
+/// setup at the age boundary, the home, face-the-motion and slow healing.
+pub fn ai_step(m: &mut Mob, w: &MobWorld) {
+    ensure_setup(m);
     // checkRestriction.
     if m.extra.leash.is_none() && m.rider.is_none() {
         let radius = restriction_radius(m);
@@ -330,15 +518,6 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld) {
             m.extra.ints[4] = radius;
         }
     }
-    // LookControl: face where it is going.
-    if !baby && m.rider.is_none() {
-        let v = m.velocity;
-        if m.ai.target.is_none() && v.x * v.x + v.z * v.z > 1.0e-6 {
-            m.yaw = -(v.x.atan2(v.z) as f32).to_degrees();
-            m.body_yaw = m.yaw;
-            m.head_yaw = m.yaw;
-        }
-    }
     // continuousHeal: a point every 30 seconds, every second in rain.
     if m.alive() && m.death_time == 0 && m.health < m.attrs.max_health {
         let (x, y, z) = (
@@ -352,6 +531,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld) {
             m.health = (m.health + 1.0).min(m.attrs.max_health);
         }
     }
+    still_tick(m, w);
 }
 /// Sounds: the ghastling has its own.
 pub fn sounds(m: &Mob) -> [&'static str; 3] {

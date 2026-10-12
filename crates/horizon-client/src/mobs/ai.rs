@@ -591,6 +591,10 @@ fn server_ai_step(
     events: &mut Vec<MobEvent>,
 ) {
     m.ai.no_action_time += 1;
+    // A happy ghast set up for its age (ageBoundaryReached runs at once).
+    if m.species() == Species::HappyGhast {
+        super::happy_ghast::ensure_setup(m);
+    }
     // A creaking looked at stands still.
     if super::creaking::is_creaking(m) && !super::creaking::can_move(m) {
         return;
@@ -799,6 +803,17 @@ pub fn walk_target_value(m: &Mob, w: &MobWorld, p: [i32; 3]) -> f32 {
     // Guardian.getWalkTargetValue: water first.
     if family(m.species()) == Family::Guardian && w.fluid(p[0], p[1], p[2]) == Fluid::Water {
         return 10.0 + light();
+    }
+    // HappyGhast.getWalkTargetValue: open air, best just above the ground.
+    if m.species() == Species::HappyGhast {
+        let air = |y: i32| w.facts.is_air(w.world.block(p[0], y, p[2]));
+        return if !air(p[1]) {
+            0.0
+        } else if air(p[1] - 1) && !air(p[1] - 2) {
+            10.0
+        } else {
+            5.0
+        };
     }
     // AbstractNautilus.getWalkTargetValue: everywhere alike.
     if matches!(m.species(), Species::Nautilus | Species::ZombieNautilus) {
