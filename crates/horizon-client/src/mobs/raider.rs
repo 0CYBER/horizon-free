@@ -42,6 +42,31 @@ pub struct State {
     pub homes: Option<std::sync::Arc<Vec<[i32; 3]>>>,
     /// A ravager carrying a raider, set every tick from `Extra::rider`.
     pub rider: bool,
+    /// The raid counts this raider (`addWaveMob` ran since it joined or was
+    /// loaded with its `RaidId`).
+    pub registered: bool,
+    /// `Raider.hurtServer` updates the raid's bar before the damage lands:
+    /// when it was last hurt (see [`next_hurt_seq`]) and its health then.
+    pub hurt_seq: u64,
+    pub pre_hurt_health: f32,
+}
+
+static HURT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// A counter ordering the hurts of raiders across the game.
+pub fn next_hurt_seq() -> u64 {
+    HURT_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
+}
+/// `Raider.hurtServer`: a raider in an active raid asks its raid to update
+/// the bar with the health it has before this hit.
+pub fn note_hurt(m: &mut Mob) {
+    let health = m.health;
+    if let Some(s) = m.extra.raider.as_deref_mut()
+        && s.raid_id.is_some()
+        && s.active_raid
+    {
+        s.hurt_seq = next_hurt_seq();
+        s.pre_hurt_health = health;
+    }
 }
 impl State {
     /// A ravager carrying a raider (`hasControllingPassenger`).

@@ -7,7 +7,6 @@ use horizon_client::{
     advancements as adv,
     containers::Crafter,
     hud::{HudBatch, rgba},
-    particles::{ParticleOptions, ParticleType},
 };
 use serde_json::Value;
 
@@ -67,6 +66,8 @@ impl Game<'_> {
             .filter(|(_, e)| matches!(e, BlockEntity::Crafter(_)))
             .map(|(p, _)| *p)
             .collect();
+        let mut positions = positions;
+        positions.sort_unstable();
         for pos in positions {
             let state = self.world.block(pos.0, pos.1, pos.2);
             let triggered = self.containers().prop(state, "triggered") == Some("true");
@@ -101,6 +102,7 @@ impl Game<'_> {
             return Ok(());
         };
         let grid: Vec<Option<ItemStack>> = crafter.items.to_vec();
+        // RecipeCache.get: the first crafting recipe that matches, assembled.
         let found = self
             .res
             .recipes
@@ -108,9 +110,7 @@ impl Game<'_> {
             .map(|(name, result)| (name.to_owned(), result))
             .filter(|(_, result)| result.count > 0);
         let Some((recipe, result)) = found else {
-            // LevelEvent 1050: CRAFTER_FAIL.
-            self.audio
-                .play("minecraft:block.crafter.fail", Some(center(key)), 1.0, 1.0);
+            self.dispenser_event(1050, key, 0);
             return Ok(());
         };
         let Some(facing) = self
@@ -130,6 +130,7 @@ impl Game<'_> {
             true,
             horizon_world::level::flags::UPDATE_CLIENTS,
         );
+        // The remainders come from the grid as it was before anything moved.
         let remainders = self.res.recipes.remainders(&recipe, &grid, 3);
         self.crafter_eject(key, facing, result, &recipe);
         for rest in remainders.into_iter().flatten() {
@@ -184,38 +185,6 @@ impl Game<'_> {
             return;
         }
         self.spawn_dispensed(pos, facing, rest, 6);
-        // LevelEvent 1049 (CRAFTER_CRAFT) and 2010 (white smoke shot out the front).
-        self.audio
-            .play("minecraft:block.crafter.craft", Some(center(pos)), 1.0, 1.0);
-        let s = step(facing);
-        for _ in 0..10 {
-            let r = &mut self.world.random;
-            let pow = r.next_double() * 0.2 + 0.01;
-            let at = [
-                f64::from(pos.0)
-                    + f64::from(s[0]) * 0.6
-                    + 0.5
-                    + f64::from(s[0]) * 0.01
-                    + (r.next_double() - 0.5) * f64::from(s[2]) * 0.5,
-                f64::from(pos.1)
-                    + f64::from(s[1]) * 0.6
-                    + 0.5
-                    + f64::from(s[1]) * 0.01
-                    + (r.next_double() - 0.5) * f64::from(s[1]) * 0.5,
-                f64::from(pos.2)
-                    + f64::from(s[2]) * 0.6
-                    + 0.5
-                    + f64::from(s[2]) * 0.01
-                    + (r.next_double() - 0.5) * f64::from(s[0]) * 0.5,
-            ];
-            let v = [
-                f64::from(s[0]) * pow + r.next_gaussian() * 0.01,
-                f64::from(s[1]) * pow + r.next_gaussian() * 0.01,
-                f64::from(s[2]) * pow + r.next_gaussian() * 0.01,
-            ];
-            self.particles
-                .add(&ParticleOptions::simple(ParticleType::WhiteSmoke), at, v);
-        }
         // CrafterRecipeCraftedTrigger for players within the 17-block box.
         let near = self.eye_position().is_some_and(|e| {
             let c = center(pos);
@@ -234,6 +203,8 @@ impl Game<'_> {
                 adv::conditions(&c["player"], &ctx, w) && recipe_matches(&c["recipes"], &id)
             });
         }
+        self.dispenser_event(1049, pos, 0);
+        self.dispenser_event(2010, pos, facing as i32);
     }
 
     // ---- the menu ----
@@ -261,57 +232,42 @@ impl Game<'_> {
             _ => None,
         }
     }
-    /// `CrafterScreen`'s background, title, disabled slots and powered arrow.
+    /// `CrafterScreen`'s background, disabled slots and powered arrow (the
+    /// verified `screen_layout::crafter`) and its centred title.
     pub(in crate::game) fn draw_crafter_screen(&self, batch: &mut HudBatch, ox: f32, oy: f32) {
         let Some(c) = self.container.and_then(|k| self.crafter_at(k)) else {
             return;
         };
+        let powered = self
+            .container
+            .map(|k| self.world.block(k.0, k.1, k.2))
+            .is_some_and(|state| self.containers().prop(state, "triggered") == Some("true"));
+        let draws =
+            horizon_client::screen_layout::crafter(&horizon_client::screen_layout::CrafterView {
+                width: 176,
+                height: 166,
+                left: 0,
+                top: 0,
+                disabled: c.disabled,
+                powered,
+            });
+        // The background goes first, then the labels, then the slot decorations.
+        let (background, rest) = draws.split_at(2.min(draws.len()));
+        self.paint_screen(batch, ox, oy, background, true);
         let atlas = &self.res.atlas;
-        batch.sprite_region(
-            atlas,
-            "gui/container/crafter",
-            [ox, oy, 176.0, 166.0],
-            256.0,
-            256.0,
-        );
         let grey = rgba(64, 64, 64, 255);
         let title = self.container_title(self.translate("container.crafter", "Crafter"));
         let tw = HudBatch::text_width(atlas, &title);
         batch.text(
             atlas,
             &title,
-            ox + (176.0 - tw) / 2.0,
+            ox + ((176.0 - tw) / 2.0).trunc(),
             oy + 6.0,
             grey,
             false,
         );
         batch.text(atlas, "Inventory", ox + 8.0, oy + 72.0, grey, false);
-        for slot in 0..9 {
-            if c.disabled[slot] {
-                let (x, y) = self.crafter_slot_position(300 + slot).unwrap_or_default();
-                batch.sprite(
-                    atlas,
-                    "gui/sprites/container/crafter/disabled_slot",
-                    ox + x - 1.0,
-                    oy + y - 1.0,
-                );
-            }
-        }
-        let powered = self
-            .container
-            .map(|k| self.world.block(k.0, k.1, k.2))
-            .is_some_and(|state| self.containers().prop(state, "triggered") == Some("true"));
-        let arrow = if powered {
-            "powered_redstone"
-        } else {
-            "unpowered_redstone"
-        };
-        batch.sprite(
-            atlas,
-            &format!("gui/sprites/container/crafter/{arrow}"),
-            ox + 97.0,
-            oy + 35.0,
-        );
+        self.paint_screen(batch, ox, oy, rest, true);
     }
     /// `gui.togglable_slot` over an empty, enabled grid slot.
     pub(in crate::game) fn crafter_tooltip(&self, slot: usize) -> Option<String> {
@@ -320,64 +276,67 @@ impl Game<'_> {
         (self.carried.is_none() && c.items[i].is_none() && !c.disabled[i] && !self.spectator())
             .then(|| self.translate("gui.togglable_slot", "Click to disable slot"))
     }
-    /// A click in the crafter menu before the generic handling; true when
-    /// it was fully handled (the result, shift-clicks).
-    pub(in crate::game) fn crafter_click(&mut self, slot: usize, shift: bool) -> bool {
+    /// A click in the crafter menu: `CrafterMenu` on the verified menu engine.
+    pub(in crate::game) fn crafter_click(&mut self, slot: usize, shift: bool, right: bool) -> bool {
         if !self.crafter_open() {
             return false;
         }
-        if slot == RESULT_SLOT {
-            return true;
-        }
-        if (300..309).contains(&slot) {
-            // CrafterScreen.slotClicked: toggle an empty slot.
-            let i = slot - 300;
-            if !shift && !self.spectator() && self.slot_mut(slot).is_none() {
-                let carried_empty = self.carried.is_none();
-                let key = self.container;
-                let mut toggled = None;
-                if let Some(BlockEntity::Crafter(c)) =
-                    key.and_then(|k| self.world.block_entities.get_mut(&k))
-                {
-                    if c.disabled[i] {
-                        c.set_slot_state(i, true);
-                        toggled = Some(true);
-                    } else if carried_empty {
-                        c.set_slot_state(i, false);
-                        toggled = Some(false);
-                    }
-                }
-                if let Some(enabled) = toggled {
-                    let pitch = if enabled { 1.0 } else { 0.75 };
-                    self.audio
-                        .play("minecraft:ui.button.click", None, 0.4, pitch);
-                }
-            }
-        }
-        if shift {
-            self.crafter_quick_move(slot);
-            return true;
-        }
-        false
+        let input = if shift {
+            horizon_client::menu::Input::QuickMove
+        } else {
+            horizon_client::menu::Input::Pickup
+        };
+        self.menu_click(Some(slot), i32::from(right), input);
+        true
     }
-    /// `CrafterMenu.quickMoveStack`.
-    fn crafter_quick_move(&mut self, slot: usize) {
-        if slot >= 309 {
+    /// `CrafterScreen.slotClicked`: an empty grid slot is enabled by a click
+    /// (or a number key with a hotbar item) when disabled, and disabled by a
+    /// click with nothing carried; the menu then gets the click itself.
+    pub(in crate::game) fn crafter_slot_clicked(
+        &mut self,
+        slot: usize,
+        button: i32,
+        input: horizon_client::menu::Input,
+    ) {
+        use horizon_client::menu::Input;
+        if !self.crafter_open() || !(300..309).contains(&slot) || self.spectator() {
             return;
         }
-        let Some(mut stack) = self.slot_mut(slot).take() else {
+        let i = slot - 300;
+        let Some(c) = self.container.and_then(|k| self.crafter_at(k)) else {
             return;
         };
-        if slot >= 300 {
-            let player: Vec<usize> = (9..36).chain(0..9).collect();
-            self.move_to(&mut stack, &player, true);
-        } else {
-            let grid: Vec<usize> = (300..309).collect();
-            self.move_to(&mut stack, &grid, false);
+        if c.items[i].is_some() {
+            return;
         }
-        if stack.count > 0 {
-            *self.slot_mut(slot) = Some(stack);
-        }
+        let disabled = c.disabled[i];
+        let enable = match input {
+            Input::Pickup if disabled => Some(true),
+            Input::Pickup if self.carried.is_none() => Some(false),
+            Input::Swap if disabled => usize::try_from(button)
+                .ok()
+                .and_then(|b| {
+                    if b == 40 {
+                        Some(&self.offhand)
+                    } else {
+                        self.inventory.get(b)
+                    }
+                })
+                .is_some_and(Option::is_some)
+                .then_some(true),
+            _ => None,
+        };
+        let Some(enabled) = enable else {
+            return;
+        };
+        // ServerboundContainerSlotStateChangedPacket: CrafterBlockEntity.setSlotState.
+        self.menu_session(|menu, _, _| {
+            menu.set_slot_state(i, enabled);
+            Some(true)
+        });
+        let pitch = if enabled { 1.0 } else { 0.75 };
+        self.audio
+            .play("minecraft:ui.button.click", None, 0.4, pitch);
     }
 }
 

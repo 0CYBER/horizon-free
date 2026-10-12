@@ -115,6 +115,7 @@ mod portal;
 mod query;
 mod rails;
 mod redstone;
+pub mod removal;
 pub mod sculk;
 mod shapes;
 mod shelf;
@@ -393,6 +394,21 @@ pub trait LevelAccess {
         true
     }
     fn emit(&mut self, _event: LevelEvent) {}
+    /// `LevelChunk.setBlockState` replaced a block that had a block entity by
+    /// another block: run `BlockEntity.preRemoveSideEffects` when
+    /// `side_effects` (containers spill their contents, a jukebox pops its
+    /// record, a lectern its book...) and remove the block entity. Called
+    /// after the storage write, before `affectNeighborsAfterRemoval`. Returns
+    /// how many times the side effects called `updateNeighborsAt(pos, block)`
+    /// (a jukebox whose song changed), which the caller then runs.
+    fn remove_block_entity(
+        &mut self,
+        _pos: BlockPos,
+        _old: BlockStateId,
+        _side_effects: bool,
+    ) -> u8 {
+        0
+    }
     /// Biome identifier at `pos` (`minecraft:plains`), for features placed by
     /// block behaviour (bone meal flowers). None when unknown.
     fn biome_name(&self, _pos: BlockPos) -> Option<&str> {
@@ -524,6 +540,18 @@ impl Behaviours {
         flags: i32,
     ) -> bool {
         self.sim(level, ticks).set_block(pos, state, flags)
+    }
+    /// `CopperChestBlock.getFromCopperBlock(copperBlock, facing, level, pos)`.
+    pub fn copper_chest_from_block<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        copper: BlockStateId,
+        facing: Direction,
+        pos: BlockPos,
+    ) -> Option<BlockStateId> {
+        self.sim(level, ticks)
+            .copper_chest_from_block(copper, facing, pos)
     }
     /// `Level.removeBlock(pos, movedByPiston)`: replace with the fluid's block.
     pub fn remove_block<L: LevelAccess + ?Sized>(

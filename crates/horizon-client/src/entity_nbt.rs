@@ -432,6 +432,17 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 map.entry(key.into()).or_insert(value);
             }
         }
+        // CopperGolem.addAdditionalSaveData.
+        "minecraft:copper_golem" => {
+            map.insert(
+                "next_weather_age".into(),
+                Tag::Long(m.extra.vector[0] as i64),
+            );
+            map.insert(
+                "weather_state".into(),
+                string(crate::mobs::copper_golem::WEATHER[m.extra.variant.min(3) as usize]),
+            );
+        }
         _ => {}
     }
     crate::mobs::raider::write_nbt(m, map);
@@ -738,6 +749,21 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     }
     if m.species() == crate::mobs::Species::Sniffer {
         crate::mobs::sniffer::from_nbt(&mut m, tag);
+    }
+    if m.species() == crate::mobs::Species::CopperGolem {
+        // CopperGolem.readAdditionalSaveData: -1 (unset) when missing.
+        m.extra.vector[0] = match tag.get("next_weather_age") {
+            Some(Tag::Long(v)) => *v as f64,
+            _ => -1.0,
+        };
+        let weather = match tag.get("weather_state") {
+            Some(Tag::String(s)) => s.to_string_lossy(),
+            _ => String::new(),
+        };
+        m.extra.variant = crate::mobs::copper_golem::WEATHER
+            .iter()
+            .position(|w| *w == weather)
+            .unwrap_or(0) as u8;
     }
     m.extra.leash_pending = crate::mobs::leash::pending_from_nbt(tag.get("leash"));
     if m.species() == crate::mobs::Species::Warden {

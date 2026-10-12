@@ -8,12 +8,7 @@ permissions:
   contents: read
 jobs:
   verify:
-    strategy:
-      fail-fast: false
-      matrix:
-        # Linux only. macOS only when started by hand: gh workflow run checks --ref <branch>.
-        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '["ubuntu-latest", "macos-26"]' || '["ubuntu-latest"]') }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,14 +22,30 @@ jobs:
           python tools/check_public_tree.py --history
       - name: Test offline research tooling
         run: python -m unittest discover -s tests -v
-      - name: Install Rust toolchain
-        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - name: Install Rust toolchain and the ALSA headers the client's audio links against
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
       - name: Check formatting and lint
         run: |
           cargo +stable fmt --all -- --check
           cargo +stable clippy --workspace --all-targets -- -D warnings
       - name: Test Rust core and voxel kernel correctness
         run: cargo +stable test --workspace
+  # Horizon never downloads the game. These jobs need a self-hosted Linux runner
+  # (label horizon-game) holding the maintainer's own copy: the official launcher's
+  # game directory in HORIZON_MINECRAFT_DIR and the pinned server jar in
+  # HORIZON_SERVER_JAR. Start them by hand: gh workflow run checks --ref <branch>.
+  vanilla-parity:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, linux, horizon-game]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Rust toolchain
+        run: rustup toolchain install stable --profile minimal
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -374,12 +385,8 @@ jobs:
           RUSTUP_TOOLCHAIN: stable
         run: python tools/test_float_log_parity.py
   portable-mod:
-    strategy:
-      fail-fast: false
-      matrix:
-        # Linux only. macOS only when started by hand: gh workflow run checks --ref <branch>.
-        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '["ubuntu-latest", "macos-26"]' || '["ubuntu-latest"]') }}
-    runs-on: ${{ matrix.os }}
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, linux, horizon-game]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -466,7 +473,7 @@ jobs:
       - name: Upload original mod and pack manifests only
         uses: actions/upload-artifact@v4
         with:
-          name: horizon-${{ matrix.os }}
+          name: horizon-linux
           path: |
             dist/*.mrpack
             dist/horizon-*.jar

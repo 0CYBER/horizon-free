@@ -41,6 +41,56 @@ class ArtifactTests(unittest.TestCase):
                 lab.download("https://example.invalid", destination, hashlib.sha1(b"verified").hexdigest())
                 request.assert_not_called()
 
+    def test_import_copies_only_the_pinned_file_from_the_users_install(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source, destination = Path(temp) / "own.jar", Path(temp) / "cache" / "client.jar"
+            source.write_bytes(b"modified")
+            with self.assertRaisesRegex(ValueError, "not the pinned file"):
+                lab.import_copy(source, destination, hashlib.sha1(b"vanilla").hexdigest())
+            self.assertFalse(destination.exists())
+            source.write_bytes(b"vanilla")
+            lab.import_copy(source, destination, hashlib.sha1(b"vanilla").hexdigest())
+            self.assertEqual(destination.read_bytes(), b"vanilla")
+            with self.assertRaisesRegex(FileNotFoundError, "official launcher"):
+                lab.import_copy(Path(temp) / "absent.jar", Path(temp) / "other.jar", "0" * 40,
+                                hint=lab.LAUNCHER_HINT.format(version="26.3"))
+
+    def test_game_files_come_from_the_launcher_install_without_network(self):
+        client, server = b"client", b"server"
+        lock = {"minecraft": {"version": "26.3", "manifest_sha1": "0" * 40, "java_major": 25,
+                              "client_sha1": hashlib.sha1(client).hexdigest(),
+                              "server_sha1": hashlib.sha1(server).hexdigest()}}
+        manifest = {"id": "26.3", "javaVersion": {"majorVersion": 25},
+                    "downloads": {"client": {"sha1": lock["minecraft"]["client_sha1"]},
+                                  "server": {"sha1": lock["minecraft"]["server_sha1"]}}}
+        with tempfile.TemporaryDirectory() as temp, mock.patch("urllib.request.urlopen") as request, \
+                mock.patch.dict("os.environ", {}, clear=False) as environment:
+            environment.pop("HORIZON_SERVER_JAR", None)
+            launcher, cache = Path(temp) / "minecraft", Path(temp) / "cache"
+            version = launcher / "versions" / "26.3"
+            version.mkdir(parents=True)
+            (version / "26.3.json").write_text(json.dumps(manifest))
+            (version / "26.3.jar").write_bytes(client)
+            loaded, jar = lab.import_client(lock, cache, launcher)
+            self.assertEqual((loaded["id"], jar.read_bytes()), ("26.3", client))
+            with self.assertRaisesRegex(FileNotFoundError, "server jar yourself"):
+                lab.import_server(lock, cache)
+            (Path(temp) / "server.jar").write_bytes(server)
+            self.assertEqual(lab.import_server(lock, cache, Path(temp) / "server.jar").read_bytes(), server)
+            self.assertEqual(lab.import_server(lock, cache).read_bytes(), server)
+            request.assert_not_called()
+
+    def test_launcher_manifest_for_another_release_is_rejected(self):
+        lock = {"minecraft": {"version": "26.3", "manifest_sha1": "0" * 40, "java_major": 25,
+                              "client_sha1": "1" * 40, "server_sha1": "2" * 40}}
+        with tempfile.TemporaryDirectory() as temp:
+            version = Path(temp) / "versions" / "26.3"
+            version.mkdir(parents=True)
+            (version / "26.3.json").write_text(json.dumps({"id": "26.3", "downloads": {
+                "client": {"sha1": "3" * 40}, "server": {"sha1": "2" * 40}}}))
+            with self.assertRaisesRegex(ValueError, "pinned 26.3 release"):
+                lab.import_manifest(lock, Path(temp) / "cache", Path(temp))
+
     def test_sourcefile_metadata_covers_inner_classes(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "game.jar"

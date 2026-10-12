@@ -3,9 +3,7 @@
 //! spit ranged attack, hunting wolves (and, for traders, zombies and
 //! illagers) and `LlamaModel`.
 use super::{
-    Mob, MobEvent, MobWorld, Seen, Species, Who,
-    anim::{Poses, State},
-    equine,
+    Mob, MobEvent, MobWorld, Seen, Species, Who, equine,
     goals::{
         Breed, Cx, Float, FollowParent, Goal, HurtByTarget, LookAtPlayer, NearestTarget, Panic,
         Prey, RandomLookAround, Stroll, Tempt, goal_clone,
@@ -14,7 +12,6 @@ use super::{
 };
 use crate::projectiles::{Projectile, ProjectileKind};
 use horizon_core::{geometry::Vec3, random::RandomSource};
-use std::f32::consts::PI;
 
 pub const VARIANTS: [&str; 4] = ["creamy", "white", "brown", "gray"];
 /// `Llama.getMaxTemper`.
@@ -29,9 +26,10 @@ pub fn is_llama(s: Species) -> bool {
 pub fn is_trader(m: &Mob) -> bool {
     m.species() == Species::TraderLlama
 }
-/// `Llama.getStrength`.
+/// `Llama.getStrength`: the stored strength (0 for a llama that was never
+/// given one; `setStrength` keeps it within 1 to 5).
 pub fn strength(m: &Mob) -> i32 {
-    i32::from(m.extra.variant2).clamp(1, 5)
+    i32::from(m.extra.variant2)
 }
 /// `getInventoryColumns`: a chest holds three rows of `strength` columns.
 pub fn inventory_columns(m: &Mob) -> i32 {
@@ -64,7 +62,7 @@ pub fn register(m: &mut Mob) {
         g.add(1, Panic::new(2.0));
     }
     g.add(1, equine::RunAroundLikeCrazy);
-    g.add(2, super::caravan::FollowCaravan::new(2.1));
+    g.add(2, super::caravan::FollowCaravan::new(f64::from(2.1_f32)));
     g.add(3, RangedAttack::new(1.25, 40, 40, 20.0, spit));
     g.add(3, Panic::new(1.2));
     g.add(4, Breed::new(1.0));
@@ -125,6 +123,59 @@ pub fn offspring(child: &mut Mob, a: &Mob, b: &Mob, r: &mut impl RandomSource) {
     } else {
         b.extra.variant
     };
+    if is_trader(child) {
+        child.persistent = true;
+    }
+}
+/// A llama's baby as `Llama.getBreedOffspring` makes it.
+#[derive(Clone, Debug)]
+pub struct Offspring {
+    pub max_health: f32,
+    pub jump: f64,
+    pub speed: f64,
+    pub strength: u8,
+    pub variant: u8,
+}
+/// `Llama.getBreedOffspring` with `AbstractHorse.setOffspringAttributes`,
+/// drawn from the parent's random with the partner's stock.
+pub fn breed_offspring(m: &mut Mob, partner: &Seen) -> Offspring {
+    // Seen.profession is the partner's strength.
+    let top = strength(m).max(i32::from(partner.profession));
+    let (health, jump, speed, own) = (
+        f64::from(m.attrs.max_health),
+        m.extra.vector[0],
+        m.attrs.speed,
+        m.extra.variant,
+    );
+    let r = &mut m.random;
+    let max_health = equine::offspring(health, partner.stats[0], 15.0, 30.0, r) as f32;
+    let jump = equine::offspring(jump, partner.stats[1], 0.4, 1.0, r);
+    let speed = equine::offspring(speed, partner.stats[2], 0.1125, 0.3375, r);
+    let mut s = r.next_int_bound(top).unwrap_or(0) + 1;
+    if r.next_float() < 0.03 {
+        s += 1;
+    }
+    let variant = if r.next_boolean() {
+        own
+    } else {
+        partner.variant
+    };
+    Offspring {
+        max_health,
+        jump,
+        speed,
+        strength: s.clamp(1, 5) as u8,
+        variant,
+    }
+}
+/// The game makes the baby drawn by `breed_offspring`.
+pub fn apply_offspring(child: &mut Mob, o: &Offspring) {
+    child.attrs.max_health = o.max_health;
+    child.health = o.max_health;
+    child.extra.vector[0] = o.jump;
+    child.attrs.speed = o.speed;
+    child.extra.variant2 = o.strength;
+    child.extra.variant = o.variant;
     if is_trader(child) {
         child.persistent = true;
     }
@@ -254,17 +305,6 @@ pub fn decor(m: &Mob) -> Option<(String, String)> {
         };
         (model.into(), format!("entity/equipment/llama_body/{name}"))
     })
-}
-/// `LlamaModel.setupAnim`.
-pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
-    super::anim::quadruped(p, s);
-    let chest = m.extra.chested && !s.baby;
-    for part in ["right_chest", "left_chest"] {
-        if !chest {
-            p.visible(part, false);
-        }
-    }
-    let _ = PI;
 }
 #[cfg(test)]
 mod tests {

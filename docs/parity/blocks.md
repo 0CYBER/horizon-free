@@ -106,7 +106,23 @@ containers, weather-driven blocks. The library code lives in
   - Their screens use the vanilla hopper and dispenser layouts.
   - `GameLevel::max_y` is exclusive, as `LevelAccess` documents.
 
+- **Block entity removal** (`level/removal.rs`, `game/spill.rs`):
+  `LevelChunk.setBlockState` runs `BlockEntity.preRemoveSideEffects` when a
+  block's block entity goes with it. Containers spill through
+  `Containers.dropItemStack`, jukeboxes and lecterns pop their item, shulker
+  boxes keep theirs, copper chests and statues keep theirs across weathering.
+  `Block.dropResources` draws when the behaviour calls it and awards ore,
+  sculk and spawner experience; the item entities join the world before the
+  behaviour returns.
+- **Copper golems** (`mobs/copper_golem.rs`, `game/copper_golems.rs`): built
+  from a pumpkin on a copper block (`CopperChestBlock.getFromCopperBlock`),
+  sheared and equipped by dispensers, weathering, waxing, statues.
+
 ## Verification
+
+- `tools/test_block_removal_parity.py`: 4,000 replacements, destructions and
+  removals of block entity holders with contents match vanilla. The dispenser
+  harness builds, shears and equips copper golems (6,000 cases match).
 
 - Unit tests in `crates/horizon-world/src/level/growth_tests.rs` cover:
   - every sapling kind, including the 2×2 trees

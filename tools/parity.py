@@ -654,6 +654,7 @@ class LocalExecutor:
         self.name, self.jobs, self.memory_budget, self.timeout = HOST, jobs, memory_budget, timeout
         self.max_peak = max_peak  # set while other machines can take heavier harnesses
         self.running = {}
+        self.dead = False  # this machine never drops out, unlike a remote host
         self.available, self.measured = 0, 0.0
         (STATE_DIR / "logs").mkdir(parents=True, exist_ok=True)
         (STATE_DIR / "traces").mkdir(parents=True, exist_ok=True)
@@ -859,28 +860,45 @@ def key_from(record, hashes, environment):
     return key(record, lambda path: hashes.get(str(Path(path).relative_to(ROOT)), "missing"), environment)
 
 
-def run(selected, state, hasher, environment_digest, executors, reuse_oracles):
+def harness_of(label):
+    """The harness a queue entry runs: food~2 is the second round of food."""
+    return label.split("~")[0]
+
+
+def run(selected, state, hasher, environment_digest, executors, reuse_oracles, rounds=None):
+    """Run the selected harnesses on the executors. rounds: how many times each must run (default once); its runs
+    must agree, and a harness that both passes and fails is reported as flaky and recorded as failing."""
     records = state["harnesses"]
-    # Longest first, so the slow harnesses don't start last.
-    queue = sorted(selected, key=lambda name: -records.get(name, {}).get("seconds", 1e9))
-    results, retried, busy = {}, set(), {}
+    rounds = rounds or {}
+    # Longest first, so the slow harnesses don't start last; a harness's later rounds after its first.
+    queue = sorted((name if index == 1 else f"{name}~{index}" for name in selected for index in range(1, rounds.get(name, 1) + 1)),
+                   key=lambda label: (-records.get(harness_of(label), {}).get("seconds", 1e9), label))
+    results, retried, busy, done = {}, set(), {}, {}
+    home = {}  # where a harness's first round ran: its later rounds run there too, reusing its oracle results
     started_all = time.monotonic()
     local = executors[-1]
     while queue or busy:
         # Remote machines first: they take the longest harnesses and leave this one lighter.
         for executor in executors:
             while queue and executor.free() > 0:
-                pick = next((name for name in queue if executor.accepts(name) and executor.fits(
-                    records.get(name, {}).get("peak_bytes", DEFAULT_MEMORY),
-                    not any(other.accepts(name) and not other.dead for other in executors[:-1]))), None)
+                # Rounds of one harness share its output directories: never two at once on one machine.
+                here = {harness_of(label) for label, (other, _) in busy.items() if other is executor}
+                pick = next((label for label in queue if harness_of(label) not in here and executor.accepts(harness_of(label))
+                             and (label == harness_of(label) or home.get(harness_of(label), executor) in (executor, None)
+                                  or home[harness_of(label)].dead)
+                             and executor.fits(records.get(harness_of(label), {}).get("peak_bytes", DEFAULT_MEMORY),
+                                               not any(other.accepts(harness_of(label)) and not other.dead
+                                                       for other in executors[:-1]))), None)
                 if pick is None:
                     break
-                reuse = reuse_oracles and records.get(pick, {}).get("oracle_reuse", True) and pick not in retried
-                if not executor.start(pick, selected[pick], reuse, records.get(pick, {}).get("peak_bytes", DEFAULT_MEMORY),
-                                      SHARDS.get(pick)):
+                name = harness_of(pick)
+                reuse = reuse_oracles and records.get(name, {}).get("oracle_reuse", True) and pick not in retried
+                if not executor.start(pick, selected[name], reuse, records.get(name, {}).get("peak_bytes", DEFAULT_MEMORY),
+                                      SHARDS.get(name)):
                     break
                 queue.remove(pick)
                 busy[pick] = (executor, reuse)
+                home.setdefault(name, executor)
         if executors[:-1] and all(executor.dead for executor in executors[:-1]) and local.max_peak is not None:
             # Every other machine is gone: this one runs everything.
             local.max_peak, local.jobs = None, max(local.jobs, default_local_jobs())
@@ -888,35 +906,46 @@ def run(selected, state, hasher, environment_digest, executors, reuse_oracles):
         finished = []
         for executor in executors:
             if isinstance(executor, LocalExecutor):
-                for name, script, passed, elapsed, trace in executor.poll():
-                    finished.append((name, outcome(name, script, passed, elapsed, trace)))
+                for label, script, passed, elapsed, trace in executor.poll():
+                    finished.append((label, outcome(label, script, passed, elapsed, trace)))
             else:
                 finished += executor.poll()
-        for name, record in finished:
-            executor, reused = busy.pop(name)
+        for label, record in finished:
+            executor, reused = busy.pop(label)
+            name = harness_of(label)
             if record is None:
-                queue.insert(0, name)
+                queue.insert(0, label)
                 continue
             passed = record["status"] == "pass"
-            if not passed and reused and records.get(name, {}).get("status") != "fail":
-                # A new failure might come from a reused oracle result: run it again from scratch.
-                retried.add(name)
-                queue.insert(0, name)
-                print(f"retry {name} without reused oracle results", flush=True)
+            if not passed and reused and label == name and records.get(name, {}).get("status") != "fail":
+                # A new failure might come from a reused oracle result: run it again from scratch. Later rounds reuse
+                # what the first just validated, so their failures count (a flaky harness).
+                retried.add(label)
+                queue.insert(0, label)
+                print(f"retry {label} without reused oracle results", flush=True)
                 continue
             # A harness that only passes fresh no longer reuses oracle results.
-            record["oracle_reuse"] = records.get(name, {}).get("oracle_reuse", True) and not (passed and name in retried)
+            record["oracle_reuse"] = records.get(name, {}).get("oracle_reuse", True) and not (passed and label in retried)
             hashes = record.pop("hashes", None)
             if record["dependencies"]:
                 record["key"] = key_from(record, hashes, environment_digest) if hashes is not None else \
                     key(record, hasher, environment_digest)
+            where = "" if executor is local else f" on {executor.name}"
+            tail = "" if passed else f"  ({STATE_DIR / 'logs' / (label + '.log')})"
+            print(f"{'PASS' if passed else 'FAIL'} {label} {record['seconds']:.0f}s{where}{tail}", flush=True)
+            done.setdefault(name, []).append(record)
+            if len(done[name]) < rounds.get(name, 1):
+                continue
+            runs = done.pop(name)
+            record = dict(runs[0], status="pass" if all(run["status"] == "pass" for run in runs) else "fail",
+                          rounds=len(runs))
+            if len({run["status"] for run in runs}) > 1:
+                record["flaky"] = [run["status"] for run in runs]
+                print(f"FLAKY {name}: {', '.join(record['flaky'])} in {len(runs)} runs", flush=True)
             records[name] = record
             results[name] = record
             save_state(state)
             publish(name, record)
-            where = "" if executor is local else f" on {executor.name}"
-            tail = "" if passed else f"  ({STATE_DIR / 'logs' / (name + '.log')})"
-            print(f"{'PASS' if passed else 'FAIL'} {name} {record['seconds']:.0f}s{where}{tail}", flush=True)
     return results, time.monotonic() - started_all
 
 
@@ -1030,6 +1059,27 @@ def trace_main(output, script, arguments):
     runpy.run_path(script, run_name="__main__")
 
 
+def changed_harnesses(found, records, ref):
+    """Harnesses new or changed since the merge base of HEAD and ref: their script, or a dependency of theirs that is
+    an oracle (Java under mods/horizon/src/test) or a probe (a crate's example or binary), changed or was added."""
+    def git(*arguments):
+        result = subprocess.run(["git", *arguments], cwd=ROOT, capture_output=True, text=True)
+        return result.stdout.split("\n") if result.returncode == 0 else None
+    base = git("merge-base", "HEAD", ref)
+    if not base or not base[0]:
+        print(f"note: no merge base with {ref}; the flake check repeats nothing", flush=True)
+        return set()
+    changed = set(filter(None, git("diff", "--name-only", base[0]) or [])) | \
+        set(filter(None, git("ls-files", "--others", "--exclude-standard") or []))
+    found_changed = set()
+    for name, script in found.items():
+        specific = [path for path in records.get(name, {}).get("dependencies", [])
+                    if path.startswith("mods/horizon/src/test/") or "/examples/" in path or "/src/bin/" in path]
+        if str(Path(script).relative_to(ROOT)) in changed or any(path in changed for path in specific):
+            found_changed.add(name)
+    return found_changed
+
+
 def finished_run(failed):
     """Record that this run completed, for tools/gate.py: a crashed runner never writes it."""
     STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -1055,6 +1105,11 @@ def main():
                         help="comma-separated machines from tools/parity_hosts.json to run harnesses on as well "
                              "(default: PARITY_HOSTS, else the file's default; '' for this machine only)")
     parser.add_argument("--timeout", type=int, default=3600, help="seconds per harness")
+    parser.add_argument("--repeat", type=int, default=1, help="run each selected harness this many times; its runs "
+                        "must agree (oracle results are reused after the first unless --fresh)")
+    parser.add_argument("--flake-check", metavar="REF", help="harnesses new or changed since the merge base with REF "
+                        "must pass --flake-rounds times in a row (tools/gate.py)")
+    parser.add_argument("--flake-rounds", type=int, default=3, help="runs required by --flake-check (default 3)")
     args = parser.parse_args()
 
     found = harnesses()
@@ -1084,6 +1139,17 @@ def main():
         chosen = [name for name in found if records.get(name, {}).get("status") == "fail"]
     else:
         chosen = [name for name in found if stale(name, state, hasher, environment)]
+    rounds = {name: args.repeat for name in chosen} if args.repeat > 1 else {}
+    if args.flake_check:
+        changed = changed_harnesses(found, records, args.flake_check)
+        for name in sorted(changed):
+            # A pass counts for a changed harness only if it held over enough runs.
+            if name not in chosen and records.get(name, {}).get("rounds", 1) < args.flake_rounds:
+                chosen.append(name)
+            if name in chosen:
+                rounds[name] = max(rounds.get(name, 1), args.flake_rounds)
+        if rounds:
+            print(f"Flake check: {', '.join(sorted(rounds))} must pass {args.flake_rounds} times.", flush=True)
     selected = {name: found[name] for name in chosen}
     if args.list or not selected:
         for name in selected:
@@ -1128,7 +1194,7 @@ def main():
         reuse_oracles = not (args.fresh or args.all)
         executors = [*remotes, LocalExecutor(jobs, int(memory_available() * 0.75), args.timeout,
                                              REMOTE_LOCAL_PEAK if remotes and args.jobs is None else None)]
-        results, elapsed = run(selected, state, hasher, environment_key(hasher), executors, reuse_oracles)
+        results, elapsed = run(selected, state, hasher, environment_key(hasher), executors, reuse_oracles, rounds)
     finally:
         for executor in remotes:
             executor.stop()
