@@ -110,7 +110,7 @@ use horizon_client::{
     environment::Environment,
     gfx::{Frame, Renderer},
     hud::{HudAtlas, HudBatch, rgba},
-    hud_layout,
+    hud_layout, hud_overlays,
     items::{ItemStack, Items},
     keymapping::KeyAction,
     light::LightTables,
@@ -637,6 +637,8 @@ struct Game<'a> {
     /// The source of a command run through /execute (the player otherwise).
     command_source: Option<commands::execute::Source>,
     titles: titles::Titles,
+    /// `Hud.toolHighlightTimer`: the selected item name.
+    tool_highlight: horizon_client::hud_overlays::ToolHighlight,
     applied_modifiers: Vec<(String, String)>,
     experience: Experience,
     orbs: Vec<ExperienceOrb>,
@@ -2717,7 +2719,7 @@ impl Game<'_> {
         self.tick_effects();
         self.tick_burning();
         self.tick_using();
-        self.titles.tick();
+        self.tick_hud();
         if running {
             self.tick_paintings();
             self.tick_item_frames();
@@ -2857,26 +2859,30 @@ impl Game<'_> {
         // `GuiGraphics.renderItem`: the resolved item model (tints, foil and
         // special renderers included), then the decorations.
         self.draw_item_model(batch, stack, x, y);
-        let atlas = &self.res.atlas;
-        if stack.count > 1 {
-            let text = stack.count.to_string();
-            let w = HudBatch::text_width(atlas, &text);
-            batch.text(atlas, &text, x + 17.0 - w, y + 9.0, u32::MAX, true);
-        }
-        if let Some(info) = self.res.items.get(&stack.item)
-            && info.max_damage > 0
-            && stack.damage > 0
-        {
-            let f = 1.0 - stack.damage as f32 / info.max_damage as f32;
-            let width = (13.0 * f).round();
-            let hue = f / 3.0;
-            let (r, g) = (
-                (255.0 * (1.0 - hue * 3.0).clamp(0.0, 1.0)) as u8,
-                (255.0 * (hue * 3.0).clamp(0.0, 1.0)) as u8,
-            );
-            batch.fill(atlas, x + 2.0, y + 13.0, 13.0, 2.0, rgba(0, 0, 0, 255));
-            batch.fill(atlas, x + 2.0, y + 13.0, width, 1.0, rgba(r, g, 0, 255));
-        }
+        // GuiGraphicsExtractor.itemDecorations, laid out at the origin and
+        // moved to (x, y). Horizon tracks no item cooldowns to shade yet.
+        let max_damage = self
+            .res
+            .items
+            .get(&stack.item)
+            .map_or(0, |info| info.max_damage as i32);
+        let decorations = hud_overlays::ItemDecorations {
+            count: stack.count,
+            count_text: None,
+            bar: hud_overlays::damage_bar(stack.damage as i32, max_damage),
+            cooldown: 0.0,
+        };
+        let mut draws = vec![hud_layout::GuiDraw::Push(vec![
+            hud_layout::PoseOp::Translate(x, y),
+        ])];
+        draws.extend(hud_overlays::item_decorations(
+            0,
+            0,
+            &decorations,
+            &self.res.atlas.font,
+        ));
+        draws.push(hud_layout::GuiDraw::Pop);
+        hud_layout::paint(batch, &self.res.atlas, &draws);
     }
     fn hud(&mut self, size: [u32; 2]) -> HudBatch {
         let mut batch = HudBatch::new(size);
@@ -2944,8 +2950,12 @@ impl Game<'_> {
         }
         self.draw_effect_icons(&mut batch);
         // Hud: the action bar and titles draw over the hotbar (nextStratum).
-        self.draw_boss_bar(&mut batch);
-        self.draw_custom_bossbars(&mut batch, 12.0 + 19.0 * self.builtin_bar_count() as f32);
+        self.draw_boss_bars(&mut batch);
+        // Hud.extractSleepOverlay, under the sidebar, titles and chat.
+        if let Some((_, ticks)) = self.sleeping {
+            let draws = hud_overlays::sleep_overlay(wi, hi, ticks as i32);
+            hud_layout::paint(&mut batch, &self.res.atlas, &draws);
+        }
         self.draw_titles(&mut batch);
         self.draw_scoreboard(&mut batch);
         self.draw_subtitles(&mut batch);
@@ -3014,6 +3024,9 @@ impl Game<'_> {
             };
             let draws = self.health_hud.layout(&inputs, wi, hi);
             hud_layout::paint(&mut batch, atlas, &draws);
+        }
+        if !spectator {
+            self.draw_selected_name(&mut batch, !self.creative);
         }
         let atlas = &self.res.atlas;
         if self.debug {
@@ -3116,12 +3129,6 @@ impl Game<'_> {
             batch.text(atlas, text, (w - tw) / 2.0, h - 59.0, u32::MAX, true);
         }
         self.draw_chat(&mut batch);
-        let atlas = &self.res.atlas;
-        if let Some((_, ticks)) = self.sleeping {
-            // Gui sleep overlay fading in over 100 ticks.
-            let a = ((ticks as f32 / 100.0).min(1.0) * 204.0) as u8;
-            batch.fill(atlas, 0.0, 0.0, w, h, rgba(16, 16, 32, a));
-        }
         match self.screen {
             Screen::Paused => self.draw_pause_menu(&mut batch),
             Screen::Dead => self.draw_death_screen(&mut batch),
@@ -8041,6 +8048,7 @@ pub fn run() -> Result<()> {
         shield_cooldown: 0,
         command_source: None,
         titles: Default::default(),
+        tool_highlight: Default::default(),
         applied_modifiers: Vec::new(),
         experience: Experience::default(),
         orbs: Vec::new(),

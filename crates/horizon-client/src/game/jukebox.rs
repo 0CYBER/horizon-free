@@ -104,8 +104,7 @@ impl Game<'_> {
         let description =
             horizon_client::component::to_text(&s.description, &mut |k| Text::literal(k));
         self.titles
-            .set_overlay(Text::translate("record.nowPlaying", &[description]));
-        self.titles.overlay_animated = true;
+            .set_overlay(Text::translate("record.nowPlaying", &[description]), true);
         self.update_song_volumes();
     }
     fn stop_song(&mut self, pos: [i32; 3]) {
