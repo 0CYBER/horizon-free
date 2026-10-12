@@ -232,6 +232,10 @@ def block_entities(e, version):
             ('structure_block', '{name:"x:y",posX:1,posY:2,posZ:3,sizeX:4,sizeY:5,sizeZ:6,mode:"SAVE"}'),
             ('skeleton_skull', '{}'),
         ]
+        if version < 2831:  # 1.18: spawn data became weighted entries
+            out = [(b, '{SpawnData:{id:"minecraft:zombie",ArmorItems:[{},{},{},{id:"minecraft:iron_helmet",Count:1b}]},'
+                       'SpawnPotentials:[{Weight:1,Entity:{id:"minecraft:skeleton"}}]}') if b == 'spawner' else (b, nbt)
+                   for b, nbt in out]
         if version >= 3682:
             out.append(('crafter', '{Items:[{Slot:0b,id:"minecraft:stone",Count:1b}],triggered:1,crafting_ticks_remaining:2}'))
         # Blocks the 1.20 experiment brought in 1.19.3 and 1.19.4.

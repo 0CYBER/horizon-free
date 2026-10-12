@@ -130,7 +130,7 @@ pub fn upgrade_older_world(world: &Path) -> Result<()> {
     }
     if version < i64::from(horizon_world::datafix::OLDEST_SUPPORTED) {
         return Err(format!(
-            "{} was saved with DataVersion {version}; worlds older than DataVersion {} (1.18.2) \
+            "{} was saved with DataVersion {version}; worlds older than DataVersion {} \
              cannot be upgraded yet (tools/upgrade_world.py runs vanilla's own upgrader)",
             world.display(),
             horizon_world::datafix::OLDEST_SUPPORTED
