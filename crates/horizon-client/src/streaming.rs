@@ -833,9 +833,8 @@ mod tests {
                         && (z - r.center.1).abs() <= radius + margin.max(reach + 1)
                 };
                 let proto_kept = |x, z| r.in_range(x, z, 4) || r.near_finished(x, z, 2);
-                let decorated = |x, z| {
-                    !decorates || r.in_range(x, z, 2) || r.near_finished(x, z, 1)
-                };
+                let decorated =
+                    |x, z| !decorates || r.in_range(x, z, 2) || r.near_finished(x, z, 1);
                 let chunk_kept = |x, z| r.in_range(x, z, 2) || r.near_finished(x, z, 1);
                 let unloaded = |x, z| !r.in_range(x, z, 3) && !r.near_finished(x, z, 1);
                 let finishes = |x: i32, z: i32| {
