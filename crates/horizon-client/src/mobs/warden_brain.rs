@@ -324,23 +324,43 @@ fn activities(seed: i64) -> Vec<Entry> {
                 speed: 0.0,
             },
         ),
-        (5, Act::Emerge, B::Emerging(Timed::new(EMERGE_DURATION, EMERGE_DURATION))),
+        (
+            5,
+            Act::Emerge,
+            B::Emerging(Timed::new(EMERGE_DURATION, EMERGE_DURATION)),
+        ),
         (0, Act::Dig, B::ForceUnmount(Timed::new(60, 60))),
-        (1, Act::Dig, B::Digging(Timed::new(DIGGING_DURATION, DIGGING_DURATION))),
+        (
+            1,
+            Act::Dig,
+            B::Digging(Timed::new(DIGGING_DURATION, DIGGING_DURATION)),
+        ),
         (10, Act::Idle, B::SetRoarTarget(false)),
         (11, Act::Idle, B::TryToSniff(false)),
         (12, Act::Idle, B::RunOne(Box::new(gate))),
-        (10, Act::Roar, B::Roar(Timed::new(ROAR_DURATION, ROAR_DURATION))),
+        (
+            10,
+            Act::Roar,
+            B::Roar(Timed::new(ROAR_DURATION, ROAR_DURATION)),
+        ),
         (10, Act::Fight, B::DigCooldownSetter(false)),
         (11, Act::Fight, B::StopAttackingIfTargetInvalid(false)),
         (12, Act::Fight, B::SetEntityLookTarget(false)),
         (13, Act::Fight, B::SetWalkTargetFromAttackTarget(false)),
-        (14, Act::Fight, B::SonicBoom(Timed::new(SONIC_DURATION, SONIC_DURATION))),
+        (
+            14,
+            Act::Fight,
+            B::SonicBoom(Timed::new(SONIC_DURATION, SONIC_DURATION)),
+        ),
         (15, Act::Fight, B::MeleeAttack(false)),
         (5, Act::Investigate, B::SetRoarTarget(false)),
         (6, Act::Investigate, B::GoToDisturbance(false)),
         (5, Act::Sniff, B::SetRoarTarget(false)),
-        (6, Act::Sniff, B::Sniffing(Timed::new(SNIFFING_DURATION, SNIFFING_DURATION))),
+        (
+            6,
+            Act::Sniff,
+            B::Sniffing(Timed::new(SNIFFING_DURATION, SNIFFING_DURATION)),
+        ),
     ];
     // A stable sort keeps each activity's own order.
     list.sort_by_key(|(prio, act, _)| (*prio, act.slot(), act.order()));
@@ -561,7 +581,8 @@ pub(super) fn set_disturbance(m: &mut Mob, w: &MobWorld, position: [i32; 3]) {
     mm.sniff_cooldown.set_ttl((), DISTURBANCE_EXPIRY);
     mm.look_target
         .set_ttl(Tracker::Block(position), DISTURBANCE_EXPIRY);
-    mm.disturbance_location.set_ttl(position, DISTURBANCE_EXPIRY);
+    mm.disturbance_location
+        .set_ttl(position, DISTURBANCE_EXPIRY);
     mm.walk_target.clear();
 }
 /// `Warden.setAttackTarget`.
@@ -977,10 +998,9 @@ impl B {
                 let Some(target) = mm.attack_target.value() else {
                     return false;
                 };
-                let close = cx
-                    .w
-                    .target_info(target)
-                    .is_some_and(|i| closer_than(m, i.position, 15.0, 20.0));
+                let close =
+                    cx.w.target_info(target)
+                        .is_some_and(|i| closer_than(m, i.position, 15.0, 20.0));
                 if !close {
                     return false;
                 }
@@ -1288,7 +1308,11 @@ pub fn describe(m: &Mob) -> Option<(String, String)> {
     let unit = |_: &()| "u".to_string();
     let list = |l: &Vec<Who>| format!("n{}", l.len());
     slot!("nearest_players", mm.nearest_players, list);
-    slot!("nearest_visible_player", mm.nearest_visible_player, |e: &Who| who(*e));
+    slot!(
+        "nearest_visible_player",
+        mm.nearest_visible_player,
+        |e: &Who| who(*e)
+    );
     slot!(
         "nearest_visible_targetable_player",
         mm.nearest_visible_targetable_player,
@@ -1303,7 +1327,9 @@ pub fn describe(m: &Mob) -> Option<(String, String)> {
     slot!("visible_mobs", mm.visible_mobs, |_: &Visible| {
         "NearestVisibleLivingEntities".to_string()
     });
-    slot!("nearest_attackable", mm.nearest_attackable, |e: &Who| who(*e));
+    slot!("nearest_attackable", mm.nearest_attackable, |e: &Who| who(
+        *e
+    ));
     slot!("look_target", mm.look_target, |t: &Tracker| tracker(*t));
     slot!("walk_target", mm.walk_target, |t: &WalkTarget| format!(
         "{}/{:x}/{}",
@@ -1336,7 +1362,11 @@ pub fn describe(m: &Mob) -> Option<(String, String)> {
     slot!("touch_cooldown", mm.touch_cooldown, unit);
     slot!("vibration_cooldown", mm.vibration_cooldown, unit);
     slot!("sonic_boom_cooldown", mm.sonic_boom_cooldown, unit);
-    slot!("sonic_boom_sound_cooldown", mm.sonic_boom_sound_cooldown, unit);
+    slot!(
+        "sonic_boom_sound_cooldown",
+        mm.sonic_boom_sound_cooldown,
+        unit
+    );
     slot!("sonic_boom_sound_delay", mm.sonic_boom_sound_delay, unit);
     out.sort();
     Some((acts.join("|"), out.join(" ")))

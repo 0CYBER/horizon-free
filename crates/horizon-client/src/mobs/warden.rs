@@ -523,7 +523,10 @@ pub fn server_ai_step(
         .extra
         .warden
         .as_mut()
-        .map(|st| st.vibration.tick(w.game_time, true, false, |d| d.floor() as i32))
+        .map(|st| {
+            st.vibration
+                .tick(w.game_time, true, false, |d| d.floor() as i32)
+        })
         .unwrap_or_default();
     if let Some((info, travel)) = tick.started {
         let eye = [m.position.x, m.position.y + m.kind.eye_height, m.position.z];

@@ -130,6 +130,13 @@ fn parse(text: &str) -> Vec<Scenario> {
     out
 }
 
+/// An entity's own random is unseeded in vanilla, and so are its sensors'
+/// first delays and its brain's `RunOne` shuffles: the oracle seeds what
+/// appeared, and so does this.
+fn seed_fresh(m: &mut Mob, seed: i64) {
+    m.random = LegacyRandom::new(seed);
+    horizon_client::mobs::warden::init_brain(m, seed);
+}
 fn d(v: f64) -> String {
     format!("{:x}", v.to_bits())
 }
@@ -138,10 +145,12 @@ fn f(v: f32) -> String {
 }
 
 /// Sounds the client plays for level events (3006 sculk charge, 3007
-/// shriek): vanilla's server never sends them.
+/// shriek) and for itself (the warden's heartbeat): vanilla's server never
+/// sends them.
 const CLIENT_SOUNDS: &[&str] = &[
     "minecraft:block.sculk_shrieker.shriek",
     "minecraft:block.sculk.charge",
+    "minecraft:entity.warden.heartbeat",
 ];
 
 impl Game<'_> {
@@ -469,6 +478,7 @@ impl Game<'_> {
         self.world.random = LegacyRandom::new(s.level_seed);
         self.audio.capture = Some(Vec::new());
         let mut known: HashSet<u32> = self.mobs.iter().map(|m| m.id).collect();
+        let mut seeded: HashSet<u32> = HashSet::new();
         let mut known_items = self.dropped.len();
         let mut known_orbs = self.orbs.len();
         let mut last: HashMap<[i32; 3], String> = HashMap::new();
@@ -478,7 +488,7 @@ impl Game<'_> {
         for t in 0..=s.ticks {
             dispense_fixture::start_recording();
             if t > 0 {
-                self.sculk_fixture_tick(t, s, &sources)?;
+                self.sculk_fixture_tick(t, s, &sources, &known, names.len(), &mut seeded)?;
             }
             let mut lines: Vec<String> = Vec::new();
             for p in &s.watch {
@@ -540,12 +550,11 @@ impl Game<'_> {
             for (id, line) in fresh {
                 known.insert(id);
                 names.insert(id, format!("n{}", names.len()));
-                // An entity's own random is unseeded in vanilla: the oracle
-                // seeds what appeared, and so does this.
                 let seed = 0x5eed + names.len() as i64;
-                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-                    m.random = LegacyRandom::new(seed);
-                    horizon_client::mobs::warden::delay_sensors(m);
+                if seeded.insert(id) {
+                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+                        seed_fresh(m, seed);
+                    }
                 }
                 lines.push(line);
             }
@@ -599,7 +608,15 @@ impl Game<'_> {
     }
 
     /// One `ServerLevel.tick` of a scenario.
-    fn sculk_fixture_tick(&mut self, t: i32, s: &Scenario, sources: &[u32]) -> Result<()> {
+    fn sculk_fixture_tick(
+        &mut self,
+        t: i32,
+        s: &Scenario,
+        sources: &[u32],
+        known: &HashSet<u32>,
+        named: usize,
+        seeded: &mut HashSet<u32>,
+    ) -> Result<()> {
         self.world.game_time += 1;
         // Scheduled block and fluid ticks, then block events.
         self.tick_scheduled()?;
@@ -660,6 +677,23 @@ impl Game<'_> {
                     self.process_level_events()?;
                 }
                 other => return Err(format!("unknown action {other}").into()),
+            }
+        }
+        // Mobs that appeared during the block ticks (a summoned warden) tick
+        // in this tick's entity phase: seed them now, as they are seeded
+        // after the tick.
+        let mut born: Vec<u32> = self
+            .mobs
+            .iter()
+            .map(|m| m.id)
+            .filter(|id| !known.contains(id))
+            .collect();
+        born.sort_unstable();
+        for (i, id) in born.into_iter().enumerate() {
+            if seeded.insert(id) {
+                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+                    seed_fresh(m, 0x5eed + (named + i + 1) as i64);
+                }
             }
         }
         // Entities: the player's warden spawn tracker, then the mobs.
