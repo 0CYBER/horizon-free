@@ -7,10 +7,9 @@
 //! the block plus `minecraft_mix_light` with the level's two diffuse lights.
 use crate::{hud::Rect, mesher::Vertex, world::World};
 use glam::{DVec3, Mat4, Quat, Vec3};
-use horizon_core::geometry::Direction;
-use horizon_core::{
-    geometry::trig::{self, Mth},
-    random::{LegacyRandom, RandomSource},
+use horizon_core::geometry::{
+    Direction,
+    trig::{self, Mth},
 };
 use horizon_world::{
     block_render::FaceVisibility,
@@ -260,6 +259,8 @@ enum SkullType {
 enum Kind {
     None,
     Chest {
+        /// The block (`neighbourState.is(state.getBlock())`).
+        block: String,
         texture: &'static str,
         part: ChestPart,
         y_rot: f32,
@@ -333,6 +334,7 @@ fn classify(name: &str, prop: &dyn Fn(&str) -> Option<String>) -> Kind {
             ChestPart::Right => Some(step(opposite(clockwise(facing)))),
         };
         Kind::Chest {
+            block: name.to_owned(),
             texture: match part {
                 ChestPart::Single => texture,
                 ChestPart::Left => left,
@@ -524,72 +526,6 @@ fn classify(name: &str, prop: &dyn Fn(&str) -> Option<String>) -> Kind {
     Kind::None
 }
 
-/// `EnchantingTableBlockEntity` book animation state.
-#[derive(Clone, Copy, Default)]
-struct Book {
-    time: i32,
-    flip: f32,
-    o_flip: f32,
-    flip_t: f32,
-    flip_a: f32,
-    open: f32,
-    o_open: f32,
-    rot: f32,
-    o_rot: f32,
-    t_rot: f32,
-}
-fn wrap(mut a: f32) -> f32 {
-    while a >= PI {
-        a -= 2.0 * PI;
-    }
-    while a < -PI {
-        a += 2.0 * PI;
-    }
-    a
-}
-impl Book {
-    /// `EnchantingTableBlockEntity.bookAnimationTick`.
-    fn tick(&mut self, pos: [i32; 3], player: Option<[f64; 3]>, random: &mut LegacyRandom) {
-        self.o_open = self.open;
-        self.o_rot = self.rot;
-        let c = [
-            f64::from(pos[0]) + 0.5,
-            f64::from(pos[1]) + 0.5,
-            f64::from(pos[2]) + 0.5,
-        ];
-        let near = player.filter(|p| {
-            (p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) + (p[2] - c[2]).powi(2) < 9.0
-        });
-        if let Some(p) = near {
-            self.t_rot = (p[2] - c[2]).atan2(p[0] - c[0]) as f32;
-            self.open += 0.1;
-            if self.open < 0.5 || random.next_int_bound(40).unwrap_or(1) == 0 {
-                let old = self.flip_t;
-                loop {
-                    let a = random.next_int_bound(4).unwrap_or(0);
-                    let b = random.next_int_bound(4).unwrap_or(0);
-                    self.flip_t += (a - b) as f32;
-                    if old != self.flip_t {
-                        break;
-                    }
-                }
-            }
-        } else {
-            self.t_rot += 0.02;
-            self.open -= 0.1;
-        }
-        self.rot = wrap(self.rot);
-        self.t_rot = wrap(self.t_rot);
-        let dir = wrap(self.t_rot - self.rot);
-        self.rot += dir * 0.4;
-        self.open = self.open.clamp(0.0, 1.0);
-        self.time += 1;
-        self.o_flip = self.flip;
-        let diff = ((self.flip_t - self.flip) * 0.4).clamp(-0.2, 0.2);
-        self.flip_a += (diff - self.flip_a) * 0.9;
-        self.flip += self.flip_a;
-    }
-}
 /// `BookModel.setupAnim` for `BookModel.State(openness, pageFlip1, pageFlip2)`.
 fn book_pose(openness: f32, flip1: f32, flip2: f32) -> impl Fn(&str, &mut [f32; 9]) {
     move |name, p| match name {
@@ -749,6 +685,8 @@ pub struct BlockAnim {
     pub sherds: [Option<String>; 4],
     /// `DecoratedPotRenderState` wobble style (positive) and progress.
     pub wobble: Option<(bool, f32)>,
+    /// `EnchantingTableBlockEntity` book fields.
+    pub book: crate::block_entity_anim::EnchantingBook,
     /// `TheEndGatewayBlockEntity` age and teleportCooldown.
     pub gateway: (i64, i32),
 }
@@ -797,8 +735,6 @@ pub struct Scene<'a> {
 pub struct BlockEntityRenderer {
     models: HashMap<&'static str, ModelPart>,
     kinds: Vec<Kind>,
-    books: HashMap<[i32; 3], Book>,
-    random: LegacyRandom,
     /// Item id to its `PROVIDES_POTTERY_PATTERN` side texture (`Sheets.DECORATED_POT_MAPPER`).
     pot_patterns: HashMap<String, String>,
     /// `Block.shouldRenderFace` for End gateway faces (its occlusion pair cache needs a lock).
@@ -893,8 +829,6 @@ impl BlockEntityRenderer {
         Self {
             models,
             kinds,
-            books: HashMap::new(),
-            random: LegacyRandom::new(0x5EED_B00C),
             pot_patterns: HashMap::new(),
             visibility: None,
         }
@@ -908,24 +842,6 @@ impl BlockEntityRenderer {
     }
     fn kind(&self, state: u32) -> &Kind {
         self.kinds.get(state as usize).unwrap_or(&Kind::None)
-    }
-    /// Client-side block-entity ticks (enchanting-table books).
-    pub fn tick<'a>(
-        &mut self,
-        blocks: impl Iterator<Item = &'a ([i32; 3], u32)>,
-        player: Option<[f64; 3]>,
-    ) {
-        let mut seen = Vec::new();
-        for (pos, state) in blocks {
-            if matches!(self.kind(*state), Kind::EnchantingTable) {
-                seen.push(*pos);
-            }
-        }
-        self.books.retain(|p, _| seen.contains(p));
-        for pos in seen {
-            let book = self.books.entry(pos).or_default();
-            book.tick(pos, player, &mut self.random);
-        }
     }
     pub fn render<'a>(
         &self,
@@ -980,21 +896,65 @@ impl BlockEntityRenderer {
     pub fn renders(&self, state: u32) -> bool {
         !matches!(self.kind(state), Kind::None)
     }
-    /// Sets an enchanting table's book fields (`EnchantingTableBlockEntity`):
-    /// time, flip, oFlip, open, oOpen, rot, oRot.
-    pub fn set_book(&mut self, pos: [i32; 3], time: i32, fields: [f32; 6]) {
-        let [flip, o_flip, open, o_open, rot, o_rot] = fields;
-        let book = self.books.entry(pos).or_default();
-        *book = Book {
-            time,
-            flip,
-            o_flip,
-            open,
-            o_open,
-            rot,
-            o_rot,
-            ..*book
+    /// `ChestRenderer.extractRenderState`'s openness for the chest of `state`
+    /// at `pos`: `ChestBlock.combine` (`DoubleBlockCombiner.combineWithNeigbour`)
+    /// pairs a double half with its neighbour only when that is the same
+    /// block, the other half and faces the same way; `opennessCombiner` then
+    /// takes the more open of both. Also returns the paired half's position.
+    /// `lid` is `getOpenNess(partial)` at a position; non-chests give 0.
+    pub fn chest_openness_of(
+        &self,
+        pos: [i32; 3],
+        state: u32,
+        block_at: &dyn Fn([i32; 3]) -> u32,
+        lid: &dyn Fn([i32; 3]) -> f32,
+    ) -> (f32, Option<[i32; 3]>) {
+        self.chest_openness(pos, self.kind(state), block_at, lid)
+    }
+    fn chest_openness(
+        &self,
+        pos: [i32; 3],
+        kind: &Kind,
+        block_at: &dyn Fn([i32; 3]) -> u32,
+        lid: &dyn Fn([i32; 3]) -> f32,
+    ) -> (f32, Option<[i32; 3]>) {
+        let Kind::Chest {
+            block,
+            part,
+            y_rot,
+            double_with,
+            ..
+        } = kind
+        else {
+            return (0.0, None);
         };
+        let open = lid(pos);
+        let Some(d) = double_with else {
+            return (open, None);
+        };
+        let other = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
+        match self.kind(block_at(other)) {
+            Kind::Chest {
+                block: other_block,
+                part: other_part,
+                y_rot: other_y_rot,
+                ..
+            } if other_block == block
+                && *other_part != ChestPart::Single
+                && other_part != part
+                && other_y_rot == y_rot =>
+            {
+                let other_open = lid(other);
+                // The right half is the first.
+                let open = if *part == ChestPart::Right {
+                    crate::block_entity_anim::combined_openness(open, Some(other_open))
+                } else {
+                    crate::block_entity_anim::combined_openness(other_open, Some(open))
+                };
+                (open, Some(other))
+            }
+            _ => (open, None),
+        }
     }
     /// One block entity of `state` drawn under `base` (minecart contents).
     pub fn render_state(
@@ -1089,7 +1049,7 @@ impl BlockEntityRenderer {
                 texture,
                 part,
                 y_rot,
-                double_with,
+                ..
             } => {
                 let model = match part {
                     ChestPart::Single => "chest",
@@ -1099,22 +1059,24 @@ impl BlockEntityRenderer {
                 let (Some(model), Some(_)) = (self.models.get(model), sprite(texture)) else {
                     return;
                 };
-                // ChestBlock.opennessCombiner / BrightnessCombiner: both halves.
-                let mut open = (scene.lid)(pos);
+                let (open, other) = self.chest_openness(
+                    pos,
+                    kind,
+                    &|p| scene.world.block(p[0], p[1], p[2]).0,
+                    scene.lid,
+                );
+                // BrightnessCombiner: the brighter of both halves, per channel.
                 let mut packed = packed;
-                if let Some(d) = double_with {
-                    let other = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
-                    open = open.max((scene.lid)(other));
+                if let Some(other) = other {
                     let l = scene.world.light(other[0], other[1], other[2]);
                     packed = (packed >> 4).max(l >> 4) << 4 | (packed & 15).max(l & 15);
                 }
-                let open = 1.0 - (1.0 - open).powi(3);
                 let m = base
                     * around(
                         Mat4::from_rotation_y((-y_rot).to_radians()),
                         Vec3::new(0.5, 0.0, 0.5),
                     );
-                let lid = -(open * PI / 2.0);
+                let lid = crate::block_entity_anim::chest_lid_x_rot(open);
                 let adjust = move |name: &str, p: &mut [f32; 9]| {
                     if name == "lid" || name == "lock" {
                         p[3] = lid;
@@ -1459,21 +1421,18 @@ impl BlockEntityRenderer {
                 ) else {
                     return;
                 };
-                let b = self.books.get(&pos).copied().unwrap_or_default();
-                let a = scene.partial;
-                let flip = b.o_flip + (b.flip - b.o_flip) * a;
-                let open = b.o_open + (b.open - b.o_open) * a;
-                let time = b.time as f32 + a;
-                let y_rot = b.o_rot + wrap(b.rot - b.o_rot) * a;
+                // EnchantTableRenderer.extractRenderState and submit.
+                let b = (scene.anim)(pos).book.render(scene.partial);
                 let m = base
                     * Mat4::from_translation(Vec3::new(0.5, 0.75, 0.5))
-                    * Mat4::from_translation(Vec3::new(0.0, 0.1 + (time * 0.1).msin() * 0.01, 0.0))
-                    * Mat4::from_rotation_y(-y_rot)
+                    * Mat4::from_translation(Vec3::new(
+                        0.0,
+                        0.1 + (b.time * 0.1).msin() * 0.01,
+                        0.0,
+                    ))
+                    * Mat4::from_rotation_y(-b.y_rot)
                     * Mat4::from_rotation_z(80f32.to_radians());
-                let ff1 = (frac(flip + 0.25) * 1.6 - 0.3).clamp(0.0, 1.0);
-                let ff2 = (frac(flip + 0.75) * 1.6 - 0.3).clamp(0.0, 1.0);
-                // BookModel.State.forAnimation.
-                let openness = ((time * 0.02).msin() * 0.1 + 1.25) * open;
+                let (openness, ff1, ff2) = (b.openness, b.page_flip1, b.page_flip2);
                 draw_part(model, "root", m, &book_pose(openness, ff1, ff2), paint, out);
             }
             Kind::Lectern { y_rot } => {
