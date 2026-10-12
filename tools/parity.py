@@ -59,6 +59,7 @@ SHIM = STATE_DIR / "shim"
 # so a harness whose inputs match one that passed elsewhere doesn't run again.
 SHARED = Path(os.environ.get("PARITY_SHARED") or (LOCAL / "minecraft").resolve().parent / "parity-shared")
 MACHINE_JOBS = int(os.environ.get("PARITY_MACHINE_JOBS") or max(1, (os.cpu_count() or 4) // 2))
+HOST = os.uname().nodename.split(".")[0]
 DEFAULT_MEMORY = 3 << 30  # assumed peak for a harness that never ran here
 
 
@@ -221,6 +222,14 @@ def run_environment(reuse_oracles=False):
     return environment
 
 
+def default_build_jobs():
+    """Cargo jobs for the probe build: every thread, within $FLEET_LOAD_JOBS when the fleet sets it."""
+    jobs = os.cpu_count() or 8
+    if os.environ.get("FLEET_LOAD_JOBS", "").isdigit():
+        jobs = min(jobs, max(1, int(os.environ["FLEET_LOAD_JOBS"])))
+    return jobs
+
+
 def prebuild(artifacts, jobs):
     """Build every recorded probe in one Cargo run so harnesses don't serialise on its lock."""
     environment = run_environment()
@@ -304,90 +313,360 @@ def machine_slot():
 
 
 def memory_available():
-    for line in Path("/proc/meminfo").read_text().splitlines():
-        if line.startswith("MemAvailable:"):
-            return int(line.split()[1]) * 1024
-    return 16 << 30
+    """Bytes the system can give harnesses now: MemAvailable on Linux, free and reclaimable pages on macOS."""
+    meminfo = Path("/proc/meminfo")
+    if meminfo.exists():
+        for line in meminfo.read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) * 1024
+    try:
+        text = subprocess.run(["vm_stat"], capture_output=True, text=True).stdout
+        page = int(re.search(r"page size of (\d+) bytes", text).group(1))
+        pages = sum(int(re.search(rf"^{label}:\s+(\d+)", text, re.MULTILINE).group(1))
+                    for label in ("Pages free", "Pages inactive", "Pages speculative", "Pages purgeable"))
+        return pages * page
+    except (OSError, AttributeError, ValueError):
+        return 16 << 30
 
 
-def run(selected, state, hasher, environment_digest, jobs, timeout, memory_budget, reuse_oracles):
-    logs = STATE_DIR / "logs"
-    traces = STATE_DIR / "traces"
-    logs.mkdir(parents=True, exist_ok=True)
-    traces.mkdir(parents=True, exist_ok=True)
-    records = state["harnesses"]
-    # Longest first, so the slow harnesses don't start last.
-    queue = sorted(selected, key=lambda name: -records.get(name, {}).get("seconds", 1e9))
-    running = {}
-    results = {}
-    retried = set()
-    started_all = time.monotonic()
-    while queue or running:
-        in_use = sum(item[3] for item in running.values())
-        for name in list(queue):
-            if len(running) >= jobs:
-                break
-            expected = records.get(name, {}).get("peak_bytes", DEFAULT_MEMORY)
-            if running and in_use + expected > memory_budget:
-                continue
-            slot = machine_slot()
-            if slot is None:
-                break  # other runners on this machine hold every slot
-            queue.remove(name)
-            reuse = reuse_oracles and records.get(name, {}).get("oracle_reuse", True) and name not in retried
-            trace = traces / f"{name}.json"
-            trace.unlink(missing_ok=True)
-            log = (logs / f"{name}.log").open("w")
-            environment = run_environment(reuse)
-            environment["PARITY_SHIM_OUTPUTS"] = str(outputs_listing(name, fresh=True))
-            process = subprocess.Popen(
-                [sys.executable, str(Path(__file__)), "--trace", str(trace), str(selected[name])],
-                cwd=ROOT, env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-            running[name] = (process, time.monotonic(), log, expected, reuse, slot)
-            in_use += expected
-        time.sleep(0.2)
-        for name, (process, started, log, _, reused, slot) in list(running.items()):
-            elapsed = time.monotonic() - started
-            if process.poll() is None and elapsed < timeout:
+def default_local_jobs():
+    """Harnesses at once on this machine: PARITY_LOCAL_JOBS, else a third of its threads within the fleet budget."""
+    if os.environ.get("PARITY_LOCAL_JOBS"):
+        return int(os.environ["PARITY_LOCAL_JOBS"])
+    jobs = max(1, (os.cpu_count() or 4) // 3)
+    if os.environ.get("FLEET_LOAD_JOBS", "").isdigit():
+        jobs = min(jobs, max(1, int(os.environ["FLEET_LOAD_JOBS"])))
+    return jobs
+
+
+def outcome(name, passed, elapsed, trace_path, hasher=None):
+    """The record of a finished harness, from its trace. With a hasher, also the content hash of each dependency."""
+    record = {"status": "pass" if passed else "fail", "seconds": round(elapsed, 1),
+              "finished": time.strftime("%Y-%m-%dT%H:%M:%S"), "host": HOST}
+    try:
+        trace = json.loads(Path(trace_path).read_text())
+    except (OSError, ValueError):
+        trace = None  # killed before writing it, or the disk was full: the pass can't be keyed
+    if trace:
+        record["dependencies"], record["artifacts"] = dependencies(trace)
+        record["peak_bytes"] = trace["peak_bytes"]
+        if passed:
+            clear_large_outputs(name, trace)
+        if hasher is not None:
+            record["hashes"] = {path: hasher(ROOT / path) for path in record["dependencies"]}
+    else:
+        record["dependencies"], record["artifacts"] = [], []
+    return record
+
+
+class LocalExecutor:
+    """Runs harnesses on this machine, within its job count, memory budget and the machine-wide slots."""
+
+    def __init__(self, jobs, memory_budget, timeout):
+        self.name, self.jobs, self.memory_budget, self.timeout = HOST, jobs, memory_budget, timeout
+        self.running = {}
+        (STATE_DIR / "logs").mkdir(parents=True, exist_ok=True)
+        (STATE_DIR / "traces").mkdir(parents=True, exist_ok=True)
+
+    def free(self):
+        return self.jobs - len(self.running)
+
+    def accepts(self, name):
+        return True
+
+    def fits(self, expected):
+        return not self.running or sum(item["expected"] for item in self.running.values()) + expected <= self.memory_budget
+
+    def start(self, name, script, reuse, expected):
+        slot = machine_slot()
+        if slot is None:
+            return False  # other runners on this machine hold every slot
+        trace = STATE_DIR / "traces" / f"{name}.json"
+        trace.unlink(missing_ok=True)
+        log = (STATE_DIR / "logs" / f"{name}.log").open("w")
+        environment = run_environment(reuse)
+        environment["PARITY_SHIM_OUTPUTS"] = str(outputs_listing(name, fresh=True))
+        process = subprocess.Popen([sys.executable, str(Path(__file__)), "--trace", str(trace), str(script)],
+                                   cwd=ROOT, env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        self.running[name] = {"process": process, "started": time.monotonic(), "log": log, "expected": expected, "slot": slot}
+        return True
+
+    def poll(self):
+        """(name, passed, seconds, trace path) of each harness that finished or timed out."""
+        finished = []
+        for name, item in list(self.running.items()):
+            process, elapsed = item["process"], time.monotonic() - item["started"]
+            if process.poll() is None and elapsed < self.timeout:
                 continue
             if process.poll() is None:
                 os.killpg(process.pid, 9)
                 process.wait()
-                print(f"--- {name}: timed out after {timeout}s", file=log)
-            log.close()
-            slot.close()
-            del running[name]
-            passed = process.returncode == 0
+                print(f"--- {name}: timed out after {self.timeout}s", file=item["log"])
+            item["log"].close()
+            item["slot"].close()
+            del self.running[name]
+            finished.append((name, process.returncode == 0, elapsed, STATE_DIR / "traces" / f"{name}.json"))
+        return finished
+
+    def stop(self):
+        for item in self.running.values():
+            try:
+                os.killpg(item["process"].pid, 9)
+            except ProcessLookupError:
+                pass
+
+
+def host_config():
+    """tools/parity_hosts.json: the machines harnesses can run on, and the harnesses that must stay local."""
+    path = ROOT / "tools" / "parity_hosts.json"
+    return json.loads(path.read_text()) if path.exists() else {"default": [], "hosts": {}, "local_only": {}}
+
+
+class RemoteExecutor:
+    """Runs harnesses on another machine through `parity.py --worker` over ssh.
+
+    The worktree (minus .git, .local, target and ignored files) is mirrored to
+    <root>/remote/<this host><this path> there; its .local links to the vanilla
+    data in <root>/shared-local. The worker builds the probes and runs each
+    harness it is sent under the same tracer; results come back with the
+    content hash of every dependency, so the pass is keyed on exactly what ran."""
+
+    def __init__(self, name, config, artifacts, local_only, timeout):
+        import threading
+        self.name, self.config, self.local_only, self.timeout = name, config, set(local_only), timeout
+        self.jobs, self.memory_budget, self.ready, self.dead = 0, 0, False, False
+        self.running, self.events, self.backoff = {}, [], 0.0
+        self.lock = threading.Lock()
+        self.process = None
+        self.mirror = f"{config['root']}/remote/{HOST}{str(ROOT).replace('/', '-')}"
+        threading.Thread(target=self._connect, args=(artifacts,), daemon=True).start()
+
+    def _log(self, text):
+        print(f"[{self.name}] {text}", flush=True)
+
+    def _connect(self, artifacts):
+        import shlex
+        ssh = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=30", self.config["ssh"]]
+        started = time.monotonic()
+        shared = f"{self.config['root']}/shared-local"
+        mkdir = subprocess.run([*ssh, f"mkdir -p {shlex.quote(self.mirror)}"], capture_output=True, text=True)
+        if mkdir.returncode:
+            self._log(f"unreachable, running everything here: {mkdir.stderr.strip()[-300:]}")
+            self.dead = True
+            return
+        sync = subprocess.run(
+            ["rsync", "-a", "--delete", "--filter=:- .gitignore", "--exclude=/.git", "--exclude=/.local", "--exclude=/target",
+             "--exclude=__pycache__", "-e", " ".join(ssh[:-1]), f"--rsync-path={self.config.get('rsync', 'rsync')}",
+             f"{ROOT}/", f"{self.config['ssh']}:{self.mirror}/"], capture_output=True, text=True)
+        if sync.returncode:
+            self._log(f"sync failed, running everything here: {sync.stderr.strip()[-300:]}")
+            self.dead = True
+            return
+        environment = " ".join(f"{key}={shlex.quote(str(value))}" for key, value in self.config.get("environment", {}).items())
+        command = (f"{self.config.get('setup', 'true')} && cd {shlex.quote(self.mirror)} && "
+                   f"exec env PARITY_MACHINE_JOBS={self.config.get('jobs', 8)} {environment} "
+                   f"{self.config.get('python', 'python3')} tools/parity.py --worker {shlex.quote(shared)}")
+        self.process = subprocess.Popen([*ssh, f"{self.config.get('shell', 'sh -c')} {shlex.quote(command)}"],
+                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
+        self._send({"prebuild": artifacts, "timeout": self.timeout})
+        self._log(f"synced in {time.monotonic() - started:.0f}s, building probes...")
+        for line in self.process.stdout:
+            try:
+                message = json.loads(line)
+            except ValueError:
+                continue
+            with self.lock:
+                if "hello" in message:
+                    hello = message["hello"]
+                    self.jobs = min(self.config.get("jobs", hello["jobs"]), hello["jobs"])
+                    self.memory_budget = hello["memory"]
+                    self.ready = True
+                    if not hello["built"]:
+                        self._log("probe build failed; harnesses will report their own build errors:\n" + hello["errors"][-2000:])
+                    self._log(f"ready after {time.monotonic() - started:.0f}s: {self.jobs} harnesses at once, "
+                              f"{self.memory_budget / (1 << 30):.0f} GB")
+                else:
+                    self.events.append(message)
+        with self.lock:
+            self.dead = True
+
+    def _send(self, message):
+        try:
+            self.process.stdin.write(json.dumps(message) + "\n")
+            self.process.stdin.flush()
+        except (OSError, ValueError, AttributeError):
+            self.dead = True
+
+    def free(self):
+        if not self.ready or self.dead or time.monotonic() < self.backoff:
+            return 0
+        return self.jobs - len(self.running)
+
+    def accepts(self, name):
+        return name not in self.local_only
+
+    def fits(self, expected):
+        return not self.running or sum(self.running.values()) + expected <= self.memory_budget
+
+    def start(self, name, script, reuse, expected):
+        self.running[name] = expected
+        self._send({"run": name, "script": str(Path(script).relative_to(ROOT)), "reuse": reuse, "expected": expected})
+        return True
+
+    def poll(self):
+        """Finished harnesses, as (name, record or None): None means it must run elsewhere."""
+        with self.lock:
+            events, self.events = self.events, []
+            dead = self.dead
+        finished = []
+        for message in events:
+            name = message.get("done") or message.get("rejected")
+            if name not in self.running:
+                continue
+            del self.running[name]
+            if "rejected" in message:
+                self.backoff = time.monotonic() + 5  # other runners hold the remote machine's slots
+                finished.append((name, None))
+            else:
+                (STATE_DIR / "logs").mkdir(parents=True, exist_ok=True)
+                (STATE_DIR / "logs" / f"{name}.log").write_text(message.get("log", ""))
+                finished.append((name, message["record"]))
+        if dead and self.running:
+            self._log("connection lost; its harnesses run elsewhere")
+            finished += [(name, None) for name in self.running]
+            self.running = {}
+        return finished
+
+    def stop(self):
+        if self.process and self.process.poll() is None:
+            try:
+                self.process.stdin.close()
+            except OSError:
+                pass
+            try:
+                self.process.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+
+
+def key_from(record, hashes, environment):
+    """key() over the content hashes a remote machine recorded for each dependency."""
+    return key(record, lambda path: hashes.get(str(Path(path).relative_to(ROOT)), "missing"), environment)
+
+
+def run(selected, state, hasher, environment_digest, executors, reuse_oracles):
+    records = state["harnesses"]
+    # Longest first, so the slow harnesses don't start last.
+    queue = sorted(selected, key=lambda name: -records.get(name, {}).get("seconds", 1e9))
+    results, retried, busy = {}, set(), {}
+    started_all = time.monotonic()
+    local = executors[-1]
+    while queue or busy:
+        # Remote machines first: they take the longest harnesses and leave this one lighter.
+        for executor in executors:
+            while queue and executor.free() > 0:
+                pick = next((name for name in queue if executor.accepts(name)
+                             and executor.fits(records.get(name, {}).get("peak_bytes", DEFAULT_MEMORY))), None)
+                if pick is None:
+                    break
+                reuse = reuse_oracles and records.get(pick, {}).get("oracle_reuse", True) and pick not in retried
+                if not executor.start(pick, selected[pick], reuse, records.get(pick, {}).get("peak_bytes", DEFAULT_MEMORY)):
+                    break
+                queue.remove(pick)
+                busy[pick] = (executor, reuse)
+        if queue and not busy and local.jobs == 0 and all(executor.dead for executor in executors[:-1]):
+            local.jobs = 1  # every remote machine is gone: don't stall
+        time.sleep(0.2)
+        finished = []
+        for executor in executors:
+            if isinstance(executor, LocalExecutor):
+                for name, passed, elapsed, trace in executor.poll():
+                    finished.append((name, outcome(name, passed, elapsed, trace)))
+            else:
+                finished += executor.poll()
+        for name, record in finished:
+            executor, reused = busy.pop(name)
+            if record is None:
+                queue.insert(0, name)
+                continue
+            passed = record["status"] == "pass"
             if not passed and reused and records.get(name, {}).get("status") != "fail":
                 # A new failure might come from a reused oracle result: run it again from scratch.
                 retried.add(name)
                 queue.insert(0, name)
                 print(f"retry {name} without reused oracle results", flush=True)
                 continue
-            trace_path = traces / f"{name}.json"
-            record = {"status": "pass" if passed else "fail", "seconds": round(elapsed, 1),
-                      "finished": time.strftime("%Y-%m-%dT%H:%M:%S")}
             # A harness that only passes fresh no longer reuses oracle results.
             record["oracle_reuse"] = records.get(name, {}).get("oracle_reuse", True) and not (passed and name in retried)
-            try:
-                trace = json.loads(trace_path.read_text())
-            except (OSError, ValueError):
-                trace = None  # killed before writing it, or the disk was full: the pass can't be keyed
-            if trace:
-                record["dependencies"], record["artifacts"] = dependencies(trace)
-                record["peak_bytes"] = trace["peak_bytes"]
-                record["key"] = key(record, hasher, environment_digest)
-                if passed:
-                    clear_large_outputs(name, trace)
-            else:
-                record["dependencies"], record["artifacts"] = [], []
+            hashes = record.pop("hashes", None)
+            if record["dependencies"]:
+                record["key"] = key_from(record, hashes, environment_digest) if hashes is not None else \
+                    key(record, hasher, environment_digest)
             records[name] = record
             results[name] = record
             save_state(state)
             publish(name, record)
-            tail = "" if passed else f"  ({logs / (name + '.log')})"
-            print(f"{'PASS' if passed else 'FAIL'} {name} {elapsed:.0f}s{tail}", flush=True)
+            where = "" if executor is local else f" on {executor.name}"
+            tail = "" if passed else f"  ({STATE_DIR / 'logs' / (name + '.log')})"
+            print(f"{'PASS' if passed else 'FAIL'} {name} {record['seconds']:.0f}s{where}{tail}", flush=True)
     return results, time.monotonic() - started_all
+
+
+def worker_main(shared_local):
+    """`parity.py --worker SHARED_LOCAL`: run harnesses sent as JSON lines on stdin, answer on stdout."""
+    import queue as queues
+    import threading
+    global SHARED
+    LOCAL.mkdir(exist_ok=True)
+    shared_local = Path.home() / Path(shared_local).expanduser()  # relative paths are from the home directory
+    for entry in sorted(shared_local.iterdir()) if shared_local.is_dir() else []:
+        if entry.is_dir() and entry.name not in {"parity-shared", "datafix"} and not (LOCAL / entry.name).exists():
+            (LOCAL / entry.name).symlink_to(entry)
+    if not os.environ.get("PARITY_SHARED"):
+        SHARED = (LOCAL / "minecraft").resolve().parent / "parity-shared"
+    inbox = queues.Queue()
+
+    def read():
+        for line in sys.stdin:
+            inbox.put(json.loads(line))
+        inbox.put(None)
+
+    threading.Thread(target=read, daemon=True).start()
+    channel = sys.stdout
+    sys.stdout = sys.stderr  # nothing else may write to the protocol channel
+
+    def send(message):
+        channel.write(json.dumps(message) + "\n")
+        channel.flush()
+
+    first = inbox.get()
+    if first is None:
+        return 0
+    state = load_state()
+    hasher = Hasher(state["hashes"])
+    built, errors = prebuild(first["prebuild"], os.cpu_count() or 8) if first["prebuild"] else (True, "")
+    executor = LocalExecutor(MACHINE_JOBS, int(memory_available() * 0.75), first["timeout"])
+    send({"hello": {"jobs": MACHINE_JOBS, "memory": executor.memory_budget, "built": built, "errors": errors[-4000:]}})
+    while True:
+        try:
+            message = inbox.get(timeout=0.2)
+        except queues.Empty:
+            message = False
+        if message is None:
+            executor.stop()
+            save_state(state)
+            return 0
+        if message:
+            # Other runners may share this machine: take a slot only while memory allows.
+            reserve = message["expected"] + (4 << 30)
+            if (executor.running and memory_available() < reserve) or \
+                    not executor.start(message["run"], ROOT / message["script"], message["reuse"], message["expected"]):
+                send({"rejected": message["run"]})
+        for name, passed, elapsed, trace in executor.poll():
+            record = outcome(name, passed, elapsed, trace, hasher)
+            log = (STATE_DIR / "logs" / f"{name}.log").read_bytes()[-(8 << 20):].decode(errors="replace")
+            send({"done": name, "record": record, "log": log})
+            save_state(state)
 
 
 def stale(name, state, hasher, environment):
@@ -427,6 +706,7 @@ def trace_main(output, script, arguments):
     def write():
         modules = [getattr(module, "__file__", None) for module in list(sys.modules.values())]
         peak = max(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss, resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)
+        peak //= 1024 if sys.platform == "darwin" else 1  # bytes on macOS, KiB elsewhere
         Path(output).write_text(json.dumps({
             "modules": sorted({m for m in modules if m and inside(m, ROOT)}),
             "read": sorted(path for path in read if os.path.isabs(path) or not path.startswith("<")),
@@ -450,6 +730,8 @@ def finished_run(failed):
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--trace":
         return trace_main(sys.argv[2], sys.argv[3], sys.argv[4:])
+    if len(sys.argv) > 1 and sys.argv[1] == "--worker":
+        return worker_main(sys.argv[2])
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("names", nargs="*", help="harness names, e.g. food or block_update")
     parser.add_argument("--all", action="store_true", help="run every harness from scratch, ignoring earlier passes")
@@ -457,8 +739,12 @@ def main():
     parser.add_argument("--failed", action="store_true", help="rerun the harnesses that failed last time")
     parser.add_argument("--list", action="store_true", help="print what would run, then stop")
     parser.add_argument("--status", action="store_true", help="print each harness's last result")
-    parser.add_argument("-j", "--jobs", type=int, default=max(1, (os.cpu_count() or 4) // 3),
-                        help="harnesses at once in this run; every runner on the machine shares PARITY_MACHINE_JOBS slots")
+    parser.add_argument("-j", "--jobs", type=int, default=default_local_jobs(),
+                        help="harnesses at once on this machine (default: PARITY_LOCAL_JOBS, else a third of its threads "
+                             "within $FLEET_LOAD_JOBS); every runner on the machine shares PARITY_MACHINE_JOBS slots")
+    parser.add_argument("--hosts", default=os.environ.get("PARITY_HOSTS"),
+                        help="comma-separated machines from tools/parity_hosts.json to run harnesses on as well "
+                             "(default: PARITY_HOSTS, else the file's default; '' for this machine only)")
     parser.add_argument("--timeout", type=int, default=3600, help="seconds per harness")
     args = parser.parse_args()
 
@@ -496,23 +782,41 @@ def main():
             finished_run([])
         return 0
 
-    jobs = max(1, args.jobs)
+    jobs = max(0, args.jobs)
     # Harnesses that never ran here have no recorded probes: build them all.
     artifacts = [["all", "", "release"]] if any("artifacts" not in records.get(name, {}) for name in selected) else []
     for name in selected:
         for artifact in records.get(name, {}).get("artifacts", []):
             if artifact not in artifacts:
                 artifacts.append(artifact)
-    print("Building probes...", flush=True)
-    started = time.monotonic()
-    built, errors = prebuild(artifacts, os.cpu_count() or 8)
-    if not built:
-        print(errors[-4000:])
-        print("Probe build failed; harnesses will report their own build errors.", flush=True)
-    print(f"Probes built in {time.monotonic() - started:.0f}s. Running {len(selected)} harnesses, {jobs} at a time...", flush=True)
-    reuse_oracles = not (args.fresh or args.all)
-    results, elapsed = run(selected, state, hasher, environment_key(hasher), jobs, args.timeout, int(memory_available() * 0.75),
-                           reuse_oracles)
+    config = host_config()
+    hosts = [host for host in (config.get("default", []) if args.hosts is None else args.hosts.split(","))
+             if host and host != HOST]
+    unknown = [host for host in hosts if host not in config["hosts"]]
+    if unknown:
+        parser.error("unknown hosts (see tools/parity_hosts.json): " + ", ".join(unknown))
+    local_only = [name for name in selected if name in config.get("local_only", {})]
+    if jobs == 0 and (local_only or not hosts):
+        jobs = 1  # harnesses that can only run here still need a slot
+    remotes = [RemoteExecutor(host, config["hosts"][host], artifacts, config.get("local_only", {}), args.timeout)
+               for host in hosts]
+    try:
+        if jobs:
+            print("Building probes...", flush=True)
+            started = time.monotonic()
+            built, errors = prebuild(artifacts, default_build_jobs())
+            if not built:
+                print(errors[-4000:])
+                print("Probe build failed; harnesses will report their own build errors.", flush=True)
+            print(f"Probes built in {time.monotonic() - started:.0f}s.", flush=True)
+        where = "".join(f", plus {host}" for host in hosts)
+        print(f"Running {len(selected)} harnesses, {jobs} at a time here{where}...", flush=True)
+        reuse_oracles = not (args.fresh or args.all)
+        executors = [*remotes, LocalExecutor(jobs, int(memory_available() * 0.75), args.timeout)]
+        results, elapsed = run(selected, state, hasher, environment_key(hasher), executors, reuse_oracles)
+    finally:
+        for executor in remotes:
+            executor.stop()
     save_state(state)
     failed = sorted(name for name, record in results.items() if record["status"] != "pass")
     finished_run(failed)

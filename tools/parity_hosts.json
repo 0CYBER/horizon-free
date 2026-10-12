@@ -1,0 +1,17 @@
+{
+ "default": [],
+ "hosts": {
+  "macmini": {
+   "ssh": "macmini",
+   "root": "code/horizon-parity",
+   "shell": "zsh -lc",
+   "setup": "source ~/.cargo/env && export JAVA_HOME=$(/usr/libexec/java_home -v 25) && export PATH=$JAVA_HOME/bin:$PATH",
+   "python": "/opt/homebrew/bin/python3.13",
+   "rsync": "/opt/homebrew/bin/rsync",
+   "jobs": 14
+  }
+ },
+ "local_only": {
+  "save_roundtrip": "runs the game on a virtual screen (vscreen) with a null ALSA device"
+ }
+}
