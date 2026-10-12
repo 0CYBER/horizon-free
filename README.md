@@ -148,6 +148,16 @@ memory; the failures are new harnesses that still find divergences.
 
 The rewrite is complete when it reaches one-to-one parity and a packaged native Linux build passes the launch checks in [Rust rewrite status](docs/rust-parity.md#completion-criteria-and-playable-builds).
 
+### After the rewrite
+
+Once Horizon matches vanilla, the plan is to build on that exact base:
+
+- **Performance:** optimize the client and the server as far as they can go (rendering, chunk generation and meshing, memory, multithreaded ticking) while the differential harnesses keep gameplay identical to vanilla.
+- **Modding support:** a stable API for writing mods against Horizon.
+- **Agent control:** an MCP server and a CLI so AI agents and scripts can play and drive the game, growing out of today's `horizon-ctl` scripting socket.
+- **Built-in recording:** capture gameplay video in a keypress, without external tools.
+- **Automatic version updates:** a pipeline that ports each new Minecraft release on its own: compare the new version with the pinned one, regenerate the data, rewrite the changed parts and prove them with the same differential harnesses.
+
 ## Contributing
 
 Issues and pull requests are welcome. Before opening a pull request, run the offline checks:
