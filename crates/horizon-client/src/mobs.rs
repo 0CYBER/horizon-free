@@ -56,6 +56,7 @@ pub mod trader;
 pub mod undead;
 pub mod vex;
 pub mod villager;
+pub mod villager_brain;
 pub mod warden;
 pub mod witch;
 pub mod wither;
@@ -894,6 +895,29 @@ pub struct Seen {
     pub player_rep: i32,
     /// `isPushable` and pushed by others (`Entity.push(Entity)` moves it).
     pub pushable: bool,
+    /// `MobCategory` (`monster`, `creature`, ...).
+    pub category: &'static str,
+    /// A villager's `POTENTIAL_JOB_SITE` and `MEETING_POINT`.
+    pub potential_job: Option<[i32; 3]>,
+    pub meeting: Option<[i32; 3]>,
+    /// A villager's profession (index into `render::PROFESSIONS`) and experience.
+    pub profession: u8,
+    pub xp: i32,
+}
+impl Mob {
+    /// `EntityType.getCategory`'s name.
+    pub fn category(&self) -> &'static str {
+        match self.kind.category.as_str() {
+            "monster" => "monster",
+            "creature" => "creature",
+            "ambient" => "ambient",
+            "axolotls" => "axolotls",
+            "underground_water_creature" => "underground_water_creature",
+            "water_creature" => "water_creature",
+            "water_ambient" => "water_ambient",
+            _ => "misc",
+        }
+    }
 }
 /// `Entity.push` on other mobs acts at once in vanilla: a mob ticking later
 /// moves with it this tick. Takes the `Push` events aimed at mobs out of
@@ -1202,10 +1226,10 @@ impl Mob {
     pub fn tick(
         &mut self,
         w: &MobWorld,
-        _random: &mut LegacyRandom,
+        level_random: &mut LegacyRandom,
         events: &mut Vec<MobEvent>,
     ) -> bool {
-        ai::tick(self, w, events)
+        ai::tick(self, w, level_random, events)
     }
     pub fn distance_to(&self, p: [f64; 3]) -> f64 {
         let d = [

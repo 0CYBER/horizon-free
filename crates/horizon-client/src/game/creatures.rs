@@ -128,6 +128,13 @@ fn seen(m: &Mob, player: Option<[i32; 4]>) -> Seen {
             _ => 0,
         },
         pushable: m.pushable(),
+        category: m.category(),
+        potential_job: horizon_client::mobs::villager_brain::potential_job_site(m),
+        meeting: (m.species() == Species::Villager)
+            .then_some(m.extra.meeting)
+            .flatten(),
+        profession: m.extra.variant2,
+        xp: horizon_client::mobs::villager::xp(m),
     }
 }
 impl Game<'_> {

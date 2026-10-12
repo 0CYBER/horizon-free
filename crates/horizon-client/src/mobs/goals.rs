@@ -315,6 +315,38 @@ impl Mob {
             m.land_up_out_of_solid(w, p)
         })
     }
+    /// LandRandomPos.getPos(mob, h, v, scorer): the best of ten by `score`.
+    pub fn land_random_pos_scored(
+        &mut self,
+        w: &MobWorld,
+        h: i32,
+        v: i32,
+        score: impl Fn([i32; 3]) -> f64,
+    ) -> Option<[f64; 3]> {
+        let mut best: Option<[i32; 3]> = None;
+        let mut best_weight = f64::NEG_INFINITY;
+        for _ in 0..10 {
+            let d = self.random_direction(h, v);
+            let p = self.toward(f64::from(h), d);
+            if p[1] < crate::chunk::MIN_Y || p[1] >= 320 || !self.stable_destination(w, p) {
+                continue;
+            }
+            if let Some(p) = self.land_up_out_of_solid(w, p) {
+                let v = score(p);
+                if v > best_weight {
+                    best_weight = v;
+                    best = Some(p);
+                }
+            }
+        }
+        best.map(|p| {
+            [
+                f64::from(p[0]) + 0.5,
+                f64::from(p[1]),
+                f64::from(p[2]) + 0.5,
+            ]
+        })
+    }
     /// LandRandomPos.getPosAway
     pub fn land_random_pos_away(
         &mut self,

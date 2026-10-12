@@ -132,6 +132,10 @@ impl Mob {
     /// slime size scaling.
     /// `EntityDimensions` (float width, height and eye height) widened to double.
     pub fn dims(&self) -> (f64, f64, f64) {
+        // LivingEntity.SLEEPING_DIMENSIONS.
+        if super::villager::sleeping(self) {
+            return (f64::from(0.2_f32), f64::from(0.2_f32), f64::from(0.2_f32));
+        }
         let k = &self.kind;
         let (mut w, mut h, mut e) = (k.width as f32, k.height as f32, k.eye_height as f32);
         // Sniffer.DIGGING_DIMENSIONS: 0.4 lower, its eyes at 0.81.

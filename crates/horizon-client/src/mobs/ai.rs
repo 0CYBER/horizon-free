@@ -12,7 +12,10 @@ use super::{
     undead,
 };
 use crate::blocks::Fluid;
-use horizon_core::{geometry::Vec3, random::RandomSource};
+use horizon_core::{
+    geometry::Vec3,
+    random::{LegacyRandom, RandomSource},
+};
 
 #[derive(Clone, Debug, Default)]
 pub struct Ai {
@@ -309,7 +312,12 @@ pub fn is_monster(s: Species) -> bool {
     )
 }
 /// One full entity tick. Returns false when the mob is gone.
-pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) -> bool {
+pub fn tick(
+    m: &mut Mob,
+    w: &MobWorld,
+    level_random: &mut LegacyRandom,
+    events: &mut Vec<MobEvent>,
+) -> bool {
     if m.removed {
         return false;
     }
@@ -344,7 +352,7 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) -> bool {
         return false;
     }
     if !m.no_ai {
-        ai_step(m, w, events);
+        ai_step(m, w, level_random, events);
     }
     // Mob.tickHeadTurn -> BodyRotationControl.clientTick
     if m.alive() {
@@ -535,7 +543,7 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     }
 }
 /// LivingEntity.aiStep (and Mob/AgeableMob/Animal additions).
-fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &mut Vec<MobEvent>) {
     // Witch.aiStep runs before super.aiStep().
     if m.species() == Species::Witch {
         let far = m
@@ -565,10 +573,9 @@ fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     m.ai.zza *= 0.98;
     // LivingEntity.isImmobile: no goals or input (a biting, stunned or
     // roaring ravager).
-    let immobile = m.species() == Species::Ravager && super::ravager::immobile(m)
-        || super::villager::sleeping(m);
+    let immobile = m.species() == Species::Ravager && super::ravager::immobile(m);
     if m.alive() && !immobile {
-        server_ai_step(m, w, events);
+        server_ai_step(m, w, level_random, events);
     } else {
         m.ai.jumping = false;
         m.ai.xxa = 0.0;
@@ -708,7 +715,12 @@ fn sun_burn_tick(m: &mut Mob, w: &MobWorld) -> bool {
     br > 0.5 && m.random.next_float() * 30.0 < (br - 0.4) * 2.0 && !wet && w.can_see_sky(x, y, z)
 }
 /// Mob.serverAiStep
-fn server_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+fn server_ai_step(
+    m: &mut Mob,
+    w: &MobWorld,
+    level_random: &mut LegacyRandom,
+    events: &mut Vec<MobEvent>,
+) {
     m.ai.no_action_time += 1;
     // A creaking looked at stands still.
     if super::creaking::is_creaking(m) && !super::creaking::can_move(m) {
@@ -737,6 +749,11 @@ fn server_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     m.ai.targets = targets;
     m.ai.goals = goals;
     m.nav_tick(w);
+    if m.species() == Species::Villager {
+        // Villager.customServerAiStep: the brain, then the raid sound roll.
+        super::villager_brain::tick(m, w, level_random, events);
+        let _ = m.random.next_int_bound(100);
+    }
     {
         let mut cx = Cx { w, events };
         custom_server_ai_step(m, &mut cx);
@@ -1079,7 +1096,6 @@ pub fn custom_travel(m: &mut Mob, w: &MobWorld, input: Vec3, events: &mut Vec<Mo
         // Shulkers never move on their own.
         Family::Shulker => true,
         Family::Vex => super::vex::travel(m),
-        Family::Villager => super::villager::travel(m),
         Family::Nautilus => super::nautilus::travel(m, w, input, events),
         _ => false,
     }

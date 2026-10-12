@@ -230,6 +230,13 @@ fn seen(m: &Mob) -> Seen {
         active_raid: horizon_client::mobs::raider::has_active_raid(m),
         player_rep: 0,
         pushable: m.pushable(),
+        category: m.category(),
+        potential_job: horizon_client::mobs::villager_brain::potential_job_site(m),
+        meeting: (m.species() == Species::Villager)
+            .then_some(m.extra.meeting)
+            .flatten(),
+        profession: m.extra.variant2,
+        xp: horizon_client::mobs::villager::xp(m),
     }
 }
 
@@ -347,7 +354,11 @@ fn print(out: &mut String, t: i32, i: usize, m: &Mob) {
         f(m.ai.speed),
         u8::from(m.ai.jumping)
     );
-    let _ = writeln!(out, "\trng {:x}", m.random.state());
+    let _ = write!(out, "\trng {:x}", m.random.state());
+    if let Some((acts, mem)) = horizon_client::mobs::villager_brain::describe(m) {
+        let _ = write!(out, "\tact {acts}\tmem {mem}");
+    }
+    out.push('\n');
 }
 
 fn main() -> horizon_client::Result<()> {
@@ -460,6 +471,16 @@ fn main() -> horizon_client::Result<()> {
                 }
             }
             m.random = LegacyRandom::new(spec.seed);
+            if m.species() == Species::Villager {
+                // The oracle seeds the random after the brain is built, then
+                // delays the sensors again and seeds the gates' shuffles.
+                horizon_client::mobs::villager_brain::init(
+                    &mut m,
+                    world.game_time,
+                    s.time,
+                    spec.seed,
+                );
+            }
             mobs.push(m);
         }
         let player = s.player.map(|p| {
