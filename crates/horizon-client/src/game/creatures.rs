@@ -513,6 +513,10 @@ impl Game<'_> {
         self.villager_murdered(m, by_player);
         let pos = [m.position.x, m.position.y + 0.5, m.position.z];
         self.drop_death_loot(&mut dying, by_player, consumed, pos);
+        if m.species() == Species::CopperGolem {
+            // CopperGolem.dropEquipment: the preserved equipment too.
+            self.golem_drop_equipment(&mut dying);
+        }
         if m.species() == Species::SulfurCube {
             self.split_sulfur_cube(m);
         }
@@ -1698,6 +1702,10 @@ impl Game<'_> {
             return Ok(true);
         }
         if self.interact_sulfur_cube(index, &item) {
+            self.swing_arm();
+            return Ok(true);
+        }
+        if self.interact_copper_golem(index, &item) {
             self.swing_arm();
             return Ok(true);
         }

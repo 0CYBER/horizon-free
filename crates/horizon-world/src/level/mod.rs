@@ -522,6 +522,18 @@ impl Behaviours {
     ) -> bool {
         self.sim(level, ticks).set_block(pos, state, flags)
     }
+    /// `CopperChestBlock.getFromCopperBlock(copperBlock, facing, level, pos)`.
+    pub fn copper_chest_from_block<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        copper: BlockStateId,
+        facing: Direction,
+        pos: BlockPos,
+    ) -> Option<BlockStateId> {
+        self.sim(level, ticks)
+            .copper_chest_from_block(copper, facing, pos)
+    }
     /// `Level.removeBlock(pos, movedByPiston)`: replace with the fluid's block.
     pub fn remove_block<L: LevelAccess + ?Sized>(
         &self,

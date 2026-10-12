@@ -16,6 +16,7 @@ mod chat;
 mod combat;
 mod commands;
 mod control;
+mod copper_golems;
 mod creaking;
 mod creatures;
 mod crossbow;
@@ -473,6 +474,18 @@ impl LevelAccess for GameLevel<'_> {
         match event {
             // Block.dropResources draws its loot and spots right away.
             LevelEvent::DropResources { pos, state } => self.drop_resources_now(pos, state),
+            // Block.popResource of the block's own item (tall flowers, flower beds).
+            LevelEvent::BlockEvent {
+                pos,
+                state,
+                kind: "pop_block_item",
+            } => self.pop_block_item(pos, state),
+            // ComposterBlock.extractProduce: bone meal above the composter.
+            LevelEvent::Player {
+                pos,
+                effect: PlayerEffect::DropItem(item),
+                ..
+            } => self.pop_above(pos, item),
             event => self.events.push(event),
         }
     }
@@ -716,6 +729,8 @@ struct Game<'a> {
     ender_open: Option<(i32, i32, i32)>,
     /// Block entity data of broken blocks waiting for their dropped item.
     pending: spill::Pending,
+    /// The chest each copper golem has open (`CopperGolem.openedChestPos`).
+    golem_openers: HashMap<u32, (i32, i32, i32)>,
     /// Item entities spawned and block entities removed while the block
     /// behaviour ran (spilled contents, popped resources).
     spill: spill::Spill,
@@ -1505,15 +1520,8 @@ impl Game<'_> {
                             self.pop_resource([pos.x, pos.y, pos.z], rest);
                         }
                     }
-                    PlayerEffect::DropItem(item) => self.pop_resource(
-                        [pos.x, pos.y + 1, pos.z],
-                        ItemStack {
-                            item,
-                            count: 1,
-                            damage: 0,
-                            extra: None,
-                        },
-                    ),
+                    // Popped as the behaviour emits it (GameLevel::emit).
+                    PlayerEffect::DropItem(_) => {}
                     PlayerEffect::EatCake => {
                         if let Some(p) = self.player.as_mut() {
                             let food = &mut p.health.food;
@@ -1571,22 +1579,6 @@ impl Game<'_> {
                     state,
                     kind: "spawn_ghastling",
                 } => self.spawn_ghastling([pos.x, pos.y, pos.z], state),
-                LevelEvent::BlockEvent {
-                    pos,
-                    state,
-                    kind: "pop_block_item",
-                } => {
-                    let item = self.res.facts.get(state).item.clone();
-                    self.pop_resource(
-                        [pos.x, pos.y, pos.z],
-                        ItemStack {
-                            item,
-                            count: 1,
-                            damage: 0,
-                            extra: None,
-                        },
-                    );
-                }
                 LevelEvent::GameEvent { pos, event, state } => {
                     self.sculk_level_event(pos, event, state)
                 }
@@ -2734,6 +2726,7 @@ impl Game<'_> {
         self.spawn_loaded_entities();
         if running {
             self.tick_mobs()?;
+            self.tick_copper_golems();
             self.tick_experience();
         }
         self.tick_lan();
@@ -8117,6 +8110,7 @@ pub fn run() -> Result<()> {
         ender_items: vec![None; 27],
         ender_open: None,
         pending: Default::default(),
+        golem_openers: HashMap::new(),
         spill: Default::default(),
         recipe_ui: Default::default(),
         mount_menu: Default::default(),

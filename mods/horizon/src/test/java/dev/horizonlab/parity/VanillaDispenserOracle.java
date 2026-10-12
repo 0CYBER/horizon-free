@@ -326,7 +326,8 @@ public final class VanillaDispenserOracle {
             }
         }
         boolean listed = e instanceof net.minecraft.world.entity.animal.sheep.Sheep || e instanceof net.minecraft.world.entity.animal.cow.MushroomCow
-            || e instanceof net.minecraft.world.entity.monster.skeleton.Bogged || e instanceof net.minecraft.world.entity.animal.golem.SnowGolem;
+            || e instanceof net.minecraft.world.entity.monster.skeleton.Bogged || e instanceof net.minecraft.world.entity.animal.golem.SnowGolem
+            || e instanceof net.minecraft.world.entity.animal.golem.CopperGolem;
         if (listed && e instanceof Shearable shearable) line.append(shearable.readyForShearing() ? " ready" : " unready");
         if (e instanceof net.minecraft.world.entity.animal.equine.AbstractChestedHorse chested && chested.hasChest()) line.append(" chest");
         if (e instanceof Leashable leashable && leashable.isLeashed()) line.append(" leashed");

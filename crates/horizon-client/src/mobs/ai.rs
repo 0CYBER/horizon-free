@@ -125,7 +125,7 @@ pub fn family(s: Species) -> Family {
         S::Witch => Family::Witch,
         S::Wolf | S::Cat => Family::Tame,
         S::Blaze | S::Ghast => Family::Nether,
-        S::IronGolem | S::SnowGolem => Family::Golem,
+        S::IronGolem | S::SnowGolem | S::CopperGolem => Family::Golem,
         S::Pillager | S::Vindicator | S::Evoker | S::Illusioner => Family::Illager,
         S::Vex => Family::Vex,
         S::Ravager => Family::Ravager,
@@ -171,6 +171,7 @@ pub fn register(m: &mut Mob) {
         Family::Nether if m.species() == Species::Ghast => super::nether::register_ghast(m),
         Family::Nether => super::nether::register_blaze(m),
         Family::Golem if m.species() == Species::IronGolem => super::golem::register_iron(m),
+        Family::Golem if m.species() == Species::CopperGolem => super::copper_golem::register(m),
         Family::Golem => super::golem::register_snow(m),
         Family::Illager if m.species() == Species::Pillager => super::illager::register_pillager(m),
         Family::Illager if m.species() == Species::Evoker => super::illager::register_evoker(m),
@@ -672,6 +673,7 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             super::shulker::ai_step(m, w, events);
         }
         Species::SnowGolem => super::golem::snow_ai_step(m, w, events),
+        Species::CopperGolem => super::copper_golem::ai_step(m, w, events),
         Species::Slime | Species::MagmaCube => super::cube::ai_step(m, w, events),
         Species::SulfurCube => {
             super::cube::ai_step(m, w, events);

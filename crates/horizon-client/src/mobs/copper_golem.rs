@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 // Copper golem state: `variant` the weathering (0 unaffected .. 3 oxidized),
 // `variant3` the `CopperGolemState`, `main_hand` with `ints[1]` the carried
-// stack, `legs` the antenna block, `egg_time` the next weathering tick (-1
+// stack, the saddle slot the antenna (`EQUIPMENT_SLOT_ANTENNA`), `egg_time` the next weathering tick (-1
 // unset, -2 waxed), `ints[0]` the idle animation start tick, `home` the chest
 // being served with `positions` the visited chests, `point` where it walks,
 // `scratch` = [transport phase, ticks since reaching the target, interaction
@@ -44,7 +44,10 @@ pub fn register(m: &mut Mob) {
 pub fn texture(m: &Mob) -> String {
     match m.extra.variant {
         0 => "entity/copper_golem/copper_golem".into(),
-        n => format!("entity/copper_golem/copper_golem_{}", WEATHER[n.min(3) as usize]),
+        n => format!(
+            "entity/copper_golem/copper_golem_{}",
+            WEATHER[n.min(3) as usize]
+        ),
     }
 }
 pub fn eye_texture(m: &Mob) -> String {
@@ -102,7 +105,11 @@ impl Goal for Serve {
         match m.extra.point {
             Some(p) => {
                 if m.ai.nav.is_done() || m.age % 10 == 0 {
-                    let block = [p[0].floor() as i32, p[1].floor() as i32, p[2].floor() as i32];
+                    let block = [
+                        p[0].floor() as i32,
+                        p[1].floor() as i32,
+                        p[2].floor() as i32,
+                    ];
                     let path = m.create_path_to(cx.w, block, 0);
                     m.nav_move_to_path(path, 1.0);
                 }
@@ -179,12 +186,13 @@ pub fn ai_step(m: &mut Mob, _w: &MobWorld, events: &mut Vec<MobEvent>) {
     match state {
         IDLE => {
             interaction(st, 0);
-            if m.extra.ints[0] == m.age {
+            let tick = m.age as i32;
+            if m.extra.ints[0] == tick {
                 st[0].start(age);
             } else if m.extra.ints[0] == 0 {
-                m.extra.ints[0] = m.age + 200 + m.random.next_int_bound(40).unwrap_or(0);
+                m.extra.ints[0] = tick + 200 + m.random.next_int_bound(40).unwrap_or(0);
             }
-            if m.age == m.extra.ints[0] + 10 {
+            if tick == m.extra.ints[0] + 10 {
                 let at = [m.position.x, m.position.y, m.position.z];
                 events.push(MobEvent::Sound(sound(m, "spin"), at, 1.0, 1.0));
                 m.extra.ints[0] = 0;

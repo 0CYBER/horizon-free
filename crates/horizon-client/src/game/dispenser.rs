@@ -1706,7 +1706,12 @@ impl Game<'_> {
     }
     /// `Entity.spawnAtLocation(level, stack, offset)`: an item at the entity's
     /// feet plus the offset, moving as `new ItemEntity` makes it.
-    fn spawn_at_location(&mut self, at: Vec3, y_offset: f64, stack: ItemStack) -> [f64; 3] {
+    pub(super) fn spawn_at_location(
+        &mut self,
+        at: Vec3,
+        y_offset: f64,
+        stack: ItemStack,
+    ) -> [f64; 3] {
         let v = new_item_motion();
         self.spawn_item(stack, [at.x, at.y + y_offset, at.z], v, 10);
         v
@@ -1840,6 +1845,20 @@ impl Game<'_> {
                     );
                     for stack in drops {
                         self.spawn_at_location(at, eye, stack);
+                    }
+                }
+                // CopperGolem.shear: the antenna's flower drops 1.5 up.
+                Species::CopperGolem if self.golem_shearable(i) => {
+                    self.audio
+                        .play("minecraft:entity.copper_golem.shear", sound_at, 1.0, 1.0);
+                    let antenna = self.mobs[i].saddle_item();
+                    let id = self.mobs[i].id;
+                    // setItemSlot(EQUIPMENT_SLOT_ANTENNA, EMPTY): an unequip.
+                    self.mobs[i].set_saddle(None);
+                    let ctx = self.who_context(Some(horizon_client::mobs::Who::Mob(id)), None);
+                    self.post_game_event("minecraft:unequip", [at.x, at.y, at.z], ctx);
+                    if let Some(antenna) = antenna {
+                        self.spawn_at_location(at, 1.5, antenna);
                     }
                 }
                 Species::Mooshroom if !m.is_baby() => {

@@ -200,6 +200,24 @@ impl GameLevel<'_> {
             delay: 10,
         });
     }
+    /// `Block.popResource(level, pos, new ItemStack(block))`.
+    pub(super) fn pop_block_item(&mut self, pos: BlockPos, state: BlockStateId) {
+        let item = self.facts.get(state).item.clone();
+        if &*item != "minecraft:air" {
+            self.pop_resource([pos.x, pos.y, pos.z], ItemStack::new(&item, 1));
+        }
+    }
+    /// An item `atLowerCornerWithOffset(pos, 0.5, 1.01, 0.5).offsetRandomXZ(random,
+    /// 0.7)` with the default pickup delay (`ComposterBlock.extractProduce`).
+    pub(super) fn pop_above(&mut self, pos: BlockPos, item: std::sync::Arc<str>) {
+        let at = removal::jukebox_pop_position(&mut self.world.random, pos);
+        self.spill.spawns.push(Spawn {
+            stack: ItemStack::new(&item, 1),
+            pos: at,
+            motion: None,
+            delay: 10,
+        });
+    }
     /// `Block.dropResources(state, level, pos, blockEntity)`: the block's loot
     /// (from its random sequence, else the level random), with what its block
     /// entity copies into it, popped at once.

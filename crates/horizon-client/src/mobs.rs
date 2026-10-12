@@ -15,6 +15,7 @@ pub mod breeze;
 pub mod camel;
 pub mod caravan;
 pub mod control;
+pub mod copper_golem;
 pub mod creaking;
 pub mod cube;
 pub mod data;
@@ -1315,8 +1316,10 @@ impl Mob {
     /// Wear (or take off) a saddle stack, keeping its components.
     pub fn set_saddle(&mut self, saddle: Option<crate::items::ItemStack>) {
         self.extra.saddled = saddle.is_some();
+        // A plain saddle is implied by `saddled`; anything else (a copper
+        // golem's antenna flower) is kept as it is.
         self.extra.saddle_stack = saddle
             .map(|s| crate::items::ItemStack { count: 1, ..s })
-            .filter(|s| s.damage != 0 || s.extra.is_some());
+            .filter(|s| s.damage != 0 || s.extra.is_some() || &*s.item != "minecraft:saddle");
     }
 }

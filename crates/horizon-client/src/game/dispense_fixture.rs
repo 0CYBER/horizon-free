@@ -499,13 +499,17 @@ impl Game<'_> {
                         let _ = write!(line, " {name}={item}x1");
                     }
                 }
-                let ready = match s {
-                    Species::Sheep => Some(!x.sheared && !m.is_baby()),
-                    Species::Mooshroom => Some(!m.is_baby()),
-                    Species::Bogged => Some(!x.sheared),
-                    Species::SnowGolem => Some(!x.sheared),
-                    _ => None,
-                };
+                let ready =
+                    match s {
+                        Species::Sheep => Some(!x.sheared && !m.is_baby()),
+                        Species::Mooshroom => Some(!m.is_baby()),
+                        Species::Bogged => Some(!x.sheared),
+                        Species::SnowGolem => Some(!x.sheared),
+                        Species::CopperGolem => Some(self.golem_shearable(
+                            self.mobs.iter().position(|o| o.id == id).unwrap_or(0),
+                        )),
+                        _ => None,
+                    };
                 if let Some(r) = ready {
                     line.push_str(if r { " ready" } else { " unready" });
                 }
