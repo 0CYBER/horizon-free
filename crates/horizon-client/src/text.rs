@@ -220,6 +220,69 @@ impl Text {
         }
         out
     }
+    /// `StringDecomposer.iterateFormatted` on every span: legacy `§` codes
+    /// inside the span contents restyle what follows them (colour codes
+    /// clear the decorations, `§r` returns to the span's own style) and are
+    /// not drawn.
+    pub fn resolve_legacy(&self) -> Text {
+        if !self.spans.iter().any(|s| s.text.contains('§')) {
+            return self.clone();
+        }
+        let mut out = Text::default();
+        for span in &self.spans {
+            let mut style = span.style.clone();
+            let mut current = String::new();
+            let mut chars = span.text.chars();
+            while let Some(c) = chars.next() {
+                if c != '§' {
+                    current.push(c);
+                    continue;
+                }
+                let Some(code) = chars.next() else { break };
+                let code = code.to_ascii_lowercase();
+                let next = if let Some(c) = COLORS.iter().find(|c| c.0 == code) {
+                    // Style.applyLegacyFormat: a colour clears the decorations.
+                    Style {
+                        color: Some(c.2),
+                        bold: Some(false),
+                        italic: Some(false),
+                        underlined: Some(false),
+                        strikethrough: Some(false),
+                        obfuscated: Some(false),
+                        ..style.clone()
+                    }
+                } else {
+                    let mut s = style.clone();
+                    match code {
+                        'k' => s.obfuscated = Some(true),
+                        'l' => s.bold = Some(true),
+                        'm' => s.strikethrough = Some(true),
+                        'n' => s.underlined = Some(true),
+                        'o' => s.italic = Some(true),
+                        'r' => s = span.style.clone(),
+                        _ => {}
+                    }
+                    s
+                };
+                if next != style {
+                    if !current.is_empty() {
+                        out.spans.push(Span {
+                            text: std::mem::take(&mut current),
+                            style: style.clone(),
+                        });
+                    }
+                    style = next;
+                }
+            }
+            if !current.is_empty() {
+                out.spans.push(Span {
+                    text: current,
+                    style,
+                });
+            }
+        }
+        out
+    }
     /// Characters with their effective styles.
     pub fn chars(&self) -> impl Iterator<Item = (char, &Style)> {
         self.spans

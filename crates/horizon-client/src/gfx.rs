@@ -76,6 +76,8 @@ pub struct Frame<'a> {
     pub hand: &'a [Vertex],
     /// Full-screen camera effects drawn over the world and hand, under the HUD.
     pub screen: &'a [crate::screen_effects::ScreenQuad],
+    /// The world border wall, when near enough to be drawn.
+    pub border: Option<BorderDraw>,
     pub game_time: f32,
     pub ticks: u64,
     /// The darkness effect on the lightmap: the brightness it takes off the
@@ -85,6 +87,22 @@ pub struct Frame<'a> {
     pub night_vision: f32,
     /// Torch flicker added to the block light factor of 1.4.
     pub block_flicker: f32,
+}
+/// One frame of the world border wall (`WorldBorderRenderer.render`).
+#[derive(Clone, Debug)]
+pub struct BorderDraw {
+    /// The cached wall buffer; uploaded only when `rebuilt`.
+    pub vertices: [crate::border_render::BorderVertex; 16],
+    pub rebuilt: bool,
+    pub transforms: crate::border_render::BorderTransforms,
+    /// Walls to draw (indices of four-vertex quads), nearest first.
+    pub sides: Vec<usize>,
+}
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct BorderUniform {
+    color: [f32; 4],
+    offset: [f32; 4],
 }
 pub struct Renderer {
     instance: wgpu::Instance,
@@ -102,6 +120,11 @@ pub struct Renderer {
     additive_pipeline: wgpu::RenderPipeline,
     celestial_pipeline: wgpu::RenderPipeline,
     celestial_buffer: wgpu::Buffer,
+    /// `RenderPipelines.WORLD_BORDER` and its buffers.
+    border_pipeline: wgpu::RenderPipeline,
+    border_group: wgpu::BindGroup,
+    border_uniform: wgpu::Buffer,
+    border_vertices: wgpu::Buffer,
     /// Screen effects: alpha-blended and vignette (`dst * (1 - src)`) pipelines.
     screen_pipelines: [wgpu::RenderPipeline; 2],
     screen_buffer: wgpu::Buffer,
@@ -190,6 +213,7 @@ impl Renderer {
         layers: u32,
         animations: &[SpriteAnimation],
         hud_atlas: (&[u8], u32, u32),
+        forcefield: (&[u8], u32),
     ) -> Result<Self> {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
@@ -764,6 +788,175 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
+        // WorldBorderRenderer: misc/forcefield.png as a MipmappedTexture
+        // (repeat, linear minification with mipmaps, nearest magnification).
+        let (forcefield_pixels, forcefield_size) = forcefield;
+        let (forcefield_mips, forcefield_levels) = mip_chain(forcefield_pixels, forcefield_size, 1);
+        let forcefield_texture = device.create_texture_with_data(
+            &queue,
+            &wgpu::TextureDescriptor {
+                label: Some("Forcefield"),
+                size: wgpu::Extent3d {
+                    width: forcefield_size,
+                    height: forcefield_size,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: forcefield_levels,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &forcefield_mips,
+        );
+        let forcefield_view = forcefield_texture.create_view(&Default::default());
+        let forcefield_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Forcefield"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            min_filter: wgpu::FilterMode::Linear,
+            mag_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..Default::default()
+        });
+        let border_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("World border"),
+            size: std::mem::size_of::<BorderUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let border_vertices = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("World border vertices"),
+            size: 16 * std::mem::size_of::<crate::border_render::BorderVertex>() as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let border_bindings = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("World border bindings"),
+            entries: &[
+                entry(
+                    0,
+                    vf,
+                    wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                ),
+                entry(
+                    1,
+                    vf,
+                    wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                ),
+                entry(
+                    2,
+                    vf,
+                    wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                ),
+                entry(
+                    3,
+                    vf,
+                    wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                ),
+            ],
+        });
+        let border_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("World border resources"),
+            layout: &border_bindings,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: globals.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&forcefield_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&forcefield_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: border_uniform.as_entire_binding(),
+                },
+            ],
+        });
+        let border_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("World border layout"),
+            bind_group_layouts: &[Some(&border_bindings)],
+            ..Default::default()
+        });
+        let border_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Horizon world border"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("border.wgsl").into()),
+        });
+        let border_attributes = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x2];
+        // RenderPipelines.WORLD_BORDER: BlendFunction.OVERLAY, no culling,
+        // depth writes with a polygon offset of 3 towards the camera.
+        let border_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("World border"),
+            layout: Some(&border_layout),
+            vertex: wgpu::VertexState {
+                module: &border_shader,
+                entry_point: Some("vs_border"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<crate::border_render::BorderVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &border_attributes,
+                })],
+            },
+            primitive: wgpu::PrimitiveState {
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: Default::default(),
+                bias: wgpu::DepthBiasState {
+                    constant: -3,
+                    slope_scale: -3.0,
+                    clamp: 0.0,
+                },
+            }),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &border_shader,
+                entry_point: Some("fs_border"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format.remove_srgb_suffix(),
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::SrcAlpha,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::Zero,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         let screen_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Horizon screen effects"),
             source: wgpu::ShaderSource::Wgsl(include_str!("screen.wgsl").into()),
@@ -855,6 +1048,10 @@ impl Renderer {
             additive_pipeline,
             celestial_pipeline,
             celestial_buffer,
+            border_pipeline,
+            border_group,
+            border_uniform,
+            border_vertices,
             screen_pipelines,
             screen_buffer,
             screen_capacity,
@@ -1421,6 +1618,27 @@ impl Renderer {
             self.index_quads = (entity_quads + additive_quads + hand_quads).next_power_of_two();
             self.indices = Self::quad_indices(&self.device, self.index_quads);
         }
+        if let Some(b) = &frame.border {
+            if b.rebuilt {
+                self.queue.write_buffer(
+                    &self.border_vertices,
+                    0,
+                    bytemuck::cast_slice(&b.vertices),
+                );
+            }
+            let t = &b.transforms;
+            let uniform = BorderUniform {
+                color: t.color,
+                offset: [
+                    t.model_offset[0],
+                    t.model_offset[1],
+                    t.model_offset[2],
+                    t.texture_offset,
+                ],
+            };
+            self.queue
+                .write_buffer(&self.border_uniform, 0, bytemuck::bytes_of(&uniform));
+        }
         let view_target = surface_frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor {
@@ -1536,6 +1754,18 @@ impl Renderer {
                     (s.solid * 4) as i32,
                     i as u32..i as u32 + 1,
                 );
+            }
+            // LevelRenderer: the world border after translucent terrain and weather.
+            if let Some(b) = frame.border.as_ref().filter(|_| !frame.title) {
+                pass.set_pipeline(&self.border_pipeline);
+                pass.set_bind_group(0, &self.border_group, &[]);
+                pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                pass.set_vertex_buffer(0, self.border_vertices.slice(..));
+                for &side in &b.sides {
+                    let first = side as u32 * 6;
+                    pass.draw_indexed(first..first + 6, 0, 0..1);
+                }
+                pass.set_bind_group(0, &self.group, &[]);
             }
         }
         if hand_quads > 0 {
