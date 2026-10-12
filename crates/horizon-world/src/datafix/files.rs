@@ -19,7 +19,7 @@ pub const VERSION_NAME: &str = "26.3";
 
 const FILE_FIXER_INTRODUCTION: i32 = 4772;
 /// The versions of the file fixes, in order.
-const FILE_FIXES: [i32; 3] = [4772, 4773, 4899];
+const FILE_FIXES: [i32; 4] = [1493, 4772, 4773, 4899];
 
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
@@ -398,6 +398,141 @@ fn level_dat_to_saved_data(base: &Path) -> io::Result<()> {
     write_level(base, content, V)
 }
 
+/// 1493: `LegacyStructureFileFix`. The structures of `data/*.dat` (1.12) become the
+/// `Structures` of the chunks they reach, in the region folders of the old layout.
+pub(crate) fn fix_1493(base: &Path) -> io::Result<()> {
+    use std::collections::{BTreeMap, HashMap};
+    const LEGACY_TO_CURRENT: [(&str, &str); 4] = [
+        ("Iglu", "Igloo"),
+        ("TeDP", "Desert_Pyramid"),
+        ("TeJP", "Jungle_Pyramid"),
+        ("TeSH", "Swamp_Hut"),
+    ];
+    #[derive(Default)]
+    struct LegacyData {
+        starts: HashMap<String, Tag>,
+        indexes: BTreeMap<String, Vec<i64>>,
+    }
+    let pack = |x: i32, z: i32| i64::from(x) & 0xFFFF_FFFF | (i64::from(z) & 0xFFFF_FFFF) << 32;
+    let Some(level) = read_level(base, 1493)? else {
+        return Ok(());
+    };
+    let overworld_generator = match as_str(level.get("generatorName")).as_deref() {
+        Some("flat") => "minecraft:flat",
+        Some("debug_all_block_states") => "minecraft:debug",
+        _ => "minecraft:noise",
+    };
+    let dimensions: [(&[&str], &str, &str, &str); 3] = [
+        (
+            &["Monument", "Stronghold", "Mineshaft", "Temple", "Mansion"],
+            "",
+            "minecraft:overworld",
+            overworld_generator,
+        ),
+        (
+            &["Fortress"],
+            "DIM-1",
+            "minecraft:the_nether",
+            "minecraft:noise",
+        ),
+        (&["EndCity"], "DIM1", "minecraft:the_end", "minecraft:noise"),
+    ];
+    for (ids, folder, dimension, generator) in dimensions {
+        let mut structures: BTreeMap<(i32, i32), LegacyData> = BTreeMap::new();
+        for id in ids {
+            let path = base.join("data").join(format!("{id}.dat"));
+            let Some(data) = read_saved_data(&path, Ty::SavedStructureFeatureIndices, 1493)? else {
+                continue;
+            };
+            let Some(Tag::Compound(features)) = data.get("Features") else {
+                continue;
+            };
+            let values: Vec<(String, Tag)> = features
+                .iter()
+                .map(|(k, v)| (k.to_string_lossy(), v.clone()))
+                .collect();
+            for (_, mut value) in super::items::java_hash_order(values, |(k, _)| k.clone()) {
+                let chunk_x = as_int(value.get("ChunkX"), 0);
+                let chunk_z = as_int(value.get("ChunkZ"), 0);
+                let children = super::dynamic::stream(value.get("Children"));
+                if let Some(first) = children.first()
+                    && let Some(current) = as_str(first.get("id"))
+                        .and_then(|i| LEGACY_TO_CURRENT.iter().find(|(from, _)| *from == i))
+                {
+                    set(&mut value, "id", string(current.1));
+                }
+                let Some(feature_id) = as_str(value.get("id")) else {
+                    continue;
+                };
+                structures
+                    .entry((chunk_x, chunk_z))
+                    .or_default()
+                    .starts
+                    .insert(feature_id.clone(), value);
+                for nx in chunk_x - 8..=chunk_x + 8 {
+                    for nz in chunk_z - 8..=chunk_z + 8 {
+                        structures
+                            .entry((nx, nz))
+                            .or_default()
+                            .indexes
+                            .entry(feature_id.clone())
+                            .or_default()
+                            .push(pack(chunk_x, chunk_z));
+                    }
+                }
+            }
+        }
+        if structures.is_empty() {
+            continue;
+        }
+        let region = if folder.is_empty() {
+            base.join("region")
+        } else {
+            base.join(folder).join("region")
+        };
+        upgrade_regions(&region, |tag| {
+            let version = as_int(tag.get("DataVersion"), -1);
+            let x = as_int(tag.get("Level").and_then(|l| l.get("xPos")), 0);
+            let z = as_int(tag.get("Level").and_then(|l| l.get("zPos")), 0);
+            let Some(legacy) = structures.get(&(x, z)) else {
+                return;
+            };
+            let _ = version;
+            super::update_chunk_to(tag, dimension, Some(generator), 1493);
+            let mut level = tag
+                .get("Level")
+                .cloned()
+                .unwrap_or_else(super::dynamic::empty_map);
+            let mut structure = level
+                .get("Structures")
+                .cloned()
+                .filter(|s| matches!(s, Tag::Compound(_)))
+                .unwrap_or_else(super::dynamic::empty_map);
+            let mut starts = structure
+                .get("Starts")
+                .cloned()
+                .filter(|s| matches!(s, Tag::Compound(_)))
+                .unwrap_or_else(super::dynamic::empty_map);
+            let mut references = structure
+                .get("References")
+                .cloned()
+                .filter(|s| matches!(s, Tag::Compound(_)))
+                .unwrap_or_else(super::dynamic::empty_map);
+            for (id, value) in &legacy.starts {
+                set(&mut starts, id, value.clone());
+            }
+            for (id, indexes) in &legacy.indexes {
+                set(&mut references, id, Tag::LongArray(indexes.clone()));
+            }
+            set(&mut structure, "Starts", starts);
+            set(&mut structure, "References", references);
+            set(&mut level, "Structures", structure);
+            set(tag, "Level", level);
+        })?;
+    }
+    Ok(())
+}
+
 /// 4773: `GeneratedStructuresRenameFileFix`.
 fn fix_4773(base: &Path) -> io::Result<()> {
     for ns in subdirectories(&base.join("generated")) {
@@ -473,6 +608,7 @@ pub fn fix_world_files(base: &Path) -> io::Result<i32> {
         for version in FILE_FIXES {
             if version > start && version <= CURRENT {
                 match version {
+                    1493 => fix_1493(base)?,
                     4772 => fix_4772(base)?,
                     4773 => fix_4773(base)?,
                     _ => fix_4899(base)?,
@@ -695,10 +831,13 @@ pub fn upgrade_world_data(base: &Path) -> io::Result<()> {
 
 /// A world in the layout of before 1.16 (dimension folders in the world folder,
 /// `playerdata`, `stats`, `advancements`) brought to DataVersion `target` and
-/// no further, without the file fixes: the harness checks the data fixes of a
-/// range of versions on their own (the vanilla oracle does the same given a
-/// target).
+/// no further, with the file fixes of that range but not the ones that move the
+/// files into the 26.x layout: the harness checks the fixes of a range of
+/// versions on their own (the vanilla oracle does the same given a target).
 pub fn upgrade_band(base: &Path, target: i32) -> io::Result<()> {
+    if target >= 1493 {
+        fix_1493(base)?;
+    }
     let level = base.join("level.dat");
     if let Some(mut root) = read_dat(&level)? {
         let mut data = root

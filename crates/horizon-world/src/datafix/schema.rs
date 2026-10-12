@@ -8,6 +8,9 @@
 use super::dynamic::{as_str, namespaced};
 use crate::nbt::Tag;
 
+#[path = "schema_flat.rs"]
+mod flat;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Ty {
     Level,
@@ -144,6 +147,9 @@ impl Walker<'_> {
 
     fn children(&mut self, ty: Ty, v: &mut Tag) {
         let k = self.k;
+        if k < flat::END && self.legacy_children(ty, v) {
+            return;
+        }
         match ty {
             Ty::Level => {
                 if k < key(4771, 0) {
@@ -837,6 +843,9 @@ impl Walker<'_> {
 /// Block entity ids the schema at `k` knows (others are read as remainder).
 pub fn block_entity_known(be: &Tag, k: Key) -> bool {
     let id = namespaced(&as_str(be.get("id")).unwrap_or_default());
+    if k < flat::END {
+        return flat::legacy_block_entity_known(&id, k);
+    }
     let since = match id.as_str() {
         "minecraft:sculk_catalyst" => key(3076, 0),
         "minecraft:sculk_shrieker" => key(3078, 0),

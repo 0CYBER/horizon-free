@@ -21,6 +21,8 @@ import net.minecraft.server.Bootstrap;
 import net.minecraft.server.level.ChunkMap;
 import net.minecraft.util.datafix.DataFixTypes;
 import net.minecraft.util.datafix.DataFixers;
+import net.minecraft.util.filefix.FileFix;
+import net.minecraft.util.filefix.FileFixerUpper;
 import net.minecraft.util.worldupdate.UpgradeProgress;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
@@ -123,6 +125,16 @@ public final class VanillaDataFixOracle {
      */
     private static void band(Path out, int target) throws Exception {
         var fixer = DataFixers.getDataFixer();
+        // The file fixes of the range (1493, LegacyStructureFileFix), as FileFixerUpper runs them
+        // (in place; the copy-on-write view and the level.dat rewrite are not what is checked).
+        var fileFixes = FileFixerUpper.class.getDeclaredField("fileFixes");
+        fileFixes.setAccessible(true);
+        for (Object o : (List<?>) fileFixes.get(DataFixers.getFileFixer())) {
+            FileFix fileFix = (FileFix) o;
+            if (fileFix.getVersion() <= target) {
+                fileFix.runFixOperations(out, new UpgradeProgress());
+            }
+        }
         Path levelFile = out.resolve("level.dat");
         if (Files.exists(levelFile)) {
             CompoundTag root = NbtIo.readCompressed(levelFile, NbtAccounter.unlimitedHeap());
