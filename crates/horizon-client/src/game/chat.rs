@@ -524,7 +524,7 @@ impl Game<'_> {
             return;
         };
         screen.resize(batch.width, batch.height);
-        let bg = self.ui.chat.options.background_opacity;
+        let bg = self.ui.chat.options.background_opacity as f32;
         screen.draw(
             batch,
             &self.res.atlas,

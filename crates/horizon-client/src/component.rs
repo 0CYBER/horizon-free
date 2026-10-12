@@ -152,6 +152,23 @@ impl Parser<'_> {
         Err("unterminated string".into())
     }
 }
+/// The style fields of a component object.
+fn object_style(o: &serde_json::Map<String, Value>) -> Style {
+    let mut style = Style::default();
+    if let Some(c) = o.get("color").and_then(Value::as_str) {
+        style.color = named_color(c).or_else(|| {
+            c.strip_prefix('#')
+                .and_then(|h| u32::from_str_radix(h, 16).ok())
+        });
+    }
+    let flag = |k: &str| o.get(k).and_then(Value::as_bool);
+    style.bold = flag("bold");
+    style.italic = flag("italic");
+    style.underlined = flag("underlined");
+    style.strikethrough = flag("strikethrough");
+    style.obfuscated = flag("obfuscated");
+    style
+}
 /// `ComponentSerialization.CODEC` decoding into text. `selector` components
 /// are resolved by `resolve` (ComponentUtils.updateForEntity).
 pub fn to_text(v: &Value, resolve: &mut dyn FnMut(&str) -> Text) -> Text {
@@ -173,30 +190,23 @@ pub fn to_text_with(
                 return Text::empty();
             };
             let mut base = to_text_with(first, resolve, contents);
-            let style = base
-                .spans
-                .first()
-                .map(|s| s.style.clone())
-                .unwrap_or_default();
+            // The siblings take the first component's own style, even when
+            // its text is empty.
+            let style = match first {
+                Value::Object(o) => object_style(o),
+                _ => base
+                    .spans
+                    .first()
+                    .map(|s| s.style.clone())
+                    .unwrap_or_default(),
+            };
             for sibling in rest {
                 base.push(to_text_with(sibling, resolve, contents).with_style(&style));
             }
             base
         }
         Value::Object(o) => {
-            let mut style = Style::default();
-            if let Some(c) = o.get("color").and_then(Value::as_str) {
-                style.color = named_color(c).or_else(|| {
-                    c.strip_prefix('#')
-                        .and_then(|h| u32::from_str_radix(h, 16).ok())
-                });
-            }
-            let flag = |k: &str| o.get(k).and_then(Value::as_bool);
-            style.bold = flag("bold");
-            style.italic = flag("italic");
-            style.underlined = flag("underlined");
-            style.strikethrough = flag("strikethrough");
-            style.obfuscated = flag("obfuscated");
+            let style = object_style(o);
             let content = if let Some(t) = contents(o) {
                 t
             } else if let Some(t) = o.get("text") {
