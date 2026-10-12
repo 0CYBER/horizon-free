@@ -24,8 +24,8 @@ use horizon_world::registry::BlockStateId;
 use std::collections::HashMap;
 
 /// The game level as natural spawning reads it.
-struct GameLevel<'g, 'a> {
-    game: &'g Game<'a>,
+pub(super) struct GameLevel<'g, 'a> {
+    pub(super) game: &'g Game<'a>,
     w: MobWorld<'g>,
     /// Boxes of the mobs this pass created, not yet in the game's list.
     pending: std::cell::RefCell<Vec<Aabb>>,
@@ -194,7 +194,7 @@ impl NaturalLevel for GameLevel<'_, '_> {
     }
 }
 impl<'a> Game<'a> {
-    fn natural_level(&self) -> GameLevel<'_, 'a> {
+    pub(super) fn natural_level(&self) -> GameLevel<'_, 'a> {
         GameLevel {
             game: self,
             w: self.mob_world_base(&[]),

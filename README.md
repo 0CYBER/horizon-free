@@ -14,7 +14,7 @@ Horizon is a Rust rewrite of Minecraft Java **26.3** targeting one-to-one vanill
 - shields, maps, books, fireworks, beacons, advancements and statistics;
 - Anvil saves.
 
-Parity is **not** complete. Still missing: the warden and the sculk family, the breeze, sniffer, creaking, happy ghast, llamas and a few other mobs, raids and pillager patrols, villager breeding and gossip, and spawned mob gear enchantments.
+Parity is **not** complete. Still missing: the warden and the sculk family, the breeze, sniffer, creaking, happy ghast, llamas and a few other mobs, villager breeding and gossip, and spawned mob gear enchantments.
 
 ### Java parity: 84%
 
@@ -38,7 +38,7 @@ round-trip harness has not been rerun.
 | Lighting | 1 | None: saved and relit light matches vanilla, slabs and stairs included |
 | World generation | 1 | None: 2,352 whole chunks over 225 structure sites, in all three dimensions, identical to vanilla |
 | Region files and saves | 0.75 | Saves round-trip with vanilla, and worlds from 1.18.2 to 26.2 upgrade as vanilla's DataFixers do over 22 sample worlds; worlds older than 1.18.2 are not upgraded |
-| Entities and physics | 0.75 | Attributes, dimensions, death loot, spawn rules and natural spawning (15,500 NaturalSpawner cases) match; AI not compared; drowned, villagers, traders and the wither unverified |
+| Entities and physics | 0.75 | Attributes, dimensions, death loot, spawn rules, natural spawning (15,500 NaturalSpawner cases), pillager patrols and raids (1,900 PatrolSpawner, Raid and raids.dat cases) match; AI not compared; drowned, villagers, traders and the wither unverified |
 | Interaction and inventory | 1 | None: menu clicks match over 8,000 click sequences, the loom and the crafter included; recipe book placement (6,000 cases), its buttons (1,200), the saved book (1,500) and the loom and crafter screens (1,600) match vanilla |
 | Menus, HUD and chat | 0.75 | Commands parse as vanilla over 39,685 inputs, the player list matches over 844,758 draw calls and the world border renders as vanilla, but /item modify, /spectate, /waypoint and /dialog do not run; player list heads use default skins |
 | Audio | 0.75 | Sound engine, music and ambience not compared with vanilla |

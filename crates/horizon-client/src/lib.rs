@@ -79,6 +79,7 @@ pub mod options_fixes;
 pub mod options_ui;
 pub mod packs;
 pub mod particles;
+pub mod patrol;
 pub mod pose;
 pub mod projectiles;
 pub mod raid;

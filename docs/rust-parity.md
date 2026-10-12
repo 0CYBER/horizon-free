@@ -150,6 +150,7 @@ python3 tools/test_biome_source_parity.py
 python3 tools/test_anchor_parity.py
 python3 tools/test_biome_temperature_parity.py
 python3 tools/test_float_log_parity.py
+python3 tools/test_raid_parity.py
 ```
 
 `--prepare` regenerates the local reference artifacts from the existing lock;
@@ -1466,3 +1467,52 @@ bit for bit** (8,513 with the wall drawn). The game draws the wall with
 `RenderPipelines.WORLD_BORDER`'s overlay blend and the mipmapped forcefield
 texture, and follows the server's border packets. One border is kept for all
 dimensions.
+
+## Pillager patrols and raids
+
+`horizon_client::patrol` ports `PatrolSpawner` and `horizon_client::raid` ports
+`Raid` and `Raids`; the game runs both through them. `tools/test_raid_parity.py`
+runs vanilla's own classes in `VanillaRaidOracle`, on a stand-in `ServerLevel`
+built from boxes of blocks and light, a biome, village sections, village points
+of interest, unloaded and non-ticking chunks, the overworld clock, local
+difficulty inputs and one player, and compares every case with
+`raid_fixture` line by line. The last run matched **1,900 cases at zero
+differences**: 1,000 patrol, 400 raid and 500 codec cases, with 474 patrol
+pillagers, 1,364 raid waves, 11,399 raiders, 149 victories and 21 losses.
+
+- **Patrols**: the countdown, `isBrightOutside`, the one in five draw, the
+  random player, spectators, the village distance, `hasChunksAt`, the
+  `can_pillager_patrol_spawn` attribute (mushroom fields and the early game
+  timeline), the group size from the local difficulty, each member's
+  `MOTION_BLOCKING_NO_LEAVES` height, empty spawn block and spawn rules, the
+  leader's banner and patrol target, and the level random's next draw.
+- **Raids**: `createOrExtendRaid` (spectators, the `raids` rule,
+  `can_start_raid`, the mean of the village points of interest, the omen
+  absorbed, the trigger stat), the pre-raid countdown and its cached spawn
+  position, `findRandomSpawnPos` with Mth's sine table, wave composition by
+  difficulty and the bonus wave, leaders and riders, `addWaveMob`,
+  `removeFromRaid` and `updateBossbar` (progress bits with Java's `clamp`, the
+  title, visibility, the player in the bar), the horn's seed and position,
+  `updateRaiders` (far, gone, removed and idle raiders), joining, loaded and
+  hurt raiders, victory with Hero of the Village, loss, the celebration,
+  peaceful, the `raids` rule, unloaded chunks, `/raid setomen` and `stop`, and
+  the 48,000 tick timeout.
+- **raids.dat**: `Raids.CODEC` with `resultOrPartial` over generated and
+  mutated data: numbers of any NBT type converted as Java does, partial
+  results (`Util.fixedSize` streams, lists with bad elements, a non-list
+  `raids`), raids dropped on missing fields, a fresh `Raids` when `next_id` or
+  `tick` is missing, the heroes in `HashSet` order and the raids in the order
+  of fastutil's entry-set stream (the tick iterates the map the other way).
+  Each dimension keeps its own `dimensions/<id>/data/minecraft/raids.dat`.
+
+Scope and remaining gaps: `finalizeSpawn` runs with a fixed random in the
+oracle, so its own draws are not compared, and raid buffs and patrol targets
+come from unseeded entity randoms. The omens act inside the effect tick
+(`BadOmenMobEffect`, `RaidOmenMobEffect`), including the
+`ConcurrentModificationException` vanilla swallows when Raid Omen is first
+added; this has unit tests but no oracle, since the effect map's order follows
+identity hashes. Raider goals (pathfinding to the raid, celebrating, fetching
+the banner, villagers' raid activities) and ravager riding are not compared:
+they belong to the mob AI harness. The game's village distance comes from the
+points of interest its villagers claim rather than a `PoiManager`.
+

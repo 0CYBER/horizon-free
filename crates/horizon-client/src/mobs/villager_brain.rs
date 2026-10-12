@@ -2514,7 +2514,7 @@ impl B {
                     if cx.lr.next_int_bound(20).unwrap_or(0) != 0 {
                         return false;
                     }
-                    if !super::villager::raid_nearby(m) {
+                    if super::villager::raid_over_or_lost(m) {
                         let b = brain_mut(m);
                         b.default_activity = Act::Idle;
                         b.update_from_schedule(cx.w.game_time, cx.w.day_time);

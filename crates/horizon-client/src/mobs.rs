@@ -1162,6 +1162,7 @@ impl Mob {
         .fold((0.0, 0.0), |(a, t), (x, y)| (a + x, t + y))
     }
     pub fn damage(&mut self, amount: f32, source: Damage) -> bool {
+        raider::note_hurt(self);
         if !self.alive() || self.removed || self.invulnerable_flag {
             return false;
         }
