@@ -5,7 +5,7 @@
 //! trails and spreads resin over the logs. The game and the mob AI probe
 //! both tick hearts through this module; the host applies the block changes
 //! and plays what it reports.
-use super::{Mob, MobEvent, MobType, MobWorld, Species, creaking, spawn_rules};
+use super::{Mob, MobEvent, MobType, MobWorld, creaking};
 use crate::{collisions::SceneCollisions, containers::CreakingHeart};
 use horizon_core::{
     geometry::{Aabb, Vec3},
@@ -434,18 +434,9 @@ fn spawn_protector(
         m.head_yaw = yaw;
         m.body_yaw = yaw;
         finalize_spawn(&mut m, lr);
-        // checkSpawnRules and checkSpawnObstruction (no liquid in the box).
-        let (bx, by, bz) = (x.floor() as i32, y.floor() as i32, z.floor() as i32);
-        let allowed = spawn_rules::check_spawn_rules(
-            Species::Creaking,
-            w,
-            spawn_rules::Reason::Spawner,
-            lr,
-            bx,
-            by,
-            bz,
-        );
-        if !allowed || liquid_in(w, m.bounds()) {
+        // Mob.checkSpawnRules (always true for a creaking) and
+        // checkSpawnObstruction (no liquid in the box).
+        if liquid_in(w, m.bounds()) {
             continue;
         }
         let id = m.id;

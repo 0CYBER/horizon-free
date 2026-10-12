@@ -88,6 +88,16 @@ def scenarios():
     add('creaking_behind', 200, ['player 0.5 -60 8.5', 'mob minecraft:creaking 0.5 -60 0.5 0 73 persistent'])
     # Woken while watched, then free to hunt and hit once the player turns away.
     add('creaking_attack', 240, ['player 0.5 -60 -7.5 turn=40,180', 'mob minecraft:creaking 0.5 -60 0.5 180 74 persistent'])
+    # A creaking heart in a pale oak trunk: by night it spawns its creaking near a player,
+    # by day it sleeps, without logs it is uprooted, with no player near it waits.
+    TRUNK = ['block 3 -60 3 minecraft:pale_oak_log[axis=y]', 'block 3 -58 3 minecraft:pale_oak_log[axis=y]']
+    add('heart_night', 300, TRUNK + ['heart 3 -59 3 minecraft:creaking_heart[axis=y,creaking_heart_state=awake,natural=true]', 'player 0.5 -60 -6.5'], 'time=18000 spawning')
+    add('heart_day', 120, TRUNK + ['heart 3 -59 3 minecraft:creaking_heart[axis=y,creaking_heart_state=awake,natural=true]', 'player 0.5 -60 -6.5'], 'spawning')
+    add('heart_uprooted', 60, ['heart 3 -59 3 minecraft:creaking_heart[axis=y,creaking_heart_state=awake,natural=true]', 'player 0.5 -60 -6.5'], 'time=18000 spawning')
+    # A player hits the heart's creaking: no damage, but the heart bleeds resin and trails.
+    add('heart_hurt', 260, TRUNK + ['heart 3 -59 3 minecraft:creaking_heart[axis=y,creaking_heart_state=awake,natural=true]', 'player 0.5 -60 -6.5',
+                            'hurt 60 0', 'hurt 64 0', 'hurt 200 0'], 'time=18000 spawning')
+    add('heart_far', 120, TRUNK + ['heart 3 -59 3 minecraft:creaking_heart[axis=y,creaking_heart_state=awake,natural=true]', 'player 40.5 -60 0.5'], 'time=18000 spawning')
     return s
 
 
@@ -105,7 +115,7 @@ def write_scenarios(path, chosen):
             elif f[0] == 'mob':
                 f[2] = repr(float(f[2]) + ox)
                 f[4] = repr(float(f[4]) + oz)
-            elif f[0] == 'block':
+            elif f[0] in ('block', 'heart'):
                 f[1] = str(int(f[1]) + ox)
                 f[3] = str(int(f[3]) + oz)
             elif f[0] == 'fill':
@@ -133,6 +143,9 @@ def parse(path):
             continue
         if parts[1] == 'trace':
             cur.setdefault('trace', {}).setdefault(t, []).append(parts[2])
+            continue
+        if parts[1] == 'heart':
+            cur.setdefault('hearts', {}).setdefault(t, []).append(line.split(' ', 2)[2])
             continue
         mob = int(parts[1])
         row = {}
@@ -221,7 +234,12 @@ def compare(vanilla, rust, fields=None):
                     report.extend('    ' + d for d in diffs[:12])
             if first is not None:
                 clean = False
-        # Sounds: first differing tick.
+        # Creaking hearts (state, block entity, level random): first differing tick.
+        for t in sorted(set(v.get('hearts', {})) | set(r.get('hearts', {}))):
+            if v.get('hearts', {}).get(t) != r.get('hearts', {}).get(t):
+                report.append(f'{name}: hearts differ at tick {t}: vanilla {v.get("hearts", {}).get(t)} | horizon {r.get("hearts", {}).get(t)}')
+                clean = False
+                break
         for t in sorted(set(v['sounds']) | set(r['sounds'])):
             if v['sounds'].get(t, []) != r['sounds'].get(t, []):
                 report.append(f'{name}: sounds differ at tick {t}: vanilla {v["sounds"].get(t, [])} | horizon {r["sounds"].get(t, [])}')

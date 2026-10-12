@@ -130,6 +130,25 @@ pub fn accepts_damage(m: &mut Mob, source: &Damage) -> bool {
     m.extra.counter |= HURT | if by_player { HURT_BY_PLAYER } else { 0 };
     false
 }
+/// The rest of `Creaking.hurtServer` for a heart-bound creaking, run by the
+/// host right after the damage: whether its heart still protects it, and
+/// whether a player is to blame (the heart then calls `creakingHurt`). The
+/// caller plays [`sway`] after the heart's reaction.
+pub fn take_hurt(m: &mut Mob, w: &MobWorld) -> Option<([i32; 3], bool)> {
+    if m.extra.counter & HURT == 0 {
+        return None;
+    }
+    let by_player = m.extra.counter & HURT_BY_PLAYER != 0;
+    m.extra.counter &= !(HURT | HURT_BY_PLAYER);
+    let home = m.extra.home?;
+    protected(m, w).then_some((home, by_player))
+}
+/// `Mob.playHurtSound` of a heart-bound creaking: the ambient sound clock
+/// restarts and it sways.
+pub fn sway(m: &mut Mob, events: &mut Vec<MobEvent>) {
+    m.ambient_timer = -m.kind.ambient_interval;
+    m.voice("entity.creaking.sway", events);
+}
 /// `Creaking.doHurtTarget`: the attack animation (the sound is the
 /// `playAttackSound` that ends `Mob.doHurtTarget`).
 pub fn on_attack(m: &mut Mob, _events: &mut Vec<MobEvent>) {
@@ -176,7 +195,7 @@ pub fn update(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
                     id: m.id,
                 });
             }
-            m.voice("entity.creaking.sway", events);
+            sway(m, events);
         }
         m.extra.counter &= !(HURT | HURT_BY_PLAYER);
     }
