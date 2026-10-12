@@ -60,13 +60,12 @@ The playable Java performance packs remain available during development.
 
 The final deliverable is the complete Horizon Rust game with one-to-one parity
 with pinned Java Edition 26.3, plus a playable **Linux** build that the user can
-download and test. The only target machine is **ludodesktop**: Ubuntu 26.04,
-Intel i7-13700KF, NVIDIA RTX 4080, GNOME on Wayland. macOS (including the M2 Pro
-Mac) and Windows are out of scope. The build must include a packaged native
+download and test. The target platform is a Linux x86-64 desktop with an NVIDIA
+GPU (Vulkan) on Wayland. macOS and Windows are out of scope. The build must include a packaged native
 executable, required runtime resources, launch instructions, artifact checksums,
 and the tested OS/CPU/GPU configuration.
 
-The build is complete only after its packaged Rust game is launched and tested on ludodesktop:
+The build is complete only after its packaged Rust game is launched and tested on the target machine:
 create/load a world, render terrain, use keyboard/mouse controls, move and interact,
 break/place blocks, use inventory/crafting, save, quit and reload. These launch
 checks accompany the full gameplay-parity suite; they do not replace it. Record
@@ -75,7 +74,7 @@ and the existing Java packs do not establish a playable Rust build.
 
 Optimize FPS, frame pacing, memory use and render distance using matched scenes,
 worlds, settings and hardware after behavior is validated. Package and test on
-ludodesktop before declaring the rewrite complete. Commit and push
+the target machine before declaring the rewrite complete. Commit and push
 verified development checkpoints regularly.
 
 ## Implemented foundation

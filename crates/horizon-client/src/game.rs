@@ -2964,121 +2964,128 @@ impl Game<'_> {
             batch.text(atlas, text, (w - tw) / 2.0, h / 2.0 - 4.0, u32::MAX, true);
             return batch;
         }
-        self.draw_spyglass(&mut batch);
-        // Hud.extractCrosshair / extractItemHotbar / extractPlayerHealth /
-        // extractVehicleHealth and the experience bar, laid out by hud_layout.
-        // Horizon has no attack cooldown yet: the strength is always full.
+        // Hud.extractRenderState: F1 (keyToggleGui) hides camera overlays, the
+        // crosshair, hotbar, effects, bars, sidebar, action bar, titles and chat;
+        // the sleep overlay, debug screen and open screens still draw.
         let spectator = self.spectator();
         let (wi, hi) = (w as i32, h as i32);
-        let indicator = self.settings.attack_indicator;
-        if self.camera_type.first_person() && !spectator {
-            let attack = (indicator == 1).then_some(1.0);
-            let draws = hud_layout::crosshair(wi, hi, attack, false);
-            hud_layout::paint(&mut batch, &self.res.atlas, &draws);
-        }
-        if !spectator {
-            let inputs = hud_layout::HotbarInputs {
-                selected: self.selected as i32,
-                right_handed: !self.settings.main_hand_left,
-                offhand: self.offhand.is_some(),
-                slots: std::array::from_fn(|i| self.inventory[i].as_ref().map(|_| 0.0)),
-                offhand_pop: 0.0,
-                attack: (indicator == 2).then_some(1.0),
-            };
-            let draws = hud_layout::hotbar(wi, hi, &inputs);
-            hud_layout::paint(&mut batch, &self.res.atlas, &draws);
-            for d in &draws {
-                if let hud_layout::GuiDraw::Item { slot, x, y, .. } = *d {
-                    let stack = if slot == 40 {
-                        self.offhand.clone()
-                    } else {
-                        self.inventory[slot as usize].clone()
-                    };
-                    if let Some(stack) = stack {
-                        self.draw_item(&mut batch, &stack, x as f32, y as f32);
+        if !self.ui.hide_gui {
+            self.draw_spyglass(&mut batch);
+            // Hud.extractCrosshair / extractItemHotbar / extractPlayerHealth /
+            // extractVehicleHealth and the experience bar, laid out by hud_layout.
+            // Horizon has no attack cooldown yet: the strength is always full.
+            let indicator = self.settings.attack_indicator;
+            if self.camera_type.first_person() && !spectator {
+                let attack = (indicator == 1).then_some(1.0);
+                let draws = hud_layout::crosshair(wi, hi, attack, false);
+                hud_layout::paint(&mut batch, &self.res.atlas, &draws);
+            }
+            if !spectator {
+                let inputs = hud_layout::HotbarInputs {
+                    selected: self.selected as i32,
+                    right_handed: !self.settings.main_hand_left,
+                    offhand: self.offhand.is_some(),
+                    slots: std::array::from_fn(|i| self.inventory[i].as_ref().map(|_| 0.0)),
+                    offhand_pop: 0.0,
+                    attack: (indicator == 2).then_some(1.0),
+                };
+                let draws = hud_layout::hotbar(wi, hi, &inputs);
+                hud_layout::paint(&mut batch, &self.res.atlas, &draws);
+                for d in &draws {
+                    if let hud_layout::GuiDraw::Item { slot, x, y, .. } = *d {
+                        let stack = if slot == 40 {
+                            self.offhand.clone()
+                        } else {
+                            self.inventory[slot as usize].clone()
+                        };
+                        if let Some(stack) = stack {
+                            self.draw_item(&mut batch, &stack, x as f32, y as f32);
+                        }
                     }
                 }
             }
+            self.draw_effect_icons(&mut batch);
+            // Hud: the action bar and titles draw over the hotbar (nextStratum).
+            self.draw_boss_bars(&mut batch);
         }
-        self.draw_effect_icons(&mut batch);
-        // Hud: the action bar and titles draw over the hotbar (nextStratum).
-        self.draw_boss_bars(&mut batch);
         // Hud.extractSleepOverlay, under the sidebar, titles and chat.
         if let Some((_, ticks)) = self.sleeping {
             let draws = hud_overlays::sleep_overlay(wi, hi, ticks as i32);
             hud_layout::paint(&mut batch, &self.res.atlas, &draws);
         }
-        self.draw_titles(&mut batch);
-        self.draw_scoreboard(&mut batch);
-        self.draw_subtitles(&mut batch);
-        // The mount's hearts (and the jump bar that replaces the experience bar).
-        let (vehicle_hearts, jump_bar) = if spectator {
-            (0, false)
-        } else {
-            self.draw_mount_hud(&mut batch, wi, hi)
-        };
-        if !self.creative
-            && !spectator
-            && let Some(p) = &mut self.player
-        {
-            let atlas = &self.res.atlas;
-            let width = |s: &str| HudBatch::text_width(atlas, s) as i32;
-            let draws = hud_layout::experience(
-                wi,
-                hi,
-                self.experience.progress,
-                self.experience.level,
-                !jump_bar,
-                &width,
-            );
-            hud_layout::paint(&mut batch, atlas, &draws);
-            let effects = &self.potions.effects;
-            let kind = if effects.get("poison").is_some() {
-                hud_layout::HeartKind::Poisoned
-            } else if effects.get("wither").is_some() {
-                hud_layout::HeartKind::Withered
+        if !self.ui.hide_gui {
+            self.draw_titles(&mut batch);
+            self.draw_scoreboard(&mut batch);
+            self.draw_subtitles(&mut batch);
+            // The mount's hearts (and the jump bar that replaces the experience bar).
+            let (vehicle_hearts, jump_bar) = if spectator {
+                (0, false)
             } else {
-                hud_layout::HeartKind::Normal
+                self.draw_mount_hud(&mut batch, wi, hi)
             };
-            let eye = p.position.y + f64::from(p.dimensions.eye_height);
-            let under_water = self
-                .res
-                .facts
-                .get(self.world.block(
-                    p.position.x.floor() as i32,
-                    eye.floor() as i32,
-                    p.position.z.floor() as i32,
-                ))
-                .fluid
-                == horizon_client::blocks::Fluid::Water;
-            let inputs = hud_layout::HealthInputs {
-                tick: self.ticks as i32,
-                millis: self.started.elapsed().as_millis() as i64,
-                health: p.health.health(),
-                max_health: p.attribute("minecraft:max_health").unwrap_or(20.0) as f32,
-                absorption: p.health.absorption(),
-                armor: p
-                    .attribute("minecraft:armor")
-                    .or_else(|_| p.attribute("armor"))
-                    .unwrap_or(0.0) as i32,
-                food: p.health.food.food,
-                saturation: p.health.food.saturation,
-                kind,
-                regeneration: effects.get("regeneration").is_some(),
-                hunger: effects.get("hunger").is_some(),
-                hardcore: self.level.hardcore,
-                damage_cooldown: p.health.hurt.cooldown > 0,
-                // Horizon does not track the player's air supply yet.
-                air: 300,
-                max_air: 300,
-                under_water,
-                vehicle_hearts,
-            };
-            let draws = self.health_hud.layout(&inputs, wi, hi);
-            hud_layout::paint(&mut batch, atlas, &draws);
-        }
-        if !spectator {
-            self.draw_selected_name(&mut batch, !self.creative);
+            if !self.creative
+                && !spectator
+                && let Some(p) = &mut self.player
+            {
+                let atlas = &self.res.atlas;
+                let width = |s: &str| HudBatch::text_width(atlas, s) as i32;
+                let draws = hud_layout::experience(
+                    wi,
+                    hi,
+                    self.experience.progress,
+                    self.experience.level,
+                    !jump_bar,
+                    &width,
+                );
+                hud_layout::paint(&mut batch, atlas, &draws);
+                let effects = &self.potions.effects;
+                let kind = if effects.get("poison").is_some() {
+                    hud_layout::HeartKind::Poisoned
+                } else if effects.get("wither").is_some() {
+                    hud_layout::HeartKind::Withered
+                } else {
+                    hud_layout::HeartKind::Normal
+                };
+                let eye = p.position.y + f64::from(p.dimensions.eye_height);
+                let under_water = self
+                    .res
+                    .facts
+                    .get(self.world.block(
+                        p.position.x.floor() as i32,
+                        eye.floor() as i32,
+                        p.position.z.floor() as i32,
+                    ))
+                    .fluid
+                    == horizon_client::blocks::Fluid::Water;
+                let inputs = hud_layout::HealthInputs {
+                    tick: self.ticks as i32,
+                    millis: self.started.elapsed().as_millis() as i64,
+                    health: p.health.health(),
+                    max_health: p.attribute("minecraft:max_health").unwrap_or(20.0) as f32,
+                    absorption: p.health.absorption(),
+                    armor: p
+                        .attribute("minecraft:armor")
+                        .or_else(|_| p.attribute("armor"))
+                        .unwrap_or(0.0) as i32,
+                    food: p.health.food.food,
+                    saturation: p.health.food.saturation,
+                    kind,
+                    regeneration: effects.get("regeneration").is_some(),
+                    hunger: effects.get("hunger").is_some(),
+                    hardcore: self.level.hardcore,
+                    damage_cooldown: p.health.hurt.cooldown > 0,
+                    // Horizon does not track the player's air supply yet.
+                    air: 300,
+                    max_air: 300,
+                    under_water,
+                    vehicle_hearts,
+                };
+                let draws = self.health_hud.layout(&inputs, wi, hi);
+                hud_layout::paint(&mut batch, atlas, &draws);
+            }
+            if !spectator {
+                self.draw_selected_name(&mut batch, !self.creative);
+            }
         }
         let atlas = &self.res.atlas;
         if self.debug {
@@ -3174,7 +3181,8 @@ impl Game<'_> {
                 );
             }
         }
-        if let Some((text, at)) = &self.message
+        if !self.ui.hide_gui
+            && let Some((text, at)) = &self.message
             && at.elapsed() < Duration::from_secs(3)
         {
             let tw = HudBatch::text_width(atlas, text);
@@ -6356,7 +6364,9 @@ impl Game<'_> {
     /// space, converted to camera-relative world space.
     fn hand_geometry(&mut self, alpha: f64) -> Vec<Vertex> {
         let mut out = Vec::new();
+        // GameRenderer.renderItemInHand: F1 hides the hand with the HUD.
         if self.spectator()
+            || self.ui.hide_gui
             || !self.camera_type.first_person()
             || self
                 .player

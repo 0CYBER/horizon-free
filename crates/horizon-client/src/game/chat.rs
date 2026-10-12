@@ -689,7 +689,7 @@ impl Game<'_> {
             self.system_message(message);
         }
     }
-    /// F1 hides the HUD (and hand); the screenshot key still works.
+    /// F1 hides the HUD (see `hud`); the screenshot key still works.
     pub(super) fn toggle_hide_gui(&mut self) {
         self.ui.hide_gui = !self.ui.hide_gui;
     }

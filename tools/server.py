@@ -18,14 +18,10 @@ except ImportError:
 ROOT = lab.ROOT
 
 
-def prepare(instance, baseline=False):
+def prepare(instance, baseline=False, server_jar=None):
     lock, directory = lab.config()
-    game = lock["minecraft"]
-    manifest_file = runtime.fetch(game["manifest_url"], directory / "manifest.json", game["manifest_sha1"])
-    manifest = json.loads(manifest_file.read_text())
-    artifact = manifest["downloads"]["server"]
-    launcher = runtime.fetch(artifact["url"], directory / "jars/server.jar", artifact["sha1"])
-    server, libraries = lab.unpack_server(launcher, directory, game["version"])
+    launcher = lab.import_server(lock, directory, server_jar)
+    server, libraries = lab.unpack_server(launcher, directory, lock["minecraft"]["version"])
     libraries = [server, *libraries, *runtime.fabric_libraries()]
     pack_lock = json.loads((ROOT / "packs/mods.lock.json").read_text())
     mods = pack_lock["projects"]
@@ -49,6 +45,7 @@ def main():
     parser.add_argument("command", choices=["prepare", "run"])
     parser.add_argument("--instance", type=Path, default=ROOT / ".local/server/optimized")
     parser.add_argument("--heap", default="4G")
+    parser.add_argument("--server-jar", type=Path, help="the pinned server jar you downloaded yourself")
     parser.add_argument("--baseline", action="store_true", help="Use a separate instance for the baseline")
     parser.add_argument("--compact-headers", action="store_true", help="Enable Java 25 compact object headers for this server process")
     parser.add_argument("--gc", choices=["default", "g1", "zgc"], default="default", help="Select a collector for this process; default leaves JVM policy in use")
@@ -58,7 +55,7 @@ def main():
     instance = args.instance.resolve()
     if args.baseline and args.instance == parser.get_default("instance"):
         instance = ROOT / ".local/server/baseline"
-    libraries = prepare(instance, args.baseline)
+    libraries = prepare(instance, args.baseline, args.server_jar)
     if args.command == "prepare":
         print(f"Prepared server at {instance}. Read https://www.minecraft.net/eula before setting eula=true locally.")
         return

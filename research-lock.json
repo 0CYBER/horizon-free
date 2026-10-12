@@ -1,8 +1,9 @@
 {
   "minecraft": {
     "version": "26.3",
-    "manifest_url": "https://piston-meta.mojang.com/v1/packages/4fe1aa1ef8da1cb95c5bad1fb98890ca56dd8ca3/26.3.json",
     "manifest_sha1": "4fe1aa1ef8da1cb95c5bad1fb98890ca56dd8ca3",
+    "client_sha1": "e877b6a07acd633fb3bb475002175cec036e7b87",
+    "server_sha1": "33680f5f2ac32864d6d7cf5e56a705fdb3e05f4c",
     "java_major": 25
   },
   "vineflower": {

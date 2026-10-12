@@ -10,14 +10,18 @@ files from it.
 What you need
   - Minecraft Java Edition, bought and installed with the official launcher,
     with version 26.3 downloaded at least once (play it once from the launcher).
-  - Python 3.12 or newer.
+  - The 26.3 server jar, downloaded yourself from
+    https://www.minecraft.net/en-us/download/server while 26.3 is the current
+    release (or from the downloads.server.url in your launcher's
+    versions/26.3/26.3.json). Only needed for the first start.
+  - Python 3.10 or newer.
   - Java 25 (a JDK, e.g. Eclipse Temurin 25).
   - A graphics driver with Vulkan (Linux, Windows) or any Apple Silicon Mac.
 
 First start (once, a few minutes)
   1. Open a terminal in this folder.
-  2. Run:   python3 tools/prepare_native_client.py --prepare
-     (on Windows: py tools\prepare_native_client.py --prepare)
+  2. Run:   python3 tools/prepare_native_client.py --prepare --server-jar PATH/TO/server.jar
+     (on Windows: py tools\prepare_native_client.py --prepare --server-jar PATH\TO\server.jar)
      It reads the game files from your own Minecraft installation and writes
      the resources Horizon needs into .local/ in this folder. If your launcher
      keeps the game elsewhere, add --minecraft-dir PATH.
