@@ -367,10 +367,14 @@ def player_commands(e, name, version=None):
     """Give the joined bot a varied inventory and ender chest."""
     out = []
     stacks = items(e, version)
+    if version is not None and version < 2700:  # `/item` arrived in 1.17
+        replace = lambda slot, item: f'replaceitem entity {name} {slot} {item}'
+    else:
+        replace = lambda slot, item: f'item replace entity {name} {slot} with {item}'
     for i, stack in enumerate(stacks[:30]):
-        out.append(f'item replace entity {name} container.{i} with {give_form(e, stack)}')
-    out.append(f'item replace entity {name} enderchest.0 with {give_form(e, stacks[0])}')
-    out.append(f'item replace entity {name} armor.head with minecraft:iron_helmet')
+        out.append(replace(f'container.{i}', give_form(e, stack)))
+    out.append(replace('enderchest.0', give_form(e, stacks[0])))
+    out.append(replace('armor.head', 'minecraft:iron_helmet'))
     out.append(f'xp set {name} 5 levels')
     return out
 

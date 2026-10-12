@@ -29,7 +29,7 @@ use schema::{Key, Ty, key, walk};
 pub const CURRENT: i32 = crate::DATA_VERSION;
 /// Data saved before this DataVersion (1.17 is 2724) needs fixes that are not
 /// ported (2717 and everything before).
-pub const OLDEST_SUPPORTED: i32 = 2724;
+pub const OLDEST_SUPPORTED: i32 = 2571;
 
 /// `Identifier.tryParse` validity, as `NamespacedSchema.ensureNamespaced` uses it.
 pub fn identifier(id: &str) -> Option<(String, String)> {
