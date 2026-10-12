@@ -756,6 +756,8 @@ struct Game<'a> {
     /// `WorldBorderRenderer` and its render state.
     border_renderer: horizon_client::border_render::BorderRenderer,
     border_state: horizon_client::border_render::BorderRenderState,
+    /// `Hud.tabList`: the player list's header, footer and heart states.
+    tab_list: horizon_client::tab_list::TabList,
     subtitles: subtitle_hud::SubtitleState,
     adv: advancements::AdvState,
     stats_ui: stats_screen::StatsUi,
@@ -3118,6 +3120,7 @@ impl Game<'_> {
             batch.text(atlas, text, (w - tw) / 2.0, h - 59.0, u32::MAX, true);
         }
         self.draw_chat(&mut batch);
+        self.draw_tab_list(&mut batch);
         let atlas = &self.res.atlas;
         if let Some((_, ticks)) = self.sleeping {
             // Gui sleep overlay fading in over 100 ticks.
@@ -8188,6 +8191,7 @@ pub fn run() -> Result<()> {
         border: Default::default(),
         border_renderer: Default::default(),
         border_state: Default::default(),
+        tab_list: Default::default(),
         subtitles: Default::default(),
         adv: Default::default(),
         stats_ui: Default::default(),

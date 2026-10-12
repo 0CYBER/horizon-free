@@ -559,6 +559,62 @@ impl Game<'_> {
     }
 }
 
+impl Game<'_> {
+    /// `Hud.extractTabList`: the player list while the player-list key is
+    /// held. A single-player world lists only its player, so it shows only
+    /// with a `list` objective.
+    pub(super) fn draw_tab_list(&mut self, batch: &mut HudBatch) {
+        use horizon_client::tab_list::{self, TabInputs, TabPlayer};
+        let chatting = self.remote.is_some() && self.remote_chat_open();
+        let key = self.screen == super::Screen::Playing
+            && !chatting
+            && self.keys.contains(&winit::keyboard::KeyCode::Tab);
+        let (players, online_mode, upside_down) = match self.remote_tab_players() {
+            Some(remote) => remote,
+            None => {
+                // The integrated server: the local player, online mode, no ping.
+                let uuid = self.level.player_uuid.map_or(0, |u| {
+                    u.iter()
+                        .fold(0u128, |a, &w| (a << 32) | u128::from(w as u32))
+                });
+                let mut me = TabPlayer::new(uuid, PLAYER_NAME);
+                me.game_mode = self.mode_id();
+                me.skin = "entity/player/wide/steve".into();
+                (vec![me], true, Vec::new())
+            }
+        };
+        let board = &self.score.board;
+        let objective = board.display_objective(sb::SLOT_LIST);
+        let shown = tab_list::visible(
+            key,
+            self.remote.is_none(),
+            players.len(),
+            objective.is_some(),
+        );
+        self.tab_list.set_visible(shown);
+        if !shown {
+            return;
+        }
+        let up = |id: u128| upside_down.contains(&id);
+        let inputs = TabInputs {
+            players: &players,
+            board,
+            objective,
+            screen_width: batch.width as i32,
+            online_mode,
+            gui_ticks: self.ticks as i64,
+            // Horizon has no "chat background only" option: vanilla's default (on).
+            background: tab_list::row_background(
+                true,
+                f64::from(self.settings.text_background_opacity),
+            ),
+            upside_down: &up,
+        };
+        let draws = self.tab_list.layout(&inputs, &self.res.atlas.font);
+        tab_list::paint(batch, &self.res.atlas, &draws);
+    }
+}
+
 /// The commands' view of the game.
 struct GameEnv<'a, 'b> {
     g: &'a mut Game<'b>,
