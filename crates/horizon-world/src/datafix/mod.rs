@@ -14,6 +14,7 @@ pub mod files;
 mod fixes_a;
 mod fixes_b;
 mod fixes_c;
+mod fixes_cliffs;
 mod fixes_old;
 mod items;
 pub mod json;
@@ -26,9 +27,9 @@ use schema::{Key, Ty, key, walk};
 
 /// The DataVersion of the game.
 pub const CURRENT: i32 = crate::DATA_VERSION;
-/// Data saved before this DataVersion (1.18.2 is 2975) needs fixes that are not
-/// ported (2967 and 2970, and everything before).
-pub const OLDEST_SUPPORTED: i32 = 2970;
+/// Data saved before this DataVersion (1.17 is 2724) needs fixes that are not
+/// ported (2717 and everything before).
+pub const OLDEST_SUPPORTED: i32 = 2724;
 
 /// `Identifier.tryParse` validity, as `NamespacedSchema.ensureNamespaced` uses it.
 pub fn identifier(id: &str) -> Option<(String, String)> {
@@ -176,6 +177,7 @@ type FixFn = fn(&mut Cx);
 /// Every ported fix (from the 1.19 schemas on), in DataFixers order.
 fn fixes() -> Vec<(Key, FixFn)> {
     let mut out = Vec::new();
+    fixes_cliffs::register(&mut out);
     fixes_old::register(&mut out);
     fixes_a::register(&mut out);
     fixes_b::register(&mut out);

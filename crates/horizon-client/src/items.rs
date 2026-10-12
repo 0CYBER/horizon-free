@@ -158,6 +158,8 @@ pub struct ItemStack {
     /// Components beyond count and damage (see `item_data`); None when default.
     pub extra: Option<Box<crate::item_data::StackData>>,
 }
+/// Item ids standing for a loot table's `minecraft:dynamic` entries.
+const DYNAMIC: &str = "#dynamic:";
 pub struct Items {
     pub items: HashMap<Arc<str>, ItemInfo>,
     pub order: Vec<Arc<str>>,
@@ -576,6 +578,53 @@ impl Items {
         random: &mut R,
         sequences: Option<(&mut crate::random_sequences::RandomSequences, i64)>,
     ) -> Vec<ItemStack> {
+        self.block_drops_full(registry, state, held, &[], random, sequences)
+    }
+    /// `block_drops` with the block entity's dynamic drops (`LootParams.withDynamicDrop`:
+    /// a decorated pot's sherds) in place of the `minecraft:dynamic` entries.
+    pub fn block_drops_with(
+        &self,
+        registry: &BlockRegistry,
+        state: BlockStateId,
+        held: Option<&ItemStack>,
+        dynamic: &[ItemStack],
+        random: &mut impl RandomSource,
+    ) -> Vec<ItemStack> {
+        self.block_drops_full(registry, state, held, dynamic, random, None)
+    }
+    /// `block_drops_in` with dynamic drops.
+    pub fn block_drops_full(
+        &self,
+        registry: &BlockRegistry,
+        state: BlockStateId,
+        held: Option<&ItemStack>,
+        dynamic: &[ItemStack],
+        random: &mut impl RandomSource,
+        sequences: Option<(&mut crate::random_sequences::RandomSequences, i64)>,
+    ) -> Vec<ItemStack> {
+        let drops = self.block_drops_raw(registry, state, held, random, sequences);
+        if !drops.iter().any(|d| d.item.starts_with(DYNAMIC)) {
+            return drops;
+        }
+        drops
+            .into_iter()
+            .flat_map(|d| {
+                if d.item.starts_with(DYNAMIC) {
+                    dynamic.to_vec()
+                } else {
+                    vec![d]
+                }
+            })
+            .collect()
+    }
+    fn block_drops_raw(
+        &self,
+        registry: &BlockRegistry,
+        state: BlockStateId,
+        held: Option<&ItemStack>,
+        random: &mut impl RandomSource,
+        sequences: Option<(&mut crate::random_sequences::RandomSequences, i64)>,
+    ) -> Vec<ItemStack> {
         let Some(block) = registry.state(state) else {
             return vec![];
         };
@@ -942,6 +991,21 @@ impl LootContext<'_> {
                         break;
                     }
                 }
+                true
+            }
+            // DynamicLoot: what the block entity adds (a cracked decorated
+            // pot's sherds), filled in by `block_drops_with`.
+            "minecraft:dynamic" => {
+                out.push((
+                    e["weight"].as_i64().unwrap_or(1) as i32,
+                    ItemStack {
+                        item: Arc::from(format!("{DYNAMIC}{}", e["name"].as_str().unwrap_or(""))),
+                        count: 1,
+                        damage: 0,
+                        extra: None,
+                    },
+                    Value::Null,
+                ));
                 true
             }
             "minecraft:empty" => {

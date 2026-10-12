@@ -520,8 +520,11 @@ pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
                     let mut fields = vec![
                         ("title", raw(Tag::String(w.title.as_str().into()))),
                         ("author", Tag::String(w.author.as_str().into())),
-                        ("pages", Tag::List(pages)),
                     ];
+                    // `optionalFieldOf("pages", List.of())`: no pages, no field.
+                    if !w.pages.is_empty() {
+                        fields.push(("pages", Tag::List(pages)));
+                    }
                     if w.generation != 0 {
                         fields.push(("generation", Tag::Int(i32::from(w.generation))));
                     }

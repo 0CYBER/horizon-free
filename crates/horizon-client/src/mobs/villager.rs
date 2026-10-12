@@ -212,19 +212,26 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
 
 // ---- Raids: the raid activities and the gift for a hero.
 
+/// No raid where the villager stands (`ServerLevel.getRaidAt` is null).
 pub const RAID_NONE: u8 = 0;
-/// A raid is near but no wave is on (`Activity.PRE_RAID`).
+/// A raid is near, before or between its waves.
 pub const PRE_RAID: u8 = 1;
-/// A wave is on (`Activity.RAID`).
+/// A raid is near and a wave is on.
 pub const RAID: u8 = 2;
-/// The raid was won: the villagers celebrate.
+/// The raid there was won: the villagers celebrate.
 pub const RAID_VICTORY: u8 = 3;
+/// The raid there was lost (still found by `getRaidAt` until it stops).
+pub const RAID_LOSS: u8 = 4;
 
 /// Villager state beyond `Extra`'s scratch fields.
 #[derive(Clone, Debug, Default)]
 pub struct Ext {
-    /// Which raid package the villager follows.
+    /// The raid `getRaidAt` finds where the villager stands (`RAID_NONE`
+    /// ... `RAID_LOSS`), set by the game every tick.
     pub raid: u8,
+    /// That raid has spawned a wave and is not between waves
+    /// (`hasFirstWaveSpawned && !isBetweenWaves`).
+    pub raid_wave: bool,
     /// What the villager remembers of players (`gossips`).
     pub gossips: crate::gossip::Gossips,
     pub last_gossip_time: i64,
@@ -250,7 +257,7 @@ pub fn ext(m: &Mob) -> Option<&Ext> {
 pub fn ext_mut(m: &mut Mob) -> &mut Ext {
     m.extra.villager.get_or_insert_with(Box::default)
 }
-/// The raid package the villager follows (`RAID_NONE` ... `RAID_VICTORY`).
+/// The raid where the villager stands (`RAID_NONE` ... `RAID_LOSS`).
 pub fn raid_status(m: &Mob) -> u8 {
     ext(m).map_or(RAID_NONE, |e| e.raid)
 }
@@ -258,14 +265,15 @@ pub fn raid_status(m: &Mob) -> u8 {
 pub fn raid_nearby(m: &Mob) -> bool {
     ext(m).is_some_and(|e| e.raid != RAID_NONE)
 }
-/// The raid near the villager: `Some(true)` while a wave is on
+/// `ResetRaidStatus`: no raid, a stopped one or a lost one.
+pub fn raid_over_or_lost(m: &Mob) -> bool {
+    matches!(raid_status(m), RAID_NONE | RAID_LOSS)
+}
+/// `SetRaidStatus`: `Some(true)` while a wave is on
 /// (`hasFirstWaveSpawned && !isBetweenWaves`), `Some(false)` otherwise.
 pub fn raid_state(m: &Mob) -> Option<bool> {
-    match ext(m).map_or(RAID_NONE, |e| e.raid) {
-        RAID_NONE => None,
-        RAID => Some(true),
-        _ => Some(false),
-    }
+    let e = ext(m)?;
+    (e.raid != RAID_NONE).then_some(e.raid_wave)
 }
 /// `Villager.getVillagerXp`.
 pub fn xp(m: &Mob) -> i32 {

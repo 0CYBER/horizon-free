@@ -60,13 +60,12 @@ The playable Java performance packs remain available during development.
 
 The final deliverable is the complete Horizon Rust game with one-to-one parity
 with pinned Java Edition 26.3, plus a playable **Linux** build that the user can
-download and test. The only target machine is **ludodesktop**: Ubuntu 26.04,
-Intel i7-13700KF, NVIDIA RTX 4080, GNOME on Wayland. macOS (including the M2 Pro
-Mac) and Windows are out of scope. The build must include a packaged native
+download and test. The target platform is a Linux x86-64 desktop with an NVIDIA
+GPU (Vulkan) on Wayland. macOS and Windows are out of scope. The build must include a packaged native
 executable, required runtime resources, launch instructions, artifact checksums,
 and the tested OS/CPU/GPU configuration.
 
-The build is complete only after its packaged Rust game is launched and tested on ludodesktop:
+The build is complete only after its packaged Rust game is launched and tested on the target machine:
 create/load a world, render terrain, use keyboard/mouse controls, move and interact,
 break/place blocks, use inventory/crafting, save, quit and reload. These launch
 checks accompany the full gameplay-parity suite; they do not replace it. Record
@@ -75,7 +74,7 @@ and the existing Java packs do not establish a playable Rust build.
 
 Optimize FPS, frame pacing, memory use and render distance using matched scenes,
 worlds, settings and hardware after behavior is validated. Package and test on
-ludodesktop before declaring the rewrite complete. Commit and push
+the target machine before declaring the rewrite complete. Commit and push
 verified development checkpoints regularly.
 
 ## Implemented foundation
@@ -150,6 +149,7 @@ python3 tools/test_biome_source_parity.py
 python3 tools/test_anchor_parity.py
 python3 tools/test_biome_temperature_parity.py
 python3 tools/test_float_log_parity.py
+python3 tools/test_raid_parity.py
 ```
 
 `--prepare` regenerates the local reference artifacts from the existing lock;
@@ -444,6 +444,42 @@ The [contained-fluid comparison](world-data.md#contained-fluid-states) adds
 **243,331 matching lines per JAR** for fluid-state mapping, liquid-block conversion
 and surface/camera height queries. It covers every pinned block state and query
 failures; fluid spreading, entity interactions and rendering remain pending.
+
+## Block entity removal, drops and copper golems
+
+`LevelChunk.setBlockState` runs `BlockEntity.preRemoveSideEffects` when a
+block with a block entity is replaced by another block (`LevelAccess::remove_block_entity`,
+`level/removal.rs`): containers spill every slot through `Containers.dropItemStack`
+(chests, barrels, copper chests, hoppers, dispensers, droppers, crafters,
+furnaces, brewing stands, chiseled bookshelves, shelves, decorated pots and
+campfires, the last four from the block entities kept as loaded), jukeboxes pop
+their record, lecterns their book, and shulker boxes keep their contents for the
+dropped box. Copper chests and statues keep their block entity across
+weathering, and `UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS` skips the spill.
+`Block.dropResources` draws its loot and pop spots when the behaviour calls it,
+with ore, sculk and spawner experience, and the item entities and orbs the
+behaviour makes join the world before it returns, in the same tick. Player
+mining, explosions and `/setblock`/`/fill destroy` use the same path in
+vanilla's order.
+
+`tools/test_block_removal_parity.py` replaces, destroys and removes every block
+entity holder with random contents (4,000 cases) against `VanillaDispenserOracle`
+running vanilla's `setBlock`/`destroyBlock`/`removeBlock`, and compares block
+changes, contents left, item entities and orbs, events, sounds and the level
+random: all cases match. The block update oracle replays the same removal, so
+the block update, random tick and redstone harnesses cover it too.
+
+The copper golem is a species: its model, weathered textures and glowing eyes,
+keyframe animations (compared by the entity model harness), sounds, weathering,
+waxing and scraping, statues, saved `weather_state` and `next_weather_age`, death
+loot (entity death loot harness), the poppy iron golems give it, and building it
+from a pumpkin on a copper block (the copper block becomes the matching copper
+chest). The dispenser harness builds, shears and equips copper golems against
+vanilla. Its chest-sorting AI (`CopperGolemAi` with
+`TransportItemsBetweenContainers`) still runs as goals that follow vanilla's
+behaviour without its brain: porting it onto the brain machinery of
+`mobs/villager_brain.rs` and comparing it in the mob AI harness, which needs
+container contents in the probe's world, is still to do.
 
 ## Overlay feature composition
 
@@ -1288,3 +1324,194 @@ binding. Rendering, transport, full entity lifecycle integration and playable
 Linux gameplay remain unfinished. In this pinned version,
 `LivingEntity.updateDataBeforeSync` invokes dirty effect synchronization; it is a
 separate phase from `tickEffects`.
+
+## Scoreboards, teams and subtitles
+
+`tools/test_scoreboard_parity.py` runs vanilla's own `Scoreboard` (what
+`ServerScoreboard` extends) and `horizon_client::scoreboard` on 500 scripted
+cases, about 81,000 operations: objectives with every kind of criteria (custom,
+team kill, and statistics in every spelling `ObjectiveCriteria.byName` accepts,
+which resolve to their canonical names), display names, render types,
+auto-updated displays and number formats; scores set, added, read, locked,
+given displays and formats, reset, and changed through `forAllObjectives` as the
+gameplay criteria change them; display slots; teams with every option, joined,
+left, removed and emptied by `Scoreboard.entityRemoved`. Every result must
+match, as must each collection in the order vanilla iterates it (objectives,
+holders and teams are fastutil open hash maps, each team's members a
+`HashSet`; `fastutil_order` keeps the same tables), the
+`ScoreboardSaveData.Packed` codec output that `data/minecraft/scoreboard.dat`
+holds (fields equal to the codec defaults are left out, components are written
+as `ComponentSerialization` writes them), and the data after each side loads
+the other's NBT. Only each holder's scores, which vanilla keeps in an
+identity-hash map, are compared as a set. `tools/test_save_roundtrip_parity.py`
+also builds a scoreboard with every saved field on a vanilla server and requires
+the game to save it back unchanged.
+
+`tools/test_team_rules_parity.py` runs vanilla's `Entity.doTeamsAllowDamage`
+(friendly fire), `isAlliedTo`, `EntitySelector.pushableBy` (collision rules),
+`Entity.isInvisibleTo` (seeing invisible team mates) and
+`LivingEntityRenderer.shouldShowName` (name tag visibility, with a stand-in
+client) on stand-in entities over 6,000 combinations of two teams' options and
+the entities' teams; the game uses the same functions. Mobs on the player's team
+never target the player, a creeper's blast spares its team mates when friendly
+fire is off, mobs push each other only as their collision rules allow, name tags
+show the team's prefix, suffix and colour and the score of the objective
+displayed below names, and a team that hides death messages keeps the player's
+own death message out of chat. The criteria that follow the player (health,
+food, armor, xp, level, air) update as `ServerPlayer.doTick` does, and deaths,
+kills, team kills and statistics update their objectives.
+
+`tools/test_subtitle_parity.py` runs vanilla's `SubtitleOverlay` with a
+stand-in client on 1,500 scripted cases of sounds reported by the sound engine
+(subtitles from sounds.json, positions, ranges, looping) at controlled times,
+and frames that render it for a listener transform, the subtitle options (shown
+or not, notification display time, text background opacity) and a GUI size.
+Every frame's fills and texts, with their pose, must match the overlay in
+`hud_overlays`: which captions show and in what order, merging of repeats,
+expiry, the fade by age, the direction arrows and the box width. The overlay
+listens to the sound engine from the frame that renders it with the option on
+until one renders with it off, as vanilla's does.
+
+Not covered yet: the player's air supply (Horizon does not track drowning, so
+the `air` criteria stays at 300); displays auto-updated with the player's name
+carry the team formatting but not the click, hover and insertion of
+`Player.getDisplayName`; there is no attack sweep for allies to be spared from;
+scores below other players' names need the multiplayer scoreboard packets,
+which the client does not handle yet.
+
+## Loom, crafter and recipe book
+
+The loom, the crafter and the recipe book run on code checked against
+vanilla's own classes, and the game uses that code:
+
+- **Menus.** `horizon_client::menu` runs `LoomMenu` (selectable patterns,
+  `clickMenuButton`, the six-layer limit, quick moves, the result's `onTake`)
+  and the server's `CrafterMenu` over the block entity (the result following
+  the grid, `setSlotState`, a filled disabled slot enabling itself) besides the
+  other menus. `tools/test_menu_click_parity.py` compares 8,000 random click
+  sequences over 19 menus, with pattern button and slot state packets, with
+  vanilla's menu classes. The game's loom and crafter screens click through
+  `Game::menu_session` on the same engine.
+- **Crafter block.** `tools/test_crafter_parity.py` runs `CrafterBlock.dispenseFrom`
+  and `CrafterBlockEntity.serverTick` over the block update oracle's level:
+  4,000 crafts of datapack recipes (remainders and special recipes included)
+  with disabled slots and containers, other crafters or air in front, comparing
+  block changes, container contents, the animation ticks, triggered flag,
+  comparator signal, shot items, level events and the level random.
+- **Recipe placement.** `horizon_client::menu::place` ports `ServerPlaceRecipe`
+  with `StackedContents`' recipe picker for the inventory, crafting table and
+  furnaces. Vanilla counts the available items in a hash map ordered by
+  identity hash codes, an order that changes between runs and decides which
+  of several fitting items fills an ingredient; `tools/test_place_recipe_parity.py`
+  hands the oracle's order to the Rust side and compares 6,000 placements.
+- **The book's contents.** `recipe_book::ClientBook` keeps the displays as
+  `ClientRecipeBook`'s `HashMap` of display ids does (on the verified Java
+  `HashMap` port), whose order is the order of the buttons;
+  `tools/test_recipe_book_view_parity.py` runs the client's `ClientRecipeBook`,
+  `RecipeCollection` selection and the tab and page logic over 1,200 cases.
+- **The player's book.** `recipe_book::Settings` with a `RecipeIndex` is
+  `ServerRecipeBook`: awards (advancements, `/recipe`, crafting) never learn
+  special recipes and count displays, and loading drops unknown recipes;
+  `tools/test_recipe_book_parity.py` compares 1,500 operation sequences and the
+  saved compound.
+- **Screens.** `screen_layout` holds `LoomScreen.extractBackground` and
+  `CrafterScreen`'s decorations as draw calls the game paints;
+  `tools/test_screen_layout_parity.py` runs vanilla's screens on stand-in
+  menus and compares 1,600 call lists.
+
+Not compared yet: the recipe book's own drawing (tabs, buttons, the overlay
+and ghost slots) and its text search, the banner preview's 3D flag (drawn as
+the flat front face), furnaces awarding their recipes and experience when
+their output is taken, and the limited crafting game rule.
+
+## Player list and world border rendering
+
+`horizon_client::tab_list` lays out vanilla's `PlayerTabOverlay` as draw calls:
+the listed players in `PLAYER_COMPARATOR` order (higher list order first,
+spectators last, team name, profile name ignoring case), at most 80 of them in
+columns of 20 rows; heads with the default skin for the UUID, flipped for
+Dinnerbone and Grumm in the level, only in online mode; team prefix, suffix and
+colour; italic, translucent spectator names (italic at the component root);
+ping bars; the `list` objective as scores in their number format (the score's,
+the objective's, or yellow) or as hearts with `HealthState`'s change blink and
+the `hp` text when they no longer fit; and the header and footer wrapped by
+`Font::split_lines`, which now follows `StringSplitter.splitLines`, with legacy
+`§` codes applied by `Text::resolve_legacy`. `Hud.extractTabList`'s rule hides
+the list in single player unless a `list` objective is set.
+`tools/test_tab_list_parity.py` runs vanilla's own `extractRenderState` frame
+after frame (`VanillaTabListOracle`: stand-in connection, level and options,
+real `Scoreboard`) against `examples/tab_list_fixture` and compares every fill,
+styled text run, sprite and face blit (as `hud_layout::GuiDraw` calls, painted
+like the rest of the HUD): **1,000 cases, 3,476 frames and 844,758
+calls match**. The game draws the same layout while the player-list key is
+held, from the local player and scoreboard in single player and from
+`PlayerInfoUpdate`, the tab list header and footer, `onlineMode` and the
+objective, score, display-slot and team packets on a server (checked live
+against the 26.3 server jar). Real skins are not downloaded: every head uses
+its default skin. Horizon has no "chat background only" option, so the row
+background is vanilla's default.
+
+The client `WorldBorder` wraps `horizon_core::geometry::border` (checked by
+`test_world_border_parity.py`) and `horizon_client::border_render` ports
+`WorldBorderRenderer`: `extract`'s fade (`(1 - distance / render distance)^4`)
+and status colour (growing, shrinking, stationary), the wall buffer that is only
+rebuilt when the border moves, the model offset and the texture scroll of
+`prepareDynamicTransforms`, and `draw`'s walls within the render distance,
+nearest first. `WorldBorder::warning_strength` feeds `hud_overlays::vignette`
+the border's warning strength at the camera. `tools/test_world_border_render_parity.py` drives vanilla's border,
+renderer and vignette (`VanillaWorldBorderRenderOracle`, with a stand-in GPU
+device, dynamic-uniform writer and render pass) against
+`examples/world_border_render_fixture`: **1,500 cases and 16,859 frames match
+bit for bit** (8,513 with the wall drawn). The game draws the wall with
+`RenderPipelines.WORLD_BORDER`'s overlay blend and the mipmapped forcefield
+texture, and follows the server's border packets. One border is kept for all
+dimensions.
+
+## Pillager patrols and raids
+
+`horizon_client::patrol` ports `PatrolSpawner` and `horizon_client::raid` ports
+`Raid` and `Raids`; the game runs both through them. `tools/test_raid_parity.py`
+runs vanilla's own classes in `VanillaRaidOracle`, on a stand-in `ServerLevel`
+built from boxes of blocks and light, a biome, village sections, village points
+of interest, unloaded and non-ticking chunks, the overworld clock, local
+difficulty inputs and one player, and compares every case with
+`raid_fixture` line by line. The last run matched **1,900 cases at zero
+differences**: 1,000 patrol, 400 raid and 500 codec cases, with 474 patrol
+pillagers, 1,364 raid waves, 11,399 raiders, 149 victories and 21 losses.
+
+- **Patrols**: the countdown, `isBrightOutside`, the one in five draw, the
+  random player, spectators, the village distance, `hasChunksAt`, the
+  `can_pillager_patrol_spawn` attribute (mushroom fields and the early game
+  timeline), the group size from the local difficulty, each member's
+  `MOTION_BLOCKING_NO_LEAVES` height, empty spawn block and spawn rules, the
+  leader's banner and patrol target, and the level random's next draw.
+- **Raids**: `createOrExtendRaid` (spectators, the `raids` rule,
+  `can_start_raid`, the mean of the village points of interest, the omen
+  absorbed, the trigger stat), the pre-raid countdown and its cached spawn
+  position, `findRandomSpawnPos` with Mth's sine table, wave composition by
+  difficulty and the bonus wave, leaders and riders, `addWaveMob`,
+  `removeFromRaid` and `updateBossbar` (progress bits with Java's `clamp`, the
+  title, visibility, the player in the bar), the horn's seed and position,
+  `updateRaiders` (far, gone, removed and idle raiders), joining, loaded and
+  hurt raiders, victory with Hero of the Village, loss, the celebration,
+  peaceful, the `raids` rule, unloaded chunks, `/raid setomen` and `stop`, and
+  the 48,000 tick timeout.
+- **raids.dat**: `Raids.CODEC` with `resultOrPartial` over generated and
+  mutated data: numbers of any NBT type converted as Java does, partial
+  results (`Util.fixedSize` streams, lists with bad elements, a non-list
+  `raids`), raids dropped on missing fields, a fresh `Raids` when `next_id` or
+  `tick` is missing, the heroes in `HashSet` order and the raids in the order
+  of fastutil's entry-set stream (the tick iterates the map the other way).
+  Each dimension keeps its own `dimensions/<id>/data/minecraft/raids.dat`.
+
+Scope and remaining gaps: `finalizeSpawn` runs with a fixed random in the
+oracle, so its own draws are not compared, and raid buffs and patrol targets
+come from unseeded entity randoms. The omens act inside the effect tick
+(`BadOmenMobEffect`, `RaidOmenMobEffect`), including the
+`ConcurrentModificationException` vanilla swallows when Raid Omen is first
+added; this has unit tests but no oracle, since the effect map's order follows
+identity hashes. Raider goals (pathfinding to the raid, celebrating, fetching
+the banner, villagers' raid activities) and ravager riding are not compared:
+they belong to the mob AI harness. The game's village distance comes from the
+points of interest its villagers claim rather than a `PoiManager`.
+

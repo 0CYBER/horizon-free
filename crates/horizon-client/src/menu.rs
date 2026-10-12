@@ -1,20 +1,27 @@
 //! `AbstractContainerMenu.clicked` over vanilla's slot layouts: every
 //! `ContainerInput` (pickup, quick move, swap, clone, throw, the three quick
 //! craft drags, pickup all) for the player inventory, the crafting table, the
-//! chest family, hoppers, dispensers, shulker boxes and the furnaces.
+//! chest family, hoppers, dispensers, shulker boxes, the furnaces, the brewing
+//! stand, the crafter (its client menu and the block entity's server menu with
+//! `setSlotState`) and the loom (`clickMenuButton`, `slotsChanged`).
 //! `tools/test_menu_click_parity.py` compares every click with vanilla's menu
 //! classes.
 use crate::{
+    banner::{self, Banners},
     brewing::Brewing,
     crafting::Recipes,
     items::{ItemStack, Items},
 };
+use std::sync::Arc;
+
+pub mod place;
 
 /// What a menu needs to know about items and recipes.
 pub struct Env<'a> {
     pub items: &'a Items,
     pub recipes: &'a Recipes,
     pub brewing: &'a Brewing,
+    pub banners: &'a Banners,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -54,7 +61,12 @@ pub enum Kind {
     /// The cooking recipe type: smelting, blasting or smoking.
     Furnace(&'static str),
     Brewing,
+    /// `CrafterMenu` over a plain crafting container (the client's menu).
     Crafter,
+    /// `CrafterMenu` over the `CrafterBlockEntity` (the server's menu): the
+    /// result follows the grid, and filling a disabled slot enables it.
+    CrafterBlock,
+    Loom,
 }
 
 impl Kind {
@@ -73,6 +85,8 @@ impl Kind {
             "smoker" => Self::Furnace("smoking"),
             "brewing" => Self::Brewing,
             "crafter" => Self::Crafter,
+            "crafter_be" => Self::CrafterBlock,
+            "loom" => Self::Loom,
             _ => return None,
         })
     }
@@ -100,6 +114,12 @@ enum Role {
     Ingredient,
     /// `BrewingStandMenu.FuelSlot`.
     BrewFuel,
+    /// The loom's banner, dye and pattern slots.
+    LoomBanner,
+    LoomDye,
+    LoomPattern,
+    /// The loom's result slot (a plain slot whose `onTake` uses the inputs).
+    LoomResult,
 }
 
 #[derive(Clone, Copy)]
@@ -126,6 +146,8 @@ pub struct Menu {
     pub carried: Option<ItemStack>,
     pub data: Vec<i32>,
     pub creative: bool,
+    /// The selected hotbar slot (`Inventory.selected`).
+    pub selected: usize,
     /// Dropped stacks (canonical text), `xp+N` and the like, in order.
     pub drops: Vec<String>,
     /// The dropped stacks themselves, for the caller to throw.
@@ -133,6 +155,12 @@ pub struct Menu {
     quick_status: i32,
     quick_type: i32,
     quick_slots: Vec<usize>,
+    /// `LoomMenu.selectablePatterns`.
+    pub loom_patterns: Vec<Arc<str>>,
+    /// Sounds the menu plays (`ui.loom.take_result`), for the caller.
+    pub sounds: Vec<&'static str>,
+    /// Recipes whose result was taken (`awardUsedRecipes`), for the caller.
+    pub crafted: Vec<String>,
 }
 
 fn same_item(a: &ItemStack, b: &ItemStack) -> bool {
@@ -238,7 +266,7 @@ impl Menu {
                 slots.extend(main(27, Role::Shulker));
                 player(&mut slots);
             }
-            Kind::Crafter => {
+            Kind::Crafter | Kind::CrafterBlock => {
                 containers[MAIN] = vec![None; 9];
                 slots.extend(main(9, Role::CrafterIn));
                 player(&mut slots);
@@ -248,6 +276,26 @@ impl Menu {
                     role: Role::Inert,
                 });
                 data = 10;
+            }
+            Kind::Loom => {
+                containers[MAIN] = vec![None; 3];
+                for (index, role) in [Role::LoomBanner, Role::LoomDye, Role::LoomPattern]
+                    .into_iter()
+                    .enumerate()
+                {
+                    slots.push(Slot {
+                        container: MAIN,
+                        index,
+                        role,
+                    });
+                }
+                slots.push(Slot {
+                    container: RESULT,
+                    index: 0,
+                    role: Role::LoomResult,
+                });
+                player(&mut slots);
+                data = 1;
             }
             Kind::Brewing => {
                 containers[MAIN] = vec![None; 5];
@@ -303,11 +351,132 @@ impl Menu {
             carried: None,
             data: vec![0; data],
             creative: false,
+            selected: 0,
             drops: Vec::new(),
             dropped: Vec::new(),
             quick_status: 0,
             quick_type: 0,
             quick_slots: Vec::new(),
+            loom_patterns: Vec::new(),
+            sounds: Vec::new(),
+            crafted: Vec::new(),
+        }
+    }
+
+    pub fn kind(&self) -> Kind {
+        self.kind
+    }
+
+    /// `clickMenuButton`: the loom's pattern buttons. False when refused.
+    pub fn button(&mut self, env: &Env, id: i32) -> bool {
+        if self.kind != Kind::Loom || id < 0 || id as usize >= self.loom_patterns.len() {
+            return false;
+        }
+        self.data[0] = id;
+        let pattern = self.loom_patterns[id as usize].clone();
+        self.loom_setup_result(env, &pattern);
+        true
+    }
+
+    /// `CrafterBlockEntity.setSlotState` (the slot state packet): only an
+    /// empty slot can be disabled or enabled.
+    pub fn set_slot_state(&mut self, slot: usize, enabled: bool) {
+        if self.kind == Kind::CrafterBlock && slot < 9 && self.containers[MAIN][slot].is_none() {
+            self.data[slot] = i32::from(!enabled);
+        }
+    }
+
+    /// The menu after a fixture set its slots: the block crafter's slot
+    /// listener has refreshed the result (`broadcastChanges`).
+    pub fn settle(&mut self, env: &Env) {
+        if self.kind == Kind::CrafterBlock {
+            self.crafter_result(env);
+        }
+    }
+
+    /// `CrafterMenu.refreshRecipeResult`.
+    fn crafter_result(&mut self, env: &Env) {
+        self.containers[RESULT][0] = env
+            .recipes
+            .find(&self.containers[MAIN], 3)
+            .map(|(_, stack)| stack)
+            .filter(|s| s.count > 0);
+    }
+
+    /// `LoomMenu.setupResultSlot`.
+    fn loom_setup_result(&mut self, env: &Env, pattern: &str) {
+        let mut result = None;
+        if let (Some(banner_stack), Some(dye)) = (
+            self.containers[MAIN][0].as_ref(),
+            self.containers[MAIN][1].as_ref(),
+        ) && let Some(color) = env.banners.loom_dye(env.items, dye)
+        {
+            result = Some(banner::loom_result(banner_stack, &color, pattern));
+        }
+        self.containers[RESULT][0] = result;
+    }
+
+    /// `LoomMenu.slotsChanged`.
+    fn loom_changed(&mut self, env: &Env) {
+        let has_inputs = self.containers[MAIN][0].is_some() && self.containers[MAIN][1].is_some();
+        if !has_inputs {
+            self.containers[RESULT][0] = None;
+            self.loom_patterns.clear();
+            self.data[0] = -1;
+            return;
+        }
+        let selected = self.data[0];
+        let valid = selected >= 0 && (selected as usize) < self.loom_patterns.len();
+        let pattern_item = self.containers[MAIN][2].clone();
+        let previous = std::mem::replace(
+            &mut self.loom_patterns,
+            env.banners.selectable(pattern_item.as_ref()),
+        );
+        let shown = if self.loom_patterns.len() == 1 {
+            self.data[0] = 0;
+            Some(self.loom_patterns[0].clone())
+        } else if !valid {
+            self.data[0] = -1;
+            None
+        } else {
+            let value = previous[selected as usize].clone();
+            match self.loom_patterns.iter().position(|p| *p == value) {
+                Some(i) => {
+                    self.data[0] = i as i32;
+                    Some(value)
+                }
+                None => {
+                    self.data[0] = -1;
+                    None
+                }
+            }
+        };
+        match shown {
+            Some(pattern) => {
+                let full = self.containers[MAIN][0]
+                    .as_ref()
+                    .is_some_and(banner::has_max_layers);
+                if full {
+                    self.data[0] = -1;
+                    self.containers[RESULT][0] = None;
+                } else {
+                    self.loom_setup_result(env, &pattern);
+                }
+            }
+            None => self.containers[RESULT][0] = None,
+        }
+    }
+
+    /// `Slot.setChanged` on slot `s`: the loom recomputes from its inputs,
+    /// the block crafter refreshes its result.
+    fn slot_changed(&mut self, env: &Env, s: usize) {
+        if self.slots[s].container != MAIN {
+            return;
+        }
+        match self.kind {
+            Kind::Loom => self.loom_changed(env),
+            Kind::CrafterBlock => self.crafter_result(env),
+            _ => {}
         }
     }
 
@@ -414,7 +583,16 @@ impl Menu {
                 .items
                 .get(&stack.item)
                 .is_some_and(|i| i.brewing_fuel.is_some()),
+            Role::LoomBanner => Self::is_banner(stack),
+            Role::LoomDye => env.banners.loom_dye(env.items, stack).is_some(),
+            Role::LoomPattern => env.banners.is_pattern_item(env.items, stack),
+            Role::LoomResult => false,
         }
+    }
+
+    /// `BannerItem`.
+    fn is_banner(stack: &ItemStack) -> bool {
+        stack.item.ends_with("_banner")
     }
 
     fn may_pickup(&self, s: usize) -> bool {
@@ -444,16 +622,34 @@ impl Menu {
     fn put(&mut self, env: &Env, s: usize, mut stack: Option<ItemStack>) {
         tidy(&mut stack);
         let slot = self.slots[s];
+        // SimpleContainer / BaseContainerBlockEntity.setItem: limitSize to
+        // getMaxStackSize(stack). The loom's result is a SimpleContainer too.
+        if (slot.container == MAIN || slot.role == Role::LoomResult)
+            && let Some(st) = stack.as_mut()
+        {
+            st.count = st.count.min(CONTAINER_MAX.min(Self::max_stack(env, st)));
+        }
+        // CrafterBlockEntity.setItem: filling a disabled (empty) slot enables it.
+        if self.kind == Kind::CrafterBlock
+            && slot.container == MAIN
+            && self.data[slot.index] == 1
+            && self.containers[MAIN][slot.index].is_none()
+        {
+            self.data[slot.index] = 0;
+        }
         self.containers[slot.container][slot.index] = stack;
         if slot.container == GRID {
             self.recompute(env);
         }
+        self.slot_changed(env, s);
     }
 
     /// `Slot.remove`: the container's `removeItem`.
     fn remove(&mut self, env: &Env, s: usize, amount: u32) -> Option<ItemStack> {
         let slot = self.slots[s];
-        if slot.container == RESULT {
+        // ResultContainer.removeItem takes the whole stack; the loom's result
+        // is a SimpleContainer slot and splits.
+        if slot.container == RESULT && slot.role != Role::LoomResult {
             return self.containers[RESULT][0].take();
         }
         let cell = &mut self.containers[slot.container][slot.index];
@@ -464,6 +660,10 @@ impl Menu {
         tidy(cell);
         if out.is_some() && slot.container == GRID {
             self.recompute(env);
+        }
+        // SimpleContainer.removeItem calls setChanged when it took something.
+        if out.is_some() && self.kind == Kind::Loom {
+            self.slot_changed(env, s);
         }
         out
     }
@@ -482,11 +682,29 @@ impl Menu {
 
     /// `ResultSlot.onTake` and the other `Slot.onTake` overrides.
     fn on_take(&mut self, env: &Env, s: usize) {
+        if self.slots[s].role == Role::LoomResult {
+            // LoomMenu's result onTake: one banner and one dye are used up.
+            self.remove(env, 0, 1);
+            self.remove(env, 1, 1);
+            if self.containers[MAIN][0].is_none() || self.containers[MAIN][1].is_none() {
+                self.data[0] = -1;
+            }
+            self.sounds.push("minecraft:ui.loom.take_result");
+            return;
+        }
+        if matches!(self.kind, Kind::CrafterBlock) && self.slots[s].container == MAIN {
+            // Slot.onTake -> CrafterSlot.setChanged -> the result refresh.
+            self.slot_changed(env, s);
+            return;
+        }
         if self.slots[s].role != Role::CraftResult {
             return;
         }
         let n = self.grid_size;
         let grid = self.containers[GRID].clone();
+        if let Some((id, _)) = env.recipes.find(&grid, n) {
+            self.crafted.push(format!("minecraft:{id}"));
+        }
         let remaining = env
             .recipes
             .find(&grid, n)
@@ -611,13 +829,16 @@ impl Menu {
     /// `Inventory.getSlotWithRemainingSpace` (selected slot 0, offhand, rest).
     fn slot_with_space(&self, env: &Env, stack: &ItemStack) -> Option<usize> {
         let inv = &self.containers[PLAYER];
-        [0, OFFHAND].into_iter().chain(0..36).find(|&i| {
-            inv[i].as_ref().is_some_and(|have| {
-                have.same_item_same_components(stack)
-                    && Self::stackable(env, have)
-                    && have.count < CONTAINER_MAX.min(Self::max_stack(env, have))
+        [self.selected, OFFHAND]
+            .into_iter()
+            .chain(0..36)
+            .find(|&i| {
+                inv[i].as_ref().is_some_and(|have| {
+                    have.same_item_same_components(stack)
+                        && Self::stackable(env, have)
+                        && have.count < CONTAINER_MAX.min(Self::max_stack(env, have))
+                })
             })
-        })
     }
 
     /// `Inventory.addResource`: returns what did not fit.
@@ -738,10 +959,12 @@ impl Menu {
                     stack.count = 0;
                     target.count = total;
                     changed = true;
+                    self.slot_changed(env, dest);
                 } else if target.count < max {
                     stack.count -= max - target.count;
                     target.count = max;
                     changed = true;
+                    self.slot_changed(env, dest);
                 }
             }
         }
@@ -859,7 +1082,44 @@ impl Menu {
                     return None;
                 }
             }
-            Kind::Crafter => {
+            Kind::Loom => {
+                after_take = true;
+                if index == 3 {
+                    if !self.move_to(env, &mut stack, 4, 40, true) {
+                        return None;
+                    }
+                } else if index > 3 {
+                    let target = if Self::is_banner(&stack) {
+                        Some(0)
+                    } else if env.banners.loom_dye(env.items, &stack).is_some() {
+                        Some(1)
+                    } else if env.banners.is_pattern_item(env.items, &stack) {
+                        Some(2)
+                    } else {
+                        None
+                    };
+                    match target {
+                        Some(t) => {
+                            if !self.move_to(env, &mut stack, t, t + 1, false) {
+                                return None;
+                            }
+                        }
+                        None if index < 31 => {
+                            if !self.move_to(env, &mut stack, 31, 40, false) {
+                                return None;
+                            }
+                        }
+                        None => {
+                            if index < 40 && !self.move_to(env, &mut stack, 4, 31, false) {
+                                return None;
+                            }
+                        }
+                    }
+                } else if !self.move_to(env, &mut stack, 4, 40, false) {
+                    return None;
+                }
+            }
+            Kind::Crafter | Kind::CrafterBlock => {
                 after_take = true;
                 if index < 9 {
                     if !self.move_to(env, &mut stack, 9, 45, true) {
@@ -961,9 +1221,11 @@ impl Menu {
         // The stack was edited in place in its slot.
         let slot = self.slots[index];
         if stack.count == 0 {
+            self.containers[slot.container][slot.index] = None;
             self.put(env, index, None);
         } else {
             self.containers[slot.container][slot.index] = Some(stack.clone());
+            self.slot_changed(env, index);
         }
         if check_count && stack.count == clicked.count {
             return None;
@@ -1173,8 +1435,14 @@ impl Menu {
         Ok(())
     }
 
-    /// The PICKUP branch of `doClick` (without the bundle overrides).
+    /// The PICKUP branch of `doClick` (without the bundle overrides), ending
+    /// with `slot.setChanged()`.
     fn pickup(&mut self, env: &Env, s: usize, primary: bool) {
+        self.pickup_inner(env, s, primary);
+        self.slot_changed(env, s);
+    }
+
+    fn pickup_inner(&mut self, env: &Env, s: usize, primary: bool) {
         let clicked = self.slot(s).cloned();
         match clicked {
             None => {
@@ -1312,7 +1580,7 @@ impl Menu {
                 if self.has_item(t)
                     && self.quick_replace(t, &have, env)
                     && self.may_pickup(t)
-                    && self.slots[t].container != RESULT
+                    && (self.slots[t].container != RESULT || self.kind == Kind::Loom)
                 {
                     let item = self.slot(t).expect("has item").clone();
                     if pass != 0 || item.count != Self::max_stack(env, &item) {

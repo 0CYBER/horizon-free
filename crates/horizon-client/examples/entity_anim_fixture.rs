@@ -8,7 +8,7 @@ use horizon_client::mobs::{
     anim::{self, Poses, State},
     aquatic, body_anim as b_anim, equine, guardian,
     keyframes::AnimationState,
-    shulker, species, tame,
+    shulker, sniffer, species, tame,
 };
 use horizon_core::geometry::Vec3;
 use serde_json::{Value, json};
@@ -173,6 +173,56 @@ fn entity_state(mob: &mut Mob, species: Species, case: &Value) {
                 mob.anim.states[i].started = case[k].as_f64().map(|v| v as f32);
             }
         }
+        Species::Breeze => {
+            // breeze::anim's state slots.
+            for (i, k) in ["idle", "shoot", "slide", "slideBack", "inhale", "longJump"]
+                .into_iter()
+                .enumerate()
+            {
+                mob.anim.states[i].started = case[k].as_f64().map(|v| v as f32);
+            }
+        }
+        Species::Sniffer => {
+            if flag("isSearching") {
+                mob.extra.variant = sniffer::SEARCHING;
+            }
+            // Sniffer's animation states, in `sniffer::anim`'s order.
+            for (i, k) in [
+                "feelingHappyAnimationState",
+                "scentingAnimationState",
+                "sniffingAnimationState",
+                "diggingAnimationState",
+                "risingAnimationState",
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                mob.anim.states[i].started = case[k].as_f64().map(|v| v as f32);
+            }
+        }
+        Species::HappyGhast => {
+            mob.extra.head = case["bodyItem"].as_str().map(Into::into);
+            if flag("isRidden") {
+                mob.rider = Some(Default::default());
+            }
+        }
+        Species::Warden => {
+            use horizon_client::mobs::warden;
+            mob.anim.v[warden::TENDRIL] = num("tendrilAnimation") * 10.0;
+            mob.anim.vo[warden::TENDRIL] = num("tendrilAnimation") * 10.0;
+            mob.anim.v[warden::HEART] = num("heartAnimation") * 10.0;
+            mob.anim.vo[warden::HEART] = num("heartAnimation") * 10.0;
+            for (i, k) in [
+                (warden::ROAR, "roarAnimationState"),
+                (warden::SNIFF, "sniffAnimationState"),
+                (warden::EMERGE, "emergeAnimationState"),
+                (warden::DIGGING, "diggingAnimationState"),
+                (warden::ATTACK, "attackAnimationState"),
+                (warden::SONIC_BOOM, "sonicBoomAnimationState"),
+            ] {
+                mob.anim.states[i].started = case[k].as_f64().map(|v| v as f32);
+            }
+        }
         Species::Witch if flag("isHoldingItem") => {
             mob.extra.main_hand = Some("minecraft:potion".into());
         }
@@ -215,6 +265,13 @@ fn main() -> horizon_client::Result<()> {
             base = base.replace(cut, "");
         }
         let base = base.replace("undead_horse#", "zombie_horse#");
+        // The breeze's wind and eyes and the creaking's eyes are layers of
+        // the species' own model class; LlamaDecorLayer's model animates like
+        // the llama.
+        let base = base
+            .replace("#wind", "#main")
+            .replace("#eyes", "#main")
+            .replace("#decor", "#main");
         let base = base.trim_start_matches("cold_").trim_start_matches("warm_");
         let Some(def) = species::ALL.iter().find(|d| {
             d.model == layer
@@ -222,6 +279,11 @@ fn main() -> horizon_client::Result<()> {
                 || d.model == base
                 || d.model.trim_end_matches("#main") == base.trim_end_matches("#main")
                 || norm(d.model) == base
+                // The warden's emissive layers are its model over other parts.
+                || (["#tendrils", "#heart", "#bioluminescent", "#pulsating_spots"]
+                    .iter()
+                    .any(|s| layer.ends_with(s))
+                    && d.model == format!("{}#main", layer.split('#').next().unwrap_or_default()))
         }) else {
             out.push_str(&format!("{}\n", json!({"skip": "no species"})));
             continue;
@@ -370,6 +432,22 @@ fn main() -> horizon_client::Result<()> {
                 },
                 &animations,
             ),
+            Species::CopperGolem => {
+                // CopperGolemRenderState's animation states, in the golem's slots.
+                for (slot, key) in [
+                    "idleAnimationState",
+                    "interactionGetItem",
+                    "interactionGetNoItem",
+                    "interactionDropItem",
+                    "interactionDropNoItem",
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    mob.anim.states[slot] = started(key);
+                }
+                horizon_client::mobs::copper_golem::anim(&mob, s, p, &animations);
+            }
             Species::Rabbit => b_anim::rabbit(
                 p,
                 s,

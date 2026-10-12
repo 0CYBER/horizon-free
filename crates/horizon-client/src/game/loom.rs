@@ -1,14 +1,13 @@
-//! The loom (`LoomMenu`, `LoomScreen`): stacking banner patterns onto a
-//! banner with a dye (and a pattern item for the special patterns), the
-//! six-layer limit, the scrolling pattern list and the banner preview.
-use super::{
-    Game,
-    stations::{INPUT, Station},
-};
+//! The loom screen (`LoomScreen`): the scrolling pattern list, the banner
+//! preview and the six-layer error. The menu itself (`LoomMenu`: slots,
+//! selectable patterns, the pattern buttons, quick moves, the result) runs on
+//! the verified engine, `horizon_client::menu`, through `Game::menu_session`.
+use super::{Game, stations::Kind};
 use horizon_client::{
     banner::{self, BannerLayer},
     hud::{HudBatch, Rect, rgba},
     items::ItemStack,
+    screen_layout::{self, LoomView, ScreenDraw},
 };
 use std::sync::Arc;
 
@@ -24,6 +23,8 @@ pub(super) struct LoomState {
     pub(super) scroll: f32,
     pub(super) start_row: usize,
     pub(super) scrolling: bool,
+    /// The inputs the screen last saw (`bannerStack`, `dyeStack`, `patternStack`).
+    last_inputs: [Option<ItemStack>; 3],
 }
 impl LoomState {
     fn total_rows(&self) -> usize {
@@ -31,9 +32,6 @@ impl LoomState {
     }
     fn offscreen_rows(&self) -> i32 {
         self.total_rows() as i32 - 4
-    }
-    fn scroll_active(&self) -> bool {
-        self.display && self.patterns.len() > 16
     }
     /// `startRow` for a scroller position.
     fn row_for(&self, offs: f32) -> usize {
@@ -65,138 +63,77 @@ pub(super) fn dye_color(name: &str) -> u32 {
 }
 
 impl Game<'_> {
-    /// `LoomMenu.slotsChanged` and the screen's `containerChanged`.
-    pub(super) fn loom_changed(&self, s: &mut Station) {
-        let banners = &self.res.stations.banners;
-        let items = &self.res.items;
-        let (banner_in, dye_in) = (s.inputs[0].as_ref(), s.inputs[1].as_ref());
+    /// `LoomScreen.containerChanged`: the error flag, whether the pattern
+    /// buttons show (only when an input changed), and the scroller reset.
+    pub(super) fn loom_screen_changed(&mut self) {
+        let Some(s) = self.station.as_mut().filter(|s| s.kind == Kind::Loom) else {
+            return;
+        };
+        let inputs = [
+            s.inputs[0].clone(),
+            s.inputs[1].clone(),
+            s.inputs[2].clone(),
+        ];
         let l = &mut s.loom;
-        let mut result = None;
-        if let (Some(banner_stack), Some(dye_stack)) = (banner_in, dye_in) {
-            let valid = l.selected.is_some_and(|i| i < l.patterns.len());
-            let previous = std::mem::take(&mut l.patterns);
-            l.patterns = banners.selectable(s.inputs[2].as_ref());
-            let shown = if l.patterns.len() == 1 {
-                l.selected = Some(0);
-                Some(l.patterns[0].clone())
-            } else if !valid {
-                l.selected = None;
-                None
-            } else {
-                let value = previous[l.selected.unwrap_or(0)].clone();
-                match l.patterns.iter().position(|p| *p == value) {
-                    Some(i) => {
-                        l.selected = Some(i);
-                        Some(value)
-                    }
-                    None => {
-                        l.selected = None;
-                        None
-                    }
-                }
-            };
-            l.has_max = banner::has_max_layers(banner_stack);
-            if let Some(pattern) = shown {
-                if l.has_max {
-                    l.selected = None;
-                } else if let Some(dye) = banners.loom_dye(items, dye_stack) {
-                    result = Some(banner::loom_result(banner_stack, &dye, &pattern));
-                }
-            }
-            l.display = !l.has_max && !l.patterns.is_empty();
-        } else {
-            l.patterns.clear();
-            l.selected = None;
-            l.has_max = banner_in.is_some_and(banner::has_max_layers);
-            l.display = false;
+        l.has_max = inputs[0].as_ref().is_some_and(banner::has_max_layers);
+        if inputs != l.last_inputs {
+            l.display =
+                inputs[0].is_some() && inputs[1].is_some() && !l.has_max && !l.patterns.is_empty();
         }
         if l.start_row >= l.total_rows() {
             l.start_row = 0;
             l.scroll = 0.0;
         }
-        s.result = result;
+        l.last_inputs = inputs;
     }
-    /// The loom slots' `mayPlace`.
-    pub(super) fn loom_slot_rules(&self, input: usize, stack: &ItemStack) -> (bool, u32) {
-        let banners = &self.res.stations.banners;
-        let ok = match input {
-            0 => stack.item.ends_with("_banner"),
-            1 => banners.loom_dye(&self.res.items, stack).is_some(),
-            _ => banners.is_pattern_item(&self.res.items, stack),
+    /// A sound the loom menu played: the result's once per tick.
+    pub(super) fn loom_sound(&mut self, sound: &str) {
+        let ticks = self.ticks;
+        let Some(s) = self.station.as_mut() else {
+            return;
         };
-        (ok, 64)
+        if s.last_sound == ticks {
+            return;
+        }
+        s.last_sound = ticks;
+        let pos = s.pos;
+        let at = [
+            f64::from(pos[0]) + 0.5,
+            f64::from(pos[1]) + 0.5,
+            f64::from(pos[2]) + 0.5,
+        ];
+        self.audio.play(sound, Some(at), 1.0, 1.0);
     }
-    /// The result slot's `onTake`: one banner and one dye are used up.
-    pub(super) fn loom_taken(&mut self, s: &mut Station) {
-        for slot in &mut s.inputs[..2] {
-            if let Some(x) = slot.as_mut() {
-                x.count -= 1;
-                if x.count == 0 {
-                    *slot = None;
-                }
-            }
-        }
-        if s.inputs[0].is_none() || s.inputs[1].is_none() {
-            s.loom.selected = None;
-        }
-        if s.last_sound != self.ticks {
-            s.last_sound = self.ticks;
-            let pos = s.pos;
-            let at = [
-                f64::from(pos[0]) + 0.5,
-                f64::from(pos[1]) + 0.5,
-                f64::from(pos[2]) + 0.5,
-            ];
+    /// `LoomScreen.mouseClicked` on a pattern button: `clickMenuButton`, and
+    /// the select sound when the menu took it.
+    fn loom_button(&mut self, index: usize) -> bool {
+        let mut taken = false;
+        let flag = &mut taken;
+        self.menu_session(|menu, env, _| {
+            *flag = menu.button(env, index as i32);
+            Some(*flag)
+        });
+        if taken {
             self.audio
-                .play("minecraft:ui.loom.take_result", Some(at), 1.0, 1.0);
+                .play("minecraft:ui.loom.select_pattern", None, 1.0, 1.0);
         }
-    }
-    /// `LoomMenu.quickMoveStack` from an inventory slot.
-    pub(super) fn loom_quick_move(&mut self, slot: usize, stack: &mut ItemStack) -> bool {
-        let banners = &self.res.stations.banners;
-        let items = &self.res.items;
-        let target = if stack.item.ends_with("_banner") {
-            Some(INPUT)
-        } else if banners.loom_dye(items, stack).is_some() {
-            Some(INPUT + 1)
-        } else if banners.is_pattern_item(items, stack) {
-            Some(INPUT + 2)
-        } else {
-            None
-        };
-        match target {
-            Some(t) => self.move_to(stack, &[t], false),
-            None if (9..36).contains(&slot) => {
-                let hotbar: Vec<usize> = (0..9).collect();
-                self.move_to(stack, &hotbar, false)
-            }
-            None if slot < 9 => {
-                let main: Vec<usize> = (9..36).collect();
-                self.move_to(stack, &main, false)
-            }
-            None => false,
-        }
+        taken
     }
     /// A left click inside the loom's pattern grid or scroller.
     pub(super) fn loom_click(&mut self, local: (f32, f32)) -> bool {
-        let Some(s) = self.station.as_ref() else {
+        let Some(start_row) = self
+            .station
+            .as_ref()
+            .filter(|s| s.loom.display)
+            .map(|s| s.loom.start_row)
+        else {
             return false;
         };
-        let l = &s.loom;
-        if !l.display {
-            return false;
-        }
         for row in 0..4 {
             for column in 0..4 {
-                let index = (row + l.start_row) * 4 + column;
+                let index = (row + start_row) * 4 + column;
                 let (x, y) = (60.0 + column as f32 * BUTTON, 13.0 + row as f32 * BUTTON);
-                if index < l.patterns.len() && inside(local, x, y, BUTTON, BUTTON) {
-                    if let Some(s) = self.station.as_mut() {
-                        s.loom.selected = Some(index);
-                    }
-                    self.audio
-                        .play("minecraft:ui.loom.select_pattern", None, 1.0, 1.0);
-                    self.station_changed();
+                if inside(local, x, y, BUTTON, BUTTON) && self.loom_button(index) {
                     return true;
                 }
             }
@@ -270,8 +207,116 @@ impl Game<'_> {
             );
         }
     }
-    /// `LoomScreen.extractBackground` after the background; returns the
-    /// pattern name tooltip of the hovered button.
+    /// Paints `screen_layout` calls at the menu origin (ox, oy): the container
+    /// background and the dimmed world are drawn by the caller.
+    pub(super) fn paint_screen(
+        &self,
+        batch: &mut HudBatch,
+        ox: f32,
+        oy: f32,
+        draws: &[ScreenDraw],
+        background: bool,
+    ) -> Option<Vec<(String, u32)>> {
+        let atlas = &self.res.atlas;
+        let mut tooltip = None;
+        let mut sheet: Option<String> = None;
+        for d in draws {
+            match d {
+                ScreenDraw::Gradient { .. } => {}
+                ScreenDraw::Blit {
+                    texture,
+                    x,
+                    y,
+                    w,
+                    h,
+                    tw,
+                    th,
+                } => {
+                    if background {
+                        let name = texture
+                            .trim_start_matches("textures/")
+                            .trim_end_matches(".png");
+                        batch.sprite_region(
+                            atlas,
+                            name,
+                            [ox + *x as f32, oy + *y as f32, *w as f32, *h as f32],
+                            *tw as f32,
+                            *th as f32,
+                        );
+                    }
+                }
+                ScreenDraw::Sprite { id, x, y, .. } => batch.sprite(
+                    atlas,
+                    &format!("gui/sprites/{id}"),
+                    ox + *x as f32,
+                    oy + *y as f32,
+                ),
+                ScreenDraw::Banner {
+                    base,
+                    layers,
+                    x0,
+                    y0,
+                    x1,
+                    y1,
+                } => self.draw_flag(
+                    batch,
+                    [
+                        ox + *x0 as f32,
+                        oy + *y0 as f32,
+                        (x1 - x0) as f32,
+                        (y1 - y0) as f32,
+                    ],
+                    base,
+                    layers,
+                ),
+                ScreenDraw::Tooltip { key } => {
+                    tooltip = Some(vec![(self.translate(key, key), u32::MAX)]);
+                }
+                ScreenDraw::SpriteOf { id } => sheet = Some(id.clone()),
+                ScreenDraw::Fill {
+                    x0,
+                    y0,
+                    x1,
+                    y1,
+                    color,
+                } => {
+                    let c = *color as u32;
+                    batch.fill(
+                        atlas,
+                        ox + *x0 as f32,
+                        oy + *y0 as f32,
+                        (x1 - x0) as f32,
+                        (y1 - y0) as f32,
+                        rgba((c >> 16) as u8, (c >> 8) as u8, c as u8, (c >> 24) as u8),
+                    );
+                }
+                ScreenDraw::Atlas { x0, y0, x1, y1, uv } => {
+                    if let Some(r) = sheet.as_ref().and_then(|n| atlas.sprites.get(n)).copied() {
+                        let (du, dv) = (r.u1 - r.u0, r.v1 - r.v0);
+                        let part = Rect {
+                            u0: r.u0 + uv[0] * du,
+                            u1: r.u0 + uv[1] * du,
+                            v0: r.v0 + uv[2] * dv,
+                            v1: r.v0 + uv[3] * dv,
+                            w: (x1 - x0) as u32,
+                            h: (y1 - y0) as u32,
+                        };
+                        batch.rect_uv(
+                            ox + *x0 as f32,
+                            oy + *y0 as f32,
+                            (x1 - x0) as f32,
+                            (y1 - y0) as f32,
+                            part,
+                            u32::MAX,
+                        );
+                    }
+                }
+            }
+        }
+        tooltip
+    }
+    /// `LoomScreen.extractBackground` after the background (the verified
+    /// `screen_layout::loom`); returns the hovered pattern's tooltip.
     pub(super) fn draw_loom(
         &mut self,
         batch: &mut HudBatch,
@@ -281,102 +326,35 @@ impl Game<'_> {
     ) -> Option<Vec<(String, u32)>> {
         let s = self.station.as_ref()?;
         let l = &s.loom;
-        let atlas = &self.res.atlas;
-        for (i, icon) in ["banner", "dye", "banner_pattern"].iter().enumerate() {
-            if s.inputs[i].is_none() {
-                let pos = [(13.0, 26.0), (33.0, 26.0), (23.0, 45.0)][i];
-                batch.sprite(
-                    atlas,
-                    &format!("gui/sprites/container/slot/{icon}"),
-                    ox + pos.0,
-                    oy + pos.1,
-                );
-            }
-        }
-        let scroller = if l.scroll_active() {
-            "scroller"
-        } else {
-            "scroller_disabled"
-        };
-        batch.sprite(
-            atlas,
-            &format!("gui/sprites/container/loom/{scroller}"),
-            ox + 119.0,
-            oy + 13.0 + (41.0 * l.scroll).floor(),
-        );
-        let result = s.result.clone();
-        let (display, has_max, start_row, selected) =
-            (l.display, l.has_max, l.start_row, l.selected);
-        let patterns = l.patterns.clone();
         let dye = s.inputs[1]
             .as_ref()
-            .and_then(|d| self.res.stations.banners.loom_dye(&self.res.items, d))
-            .unwrap_or_else(|| Arc::from("white"));
-        if let Some(result) = result.filter(|_| !has_max)
-            && let Some(base) = banner::banner_color(&result.item)
-        {
-            self.draw_flag(
-                batch,
-                [ox + 141.0, oy + 8.0, 20.0, 40.0],
-                base,
-                banner::layers(&result),
-            );
-        } else if has_max {
-            batch.sprite(
-                &self.res.atlas,
-                "gui/sprites/container/loom/error",
-                ox + 138.0,
-                oy + 52.0,
-            );
-        }
-        let mut tooltip = None;
-        if display {
-            let atlas = &self.res.atlas;
-            for row in 0..4 {
-                for column in 0..4 {
-                    let index = (row + start_row) * 4 + column;
-                    let Some(pattern) = patterns.get(index) else {
-                        return tooltip;
-                    };
-                    let (x, y) = (60.0 + column as f32 * BUTTON, 13.0 + row as f32 * BUTTON);
-                    let hover = inside(local, x, y, BUTTON, BUTTON);
-                    let sprite = if selected == Some(index) {
-                        "pattern_selected"
-                    } else if hover {
-                        let key = self
-                            .res
-                            .stations
-                            .banners
-                            .layer_key(&BannerLayer::new(pattern, &dye));
-                        tooltip = Some(vec![(self.translate(&key, &key), u32::MAX)]);
-                        "pattern_highlighted"
-                    } else {
-                        "pattern"
-                    };
-                    batch.sprite(
-                        atlas,
-                        &format!("gui/sprites/container/loom/{sprite}"),
-                        ox + x,
-                        oy + y,
-                    );
-                    // extractBannerOnButton: a 5x10 grey cloth with the pattern.
-                    batch.fill(
-                        atlas,
-                        ox + x + 4.0,
-                        oy + y + 2.0,
-                        5.0,
-                        10.0,
-                        dye_color("gray"),
-                    );
-                    let texture = self.res.stations.banners.banner_texture(pattern);
-                    if let Some(r) = atlas.sprites.get(&texture).copied() {
-                        let uv = sub_rect(r, [0.0, 1.0, 21.0, 40.0]);
-                        batch.rect_uv(ox + x + 4.0, oy + y + 2.0, 5.0, 10.0, uv, u32::MAX);
-                    }
-                }
-            }
-        }
-        tooltip
+            .and_then(|d| self.res.items.get(&d.item))
+            .and_then(|i| i.dye.clone())
+            .unwrap_or_else(|| "white".to_owned());
+        let result = s
+            .result
+            .as_ref()
+            .and_then(|r| Some((banner::banner_color(&r.item)?, banner::layers(r))));
+        let view = LoomView {
+            width: 176,
+            height: 166,
+            left: 0,
+            top: 0,
+            has_banner: s.inputs[0].is_some(),
+            has_dye: s.inputs[1].is_some(),
+            has_pattern: s.inputs[2].is_some(),
+            patterns: &l.patterns,
+            selected: l.selected.map_or(-1, |i| i as i32),
+            display: l.display,
+            has_max: l.has_max,
+            scroll: l.scroll,
+            start_row: l.start_row,
+            result,
+            dye: &dye,
+            mouse: local,
+        };
+        let draws = screen_layout::loom(&view, &self.res.stations.banners);
+        self.paint_screen(batch, ox, oy, &draws, false)
     }
 }
 
@@ -395,7 +373,6 @@ mod tests {
         };
         // 40 patterns = 10 rows, 6 off screen.
         assert_eq!(l.offscreen_rows(), 6);
-        assert!(l.scroll_active());
         assert_eq!(l.row_for(0.0), 0);
         assert_eq!(l.row_for(1.0), 6);
         assert_eq!(l.row_for(0.5), 3);
@@ -409,7 +386,6 @@ mod tests {
             display: true,
             ..Default::default()
         };
-        assert!(!l.scroll_active());
         assert_eq!(l.offscreen_rows(), 0);
     }
 }

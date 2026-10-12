@@ -723,11 +723,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         kind = "right";
                     }
                 }
-                Some(wl(table.set_text(
-                    table.set_dir(default, p.facing, facing),
-                    p.kind,
-                    kind,
-                )))
+                let state =
+                    wl(table.set_text(table.set_dir(default, p.facing, facing), p.kind, kind));
+                Some(self.copper_chest_least_oxidized(state, pos))
             }
             Class::ChorusPlant => Some(self.chorus_plant_with_connections(pos, default)),
             Class::ConcretePowder => {
@@ -1156,6 +1154,84 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         })
     }
 
+    /// `CopperChestBlock.getLeastOxidizedChestOfConnectedBlocks`: a copper chest
+    /// joining another takes the less weathered of the two blocks (both unwaxed
+    /// when only one was waxed), keeping its own properties.
+    pub(crate) fn copper_chest_least_oxidized(
+        &self,
+        state: BlockStateId,
+        pos: BlockPos,
+    ) -> BlockStateId {
+        let b = self.b;
+        if !b.instance_of(state, Class::CopperChest)
+            || b.table.text(state, b.props.kind) == "single"
+        {
+            return state;
+        }
+        let connected = self.rel_state(pos, self.chest_connected_direction(state));
+        if !b.instance_of(connected, Class::CopperChest) {
+            return state;
+        }
+        let name = |s: BlockStateId| b.table.name(s).trim_start_matches("minecraft:").to_owned();
+        let weather = |n: &str| {
+            let n = n.trim_start_matches("waxed_");
+            ["exposed_", "weathered_", "oxidized_"]
+                .iter()
+                .position(|p| n.starts_with(p))
+                .map_or(0, |i| i + 1)
+        };
+        let (own, other) = (name(state), name(connected));
+        let (mut own_block, mut other_block) = (own.clone(), other.clone());
+        if own.starts_with("waxed_") != other.starts_with("waxed_") {
+            own_block = own.trim_start_matches("waxed_").to_owned();
+            other_block = other.trim_start_matches("waxed_").to_owned();
+        }
+        let least = if weather(&own) <= weather(&other) {
+            own_block
+        } else {
+            other_block
+        };
+        match b.table.block_by_name(&format!("minecraft:{least}")) {
+            Some(block) => b.table.with_properties_of(block, state),
+            None => state,
+        }
+    }
+    /// `CopperChestBlock.getFromCopperBlock`: the copper chest a copper block
+    /// becomes under a copper golem's pumpkin, facing `facing`.
+    pub(crate) fn copper_chest_from_block(
+        &self,
+        copper: BlockStateId,
+        facing: Direction,
+        pos: BlockPos,
+    ) -> Option<BlockStateId> {
+        let b = self.b;
+        let block = b.table.name(copper).trim_start_matches("minecraft:");
+        let chest = match block {
+            "copper_block" => "copper_chest".to_owned(),
+            "waxed_copper_block" => "waxed_copper_chest".to_owned(),
+            n if n.ends_with("_copper") => format!("{n}_chest"),
+            _ => "copper_chest".to_owned(),
+        };
+        let block = b.table.block_by_name(&format!("minecraft:{chest}"))?;
+        let default = b.default_of(block);
+        let kind = if self.chest_candidate_partner_facing(default, pos, clockwise(facing))
+            == Some(facing)
+        {
+            "left"
+        } else if self.chest_candidate_partner_facing(default, pos, counter_clockwise(facing))
+            == Some(facing)
+        {
+            "right"
+        } else {
+            "single"
+        };
+        let state = b.table.set_text(
+            b.table.set_dir(default, b.props.facing, facing),
+            b.props.kind,
+            kind,
+        );
+        Some(self.copper_chest_least_oxidized(state, pos))
+    }
     fn chest_candidate_partner_facing(
         &self,
         chest: BlockStateId,

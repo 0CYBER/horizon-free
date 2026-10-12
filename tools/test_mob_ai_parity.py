@@ -77,6 +77,73 @@ def scenarios():
         'player 12.5 -60 0.5',
         'mob minecraft:villager 0.5 -60 0.5 0 51 persistent',
     ])
+    # Breezes: idle, and fighting a player near, in, and beyond the inner jump circle.
+    add('breeze_alone', 200, ['mob minecraft:breeze 0.5 -60 0.5 90 61 persistent'])
+    add('breeze_player', 200, ['player 8.5 -60 0.5', 'mob minecraft:breeze 0.5 -60 0.5 0 62 persistent'])
+    add('breeze_close', 200, ['player 2.5 -60 1.5', 'mob minecraft:breeze 0.5 -60 0.5 0 63 persistent'])
+    add('breeze_far', 200, ['player 13.5 -60 6.5', 'mob minecraft:breeze 0.5 -60 0.5 0 64 persistent'])
+    # Creakings: the player faces +z, so it watches one and turns its back on the other.
+    add('creaking_alone', 200, ['mob minecraft:creaking 0.5 -60 0.5 90 71 persistent'])
+    add('creaking_watched', 200, ['player 0.5 -60 -7.5', 'mob minecraft:creaking 0.5 -60 0.5 180 72 persistent'])
+    add('creaking_behind', 200, ['player 0.5 -60 8.5', 'mob minecraft:creaking 0.5 -60 0.5 0 73 persistent'])
+    # Woken while watched, then free to hunt and hit once the player turns away.
+    add('creaking_attack', 240, ['player 0.5 -60 -7.5 turn=40,180', 'mob minecraft:creaking 0.5 -60 0.5 180 74 persistent'])
+    # A creaking heart in a pale oak trunk: by night it spawns its creaking near a player,
+    # by day it sleeps, without logs it is uprooted, with no player near it waits.
+    TRUNK = ['block 3 -60 3 minecraft:pale_oak_log[axis=y]', 'block 3 -58 3 minecraft:pale_oak_log[axis=y]']
+    add('heart_night', 300, TRUNK + ['heart 3 -59 3 minecraft:creaking_heart[axis=y,creaking_heart_state=awake,natural=true]', 'player 0.5 -60 -6.5'], 'time=18000 spawning')
+    add('heart_day', 120, TRUNK + ['heart 3 -59 3 minecraft:creaking_heart[axis=y,creaking_heart_state=awake,natural=true]', 'player 0.5 -60 -6.5'], 'spawning')
+    add('heart_uprooted', 60, ['heart 3 -59 3 minecraft:creaking_heart[axis=y,creaking_heart_state=awake,natural=true]', 'player 0.5 -60 -6.5'], 'time=18000 spawning')
+    # A player hits the heart's creaking: no damage, but the heart bleeds resin and trails.
+    add('heart_hurt', 260, TRUNK + ['heart 3 -59 3 minecraft:creaking_heart[axis=y,creaking_heart_state=awake,natural=true]', 'player 0.5 -60 -6.5',
+                            'hurt 60 0', 'hurt 64 0', 'hurt 200 0'], 'time=18000 spawning')
+    add('heart_far', 120, TRUNK + ['heart 3 -59 3 minecraft:creaking_heart[axis=y,creaking_heart_state=awake,natural=true]', 'player 40.5 -60 0.5'], 'time=18000 spawning')
+    # Llamas and trader llamas: strolling, looking at the player, a baby following its parent and a
+    # llama hunting a wolf (LlamaAttackWolfGoal) and spitting at it.
+    for species, seed in [('llama', 61), ('trader_llama', 62)]:
+        add(f'{species}_player', 200, ['player 6.5 -60 0.5', f'mob minecraft:{species} 0.5 -60 0.5 0 {seed} persistent'])
+        add(f'{species}_alone', 200, [f'mob minecraft:{species} 0.5 -60 0.5 90 {seed * 7 + 1} persistent'])
+    add('llama_family', 200, ['mob minecraft:llama 0.5 -60 0.5 0 63 persistent',
+                              'mob minecraft:llama 6.5 -60 2.5 0 64 persistent baby'])
+    add('llama_wolf', 200, ['mob minecraft:llama 0.5 -60 0.5 0 65 persistent',
+                            'mob minecraft:wolf 8.5 -60 0.5 0 66 persistent'])
+    # Sniffers on diggable grass: scenting, sniffing, searching and digging.
+    add('sniffer_player', 400, ['player 8.5 -60 0.5', 'mob minecraft:sniffer 0.5 -60 0.5 0 71 persistent'])
+    for i, seed in enumerate([72, 73, 74]):
+        add(f'sniffer_alone_{i}', 600, [f'mob minecraft:sniffer 0.5 -60 0.5 {90 * i} {seed} persistent'])
+    add('sniffer_baby', 300, ['mob minecraft:sniffer 0.5 -60 0.5 0 75 persistent baby'])
+    # Happy ghasts float above the grass; ghastlings follow players and adults.
+    add('happy_ghast_player', 200, ['player 6.5 -60 0.5', 'mob minecraft:happy_ghast 0.5 -55 0.5 0 81 persistent'])
+    add('happy_ghast_alone', 200, ['mob minecraft:happy_ghast 0.5 -55 0.5 90 82 persistent'])
+    add('ghastling_player', 200, ['player 8.5 -60 0.5', 'mob minecraft:happy_ghast 0.5 -57 0.5 0 83 persistent baby'])
+    add('ghastling_alone', 200, ['mob minecraft:happy_ghast 0.5 -57 0.5 0 84 persistent baby'])
+    add('ghastling_adult', 200, ['mob minecraft:happy_ghast 10.5 -55 0.5 0 85 persistent',
+                                 'mob minecraft:happy_ghast 0.5 -57 0.5 0 86 persistent baby'])
+    # Breeding, temptation and growing up.
+    add('sniffer_love', 300, ['mob minecraft:sniffer 0.5 -60 0.5 0 91 persistent inlove',
+                              'mob minecraft:sniffer 4.5 -60 0.5 0 92 persistent inlove'])
+    add('sniffer_tempted', 200, ['player 7.5 -60 0.5 hand=minecraft:torchflower_seeds',
+                                 'mob minecraft:sniffer 0.5 -60 0.5 0 93 persistent'])
+    add('llama_love', 300, ['mob minecraft:llama 0.5 -60 0.5 0 94 persistent tame inlove strength=3',
+                            'mob minecraft:llama 4.5 -60 0.5 0 95 persistent tame inlove strength=2'])
+    add('llama_tempted', 200, ['player 7.5 -60 0.5 hand=minecraft:hay_block',
+                               'mob minecraft:llama 0.5 -60 0.5 0 96 persistent'])
+    add('ghastling_tempted', 200, ['player 8.5 -60 0.5 hand=minecraft:snowball',
+                                   'mob minecraft:happy_ghast 0.5 -57 0.5 0 97 persistent baby'])
+    add('happy_ghast_tempted', 200, ['player 12.5 -60 0.5 hand=minecraft:snowball',
+                                     'mob minecraft:happy_ghast 0.5 -55 0.5 0 98 persistent'])
+    add('ghastling_grows', 200, ['player 8.5 -60 0.5',
+                                 'mob minecraft:happy_ghast 0.5 -57 0.5 0 99 persistent age=-40'])
+    # Llama caravans: two llamas fall in behind one on the player's lead; a wandering trader's two
+    # llamas on its leads.
+    add('llama_caravan', 300, ['player 0.5 -60 0.5',
+                               'mob minecraft:llama 3.5 -60 0.5 0 101 persistent leashed strength=3',
+                               'mob minecraft:llama 9.5 -60 2.5 0 102 persistent strength=2',
+                               'mob minecraft:llama 13.5 -60 -1.5 0 103 persistent strength=1'])
+    add('trader_llamas', 300, ['player 14.5 -60 0.5',
+                               'mob minecraft:wandering_trader 0.5 -60 0.5 0 104 persistent',
+                               'mob minecraft:trader_llama 3.5 -60 1.5 0 105 persistent leashto=0 strength=2',
+                               'mob minecraft:trader_llama 3.5 -60 -1.5 0 106 persistent leashto=0 strength=4'])
     return s
 
 
@@ -96,7 +163,7 @@ def write_scenarios(path, chosen):
             elif f[0] == 'mob':
                 f[2] = repr(float(f[2]) + ox)
                 f[4] = repr(float(f[4]) + oz)
-            elif f[0] == 'block':
+            elif f[0] in ('block', 'heart'):
                 f[1] = str(int(f[1]) + ox)
                 f[3] = str(int(f[3]) + oz)
             elif f[0] == 'fill':
@@ -127,6 +194,9 @@ def parse(path):
             continue
         if parts[1] == 'trace':
             cur.setdefault('trace', {}).setdefault(t, []).append(parts[2])
+            continue
+        if parts[1] == 'heart':
+            cur.setdefault('hearts', {}).setdefault(t, []).append(line.split(' ', 2)[2])
             continue
         mob = int(parts[1])
         row = {}
@@ -215,6 +285,12 @@ def compare(vanilla, rust, fields=None):
                     report.extend('    ' + d for d in diffs[:12])
             if first is not None:
                 clean = False
+        # Creaking hearts (state, block entity, level random): first differing tick.
+        for t in sorted(set(v.get('hearts', {})) | set(r.get('hearts', {}))):
+            if v.get('hearts', {}).get(t) != r.get('hearts', {}).get(t):
+                report.append(f'{name}: hearts differ at tick {t}: vanilla {v.get("hearts", {}).get(t)} | horizon {r.get("hearts", {}).get(t)}')
+                clean = False
+                break
         # Sounds and watched block changes: first differing tick.
         for kind in ('sounds', 'blocks'):
             va, ra = v.get(kind, {}), r.get(kind, {})

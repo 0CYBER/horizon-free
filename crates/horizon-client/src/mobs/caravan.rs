@@ -55,20 +55,21 @@ fn first_is_leashed(cx: &Cx, caravan: u32, leashed: bool, counter: i32) -> bool 
 #[derive(Clone, Debug)]
 pub struct FollowCaravan {
     speed: f64,
-    base_speed: f64,
     dist_check: i32,
 }
 impl FollowCaravan {
     pub fn new(speed: f64) -> Self {
         Self {
             speed,
-            base_speed: speed,
             dist_check: 0,
         }
     }
 }
 impl Goal for FollowCaravan {
     goal_clone!();
+    fn name(&self) -> &'static str {
+        "LlamaFollowCaravanGoal"
+    }
     fn flags(&self) -> u8 {
         super::goals::MOVE
     }
@@ -158,7 +159,8 @@ impl Goal for FollowCaravan {
     }
     fn stop(&mut self, m: &mut Mob, _: &mut Cx) {
         m.extra.ints[1] = 0;
-        self.speed = self.base_speed;
+        // A double 2.1 here, while the llama built it with 2.1F.
+        self.speed = 2.1;
     }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         let caravan = head_of(m);
@@ -265,7 +267,7 @@ pub fn trader_llama_tick(m: &mut Mob, w: &MobWorld) {
     }
     m.extra.ints[0] = trader.unwrap_or(m.extra.ints[0]) - 1;
     if m.extra.ints[0] <= 0 {
-        m.extra.leash = None;
+        super::leash::remove(m);
         m.removed = true;
     }
 }

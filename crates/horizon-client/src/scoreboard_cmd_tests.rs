@@ -253,7 +253,8 @@ fn teams() {
     assert!(!t.see_friendly_invisibles);
     // join defaults to the executor
     assert_eq!(run(&mut m, "team join red").unwrap(), 1);
-    assert_eq!(run(&mut m, "team join red @e").unwrap(), 1);
+    // addPlayerToTeam leaves and rejoins: the player counts again.
+    assert_eq!(run(&mut m, "team join red @e").unwrap(), 2);
     assert_eq!(m.sb.team("red").unwrap().players.len(), 2);
     assert_eq!(run(&mut m, "team list red").unwrap(), 2);
     assert_eq!(run(&mut m, "team leave Alex").unwrap(), 1);

@@ -25,9 +25,9 @@ except ImportError:
     import test_rust_parity as base
 
 # Living entity types with an entity loot table that the corpus skips: players
-# and stands are not mobs, the dragon dies over 200 ticks, and the giant and
-# the copper golem are not Horizon mob types.
-SKIPPED = {'player', 'mannequin', 'armor_stand', 'ender_dragon', 'giant', 'copper_golem'}
+# and stands are not mobs, the dragon dies over 200 ticks, and the giant is
+# not a Horizon mob type.
+SKIPPED = {'player', 'mannequin', 'armor_stand', 'ender_dragon', 'giant'}
 # Types Horizon keeps body armour for in the head slot: their corpus wears
 # body items instead of helmets.
 BODY = {'horse', 'donkey', 'mule', 'skeleton_horse', 'zombie_horse', 'camel', 'camel_husk', 'llama', 'trader_llama',

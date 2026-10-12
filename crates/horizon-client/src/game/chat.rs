@@ -282,6 +282,13 @@ impl Game<'_> {
             out.sort();
             out
         };
+        // The mob effect registry: every effect `/effect` and the
+        // `mob_effect` resource arguments accept.
+        reg.effects = horizon_client::brewing::EFFECTS
+            .iter()
+            .map(|e| format!("minecraft:{}", e.id))
+            .collect();
+        reg.effects.sort();
         reg.enchantments = list("data/minecraft/enchantment");
         reg.structures = list("data/minecraft/worldgen/structure");
         reg.biomes = list("data/minecraft/worldgen/biome");
@@ -668,17 +675,21 @@ impl Game<'_> {
         let Some(p) = self.player.as_ref() else {
             return;
         };
+        let below_world = p.position.y < f64::from(horizon_client::chunk::MIN_Y - 64);
+        let name = self.player_display_text();
         let message = match cause {
-            Some(key) => Text::translate(&key, &[Text::literal(PLAYER_NAME)]),
-            None if p.position.y < f64::from(horizon_client::chunk::MIN_Y - 64) => {
-                Text::translate("death.attack.outOfWorld", &[Text::literal(PLAYER_NAME)])
-            }
+            Some(key) => Text::translate(&key, &[name]),
+            None if below_world => Text::translate("death.attack.outOfWorld", &[name]),
             None => self.combat_death_message(),
         };
         self.ui.death_text = Some(message.clone());
-        self.system_message(message);
+        // ServerPlayer.die: a team that hides death messages keeps it out of
+        // the dying player's own chat (the death screen still shows it).
+        if horizon_client::scoreboard::own_death_message_shown(self.player_team()) {
+            self.system_message(message);
+        }
     }
-    /// F1 hides the HUD (and hand); the screenshot key still works.
+    /// F1 hides the HUD (see `hud`); the screenshot key still works.
     pub(super) fn toggle_hide_gui(&mut self) {
         self.ui.hide_gui = !self.ui.hide_gui;
     }
