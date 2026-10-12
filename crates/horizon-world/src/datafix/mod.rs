@@ -9,13 +9,18 @@
 //! with the schema just below its own key ([`schema`]). Data older than
 //! [`OLDEST_SUPPORTED`] needs fixes that are not ported. The fixes of client
 //! files (options, hotbars, debug profiles) are not ported either.
+mod block_state_data;
+mod chunk_flatten;
+mod chunk_leaves;
 pub mod dynamic;
 pub mod files;
 mod fixes_a;
 mod fixes_b;
 mod fixes_c;
 mod fixes_cliffs;
+mod fixes_flat;
 mod fixes_old;
+mod flat_tables;
 mod items;
 pub mod json;
 pub mod schema;
@@ -177,6 +182,7 @@ type FixFn = fn(&mut Cx);
 /// Every ported fix (from the 1.19 schemas on), in DataFixers order.
 fn fixes() -> Vec<(Key, FixFn)> {
     let mut out = Vec::new();
+    fixes_flat::register(&mut out);
     fixes_cliffs::register(&mut out);
     fixes_old::register(&mut out);
     fixes_a::register(&mut out);
@@ -219,7 +225,17 @@ fn read_hooks(root: Ty, data: &mut Tag, k: Key) {
             *stack = Tag::compound([("id", stack.clone()), ("count", Tag::Int(1))]);
         }
     });
-    walk(root, data, k, Ty::Objective, &mut fixes_a::unpack_objective);
+    if k >= key(1451, 6) {
+        walk(root, data, k, Ty::Objective, &mut fixes_a::unpack_objective);
+    }
+    // Namespaced name types read their strings with `ensureNamespaced`.
+    for ty in [Ty::Biome, Ty::EntityName] {
+        walk(root, data, k, ty, &mut |name| {
+            if let Some(n) = as_str(Some(name)) {
+                *name = string(&dynamic::namespaced(&n));
+            }
+        });
+    }
 }
 
 fn write_hooks(root: Ty, data: &mut Tag, k: Key) {
