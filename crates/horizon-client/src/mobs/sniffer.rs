@@ -104,14 +104,7 @@ pub fn ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
             1.0,
         ));
     }
-    if current == SEARCHING && m.age.is_multiple_of(20) {
-        events.push(MobEvent::Sound(
-            "entity.sniffer.searching",
-            m.center(),
-            1.0,
-            1.0,
-        ));
-    }
+    // The searching sound is the client's (`playSearchingSound`).
     // onPathfindingStart / Done: water only blocks the way while it is dry.
     let wet = m.fluids.in_water || m.fire_ticks > 0;
     m.set_malus(PathType::Water, if wet { 0.0 } else { -1.0 });

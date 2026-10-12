@@ -1295,6 +1295,21 @@ impl B {
                         parent: m.id,
                         partner: id,
                     });
+                    if brain_mut(m).kind == Kind::Sniffer {
+                        // Sniffer.spawnChildFromBreeding: the experience
+                        // (finalizeSpawnChildFromBreeding), then the plop,
+                        // both from the parent's random; the game lays the
+                        // egg.
+                        let at = [m.position.x, m.position.y, m.position.z];
+                        let xp = 1 + m.random.next_int_bound(7).unwrap_or(0);
+                        cx.events.push(MobEvent::Experience {
+                            at,
+                            amount: xp as u32,
+                        });
+                        let pitch = (m.random.next_float() - m.random.next_float()) * 0.2 + 0.5;
+                        cx.events
+                            .push(MobEvent::Sound("block.sniffer_egg.plop", at, 1.0, pitch));
+                    }
                     mem(m).breed_target.clear();
                 }
             }
