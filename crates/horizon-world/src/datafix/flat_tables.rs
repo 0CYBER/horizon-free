@@ -1,7 +1,6 @@
 //! Lookup tables of the DataFixers of 1.13 (DataVersion 1343 to 1631), copied from vanilla's
 //! sources by `tools/gen_flat_tables.py`. Do not edit.
 
-
 /// `ItemStackTheFlatteningFix.MAP`: `id.damage` to the flattened item.
 pub static ITEM_FLATTENING: &[(&str, &str)] = &[
     ("minecraft:stone.0", "minecraft:stone"),
@@ -41,7 +40,10 @@ pub static ITEM_FLATTENING: &[(&str, &str)] = &[
     ("minecraft:sand.0", "minecraft:sand"),
     ("minecraft:sand.1", "minecraft:red_sand"),
     ("minecraft:quartz_block.0", "minecraft:quartz_block"),
-    ("minecraft:quartz_block.1", "minecraft:chiseled_quartz_block"),
+    (
+        "minecraft:quartz_block.1",
+        "minecraft:chiseled_quartz_block",
+    ),
     ("minecraft:quartz_block.2", "minecraft:quartz_pillar"),
     ("minecraft:anvil.0", "minecraft:anvil"),
     ("minecraft:anvil.1", "minecraft:chipped_anvil"),
@@ -79,55 +81,181 @@ pub static ITEM_FLATTENING: &[(&str, &str)] = &[
     ("minecraft:carpet.14", "minecraft:red_carpet"),
     ("minecraft:carpet.15", "minecraft:black_carpet"),
     ("minecraft:hardened_clay.0", "minecraft:terracotta"),
-    ("minecraft:stained_hardened_clay.0", "minecraft:white_terracotta"),
-    ("minecraft:stained_hardened_clay.1", "minecraft:orange_terracotta"),
-    ("minecraft:stained_hardened_clay.2", "minecraft:magenta_terracotta"),
-    ("minecraft:stained_hardened_clay.3", "minecraft:light_blue_terracotta"),
-    ("minecraft:stained_hardened_clay.4", "minecraft:yellow_terracotta"),
-    ("minecraft:stained_hardened_clay.5", "minecraft:lime_terracotta"),
-    ("minecraft:stained_hardened_clay.6", "minecraft:pink_terracotta"),
-    ("minecraft:stained_hardened_clay.7", "minecraft:gray_terracotta"),
-    ("minecraft:stained_hardened_clay.8", "minecraft:light_gray_terracotta"),
-    ("minecraft:stained_hardened_clay.9", "minecraft:cyan_terracotta"),
-    ("minecraft:stained_hardened_clay.10", "minecraft:purple_terracotta"),
-    ("minecraft:stained_hardened_clay.11", "minecraft:blue_terracotta"),
-    ("minecraft:stained_hardened_clay.12", "minecraft:brown_terracotta"),
-    ("minecraft:stained_hardened_clay.13", "minecraft:green_terracotta"),
-    ("minecraft:stained_hardened_clay.14", "minecraft:red_terracotta"),
-    ("minecraft:stained_hardened_clay.15", "minecraft:black_terracotta"),
-    ("minecraft:silver_glazed_terracotta.0", "minecraft:light_gray_glazed_terracotta"),
+    (
+        "minecraft:stained_hardened_clay.0",
+        "minecraft:white_terracotta",
+    ),
+    (
+        "minecraft:stained_hardened_clay.1",
+        "minecraft:orange_terracotta",
+    ),
+    (
+        "minecraft:stained_hardened_clay.2",
+        "minecraft:magenta_terracotta",
+    ),
+    (
+        "minecraft:stained_hardened_clay.3",
+        "minecraft:light_blue_terracotta",
+    ),
+    (
+        "minecraft:stained_hardened_clay.4",
+        "minecraft:yellow_terracotta",
+    ),
+    (
+        "minecraft:stained_hardened_clay.5",
+        "minecraft:lime_terracotta",
+    ),
+    (
+        "minecraft:stained_hardened_clay.6",
+        "minecraft:pink_terracotta",
+    ),
+    (
+        "minecraft:stained_hardened_clay.7",
+        "minecraft:gray_terracotta",
+    ),
+    (
+        "minecraft:stained_hardened_clay.8",
+        "minecraft:light_gray_terracotta",
+    ),
+    (
+        "minecraft:stained_hardened_clay.9",
+        "minecraft:cyan_terracotta",
+    ),
+    (
+        "minecraft:stained_hardened_clay.10",
+        "minecraft:purple_terracotta",
+    ),
+    (
+        "minecraft:stained_hardened_clay.11",
+        "minecraft:blue_terracotta",
+    ),
+    (
+        "minecraft:stained_hardened_clay.12",
+        "minecraft:brown_terracotta",
+    ),
+    (
+        "minecraft:stained_hardened_clay.13",
+        "minecraft:green_terracotta",
+    ),
+    (
+        "minecraft:stained_hardened_clay.14",
+        "minecraft:red_terracotta",
+    ),
+    (
+        "minecraft:stained_hardened_clay.15",
+        "minecraft:black_terracotta",
+    ),
+    (
+        "minecraft:silver_glazed_terracotta.0",
+        "minecraft:light_gray_glazed_terracotta",
+    ),
     ("minecraft:stained_glass.0", "minecraft:white_stained_glass"),
-    ("minecraft:stained_glass.1", "minecraft:orange_stained_glass"),
-    ("minecraft:stained_glass.2", "minecraft:magenta_stained_glass"),
-    ("minecraft:stained_glass.3", "minecraft:light_blue_stained_glass"),
-    ("minecraft:stained_glass.4", "minecraft:yellow_stained_glass"),
+    (
+        "minecraft:stained_glass.1",
+        "minecraft:orange_stained_glass",
+    ),
+    (
+        "minecraft:stained_glass.2",
+        "minecraft:magenta_stained_glass",
+    ),
+    (
+        "minecraft:stained_glass.3",
+        "minecraft:light_blue_stained_glass",
+    ),
+    (
+        "minecraft:stained_glass.4",
+        "minecraft:yellow_stained_glass",
+    ),
     ("minecraft:stained_glass.5", "minecraft:lime_stained_glass"),
     ("minecraft:stained_glass.6", "minecraft:pink_stained_glass"),
     ("minecraft:stained_glass.7", "minecraft:gray_stained_glass"),
-    ("minecraft:stained_glass.8", "minecraft:light_gray_stained_glass"),
+    (
+        "minecraft:stained_glass.8",
+        "minecraft:light_gray_stained_glass",
+    ),
     ("minecraft:stained_glass.9", "minecraft:cyan_stained_glass"),
-    ("minecraft:stained_glass.10", "minecraft:purple_stained_glass"),
+    (
+        "minecraft:stained_glass.10",
+        "minecraft:purple_stained_glass",
+    ),
     ("minecraft:stained_glass.11", "minecraft:blue_stained_glass"),
-    ("minecraft:stained_glass.12", "minecraft:brown_stained_glass"),
-    ("minecraft:stained_glass.13", "minecraft:green_stained_glass"),
+    (
+        "minecraft:stained_glass.12",
+        "minecraft:brown_stained_glass",
+    ),
+    (
+        "minecraft:stained_glass.13",
+        "minecraft:green_stained_glass",
+    ),
     ("minecraft:stained_glass.14", "minecraft:red_stained_glass"),
-    ("minecraft:stained_glass.15", "minecraft:black_stained_glass"),
-    ("minecraft:stained_glass_pane.0", "minecraft:white_stained_glass_pane"),
-    ("minecraft:stained_glass_pane.1", "minecraft:orange_stained_glass_pane"),
-    ("minecraft:stained_glass_pane.2", "minecraft:magenta_stained_glass_pane"),
-    ("minecraft:stained_glass_pane.3", "minecraft:light_blue_stained_glass_pane"),
-    ("minecraft:stained_glass_pane.4", "minecraft:yellow_stained_glass_pane"),
-    ("minecraft:stained_glass_pane.5", "minecraft:lime_stained_glass_pane"),
-    ("minecraft:stained_glass_pane.6", "minecraft:pink_stained_glass_pane"),
-    ("minecraft:stained_glass_pane.7", "minecraft:gray_stained_glass_pane"),
-    ("minecraft:stained_glass_pane.8", "minecraft:light_gray_stained_glass_pane"),
-    ("minecraft:stained_glass_pane.9", "minecraft:cyan_stained_glass_pane"),
-    ("minecraft:stained_glass_pane.10", "minecraft:purple_stained_glass_pane"),
-    ("minecraft:stained_glass_pane.11", "minecraft:blue_stained_glass_pane"),
-    ("minecraft:stained_glass_pane.12", "minecraft:brown_stained_glass_pane"),
-    ("minecraft:stained_glass_pane.13", "minecraft:green_stained_glass_pane"),
-    ("minecraft:stained_glass_pane.14", "minecraft:red_stained_glass_pane"),
-    ("minecraft:stained_glass_pane.15", "minecraft:black_stained_glass_pane"),
+    (
+        "minecraft:stained_glass.15",
+        "minecraft:black_stained_glass",
+    ),
+    (
+        "minecraft:stained_glass_pane.0",
+        "minecraft:white_stained_glass_pane",
+    ),
+    (
+        "minecraft:stained_glass_pane.1",
+        "minecraft:orange_stained_glass_pane",
+    ),
+    (
+        "minecraft:stained_glass_pane.2",
+        "minecraft:magenta_stained_glass_pane",
+    ),
+    (
+        "minecraft:stained_glass_pane.3",
+        "minecraft:light_blue_stained_glass_pane",
+    ),
+    (
+        "minecraft:stained_glass_pane.4",
+        "minecraft:yellow_stained_glass_pane",
+    ),
+    (
+        "minecraft:stained_glass_pane.5",
+        "minecraft:lime_stained_glass_pane",
+    ),
+    (
+        "minecraft:stained_glass_pane.6",
+        "minecraft:pink_stained_glass_pane",
+    ),
+    (
+        "minecraft:stained_glass_pane.7",
+        "minecraft:gray_stained_glass_pane",
+    ),
+    (
+        "minecraft:stained_glass_pane.8",
+        "minecraft:light_gray_stained_glass_pane",
+    ),
+    (
+        "minecraft:stained_glass_pane.9",
+        "minecraft:cyan_stained_glass_pane",
+    ),
+    (
+        "minecraft:stained_glass_pane.10",
+        "minecraft:purple_stained_glass_pane",
+    ),
+    (
+        "minecraft:stained_glass_pane.11",
+        "minecraft:blue_stained_glass_pane",
+    ),
+    (
+        "minecraft:stained_glass_pane.12",
+        "minecraft:brown_stained_glass_pane",
+    ),
+    (
+        "minecraft:stained_glass_pane.13",
+        "minecraft:green_stained_glass_pane",
+    ),
+    (
+        "minecraft:stained_glass_pane.14",
+        "minecraft:red_stained_glass_pane",
+    ),
+    (
+        "minecraft:stained_glass_pane.15",
+        "minecraft:black_stained_glass_pane",
+    ),
     ("minecraft:prismarine.0", "minecraft:prismarine"),
     ("minecraft:prismarine.1", "minecraft:prismarine_bricks"),
     ("minecraft:prismarine.2", "minecraft:dark_prismarine"),
@@ -147,29 +275,83 @@ pub static ITEM_FLATTENING: &[(&str, &str)] = &[
     ("minecraft:concrete.13", "minecraft:green_concrete"),
     ("minecraft:concrete.14", "minecraft:red_concrete"),
     ("minecraft:concrete.15", "minecraft:black_concrete"),
-    ("minecraft:concrete_powder.0", "minecraft:white_concrete_powder"),
-    ("minecraft:concrete_powder.1", "minecraft:orange_concrete_powder"),
-    ("minecraft:concrete_powder.2", "minecraft:magenta_concrete_powder"),
-    ("minecraft:concrete_powder.3", "minecraft:light_blue_concrete_powder"),
-    ("minecraft:concrete_powder.4", "minecraft:yellow_concrete_powder"),
-    ("minecraft:concrete_powder.5", "minecraft:lime_concrete_powder"),
-    ("minecraft:concrete_powder.6", "minecraft:pink_concrete_powder"),
-    ("minecraft:concrete_powder.7", "minecraft:gray_concrete_powder"),
-    ("minecraft:concrete_powder.8", "minecraft:light_gray_concrete_powder"),
-    ("minecraft:concrete_powder.9", "minecraft:cyan_concrete_powder"),
-    ("minecraft:concrete_powder.10", "minecraft:purple_concrete_powder"),
-    ("minecraft:concrete_powder.11", "minecraft:blue_concrete_powder"),
-    ("minecraft:concrete_powder.12", "minecraft:brown_concrete_powder"),
-    ("minecraft:concrete_powder.13", "minecraft:green_concrete_powder"),
-    ("minecraft:concrete_powder.14", "minecraft:red_concrete_powder"),
-    ("minecraft:concrete_powder.15", "minecraft:black_concrete_powder"),
+    (
+        "minecraft:concrete_powder.0",
+        "minecraft:white_concrete_powder",
+    ),
+    (
+        "minecraft:concrete_powder.1",
+        "minecraft:orange_concrete_powder",
+    ),
+    (
+        "minecraft:concrete_powder.2",
+        "minecraft:magenta_concrete_powder",
+    ),
+    (
+        "minecraft:concrete_powder.3",
+        "minecraft:light_blue_concrete_powder",
+    ),
+    (
+        "minecraft:concrete_powder.4",
+        "minecraft:yellow_concrete_powder",
+    ),
+    (
+        "minecraft:concrete_powder.5",
+        "minecraft:lime_concrete_powder",
+    ),
+    (
+        "minecraft:concrete_powder.6",
+        "minecraft:pink_concrete_powder",
+    ),
+    (
+        "minecraft:concrete_powder.7",
+        "minecraft:gray_concrete_powder",
+    ),
+    (
+        "minecraft:concrete_powder.8",
+        "minecraft:light_gray_concrete_powder",
+    ),
+    (
+        "minecraft:concrete_powder.9",
+        "minecraft:cyan_concrete_powder",
+    ),
+    (
+        "minecraft:concrete_powder.10",
+        "minecraft:purple_concrete_powder",
+    ),
+    (
+        "minecraft:concrete_powder.11",
+        "minecraft:blue_concrete_powder",
+    ),
+    (
+        "minecraft:concrete_powder.12",
+        "minecraft:brown_concrete_powder",
+    ),
+    (
+        "minecraft:concrete_powder.13",
+        "minecraft:green_concrete_powder",
+    ),
+    (
+        "minecraft:concrete_powder.14",
+        "minecraft:red_concrete_powder",
+    ),
+    (
+        "minecraft:concrete_powder.15",
+        "minecraft:black_concrete_powder",
+    ),
     ("minecraft:cobblestone_wall.0", "minecraft:cobblestone_wall"),
-    ("minecraft:cobblestone_wall.1", "minecraft:mossy_cobblestone_wall"),
+    (
+        "minecraft:cobblestone_wall.1",
+        "minecraft:mossy_cobblestone_wall",
+    ),
     ("minecraft:sandstone.0", "minecraft:sandstone"),
     ("minecraft:sandstone.1", "minecraft:chiseled_sandstone"),
     ("minecraft:sandstone.2", "minecraft:cut_sandstone"),
     ("minecraft:red_sandstone.0", "minecraft:red_sandstone"),
-    ("minecraft:red_sandstone.1", "minecraft:chiseled_red_sandstone"),
+    (
+        "minecraft:red_sandstone.1",
+        "minecraft:chiseled_red_sandstone",
+    ),
     ("minecraft:red_sandstone.2", "minecraft:cut_red_sandstone"),
     ("minecraft:stonebrick.0", "minecraft:stone_bricks"),
     ("minecraft:stonebrick.1", "minecraft:mossy_stone_bricks"),
@@ -178,9 +360,18 @@ pub static ITEM_FLATTENING: &[(&str, &str)] = &[
     ("minecraft:monster_egg.0", "minecraft:infested_stone"),
     ("minecraft:monster_egg.1", "minecraft:infested_cobblestone"),
     ("minecraft:monster_egg.2", "minecraft:infested_stone_bricks"),
-    ("minecraft:monster_egg.3", "minecraft:infested_mossy_stone_bricks"),
-    ("minecraft:monster_egg.4", "minecraft:infested_cracked_stone_bricks"),
-    ("minecraft:monster_egg.5", "minecraft:infested_chiseled_stone_bricks"),
+    (
+        "minecraft:monster_egg.3",
+        "minecraft:infested_mossy_stone_bricks",
+    ),
+    (
+        "minecraft:monster_egg.4",
+        "minecraft:infested_cracked_stone_bricks",
+    ),
+    (
+        "minecraft:monster_egg.5",
+        "minecraft:infested_chiseled_stone_bricks",
+    ),
     ("minecraft:yellow_flower.0", "minecraft:dandelion"),
     ("minecraft:red_flower.0", "minecraft:poppy"),
     ("minecraft:red_flower.1", "minecraft:blue_orchid"),
@@ -234,7 +425,10 @@ pub static ITEM_FLATTENING: &[(&str, &str)] = &[
     ("minecraft:skull.4", "minecraft:creeper_head"),
     ("minecraft:skull.5", "minecraft:dragon_head"),
     ("minecraft:golden_apple.0", "minecraft:golden_apple"),
-    ("minecraft:golden_apple.1", "minecraft:enchanted_golden_apple"),
+    (
+        "minecraft:golden_apple.1",
+        "minecraft:enchanted_golden_apple",
+    ),
     ("minecraft:fireworks.0", "minecraft:firework_rocket"),
     ("minecraft:firework_charge.0", "minecraft:firework_star"),
     ("minecraft:dye.0", "minecraft:ink_sac"),
@@ -253,7 +447,10 @@ pub static ITEM_FLATTENING: &[(&str, &str)] = &[
     ("minecraft:dye.13", "minecraft:magenta_dye"),
     ("minecraft:dye.14", "minecraft:orange_dye"),
     ("minecraft:dye.15", "minecraft:bone_meal"),
-    ("minecraft:silver_shulker_box.0", "minecraft:light_gray_shulker_box"),
+    (
+        "minecraft:silver_shulker_box.0",
+        "minecraft:light_gray_shulker_box",
+    ),
     ("minecraft:fence.0", "minecraft:oak_fence"),
     ("minecraft:fence_gate.0", "minecraft:oak_fence_gate"),
     ("minecraft:wooden_door.0", "minecraft:oak_door"),
@@ -262,10 +459,16 @@ pub static ITEM_FLATTENING: &[(&str, &str)] = &[
     ("minecraft:pumpkin.0", "minecraft:carved_pumpkin"),
     ("minecraft:trapdoor.0", "minecraft:oak_trapdoor"),
     ("minecraft:nether_brick.0", "minecraft:nether_bricks"),
-    ("minecraft:red_nether_brick.0", "minecraft:red_nether_bricks"),
+    (
+        "minecraft:red_nether_brick.0",
+        "minecraft:red_nether_bricks",
+    ),
     ("minecraft:netherbrick.0", "minecraft:nether_brick"),
     ("minecraft:wooden_button.0", "minecraft:oak_button"),
-    ("minecraft:wooden_pressure_plate.0", "minecraft:oak_pressure_plate"),
+    (
+        "minecraft:wooden_pressure_plate.0",
+        "minecraft:oak_pressure_plate",
+    ),
     ("minecraft:noteblock.0", "minecraft:note_block"),
     ("minecraft:bed.0", "minecraft:white_bed"),
     ("minecraft:bed.1", "minecraft:orange_bed"),
@@ -1047,7 +1250,10 @@ pub static STATS_CUSTOM: &[(&str, &str)] = &[
     ("stat.cauldronUsed", "minecraft:use_cauldron"),
     ("stat.armorCleaned", "minecraft:clean_armor"),
     ("stat.bannerCleaned", "minecraft:clean_banner"),
-    ("stat.brewingstandInteraction", "minecraft:interact_with_brewingstand"),
+    (
+        "stat.brewingstandInteraction",
+        "minecraft:interact_with_brewingstand",
+    ),
     ("stat.beaconInteraction", "minecraft:interact_with_beacon"),
     ("stat.dropperInspected", "minecraft:inspect_dropper"),
     ("stat.hopperInspected", "minecraft:inspect_hopper"),
@@ -1055,12 +1261,18 @@ pub static STATS_CUSTOM: &[(&str, &str)] = &[
     ("stat.noteblockPlayed", "minecraft:play_noteblock"),
     ("stat.noteblockTuned", "minecraft:tune_noteblock"),
     ("stat.flowerPotted", "minecraft:pot_flower"),
-    ("stat.trappedChestTriggered", "minecraft:trigger_trapped_chest"),
+    (
+        "stat.trappedChestTriggered",
+        "minecraft:trigger_trapped_chest",
+    ),
     ("stat.enderchestOpened", "minecraft:open_enderchest"),
     ("stat.itemEnchanted", "minecraft:enchant_item"),
     ("stat.recordPlayed", "minecraft:play_record"),
     ("stat.furnaceInteraction", "minecraft:interact_with_furnace"),
-    ("stat.craftingTableInteraction", "minecraft:interact_with_crafting_table"),
+    (
+        "stat.craftingTableInteraction",
+        "minecraft:interact_with_crafting_table",
+    ),
     ("stat.chestOpened", "minecraft:open_chest"),
     ("stat.sleepInBed", "minecraft:sleep_in_bed"),
     ("stat.shulkerBoxOpened", "minecraft:open_shulker_box"),
@@ -1128,58 +1340,130 @@ pub static STATS_ENTITIES: &[(&str, &str)] = &[
 pub static RECIPES: &[(&str, &str)] = &[
     ("minecraft:acacia_wooden_slab", "minecraft:acacia_slab"),
     ("minecraft:birch_wooden_slab", "minecraft:birch_slab"),
-    ("minecraft:black_stained_hardened_clay", "minecraft:black_terracotta"),
-    ("minecraft:blue_stained_hardened_clay", "minecraft:blue_terracotta"),
+    (
+        "minecraft:black_stained_hardened_clay",
+        "minecraft:black_terracotta",
+    ),
+    (
+        "minecraft:blue_stained_hardened_clay",
+        "minecraft:blue_terracotta",
+    ),
     ("minecraft:boat", "minecraft:oak_boat"),
-    ("minecraft:bone_meal_from_block", "minecraft:bone_meal_from_bone_block"),
+    (
+        "minecraft:bone_meal_from_block",
+        "minecraft:bone_meal_from_bone_block",
+    ),
     ("minecraft:bone_meal_from_bone", "minecraft:bone_meal"),
     ("minecraft:brick_block", "minecraft:bricks"),
-    ("minecraft:brown_stained_hardened_clay", "minecraft:brown_terracotta"),
-    ("minecraft:chiseled_stonebrick", "minecraft:chiseled_stone_bricks"),
-    ("minecraft:cyan_stained_hardened_clay", "minecraft:cyan_terracotta"),
+    (
+        "minecraft:brown_stained_hardened_clay",
+        "minecraft:brown_terracotta",
+    ),
+    (
+        "minecraft:chiseled_stonebrick",
+        "minecraft:chiseled_stone_bricks",
+    ),
+    (
+        "minecraft:cyan_stained_hardened_clay",
+        "minecraft:cyan_terracotta",
+    ),
     ("minecraft:dark_oak_wooden_slab", "minecraft:dark_oak_slab"),
     ("minecraft:end_bricks", "minecraft:end_stone_bricks"),
     ("minecraft:fence_gate", "minecraft:oak_fence_gate"),
     ("minecraft:fence", "minecraft:oak_fence"),
     ("minecraft:golden_rail", "minecraft:powered_rail"),
-    ("minecraft:gold_ingot_from_block", "minecraft:gold_ingot_from_gold_block"),
-    ("minecraft:gray_stained_hardened_clay", "minecraft:gray_terracotta"),
-    ("minecraft:green_stained_hardened_clay", "minecraft:green_terracotta"),
-    ("minecraft:iron_ingot_from_block", "minecraft:iron_ingot_from_iron_block"),
+    (
+        "minecraft:gold_ingot_from_block",
+        "minecraft:gold_ingot_from_gold_block",
+    ),
+    (
+        "minecraft:gray_stained_hardened_clay",
+        "minecraft:gray_terracotta",
+    ),
+    (
+        "minecraft:green_stained_hardened_clay",
+        "minecraft:green_terracotta",
+    ),
+    (
+        "minecraft:iron_ingot_from_block",
+        "minecraft:iron_ingot_from_iron_block",
+    ),
     ("minecraft:jungle_wooden_slab", "minecraft:jungle_slab"),
-    ("minecraft:light_blue_stained_hardened_clay", "minecraft:light_blue_terracotta"),
-    ("minecraft:light_gray_stained_hardened_clay", "minecraft:light_gray_terracotta"),
-    ("minecraft:lime_stained_hardened_clay", "minecraft:lime_terracotta"),
+    (
+        "minecraft:light_blue_stained_hardened_clay",
+        "minecraft:light_blue_terracotta",
+    ),
+    (
+        "minecraft:light_gray_stained_hardened_clay",
+        "minecraft:light_gray_terracotta",
+    ),
+    (
+        "minecraft:lime_stained_hardened_clay",
+        "minecraft:lime_terracotta",
+    ),
     ("minecraft:lit_pumpkin", "minecraft:jack_o_lantern"),
-    ("minecraft:magenta_stained_hardened_clay", "minecraft:magenta_terracotta"),
+    (
+        "minecraft:magenta_stained_hardened_clay",
+        "minecraft:magenta_terracotta",
+    ),
     ("minecraft:magma", "minecraft:magma_block"),
     ("minecraft:melon_block", "minecraft:melon"),
     ("minecraft:mossy_stonebrick", "minecraft:mossy_stone_bricks"),
     ("minecraft:noteblock", "minecraft:note_block"),
     ("minecraft:oak_wooden_slab", "minecraft:oak_slab"),
-    ("minecraft:orange_stained_hardened_clay", "minecraft:orange_terracotta"),
+    (
+        "minecraft:orange_stained_hardened_clay",
+        "minecraft:orange_terracotta",
+    ),
     ("minecraft:pillar_quartz_block", "minecraft:quartz_pillar"),
-    ("minecraft:pink_stained_hardened_clay", "minecraft:pink_terracotta"),
+    (
+        "minecraft:pink_stained_hardened_clay",
+        "minecraft:pink_terracotta",
+    ),
     ("minecraft:purple_shulker_box", "minecraft:shulker_box"),
-    ("minecraft:purple_stained_hardened_clay", "minecraft:purple_terracotta"),
+    (
+        "minecraft:purple_stained_hardened_clay",
+        "minecraft:purple_terracotta",
+    ),
     ("minecraft:red_nether_brick", "minecraft:red_nether_bricks"),
-    ("minecraft:red_stained_hardened_clay", "minecraft:red_terracotta"),
+    (
+        "minecraft:red_stained_hardened_clay",
+        "minecraft:red_terracotta",
+    ),
     ("minecraft:slime", "minecraft:slime_block"),
-    ("minecraft:smooth_red_sandstone", "minecraft:cut_red_sandstone"),
+    (
+        "minecraft:smooth_red_sandstone",
+        "minecraft:cut_red_sandstone",
+    ),
     ("minecraft:smooth_sandstone", "minecraft:cut_sandstone"),
     ("minecraft:snow_layer", "minecraft:snow"),
     ("minecraft:snow", "minecraft:snow_block"),
-    ("minecraft:speckled_melon", "minecraft:glistering_melon_slice"),
+    (
+        "minecraft:speckled_melon",
+        "minecraft:glistering_melon_slice",
+    ),
     ("minecraft:spruce_wooden_slab", "minecraft:spruce_slab"),
     ("minecraft:stonebrick", "minecraft:stone_bricks"),
     ("minecraft:stone_stairs", "minecraft:cobblestone_stairs"),
-    ("minecraft:string_to_wool", "minecraft:white_wool_from_string"),
+    (
+        "minecraft:string_to_wool",
+        "minecraft:white_wool_from_string",
+    ),
     ("minecraft:trapdoor", "minecraft:oak_trapdoor"),
-    ("minecraft:white_stained_hardened_clay", "minecraft:white_terracotta"),
+    (
+        "minecraft:white_stained_hardened_clay",
+        "minecraft:white_terracotta",
+    ),
     ("minecraft:wooden_button", "minecraft:oak_button"),
     ("minecraft:wooden_door", "minecraft:oak_door"),
-    ("minecraft:wooden_pressure_plate", "minecraft:oak_pressure_plate"),
-    ("minecraft:yellow_stained_hardened_clay", "minecraft:yellow_terracotta"),
+    (
+        "minecraft:wooden_pressure_plate",
+        "minecraft:oak_pressure_plate",
+    ),
+    (
+        "minecraft:yellow_stained_hardened_clay",
+        "minecraft:yellow_terracotta",
+    ),
 ];
 
 pub static RECIPES_RENAMENING: &[(&str, &str)] = &[
@@ -1192,61 +1476,226 @@ pub static RECIPES_RENAMENING: &[(&str, &str)] = &[
 ];
 
 pub static ADVANCEMENTS: &[(&str, &str)] = &[
-    ("minecraft:recipes/brewing/speckled_melon", "minecraft:recipes/brewing/glistering_melon_slice"),
-    ("minecraft:recipes/building_blocks/black_stained_hardened_clay", "minecraft:recipes/building_blocks/black_terracotta"),
-    ("minecraft:recipes/building_blocks/blue_stained_hardened_clay", "minecraft:recipes/building_blocks/blue_terracotta"),
-    ("minecraft:recipes/building_blocks/brown_stained_hardened_clay", "minecraft:recipes/building_blocks/brown_terracotta"),
-    ("minecraft:recipes/building_blocks/cyan_stained_hardened_clay", "minecraft:recipes/building_blocks/cyan_terracotta"),
-    ("minecraft:recipes/building_blocks/gray_stained_hardened_clay", "minecraft:recipes/building_blocks/gray_terracotta"),
-    ("minecraft:recipes/building_blocks/green_stained_hardened_clay", "minecraft:recipes/building_blocks/green_terracotta"),
-    ("minecraft:recipes/building_blocks/light_blue_stained_hardened_clay", "minecraft:recipes/building_blocks/light_blue_terracotta"),
-    ("minecraft:recipes/building_blocks/light_gray_stained_hardened_clay", "minecraft:recipes/building_blocks/light_gray_terracotta"),
-    ("minecraft:recipes/building_blocks/lime_stained_hardened_clay", "minecraft:recipes/building_blocks/lime_terracotta"),
-    ("minecraft:recipes/building_blocks/magenta_stained_hardened_clay", "minecraft:recipes/building_blocks/magenta_terracotta"),
-    ("minecraft:recipes/building_blocks/orange_stained_hardened_clay", "minecraft:recipes/building_blocks/orange_terracotta"),
-    ("minecraft:recipes/building_blocks/pink_stained_hardened_clay", "minecraft:recipes/building_blocks/pink_terracotta"),
-    ("minecraft:recipes/building_blocks/purple_stained_hardened_clay", "minecraft:recipes/building_blocks/purple_terracotta"),
-    ("minecraft:recipes/building_blocks/red_stained_hardened_clay", "minecraft:recipes/building_blocks/red_terracotta"),
-    ("minecraft:recipes/building_blocks/white_stained_hardened_clay", "minecraft:recipes/building_blocks/white_terracotta"),
-    ("minecraft:recipes/building_blocks/yellow_stained_hardened_clay", "minecraft:recipes/building_blocks/yellow_terracotta"),
-    ("minecraft:recipes/building_blocks/acacia_wooden_slab", "minecraft:recipes/building_blocks/acacia_slab"),
-    ("minecraft:recipes/building_blocks/birch_wooden_slab", "minecraft:recipes/building_blocks/birch_slab"),
-    ("minecraft:recipes/building_blocks/dark_oak_wooden_slab", "minecraft:recipes/building_blocks/dark_oak_slab"),
-    ("minecraft:recipes/building_blocks/jungle_wooden_slab", "minecraft:recipes/building_blocks/jungle_slab"),
-    ("minecraft:recipes/building_blocks/oak_wooden_slab", "minecraft:recipes/building_blocks/oak_slab"),
-    ("minecraft:recipes/building_blocks/spruce_wooden_slab", "minecraft:recipes/building_blocks/spruce_slab"),
-    ("minecraft:recipes/building_blocks/brick_block", "minecraft:recipes/building_blocks/bricks"),
-    ("minecraft:recipes/building_blocks/chiseled_stonebrick", "minecraft:recipes/building_blocks/chiseled_stone_bricks"),
-    ("minecraft:recipes/building_blocks/end_bricks", "minecraft:recipes/building_blocks/end_stone_bricks"),
-    ("minecraft:recipes/building_blocks/lit_pumpkin", "minecraft:recipes/building_blocks/jack_o_lantern"),
-    ("minecraft:recipes/building_blocks/magma", "minecraft:recipes/building_blocks/magma_block"),
-    ("minecraft:recipes/building_blocks/melon_block", "minecraft:recipes/building_blocks/melon"),
-    ("minecraft:recipes/building_blocks/mossy_stonebrick", "minecraft:recipes/building_blocks/mossy_stone_bricks"),
-    ("minecraft:recipes/building_blocks/nether_brick", "minecraft:recipes/building_blocks/nether_bricks"),
-    ("minecraft:recipes/building_blocks/pillar_quartz_block", "minecraft:recipes/building_blocks/quartz_pillar"),
-    ("minecraft:recipes/building_blocks/red_nether_brick", "minecraft:recipes/building_blocks/red_nether_bricks"),
-    ("minecraft:recipes/building_blocks/snow", "minecraft:recipes/building_blocks/snow_block"),
-    ("minecraft:recipes/building_blocks/smooth_red_sandstone", "minecraft:recipes/building_blocks/cut_red_sandstone"),
-    ("minecraft:recipes/building_blocks/smooth_sandstone", "minecraft:recipes/building_blocks/cut_sandstone"),
-    ("minecraft:recipes/building_blocks/stonebrick", "minecraft:recipes/building_blocks/stone_bricks"),
-    ("minecraft:recipes/building_blocks/stone_stairs", "minecraft:recipes/building_blocks/cobblestone_stairs"),
-    ("minecraft:recipes/building_blocks/string_to_wool", "minecraft:recipes/building_blocks/white_wool_from_string"),
-    ("minecraft:recipes/decorations/fence", "minecraft:recipes/decorations/oak_fence"),
-    ("minecraft:recipes/decorations/purple_shulker_box", "minecraft:recipes/decorations/shulker_box"),
-    ("minecraft:recipes/decorations/slime", "minecraft:recipes/decorations/slime_block"),
-    ("minecraft:recipes/decorations/snow_layer", "minecraft:recipes/decorations/snow"),
-    ("minecraft:recipes/misc/bone_meal_from_block", "minecraft:recipes/misc/bone_meal_from_bone_block"),
-    ("minecraft:recipes/misc/bone_meal_from_bone", "minecraft:recipes/misc/bone_meal"),
-    ("minecraft:recipes/misc/gold_ingot_from_block", "minecraft:recipes/misc/gold_ingot_from_gold_block"),
-    ("minecraft:recipes/misc/iron_ingot_from_block", "minecraft:recipes/misc/iron_ingot_from_iron_block"),
-    ("minecraft:recipes/redstone/fence_gate", "minecraft:recipes/redstone/oak_fence_gate"),
-    ("minecraft:recipes/redstone/noteblock", "minecraft:recipes/redstone/note_block"),
-    ("minecraft:recipes/redstone/trapdoor", "minecraft:recipes/redstone/oak_trapdoor"),
-    ("minecraft:recipes/redstone/wooden_button", "minecraft:recipes/redstone/oak_button"),
-    ("minecraft:recipes/redstone/wooden_door", "minecraft:recipes/redstone/oak_door"),
-    ("minecraft:recipes/redstone/wooden_pressure_plate", "minecraft:recipes/redstone/oak_pressure_plate"),
-    ("minecraft:recipes/transportation/boat", "minecraft:recipes/transportation/oak_boat"),
-    ("minecraft:recipes/transportation/golden_rail", "minecraft:recipes/transportation/powered_rail"),
+    (
+        "minecraft:recipes/brewing/speckled_melon",
+        "minecraft:recipes/brewing/glistering_melon_slice",
+    ),
+    (
+        "minecraft:recipes/building_blocks/black_stained_hardened_clay",
+        "minecraft:recipes/building_blocks/black_terracotta",
+    ),
+    (
+        "minecraft:recipes/building_blocks/blue_stained_hardened_clay",
+        "minecraft:recipes/building_blocks/blue_terracotta",
+    ),
+    (
+        "minecraft:recipes/building_blocks/brown_stained_hardened_clay",
+        "minecraft:recipes/building_blocks/brown_terracotta",
+    ),
+    (
+        "minecraft:recipes/building_blocks/cyan_stained_hardened_clay",
+        "minecraft:recipes/building_blocks/cyan_terracotta",
+    ),
+    (
+        "minecraft:recipes/building_blocks/gray_stained_hardened_clay",
+        "minecraft:recipes/building_blocks/gray_terracotta",
+    ),
+    (
+        "minecraft:recipes/building_blocks/green_stained_hardened_clay",
+        "minecraft:recipes/building_blocks/green_terracotta",
+    ),
+    (
+        "minecraft:recipes/building_blocks/light_blue_stained_hardened_clay",
+        "minecraft:recipes/building_blocks/light_blue_terracotta",
+    ),
+    (
+        "minecraft:recipes/building_blocks/light_gray_stained_hardened_clay",
+        "minecraft:recipes/building_blocks/light_gray_terracotta",
+    ),
+    (
+        "minecraft:recipes/building_blocks/lime_stained_hardened_clay",
+        "minecraft:recipes/building_blocks/lime_terracotta",
+    ),
+    (
+        "minecraft:recipes/building_blocks/magenta_stained_hardened_clay",
+        "minecraft:recipes/building_blocks/magenta_terracotta",
+    ),
+    (
+        "minecraft:recipes/building_blocks/orange_stained_hardened_clay",
+        "minecraft:recipes/building_blocks/orange_terracotta",
+    ),
+    (
+        "minecraft:recipes/building_blocks/pink_stained_hardened_clay",
+        "minecraft:recipes/building_blocks/pink_terracotta",
+    ),
+    (
+        "minecraft:recipes/building_blocks/purple_stained_hardened_clay",
+        "minecraft:recipes/building_blocks/purple_terracotta",
+    ),
+    (
+        "minecraft:recipes/building_blocks/red_stained_hardened_clay",
+        "minecraft:recipes/building_blocks/red_terracotta",
+    ),
+    (
+        "minecraft:recipes/building_blocks/white_stained_hardened_clay",
+        "minecraft:recipes/building_blocks/white_terracotta",
+    ),
+    (
+        "minecraft:recipes/building_blocks/yellow_stained_hardened_clay",
+        "minecraft:recipes/building_blocks/yellow_terracotta",
+    ),
+    (
+        "minecraft:recipes/building_blocks/acacia_wooden_slab",
+        "minecraft:recipes/building_blocks/acacia_slab",
+    ),
+    (
+        "minecraft:recipes/building_blocks/birch_wooden_slab",
+        "minecraft:recipes/building_blocks/birch_slab",
+    ),
+    (
+        "minecraft:recipes/building_blocks/dark_oak_wooden_slab",
+        "minecraft:recipes/building_blocks/dark_oak_slab",
+    ),
+    (
+        "minecraft:recipes/building_blocks/jungle_wooden_slab",
+        "minecraft:recipes/building_blocks/jungle_slab",
+    ),
+    (
+        "minecraft:recipes/building_blocks/oak_wooden_slab",
+        "minecraft:recipes/building_blocks/oak_slab",
+    ),
+    (
+        "minecraft:recipes/building_blocks/spruce_wooden_slab",
+        "minecraft:recipes/building_blocks/spruce_slab",
+    ),
+    (
+        "minecraft:recipes/building_blocks/brick_block",
+        "minecraft:recipes/building_blocks/bricks",
+    ),
+    (
+        "minecraft:recipes/building_blocks/chiseled_stonebrick",
+        "minecraft:recipes/building_blocks/chiseled_stone_bricks",
+    ),
+    (
+        "minecraft:recipes/building_blocks/end_bricks",
+        "minecraft:recipes/building_blocks/end_stone_bricks",
+    ),
+    (
+        "minecraft:recipes/building_blocks/lit_pumpkin",
+        "minecraft:recipes/building_blocks/jack_o_lantern",
+    ),
+    (
+        "minecraft:recipes/building_blocks/magma",
+        "minecraft:recipes/building_blocks/magma_block",
+    ),
+    (
+        "minecraft:recipes/building_blocks/melon_block",
+        "minecraft:recipes/building_blocks/melon",
+    ),
+    (
+        "minecraft:recipes/building_blocks/mossy_stonebrick",
+        "minecraft:recipes/building_blocks/mossy_stone_bricks",
+    ),
+    (
+        "minecraft:recipes/building_blocks/nether_brick",
+        "minecraft:recipes/building_blocks/nether_bricks",
+    ),
+    (
+        "minecraft:recipes/building_blocks/pillar_quartz_block",
+        "minecraft:recipes/building_blocks/quartz_pillar",
+    ),
+    (
+        "minecraft:recipes/building_blocks/red_nether_brick",
+        "minecraft:recipes/building_blocks/red_nether_bricks",
+    ),
+    (
+        "minecraft:recipes/building_blocks/snow",
+        "minecraft:recipes/building_blocks/snow_block",
+    ),
+    (
+        "minecraft:recipes/building_blocks/smooth_red_sandstone",
+        "minecraft:recipes/building_blocks/cut_red_sandstone",
+    ),
+    (
+        "minecraft:recipes/building_blocks/smooth_sandstone",
+        "minecraft:recipes/building_blocks/cut_sandstone",
+    ),
+    (
+        "minecraft:recipes/building_blocks/stonebrick",
+        "minecraft:recipes/building_blocks/stone_bricks",
+    ),
+    (
+        "minecraft:recipes/building_blocks/stone_stairs",
+        "minecraft:recipes/building_blocks/cobblestone_stairs",
+    ),
+    (
+        "minecraft:recipes/building_blocks/string_to_wool",
+        "minecraft:recipes/building_blocks/white_wool_from_string",
+    ),
+    (
+        "minecraft:recipes/decorations/fence",
+        "minecraft:recipes/decorations/oak_fence",
+    ),
+    (
+        "minecraft:recipes/decorations/purple_shulker_box",
+        "minecraft:recipes/decorations/shulker_box",
+    ),
+    (
+        "minecraft:recipes/decorations/slime",
+        "minecraft:recipes/decorations/slime_block",
+    ),
+    (
+        "minecraft:recipes/decorations/snow_layer",
+        "minecraft:recipes/decorations/snow",
+    ),
+    (
+        "minecraft:recipes/misc/bone_meal_from_block",
+        "minecraft:recipes/misc/bone_meal_from_bone_block",
+    ),
+    (
+        "minecraft:recipes/misc/bone_meal_from_bone",
+        "minecraft:recipes/misc/bone_meal",
+    ),
+    (
+        "minecraft:recipes/misc/gold_ingot_from_block",
+        "minecraft:recipes/misc/gold_ingot_from_gold_block",
+    ),
+    (
+        "minecraft:recipes/misc/iron_ingot_from_block",
+        "minecraft:recipes/misc/iron_ingot_from_iron_block",
+    ),
+    (
+        "minecraft:recipes/redstone/fence_gate",
+        "minecraft:recipes/redstone/oak_fence_gate",
+    ),
+    (
+        "minecraft:recipes/redstone/noteblock",
+        "minecraft:recipes/redstone/note_block",
+    ),
+    (
+        "minecraft:recipes/redstone/trapdoor",
+        "minecraft:recipes/redstone/oak_trapdoor",
+    ),
+    (
+        "minecraft:recipes/redstone/wooden_button",
+        "minecraft:recipes/redstone/oak_button",
+    ),
+    (
+        "minecraft:recipes/redstone/wooden_door",
+        "minecraft:recipes/redstone/oak_door",
+    ),
+    (
+        "minecraft:recipes/redstone/wooden_pressure_plate",
+        "minecraft:recipes/redstone/oak_pressure_plate",
+    ),
+    (
+        "minecraft:recipes/transportation/boat",
+        "minecraft:recipes/transportation/oak_boat",
+    ),
+    (
+        "minecraft:recipes/transportation/golden_rail",
+        "minecraft:recipes/transportation/powered_rail",
+    ),
 ];
 
 pub static GENERATOR_BIOMES: &[(&str, &str)] = &[
@@ -1333,11 +1782,17 @@ pub static SPAWN_EGGS: &[(&str, &str)] = &[
     ("minecraft:cow", "minecraft:cow_spawn_egg"),
     ("minecraft:creeper", "minecraft:creeper_spawn_egg"),
     ("minecraft:donkey", "minecraft:donkey_spawn_egg"),
-    ("minecraft:elder_guardian", "minecraft:elder_guardian_spawn_egg"),
+    (
+        "minecraft:elder_guardian",
+        "minecraft:elder_guardian_spawn_egg",
+    ),
     ("minecraft:ender_dragon", "minecraft:ender_dragon_spawn_egg"),
     ("minecraft:enderman", "minecraft:enderman_spawn_egg"),
     ("minecraft:endermite", "minecraft:endermite_spawn_egg"),
-    ("minecraft:evocation_illager", "minecraft:evocation_illager_spawn_egg"),
+    (
+        "minecraft:evocation_illager",
+        "minecraft:evocation_illager_spawn_egg",
+    ),
     ("minecraft:ghast", "minecraft:ghast_spawn_egg"),
     ("minecraft:guardian", "minecraft:guardian_spawn_egg"),
     ("minecraft:horse", "minecraft:horse_spawn_egg"),
@@ -1357,7 +1812,10 @@ pub static SPAWN_EGGS: &[(&str, &str)] = &[
     ("minecraft:shulker", "minecraft:shulker_spawn_egg"),
     ("minecraft:silverfish", "minecraft:silverfish_spawn_egg"),
     ("minecraft:skeleton", "minecraft:skeleton_spawn_egg"),
-    ("minecraft:skeleton_horse", "minecraft:skeleton_horse_spawn_egg"),
+    (
+        "minecraft:skeleton_horse",
+        "minecraft:skeleton_horse_spawn_egg",
+    ),
     ("minecraft:slime", "minecraft:slime_spawn_egg"),
     ("minecraft:snow_golem", "minecraft:snow_golem_spawn_egg"),
     ("minecraft:spider", "minecraft:spider_spawn_egg"),
@@ -1366,15 +1824,27 @@ pub static SPAWN_EGGS: &[(&str, &str)] = &[
     ("minecraft:turtle", "minecraft:turtle_spawn_egg"),
     ("minecraft:vex", "minecraft:vex_spawn_egg"),
     ("minecraft:villager", "minecraft:villager_spawn_egg"),
-    ("minecraft:vindication_illager", "minecraft:vindication_illager_spawn_egg"),
+    (
+        "minecraft:vindication_illager",
+        "minecraft:vindication_illager_spawn_egg",
+    ),
     ("minecraft:witch", "minecraft:witch_spawn_egg"),
     ("minecraft:wither", "minecraft:wither_spawn_egg"),
-    ("minecraft:wither_skeleton", "minecraft:wither_skeleton_spawn_egg"),
+    (
+        "minecraft:wither_skeleton",
+        "minecraft:wither_skeleton_spawn_egg",
+    ),
     ("minecraft:wolf", "minecraft:wolf_spawn_egg"),
     ("minecraft:zombie", "minecraft:zombie_spawn_egg"),
     ("minecraft:zombie_horse", "minecraft:zombie_horse_spawn_egg"),
-    ("minecraft:zombie_pigman", "minecraft:zombie_pigman_spawn_egg"),
-    ("minecraft:zombie_villager", "minecraft:zombie_villager_spawn_egg"),
+    (
+        "minecraft:zombie_pigman",
+        "minecraft:zombie_pigman_spawn_egg",
+    ),
+    (
+        "minecraft:zombie_villager",
+        "minecraft:zombie_villager_spawn_egg",
+    ),
 ];
 
 pub static ENCHANTMENTS: &[(i32, &str)] = &[
@@ -1439,14 +1909,23 @@ pub static CORAL: &[(&str, &str)] = &[
 
 pub static CORAL_FANS: &[(&str, &str)] = &[
     ("minecraft:tube_coral_fan", "minecraft:tube_coral_wall_fan"),
-    ("minecraft:brain_coral_fan", "minecraft:brain_coral_wall_fan"),
-    ("minecraft:bubble_coral_fan", "minecraft:bubble_coral_wall_fan"),
+    (
+        "minecraft:brain_coral_fan",
+        "minecraft:brain_coral_wall_fan",
+    ),
+    (
+        "minecraft:bubble_coral_fan",
+        "minecraft:bubble_coral_wall_fan",
+    ),
     ("minecraft:fire_coral_fan", "minecraft:fire_coral_wall_fan"),
     ("minecraft:horn_coral_fan", "minecraft:horn_coral_wall_fan"),
 ];
 
 pub static THE_RENAMENING_ENTITIES: &[(&str, &str)] = &[
-    ("minecraft:commandblock_minecart", "minecraft:command_block_minecart"),
+    (
+        "minecraft:commandblock_minecart",
+        "minecraft:command_block_minecart",
+    ),
     ("minecraft:ender_crystal", "minecraft:end_crystal"),
     ("minecraft:snowman", "minecraft:snow_golem"),
     ("minecraft:evocation_illager", "minecraft:evoker"),
@@ -1469,11 +1948,26 @@ pub static THE_RENAMENING_BLOCKS: &[(&str, &str)] = &[
     ("minecraft:acacia_bark", "minecraft:acacia_wood"),
     ("minecraft:dark_oak_bark", "minecraft:dark_oak_wood"),
     ("minecraft:stripped_oak_bark", "minecraft:stripped_oak_wood"),
-    ("minecraft:stripped_spruce_bark", "minecraft:stripped_spruce_wood"),
-    ("minecraft:stripped_birch_bark", "minecraft:stripped_birch_wood"),
-    ("minecraft:stripped_jungle_bark", "minecraft:stripped_jungle_wood"),
-    ("minecraft:stripped_acacia_bark", "minecraft:stripped_acacia_wood"),
-    ("minecraft:stripped_dark_oak_bark", "minecraft:stripped_dark_oak_wood"),
+    (
+        "minecraft:stripped_spruce_bark",
+        "minecraft:stripped_spruce_wood",
+    ),
+    (
+        "minecraft:stripped_birch_bark",
+        "minecraft:stripped_birch_wood",
+    ),
+    (
+        "minecraft:stripped_jungle_bark",
+        "minecraft:stripped_jungle_wood",
+    ),
+    (
+        "minecraft:stripped_acacia_bark",
+        "minecraft:stripped_acacia_wood",
+    ),
+    (
+        "minecraft:stripped_dark_oak_bark",
+        "minecraft:stripped_dark_oak_wood",
+    ),
     ("minecraft:mob_spawner", "minecraft:spawner"),
 ];
 
@@ -1483,92 +1977,303 @@ pub static COD_SALMON: &[(&str, &str)] = &[
 ];
 
 pub static COD_SALMON_EGGS: &[(&str, &str)] = &[
-    ("minecraft:salmon_mob_spawn_egg", "minecraft:salmon_spawn_egg"),
+    (
+        "minecraft:salmon_mob_spawn_egg",
+        "minecraft:salmon_spawn_egg",
+    ),
     ("minecraft:cod_mob_spawn_egg", "minecraft:cod_spawn_egg"),
 ];
 
 /// `ChunkStructuresTemplateRenameFix.RENAMES`: structure id, child id, template renames.
 pub static STRUCTURE_TEMPLATE_RENAMES: &[(&str, &str, &[(&str, &str)])] = &[
-    ("EndCity", "ECP", &[
-        ("second_floor", "second_floor_1"),
-        ("third_floor", "third_floor_1"),
-        ("third_floor_c", "third_floor_2"),
-    ]),
-    ("Mansion", "WMP", &[
-        ("carpet_south", "carpet_south_1"),
-        ("carpet_west", "carpet_west_1"),
-        ("indoors_door", "indoors_door_1"),
-        ("indoors_wall", "indoors_wall_1"),
-    ]),
-    ("Igloo", "Iglu", &[
-        ("minecraft:igloo/igloo_bottom", "minecraft:igloo/bottom"),
-        ("minecraft:igloo/igloo_middle", "minecraft:igloo/middle"),
-        ("minecraft:igloo/igloo_top", "minecraft:igloo/top"),
-    ]),
-    ("Ocean_Ruin", "ORP", &[
-        ("minecraft:ruin/big_ruin1_brick", "minecraft:underwater_ruin/big_brick_1"),
-        ("minecraft:ruin/big_ruin2_brick", "minecraft:underwater_ruin/big_brick_2"),
-        ("minecraft:ruin/big_ruin3_brick", "minecraft:underwater_ruin/big_brick_3"),
-        ("minecraft:ruin/big_ruin8_brick", "minecraft:underwater_ruin/big_brick_8"),
-        ("minecraft:ruin/big_ruin1_cracked", "minecraft:underwater_ruin/big_cracked_1"),
-        ("minecraft:ruin/big_ruin2_cracked", "minecraft:underwater_ruin/big_cracked_2"),
-        ("minecraft:ruin/big_ruin3_cracked", "minecraft:underwater_ruin/big_cracked_3"),
-        ("minecraft:ruin/big_ruin8_cracked", "minecraft:underwater_ruin/big_cracked_8"),
-        ("minecraft:ruin/big_ruin1_mossy", "minecraft:underwater_ruin/big_mossy_1"),
-        ("minecraft:ruin/big_ruin2_mossy", "minecraft:underwater_ruin/big_mossy_2"),
-        ("minecraft:ruin/big_ruin3_mossy", "minecraft:underwater_ruin/big_mossy_3"),
-        ("minecraft:ruin/big_ruin8_mossy", "minecraft:underwater_ruin/big_mossy_8"),
-        ("minecraft:ruin/big_ruin_warm4", "minecraft:underwater_ruin/big_warm_4"),
-        ("minecraft:ruin/big_ruin_warm5", "minecraft:underwater_ruin/big_warm_5"),
-        ("minecraft:ruin/big_ruin_warm6", "minecraft:underwater_ruin/big_warm_6"),
-        ("minecraft:ruin/big_ruin_warm7", "minecraft:underwater_ruin/big_warm_7"),
-        ("minecraft:ruin/ruin1_brick", "minecraft:underwater_ruin/brick_1"),
-        ("minecraft:ruin/ruin2_brick", "minecraft:underwater_ruin/brick_2"),
-        ("minecraft:ruin/ruin3_brick", "minecraft:underwater_ruin/brick_3"),
-        ("minecraft:ruin/ruin4_brick", "minecraft:underwater_ruin/brick_4"),
-        ("minecraft:ruin/ruin5_brick", "minecraft:underwater_ruin/brick_5"),
-        ("minecraft:ruin/ruin6_brick", "minecraft:underwater_ruin/brick_6"),
-        ("minecraft:ruin/ruin7_brick", "minecraft:underwater_ruin/brick_7"),
-        ("minecraft:ruin/ruin8_brick", "minecraft:underwater_ruin/brick_8"),
-        ("minecraft:ruin/ruin1_cracked", "minecraft:underwater_ruin/cracked_1"),
-        ("minecraft:ruin/ruin2_cracked", "minecraft:underwater_ruin/cracked_2"),
-        ("minecraft:ruin/ruin3_cracked", "minecraft:underwater_ruin/cracked_3"),
-        ("minecraft:ruin/ruin4_cracked", "minecraft:underwater_ruin/cracked_4"),
-        ("minecraft:ruin/ruin5_cracked", "minecraft:underwater_ruin/cracked_5"),
-        ("minecraft:ruin/ruin6_cracked", "minecraft:underwater_ruin/cracked_6"),
-        ("minecraft:ruin/ruin7_cracked", "minecraft:underwater_ruin/cracked_7"),
-        ("minecraft:ruin/ruin8_cracked", "minecraft:underwater_ruin/cracked_8"),
-        ("minecraft:ruin/ruin1_mossy", "minecraft:underwater_ruin/mossy_1"),
-        ("minecraft:ruin/ruin2_mossy", "minecraft:underwater_ruin/mossy_2"),
-        ("minecraft:ruin/ruin3_mossy", "minecraft:underwater_ruin/mossy_3"),
-        ("minecraft:ruin/ruin4_mossy", "minecraft:underwater_ruin/mossy_4"),
-        ("minecraft:ruin/ruin5_mossy", "minecraft:underwater_ruin/mossy_5"),
-        ("minecraft:ruin/ruin6_mossy", "minecraft:underwater_ruin/mossy_6"),
-        ("minecraft:ruin/ruin7_mossy", "minecraft:underwater_ruin/mossy_7"),
-        ("minecraft:ruin/ruin8_mossy", "minecraft:underwater_ruin/mossy_8"),
-        ("minecraft:ruin/ruin_warm1", "minecraft:underwater_ruin/warm_1"),
-        ("minecraft:ruin/ruin_warm2", "minecraft:underwater_ruin/warm_2"),
-        ("minecraft:ruin/ruin_warm3", "minecraft:underwater_ruin/warm_3"),
-        ("minecraft:ruin/ruin_warm4", "minecraft:underwater_ruin/warm_4"),
-        ("minecraft:ruin/ruin_warm5", "minecraft:underwater_ruin/warm_5"),
-        ("minecraft:ruin/ruin_warm6", "minecraft:underwater_ruin/warm_6"),
-        ("minecraft:ruin/ruin_warm7", "minecraft:underwater_ruin/warm_7"),
-        ("minecraft:ruin/ruin_warm8", "minecraft:underwater_ruin/warm_8"),
-        ("minecraft:ruin/big_brick_1", "minecraft:underwater_ruin/big_brick_1"),
-        ("minecraft:ruin/big_brick_2", "minecraft:underwater_ruin/big_brick_2"),
-        ("minecraft:ruin/big_brick_3", "minecraft:underwater_ruin/big_brick_3"),
-        ("minecraft:ruin/big_brick_8", "minecraft:underwater_ruin/big_brick_8"),
-        ("minecraft:ruin/big_mossy_1", "minecraft:underwater_ruin/big_mossy_1"),
-        ("minecraft:ruin/big_mossy_2", "minecraft:underwater_ruin/big_mossy_2"),
-        ("minecraft:ruin/big_mossy_3", "minecraft:underwater_ruin/big_mossy_3"),
-        ("minecraft:ruin/big_mossy_8", "minecraft:underwater_ruin/big_mossy_8"),
-        ("minecraft:ruin/big_cracked_1", "minecraft:underwater_ruin/big_cracked_1"),
-        ("minecraft:ruin/big_cracked_2", "minecraft:underwater_ruin/big_cracked_2"),
-        ("minecraft:ruin/big_cracked_3", "minecraft:underwater_ruin/big_cracked_3"),
-        ("minecraft:ruin/big_cracked_8", "minecraft:underwater_ruin/big_cracked_8"),
-        ("minecraft:ruin/big_warm_4", "minecraft:underwater_ruin/big_warm_4"),
-        ("minecraft:ruin/big_warm_5", "minecraft:underwater_ruin/big_warm_5"),
-        ("minecraft:ruin/big_warm_6", "minecraft:underwater_ruin/big_warm_6"),
-        ("minecraft:ruin/big_warm_7", "minecraft:underwater_ruin/big_warm_7"),
-    ]),
+    (
+        "EndCity",
+        "ECP",
+        &[
+            ("second_floor", "second_floor_1"),
+            ("third_floor", "third_floor_1"),
+            ("third_floor_c", "third_floor_2"),
+        ],
+    ),
+    (
+        "Mansion",
+        "WMP",
+        &[
+            ("carpet_south", "carpet_south_1"),
+            ("carpet_west", "carpet_west_1"),
+            ("indoors_door", "indoors_door_1"),
+            ("indoors_wall", "indoors_wall_1"),
+        ],
+    ),
+    (
+        "Igloo",
+        "Iglu",
+        &[
+            ("minecraft:igloo/igloo_bottom", "minecraft:igloo/bottom"),
+            ("minecraft:igloo/igloo_middle", "minecraft:igloo/middle"),
+            ("minecraft:igloo/igloo_top", "minecraft:igloo/top"),
+        ],
+    ),
+    (
+        "Ocean_Ruin",
+        "ORP",
+        &[
+            (
+                "minecraft:ruin/big_ruin1_brick",
+                "minecraft:underwater_ruin/big_brick_1",
+            ),
+            (
+                "minecraft:ruin/big_ruin2_brick",
+                "minecraft:underwater_ruin/big_brick_2",
+            ),
+            (
+                "minecraft:ruin/big_ruin3_brick",
+                "minecraft:underwater_ruin/big_brick_3",
+            ),
+            (
+                "minecraft:ruin/big_ruin8_brick",
+                "minecraft:underwater_ruin/big_brick_8",
+            ),
+            (
+                "minecraft:ruin/big_ruin1_cracked",
+                "minecraft:underwater_ruin/big_cracked_1",
+            ),
+            (
+                "minecraft:ruin/big_ruin2_cracked",
+                "minecraft:underwater_ruin/big_cracked_2",
+            ),
+            (
+                "minecraft:ruin/big_ruin3_cracked",
+                "minecraft:underwater_ruin/big_cracked_3",
+            ),
+            (
+                "minecraft:ruin/big_ruin8_cracked",
+                "minecraft:underwater_ruin/big_cracked_8",
+            ),
+            (
+                "minecraft:ruin/big_ruin1_mossy",
+                "minecraft:underwater_ruin/big_mossy_1",
+            ),
+            (
+                "minecraft:ruin/big_ruin2_mossy",
+                "minecraft:underwater_ruin/big_mossy_2",
+            ),
+            (
+                "minecraft:ruin/big_ruin3_mossy",
+                "minecraft:underwater_ruin/big_mossy_3",
+            ),
+            (
+                "minecraft:ruin/big_ruin8_mossy",
+                "minecraft:underwater_ruin/big_mossy_8",
+            ),
+            (
+                "minecraft:ruin/big_ruin_warm4",
+                "minecraft:underwater_ruin/big_warm_4",
+            ),
+            (
+                "minecraft:ruin/big_ruin_warm5",
+                "minecraft:underwater_ruin/big_warm_5",
+            ),
+            (
+                "minecraft:ruin/big_ruin_warm6",
+                "minecraft:underwater_ruin/big_warm_6",
+            ),
+            (
+                "minecraft:ruin/big_ruin_warm7",
+                "minecraft:underwater_ruin/big_warm_7",
+            ),
+            (
+                "minecraft:ruin/ruin1_brick",
+                "minecraft:underwater_ruin/brick_1",
+            ),
+            (
+                "minecraft:ruin/ruin2_brick",
+                "minecraft:underwater_ruin/brick_2",
+            ),
+            (
+                "minecraft:ruin/ruin3_brick",
+                "minecraft:underwater_ruin/brick_3",
+            ),
+            (
+                "minecraft:ruin/ruin4_brick",
+                "minecraft:underwater_ruin/brick_4",
+            ),
+            (
+                "minecraft:ruin/ruin5_brick",
+                "minecraft:underwater_ruin/brick_5",
+            ),
+            (
+                "minecraft:ruin/ruin6_brick",
+                "minecraft:underwater_ruin/brick_6",
+            ),
+            (
+                "minecraft:ruin/ruin7_brick",
+                "minecraft:underwater_ruin/brick_7",
+            ),
+            (
+                "minecraft:ruin/ruin8_brick",
+                "minecraft:underwater_ruin/brick_8",
+            ),
+            (
+                "minecraft:ruin/ruin1_cracked",
+                "minecraft:underwater_ruin/cracked_1",
+            ),
+            (
+                "minecraft:ruin/ruin2_cracked",
+                "minecraft:underwater_ruin/cracked_2",
+            ),
+            (
+                "minecraft:ruin/ruin3_cracked",
+                "minecraft:underwater_ruin/cracked_3",
+            ),
+            (
+                "minecraft:ruin/ruin4_cracked",
+                "minecraft:underwater_ruin/cracked_4",
+            ),
+            (
+                "minecraft:ruin/ruin5_cracked",
+                "minecraft:underwater_ruin/cracked_5",
+            ),
+            (
+                "minecraft:ruin/ruin6_cracked",
+                "minecraft:underwater_ruin/cracked_6",
+            ),
+            (
+                "minecraft:ruin/ruin7_cracked",
+                "minecraft:underwater_ruin/cracked_7",
+            ),
+            (
+                "minecraft:ruin/ruin8_cracked",
+                "minecraft:underwater_ruin/cracked_8",
+            ),
+            (
+                "minecraft:ruin/ruin1_mossy",
+                "minecraft:underwater_ruin/mossy_1",
+            ),
+            (
+                "minecraft:ruin/ruin2_mossy",
+                "minecraft:underwater_ruin/mossy_2",
+            ),
+            (
+                "minecraft:ruin/ruin3_mossy",
+                "minecraft:underwater_ruin/mossy_3",
+            ),
+            (
+                "minecraft:ruin/ruin4_mossy",
+                "minecraft:underwater_ruin/mossy_4",
+            ),
+            (
+                "minecraft:ruin/ruin5_mossy",
+                "minecraft:underwater_ruin/mossy_5",
+            ),
+            (
+                "minecraft:ruin/ruin6_mossy",
+                "minecraft:underwater_ruin/mossy_6",
+            ),
+            (
+                "minecraft:ruin/ruin7_mossy",
+                "minecraft:underwater_ruin/mossy_7",
+            ),
+            (
+                "minecraft:ruin/ruin8_mossy",
+                "minecraft:underwater_ruin/mossy_8",
+            ),
+            (
+                "minecraft:ruin/ruin_warm1",
+                "minecraft:underwater_ruin/warm_1",
+            ),
+            (
+                "minecraft:ruin/ruin_warm2",
+                "minecraft:underwater_ruin/warm_2",
+            ),
+            (
+                "minecraft:ruin/ruin_warm3",
+                "minecraft:underwater_ruin/warm_3",
+            ),
+            (
+                "minecraft:ruin/ruin_warm4",
+                "minecraft:underwater_ruin/warm_4",
+            ),
+            (
+                "minecraft:ruin/ruin_warm5",
+                "minecraft:underwater_ruin/warm_5",
+            ),
+            (
+                "minecraft:ruin/ruin_warm6",
+                "minecraft:underwater_ruin/warm_6",
+            ),
+            (
+                "minecraft:ruin/ruin_warm7",
+                "minecraft:underwater_ruin/warm_7",
+            ),
+            (
+                "minecraft:ruin/ruin_warm8",
+                "minecraft:underwater_ruin/warm_8",
+            ),
+            (
+                "minecraft:ruin/big_brick_1",
+                "minecraft:underwater_ruin/big_brick_1",
+            ),
+            (
+                "minecraft:ruin/big_brick_2",
+                "minecraft:underwater_ruin/big_brick_2",
+            ),
+            (
+                "minecraft:ruin/big_brick_3",
+                "minecraft:underwater_ruin/big_brick_3",
+            ),
+            (
+                "minecraft:ruin/big_brick_8",
+                "minecraft:underwater_ruin/big_brick_8",
+            ),
+            (
+                "minecraft:ruin/big_mossy_1",
+                "minecraft:underwater_ruin/big_mossy_1",
+            ),
+            (
+                "minecraft:ruin/big_mossy_2",
+                "minecraft:underwater_ruin/big_mossy_2",
+            ),
+            (
+                "minecraft:ruin/big_mossy_3",
+                "minecraft:underwater_ruin/big_mossy_3",
+            ),
+            (
+                "minecraft:ruin/big_mossy_8",
+                "minecraft:underwater_ruin/big_mossy_8",
+            ),
+            (
+                "minecraft:ruin/big_cracked_1",
+                "minecraft:underwater_ruin/big_cracked_1",
+            ),
+            (
+                "minecraft:ruin/big_cracked_2",
+                "minecraft:underwater_ruin/big_cracked_2",
+            ),
+            (
+                "minecraft:ruin/big_cracked_3",
+                "minecraft:underwater_ruin/big_cracked_3",
+            ),
+            (
+                "minecraft:ruin/big_cracked_8",
+                "minecraft:underwater_ruin/big_cracked_8",
+            ),
+            (
+                "minecraft:ruin/big_warm_4",
+                "minecraft:underwater_ruin/big_warm_4",
+            ),
+            (
+                "minecraft:ruin/big_warm_5",
+                "minecraft:underwater_ruin/big_warm_5",
+            ),
+            (
+                "minecraft:ruin/big_warm_6",
+                "minecraft:underwater_ruin/big_warm_6",
+            ),
+            (
+                "minecraft:ruin/big_warm_7",
+                "minecraft:underwater_ruin/big_warm_7",
+            ),
+        ],
+    ),
 ];

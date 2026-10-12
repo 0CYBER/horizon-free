@@ -45,7 +45,9 @@ impl Walker<'_> {
         };
         match id.as_str() {
             "minecraft:area_effect_cloud" => self.field(Ty::Particle, v, "Particle"),
-            "minecraft:arrow" | "minecraft:spectral_arrow" => block(self, v, "inTile", "inBlockState"),
+            "minecraft:arrow" | "minecraft:spectral_arrow" => {
+                block(self, v, "inTile", "inBlockState")
+            }
             "minecraft:egg"
             | "minecraft:ender_pearl"
             | "minecraft:fireball"
@@ -95,7 +97,9 @@ impl Walker<'_> {
                 block(self, v, "Block", "BlockState");
                 self.field(Ty::BlockEntity, v, "TileEntityData");
             }
-            "minecraft:fireworks_rocket" if !renamed => self.field(Ty::ItemStack, v, "FireworksItem"),
+            "minecraft:fireworks_rocket" if !renamed => {
+                self.field(Ty::ItemStack, v, "FireworksItem")
+            }
             "minecraft:firework_rocket" if renamed => self.field(Ty::ItemStack, v, "FireworksItem"),
             "minecraft:item" | "minecraft:item_frame" => self.field(Ty::ItemStack, v, "Item"),
             "minecraft:horse" => {

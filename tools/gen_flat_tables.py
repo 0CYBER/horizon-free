@@ -7,6 +7,7 @@ data.  Run from the repository root; the vanilla sources are the ones under .loc
 """
 import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -137,6 +138,7 @@ def main():
         structure_renames(),
     ]
     Path(args.out).write_text('\n\n'.join(parts) + '\n')
+    subprocess.run(['rustfmt', '--edition', '2024', args.out], check=True)
     print('wrote', args.out)
 
 

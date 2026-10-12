@@ -11,7 +11,7 @@ use super::dynamic::{
 };
 use super::flat_tables as t;
 use super::schema::{Key, Ty, key};
-use super::{Cx, FixFn, id_is, items, mark_read, reread, reread_as};
+use super::{Cx, FixFn, items, mark_read, reread, reread_as};
 use crate::nbt::{Compound, JavaString, Tag};
 
 pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
@@ -63,10 +63,16 @@ pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
         })
     }));
     out.push((key(1474, 0), |cx| {
-        legacy_block_rename(cx, &only("minecraft:purple_shulker_box", "minecraft:shulker_box"))
+        legacy_block_rename(
+            cx,
+            &only("minecraft:purple_shulker_box", "minecraft:shulker_box"),
+        )
     }));
     out.push((key(1474, 0), |cx| {
-        item_rename(cx, &only("minecraft:purple_shulker_box", "minecraft:shulker_box"))
+        item_rename(
+            cx,
+            &only("minecraft:purple_shulker_box", "minecraft:shulker_box"),
+        )
     }));
     out.push((key(1475, 0), |cx| {
         legacy_block_rename(
@@ -85,7 +91,10 @@ pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
     out.push((key(1483, 0), |cx| {
         item_rename(
             cx,
-            &only("minecraft:puffer_fish_spawn_egg", "minecraft:pufferfish_spawn_egg"),
+            &only(
+                "minecraft:puffer_fish_spawn_egg",
+                "minecraft:pufferfish_spawn_egg",
+            ),
         )
     }));
     const SEAGRASS: &[(&str, &str)] = &[
@@ -96,7 +105,9 @@ pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
     out.push((key(1484, 0), |cx| legacy_block_rename(cx, &table(SEAGRASS))));
     out.push((key(1484, 0), heightmap_renaming));
     out.push((key(1486, 0), |cx| entity_rename(cx, &table(t::COD_SALMON))));
-    out.push((key(1486, 0), |cx| item_rename(cx, &table(t::COD_SALMON_EGGS))));
+    out.push((key(1486, 0), |cx| {
+        item_rename(cx, &table(t::COD_SALMON_EGGS))
+    }));
     const PRISMARINE: &[(&str, &str)] = &[
         (
             "minecraft:prismarine_bricks_slab",
@@ -108,7 +119,9 @@ pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
         ),
     ];
     out.push((key(1487, 0), |cx| item_rename(cx, &table(PRISMARINE))));
-    out.push((key(1487, 0), |cx| legacy_block_rename(cx, &table(PRISMARINE))));
+    out.push((key(1487, 0), |cx| {
+        legacy_block_rename(cx, &table(PRISMARINE))
+    }));
     out.push((key(1488, 0), |cx| {
         legacy_block_rename(
             cx,
@@ -133,13 +146,18 @@ pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
             &table(&[
                 ("minecraft:melon_block", "minecraft:melon"),
                 ("minecraft:melon", "minecraft:melon_slice"),
-                ("minecraft:speckled_melon", "minecraft:glistering_melon_slice"),
+                (
+                    "minecraft:speckled_melon",
+                    "minecraft:glistering_melon_slice",
+                ),
             ]),
         )
     }));
     out.push((key(1492, 0), structure_template_rename));
     out.push((key(1494, 0), enchantment_names));
-    out.push((key(1496, 0), |cx| cx.each(Ty::Chunk, chunk_leaves::leaves_fix)));
+    out.push((key(1496, 0), |cx| {
+        cx.each(Ty::Chunk, chunk_leaves::leaves_fix)
+    }));
     out.push((key(1500, 0), |cx| {
         cx.block_entity("DUMMY", |be| set(be, "keepPacked", Tag::Byte(1)))
     }));
@@ -155,9 +173,13 @@ pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
     out.push((key(1510, 0), |cx| {
         rename_names(cx, Ty::Recipe, &table(t::RECIPES_RENAMENING))
     }));
-    out.push((key(1510, 0), |cx| entity_rename(cx, &the_renamening_entities)));
+    out.push((key(1510, 0), |cx| {
+        entity_rename(cx, &the_renamening_entities)
+    }));
     out.push((key(1510, 0), swim_stats_rename));
-    out.push((key(1514, 0), |cx| display_name_to_component(cx, Ty::Objective)));
+    out.push((key(1514, 0), |cx| {
+        display_name_to_component(cx, Ty::Objective)
+    }));
     out.push((key(1514, 0), |cx| display_name_to_component(cx, Ty::Team)));
     out.push((key(1514, 0), objective_render_type));
     out.push((key(1515, 0), |cx| {
@@ -264,12 +286,7 @@ fn the_renamening_items(name: &str) -> Option<String> {
     )
 }
 
-/// `LegacyComponentDataFixUtils.createTextComponentJson`.
-fn text_json(text: &str) -> Tag {
-    let units: Vec<u16> = text.encode_utf16().collect();
-    Tag::String(JavaString(super::json::text_component_json(&units)))
-}
-
+/// `LegacyComponentDataFixUtils.createTextComponentJson` of a string tag's text.
 fn text_json_units(text: &JavaString) -> Tag {
     Tag::String(JavaString(super::json::text_component_json(&text.0)))
 }
@@ -346,7 +363,9 @@ fn entity_block_state(cx: &mut Cx) {
                     remove(e, f);
                 }
             }
-            "minecraft:enderman" => block_to_state(e, "carried", "carriedData", "carriedBlockState"),
+            "minecraft:enderman" => {
+                block_to_state(e, "carried", "carriedData", "carriedBlockState")
+            }
             "minecraft:arrow" | "minecraft:spectral_arrow" => {
                 block_to_state(e, "inTile", "inData", "inBlockState")
             }
@@ -396,7 +415,8 @@ fn block_name_flattening(cx: &mut Cx) {
 
 /// `ItemStackTheFlatteningFix.updateItem`.
 fn update_item(name: &str, data: i32) -> Option<&'static str> {
-    static MAP: OnceLock<(HashMap<&'static str, &'static str>, Vec<&'static str>)> = OnceLock::new();
+    static MAP: OnceLock<(HashMap<&'static str, &'static str>, Vec<&'static str>)> =
+        OnceLock::new();
     let (map, ids) = MAP.get_or_init(|| {
         let map: HashMap<_, _> = t::ITEM_FLATTENING.iter().copied().collect();
         let mut ids: Vec<&str> = t::ITEM_FLATTENING
@@ -550,9 +570,7 @@ fn flat_generator_string(options: &str) -> String {
                 to_int(block_string, 0)
             };
             let data_index = name_index + 1;
-            let data = block_parts
-                .get(data_index)
-                .map_or(0, |d| to_int(d, 0));
+            let data = block_parts.get(data_index).map_or(0, |d| to_int(d, 0));
             let tag = bsd::get_tag(block << 4 | data);
             let name = as_str(tag.get("Name")).unwrap_or_default();
             format!(
@@ -579,7 +597,11 @@ fn flat_generator_info(cx: &mut Cx) {
             return;
         }
         if let Some(options) = as_str(l.get("generatorOptions")) {
-            set(l, "generatorOptions", string(&flat_generator_string(&options)));
+            set(
+                l,
+                "generatorOptions",
+                string(&flat_generator_string(&options)),
+            );
         }
     });
 }
@@ -608,10 +630,7 @@ fn unpack_legacy_key(k: &str) -> Option<(String, String)> {
     let prefix = &k[..split];
     let rest = k[split + 1..].replace('.', ":");
     if prefix == "stat.mineBlock" {
-        return Some((
-            "minecraft:mined".to_owned(),
-            bsd::upgrade_block_name(&rest),
-        ));
+        return Some(("minecraft:mined".to_owned(), bsd::upgrade_block_name(&rest)));
     }
     if let Some(item_key) = lookup(t::STATS_ITEM_KEYS, prefix) {
         let new = update_item(&rest, 0).map_or(rest.clone(), str::to_owned);
@@ -1068,7 +1087,8 @@ fn flat_options(flat: &str) -> Tag {
                         continue;
                     }
                     let mut options = Vec::new();
-                    if separated.len() > 1 && separated[1].ends_with(')') && separated[1].len() > 1 {
+                    if separated.len() > 1 && separated[1].ends_with(')') && separated[1].len() > 1
+                    {
                         let inner = &separated[1][..separated[1].len() - 1];
                         for part in java_split(inner, " ", 0) {
                             let split = java_split(part, "=", 2);
@@ -1105,7 +1125,10 @@ fn flat_options(flat: &str) -> Tag {
                 .into_iter()
                 .map(|(k, v)| (super::dynamic::key(&k), string(&v)))
                 .collect();
-            (super::dynamic::key(&name.to_lowercase()), Tag::Compound(options))
+            (
+                super::dynamic::key(&name.to_lowercase()),
+                Tag::Compound(options),
+            )
         })
         .collect();
     Tag::compound([
@@ -1188,10 +1211,4 @@ fn objective_render_type(cx: &mut Cx) {
             set(o, "RenderType", string(render));
         }
     });
-}
-
-#[allow(dead_code)]
-fn unused(_: &Tag) -> bool {
-    let _ = (text_json, id_is);
-    false
 }

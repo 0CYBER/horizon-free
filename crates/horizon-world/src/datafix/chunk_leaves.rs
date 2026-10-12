@@ -6,7 +6,7 @@
 //! emulated here (`IntOpenHashSet` and the key order of an `Int2ObjectOpenHashMap`).
 use std::collections::{HashMap, HashSet};
 
-use super::dynamic::{as_int, as_long_stream, as_str, ceillog2, remove, set};
+use super::dynamic::{as_int, as_long_stream, as_str, ceillog2, set};
 use crate::nbt::Tag;
 
 /// `PackedBitStorage`.
@@ -34,7 +34,8 @@ impl Packed {
         let end = ((index + 1) * self.bits - 1) >> 6;
         let start_bit = position ^ (start << 6);
         let value = i64::from(value);
-        self.data[start] = self.data[start] & !(self.mask << start_bit) | (value & self.mask) << start_bit;
+        self.data[start] =
+            self.data[start] & !(self.mask << start_bit) | (value & self.mask) << start_bit;
         if start != end {
             let shift = 64 - start_bit;
             let wanted = self.bits - shift;
@@ -51,7 +52,8 @@ impl Packed {
             return (((self.data[start] as u64) >> start_bit) as i64 & self.mask) as i32;
         }
         let shift = 64 - start_bit;
-        ((((self.data[start] as u64) >> start_bit) as i64 | self.data[end] << shift) & self.mask) as i32
+        ((((self.data[start] as u64) >> start_bit) as i64 | self.data[end] << shift) & self.mask)
+            as i32
     }
 }
 
@@ -250,10 +252,15 @@ impl Section {
         for i in 0..s.palette.len() {
             let name = name_of(&s.palette[i]);
             if leaf_index(&name).is_some() {
-                let persistent = as_str(s.palette[i].get("Properties").and_then(|p| p.get("decayable")))
-                    .is_some_and(|d| d == "false");
+                let persistent = as_str(
+                    s.palette[i]
+                        .get("Properties")
+                        .and_then(|p| p.get("decayable")),
+                )
+                .is_some_and(|d| d == "false");
                 s.leaf_ids.insert(i as i32);
-                s.state_to_id.insert(state_id(&name, persistent, 7), i as i32);
+                s.state_to_id
+                    .insert(state_id(&name, persistent, 7), i as i32);
                 s.palette[i] = leaf_tag(&name, persistent, 7);
             }
             if LOGS.contains(&name.as_str()) {
@@ -503,5 +510,4 @@ pub(super) fn trapped_chest_fix(chunk: &mut Tag) {
             }
         }
     }
-    let _ = remove;
 }

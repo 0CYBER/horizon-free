@@ -94,7 +94,10 @@ fn consts() -> &'static Consts {
             ("minecraft:sapling4", "minecraft:potted_acacia_sapling"),
             ("minecraft:sapling5", "minecraft:potted_dark_oak_sapling"),
             ("minecraft:red_mushroom0", "minecraft:potted_red_mushroom"),
-            ("minecraft:brown_mushroom0", "minecraft:potted_brown_mushroom"),
+            (
+                "minecraft:brown_mushroom0",
+                "minecraft:potted_brown_mushroom",
+            ),
             ("minecraft:deadbush0", "minecraft:potted_dead_bush"),
             ("minecraft:tallgrass2", "minecraft:potted_fern"),
             ("minecraft:cactus0", "minecraft:potted_cactus"),
@@ -444,8 +447,8 @@ impl Section {
             if start != end {
                 let shift = 64 - start_bit;
                 let wanted = bits - shift;
-                storage[end] = ((storage[end] as u64) >> wanted << wanted) as i64
-                    | (value & mask) >> shift;
+                storage[end] =
+                    ((storage[end] as u64) >> wanted << wanted) as i64 | (value & mask) >> shift;
             }
         }
         set(&mut section, "BlockStates", Tag::LongArray(storage));
@@ -463,7 +466,12 @@ enum Direction {
 }
 
 fn relative(pos: i64, direction: Direction) -> i64 {
-    let y = (pos >> 8) + if matches!(direction, Direction::Up) { 1 } else { -1 };
+    let y = (pos >> 8)
+        + if matches!(direction, Direction::Up) {
+            1
+        } else {
+            -1
+        };
     if (0..=255).contains(&y) {
         pos & 0xFF | y << 8
     } else {
@@ -583,7 +591,13 @@ fn upgrade_level(level: &Tag) -> Tag {
         set(
             &mut out,
             "TileEntities",
-            Tag::List(chunk.block_entities.iter().map(|(_, v)| v.clone()).collect()),
+            Tag::List(
+                chunk
+                    .block_entities
+                    .iter()
+                    .map(|(_, v)| v.clone())
+                    .collect(),
+            ),
         );
     }
     let mut indices = crate::nbt::Compound::new();
@@ -659,8 +673,16 @@ fn fix_block(chunk: &mut UpgradeChunk, c: &Consts, block: usize, pos: i64, alpha
                     if lower.name == upper.name {
                         let facing = lower.property("facing");
                         let open = lower.property("open");
-                        let hinge = if alpha { "left" } else { upper.property("hinge") };
-                        let powered = if alpha { "false" } else { upper.property("powered") };
+                        let hinge = if alpha {
+                            "left"
+                        } else {
+                            upper.property("hinge")
+                        };
+                        let powered = if alpha {
+                            "false"
+                        } else {
+                            upper.property("powered")
+                        };
                         let name = &lower.name;
                         let lo = c
                             .door
