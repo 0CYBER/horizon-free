@@ -611,6 +611,10 @@ fn tag_to_json(t: &Tag) -> Json {
 }
 
 fn upgrade_json(path: &Path, ty: Ty) -> io::Result<()> {
+    upgrade_json_to(path, ty, CURRENT)
+}
+
+fn upgrade_json_to(path: &Path, ty: Ty, to: i32) -> io::Result<()> {
     let text = fs::read_to_string(path)?;
     let units: Vec<u16> = text.encode_utf16().collect();
     let parsed = json::parse_lenient(&units)
@@ -621,8 +625,8 @@ fn upgrade_json(path: &Path, ty: Ty) -> io::Result<()> {
         // `PlayerAdvancements`: the version field is not part of the data.
         remove(&mut tag, "DataVersion");
     }
-    update(ty, &mut tag, from, CURRENT);
-    set(&mut tag, "DataVersion", Tag::Int(CURRENT));
+    update(ty, &mut tag, from, to);
+    set(&mut tag, "DataVersion", Tag::Int(to));
     let out = json::to_stable_string(&tag_to_json(&tag));
     fs::write(path, String::from_utf16_lossy(&out))
 }
@@ -668,6 +672,54 @@ pub fn upgrade_world_data(base: &Path) -> io::Result<()> {
     }
     for file in files_with_suffix(&base.join("players/stats"), ".json") {
         upgrade_json(&file, Ty::Stats)?;
+    }
+    Ok(())
+}
+
+/// A world in the layout of before 1.16 (dimension folders in the world folder,
+/// `playerdata`, `stats`, `advancements`) brought to DataVersion `target` and
+/// no further, without the file fixes: the harness checks the data fixes of a
+/// range of versions on their own (the vanilla oracle does the same given a
+/// target).
+pub fn upgrade_band(base: &Path, target: i32) -> io::Result<()> {
+    let level = base.join("level.dat");
+    if let Some(mut root) = read_dat(&level)? {
+        let mut data = root
+            .get("Data")
+            .cloned()
+            .unwrap_or_else(|| Tag::Compound(Compound::new()));
+        let from = data_version(&data, -1);
+        update(Ty::Level, &mut data, from, target);
+        set(&mut data, "DataVersion", Tag::Int(target));
+        set(&mut root, "Data", data);
+        write_dat(&level, &root)?;
+    }
+    for (folder, id) in [
+        ("", "minecraft:overworld"),
+        ("DIM-1", "minecraft:the_nether"),
+        ("DIM1", "minecraft:the_end"),
+    ] {
+        let dim = base.join(folder);
+        upgrade_regions(&dim.join("region"), |tag| {
+            super::update_chunk_to(tag, id, None, target)
+        })?;
+        upgrade_regions(&dim.join("entities"), |tag| {
+            super::update_region_tag_to(Ty::EntityChunk, tag, target)
+        })?;
+        upgrade_regions(&dim.join("poi"), |tag| {
+            super::update_region_tag_to(Ty::PoiChunk, tag, target)
+        })?;
+    }
+    for file in files_with_suffix(&base.join("playerdata"), ".dat") {
+        if let Some(mut tag) = read_dat(&file)? {
+            super::update_player_to(&mut tag, target);
+            write_dat(&file, &tag)?;
+        }
+    }
+    for (folder, ty) in [("advancements", Ty::Advancements), ("stats", Ty::Stats)] {
+        for file in files_with_suffix(&base.join(folder), ".json") {
+            upgrade_json_to(&file, ty, target)?;
+        }
     }
     Ok(())
 }

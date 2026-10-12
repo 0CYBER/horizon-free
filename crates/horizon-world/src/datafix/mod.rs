@@ -182,6 +182,8 @@ fn fixes() -> Vec<(Key, FixFn)> {
     fixes_a::register(&mut out);
     fixes_b::register(&mut out);
     fixes_c::register(&mut out);
+    // DataFixerBuilder sorts the fixes of equal keys by registration, the rest by key.
+    out.sort_by_key(|(k, _)| *k);
     out
 }
 
@@ -227,8 +229,14 @@ fn write_hooks(root: Ty, data: &mut Tag, k: Key) {
 /// `SimpleRegionStorage.upgradeChunkTag` for a region chunk (`ChunkMap`):
 /// the dimension and generator are passed to the fixes as `__context`.
 pub fn update_chunk(tag: &mut Tag, dimension: &str, generator: Option<&str>) {
+    update_chunk_to(tag, dimension, generator, CURRENT);
+}
+
+/// [`update_chunk`] up to an older DataVersion than the current one (the
+/// harness checks the fixes of a range of versions on their own).
+pub fn update_chunk_to(tag: &mut Tag, dimension: &str, generator: Option<&str>, to: i32) {
     let version = dynamic::as_int(tag.get("DataVersion"), -1);
-    if version >= CURRENT {
+    if version >= to {
         return;
     }
     let mut context = Tag::compound([("dimension", string(dimension))]);
@@ -236,27 +244,39 @@ pub fn update_chunk(tag: &mut Tag, dimension: &str, generator: Option<&str>) {
         dynamic::set(&mut context, "generator", string(g));
     }
     dynamic::set(tag, "__context", context);
-    update(Ty::Chunk, tag, version, CURRENT);
+    update(Ty::Chunk, tag, version, to);
     dynamic::remove(tag, "__context");
-    dynamic::set(tag, "DataVersion", Tag::Int(CURRENT));
+    dynamic::set(tag, "DataVersion", Tag::Int(to));
 }
 
 /// `SimpleRegionStorage.upgradeChunkTag` for entity chunks (default version -1)
 /// and POI chunks (default 1945).
 pub fn update_region_tag(root: Ty, tag: &mut Tag) {
+    update_region_tag_to(root, tag, CURRENT);
+}
+
+/// [`update_region_tag`] up to an older DataVersion.
+pub fn update_region_tag_to(root: Ty, tag: &mut Tag, to: i32) {
     let default = if root == Ty::PoiChunk { 1945 } else { -1 };
     let version = dynamic::as_int(tag.get("DataVersion"), default);
-    if version >= CURRENT {
+    if version >= to {
         return;
     }
-    update(root, tag, version, CURRENT);
-    dynamic::set(tag, "DataVersion", Tag::Int(CURRENT));
+    update(root, tag, version, to);
+    dynamic::set(tag, "DataVersion", Tag::Int(to));
 }
 
 /// `PlayerDataStorage.load`: the DataVersion field stays as loaded.
 pub fn update_player(tag: &mut Tag) {
     let version = dynamic::as_int(tag.get("DataVersion"), -1);
     update(Ty::Player, tag, version, CURRENT);
+}
+
+/// [`update_player`] up to an older DataVersion.
+pub fn update_player_to(tag: &mut Tag, to: i32) {
+    let version = dynamic::as_int(tag.get("DataVersion"), -1);
+    update(Ty::Player, tag, version, to);
+    dynamic::set(tag, "DataVersion", Tag::Int(to));
 }
 
 /// The saved data type of a file below a `data` folder (`namespace/path.dat`).

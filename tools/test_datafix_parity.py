@@ -83,20 +83,20 @@ def shard(items):
     return items[index - 1::count]
 
 
-def run_vanilla(classpath, world, out):
+def run_vanilla(classpath, world, out, target=None):
     # The oracle replaces OUT itself: left in place, an unchanged run's outputs can be reused.
     log = out.parent / (out.name + '.log')
     with log.open('w') as f:
         subprocess.run(['java', '-Xmx3g', '-Djava.awt.headless=true', '-cp', classpath,
-                        'dev.horizonlab.parity.VanillaDataFixOracle', str(world), str(out)],
+                        'dev.horizonlab.parity.VanillaDataFixOracle', str(world), str(out), *([str(target)] if target else [])],
                        check=True, stdout=f, stderr=subprocess.STDOUT)
 
 
-def run_horizon(binary, world, out):
+def run_horizon(binary, world, out, target=None):
     shutil.rmtree(out, ignore_errors=True)
     log = out.parent / (out.name + '.log')
     with log.open('w') as f:
-        subprocess.run([str(binary), str(world), str(out)], check=True, stdout=f, stderr=subprocess.STDOUT)
+        subprocess.run([str(binary), str(world), str(out), *([str(target)] if target else [])], check=True, stdout=f, stderr=subprocess.STDOUT)
 
 
 # ---------------------------------------------------------------- comparison
@@ -206,6 +206,8 @@ def main():
     p.add_argument('--keep', action='store_true')
     p.add_argument('--vanilla-only', action='store_true', help='only run the oracle')
     p.add_argument('--binary', help='a prebuilt datafix_world example')
+    p.add_argument('--band', type=int, metavar='TARGET', help='check the data fixes up to this DataVersion only (not the '
+                   'file fixes), on the sample worlds saved before it, for developing the fixes of a range of versions')
     args = p.parse_args()
     import datafix_worlds
     import fcntl
@@ -217,6 +219,9 @@ def main():
             print('generating sample worlds:', ' '.join(missing), flush=True)
             subprocess.run([sys.executable, str(ROOT / 'tools' / 'datafix_worlds.py'), *missing], cwd=ROOT, check=True)
     worlds = sorted(p.name for p in WORLDS.iterdir() if p.is_dir())
+    band = args.band
+    if band and not args.versions:  # worlds in the layout of before 1.16, saved before the target
+        worlds = [w for w in worlds if json.loads((WORLDS / w / 'datafix-source.json').read_text())['data_version'] < band]
     versions = shard(args.versions or worlds)
     classpath = java_classpath()
     binary = None if args.vanilla_only else Path(args.binary) if args.binary else build_rust()
@@ -226,18 +231,19 @@ def main():
         source = json.loads((world / 'datafix-source.json').read_text())
         print(f'{version} (DataVersion {source["data_version"]})')
         RUN.mkdir(parents=True, exist_ok=True)
-        run_vanilla(classpath, world, RUN / f'{version}-vanilla')
+        tag = f'{version}-band{band}' if band else version
+        run_vanilla(classpath, world, RUN / f'{tag}-vanilla', band)
         if binary is None:
             continue
-        run_horizon(binary, world, RUN / f'{version}-horizon')
-        failures = summarize(compare(RUN / f'{version}-vanilla', RUN / f'{version}-horizon'))
+        run_horizon(binary, world, RUN / f'{tag}-horizon', band)
+        failures = summarize(compare(RUN / f'{tag}-vanilla', RUN / f'{tag}-horizon'))
         print(f'  {version}: {"ok" if not failures else f"{failures} differences"}')
         total += failures
     if binary is not None:
         print('datafix parity', 'FAILED' if total else 'ok', f'({total} differences over {len(versions)} worlds)')
         if not total and not args.keep:
             for version in versions:  # vanilla outputs stay, for reuse
-                shutil.rmtree(RUN / f'{version}-horizon', ignore_errors=True)
+                shutil.rmtree(RUN / f'{version}-band{band}-horizon' if band else RUN / f'{version}-horizon', ignore_errors=True)
         sys.exit(1 if total else 0)
 
 
