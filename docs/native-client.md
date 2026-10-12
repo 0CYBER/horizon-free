@@ -16,14 +16,17 @@ most structures and mobs, and several containers are still missing. See
 
 ## Run from a checkout
 
-Use current stable Rust (1.90+), Python 3.10+ and JDK 25. Resource preparation
-verifies the pinned game artifacts, runs vanilla's data generator and small
-exporters against the reference jars, and extracts the jar's assets and data
-into ignored `.local/horizon-client/26.3/`. Sounds come from Mojang's asset
-index (about 380 MB). Prepared resources are private; never commit them.
+Use current stable Rust (1.90+), Python 3.10+ and JDK 25. Horizon never
+downloads the game: resource preparation imports **your own copy** (the 26.3
+client from your official launcher install, and the 26.3 server jar you
+downloaded yourself; see [Bring your own copy](../README.md#bring-your-own-copy)),
+verifies it against the pinned checksums, runs vanilla's data generator and small
+exporters against those jars, and extracts the jar's assets and data into ignored
+`.local/horizon-client/26.3/`. Sounds (about 380 MB) are copied from your
+launcher's asset store. Prepared resources are private; never commit them.
 
 ```sh
-python3 tools/prepare_native_client.py --prepare
+python3 tools/prepare_native_client.py --prepare --server-jar ~/Downloads/server.jar
 python3 tools/fetch_sounds.py
 cargo run --release -p horizon-client -- --render-distance 12
 ```

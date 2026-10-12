@@ -141,10 +141,12 @@ def prepare_worldgen(root, jars, local, libraries=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--prepare', action='store_true', help='Fetch pinned reference artifacts first')
+    parser.add_argument('--prepare', action='store_true',
+                        help='Import the pinned game files from your own copy first')
+    lab.add_game_arguments(parser)
     args = parser.parse_args()
     if args.prepare:
-        lab.prepare()
+        lab.prepare(args.minecraft_dir, args.server_jar)
     lock, jars, libraries = base.verify_artifacts()
     root = lab.LOCAL / 'horizon-client' / lock['minecraft']['version']
     root.mkdir(parents=True, exist_ok=True)

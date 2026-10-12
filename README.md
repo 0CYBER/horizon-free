@@ -52,11 +52,20 @@ memory; the failures are new harnesses that still find divergences.
 5. The missing commands, the tab list and world border rendering.
 6. Test LAN hosting with a vanilla client, and upgrade saves from older DataVersions.
 
+### Bring your own copy
+
+Horizon contains no game files and never downloads them. It builds its resources from **your own copy** of Minecraft Java Edition 26.3, verified against the checksums in `research-lock.json`:
+
+1. **Client:** install Java Edition with the official launcher and play 26.3 once. Horizon reads `versions/26.3/`, `libraries/` and `assets/` from the launcher's game directory (`~/.minecraft` on Linux). If yours lives elsewhere, pass `--minecraft-dir` or set `HORIZON_MINECRAFT_DIR`.
+2. **Server jar:** download the 26.3 server jar yourself, from [minecraft.net/download/server](https://www.minecraft.net/en-us/download/server) while 26.3 is the current release, or otherwise from the `downloads.server.url` in your launcher's `versions/26.3/26.3.json`. Pass it with `--server-jar` or set `HORIZON_SERVER_JAR`. It is only needed the first time.
+
 ```sh
-python3 tools/prepare_native_client.py --prepare   # needs JDK 25; extracts private vanilla resources
-python3 tools/fetch_sounds.py                      # optional: vanilla sounds
+python3 tools/prepare_native_client.py --prepare --server-jar ~/Downloads/server.jar   # needs JDK 25
+python3 tools/fetch_sounds.py                      # optional: sounds from your launcher install
 cargo run --release -p horizon-client
 ```
+
+Everything prepared lands in the gitignored `.local/`. Never commit it or share it.
 
 **Target machine:** the Rust rewrite targets one machine, **ludodesktop**: Ubuntu 26.04, Intel i7-13700KF, NVIDIA RTX 4080, GNOME on Wayland. The final deliverable is a playable native Linux build validated there. macOS (including the M2 Pro Mac) and Windows are out of scope. Track implementation and acceptance criteria in [Rust rewrite status](docs/rust-parity.md).
 
@@ -236,18 +245,18 @@ this launcher correction is not a measured graphics performance improvement.
 
 ## Local game inspection
 
-Game JARs, decompiled Java, libraries, inventories, worlds and logs live **inside this checkout** under gitignored **`.local/`**. No game code is in Git history or release downloads. Fresh clones regenerate the inspection workspace from official downloads; Microsoft credentials are not needed for this step.
+Game JARs, decompiled Java, libraries, inventories, worlds and logs live **inside this checkout** under gitignored **`.local/`**. No game code is in Git history or release downloads. Fresh clones rebuild the inspection workspace from your own copy of the game (see [Bring your own copy](#bring-your-own-copy)); nothing of the game is downloaded.
 
 ```sh
 git clone https://github.com/ludovic111/horizon.git
 cd horizon
 git config core.hooksPath .githooks
-python3 tools/lab.py prepare
+python3 tools/lab.py prepare --server-jar ~/Downloads/server.jar
 python3 tools/lab.py decompile
 python3 tools/lab.py status
 ```
 
-`research-lock.json` pins the official manifest and Vineflower. The inner server JAR is extracted and checked; client/server libraries provide decompiler context. Output: `.local/minecraft/26.3/sources/{client,server}/` and coverage/inventory reports. Current inventories cover 11,383 client classes and 7,762 server classes, producing 7,301/5,037 Java files. See [decompilation status](docs/decompilation-status.md).
+`research-lock.json` pins the official manifest, the client and server jar checksums, and Vineflower. The inner server JAR is extracted and checked; client/server libraries provide decompiler context. Output: `.local/minecraft/26.3/sources/{client,server}/` and coverage/inventory reports. Current inventories cover 11,383 client classes and 7,762 server classes, producing 7,301/5,037 Java files. See [decompilation status](docs/decompilation-status.md).
 
 Class-file SourceFile metadata covers inner classes, which often share a source file. Coverage does not prove semantic equivalence or recompilability; original bytecode remains the reference. Completed source directories are not overwritten automatically. Older obfuscated releases require a separate remapping stage.
 
@@ -329,7 +338,7 @@ python3 tools/check_public_tree.py
 python3 tools/check_public_tree.py --history
 ```
 
-CI checks offline tools/Rust and compiles the original mod/builds packs on Linux and Apple Silicon macOS. Game dependencies download to ephemeral `.local/`; CI uploads only our original JAR and packs. Compilation is not Mac GPU gameplay testing. Publication checks allow Java only under our original `dev/horizonlab` namespace; review diffs as well.
+CI runs the offline checks (publication, Python tooling, Rust format, lint and tests) on GitHub's Linux runners. The vanilla comparisons and the original mod build need the game, which Horizon never downloads, so they run only when started by hand on a self-hosted runner holding the maintainer's own copy; CI uploads only our original JAR and packs. Publication checks allow Java only under our original `dev/horizonlab` namespace; review diffs as well.
 
 [MIT](LICENSE) covers only our original tracked work. Dependencies retain their licenses. Mojang [removed obfuscation](https://www.minecraft.net/en-us/article/removing-obfuscation-in-java-edition) without changing [Minecraft's EULA](https://www.minecraft.net/en-us/eula). Decompiled game source remains local; published code implements independent tooling and instrumentation.
 
