@@ -995,6 +995,18 @@ impl Mob {
             },
             kind,
         };
+        // setCanPickUpLoot(true) in the Villager, AbstractPiglin, Allay,
+        // Dolphin, Fox and Panda constructors.
+        mob.extra.pick_up_loot = matches!(
+            mob.species(),
+            Species::Villager
+                | Species::Piglin
+                | Species::PiglinBrute
+                | Species::Allay
+                | Species::Dolphin
+                | Species::Fox
+                | Species::Panda
+        );
         ai::register(&mut mob);
         mob
     }
@@ -1216,7 +1228,8 @@ impl Mob {
     /// Mob.playSound with LivingEntity.getVoicePitch.
     pub fn voice(&mut self, event: &'static str, events: &mut Vec<MobEvent>) {
         let pitch = self.voice_pitch();
-        let at = [self.position.x, self.eye_y(), self.position.z];
+        // Entity.playSound: at the entity's feet.
+        let at = [self.position.x, self.position.y, self.position.z];
         events.push(MobEvent::Sound(event, at, ai::sound_volume(self), pitch));
     }
 }

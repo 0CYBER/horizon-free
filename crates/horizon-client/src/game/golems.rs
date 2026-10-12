@@ -24,6 +24,7 @@ impl Game<'_> {
         if self.golem_block(below(1)) == "minecraft:snow_block"
             && self.golem_block(below(2)) == "minecraft:snow_block"
         {
+            // The pattern ("^", "#", "#") is one column.
             return Some((
                 "minecraft:snow_golem",
                 vec![head, below(1), below(2)],
@@ -38,9 +39,11 @@ impl Game<'_> {
                 && self.golem_block(side(0, 2)) == "minecraft:iron_block"
                 && [-1, 1].iter().all(|&s| air(side(s, 0)) && air(side(s, 2)))
             {
-                let mut blocks = vec![head];
-                blocks.extend((-1..=1).map(|s| side(s, 1)));
-                blocks.push(side(0, 2));
+                // Every cell of ("~^~", "###", "~#~"), the air ones included.
+                let blocks = (-1..=1)
+                    .flat_map(|s| (0..3).map(move |row| (s, row)))
+                    .map(|(s, row)| side(s, row))
+                    .collect();
                 return Some(("minecraft:iron_golem", blocks, side(0, 2)));
             }
         }
@@ -58,27 +61,68 @@ impl Game<'_> {
         let Some((kind, blocks, base)) = self.find_golem(head) else {
             return self.try_spawn_copper_golem(head);
         };
-        for p in blocks {
-            let state = self.world.block(p[0], p[1], p[2]);
-            self.destroy_particles(p, state);
-            self.level_set(p, self.world.air)?;
-        }
+        // CarvedPumpkinBlock.spawnGolemInWorld
+        self.clear_pattern_blocks(&blocks)?;
         let at = [
             f64::from(base[0]) + 0.5,
             f64::from(base[1]) + 0.05,
             f64::from(base[2]) + 0.5,
         ];
-        if let Some(id) = self.spawn_mob(kind, at, false)
-            && let Some(m) = self.mobs.iter_mut().find(|m| m.id == id)
-        {
-            m.yaw = 0.0;
-            m.body_yaw = 0.0;
-            m.head_yaw = 0.0;
-            m.previous_yaw = 0.0;
-            m.previous_body_yaw = 0.0;
-            m.previous_head_yaw = 0.0;
+        self.create_triggered(kind, at, 0.0);
+        self.update_pattern_blocks(&blocks)
+    }
+    /// Whether placing a golem head at `head` completes a snow or iron golem.
+    pub(super) fn completes_golem(&self, head: [i32; 3]) -> bool {
+        self.find_golem(head).is_some()
+    }
+    /// `EntityType.create(level, TRIGGERED)` and `snapTo`: a built golem or
+    /// wither has no spawn finalization and draws nothing from the level.
+    pub(super) fn create_triggered(&mut self, kind: &str, at: [f64; 3], yaw: f32) -> Option<u32> {
+        let t = self.res.mob_types.get(kind).cloned()?;
+        self.next_entity += 1;
+        let mut mob = horizon_client::mobs::Mob::new(
+            self.next_entity,
+            t,
+            horizon_core::geometry::Vec3::new(at[0], at[1], at[2]),
+            yaw,
+        );
+        mob.head_yaw = yaw;
+        mob.body_yaw = yaw;
+        mob.previous_yaw = yaw;
+        mob.previous_body_yaw = yaw;
+        mob.previous_head_yaw = yaw;
+        let id = mob.id;
+        self.mobs.push(mob);
+        Some(id)
+    }
+    /// `CarvedPumpkinBlock.clearPatternBlocks`: every cell of the match
+    /// becomes air (flags 2) with its destroy event (2001).
+    pub(super) fn clear_pattern_blocks(&mut self, cells: &[[i32; 3]]) -> Result<()> {
+        let air = self.world.air;
+        for &p in cells {
+            let state = self.world.block(p[0], p[1], p[2]);
+            let pos = horizon_core::position::BlockPos::new(p[0], p[1], p[2]);
+            self.with_level(|b, level, ticks| b.set_block(level, ticks, pos, air, 2));
+            self.level_events
+                .push(horizon_world::level::LevelEvent::LevelEvent {
+                    id: 2001,
+                    pos,
+                    data: state.0 as i32,
+                });
         }
-        Ok(())
+        self.process_level_events()
+    }
+    /// `CarvedPumpkinBlock.updatePatternBlocks`: neighbours of every cell
+    /// hear that air arrived.
+    pub(super) fn update_pattern_blocks(&mut self, cells: &[[i32; 3]]) -> Result<()> {
+        let air = self.world.air;
+        for &p in cells {
+            let pos = horizon_core::position::BlockPos::new(p[0], p[1], p[2]);
+            self.with_level(|b, level, ticks| {
+                b.update_neighbors_at(level, ticks, pos, b.block(air))
+            });
+        }
+        self.process_level_events()
     }
     /// A pumpkin on a copper block: the block turns into the matching copper
     /// chest (facing the pumpkin's way) and a copper golem appears where the

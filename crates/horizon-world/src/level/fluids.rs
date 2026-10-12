@@ -265,7 +265,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             return false;
         }
         if b.is_block(state, b.named.powder_snow) {
+            // PowderSnowBlock.pickupBlock: the block breaks with its particles and sound.
             self.set_block(pos, b.air(), 11);
+            self.level_event(2001, pos, state.0 as i32);
             return true;
         }
         false

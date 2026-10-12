@@ -549,6 +549,26 @@ impl Behaviours {
     ) -> bool {
         self.sim(level, ticks).player_destroy(pos, creative)
     }
+    /// `BaseFireBlock.getState(level, pos)`: soul fire on its base blocks,
+    /// otherwise fire shaped by its neighbours.
+    pub fn fire_state_for<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+    ) -> BlockStateId {
+        self.sim(level, ticks).fire_state_for(pos)
+    }
+    /// `BaseFireBlock.canBePlacedAt(level, pos, forwardDirection)`.
+    pub fn fire_can_be_placed_at<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        forward: horizon_core::geometry::Direction,
+    ) -> bool {
+        self.sim(level, ticks).fire_can_be_placed_at(pos, forward)
+    }
     /// `BlockState.canSurvive(level, pos)`.
     pub fn can_survive<L: LevelAccess + ?Sized>(
         &self,
