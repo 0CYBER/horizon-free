@@ -558,6 +558,113 @@ impl Team {
     }
 }
 
+// ---- team rules in gameplay ------------------------------------------------
+
+/// `Team.isAlliedTo`: both on the same team.
+pub fn teams_allied(own: Option<&Team>, other: Option<&Team>) -> bool {
+    matches!((own, other), (Some(a), Some(b)) if a.name == b.name)
+}
+/// `Entity.doTeamsAllowDamage`: an entity may hurt another unless they are
+/// allies on a team without friendly fire (also `Player.canHarmPlayer`).
+pub fn teams_allow_damage(own: Option<&Team>, other: Option<&Team>) -> bool {
+    match own {
+        None => true,
+        Some(t) => !teams_allied(own, other) || t.allow_friendly_fire,
+    }
+}
+/// `EntitySelector.pushableBy(entity).test(input)` on the server (or for the
+/// local player on the client): whether `entity` pushes `input`, which must
+/// be pushable and not a spectator.
+pub fn pushable_by(own: Option<&Team>, their: Option<&Team>, their_pushable: bool) -> bool {
+    let own_rule = own.map_or(CollisionRule::Always, |t| t.collision_rule);
+    if own_rule == CollisionRule::Never || !their_pushable {
+        return false;
+    }
+    let their_rule = their.map_or(CollisionRule::Always, |t| t.collision_rule);
+    if their_rule == CollisionRule::Never {
+        return false;
+    }
+    let same = teams_allied(own, their);
+    if (own_rule == CollisionRule::PushOwnTeam || their_rule == CollisionRule::PushOwnTeam) && same
+    {
+        return false;
+    }
+    own_rule != CollisionRule::PushOtherTeams && their_rule != CollisionRule::PushOtherTeams || same
+}
+/// `Entity.isInvisibleTo(player)`: invisible unless the viewer spectates or
+/// shares a team that sees friendly invisibles.
+pub fn invisible_to(
+    own: Option<&Team>,
+    viewer: Option<&Team>,
+    viewer_spectator: bool,
+    invisible: bool,
+) -> bool {
+    if viewer_spectator {
+        return false;
+    }
+    match own {
+        Some(t) if teams_allied(own, viewer) && t.see_friendly_invisibles => false,
+        _ => invisible,
+    }
+}
+/// The team part of `LivingEntityRenderer.shouldShowName` for an entity
+/// other than the viewer: `Some(shown)` when the entity's team decides,
+/// `None` when it has no team.
+pub fn team_shows_name(
+    own: Option<&Team>,
+    viewer: Option<&Team>,
+    visible_to_viewer: bool,
+) -> Option<bool> {
+    let t = own?;
+    Some(match t.nametag_visibility {
+        Visibility::Always => visible_to_viewer,
+        Visibility::Never => false,
+        Visibility::HideForOtherTeams => match viewer {
+            None => visible_to_viewer,
+            Some(_) => {
+                teams_allied(own, viewer) && (t.see_friendly_invisibles || visible_to_viewer)
+            }
+        },
+        Visibility::HideForOwnTeam => match viewer {
+            None => visible_to_viewer,
+            Some(_) => !teams_allied(own, viewer) && visible_to_viewer,
+        },
+    })
+}
+/// What `LivingEntityRenderer.shouldShowName` asks of a living entity other
+/// than the viewer.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NameView {
+    /// Crouching (`isDiscrete`): its name hides beyond 32 blocks.
+    pub discrete: bool,
+    pub distance_sqr: f64,
+    /// `isInvisibleTo(viewer)`.
+    pub invisible_to_viewer: bool,
+    /// F1 (`Hud.isHidden`).
+    pub hud_hidden: bool,
+    /// The camera is this entity.
+    pub is_camera: bool,
+    /// Something rides it.
+    pub is_vehicle: bool,
+}
+/// `LivingEntityRenderer.shouldShowName` (before a mob renderer's own check
+/// for a visible or targeted custom name).
+pub fn name_shown(own: Option<&Team>, viewer: Option<&Team>, v: NameView) -> bool {
+    if v.discrete && v.distance_sqr >= 1024.0 {
+        return false;
+    }
+    let visible = !v.invisible_to_viewer;
+    if let Some(shown) = team_shows_name(own, viewer, visible) {
+        return shown;
+    }
+    !v.hud_hidden && !v.is_camera && visible && !v.is_vehicle
+}
+/// `ServerPlayer.die`: whether a player's death message reaches the player
+/// themselves (the team broadcasts leave out the dying player).
+pub fn own_death_message_shown(team: Option<&Team>) -> bool {
+    team.is_none_or(|t| t.death_message_visibility == Visibility::Always)
+}
+
 // ---- objectives and scores ---------------------------------------------
 
 #[derive(Clone, Debug, PartialEq)]
