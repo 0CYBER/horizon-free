@@ -276,9 +276,25 @@ public final class VanillaProtocolClient {
         return e.toString();
     }
 
-    /** A record's text without object identities. */
+    /** A record's text without object identities; other objects by their fields. */
     private static String text(Object o) {
-        return String.valueOf(o).replaceAll("@[0-9a-f]{4,}", "@");
+        String s = String.valueOf(o);
+        if (o != null && s.matches("[\\w.$]+@[0-9a-f]+")) {
+            StringBuilder b = new StringBuilder(o.getClass().getSimpleName()).append('{');
+            for (Class<?> c = o.getClass(); c != null && c != Object.class; c = c.getSuperclass()) {
+                for (java.lang.reflect.Field f : c.getDeclaredFields()) {
+                    if (java.lang.reflect.Modifier.isStatic(f.getModifiers())) continue;
+                    try {
+                        f.setAccessible(true);
+                        b.append(f.getName()).append('=').append(text(f.get(o))).append(", ");
+                    } catch (Exception e) {
+                        b.append(f.getName()).append("=?, ");
+                    }
+                }
+            }
+            return b.append('}').toString();
+        }
+        return s.replaceAll("@[0-9a-f]{4,}", "@");
     }
 
     private void record(String section, String line) {
@@ -359,18 +375,19 @@ public final class VanillaProtocolClient {
             } else if (r.packet instanceof ClientboundCustomPayloadPacket p) {
                 record("config", r.type + " " + text(p.payload()));
             } else if (r.packet instanceof net.minecraft.network.protocol.common.ClientboundUpdateTagsPacket p) {
-                record("config", r.type + " sha=" + sha(r.payload));
-                // Each registry's tags: what they hold, then the order sent.
+                // Each registry's tags and what they hold. Vanilla sends the
+                // registries and tags in the order of maps keyed by interned
+                // ResourceKeys (identity hashes), which changes between runs.
+                var registries = new TreeMap<String, String>();
                 for (var e : p.tags().entrySet()) {
                     var tags = new TreeMap<String, String>();
-                    StringBuilder order = new StringBuilder();
                     for (var t : e.getValue().tags().entrySet()) {
                         tags.put(t.getKey().toString(), t.getValue().toString());
-                        order.append(t.getKey()).append(';');
                     }
-                    record("config-tags", e.getKey().identifier() + " " + tags.size() + " content=" + sha(tags.toString().getBytes())
-                        + " order=" + sha(order.toString().getBytes()));
+                    registries.put(e.getKey().identifier().toString(), tags.size() + " " + sha(tags.toString().getBytes()));
                 }
+                record("config", r.type + " " + registries.size() + " registries");
+                registries.forEach((k, v) -> record("config-tags", k + " " + v));
             } else if (r.packet instanceof ClientboundFinishConfigurationPacket) {
                 record("config", r.type);
                 send(ServerboundFinishConfigurationPacket.INSTANCE);
@@ -402,6 +419,7 @@ public final class VanillaProtocolClient {
         inbound = GameProtocols.CLIENTBOUND_TEMPLATE.bind(RegistryFriendlyByteBuf.decorator(ParityData.access));
         socket.setSoTimeout(250);
         Map<String, String> chunks = new TreeMap<>();
+        Map<String, String> layers = new TreeMap<>();
         Map<String, Integer> counts = new TreeMap<>();
         boolean ordered = true;
         boolean loaded = false;
@@ -440,6 +458,7 @@ public final class VanillaProtocolClient {
                     send(new ServerboundChunkBatchReceivedPacket(64.0F));
                 } else if (packet instanceof ClientboundLevelChunkWithLightPacket p) {
                     chunks.put(p.x() + "," + p.z(), chunkHash(p));
+                    layers.put(p.x() + "," + p.z(), lightLayers(p));
                     lastChunk = now;
                     int px = (int) Math.floor(position.position().x) >> 4;
                     int pz = (int) Math.floor(position.position().z) >> 4;
@@ -460,10 +479,24 @@ public final class VanillaProtocolClient {
                 if (ordered) {
                     record("play-start", r.type + " " + summary(r));
                 }
+                if (packet instanceof net.minecraft.network.protocol.game.ClientboundCommandsPacket p && counts.get(r.type) == 1) {
+                    commandTree(p);
+                }
             }
             // Once the chunks stop coming: chat, then /list, then leave.
             if (loaded && lastChunk > 0 && now - lastChunk > 3000 && step == 0) {
                 record("play-chunks", chunks.size() + " " + chunks);
+                // Which light layers exist depends on the neighbouring
+                // columns: compared where all eight were sent.
+                Map<String, String> inner = new TreeMap<>();
+                layers.forEach((k, v) -> {
+                    String[] xz = k.split(",");
+                    int x = Integer.parseInt(xz[0]), z = Integer.parseInt(xz[1]);
+                    boolean all = true;
+                    for (int dz = -1; dz <= 1; dz++) for (int dx = -1; dx <= 1; dx++) all &= chunks.containsKey((x + dx) + "," + (z + dz));
+                    if (all) inner.put(k, v);
+                });
+                record("play-light-layers", inner.size() + " " + inner);
                 step = 1;
                 stepAt = now;
                 send(new ServerboundChatPacket("hello from the parity client", Instant.now(), 0L, Optional.empty(),
@@ -482,8 +515,7 @@ public final class VanillaProtocolClient {
 
     /**
      * A chunk's blocks, biomes, heightmaps and block entities (its
-     * ClientboundLevelChunkPacketData bytes) and which light layers it has.
-     * The light values are left out: both servers relight around chunks
+     * ClientboundLevelChunkPacketData bytes). The light is left out: both servers relight around chunks
      * loaded with their saved light, which test_light_parity covers.
      */
     private static String chunkHash(ClientboundLevelChunkWithLightPacket p) {
@@ -491,12 +523,17 @@ public final class VanillaProtocolClient {
         ClientboundLevelChunkPacketData.STREAM_CODEC.encode(buf, p.chunkData());
         byte[] bytes = new byte[buf.readableBytes()];
         buf.readBytes(bytes);
+        return sha(bytes);
+    }
+
+    /** The light layers a chunk has, sky then block (with data or empty). */
+    private static String lightLayers(ClientboundLevelChunkWithLightPacket p) {
         var light = p.lightData();
         BitSet sky = (BitSet) light.skyYMask().clone();
         sky.or(light.emptySkyYMask());
         BitSet block = (BitSet) light.blockYMask().clone();
         block.or(light.emptyBlockYMask());
-        return sha(bytes) + "/" + sky + "/" + block;
+        return sky + "/" + block;
     }
 
     /** The player's chunk part by part, so a difference in its bytes can be told apart. */
@@ -534,13 +571,61 @@ public final class VanillaProtocolClient {
         record("chunk-block-entities", entities.toString());
     }
 
+    /** The command tree, one line per top-level command with its subtree. */
+    private void commandTree(net.minecraft.network.protocol.game.ClientboundCommandsPacket p) {
+        var context = net.minecraft.commands.CommandBuildContext.simple(ParityData.access, net.minecraft.world.flag.FeatureFlags.VANILLA_SET);
+        var root = p.getRoot(context, new net.minecraft.network.protocol.game.ClientboundCommandsPacket.NodeBuilder<Object>() {
+            @Override
+            public com.mojang.brigadier.builder.ArgumentBuilder<Object, ?> createLiteral(String id) {
+                return com.mojang.brigadier.builder.LiteralArgumentBuilder.literal(id);
+            }
+
+            @Override
+            public com.mojang.brigadier.builder.ArgumentBuilder<Object, ?> createArgument(String id, com.mojang.brigadier.arguments.ArgumentType<?> type,
+                net.minecraft.resources.Identifier suggestionId) {
+                return com.mojang.brigadier.builder.RequiredArgumentBuilder.argument(id + ":" + type.getClass().getSimpleName() + ":" + suggestionId, type);
+            }
+
+            @Override
+            public com.mojang.brigadier.builder.ArgumentBuilder<Object, ?> configure(com.mojang.brigadier.builder.ArgumentBuilder<Object, ?> input,
+                boolean executable, boolean restricted) {
+                if (executable) input.executes(c -> 0);
+                return input;
+            }
+        });
+        // Vanilla sends each node's children in registration order, which
+        // its commands report (sorted) does not keep: compared as sets.
+        var lines = new TreeMap<String, String>();
+        for (var child : root.getChildren()) {
+            var paths = new java.util.TreeSet<String>();
+            describe(child, "", paths, new java.util.IdentityHashMap<>());
+            lines.put(child.getName(), paths.size() + " " + sha(String.join("\n", paths).getBytes()));
+        }
+        lines.forEach((k, v) -> record("play-command", k + " " + v));
+    }
+
+    private static void describe(com.mojang.brigadier.tree.CommandNode<Object> node, String path, java.util.Set<String> out,
+        java.util.IdentityHashMap<Object, Boolean> seen) {
+        String here = path + " " + node.getName() + (node.getCommand() != null ? "*" : "");
+        out.add(here + (node.getRedirect() != null ? " -> " + node.getRedirect().getName() : ""));
+        if (seen.put(node, true) != null) return;
+        for (var child : node.getChildren()) describe(child, here, out, seen);
+    }
+
     /** The first play packets: entity ids, seeds and times aside. */
     private String summary(Received r) {
         String t = r.type;
         if (t.equals("minecraft:login")) {
-            return text(r.packet).replaceAll("playerId=-?\\d+", "playerId=_");
+            // levels: the server's level keys, in an identity-hashed order after the overworld.
+            var login = (net.minecraft.network.protocol.game.ClientboundLoginPacket) r.packet;
+            var levels = new java.util.TreeSet<String>();
+            login.levels().forEach(l -> levels.add(l.identifier().toString()));
+            return text(r.packet).replaceAll("playerId=-?\\d+", "playerId=_").replaceAll("levels=\\[(ResourceKey\\[[^\\]]*\\](, )?)*\\]", "levels=" + levels);
         }
         if (t.equals("minecraft:set_time") || t.equals("minecraft:keep_alive") || t.equals("minecraft:ping")) return "";
+        if (t.equals("minecraft:set_entity_data")) {
+            return text(((net.minecraft.network.protocol.game.ClientboundSetEntityDataPacket) r.packet).packedItems());
+        }
         if (t.contains("entity") || t.equals("minecraft:add_entity") || t.equals("minecraft:update_attributes")
             || t.equals("minecraft:player_info_update") || t.equals("minecraft:player_position")) {
             return "";

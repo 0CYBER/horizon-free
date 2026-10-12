@@ -533,6 +533,12 @@ impl Hub {
         };
         self.broadcast(&C::PlayerInfoUpdate(newcomer));
         self.send_level_info(i, ctx);
+        // ServerLevel.addNewPlayer: the chunk tracking starts at the player.
+        let g = &mut self.guests[i];
+        let (cx, cz) = g.chunk();
+        g.send(&C::SetChunkCacheCenter(play::SetChunkCacheCenter { x: cx, z: cz }));
+        g.center_sent = Some((cx, cz));
+        g.placed_at = self.ticks;
         // ServerPlayer.sendPostEffects and initInventoryMenu.
         self.guests[i].send(&raw(ids::POST_EFFECTS, vec![0]));
         self.send_inventory(i);
@@ -888,10 +894,12 @@ impl Hub {
         let g = &mut self.guests[i];
         if g.center != Some((cx, cz)) {
             g.center = Some((cx, cz));
-            g.send(&C::SetChunkCacheCenter(play::SetChunkCacheCenter {
-                x: cx,
-                z: cz,
-            }));
+            if g.center_sent.take() != Some((cx, cz)) {
+                g.send(&C::SetChunkCacheCenter(play::SetChunkCacheCenter {
+                    x: cx,
+                    z: cz,
+                }));
+            }
             // Chunks that left the view.
             let forget: Vec<_> = g
                 .sent_chunks
@@ -919,7 +927,7 @@ impl Hub {
                 .sort_by_key(|&(x, z)| i64::from(x - cx).pow(2) + i64::from(z - cz).pow(2));
         }
         // Send ready chunks, closest first, in batches.
-        if g.chunk_queue.is_empty() || g.unacknowledged >= 10 {
+        if g.chunk_queue.is_empty() || g.unacknowledged >= 10 || self.ticks <= g.placed_at + 1 {
             return;
         }
         g.chunk_credit = (g.chunk_credit + g.chunks_per_tick).min(g.chunks_per_tick.max(1.0) * 2.0);
@@ -1253,6 +1261,15 @@ impl Hub {
 
     /// ServerPlayer.doTick: health, food, experience and the inventory menu.
     fn sync_player_state(&mut self, i: usize) {
+        // ServerEntity.sendDirtyEntityData on the player's first tick: the
+        // health its creation set is still dirty, and goes to the player too.
+        if self.guests[i].sent_health.is_none() {
+            let g = &self.guests[i];
+            g.send(&C::SetEntityData(play::SetEntityData {
+                id: g.entity_id,
+                values: vec![(9, serializer::FLOAT, Value::Float(g.health))],
+            }));
+        }
         let health = {
             let g = &self.guests[i];
             (g.health, g.food, g.saturation)
