@@ -33,7 +33,7 @@ Type=Application
 Name=Horizon
 Comment=Minecraft Java Edition 26.3 in Rust
 Exec="$here/horizon.sh"
-Icon=$here/resources/assets/minecraft/textures/block/grass_block_side.png
+Icon=$here/horizon.png
 Terminal=false
 Categories=Game;
 EOF
@@ -103,6 +103,7 @@ def main():
     with tarfile.open(archive, 'w:gz', compresslevel=1) as tar:
         tar.add(args.binary, 'horizon/horizon-client')
         add_bytes(tar, 'horizon/horizon.sh', LAUNCHER.encode(), 0o755)
+        tar.add(ROOT / 'docs/media/icon-256.png', 'horizon/horizon.png')
         add_bytes(tar, 'horizon/README.txt', README.format(version=version, commit=commit, platform=plat).encode())
         for path in sorted(args.resources.iterdir()):
             if path.name not in SKIP:

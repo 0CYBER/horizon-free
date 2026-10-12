@@ -8,22 +8,23 @@ hardness/tool rules, collect drops from the block loot tables, place blocks,
 craft in the 2x2 inventory grid or on a crafting table, and save and reload worlds
 in vanilla's Anvil format.
 
-**Status:** playable, about 55% Java parity (see the README table). Worlds use the
-Rust port of the vanilla overworld and Nether generators. Chests, furnaces, nine
-mob types, fluids, redstone and crop growth run in the client. Multiplayer, the End,
-most structures and mobs, and several containers are still missing. See
-[Rust rewrite status](rust-parity.md).
+**Status:** playable, in development. The [Java parity table](../README.md#project-status)
+in the README scores each subsystem against vanilla and lists what is still
+missing; [Rust rewrite status](rust-parity.md) has the details.
 
 ## Run from a checkout
 
-Use current stable Rust (1.90+), Python 3.10+ and JDK 25. Resource preparation
-verifies the pinned game artifacts, runs vanilla's data generator and small
-exporters against the reference jars, and extracts the jar's assets and data
-into ignored `.local/horizon-client/26.3/`. Sounds come from Mojang's asset
-index (about 380 MB). Prepared resources are private; never commit them.
+Use current stable Rust (1.90+), Python 3.10+ and JDK 25. Horizon never
+downloads the game: resource preparation imports **your own copy** (the 26.3
+client from your official launcher install, and the 26.3 server jar you
+downloaded yourself; see [Bring your own copy](../README.md#bring-your-own-copy)),
+verifies it against the pinned checksums, runs vanilla's data generator and small
+exporters against those jars, and extracts the jar's assets and data into ignored
+`.local/horizon-client/26.3/`. Sounds (about 380 MB) are copied from your
+launcher's asset store. Prepared resources are private; never commit them.
 
 ```sh
-python3 tools/prepare_native_client.py --prepare
+python3 tools/prepare_native_client.py --prepare --server-jar ~/Downloads/server.jar
 python3 tools/fetch_sounds.py
 cargo run --release -p horizon-client -- --render-distance 12
 ```
@@ -82,7 +83,7 @@ Frame times include waits for presentation, so `bench` reports what is on screen
 
 ### Play on another of your machines
 
-Horizon targets Linux on ludodesktop (Ubuntu 26.04, RTX 4080); macOS and Windows
+Horizon targets Linux on x86-64 with an NVIDIA GPU (Vulkan); macOS and Windows
 are out of scope. To play on another Linux machine
 without Rust, JDK or prepared resources, package a release build where they exist:
 
@@ -404,8 +405,8 @@ Initial local validation uses Linux x86_64, a headless Wayland compositor and
 Vulkan llvmpipe software rendering. Textured geometry and resizing were visually
 inspected; movement, arrow rotation and Ctrl+Q were exercised using virtual
 physical key codes. Captured relative mouse movement and Escape release were
-exercised through a virtual pointer. Physical-GPU runtime tests on ludodesktop
-(RTX 4080) remain pending. Software-renderer frame rates
+exercised through a virtual pointer. Physical-GPU runtime tests on the target
+machine remain pending. Software-renderer frame rates
 are not evidence of a hardware speedup.
 
 The model gallery was also inspected at close range on Linux/Vulkan llvmpipe.
@@ -579,7 +580,7 @@ The Ctrl run recorded 71 sprint ticks and 1,948 sprint centimeters. The double-t
 run visibly showed `Sprint true` during the second press and `Sprint false`
 after releasing W. Both runs ended grounded and alive without an error, and
 their views were visually inspected. These are development client checks;
-ludodesktop release acceptance and complete gameplay remain pending.
+release acceptance on the target machine and complete gameplay remain pending.
 
 ## Crouching and dry pose transitions
 
@@ -618,7 +619,7 @@ visibly switched from crouching to standing after releasing Shift. It recorded
 without an error. Both views were inspected. The
 [renderer startup check](../benchmarks/rust-native-crouch-2026-10-07/startup-smoke.json),
 seven client tests and all-target client Clippy also passed. These checks do not
-establish full vanilla gameplay or final Linux release acceptance on ludodesktop.
+establish full vanilla gameplay or final Linux release acceptance on the target machine.
 
 
 ## Pending attribute updates
@@ -657,4 +658,4 @@ recorded 36 sprinting ticks and 36 crouching ticks, ending grounded and alive
 without an error. Its view was inspected. The
 [startup check](../benchmarks/rust-native-attribute-updates-2026-10-07/startup-smoke.json),
 seven client tests and all-target client Clippy passed. Full gameplay parity and
-playable Linux release acceptance on ludodesktop remain pending.
+playable Linux release acceptance on the target machine remain pending.

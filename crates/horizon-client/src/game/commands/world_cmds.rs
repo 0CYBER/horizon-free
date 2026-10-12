@@ -30,66 +30,9 @@ fn java_double_text(v: f64) -> Text {
 impl Game<'_> {
     // ---- /recipe -----------------------------------------------------------
 
-    /// Every `minecraft:` recipe that `/recipe` can give (non-special ones).
-    /// `Recipe.display().size()`.
-    fn recipe_display_count(&self, id: &str) -> i32 {
-        let path = self.options.resources.join(format!(
-            "data/minecraft/recipe/{}.json",
-            id.trim_start_matches("minecraft:")
-        ));
-        let Some(v) = std::fs::read(path)
-            .ok()
-            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-        else {
-            return 1;
-        };
-        if v["type"].as_str() != Some("minecraft:crafting_transmute") {
-            return 1;
-        }
-        // TransmuteRecipe: material_count defaults to exactly 1; open
-        // bounds are 1 and 8.
-        let (min, max) = match &v["material_count"] {
-            serde_json::Value::Null => (1, 1),
-            serde_json::Value::Number(n) => {
-                let n = n.as_i64().unwrap_or(1);
-                (n, n)
-            }
-            b => (
-                b["min"].as_i64().unwrap_or(1),
-                b["max"].as_i64().unwrap_or(8),
-            ),
-        };
-        (max - min + 1).max(0) as i32
-    }
+    /// Every recipe id of the recipe manager (what `/recipe` resolves and suggests).
     pub(super) fn learnable_recipes(&self) -> Vec<String> {
-        // RecipeManager's learnable (non-special) recipes, as exported.
-        if !self.ui.registries.learnable_recipes.is_empty() {
-            return self.ui.registries.learnable_recipes.clone();
-        }
-        let dir = self.options.resources.join("data/minecraft/recipe");
-        let mut out = Vec::new();
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            return out;
-        };
-        for e in entries.flatten() {
-            let path = e.path();
-            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-                continue;
-            };
-            if path.extension().and_then(|x| x.to_str()) != Some("json") {
-                continue;
-            }
-            let special = std::fs::read(&path)
-                .ok()
-                .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-                .and_then(|v| v["type"].as_str().map(|t| t.contains("crafting_special_")))
-                .unwrap_or(false);
-            if !special {
-                out.push(format!("minecraft:{stem}"));
-            }
-        }
-        out.sort();
-        out
+        self.res.stations.recipe_index.ids().cloned().collect()
     }
     pub(super) fn cmd_recipe(&mut self, id: &str, ctx: &Context) -> R<i32> {
         let targets = self.entities(ctx, "targets", true)?;
@@ -109,25 +52,15 @@ impl Game<'_> {
             // ServerRecipeBook.addRecipes/removeRecipes count recipe book
             // displays (a transmute recipe has one per material count).
             let mut n = 0;
-            let mut unlocked = Vec::new();
-            for r in &recipes {
-                let changed = if give {
-                    self.adv.recipes.insert(r.clone())
-                } else {
-                    self.adv.recipes.remove(r)
-                };
-                if changed {
-                    n += self.recipe_display_count(r);
-                    if give {
-                        unlocked.push(r.clone());
-                    }
-                }
-            }
-            for r in unlocked {
-                self.trigger("minecraft:recipe_unlocked", |c, _| {
-                    c["recipes"].as_str() == Some(r.as_str())
-                });
-            }
+            // ServerPlayer.awardRecipes / resetRecipes: the displays changed.
+            let index = &self.res.stations.recipe_index;
+            n += if give {
+                let (count, unlocked) = self.level.recipe_book.add_recipes(index, &recipes);
+                self.recipe_unlocked(&unlocked);
+                count as i32
+            } else {
+                self.level.recipe_book.remove_recipes(index, &recipes) as i32
+            };
             tracker.track(&h, n);
         }
         let verb = if give { "give" } else { "take" };

@@ -2,7 +2,7 @@
 
 ## Starting point
 
-The first playable Java foundation is in the root README. Client optimization has priority. Vanilla gameplay, world formats and multiplayer behavior must be preserved; existing modpack compatibility is not required. Any language, renderer or architecture is in scope when measured gains justify it. Windows/Linux and Apple Silicon/Intel macOS are targets, with the M2 Pro/16 GB Mac prioritized.
+The first playable Java foundation is described in [Java performance packs](java-packs.md). Client optimization has priority. Vanilla gameplay, world formats and multiplayer behavior must be preserved; existing modpack compatibility is not required. Any language, renderer or architecture is in scope when measured gains justify it. Windows/Linux and Apple Silicon/Intel macOS are targets, with the M2 Pro/16 GB Mac prioritized.
 
 Inspect both pinned game JARs locally, retain bytecode as the reference, and measure actual Minecraft workloads before selecting a subsystem to replace. The Rust face-count experiment establishes a small correctness/benchmark workflow; it does not identify a Minecraft bottleneck.
 

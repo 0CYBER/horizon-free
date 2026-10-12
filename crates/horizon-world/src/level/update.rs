@@ -320,6 +320,19 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             // PistonMovingBlockEntity.preRemoveSideEffects -> finalTick; the
             // block is already replaced, so only the entity goes away.
             self.remove_moving_piston(pos);
+        } else if block_changed
+            && self.b.has_flag(old, super::data::state_flags::BLOCK_ENTITY)
+            && !self.keeps_block_entity(state, old)
+        {
+            // BlockEntity.preRemoveSideEffects (unless UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS)
+            // and removeBlockEntity, before the neighbours hear of the removal.
+            let side_effects = update_flags & flags::UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS == 0;
+            let updates = self.level.remove_block_entity(pos, old, side_effects);
+            for _ in 0..updates {
+                // JukeboxBlockEntity.onSongChanged.
+                let block = self.block_of(old);
+                self.update_neighbors_at(pos, block);
+            }
         }
         let moved = update_flags & flags::UPDATE_MOVE_BY_PISTON != 0;
         if (block_changed
@@ -338,6 +351,14 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             self.on_place(state, pos, old, moved);
         }
         Some(old)
+    }
+    /// `BlockState.shouldChangedStateKeepBlockEntity(oldState)`: copper chests
+    /// and copper golem statues keep theirs across their weathering states.
+    fn keeps_block_entity(&self, new: BlockStateId, old: BlockStateId) -> bool {
+        let (new, old) = (self.block_of(new), self.block_of(old));
+        let tags = &self.b.tags;
+        (tags.copper_chests.contains(new) && tags.copper_chests.contains(old))
+            || (tags.copper_golem_statues.contains(new) && tags.copper_golem_statues.contains(old))
     }
     /// `Level.removeBlock`.
     pub fn remove_block(&mut self, pos: BlockPos, moved_by_piston: bool) -> bool {

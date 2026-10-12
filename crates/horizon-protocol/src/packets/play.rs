@@ -582,6 +582,192 @@ packet!(
     }
 );
 packet!(TabList { header: Tag => Nbt, footer: Tag => Nbt });
+packet!(
+    /// ClientboundSetBorderCenterPacket.
+    SetBorderCenter { x: f64 => Double, z: f64 => Double }
+);
+packet!(
+    /// ClientboundSetBorderLerpSizePacket.
+    SetBorderLerpSize { old_size: f64 => Double, new_size: f64 => Double, lerp_time: i64 => VarLong }
+);
+packet!(
+    /// ClientboundSetBorderSizePacket.
+    SetBorderSize { size: f64 => Double }
+);
+packet!(
+    /// ClientboundSetBorderWarningDelayPacket (ticks).
+    SetBorderWarningDelay { delay: i32 => VarInt }
+);
+packet!(
+    /// ClientboundSetBorderWarningDistancePacket.
+    SetBorderWarningDistance { blocks: i32 => VarInt }
+);
+packet!(
+    /// ClientboundSetDisplayObjectivePacket: `DisplaySlot` id (0 list,
+    /// 1 sidebar, 2 below name, 3.. team sidebars) and the objective ("" clears).
+    SetDisplayObjective { slot: i32 => VarInt, objective: String => Str }
+);
+packet!(
+    /// ClientboundResetScorePacket: one objective, or all of them when absent.
+    ResetScore { owner: String => Str, objective: Option<String> => Opt<Str> }
+);
+/// `NumberFormatTypes.STREAM_CODEC`, by `number_format_type` registry id.
+#[derive(Clone, Debug, PartialEq)]
+pub enum NumberFormat {
+    /// 0: `minecraft:blank`.
+    Blank,
+    /// 1: `minecraft:styled`, a style compound.
+    Styled(Tag),
+    /// 2: `minecraft:fixed`, a component.
+    Fixed(Tag),
+}
+impl Codec<NumberFormat> for NumberFormat {
+    fn read(r: &mut Reader) -> Result<Self> {
+        Ok(match r.varint()? {
+            0 => NumberFormat::Blank,
+            1 => NumberFormat::Styled(r.nbt()?),
+            2 => NumberFormat::Fixed(r.nbt()?),
+            other => return Err(crate::Error::new(format!("unknown number format {other}"))),
+        })
+    }
+    fn write(v: &Self, w: &mut Writer) {
+        match v {
+            NumberFormat::Blank => w.varint(0),
+            NumberFormat::Styled(t) => {
+                w.varint(1);
+                w.nbt(t);
+            }
+            NumberFormat::Fixed(t) => {
+                w.varint(2);
+                w.nbt(t);
+            }
+        }
+    }
+}
+packet!(
+    /// ClientboundSetScorePacket.
+    SetScore {
+        owner: String => Str,
+        objective: String => Str,
+        score: i32 => VarInt,
+        display: Option<Tag> => Opt<Nbt>,
+        number_format: Option<NumberFormat> => Opt<NumberFormat>,
+    }
+);
+/// ClientboundSetObjectivePacket: method 0 adds, 1 removes, 2 changes;
+/// adds and changes carry the display name, render type (0 integer,
+/// 1 hearts) and number format.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SetObjective {
+    pub name: String,
+    pub method: i8,
+    pub display: Option<(Tag, i32, Option<NumberFormat>)>,
+}
+impl Codec<SetObjective> for SetObjective {
+    fn read(r: &mut Reader) -> Result<Self> {
+        let name = r.string(32767)?;
+        let method = r.i8()?;
+        let display = if method == 0 || method == 2 {
+            Some((r.nbt()?, r.varint()?, <Opt<NumberFormat>>::read(r)?))
+        } else {
+            None
+        };
+        Ok(Self {
+            name,
+            method,
+            display,
+        })
+    }
+    fn write(v: &Self, w: &mut Writer) {
+        w.string(&v.name);
+        w.i8(v.method);
+        if v.method == 0 || v.method == 2 {
+            let (name, render, format) = v.display.clone().unwrap_or((Tag::End, 0, None));
+            w.nbt(&name);
+            w.varint(render);
+            <Opt<NumberFormat>>::write(&format, w);
+        }
+    }
+}
+/// `ClientboundSetPlayerTeamPacket.Parameters`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TeamParameters {
+    pub display_name: Tag,
+    pub prefix: Tag,
+    pub suffix: Tag,
+    /// `Team.Visibility` id.
+    pub name_tag_visibility: i32,
+    /// `Team.CollisionRule` id.
+    pub collision_rule: i32,
+    /// `TeamColor` id (0 black .. 15 white), absent for no colour.
+    pub color: Option<i32>,
+    /// 1: friendly fire, 2: see friendly invisibles.
+    pub options: i8,
+}
+/// ClientboundSetPlayerTeamPacket: method 0 adds (parameters and players),
+/// 1 removes, 2 changes (parameters), 3 joins and 4 leaves (players).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SetPlayerTeam {
+    pub name: String,
+    pub method: i8,
+    pub parameters: Option<TeamParameters>,
+    pub players: Vec<String>,
+}
+impl Codec<SetPlayerTeam> for SetPlayerTeam {
+    fn read(r: &mut Reader) -> Result<Self> {
+        let name = r.string(32767)?;
+        let method = r.i8()?;
+        let parameters = if method == 0 || method == 2 {
+            Some(TeamParameters {
+                display_name: r.nbt()?,
+                prefix: r.nbt()?,
+                suffix: r.nbt()?,
+                name_tag_visibility: r.varint()?,
+                collision_rule: r.varint()?,
+                color: <Opt<VarInt>>::read(r)?,
+                options: r.i8()?,
+            })
+        } else {
+            None
+        };
+        let players = if matches!(method, 0 | 3 | 4) {
+            <List<Str>>::read(r)?
+        } else {
+            Vec::new()
+        };
+        Ok(Self {
+            name,
+            method,
+            parameters,
+            players,
+        })
+    }
+    fn write(v: &Self, w: &mut Writer) {
+        w.string(&v.name);
+        w.i8(v.method);
+        if v.method == 0 || v.method == 2 {
+            let p = v.parameters.clone().unwrap_or(TeamParameters {
+                display_name: Tag::End,
+                prefix: Tag::End,
+                suffix: Tag::End,
+                name_tag_visibility: 0,
+                collision_rule: 0,
+                color: None,
+                options: 0,
+            });
+            w.nbt(&p.display_name);
+            w.nbt(&p.prefix);
+            w.nbt(&p.suffix);
+            w.varint(p.name_tag_visibility);
+            w.varint(p.collision_rule);
+            <Opt<VarInt>>::write(&p.color, w);
+            w.i8(p.options);
+        }
+        if matches!(v.method, 0 | 3 | 4) {
+            <List<Str>>::write(&v.players, w);
+        }
+    }
+}
 packet!(ServerData { motd: Tag => Nbt, icon: Option<Vec<u8>> => Opt<crate::buf::Bytes> });
 packet!(
     /// ClientboundUpdateMobEffectPacket; flags: 1 ambient, 2 visible, 4 icon, 8 blend.
@@ -746,23 +932,33 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     PlayerRotation(PlayerRotation) = PLAYER_ROTATION,
     RemoveEntities(RemoveEntities) = REMOVE_ENTITIES,
     RemoveMobEffect(RemoveMobEffect) = REMOVE_MOB_EFFECT,
+    ResetScore(ResetScore) = RESET_SCORE,
     ResourcePackPush(ResourcePackPush) = RESOURCE_PACK_PUSH,
     Respawn(Respawn) = RESPAWN,
     RotateHead(RotateHead) = ROTATE_HEAD,
     SectionBlocksUpdate(SectionBlocksUpdate) = SECTION_BLOCKS_UPDATE,
     ServerData(ServerData) = SERVER_DATA,
     SetActionBarText(Text) = SET_ACTION_BAR_TEXT,
+    SetBorderCenter(SetBorderCenter) = SET_BORDER_CENTER,
+    SetBorderLerpSize(SetBorderLerpSize) = SET_BORDER_LERP_SIZE,
+    SetBorderSize(SetBorderSize) = SET_BORDER_SIZE,
+    SetBorderWarningDelay(SetBorderWarningDelay) = SET_BORDER_WARNING_DELAY,
+    SetBorderWarningDistance(SetBorderWarningDistance) = SET_BORDER_WARNING_DISTANCE,
     SetChunkCacheCenter(SetChunkCacheCenter) = SET_CHUNK_CACHE_CENTER,
     SetChunkCacheRadius(Distance) = SET_CHUNK_CACHE_RADIUS,
     SetCursorItem(SetCursorItem) = SET_CURSOR_ITEM,
     SetDefaultSpawnPosition(SetDefaultSpawnPosition) = SET_DEFAULT_SPAWN_POSITION,
+    SetDisplayObjective(SetDisplayObjective) = SET_DISPLAY_OBJECTIVE,
     SetEntityData(SetEntityData) = SET_ENTITY_DATA,
     SetEntityMotion(SetEntityMotion) = SET_ENTITY_MOTION,
     SetEquipment(SetEquipment) = SET_EQUIPMENT,
     SetExperience(SetExperience) = SET_EXPERIENCE,
     SetHealth(SetHealth) = SET_HEALTH,
     SetHeldSlot(SetHeldSlot) = SET_HELD_SLOT,
+    SetObjective(SetObjective) = SET_OBJECTIVE,
     SetPlayerInventory(SetPlayerInventory) = SET_PLAYER_INVENTORY,
+    SetPlayerTeam(SetPlayerTeam) = SET_PLAYER_TEAM,
+    SetScore(SetScore) = SET_SCORE,
     SetSimulationDistance(Distance) = SET_SIMULATION_DISTANCE,
     SetSubtitleText(Text) = SET_SUBTITLE_TEXT,
     SetTime(SetTime) = SET_TIME,
@@ -948,6 +1144,63 @@ mod tests {
     fn clientbound_round_trips() {
         let packets = vec![
             Clientbound::BundleDelimiter(Empty),
+            Clientbound::SetBorderCenter(SetBorderCenter { x: 1.5, z: -2.0 }),
+            Clientbound::SetBorderLerpSize(SetBorderLerpSize {
+                old_size: 10.0,
+                new_size: 200.0,
+                lerp_time: 1200,
+            }),
+            Clientbound::SetBorderSize(SetBorderSize { size: 30.0 }),
+            Clientbound::SetBorderWarningDelay(SetBorderWarningDelay { delay: 300 }),
+            Clientbound::SetBorderWarningDistance(SetBorderWarningDistance { blocks: 5 }),
+            Clientbound::SetDisplayObjective(SetDisplayObjective {
+                slot: 0,
+                objective: "kills".into(),
+            }),
+            Clientbound::ResetScore(ResetScore {
+                owner: "Steve".into(),
+                objective: Some("kills".into()),
+            }),
+            Clientbound::SetScore(SetScore {
+                owner: "Steve".into(),
+                objective: "kills".into(),
+                score: -3,
+                display: Some(Tag::String("S".into())),
+                number_format: Some(NumberFormat::Styled(Tag::compound([(
+                    "color",
+                    Tag::String("red".into()),
+                )]))),
+            }),
+            Clientbound::SetObjective(SetObjective {
+                name: "kills".into(),
+                method: 0,
+                display: Some((Tag::String("Kills".into()), 1, Some(NumberFormat::Blank))),
+            }),
+            Clientbound::SetObjective(SetObjective {
+                name: "kills".into(),
+                method: 1,
+                display: None,
+            }),
+            Clientbound::SetPlayerTeam(SetPlayerTeam {
+                name: "red".into(),
+                method: 0,
+                parameters: Some(TeamParameters {
+                    display_name: Tag::String("Red".into()),
+                    prefix: Tag::String("[R] ".into()),
+                    suffix: Tag::String("".into()),
+                    name_tag_visibility: 0,
+                    collision_rule: 0,
+                    color: Some(12),
+                    options: 3,
+                }),
+                players: vec!["Steve".into(), "Alex".into()],
+            }),
+            Clientbound::SetPlayerTeam(SetPlayerTeam {
+                name: "red".into(),
+                method: 4,
+                parameters: None,
+                players: vec!["Alex".into()],
+            }),
             Clientbound::AddEntity(AddEntity {
                 id: 5,
                 uuid: 9,

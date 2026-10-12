@@ -229,6 +229,10 @@ impl Selector {
     pub fn start_over(&mut self) {
         self.current = None;
     }
+    /// The candidate kept so far and the tick it came in.
+    pub fn current(&self) -> Option<(Info, i64)> {
+        self.current
+    }
 }
 /// `VibrationSystem.Data`.
 #[derive(Clone, Debug, Default, PartialEq)]

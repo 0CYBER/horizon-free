@@ -22,6 +22,9 @@ pub struct Guest {
     pub conn: u32,
     /// The client's address (IP bans, `list`).
     pub address: std::net::SocketAddr,
+    /// The hub tick of the player's last action (ServerPlayer.lastActionTime),
+    /// for player-idle-timeout.
+    pub last_action_tick: u64,
     pub uuid: u128,
     pub name: String,
     pub entity_id: i32,
@@ -100,6 +103,7 @@ impl Guest {
         Self {
             conn: j.conn,
             address: j.address,
+            last_action_tick: 0,
             uuid: j.uuid,
             name: j.name,
             entity_id,

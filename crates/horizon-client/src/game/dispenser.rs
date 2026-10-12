@@ -387,7 +387,20 @@ impl Game<'_> {
                 self.audio
                     .play("minecraft:entity.wind_charge.throw", Some(c), 0.5, pitch);
             }
-            2000 => {
+            1049 => self
+                .audio
+                .play("minecraft:block.crafter.craft", Some(c), 1.0, 1.0),
+            1050 => self
+                .audio
+                .play("minecraft:block.crafter.fail", Some(c), 1.0, 1.0),
+            // LevelEventHandler.shootParticles: smoke for dispensers, white
+            // smoke out of a crafter's front.
+            2000 | 2010 => {
+                let particle = if id == 2010 {
+                    ParticleType::WhiteSmoke
+                } else {
+                    ParticleType::Smoke
+                };
                 let s = match data {
                     0 => [0, -1, 0],
                     1 => [0, 1, 0],
@@ -422,8 +435,7 @@ impl Game<'_> {
                         sy * pow + r.next_gaussian() * 0.01,
                         sz * pow + r.next_gaussian() * 0.01,
                     ];
-                    self.particles
-                        .add(&ParticleOptions::simple(ParticleType::Smoke), p, v);
+                    self.particles.add(&ParticleOptions::simple(particle), p, v);
                 }
             }
             _ => {}
@@ -1706,7 +1718,12 @@ impl Game<'_> {
     }
     /// `Entity.spawnAtLocation(level, stack, offset)`: an item at the entity's
     /// feet plus the offset, moving as `new ItemEntity` makes it.
-    fn spawn_at_location(&mut self, at: Vec3, y_offset: f64, stack: ItemStack) -> [f64; 3] {
+    pub(super) fn spawn_at_location(
+        &mut self,
+        at: Vec3,
+        y_offset: f64,
+        stack: ItemStack,
+    ) -> [f64; 3] {
         let v = new_item_motion();
         self.spawn_item(stack, [at.x, at.y + y_offset, at.z], v, 10);
         v
@@ -1842,6 +1859,20 @@ impl Game<'_> {
                         self.spawn_at_location(at, eye, stack);
                     }
                 }
+                // CopperGolem.shear: the antenna's flower drops 1.5 up.
+                Species::CopperGolem if self.golem_shearable(i) => {
+                    self.audio
+                        .play("minecraft:entity.copper_golem.shear", sound_at, 1.0, 1.0);
+                    let antenna = self.mobs[i].saddle_item();
+                    let id = self.mobs[i].id;
+                    // setItemSlot(EQUIPMENT_SLOT_ANTENNA, EMPTY): an unequip.
+                    self.mobs[i].set_saddle(None);
+                    let ctx = self.who_context(Some(horizon_client::mobs::Who::Mob(id)), None);
+                    self.post_game_event("minecraft:unequip", [at.x, at.y, at.z], ctx);
+                    if let Some(antenna) = antenna {
+                        self.spawn_at_location(at, 1.5, antenna);
+                    }
+                }
                 Species::Mooshroom if !m.is_baby() => {
                     let variant = if m.extra.variant == 1 { "brown" } else { "red" };
                     let height = f64::from(m.height());
@@ -1912,7 +1943,7 @@ impl Game<'_> {
         }
         // Leashable.dropLeash: a lead item at the leashed entity's feet.
         let drop = |game: &mut Self, j: usize| {
-            if game.mobs[j].extra.leash.take().is_some() {
+            if horizon_client::mobs::leash::remove(&mut game.mobs[j]).is_some() {
                 let at = game.mobs[j].position;
                 game.spawn_at_location(at, 0.0, ItemStack::new("minecraft:lead", 1));
             }

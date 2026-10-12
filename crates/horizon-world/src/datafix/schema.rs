@@ -24,6 +24,8 @@ pub enum Ty {
     DataComponents,
     TextComponent,
     VillagerTrade,
+    /// `UNTAGGED_SPAWNER`: the spawner fields of a spawner block entity or minecart.
+    UntaggedSpawner,
     Particle,
     BlockState,
     FlatBlockState,
@@ -170,6 +172,11 @@ impl Walker<'_> {
                     self.list(Ty::Recipe, book, "toBeDisplayed");
                 }
             }
+            Ty::Chunk if k < key(2842, 0) => {
+                if let Some(level) = v.get_mut("Level") {
+                    self.level_chunk(level);
+                }
+            }
             Ty::Chunk => {
                 self.list(Ty::EntityTree, v, "entities");
                 if let Some(Tag::List(items)) = v.get_mut("block_entities") {
@@ -201,6 +208,7 @@ impl Walker<'_> {
                 self.walk(Ty::Entity, v);
             }
             Ty::Entity => self.entity(v),
+            Ty::UntaggedSpawner => self.untagged_spawner(v),
             Ty::BlockEntity => self.block_entity(v),
             Ty::ItemStack => self.item_stack(v),
             Ty::DataComponents => self.components(v),
@@ -450,8 +458,53 @@ impl Walker<'_> {
         }
     }
 
-    /// `UNTAGGED_SPAWNER` (V2831).
+    /// The `Level` of a chunk before 1.18 (V99, V1451_1, V1466, V2832).
+    fn level_chunk(&mut self, v: &mut Tag) {
+        let k = self.k;
+        self.list(Ty::EntityTree, v, "Entities");
+        if let Some(Tag::List(items)) = v.get_mut("TileEntities") {
+            for be in items {
+                if block_entity_known(be, k) {
+                    self.walk(Ty::BlockEntity, be);
+                }
+            }
+        }
+        self.list_of_field(Ty::BlockName, v, "TileTicks", "i");
+        if let Some(Tag::List(sections)) = v.get_mut("Sections") {
+            for s in sections {
+                if k >= key(2832, 0) {
+                    if let Some(b) = s.get_mut("biomes") {
+                        self.list(Ty::Biome, b, "palette");
+                    }
+                    if let Some(b) = s.get_mut("block_states") {
+                        self.list(Ty::BlockState, b, "palette");
+                    }
+                } else if k >= key(1451, 1) {
+                    self.list(Ty::BlockState, s, "Palette");
+                }
+            }
+        }
+        if k >= key(1466, 0)
+            && let Some(s) = v.get_mut("Structures")
+        {
+            self.values(Ty::StructureFeature, s, "Starts");
+        }
+    }
+
     fn spawner(&mut self, v: &mut Tag) {
+        self.walk(Ty::UntaggedSpawner, v);
+    }
+
+    /// `UNTAGGED_SPAWNER` (V106, V2831).
+    fn untagged_spawner(&mut self, v: &mut Tag) {
+        if self.k < key(106, 0) {
+            return;
+        }
+        if self.k < key(2831, 0) {
+            self.list_of_field(Ty::EntityTree, v, "SpawnPotentials", "Entity");
+            self.field(Ty::EntityTree, v, "SpawnData");
+            return;
+        }
         if let Some(Tag::List(items)) = v.get_mut("SpawnPotentials") {
             for p in items {
                 if let Some(d) = p.get_mut("data") {
@@ -739,6 +792,9 @@ impl Walker<'_> {
 
     /// `WORLD_GEN_SETTINGS` (V2832).
     fn world_gen(&mut self, v: &mut Tag) {
+        if self.k < key(2551, 0) {
+            return;
+        }
         let Some(Tag::Compound(dims)) = v.get_mut("dimensions") else {
             return;
         };

@@ -155,9 +155,11 @@ fn run_case(dir: &Path, out: &mut String) -> Result<(), Box<dyn std::error::Erro
                 BanEntry {
                     user,
                     created: date(created).unwrap_or_else(now_millis),
-                    source: (source != "-")
-                        .then(|| source.to_owned())
-                        .unwrap_or_else(|| "(Unknown)".into()),
+                    source: if source != "-" {
+                        source.to_owned()
+                    } else {
+                        "(Unknown)".into()
+                    },
                     expires: date(expires),
                     reason: (reason != "-").then(|| reason.to_owned()),
                 }

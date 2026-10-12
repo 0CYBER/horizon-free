@@ -4,11 +4,12 @@
 use crate::{
     command::Registries,
     component,
+    fastutil_order::{HashSetOrder, OpenOrder},
     text::{self, Style, Text},
 };
-use horizon_world::nbt::{Compound, Tag};
+use horizon_world::nbt::Tag;
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 /// A text component in its JSON form (what `ComponentSerialization` holds).
 pub type Comp = Value;
@@ -135,30 +136,30 @@ impl NumberFormat {
             }
         }
     }
-    pub fn to_tag(&self) -> Tag {
+    /// `NumberFormatTypes.CODEC` encoding.
+    pub fn to_json(&self) -> Value {
         match self {
-            NumberFormat::Blank => Tag::compound([("type", Tag::String("minecraft:blank".into()))]),
-            NumberFormat::Fixed(c) => Tag::compound([
-                ("type", Tag::String("minecraft:fixed".into())),
-                ("value", json_to_tag(c)),
-            ]),
+            NumberFormat::Blank => serde_json::json!({"type": "minecraft:blank"}),
+            NumberFormat::Fixed(c) => {
+                serde_json::json!({"type": "minecraft:fixed", "value": canonical_component(c)})
+            }
             NumberFormat::Styled(style) => {
-                let mut c = match json_to_tag(style) {
-                    Tag::Compound(c) => c,
-                    _ => Compound::new(),
-                };
-                c.insert("type".into(), Tag::String("minecraft:styled".into()));
-                Tag::Compound(c)
+                let mut v = canonical_style(style);
+                if let Value::Object(o) = &mut v {
+                    o.insert("type".into(), Value::String("minecraft:styled".into()));
+                }
+                v
             }
         }
     }
-    pub fn from_tag(t: &Tag) -> Option<Self> {
-        let kind = string_of(t.get("type"))?;
+    /// `NumberFormatTypes.CODEC` decoding.
+    pub fn from_json(v: &Value) -> Option<Self> {
+        let kind = v.get("type")?.as_str()?;
         match kind.trim_start_matches("minecraft:") {
             "blank" => Some(NumberFormat::Blank),
-            "fixed" => Some(NumberFormat::Fixed(tag_to_json(t.get("value")?))),
+            "fixed" => Some(NumberFormat::Fixed(v.get("value")?.clone())),
             "styled" => {
-                let mut v = tag_to_json(t);
+                let mut v = v.clone();
                 if let Value::Object(o) = &mut v {
                     o.remove("type");
                 }
@@ -166,6 +167,14 @@ impl NumberFormat {
             }
             _ => None,
         }
+    }
+    pub fn to_tag(&self) -> Tag {
+        let mut tag = json_to_tag(&self.to_json());
+        entity_uuids(&mut tag);
+        tag
+    }
+    pub fn from_tag(t: &Tag) -> Option<Self> {
+        Self::from_json(&tag_to_json(t))
     }
 }
 
@@ -322,22 +331,45 @@ fn is_team_criteria(name: &str) -> bool {
             .is_some_and(|c| team_colors().any(|t| t == c))
     })
 }
-/// `ObjectiveCriteria.byName`: whether the criteria name exists.
-pub fn criteria_exists(name: &str, reg: &Registries) -> bool {
+/// `Identifier.bySeparator`: `None` for characters an identifier cannot hold
+/// (vanilla throws).
+fn identifier_by_separator(id: &str, sep: char) -> Option<String> {
+    let (ns, path) = match id.find(sep) {
+        Some(0) => ("minecraft", &id[1..]),
+        Some(i) => (&id[..i], &id[i + 1..]),
+        None => ("minecraft", id),
+    };
+    let ns_ok = ns
+        .chars()
+        .all(|c| matches!(c, 'a'..='z' | '0'..='9' | '_' | '-' | '.'));
+    let path_ok = path
+        .chars()
+        .all(|c| matches!(c, 'a'..='z' | '0'..='9' | '_' | '-' | '.' | '/'));
+    (ns_ok && path_ok).then(|| format!("{ns}:{path}"))
+}
+/// An identifier vanilla's `Identifier` constructor rejects (it throws).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InvalidIdentifier;
+/// `ObjectiveCriteria.byName`: the criteria's canonical name (statistics are
+/// named `minecraft.<type>:<namespace>.<path>` whatever the spelling used),
+/// `Ok(None)` for no such criteria and `Err` where vanilla throws on an
+/// invalid identifier.
+pub fn criteria_by_name(name: &str, reg: &Registries) -> Result<Option<String>, InvalidIdentifier> {
     if CUSTOM_CRITERIA.contains(&name) || is_team_criteria(name) {
-        return true;
+        return Ok(Some(name.to_owned()));
     }
-    let Some((ty, key)) = name.split_once(':') else {
-        return false;
+    let Some(colon) = name.find(':') else {
+        return Ok(None);
     };
-    let Some(ty) = ty.strip_prefix("minecraft.") else {
-        return false;
+    let ty = identifier_by_separator(&name[..colon], '.').ok_or(InvalidIdentifier)?;
+    let Some(ty) = ty
+        .strip_prefix("minecraft:")
+        .filter(|t| STAT_TYPES.contains(t))
+    else {
+        return Ok(None);
     };
-    let key = match key.split_once('.') {
-        Some((ns, path)) => format!("{ns}:{path}"),
-        None => return false,
-    };
-    match ty {
+    let key = identifier_by_separator(&name[colon + 1..], '.').ok_or(InvalidIdentifier)?;
+    let known = match ty {
         "mined" => reg.blocks.is_empty() || reg.blocks.contains_key(&key),
         "crafted" | "used" | "broken" | "picked_up" | "dropped" => {
             reg.items.is_empty() || reg.items.contains(&key)
@@ -347,7 +379,12 @@ pub fn criteria_exists(name: &str, reg: &Registries) -> bool {
             .strip_prefix("minecraft:")
             .is_some_and(|k| CUSTOM_STATS.contains(&k)),
         _ => false,
-    }
+    };
+    Ok(known.then(|| stat_criteria(ty, &key)))
+}
+/// Whether `ObjectiveCriteria.byName` finds the criteria.
+pub fn criteria_exists(name: &str, reg: &Registries) -> bool {
+    matches!(criteria_by_name(name, reg), Ok(Some(_)))
 }
 /// `ObjectiveCriteria.isReadOnly`.
 pub fn criteria_read_only(name: &str) -> bool {
@@ -373,7 +410,7 @@ pub fn stat_criteria(stat_type: &str, key: &str) -> String {
     format!(
         "minecraft.{}:{}",
         stat_type.trim_start_matches("minecraft:"),
-        key.replacen(':', ".", 1)
+        key.replace(':', ".")
     )
 }
 
@@ -468,7 +505,8 @@ pub struct Team {
     pub nametag_visibility: Visibility,
     pub death_message_visibility: Visibility,
     pub collision_rule: CollisionRule,
-    pub players: BTreeSet<String>,
+    /// `Sets.newHashSet()`, in its iteration order.
+    pub players: HashSetOrder,
 }
 impl Team {
     fn new(name: &str) -> Self {
@@ -483,7 +521,7 @@ impl Team {
             nametag_visibility: Visibility::Always,
             death_message_visibility: Visibility::Always,
             collision_rule: CollisionRule::Always,
-            players: BTreeSet::new(),
+            players: HashSetOrder::default(),
         }
     }
     fn apply_color(&self, t: Text) -> Text {
@@ -508,6 +546,125 @@ impl Team {
         t.push(comp_text(&self.suffix));
         self.apply_color(t)
     }
+    /// `PlayerTeam.getFormattedName` as a component (`Component.empty()
+    /// .append(prefix).append(name).append(suffix)` with the team colour).
+    pub fn formatted_name_comp(&self, member: &Comp) -> Comp {
+        let mut c = serde_json::json!({
+            "text": "",
+            "extra": [self.prefix.clone(), member.clone(), self.suffix.clone()],
+        });
+        if let Some(color) = &self.color {
+            c["color"] = Value::String(color.clone());
+        }
+        c
+    }
+}
+
+// ---- team rules in gameplay ------------------------------------------------
+
+/// `Team.isAlliedTo`: both on the same team.
+pub fn teams_allied(own: Option<&Team>, other: Option<&Team>) -> bool {
+    matches!((own, other), (Some(a), Some(b)) if a.name == b.name)
+}
+/// `Entity.doTeamsAllowDamage`: an entity may hurt another unless they are
+/// allies on a team without friendly fire (also `Player.canHarmPlayer`).
+pub fn teams_allow_damage(own: Option<&Team>, other: Option<&Team>) -> bool {
+    match own {
+        None => true,
+        Some(t) => !teams_allied(own, other) || t.allow_friendly_fire,
+    }
+}
+/// `EntitySelector.pushableBy(entity).test(input)` on the server (or for the
+/// local player on the client): whether `entity` pushes `input`, which must
+/// be pushable and not a spectator.
+pub fn pushable_by(own: Option<&Team>, their: Option<&Team>, their_pushable: bool) -> bool {
+    let own_rule = own.map_or(CollisionRule::Always, |t| t.collision_rule);
+    if own_rule == CollisionRule::Never || !their_pushable {
+        return false;
+    }
+    let their_rule = their.map_or(CollisionRule::Always, |t| t.collision_rule);
+    if their_rule == CollisionRule::Never {
+        return false;
+    }
+    let same = teams_allied(own, their);
+    if (own_rule == CollisionRule::PushOwnTeam || their_rule == CollisionRule::PushOwnTeam) && same
+    {
+        return false;
+    }
+    own_rule != CollisionRule::PushOtherTeams && their_rule != CollisionRule::PushOtherTeams || same
+}
+/// `Entity.isInvisibleTo(player)`: invisible unless the viewer spectates or
+/// shares a team that sees friendly invisibles.
+pub fn invisible_to(
+    own: Option<&Team>,
+    viewer: Option<&Team>,
+    viewer_spectator: bool,
+    invisible: bool,
+) -> bool {
+    if viewer_spectator {
+        return false;
+    }
+    match own {
+        Some(t) if teams_allied(own, viewer) && t.see_friendly_invisibles => false,
+        _ => invisible,
+    }
+}
+/// The team part of `LivingEntityRenderer.shouldShowName` for an entity
+/// other than the viewer: `Some(shown)` when the entity's team decides,
+/// `None` when it has no team.
+pub fn team_shows_name(
+    own: Option<&Team>,
+    viewer: Option<&Team>,
+    visible_to_viewer: bool,
+) -> Option<bool> {
+    let t = own?;
+    Some(match t.nametag_visibility {
+        Visibility::Always => visible_to_viewer,
+        Visibility::Never => false,
+        Visibility::HideForOtherTeams => match viewer {
+            None => visible_to_viewer,
+            Some(_) => {
+                teams_allied(own, viewer) && (t.see_friendly_invisibles || visible_to_viewer)
+            }
+        },
+        Visibility::HideForOwnTeam => match viewer {
+            None => visible_to_viewer,
+            Some(_) => !teams_allied(own, viewer) && visible_to_viewer,
+        },
+    })
+}
+/// What `LivingEntityRenderer.shouldShowName` asks of a living entity other
+/// than the viewer.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NameView {
+    /// Crouching (`isDiscrete`): its name hides beyond 32 blocks.
+    pub discrete: bool,
+    pub distance_sqr: f64,
+    /// `isInvisibleTo(viewer)`.
+    pub invisible_to_viewer: bool,
+    /// F1 (`Hud.isHidden`).
+    pub hud_hidden: bool,
+    /// The camera is this entity.
+    pub is_camera: bool,
+    /// Something rides it.
+    pub is_vehicle: bool,
+}
+/// `LivingEntityRenderer.shouldShowName` (before a mob renderer's own check
+/// for a visible or targeted custom name).
+pub fn name_shown(own: Option<&Team>, viewer: Option<&Team>, v: NameView) -> bool {
+    if v.discrete && v.distance_sqr >= 1024.0 {
+        return false;
+    }
+    let visible = !v.invisible_to_viewer;
+    if let Some(shown) = team_shows_name(own, viewer, visible) {
+        return shown;
+    }
+    !v.hud_hidden && !v.is_camera && visible && !v.is_vehicle
+}
+/// `ServerPlayer.die`: whether a player's death message reaches the player
+/// themselves (the team broadcasts leave out the dying player).
+pub fn own_death_message_shown(team: Option<&Team>) -> bool {
+    team.is_none_or(|t| t.death_message_visibility == Visibility::Always)
 }
 
 // ---- objectives and scores ---------------------------------------------
@@ -576,25 +733,61 @@ impl ScoreEntry {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+/// `Scoreboard`: objectives, scores, display slots and teams, kept in the
+/// iteration orders of vanilla's hash maps.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Scoreboard {
-    /// In the iteration order of vanilla's objectivesByName map.
+    /// `objectivesByName` in its iterator order (`getObjectives()`).
     pub objectives: Vec<Objective>,
-    /// `objectivesByName` (`Object2ObjectOpenHashMap(16, 0.5)`) and
-    /// `teamsByName` key orders.
-    objective_order: Option<crate::fastutil_order::OpenOrder>,
-    team_order: crate::fastutil_order::OpenOrder,
+    objective_order: OpenOrder,
+    /// `objectivesByCriteria`: each criteria's objectives in creation order.
+    by_criteria: BTreeMap<String, Vec<String>>,
+    /// `playerScores`: each holder's scores by objective. A holder stays
+    /// tracked when its last objective is removed.
     pub scores: BTreeMap<String, BTreeMap<String, Score>>,
+    holder_order: OpenOrder,
     pub display: BTreeMap<String, String>,
+    /// `teamsByName` in its iterator order (`getPlayerTeams()`).
     pub teams: Vec<Team>,
+    team_order: OpenOrder,
     team_of: BTreeMap<String, String>,
 }
+impl Default for Scoreboard {
+    fn default() -> Self {
+        Self {
+            objectives: Vec::new(),
+            objective_order: OpenOrder::new(16, 0.5),
+            by_criteria: BTreeMap::new(),
+            scores: BTreeMap::new(),
+            holder_order: OpenOrder::new(16, 0.5),
+            display: BTreeMap::new(),
+            teams: Vec::new(),
+            team_order: OpenOrder::default(),
+            team_of: BTreeMap::new(),
+        }
+    }
+}
+fn ranked<T>(items: &mut [T], order: &OpenOrder, name: impl Fn(&T) -> &str) {
+    let rank: BTreeMap<&str, usize> = order.iter().enumerate().map(|(i, k)| (k, i)).collect();
+    items.sort_by_key(|t| rank.get(name(t)).copied().unwrap_or(usize::MAX));
+}
 impl Scoreboard {
+    fn reorder(&mut self) {
+        ranked(&mut self.objectives, &self.objective_order, |o| &o.name);
+        ranked(&mut self.teams, &self.team_order, |t| &t.name);
+    }
     pub fn objective(&self, name: &str) -> Option<&Objective> {
         self.objectives.iter().find(|o| o.name == name)
     }
     pub fn objective_mut(&mut self, name: &str) -> Option<&mut Objective> {
         self.objectives.iter_mut().find(|o| o.name == name)
+    }
+    /// `getObjectives().stream()` (what saving uses).
+    pub fn objectives_streamed(&self) -> Vec<&Objective> {
+        self.objective_order
+            .stream()
+            .filter_map(|n| self.objective(n))
+            .collect()
     }
     pub fn add_objective(
         &mut self,
@@ -616,42 +809,27 @@ impl Scoreboard {
             display_auto_update,
             number_format,
         });
-        self.objective_order
-            .get_or_insert_with(|| crate::fastutil_order::OpenOrder::new(16, 0.5))
-            .insert(name);
-        self.sort_objectives();
+        self.objective_order.insert(name);
+        self.by_criteria
+            .entry(criteria.to_owned())
+            .or_default()
+            .push(name.to_owned());
+        self.reorder();
         true
     }
-    /// Objectives and teams in vanilla's hash map iteration order.
-    fn sort_objectives(&mut self) {
-        let order = self
-            .objective_order
-            .get_or_insert_with(|| crate::fastutil_order::OpenOrder::new(16, 0.5));
-        for o in &self.objectives {
-            order.insert(&o.name);
-        }
-        let rank: BTreeMap<&str, usize> = order.keys().enumerate().map(|(i, k)| (k, i)).collect();
-        self.objectives
-            .sort_by_key(|o| rank.get(o.name.as_str()).copied().unwrap_or(usize::MAX));
-        for t in &self.teams {
-            self.team_order.insert(&t.name);
-        }
-        let rank: BTreeMap<&str, usize> = self
-            .team_order
-            .keys()
-            .enumerate()
-            .map(|(i, k)| (k, i))
-            .collect();
-        self.teams
-            .sort_by_key(|t| rank.get(t.name.as_str()).copied().unwrap_or(usize::MAX));
-    }
+    /// `removeObjective`: holders left without scores stay tracked.
     pub fn remove_objective(&mut self, name: &str) {
+        let Some(criteria) = self.objective(name).map(|o| o.criteria.clone()) else {
+            return;
+        };
         self.objectives.retain(|o| o.name != name);
-        if let Some(order) = self.objective_order.as_mut() {
-            order.remove(name);
-        }
+        self.objective_order.remove(name);
+        // Removing shifts the keys after it back.
+        self.reorder();
         self.display.retain(|_, o| o != name);
-        // Scoreboard.removeObjective: holders left without scores stay tracked.
+        if let Some(list) = self.by_criteria.get_mut(&criteria) {
+            list.retain(|n| n != name);
+        }
         for s in self.scores.values_mut() {
             s.remove(name);
         }
@@ -674,6 +852,7 @@ impl Scoreboard {
     }
     /// `getOrCreatePlayerScore`: a new score starts locked at zero.
     pub fn score_mut(&mut self, holder: &str, objective: &str) -> &mut Score {
+        self.holder_order.insert(holder);
         self.scores
             .entry(holder.to_owned())
             .or_default()
@@ -683,13 +862,17 @@ impl Scoreboard {
     pub fn get(&mut self, holder: &str, objective: &str) -> i32 {
         self.score_mut(holder, objective).value
     }
-    /// `ScoreAccess.set`; with `display` the objective's auto-update applies.
+    /// `ScoreAccess.set`; `display` is the holder's display name, which an
+    /// objective that updates its display copies to the score.
     pub fn set_with(&mut self, holder: &str, objective: &str, value: i32, display: Option<&Comp>) {
         let auto = self
             .objective(objective)
             .is_some_and(|o| o.display_auto_update);
         let s = self.score_mut(holder, objective);
-        if auto && let Some(d) = display {
+        if auto
+            && let Some(d) = display
+            && s.display.as_ref().map(canonical_component) != Some(canonical_component(d))
+        {
             s.display = Some(d.clone());
         }
         s.value = value;
@@ -703,45 +886,52 @@ impl Scoreboard {
         v
     }
     /// `forAllObjectives`: change the score of `holder` in every objective
-    /// using `criteria`, writable or not.
-    pub fn for_all_objectives(
+    /// using `criteria`, writable or not, in the order they were added.
+    pub fn for_all_objectives(&mut self, criteria: &str, holder: &str, f: impl FnMut(i32) -> i32) {
+        self.for_all_objectives_with(criteria, holder, None, f);
+    }
+    /// `forAllObjectives` for a holder with a display name.
+    pub fn for_all_objectives_with(
         &mut self,
         criteria: &str,
         holder: &str,
+        display: Option<&Comp>,
         mut f: impl FnMut(i32) -> i32,
     ) {
-        let names: Vec<String> = self
-            .objectives
-            .iter()
-            .filter(|o| o.criteria == criteria)
-            .map(|o| o.name.clone())
-            .collect();
+        let names = self.by_criteria.get(criteria).cloned().unwrap_or_default();
         for n in names {
             let v = f(self.get(holder, &n));
-            self.set(holder, &n, v);
+            self.set_with(holder, &n, v, display);
         }
     }
     pub fn has_objectives_for(&self, criteria: &str) -> bool {
-        self.objectives.iter().any(|o| o.criteria == criteria)
+        self.by_criteria
+            .get(criteria)
+            .is_some_and(|l| !l.is_empty())
     }
+    /// `resetAllPlayerScores`.
     pub fn reset_all(&mut self, holder: &str) {
-        self.scores.remove(holder);
+        if self.scores.remove(holder).is_some() {
+            self.holder_order.remove(holder);
+        }
     }
+    /// `resetSinglePlayerScore`: a holder left without scores is forgotten.
     pub fn reset_one(&mut self, holder: &str, objective: &str) {
         if let Some(s) = self.scores.get_mut(holder) {
             s.remove(objective);
             if s.is_empty() {
-                self.scores.remove(holder);
+                self.reset_all(holder);
             }
         }
     }
+    /// `listPlayerScores(objective)`, in `playerScores.forEach` order.
     pub fn list_scores(&self, objective: &str) -> Vec<ScoreEntry> {
-        self.scores
+        self.holder_order
             .iter()
-            .filter_map(|(owner, s)| {
-                let s = s.get(objective)?;
+            .filter_map(|owner| {
+                let s = self.scores.get(owner)?.get(objective)?;
                 Some(ScoreEntry {
-                    owner: owner.clone(),
+                    owner: owner.to_owned(),
                     value: s.value,
                     display: s.display.clone(),
                     number_format: s.number_format.clone(),
@@ -759,8 +949,9 @@ impl Scoreboard {
             .filter_map(|o| Some((o, s.get(&o.name)?.value)))
             .collect()
     }
+    /// `getTrackedPlayers` (`playerScores.keySet().stream()`).
     pub fn tracked(&self) -> Vec<String> {
-        self.scores.keys().cloned().collect()
+        self.holder_order.stream().map(str::to_owned).collect()
     }
 
     // teams
@@ -774,27 +965,39 @@ impl Scoreboard {
         if self.team(name).is_none() {
             self.teams.push(Team::new(name));
             self.team_order.insert(name);
-            self.sort_objectives();
+            self.reorder();
         }
         self.team_mut(name).expect("just added")
     }
+    /// `getPlayerTeams().stream()` (what saving uses).
+    pub fn teams_streamed(&self) -> Vec<&Team> {
+        self.team_order
+            .stream()
+            .filter_map(|n| self.team(n))
+            .collect()
+    }
+    /// `removePlayerTeam`: its members no longer have a team.
     pub fn remove_team(&mut self, name: &str) {
-        self.team_of.retain(|_, t| t != name);
-        self.teams.retain(|t| t.name != name);
+        let Some(at) = self.teams.iter().position(|t| t.name == name) else {
+            return;
+        };
+        let team = self.teams.remove(at);
+        for p in team.players.iter() {
+            self.team_of.remove(p);
+        }
         self.team_order.remove(name);
+        self.reorder();
     }
     pub fn players_team(&self, player: &str) -> Option<&Team> {
         self.team(self.team_of.get(player)?)
     }
-    /// `addPlayerToTeam`: leaves the old team first; false when already a member.
+    /// `addPlayerToTeam`: leaves the old team first (even when it is the
+    /// same one); false when the team already listed the player.
     pub fn add_to_team(&mut self, player: &str, team: &str) -> bool {
-        if self.team_of.get(player).is_some_and(|t| t == team) {
-            return false;
-        }
         self.remove_from_team(player);
         self.team_of.insert(player.to_owned(), team.to_owned());
         match self.team_mut(team) {
-            Some(t) => t.players.insert(player.to_owned()),
+            Some(t) => t.players.insert(player),
             None => false,
         }
     }
@@ -814,23 +1017,33 @@ impl Scoreboard {
             _ => false,
         }
     }
+    /// `Scoreboard.entityRemoved` for a dead entity that is not a player.
+    pub fn entity_removed(&mut self, holder: &str) {
+        self.reset_all(holder);
+        self.remove_from_team(holder);
+    }
 
     // saved data
+    /// `ScoreboardSaveData.Packed.CODEC` encoding of `ServerScoreboard.store`:
+    /// fields equal to their codec default are left out.
     pub fn pack(&self) -> Tag {
         let objectives: Vec<Tag> = self
-            .objectives
-            .iter()
+            .objectives_streamed()
+            .into_iter()
             .map(|o| {
                 let mut c = vec![
                     ("Name", Tag::String(o.name.as_str().into())),
-                    ("CriteriaName", Tag::String(o.criteria.as_str().into())),
-                    ("DisplayName", json_to_tag(&o.display_name)),
-                    ("RenderType", Tag::String(o.render_type.id().into())),
-                    (
-                        "display_auto_update",
-                        Tag::Byte(i8::from(o.display_auto_update)),
-                    ),
+                    ("DisplayName", component_tag(&o.display_name)),
                 ];
+                if o.criteria != CRITERIA_DUMMY {
+                    c.push(("CriteriaName", Tag::String(o.criteria.as_str().into())));
+                }
+                if o.render_type != RenderType::Integer {
+                    c.push(("RenderType", Tag::String(o.render_type.id().into())));
+                }
+                if o.display_auto_update {
+                    c.push(("display_auto_update", Tag::Byte(1)));
+                }
                 if let Some(f) = &o.number_format {
                     c.push(("format", f.to_tag()));
                 }
@@ -838,17 +1051,24 @@ impl Scoreboard {
             })
             .collect();
         let mut scores = Vec::new();
-        for (owner, per) in &self.scores {
-            for o in &self.objectives {
+        for owner in self.holder_order.stream() {
+            let Some(per) = self.scores.get(owner) else {
+                continue;
+            };
+            for o in self.objectives_streamed() {
                 let Some(s) = per.get(&o.name) else { continue };
                 let mut c = vec![
-                    ("Name", Tag::String(owner.as_str().into())),
+                    ("Name", Tag::String(owner.into())),
                     ("Objective", Tag::String(o.name.as_str().into())),
-                    ("Score", Tag::Int(s.value)),
-                    ("Locked", Tag::Byte(i8::from(s.locked))),
                 ];
+                if s.value != 0 {
+                    c.push(("Score", Tag::Int(s.value)));
+                }
+                if s.locked {
+                    c.push(("Locked", Tag::Byte(1)));
+                }
                 if let Some(d) = &s.display {
-                    c.push(("display", json_to_tag(d)));
+                    c.push(("display", component_tag(d)));
                 }
                 if let Some(f) = &s.number_format {
                     c.push(("format", f.to_tag()));
@@ -856,38 +1076,56 @@ impl Scoreboard {
                 scores.push(Tag::compound(c));
             }
         }
-        let slots = self
-            .display
-            .iter()
-            .map(|(k, v)| (k.as_str(), Tag::String(v.as_str().into())))
+        let slots = display_slots()
+            .into_iter()
+            .filter_map(|slot| {
+                let o = self.display.get(&slot)?;
+                self.objective(o)?;
+                Some((slot, Tag::String(o.as_str().into())))
+            })
             .collect::<Vec<_>>();
+        let slots: Vec<(&str, Tag)> = slots.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
         let teams: Vec<Tag> = self
-            .teams
-            .iter()
+            .teams_streamed()
+            .into_iter()
             .map(|t| {
                 let mut c = vec![
                     ("Name", Tag::String(t.name.as_str().into())),
-                    ("DisplayName", json_to_tag(&t.display_name)),
-                    (
-                        "AllowFriendlyFire",
-                        Tag::Byte(i8::from(t.allow_friendly_fire)),
-                    ),
-                    (
-                        "SeeFriendlyInvisibles",
-                        Tag::Byte(i8::from(t.see_friendly_invisibles)),
-                    ),
-                    ("MemberNamePrefix", json_to_tag(&t.prefix)),
-                    ("MemberNameSuffix", json_to_tag(&t.suffix)),
-                    (
+                    ("DisplayName", component_tag(&t.display_name)),
+                ];
+                if let Some(color) = &t.color {
+                    c.push(("TeamColor", Tag::String(color.as_str().into())));
+                }
+                if !t.allow_friendly_fire {
+                    c.push(("AllowFriendlyFire", Tag::Byte(0)));
+                }
+                if !t.see_friendly_invisibles {
+                    c.push(("SeeFriendlyInvisibles", Tag::Byte(0)));
+                }
+                let empty = Value::String(String::new());
+                if canonical_component(&t.prefix) != empty {
+                    c.push(("MemberNamePrefix", component_tag(&t.prefix)));
+                }
+                if canonical_component(&t.suffix) != empty {
+                    c.push(("MemberNameSuffix", component_tag(&t.suffix)));
+                }
+                if t.nametag_visibility != Visibility::Always {
+                    c.push((
                         "NameTagVisibility",
                         Tag::String(t.nametag_visibility.name().into()),
-                    ),
-                    (
+                    ));
+                }
+                if t.death_message_visibility != Visibility::Always {
+                    c.push((
                         "DeathMessageVisibility",
                         Tag::String(t.death_message_visibility.name().into()),
-                    ),
-                    ("CollisionRule", Tag::String(t.collision_rule.name().into())),
-                    (
+                    ));
+                }
+                if t.collision_rule != CollisionRule::Always {
+                    c.push(("CollisionRule", Tag::String(t.collision_rule.name().into())));
+                }
+                if !t.players.is_empty() {
+                    c.push((
                         "Players",
                         Tag::List(
                             t.players
@@ -895,10 +1133,7 @@ impl Scoreboard {
                                 .map(|p| Tag::String(p.as_str().into()))
                                 .collect(),
                         ),
-                    ),
-                ];
-                if let Some(color) = &t.color {
-                    c.push(("TeamColor", Tag::String(color.as_str().into())));
+                    ));
                 }
                 Tag::compound(c)
             })
@@ -919,6 +1154,7 @@ impl Scoreboard {
         }
         Tag::compound(entries)
     }
+    /// `ServerScoreboard.load` of the decoded save data.
     pub fn unpack(data: &Tag) -> Self {
         let mut sb = Scoreboard::default();
         let list = |k: &str| match data.get(k) {
@@ -958,8 +1194,14 @@ impl Scoreboard {
         }
         if let Some(Tag::Compound(slots)) = data.get("DisplaySlots") {
             for (k, v) in slots {
-                if let Tag::String(o) = v {
-                    sb.display.insert(k.to_string_lossy(), o.to_string_lossy());
+                let slot = k.to_string_lossy();
+                if let Tag::String(o) = v
+                    && display_slot_valid(&slot)
+                {
+                    let o = o.to_string_lossy();
+                    if sb.objective(&o).is_some() {
+                        sb.display.insert(slot, o);
+                    }
                 }
             }
         }
@@ -974,27 +1216,21 @@ impl Scoreboard {
             team.color = string_of(t.get("TeamColor")).filter(|c| team_color_rgb(c).is_some());
             team.allow_friendly_fire = bool_of(t.get("AllowFriendlyFire"), true);
             team.see_friendly_invisibles = bool_of(t.get("SeeFriendlyInvisibles"), true);
-            if let Some(p) = t.get("MemberNamePrefix") {
-                team.prefix = tag_to_json(p);
-            }
-            if let Some(p) = t.get("MemberNameSuffix") {
-                team.suffix = tag_to_json(p);
-            }
-            if let Some(v) =
-                string_of(t.get("NameTagVisibility")).and_then(|v| Visibility::by_name(&v))
-            {
-                team.nametag_visibility = v;
-            }
-            if let Some(v) =
-                string_of(t.get("DeathMessageVisibility")).and_then(|v| Visibility::by_name(&v))
-            {
-                team.death_message_visibility = v;
-            }
-            if let Some(v) =
-                string_of(t.get("CollisionRule")).and_then(|v| CollisionRule::by_name(&v))
-            {
-                team.collision_rule = v;
-            }
+            team.prefix = t
+                .get("MemberNamePrefix")
+                .map_or_else(|| literal(""), tag_to_json);
+            team.suffix = t
+                .get("MemberNameSuffix")
+                .map_or_else(|| literal(""), tag_to_json);
+            team.nametag_visibility = string_of(t.get("NameTagVisibility"))
+                .and_then(|v| Visibility::by_name(&v))
+                .unwrap_or(Visibility::Always);
+            team.death_message_visibility = string_of(t.get("DeathMessageVisibility"))
+                .and_then(|v| Visibility::by_name(&v))
+                .unwrap_or(Visibility::Always);
+            team.collision_rule = string_of(t.get("CollisionRule"))
+                .and_then(|v| CollisionRule::by_name(&v))
+                .unwrap_or(CollisionRule::Always);
             if let Some(Tag::List(players)) = t.get("Players") {
                 for p in players {
                     if let Tag::String(p) = p {
@@ -1005,6 +1241,156 @@ impl Scoreboard {
         }
         sb
     }
+}
+
+/// A component as `ComponentSerialization.CODEC` writes it to NBT.
+pub fn component_tag(c: &Comp) -> Tag {
+    let mut tag = json_to_tag(&canonical_component(c));
+    entity_uuids(&mut tag);
+    tag
+}
+/// `HoverEvent.ShowEntity` writes its UUID with `UUIDUtil.CODEC`: an int array.
+fn entity_uuids(tag: &mut Tag) {
+    match tag {
+        Tag::Compound(c) => {
+            let show_entity = matches!(c.get(&"action".into()), Some(Tag::String(a)) if a.to_string_lossy() == "show_entity");
+            for (k, v) in c.iter_mut() {
+                if show_entity && k.to_string_lossy() == "uuid" {
+                    let ints = match v {
+                        Tag::List(l) => l
+                            .iter()
+                            .map(|t| match t {
+                                Tag::Int(i) => Some(*i),
+                                _ => None,
+                            })
+                            .collect::<Option<Vec<i32>>>(),
+                        Tag::String(s) => {
+                            crate::save::uuid_from_text(&s.to_string_lossy()).map(Vec::from)
+                        }
+                        _ => None,
+                    };
+                    if let Some(ints) = ints.filter(|i| i.len() == 4) {
+                        *v = Tag::IntArray(ints);
+                    }
+                } else {
+                    entity_uuids(v);
+                }
+            }
+        }
+        Tag::List(l) => l.iter_mut().for_each(entity_uuids),
+        _ => {}
+    }
+}
+
+/// A style object as `Style.Serializer.MAP_CODEC` re-encodes it.
+pub fn canonical_style(style: &Value) -> Value {
+    let (mut node, _) = decompose(style);
+    node.remove("text");
+    Value::Object(node)
+}
+
+/// A component as vanilla decodes and re-encodes it (`ComponentSerialization`):
+/// a literal without style or siblings becomes a plain string, a list becomes
+/// its first element with the others appended as siblings, and the content
+/// type marker is left out.
+pub fn canonical_component(c: &Comp) -> Comp {
+    let (mut node, extra) = decompose(c);
+    finish(&mut node, extra)
+}
+/// A component's own fields (content and style) and its siblings.
+fn decompose(c: &Comp) -> (serde_json::Map<String, Value>, Vec<Comp>) {
+    match c {
+        Value::Array(list) if !list.is_empty() => {
+            let (mut node, mut extra) = decompose(&list[0]);
+            extra.extend(list[1..].iter().map(canonical_component));
+            node.remove("extra");
+            (node, extra)
+        }
+        Value::Object(o) => {
+            let mut node = serde_json::Map::new();
+            let mut extra = Vec::new();
+            for (k, v) in o {
+                match k.as_str() {
+                    "type" => {}
+                    "extra" => {
+                        if let Value::Array(list) = v {
+                            extra.extend(list.iter().map(canonical_component));
+                        }
+                    }
+                    "bold" | "italic" | "underlined" | "strikethrough" | "obfuscated" => {
+                        let b = match v {
+                            Value::Bool(b) => *b,
+                            Value::Number(n) => n.as_f64().is_some_and(|f| f as i8 != 0),
+                            _ => continue,
+                        };
+                        node.insert(k.clone(), Value::Bool(b));
+                    }
+                    "color" => {
+                        let color = v.as_str().map(|s| match s.strip_prefix('#') {
+                            Some(hex) => match u32::from_str_radix(hex, 16) {
+                                Ok(rgb) => format!("#{rgb:06X}"),
+                                Err(_) => s.to_owned(),
+                            },
+                            None => s.to_owned(),
+                        });
+                        if let Some(color) = color {
+                            node.insert(k.clone(), Value::String(color));
+                        }
+                    }
+                    "with" => {
+                        if let Value::Array(args) = v {
+                            let args = args
+                                .iter()
+                                .map(|a| match a {
+                                    Value::Object(_) | Value::Array(_) => canonical_component(a),
+                                    other => other.clone(),
+                                })
+                                .collect();
+                            node.insert(k.clone(), Value::Array(args));
+                        }
+                    }
+                    "separator" => {
+                        node.insert(k.clone(), canonical_component(v));
+                    }
+                    "hover_event" => {
+                        let mut h = v.clone();
+                        if let Some(value) = h.get("value").cloned()
+                            && h.get("action").and_then(Value::as_str) == Some("show_text")
+                        {
+                            h["value"] = canonical_component(&value);
+                        }
+                        node.insert(k.clone(), h);
+                    }
+                    _ => {
+                        node.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+            (node, extra)
+        }
+        Value::String(s) => {
+            let mut node = serde_json::Map::new();
+            node.insert("text".into(), Value::String(s.clone()));
+            (node, Vec::new())
+        }
+        other => {
+            let mut node = serde_json::Map::new();
+            node.insert("text".into(), Value::String(other.to_string()));
+            (node, Vec::new())
+        }
+    }
+}
+fn finish(node: &mut serde_json::Map<String, Value>, extra: Vec<Comp>) -> Comp {
+    if extra.is_empty()
+        && node.len() == 1
+        && let Some(Value::String(s)) = node.get("text")
+    {
+        return Value::String(s.clone());
+    }
+    if !extra.is_empty() {
+        node.insert("extra".into(), Value::Array(extra));
+    }
+    Value::Object(node.clone())
 }
 
 #[cfg(test)]
@@ -1077,13 +1463,15 @@ mod tests {
         assert_eq!(sb.add("Steve", "kills", 5), 7);
         assert_eq!(sb.holder_scores("Steve").len(), 1);
         sb.set("Alex", "hp", 20);
-        assert_eq!(sb.tracked(), vec!["Alex".to_owned(), "Steve".to_owned()]);
+        let mut tracked = sb.tracked();
+        tracked.sort();
+        assert_eq!(tracked, vec!["Alex".to_owned(), "Steve".to_owned()]);
         sb.reset_one("Alex", "hp");
         assert_eq!(sb.tracked(), vec!["Steve".to_owned()]);
         sb.set_display_objective("sidebar", Some("kills"));
         sb.remove_objective("kills");
         assert!(sb.display_objective("sidebar").is_none());
-        // Scoreboard.removeObjective keeps the holder, now without scores.
+        // removeObjective keeps the holder, now without scores.
         assert_eq!(sb.tracked(), vec!["Steve".to_owned()]);
         assert!(sb.holder_scores("Steve").is_empty());
     }
@@ -1094,7 +1482,8 @@ mod tests {
         sb.add_team("red");
         sb.add_team("blue");
         assert!(sb.add_to_team("Steve", "red"));
-        assert!(!sb.add_to_team("Steve", "red"));
+        // Joining the same team leaves it first, so it succeeds again.
+        assert!(sb.add_to_team("Steve", "red"));
         assert!(sb.add_to_team("Alex", "red"));
         assert!(sb.allied("Steve", "Alex"));
         assert!(sb.add_to_team("Steve", "blue"));

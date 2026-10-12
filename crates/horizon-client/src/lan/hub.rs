@@ -275,6 +275,7 @@ impl Hub {
         *ctx.next_entity += 1;
         let conn = j.conn;
         let mut guest = Guest::new(j, entity_id, ctx.spawn, self.config.view_distance);
+        guest.last_action_tick = self.ticks;
         guest.game_mode = self.config.default_game_mode;
         guest.permission = self.default_permission(guest.uuid);
         guest.joined_tick = self.ticks;
@@ -1154,6 +1155,13 @@ impl Hub {
 
     // ---- incoming ------------------------------------------------------
 
+    /// The squared movement past 1.0E-5F (handlePlayerKnownMovement).
+    fn moved_far(&self, i: usize, to: [f64; 3]) -> bool {
+        let from = self.guests[i].position;
+        let d: f64 = (0..3).map(|k| (to[k] - from[k]).powi(2)).sum();
+        d > f64::from(1.0E-5_f32)
+    }
+
     fn process_inbox(&mut self, i: usize, ctx: &mut TickCtx, events: &mut Vec<HostEvent>) {
         let mut budget = 400;
         while budget > 0 {
@@ -1162,6 +1170,26 @@ impl Hub {
             };
             budget -= 1;
             let conn = self.guests[i].conn;
+            // ServerPlayer.resetLastActionTime: every handler of a player's
+            // own action resets it, movement only when it moved
+            // (handlePlayerKnownMovement), PlayerInput once loaded.
+            let acted = match &packet {
+                S::AcceptTeleportation(_)
+                | S::MovePlayerStatus(_)
+                | S::MovePlayerRot(_)
+                | S::PlayerLoaded(_)
+                | S::ChunkBatchReceived(_)
+                | S::ClientInformation(_)
+                | S::ClientTickEnd(_)
+                | S::KeepAlive(_) => false,
+                S::MovePlayerPos(p) => self.moved_far(i, [p.x, p.y, p.z]),
+                S::MovePlayerPosRot(p) => self.moved_far(i, [p.x, p.y, p.z]),
+                S::PlayerInput(_) => self.guests[i].loaded,
+                _ => true,
+            };
+            if acted {
+                self.guests[i].last_action_tick = self.ticks;
+            }
             match packet {
                 S::AcceptTeleportation(p) => {
                     let g = &mut self.guests[i];

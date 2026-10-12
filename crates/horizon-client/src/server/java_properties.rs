@@ -159,9 +159,7 @@ impl LineReader<'_> {
             }
             if line.is_empty() && (c == '#' || c == '!') {
                 loop {
-                    let Some(&d) = chars.get(self.pos) else {
-                        return None;
-                    };
+                    let &d = chars.get(self.pos)?;
                     self.pos += 1;
                     if d == '\r' || d == '\n' {
                         break;

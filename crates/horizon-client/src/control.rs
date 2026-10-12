@@ -5,11 +5,60 @@
 //! that depend on a later frame (screenshots, benchmarks) arrive when ready.
 use std::{
     io::{BufRead, BufReader, Write},
-    os::unix::net::{UnixListener, UnixStream},
     path::{Path, PathBuf},
     sync::mpsc,
     thread,
 };
+
+#[cfg(unix)]
+pub use std::os::unix::net::{UnixListener, UnixStream};
+#[cfg(not(unix))]
+pub use unsupported::{UnixListener, UnixStream};
+
+/// Windows' standard library has no Unix domain sockets: there the control
+/// socket reports itself unavailable and the game runs without it.
+#[cfg(not(unix))]
+mod unsupported {
+    use std::{io, path::Path};
+
+    fn unavailable() -> io::Error {
+        io::Error::new(
+            io::ErrorKind::Unsupported,
+            "the control socket needs Unix domain sockets (Linux or macOS)",
+        )
+    }
+    pub struct UnixStream;
+    impl UnixStream {
+        pub fn connect<P: AsRef<Path>>(_: P) -> io::Result<Self> {
+            Err(unavailable())
+        }
+        pub fn try_clone(&self) -> io::Result<Self> {
+            Err(unavailable())
+        }
+    }
+    impl io::Read for UnixStream {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Err(unavailable())
+        }
+    }
+    impl io::Write for UnixStream {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(unavailable())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    pub struct UnixListener;
+    impl UnixListener {
+        pub fn bind<P: AsRef<Path>>(_: P) -> io::Result<Self> {
+            Err(unavailable())
+        }
+        pub fn incoming(&self) -> std::iter::Empty<io::Result<UnixStream>> {
+            std::iter::empty()
+        }
+    }
+}
 
 /// One command line from a client, with the channel for its JSON reply.
 pub struct Request {
