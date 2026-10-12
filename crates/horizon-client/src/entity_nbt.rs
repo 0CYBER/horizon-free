@@ -1120,6 +1120,25 @@ pub fn armor_stand_to_nbt(a: &ArmorStand, uuid: [i32; 4], raw: Option<&Tag>) -> 
     {
         put(&mut tag, "Health", Tag::Float(20f32.to_bits()));
     }
+    // LivingEntity.addAdditionalSaveData and ArmorStand's own fields.
+    if let Tag::Compound(map) = &mut tag {
+        for (key, value) in [
+            ("HurtTime", Tag::Short(0)),
+            ("DeathTime", Tag::Short(0)),
+            ("AbsorptionAmount", Tag::Float(0)),
+            ("FallFlying", Tag::Byte(0)),
+            ("current_impulse_context_reset_grace_time", Tag::Int(0)),
+            ("attributes", Tag::List(Vec::new())),
+            (
+                "Brain",
+                Tag::compound([("memories", Tag::Compound(Compound::new()))]),
+            ),
+            ("DisabledSlots", Tag::Int(0)),
+            ("Pose", Tag::Compound(Compound::new())),
+        ] {
+            map.entry(key.into()).or_insert(value);
+        }
+    }
     tag
 }
 pub fn armor_stand_from_nbt(tag: &Tag, id: u32) -> Option<ArmorStand> {

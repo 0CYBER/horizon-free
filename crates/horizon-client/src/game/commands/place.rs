@@ -70,20 +70,129 @@ impl Game<'_> {
         }
         None
     }
+    /// `BlockPosArgument.getLoadedBlockPos(pos)`, or the source's block.
+    fn place_pos(&self, ctx: &Context, name: &str) -> R<[i32; 3]> {
+        if ctx.get(name).is_some() {
+            return self.block_pos_arg(ctx, name);
+        }
+        Ok(self.source_position().map(|v| v.floor() as i32))
+    }
+    /// `PlaceCommand.checkLoaded`: every chunk of the inclusive range.
+    fn place_check_loaded(&self, min: [i32; 2], max: [i32; 2]) -> R<()> {
+        let elsewhere = self.command_source.is_some_and(|s| s.elsewhere);
+        for cx in min[0]..=max[0] {
+            for cz in min[1]..=max[1] {
+                if elsewhere || !self.world.chunks.contains_key(&(cx, cz)) {
+                    return Err(err("argument.pos.unloaded", &[]));
+                }
+            }
+        }
+        Ok(())
+    }
+    /// `PlaceCommand.placeFeature`, `placeJigsaw` and `placeStructure`.
+    pub(super) fn cmd_place_generated(&mut self, id: &str, ctx: &Context) -> R<i32> {
+        match id {
+            "place.feature" => {
+                let raw = match ctx.get("feature") {
+                    Some(Arg::Resource(s) | Arg::Str(s)) => s.clone(),
+                    _ => return Ok(0),
+                };
+                let pos = self.place_pos(ctx, "pos")?;
+                let (cx, cz) = (pos[0] >> 4, pos[2] >> 4);
+                self.place_check_loaded([cx - 1, cz - 1], [cx + 1, cz + 1])?;
+                // Inline features are not built by the live feature registry.
+                if raw.starts_with('{') {
+                    return Err(err("command.failed", &[]));
+                }
+                let name = if raw.contains(':') {
+                    raw
+                } else {
+                    format!("minecraft:{raw}")
+                };
+                let at = horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]);
+                let placed = self
+                    .with_level(|b, level, ticks| b.place_feature(level, ticks, &name, at))
+                    .ok_or_else(|| err("command.failed", &[]))?;
+                self.process_level_events()
+                    .map_err(|_| err("command.failed", &[]))?;
+                if !placed {
+                    return Err(err("commands.place.feature.failed", &[]));
+                }
+                self.feedback(Text::translate(
+                    "commands.place.feature.success",
+                    &[Text::literal(name), num(pos[0]), num(pos[1]), num(pos[2])],
+                ));
+                Ok(1)
+            }
+            "place.jigsaw" => {
+                let Some(Arg::Resource(pool)) = ctx.get("pool").cloned() else {
+                    return Ok(0);
+                };
+                if !self
+                    .ui
+                    .registries
+                    .ids("minecraft:worldgen/template_pool")
+                    .contains(&pool)
+                {
+                    return Err(err("commands.place.jigsaw.invalid", &[&pool]));
+                }
+                let target = match ctx.get("target") {
+                    Some(Arg::Resource(s) | Arg::Str(s)) => s.clone(),
+                    _ => return Ok(0),
+                };
+                let max_depth = match ctx.get("max_depth") {
+                    Some(Arg::Int(n)) => *n,
+                    _ => return Ok(0),
+                };
+                let pos = self.place_pos(ctx, "position")?;
+                self.place_check_loaded([pos[0] >> 4, pos[2] >> 4], [pos[0] >> 4, pos[2] >> 4])?;
+                let terrain = self
+                    .end
+                    .locator()
+                    .ok_or_else(|| err("command.failed", &[]))?;
+                let query = horizon_world::worldgen::generator::JigsawQuery {
+                    pool: &pool,
+                    target: &target,
+                    max_depth,
+                    position: pos,
+                };
+                let placed = self.with_level(|b, level, ticks| {
+                    b.place_jigsaw(level, ticks, pos, || terrain.jigsaw_pieces(&query))
+                });
+                self.process_level_events()
+                    .map_err(|_| err("command.failed", &[]))?;
+                if !placed {
+                    return Err(err("commands.place.jigsaw.failed", &[]));
+                }
+                self.feedback(Text::translate(
+                    "commands.place.jigsaw.success",
+                    &[num(pos[0]), num(pos[1]), num(pos[2])],
+                ));
+                Ok(1)
+            }
+            _ => {
+                let Some(Arg::Resource(structure)) = ctx.get("structure").cloned() else {
+                    return Ok(0);
+                };
+                if !self
+                    .ui
+                    .registries
+                    .ids("minecraft:worldgen/structure")
+                    .contains(&structure)
+                {
+                    return Err(err("commands.place.structure.invalid", &[&structure]));
+                }
+                self.place_pos(ctx, "pos")?;
+                // Structure.generate is not wired to the live level.
+                Err(err("command.failed", &[]))
+            }
+        }
+    }
     pub(super) fn cmd_place(&mut self, ctx: &Context) -> R<i32> {
         let Some(Arg::Resource(id)) = ctx.get("template").cloned() else {
             return Ok(0);
         };
-        let pos = if ctx.get("pos").is_some() {
-            self.block_pos_arg(ctx, "pos")?
-        } else {
-            let p = self.source_position();
-            [
-                p[0].floor() as i32,
-                p[1].floor() as i32,
-                p[2].floor() as i32,
-            ]
-        };
+        let pos = self.place_pos(ctx, "pos")?;
         let rotation = match ctx.get("rotation") {
             Some(Arg::Str(r)) => Rotation::from_name(r).unwrap_or(Rotation::None),
             _ => Rotation::None,

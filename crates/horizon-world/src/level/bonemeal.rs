@@ -105,6 +105,18 @@ fn next_int_between<R: RandomSource>(random: &mut R, min: i32, max: i32) -> i32 
 }
 
 impl Behaviours {
+    /// `/place feature`: `ConfiguredFeature.place` at `pos` with the level
+    /// random. `None` when the feature is unknown or cannot run.
+    pub fn place_feature<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        name: &str,
+        pos: BlockPos,
+    ) -> Option<bool> {
+        self.live_features()?.configured(name)?;
+        Some(self.sim(level, ticks).place_configured_feature(name, pos))
+    }
     /// `BoneMealItem.useOn` for a player clicking `pos` on `face`. Returns
     /// whether bone meal was used (the caller then shrinks the stack unless
     /// the player is in creative mode). Reports level event 1505 (growth

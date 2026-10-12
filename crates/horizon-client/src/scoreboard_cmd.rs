@@ -908,7 +908,8 @@ fn team(id: &str, ctx: &Context, env: &mut dyn Env) -> CmdResult<i32> {
             let mut tracker = Tracker::default();
             for m in &members {
                 let joined = env.sb_mut().add_to_team(&m.name, &name);
-                tracker.track(m, i32::from(joined));
+                // The message reads the display name after the change.
+                tracker.track(&env.named(&m.name), i32::from(joined));
             }
             let shown = formatted(env, &name);
             tracker.send(
@@ -934,7 +935,7 @@ fn team(id: &str, ctx: &Context, env: &mut dyn Env) -> CmdResult<i32> {
             let mut tracker = Tracker::default();
             for m in &members {
                 let left = env.sb_mut().remove_from_team(&m.name);
-                tracker.track(m, i32::from(left));
+                tracker.track(&env.named(&m.name), i32::from(left));
             }
             tracker.send(
                 env,

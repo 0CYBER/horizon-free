@@ -7,6 +7,7 @@ use horizon_client::{
     scoreboard_cmd::{Holder, Tracker},
     text::Text,
 };
+use horizon_world::nbt::Tag;
 
 /// One addressable slot.
 #[derive(Clone, Debug, PartialEq)]
@@ -290,7 +291,7 @@ impl Game<'_> {
         }
     }
     fn stack_name(&self, s: &ItemStack) -> Text {
-        self.item_display_name(&s.item)
+        self.stack_display_name(s)
     }
     fn item_from_input(&self, ctx: &Context) -> R<Option<ItemStack>> {
         let Some(Arg::Item(ItemInput { id, components, .. })) = ctx.get("item").cloned() else {
@@ -351,12 +352,12 @@ impl Game<'_> {
             },
             Value::Object(_) => {
                 let mut stack = stack?;
-                if !m["conditions"].is_null()
-                    && !self.conditions_hold(&m["conditions"], this, origin)
+                // 26.3 item modifiers: a single `condition`, dispatched on `type`.
+                if !m["condition"].is_null() && !self.conditions_hold(&m["condition"], this, origin)
                 {
                     return Some(stack);
                 }
-                match m["function"].as_str().unwrap_or("") {
+                match m["type"].as_str().unwrap_or("") {
                     "minecraft:sequence" => {
                         #[allow(clippy::manual_try_fold)]
                         return m["functions"]
@@ -408,9 +409,19 @@ impl Game<'_> {
                         }
                     }
                     "minecraft:set_name" => {
-                        let t = horizon_client::packs::component(&m["name"]);
-                        stack.extra.get_or_insert_with(Default::default).custom_name =
-                            Some(t.plain());
+                        if m["name"].is_null() {
+                            return Some(stack);
+                        }
+                        if m["target"].as_str() == Some("item_name") {
+                            let name = horizon_client::scoreboard::json_to_tag(&m["name"]);
+                            edit_components(&mut stack, |c| {
+                                c.insert("minecraft:item_name".into(), name);
+                            });
+                        } else {
+                            let t = horizon_client::packs::component(&m["name"]);
+                            stack.extra.get_or_insert_with(Default::default).custom_name =
+                                Some(t.plain());
+                        }
                     }
                     "minecraft:set_enchantments" => {
                         let add = m["add"].as_bool() == Some(true);
@@ -440,12 +451,167 @@ impl Game<'_> {
                                 Some(p.into());
                         }
                     }
+                    "minecraft:set_lore" => {
+                        let lines: Vec<Tag> = m["lore"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .map(horizon_client::scoreboard::json_to_tag)
+                            .collect();
+                        edit_components(&mut stack, |c| {
+                            let old: Vec<Tag> = match c.get(&"minecraft:lore".into()) {
+                                Some(Tag::List(l)) => l.clone(),
+                                _ => Vec::new(),
+                            };
+                            let new = list_operation(m, old, lines);
+                            c.insert("minecraft:lore".into(), Tag::List(new));
+                        });
+                    }
+                    "minecraft:set_custom_data" => {
+                        let tag = match &m["tag"] {
+                            Value::String(snbt) => horizon_world::nbt::parse_snbt(snbt)
+                                .map(|(t, _)| t)
+                                .unwrap_or(Tag::Compound(Default::default())),
+                            v => horizon_client::scoreboard::json_to_tag(v),
+                        };
+                        edit_components(&mut stack, |c| {
+                            let mut data = match c.get(&"minecraft:custom_data".into()) {
+                                Some(t @ Tag::Compound(_)) => t.clone(),
+                                _ => Tag::Compound(Default::default()),
+                            };
+                            merge_compound(&mut data, &tag);
+                            c.insert("minecraft:custom_data".into(), data);
+                        });
+                    }
+                    "minecraft:set_components" => {
+                        let patch = m["components"].clone();
+                        edit_components(&mut stack, |c| {
+                            for (k, v) in patch.as_object().into_iter().flatten() {
+                                let (remove, key) = match k.strip_prefix('!') {
+                                    Some(rest) => (true, rest),
+                                    None => (false, k.as_str()),
+                                };
+                                let key = if key.contains(':') {
+                                    key.to_owned()
+                                } else {
+                                    format!("minecraft:{key}")
+                                };
+                                if remove {
+                                    c.remove(&key.as_str().into());
+                                } else {
+                                    c.insert(
+                                        key.as_str().into(),
+                                        horizon_client::scoreboard::json_to_tag(v),
+                                    );
+                                }
+                            }
+                        });
+                    }
+                    "minecraft:toggle_tooltips" => {
+                        let toggles = m["toggles"].clone();
+                        edit_components(&mut stack, |c| {
+                            let mut hidden: Vec<String> = c
+                                .get(&"minecraft:tooltip_display".into())
+                                .and_then(|d| d.get("hidden_components"))
+                                .and_then(|l| match l {
+                                    Tag::List(l) => Some(
+                                        l.iter()
+                                            .filter_map(|t| match t {
+                                                Tag::String(s) => Some(s.to_string_lossy()),
+                                                _ => None,
+                                            })
+                                            .collect(),
+                                    ),
+                                    _ => None,
+                                })
+                                .unwrap_or_default();
+                            let hide_tooltip = c
+                                .get(&"minecraft:tooltip_display".into())
+                                .and_then(|d| d.get("hide_tooltip"))
+                                .cloned();
+                            for (k, shown) in toggles.as_object().into_iter().flatten() {
+                                let key = if k.contains(':') {
+                                    k.clone()
+                                } else {
+                                    format!("minecraft:{k}")
+                                };
+                                hidden.retain(|h| *h != key);
+                                if shown.as_bool() == Some(false) {
+                                    hidden.push(key);
+                                }
+                            }
+                            let mut display: Vec<(&str, Tag)> = Vec::new();
+                            if let Some(h) = hide_tooltip {
+                                display.push(("hide_tooltip", h));
+                            }
+                            if !hidden.is_empty() {
+                                display.push((
+                                    "hidden_components",
+                                    Tag::List(
+                                        hidden
+                                            .iter()
+                                            .map(|h| Tag::String(h.as_str().into()))
+                                            .collect(),
+                                    ),
+                                ));
+                            }
+                            c.insert("minecraft:tooltip_display".into(), Tag::compound(display));
+                        });
+                    }
+                    "minecraft:filtered" => {
+                        let pass = self.loot_item_filter(&m["item_filter"], &stack);
+                        let branch = if pass { &m["on_pass"] } else { &m["on_fail"] };
+                        if branch.is_null() {
+                            return Some(stack);
+                        }
+                        return self.apply_item_modifier(
+                            branch,
+                            Some(stack),
+                            rng,
+                            this,
+                            origin,
+                            depth + 1,
+                        );
+                    }
+                    "minecraft:discard" => stack.count = 0,
                     _ => {}
                 }
                 (stack.count > 0).then_some(stack)
             }
             _ => stack,
         }
+    }
+    /// `ItemStack.getMaxStackSize`: the max_stack_size component, else the
+    /// item's.
+    pub(super) fn stack_max_size(&self, s: &ItemStack) -> u32 {
+        if let Some(Tag::Int(n)) = s.data().and_then(|d| d.other("minecraft:max_stack_size")) {
+            return (*n).clamp(1, 99) as u32;
+        }
+        self.res.items.get(&s.item).map_or(64, |i| i.max_stack)
+    }
+    /// `ResourceOrIdArgument.getItemModifier`: an inline modifier (SNBT) or
+    /// a registered one.
+    pub(super) fn item_modifier_arg(&mut self, ctx: &Context, name: &str) -> R<serde_json::Value> {
+        let raw = match ctx.get(name) {
+            Some(Arg::Resource(s) | Arg::Str(s)) => s.clone(),
+            _ => return Err(err("command.failed", &[])),
+        };
+        if raw.starts_with('{') || raw.starts_with('[') {
+            let (tag, _) = horizon_world::nbt::parse_snbt(&raw)
+                .map_err(|e| err("argument.nbt.invalid", &[&e]))?;
+            return Ok(horizon_client::scoreboard::tag_to_json(&tag));
+        }
+        let id = if raw.contains(':') {
+            raw
+        } else {
+            format!("minecraft:{raw}")
+        };
+        self.fns
+            .store
+            .item_modifiers
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| err("argument.item_modifier.unknown", &[&id]))
     }
     /// `/item modify (entity|block) <target> <slot> <modifier>`.
     pub(super) fn cmd_item_modify(&mut self, ctx: &Context) -> R<i32> {
@@ -454,17 +620,7 @@ impl Game<'_> {
         let Some(Arg::Str(slot_name)) = ctx.get("slot").cloned() else {
             return Ok(0);
         };
-        let Some(Arg::Str(id)) = ctx.get("modifier").cloned() else {
-            return Ok(0);
-        };
-        let id = if id.contains(':') {
-            id
-        } else {
-            format!("minecraft:{id}")
-        };
-        let Some(modifier) = self.fns.store.item_modifiers.get(&id).cloned() else {
-            return Err(err("argument.item_modifier.unknown", &[&id]));
-        };
+        let modifier = self.item_modifier_arg(ctx, "modifier")?;
         let source = self.command_source.unwrap_or_else(|| self.player_source());
         let view = source.entity.map(|t| self.entity_view_of(t));
         let seed = std::time::SystemTime::now()
@@ -501,7 +657,14 @@ impl Game<'_> {
                     source.pos,
                     0,
                 );
-                if new.as_ref() != Some(&current) && self.slot_set(slot, new) {
+                // CountingModifier: every slot set counts, changed or not;
+                // ItemStack.limitSize to the (new) max stack size.
+                let new = new.map(|mut s| {
+                    let max = self.stack_max_size(&s);
+                    s.count = s.count.min(max);
+                    s
+                });
+                if self.slot_set(slot, new) {
                     changed += 1;
                 }
             }
@@ -581,6 +744,28 @@ impl Game<'_> {
                     ),
                     _ => err("commands.item.source.no_such_slot", &[&source_slots]),
                 });
+            }
+            // ItemCommands.applyModifier on each source stack.
+            if ctx.get("modifier").is_some() {
+                let modifier = self.item_modifier_arg(ctx, "modifier")?;
+                let source = self.command_source.unwrap_or_else(|| self.player_source());
+                let view = source.entity.map(|t| self.entity_view_of(t));
+                let mut rng = horizon_core::random::LegacyRandom::new(0);
+                found = found
+                    .into_iter()
+                    .map(|s| {
+                        s.and_then(|s| {
+                            self.apply_item_modifier(
+                                &modifier,
+                                Some(s),
+                                &mut rng,
+                                view.as_ref(),
+                                source.pos,
+                                0,
+                            )
+                        })
+                    })
+                    .collect();
             }
             // A source with nothing in the slot contributes air.
             (found, None)
@@ -706,7 +891,7 @@ impl Game<'_> {
                 if let Some(stack) = self.slot_get(&s)
                     && predicate
                         .as_ref()
-                        .is_some_and(|p| self.item_matches(p, &stack.item))
+                        .is_some_and(|p| self.stack_matches(p, &stack))
                 {
                     count += stack.count as i32;
                 }
@@ -714,4 +899,63 @@ impl Game<'_> {
         }
         Ok((count > 0, count))
     }
+}
+
+/// Edit a stack's components as their saved compound.
+fn edit_components(stack: &mut ItemStack, f: impl FnOnce(&mut horizon_world::nbt::Compound)) {
+    let mut c = match horizon_client::item_data::encode_components(stack) {
+        Some(Tag::Compound(c)) => c,
+        _ => horizon_world::nbt::Compound::new(),
+    };
+    f(&mut c);
+    let tag = Tag::Compound(c);
+    let (damage, extra) = horizon_client::item_data::decode_components(Some(&tag));
+    stack.damage = damage;
+    stack.extra = extra;
+    stack.tidy();
+}
+/// `CompoundTag.merge`: nested compounds merge, other values replace.
+fn merge_compound(into: &mut Tag, from: &Tag) {
+    let (Tag::Compound(a), Tag::Compound(b)) = (into, from) else {
+        return;
+    };
+    for (k, v) in b {
+        match (a.get_mut(k), v) {
+            (Some(existing @ Tag::Compound(_)), Tag::Compound(_)) => merge_compound(existing, v),
+            _ => {
+                a.insert(k.clone(), v.clone());
+            }
+        }
+    }
+}
+/// `ListOperation.apply` (`mode`: replace_all, replace_section, insert,
+/// append) with a 256-entry limit.
+fn list_operation(m: &serde_json::Value, old: Vec<Tag>, new: Vec<Tag>) -> Vec<Tag> {
+    let offset = m["offset"].as_u64().unwrap_or(0) as usize;
+    let mut out = match m["mode"].as_str().unwrap_or("") {
+        "replace_all" => new,
+        "insert" => {
+            let at = offset.min(old.len());
+            let mut out = old[..at].to_vec();
+            out.extend(new);
+            out.extend_from_slice(&old[at..]);
+            out
+        }
+        "replace_section" => {
+            let at = offset.min(old.len());
+            let size = m["size"].as_u64().map_or(new.len(), |s| s as usize);
+            let mut out = old[..at].to_vec();
+            out.extend(new);
+            let end = (at + size).min(old.len());
+            out.extend_from_slice(&old[end..]);
+            out
+        }
+        _ => {
+            let mut out = old;
+            out.extend(new);
+            out
+        }
+    };
+    out.truncate(256);
+    out
 }
