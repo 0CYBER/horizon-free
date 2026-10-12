@@ -94,6 +94,21 @@ def scenarios():
     add('ghastling_alone', 200, ['mob minecraft:happy_ghast 0.5 -57 0.5 0 84 persistent baby'])
     add('ghastling_adult', 200, ['mob minecraft:happy_ghast 10.5 -55 0.5 0 85 persistent',
                                  'mob minecraft:happy_ghast 0.5 -57 0.5 0 86 persistent baby'])
+    # Breeding, temptation and growing up.
+    add('sniffer_love', 300, ['mob minecraft:sniffer 0.5 -60 0.5 0 91 persistent inlove',
+                              'mob minecraft:sniffer 4.5 -60 0.5 0 92 persistent inlove'])
+    add('sniffer_tempted', 200, ['player 7.5 -60 0.5 hand=minecraft:torchflower_seeds',
+                                 'mob minecraft:sniffer 0.5 -60 0.5 0 93 persistent'])
+    add('llama_love', 300, ['mob minecraft:llama 0.5 -60 0.5 0 94 persistent tame inlove strength=3',
+                            'mob minecraft:llama 4.5 -60 0.5 0 95 persistent tame inlove strength=2'])
+    add('llama_tempted', 200, ['player 7.5 -60 0.5 hand=minecraft:hay_block',
+                               'mob minecraft:llama 0.5 -60 0.5 0 96 persistent'])
+    add('ghastling_tempted', 200, ['player 8.5 -60 0.5 hand=minecraft:snowball',
+                                   'mob minecraft:happy_ghast 0.5 -57 0.5 0 97 persistent baby'])
+    add('happy_ghast_tempted', 200, ['player 12.5 -60 0.5 hand=minecraft:snowball',
+                                     'mob minecraft:happy_ghast 0.5 -55 0.5 0 98 persistent'])
+    add('ghastling_grows', 200, ['player 8.5 -60 0.5',
+                                 'mob minecraft:happy_ghast 0.5 -57 0.5 0 99 persistent age=-40'])
     return s
 
 

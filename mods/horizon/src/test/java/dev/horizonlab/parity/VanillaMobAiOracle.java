@@ -155,6 +155,8 @@ public final class VanillaMobAiOracle {
         List<String[]> blocks = new ArrayList<>();
         double[] player;
         boolean creative;
+        /** What the player holds in its main hand (an item id), or null. */
+        String hand;
         List<MobSpec> mobs = new ArrayList<>();
         long levelSeed = 0;
     }
@@ -185,7 +187,11 @@ public final class VanillaMobAiOracle {
                 case "fill", "block" -> s.blocks.add(f);
                 case "player" -> {
                     s.player = new double[] {Double.parseDouble(f[1]), Double.parseDouble(f[2]), Double.parseDouble(f[3])};
-                    s.creative = f.length > 4 && f[4].equals("creative");
+                    for (int i = 4; i < f.length; i++) {
+                        if (f[i].equals("creative")) s.creative = true;
+                        else if (f[i].startsWith("hand=")) s.hand = f[i].substring(5);
+                        else throw new IllegalArgumentException(line);
+                    }
                 }
                 case "mob" -> {
                     MobSpec m = new MobSpec();
@@ -426,6 +432,8 @@ public final class VanillaMobAiOracle {
                     this.getPlayerList().placeNewPlayer(connection, player, cookie);
                 }
                 player.setGameMode(s.creative ? GameType.CREATIVE : GameType.SURVIVAL);
+                player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, s.hand == null ? net.minecraft.world.item.ItemStack.EMPTY
+                    : new net.minecraft.world.item.ItemStack(BuiltInRegistries.ITEM.getValue(net.minecraft.resources.Identifier.parse(s.hand))));
                 player.snapTo(s.player[0], s.player[1], s.player[2], 0.0F, 0.0F);
                 player.setDeltaMovement(Vec3.ZERO);
             } else if (player != null) {
@@ -450,6 +458,11 @@ public final class VanillaMobAiOracle {
                 for (String flag : spec.flags) {
                     if (flag.equals("persistent")) mob.setPersistenceRequired();
                     else if (flag.equals("noai")) mob.setNoAi(true);
+                    else if (flag.equals("inlove")) ((net.minecraft.world.entity.animal.Animal) mob).setInLoveTime(600);
+                    else if (flag.equals("tame") && mob instanceof net.minecraft.world.entity.animal.equine.AbstractHorse horse) horse.setTamed(true);
+                    else if (flag.startsWith("age=")) ((AgeableMob) mob).setAge(Integer.parseInt(flag.substring(4)));
+                    else if (flag.startsWith("strength=")) method(net.minecraft.world.entity.animal.equine.Llama.class, "setStrength", int.class)
+                        .invoke(mob, Integer.parseInt(flag.substring(9)));
                     else throw new IllegalArgumentException(flag);
                 }
                 level.addFreshEntity(mob);

@@ -629,6 +629,12 @@ pub enum MobEvent {
         mob: u32,
         partner: u32,
     },
+    /// `BehaviorUtils.lockGazeAndWalkToEachOther`'s other half: the partner
+    /// looks at this mob and walks to it.
+    LockGaze {
+        mob: u32,
+        partner: u32,
+    },
     /// A sound event id that is not a static string (variant sounds).
     SoundId(String, [f64; 3], f32, f32),
     AttackPlayer(f32, [f64; 3]),
@@ -885,6 +891,39 @@ pub struct Seen {
     pub active_raid: bool,
     /// A villager's reputation of the player (`getPlayerReputation`).
     pub player_rep: i32,
+}
+/// Applies the brain memories a mob's tick set on other mobs (from event
+/// index `from` on), at once: vanilla sets them on the other entity during
+/// the tick, before the mobs after it tick.
+pub fn apply_brain_events(mobs: &mut [Mob], events: &mut Vec<MobEvent>, from: usize) {
+    let mut i = from;
+    while i < events.len() {
+        match events[i] {
+            MobEvent::BreedTarget { mob, partner } => {
+                if let Some(m) = mobs.iter_mut().find(|m| m.id == mob) {
+                    animal_brain::set_breed_partner(m, partner);
+                }
+                events.remove(i);
+            }
+            MobEvent::LockGaze { mob, partner } => {
+                if let Some(m) = mobs.iter_mut().find(|m| m.id == mob) {
+                    animal_brain::lock_gaze(m, partner);
+                }
+                events.remove(i);
+            }
+            // Animal.finalizeSpawnChildFromBreeding: the partner rests and
+            // forgets it at once (the game still makes the baby).
+            MobEvent::Breed { parent, partner } => {
+                if let Some(m) = mobs.iter_mut().find(|m| m.id == partner) {
+                    m.extra.age = 6000;
+                    m.extra.in_love = 0;
+                    animal_brain::forget_breed_target(m, parent);
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
 }
 /// The player as mobs see it.
 #[derive(Clone, Debug)]

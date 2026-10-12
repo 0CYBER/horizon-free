@@ -552,13 +552,18 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
         if m.extra.in_love > 0 {
             m.extra.in_love -= 1;
             if m.extra.in_love % 10 == 0 {
+                // The heart's speed and getRandomX/Y/Z, drawn even on the server.
+                let (w, h) = (f64::from(m.width()), f64::from(m.height()));
+                let r = &mut m.random;
+                for _ in 0..3 {
+                    let _ = r.next_gaussian();
+                }
+                let x = m.position.x + w * (2.0 * r.next_double() - 1.0);
+                let y = m.position.y + h * r.next_double() + 0.5;
+                let z = m.position.z + w * (2.0 * r.next_double() - 1.0);
                 events.push(MobEvent::Particles {
                     kind: "heart",
-                    at: [
-                        m.position.x,
-                        m.position.y + f64::from(m.height()) + 0.5,
-                        m.position.z,
-                    ],
+                    at: [x, y, z],
                     count: 1,
                 });
             }

@@ -369,6 +369,20 @@ pub fn set_breed_partner(m: &mut Mob, partner: u32) {
     lock_gaze_and_walk(m, who, 1.0, 2);
 }
 
+/// `AnimalMakeLove.tick` after the birth: the partner forgets this mob.
+pub fn forget_breed_target(m: &mut Mob, partner: u32) {
+    if m.extra.animal_brain.is_some() && mem(m).breed_target.value() == Some(Who::Mob(partner)) {
+        mem(m).breed_target.clear();
+    }
+}
+/// The partner's half of `lockGazeAndWalkToEachOther`.
+pub fn lock_gaze(m: &mut Mob, partner: u32) {
+    if m.extra.animal_brain.is_none() {
+        return;
+    }
+    lock_gaze_and_walk(m, Who::Mob(partner), 1.0, 2);
+}
+
 /// What behaviours read and emit during a brain tick.
 pub struct Bx<'a, 'w> {
     pub w: &'a MobWorld<'w>,
@@ -1282,6 +1296,12 @@ impl B {
                     return;
                 }
                 lock_gaze_and_walk(m, partner, 1.0, 2);
+                if let Who::Mob(id) = partner {
+                    cx.events.push(MobEvent::LockGaze {
+                        mob: id,
+                        partner: m.id,
+                    });
+                }
                 if let Some(t) = cx.w.target_info(partner)
                     && m.distance_sqr(t.position) < 9.0
                     && now >= *spawn_at

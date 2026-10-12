@@ -43,6 +43,7 @@ struct Scenario {
     blocks: Vec<Vec<String>>,
     player: Option<[f64; 3]>,
     creative: bool,
+    hand: Option<String>,
     mobs: Vec<MobSpec>,
 }
 
@@ -79,7 +80,13 @@ fn parse(text: &str) -> Vec<Scenario> {
                     f[2].parse().unwrap(),
                     f[3].parse().unwrap(),
                 ]);
-                s.creative = f.get(4) == Some(&"creative");
+                for x in &f[4..] {
+                    match *x {
+                        "creative" => s.creative = true,
+                        x if x.starts_with("hand=") => s.hand = Some(x[5..].to_owned()),
+                        other => panic!("unknown player option {other}"),
+                    }
+                }
             }
             "mob" => s.mobs.push(MobSpec {
                 kind: f[1].to_owned(),
@@ -429,6 +436,10 @@ fn main() -> horizon_client::Result<()> {
                 match flag.as_str() {
                     "persistent" => m.persistent = true,
                     "noai" => m.no_ai = true,
+                    "inlove" => m.extra.in_love = 600,
+                    "tame" => m.extra.tame = true,
+                    x if x.starts_with("age=") => m.extra.age = x[4..].parse().unwrap(),
+                    x if x.starts_with("strength=") => m.extra.variant2 = x[9..].parse().unwrap(),
                     other => panic!("unknown mob flag {other}"),
                 }
             }
@@ -453,7 +464,7 @@ fn main() -> horizon_client::Result<()> {
                 creative: s.creative,
                 sneaking: false,
                 look: [0.0, 0.0, 1.0],
-                main_hand: None,
+                main_hand: s.hand.as_deref().map(Into::into),
                 off_hand: None,
                 head: None,
                 armor_cover: 0.0,
@@ -500,9 +511,11 @@ fn main() -> horizon_client::Result<()> {
                     end: false,
                     world_seed: 0,
                 };
+                let from = events.len();
                 if !mobs[i].tick(&w, &mut scratch, &mut events) {
                     mobs[i].removed = true;
                 }
+                horizon_client::mobs::apply_brain_events(&mut mobs, &mut events, from);
                 // ServerLevel ticks entities one after another: the ones
                 // after this mob see it as it is now.
                 if let Some(e) = snapshot.iter_mut().find(|e| e.id == mobs[i].id) {

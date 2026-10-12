@@ -338,22 +338,24 @@ impl Goal for GhastTempt {
             return false;
         }
         let Some(p) = &cx.w.player else { return false };
-        // Attributes.TEMPT_RANGE 16.
+        // getNearestPlayer(TargetingConditions.forNonCombat()
+        // .ignoreLineOfSight().range(TEMPT_RANGE 16)): creative players too.
+        let visibility = if p.sneaking { 0.8 } else { 1.0 };
+        let range = (16.0_f64 * visibility).max(2.0);
         p.alive
-            && !p.creative
+            && !p.spectator
             && (Self::wants(m, &p.main_hand) || Self::wants(m, &p.off_hand))
-            && m.distance_sqr(p.position) <= 256.0
+            && m.distance_sqr(p.position) <= range * range
     }
     fn stop(&mut self, m: &mut Mob, _: &mut Cx) {
+        // stopNavigation: setWait; calmDown = reducedTickDelay(100).
         m.ai.mov.operation = Operation::Wait;
-        self.calm_down = 50;
-    }
-    fn every_tick(&self) -> bool {
-        true
+        self.calm_down = super::goals::reduced(100);
     }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         let Some(p) = cx.w.player.clone() else { return };
         m.look_at(p.eye);
+        // stopDistance 7.
         if m.distance_sqr(p.position) < 49.0 {
             m.ai.mov.operation = Operation::Wait;
         } else {

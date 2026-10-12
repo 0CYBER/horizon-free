@@ -445,8 +445,10 @@ impl Game<'_> {
         {
             let mut scratch = self.world.random.clone();
             let mut keep = Vec::with_capacity(mobs.len());
-            for (i, m) in mobs.iter_mut().enumerate() {
+            for i in 0..mobs.len() {
+                let from = events.len();
                 let w = self.mob_world_base(&snapshot);
+                let m = &mut mobs[i];
                 if !w
                     .world
                     .loaded(m.position.x.floor() as i32, m.position.z.floor() as i32)
@@ -463,6 +465,7 @@ impl Game<'_> {
                 // after this mob see it as it is now.
                 snapshot[i] = seen(m, uuid);
                 snapshot[i].alive &= kept;
+                horizon_client::mobs::apply_brain_events(&mut mobs, &mut events, from);
             }
             let mut flags = keep.into_iter();
             mobs.retain(|_| flags.next().unwrap_or(true));
@@ -858,6 +861,11 @@ impl Game<'_> {
                     }
                 },
                 MobEvent::Breed { parent, partner } => self.breed(parent, partner),
+                MobEvent::LockGaze { mob, partner } => {
+                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
+                        horizon_client::mobs::animal_brain::lock_gaze(m, partner);
+                    }
+                }
                 MobEvent::BreedTarget { mob, partner } => {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
                         horizon_client::mobs::animal_brain::set_breed_partner(m, partner);
