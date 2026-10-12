@@ -19,6 +19,9 @@ use horizon_core::{
 
 #[derive(Clone, Debug, Default)]
 pub struct Ai {
+    /// `Mob.homePosition` and `homeRadius`: where a restricted mob stays
+    /// (a lead's holder, a happy ghast's float area).
+    pub home: Option<([i32; 3], i32)>,
     pub goals: GoalSelector,
     pub targets: GoalSelector,
     pub nav: Navigation,
@@ -604,7 +607,12 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
     // AgeableMob.aiStep
     if m.alive() {
         if m.extra.age < 0 {
+            let (bw, bh, _) = m.dims();
             m.extra.age += 1;
+            // setAge at the age boundary: refreshDimensions.
+            if m.extra.age >= 0 {
+                m.fudge_position_after_size_change(w, bw, bh);
+            }
         } else if m.extra.age > 0 {
             m.extra.age -= 1;
         }

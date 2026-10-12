@@ -135,6 +135,11 @@ fn seen(m: &Mob, player: Option<[i32; 4]>) -> Seen {
             .flatten(),
         profession: m.extra.variant2,
         xp: horizon_client::mobs::villager::xp(m),
+        stats: [
+            f64::from(m.attrs.max_health),
+            m.extra.vector[0],
+            m.attrs.speed,
+        ],
     }
 }
 impl Game<'_> {
@@ -886,7 +891,11 @@ impl Game<'_> {
                         }
                     }
                 },
-                MobEvent::Breed { parent, partner } => self.breed(parent, partner),
+                MobEvent::Breed {
+                    parent,
+                    partner,
+                    llama,
+                } => self.breed(parent, partner, llama),
                 MobEvent::LockGaze { mob, partner } => {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
                         horizon_client::mobs::animal_brain::lock_gaze(m, partner);
@@ -981,7 +990,12 @@ impl Game<'_> {
         }
     }
     /// Animal.spawnChildFromBreeding
-    fn breed(&mut self, parent: u32, partner: u32) {
+    fn breed(
+        &mut self,
+        parent: u32,
+        partner: u32,
+        llama: Option<Box<horizon_client::mobs::llama::Offspring>>,
+    ) {
         let Some(p) = self.mobs.iter().find(|m| m.id == parent).cloned() else {
             return;
         };
@@ -1034,6 +1048,12 @@ impl Game<'_> {
             && let Some(child) = self.mobs.iter_mut().find(|m| m.id == id)
         {
             child.extra.age = -24000;
+            // A llama's baby was drawn in the parent's tick, with the
+            // experience.
+            if let Some(o) = llama {
+                horizon_client::mobs::llama::apply_offspring(child, &o);
+                return;
+            }
             if horizon_client::mobs::equine::is_equine(p.species()) {
                 let other = q.clone().unwrap_or_else(|| p.clone());
                 let mut r = self.world.random.clone();

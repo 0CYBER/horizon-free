@@ -1314,6 +1314,7 @@ impl B {
                     cx.events.push(MobEvent::Breed {
                         parent: m.id,
                         partner: id,
+                        llama: None,
                     });
                     if brain_mut(m).kind == Kind::Sniffer {
                         // Sniffer.spawnChildFromBreeding: the experience

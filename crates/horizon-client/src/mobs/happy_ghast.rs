@@ -15,7 +15,7 @@ use horizon_core::{
 };
 
 // Happy ghast state: `head` the harness, `scratch[0]` 1 once set up as a
-// baby and 2 as an adult, `home` and `ints[4]` the restriction, `counter`
+// baby and 2 as an adult, `ai.home` the restriction, `counter`
 // the end tick of the follow-an-adult range pick.
 pub const BABY_SCALE: f64 = 0.2375;
 /// `Attributes.FLYING_SPEED` and the speed `travel` uses (`* 5 / 3`).
@@ -33,7 +33,13 @@ fn setup(m: &mut Mob, baby: bool) {
     m.extra.scratch[0] = if baby { 1 } else { 2 };
     m.ai.goals.clear();
     m.ai.nav.stop();
+    // A new move and look control (nothing wanted) and navigation.
     m.ai.mov.operation = Operation::Wait;
+    m.ai.mov.wanted = [0.0; 3];
+    m.ai.mov.speed_modifier = 0.0;
+    m.ai.look.wanted = [0.0; 3];
+    m.ai.look.cooldown = 0;
+    m.extra.counter2 = 0;
     if baby {
         m.ai.look.kind = LookKind::Default;
         m.ai.mov.kind = MoveKind::Flying {
@@ -74,8 +80,10 @@ fn restriction_radius(m: &Mob) -> i32 {
 }
 /// `Mob.isWithinHome` for the ghast's restriction.
 fn within_home(m: &Mob, p: Vec3) -> bool {
-    let Some(h) = m.extra.home else { return true };
-    let r = f64::from(m.extra.ints[4]);
+    let Some((h, r)) = m.ai.home else {
+        return true;
+    };
+    let r = f64::from(r);
     let (dx, dy, dz) = (
         f64::from(h[0]) + 0.5 - p.x,
         f64::from(h[1]) + 0.5 - p.y,
@@ -507,17 +515,17 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld) {
             m.position.y.floor() as i32,
             m.position.z.floor() as i32,
         ];
-        let stale = match m.extra.home {
-            Some(h) => {
+        // !hasHome || !home.closerThan(blockPosition, radius + 16) || radius changed
+        let stale = match m.ai.home {
+            Some((h, r)) => {
                 (h[0] - here[0]).pow(2) + (h[1] - here[1]).pow(2) + (h[2] - here[2]).pow(2)
                     >= (radius + 16).pow(2)
-                    || radius != m.extra.ints[4]
+                    || radius != r
             }
             None => true,
         };
         if stale {
-            m.extra.home = Some(here);
-            m.extra.ints[4] = radius;
+            m.ai.home = Some((here, radius));
         }
     }
     // continuousHeal: a point every 30 seconds, every second in rain.

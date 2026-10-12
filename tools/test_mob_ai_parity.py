@@ -113,6 +113,16 @@ def scenarios():
                                      'mob minecraft:happy_ghast 0.5 -55 0.5 0 98 persistent'])
     add('ghastling_grows', 200, ['player 8.5 -60 0.5',
                                  'mob minecraft:happy_ghast 0.5 -57 0.5 0 99 persistent age=-40'])
+    # Llama caravans: two llamas fall in behind one on the player's lead; a wandering trader's two
+    # llamas on its leads.
+    add('llama_caravan', 300, ['player 0.5 -60 0.5',
+                               'mob minecraft:llama 3.5 -60 0.5 0 101 persistent leashed strength=3',
+                               'mob minecraft:llama 9.5 -60 2.5 0 102 persistent strength=2',
+                               'mob minecraft:llama 13.5 -60 -1.5 0 103 persistent strength=1'])
+    add('trader_llamas', 300, ['player 14.5 -60 0.5',
+                               'mob minecraft:wandering_trader 0.5 -60 0.5 0 104 persistent',
+                               'mob minecraft:trader_llama 3.5 -60 1.5 0 105 persistent leashto=0 strength=2',
+                               'mob minecraft:trader_llama 3.5 -60 -1.5 0 106 persistent leashto=0 strength=4'])
     return s
 
 

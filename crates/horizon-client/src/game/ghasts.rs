@@ -48,6 +48,9 @@ impl Game<'_> {
             let id = self.mobs[index].id;
             self.break_leash(id, true, false);
             let was_empty = self.mobs[index].rider.is_none();
+            // addPassenger: the rider is not standing on top, so no still
+            // timeout.
+            self.mobs[index].extra.counter = 0;
             self.yaw = self.mobs[index].yaw;
             self.riding = Some(id);
             self.mount.reset_jump();
@@ -62,6 +65,12 @@ impl Game<'_> {
     }
     /// Getting off lands on top of it.
     pub(super) fn dismount_happy_ghast(&mut self, id: u32) {
+        // removePassenger: held still for half a second, and with no one
+        // aboard the ghast forgets its home.
+        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+            m.extra.counter = 10;
+            m.ai.home = None;
+        }
         let Some(m) = self.mobs.iter().find(|m| m.id == id) else {
             return;
         };

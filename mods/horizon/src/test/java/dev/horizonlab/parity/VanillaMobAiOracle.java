@@ -480,6 +480,9 @@ public final class VanillaMobAiOracle {
                     else if (flag.startsWith("age=")) ((AgeableMob) mob).setAge(Integer.parseInt(flag.substring(4)));
                     else if (flag.startsWith("strength=")) method(net.minecraft.world.entity.animal.equine.Llama.class, "setStrength", int.class)
                         .invoke(mob, Integer.parseInt(flag.substring(9)));
+                    else if (flag.equals("leashed") || flag.startsWith("leashto=")) {
+                        // Leashed once every mob exists (below).
+                    }
                     else throw new IllegalArgumentException(flag);
                 }
                 level.addFreshEntity(mob);
@@ -492,6 +495,14 @@ public final class VanillaMobAiOracle {
                 mobs.add(mob);
                 brains.add(brain);
                 seeds.add(spec.seed);
+            }
+            // Leads: to the player ("leashed") or to the n-th mob ("leashto=n").
+            for (int i = 0; i < s.mobs.size(); i++) {
+                for (String flag : s.mobs.get(i).flags) {
+                    if (flag.equals("leashed")) ((net.minecraft.world.entity.Leashable) mobs.get(i)).setLeashedTo(player, true);
+                    else if (flag.startsWith("leashto=")) ((net.minecraft.world.entity.Leashable) mobs.get(i))
+                        .setLeashedTo(mobs.get(Integer.parseInt(flag.substring(8))), true);
+                }
             }
             level.getRandom().setSeed(s.levelSeed);
             SOUNDS.clear();

@@ -174,6 +174,13 @@ impl GoalSelector {
 
 // --- random positions (DefaultRandomPos / LandRandomPos / RandomPos) -------
 
+/// `Mob.isWithinHome(BlockPos)`.
+pub fn within_home(c: [i32; 3], r: i32, p: [i32; 3]) -> bool {
+    let d = |i: usize| i64::from(c[i] - p[i]);
+    let r = i64::from(r);
+    d(0) * d(0) + d(1) * d(1) + d(2) * d(2) < r * r
+}
+
 impl Mob {
     /// PathfinderMob.getWalkTargetValue.
     pub fn walk_target_value(&self, w: &MobWorld, p: [i32; 3]) -> f32 {
@@ -209,17 +216,52 @@ impl Mob {
         let yt = self.random.next_int_bound(2 * v + 1).unwrap_or(0) - v + fly_height;
         Some([xt.floor() as i32, yt, zt.floor() as i32])
     }
-    /// RandomPos.generateRandomPosTowardDirection (no home restriction).
-    fn toward(&mut self, _h: f64, d: [i32; 3]) -> [i32; 3] {
+    /// RandomPos.generateRandomPosTowardDirection: a mob with a home leans
+    /// half the distance back toward it.
+    fn toward(&mut self, h: f64, d: [i32; 3]) -> [i32; 3] {
+        let (mut xt, mut zt) = (f64::from(d[0]), f64::from(d[2]));
+        if let Some((c, _)) = self.ai.home
+            && h > 1.0
+        {
+            if self.position.x > f64::from(c[0]) {
+                xt -= self.random.next_double() * h / 2.0;
+            } else {
+                xt += self.random.next_double() * h / 2.0;
+            }
+            if self.position.z > f64::from(c[2]) {
+                zt -= self.random.next_double() * h / 2.0;
+            } else {
+                zt += self.random.next_double() * h / 2.0;
+            }
+        }
         [
-            (f64::from(d[0]) + self.position.x).floor() as i32,
+            (xt + self.position.x).floor() as i32,
             (f64::from(d[1]) + self.position.y).floor() as i32,
-            (f64::from(d[2]) + self.position.z).floor() as i32,
+            (zt + self.position.z).floor() as i32,
         ]
     }
-    fn default_check(&self, w: &MobWorld, p: [i32; 3]) -> bool {
+    /// `GoalUtils.isRestricted(mobRestricted(mob, h), mob, pos)`: a mob
+    /// near its home keeps the positions it picks within it.
+    pub fn restricted(&self, h: f64, p: [i32; 3]) -> bool {
+        let Some((c, r)) = self.ai.home else {
+            return false;
+        };
+        let near = {
+            let d = |i: usize, v: f64| f64::from(c[i]) + 0.5 - v;
+            let (x, y, z) = (
+                d(0, self.position.x),
+                d(1, self.position.y),
+                d(2, self.position.z),
+            );
+            let reach = f64::from(r) + h + 1.0;
+            x * x + y * y + z * z < reach * reach
+        };
+        near && !within_home(c, r, p)
+    }
+    fn default_check(&self, w: &MobWorld, h: f64, p: [i32; 3]) -> bool {
         p[1] >= crate::chunk::MIN_Y
             && p[1] < 320
+            && !self.restricted(h, p)
             && self.stable_destination(w, p)
             && self.malus(w.path_type_static(p[0], p[1], p[2])) == 0.0
     }
@@ -252,7 +294,7 @@ impl Mob {
         self.pick_best(w, |m| {
             let d = m.random_direction(h, v);
             let p = m.toward(f64::from(h), d);
-            m.default_check(w, p).then_some(p)
+            m.default_check(w, f64::from(h), p).then_some(p)
         })
     }
     /// DefaultRandomPos.getPosAway
@@ -275,7 +317,7 @@ impl Mob {
                 std::f64::consts::FRAC_PI_2,
             )?;
             let p = m.toward(f64::from(h), d);
-            m.default_check(w, p).then_some(p)
+            m.default_check(w, f64::from(h), p).then_some(p)
         })
     }
     /// DefaultRandomPos.getPosTowards
@@ -291,7 +333,7 @@ impl Mob {
         self.pick_best(w, |m| {
             let d = m.random_direction_within(0.0, f64::from(h), v, 0, xd, zd, max_rad)?;
             let p = m.toward(f64::from(h), d);
-            m.default_check(w, p).then_some(p)
+            m.default_check(w, f64::from(h), p).then_some(p)
         })
     }
     fn land_up_out_of_solid(&self, w: &MobWorld, mut p: [i32; 3]) -> Option<[i32; 3]> {
@@ -303,14 +345,6 @@ impl Mob {
         }
         let water = w.fluid(p[0], p[1], p[2]) == crate::blocks::Fluid::Water;
         (!water && self.malus(w.path_type_static(p[0], p[1], p[2])) == 0.0).then_some(p)
-    }
-    /// The home a mob stays near (`Mob.getHomePosition` / `getHomeRadius`):
-    /// only happy ghasts keep one here.
-    fn home(&self) -> Option<([i32; 3], i32)> {
-        if self.species() != Species::HappyGhast {
-            return None;
-        }
-        self.extra.home.map(|h| (h, self.extra.ints[4]))
     }
     /// `Entity.getViewVector(0)`: `calculateViewVector(xRotO, yRotO)`.
     pub fn view_vector(&self) -> [f64; 3] {
@@ -336,15 +370,6 @@ impl Mob {
         xd: f64,
         zd: f64,
     ) -> Option<[f64; 3]> {
-        let home = self.home();
-        let at = self.position;
-        let within = |c: [i32; 3], r: f64, p: [f64; 3]| {
-            let d = |i: usize| f64::from(c[i]) + 0.5 - p[i];
-            d(0) * d(0) + d(1) * d(1) + d(2) * d(2) < r * r
-        };
-        // GoalUtils.mobRestricted
-        let restrict = home
-            .is_some_and(|(c, r)| within(c, f64::from(r) + f64::from(h) + 1.0, [at.x, at.y, at.z]));
         self.pick_best(w, |m| {
             let d = m.random_direction_within(
                 0.0,
@@ -355,38 +380,9 @@ impl Mob {
                 zd,
                 std::f64::consts::FRAC_PI_2,
             )?;
-            // RandomPos.generateRandomPosTowardDirection, toward home.
-            let (mut xt, mut zt) = (f64::from(d[0]), f64::from(d[2]));
-            if let Some((c, _)) = home
-                && h > 1
-            {
-                let half = f64::from(h) / 2.0;
-                if m.position.x > f64::from(c[0]) {
-                    xt -= m.random.next_double() * half;
-                } else {
-                    xt += m.random.next_double() * half;
-                }
-                if m.position.z > f64::from(c[2]) {
-                    zt -= m.random.next_double() * half;
-                } else {
-                    zt += m.random.next_double() * half;
-                }
-            }
-            let mut p = [
-                (xt + m.position.x).floor() as i32,
-                (f64::from(d[1]) + m.position.y).floor() as i32,
-                (zt + m.position.z).floor() as i32,
-            ];
-            if p[1] < crate::chunk::MIN_Y || p[1] >= 320 {
+            let mut p = m.toward(f64::from(h), d);
+            if p[1] < crate::chunk::MIN_Y || p[1] >= 320 || m.restricted(f64::from(h), p) {
                 return None;
-            }
-            // GoalUtils.isRestricted: Mob.isWithinHome(BlockPos).
-            if restrict && let Some((c, r)) = home {
-                let dd = |i: usize| i64::from(c[i] - p[i]);
-                let r = i64::from(r);
-                if dd(0) * dd(0) + dd(1) * dd(1) + dd(2) * dd(2) >= r * r {
-                    return None;
-                }
             }
             // RandomPos.moveUpOutOfSolid
             if w.solid(p[0], p[1], p[2]) {
@@ -403,7 +399,11 @@ impl Mob {
         self.pick_best(w, |m| {
             let d = m.random_direction(h, v);
             let p = m.toward(f64::from(h), d);
-            if p[1] < crate::chunk::MIN_Y || p[1] >= 320 || !m.stable_destination(w, p) {
+            if p[1] < crate::chunk::MIN_Y
+                || p[1] >= 320
+                || m.restricted(f64::from(h), p)
+                || !m.stable_destination(w, p)
+            {
                 return None;
             }
             m.land_up_out_of_solid(w, p)
@@ -465,7 +465,11 @@ impl Mob {
                 std::f64::consts::FRAC_PI_2,
             )?;
             let p = m.toward(f64::from(h), d);
-            if p[1] < crate::chunk::MIN_Y || p[1] >= 320 || !m.stable_destination(w, p) {
+            if p[1] < crate::chunk::MIN_Y
+                || p[1] >= 320
+                || m.restricted(f64::from(h), p)
+                || !m.stable_destination(w, p)
+            {
                 return None;
             }
             m.land_up_out_of_solid(w, p)
@@ -491,7 +495,11 @@ impl Mob {
                 std::f64::consts::FRAC_PI_2,
             )?;
             let p = m.toward(f64::from(h), d);
-            if p[1] < crate::chunk::MIN_Y || p[1] >= 320 || !m.stable_destination(w, p) {
+            if p[1] < crate::chunk::MIN_Y
+                || p[1] >= 320
+                || m.restricted(f64::from(h), p)
+                || !m.stable_destination(w, p)
+            {
                 return None;
             }
             m.land_up_out_of_solid(w, p)
@@ -1431,6 +1439,8 @@ pub struct AvoidEntity {
     /// Extra condition on the avoider (e.g. untamed cats only).
     pub when: Option<fn(&Mob) -> bool>,
     from: Vec3,
+    /// The mob being avoided (`toAvoid`), when it is one.
+    pub found: Option<u32>,
 }
 impl AvoidEntity {
     pub fn new(what: Avoid, max_dist: f32, walk: f64, sprint: f64) -> Self {
@@ -1441,6 +1451,7 @@ impl AvoidEntity {
             sprint,
             when: None,
             from: Vec3::ZERO,
+            found: None,
         }
     }
     pub fn when(mut self, f: fn(&Mob) -> bool) -> Self {
@@ -1475,11 +1486,16 @@ impl Goal for AvoidEntity {
             Avoid::Species(list) => {
                 let id = m.id;
                 let y = m.position.y;
-                cx.w.nearby(m.position, max, move |s| {
-                    s.id != id && list.contains(&s.species) && (s.position.y - y).abs() <= 3.0 + max
-                })
-                .map(|s| s.position)
-                .next()
+                let hit =
+                    cx.w.nearby(m.position, max, move |s| {
+                        s.id != id
+                            && list.contains(&s.species)
+                            && (s.position.y - y).abs() <= 3.0 + max
+                    })
+                    .map(|s| (s.id, s.position))
+                    .next();
+                self.found = hit.map(|h| h.0);
+                hit.map(|h| h.1)
             }
         };
         let Some(from) = found else { return false };
@@ -1716,11 +1732,23 @@ impl Goal for Breed {
         );
         self.love_time += 1;
         if self.love_time >= reduced(60) && m.distance_sqr(p.position) < 9.0 {
+            // Llama.getBreedOffspring and finalizeSpawnChildFromBreeding's
+            // experience, from the parent's random.
+            let llama = super::llama::is_llama(m.species()).then(|| {
+                let o = super::llama::breed_offspring(m, &p);
+                let xp = 1 + m.random.next_int_bound(7).unwrap_or(0);
+                cx.events.push(MobEvent::Experience {
+                    at: [m.position.x, m.position.y, m.position.z],
+                    amount: xp as u32,
+                });
+                Box::new(o)
+            });
             m.extra.in_love = 0;
             m.extra.age = 6000;
             cx.events.push(MobEvent::Breed {
                 parent: m.id,
                 partner: p.id,
+                llama,
             });
         }
     }

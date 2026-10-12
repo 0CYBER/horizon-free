@@ -209,6 +209,21 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         }
         return;
     };
+    // PathfinderMob.whenLeashedTo: home is the holder's block, within the
+    // elastic distance less one.
+    let elastic = if m.species() == super::Species::HappyGhast {
+        10.0
+    } else {
+        ELASTIC
+    };
+    m.ai.home = Some((
+        [
+            state.position.x.floor() as i32,
+            state.position.y.floor() as i32,
+            state.position.z.floor() as i32,
+        ],
+        elastic as i32 - 1,
+    ));
     let b = m.bounds();
     let (lo, hi) = (b.min_position(), b.max_position());
     let center = Vec3::new(
@@ -264,6 +279,14 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         0.91
     };
     m.extra.leash_spin *= friction;
+}
+/// The lead comes off (`Mob.onLeashRemoved`): no more home.
+pub fn remove(m: &mut Mob) -> Option<Holder> {
+    let was = m.extra.leash.take();
+    if was.is_some() {
+        m.ai.home = None;
+    }
+    was
 }
 /// `PathfinderMob.closeRangeLeashBehaviour`: walk to within two blocks of
 /// the holder unless panicking.

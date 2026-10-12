@@ -741,6 +741,9 @@ pub enum MobEvent {
     Breed {
         parent: u32,
         partner: u32,
+        /// A llama's baby, drawn from the parent's random as
+        /// `Llama.getBreedOffspring` does.
+        llama: Option<Box<super::mobs::llama::Offspring>>,
     },
     /// Replace a block by name (sheep turning grass to dirt), optionally with
     /// the destroy effect.
@@ -915,9 +918,13 @@ pub struct Seen {
     /// A villager's `POTENTIAL_JOB_SITE` and `MEETING_POINT`.
     pub potential_job: Option<[i32; 3]>,
     pub meeting: Option<[i32; 3]>,
-    /// A villager's profession (index into `render::PROFESSIONS`) and experience.
+    /// `variant2`: a villager's profession (index into
+    /// `render::PROFESSIONS`), a llama's strength. And a villager's experience.
     pub profession: u8,
     pub xp: i32,
+    /// `MAX_HEALTH`, `JUMP_STRENGTH` and `MOVEMENT_SPEED` base values (a
+    /// horse's breeding stock).
+    pub stats: [f64; 3],
 }
 impl Mob {
     /// `EntityType.getCategory`'s name.
@@ -984,7 +991,9 @@ pub fn apply_brain_events(mobs: &mut [Mob], events: &mut Vec<MobEvent>, from: us
             }
             // Animal.finalizeSpawnChildFromBreeding: the partner rests and
             // forgets it at once (the game still makes the baby).
-            MobEvent::Breed { parent, partner } => {
+            MobEvent::Breed {
+                parent, partner, ..
+            } => {
                 if let Some(m) = mobs.iter_mut().find(|m| m.id == partner) {
                     m.extra.age = 6000;
                     m.extra.in_love = 0;

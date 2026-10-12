@@ -244,6 +244,11 @@ fn seen(m: &Mob) -> Seen {
             .flatten(),
         profession: m.extra.variant2,
         xp: horizon_client::mobs::villager::xp(m),
+        stats: [
+            f64::from(m.attrs.max_health),
+            m.extra.vector[0],
+            m.attrs.speed,
+        ],
     }
 }
 
@@ -480,6 +485,11 @@ fn main() -> horizon_client::Result<()> {
                     "tame" => m.extra.tame = true,
                     x if x.starts_with("age=") => m.extra.age = x[4..].parse().unwrap(),
                     x if x.starts_with("strength=") => m.extra.variant2 = x[9..].parse().unwrap(),
+                    "leashed" => m.extra.leash = Some(horizon_client::mobs::leash::Holder::Player),
+                    x if x.starts_with("leashto=") => {
+                        let n: u32 = x[8..].parse().unwrap();
+                        m.extra.leash = Some(horizon_client::mobs::leash::Holder::Mob(100_000 + n));
+                    }
                     other => panic!("unknown mob flag {other}"),
                 }
             }
