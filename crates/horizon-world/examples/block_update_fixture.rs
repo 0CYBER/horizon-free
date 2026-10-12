@@ -367,6 +367,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 LevelEvent::BlockEvent { kind, .. } => {
                     let _ = writeln!(result, "X {kind}");
                 }
+                // The client copy of a bell's ring: no level change.
+                LevelEvent::BlockEntityEvent { .. } => {}
                 LevelEvent::GrowTree { .. } => {
                     let _ = writeln!(result, "X grow_tree");
                 }
