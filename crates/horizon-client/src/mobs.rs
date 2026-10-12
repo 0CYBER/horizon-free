@@ -798,10 +798,14 @@ pub enum MobEvent {
         mob: u32,
         other: u32,
     },
-    /// Two villagers make a baby.
+    /// Two villagers make a baby (`VillagerMakeLove.tryToGiveBirth`): the
+    /// parent has eaten and, with a bed for the child, rests; the partner
+    /// eats, and rests too if `child` holds the child's bed and type
+    /// (`None`: the biome's).
     VillagerBirth {
         parent: u32,
         partner: u32,
+        child: Option<([i32; 3], Option<u8>)>,
     },
     /// A villager asks whether enough neighbours want an iron golem.
     GolemCheck {

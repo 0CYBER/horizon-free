@@ -610,18 +610,13 @@ pub fn meet(
         gossiped: ready,
     }
 }
-/// `PoiManager.take(HOME, ..., 48)`: the nearest bed head no villager has
-/// claimed (`free_head`: a bed head that is not occupied).
+/// `PoiManager.take(HOME, ..., 48)`: the nearest bed head not `claimed`
+/// (`free_head`: a bed head that is not occupied).
 pub fn take_vacant_bed(
-    mobs: &[Mob],
+    claimed: &[[i32; 3]],
     from: [i32; 3],
     mut free_head: impl FnMut(i32, i32, i32) -> bool,
 ) -> Option<[i32; 3]> {
-    let claimed: Vec<[i32; 3]> = mobs
-        .iter()
-        .filter(|m| m.species() == Species::Villager)
-        .filter_map(|m| m.extra.bed)
-        .collect();
     let mut best: Option<(i32, [i32; 3])> = None;
     for y in from[1] - 8..=from[1] + 8 {
         for z in from[2] - 48..=from[2] + 48 {

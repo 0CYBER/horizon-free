@@ -663,7 +663,7 @@ fn sense_bed(m: &mut Mob, w: &MobWorld, lr: &mut LegacyRandom) {
     let mut cache = std::mem::take(&mut brain_mut(m).bed_cache);
     let mut tried = 0;
     let mut targets = Vec::new();
-    for p in homes {
+    for &p in &homes {
         if cache.iter().any(|(q, _)| *q == p) {
             continue;
         }
@@ -679,8 +679,12 @@ fn sense_bed(m: &mut Mob, w: &MobWorld, lr: &mut LegacyRandom) {
     } else {
         m.create_path_to_any(w, &targets, 1)
     };
+    // createPath hands back the current path when it still heads for a
+    // target position it was asked: only a bed (a POI) counts.
     if let Some(path) = path.filter(|p| p.reached) {
-        mem(m).nearest_bed.set(path.target);
+        if homes.contains(&path.target) {
+            mem(m).nearest_bed.set(path.target);
+        }
     } else if tried < 5 {
         cache.retain(|(_, until)| *until >= last_update);
     }
@@ -2867,9 +2871,27 @@ impl B {
                 {
                     lock_gaze(m, target, cx);
                     if now >= *birth {
+                        // The parent's half happens in its own tick: it eats,
+                        // takes a bed for the child, picks its type and rests.
+                        super::villager::ext_mut(m).eat_and_digest();
+                        let child = take_bed_for_child(m, cx.w).map(|bed| {
+                            // Villager.getBreedOffspring: half the biome's type,
+                            // a quarter each parent's.
+                            let roll = m.random.next_double();
+                            let variant = if roll < 0.5 {
+                                None
+                            } else if roll < 0.75 {
+                                Some(m.extra.variant)
+                            } else {
+                                Some(cx.w.seen(partner).map_or(m.extra.variant, |s| s.variant))
+                            };
+                            m.extra.age = 6000;
+                            (bed, variant)
+                        });
                         cx.events.push(MobEvent::VillagerBirth {
                             parent: m.id,
                             partner,
+                            child,
                         });
                     } else if m.random.next_int_bound(35).unwrap_or(1) == 0 {
                         let mut p = vec![m.position];
@@ -3360,6 +3382,21 @@ fn breeding_possible(m: &mut Mob, w: &MobWorld) -> bool {
     villager_target_valid(m, w, Mem::BreedTarget)
         && super::villager::can_breed(m)
         && w.seen(id).is_some_and(|s| s.in_love)
+}
+/// `VillagerMakeLove.takeVacantBed`: a bed head no villager has claimed.
+fn take_bed_for_child(m: &Mob, w: &MobWorld) -> Option<[i32; 3]> {
+    let claimed: Vec<[i32; 3]> = w
+        .others
+        .iter()
+        .filter(|s| s.species == Species::Villager && s.id != m.id)
+        .filter_map(|s| s.bed)
+        .chain(m.extra.bed)
+        .collect();
+    let p = m.position;
+    let from = [p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32];
+    super::villager::take_vacant_bed(&claimed, from, |x, y, z| {
+        w.prop(x, y, z, "part") == Some("head") && w.prop(x, y, z, "occupied") != Some("true")
+    })
 }
 /// `BehaviorUtils.lockGazeAndWalkToEachOther`: this villager's half, and
 /// the other villager's through a `LockGaze` event.

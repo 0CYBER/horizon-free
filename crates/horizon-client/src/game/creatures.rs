@@ -914,7 +914,11 @@ impl Game<'_> {
                 }
                 MobEvent::CureZombieVillager { mob } => self.cure_zombie_villager(mob),
                 MobEvent::VillagerMeet { mob, other } => self.villager_meet(mob, other),
-                MobEvent::VillagerBirth { parent, partner } => self.villager_birth(parent, partner),
+                MobEvent::VillagerBirth {
+                    parent,
+                    partner,
+                    child,
+                } => self.villager_birth(parent, partner, child),
                 MobEvent::GolemCheck { mob, needed } => self.villager_golem_check(mob, needed),
                 MobEvent::Firework { at, color, flight } => {
                     self.villager_firework(at, color, flight)

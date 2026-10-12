@@ -8,7 +8,6 @@ use horizon_client::{
     mobs::{Mob, Species, spawning, villager},
 };
 use horizon_core::{geometry::Vec3, random::RandomSource};
-use std::collections::HashMap;
 
 fn block_of(p: Vec3) -> [i32; 3] {
     [p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32]
@@ -164,46 +163,39 @@ impl Game<'_> {
     /// `VillagerMakeLove.tryToGiveBirth`: both eat, a free bed within 48
     /// blocks is taken for the child, who is a baby villager of one of
     /// three villager types.
-    pub(super) fn villager_birth(&mut self, parent: u32, partner: u32) {
+    pub(super) fn villager_birth(
+        &mut self,
+        parent: u32,
+        partner: u32,
+        child: Option<([i32; 3], Option<u8>)>,
+    ) {
         let (Some(ia), Some(ib)) = (self.villager_index(parent), self.villager_index(partner))
         else {
             return;
         };
-        villager::ext_mut(&mut self.mobs[ia]).eat_and_digest();
         villager::ext_mut(&mut self.mobs[ib]).eat_and_digest();
         let from = self.mobs[ia].position;
-        let angry = |g: &mut Self| {
+        let Some((bed, variant)) = child else {
             for i in [ia, ib] {
-                let p = g.mobs[i].position;
-                g.particles_at("angry_villager", [p.x, p.y + 1.8, p.z]);
+                let p = self.mobs[i].position;
+                self.particles_at("angry_villager", [p.x, p.y + 1.8, p.z]);
             }
-        };
-        let Some(bed) = self.take_vacant_bed(block_of(from)) else {
-            angry(self);
             return;
         };
-        // Villager.getBreedOffspring: half the biome's type, a quarter each parent's.
-        let roll = self.mobs[ia].random.next_double();
-        let kind_of = |m: &Mob| m.extra.variant;
-        let facts = self.biome_facts(
-            from.x.floor() as i32,
-            from.y.floor() as i32,
-            from.z.floor() as i32,
-        );
-        let variant = if roll < 0.5 {
+        let variant = variant.unwrap_or_else(|| {
+            let facts = self.biome_facts(
+                from.x.floor() as i32,
+                from.y.floor() as i32,
+                from.z.floor() as i32,
+            );
             spawning::villager_type(&facts)
-        } else if roll < 0.75 {
-            kind_of(&self.mobs[ia])
-        } else {
-            kind_of(&self.mobs[ib])
-        };
+        });
+        self.mobs[ib].extra.age = 6000;
         let Some(id) =
             self.spawn_mob_for("minecraft:villager", [from.x, from.y, from.z], true, true)
         else {
             return;
         };
-        self.mobs[ia].extra.age = 6000;
-        self.mobs[ib].extra.age = 6000;
         if let Some(child) = self.mobs.iter_mut().find(|m| m.id == id) {
             child.extra.variant = variant;
             child.extra.variant2 = villager::NONE;
@@ -211,21 +203,6 @@ impl Game<'_> {
             child.extra.bed = Some(bed);
         }
         self.particles_at("heart", [from.x, from.y + 1.8, from.z]);
-    }
-    /// `PoiManager.take(HOME, ..., 48)`: the nearest unclaimed bed head.
-    fn take_vacant_bed(&self, from: [i32; 3]) -> Option<[i32; 3]> {
-        let mut known: HashMap<u32, bool> = HashMap::new();
-        villager::take_vacant_bed(&self.mobs, from, |x, y, z| {
-            let state = self.world.block(x, y, z);
-            !self.res.facts.is_air(state)
-                && *known.entry(state.0).or_insert_with(|| {
-                    self.res.facts.get(state).name.ends_with("_bed")
-                        && self.res.assets.registry.state(state).is_some_and(|s| {
-                            s.properties.get("part").map(String::as_str) == Some("head")
-                                && s.properties.get("occupied").map(String::as_str) != Some("true")
-                        })
-                })
-        })
     }
     fn particles_at(&mut self, kind: &'static str, at: [f64; 3]) {
         if let Some(ty) = horizon_client::particles::ParticleType::from_name(kind) {

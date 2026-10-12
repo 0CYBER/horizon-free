@@ -309,38 +309,27 @@ fn villager_events(
                 }
                 events.remove(i);
             }
-            MobEvent::VillagerBirth { parent, partner } => {
+            MobEvent::VillagerBirth {
+                parent,
+                partner,
+                child,
+            } => {
                 events.remove(i);
                 let (Some(a), Some(b)) = (index(mobs, parent), index(mobs, partner)) else {
                     continue;
                 };
-                villager::ext_mut(&mut mobs[a]).eat_and_digest();
                 villager::ext_mut(&mut mobs[b]).eat_and_digest();
-                let p = mobs[a].position;
-                let from = [p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32];
-                let Some(bed) = villager::take_vacant_bed(mobs, from, |x, y, z| {
-                    w.prop(x, y, z, "part") == Some("head")
-                        && w.prop(x, y, z, "occupied") == Some("false")
-                }) else {
+                let Some((bed, variant)) = child else {
                     continue;
                 };
-                // Villager.getBreedOffspring: half the biome's type (plains
-                // here), a quarter each parent's.
-                let roll = horizon_core::random::RandomSource::next_double(&mut mobs[a].random);
-                let variant = if roll < 0.5 {
-                    0
-                } else if roll < 0.75 {
-                    mobs[a].extra.variant
-                } else {
-                    mobs[b].extra.variant
-                };
-                mobs[a].extra.age = 6000;
                 mobs[b].extra.age = 6000;
                 let index = mobs.len() + born.len();
                 let kind = types.types.get("minecraft:villager").expect("villager");
+                let p = mobs[a].position;
                 let mut child = Mob::new(100_000 + index as u32, Arc::new(kind.clone()), p, 0.0);
                 child.persistent = true;
-                child.extra.variant = variant;
+                // The flat world is all plains (type 0).
+                child.extra.variant = variant.unwrap_or(0);
                 child.extra.variant2 = villager::NONE;
                 child.extra.age = -24000;
                 child.extra.bed = Some(bed);

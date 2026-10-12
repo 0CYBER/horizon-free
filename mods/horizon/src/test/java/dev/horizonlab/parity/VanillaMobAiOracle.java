@@ -704,6 +704,10 @@ public final class VanillaMobAiOracle {
                     ENTS.add(e);
                     seeds.add(seed);
                     if (e instanceof Mob mob) {
+                        // LivingEntity's constructor turns the head at random (Math.random):
+                        // face it the way the body does, as the probe's newborns.
+                        mob.setYHeadRot(mob.getYRot());
+                        mob.yHeadRotO = mob.getYRot();
                         if (tracing(s)) field(Entity.class, "random").set(mob, new TracingRandom(0L, TRACE, index));
                         mob.getRandom().setSeed(seed);
                         @SuppressWarnings("unchecked")

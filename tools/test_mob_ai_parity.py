@@ -90,8 +90,10 @@ def scenarios():
         ], opts)
     # Two villagers with bread breed (VillagerMakeLove): they eat, a baby is
     # born and takes a free bed, the parents rest for 6000 ticks.
+    # PoiManager.take hands out the free beds of a section in hash order:
+    # the parents claim the two near them, the child gets the only one left.
     beds = []
-    for x in (-6, -3, 3, 6):
+    for x in (-6, 3, 6):
         beds += [f'block {x} -60 6 minecraft:red_bed[facing=north,part=foot]',
                  f'block {x} -60 5 minecraft:red_bed[facing=north,part=head]']
     for name, seeds in [('villager_breed', (71, 72)), ('villager_breed_2', (73, 74))]:
