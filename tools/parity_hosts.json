@@ -1,8 +1,5 @@
 {
- "default": [
-  "macmini",
-  "thinkpad"
- ],
+ "default": [],
  "hosts": {
   "macmini": {
    "ssh": "macmini",

@@ -13,7 +13,7 @@ python3 tools/parity.py --failed     # the ones that failed last time
 python3 tools/parity.py --all        # everything, from scratch: the audit (26 minutes on the Mac mini alone)
 python3 tools/parity.py --fresh food # don't reuse vanilla oracle results
 python3 tools/parity.py --repeat 3 food   # run it three times; the runs must agree
-python3 tools/parity.py --hosts ''   # this machine only (default: the hosts in tools/parity_hosts.json)
+python3 tools/parity.py --hosts macmini,thinkpad   # with other machines (default: tools/parity_hosts.json's default list, empty)
 python3 tools/parity.py --list       # what would run
 python3 tools/parity.py --status     # last result of each harness
 ```
@@ -30,7 +30,7 @@ Every runner on the machine shares `PARITY_MACHINE_JOBS` slots (default: half th
 
 ### Other machines
 
-By default harnesses also run on the Mac mini and the ThinkPad (`tools/parity_hosts.json`; `--hosts` or `PARITY_HOSTS` choose others, `''` none). The runner mirrors the worktree there with rsync (not `.git`, `.local`, `target` or ignored files) into `~/code/horizon-parity/remote/<host><path>`, whose `.local` links to the vanilla data in `~/code/horizon-parity/shared-local`, and starts `tools/parity.py --worker` over ssh. The worker builds the probes (about 80 s the first time) and runs what it is sent under the same tracer, admitting harnesses against its own free memory. One queue, longest first, feeds every machine, remote ones first: the Mac takes up to 14 harnesses, the desktop 3 and only those under 800 MB. Each pass comes back with the content hash of every file it depended on, so it is keyed on exactly what ran, and logs come back to `.local/parity-runner/logs/`; state, sharing and `gate.py` work as before. If a host can't be reached, or drops out, its harnesses run here.
+Harnesses can also run on the Mac mini and the ThinkPad (`tools/parity_hosts.json` describes them; its `default` list is empty, so pass `--hosts macmini,thinkpad` or set `PARITY_HOSTS`, after copying `shared-local/` to `~/code/horizon-parity/shared-local` on each host). The runner mirrors the worktree there with rsync (not `.git`, `.local`, `target` or ignored files) into `~/code/horizon-parity/remote/<host><path>`, whose `.local` links to the vanilla data in `~/code/horizon-parity/shared-local`, and starts `tools/parity.py --worker` over ssh. The worker builds the probes (about 80 s the first time) and runs what it is sent under the same tracer, admitting harnesses against its own free memory. One queue, longest first, feeds every machine, remote ones first: the Mac takes up to 14 harnesses, the desktop 3 and only those under 800 MB. Each pass comes back with the content hash of every file it depended on, so it is keyed on exactly what ran, and logs come back to `.local/parity-runner/logs/`; state, sharing and `gate.py` work as before. If a host can't be reached, or drops out, its harnesses run here.
 
 Harnesses a host can't run are listed in the file: `local_only` (`save_roundtrip` runs the game on a virtual screen) and each host's `exclude`. On macOS, `options` and `chunk_generation` differ because Rust's float functions (`f64::powf` and the like) use the platform libm, which rounds differently from glibc; every other harness gave the same result on the Mac as on Linux. The ThinkPad helps too, gently: Linux, 2 harnesses at `nice 19`, since it hosts the Claude account pool; it finds ALSA through `~/code/horizon-parity/alsa-dev` like the desktop.
 
