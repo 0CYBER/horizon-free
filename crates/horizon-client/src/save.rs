@@ -53,7 +53,7 @@ pub(crate) fn text(tag: Option<&Tag>) -> Option<String> {
     }
 }
 /// Any numeric tag as i64 (vanilla's `getIntOr` etc. accept every number type).
-pub(crate) fn number(tag: Option<&Tag>) -> Option<i64> {
+pub fn number(tag: Option<&Tag>) -> Option<i64> {
     Some(match tag? {
         Tag::Byte(v) => i64::from(*v),
         Tag::Short(v) => i64::from(*v),

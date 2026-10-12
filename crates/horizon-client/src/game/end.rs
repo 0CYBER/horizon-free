@@ -405,6 +405,7 @@ impl Game<'_> {
             }
         } else if let Some(g) = gateway
             && self.end.gateway_cooldown == 0
+            && self.gateway_enter(g)
         {
             self.enter_gateway(g)?;
         }
