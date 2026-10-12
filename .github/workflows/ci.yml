@@ -22,8 +22,10 @@ jobs:
           python tools/check_public_tree.py --history
       - name: Test offline research tooling
         run: python -m unittest discover -s tests -v
-      - name: Install Rust toolchain
-        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - name: Install Rust toolchain and the ALSA headers the client's audio links against
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
       - name: Check formatting and lint
         run: |
           cargo +stable fmt --all -- --check
