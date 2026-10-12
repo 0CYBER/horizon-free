@@ -1,10 +1,8 @@
-//! The loom (`LoomMenu`, `LoomScreen`): stacking banner patterns onto a
-//! banner with a dye (and a pattern item for the special patterns), the
-//! six-layer limit, the scrolling pattern list and the banner preview.
-use super::{
-    Game,
-    stations::{INPUT, Station},
-};
+//! The loom screen (`LoomScreen`): the scrolling pattern list, the banner
+//! preview and the six-layer error. The menu itself (`LoomMenu`: slots,
+//! selectable patterns, the pattern buttons, quick moves, the result) runs on
+//! the verified engine, `horizon_client::menu`, through `Game::menu_session`.
+use super::{Game, stations::Kind};
 use horizon_client::{
     banner::{self, BannerLayer},
     hud::{HudBatch, Rect, rgba},
@@ -24,6 +22,8 @@ pub(super) struct LoomState {
     pub(super) scroll: f32,
     pub(super) start_row: usize,
     pub(super) scrolling: bool,
+    /// The inputs the screen last saw (`bannerStack`, `dyeStack`, `patternStack`).
+    last_inputs: [Option<ItemStack>; 3],
 }
 impl LoomState {
     fn total_rows(&self) -> usize {
@@ -65,138 +65,77 @@ pub(super) fn dye_color(name: &str) -> u32 {
 }
 
 impl Game<'_> {
-    /// `LoomMenu.slotsChanged` and the screen's `containerChanged`.
-    pub(super) fn loom_changed(&self, s: &mut Station) {
-        let banners = &self.res.stations.banners;
-        let items = &self.res.items;
-        let (banner_in, dye_in) = (s.inputs[0].as_ref(), s.inputs[1].as_ref());
+    /// `LoomScreen.containerChanged`: the error flag, whether the pattern
+    /// buttons show (only when an input changed), and the scroller reset.
+    pub(super) fn loom_screen_changed(&mut self) {
+        let Some(s) = self.station.as_mut().filter(|s| s.kind == Kind::Loom) else {
+            return;
+        };
+        let inputs = [
+            s.inputs[0].clone(),
+            s.inputs[1].clone(),
+            s.inputs[2].clone(),
+        ];
         let l = &mut s.loom;
-        let mut result = None;
-        if let (Some(banner_stack), Some(dye_stack)) = (banner_in, dye_in) {
-            let valid = l.selected.is_some_and(|i| i < l.patterns.len());
-            let previous = std::mem::take(&mut l.patterns);
-            l.patterns = banners.selectable(s.inputs[2].as_ref());
-            let shown = if l.patterns.len() == 1 {
-                l.selected = Some(0);
-                Some(l.patterns[0].clone())
-            } else if !valid {
-                l.selected = None;
-                None
-            } else {
-                let value = previous[l.selected.unwrap_or(0)].clone();
-                match l.patterns.iter().position(|p| *p == value) {
-                    Some(i) => {
-                        l.selected = Some(i);
-                        Some(value)
-                    }
-                    None => {
-                        l.selected = None;
-                        None
-                    }
-                }
-            };
-            l.has_max = banner::has_max_layers(banner_stack);
-            if let Some(pattern) = shown {
-                if l.has_max {
-                    l.selected = None;
-                } else if let Some(dye) = banners.loom_dye(items, dye_stack) {
-                    result = Some(banner::loom_result(banner_stack, &dye, &pattern));
-                }
-            }
-            l.display = !l.has_max && !l.patterns.is_empty();
-        } else {
-            l.patterns.clear();
-            l.selected = None;
-            l.has_max = banner_in.is_some_and(banner::has_max_layers);
-            l.display = false;
+        l.has_max = inputs[0].as_ref().is_some_and(banner::has_max_layers);
+        if inputs != l.last_inputs {
+            l.display =
+                inputs[0].is_some() && inputs[1].is_some() && !l.has_max && !l.patterns.is_empty();
         }
         if l.start_row >= l.total_rows() {
             l.start_row = 0;
             l.scroll = 0.0;
         }
-        s.result = result;
+        l.last_inputs = inputs;
     }
-    /// The loom slots' `mayPlace`.
-    pub(super) fn loom_slot_rules(&self, input: usize, stack: &ItemStack) -> (bool, u32) {
-        let banners = &self.res.stations.banners;
-        let ok = match input {
-            0 => stack.item.ends_with("_banner"),
-            1 => banners.loom_dye(&self.res.items, stack).is_some(),
-            _ => banners.is_pattern_item(&self.res.items, stack),
+    /// A sound the loom menu played: the result's once per tick.
+    pub(super) fn loom_sound(&mut self, sound: &str) {
+        let ticks = self.ticks;
+        let Some(s) = self.station.as_mut() else {
+            return;
         };
-        (ok, 64)
+        if s.last_sound == ticks {
+            return;
+        }
+        s.last_sound = ticks;
+        let pos = s.pos;
+        let at = [
+            f64::from(pos[0]) + 0.5,
+            f64::from(pos[1]) + 0.5,
+            f64::from(pos[2]) + 0.5,
+        ];
+        self.audio.play(sound, Some(at), 1.0, 1.0);
     }
-    /// The result slot's `onTake`: one banner and one dye are used up.
-    pub(super) fn loom_taken(&mut self, s: &mut Station) {
-        for slot in &mut s.inputs[..2] {
-            if let Some(x) = slot.as_mut() {
-                x.count -= 1;
-                if x.count == 0 {
-                    *slot = None;
-                }
-            }
-        }
-        if s.inputs[0].is_none() || s.inputs[1].is_none() {
-            s.loom.selected = None;
-        }
-        if s.last_sound != self.ticks {
-            s.last_sound = self.ticks;
-            let pos = s.pos;
-            let at = [
-                f64::from(pos[0]) + 0.5,
-                f64::from(pos[1]) + 0.5,
-                f64::from(pos[2]) + 0.5,
-            ];
+    /// `LoomScreen.mouseClicked` on a pattern button: `clickMenuButton`, and
+    /// the select sound when the menu took it.
+    fn loom_button(&mut self, index: usize) -> bool {
+        let mut taken = false;
+        let flag = &mut taken;
+        self.menu_session(|menu, env, _| {
+            *flag = menu.button(env, index as i32);
+            Some(*flag)
+        });
+        if taken {
             self.audio
-                .play("minecraft:ui.loom.take_result", Some(at), 1.0, 1.0);
+                .play("minecraft:ui.loom.select_pattern", None, 1.0, 1.0);
         }
-    }
-    /// `LoomMenu.quickMoveStack` from an inventory slot.
-    pub(super) fn loom_quick_move(&mut self, slot: usize, stack: &mut ItemStack) -> bool {
-        let banners = &self.res.stations.banners;
-        let items = &self.res.items;
-        let target = if stack.item.ends_with("_banner") {
-            Some(INPUT)
-        } else if banners.loom_dye(items, stack).is_some() {
-            Some(INPUT + 1)
-        } else if banners.is_pattern_item(items, stack) {
-            Some(INPUT + 2)
-        } else {
-            None
-        };
-        match target {
-            Some(t) => self.move_to(stack, &[t], false),
-            None if (9..36).contains(&slot) => {
-                let hotbar: Vec<usize> = (0..9).collect();
-                self.move_to(stack, &hotbar, false)
-            }
-            None if slot < 9 => {
-                let main: Vec<usize> = (9..36).collect();
-                self.move_to(stack, &main, false)
-            }
-            None => false,
-        }
+        taken
     }
     /// A left click inside the loom's pattern grid or scroller.
     pub(super) fn loom_click(&mut self, local: (f32, f32)) -> bool {
-        let Some(s) = self.station.as_ref() else {
+        let Some(start_row) = self
+            .station
+            .as_ref()
+            .filter(|s| s.loom.display)
+            .map(|s| s.loom.start_row)
+        else {
             return false;
         };
-        let l = &s.loom;
-        if !l.display {
-            return false;
-        }
         for row in 0..4 {
             for column in 0..4 {
-                let index = (row + l.start_row) * 4 + column;
+                let index = (row + start_row) * 4 + column;
                 let (x, y) = (60.0 + column as f32 * BUTTON, 13.0 + row as f32 * BUTTON);
-                if index < l.patterns.len() && inside(local, x, y, BUTTON, BUTTON) {
-                    if let Some(s) = self.station.as_mut() {
-                        s.loom.selected = Some(index);
-                    }
-                    self.audio
-                        .play("minecraft:ui.loom.select_pattern", None, 1.0, 1.0);
-                    self.station_changed();
+                if inside(local, x, y, BUTTON, BUTTON) && self.loom_button(index) {
                     return true;
                 }
             }

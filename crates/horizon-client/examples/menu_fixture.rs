@@ -35,10 +35,12 @@ fn main() -> horizon_client::Result<()> {
     let items = Items::catalog(root)?;
     let recipes = Recipes::load(root, &items)?;
     let brewing = horizon_client::brewing::Brewing::load(root, &items);
+    let banners = horizon_client::banner::Banners::load(root);
     let env = Env {
         items: &items,
         recipes: &recipes,
         brewing: &brewing,
+        banners: &banners,
     };
     let mut out = String::new();
     for line in input.lines() {
@@ -50,6 +52,7 @@ fn main() -> horizon_client::Result<()> {
             menu.set_slot(&env, i, parse_stack(slot.as_str().unwrap_or("-"))?);
         }
         menu.carried = parse_stack(case["carried"].as_str().unwrap_or("-"))?;
+        menu.settle(&env);
         for (i, v) in case["data"].as_array().ok_or("data")?.iter().enumerate() {
             menu.data[i] = v.as_i64().unwrap_or(0) as i32;
         }
@@ -58,6 +61,23 @@ fn main() -> horizon_client::Result<()> {
         for op in case["ops"].as_array().ok_or("ops")? {
             let slot = op[0].as_i64().unwrap_or(0) as i32;
             let button = op[1].as_i64().unwrap_or(0) as i32;
+            match op[2].as_str().unwrap_or_default() {
+                // ServerboundContainerButtonClickPacket: clickMenuButton.
+                "BUTTON" => {
+                    menu.button(&env, slot);
+                    out += &format!("{}\n", state(&menu));
+                    continue;
+                }
+                // ServerboundContainerSlotStateChangedPacket.
+                "SLOT_STATE" => {
+                    if (0..9).contains(&slot) {
+                        menu.set_slot_state(slot as usize, button == 1);
+                    }
+                    out += &format!("{}\n", state(&menu));
+                    continue;
+                }
+                _ => {}
+            }
             let kind = Input::parse(op[2].as_str().unwrap_or_default()).ok_or("input")?;
             match menu.click(&env, slot, button, kind) {
                 Ok(()) => out += &format!("{}\n", state(&menu)),

@@ -3528,6 +3528,50 @@ impl Game<'_> {
     }
     /// Several clicks on one menu instance (a quick craft drag is three).
     fn menu_ops(&mut self, ops: &[(Option<usize>, i32, horizon_client::menu::Input)]) -> bool {
+        use horizon_client::menu::Input;
+        if let [(Some(slot), button, input)] = ops {
+            self.crafter_slot_clicked(*slot, *button, *input);
+        }
+        let ops = ops.to_vec();
+        self.menu_session(move |menu, env, to_menu| {
+            let mut clicks = Vec::new();
+            for &(slot, button, input) in &ops {
+                let menu_slot = match slot {
+                    Some(g) => {
+                        if g == 200 && input != Input::QuickMove {
+                            return None;
+                        }
+                        match to_menu(g) {
+                            Some(i) => i as i32,
+                            None => return None,
+                        }
+                    }
+                    None => -999,
+                };
+                clicks.push((menu_slot, button, input));
+            }
+            for (menu_slot, button, input) in clicks {
+                if menu.click(env, menu_slot, button, input).is_err() {
+                    // Vanilla's server throws: nothing of this click is kept.
+                    return Some(false);
+                }
+            }
+            Some(true)
+        })
+    }
+    /// The open menu as the verified engine (`horizon_client::menu`): the
+    /// game's slots are copied in, `run` acts on it, and the slots, carried
+    /// stack, menu data and drops are copied back when it returns Some(true)
+    /// (Some(false): handled, nothing kept; None: not handled). False when the
+    /// open screen is not one the engine models or `run` did not handle it.
+    pub(super) fn menu_session(
+        &mut self,
+        run: impl FnOnce(
+            &mut horizon_client::menu::Menu,
+            &horizon_client::menu::Env,
+            &dyn Fn(usize) -> Option<usize>,
+        ) -> Option<bool>,
+    ) -> bool {
         use horizon_client::menu::{Env, Kind, Menu};
         #[derive(Clone, Copy)]
         struct Map {
@@ -3586,113 +3630,170 @@ impl Game<'_> {
                 }
             }
         }
-        let (kind, map) = if self.container.is_some() {
-            let size = self.container_size();
-            let (kind, count) = match self.container_kind() {
-                Some(BlockEntity::Chest(_)) => {
-                    let shulker = self.container.is_some_and(|k| {
-                        let id = self.world.block(k.0, k.1, k.2);
-                        storage::is_shulker_box(&self.res.facts.get(id).name)
-                    });
-                    let kind = match size {
-                        5 => Kind::Hopper,
-                        9 => Kind::Dispenser,
-                        27 if shulker => Kind::Shulker,
-                        n => Kind::Chest((n / 9).clamp(1, 6)),
-                    };
-                    (kind, size)
-                }
-                Some(BlockEntity::Furnace(f)) => (
-                    Kind::Furnace(
-                        match f.kind.recipe_type().trim_start_matches("minecraft:") {
-                            "blasting" => "blasting",
-                            "smoking" => "smoking",
-                            _ => "smelting",
-                        },
-                    ),
-                    3,
-                ),
-                _ => return false,
-            };
-            let map = Map {
-                container: count,
-                table: false,
-                cells: 0,
-                plain: false,
-            };
-            (kind, map)
-        } else if self.station.is_none() && !self.mount_active() && self.remote.is_none() {
-            let table = self.craft_size == 3;
-            let map = Map {
-                container: 0,
-                table,
-                cells: self.craft_size * self.craft_size,
-                plain: true,
-            };
-            (
-                if table {
-                    Kind::Crafting
-                } else {
-                    Kind::Inventory
-                },
-                map,
-            )
+        // Menu slot -> game slot, for every menu slot.
+        let mut plain_map = None;
+        let crafter_open = matches!(self.container_kind(), Some(BlockEntity::Crafter(_)));
+        let loom_open = self
+            .station
+            .as_ref()
+            .is_some_and(|s| s.kind == stations::Kind::Loom);
+        let (kind, game_of): (Kind, Vec<Option<usize>>) = if crafter_open {
+            // CrafterMenu: the grid, the inventory, then the result.
+            let mut v: Vec<Option<usize>> = (300..309).map(Some).collect();
+            v.extend((9..36).chain(0..9).map(Some));
+            v.push(None);
+            (Kind::CrafterBlock, v)
+        } else if loom_open {
+            // LoomMenu: banner, dye, pattern, result, then the inventory.
+            let mut v: Vec<Option<usize>> = (0..3).map(|i| Some(stations::INPUT + i)).collect();
+            v.push(Some(stations::RESULT));
+            v.extend((9..36).chain(0..9).map(Some));
+            (Kind::Loom, v)
         } else {
-            return false;
-        };
-        let mut clicks = Vec::new();
-        for &(slot, button, input) in ops {
-            let menu_slot = match slot {
-                Some(g) => {
-                    if g == 200 && input != horizon_client::menu::Input::QuickMove {
-                        return false;
+            let (kind, map) = if self.container.is_some() {
+                let size = self.container_size();
+                let (kind, count) = match self.container_kind() {
+                    Some(BlockEntity::Chest(_)) => {
+                        let shulker = self.container.is_some_and(|k| {
+                            let id = self.world.block(k.0, k.1, k.2);
+                            storage::is_shulker_box(&self.res.facts.get(id).name)
+                        });
+                        let kind = match size {
+                            5 => Kind::Hopper,
+                            9 => Kind::Dispenser,
+                            27 if shulker => Kind::Shulker,
+                            n => Kind::Chest((n / 9).clamp(1, 6)),
+                        };
+                        (kind, size)
                     }
-                    match map.to_menu(g) {
-                        Some(i) => i as i32,
-                        None => return false,
-                    }
-                }
-                None => -999,
+                    Some(BlockEntity::Furnace(f)) => (
+                        Kind::Furnace(
+                            match f.kind.recipe_type().trim_start_matches("minecraft:") {
+                                "blasting" => "blasting",
+                                "smoking" => "smoking",
+                                _ => "smelting",
+                            },
+                        ),
+                        3,
+                    ),
+                    _ => return false,
+                };
+                let map = Map {
+                    container: count,
+                    table: false,
+                    cells: 0,
+                    plain: false,
+                };
+                (kind, map)
+            } else if self.station.is_none() && !self.mount_active() && self.remote.is_none() {
+                let table = self.craft_size == 3;
+                let map = Map {
+                    container: 0,
+                    table,
+                    cells: self.craft_size * self.craft_size,
+                    plain: true,
+                };
+                (
+                    if table {
+                        Kind::Crafting
+                    } else {
+                        Kind::Inventory
+                    },
+                    map,
+                )
+            } else {
+                return false;
             };
-            clicks.push((menu_slot, button, input));
-        }
+            let total = Menu::new(kind).slot_count();
+            plain_map = Some(map);
+            (kind, (0..total).map(|i| map.to_game(i)).collect())
+        };
+        // The plain map also takes the crafting result slot (a shift-click on it).
+        let to_menu = |g: usize| match plain_map {
+            Some(map) => map.to_menu(g),
+            None => game_of.iter().position(|x| *x == Some(g)),
+        };
         let mut menu = Menu::new(kind);
         let total = menu.slot_count();
-        let before: Vec<Option<ItemStack>> = (0..total)
-            .map(|i| map.to_game(i).and_then(|g| self.slot_mut(g).clone()))
+        let before: Vec<Option<ItemStack>> = game_of
+            .iter()
+            .map(|g| g.and_then(|g| self.slot_mut(g).clone()))
             .collect();
         let carried = self.carried.clone();
         let creative = self.creative;
-        let (after, carried, dropped): (Vec<Option<ItemStack>>, Option<ItemStack>, Vec<ItemStack>) = {
-            let env = Env {
-                items: &self.res.items,
-                recipes: &self.res.recipes,
-                brewing: &self.res.stations.brewing,
-            };
-            menu.creative = creative;
-            for (i, stack) in before.iter().enumerate() {
-                menu.set_slot(&env, i, stack.clone());
-            }
-            menu.carried = carried;
-            for (menu_slot, button, input) in clicks {
-                if menu.click(&env, menu_slot, button, input).is_err() {
-                    return true;
-                }
-            }
+        let station_menu = self.station.as_ref().map(|s| {
             (
-                (0..total).map(|i| menu.slot(i).cloned()).collect(),
-                menu.carried.take(),
-                std::mem::take(&mut menu.dropped),
+                s.loom.selected.map_or(-1, |i| i as i32),
+                s.loom.patterns.clone(),
             )
+        });
+        let crafter_data = match self.container_kind() {
+            Some(BlockEntity::Crafter(c)) => Some((c.disabled, c.triggered)),
+            _ => None,
         };
+        let env = Env {
+            items: &self.res.items,
+            recipes: &self.res.recipes,
+            brewing: &self.res.stations.brewing,
+            banners: &self.res.stations.banners,
+        };
+        menu.creative = creative;
+        for (i, stack) in before.iter().enumerate() {
+            menu.set_slot(&env, i, stack.clone());
+        }
+        menu.settle(&env);
+        if kind == Kind::Loom
+            && let Some((selected, patterns)) = station_menu
+        {
+            // The menu's state between clicks: what set_slot recomputed is replaced.
+            menu.data[0] = selected;
+            menu.loom_patterns = patterns;
+            menu.set_slot(&env, 3, before[3].clone());
+        }
+        if let Some((disabled, triggered)) = crafter_data {
+            for (i, d) in disabled.iter().enumerate() {
+                menu.data[i] = i32::from(*d);
+            }
+            menu.data[9] = i32::from(triggered);
+        }
+        menu.carried = carried;
+        menu.drops.clear();
+        match run(&mut menu, &env, &to_menu) {
+            None => return false,
+            Some(false) => return true,
+            Some(true) => {}
+        }
+        let after: Vec<Option<ItemStack>> = (0..total).map(|i| menu.slot(i).cloned()).collect();
+        let carried = menu.carried.take();
+        let dropped = std::mem::take(&mut menu.dropped);
+        let sounds = std::mem::take(&mut menu.sounds);
         for (i, stack) in after.into_iter().enumerate() {
-            if let Some(g) = map.to_game(i) {
+            if let Some(g) = game_of[i] {
                 *self.slot_mut(g) = stack;
             }
         }
         self.carried = carried;
         for stack in dropped {
             self.player_drop(stack);
+        }
+        if kind == Kind::Loom {
+            if let Some(s) = self.station.as_mut() {
+                s.loom.selected = usize::try_from(menu.data[0]).ok();
+                s.loom.patterns = std::mem::take(&mut menu.loom_patterns);
+            }
+            for sound in sounds {
+                self.loom_sound(sound);
+            }
+            self.loom_screen_changed();
+        }
+        if kind == Kind::CrafterBlock
+            && let Some(BlockEntity::Crafter(c)) = self
+                .container
+                .and_then(|k| self.world.block_entities.get_mut(&k))
+        {
+            for (i, d) in c.disabled.iter_mut().enumerate() {
+                *d = menu.data[i] == 1;
+            }
         }
         if matches!(kind, Kind::Furnace(_))
             && let Some(BlockEntity::Furnace(f)) = self
@@ -3849,7 +3950,7 @@ impl Game<'_> {
         };
         let held_shift =
             self.keys.contains(&KeyCode::ShiftLeft) || self.keys.contains(&KeyCode::ShiftRight);
-        if self.crafter_click(slot, held_shift) {
+        if self.crafter_click(slot, held_shift, right) {
             return;
         }
         if held_shift && self.container.is_some() && self.container_quick_move(slot) {

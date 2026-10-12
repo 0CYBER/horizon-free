@@ -291,64 +291,67 @@ impl Game<'_> {
         (self.carried.is_none() && c.items[i].is_none() && !c.disabled[i] && !self.spectator())
             .then(|| self.translate("gui.togglable_slot", "Click to disable slot"))
     }
-    /// A click in the crafter menu before the generic handling; true when
-    /// it was fully handled (the result, shift-clicks).
-    pub(in crate::game) fn crafter_click(&mut self, slot: usize, shift: bool) -> bool {
+    /// A click in the crafter menu: `CrafterMenu` on the verified menu engine.
+    pub(in crate::game) fn crafter_click(&mut self, slot: usize, shift: bool, right: bool) -> bool {
         if !self.crafter_open() {
             return false;
         }
-        if slot == RESULT_SLOT {
-            return true;
-        }
-        if (300..309).contains(&slot) {
-            // CrafterScreen.slotClicked: toggle an empty slot.
-            let i = slot - 300;
-            if !shift && !self.spectator() && self.slot_mut(slot).is_none() {
-                let carried_empty = self.carried.is_none();
-                let key = self.container;
-                let mut toggled = None;
-                if let Some(BlockEntity::Crafter(c)) =
-                    key.and_then(|k| self.world.block_entities.get_mut(&k))
-                {
-                    if c.disabled[i] {
-                        c.set_slot_state(i, true);
-                        toggled = Some(true);
-                    } else if carried_empty {
-                        c.set_slot_state(i, false);
-                        toggled = Some(false);
-                    }
-                }
-                if let Some(enabled) = toggled {
-                    let pitch = if enabled { 1.0 } else { 0.75 };
-                    self.audio
-                        .play("minecraft:ui.button.click", None, 0.4, pitch);
-                }
-            }
-        }
-        if shift {
-            self.crafter_quick_move(slot);
-            return true;
-        }
-        false
+        let input = if shift {
+            horizon_client::menu::Input::QuickMove
+        } else {
+            horizon_client::menu::Input::Pickup
+        };
+        self.menu_click(Some(slot), i32::from(right), input);
+        true
     }
-    /// `CrafterMenu.quickMoveStack`.
-    fn crafter_quick_move(&mut self, slot: usize) {
-        if slot >= 309 {
+    /// `CrafterScreen.slotClicked`: an empty grid slot is enabled by a click
+    /// (or a number key with a hotbar item) when disabled, and disabled by a
+    /// click with nothing carried; the menu then gets the click itself.
+    pub(in crate::game) fn crafter_slot_clicked(
+        &mut self,
+        slot: usize,
+        button: i32,
+        input: horizon_client::menu::Input,
+    ) {
+        use horizon_client::menu::Input;
+        if !self.crafter_open() || !(300..309).contains(&slot) || self.spectator() {
             return;
         }
-        let Some(mut stack) = self.slot_mut(slot).take() else {
+        let i = slot - 300;
+        let Some(c) = self.container.and_then(|k| self.crafter_at(k)) else {
             return;
         };
-        if slot >= 300 {
-            let player: Vec<usize> = (9..36).chain(0..9).collect();
-            self.move_to(&mut stack, &player, true);
-        } else {
-            let grid: Vec<usize> = (300..309).collect();
-            self.move_to(&mut stack, &grid, false);
+        if c.items[i].is_some() {
+            return;
         }
-        if stack.count > 0 {
-            *self.slot_mut(slot) = Some(stack);
-        }
+        let disabled = c.disabled[i];
+        let enable = match input {
+            Input::Pickup if disabled => Some(true),
+            Input::Pickup if self.carried.is_none() => Some(false),
+            Input::Swap if disabled => usize::try_from(button)
+                .ok()
+                .and_then(|b| {
+                    if b == 40 {
+                        Some(&self.offhand)
+                    } else {
+                        self.inventory.get(b)
+                    }
+                })
+                .is_some_and(Option::is_some)
+                .then_some(true),
+            _ => None,
+        };
+        let Some(enabled) = enable else {
+            return;
+        };
+        // ServerboundContainerSlotStateChangedPacket: CrafterBlockEntity.setSlotState.
+        self.menu_session(|menu, _, _| {
+            menu.set_slot_state(i, enabled);
+            Some(true)
+        });
+        let pitch = if enabled { 1.0 } else { 0.75 };
+        self.audio
+            .play("minecraft:ui.button.click", None, 0.4, pitch);
     }
 }
 
