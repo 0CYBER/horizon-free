@@ -91,6 +91,7 @@ pub mod scoreboard_cmd;
 pub mod screen_effects;
 pub mod screen_layout;
 pub mod sculk;
+pub mod server;
 pub mod settings;
 pub mod shadows;
 pub mod signs;
