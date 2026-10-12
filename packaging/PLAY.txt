@@ -25,6 +25,8 @@ First start (once, a few minutes)
      It reads the game files from your own Minecraft installation and writes
      the resources Horizon needs into .local/ in this folder. If your launcher
      keeps the game elsewhere, add --minecraft-dir PATH.
+  3. Optional, for sound: python3 tools/fetch_sounds.py
+     It copies the game's sounds from your launcher's install in the same way.
 
 Play
   Linux:    ./horizon-client
