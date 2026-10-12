@@ -634,6 +634,8 @@ struct Game<'a> {
     /// The source of a command run through /execute (the player otherwise).
     command_source: Option<commands::execute::Source>,
     titles: titles::Titles,
+    /// `Hud.toolHighlightTimer`: the selected item name.
+    tool_highlight: horizon_client::hud_overlays::ToolHighlight,
     applied_modifiers: Vec<(String, String)>,
     experience: Experience,
     orbs: Vec<ExperienceOrb>,
@@ -2695,7 +2697,7 @@ impl Game<'_> {
         self.tick_effects();
         self.tick_burning();
         self.tick_using();
-        self.titles.tick();
+        self.tick_hud();
         if running {
             self.tick_paintings();
             self.tick_item_frames();
@@ -2999,6 +3001,9 @@ impl Game<'_> {
             };
             let draws = self.health_hud.layout(&inputs, wi, hi);
             hud_layout::paint(&mut batch, atlas, &draws);
+        }
+        if !spectator {
+            self.draw_selected_name(&mut batch, !self.creative);
         }
         let atlas = &self.res.atlas;
         if self.debug {
@@ -8036,6 +8041,7 @@ pub fn run() -> Result<()> {
         shield_cooldown: 0,
         command_source: None,
         titles: Default::default(),
+        tool_highlight: Default::default(),
         applied_modifiers: Vec::new(),
         experience: Experience::default(),
         orbs: Vec::new(),

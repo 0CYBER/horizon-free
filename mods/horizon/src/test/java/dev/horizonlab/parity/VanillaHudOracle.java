@@ -88,6 +88,19 @@ public final class VanillaHudOracle {
     static float f(String k, float d) { return c.has(k) && !c.get(k).isJsonNull() ? c.get(k).getAsFloat() : d; }
     static int i(String k, int d) { return c.has(k) && !c.get(k).isJsonNull() ? c.get(k).getAsInt() : d; }
     static boolean b(String k) { return c.has(k) && c.get(k).getAsBoolean(); }
+    static net.minecraft.network.chat.Component comp(JsonElement e) {
+        return net.minecraft.network.chat.ComponentSerialization.CODEC.parse(com.mojang.serialization.JsonOps.INSTANCE, e).getOrThrow();
+    }
+    static <T> OptionInstance<T> option(T value) throws Exception {
+        @SuppressWarnings("unchecked") OptionInstance<T> o = alloc(OptionInstance.class);
+        put(o, OptionInstance.class, "value", value);
+        return o;
+    }
+    static Method hudMethod(String name, Class<?>... params) throws Exception {
+        Method m = Hud.class.getDeclaredMethod(name, params);
+        m.setAccessible(true);
+        return m;
+    }
 
     /** A player whose HUD-facing getters answer from the case. */
     public static final class Actor extends LocalPlayer {
@@ -95,6 +108,7 @@ public final class VanillaHudOracle {
         Entity vehicle;
         FoodData food;
         ItemStack offhand = ItemStack.EMPTY;
+        List<net.minecraft.world.effect.MobEffectInstance> active = new ArrayList<>();
         private Actor() { super(null, null, null, null, null, null, false, null, null); }
         @Override public float getHealth() { return f("health", 20); }
         @Override public double getAttributeValue(Holder<Attribute> a) { return a == Attributes.MAX_HEALTH ? f("maxHealth", 20) : 0.0; }
@@ -102,9 +116,10 @@ public final class VanillaHudOracle {
         @Override public int getArmorValue() { return i("armor", 0); }
         @Override public FoodData getFoodData() { return food; }
         @Override public boolean hasEffect(Holder<MobEffect> effect) {
-            for (var e : c.getAsJsonArray("effects")) if (effect.is(Identifier.parse(e.getAsString()))) return true;
+            if (c.has("effects")) for (var e : c.getAsJsonArray("effects")) if (effect.is(Identifier.parse(e.getAsString()))) return true;
             return false;
         }
+        @Override public java.util.Collection<net.minecraft.world.effect.MobEffectInstance> getActiveEffects() { return active; }
         @Override public boolean isFullyFrozen() { return b("frozen"); }
         @Override public int getAirSupply() { return i("air", 300); }
         @Override public int getMaxAirSupply() { return i("maxAir", 300); }
@@ -264,6 +279,11 @@ public final class VanillaHudOracle {
         Method crosshair = Hud.class.getDeclaredMethod("extractCrosshair", GuiGraphicsExtractor.class, DeltaTracker.class);
         crosshair.setAccessible(true);
         for (Method m : new Method[] {hotbar, health, vehicle}) m.setAccessible(true);
+        Method effects = hudMethod("extractEffects", GuiGraphicsExtractor.class, DeltaTracker.class);
+        Method title = hudMethod("extractTitle", GuiGraphicsExtractor.class, DeltaTracker.class);
+        Method overlayMessage = hudMethod("extractOverlayMessage", GuiGraphicsExtractor.class, DeltaTracker.class);
+        Method selectedName = hudMethod("extractSelectedItemName", GuiGraphicsExtractor.class);
+        Method tick = hudMethod("tick");
         Method level = Class.forName("net.minecraft.client.gui.contextualbar.ContextualBar")
             .getDeclaredMethod("extractExperienceLevel", GuiGraphicsExtractor.class, Font.class, int.class);
         level.setAccessible(true);
@@ -284,6 +304,7 @@ public final class VanillaHudOracle {
                 put(clientLevel, ClientLevel.class, "clientLevelData", levelData);
                 actor.level = clientLevel;
                 actor.offhand = ItemStack.EMPTY;
+                actor.active = new ArrayList<>();
                 actor.food = new FoodData();
                 actor.food.setFoodLevel(i("food", 20));
                 actor.food.setSaturation(f("saturation", 5));
@@ -296,7 +317,7 @@ public final class VanillaHudOracle {
                 var stacks = c.getAsJsonArray("slots");
                 var items = new net.minecraft.world.item.Item[] {Items.STONE, Items.DIAMOND_SWORD, Items.APPLE, Items.TORCH, Items.BOW,
                     Items.OAK_LOG, Items.BREAD, Items.SHIELD, Items.COMPASS};
-                for (int n = 0; n < 9; n++) {
+                for (int n = 0; stacks != null && n < 9; n++) {
                     if (stacks.get(n).isJsonNull()) continue;
                     var stack = new ItemStack(items[n]);
                     stack.setPopTime(stacks.get(n).getAsInt());
@@ -317,17 +338,20 @@ public final class VanillaHudOracle {
                 put(mc, Minecraft.class, "gameRenderer", renderer);
                 put(mc, Minecraft.class, "font", font);
                 var gameMode = alloc(MultiPlayerGameMode.class);
-                put(gameMode, MultiPlayerGameMode.class, "localPlayerMode", GameType.byName(c.get("gameMode").getAsString()));
+                put(gameMode, MultiPlayerGameMode.class, "localPlayerMode", GameType.byName(c.has("gameMode") ? c.get("gameMode").getAsString() : "survival"));
                 put(mc, Minecraft.class, "gameMode", gameMode);
                 var options = alloc(Options.class);
-                var indicator = alloc(OptionInstance.class);
-                put(indicator, OptionInstance.class, "value", AttackIndicatorStatus.valueOf(c.get("attackIndicator").getAsString()));
-                put(options, Options.class, "attackIndicator", indicator);
+                put(options, Options.class, "attackIndicator", option(AttackIndicatorStatus.valueOf(c.has("attackIndicator") ? c.get("attackIndicator").getAsString() : "OFF")));
+                put(options, Options.class, "backgroundForChatOnly", option(c.has("chatOnly") ? b("chatOnly") : true));
+                put(options, Options.class, "textBackgroundOpacity", option((double) f("textOpacity", 0.5F)));
+                put(options, Options.class, "notificationDisplayTime", option(c.has("displayTime") ? c.get("displayTime").getAsDouble() : 1.0));
                 put(mc, Minecraft.class, "options", options);
                 var window = alloc(com.mojang.blaze3d.platform.Window.class);
                 put(window, com.mojang.blaze3d.platform.Window.class, "guiScaledWidth", i("width", 0));
                 put(window, com.mojang.blaze3d.platform.Window.class, "guiScaledHeight", i("height", 0));
                 put(mc, Minecraft.class, "window", window);
+                put(mc, Minecraft.class, "gui", alloc(net.minecraft.client.gui.Gui.class));
+                put(mc, Minecraft.class, "demo", b("demo"));
                 var hud = alloc(Hud.class);
                 put(hud, Hud.class, "minecraft", mc);
                 put(hud, Hud.class, "random", net.minecraft.util.RandomSource.create());
@@ -336,25 +360,79 @@ public final class VanillaHudOracle {
                 put(hud, Hud.class, "displayHealth", i("displayHealth", 0));
                 put(hud, Hud.class, "lastHealthTime", Util.getMillis() - (long) i("lastHealthAgo", 0));
                 put(hud, Hud.class, "healthBlinkTime", (long) i("healthBlinkTime", 0));
+                put(hud, Hud.class, "lastToolHighlight", ItemStack.EMPTY);
+                var chat = alloc(net.minecraft.client.gui.components.ChatComponent.class);
+                put(chat, net.minecraft.client.gui.components.ChatComponent.class, "messageDeletionQueue", new ArrayList<>());
+                put(hud, Hud.class, "chat", chat);
+                hud.resetTitleTimes();
                 var capture = alloc(Capture.class);
                 capture.draws = new JsonArray();
                 capture.stack = new Matrix3x2fStack(16);
+                put(capture, GuiGraphicsExtractor.class, "minecraft", mc);
                 float partial = f("partial", 0);
                 DeltaTracker delta = (DeltaTracker) Proxy.newProxyInstance(DeltaTracker.class.getClassLoader(), new Class<?>[] {DeltaTracker.class},
                     (proxy, method, a) -> method.getReturnType() == float.class ? partial : null);
-                var mode = GameType.byName(c.get("gameMode").getAsString());
-                if (c.has("crosshair") && c.get("crosshair").getAsBoolean()) {
-                    put(options, Options.class, "cameraType", net.minecraft.client.CameraType.FIRST_PERSON);
-                    var debug = alloc(net.minecraft.client.gui.components.debug.DebugScreenEntryList.class);
-                    put(debug, net.minecraft.client.gui.components.debug.DebugScreenEntryList.class, "currentlyEnabled", new ArrayList<Identifier>());
-                    put(mc, Minecraft.class, "debugEntries", debug);
-                    crosshair.invoke(hud, capture, delta);
+                var mode = GameType.byName(c.has("gameMode") ? c.get("gameMode").getAsString() : "survival");
+                // Hud.tick's vignette brightness reads the camera entity's level: tick without one.
+                if (Set.of("title", "selected").contains(c.get("kind").getAsString()))
+                    put(camera, net.minecraft.client.Camera.class, "entity", null);
+                switch (c.get("kind").getAsString()) {
+                    case "decorations" -> {
+                        if (c.has("crosshair") && c.get("crosshair").getAsBoolean()) {
+                            put(options, Options.class, "cameraType", net.minecraft.client.CameraType.FIRST_PERSON);
+                            var debug = alloc(net.minecraft.client.gui.components.debug.DebugScreenEntryList.class);
+                            put(debug, net.minecraft.client.gui.components.debug.DebugScreenEntryList.class, "currentlyEnabled", new ArrayList<Identifier>());
+                            put(mc, Minecraft.class, "debugEntries", debug);
+                            crosshair.invoke(hud, capture, delta);
+                        }
+                        if (mode != GameType.SPECTATOR) hotbar.invoke(hud, capture, delta);
+                        if (mode.isSurvival()) health.invoke(hud, capture);
+                        vehicle.invoke(hud, capture);
+                        if (c.has("experienceBar") && c.get("experienceBar").getAsBoolean()) new ExperienceBar(mc).extractBackground(capture, delta);
+                        if (mode.isSurvival() && actor.experienceLevel > 0) level.invoke(null, capture, font, actor.experienceLevel);
+                    }
+                    case "effects" -> {
+                        for (var e : c.getAsJsonArray("active")) {
+                            var o = e.getAsJsonObject();
+                            var effect = BuiltInRegistries.MOB_EFFECT.get(Identifier.parse(o.get("id").getAsString())).orElseThrow();
+                            actor.active.add(new net.minecraft.world.effect.MobEffectInstance(effect, o.get("duration").getAsInt(), 0,
+                                o.get("ambient").getAsBoolean(), true, o.get("icon").getAsBoolean()));
+                        }
+                        effects.invoke(hud, capture, delta);
+                    }
+                    case "title" -> {
+                        for (var e : c.getAsJsonArray("ops")) {
+                            var op = e.getAsJsonArray();
+                            switch (op.get(0).getAsString()) {
+                                case "title" -> hud.setTitle(comp(op.get(1)));
+                                case "subtitle" -> hud.setSubtitle(comp(op.get(1)));
+                                case "times" -> hud.setTimes(op.get(1).getAsInt(), op.get(2).getAsInt(), op.get(3).getAsInt());
+                                case "clear" -> hud.clearTitles();
+                                case "reset" -> hud.resetTitleTimes();
+                                case "overlay" -> hud.setOverlayMessage(comp(op.get(1)), op.get(2).getAsBoolean());
+                                case "tick" -> { for (int n = op.get(1).getAsInt(); n > 0; n--) tick.invoke(hud); }
+                                default -> throw new IllegalArgumentException(op.toString());
+                            }
+                        }
+                        overlayMessage.invoke(hud, capture, delta);
+                        title.invoke(hud, capture, delta);
+                    }
+                    case "selected" -> {
+                        int slot = i("selected", 0);
+                        for (var e : c.getAsJsonArray("steps")) {
+                            ItemStack stack = ItemStack.EMPTY;
+                            if (!e.isJsonNull()) {
+                                var o = e.getAsJsonObject();
+                                stack = new ItemStack(BuiltInRegistries.ITEM.getValue(Identifier.withDefaultNamespace(o.get("item").getAsString())));
+                                if (!o.get("custom").isJsonNull()) stack.set(net.minecraft.core.component.DataComponents.CUSTOM_NAME, comp(o.get("custom")));
+                            }
+                            inventory.setItem(slot, stack);
+                            tick.invoke(hud);
+                        }
+                        selectedName.invoke(hud, capture);
+                    }
+                    default -> throw new IllegalArgumentException(c.get("kind").getAsString());
                 }
-                if (mode != GameType.SPECTATOR) hotbar.invoke(hud, capture, delta);
-                if (mode.isSurvival()) health.invoke(hud, capture);
-                vehicle.invoke(hud, capture);
-                if (c.has("experienceBar") && c.get("experienceBar").getAsBoolean()) new ExperienceBar(mc).extractBackground(capture, delta);
-                if (mode.isSurvival() && actor.experienceLevel > 0) level.invoke(null, capture, font, actor.experienceLevel);
                 result.add("draws", capture.draws);
             } catch (Throwable error) {
                 var cause = error instanceof InvocationTargetException && error.getCause() != null ? error.getCause() : error;

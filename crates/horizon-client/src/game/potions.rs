@@ -6,7 +6,8 @@ use super::{Game, Screen};
 use horizon_client::{
     brewing,
     effects::{EffectAction, EffectInstance, PlayerEffects},
-    hud::{HudBatch, rgba},
+    hud::HudBatch,
+    hud_layout, hud_overlays,
     items::ItemStack,
 };
 use horizon_core::{geometry::Vec3, random::RandomSource};
@@ -542,52 +543,26 @@ impl Game<'_> {
         if self.screen != Screen::Playing || self.potions.effects.list.is_empty() {
             return;
         }
-        let mut list: Vec<&EffectInstance> = self.potions.effects.list.iter().collect();
-        let color = |e: &EffectInstance| brewing::effect(e.id).map_or(0, |d| d.color);
-        list.sort_by(|a, b| {
-            (a.ambient, a.duration == -1, a.duration, color(a))
-                .cmp(&(b.ambient, b.duration == -1, b.duration, color(b)))
-                .reverse()
-        });
-        let (mut good, mut bad) = (0, 0);
-        let atlas = &self.res.atlas;
-        for e in list {
-            let beneficial =
-                brewing::effect(e.id).is_some_and(|d| d.category == brewing::Category::Beneficial);
-            let mut x = batch.width;
-            let mut y = 1.0;
-            if beneficial {
-                good += 1;
-                x -= 25.0 * good as f32;
-            } else {
-                bad += 1;
-                x -= 25.0 * bad as f32;
-                y += 26.0;
-            }
-            let mut alpha = 1.0f32;
-            if e.ambient {
-                batch.sprite(atlas, "gui/sprites/hud/effect_background_ambient", x, y);
-            } else {
-                batch.sprite(atlas, "gui/sprites/hud/effect_background", x, y);
-                if e.duration != -1 && e.duration <= 200 {
-                    let d = e.duration as f32;
-                    let used = 10.0 - (e.duration / 20) as f32;
-                    alpha = ((d / 10.0 / 5.0 * 0.5).clamp(0.0, 0.5)
-                        + (d * std::f32::consts::PI / 5.0).cos()
-                            * (used / 10.0 * 0.25).clamp(0.0, 0.25))
-                    .clamp(0.0, 1.0);
+        let icons: Vec<hud_overlays::EffectIcon> = self
+            .potions
+            .effects
+            .list
+            .iter()
+            .map(|e| {
+                let def = brewing::effect(e.id);
+                hud_overlays::EffectIcon {
+                    id: e.id.to_owned(),
+                    beneficial: def.is_some_and(|d| d.category == brewing::Category::Beneficial),
+                    color: def.map_or(0, |d| d.color as i32),
+                    ambient: e.ambient,
+                    duration: e.duration,
+                    // Horizon keeps no showIcon flag: every effect shows its icon.
+                    show_icon: true,
                 }
-            }
-            batch.sprite_scaled(
-                atlas,
-                &format!("mob_effect/{}", e.id),
-                x + 3.0,
-                y + 3.0,
-                18.0,
-                18.0,
-                rgba(255, 255, 255, (alpha * 255.0) as u8),
-            );
-        }
+            })
+            .collect();
+        let draws = hud_overlays::effects(batch.width as i32, false, &icons);
+        hud_layout::paint(batch, &self.res.atlas, &draws);
     }
     /// Effects saved in level.dat (`Player.active_effects`).
     pub(super) fn restore_effects(&mut self) {

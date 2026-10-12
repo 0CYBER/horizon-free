@@ -139,7 +139,14 @@ fn sprite(sprite: &'static str, x: i32, y: i32, w: i32, h: i32) -> GuiDraw {
         color: WHITE,
     }
 }
-fn region(sprite: &'static str, size: [i32; 2], uv: [i32; 2], at: [i32; 2], w: i32, h: i32) -> GuiDraw {
+fn region(
+    sprite: &'static str,
+    size: [i32; 2],
+    uv: [i32; 2],
+    at: [i32; 2],
+    w: i32,
+    h: i32,
+) -> GuiDraw {
     GuiDraw::Sprite {
         sprite: Cow::Borrowed(sprite),
         x: at[0],
@@ -172,14 +179,6 @@ fn text(out: &mut Vec<GuiDraw>, text: Text, x: i32, y: i32, color: u32, shadow: 
         });
     }
 }
-/// `graphics.textWithBackdrop` under `background` = `Options.getBackgroundColor(0)`.
-fn text_with_backdrop(out: &mut Vec<GuiDraw>, t: Text, x: i32, y: i32, w: i32, color: u32, background: u32) {
-    if background != 0 {
-        out.push(fill(x - 2, y - 2, x + w + 2, y + 9 + 2, multiply(background, color)));
-    }
-    text(out, t, x, y, color, true);
-}
-
 /// `Options.getBackgroundColor(float)`: `chat_only` = `backgroundForChatOnly`.
 pub fn background_color(chat_only: bool, opacity: f64, default: f32) -> u32 {
     let a = if chat_only { default } else { opacity as f32 };
@@ -424,7 +423,14 @@ pub fn experience(
         let x = (w - width(&text)) / 2;
         let y = h - 24 - 9 - 2;
         for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-            self::text(&mut out, Text::literal(&text), x + dx, y + dy, 0xFF00_0000, false);
+            self::text(
+                &mut out,
+                Text::literal(&text),
+                x + dx,
+                y + dy,
+                0xFF00_0000,
+                false,
+            );
         }
         self::text(&mut out, Text::literal(text), x, y, 0xFF80_FF20, false);
     }
@@ -780,7 +786,15 @@ pub fn paint(batch: &mut crate::hud::HudBatch, atlas: &crate::hud::HudAtlas, dra
                 h,
                 color,
             } => {
-                batch.sprite_scaled(atlas, sprite, *x as f32, *y as f32, *w as f32, *h as f32, abgr(*color));
+                batch.sprite_scaled(
+                    atlas,
+                    sprite,
+                    *x as f32,
+                    *y as f32,
+                    *w as f32,
+                    *h as f32,
+                    abgr(*color),
+                );
             }
             GuiDraw::Blit {
                 texture,

@@ -67,10 +67,10 @@ impl Game<'_> {
         } else {
             let text = self.component_arg(ctx, "title")?;
             if ctx.has("subtitle") {
-                self.titles.subtitle = Some(text);
+                self.titles.set_subtitle(text);
                 "show.subtitle"
             } else if ctx.has("actionbar") {
-                self.titles.set_overlay(text);
+                self.titles.set_overlay(text, false);
                 "show.actionbar"
             } else {
                 self.titles.set_title(text);

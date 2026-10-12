@@ -45,6 +45,7 @@ pub mod gossip;
 pub mod health;
 pub mod hud;
 pub mod hud_layout;
+pub mod hud_overlays;
 pub mod hunger;
 pub mod input;
 pub mod item_data;

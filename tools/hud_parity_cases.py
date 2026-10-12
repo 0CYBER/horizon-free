@@ -35,12 +35,90 @@ def decorations(rng, n):
     if rng.random() < 0.15:
         case['vehicleMaxHealth'] = rng.choice([15.0, 30.0, 53.0, 100.0])
         case['vehicleHealth'] = round(rng.uniform(0, case['vehicleMaxHealth']), 1)
-
-
     return case
+
+
+ALL_EFFECTS = ['speed', 'slowness', 'haste', 'mining_fatigue', 'strength', 'instant_health', 'instant_damage', 'jump_boost',
+               'nausea', 'regeneration', 'resistance', 'fire_resistance', 'water_breathing', 'invisibility', 'blindness',
+               'night_vision', 'hunger', 'weakness', 'poison', 'wither', 'health_boost', 'absorption', 'saturation', 'glowing',
+               'levitation', 'luck', 'unluck', 'slow_falling', 'conduit_power', 'dolphins_grace', 'bad_omen',
+               'hero_of_the_village', 'darkness', 'trial_omen', 'raid_omen', 'wind_charged', 'weaving', 'oozing', 'infested',
+               'breath_of_the_nautilus']
+SIZES = dict(width=[427, 320, 480, 640, 961], height=[240, 255, 270, 360, 501])
+
+
+def screen(rng):
+    return {'width': rng.choice(SIZES['width']), 'height': rng.choice(SIZES['height'])}
+
+
+def backdrop(rng):
+    """The text background options behind textWithBackdrop."""
+    return {'chatOnly': rng.random() < 0.5, 'textOpacity': rng.choice([0.0, 0.5, 0.25, 1.0, round(rng.random(), 3)])}
+
+
+def effects(rng, n):
+    count = rng.choice([1, 2, 3, 5, 8, 12, 20])
+    active = []
+    for e in rng.sample(ALL_EFFECTS, count):
+        duration = rng.choice([-1, 1, 7, 19, 20, 99, 150, 199, 200, 201, 600, 32147, 32148, 40000, rng.randint(0, 220)])
+        active.append({'id': 'minecraft:' + e, 'duration': duration, 'ambient': rng.random() < 0.25, 'icon': rng.random() < 0.9})
+    return {**screen(rng), 'demo': rng.random() < 0.15, 'active': active}
+
+
+TITLES = [{'text': 'Hello'}, {'text': 'Boss fight!', 'color': 'red', 'bold': True}, {'text': 'Wave 3', 'italic': True},
+          {'text': 'A long title over the whole screen'}, {'text': ''}, ['Mixed ', {'text': 'parts', 'color': 'gold'}],
+          {'text': 'Ünïcödé ★'}]
+
+
+def title(rng, n):
+    """Title, subtitle and action bar events between ticks (fades, setTimes mid-title, clears)."""
+    ops = []
+    for _ in range(rng.randint(1, 6)):
+        r = rng.random()
+        if r < 0.3:
+            ops.append(['title', rng.choice(TITLES)])
+        elif r < 0.45:
+            ops.append(['subtitle', rng.choice(TITLES)])
+        elif r < 0.6:
+            ops.append(['times', rng.choice([-1, 0, 1, 5, 10, 20]), rng.choice([-1, 0, 3, 40, 70]), rng.choice([-1, 0, 1, 7, 20])])
+        elif r < 0.65:
+            ops.append(['clear'])
+        elif r < 0.7:
+            ops.append(['reset'])
+        elif r < 0.85:
+            ops.append(['overlay', rng.choice(TITLES), rng.random() < 0.3])
+        ops.append(['tick', rng.choice([0, 0, 1, 2, 5, 9, 10, 11, 30, 50, 59, 60, 79, 80, 81, 99, 100, rng.randint(0, 120)])])
+    return {**screen(rng), **backdrop(rng), 'partial': round(rng.random(), 3), 'ops': ops}
+
+
+# Items for the selected item name: id, translation key and rarity colour (checked by the oracle's own stacks).
+HELD = [('stone', 'block.minecraft.stone', 'white'), ('diamond_sword', 'item.minecraft.diamond_sword', 'white'),
+        ('totem_of_undying', 'item.minecraft.totem_of_undying', 'yellow'), ('beacon', 'block.minecraft.beacon', 'aqua'),
+        ('dragon_egg', 'block.minecraft.dragon_egg', 'light_purple'), ('apple', 'item.minecraft.apple', 'white')]
+CUSTOM = [None, None, None, {'text': 'Excalibur'}, {'text': 'Red', 'color': 'red'}, {'text': 'Plain', 'italic': False}]
+
+
+def selected(rng, n):
+    """Selected-slot changes tick by tick, then the name with its fade."""
+    def stack():
+        item, key, rarity = rng.choice(HELD)
+        return {'item': item, 'key': key, 'rarity': rarity, 'custom': rng.choice(CUSTOM)}
+    steps, held = [], stack()
+    for _ in range(rng.randint(1, 60)):
+        if rng.random() < 0.1:
+            if rng.random() < 0.2:
+                held = None
+            else:
+                held = stack()
+        steps.append(held)
+    return {**screen(rng), **backdrop(rng), 'gameMode': rng.choice(['survival', 'adventure', 'creative']),
+            'displayTime': rng.choice([1.0, 1.0, 0.5, 2.0, 0.123]), 'steps': steps}
 
 
 # Generators by kind: (rng, index) -> case. Cases are drawn round-robin.
 KINDS = {
     'decorations': decorations,
+    'effects': effects,
+    'title': title,
+    'selected': selected,
 }

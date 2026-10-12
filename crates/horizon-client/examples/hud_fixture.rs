@@ -7,6 +7,7 @@
 use horizon_client::{
     hud::{HudAtlas, HudBatch},
     hud_layout::{self, GuiDraw, HealthHud, HealthInputs, HeartKind, HotbarInputs, IDENTITY, Pose},
+    lang,
     text::Text,
 };
 use serde_json::{Value, json};
@@ -25,6 +26,7 @@ fn main() -> Result<()> {
         return Err("usage: hud_fixture RESOURCES INPUTS OUTPUT".into());
     };
     let atlas = HudAtlas::build(root)?;
+    lang::set(lang::Language::load(&[root], lang::DEFAULT));
     let mut out = BufWriter::new(fs::File::create(output)?);
     for line in fs::read_to_string(inputs)?
         .lines()
@@ -53,7 +55,13 @@ fn runs(t: &Text) -> Option<Value> {
             _ => out.push((ch.to_string(), key.0, key.1, key.2)),
         }
     }
-    styled.then(|| json!(out.into_iter().map(|r| json!([r.0, r.1, r.2, r.3])).collect::<Vec<_>>()))
+    styled.then(|| {
+        json!(
+            out.into_iter()
+                .map(|r| json!([r.0, r.1, r.2, r.3]))
+                .collect::<Vec<_>>()
+        )
+    })
 }
 
 fn encode(draws: &[GuiDraw]) -> Vec<Value> {
@@ -74,28 +82,80 @@ fn encode(draws: &[GuiDraw]) -> Vec<Value> {
                 stack.pop();
                 continue;
             }
-            GuiDraw::Sprite { sprite, x, y, w, h, region, color } => {
+            GuiDraw::Sprite {
+                sprite,
+                x,
+                y,
+                w,
+                h,
+                region,
+                color,
+            } => {
                 json!({"type": "sprite", "sprite": sprite, "x": x, "y": y, "w": w, "h": h, "region": region, "color": *color as i32})
             }
-            GuiDraw::AtlasSprite { sprite, x, y, w, h, color } => {
+            GuiDraw::AtlasSprite {
+                sprite,
+                x,
+                y,
+                w,
+                h,
+                color,
+            } => {
                 json!({"type": "atlas", "sprite": sprite, "x": x, "y": y, "w": w, "h": h, "color": *color as i32})
             }
-            GuiDraw::Blit { texture, blend, x, y, w, h, uv, src, tex, color } => json!({
+            GuiDraw::Blit {
+                texture,
+                blend,
+                x,
+                y,
+                w,
+                h,
+                uv,
+                src,
+                tex,
+                color,
+            } => json!({
                 "type": "blit", "texture": format!("textures/{texture}.png"), "pipeline": blend.pipeline(),
                 "x": x, "y": y, "w": w, "h": h, "uv": uv, "src": src, "tex": tex, "color": *color as i32}),
-            GuiDraw::Fill { x0, y0, x1, y1, color } => {
+            GuiDraw::Fill {
+                x0,
+                y0,
+                x1,
+                y1,
+                color,
+            } => {
                 json!({"type": "fill", "x0": x0, "y0": y0, "x1": x1, "y1": y1, "color": *color as i32})
             }
-            GuiDraw::Text { text, x, y, color, shadow } => {
+            GuiDraw::Text {
+                text,
+                x,
+                y,
+                color,
+                shadow,
+            } => {
                 let mut v = json!({"type": "text", "text": text.plain(), "x": x, "y": y, "color": *color as i32, "shadow": shadow});
                 if let Some(r) = runs(text) {
                     v["runs"] = r;
                 }
                 v
             }
-            GuiDraw::Item { slot, x, y, seed, scale, pivot } => {
+            GuiDraw::Item {
+                slot,
+                x,
+                y,
+                seed,
+                scale,
+                pivot,
+            } => {
                 // translate(pivot) * scale * translate(-pivot) as a 3x2 matrix.
-                let m = [scale[0], 0.0, 0.0, scale[1], pivot[0] - pivot[0] * scale[0], pivot[1] - pivot[1] * scale[1]];
+                let m = [
+                    scale[0],
+                    0.0,
+                    0.0,
+                    scale[1],
+                    pivot[0] - pivot[0] * scale[0],
+                    pivot[1] - pivot[1] * scale[1],
+                ];
                 out.push(json!({"type": "item", "slot": slot, "x": x, "y": y, "seed": seed, "matrix": m}));
                 continue;
             }

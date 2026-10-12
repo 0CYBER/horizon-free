@@ -475,6 +475,15 @@ impl Settings {
                 }
             })
     }
+    /// `Options.getBackgroundColor(float)`: the text backdrop colour, `default`
+    /// opacity unless `backgroundForChatOnly` is off.
+    pub fn text_background(&self, default: f32) -> u32 {
+        crate::hud_layout::background_color(
+            self.file.bool("backgroundForChatOnly"),
+            f64::from(self.text_background_opacity),
+            default,
+        )
+    }
     pub fn chat_options(&self) -> crate::chat::ChatOptions {
         crate::chat::ChatOptions {
             opacity: self.chat_opacity,

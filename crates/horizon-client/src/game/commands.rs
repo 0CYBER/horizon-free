@@ -687,7 +687,7 @@ impl Game<'_> {
             .append("]")
             .with_color(color)
     }
-    fn item_rarity(&self, item: &str) -> String {
+    pub(super) fn item_rarity(&self, item: &str) -> String {
         static RARITY: std::sync::OnceLock<std::collections::HashMap<String, String>> =
             std::sync::OnceLock::new();
         let map = RARITY.get_or_init(|| {
