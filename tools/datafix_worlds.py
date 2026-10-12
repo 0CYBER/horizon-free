@@ -37,31 +37,106 @@ LOCAL = ROOT / '.local' / 'datafix'
 # Old server jars and their worlds are inputs, not outputs: keep them beside the
 # vanilla data, which parallel worktrees share (.local/minecraft links there).
 SHARED = (ROOT / '.local' / 'minecraft').resolve().parent / 'datafix'
-VERSIONS = ['1.18.2', '1.19', '1.19.2', '1.19.3', '1.19.4', '1.20.1', '1.20.2', '1.20.4', '1.20.5', '1.20.6', '1.21.1',
+VERSIONS = ['1.18.1', '1.18.2', '1.19', '1.19.2', '1.19.3', '1.19.4', '1.20.1', '1.20.2', '1.20.4', '1.20.5', '1.20.6', '1.21.1',
             '1.21.3', '1.21.4', '1.21.5', '1.21.6', '1.21.8', '1.21.9', '1.21.10', '1.21.11', '26.1', '26.1.2', '26.2']
 MANIFEST = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'
+LOCK = json.loads((ROOT / 'research-lock.json').read_text())['java_runtimes']
 BOT = 'Upgrader'
 UUID_BASE = 0x6000
 
 
-def server_jar(version):
-    path = SHARED / 'servers' / version / 'server.jar'
+def version_meta(version):
+    path = SHARED / 'servers' / version / 'version.json'
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         manifest = json.load(urllib.request.urlopen(MANIFEST))
         entry = next(v for v in manifest['versions'] if v['id'] == version)
-        meta = json.load(urllib.request.urlopen(entry['url']))
-        download = meta['downloads']['server']
+        data = urllib.request.urlopen(entry['url']).read()
+        if hashlib.sha1(data).hexdigest() != entry['sha1']:
+            sys.exit(f'{version}: version metadata checksum mismatch')
+        path.write_bytes(data)
+    return json.loads(path.read_text())
+
+
+def server_jar(version):
+    """The server jar, its DataVersion (None before 1.9: no DataVersion) and protocol."""
+    path = SHARED / 'servers' / version / 'server.jar'
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        download = version_meta(version)['downloads']['server']
         data = urllib.request.urlopen(download['url']).read()
         if hashlib.sha1(data).hexdigest() != download['sha1']:
             sys.exit(f'{version}: server.jar checksum mismatch')
         path.write_bytes(data)
-    info = json.loads(zipfile.ZipFile(path).read('version.json'))
-    return path, info['world_version'], info['protocol_version']
+    jar = zipfile.ZipFile(path)
+    if 'version.json' in jar.namelist():
+        info = json.loads(jar.read('version.json'))
+        return path, info['world_version'], info['protocol_version']
+    return path, OLD_VERSIONS[version][0], OLD_VERSIONS[version][1]
+
+
+# DataVersion and protocol of servers whose jar has no version.json (before 1.14).
+OLD_VERSIONS = {
+    '1.13.2': (1631, 404), '1.12.2': (1343, 340), '1.11.2': (922, 316), '1.10.2': (512, 210),
+    '1.9.4': (184, 110), '1.8.9': (None, 47),
+}
+
+
+def platform():
+    import platform as p
+    if sys.platform == 'darwin':
+        return 'mac-os-arm64' if p.machine() == 'arm64' else 'mac-os'
+    return 'linux'
+
+
+def java(version):
+    """The java executable for a server version: Mojang's runtime of the version's
+    component (pinned in research-lock.json), installed beside the shared data."""
+    meta = version_meta(version)
+    component = meta.get('javaVersion', {}).get('component', 'jre-legacy')
+    if component in ('java-runtime-delta', 'java-runtime-epsilon'):
+        return 'java'  # 1.20.5 on: the JDK that runs 26.3 runs them
+    runtimes = LOCK[platform()]
+    if component not in runtimes:
+        component = 'java-runtime-gamma'
+    pin = runtimes[component]
+    home = SHARED / 'java' / f'{component}-{platform()}'
+    stamp = home / '.complete'
+    if not stamp.exists() or stamp.read_text() != pin['manifest_sha1']:
+        install_runtime(pin, home)
+        stamp.write_text(pin['manifest_sha1'])
+    exe = next(home.glob('**/bin/java'))
+    return str(exe)
+
+
+def install_runtime(pin, home):
+    data = urllib.request.urlopen(pin['manifest_url']).read()
+    if hashlib.sha1(data).hexdigest() != pin['manifest_sha1']:
+        sys.exit(f'{pin["manifest_url"]}: checksum mismatch')
+    shutil.rmtree(home, ignore_errors=True)
+    links = []
+    for name, entry in sorted(json.loads(data)['files'].items()):
+        target = home / name
+        if entry['type'] == 'directory':
+            target.mkdir(parents=True, exist_ok=True)
+        elif entry['type'] == 'link':
+            links.append((target, entry['target']))
+        else:
+            raw = entry['downloads']['raw']
+            body = urllib.request.urlopen(raw['url']).read()
+            if hashlib.sha1(body).hexdigest() != raw['sha1']:
+                sys.exit(f'{name}: checksum mismatch')
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(body)
+            if entry.get('executable'):
+                target.chmod(0o755)
+    for target, to in links:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.symlink_to(to)
 
 
 class Server:
-    def __init__(self, directory, jar, port, packs=()):
+    def __init__(self, directory, jar, port, packs=(), java='java'):
         directory.mkdir(parents=True, exist_ok=True)
         (directory / 'eula.txt').write_text('eula=true\n')
         props = {'server-port': port, 'online-mode': 'false', 'level-name': 'world', 'level-seed': '4242',
@@ -70,7 +145,7 @@ class Server:
         if packs:
             props['initial-enabled-packs'] = ','.join(['vanilla', *packs])
         (directory / 'server.properties').write_text(''.join(f'{k}={v}\n' for k, v in props.items()))
-        self.process = subprocess.Popen(['java', '-Xmx2G', '-jar', str(jar), 'nogui'], cwd=directory,
+        self.process = subprocess.Popen([java, '-Xmx2G', '-jar', str(jar), 'nogui'], cwd=directory,
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         self.lines = []
         self.queue = queue.Queue()
@@ -283,7 +358,7 @@ def build(version, force=False):
     work = LOCAL / 'gen' / version
     shutil.rmtree(work, ignore_errors=True)
     port = 30000 + (os.getpid() + data_version) % 20000
-    server = Server(work, jar, port, scene.experiments(data_version))
+    server = Server(work, jar, port, scene.experiments(data_version), java(version))
     problems = []
 
     def run(command):
