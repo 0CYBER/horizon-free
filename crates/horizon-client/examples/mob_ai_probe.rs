@@ -659,7 +659,10 @@ fn main() -> horizon_client::Result<()> {
             }
             mobs.push(m);
         }
-        let mut player = s.player.map(|p| {
+        // Without a player of its own a scenario still has the oracle's,
+        // 5000 blocks east (Mob.checkDespawn draws for it).
+        let far = [f64::from(s.origin[0] + 5000), -60.0, f64::from(s.origin[1])];
+        let mut player = Some(s.player.unwrap_or(far)).map(|p| {
             let position = Vec3::new(p[0], p[1], p[2]);
             PlayerView {
                 position,
