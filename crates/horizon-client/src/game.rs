@@ -3096,133 +3096,139 @@ impl Game<'_> {
             batch.text(atlas, text, (w - tw) / 2.0, h / 2.0 - 4.0, u32::MAX, true);
             return batch;
         }
-        self.draw_spyglass(&mut batch);
-        {
-            let atlas = &self.res.atlas;
-            // Crosshair (first person only).
-            if self.camera_type.first_person() {
-                batch.sprite(
-                    atlas,
-                    "gui/sprites/hud/crosshair",
-                    (w - 15.0) / 2.0,
-                    (h - 15.0) / 2.0,
-                );
-            }
-        }
-        // Gui: spectators get the (closed) spectator menu instead of the
-        // hotbar and no player health.
-        let spectator = self.spectator();
-        if !spectator {
-            let atlas = &self.res.atlas;
-            batch.sprite(atlas, "gui/sprites/hud/hotbar", w / 2.0 - 91.0, h - 22.0);
-            batch.sprite(
-                atlas,
-                "gui/sprites/hud/hotbar_selection",
-                w / 2.0 - 91.0 - 1.0 + self.selected as f32 * 20.0,
-                h - 23.0,
-            );
-        }
-        // Hud.extractItemHotbar: the off hand left of the hotbar (right-handed).
-        if let Some(stack) = self.offhand.clone().filter(|_| !spectator) {
-            batch.sprite(
-                &self.res.atlas,
-                "gui/sprites/hud/hotbar_offhand_left",
-                w / 2.0 - 91.0 - 29.0,
-                h - 23.0,
-            );
-            self.draw_item(&mut batch, &stack, w / 2.0 - 91.0 - 26.0, h - 19.0);
-        }
-        for i in 0..9 {
-            if let Some(stack) = self.inventory[i].clone().filter(|_| !spectator) {
-                self.draw_item(
-                    &mut batch,
-                    &stack,
-                    w / 2.0 - 90.0 + i as f32 * 20.0 + 2.0,
-                    h - 19.0,
-                );
-            }
-        }
-        self.draw_effect_icons(&mut batch);
-        // Hud: the action bar and titles draw over the hotbar (nextStratum).
-        self.draw_boss_bar(&mut batch);
-        self.draw_custom_bossbars(&mut batch, 12.0 + 19.0 * self.builtin_bar_count() as f32);
-        self.draw_titles(&mut batch);
-        self.draw_scoreboard(&mut batch);
-        self.draw_subtitles(&mut batch);
-        // Gui.renderVehicleHealth / the jump bar while riding a mount.
-        let mounted = !self.creative && !spectator && self.draw_mount_hud(&mut batch, w, h);
-        let atlas = &self.res.atlas;
-        if !self.creative
-            && !spectator
-            && let Some(p) = &mut self.player
-        {
-            // Experience bar and hearts/food (Gui.renderPlayerHealth).
-            let saddled_mount = mounted
-                && self
-                    .riding
-                    .and_then(|id| self.mobs.iter().find(|m| m.id == id))
-                    .is_some_and(|m| m.extra.saddled);
-            if !saddled_mount {
-                batch.sprite(
-                    atlas,
-                    "gui/sprites/hud/experience_bar_background",
-                    w / 2.0 - 91.0,
-                    h - 29.0,
-                );
-                let filled = (self.experience.progress * 183.0).floor() / 182.0;
-                if filled > 0.0 {
-                    batch.sprite_part(
+        // Hud.extractRenderState: F1 (keyToggleGui) hides camera overlays, the
+        // crosshair, hotbar, effects, bars, sidebar, action bar, titles and chat;
+        // the sleep overlay, debug screen and open screens still draw.
+        if !self.ui.hide_gui {
+            self.draw_spyglass(&mut batch);
+            {
+                let atlas = &self.res.atlas;
+                // Crosshair (first person only).
+                if self.camera_type.first_person() {
+                    batch.sprite(
                         atlas,
-                        "gui/sprites/hud/experience_bar_progress",
-                        w / 2.0 - 91.0,
-                        h - 29.0,
-                        filled.min(1.0),
+                        "gui/sprites/hud/crosshair",
+                        (w - 15.0) / 2.0,
+                        (h - 15.0) / 2.0,
                     );
                 }
             }
-            if self.experience.level > 0 {
-                // Gui.renderExperienceLevel: green text with a black outline.
-                let text = self.experience.level.to_string();
-                let tw = HudBatch::text_width(atlas, &text);
-                let (x, y) = ((w - tw) / 2.0, h - 31.0 - 4.0);
-                for (dx, dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
-                    batch.text(atlas, &text, x + dx, y + dy, rgba(0, 0, 0, 255), false);
-                }
-                batch.text(atlas, &text, x, y, rgba(128, 255, 32, 255), false);
+            // Gui: spectators get the (closed) spectator menu instead of the
+            // hotbar and no player health.
+            let spectator = self.spectator();
+            if !spectator {
+                let atlas = &self.res.atlas;
+                batch.sprite(atlas, "gui/sprites/hud/hotbar", w / 2.0 - 91.0, h - 22.0);
+                batch.sprite(
+                    atlas,
+                    "gui/sprites/hud/hotbar_selection",
+                    w / 2.0 - 91.0 - 1.0 + self.selected as f32 * 20.0,
+                    h - 23.0,
+                );
             }
-            let effects = &self.potions.effects;
-            let kind = if effects.get("poison").is_some() {
-                health_hud::HeartKind::Poisoned
-            } else if effects.get("wither").is_some() {
-                health_hud::HeartKind::Withered
-            } else {
-                health_hud::HeartKind::Normal
-            };
-            let inputs = health_hud::HealthInputs {
-                tick: self.ticks,
-                health: p.health.health(),
-                max_health: p.attribute("minecraft:max_health").unwrap_or(20.0) as f32,
-                absorption: p.health.absorption(),
-                armor: p
-                    .attribute("minecraft:armor")
-                    .or_else(|_| p.attribute("armor"))
-                    .unwrap_or(0.0) as i32,
-                food: p.health.food.food,
-                saturation: p.health.food.saturation,
-                kind,
-                regeneration: effects.get("regeneration").is_some(),
-                hunger: effects.get("hunger").is_some(),
-                hardcore: self.level.hardcore,
-                damage_cooldown: p.health.hurt.cooldown > 0,
-                show_food: !mounted,
-            };
-            for (name, x, y) in
-                self.health_hud
-                    .layout(&inputs, w as i32, h as i32, std::time::Instant::now())
+            // Hud.extractItemHotbar: the off hand left of the hotbar (right-handed).
+            if let Some(stack) = self.offhand.clone().filter(|_| !spectator) {
+                batch.sprite(
+                    &self.res.atlas,
+                    "gui/sprites/hud/hotbar_offhand_left",
+                    w / 2.0 - 91.0 - 29.0,
+                    h - 23.0,
+                );
+                self.draw_item(&mut batch, &stack, w / 2.0 - 91.0 - 26.0, h - 19.0);
+            }
+            for i in 0..9 {
+                if let Some(stack) = self.inventory[i].clone().filter(|_| !spectator) {
+                    self.draw_item(
+                        &mut batch,
+                        &stack,
+                        w / 2.0 - 90.0 + i as f32 * 20.0 + 2.0,
+                        h - 19.0,
+                    );
+                }
+            }
+            self.draw_effect_icons(&mut batch);
+            // Hud: the action bar and titles draw over the hotbar (nextStratum).
+            self.draw_boss_bar(&mut batch);
+            self.draw_custom_bossbars(&mut batch, 12.0 + 19.0 * self.builtin_bar_count() as f32);
+            self.draw_titles(&mut batch);
+            self.draw_scoreboard(&mut batch);
+            self.draw_subtitles(&mut batch);
+            // Gui.renderVehicleHealth / the jump bar while riding a mount.
+            let mounted = !self.creative && !spectator && self.draw_mount_hud(&mut batch, w, h);
+            let atlas = &self.res.atlas;
+            if !self.creative
+                && !spectator
+                && let Some(p) = &mut self.player
             {
-                batch.sprite(atlas, &name, x as f32, y as f32);
+                // Experience bar and hearts/food (Gui.renderPlayerHealth).
+                let saddled_mount = mounted
+                    && self
+                        .riding
+                        .and_then(|id| self.mobs.iter().find(|m| m.id == id))
+                        .is_some_and(|m| m.extra.saddled);
+                if !saddled_mount {
+                    batch.sprite(
+                        atlas,
+                        "gui/sprites/hud/experience_bar_background",
+                        w / 2.0 - 91.0,
+                        h - 29.0,
+                    );
+                    let filled = (self.experience.progress * 183.0).floor() / 182.0;
+                    if filled > 0.0 {
+                        batch.sprite_part(
+                            atlas,
+                            "gui/sprites/hud/experience_bar_progress",
+                            w / 2.0 - 91.0,
+                            h - 29.0,
+                            filled.min(1.0),
+                        );
+                    }
+                }
+                if self.experience.level > 0 {
+                    // Gui.renderExperienceLevel: green text with a black outline.
+                    let text = self.experience.level.to_string();
+                    let tw = HudBatch::text_width(atlas, &text);
+                    let (x, y) = ((w - tw) / 2.0, h - 31.0 - 4.0);
+                    for (dx, dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+                        batch.text(atlas, &text, x + dx, y + dy, rgba(0, 0, 0, 255), false);
+                    }
+                    batch.text(atlas, &text, x, y, rgba(128, 255, 32, 255), false);
+                }
+                let effects = &self.potions.effects;
+                let kind = if effects.get("poison").is_some() {
+                    health_hud::HeartKind::Poisoned
+                } else if effects.get("wither").is_some() {
+                    health_hud::HeartKind::Withered
+                } else {
+                    health_hud::HeartKind::Normal
+                };
+                let inputs = health_hud::HealthInputs {
+                    tick: self.ticks,
+                    health: p.health.health(),
+                    max_health: p.attribute("minecraft:max_health").unwrap_or(20.0) as f32,
+                    absorption: p.health.absorption(),
+                    armor: p
+                        .attribute("minecraft:armor")
+                        .or_else(|_| p.attribute("armor"))
+                        .unwrap_or(0.0) as i32,
+                    food: p.health.food.food,
+                    saturation: p.health.food.saturation,
+                    kind,
+                    regeneration: effects.get("regeneration").is_some(),
+                    hunger: effects.get("hunger").is_some(),
+                    hardcore: self.level.hardcore,
+                    damage_cooldown: p.health.hurt.cooldown > 0,
+                    show_food: !mounted,
+                };
+                for (name, x, y) in
+                    self.health_hud
+                        .layout(&inputs, w as i32, h as i32, std::time::Instant::now())
+                {
+                    batch.sprite(atlas, &name, x as f32, y as f32);
+                }
             }
         }
+        let atlas = &self.res.atlas;
         if self.debug {
             let p = self
                 .player
@@ -3316,7 +3322,8 @@ impl Game<'_> {
                 );
             }
         }
-        if let Some((text, at)) = &self.message
+        if !self.ui.hide_gui
+            && let Some((text, at)) = &self.message
             && at.elapsed() < Duration::from_secs(3)
         {
             let tw = HudBatch::text_width(atlas, text);
@@ -6560,7 +6567,9 @@ impl Game<'_> {
     /// space, converted to camera-relative world space.
     fn hand_geometry(&mut self, alpha: f64) -> Vec<Vertex> {
         let mut out = Vec::new();
+        // GameRenderer.renderItemInHand: F1 hides the hand with the HUD.
         if self.spectator()
+            || self.ui.hide_gui
             || !self.camera_type.first_person()
             || self
                 .player
