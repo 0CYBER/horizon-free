@@ -682,11 +682,12 @@ public final class VanillaMobAiOracle {
                 }
                 if (!heartPositions.isEmpty()) level.tickBlockEntities();
                 managerTick.invoke(manager);
-                // What the tick spawned (babies, golems, dropped items) ticks from the next one,
-                // in the order it was added, with a seeded random of its own.
+                // Villagers the tick spawned (babies) and a heart's creakings tick from the next
+                // one, in the order they were added, with a seeded random of their own. Other
+                // newcomers (animal babies, dropped items) are left out, as the probe leaves them.
                 List<Entity> fresh = new ArrayList<>();
                 for (Entity e : level.getAllEntities())
-                    if (!(e instanceof Player) && !LABELS.containsKey(e) && (e instanceof Mob || e instanceof net.minecraft.world.entity.item.ItemEntity)) fresh.add(e);
+                    if (!LABELS.containsKey(e) && (e instanceof Villager || created.contains(e))) fresh.add(e);
                 fresh.sort(java.util.Comparator.comparingInt(Entity::getId));
                 for (Entity e : fresh) {
                     int index = ENTS.size();
