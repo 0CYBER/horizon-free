@@ -409,6 +409,38 @@ impl Mob {
             m.land_up_out_of_solid(w, p)
         })
     }
+    /// LandRandomPos.getPos(mob, h, v, scorer): the best of ten by `score`.
+    pub fn land_random_pos_scored(
+        &mut self,
+        w: &MobWorld,
+        h: i32,
+        v: i32,
+        score: impl Fn([i32; 3]) -> f64,
+    ) -> Option<[f64; 3]> {
+        let mut best: Option<[i32; 3]> = None;
+        let mut best_weight = f64::NEG_INFINITY;
+        for _ in 0..10 {
+            let d = self.random_direction(h, v);
+            let p = self.toward(f64::from(h), d);
+            if p[1] < crate::chunk::MIN_Y || p[1] >= 320 || !self.stable_destination(w, p) {
+                continue;
+            }
+            if let Some(p) = self.land_up_out_of_solid(w, p) {
+                let v = score(p);
+                if v > best_weight {
+                    best_weight = v;
+                    best = Some(p);
+                }
+            }
+        }
+        best.map(|p| {
+            [
+                f64::from(p[0]) + 0.5,
+                f64::from(p[1]),
+                f64::from(p[2]) + 0.5,
+            ]
+        })
+    }
     /// LandRandomPos.getPosAway
     pub fn land_random_pos_away(
         &mut self,
@@ -491,9 +523,22 @@ impl Mob {
     /// creative, within range scaled by visibility, optionally visible.
     pub fn can_target_player(&mut self, w: &MobWorld, range: f64, check_sight: bool) -> bool {
         let Some(p) = &w.player else { return false };
-        if !p.alive || p.creative {
+        if p.creative {
             return false;
         }
+        self.player_in_range(w, range, check_sight)
+    }
+    /// TargetingConditions.forNonCombat().range(range).test for the player
+    /// (seen by anyone, within range scaled by visibility, in sight).
+    pub fn can_see_player(&mut self, w: &MobWorld, range: f64) -> bool {
+        self.player_in_range(w, range, true)
+    }
+    fn player_in_range(&mut self, w: &MobWorld, range: f64, check_sight: bool) -> bool {
+        let Some(p) = &w.player else { return false };
+        if !p.alive || p.spectator {
+            return false;
+        }
+        // LivingEntity.getVisibilityPercent
         let mut visibility = 1.0;
         if p.sneaking {
             visibility *= 0.8;
@@ -666,6 +711,15 @@ impl Stroll {
 }
 impl Goal for Stroll {
     goal_clone!();
+    fn name(&self) -> &'static str {
+        if self.water_avoiding.is_some() {
+            "Stroll"
+        } else if self.swim {
+            "RandomSwimming"
+        } else {
+            "RandomStroll"
+        }
+    }
     fn flags(&self) -> u8 {
         MOVE
     }
@@ -729,6 +783,11 @@ pub struct LookAtPlayer {
     pub range: f32,
     pub probability: f32,
     pub only_horizontal: bool,
+    /// `LookAtPlayerGoal(Mob.class, ...)`: the nearest mob, not the player.
+    pub mobs: bool,
+    /// InteractGoal: LOOK and MOVE.
+    pub interact: bool,
+    look_at: Option<Who>,
     look_time: i32,
 }
 impl LookAtPlayer {
@@ -737,45 +796,110 @@ impl LookAtPlayer {
             range,
             probability: 0.02,
             only_horizontal: false,
+            mobs: false,
+            interact: false,
+            look_at: None,
             look_time: 0,
+        }
+    }
+    /// `LookAtPlayerGoal(this, Mob.class, range)`.
+    pub fn mobs(range: f32) -> Self {
+        Self {
+            mobs: true,
+            ..Self::new(range)
+        }
+    }
+    /// `InteractGoal(this, Player.class, range, probability)`.
+    pub fn interact(range: f32, probability: f32) -> Self {
+        Self {
+            interact: true,
+            ..Self::new(range).probability(probability)
         }
     }
     pub fn probability(mut self, p: f32) -> Self {
         self.probability = p;
         self
     }
+    /// The goal's look target, alive, with its position and eye height.
+    fn look_target(&self, w: &MobWorld) -> Option<(Vec3, f64)> {
+        match self.look_at? {
+            Who::Player => w
+                .player
+                .as_ref()
+                .filter(|p| p.alive)
+                .map(|p| (p.position, p.eye[1])),
+            Who::Mob(id) => w
+                .seen(id)
+                .filter(|s| s.alive)
+                .map(|s| (s.position, s.eye_y)),
+        }
+    }
 }
 impl Goal for LookAtPlayer {
     goal_clone!();
     fn flags(&self) -> u8 {
-        LOOK
+        if self.interact { LOOK | MOVE } else { LOOK }
+    }
+    fn name(&self) -> &'static str {
+        if self.interact {
+            "InteractGoal"
+        } else {
+            "LookAtPlayer"
+        }
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         if m.random.next_float() >= self.probability {
             return false;
         }
-        let Some(p) = &cx.w.player else { return false };
-        p.alive && m.distance_sqr(p.position) <= f64::from(self.range * self.range)
+        self.look_at = None;
+        let range = f64::from(self.range);
+        if !self.mobs {
+            // level.getNearestPlayer(forNonCombat().range(lookDistance)).
+            if m.can_see_player(cx.w, range) {
+                self.look_at = Some(Who::Player);
+            }
+            return self.look_at.is_some();
+        }
+        // level.getNearestEntity(mobs in the box inflated by (range, 3, range)).
+        let area = m.bounds().inflate(Vec3::new(range, 3.0, range));
+        let id = m.id;
+        let at = Vec3::new(m.position.x, m.eye_y(), m.position.z);
+        let candidates: Vec<(u32, Vec3)> =
+            cx.w.others
+                .iter()
+                .filter(|s| s.id != id && s.alive && s.bounds.intersects(area))
+                .map(|s| (s.id, s.position))
+                .collect();
+        let mut best: Option<(u32, f64)> = None;
+        for (cid, pos) in candidates {
+            let reach = range.max(2.0);
+            if m.distance_sqr(pos) > reach * reach || !m.sees(cx.w, Who::Mob(cid)) {
+                continue;
+            }
+            let d = pos.distance_squared(at);
+            if best.is_none_or(|(_, b)| d < b) {
+                best = Some((cid, d));
+            }
+        }
+        self.look_at = best.map(|(cid, _)| Who::Mob(cid));
+        self.look_at.is_some()
     }
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        let Some(p) = &cx.w.player else { return false };
-        p.alive
-            && m.distance_sqr(p.position) <= f64::from(self.range * self.range)
-            && self.look_time > 0
+        let Some((pos, _)) = self.look_target(cx.w) else {
+            return false;
+        };
+        m.distance_sqr(pos) <= f64::from(self.range * self.range) && self.look_time > 0
     }
     fn start(&mut self, m: &mut Mob, _: &mut Cx) {
         self.look_time = reduced(40 + m.random.next_int_bound(40).unwrap_or(0));
     }
+    fn stop(&mut self, _: &mut Mob, _: &mut Cx) {
+        self.look_at = None;
+    }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
-        if let Some(p) = &cx.w.player
-            && p.alive
-        {
-            let y = if self.only_horizontal {
-                m.eye_y()
-            } else {
-                p.eye[1]
-            };
-            m.look_at([p.position.x, y, p.position.z]);
+        if let Some((pos, eye)) = self.look_target(cx.w) {
+            let y = if self.only_horizontal { m.eye_y() } else { eye };
+            m.look_at([pos.x, y, pos.z]);
             self.look_time -= 1;
         }
     }
@@ -1012,8 +1136,13 @@ pub struct NearestTarget {
     pub must_see: bool,
     pub must_reach: bool,
     pub interval: i32,
-    /// Extra condition on the attacker (e.g. spiders only at night).
+    /// Extra condition on the attacker, checked after the random interval.
     pub when: Option<fn(&Mob, &MobWorld) -> bool>,
+    /// A condition checked before anything else, by subclasses overriding
+    /// `canUse` (SpiderTargetGoal: only in the dark).
+    pub gate: Option<fn(&Mob, &MobWorld) -> bool>,
+    /// The vanilla class name of a subclass (`Goal::name`).
+    pub label: Option<&'static str>,
     found: Option<Who>,
     target_goal: TargetState,
 }
@@ -1041,6 +1170,8 @@ impl NearestTarget {
             must_reach: false,
             interval: reduced(10),
             when: None,
+            gate: None,
+            label: None,
             found: None,
             target_goal: TargetState {
                 unseen_memory: 60,
@@ -1071,6 +1202,15 @@ impl NearestTarget {
         self.when = Some(f);
         self
     }
+    pub fn gate(mut self, f: fn(&Mob, &MobWorld) -> bool) -> Self {
+        self.gate = Some(f);
+        self
+    }
+    /// A subclass's name, e.g. `NearestAttackableWitchTargetGoal`.
+    pub fn named(mut self, label: &'static str) -> Self {
+        self.label = Some(label);
+        self
+    }
 }
 /// TargetGoal.canContinueToUse
 pub fn target_continue(st: &mut TargetState, must_see: bool, m: &mut Mob, cx: &mut Cx) -> bool {
@@ -1099,10 +1239,18 @@ pub fn target_continue(st: &mut TargetState, must_see: bool, m: &mut Mob, cx: &m
 }
 impl Goal for NearestTarget {
     goal_clone!();
+    fn name(&self) -> &'static str {
+        self.label.unwrap_or("NearestTarget")
+    }
     fn flags(&self) -> u8 {
         TARGET
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if let Some(f) = self.gate
+            && !f(m, cx.w)
+        {
+            return false;
+        }
         if self.interval > 0 && m.random.next_int_bound(self.interval).unwrap_or(1) != 0 {
             return false;
         }
@@ -1922,7 +2070,7 @@ impl MoveToBlock {
         self.find_nearest(m, w, valid)
     }
     /// `MoveToBlockGoal.findNearestBlock`: rings outward, alternating heights.
-    fn find_nearest(
+    pub fn find_nearest(
         &mut self,
         m: &Mob,
         w: &MobWorld,
@@ -1975,6 +2123,10 @@ impl MoveToBlock {
     }
     /// `MoveToBlockGoal.tick` (accepted distance 1 from the block above).
     pub fn tick(&mut self, m: &mut Mob, w: &MobWorld) {
+        self.tick_within(m, w, 1.0);
+    }
+    /// `MoveToBlockGoal.tick` with the goal's `acceptedDistance`.
+    pub fn tick_within(&mut self, m: &mut Mob, w: &MobWorld, accepted: f64) {
         let t = [
             f64::from(self.block[0]) + 0.5,
             f64::from(self.block[1] + 1) + 0.5,
@@ -1983,7 +2135,7 @@ impl MoveToBlock {
         let d2 = (m.position.x - t[0]).powi(2)
             + (m.position.y - t[1]).powi(2)
             + (m.position.z - t[2]).powi(2);
-        if d2 >= 1.0 {
+        if d2 >= accepted * accepted {
             self.reached = false;
             self.try_ticks += 1;
             if self.try_ticks % 40 == 0 {

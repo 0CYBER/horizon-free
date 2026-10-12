@@ -111,13 +111,15 @@ fn head_pos(m: &Mob, i: usize) -> [f64; 3] {
 /// `performRangedAttack`: a skull from a head toward a point.
 fn shoot(m: &mut Mob, head: usize, at: [f64; 3], dangerous: bool, events: &mut Vec<MobEvent>) {
     let h = head_pos(m, head);
-    // Level event 1024: the shoot sound.
-    events.push(MobEvent::Sound(
-        "entity.wither.shoot",
-        h,
-        2.0,
-        (m.random.next_float() - m.random.next_float()) * 0.2 + 1.0,
-    ));
+    // Level event 1024: the shoot sound (the client's pitch).
+    if !m.silent {
+        events.push(MobEvent::LevelEventSound {
+            sound: "entity.wither.shoot",
+            at: [m.position.x, m.position.y, m.position.z],
+            volume: 2.0,
+            spread: 0.2,
+        });
+    }
     let dir = [at[0] - h[0], at[1] - h[1], at[2] - h[2]];
     let p = Projectile::fireball(
         ProjectileKind::WitherSkull { dangerous },
@@ -135,7 +137,7 @@ pub fn steer(m: &mut Mob) {
         let mut yd = v.y;
         if m.position.y < t[1] || !powered(m) && m.position.y < t[1] + 5.0 {
             yd = yd.max(0.0);
-            yd += 0.3 - yd * 0.6;
+            yd += 0.3 - yd * f64::from(0.6_f32);
         }
         v.y = yd;
         let (dx, dz) = (t[0] - m.position.x, t[2] - m.position.z);
@@ -147,7 +149,10 @@ pub fn steer(m: &mut Mob) {
     }
     m.velocity = v;
     if v.x * v.x + v.z * v.z > 0.05 {
-        m.yaw = (v.z.atan2(v.x).to_degrees() as f32) - 90.0;
+        // (float)Mth.atan2(z, x) * (180.0F / (float)Math.PI) - 90.0F
+        m.yaw = (horizon_core::geometry::trig::atan2(v.z, v.x) as f32)
+            * (180.0_f32 / std::f32::consts::PI)
+            - 90.0;
     }
 }
 fn target_pos(w: &MobWorld, id: i32) -> Option<([f64; 3], f64, bool)> {
@@ -165,14 +170,9 @@ fn target_pos(w: &MobWorld, id: i32) -> Option<([f64; 3], f64, bool)> {
             .map(|s| ([s.position.x, s.position.y, s.position.z], s.eye_y, false)),
     }
 }
-/// `WitherBoss.aiStep` (heads, particles) and `customServerAiStep`.
+/// `WitherBoss.aiStep` after `super.aiStep()`: the side heads turn, smoke
+/// rises from the heads (the particle offsets are drawn on the server too).
 pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
-    if !m.alive() {
-        return;
-    }
-    m.extra.point = m
-        .target_info(w)
-        .map(|t| [t.position.x, t.position.y, t.position.z]);
     // Side heads turn toward their targets, else back to the body.
     for i in 0..2 {
         match target_pos(w, m.extra.ints[i]) {
@@ -180,22 +180,42 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
                 let h = head_pos(m, i + 1);
                 let (xd, yd, zd) = (p[0] - h[0], eye - h[1], p[2] - h[2]);
                 let sd = (xd * xd + zd * zd).sqrt();
-                let y_rot = (zd.atan2(xd).to_degrees() as f32) - 90.0;
-                let x_rot = -(yd.atan2(sd).to_degrees() as f32);
+                let y_rot = horizon_core::geometry::trig::atan2_degrees(zd, xd) - 90.0;
+                let x_rot = -horizon_core::geometry::trig::atan2_degrees(yd, sd);
                 m.anim.v[2 + i] = rotlerp(m.anim.v[2 + i], x_rot, 40.0);
                 m.anim.v[i] = rotlerp(m.anim.v[i], y_rot, 10.0);
             }
             None => m.anim.v[i] = rotlerp(m.anim.v[i], m.body_yaw, 10.0),
         }
     }
+    let powered = powered(m);
     for i in 0..3 {
         let h = head_pos(m, i);
+        for _ in 0..3 {
+            m.random.next_gaussian();
+        }
         events.push(MobEvent::Particles {
             kind: "smoke",
             at: h,
             count: 0,
         });
+        // The entity-effect particles roll the level random, not the wither's.
+        let _ = powered;
     }
+    if m.extra.counter > 0 {
+        for _ in 0..3 {
+            m.random.next_gaussian();
+            m.random.next_float();
+            m.random.next_gaussian();
+        }
+    }
+}
+/// `WitherBoss.customServerAiStep`: charging, then the side heads' targets
+/// and volleys, block breaking and healing.
+pub fn custom_server_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    m.extra.point = m
+        .target_info(w)
+        .map(|t| [t.position.x, t.position.y, t.position.z]);
     if m.extra.counter > 0 {
         let left = m.extra.counter - 1;
         if left <= 0 {
@@ -203,12 +223,15 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
                 [m.position.x, m.eye_y(), m.position.z],
                 7.0,
             ));
-            events.push(MobEvent::Sound(
-                "entity.wither.spawn",
-                [m.position.x, m.position.y, m.position.z],
-                1.0,
-                1.0,
-            ));
+            // Global level event 1023.
+            if !m.silent {
+                events.push(MobEvent::LevelEventSound {
+                    sound: "entity.wither.spawn",
+                    at: [m.position.x, m.position.y, m.position.z],
+                    volume: 1.0,
+                    spread: 0.0,
+                });
+            }
         }
         m.extra.counter = left;
         if m.age.is_multiple_of(10) {
@@ -226,11 +249,14 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         m.extra.ints[2 + k] = age + 10 + m.random.next_int_bound(10).unwrap_or(0);
         m.extra.ints[4 + k] += 1;
         if m.extra.ints[4 + k] > 16 {
+            // Mth.nextDouble(random, min, max) = nextDouble * (max - min) + min.
+            let p = m.position;
             let r = &mut m.random;
+            let mut between = |lo: f64, hi: f64| r.next_double() * (hi - lo) + lo;
             let at = [
-                m.position.x - 10.0 + r.next_double() * 20.0,
-                m.position.y - 5.0 + r.next_double() * 10.0,
-                m.position.z - 10.0 + r.next_double() * 20.0,
+                between(p.x - 10.0, p.x + 10.0),
+                between(p.y - 5.0, p.y + 5.0),
+                between(p.z - 10.0, p.z + 10.0),
             ];
             shoot(m, i + 1, at, true, events);
             m.extra.ints[4 + k] = 0;
@@ -307,12 +333,13 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
                 }
             }
             if destroyed {
-                events.push(MobEvent::Sound(
-                    "entity.wither.break_block",
-                    [m.position.x, m.position.y, m.position.z],
-                    1.0,
-                    1.0,
-                ));
+                // Level event 1022.
+                events.push(MobEvent::LevelEventSound {
+                    sound: "entity.wither.break_block",
+                    at: [m.position.x, m.position.y, m.position.z],
+                    volume: 1.0,
+                    spread: 0.0,
+                });
             }
         }
     }

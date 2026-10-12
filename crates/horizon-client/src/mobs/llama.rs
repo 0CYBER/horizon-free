@@ -172,7 +172,12 @@ fn spit(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
     let zd = t.position.z - m.position.z;
     let yo = (xd * xd + zd * zd).sqrt() * f64::from(0.2_f32);
     let mut p = Projectile::new(ProjectileKind::LlamaSpit, start, Some(Who::Mob(m.id)));
-    p.shoot(&mut m.random, [xd, yd + yo, zd], 1.5, 10.0);
+    p.shoot(
+        &mut crate::projectiles::own_random(m),
+        [xd, yd + yo, zd],
+        1.5,
+        10.0,
+    );
     cx.events.push(MobEvent::Projectile(p));
     let pitch = 1.0 + (m.random.next_float() - m.random.next_float()) * 0.2;
     cx.events.push(MobEvent::Sound(

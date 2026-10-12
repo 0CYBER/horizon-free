@@ -9,6 +9,49 @@ pub use positional::{
 };
 pub use worldgen::{WorldgenPositional, WorldgenRandom, WorldgenSource, slime_chunk_random};
 
+/// Call sites of `LegacyRandom` draws, recorded while switched on (the
+/// counterpart of the mob AI oracle's `TracingRandom`).
+#[cfg(feature = "rng-trace")]
+pub mod trace {
+    use std::cell::{Cell, RefCell};
+    thread_local! {
+        static ON: Cell<bool> = const { Cell::new(false) };
+        static LOG: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    }
+    pub fn set(on: bool) {
+        ON.with(|c| c.set(on));
+    }
+    /// The draws recorded since the last call, as `bits=value: frames`.
+    pub fn take() -> Vec<String> {
+        LOG.with(|l| std::mem::take(&mut *l.borrow_mut()))
+    }
+    pub(super) fn record(bits: u32, value: i32) {
+        if !ON.with(Cell::get) {
+            return;
+        }
+        let text = std::backtrace::Backtrace::force_capture().to_string();
+        let mut line = format!("{bits}={value:x}:");
+        let mut name = "";
+        let mut n = 0;
+        for raw in text.lines() {
+            let raw = raw.trim();
+            match raw.strip_prefix("at ") {
+                Some(at) if at.contains("horizon-client/src/") && n < 7 => {
+                    let file = at.rsplit('/').next().unwrap_or(at);
+                    let file = file.rsplit_once(':').map_or(file, |(f, _)| f);
+                    let short = name.split('<').next().unwrap_or(name);
+                    let short = short.rsplit("::").next().unwrap_or(short);
+                    line.push_str(&format!(" {short}@{file}"));
+                    n += 1;
+                }
+                Some(_) => {}
+                None => name = raw.split_once(": ").map_or("", |(_, f)| f),
+            }
+        }
+        LOG.with(|l| l.borrow_mut().push(line));
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InvalidBound;
 
@@ -85,7 +128,10 @@ impl LegacyRandom {
 
     fn bits(&mut self, count: u32) -> i32 {
         self.state = self.state.wrapping_mul(Self::MULTIPLIER).wrapping_add(11) & Self::MASK;
-        (self.state >> (48 - count)) as i32
+        let value = (self.state >> (48 - count)) as i32;
+        #[cfg(feature = "rng-trace")]
+        trace::record(count, value);
+        value
     }
 }
 

@@ -57,7 +57,9 @@ impl BossBar {
             hover: Some(Box::new(Text::literal(self.id.clone()))),
             ..Style::default()
         };
-        bracketed(comp_text(&self.name).with_style(&style))
+        // ComponentUtils.wrapInSquareBrackets(name).withStyle(...): the
+        // brackets take the colour too.
+        bracketed(comp_text(&self.name)).with_style(&style)
     }
     /// The filled fraction of the bar (`BossEvent.getProgress`).
     pub fn progress(&self) -> f32 {

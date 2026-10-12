@@ -26,6 +26,10 @@ struct Globals {
     sun: [f32; 4],
     /// x: sky fog end, y: cloud fog end, z: dark disc (camera below the horizon), w: unused.
     fog_ends: [f32; 4],
+    /// Atlas rects (u0, v0, width, height) of end_sky.png and end_portal.png.
+    end_portal_sprites: [[f32; 4]; 2],
+    /// x: vanilla's `GameTime` uniform; yzw unused.
+    time: [f32; 4],
 }
 pub type SectionKey = (i32, i32, i32);
 struct SectionGpu {
@@ -77,6 +81,11 @@ pub struct Frame<'a> {
     /// Full-screen camera effects drawn over the world and hand, under the HUD.
     pub screen: &'a [crate::screen_effects::ScreenQuad],
     pub game_time: f32,
+    /// `GlobalSettingsUniform` GameTime: (game time % 24000 + partial tick) / 24000.
+    pub shader_game_time: f32,
+    /// Atlas rects (u0, v0, width, height) of end_sky.png and end_portal.png
+    /// (`rendertype_end_portal`'s Sampler0 and Sampler1).
+    pub end_portal_sprites: [[f32; 4]; 2],
     pub ticks: u64,
     /// The darkness effect on the lightmap: the brightness it takes off the
     /// gamma option and the pulsing scale subtracted from the light.
@@ -1281,6 +1290,8 @@ impl Renderer {
                 if frame.dark_disc { 1.0 } else { 0.0 },
                 0.0,
             ],
+            end_portal_sprites: frame.end_portal_sprites,
+            time: [frame.shader_game_time, 0.0, 0.0, 0.0],
         };
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
