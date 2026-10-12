@@ -1054,6 +1054,7 @@ pub fn apply_brain_events(mobs: &mut [Mob], events: &mut Vec<MobEvent>, from: us
             MobEvent::LockGaze { mob, partner } => {
                 if let Some(m) = mobs.iter_mut().find(|m| m.id == mob) {
                     animal_brain::lock_gaze(m, partner);
+                    villager_brain::lock_gaze_half(m, Who::Mob(partner));
                 }
                 events.remove(i);
             }

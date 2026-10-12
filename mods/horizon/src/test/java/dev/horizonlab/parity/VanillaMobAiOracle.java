@@ -779,10 +779,37 @@ public final class VanillaMobAiOracle {
         }
 
         static void seedGate(Object behavior, long seed) throws Exception {
-            if (!(behavior instanceof GateBehavior<?>)) return;
-            ShufflingList<?> list = (ShufflingList<?>) field(GateBehavior.class, "behaviors").get(behavior);
-            field(ShufflingList.class, "random").set(list, new net.minecraft.world.level.levelgen.LegacyRandomSource(seed));
-            for (Object child : list) seedGate(child, seed);
+            seedLists(behavior, seed, java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>()), 0);
+        }
+
+        /**
+         * Seeds every ShufflingList a behaviour holds: a GateBehavior's, and the ones TriggerGate
+         * captures in its lambdas (BehaviorBuilder's one-shots), found through their fields.
+         */
+        static void seedLists(Object o, long seed, Set<Object> seen, int depth) throws Exception {
+            if (o == null || depth > 8 || !seen.add(o)) return;
+            if (o instanceof ShufflingList<?> list) {
+                field(ShufflingList.class, "random").set(list, new net.minecraft.world.level.levelgen.LegacyRandomSource(seed));
+                for (Object child : list) seedLists(child, seed, seen, depth + 1);
+                return;
+            }
+            String name = o.getClass().getName();
+            if (!name.startsWith("net.minecraft.world.entity.ai.behavior") || o instanceof Enum<?>) return;
+            for (Class<?> c = o.getClass(); c != null && c.getName().startsWith("net.minecraft"); c = c.getSuperclass()) {
+                for (Field f : c.getDeclaredFields()) {
+                    if (java.lang.reflect.Modifier.isStatic(f.getModifiers()) || f.getType().isPrimitive()) continue;
+                    f.setAccessible(true);
+                    Object v = f.get(o);
+                    if (v instanceof Iterable<?> it && !(v instanceof ShufflingList<?>)) {
+                        for (Object x : it) seedLists(x, seed, seen, depth + 1);
+                    } else if (v instanceof com.mojang.datafixers.util.Pair<?, ?> pair) {
+                        seedLists(pair.getFirst(), seed, seen, depth + 1);
+                        seedLists(pair.getSecond(), seed, seen, depth + 1);
+                    } else {
+                        seedLists(v, seed, seen, depth + 1);
+                    }
+                }
+            }
         }
 
         static String who(Entity e) {
@@ -880,7 +907,7 @@ public final class VanillaMobAiOracle {
                 mem.sort(null);
                 sb.append("\tmem ").append(String.join(" ", mem));
             }
-            if (m instanceof Villager v) sb.append("\tvx ").append(villager(v));
+            if (m instanceof Villager villager) sb.append("\tvx ").append(villager(villager));
             out.println(sb);
         }
 

@@ -1609,13 +1609,7 @@ impl B {
                 }
                 t.begin(cx);
                 let target = mem(m).interaction_target.value().unwrap();
-                let mm = mem(m);
-                mm.look_target.set(Tracker::Entity(target, true));
-                mm.walk_target.set(WalkTarget {
-                    target: Tracker::Entity(target, true),
-                    speed: 0.5,
-                    close: 2,
-                });
+                lock_gaze(m, target, cx);
                 true
             }
             B::MakeLove { t, birth } => {
@@ -1628,7 +1622,7 @@ impl B {
                 }
                 t.begin(cx);
                 let target = mem(m).breed_target.value().unwrap();
-                lock_gaze(m, target);
+                lock_gaze(m, target, cx);
                 *birth = now + 275 + i64::from(m.random.next_int_bound(50).unwrap_or(0));
                 true
             }
@@ -2853,6 +2847,7 @@ impl B {
                     && i.position.distance_squared(m.position) <= 5.0
                 {
                     let Who::Mob(other) = target else { return };
+                    lock_gaze(m, target, cx);
                     cx.events.push(MobEvent::VillagerMeet { mob: m.id, other });
                 }
             }
@@ -2870,7 +2865,7 @@ impl B {
                     .target_info(target)
                     .is_some_and(|t| t.position.distance_squared(m.position) <= 5.0)
                 {
-                    lock_gaze(m, target);
+                    lock_gaze(m, target, cx);
                     if now >= *birth {
                         cx.events.push(MobEvent::VillagerBirth {
                             parent: m.id,
@@ -3366,8 +3361,23 @@ fn breeding_possible(m: &mut Mob, w: &MobWorld) -> bool {
         && super::villager::can_breed(m)
         && w.seen(id).is_some_and(|s| s.in_love)
 }
-/// `BehaviorUtils.lockGazeAndWalkToEachOther`, this villager's half.
-fn lock_gaze(m: &mut Mob, target: Who) {
+/// `BehaviorUtils.lockGazeAndWalkToEachOther`: this villager's half, and
+/// the other villager's through a `LockGaze` event.
+fn lock_gaze(m: &mut Mob, target: Who, cx: &mut Bx) {
+    lock_gaze_half(m, target);
+    if let Who::Mob(other) = target {
+        cx.events.push(MobEvent::LockGaze {
+            mob: other,
+            partner: m.id,
+        });
+    }
+}
+/// One villager's half of `lockGazeAndWalkToEachOther`: look at the other
+/// and walk to it.
+pub fn lock_gaze_half(m: &mut Mob, target: Who) {
+    if super::villager::ext(m).is_none_or(|e| e.brain.is_none()) {
+        return;
+    }
     let mm = mem(m);
     mm.look_target.set(Tracker::Entity(target, true));
     mm.walk_target.set(WalkTarget {
