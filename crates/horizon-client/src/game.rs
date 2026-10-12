@@ -1610,6 +1610,8 @@ impl Game<'_> {
             self.world.block_entities.entry(key).or_insert_with(|| {
                 BlockEntity::for_block(&name).unwrap_or(BlockEntity::Chest(Vec::new()))
             });
+        } else if storage::is_shulker_box(&name) && !self.shulker_can_open(pos) {
+            // ShulkerBoxBlock.canOpen: the lid has no room; nothing opens.
         } else if let Some(entity) = BlockEntity::for_block(&name) {
             self.world.block_entities.entry(key).or_insert(entity);
             self.container = Some(key);
@@ -2745,9 +2747,10 @@ impl Game<'_> {
             self.tick_sculk()?;
             self.tick_brewing_stands()?;
         }
-        // ClientLevel.tickBlockEntities: chest lids, books, shulker boxes, bells...
-        self.tick_block_entity_anims();
         if running {
+            // ClientLevel.tickBlockEntities (not while paused or frozen):
+            // chest lids, books, shulker boxes, bells, conduits, heads.
+            self.tick_block_entity_anims();
             self.tick_particles();
         }
         if self.right && self.use_delay == 0 && self.screen == Screen::Playing {

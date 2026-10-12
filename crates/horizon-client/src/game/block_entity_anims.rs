@@ -5,10 +5,12 @@
 //! [`Game::block_anim`] and [`Game::chest_lid`].
 use super::Game;
 use horizon_client::{
-    block_entity_anim::{BellEntity, Ticker},
+    block_entity_anim::{BellEntity, Shulker, ShulkerStatus, Ticker},
     block_entity_render::BlockAnim,
+    collisions::{SceneCollisions, no_collision_empty},
     particles::{ParticleOptions, ParticleType},
 };
+use horizon_core::geometry::{Aabb, Vec3};
 use std::collections::HashMap;
 
 /// The handle of the local player among a bell's gathered entities.
@@ -86,36 +88,56 @@ impl Game<'_> {
     /// `BellBlockEntity.updateEntities`: the living entities whose bounding
     /// box meets the bell's block box inflated by 48.
     fn bell_gather(&self, pos: [i32; 3]) -> Vec<u64> {
-        let lo = [
-            f64::from(pos[0]) - 48.0,
-            f64::from(pos[1]) - 48.0,
-            f64::from(pos[2]) - 48.0,
-        ];
-        let hi = [
-            lo[0] + 49.0 + 48.0,
-            lo[1] + 49.0 + 48.0,
-            lo[2] + 49.0 + 48.0,
-        ];
-        let meets = |p: [f64; 3], width: f64, height: f64| {
-            let (bl, bh) = (
-                [p[0] - width / 2.0, p[1], p[2] - width / 2.0],
-                [p[0] + width / 2.0, p[1] + height, p[2] + width / 2.0],
-            );
-            (0..3).all(|a| bl[a] < hi[a] && bh[a] > lo[a])
-        };
+        let area = Aabb::new(
+            Vec3::new(
+                f64::from(pos[0]) - 48.0,
+                f64::from(pos[1]) - 48.0,
+                f64::from(pos[2]) - 48.0,
+            ),
+            Vec3::new(
+                f64::from(pos[0]) + 49.0,
+                f64::from(pos[1]) + 49.0,
+                f64::from(pos[2]) + 49.0,
+            ),
+        );
         let mut out = Vec::new();
-        if let Some(p) = &self.player
-            && meets([p.position.x, p.position.y, p.position.z], 0.6, 1.8)
+        if self
+            .player_view()
+            .is_some_and(|p| p.bounds.intersects(area))
         {
             out.push(PLAYER);
         }
         for m in &self.mobs {
-            let p = [m.position.x, m.position.y, m.position.z];
-            if meets(p, m.kind.width, m.kind.height) {
+            if !m.removed && m.bounds().intersects(area) {
                 out.push(u64::from(m.id));
             }
         }
         out
+    }
+    /// `ShulkerBoxBlock.canOpen`: a closed box opens only when its lid has
+    /// room to rise (`level.noCollision` of the half-open lid box).
+    pub(super) fn shulker_can_open(&self, pos: [i32; 3]) -> bool {
+        let state = self.world.block(pos[0], pos[1], pos[2]).0;
+        let Some(Ticker::Shulker { facing }) = self.be_anims.ticker(state) else {
+            return true;
+        };
+        let closed = self
+            .be_anims
+            .shulkers
+            .get(&pos)
+            .is_none_or(|s| s.status == ShulkerStatus::Closed);
+        if !closed {
+            return true;
+        }
+        let b = Shulker::lid_box(pos, facing);
+        let mut scene = SceneCollisions {
+            world: &self.world,
+            binding: self.collision,
+        };
+        no_collision_empty(
+            &mut scene,
+            Aabb::new(Vec3::new(b[0], b[1], b[2]), Vec3::new(b[3], b[4], b[5])),
+        )
     }
     /// The client tickers of the loaded animated block entities, once per
     /// client tick (`ClientLevel.tickBlockEntities`).
@@ -173,9 +195,9 @@ impl Game<'_> {
                     self.be_anims.skulls.entry(pos).or_default().tick(powered);
                 }
                 Ticker::Bell => {
-                    let player = self.player.as_ref().map(|p| BellEntity {
+                    let player = self.player_view().map(|p| BellEntity {
                         position: [p.position.x, p.position.y, p.position.z],
-                        alive: true,
+                        alive: p.alive,
                         raider: false,
                     });
                     let mobs = &self.mobs;
@@ -186,7 +208,7 @@ impl Game<'_> {
                         let m = mobs.iter().find(|m| u64::from(m.id) == h)?;
                         Some(BellEntity {
                             position: [m.position.x, m.position.y, m.position.z],
-                            alive: m.health > 0.0,
+                            alive: m.alive() && !m.removed,
                             raider: raiders.contains(&m.kind.id),
                         })
                     };
