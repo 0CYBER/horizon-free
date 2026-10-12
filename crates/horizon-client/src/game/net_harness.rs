@@ -1,0 +1,90 @@
+//! Headless multiplayer client for `tools/test_dedicated_server_parity.py`:
+//! with `--server` and `HORIZON_NET_REPORT` set, the client joins without a
+//! window, waits until it stands in the world with the chunks around it,
+//! sends a chat message and `/list`, collects the chat it is shown, leaves
+//! and writes a JSON report (position, chunks, chat lines, whether the
+//! server kept it connected throughout).
+use super::Game;
+use horizon_client::Result;
+use serde_json::json;
+use std::{
+    path::Path,
+    time::{Duration, Instant},
+};
+
+impl Game<'_> {
+    pub(super) fn run_net_harness(&mut self, report: &Path) -> Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(120);
+        let mut next = Instant::now();
+        let mut spawned_at: Option<Instant> = None;
+        let mut last_chunks = 0;
+        let mut quiet_since = Instant::now();
+        let mut step = 0;
+        let mut step_at = Instant::now();
+        let mut position = None;
+        let mut chunks = 0;
+        let mut error = None;
+        while Instant::now() < deadline {
+            self.update_world();
+            if self.remote.is_none() {
+                error = Some("disconnected".to_owned());
+                break;
+            }
+            if Instant::now() >= next {
+                next += Duration::from_millis(50);
+                self.tick()?;
+            }
+            let now = Instant::now();
+            if let Some(p) = &self.player {
+                spawned_at.get_or_insert(now);
+                position.get_or_insert([p.position.x, p.position.y, p.position.z]);
+            }
+            let count = self.world.chunks.len();
+            if count != last_chunks {
+                last_chunks = count;
+                quiet_since = now;
+            }
+            match step {
+                0 if spawned_at.is_some() && count > 0 && now - quiet_since > Duration::from_secs(3) => {
+                    chunks = count;
+                    self.send_chat("hello from the horizon client");
+                    step = 1;
+                    step_at = now;
+                }
+                1 if now - step_at > Duration::from_millis(1500) => {
+                    self.send_chat("/list");
+                    step = 2;
+                    step_at = now;
+                }
+                2 if now - step_at > Duration::from_millis(1500) => {
+                    step = 3;
+                    break;
+                }
+                _ => {}
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        if step < 3 && error.is_none() {
+            error = Some(format!("timed out at step {step}"));
+        }
+        let chat: Vec<String> = self
+            .remote
+            .as_ref()
+            .map(|r| r.chat.iter().map(|(t, _)| t.clone()).collect())
+            .unwrap_or_default();
+        if self.remote.is_some() {
+            self.leave_server(None)?;
+        }
+        std::fs::write(
+            report,
+            json!({
+                "position": position,
+                "chunks": chunks,
+                "chat": chat,
+                "error": error,
+            })
+            .to_string(),
+        )?;
+        Ok(())
+    }
+}

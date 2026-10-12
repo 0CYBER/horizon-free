@@ -22,6 +22,7 @@ mod copper_golems;
 mod creaking;
 mod creatures;
 mod dedicated;
+mod net_harness;
 mod crossbow;
 mod dispense_fixture;
 mod dispenser;
@@ -8452,6 +8453,9 @@ pub fn run() -> Result<()> {
                 game.options.player_name.clone(),
             );
             game.connect_server(&address, &name)?;
+            if let Some(report) = std::env::var_os("HORIZON_NET_REPORT") {
+                return game.run_net_harness(report.as_ref());
+            }
         }
         Some(folder) => {
             let (seed, creative) = (game.options.seed, game.options.creative);

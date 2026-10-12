@@ -247,6 +247,56 @@ def run_side(label, command, directory, client):
 PROPERTIES_PORTS = {}
 
 
+def horizon_client_joins(vanilla_server, binary, world, build, reference):
+    """Horizon's client joins a vanilla dedicated server headless: it must
+    land where the vanilla client did, receive as many chunks, see its chat
+    and /list reply, and leave as a vanilla client does (the server's log)."""
+    label = 'vanilla-for-horizon-client'
+    PROPERTIES_PORTS[label] = port = free_port()
+    directory = build / label
+    write_server_dir(directory, port, world)
+    client_dir = build / 'horizon-client'
+    shutil.rmtree(client_dir, ignore_errors=True)
+    client_dir.mkdir()
+    report = build / 'horizon-client-report.json'
+    report.unlink(missing_ok=True)
+    server = Server(vanilla_server, directory, label)
+    try:
+        server.wait_for(r'Done \(')
+        env = dict(os.environ, HORIZON_NO_AUDIO='1', HORIZON_NET_REPORT=str(report))
+        with (build / 'horizon-client-run.log').open('w') as log:
+            subprocess.run([str(c) for c in [binary, '--resources', lab.LOCAL / 'horizon-client/26.3', '--render-distance', 2,
+                                             '--server', f'127.0.0.1:{port}', '--name', PLAYER]],
+                           cwd=client_dir, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=300, check=True)
+        server.wait_for(r'left the game', timeout=30)
+    finally:
+        server.stop()
+    got = json.loads(report.read_text())
+    move = next(l for l in reference if l.startswith('play-move'))
+    want_position = [float(v) for v in re.match(r'play-move \(([^,]+), ([^,]+), ([^)]+)\)', move).groups()]
+    want_chunks = int(next(l for l in reference if l.startswith('play-counts')).split()[-1])
+    expected = {
+        'connected throughout': None,
+        'spawn position': want_position,
+        'chunks received': want_chunks,
+        'own chat shown': True,
+        '/list reply shown': True,
+        'server log': ['logged in', 'Tester joined the game', '[Not Secure] <Tester> hello from the horizon client',
+                       'Tester lost connection: Disconnected', 'Tester left the game'],
+    }
+    log = '\n'.join(server.lines)
+    actual = {
+        'connected throughout': got['error'],
+        'spawn position': got['position'],
+        'chunks received': got['chunks'],
+        'own chat shown': any('<Tester> hello from the horizon client' in c for c in got['chat']),
+        '/list reply shown': any('There are 1 of a max of 5 players online: Tester' in c for c in got['chat']),
+        'server log': [k for k in expected['server log'] if k in log],
+    }
+    return [f'horizon-client {k}: {"ok" if actual[k] == v else f"expected {v!r}, got {actual[k]!r}"}'
+            for k, v in expected.items()]
+
+
 def main():
     lock, jars, libraries = base.verify_artifacts()
     build = lab.LOCAL / NAME
@@ -303,12 +353,15 @@ def main():
         write_server_dir(directory, PROPERTIES_PORTS[label], world)
         results[label] = run_side(label, command, directory, client)
         (build / f'{label}.txt').write_text('\n'.join(results[label]) + '\n', encoding='utf-8')
+    client_checks = horizon_client_joins(vanilla_server, binary, world, build, results['vanilla'])
     vanilla, horizon = results['vanilla'], results['horizon']
     gaps = sorted({gap(l) for l in vanilla if gap(l)})
     vanilla = [l for l in vanilla if not gap(l)]
     for g in gaps:
         print(f'known gap: {KNOWN_GAPS[g]}')
-    errors = [l for l in vanilla + horizon if l.startswith('error')]
+    errors = [l for l in vanilla + horizon if l.startswith('error')] + [l for l in client_checks if not l.endswith(': ok')]
+    for line in client_checks:
+        print(line)
     differences = []
     import difflib
     for line in difflib.unified_diff(vanilla, horizon, 'vanilla', 'horizon', n=0, lineterm=''):
