@@ -1,8 +1,11 @@
-//! The `Hud` overlays above the hotbar and decorations, laid out as
-//! [`GuiDraw`] calls like [`crate::hud_layout`]: status effect icons
-//! (`extractEffects`), titles and the action bar (`extractTitle`,
-//! `extractOverlayMessage` and the title timers of `Hud.tick`), and the
-//! selected item name (`extractSelectedItemName` and its `toolHighlightTimer`).
+//! The `Hud` overlays laid out as [`GuiDraw`] calls like
+//! [`crate::hud_layout`]: status effect icons (`extractEffects`), titles and
+//! the action bar (`extractTitle`, `extractOverlayMessage` and the title
+//! timers of `Hud.tick`), the selected item name (`extractSelectedItemName`
+//! and its `toolHighlightTimer`), boss bars (`BossHealthOverlay`), the jump
+//! bar (`JumpableVehicleBar`), the scoreboard sidebar, item decorations
+//! (`GuiGraphicsExtractor.itemDecorations`), the camera overlays and the
+//! sleep overlay.
 use crate::{
     font::Font,
     hud_layout::{
@@ -635,12 +638,6 @@ pub fn sidebar(
     out
 }
 
-/// `Mth.ceil`.
-fn ceil(x: f32) -> i32 {
-    let i = x as i32;
-    if x > i as f32 { i + 1 } else { i }
-}
-
 /// What `GuiGraphicsExtractor.itemDecorations` draws over a stack.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ItemDecorations {
@@ -676,7 +673,7 @@ pub fn item_decorations(x: i32, y: i32, d: &ItemDecorations, font: &Font) -> Vec
     }
     if d.cooldown > 0.0 {
         let top = y + crate::hud_layout::floor(16.0 * (1.0 - d.cooldown));
-        let bottom = top + ceil(16.0 * d.cooldown);
+        let bottom = top + crate::hud_layout::ceil(16.0 * d.cooldown);
         out.push(fill(x, top, x + 16, bottom, 0x7FFF_FFFF));
     }
     if d.count != 1 || d.count_text.is_some() {

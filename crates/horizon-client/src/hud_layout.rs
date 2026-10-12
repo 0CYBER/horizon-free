@@ -1,9 +1,8 @@
 //! Layout of vanilla's `Hud` as draw calls (`GuiGraphicsExtractor` blits,
 //! fills and text): the hotbar with its selection, off-hand slot, items and
 //! attack indicator, the crosshair, armour, hearts, food, air bubbles, mount
-//! hearts, the experience and jump bars, status effect icons, camera
-//! overlays, titles and the action bar, the selected item name, boss bars,
-//! the scoreboard sidebar, chat and item decorations. Computed without
+//! hearts and the experience bar, plus the draw-call types and colour
+//! helpers the other layouts share (`hud_overlays`, `chat`). Computed without
 //! drawing so the parity fixture can compare them with the vanilla client.
 use crate::{font::Font, text::Text};
 use horizon_core::random::{LegacyRandom, RandomSource};
@@ -189,6 +188,11 @@ pub fn background_color(chat_only: bool, opacity: f64, default: f32) -> u32 {
 pub fn floor(x: f32) -> i32 {
     let i = x as i32;
     if x < i as f32 { i - 1 } else { i }
+}
+/// `Mth.ceil`.
+pub fn ceil(x: f32) -> i32 {
+    let i = x as i32;
+    if x > i as f32 { i + 1 } else { i }
 }
 /// `ARGB.as8BitChannel`.
 pub fn as8(v: f32) -> u32 {
@@ -583,12 +587,6 @@ fn heart(
         ],
     };
     table[usize::from(hardcore) * 4 + usize::from(half) * 2 + usize::from(blink)]
-}
-
-fn ceil(x: f32) -> i32 {
-    // Mth.ceil.
-    let i = x as i32;
-    if x > i as f32 { i + 1 } else { i }
 }
 
 impl HealthHud {

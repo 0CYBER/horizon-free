@@ -1,21 +1,29 @@
 #!/usr/bin/env python3
 """Compare the in-game HUD with the vanilla 26.3 client's Hud.
 
-The Java oracle (VanillaHudOracle) runs vanilla's own Hud methods
-(extractCrosshair, extractItemHotbar, extractPlayerHealth,
-extractVehicleHealth, extractEffects, extractCameraOverlays, extractTitle,
-extractOverlayMessage, extractSelectedItemName, the scoreboard sidebar and
-Hud.tick), BossHealthOverlay, ChatComponent, the contextual bars and
-GuiGraphicsExtractor.itemDecorations on a stand-in client whose player
-answers from the case, and records every blit (sprite, texture, position,
-size, region, colour, pose), fill, text call (string, style runs, position,
-colour, shadow, pose) and hotbar item (slot, position, seed, pose).
-`examples/hud_fixture` lays out the same state with
-`horizon_client::hud_layout`; the ordered call lists must agree.
+The Java oracle (VanillaHudOracle) runs vanilla's own code on a stand-in
+client whose player answers from the case, and records every
+GuiGraphicsExtractor blit (sprite, texture, position, size, region, colour,
+pose), fill, text call (string, style runs, position, colour, shadow, pose)
+and hotbar item (slot, position, seed, pose). `examples/hud_fixture` lays
+out the same state with `horizon_client::hud_layout`, `hud_overlays` and
+`chat`; the ordered call lists (and any state read back) must agree.
 
-Each case has a `kind` (decorations, effects, title, selected, boss,
-sidebar, jump, decor, overlays, chat); timing kinds replay events tick by
-tick (title fades, the action bar, the selected item name, chat fades).
+Case kinds (`tools/hud_parity_cases.py`), drawn round-robin:
+  decorations  extractCrosshair, extractItemHotbar, extractPlayerHealth,
+               extractVehicleHealth, ExperienceBar and the level
+  effects      extractEffects (MobEffectInstance order, blinking icons)
+  title        setTitle/setTimes/setOverlayMessage and Hud.tick, then
+               extractOverlayMessage and extractTitle (fades, backdrops)
+  selected     Hud.tick's tool highlight, then extractSelectedItemName
+  boss         BossHealthOverlay
+  jump         JumpableVehicleBar
+  sidebar      displayScoreboardSidebar (teams, number formats)
+  decor        GuiGraphicsExtractor.itemDecorations (count, bar, cooldown)
+  overlays     extractCameraOverlays (vignette, spyglass and scopeScale,
+               pumpkin, powder snow, portal, nausea) and extractSleepOverlay
+  chat         ChatComponent: wrapping (StringSplitter, indents), fades,
+               tags, scale, width, height and spacing options
 
   test_hud_parity.py [--count N] [--detail N] [--kind K]
 """
@@ -81,7 +89,7 @@ def same(x, y):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--count', type=int, default=600)
+    parser.add_argument('--count', type=int, default=2200)
     parser.add_argument('--detail', type=int, default=3)
     parser.add_argument('--kind', action='append', choices=sorted(KINDS), help='only these kinds (repeatable)')
     args = parser.parse_args()

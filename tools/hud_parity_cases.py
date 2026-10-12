@@ -196,6 +196,38 @@ def overlays(rng, n):
     return case
 
 
+
+WORDS = ['hello', 'world', 'a', 'Minecraft', 'supercalifragilisticexpialidocious', 'x' * 70, 'ok!', 'Ünïcödé', '★', '']
+
+
+def chat_text(rng):
+    words = [rng.choice(WORDS) for _ in range(rng.choice([1, 2, 5, 12, 30]))]
+    text = rng.choice([' ', ' ', ' ', '  ', '\n']).join(words)
+    if rng.random() < 0.1:
+        text = rng.choice([' ', '\n']) + text + rng.choice(['', ' ', '\n'])
+    if rng.random() < 0.3:
+        cut = rng.randint(0, len(text))
+        return [{'text': text[:cut], 'color': rng.choice(['red', 'gold', 'aqua'])},
+                {'text': text[cut:], 'bold': rng.random() < 0.5, 'italic': rng.random() < 0.3}]
+    return {'text': text}
+
+
+def chat(rng, n):
+    """Messages wrapped to the chat width and fading 200 ticks after they arrive."""
+    count = rng.choice([1, 2, 5, 10, 30, 120])
+    now = rng.randint(200, 2000)
+    messages = []
+    for _ in range(count):
+        at = rng.choice([now, now - 1, now - 179, now - 180, now - 190, now - 199, now - 200, now - 500, rng.randint(now - 260, now + 5)])
+        messages.append({'text': chat_text(rng), 'at': at, 'tag': rng.choice([None, None, 'system', 'error'])})
+    messages.sort(key=lambda m: m['at'])
+    return {**screen(rng), 'now': now, 'messages': messages,
+            'chatScale': rng.choice([1.0, 1.0, 0.5, 0.0 + 0.75, 0.25]), 'chatWidth': rng.choice([1.0, 1.0, 0.5, 0.0, 0.3]),
+            'chatOpacity': rng.choice([1.0, 0.5, 0.0, 0.25]), 'textOpacity': rng.choice([0.5, 0.0, 1.0, 0.25]),
+            'chatLineSpacing': rng.choice([0.0, 0.0, 0.5, 1.0, 0.25]), 'chatHeightUnfocused': rng.choice([70 / 160, 1.0, 0.0, 0.5]),
+            'chatHeightFocused': 1.0}
+
+
 # Generators by kind: (rng, index) -> case. Cases are drawn round-robin.
 KINDS = {
     'decorations': decorations,
@@ -207,4 +239,5 @@ KINDS = {
     'sidebar': sidebar,
     'decor': decor,
     'overlays': overlays,
+    'chat': chat,
 }

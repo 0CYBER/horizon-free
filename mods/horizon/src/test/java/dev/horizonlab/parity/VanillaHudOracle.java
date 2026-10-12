@@ -43,14 +43,16 @@ import org.joml.Matrix3x2f;
 import org.joml.Matrix3x2fStack;
 
 /**
- * Original oracle for the in-game HUD decorations: runs vanilla's own Hud
- * methods (extractItemHotbar, extractPlayerHealth, extractVehicleHealth,
- * extractCrosshair) and ExperienceBar / ContextualBar on a stand-in client
- * (Unsafe-allocated Minecraft, options, game mode, window and level) and a
- * player whose state getters answer from the case, and records every
- * GuiGraphicsExtractor blit, text and item call.
+ * Oracle for the in-game HUD: runs vanilla's own Hud methods (hotbar,
+ * crosshair, health, mount, experience, effects, titles and the action bar,
+ * the selected item name, the sidebar, camera and sleep overlays and
+ * Hud.tick), BossHealthOverlay, JumpableVehicleBar, ChatComponent and
+ * GuiGraphicsExtractor.itemDecorations on a stand-in client (Unsafe-allocated
+ * Minecraft, options, game mode, window and level) and a player whose state
+ * getters answer from the case, and records every GuiGraphicsExtractor blit,
+ * fill, text and item call. See tools/test_hud_parity.py for the case kinds.
  *
- * Input lines: case JSON. Output lines: {case, draws:[...]} or {case, error}.
+ * Input lines: case JSON. Output lines: {case, draws:[...], state...} or {case, error}.
  */
 public final class VanillaHudOracle {
     static Object unsafe;
@@ -83,6 +85,14 @@ public final class VanillaHudOracle {
         String setter = t == int.class ? "putInt" : t == boolean.class ? "putBoolean" : t == float.class ? "putFloat" : t == long.class ? "putLong" : "putObject";
         Class<?> param = t.isPrimitive() ? t : Object.class;
         unsafe.getClass().getMethod(setter, Object.class, long.class, param).invoke(unsafe, target, offset, value);
+    }
+
+    static void putStatic(Class<?> owner, String name, Object value) throws Exception {
+        Field f = field(owner, name);
+        var u = unsafe.getClass();
+        Object base = u.getMethod("staticFieldBase", Field.class).invoke(unsafe, f);
+        long offset = (long) u.getMethod("staticFieldOffset", Field.class).invoke(unsafe, f);
+        u.getMethod("putObject", Object.class, long.class, Object.class).invoke(unsafe, base, offset, value);
     }
 
     static float f(String k, float d) { return c.has(k) && !c.get(k).isJsonNull() ? c.get(k).getAsFloat() : d; }
@@ -385,7 +395,8 @@ public final class VanillaHudOracle {
                 put(window, com.mojang.blaze3d.platform.Window.class, "guiScaledWidth", i("width", 0));
                 put(window, com.mojang.blaze3d.platform.Window.class, "guiScaledHeight", i("height", 0));
                 put(mc, Minecraft.class, "window", window);
-                put(mc, Minecraft.class, "gui", alloc(net.minecraft.client.gui.Gui.class));
+                var gui = alloc(net.minecraft.client.gui.Gui.class);
+                put(mc, Minecraft.class, "gui", gui);
                 put(mc, Minecraft.class, "demo", b("demo"));
                 var hud = alloc(Hud.class);
                 put(hud, Hud.class, "minecraft", mc);
@@ -557,6 +568,32 @@ public final class VanillaHudOracle {
                         cameraOverlays.invoke(hud, capture, delta);
                         sleep.invoke(hud, capture, delta);
                         result.addProperty("scopeScale", (float) field(Hud.class, "scopeScale").get(hud));
+                    }
+                    case "chat" -> {
+                        for (String o : new String[] {"chatScale", "chatWidth", "chatOpacity", "chatLineSpacing", "chatHeightUnfocused", "chatHeightFocused"})
+                            put(options, Options.class, o, option(c.get(o).getAsDouble()));
+                        put(options, Options.class, "chatColors", option(true));
+                        putStatic(Minecraft.class, "instance", mc);
+                        put(gui, net.minecraft.client.gui.Gui.class, "hud", hud);
+                        var listener = alloc(net.minecraft.client.multiplayer.chat.ChatListener.class);
+                        put(listener, net.minecraft.client.multiplayer.chat.ChatListener.class, "delayedMessageQueue", new ArrayDeque<>());
+                        put(gui, net.minecraft.client.gui.Gui.class, "chatListener", listener);
+                        var C = net.minecraft.client.gui.components.ChatComponent.class;
+                        put(chat, C, "minecraft", mc);
+                        put(chat, C, "allMessages", new ArrayList<>());
+                        put(chat, C, "trimmedMessages", new ArrayList<>());
+                        put(chat, C, "visibleMessageFilter", (java.util.function.Predicate<?>) m -> true);
+                        for (var e : c.getAsJsonArray("messages")) {
+                            var m = e.getAsJsonObject();
+                            put(hud, Hud.class, "tickCount", m.get("at").getAsInt());
+                            var text = comp(m.get("text"));
+                            switch (m.get("tag").isJsonNull() ? "" : m.get("tag").getAsString()) {
+                                case "system" -> chat.addClientSystemMessage(text);
+                                case "error" -> chat.addPlayerMessage(text, null, net.minecraft.client.multiplayer.chat.GuiMessageTag.chatError());
+                                default -> chat.addPlayerMessage(text, null, null);
+                            }
+                        }
+                        chat.extractRenderState(capture, font, i("now", 0), 0, 0, net.minecraft.client.gui.components.ChatComponent.DisplayMode.BACKGROUND, false);
                     }
                     default -> throw new IllegalArgumentException(c.get("kind").getAsString());
                 }

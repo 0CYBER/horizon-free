@@ -486,13 +486,13 @@ impl Settings {
     }
     pub fn chat_options(&self) -> crate::chat::ChatOptions {
         crate::chat::ChatOptions {
-            opacity: self.chat_opacity,
-            background_opacity: self.text_background_opacity,
-            scale: self.chat_scale,
-            width: self.chat_width,
-            height_focused: self.chat_height_focused,
-            height_unfocused: self.chat_height_unfocused,
-            line_spacing: self.chat_line_spacing,
+            opacity: f64::from(self.chat_opacity),
+            background_opacity: f64::from(self.text_background_opacity),
+            scale: f64::from(self.chat_scale),
+            width: f64::from(self.chat_width),
+            height_focused: f64::from(self.chat_height_focused),
+            height_unfocused: f64::from(self.chat_height_unfocused),
+            line_spacing: f64::from(self.chat_line_spacing),
         }
     }
 }

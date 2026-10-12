@@ -1,6 +1,8 @@
 //! The overlay case kinds of the HUD parity fixture.
 use horizon_client::{
-    brewing, component,
+    brewing,
+    chat::{Chat, ChatOptions},
+    component,
     hud::HudAtlas,
     hud_layout::{self, GuiDraw},
     hud_overlays::{
@@ -46,6 +48,7 @@ pub fn run(
         "sidebar" => sidebar(c, w, h, atlas),
         "decor" => decor(c, atlas),
         "overlays" => overlays(c, w, h, state),
+        "chat" => chat(c, h, atlas),
         _ => Vec::new(),
     }
 }
@@ -288,4 +291,36 @@ fn overlays(c: &Value, w: i32, h: i32, state: &mut serde_json::Map<String, Value
     out.extend(hud_overlays::sleep_overlay(w, h, int(c, "sleepTimer", 0)));
     state.insert("scopeScale".into(), serde_json::json!(scope));
     out
+}
+
+/// Messages added at their ticks (`Hud.tickCount`), then the chat in
+/// background mode at tick `now`.
+fn chat(c: &Value, h: i32, atlas: &HudAtlas) -> Vec<GuiDraw> {
+    let option = |k: &str| c[k].as_f64().unwrap_or(0.0);
+    let mut chat = Chat::default();
+    chat.options = ChatOptions {
+        opacity: option("chatOpacity"),
+        background_opacity: option("textOpacity"),
+        scale: option("chatScale"),
+        width: option("chatWidth"),
+        height_focused: option("chatHeightFocused"),
+        height_unfocused: option("chatHeightUnfocused"),
+        line_spacing: option("chatLineSpacing"),
+    };
+    for m in c["messages"].as_array().into_iter().flatten() {
+        // GuiMessageTag indicator colours: systemSinglePlayer and chatError.
+        let indicator = match m["tag"].as_str() {
+            Some("system") => Some(13684944),
+            Some("error") => Some(16733525),
+            _ => None,
+        };
+        chat.add(
+            atlas,
+            comp(&m["text"]),
+            indicator,
+            m["at"].as_u64().unwrap_or(0),
+            false,
+        );
+    }
+    chat.layout(h, c["now"].as_u64().unwrap_or(0), false)
 }
