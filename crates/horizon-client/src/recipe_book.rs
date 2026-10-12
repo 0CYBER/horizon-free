@@ -4,7 +4,7 @@
 //! craftable stack), where a recipe goes in a grid (`PlaceRecipeHelper`) and
 //! the book's saved settings.
 use crate::{
-    crafting::{Ingredient, Recipe, Recipes},
+    crafting::{Ingredient, Placement, Recipe, Recipes},
     items::{ItemStack, Items},
 };
 use horizon_world::nbt::Tag;
@@ -245,6 +245,9 @@ pub struct Collection {
 #[derive(Default)]
 pub struct Book {
     pub entries: Vec<Entry>,
+    /// `Recipe.placementInfo` by recipe id: what the book's craftable test
+    /// and the server's placement look for.
+    pub placements: HashMap<String, Placement>,
     /// Item id -> registry position, to order ingredient choices.
     pub order: HashMap<String, usize>,
 }
@@ -327,7 +330,15 @@ impl Book {
             .enumerate()
             .map(|(i, id)| (id.to_string(), i))
             .collect();
-        Self { entries, order }
+        let placements = entries
+            .iter()
+            .filter_map(|e| Some((e.id.clone(), recipes.placement(&e.id)?)))
+            .collect();
+        Self {
+            entries,
+            placements,
+            order,
+        }
     }
     /// The unlocked recipes of one tab as collections (`ClientRecipeBook.rebuildCollections`).
     pub fn collections(
@@ -380,6 +391,13 @@ impl Book {
             Category::SmokerFood => BookType::Smoker,
         })
     }
+    /// `RecipeDisplayEntry.canCraft`: the recipe's placement ingredients can
+    /// all be found in `stock`.
+    pub fn can_craft(&self, entry: &Entry, stock: &crate::menu::place::Stacked) -> bool {
+        self.placements.get(&entry.id).is_some_and(|p| {
+            !p.impossible() && stock.can_craft(&p.ingredients.iter().collect::<Vec<_>>())
+        })
+    }
     pub fn entry(&self, id: &str) -> Option<&Entry> {
         self.entries.iter().find(|e| e.id == id)
     }
@@ -417,125 +435,6 @@ impl Book {
         results.iter().any(|r| id(r).0.contains(namespace))
             && (results.iter().any(|r| id(r).1.contains(path)) || in_lines(path))
     }
-}
-
-/// `StackedItemContents`: simple stacks (undamaged, unenchanted, unnamed) by item.
-#[derive(Clone, Debug, Default)]
-pub struct Available {
-    pub counts: HashMap<String, u32>,
-}
-impl Available {
-    /// `accountSimpleStack`.
-    pub fn add(&mut self, stack: &ItemStack) {
-        if stack.count > 0
-            && stack.damage == 0
-            && stack.enchantments().is_empty()
-            && stack.custom_name().is_none()
-        {
-            *self.counts.entry(stack.item.to_string()).or_default() += stack.count;
-        }
-    }
-    pub fn from_stacks<'a>(stacks: impl IntoIterator<Item = &'a ItemStack>) -> Self {
-        let mut a = Self::default();
-        for s in stacks {
-            a.add(s);
-        }
-        a
-    }
-    /// `StackedItemContents.canCraft(ingredients, null)`.
-    pub fn can_craft(&self, requirements: &[&Ingredient]) -> bool {
-        !requirements.is_empty() && pick(requirements, &self.counts, 1, &HashMap::new()).is_some()
-    }
-    /// `canCraft(recipe, amount, output)`: the item each ingredient uses when
-    /// `amount` sets can be made, preferring earlier registry items.
-    pub fn pick(
-        &self,
-        requirements: &[&Ingredient],
-        amount: u32,
-        order: &HashMap<String, usize>,
-    ) -> Option<Vec<String>> {
-        pick(requirements, &self.counts, amount, order)
-    }
-    /// `getBiggestCraftableStack`: how many sets can be made, up to 99.
-    pub fn biggest_stack(&self, requirements: &[&Ingredient]) -> u32 {
-        if !self.can_craft(requirements) {
-            return 0;
-        }
-        let none = HashMap::new();
-        let (mut lo, mut hi) = (1u32, 99u32);
-        while lo < hi {
-            let mid = (lo + hi).div_ceil(2);
-            if pick(requirements, &self.counts, mid, &none).is_some() {
-                lo = mid;
-            } else {
-                hi = mid - 1;
-            }
-        }
-        lo
-    }
-}
-/// Bipartite assignment of one item to each ingredient where an item can
-/// serve `count / amount` ingredients.
-fn pick(
-    requirements: &[&Ingredient],
-    counts: &HashMap<String, u32>,
-    amount: u32,
-    order: &HashMap<String, usize>,
-) -> Option<Vec<String>> {
-    let amount = amount.max(1);
-    let capacity = |item: &str| counts.get(item).copied().unwrap_or(0) / amount;
-    let candidates: Vec<Vec<String>> = requirements
-        .iter()
-        .map(|ing| {
-            let mut v: Vec<String> = ing.0.iter().filter(|i| capacity(i) > 0).cloned().collect();
-            v.sort_by_key(|i| (order.get(i).copied().unwrap_or(usize::MAX), i.clone()));
-            v
-        })
-        .collect();
-    let mut used: HashMap<String, Vec<usize>> = HashMap::new();
-    fn assign(
-        i: usize,
-        candidates: &[Vec<String>],
-        used: &mut HashMap<String, Vec<usize>>,
-        visited: &mut Vec<String>,
-        capacity: &dyn Fn(&str) -> u32,
-    ) -> bool {
-        for item in &candidates[i] {
-            if visited.contains(item) {
-                continue;
-            }
-            visited.push(item.clone());
-            let holders = used.get(item).cloned().unwrap_or_default();
-            if (holders.len() as u32) < capacity(item) {
-                used.entry(item.clone()).or_default().push(i);
-                return true;
-            }
-            for j in holders {
-                if assign(j, candidates, used, visited, capacity) {
-                    // j moved elsewhere: drop it from this item and take its place.
-                    if let Some(list) = used.get_mut(item) {
-                        list.retain(|x| *x != j);
-                        list.push(i);
-                    }
-                    return true;
-                }
-            }
-        }
-        false
-    }
-    for i in 0..requirements.len() {
-        let mut visited = Vec::new();
-        if !assign(i, &candidates, &mut used, &mut visited, &capacity) {
-            return None;
-        }
-    }
-    let mut result = vec![String::new(); requirements.len()];
-    for (item, holders) in used {
-        for i in holders {
-            result[i] = item.clone();
-        }
-    }
-    Some(result)
 }
 
 /// The recipe book's saved state: the `recipeBook` compound of the player.
@@ -602,11 +501,6 @@ mod tests {
     fn ing(items: &[&str]) -> Ingredient {
         Ingredient(items.iter().map(|s| (*s).to_owned()).collect())
     }
-    fn have(items: &[(&str, u32)]) -> Available {
-        Available {
-            counts: items.iter().map(|(i, n)| ((*i).to_owned(), *n)).collect(),
-        }
-    }
     #[test]
     fn small_recipes_are_centred_in_the_grid() {
         // One ingredient in a 3x3 grid goes to the middle cell.
@@ -631,46 +525,6 @@ mod tests {
         assert_eq!(small, vec![0]);
     }
     #[test]
-    fn a_single_item_can_fill_several_ingredients() {
-        let planks = ing(&["minecraft:oak_planks", "minecraft:birch_planks"]);
-        let reqs = [&planks, &planks, &planks, &planks];
-        let a = have(&[("minecraft:oak_planks", 2), ("minecraft:birch_planks", 2)]);
-        assert!(a.can_craft(&reqs));
-        let none = HashMap::new();
-        // Two sets need 8 planks, but only 4 are there.
-        assert!(a.pick(&reqs, 2, &none).is_none());
-        assert!(a.pick(&reqs, 1, &none).is_some());
-        assert_eq!(a.biggest_stack(&reqs), 1);
-        assert_eq!(
-            have(&[("minecraft:oak_planks", 64)]).biggest_stack(&reqs),
-            16
-        );
-    }
-    #[test]
-    fn the_matching_reassigns_flexible_ingredients() {
-        // The first ingredient takes either item, the second only the stick:
-        // one stick must not be wasted on the first.
-        let any = ing(&["minecraft:stick", "minecraft:bone"]);
-        let stick = ing(&["minecraft:stick"]);
-        let a = have(&[("minecraft:stick", 1), ("minecraft:bone", 1)]);
-        let mut order = HashMap::new();
-        order.insert("minecraft:stick".to_owned(), 0);
-        order.insert("minecraft:bone".to_owned(), 1);
-        let picked = a.pick(&[&any, &stick], 1, &order).expect("matching");
-        assert_eq!(picked, vec!["minecraft:bone", "minecraft:stick"]);
-        assert!(!have(&[("minecraft:stick", 1)]).can_craft(&[&any, &stick]));
-    }
-    #[test]
-    fn damaged_or_named_stacks_are_not_counted() {
-        let mut named = ItemStack::new("minecraft:stick", 4);
-        named.data_mut().custom_name = Some("x".into());
-        let mut damaged = ItemStack::new("minecraft:iron_sword", 1);
-        damaged.damage = 3;
-        let a = Available::from_stacks([&named, &damaged, &ItemStack::new("minecraft:stick", 2)]);
-        assert_eq!(a.counts.get("minecraft:stick"), Some(&2));
-        assert!(!a.counts.contains_key("minecraft:iron_sword"));
-    }
-    #[test]
     fn collections_group_recipes_of_a_category() {
         let entry = |id: &str, group: Option<&str>, category| Entry {
             id: id.into(),
@@ -686,6 +540,7 @@ mod tests {
                 entry("minecraft:c", None, Category::CraftingBuilding),
                 entry("minecraft:d", Some("planks"), Category::CraftingMisc),
             ],
+            placements: HashMap::new(),
             order: HashMap::new(),
         };
         let unlocked: BTreeSet<String> = ["a", "b", "c", "d"]
@@ -713,6 +568,7 @@ mod tests {
                 display: Display::Shapeless(Vec::new()),
                 result: ItemStack::new("minecraft:stick", 4),
             }],
+            placements: HashMap::new(),
             order: HashMap::new(),
         };
         let lines = |s: &ItemStack| vec![format!("Item {}", s.item), "Stick".to_owned()];

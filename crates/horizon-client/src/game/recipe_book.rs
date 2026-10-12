@@ -9,7 +9,8 @@ use horizon_client::{
     containers::{BlockEntity, FurnaceKind},
     hud::{HudBatch, Rect, rgba},
     items::ItemStack,
-    recipe_book::{Available, Book, BookType, Collection, Display, Entry, Tab},
+    menu::place::{PostPlace, Stacked},
+    recipe_book::{Book, BookType, Collection, Display, Entry, Tab},
     ui::EditBox,
 };
 use std::{
@@ -212,30 +213,16 @@ impl Game<'_> {
     fn book_grid(&self) -> (usize, usize) {
         (self.craft_size, self.craft_size)
     }
-    /// The slot ids holding the menu's recipe inputs (and, for furnaces, the
-    /// fuel and result slots that the book also reads).
-    fn book_input_slots(&self, book: BookType) -> Vec<usize> {
-        match book {
-            BookType::Crafting => {
-                let (w, h) = self.book_grid();
-                (0..w * h).map(|i| 100 + i).collect()
-            }
-            _ => vec![300],
-        }
-    }
-    /// The items the book counts: the inventory and the menu's crafting slots.
-    fn book_available(&mut self, book: BookType) -> Available {
-        let mut stacks: Vec<ItemStack> = self.inventory.iter().flatten().cloned().collect();
-        let slots = match book {
-            BookType::Crafting => self.book_input_slots(book),
-            _ => vec![300, 301, 302],
-        };
-        for slot in slots {
-            if let Some(s) = self.slot_mut(slot).clone() {
-                stacks.push(s);
-            }
-        }
-        Available::from_stacks(stacks.iter())
+    /// The items the book counts (`RecipeBookComponent.updateStackedContents`):
+    /// the inventory and the menu's crafting slots, as the menu engine counts them.
+    fn book_available(&mut self, _book: BookType) -> Stacked {
+        let mut out = Stacked::default();
+        let stock = &mut out;
+        self.menu_session(|menu, env, _| {
+            *stock = menu.stacked_contents(env);
+            Some(false)
+        });
+        out
     }
     fn unlocked_recipes(&self) -> BTreeSet<String> {
         self.adv
@@ -317,7 +304,7 @@ impl Game<'_> {
         let available = self.book_available(book_type);
         let shown = |e: &Entry| {
             (book_type != BookType::Crafting || e.fits(gw, gh))
-                && (!filtering || available.can_craft(&e.requirements()))
+                && (!filtering || book.can_craft(e, &available))
         };
         let new = |level: &Self, e: &Entry| level.level.recipe_book.to_be_displayed.contains(&e.id);
         let mut tabs = Vec::new();
@@ -376,7 +363,7 @@ impl Game<'_> {
             BookType::Crafting => e.fits(gw, gh),
             _ => true,
         };
-        let craftable = |e: &Entry| selected(e) && available.can_craft(&e.requirements());
+        let craftable = |e: &Entry| selected(e) && book.can_craft(e, &available);
         let filtering = self.book_filtering(book_type);
         let mut tabs = Vec::new();
         for tab in book_type.tabs() {
@@ -660,8 +647,9 @@ impl Game<'_> {
         self.recipe_ui.ghost.clear();
         self.place_recipe(book_type, entry_index, use_max);
     }
-    /// `ServerPlaceRecipe.placeRecipe`: fills the grid from the inventory,
-    /// or shows the ghost recipe when the items are missing.
+    /// `ServerboundPlaceRecipePacket`: the server places the recipe
+    /// (`ServerPlaceRecipe` on the menu engine) and answers with a ghost
+    /// recipe when the items are missing.
     fn place_recipe(&mut self, book_type: BookType, entry_index: usize, use_max: bool) {
         let Some(entry) = self
             .recipe_ui
@@ -672,88 +660,23 @@ impl Game<'_> {
         else {
             return;
         };
-        let (gw, gh) = match book_type {
-            BookType::Crafting => self.book_grid(),
-            _ => (1, 1),
-        };
-        let inputs = self.book_input_slots(book_type);
-        let clear: Vec<usize> = match book_type {
-            BookType::Crafting => inputs.clone(),
-            _ => vec![300, 302],
-        };
-        if !self.creative && !self.can_clear_grid(&clear) {
-            return;
-        }
-        let available = self.book_available(book_type);
-        let requirements = entry.requirements();
-        if !available.can_craft(&requirements) {
-            self.clear_book_grid(&clear);
+        let creative = self.creative;
+        let mut post = None;
+        let answer = &mut post;
+        self.menu_session(|menu, env, _| {
+            // handlePlaceRecipe: an impossible recipe is refused outright.
+            if env
+                .recipes
+                .placement(&entry.id)
+                .is_none_or(|p| p.impossible())
+            {
+                return Some(false);
+            }
+            *answer = Some(menu.place_recipe(env, &entry.id, use_max, creative, None));
+            Some(true)
+        });
+        if post == Some(PostPlace::Ghost) {
             self.fill_ghost(book_type, &entry);
-            self.recipe_book_changed();
-            return;
-        }
-        let matches_placed = self.recipe_matches(book_type, &entry);
-        let biggest = available.biggest_stack(&requirements);
-        if matches_placed {
-            for slot in &inputs {
-                let stack = self.slot_mut(*slot).clone();
-                if let Some(s) = stack {
-                    let max = self.res.items.get(&s.item).map_or(64, |i| i.max_stack);
-                    if biggest.min(max) < s.count + 1 {
-                        return;
-                    }
-                }
-            }
-        }
-        let amount = if use_max {
-            biggest
-        } else if matches_placed {
-            let smallest = inputs
-                .iter()
-                .filter_map(|slot| self.slot_mut(*slot).as_ref().map(|s| s.count))
-                .min();
-            smallest.map_or(1, |n| n + 1)
-        } else {
-            1
-        };
-        let order = self
-            .recipe_ui
-            .book
-            .as_ref()
-            .map(|b| b.order.clone())
-            .unwrap_or_default();
-        let Some(mut used) = available.pick(&requirements, amount, &order) else {
-            return;
-        };
-        let item_max = |item: &str| self.res.items.get(item).map_or(64, |i| i.max_stack);
-        let mut amount = amount;
-        let clamped = used.iter().map(|i| item_max(i)).fold(amount, u32::min);
-        if clamped != amount {
-            amount = clamped;
-            match available.pick(&requirements, amount, &order) {
-                Some(u) => used = u,
-                None => return,
-            }
-        }
-        self.clear_book_grid(&clear);
-        for (ingredient, grid_index) in entry.grid_cells(gw, gh) {
-            let Some(ingredient) = ingredient else {
-                continue;
-            };
-            let slot = inputs[grid_index.min(inputs.len() - 1)];
-            let mut remaining = amount as i64;
-            while remaining > 0 {
-                remaining = self.move_item_to_grid(slot, &used[ingredient], remaining);
-                if remaining < 0 {
-                    break;
-                }
-            }
-        }
-        if let Some(BlockEntity::Furnace(f)) = self
-            .container
-            .and_then(|k| self.world.block_entities.get_mut(&k))
-        {
-            f.cooking_timer = 0;
         }
         self.recipe_book_changed();
     }
@@ -763,111 +686,6 @@ impl Game<'_> {
             self.world.modified.insert((key.0 >> 4, key.2 >> 4));
             self.container_changed(key);
         }
-    }
-    /// `menu.recipeMatches(recipe)`: the grid already holds this recipe.
-    fn recipe_matches(&mut self, book_type: BookType, entry: &Entry) -> bool {
-        match (&entry.display, book_type) {
-            (Display::Furnace(ingredient), _) => self
-                .slot_mut(300)
-                .as_ref()
-                .is_some_and(|s| ingredient.test(s)),
-            (_, BookType::Crafting) => {
-                let n = self.craft_size;
-                let grid: Vec<Option<ItemStack>> =
-                    (0..n * n).map(|i| self.craft_grid[i].clone()).collect();
-                self.res
-                    .recipes
-                    .find(&grid, n)
-                    .is_some_and(|(name, _)| format!("minecraft:{name}") == entry.id)
-            }
-            _ => false,
-        }
-    }
-    /// `Inventory.getSlotWithRemainingSpace`.
-    fn has_room_for(&self, stack: &ItemStack) -> bool {
-        let max = self.res.items.get(&stack.item).map_or(64, |i| i.max_stack);
-        self.inventory
-            .iter()
-            .flatten()
-            .any(|s| s.same_item_same_components(stack) && max > 1 && s.count < max)
-    }
-    /// `ServerPlaceRecipe.testClearGrid`.
-    fn can_clear_grid(&mut self, slots: &[usize]) -> bool {
-        let mut free: Vec<ItemStack> = Vec::new();
-        let free_in_inventory = self.inventory.iter().filter(|s| s.is_none()).count();
-        for &slot in slots {
-            let Some(mut stack) = self.slot_mut(slot).clone() else {
-                continue;
-            };
-            if !self.has_room_for(&stack) && free.len() <= free_in_inventory {
-                for other in free.iter_mut() {
-                    let max = self.res.items.get(&other.item).map_or(64, |i| i.max_stack);
-                    if other.item == stack.item
-                        && other.count != max
-                        && other.count + stack.count <= max
-                    {
-                        other.count += stack.count;
-                        stack.count = 0;
-                        break;
-                    }
-                }
-                if stack.count > 0 {
-                    if free.len() >= free_in_inventory {
-                        return false;
-                    }
-                    free.push(stack);
-                }
-            } else if !self.has_room_for(&stack) {
-                return false;
-            }
-        }
-        true
-    }
-    /// `ServerPlaceRecipe.clearGrid`: the grid's items go back to the inventory.
-    fn clear_book_grid(&mut self, slots: &[usize]) {
-        for &slot in slots {
-            if let Some(stack) = self.slot_mut(slot).take() {
-                self.give_or_drop_quiet(stack);
-            }
-        }
-    }
-    /// Back into the inventory; what does not fit is lost only in creative
-    /// (survival checks room first with `can_clear_grid`).
-    fn give_or_drop_quiet(&mut self, stack: ItemStack) {
-        let _ = self.give(stack);
-    }
-    /// `ServerPlaceRecipe.moveItemToGrid`; the count still to move or -1.
-    fn move_item_to_grid(&mut self, slot: usize, item: &str, count: i64) -> i64 {
-        let target = self.slot_mut(slot).clone();
-        let found = self.inventory.iter().position(|s| {
-            s.as_ref().is_some_and(|s| {
-                &*s.item == item
-                    && s.damage == 0
-                    && s.enchantments().is_empty()
-                    && s.custom_name().is_none()
-                    && target
-                        .as_ref()
-                        .is_none_or(|t| t.same_item_same_components(s))
-            })
-        });
-        let Some(index) = found else { return -1 };
-        let Some(source) = self.inventory[index].as_mut() else {
-            return -1;
-        };
-        let taken = (count as u32).min(source.count);
-        let moved = ItemStack {
-            count: taken,
-            ..source.clone()
-        };
-        source.count -= taken;
-        if source.count == 0 {
-            self.inventory[index] = None;
-        }
-        match self.slot_mut(slot) {
-            Some(existing) => existing.count += taken,
-            empty => *empty = Some(moved),
-        }
-        count - i64::from(taken)
     }
 
     // ---- ghost recipe ----

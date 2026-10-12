@@ -3738,8 +3738,14 @@ impl Game<'_> {
             banners: &self.res.stations.banners,
         };
         menu.creative = creative;
+        menu.selected = self.selected;
         for (i, stack) in before.iter().enumerate() {
             menu.set_slot(&env, i, stack.clone());
+        }
+        // The off hand is part of the inventory even when the menu has no slot for it.
+        let offhand_mapped = game_of.contains(&Some(504));
+        if !offhand_mapped {
+            menu.set_player_item(40, self.offhand.clone());
         }
         menu.settle(&env);
         if kind == Kind::Loom
@@ -3773,6 +3779,9 @@ impl Game<'_> {
             }
         }
         self.carried = carried;
+        if !offhand_mapped {
+            self.offhand = menu.player_item(40).cloned();
+        }
         for stack in dropped {
             self.player_drop(stack);
         }

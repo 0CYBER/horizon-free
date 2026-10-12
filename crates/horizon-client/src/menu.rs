@@ -14,6 +14,8 @@ use crate::{
 };
 use std::sync::Arc;
 
+pub mod place;
+
 /// What a menu needs to know about items and recipes.
 pub struct Env<'a> {
     pub items: &'a Items,
@@ -144,6 +146,8 @@ pub struct Menu {
     pub carried: Option<ItemStack>,
     pub data: Vec<i32>,
     pub creative: bool,
+    /// The selected hotbar slot (`Inventory.selected`).
+    pub selected: usize,
     /// Dropped stacks (canonical text), `xp+N` and the like, in order.
     pub drops: Vec<String>,
     /// The dropped stacks themselves, for the caller to throw.
@@ -345,6 +349,7 @@ impl Menu {
             carried: None,
             data: vec![0; data],
             creative: false,
+            selected: 0,
             drops: Vec::new(),
             dropped: Vec::new(),
             quick_status: 0,
@@ -818,13 +823,16 @@ impl Menu {
     /// `Inventory.getSlotWithRemainingSpace` (selected slot 0, offhand, rest).
     fn slot_with_space(&self, env: &Env, stack: &ItemStack) -> Option<usize> {
         let inv = &self.containers[PLAYER];
-        [0, OFFHAND].into_iter().chain(0..36).find(|&i| {
-            inv[i].as_ref().is_some_and(|have| {
-                have.same_item_same_components(stack)
-                    && Self::stackable(env, have)
-                    && have.count < CONTAINER_MAX.min(Self::max_stack(env, have))
+        [self.selected, OFFHAND]
+            .into_iter()
+            .chain(0..36)
+            .find(|&i| {
+                inv[i].as_ref().is_some_and(|have| {
+                    have.same_item_same_components(stack)
+                        && Self::stackable(env, have)
+                        && have.count < CONTAINER_MAX.min(Self::max_stack(env, have))
+                })
             })
-        })
     }
 
     /// `Inventory.addResource`: returns what did not fit.
