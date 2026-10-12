@@ -174,6 +174,15 @@ def console_lines(lines):
         text = re.sub(r'/127\.0\.0\.1:\d+', '/127.0.0.1:_', m.group(2))
         text = re.sub(r'entity id \d+', 'entity id _', text)
         out.append(f'[{m.group(1)}] {text}')
+    # Vanilla saves its levels in the order of an identity-hashed map, which
+    # changes between runs: each block of saves is compared sorted.
+    i = 0
+    while i < len(out):
+        j = i
+        while j < len(out) and 'Saving chunks for level' in out[j]:
+            j += 1
+        out[i:j] = sorted(out[i:j])
+        i = j + 1 if j == i else j
     return out
 
 
@@ -188,6 +197,8 @@ def server_files(directory):
         if name in ('server.properties', 'eula.txt'):
             # The second comment line is the date Properties.store wrote.
             text = re.sub(r'^(#[^\n]*\n)#[^\n]*\n', r'\1#<date>\n', text)
+            # Random per server, and each side has its own port.
+            text = re.sub(r'\n(management-server-secret|server-port)=[^\n]*', r'\n\1=<varies>', text)
         out.append(f'{name}: {text!r}')
     return out
 

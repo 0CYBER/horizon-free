@@ -25,6 +25,10 @@ pub struct Guest {
     /// The hub tick of the player's last action (ServerPlayer.lastActionTime),
     /// for player-idle-timeout.
     pub last_action_tick: u64,
+    /// The next ClientboundPlayerChatPacket.globalIndex for this connection.
+    pub chat_index: i32,
+    /// Why the connection closed (the console's "lost connection").
+    pub left_reason: String,
     pub uuid: u128,
     pub name: String,
     pub entity_id: i32,
@@ -104,6 +108,8 @@ impl Guest {
             conn: j.conn,
             address: j.address,
             last_action_tick: 0,
+            chat_index: 0,
+            left_reason: String::new(),
             uuid: j.uuid,
             name: j.name,
             entity_id,

@@ -30,7 +30,10 @@ import java.util.zip.Deflater;
 import java.util.zip.Inflater;
 import net.minecraft.SharedConstants;
 import net.minecraft.core.UUIDUtil;
+import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.world.level.chunk.LevelChunkSection;
+import net.minecraft.world.level.chunk.PalettedContainerFactory;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.ComponentSerialization;
 import net.minecraft.network.chat.LastSeenMessages;
@@ -424,6 +427,9 @@ public final class VanillaProtocolClient {
                 } else if (packet instanceof ClientboundLevelChunkWithLightPacket p) {
                     chunks.put(p.x() + "," + p.z(), sha(r.payload));
                     lastChunk = now;
+                    int px = (int) Math.floor(position.position().x) >> 4;
+                    int pz = (int) Math.floor(position.position().z) >> 4;
+                    if (p.x() == px && p.z() == pz) chunkParts(p);
                 } else if (packet instanceof ClientboundSystemChatPacket p && step > 0) {
                     record("play-chat", "system " + p.overlay() + " " + json(p.content()));
                 } else if (packet instanceof ClientboundPlayerChatPacket p && step > 0) {
@@ -458,6 +464,49 @@ public final class VanillaProtocolClient {
             }
         }
         record("error", "timed out in play, step " + step + ", chunks " + chunks.size());
+    }
+
+    /** The player's chunk part by part, so a difference in its bytes can be told apart. */
+    private void chunkParts(ClientboundLevelChunkWithLightPacket p) {
+        var data = p.chunkData();
+        for (var e : new TreeMap<>(data.getHeightmaps().entrySet().stream()
+            .collect(java.util.stream.Collectors.toMap(x -> x.getKey().getSerializedName(), x -> x.getValue()))).entrySet()) {
+            record("chunk-heightmap", e.getKey() + " " + java.util.Arrays.toString(e.getValue()).hashCode());
+        }
+        FriendlyByteBuf buf = data.getReadBuffer();
+        byte[] all = new byte[buf.readableBytes()];
+        buf.getBytes(buf.readerIndex(), all);
+        var factory = PalettedContainerFactory.create(ParityData.access);
+        int index = 0;
+        while (buf.isReadable()) {
+            int start = buf.readerIndex();
+            LevelChunkSection section = new LevelChunkSection(factory);
+            section.read(buf);
+            StringBuilder states = new StringBuilder();
+            for (int y = 0; y < 16; y++) for (int z = 0; z < 16; z++) for (int x = 0; x < 16; x++) {
+                states.append(net.minecraft.world.level.block.Block.getId(section.getBlockState(x, y, z))).append(',');
+            }
+            StringBuilder biomes = new StringBuilder();
+            for (int y = 0; y < 4; y++) for (int z = 0; z < 4; z++) for (int x = 0; x < 4; x++) {
+                biomes.append(section.getNoiseBiome(x, y, z).getRegisteredName()).append(',');
+            }
+            byte[] bytes = new byte[buf.readerIndex() - start];
+            buf.getBytes(start, bytes);
+            record("chunk-section", index++ + " states=" + sha(states.toString().getBytes()) + " biomes=" + sha(biomes.toString().getBytes())
+                + " count=" + (((bytes[0] & 0xFF) << 8) | (bytes[1] & 0xFF)) + " bytes=" + sha(bytes));
+        }
+        StringBuilder entities = new StringBuilder();
+        data.forEachBlockEntityTag(p.x(), p.z(), (pos, type, tag) -> entities.append(pos.toShortString()).append(' ')
+            .append(net.minecraft.core.registries.BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(type)).append(' ').append(tag).append(';'));
+        record("chunk-block-entities", entities.toString());
+        var light = p.lightData();
+        record("chunk-light-masks", light.skyYMask() + " " + light.blockYMask() + " " + light.emptySkyYMask() + " " + light.emptyBlockYMask());
+        StringBuilder sky = new StringBuilder();
+        for (byte[] b : light.skyUpdates()) sky.append(sha(b)).append(' ');
+        record("chunk-light-sky", sky.toString());
+        StringBuilder block = new StringBuilder();
+        for (byte[] b : light.blockUpdates()) block.append(sha(b)).append(' ');
+        record("chunk-light-block", block.toString());
     }
 
     /** The first play packets: entity ids, seeds and times aside. */

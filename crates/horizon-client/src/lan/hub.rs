@@ -126,6 +126,49 @@ pub fn yellow_translation(key: &str, args: &[&str]) -> Tag {
     t
 }
 
+/// Player.getDisplayName for a player in no team: the name, suggesting
+/// `/tell NAME `, showing the player on hover and inserting the name.
+pub fn display_name(uuid: u128, name: &str) -> Tag {
+    let words = [(uuid >> 96) as i32, (uuid >> 64) as i32, (uuid >> 32) as i32, uuid as i32];
+    Tag::compound([
+        ("text", string(name)),
+        (
+            "click_event",
+            Tag::compound([
+                ("action", string("suggest_command")),
+                ("command", string(&format!("/tell {name} "))),
+            ]),
+        ),
+        (
+            "hover_event",
+            Tag::compound([
+                ("action", string("show_entity")),
+                ("id", string("minecraft:player")),
+                ("uuid", Tag::IntArray(words.to_vec())),
+                ("name", string(name)),
+            ]),
+        ),
+        ("insertion", string(name)),
+    ])
+}
+
+/// A yellow translation of player names (`multiplayer.player.joined`).
+fn yellow_names(key: &str, names: Vec<Tag>) -> Tag {
+    Tag::compound([
+        ("translate", string(key)),
+        ("with", Tag::List(names)),
+        ("color", string("yellow")),
+    ])
+}
+
+/// ChunkTrackingView.contains: the chunks a player at (cx, cz) with view
+/// distance `r` is sent (isWithinDistance with the neighbours' buffer).
+fn tracked(cx: i32, cz: i32, r: i32, x: i32, z: i32) -> bool {
+    let dx = i64::from(((x - cx).abs() - 2).max(0));
+    let dz = i64::from(((z - cz).abs() - 2).max(0));
+    dx * dx + dz * dz < i64::from(r) * i64::from(r)
+}
+
 impl Hub {
     pub fn new(lan: Lan, sync: Arc<SyncData>, encoder: ChunkEncoder, config: HubConfig) -> Self {
         let chat_type = sync
@@ -214,19 +257,115 @@ impl Hub {
             overlay: false,
         }));
     }
-    /// A chat message from `sender` (PlayerChatMessage as a disguised chat).
+    /// A chat message from the host (a disguised chat: the host has no
+    /// connection to sign with).
     pub fn chat(&self, sender: &str, text: &str) {
-        self.broadcast(&self.chat_packet(sender, text));
-    }
-    fn chat_packet(&self, sender: &str, text: &str) -> C {
-        C::DisguisedChat(play::DisguisedChat {
+        self.broadcast(&C::DisguisedChat(play::DisguisedChat {
             message: literal(text),
             chat_type: play::ChatTypeBound {
                 chat_type: self.chat_type,
                 name: literal(sender),
                 target: None,
             },
-        })
+        }));
+    }
+    /// ListPlayersCommand's reply: the players in join order (the host of a
+    /// LAN world first), as display names or names with ids, joined by
+    /// gray commas (ComponentUtils.formatList).
+    pub fn list_reply(&self, host: Option<(u128, &str)>, uuids: bool) -> Tag {
+        let players: Vec<(u128, &str)> = host
+            .into_iter()
+            .chain(self.guests.iter().filter(|g| g.placed).map(|g| (g.uuid, g.name.as_str())))
+            .collect();
+        let format = |(uuid, name): (u128, &str)| {
+            if uuids {
+                Tag::compound([
+                    ("translate", string("commands.list.nameAndId")),
+                    (
+                        "with",
+                        Tag::List(vec![
+                            string(name),
+                            string(&horizon_protocol::crypto::uuid_string(uuid)),
+                        ]),
+                    ),
+                ])
+            } else {
+                display_name(uuid, name)
+            }
+        };
+        let names = match players.len() {
+            0 => string(""),
+            1 => format(players[0]),
+            _ => {
+                let mut extra = Vec::new();
+                for (k, p) in players.iter().enumerate() {
+                    if k > 0 {
+                        extra.push(Tag::compound([("text", string(", ")), ("color", string("gray"))]));
+                    }
+                    extra.push(format(*p));
+                }
+                Tag::compound([("text", string("")), ("extra", Tag::List(extra))])
+            }
+        };
+        Tag::compound([
+            ("translate", string("commands.list.players")),
+            (
+                "with",
+                Tag::List(vec![
+                    Tag::Int(players.len() as i32),
+                    Tag::Int(self.lan.shared.max_players() as i32),
+                    names,
+                ]),
+            ),
+        ])
+    }
+
+    /// SayCommand from a source without a player: a disguised chat of type
+    /// say_command named after the source.
+    pub fn say(&self, source: &str, text: &str) {
+        let chat_type = self
+            .sync
+            .id("minecraft:chat_type", "minecraft:say_command")
+            .unwrap_or(self.chat_type);
+        self.broadcast(&C::DisguisedChat(play::DisguisedChat {
+            message: literal(text),
+            chat_type: play::ChatTypeBound {
+                chat_type,
+                name: literal(source),
+                target: None,
+            },
+        }));
+    }
+    /// PlayerList.broadcastChatMessage of a guest's unsigned message
+    /// (PlayerChatMessage.unsigned): a ClientboundPlayerChatPacket to every
+    /// player, each connection numbering its messages.
+    pub fn player_chat(&mut self, from: usize, text: &str) {
+        let (uuid, name) = (self.guests[from].uuid, self.guests[from].name.clone());
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as i64);
+        let bound = play::ChatTypeBound {
+            chat_type: self.chat_type,
+            name: display_name(uuid, &name),
+            target: None,
+        };
+        for g in self.guests.iter_mut().filter(|g| g.placed) {
+            let packet = C::PlayerChat(play::PlayerChat {
+                global_index: g.chat_index,
+                sender: uuid,
+                index: 0,
+                signature: None,
+                content: text.to_owned(),
+                timestamp,
+                salt: 0,
+                last_seen: Vec::new(),
+                unsigned_content: None,
+                filter: (0, Vec::new()),
+                chat_type: bound.clone(),
+            });
+            g.chat_index += 1;
+            g.send(&packet);
+        }
     }
 
     /// Disconnect a guest with a reason (ServerGamePacketListenerImpl.disconnect).
@@ -357,7 +496,10 @@ impl Hub {
         self.broadcast_except(
             conn,
             &C::SystemChat(play::SystemChat {
-                content: yellow_translation("multiplayer.player.joined", &[&name]),
+                content: yellow_names(
+                    "multiplayer.player.joined",
+                    vec![display_name(self.guests[i].uuid, &name)],
+                ),
                 overlay: false,
             }),
         );
@@ -366,7 +508,7 @@ impl Hub {
         let g = &self.guests[i];
         g.send(&C::ServerData(play::ServerData {
             motd: literal(&self.lan.shared.motd()),
-            icon: None,
+            icon: self.lan.shared.config.favicon.clone(),
         }));
         // The player list: everyone already here, then the newcomer to all.
         let mut entries = Vec::new();
@@ -652,7 +794,8 @@ impl Hub {
     }
 
     fn remove_guest(&mut self, i: usize, reason: &str) -> Guest {
-        let g = self.guests.remove(i);
+        let mut g = self.guests.remove(i);
+        g.left_reason = reason.to_owned();
         if std::env::var_os("HORIZON_NET_DEBUG").is_some() {
             eprintln!("[lan] {} left: {reason}", g.name);
         }
@@ -665,7 +808,10 @@ impl Hub {
         self.broadcast(&C::RemoveEntities(play::RemoveEntities {
             ids: vec![g.entity_id],
         }));
-        self.system_message(yellow_translation("multiplayer.player.left", &[&g.name]));
+        self.system_message(yellow_names(
+            "multiplayer.player.left",
+            vec![display_name(g.uuid, &g.name)],
+        ));
         g
     }
 
@@ -751,18 +897,20 @@ impl Hub {
                 .sent_chunks
                 .iter()
                 .copied()
-                .filter(|&(x, z)| (x - cx).abs().max((z - cz).abs()) > r)
+                .filter(|&(x, z)| !tracked(cx, cz, r, x, z))
                 .collect();
             for (x, z) in forget {
                 g.sent_chunks.remove(&(x, z));
                 g.send(&C::ForgetLevelChunk(play::ForgetLevelChunk { pos: [x, z] }));
             }
-            g.chunk_queue
-                .retain(|&(x, z)| (x - cx).abs().max((z - cz).abs()) <= r);
-            for dz in -r..=r {
-                for dx in -r..=r {
+            g.chunk_queue.retain(|&(x, z)| tracked(cx, cz, r, x, z));
+            for dz in -r - 2..=r + 2 {
+                for dx in -r - 2..=r + 2 {
                     let key = (cx + dx, cz + dz);
-                    if !g.sent_chunks.contains(&key) && !g.chunk_queue.contains(&key) {
+                    if tracked(cx, cz, r, key.0, key.1)
+                        && !g.sent_chunks.contains(&key)
+                        && !g.chunk_queue.contains(&key)
+                    {
                         g.chunk_queue.push(key);
                     }
                 }
@@ -792,7 +940,7 @@ impl Hub {
                 continue;
             }
             packets.push(C::LevelChunkWithLight(
-                self.encoder.encode(chunk, &ctx.world.block_entities),
+                self.encoder.encode_in(chunk, ctx.world),
             ));
             taken.push(idx);
         }
@@ -819,7 +967,7 @@ impl Hub {
         let Some(chunk) = world.chunks.get(&(x, z)) else {
             return;
         };
-        let packet = C::LevelChunkWithLight(self.encoder.encode(chunk, &world.block_entities));
+        let packet = C::LevelChunkWithLight(self.encoder.encode_in(chunk, world));
         let body = packet.encode();
         for g in self
             .guests
@@ -1242,7 +1390,7 @@ impl Hub {
                     let text: String = c.message.chars().filter(|c| !c.is_control()).collect();
                     if !text.is_empty() {
                         let name = self.guests[i].name.clone();
-                        self.chat(&name, &text);
+                        self.player_chat(i, &text);
                         events.push(HostEvent::Chat(format!("<{name}> {text}")));
                     }
                 }

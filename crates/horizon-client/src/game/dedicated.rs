@@ -29,6 +29,19 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Double.toString for the magnitudes positions have (no exponent form
+/// between 1e-3 and 1e7).
+pub(super) fn java_double(v: f64) -> String {
+    if v == 0.0 || (1e-3..1e7).contains(&v.abs()) {
+        format!("{v:?}")
+    } else {
+        let s = format!("{v:E}");
+        let (m, e) = s.split_once('E').unwrap_or((&s, "0"));
+        let m = if m.contains('.') { m.to_owned() } else { format!("{m}.0") };
+        format!("{m}E{e}")
+    }
+}
+
 /// What the startup read before the game's resources were loaded.
 struct Setup {
     props: ServerProperties,
@@ -421,6 +434,9 @@ impl Game<'_> {
                 started.elapsed().as_secs_f64()
             ),
         );
+        // DedicatedServer.initServer ends with saveEverything(false, true, true).
+        self.save_game()?;
+        self.log_saved_levels();
         let mut state = ServerState {
             lists,
             console,
@@ -568,8 +584,9 @@ impl Game<'_> {
             )
     }
 
+    /// MinecraftServer.sendSystemMessage: what the console is told.
     fn console_reply(&self, text: Text) {
-        log("INFO", &text.plain());
+        log("INFO", &format!("System chat: {}", text.plain()));
     }
 
     /// DedicatedServer.handleConsoleInputs: one console line, run as the
@@ -840,10 +857,12 @@ impl Game<'_> {
                 ));
             }
             "say" if !rest.is_empty() => {
-                let message = format!("[Server] {}", rest.join(" "));
-                log("INFO", &message);
+                // SayCommand from the console: an unsigned system chat
+                // message of type say_command, logged as not secure.
+                let message = rest.join(" ");
+                log("INFO", &format!("[Not Secure] [Server] {message}"));
                 if let Some(h) = &self.lan {
-                    h.hub.system_message(Tag::String(JavaString::from(message.as_str())));
+                    h.hub.say("Server", &message);
                 }
             }
             _ => {
@@ -851,7 +870,7 @@ impl Game<'_> {
                 self.chat_capture = Some(Vec::new());
                 self.run_command(line);
                 for text in self.chat_capture.take().unwrap_or_default() {
-                    log("INFO", &text.plain());
+                    self.console_reply(text);
                 }
             }
         }
@@ -946,6 +965,20 @@ impl Game<'_> {
     }
 
     /// MinecraftServer.stopServer: players saved and sent away, worlds saved.
+    /// MinecraftServer.saveAllChunks, not silent: one line per level, in
+    /// the server's level order.
+    fn log_saved_levels(&self) {
+        for dimension in ["minecraft:overworld", "minecraft:the_nether", "minecraft:the_end"] {
+            log(
+                "INFO",
+                &format!(
+                    "Saving chunks for level 'ServerLevel[{}]'/{dimension}",
+                    self.level.name
+                ),
+            );
+        }
+    }
+
     fn stop_dedicated(&mut self) -> Result<()> {
         log("INFO", "Stopping server");
         log("INFO", "Saving players");
@@ -962,16 +995,8 @@ impl Game<'_> {
         std::thread::sleep(Duration::from_millis(100));
         log("INFO", "Saving worlds");
         self.save_game()?;
-        log(
-            "INFO",
-            &format!(
-                "Saving chunks for level 'ServerLevel[{}]'/{}",
-                self.level.name,
-                self.dim.id()
-            ),
-        );
+        self.log_saved_levels();
         self.lan_close(false);
-        log("INFO", "ThreadedAnvilChunkStorage: All dimensions are saved");
         Ok(())
     }
 }

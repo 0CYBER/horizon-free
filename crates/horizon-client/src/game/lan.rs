@@ -396,7 +396,7 @@ impl Game<'_> {
             .get("minecraft:worldgen/biome")
             .map(|v| v.iter().map(|(n, _)| n.clone()).collect())
             .unwrap_or_default();
-        let encoder = ChunkEncoder::new(
+        let mut encoder = ChunkEncoder::new(
             self.res
                 .facts
                 .states
@@ -405,6 +405,12 @@ impl Game<'_> {
             &sync.builtin,
             &biome_names,
             &registry,
+        );
+        encoder.tables = Some(
+            self.save
+                .tables
+                .get_or_init(|| Arc::new(horizon_client::save::SaveTables::new(&self.res.assets)))
+                .clone(),
         );
         let lan = Lan::start_with(sync.clone(), net)?;
         if let Some(uuid) = host {
@@ -592,11 +598,47 @@ impl Game<'_> {
             for event in events {
                 match event {
                     HostEvent::Joined(conn) => {
-                        self.lan_guest_joined(&mut host, conn, state.as_ref(), &entities, spawn)
+                        self.lan_guest_joined(&mut host, conn, state.as_ref(), &entities, spawn);
+                        if self.options.dedicated.is_some()
+                            && let Some(g) = host.hub.guest(conn)
+                        {
+                            // PlayerList.placeNewPlayer, then the broadcast join message.
+                            let [x, y, z] = g.position;
+                            super::dedicated::log(
+                                "INFO",
+                                &format!(
+                                    "{}[/{}] logged in with entity id {} at ({}, {}, {})",
+                                    g.name,
+                                    g.address,
+                                    g.entity_id,
+                                    super::dedicated::java_double(x),
+                                    super::dedicated::java_double(y),
+                                    super::dedicated::java_double(z)
+                                ),
+                            );
+                            super::dedicated::log(
+                                "INFO",
+                                &format!("System chat: {} joined the game", g.name),
+                            );
+                        }
                     }
                     HostEvent::Left(guest) => {
                         playerdata::save(&guest, &self.world_root);
                         host.models.remove(&guest.conn);
+                        if self.options.dedicated.is_some() && guest.placed {
+                            super::dedicated::log(
+                                "INFO",
+                                &format!("{} lost connection: {}", guest.name, guest.left_reason),
+                            );
+                            super::dedicated::log(
+                                "INFO",
+                                &format!("System chat: {} left the game", guest.name),
+                            );
+                        }
+                    }
+                    // MinecraftServer.logChatMessage of an unsigned message.
+                    HostEvent::Chat(line) if self.options.dedicated.is_some() => {
+                        super::dedicated::log("INFO", &format!("[Not Secure] {line}"));
                     }
                     HostEvent::Chat(line) => self.system_message(Text::literal(line)),
                     HostEvent::Packet(conn, packet) => {
@@ -703,7 +745,9 @@ impl Game<'_> {
             .guests
             .iter()
             .filter(|g| g.placed)
-            .map(|g| (g.chunk(), g.view_distance + 1))
+            // The tracked square's corners and their lit neighbours lie
+            // within (view distance + 2) * √2 of the player's chunk.
+            .map(|g| (g.chunk(), (g.view_distance + 2) * 3 / 2 + 1))
             .collect();
     }
 
