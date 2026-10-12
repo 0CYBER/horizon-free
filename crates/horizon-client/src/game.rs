@@ -75,6 +75,7 @@ mod render_tick;
 mod scoreboard;
 mod screens;
 mod sculk;
+mod sculk_fixture;
 mod shield;
 mod sign_edit;
 mod sniffers;
@@ -641,6 +642,8 @@ struct Game<'a> {
     raiding: raids::Raiding,
     attack_ticks: u32,
     last_hurt_by_player: HashSet<u32>,
+    /// Mobs whose death (`LivingEntity.die`) has been handled.
+    died: HashSet<u32>,
     /// Client-ticked block-entity animation state (`game/block_entity_anims.rs`).
     be_anims: horizon_client::block_entity_anim::BlockEntityAnims,
     /// Item being used (eaten): hotbar slot and ticks used.
@@ -1419,7 +1422,10 @@ impl Game<'_> {
             for pos in inside {
                 b.entity_inside(level, ticks, pos);
             }
-            b.tick_scheduled(level, ticks);
+        });
+        self.process_level_events()?;
+        self.tick_scheduled()?;
+        self.with_level(|b, level, ticks| {
             for (x, z, sections) in ticking {
                 b.tick_chunk_random(
                     level,
@@ -1432,6 +1438,28 @@ impl Game<'_> {
             b.tick_block_entities(level, ticks);
         });
         self.process_level_events()
+    }
+    /// `ServerLevel.tick`'s scheduled block then fluid ticks, one at a time:
+    /// the side effects of each (a shrieker summoning a warden, drops, game
+    /// events) happen before the next tick runs, as they do inline in vanilla.
+    pub(super) fn tick_scheduled(&mut self) -> Result<()> {
+        for fluids in [false, true] {
+            if !self.with_level(|b, level, ticks| b.scheduled_begin(level, ticks, fluids)) {
+                continue;
+            }
+            loop {
+                let more =
+                    self.with_level(|b, level, ticks| b.scheduled_step(level, ticks, fluids));
+                if !self.level_events.is_empty() {
+                    self.process_level_events()?;
+                }
+                if !more {
+                    break;
+                }
+            }
+            self.with_level(|b, _, ticks| b.scheduled_finish(ticks, fluids));
+        }
+        Ok(())
     }
     /// Side effects reported by the behaviour library, in vanilla order.
     fn process_level_events(&mut self) -> Result<()> {
@@ -2781,7 +2809,8 @@ impl Game<'_> {
         }
         if running {
             self.tick_block_entities()?;
-            self.tick_sculk()?;
+            self.tick_sculk_entities();
+            self.tick_sculk_blocks()?;
             self.tick_brewing_stands()?;
         }
         if running {
@@ -6106,7 +6135,6 @@ impl Game<'_> {
         }
         Ok(false)
     }
-    /// ExperienceOrb.award: split into vanilla orb sizes.
     /// `ExperienceOrb.award`: orbs of the largest sizes; each draws the id
     /// `tryMergeToExisting` compares from the level random, then moves with
     /// its own random.
@@ -8242,6 +8270,7 @@ pub fn run() -> Result<()> {
         raiding: Default::default(),
         attack_ticks: 100,
         last_hurt_by_player: HashSet::new(),
+        died: HashSet::new(),
         be_anims: {
             let mut anims = horizon_client::block_entity_anim::BlockEntityAnims::default();
             anims.classify(registry_owner.registry);
@@ -8374,6 +8403,9 @@ pub fn run() -> Result<()> {
     }
     if let Ok(spec) = std::env::var("HORIZON_DISPENSE_FIXTURE") {
         return game.dispense_fixture(&spec);
+    }
+    if let Ok(spec) = std::env::var("HORIZON_SCULK_FIXTURE") {
+        return game.sculk_fixture(&spec);
     }
     match game.options.world.clone() {
         _ if game.options.server.is_some() => {

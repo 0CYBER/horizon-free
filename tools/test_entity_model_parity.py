@@ -60,6 +60,9 @@ EXTRAS = [
     # the creaking's emissive eyes layer is a CreakingModel.
     ('minecraft:breeze#wind', 'BreezeModel'), ('minecraft:breeze#eyes', 'BreezeModel'),
     ('minecraft:creaking#eyes', 'CreakingModel'),
+    # The warden's emissive layers: its model over each layer's own parts.
+    ('minecraft:warden#tendrils', 'WardenModel'), ('minecraft:warden#heart', 'WardenModel'),
+    ('minecraft:warden#bioluminescent', 'WardenModel'), ('minecraft:warden#pulsating_spots', 'WardenModel'),
 ]
 # Layers a renderer reuses for another entity under a different constant.
 SKIP_LAYERS = re.compile(r'(banner|bell|book|skull|head|chest|shulker_box|boat|cushion|conduit|leash|arrow|trident|'
@@ -208,6 +211,11 @@ SPECIES = {
     'copper_golem': [{'idleAnimationState': 4}, {'idleAnimationState': 37}, {'interactionGetItem': 3},
                      {'interactionGetItem': 30}, {'interactionGetNoItem': 12}, {'interactionDropItem': 8},
                      {'interactionDropItem': 45}, {'interactionDropNoItem': 20}],
+    'warden': [{'tendrilAnimation': 0.7}, {'tendrilAnimation': 1.0, 'heartAnimation': 0.4}, {'heartAnimation': 1.0}]
+              + [{state: start} for state in ('roarAnimationState', 'sniffAnimationState', 'emergeAnimationState',
+                                              'diggingAnimationState', 'attackAnimationState', 'sonicBoomAnimationState')
+                 for start in (50, 20, 100)]
+              + [{'attackAnimationState': 50, 'tendrilAnimation': 0.3, 'roarAnimationState': 40}],
 }
 
 

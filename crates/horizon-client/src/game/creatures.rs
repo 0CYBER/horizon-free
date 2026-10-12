@@ -453,15 +453,34 @@ impl Game<'_> {
             self.tick_patrol_spawner();
         }
         self.tick_raids();
+        self.tick_creature_entities()
+    }
+    /// The entity phase of `tick_creatures`: every mob's tick, deaths, and the
+    /// projectiles and effects that follow from them.
+    pub(super) fn tick_creature_entities(&mut self) -> Result<()> {
+        // LivingEntity.die runs when the killing blow lands: mobs killed
+        // since the last tick (by the player, explosions...) die first.
+        let killed: Vec<Mob> = self
+            .mobs
+            .iter()
+            .filter(|m| !m.alive() && !m.removed && !self.died.contains(&m.id))
+            .cloned()
+            .collect();
+        for m in killed {
+            self.died.insert(m.id);
+            self.mob_died(&m);
+        }
         let uuid = self.level.player_uuid;
         let mut snapshot: Vec<Seen> = self.mobs.iter().map(|m| seen(m, uuid)).collect();
         let mut events = Vec::new();
         let mut mobs = std::mem::take(&mut self.mobs);
         let mut dead = Vec::new();
-        // The level random (`ServerLevel.getRandom`): behaviours' durations and
-        // the like draw from it, and it goes on from where they left it.
-        let mut scratch = self.world.random.clone();
+        let mut died = std::mem::take(&mut self.died);
+        let level_random;
         {
+            // The level random, lent to the mobs (brain behaviours draw from
+            // it) and taken back after their ticks.
+            let mut scratch = self.world.random.clone();
             let mut pushes = Vec::new();
             let mut keep = Vec::with_capacity(mobs.len());
             for i in 0..mobs.len() {
@@ -478,8 +497,12 @@ impl Game<'_> {
                 let from = events.len();
                 let kept = m.tick(&w, &mut scratch, &mut events);
                 horizon_client::mobs::take_mob_pushes(&mut events, from, &mut pushes);
-                if !kept && !m.alive() && !m.removed {
+                // Killed during its own tick (drowning, burning, falling...).
+                if !m.alive() && !m.removed && died.insert(m.id) {
                     dead.push(m.clone());
+                }
+                if !kept {
+                    died.remove(&m.id);
                 }
                 keep.push(kept);
                 // ServerLevel ticks entities one after another: the ones
@@ -493,9 +516,11 @@ impl Game<'_> {
             for m in &mut mobs {
                 horizon_client::mobs::apply_mob_pushes(m, &mut pushes);
             }
+            level_random = scratch;
         }
-        self.world.random = scratch;
+        self.world.random = level_random;
         self.mobs.append(&mut mobs);
+        self.died = died;
         self.sync_riders();
         self.tick_skeleton_traps();
         self.tick_apparition();
@@ -1331,7 +1356,13 @@ impl Game<'_> {
                 .filter(|m| m.alive() && m.species() == Species::Breeze)
                 .map(|m| m.id)
                 .collect();
-            let jitter = self.world.random.next_float();
+            // Drawn only when a breeze could deflect a projectile: an empty
+            // level must not move the level random every tick.
+            let jitter = if breezes.is_empty() || projectiles.is_empty() {
+                0.0
+            } else {
+                self.world.random.next_float()
+            };
             let w = self.mob_world_base(&[]);
             let pw = ProjWorld { w: &w, targets };
             projectiles.retain_mut(|p| {
