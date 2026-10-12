@@ -39,7 +39,7 @@ pub fn register(m: &mut Mob) {
     g.add(6, BowAttack::new(0.5, 20, 15.0));
     g.add(8, Stroll::new(0.6));
     g.add(9, LookAtPlayer::new(3.0).probability(1.0));
-    g.add(10, LookAtPlayer::new(8.0));
+    g.add(10, LookAtPlayer::mobs(8.0));
     let mut hurt = HurtByTarget::new().alert();
     hurt.ignore = vec![
         Species::Pillager,

@@ -466,23 +466,11 @@ impl Game<'_> {
         let draws = horizon_client::hud_layout::vehicle_health(w, h, hearts, m.health);
         horizon_client::hud_layout::paint(batch, atlas, &draws);
         if m.extra.saddled {
-            let x = (w / 2 - 91) as f32;
-            let y = (h - 29) as f32;
-            batch.sprite(atlas, "gui/sprites/hud/jump_bar_background", x, y);
-            if self.mount.jump_ticks < 0 {
-                batch.sprite(atlas, "gui/sprites/hud/jump_bar_cooldown", x, y);
-            } else {
-                let filled = (self.mount.jump_scale * 183.0).floor();
-                if filled > 0.0 {
-                    batch.sprite_part(
-                        atlas,
-                        "gui/sprites/hud/jump_bar_progress",
-                        x,
-                        y,
-                        filled / 182.0,
-                    );
-                }
-            }
+            // JumpableVehicleBar: the cooldown shows while the jump recharges.
+            let cooldown = i32::from(self.mount.jump_ticks < 0);
+            let draws =
+                horizon_client::hud_overlays::jump_bar(w, h, cooldown, self.mount.jump_scale);
+            horizon_client::hud_layout::paint(batch, atlas, &draws);
         }
         (hearts, m.extra.saddled)
     }

@@ -407,7 +407,9 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         }
         // Skeletons are spawned holding a bow (finalizeSpawn); a mob loaded
         // from NBT keeps only its saved equipment.
-        "minecraft:skeleton" | "minecraft:stray" | "minecraft:bogged" if raw.is_none() => {
+        "minecraft:skeleton" | "minecraft:stray" | "minecraft:bogged"
+            if raw.is_none() && m.extra.main_hand.as_deref() == Some("minecraft:bow") =>
+        {
             map.entry("equipment".into()).or_insert_with(|| {
                 Tag::compound([(
                     "mainhand",
@@ -1117,6 +1119,25 @@ pub fn armor_stand_to_nbt(a: &ArmorStand, uuid: [i32; 4], raw: Option<&Tag>) -> 
         && !map.contains_key(&horizon_world::nbt::JavaString::from("Health"))
     {
         put(&mut tag, "Health", Tag::Float(20f32.to_bits()));
+    }
+    // LivingEntity.addAdditionalSaveData and ArmorStand's own fields.
+    if let Tag::Compound(map) = &mut tag {
+        for (key, value) in [
+            ("HurtTime", Tag::Short(0)),
+            ("DeathTime", Tag::Short(0)),
+            ("AbsorptionAmount", Tag::Float(0)),
+            ("FallFlying", Tag::Byte(0)),
+            ("current_impulse_context_reset_grace_time", Tag::Int(0)),
+            ("attributes", Tag::List(Vec::new())),
+            (
+                "Brain",
+                Tag::compound([("memories", Tag::Compound(Compound::new()))]),
+            ),
+            ("DisabledSlots", Tag::Int(0)),
+            ("Pose", Tag::Compound(Compound::new())),
+        ] {
+            map.entry(key.into()).or_insert(value);
+        }
     }
     tag
 }

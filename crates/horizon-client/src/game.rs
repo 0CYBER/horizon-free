@@ -6,6 +6,7 @@ mod allays;
 mod armor_stands;
 mod banners;
 mod beacon;
+mod block_entity_anims;
 mod blockctl;
 mod boats;
 mod books;
@@ -14,6 +15,7 @@ mod breezes;
 mod cartography;
 mod chat;
 mod combat;
+mod command_harness;
 mod commands;
 mod control;
 mod creaking;
@@ -109,7 +111,7 @@ use horizon_client::{
     environment::Environment,
     gfx::{Frame, Renderer},
     hud::{HudAtlas, HudBatch, rgba},
-    hud_layout,
+    hud_layout, hud_overlays,
     items::{ItemStack, Items},
     keymapping::KeyAction,
     light::LightTables,
@@ -612,7 +614,8 @@ struct Game<'a> {
     raiding: raids::Raiding,
     attack_ticks: u32,
     last_hurt_by_player: HashSet<u32>,
-    chest_open: HashMap<(i32, i32, i32), (f32, f32)>,
+    /// Client-ticked block-entity animation state (`game/block_entity_anims.rs`).
+    be_anims: horizon_client::block_entity_anim::BlockEntityAnims,
     /// Item being used (eaten): hotbar slot and ticks used.
     using: Option<(usize, u32)>,
     /// Camera.oldFovModifier / fovModifier.
@@ -635,6 +638,8 @@ struct Game<'a> {
     /// The source of a command run through /execute (the player otherwise).
     command_source: Option<commands::execute::Source>,
     titles: titles::Titles,
+    /// `Hud.toolHighlightTimer`: the selected item name.
+    tool_highlight: horizon_client::hud_overlays::ToolHighlight,
     applied_modifiers: Vec<(String, String)>,
     experience: Experience,
     orbs: Vec<ExperienceOrb>,
@@ -679,6 +684,8 @@ struct Game<'a> {
     map_frame_model: frames::FrameModel,
     glow_map_frame_model: frames::FrameModel,
     armor_stands: Vec<horizon_client::entities::ArmorStand>,
+    /// Entities of types Horizon does not simulate.
+    others: Vec<commands::OtherEntity>,
     armor_stand_assets: armor_stands::ArmorStandAssets,
     boats: Vec<boats::Boat>,
     boat_models: boats::BoatModels,
@@ -738,7 +745,9 @@ struct Game<'a> {
     lan_events: Vec<(i32, [i32; 3], i32, Option<u32>)>,
     lan_acting: Option<u32>,
     /// Command feedback to forward to a guest.
-    chat_capture: Option<Vec<String>>,
+    chat_capture: Option<Vec<horizon_client::text::Text>>,
+    /// State of `/spectate`, `/posteffect`, `/debug`, `/waypoint` and friends.
+    cmds: commands::extra::CommandExtras,
     /// Allow Cheats: whether guests may be given commands.
     cheats: bool,
     ui: chat::UiState,
@@ -779,6 +788,13 @@ impl Dim {
             "minecraft:the_nether" => Self::Nether,
             "minecraft:the_end" => Self::End,
             _ => Self::Overworld,
+        }
+    }
+    /// `Level.getMaxY`: the dimension type's minimum y plus height, less one.
+    fn max_y(self) -> i32 {
+        match self {
+            Self::Overworld => MIN_Y + HEIGHT - 1,
+            Self::Nether | Self::End => 255,
         }
     }
 }
@@ -1585,6 +1601,9 @@ impl Game<'_> {
                     state,
                     kind: "shrieker_respond",
                 } => self.shrieker_block_event(pos, state),
+                LevelEvent::BlockEntityEvent { pos, a, b, .. } => {
+                    self.block_entity_event([pos.x, pos.y, pos.z], a, b)
+                }
                 LevelEvent::GrowTree { .. }
                 | LevelEvent::PlaceFeature { .. }
                 | LevelEvent::BlockEvent { .. } => {}
@@ -1609,6 +1628,7 @@ impl Game<'_> {
             self.craft_size = 3;
         } else if &*name == "minecraft:ender_chest" {
             self.open_ender_chest(key);
+            self.container_opener_event(key, true);
             let at = [
                 f64::from(key.0) + 0.5,
                 f64::from(key.1) + 0.5,
@@ -1621,9 +1641,12 @@ impl Game<'_> {
             self.world.block_entities.entry(key).or_insert_with(|| {
                 BlockEntity::for_block(&name).unwrap_or(BlockEntity::Chest(Vec::new()))
             });
+        } else if storage::is_shulker_box(&name) && !self.shulker_can_open(pos) {
+            // ShulkerBoxBlock.canOpen: the lid has no room; nothing opens.
         } else if let Some(entity) = BlockEntity::for_block(&name) {
             self.world.block_entities.entry(key).or_insert(entity);
             self.container = Some(key);
+            self.container_opener_event(key, true);
             self.post_block_game_event(
                 "minecraft:container_open",
                 [key.0, key.1, key.2],
@@ -1860,6 +1883,7 @@ impl Game<'_> {
             let name = facts.name.clone();
             self.release_contents(pos, entity, &name);
             if self.container == Some((pos[0], pos[1], pos[2])) {
+                self.container_opener_event((pos[0], pos[1], pos[2]), false);
                 self.container = None;
                 self.screen = Screen::Playing;
             }
@@ -2500,6 +2524,8 @@ impl Game<'_> {
         }
         self.apply_totem();
         self.update_totem_ready();
+        self.tick_command_extras();
+        let camera_eye = self.camera_eye_height();
         if self.riding.is_some() && self.player.is_some() {
             let playing = self.screen == Screen::Playing;
             let held = |k| playing && self.keys.contains(&k);
@@ -2597,7 +2623,7 @@ impl Game<'_> {
         }
         let feet = [player.position.x, player.position.y, player.position.z];
         self.previous_eye = self.eye;
-        self.eye += (player.dimensions.eye_height - self.eye) * 0.5;
+        self.eye += (camera_eye.unwrap_or(player.dimensions.eye_height) - self.eye) * 0.5;
         let crouching = player.pose == horizon_client::pose::Pose::Crouching;
         self.tick_avatar(before, riding);
         self.record_combat(&events);
@@ -2707,7 +2733,7 @@ impl Game<'_> {
         self.tick_effects();
         self.tick_burning();
         self.tick_using();
-        self.titles.tick();
+        self.tick_hud();
         if running {
             self.tick_paintings();
             self.tick_item_frames();
@@ -2749,17 +2775,10 @@ impl Game<'_> {
             self.tick_sculk()?;
             self.tick_brewing_stands()?;
         }
-        if let Some(r) = &self.renderer {
-            let eye = self.player.as_ref().map(|p| {
-                [
-                    p.position.x,
-                    p.position.y + f64::from(self.eye),
-                    p.position.z,
-                ]
-            });
-            self.res.block_entity_render.tick(r.block_entities(), eye);
-        }
         if running {
+            // ClientLevel.tickBlockEntities (not while paused or frozen):
+            // chest lids, books, shulker boxes, bells, conduits, heads.
+            self.tick_block_entity_anims();
             self.tick_particles();
         }
         if self.right && self.use_delay == 0 && self.screen == Screen::Playing {
@@ -2854,26 +2873,30 @@ impl Game<'_> {
         // `GuiGraphics.renderItem`: the resolved item model (tints, foil and
         // special renderers included), then the decorations.
         self.draw_item_model(batch, stack, x, y);
-        let atlas = &self.res.atlas;
-        if stack.count > 1 {
-            let text = stack.count.to_string();
-            let w = HudBatch::text_width(atlas, &text);
-            batch.text(atlas, &text, x + 17.0 - w, y + 9.0, u32::MAX, true);
-        }
-        if let Some(info) = self.res.items.get(&stack.item)
-            && info.max_damage > 0
-            && stack.damage > 0
-        {
-            let f = 1.0 - stack.damage as f32 / info.max_damage as f32;
-            let width = (13.0 * f).round();
-            let hue = f / 3.0;
-            let (r, g) = (
-                (255.0 * (1.0 - hue * 3.0).clamp(0.0, 1.0)) as u8,
-                (255.0 * (hue * 3.0).clamp(0.0, 1.0)) as u8,
-            );
-            batch.fill(atlas, x + 2.0, y + 13.0, 13.0, 2.0, rgba(0, 0, 0, 255));
-            batch.fill(atlas, x + 2.0, y + 13.0, width, 1.0, rgba(r, g, 0, 255));
-        }
+        // GuiGraphicsExtractor.itemDecorations, laid out at the origin and
+        // moved to (x, y). Horizon tracks no item cooldowns to shade yet.
+        let max_damage = self
+            .res
+            .items
+            .get(&stack.item)
+            .map_or(0, |info| info.max_damage as i32);
+        let decorations = hud_overlays::ItemDecorations {
+            count: stack.count,
+            count_text: None,
+            bar: hud_overlays::damage_bar(stack.damage as i32, max_damage),
+            cooldown: 0.0,
+        };
+        let mut draws = vec![hud_layout::GuiDraw::Push(vec![
+            hud_layout::PoseOp::Translate(x, y),
+        ])];
+        draws.extend(hud_overlays::item_decorations(
+            0,
+            0,
+            &decorations,
+            &self.res.atlas.font,
+        ));
+        draws.push(hud_layout::GuiDraw::Pop);
+        hud_layout::paint(batch, &self.res.atlas, &draws);
     }
     fn hud(&mut self, size: [u32; 2]) -> HudBatch {
         let mut batch = HudBatch::new(size);
@@ -2941,8 +2964,12 @@ impl Game<'_> {
         }
         self.draw_effect_icons(&mut batch);
         // Hud: the action bar and titles draw over the hotbar (nextStratum).
-        self.draw_boss_bar(&mut batch);
-        self.draw_custom_bossbars(&mut batch, 12.0 + 19.0 * self.builtin_bar_count() as f32);
+        self.draw_boss_bars(&mut batch);
+        // Hud.extractSleepOverlay, under the sidebar, titles and chat.
+        if let Some((_, ticks)) = self.sleeping {
+            let draws = hud_overlays::sleep_overlay(wi, hi, ticks as i32);
+            hud_layout::paint(&mut batch, &self.res.atlas, &draws);
+        }
         self.draw_titles(&mut batch);
         self.draw_scoreboard(&mut batch);
         self.draw_subtitles(&mut batch);
@@ -3011,6 +3038,9 @@ impl Game<'_> {
             };
             let draws = self.health_hud.layout(&inputs, wi, hi);
             hud_layout::paint(&mut batch, atlas, &draws);
+        }
+        if !spectator {
+            self.draw_selected_name(&mut batch, !self.creative);
         }
         let atlas = &self.res.atlas;
         if self.debug {
@@ -3113,12 +3143,6 @@ impl Game<'_> {
             batch.text(atlas, text, (w - tw) / 2.0, h - 59.0, u32::MAX, true);
         }
         self.draw_chat(&mut batch);
-        let atlas = &self.res.atlas;
-        if let Some((_, ticks)) = self.sleeping {
-            // Gui sleep overlay fading in over 100 ticks.
-            let a = ((ticks as f32 / 100.0).min(1.0) * 204.0) as u8;
-            batch.fill(atlas, 0.0, 0.0, w, h, rgba(16, 16, 32, a));
-        }
         match self.screen {
             Screen::Paused => self.draw_pause_menu(&mut batch),
             Screen::Dead => self.draw_death_screen(&mut batch),
@@ -3477,6 +3501,7 @@ impl Game<'_> {
         }
         self.craft_size = 2;
         if let Some(key) = self.container.take() {
+            self.container_opener_event(key, false);
             self.post_block_game_event(
                 "minecraft:container_close",
                 [key.0, key.1, key.2],
@@ -4235,14 +4260,8 @@ impl Game<'_> {
         }
         // Block entities (BlockEntityRenderers): chests, shulker boxes, banners, skulls...
         if let Some(r) = &self.renderer {
-            let lid = |p: [i32; 3]| {
-                let (prev, cur) = self
-                    .chest_open
-                    .get(&(p[0], p[1], p[2]))
-                    .copied()
-                    .unwrap_or((0.0, 0.0));
-                prev + (cur - prev) * alpha as f32
-            };
+            let lid = |p: [i32; 3]| self.chest_lid(p, alpha as f32);
+            let anim = |p: [i32; 3]| self.block_anim(p, alpha as f32);
             let (view_yaw, view_pitch) =
                 if self.camera_type == perspective::CameraType::ThirdPersonFront {
                     (self.yaw + 180.0, -self.pitch)
@@ -4258,10 +4277,11 @@ impl Game<'_> {
                     -view_pitch.to_radians(),
                     0.0,
                 ),
-                anim: &|_| horizon_client::block_entity_render::BlockAnim::default(),
+                anim: &anim,
                 texts: None,
                 partial: alpha as f32,
                 game_time: self.world.game_time,
+                max_y: self.dim.max_y(),
                 world: &self.world,
                 sprites: &self.res.atlas.sprites,
                 nether: self.dim == Dim::Nether,
@@ -4723,20 +4743,6 @@ impl Game<'_> {
         self.tick_jukeboxes();
         self.tick_beacons();
         self.tick_creaking_hearts()?;
-        // ChestLidController: 0.1 per tick towards open/closed.
-        if let Some(key) = self.container {
-            self.chest_open.entry(key).or_insert((0.0, 0.0));
-        }
-        let open = self.container;
-        self.chest_open.retain(|k, (prev, cur)| {
-            *prev = *cur;
-            *cur = if Some(*k) == open {
-                (*cur + 0.1).min(1.0)
-            } else {
-                (*cur - 0.1).max(0.0)
-            };
-            *cur > 0.0 || *prev > 0.0
-        });
         let mut lit_changes = Vec::new();
         for (pos, entity) in self.world.block_entities.iter_mut() {
             if let BlockEntity::Furnace(f) = entity
@@ -5126,6 +5132,11 @@ impl Game<'_> {
         self.restore_effects();
         self.mining = None;
         self.container = None;
+        let kinds = std::mem::take(&mut self.be_anims.kinds);
+        self.be_anims = horizon_client::block_entity_anim::BlockEntityAnims {
+            kinds,
+            ..Default::default()
+        };
         self.carried = None;
         self.using = None;
         self.screen = Screen::Playing;
@@ -7203,6 +7214,14 @@ impl Game<'_> {
             hand: &hand,
             screen: &screen,
             game_time: self.world.game_time as f32,
+            shader_game_time: ((self.world.game_time % 24000) as f32 + alpha as f32) / 24000.0,
+            end_portal_sprites: ["environment/end_sky", "entity/end_portal/end_portal"].map(|n| {
+                self.res
+                    .atlas
+                    .sprites
+                    .get(n)
+                    .map_or([0.0; 4], |r| [r.u0, r.v0, r.u1 - r.u0, r.v1 - r.v0])
+            }),
             ticks: self.ticks,
             darkness: self.darkness_lighting(alpha as f32),
             night_vision: self.night_vision_intensity(),
@@ -8159,7 +8178,11 @@ pub fn run() -> Result<()> {
         raiding: Default::default(),
         attack_ticks: 100,
         last_hurt_by_player: HashSet::new(),
-        chest_open: HashMap::new(),
+        be_anims: {
+            let mut anims = horizon_client::block_entity_anim::BlockEntityAnims::default();
+            anims.classify(registry_owner.registry);
+            anims
+        },
         using: None,
         view: Default::default(),
         limiter: horizon_client::window::FramerateLimiter::new(0),
@@ -8172,6 +8195,7 @@ pub fn run() -> Result<()> {
         shield_cooldown: 0,
         command_source: None,
         titles: Default::default(),
+        tool_highlight: Default::default(),
         applied_modifiers: Vec::new(),
         experience: Experience::default(),
         orbs: Vec::new(),
@@ -8207,6 +8231,7 @@ pub fn run() -> Result<()> {
         map_frame_model: frames::bake_frame(&root, "item_frame_map"),
         glow_map_frame_model: frames::bake_frame(&root, "glow_item_frame_map"),
         armor_stands: Vec::new(),
+        others: Vec::new(),
         armor_stand_assets: armor_stands::ArmorStandAssets::load(&root),
         boats: Vec::new(),
         boat_models: boats::BoatModels::load(&root),
@@ -8250,6 +8275,7 @@ pub fn run() -> Result<()> {
         lan_events: Vec::new(),
         lan_acting: None,
         chat_capture: None,
+        cmds: Default::default(),
         cheats: true,
         ui: Default::default(),
         combat: Default::default(),
@@ -8295,6 +8321,12 @@ pub fn run() -> Result<()> {
             game.open_world(&folder, None, Some(seed), creative)?;
         }
         None => game.title = Some(Title::new(std::env::current_dir()?.join("saves"))),
+    }
+    if let (Some(script), Some(output)) = (
+        std::env::var_os("HORIZON_COMMAND_SCRIPT"),
+        std::env::var_os("HORIZON_COMMAND_OUTPUT"),
+    ) {
+        return game.run_command_harness(script.as_ref(), output.as_ref());
     }
     EventLoop::new()?.run_app(&mut game)?;
     if let Some(path) = &game.options.report {

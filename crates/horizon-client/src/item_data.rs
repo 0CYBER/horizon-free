@@ -56,6 +56,48 @@ pub struct StackData {
     pub stew_effects: Vec<(Arc<str>, i32)>,
     /// `minecraft:map_post_processing`: 0 lock, 1 scale.
     pub map_post_processing: Option<u8>,
+    /// Components Horizon does not model (lore, custom data, item name,
+    /// max stack size...), kept as their saved values in key order.
+    pub other: Vec<(String, Tag)>,
+}
+/// The components `components_tag` writes from modelled fields.
+const MODELLED: &[&str] = &[
+    "minecraft:banner_patterns",
+    "minecraft:base_color",
+    "minecraft:bundle_contents",
+    "minecraft:charged_projectiles",
+    "minecraft:container",
+    "minecraft:custom_name",
+    "minecraft:damage",
+    "minecraft:dyed_color",
+    "minecraft:enchantments",
+    "minecraft:firework_explosion",
+    "minecraft:fireworks",
+    "minecraft:map_id",
+    "minecraft:map_post_processing",
+    "minecraft:ominous_bottle_amplifier",
+    "minecraft:pot_decorations",
+    "minecraft:potion_contents",
+    "minecraft:repair_cost",
+    "minecraft:stored_enchantments",
+    "minecraft:suspicious_stew_effects",
+    "minecraft:trim",
+    "minecraft:writable_book_content",
+    "minecraft:written_book_content",
+];
+impl StackData {
+    /// An unmodelled component's saved value.
+    pub fn other(&self, id: &str) -> Option<&Tag> {
+        self.other.iter().find(|(k, _)| k == id).map(|(_, v)| v)
+    }
+    /// Set (or with None remove) an unmodelled component.
+    pub fn set_other(&mut self, id: &str, value: Option<Tag>) {
+        self.other.retain(|(k, _)| k != id);
+        if let Some(v) = value {
+            self.other.push((id.to_owned(), v));
+            self.other.sort_by(|a, b| a.0.cmp(&b.0));
+        }
+    }
 }
 /// `Raid.getBannerComponentPatch`: the ominous banner's pattern layers.
 pub const OMINOUS_LAYERS: [(&str, &str); 8] = [
@@ -599,7 +641,17 @@ pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
             entries.push(("minecraft:container", Tag::List(slots)));
         }
     }
-    (!entries.is_empty()).then(|| Tag::compound(entries))
+    let mut out: horizon_world::nbt::Compound = entries
+        .into_iter()
+        .map(|(k, v)| (JavaString::from(k), v))
+        .collect();
+    if let Some(d) = data {
+        for (k, v) in &d.other {
+            out.entry(JavaString::from(k.as_str()))
+                .or_insert_with(|| v.clone());
+        }
+    }
+    (!out.is_empty()).then_some(Tag::Compound(out))
 }
 /// Damage and extra components from a stack's `components` compound.
 pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData>>) {
@@ -732,7 +784,23 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
                 Arc::from(t.get("pattern").and_then(string)?.as_str()),
             ))
         }),
+        other: Vec::new(),
     };
+    let mut data = data;
+    if let Tag::Compound(map) = c {
+        for (k, v) in map {
+            let key = k.to_string_lossy();
+            let ominous_part = data.ominous_banner
+                && matches!(
+                    key.as_str(),
+                    "minecraft:item_name" | "minecraft:rarity" | "minecraft:tooltip_display"
+                );
+            if !MODELLED.contains(&key.as_str()) && !ominous_part {
+                data.other.push((key, v.clone()));
+            }
+        }
+        data.other.sort_by(|a, b| a.0.cmp(&b.0));
+    }
     (damage, (!data.is_empty()).then(|| Box::new(data)))
 }
 

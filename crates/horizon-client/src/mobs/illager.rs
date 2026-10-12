@@ -48,20 +48,35 @@ fn targets(m: &mut Mob, villagers_seen: bool) {
     m.ai.targets
         .add(3, NearestTarget::species(&[Species::IronGolem], true));
 }
+/// `AvoidEntityGoal<>(this, Creaking.class, 8.0F, walk, sprint)`.
+fn avoid_creaking(walk: f64, sprint: f64) -> super::goals::AvoidEntity {
+    super::goals::AvoidEntity::new(
+        super::goals::Avoid::Species(vec![Species::Creaking]),
+        8.0,
+        walk,
+        sprint,
+    )
+}
 pub fn register_pillager(m: &mut Mob) {
     let g = &mut m.ai.goals;
     g.add(0, Float);
+    g.add(1, avoid_creaking(1.0, 1.2));
+    g.add(2, super::raider::HoldGroundAttack::new(10.0));
     g.add(3, CrossbowAttack::new(1.0, 8.0));
     g.add(8, Stroll::new(0.6));
-    g.add(9, LookAtPlayer::new(15.0));
+    g.add(9, LookAtPlayer::new(15.0).probability(1.0));
+    g.add(10, LookAtPlayer::mobs(15.0));
     targets(m, false);
 }
 pub fn register_vindicator(m: &mut Mob) {
     let g = &mut m.ai.goals;
     g.add(0, Float);
+    g.add(1, avoid_creaking(1.0, 1.2));
+    g.add(4, super::raider::HoldGroundAttack::new(10.0));
     g.add(5, MeleeAttack::new(1.0, false));
     g.add(8, Stroll::new(0.6));
-    g.add(9, LookAtPlayer::new(3.0));
+    g.add(9, LookAtPlayer::new(3.0).probability(1.0));
+    g.add(10, LookAtPlayer::mobs(8.0));
     targets(m, true);
     // VindicatorJohnnyAttackGoal: a vindicator named Johnny attacks anything.
     m.ai.targets.add(
@@ -82,11 +97,13 @@ pub fn register_evoker(m: &mut Mob) {
         2,
         super::goals::AvoidEntity::new(super::goals::Avoid::Player, 8.0, 0.6, 1.0),
     );
+    g.add(3, avoid_creaking(0.6, 1.0));
     g.add(4, UseSpell::new(Spell::Vexes));
     g.add(5, UseSpell::new(Spell::Fangs));
     g.add(6, UseSpell::new(Spell::Wololo));
     g.add(8, Stroll::new(0.6));
     g.add(9, LookAtPlayer::new(3.0).probability(1.0));
+    g.add(10, LookAtPlayer::mobs(8.0));
     targets(m, false);
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -526,7 +543,12 @@ fn shoot_crossbow(m: &mut Mob, who: Who, cx: &mut Cx) {
     );
     p.bonus = super::gear::arrow_bonus(m);
     // rangedAttackUncertainty at normal difficulty: 14 - 2 * 4.
-    p.shoot(&mut m.random, [dx, dy, dz], 1.6, 6.0);
+    p.shoot(
+        &mut crate::projectiles::own_random(m),
+        [dx, dy, dz],
+        1.6,
+        6.0,
+    );
     cx.events.push(MobEvent::Projectile(p));
     let pitch = 1.0 / (m.random.next_float() * 0.5 + 1.8) + 0.53;
     cx.events.push(MobEvent::Sound(

@@ -152,9 +152,34 @@ impl Parser<'_> {
         Err("unterminated string".into())
     }
 }
+/// The style fields of a component object.
+fn object_style(o: &serde_json::Map<String, Value>) -> Style {
+    let mut style = Style::default();
+    if let Some(c) = o.get("color").and_then(Value::as_str) {
+        style.color = named_color(c).or_else(|| {
+            c.strip_prefix('#')
+                .and_then(|h| u32::from_str_radix(h, 16).ok())
+        });
+    }
+    let flag = |k: &str| o.get(k).and_then(Value::as_bool);
+    style.bold = flag("bold");
+    style.italic = flag("italic");
+    style.underlined = flag("underlined");
+    style.strikethrough = flag("strikethrough");
+    style.obfuscated = flag("obfuscated");
+    style
+}
 /// `ComponentSerialization.CODEC` decoding into text. `selector` components
 /// are resolved by `resolve` (ComponentUtils.updateForEntity).
 pub fn to_text(v: &Value, resolve: &mut dyn FnMut(&str) -> Text) -> Text {
+    to_text_with(v, resolve, &mut |_| None)
+}
+/// `to_text` with a hook resolving other contents (`nbt`) from the object.
+pub fn to_text_with(
+    v: &Value,
+    resolve: &mut dyn FnMut(&str) -> Text,
+    contents: &mut dyn FnMut(&serde_json::Map<String, Value>) -> Option<Text>,
+) -> Text {
     match v {
         Value::String(s) => Text::literal(s.clone()),
         Value::Number(n) => Text::literal(n.to_string()),
@@ -164,32 +189,27 @@ pub fn to_text(v: &Value, resolve: &mut dyn FnMut(&str) -> Text) -> Text {
             let Some((first, rest)) = list.split_first() else {
                 return Text::empty();
             };
-            let mut base = to_text(first, resolve);
-            let style = base
-                .spans
-                .first()
-                .map(|s| s.style.clone())
-                .unwrap_or_default();
+            let mut base = to_text_with(first, resolve, contents);
+            // The siblings take the first component's own style, even when
+            // its text is empty.
+            let style = match first {
+                Value::Object(o) => object_style(o),
+                _ => base
+                    .spans
+                    .first()
+                    .map(|s| s.style.clone())
+                    .unwrap_or_default(),
+            };
             for sibling in rest {
-                base.push(to_text(sibling, resolve).with_style(&style));
+                base.push(to_text_with(sibling, resolve, contents).with_style(&style));
             }
             base
         }
         Value::Object(o) => {
-            let mut style = Style::default();
-            if let Some(c) = o.get("color").and_then(Value::as_str) {
-                style.color = named_color(c).or_else(|| {
-                    c.strip_prefix('#')
-                        .and_then(|h| u32::from_str_radix(h, 16).ok())
-                });
-            }
-            let flag = |k: &str| o.get(k).and_then(Value::as_bool);
-            style.bold = flag("bold");
-            style.italic = flag("italic");
-            style.underlined = flag("underlined");
-            style.strikethrough = flag("strikethrough");
-            style.obfuscated = flag("obfuscated");
-            let content = if let Some(t) = o.get("text") {
+            let style = object_style(o);
+            let content = if let Some(t) = contents(o) {
+                t
+            } else if let Some(t) = o.get("text") {
                 match t {
                     Value::String(s) => Text::literal(s.clone()),
                     other => Text::literal(other.to_string()),
@@ -198,7 +218,11 @@ pub fn to_text(v: &Value, resolve: &mut dyn FnMut(&str) -> Text) -> Text {
                 let args: Vec<Text> = o
                     .get("with")
                     .and_then(Value::as_array)
-                    .map(|a| a.iter().map(|x| to_text(x, resolve)).collect())
+                    .map(|a| {
+                        a.iter()
+                            .map(|x| to_text_with(x, resolve, contents))
+                            .collect()
+                    })
                     .unwrap_or_default();
                 let translated = Text::translate(key, &args);
                 match o.get("fallback").and_then(Value::as_str) {
@@ -219,7 +243,7 @@ pub fn to_text(v: &Value, resolve: &mut dyn FnMut(&str) -> Text) -> Text {
                 .into_iter()
                 .flatten()
             {
-                out.push(to_text(extra, resolve).with_style(&style));
+                out.push(to_text_with(extra, resolve, contents).with_style(&style));
             }
             out
         }
