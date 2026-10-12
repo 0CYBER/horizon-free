@@ -8,6 +8,7 @@
 pub mod ai;
 pub mod allay;
 pub mod anim;
+pub mod animal_brain;
 pub mod aquatic;
 pub mod body_anim;
 pub mod brain;
@@ -15,7 +16,9 @@ pub mod breeze;
 pub mod camel;
 pub mod caravan;
 pub mod control;
+pub mod copper_golem;
 pub mod creaking;
+pub mod creaking_heart;
 pub mod cube;
 pub mod data;
 pub mod drops;
@@ -34,6 +37,7 @@ pub mod keyframes;
 pub mod leash;
 pub mod living;
 pub mod llama;
+pub mod monster_brain;
 pub mod nautilus;
 pub mod nav;
 pub mod nether;
@@ -543,6 +547,8 @@ pub struct Extra {
     pub raider: Option<Box<raider::State>>,
     /// A villager's raid activity and gossip.
     pub villager: Option<Box<villager::Ext>>,
+    /// The sniffer's and the ghastling's brain.
+    pub animal_brain: Option<Box<animal_brain::Brain>>,
     /// The mob this one rides, and the mob riding it (`getVehicle`, `getFirstPassenger`).
     pub mount: Option<u32>,
     pub rider: Option<u32>,
@@ -556,6 +562,8 @@ pub struct Extra {
     /// `Mob.dropChances` by `EquipmentSlot` (`drops::SLOTS` order) when set
     /// explicitly; None uses the defaults of `drops::drop_chance`.
     pub drop_chances: Option<Box<[f32; 8]>>,
+    /// A breeze's or creaking's brain (`monster_brain`).
+    pub brain: Option<Box<monster_brain::Brain>>,
 }
 #[derive(Clone, Debug)]
 pub struct Mob {
@@ -629,8 +637,29 @@ pub struct Mob {
 #[derive(Clone, Debug)]
 pub enum MobEvent {
     Sound(&'static str, [f64; 3], f32, f32),
+    /// `OfferFlowerGoal.stop`: the item goes to the target's antenna (saddle)
+    /// slot if it is empty, as a guaranteed drop.
+    Gift {
+        target: u32,
+        item: &'static str,
+    },
+    /// `AnimalMakeLove`: the partner remembers this mob as its breed target
+    /// and walks to it and looks at it.
+    BreedTarget {
+        mob: u32,
+        partner: u32,
+    },
+    /// `BehaviorUtils.lockGazeAndWalkToEachOther`'s other half: the partner
+    /// looks at this mob and walks to it.
+    LockGaze {
+        mob: u32,
+        partner: u32,
+    },
     /// A sound event id that is not a static string (variant sounds).
     SoundId(String, [f64; 3], f32, f32),
+    /// `Level.playLocalSound`: a sound the client plays for itself, never
+    /// sent by a server (a breeze's whirl and idle sounds).
+    LocalSound(&'static str, [f64; 3], f32, f32),
     /// A level event's sound (`levelEvent`/`globalLevelEvent`): the client
     /// plays it with its own random pitch spread (`(a - b) * spread + 1`),
     /// nothing is drawn from the mob.
@@ -727,6 +756,9 @@ pub enum MobEvent {
     Breed {
         parent: u32,
         partner: u32,
+        /// A llama's baby, drawn from the parent's random as
+        /// `Llama.getBreedOffspring` does.
+        llama: Option<Box<super::mobs::llama::Offspring>>,
     },
     /// Replace a block by name (sheep turning grass to dirt), optionally with
     /// the destroy effect.
@@ -901,9 +933,13 @@ pub struct Seen {
     /// A villager's `POTENTIAL_JOB_SITE` and `MEETING_POINT`.
     pub potential_job: Option<[i32; 3]>,
     pub meeting: Option<[i32; 3]>,
-    /// A villager's profession (index into `render::PROFESSIONS`) and experience.
+    /// `variant2`: a villager's profession (index into
+    /// `render::PROFESSIONS`), a llama's strength. And a villager's experience.
     pub profession: u8,
     pub xp: i32,
+    /// `MAX_HEALTH`, `JUMP_STRENGTH` and `MOVEMENT_SPEED` base values (a
+    /// horse's breeding stock).
+    pub stats: [f64; 3],
 }
 impl Mob {
     /// `EntityType.getCategory`'s name.
@@ -949,6 +985,41 @@ pub fn apply_mob_pushes(m: &mut Mob, pending: &mut Vec<(u32, Vec3)>) {
         false
     });
 }
+/// Applies the brain memories a mob's tick set on other mobs (from event
+/// index `from` on), at once: vanilla sets them on the other entity during
+/// the tick, before the mobs after it tick.
+pub fn apply_brain_events(mobs: &mut [Mob], events: &mut Vec<MobEvent>, from: usize) {
+    let mut i = from;
+    while i < events.len() {
+        match events[i] {
+            MobEvent::BreedTarget { mob, partner } => {
+                if let Some(m) = mobs.iter_mut().find(|m| m.id == mob) {
+                    animal_brain::set_breed_partner(m, partner);
+                }
+                events.remove(i);
+            }
+            MobEvent::LockGaze { mob, partner } => {
+                if let Some(m) = mobs.iter_mut().find(|m| m.id == mob) {
+                    animal_brain::lock_gaze(m, partner);
+                }
+                events.remove(i);
+            }
+            // Animal.finalizeSpawnChildFromBreeding: the partner rests and
+            // forgets it at once (the game still makes the baby).
+            MobEvent::Breed {
+                parent, partner, ..
+            } => {
+                if let Some(m) = mobs.iter_mut().find(|m| m.id == partner) {
+                    m.extra.age = 6000;
+                    m.extra.in_love = 0;
+                    animal_brain::forget_breed_target(m, parent);
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+}
 /// The player as mobs see it.
 #[derive(Clone, Debug)]
 pub struct PlayerView {
@@ -976,6 +1047,9 @@ pub struct PlayerView {
     pub hero: bool,
     /// The player's UUID (villagers' gossip is keyed by it).
     pub uuid: [i32; 4],
+    /// The mobs on the player's team (`isAlliedTo`): combat targeting
+    /// leaves the player alone.
+    pub allies: std::sync::Arc<std::collections::HashSet<u32>>,
 }
 pub struct MobWorld<'a> {
     pub world: &'a World,
@@ -1003,6 +1077,22 @@ pub struct MobWorld<'a> {
     pub world_seed: i64,
     /// `Level.getSeaLevel` (63 in the overworld, -63 in a flat world).
     pub sea_level: i32,
+    /// The scoreboard teams of the player and the mobs (collision rules).
+    pub teams: Teams,
+}
+/// `Entity.getTeam` of the player and of the mobs on a team.
+#[derive(Clone, Debug, Default)]
+pub struct Teams {
+    pub player: Option<crate::scoreboard::Team>,
+    pub mobs: HashMap<u32, crate::scoreboard::Team>,
+}
+impl Teams {
+    pub fn of(&self, who: Who) -> Option<&crate::scoreboard::Team> {
+        match who {
+            Who::Player => self.player.as_ref(),
+            Who::Mob(id) => self.mobs.get(&id),
+        }
+    }
 }
 impl Mob {
     pub fn new(id: u32, kind: Arc<MobType>, position: Vec3, yaw: f32) -> Self {
@@ -1137,6 +1227,7 @@ impl Mob {
         .fold((0.0, 0.0), |(a, t), (x, y)| (a + x, t + y))
     }
     pub fn damage(&mut self, amount: f32, source: Damage) -> bool {
+        raider::note_hurt(self);
         if !self.alive() || self.removed || self.invulnerable_flag {
             return false;
         }
@@ -1390,8 +1481,10 @@ impl Mob {
     /// Wear (or take off) a saddle stack, keeping its components.
     pub fn set_saddle(&mut self, saddle: Option<crate::items::ItemStack>) {
         self.extra.saddled = saddle.is_some();
+        // A plain saddle is implied by `saddled`; anything else (a copper
+        // golem's antenna flower) is kept as it is.
         self.extra.saddle_stack = saddle
             .map(|s| crate::items::ItemStack { count: 1, ..s })
-            .filter(|s| s.damage != 0 || s.extra.is_some());
+            .filter(|s| s.damage != 0 || s.extra.is_some() || &*s.item != "minecraft:saddle");
     }
 }

@@ -19,13 +19,13 @@ use horizon_core::{
 };
 
 /// `MemorySlot.NEVER_EXPIRE`.
-const NEVER: i64 = i64::MAX;
+pub(super) const NEVER: i64 = i64::MAX;
 
 /// `MemorySlot`: a value and its time to live.
 #[derive(Clone, Debug)]
 pub struct Slot<T> {
     v: Option<T>,
-    ttl: i64,
+    pub(super) ttl: i64,
 }
 impl<T> Default for Slot<T> {
     fn default() -> Self {
@@ -67,7 +67,7 @@ impl<T> Slot<T> {
     pub fn get(&self) -> Option<&T> {
         self.v.as_ref()
     }
-    pub(super) fn get_mut(&mut self) -> Option<&mut T> {
+    pub fn get_mut(&mut self) -> Option<&mut T> {
         self.v.as_mut()
     }
     pub fn present(&self) -> bool {
@@ -145,7 +145,7 @@ pub struct WalkTarget {
     pub close: i32,
 }
 impl WalkTarget {
-    fn block(p: [i32; 3], speed: f32, close: i32) -> Self {
+    pub(super) fn block(p: [i32; 3], speed: f32, close: i32) -> Self {
         Self {
             target: Tracker::Block(p),
             speed,
@@ -153,7 +153,7 @@ impl WalkTarget {
         }
     }
     /// `new WalkTarget(Vec3, ...)`: the block containing the point.
-    fn point(p: [f64; 3], speed: f32, close: i32) -> Self {
+    pub(super) fn point(p: [f64; 3], speed: f32, close: i32) -> Self {
         Self::block(
             [
                 p[0].floor() as i32,
@@ -2522,7 +2522,7 @@ impl B {
                     if cx.lr.next_int_bound(20).unwrap_or(0) != 0 {
                         return false;
                     }
-                    if !super::villager::raid_nearby(m) {
+                    if super::villager::raid_over_or_lost(m) {
                         let b = brain_mut(m);
                         b.default_activity = Act::Idle;
                         b.update_from_schedule(cx.w.game_time, cx.w.day_time);

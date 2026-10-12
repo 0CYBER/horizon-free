@@ -10,8 +10,10 @@ How parity work is run, checked and merged. The harnesses themselves are describ
 python3 tools/parity.py              # harnesses whose inputs changed, or that never passed
 python3 tools/parity.py food light   # these harnesses, whatever their state
 python3 tools/parity.py --failed     # the ones that failed last time
-python3 tools/parity.py --all        # everything, from scratch: the audit (about 20 minutes on ludodesktop)
+python3 tools/parity.py --all        # everything, from scratch: the audit (26 minutes on the Mac mini alone)
 python3 tools/parity.py --fresh food # don't reuse vanilla oracle results
+python3 tools/parity.py --repeat 3 food   # run it three times; the runs must agree
+python3 tools/parity.py --hosts macmini,thinkpad   # with other machines (default: tools/parity_hosts.json's default list, empty)
 python3 tools/parity.py --list       # what would run
 python3 tools/parity.py --status     # last result of each harness
 ```
@@ -24,11 +26,26 @@ Probes build into `.local/parity-target/` with release optimisation but no LTO a
 
 Passes are shared between worktrees. A harness's key depends only on the content of its dependencies, not on where they are, so every pass is also written to `parity-shared/` beside the shared vanilla data (`PARITY_SHARED` overrides it). A worktree whose files match those a harness passed with, in any worktree, counts that pass without running the harness: after merging the integration branch, an agent's gate only runs the harnesses its own changes affect.
 
-Every runner on the machine shares `PARITY_MACHINE_JOBS` slots (default: half the CPU threads), so several agents' runs together can't overload it. Parallel harnesses are also admitted by memory: each harness's recorded peak is reserved, within three quarters of the memory available at the start. `-j` caps the count (default: a third of the CPU threads).
+Every runner on the machine shares `PARITY_MACHINE_JOBS` slots (default: half the CPU threads), so several agents' runs together can't overload it. Parallel harnesses are also admitted by memory: each harness's recorded peak is reserved, within three quarters of the memory available at the start, and a harness starts only if the memory free at that moment still leaves 2 GB. `-j` caps the count here (default: `PARITY_LOCAL_JOBS`, else 3 while other machines help or a third of the CPU threads alone, within `$FLEET_LOAD_JOBS`).
+
+### Other machines
+
+Harnesses can also run on the Mac mini and the ThinkPad (`tools/parity_hosts.json` describes them; its `default` list is empty, so pass `--hosts macmini,thinkpad` or set `PARITY_HOSTS`, after copying `shared-local/` to `~/code/horizon-parity/shared-local` on each host). The runner mirrors the worktree there with rsync (not `.git`, `.local`, `target` or ignored files) into `~/code/horizon-parity/remote/<host><path>`, whose `.local` links to the vanilla data in `~/code/horizon-parity/shared-local`, and starts `tools/parity.py --worker` over ssh. The worker builds the probes (about 80 s the first time) and runs what it is sent under the same tracer, admitting harnesses against its own free memory. One queue, longest first, feeds every machine, remote ones first: the Mac takes up to 14 harnesses, the desktop 3 and only those under 800 MB. Each pass comes back with the content hash of every file it depended on, so it is keyed on exactly what ran, and logs come back to `.local/parity-runner/logs/`; state, sharing and `gate.py` work as before. If a host can't be reached, or drops out, its harnesses run here.
+
+Harnesses a host can't run are listed in the file: `local_only` (`save_roundtrip` runs the game on a virtual screen) and each host's `exclude`. On macOS, `options` and `chunk_generation` differ because Rust's float functions (`f64::powf` and the like) use the platform libm, which rounds differently from glibc; every other harness gave the same result on the Mac as on Linux. The ThinkPad helps too, gently: Linux, 2 harnesses at `nice 19`, since it hosts the Claude account pool; it finds ALSA through `~/code/horizon-parity/alsa-dev` like the desktop.
+
+### Shards and Rust scopes
+
+A harness can declare, at the top level of its script:
+
+- `PARITY_SHARDS = N`: it runs as `NAME#1` to `NAME#N`, in parallel, each told its share in `PARITY_SHARD=i/N` (`test_datafix_parity.py` upgrades every sixth world). `NAME` on the command line or in `--known-failures` means all of them.
+- `PARITY_RUST_SCOPE = [...]`: the Rust sources its probes can reach, as path prefixes. Cargo's dep-info names every file of every crate a probe links, so without it a probe of `horizon-world` depends on all 350 of its files. The runner keeps only the scope's files if the scope is closed: nothing in it names a module, crate-root re-export or macro outside it (`crate::`, `super::`, other workspace crates; comments and strings ignored), declares a module it doesn't cover, or includes source, and nothing outside it implements anything for a type it defines. Crate roots then count without their declarations of other modules, so adding a module elsewhere doesn't rerun the harness. If the scope isn't closed the runner says why and keeps every file. `datafix` depends on 41 files this way, not 354.
 
 ## The gate
 
 `tools/gate.py` is what a branch must pass before it is integrated: the public-tree check, rustfmt, clippy with warnings denied, the Rust and Python tests, then the harnesses whose inputs changed. It stops at the first failure and writes `.local/gate.json`. `--known-failures a,b` lets harnesses that already fail on the integration branch keep failing. `--quick` checks formatting, lints and Python tests only; `--no-parity` skips the harnesses.
+
+The gate also looks for flaky harnesses: a harness whose script, oracle (Java under `mods/horizon/src/test`) or probe (a crate's example or binary) is new or changed since the merge base with `--flake-base` (default `parity-base`) must pass three runs in a row. The later runs reuse the first one's oracle results, so they cost only the Rust side, and run on the same machine; a harness whose runs disagree is reported `FLAKY` and fails the gate. A pass records how many runs it held over, so a later gate doesn't repeat it.
 
 ## Parallel work: worktrees and the integration branch
 
@@ -38,10 +55,14 @@ Parity work happens in one worktree and branch per area, next to an integration 
 python3 tools/supervise.py status                       # branches, progress, unpushed work, last gate
 python3 tools/supervise.py new dispensers               # new worktree and branch from the integration branch
 python3 tools/supervise.py save                         # commit and push unfinished work before agents stop
+python3 tools/supervise.py check                        # which branches merge cleanly, alone and together
 python3 tools/supervise.py integrate parity/dispensers  # merge, gate, push; undo the merge if the gate fails
+python3 tools/supervise.py integrate --ready            # every parity/* branch with new commits, one gate
 ```
 
 An agent working an area merges the integration branch first, uses `tools/parity.py` on its harnesses while it works, runs `tools/gate.py` before its last commit and pushes its branch. Integration happens only through `supervise.py integrate`, which runs the gate with the harnesses already failing on the integration branch as known failures: a branch may leave those failing, or fix them, but must not make any other harness fail.
+
+`check` and `integrate` start by trial-merging the candidates with `git merge-tree`, in the object database, without touching any worktree: each branch alone, every pair, then the largest set without conflicts, merged in turn. That takes about a second for ten branches and names the conflicting files. `integrate` merges that set, gates it once (formatting, lints and tests before the long harness run; the flake check covers everything the branches change) and pushes. If the gate fails it tries each half of the set in turn, so the branches that pass still land; `--no-bisect` turns that off.
 
 On ludodesktop, source `~/code/horizon-parity/env.sh` first: it sets the ALSA build path and the Cargo job cap. Debug builds carry line tables only (`[profile.dev]` in `Cargo.toml`), which keeps backtraces readable while keeping each worktree's build small; a fresh worktree builds `horizon-client` and its tests in under a minute.
 

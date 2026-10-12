@@ -56,6 +56,39 @@ impl Ingredient {
         self.0.contains(&*stack.item)
     }
 }
+/// `PlacementInfo`: the ingredients to find and, per recipe slot, the index
+/// of its ingredient (`slotsToIngredientIndex`, -1 for an empty slot). Empty
+/// when the recipe is impossible to place.
+#[derive(Clone, Debug, Default)]
+pub struct Placement {
+    pub ingredients: Vec<Ingredient>,
+    pub slots: Vec<i32>,
+    /// A `ShapedRecipe`'s width and height (the others fill the grid).
+    pub shaped: Option<(usize, usize)>,
+}
+impl Placement {
+    /// `PlacementInfo.createFromOptionals` (and `create` with no empty slots).
+    pub fn of(cells: Vec<Option<Ingredient>>, shaped: Option<(usize, usize)>) -> Self {
+        let mut out = Self {
+            shaped,
+            ..Self::default()
+        };
+        for cell in cells {
+            match cell {
+                Some(i) if i.0.is_empty() => return Self::default(),
+                Some(i) => {
+                    out.slots.push(out.ingredients.len() as i32);
+                    out.ingredients.push(i);
+                }
+                None => out.slots.push(-1),
+            }
+        }
+        out
+    }
+    pub fn impossible(&self) -> bool {
+        self.slots.is_empty()
+    }
+}
 /// A recipe result: `ItemStackTemplate` (`id`, `count`, `components`), with the
 /// id optional for the transmuting recipes that keep the input's item.
 #[derive(Clone, Debug)]
@@ -1319,55 +1352,113 @@ impl Recipes {
             map_scale,
         };
         for (name, recipe) in &self.crafting {
-            let result = match recipe {
-                Recipe::Special(special) => {
-                    if !special.matches(&ctx, &input) {
-                        continue;
-                    }
-                    special.assemble(&ctx, &input)
-                }
-                Recipe::Shaped {
-                    width,
-                    height,
-                    cells,
-                    result,
-                } => {
-                    if *width != input.width
-                        || *height != input.height
-                        || cells.iter().flatten().count() != input.count()
-                    {
-                        continue;
-                    }
-                    let matches = |mirror: bool| {
-                        (0..*height).all(|y| {
-                            (0..*width).all(|x| {
-                                let rx = if mirror { width - 1 - x } else { x };
-                                match (&cells[y * width + rx], input.get(x, y)) {
-                                    (None, None) => true,
-                                    (Some(i), Some(s)) => i.test(s),
-                                    _ => false,
-                                }
-                            })
-                        })
-                    };
-                    if !(matches(false) || matches(true)) {
-                        continue;
-                    }
-                    Some(result.create())
-                }
-                Recipe::Shapeless {
-                    ingredients,
-                    result,
-                } => {
-                    if !matches_all(ingredients, &input.stacks()) {
-                        continue;
-                    }
-                    Some(result.create())
-                }
-            };
-            return result.map(|r| (name.as_str(), r));
+            if let Some(result) = Self::assemble_if_matches(&ctx, &input, recipe) {
+                return result.map(|r| (name.as_str(), r));
+            }
         }
         None
+    }
+    /// `Recipe.matches` then `assemble` for one recipe: None when it does
+    /// not match, Some(None) when it matches with nothing to make.
+    fn assemble_if_matches(
+        ctx: &Context,
+        input: &Input,
+        recipe: &Recipe,
+    ) -> Option<Option<ItemStack>> {
+        match recipe {
+            Recipe::Special(special) => special
+                .matches(ctx, input)
+                .then(|| special.assemble(ctx, input)),
+            Recipe::Shaped {
+                width,
+                height,
+                cells,
+                result,
+            } => {
+                if *width != input.width
+                    || *height != input.height
+                    || cells.iter().flatten().count() != input.count()
+                {
+                    return None;
+                }
+                let matches = |mirror: bool| {
+                    (0..*height).all(|y| {
+                        (0..*width).all(|x| {
+                            let rx = if mirror { width - 1 - x } else { x };
+                            match (&cells[y * width + rx], input.get(x, y)) {
+                                (None, None) => true,
+                                (Some(i), Some(s)) => i.test(s),
+                                _ => false,
+                            }
+                        })
+                    })
+                };
+                (matches(false) || matches(true)).then(|| Some(result.create()))
+            }
+            Recipe::Shapeless {
+                ingredients,
+                result,
+            } => matches_all(ingredients, &input.stacks()).then(|| Some(result.create())),
+        }
+    }
+    /// `recipe.matches(craftSlots.asCraftInput())` for one recipe by id
+    /// (`minecraft:name`).
+    pub fn recipe_matches(&self, id: &str, grid: &[Option<ItemStack>], size: usize) -> bool {
+        let name = id.trim_start_matches("minecraft:");
+        let Some((_, recipe)) = self.crafting.iter().find(|(n, _)| n == name) else {
+            return false;
+        };
+        let Some(input) = Input::of(grid, size) else {
+            return false;
+        };
+        let ctx = Context {
+            recipes: self,
+            map_scale: &|_| None,
+        };
+        Self::assemble_if_matches(&ctx, &input, recipe).is_some()
+    }
+    /// `Recipe.placementInfo` of a crafting or cooking recipe by id; None for
+    /// an unknown id, an empty placement when it is impossible to place.
+    pub fn placement(&self, id: &str) -> Option<Placement> {
+        let name = id.trim_start_matches("minecraft:");
+        if let Some(c) = self.cooking.iter().find(|c| c.id == name) {
+            return Some(Placement::of(vec![Some(c.ingredient.clone())], None));
+        }
+        let (_, recipe) = self.crafting.iter().find(|(n, _)| n == name)?;
+        Some(match recipe {
+            Recipe::Shaped {
+                width,
+                height,
+                cells,
+                ..
+            } => Placement::of(cells.clone(), Some((*width, *height))),
+            Recipe::Shapeless { ingredients, .. } => {
+                Placement::of(ingredients.iter().cloned().map(Some).collect(), None)
+            }
+            Recipe::Special(Special::Transmute {
+                input,
+                material,
+                max,
+                ..
+            }) => {
+                let mut list = vec![Some(input.clone())];
+                list.extend(std::iter::repeat_n(Some(material.clone()), *max));
+                Placement::of(list, None)
+            }
+            Recipe::Special(Special::Dye { target, dye, .. }) => {
+                Placement::of(vec![Some(target.clone()), Some(dye.clone())], None)
+            }
+            Recipe::Special(Special::Imbue {
+                source, material, ..
+            }) => Placement::of(
+                (0..9)
+                    .map(|i| Some(if i == 4 { source } else { material }.clone()))
+                    .collect(),
+                None,
+            ),
+            // CustomRecipe.placementInfo: NOT_PLACEABLE.
+            Recipe::Special(_) => Placement::default(),
+        })
     }
     /// `Recipe.getRemainingItems` placed on the `size`x`size` grid: an item's
     /// crafting remainder (buckets, bottles), the patterned banner a duplicate

@@ -2,12 +2,13 @@
 #![forbid(unsafe_code)]
 use std::{
     io::{BufRead, BufReader, Write},
-    os::unix::net::UnixStream,
     path::{Path, PathBuf},
     process::{Command, ExitCode, Stdio},
     thread,
     time::{Duration, Instant},
 };
+
+use horizon_client::control::UnixStream;
 
 const USAGE: &str = "usage: horizon-ctl [--socket PATH] COMMAND [ARGS...]
 

@@ -1477,13 +1477,12 @@ impl Game<'_> {
             self.res.facts.get(previous).name.clone(),
             self.res.facts.get(state).name.clone(),
         );
+        // The command clears the old block entity without its side effects
+        // (UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS); the new block gets a fresh one.
+        let key = (pos[0], pos[1], pos[2]);
         if old != new {
-            let key = (pos[0], pos[1], pos[2]);
             self.jukebox_removed(pos);
             self.world.block_entities.remove(&key);
-            if let Some(entity) = horizon_client::containers::BlockEntity::for_block(&new) {
-                self.world.block_entities.insert(key, entity);
-            }
         }
         if strict {
             self.with_level(|b, level, ticks| {
@@ -1501,6 +1500,12 @@ impl Game<'_> {
         } else {
             self.level_set(pos, state)
                 .map_err(|e| CommandError::new(Text::literal(e.to_string())))?;
+        }
+        if old != new
+            && self.world.block(pos[0], pos[1], pos[2]) == state
+            && let Some(entity) = horizon_client::containers::BlockEntity::for_block(&new)
+        {
+            self.world.block_entities.insert(key, entity);
         }
         Ok(true)
     }
@@ -1531,31 +1536,14 @@ impl Game<'_> {
         ));
         Ok(1)
     }
-    /// `Level.destroyBlock(pos, true)`: the block's drops without a tool or
-    /// breaker (its loot table, contents of a container), then air.
+    /// `Level.destroyBlock(pos, true)` through the behaviour library: the
+    /// destroy event, the block's drops without a tool or breaker, then its
+    /// fluid's block, the block entity spilling its contents on the way.
     pub(super) fn destroy_block_dropping(&mut self, pos: [i32; 3]) -> R<()> {
-        let state = self.world.block(pos[0], pos[1], pos[2]);
-        self.destroy_particles(pos, state);
-        self.jukebox_removed(pos);
-        if let Some(entity) = self.world.block_entities.remove(&(pos[0], pos[1], pos[2])) {
-            let name = self.res.facts.get(state).name.clone();
-            self.release_contents(pos, entity, &name);
-        }
-        let drops = self.res.items.block_drops_in(
-            self.res.assets.registry,
-            state,
-            None,
-            &mut self.world.random,
-            Some((&mut self.rand_sequences, self.level.seed)),
-        );
-        for d in drops {
-            if &*d.item != "minecraft:air" {
-                self.pop_resource(pos, d);
-            }
-        }
-        let air = self.world.air;
-        self.place_state(pos, air, false)?;
-        Ok(())
+        let at = horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]);
+        self.with_level(|b, level, ticks| b.destroy_block(level, ticks, at, true));
+        self.process_level_events()
+            .map_err(|e| CommandError::new(Text::literal(e.to_string())))
     }
     /// The block entity part of `BlockInput.place`: load the block entity
     /// from the argument's tag; true when its saved data changed.

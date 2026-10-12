@@ -48,12 +48,18 @@ EXTRAS = [
     ('minecraft:pillager#main', 'IllagerModel'), ('minecraft:vindicator#main', 'IllagerModel'),
     ('minecraft:llama#main', 'LlamaModel'), ('minecraft:trader_llama#main', 'LlamaModel'),
     ('minecraft:llama_baby#main', 'BabyLlamaModel'), ('minecraft:trader_llama_baby#main', 'BabyLlamaModel'),
+    # LlamaDecorLayer: the carpet and the trader's blanket.
+    ('minecraft:llama#decor', 'LlamaModel'), ('minecraft:llama_baby#decor', 'BabyLlamaModel'),
     ('minecraft:donkey#main', 'DonkeyModel'), ('minecraft:mule#main', 'DonkeyModel'),
     ('minecraft:donkey_baby#main', 'BabyDonkeyModel'), ('minecraft:mule_baby#main', 'BabyDonkeyModel'),
     ('minecraft:skeleton_horse#main', 'HorseModel'), ('minecraft:zombie_horse#main', 'HorseModel'),
     ('minecraft:skeleton_horse_baby#main', 'BabyHorseModel'), ('minecraft:zombie_horse_baby#main', 'BabyHorseModel'),
     ('minecraft:cave_spider#main', 'SpiderModel'),
     ('minecraft:stray#main', 'SkeletonModel'),
+    # BreezeWindLayer and BreezeEyesLayer bake their own layers into a BreezeModel;
+    # the creaking's emissive eyes layer is a CreakingModel.
+    ('minecraft:breeze#wind', 'BreezeModel'), ('minecraft:breeze#eyes', 'BreezeModel'),
+    ('minecraft:creaking#eyes', 'CreakingModel'),
     # The warden's emissive layers: its model over each layer's own parts.
     ('minecraft:warden#tendrils', 'WardenModel'), ('minecraft:warden#heart', 'WardenModel'),
     ('minecraft:warden#bioluminescent', 'WardenModel'), ('minecraft:warden#pulsating_spots', 'WardenModel'),
@@ -61,7 +67,7 @@ EXTRAS = [
 # Layers a renderer reuses for another entity under a different constant.
 SKIP_LAYERS = re.compile(r'(banner|bell|book|skull|head|chest|shulker_box|boat|cushion|conduit|leash|arrow|trident|'
                          r'shield|elytra|spin_attack|ears|cape|decorated_pot|minecart|wind_charge|evoker_fangs|'
-                         r'llama_spit|shulker_bullet|bee_stinger|end_crystal|armor_stand|copper_golem|#(helmet|chestplate|leggings|'
+                         r'llama_spit|shulker_bullet|bee_stinger|end_crystal|armor_stand|copper_golem_\w+|#(helmet|chestplate|leggings|'
                          r'boots|outer|armor|decor|saddle|collar|wool|wool_undercoat|eyes|wind|inner|pattern|tendrils|'
                          r'heart|bioluminescent|pulsating_spots|water_patch|flag|cage|shell)$)')
 
@@ -137,6 +143,8 @@ PIGLIN = [{'armPose': pose, 'maxCrossbowChageDuration': 25.0, 'ticksUsingItem': 
 EQUINE = [{'eatAnimation': 0.6}, {'standAnimation': 0.5}, {'eatAnimation': 0.3, 'standAnimation': 0.4, 'feedingAnimation': 0.7},
           {'isInWater': T}, {'standAnimation': 1.0, 'eatAnimation': 1.0}]
 WATER = [{'isInWater': T}, {'isInWater': F}]
+GHAST_BODY = [{'bodyItem': 'minecraft:white_harness'}, {'isRidden': T}, {'bodyItem': 'minecraft:red_harness', 'isRidden': T},
+              {'isLeashHolder': T, 'bodyItem': 'minecraft:blue_harness'}]
 SPECIES = {
     'horse': EQUINE, 'donkey': EQUINE + [{'hasChest': T}], 'mule': EQUINE + [{'hasChest': T}], 'zombie_horse': EQUINE, 'skeleton_horse': EQUINE,
     'iron_golem': [{'attackTicksRemaining': 7.0}, {'offerFlowerTick': 30}, {'attackTicksRemaining': 0.0, 'offerFlowerTick': 0}],
@@ -159,6 +167,8 @@ SPECIES = {
     'skeleton': SKELETON, 'stray': SKELETON, 'wither_skeleton': SKELETON, 'bogged': SKELETON,
     'piglin': PIGLIN, 'piglin_brute': PIGLIN,
     'cat': FELINE, 'ocelot': FELINE,
+    'breeze': [{'idle': 3}, {'shoot': 2}, {'slide': 4}, {'slideBack': 1}, {'inhale': 5}, {'longJump': 2},
+               {'idle': 1, 'shoot': 6}, {'idle': 9, 'slideBack': 7, 'longJump': 3}, {'idle': 2, 'inhale': 0, 'slide': 8}],
     'creaking': [{'canMove': F}, {'attackAnimationState': 2}, {'invulnerabilityAnimationState': 3}, {'deathAnimationState': 1}],
     'evoker': ILLAGER, 'pillager': ILLAGER, 'vindicator': ILLAGER, 'illusioner': ILLAGER,
     'sheep': [{'eatTick': t} for t in (2, 10, 36, 39)],
@@ -173,6 +183,11 @@ SPECIES = {
               {'sitAmount': 0.6, 'isEating': T}, {'sitAmount': 1.0, 'isScared': T}, {'sitAmount': 0.3},
               {'lieOnBackAmount': 0.5}, {'rollAmount': 0.7}],
     'llama': [{'hasChest': T}, {'hasChest': F}],
+    'sniffer': [{'isSearching': T}, {'diggingAnimationState': 2}, {'sniffingAnimationState': 5}, {'risingAnimationState': 1},
+                {'feelingHappyAnimationState': 3}, {'scentingAnimationState': 0}, {'diggingAnimationState': 50, 'isSearching': T},
+                {'feelingHappyAnimationState': 30, 'scentingAnimationState': 20}],
+    'happy_ghast': GHAST_BODY, 'happy_ghast_ropes': GHAST_BODY, 'happy_ghast_baby_ropes': GHAST_BODY,
+    'happy_ghast_harness': GHAST_BODY, 'happy_ghast_baby_harness': GHAST_BODY,
     'trader_llama': [{'hasChest': T}, {'hasChest': F}],
     'turtle': [{'isOnLand': T}, {'isOnLand': T, 'isLayingEgg': T}, {'isOnLand': F, 'hasEgg': T}, {'isOnLand': T, 'hasEgg': T}],
     'strider': [{'isRidden': T}, {'isRidden': F}],
@@ -192,6 +207,10 @@ SPECIES = {
              {'tongueAnimationState': 3}, {'swimIdleAnimationState': 2, 'isSwimming': T}],
     'rabbit': [{'hopAnimationState': 2}, {'idleHeadTiltAnimationState': 1}],
     'fox': FOX,
+    # CopperGolemModel: the idle head spin and the four chest interactions (started N ticks ago).
+    'copper_golem': [{'idleAnimationState': 4}, {'idleAnimationState': 37}, {'interactionGetItem': 3},
+                     {'interactionGetItem': 30}, {'interactionGetNoItem': 12}, {'interactionDropItem': 8},
+                     {'interactionDropItem': 45}, {'interactionDropNoItem': 20}],
     'warden': [{'tendrilAnimation': 0.7}, {'tendrilAnimation': 1.0, 'heartAnimation': 0.4}, {'heartAnimation': 1.0}]
               + [{state: start} for state in ('roarAnimationState', 'sniffAnimationState', 'emergeAnimationState',
                                               'diggingAnimationState', 'attackAnimationState', 'sonicBoomAnimationState')

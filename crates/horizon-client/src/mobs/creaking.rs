@@ -1,13 +1,14 @@
-//! Creakings (`Creaking`, `CreakingAi`): they freeze while any player looks at
-//! them, wake up when one looks from within 12 blocks, then hunt the nearest
-//! visible player and hit every 40 ticks. One bound to a creaking heart takes
-//! no damage (it only sways and hurts the heart's resin spreader), dies when
-//! the heart no longer protects it and falls apart with the heart.
+//! Creakings (`Creaking`): they freeze while any player looks at them, wake
+//! up when one looks from within 12 blocks, then hunt the nearest visible
+//! player and hit every 40 ticks (the brain, `CreakingAi`, is in
+//! `monster_brain`). One bound to a creaking heart takes no damage (it only
+//! sways and hurts the heart's resin spreader), dies when the heart no
+//! longer protects it and falls apart with the heart.
 use super::{
     Damage, DamageKind, Mob, MobEvent, MobWorld, Species, Who,
     anim::{Poses, State},
-    goals::{Cx, Float, Goal, LookAtPlayer, MeleeAttack, Stroll, TARGET, goal_clone},
     keyframes::Animation,
+    monster_brain,
     path::PathType,
 };
 use crate::containers::BlockEntity;
@@ -33,13 +34,10 @@ const ATTACK_TICKS: i32 = 15;
 /// `Creaking.TWITCH_DEATH_DURATION`.
 const TWITCH_TICKS: i32 = 45;
 
+/// `Creaking`'s constructor: no goals (the brain thinks), a navigation that
+/// floats.
 pub fn register(m: &mut Mob) {
-    let g = &mut m.ai.goals;
-    g.add(0, Float);
-    g.add(2, MeleeAttack::new(1.0, false).interval(40));
-    g.add(5, Stroll::avoiding_water(0.3));
-    g.add(6, LookAtPlayer::new(8.0));
-    m.ai.targets.add(1, HuntPlayer);
+    m.ai.nav.can_float = true;
 }
 /// Bound to a heart (`getHomePos() != null`).
 pub fn heart_bound(m: &Mob) -> bool {
@@ -132,10 +130,29 @@ pub fn accepts_damage(m: &mut Mob, source: &Damage) -> bool {
     m.extra.counter |= HURT | if by_player { HURT_BY_PLAYER } else { 0 };
     false
 }
-/// `Creaking.doHurtTarget` extras: the attack animation and sound.
-pub fn on_attack(m: &mut Mob, events: &mut Vec<MobEvent>) {
+/// The rest of `Creaking.hurtServer` for a heart-bound creaking, run by the
+/// host right after the damage: whether its heart still protects it, and
+/// whether a player is to blame (the heart then calls `creakingHurt`). The
+/// caller plays [`sway`] after the heart's reaction.
+pub fn take_hurt(m: &mut Mob, w: &MobWorld) -> Option<([i32; 3], bool)> {
+    if m.extra.counter & HURT == 0 {
+        return None;
+    }
+    let by_player = m.extra.counter & HURT_BY_PLAYER != 0;
+    m.extra.counter &= !(HURT | HURT_BY_PLAYER);
+    let home = m.extra.home?;
+    protected(m, w).then_some((home, by_player))
+}
+/// `Mob.playHurtSound` of a heart-bound creaking: the ambient sound clock
+/// restarts and it sways.
+pub fn sway(m: &mut Mob, events: &mut Vec<MobEvent>) {
+    m.ambient_timer = -m.kind.ambient_interval;
+    m.voice("entity.creaking.sway", events);
+}
+/// `Creaking.doHurtTarget`: the attack animation (the sound is the
+/// `playAttackSound` that ends `Mob.doHurtTarget`).
+pub fn on_attack(m: &mut Mob, _events: &mut Vec<MobEvent>) {
     m.extra.ints[ATTACKING] = ATTACK_TICKS;
-    m.voice("entity.creaking.attack", events);
 }
 /// The heart this creaking is bound to protects it (`isProtector`); a link
 /// read from a save is trusted until the heart resolves it.
@@ -178,7 +195,7 @@ pub fn update(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
                     id: m.id,
                 });
             }
-            m.voice("entity.creaking.sway", events);
+            sway(m, events);
         }
         m.extra.counter &= !(HURT | HURT_BY_PLAYER);
     }
@@ -215,71 +232,84 @@ pub fn stop_in_place(m: &mut Mob) {
     m.ai.yya = 0.0;
     m.ai.zza = 0.0;
     m.ai.speed = 0.0;
+    m.velocity = horizon_core::geometry::Vec3::ZERO;
+    m.extra.leash_spin = 0.0;
 }
+/// `Creaking.activate`.
 fn activate(m: &mut Mob, events: &mut Vec<MobEvent>) {
-    m.ai.target = Some(Who::Player);
+    monster_brain::set_attack_target(m, Some(Who::Player));
     m.voice("entity.creaking.activate", events);
     m.extra.flag = true;
 }
+/// `Creaking.deactivate`.
 fn deactivate(m: &mut Mob, events: &mut Vec<MobEvent>) {
-    m.ai.target = None;
+    monster_brain::set_attack_target(m, None);
     m.voice("entity.creaking.deactivate", events);
     m.extra.flag = false;
 }
-/// `LivingEntity.isLookingAtMe(player, 0.5, false, true, eyeY, y + 0.5, mid)`.
+/// `LivingEntity.isLookingAtMe(player, 0.5, false, true, eyeY, y + 0.5,
+/// (eyeY + y) / 2)`: within the player's view cone and seen through
+/// transparent blocks.
 fn looked_at_by(m: &Mob, w: &MobWorld) -> bool {
     let Some(p) = &w.player else { return false };
-    let look = p.look;
+    let look = normalize(p.look);
     let eye = m.eye_y();
     [eye, m.position.y + 0.5, (eye + m.position.y) / 2.0]
         .into_iter()
         .any(|y| {
-            let d = [
+            let d = normalize([
                 m.position.x - p.position.x,
                 y - p.eye[1],
                 m.position.z - p.position.z,
-            ];
-            let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-            if len < 1.0e-6 {
-                return true;
+            ]);
+            let dot = look[0] * d[0] + look[1] * d[1] + look[2] * d[2];
+            if dot <= 0.5 {
+                return false;
             }
-            let dot = (look[0] * d[0] + look[1] * d[1] + look[2] * d[2]) / len;
-            dot > 0.5
-                && w.line_of_sight(
-                    Vec3::new(p.eye[0], p.eye[1], p.eye[2]),
-                    Vec3::new(m.position.x, y, m.position.z),
-                )
+            // Player.hasLineOfSight(this, VISUAL, NONE, y).
+            let from = Vec3::new(p.position.x, p.eye[1], p.position.z);
+            let to = Vec3::new(m.position.x, y, m.position.z);
+            to.distance(from) <= 128.0 && w.visual_clear_between(from, to)
         })
+}
+/// `Vec3.normalize`.
+fn normalize(v: [f64; 3]) -> [f64; 3] {
+    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if len < f64::from(1.0e-5_f32) {
+        [0.0; 3]
+    } else {
+        [v[0] / len, v[1] / len, v[2] / len]
+    }
 }
 /// `Creaking.checkCanMove`: false while looked at; also wakes and calms it.
 fn check_can_move(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) -> bool {
+    let players = monster_brain::nearest_players(m);
     let active = is_active(m);
-    // NEAREST_PLAYERS: players within the follow range.
-    let near = w.player.as_ref().filter(|p| {
-        let d = Vec3::new(p.position.x, p.position.y, p.position.z);
-        m.distance_sqr(d) < 32.0 * 32.0
-    });
-    let Some(p) = near else {
+    if players.is_empty() {
         if active {
             deactivate(m, events);
         }
         return true;
-    };
-    // canAttack: alive and not creative or spectator.
-    let attackable = p.alive && !p.creative;
-    if attackable {
-        // GAZE_DISGUISE_EQUIPMENT hides the player once the creaking is awake.
-        let disguised = p.head.as_deref() == Some("minecraft:carved_pumpkin");
-        if (!active || !disguised) && looked_at_by(m, w) {
-            if active {
-                return false;
-            }
-            if m.distance_sqr(p.position) < ACTIVATION_RANGE_SQ {
-                activate(m, events);
-                return false;
+    }
+    let mut potential = false;
+    if let Some(p) = w.player.as_ref().filter(|_| players.contains(&Who::Player)) {
+        // canAttack (not creative, spectator or dead) and not allied.
+        if p.alive && !p.creative && !p.spectator {
+            potential = true;
+            // GAZE_DISGUISE_EQUIPMENT hides the player once the creaking is awake.
+            let disguised = p.head.as_deref() == Some("minecraft:carved_pumpkin");
+            if (!active || !disguised) && looked_at_by(m, w) {
+                if active {
+                    return false;
+                }
+                if m.distance_sqr(p.position) < ACTIVATION_RANGE_SQ {
+                    activate(m, events);
+                    return false;
+                }
             }
         }
-    } else if active {
+    }
+    if !potential && active {
         deactivate(m, events);
     }
     true
@@ -292,51 +322,19 @@ pub fn player_is_stuck(m: &mut Mob, eye: Option<[f64; 3]>) -> bool {
     };
     let b = m.bounds();
     let (lo, hi) = (b.min_position(), b.max_position());
+    // AABB.contains: the far faces are outside.
     let inside = eye[0] >= lo.x
-        && eye[0] <= hi.x
+        && eye[0] < hi.x
         && eye[1] >= lo.y
-        && eye[1] <= hi.y
+        && eye[1] < hi.y
         && eye[2] >= lo.z
-        && eye[2] <= hi.z;
+        && eye[2] < hi.z;
     if inside {
         m.extra.ints[STUCK] += 1;
         m.extra.ints[STUCK] > 4
     } else {
         m.extra.ints[STUCK] = 0;
         false
-    }
-}
-/// The nearest attackable player the creaking can see.
-fn sees_attackable_player(m: &mut Mob, cx: &mut Cx) -> bool {
-    let Some(p) = &cx.w.player else {
-        return false;
-    };
-    let near = m.distance_sqr(p.position) < m.attrs.follow_range.powi(2);
-    p.alive && !p.creative && near && m.sees(cx.w, Who::Player)
-}
-/// `StartAttacking` / `StopAttackingIfTargetInvalid`: while awake, hunt the
-/// nearest visible player.
-#[derive(Clone, Debug)]
-struct HuntPlayer;
-impl Goal for HuntPlayer {
-    goal_clone!();
-    fn flags(&self) -> u8 {
-        TARGET
-    }
-    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        if !is_active(m) || !sees_attackable_player(m, cx) {
-            return false;
-        }
-        m.ai.target = Some(Who::Player);
-        true
-    }
-    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        is_active(m) && m.ai.target == Some(Who::Player) && sees_attackable_player(m, cx)
-    }
-    fn stop(&mut self, m: &mut Mob, _: &mut Cx) {
-        if m.ai.target == Some(Who::Player) {
-            m.ai.target = None;
-        }
     }
 }
 /// `CreakingModel.setupAnim`.

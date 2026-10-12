@@ -45,6 +45,7 @@ pub enum Species {
     WanderingTrader,
     IronGolem,
     SnowGolem,
+    CopperGolem,
     Zombie,
     Husk,
     Drowned,
@@ -640,6 +641,16 @@ pub const ALL: &[Def] = &[
             "entity.snow_golem.death"
         ],
         None,
+        Baby::None
+    ),
+    def!(
+        CopperGolem,
+        "copper_golem",
+        "copper_golem#main",
+        "entity/copper_golem/copper_golem",
+        A::CopperGolem,
+        ["", "entity.copper_golem.hurt", "entity.copper_golem.death"],
+        Some("entity.copper_golem.step"),
         Baby::None
     ),
     def!(
@@ -1428,6 +1439,7 @@ impl Def {
                     | S::MagmaCube
                     | S::Wither
                     | S::Allay
+                    | S::Breeze
             ),
             flying: matches!(s, S::Ghast | S::Phantom | S::HappyGhast),
             climber: matches!(s, S::Spider | S::CaveSpider),
@@ -1481,7 +1493,7 @@ impl Def {
                 && !aquatic
                 && !matches!(
                     s,
-                    S::Villager | S::WanderingTrader | S::IronGolem | S::SnowGolem
+                    S::Villager | S::WanderingTrader | S::IronGolem | S::SnowGolem | S::CopperGolem
                 ),
         }
     }
@@ -1526,6 +1538,8 @@ impl Def {
                 | S::Ravager
                 | S::Wither
                 | S::Warden
+                | S::Breeze
+                | S::Creaking
         )
     }
     /// The item tag Animal.isFood tests.
@@ -1632,7 +1646,8 @@ impl Def {
             | S::Dolphin
             | S::Axolotl
             | S::IronGolem
-            | S::SnowGolem => 120,
+            | S::SnowGolem
+            | S::CopperGolem => 120,
             _ if self.flags(false).animal => 120,
             _ => 80,
         }

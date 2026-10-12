@@ -1,16 +1,18 @@
 Horizon server @PACK_VERSION@ — Minecraft 26.3, Fabric 0.19.5, Java 25
 
 Install Python 3.10+ and native Java 25. Extract this ZIP and open a terminal here.
+This starter never downloads the game: download the Minecraft 26.3 server jar
+yourself (https://www.minecraft.net/download/server while 26.3 is current), then:
 
-  python3 tools/server.py prepare
+  python3 tools/server.py prepare --server-jar PATH/TO/server.jar
 
 Read Minecraft's EULA at https://www.minecraft.net/eula. Create/edit
 .local/server/optimized/eula.txt to contain eula=true if you agree, then:
 
   python3 tools/server.py run --heap 4G
 
-Windows: use python in place of python3 if needed. Server downloads and assets
-stay in .local. No game code, third-party mod JARs or credentials are bundled.
+Windows: use python in place of python3 if needed. Your server jar, mods and
+assets stay in .local. No game code, third-party mod JARs or credentials are bundled.
 Lithium and FerriteCore optimize the original simulation/storage; tick rate and
 vanilla gameplay rules are retained. No Paper-style gameplay configuration.
 

@@ -19,6 +19,9 @@ use horizon_core::{
 
 #[derive(Clone, Debug, Default)]
 pub struct Ai {
+    /// `Mob.homePosition` and `homeRadius`: where a restricted mob stays
+    /// (a lead's holder, a happy ghast's float area).
+    pub home: Option<([i32; 3], i32)>,
     pub goals: GoalSelector,
     pub targets: GoalSelector,
     pub nav: Navigation,
@@ -128,7 +131,7 @@ pub fn family(s: Species) -> Family {
         S::Witch => Family::Witch,
         S::Wolf | S::Cat => Family::Tame,
         S::Blaze | S::Ghast => Family::Nether,
-        S::IronGolem | S::SnowGolem => Family::Golem,
+        S::IronGolem | S::SnowGolem | S::CopperGolem => Family::Golem,
         S::Pillager | S::Vindicator | S::Evoker | S::Illusioner => Family::Illager,
         S::Vex => Family::Vex,
         S::Ravager => Family::Ravager,
@@ -176,6 +179,7 @@ pub fn register(m: &mut Mob) {
         Family::Nether if m.species() == Species::Ghast => super::nether::register_ghast(m),
         Family::Nether => super::nether::register_blaze(m),
         Family::Golem if m.species() == Species::IronGolem => super::golem::register_iron(m),
+        Family::Golem if m.species() == Species::CopperGolem => super::copper_golem::register(m),
         Family::Golem => super::golem::register_snow(m),
         Family::Illager if m.species() == Species::Pillager => super::illager::register_pillager(m),
         Family::Illager if m.species() == Species::Evoker => super::illager::register_evoker(m),
@@ -211,6 +215,9 @@ pub fn register(m: &mut Mob) {
 fn pre_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
     if m.species() == Species::Wither && m.alive() {
         super::wither::steer(m);
+    }
+    if m.species() == Species::Breeze {
+        super::breeze::tick(m, events);
     }
     match family(m.species()) {
         Family::Hostile => {
@@ -354,8 +361,9 @@ pub fn tick(
     if !m.no_ai {
         ai_step(m, w, level_random, events);
     }
-    // Mob.tickHeadTurn -> BodyRotationControl.clientTick
-    if m.alive() {
+    // Mob.tickHeadTurn -> BodyRotationControl.clientTick (a frozen
+    // creaking's waits).
+    if m.alive() && !(super::creaking::is_creaking(m) && !super::creaking::can_move(m)) {
         m.body_rotation_tick();
     }
     events.append(&mut m.outbox);
@@ -527,11 +535,14 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             Some(s) => s,
             None => return,
         },
-        // Breeze.playAmbientSound.
-        Species::Breeze => match super::breeze::ambient(m) {
-            Some(s) => s,
-            None => return,
-        },
+        // Breeze.playAmbientSound: a local sound, nothing drawn.
+        Species::Breeze => {
+            if let Some(s) = super::breeze::ambient(m) {
+                let at = [m.position.x, m.position.y, m.position.z];
+                events.push(MobEvent::LocalSound(s, at, 1.0, 1.0));
+            }
+            return;
+        }
         // Creaking.getAmbientSound: silent while awake.
         Species::Creaking if m.extra.flag => return,
         // Shulker.playAmbientSound: silent while closed.
@@ -554,6 +565,10 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
             .target_info(w)
             .is_some_and(|t| t.position.distance_squared(m.position) > 121.0);
         super::witch::ai_step(m, events, far);
+    }
+    // AbstractHorse.aiStep: the tail swishes now and then (moveTail).
+    if super::equine::is_equine(m.species()) {
+        let _ = m.random.next_int_bound(200);
     }
     // Monster.aiStep: updateNoActionTime (Raider: always +2).
     if is_monster(m.species())
@@ -600,7 +615,12 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
     // AgeableMob.aiStep
     if m.alive() {
         if m.extra.age < 0 {
+            let (bw, bh, _) = m.dims();
             m.extra.age += 1;
+            // setAge at the age boundary: refreshDimensions.
+            if m.extra.age >= 0 {
+                m.fudge_position_after_size_change(w, bw, bh);
+            }
         } else if m.extra.age > 0 {
             m.extra.age -= 1;
         }
@@ -611,13 +631,18 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
         if m.extra.in_love > 0 {
             m.extra.in_love -= 1;
             if m.extra.in_love % 10 == 0 {
+                // The heart's speed and getRandomX/Y/Z, drawn even on the server.
+                let (w, h) = (f64::from(m.width()), f64::from(m.height()));
+                let r = &mut m.random;
+                for _ in 0..3 {
+                    let _ = r.next_gaussian();
+                }
+                let x = m.position.x + w * (2.0 * r.next_double() - 1.0);
+                let y = m.position.y + h * r.next_double() + 0.5;
+                let z = m.position.z + w * (2.0 * r.next_double() - 1.0);
                 events.push(MobEvent::Particles {
                     kind: "heart",
-                    at: [
-                        m.position.x,
-                        m.position.y + f64::from(m.height()) + 0.5,
-                        m.position.z,
-                    ],
+                    at: [x, y, z],
                     count: 1,
                 });
             }
@@ -677,6 +702,9 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             targets.push((Who::Mob(o.id), o.position));
         }
     }
+    // EntitySelector.pushableBy(this): the teams' collision rules.
+    let own = w.teams.of(Who::Mob(m.id));
+    targets.retain(|(who, _)| crate::scoreboard::pushable_by(own, w.teams.of(*who), true));
     // Cramming (maxEntityCramming 24).
     if targets.len() > 23 {
         let _ = m.random.next_int_bound(4);
@@ -730,9 +758,9 @@ fn server_ai_step(
     events: &mut Vec<MobEvent>,
 ) {
     m.ai.no_action_time += 1;
-    // A creaking looked at stands still.
-    if super::creaking::is_creaking(m) && !super::creaking::can_move(m) {
-        return;
+    // A happy ghast set up for its age (ageBoundaryReached runs at once).
+    if m.species() == Species::HappyGhast {
+        super::happy_ghast::ensure_setup(m);
     }
     // A saddled mount follows its rider instead of its goals.
     if super::equine::controlled(m) {
@@ -756,7 +784,16 @@ fn server_ai_step(
     }
     m.ai.targets = targets;
     m.ai.goals = goals;
-    m.nav_tick(w);
+    // A creaking looked at stands still: its navigation, move, look and jump
+    // controls wait (CreakingPathNavigation and the Creaking*Control).
+    let frozen = super::creaking::is_creaking(m) && !super::creaking::can_move(m);
+    if !frozen {
+        m.nav_tick(w);
+    }
+    if super::monster_brain::has_brain(m.species()) {
+        // Breeze/Creaking.customServerAiStep: the brain, then updateActivity.
+        super::monster_brain::tick(m, w, level_random, events);
+    }
     if m.species() == Species::Villager {
         // Villager.customServerAiStep: the brain, then the raid sound roll.
         super::villager_brain::tick(m, w, level_random, events);
@@ -766,9 +803,18 @@ fn server_ai_step(
         // Warden.customServerAiStep: the brain and its bookkeeping.
         super::warden::server_ai_step(m, w, level_random, events);
     }
+    // Sniffer and HappyGhast.customServerAiStep: the brain (a happy ghast's
+    // only while it is a ghastling), then updateActivity.
+    if m.species() == Species::Sniffer || m.species() == Species::HappyGhast && m.is_baby() {
+        super::animal_brain::tick(m, w, level_random, events);
+    }
     {
         let mut cx = Cx { w, events };
         custom_server_ai_step(m, &mut cx);
+    }
+    if frozen {
+        m.ai.jumping = false;
+        return;
     }
     m.move_control_tick(w, events);
     m.look_control_tick();
@@ -818,7 +864,7 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::Ravager => super::ravager::ai_step(m, w, events),
         Species::Wither => super::wither::ai_step(m, w, events),
         Species::Allay => super::allay::ai_step(m),
-        Species::Breeze => super::breeze::ai_step(m, events),
+        Species::Breeze => super::breeze::ai_step(m),
         Species::Sniffer => super::sniffer::ai_step(m, events),
         Species::HappyGhast => super::happy_ghast::ai_step(m, w),
         Species::Villager => super::villager::ai_step(m, w),
@@ -831,6 +877,7 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             super::shulker::ai_step(m, w, events);
         }
         Species::SnowGolem => super::golem::snow_ai_step(m, w, events),
+        Species::CopperGolem => super::copper_golem::ai_step(m, w, events),
         Species::Slime | Species::MagmaCube => super::cube::ai_step(m, w, events),
         Species::SulfurCube => {
             super::cube::ai_step(m, w, events);
@@ -937,8 +984,22 @@ pub fn walk_target_value(m: &Mob, w: &MobWorld, p: [i32; 3]) -> f32 {
     if family(m.species()) == Family::Guardian && w.fluid(p[0], p[1], p[2]) == Fluid::Water {
         return 10.0 + light();
     }
-    // AbstractNautilus.getWalkTargetValue: everywhere alike.
-    if matches!(m.species(), Species::Nautilus | Species::ZombieNautilus) {
+    // HappyGhast.getWalkTargetValue: open air, best just above the ground.
+    if m.species() == Species::HappyGhast {
+        let air = |y: i32| w.facts.is_air(w.world.block(p[0], y, p[2]));
+        return if !air(p[1]) {
+            0.0
+        } else if air(p[1] - 1) && !air(p[1] - 2) {
+            10.0
+        } else {
+            5.0
+        };
+    }
+    // AbstractNautilus and Creaking.getWalkTargetValue: everywhere alike.
+    if matches!(
+        m.species(),
+        Species::Nautilus | Species::ZombieNautilus | Species::Creaking
+    ) {
         return 0.0;
     }
     if m.hostile()
@@ -1083,6 +1144,10 @@ pub fn do_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
             amount,
             source,
         }),
+    }
+    // Mob.doHurtTarget ends with playAttackSound once the hit landed.
+    if super::creaking::is_creaking(m) {
+        m.voice("entity.creaking.attack", cx.events);
     }
     let _ = Fluid::None;
 }

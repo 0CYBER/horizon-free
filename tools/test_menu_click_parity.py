@@ -6,7 +6,9 @@ class with a stand-in player and level; the Rust example (menu_fixture) runs
 horizon_client::menu. Cases are randomized slot contents with random click
 sequences covering every ContainerInput (pickup, quick move, swap, clone,
 throw, the three quick craft drags, pickup all) over the player inventory,
-crafting table, chests, hopper, dispenser, shulker box and the furnaces. After
+crafting table, chests, hopper, dispenser, shulker box, the furnaces, the
+brewing stand, the crafter (the client's menu, and the server's over the block
+entity with slot state packets) and the loom (with its pattern buttons). After
 every click the slots, carried stack, data slots and drops are compared.
 """
 import argparse
@@ -19,8 +21,13 @@ except ImportError:
     import lab
 
 MENUS = {'inventory': 46, 'crafting': 46, 'chest1': 45, 'chest2': 54, 'chest3': 63, 'chest4': 72, 'chest5': 81,
-         'chest6': 90, 'hopper': 41, 'dispenser': 45, 'shulker': 63, 'furnace': 39, 'blast_furnace': 39, 'smoker': 39, 'brewing': 41, 'crafter': 46}
-DATA = {'furnace': 4, 'blast_furnace': 4, 'smoker': 4, 'brewing': 4, 'crafter': 10}
+         'chest6': 90, 'hopper': 41, 'dispenser': 45, 'shulker': 63, 'furnace': 39, 'blast_furnace': 39, 'smoker': 39, 'brewing': 41, 'crafter': 46,
+         'crafter_be': 46, 'loom': 40}
+DATA = {'furnace': 4, 'blast_furnace': 4, 'smoker': 4, 'brewing': 4, 'crafter': 10, 'crafter_be': 10, 'loom': 1}
+DYES = ['white', 'orange', 'magenta', 'light_blue', 'yellow', 'lime', 'pink', 'gray', 'light_gray', 'cyan', 'purple',
+        'blue', 'brown', 'green', 'red', 'black']
+PATTERNS = ['minecraft:' + p for p in ('base', 'square_bottom_left', 'stripe_bottom', 'cross', 'border', 'gradient',
+                                      'creeper', 'flower', 'globe', 'rhombus', 'small_stripes', 'half_horizontal')]
 COMMON = ['stone', 'dirt', 'cobblestone', 'oak_planks', 'stick', 'coal', 'iron_ingot', 'diamond', 'apple', 'bread',
           'oak_log', 'sand', 'bucket', 'water_bucket', 'lava_bucket', 'ender_pearl', 'snowball', 'egg', 'white_wool',
           'iron_helmet', 'diamond_chestplate', 'leather_leggings', 'iron_boots', 'shield', 'carved_pumpkin',
@@ -69,8 +76,24 @@ class Gen:
     def slots(self, size, density):
         return [self.stack() if self.rng.random() < density else '-' for _ in range(size)]
 
-    def recipe(self, slots, width):
-        """Fills the crafting grid (slots 1..) with a small known recipe."""
+    def loom_stack(self, roll=None):
+        """A banner (with up to seven layers), a dye, a pattern item or anything."""
+        rng = self.rng
+        roll = rng.random() if roll is None else roll
+        if roll < 0.3:
+            layers = ','.join('{pattern:"%s",color:"%s"}' % (rng.choice(PATTERNS), rng.choice(DYES))
+                              for _ in range(rng.choice([0, 0, 1, 2, 5, 6, 6, 7])))
+            extra = ',components:{"minecraft:banner_patterns":[%s]}' % layers if layers else ''
+            return '{id:"minecraft:%s_banner",count:%d%s}' % (rng.choice(DYES), rng.choice([1, 1, 2, 16]), extra)
+        if roll < 0.55:
+            return snbt('minecraft:%s_dye' % rng.choice(DYES), rng.choice([1, 1, 2, 3, 64]))
+        if roll < 0.75:
+            pool = [k for k in self.items if k.endswith('_banner_pattern')]
+            return snbt(rng.choice(pool), 1)
+        return self.stack()
+
+    def recipe(self, slots, width, start=1):
+        """Fills the crafting grid (slots `start`..) with a small known recipe."""
         rng = self.rng
         amount = lambda: rng.choice([1, 1, 2, 5, 64])
         choices = [[('oak_log',)], [('oak_planks',), ('oak_planks',)], [('oak_planks', 'oak_planks'), ('oak_planks', 'oak_planks')],
@@ -81,12 +104,23 @@ class Gen:
             pattern = [('oak_planks',), ('oak_planks',)]
         for y, row in enumerate(pattern):
             for x, name in enumerate(row):
-                slots[1 + x + y * width] = snbt('minecraft:' + name, amount() if name != 'milk_bucket' else 1)
+                slots[start + x + y * width] = snbt('minecraft:' + name, amount() if name != 'milk_bucket' else 1)
 
-    def ops(self, size):
+    def ops(self, size, menu=None):
         rng = self.rng
         out = []
         for _ in range(rng.randrange(1, 9)):
+            if menu == 'loom' and rng.random() < 0.25:
+                # A pattern button (clickMenuButton), sometimes out of range.
+                out.append([rng.choice([0, 0, 1, 2, 3, 5, 10, 20, 39, 40, -1]), 0, 'BUTTON'])
+                continue
+            if menu == 'loom' and rng.random() < 0.15:
+                # The result: take it, shift it out, throw it.
+                out.append([3, rng.randrange(0, 2), rng.choice(['PICKUP', 'QUICK_MOVE', 'THROW', 'SWAP'])])
+                continue
+            if menu == 'crafter_be' and rng.random() < 0.2:
+                out.append([rng.choice([0, 1, 4, 8, 8, 9, -1]), rng.randrange(0, 2), 'SLOT_STATE'])
+                continue
             kind = rng.choices(['PICKUP', 'QUICK_MOVE', 'SWAP', 'CLONE', 'THROW', 'DRAG', 'PICKUP_ALL', 'JUNK'],
                                [30, 20, 8, 3, 6, 14, 6, 2])[0]
             slot = 0 if rng.random() < 0.2 and size in (46,) else rng.randrange(size)
@@ -113,8 +147,9 @@ class Gen:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--seed', type=int, default=7)
-    parser.add_argument('--cases', type=int, default=6000)
+    parser.add_argument('--cases', type=int, default=8000)
     parser.add_argument('--limit', type=int, default=3)
+    parser.add_argument('--menus', help='comma-separated menus to run (default: all)')
     args = parser.parse_args()
     work = lib.work_dir('menu-click-parity')
     vanilla = lib.Vanilla(work)
@@ -123,17 +158,38 @@ def main():
     rng = random.Random(args.seed)
     g = Gen(rng, items)
     cases = []
+    chosen = args.menus.split(',') if args.menus else list(MENUS)
     for n in range(args.cases):
-        menu = list(MENUS)[n % len(MENUS)]
+        menu = chosen[n % len(chosen)]
         size = MENUS[menu]
         slots = g.slots(size, rng.choice([0.1, 0.4, 0.8]))
+        if menu == 'loom':
+            for i in rng.sample(range(4, size), 8):
+                slots[i] = g.loom_stack()
+            # Mostly a banner, a dye and sometimes a pattern item in their slots.
+            slots[0] = g.loom_stack(0.0) if rng.random() < 0.75 else rng.choice(['-', g.loom_stack()])
+            slots[1] = g.loom_stack(0.4) if rng.random() < 0.75 else rng.choice(['-', g.loom_stack()])
+            slots[2] = g.loom_stack(0.6) if rng.random() < 0.4 else rng.choice(['-', '-', g.loom_stack()])
+            # The result slot follows the inputs; a fixture stack there is rare.
+            slots[3] = '-' if rng.random() < 0.9 else g.loom_stack()
+        if menu == 'crafter_be':
+            slots[45] = '-'
+            if rng.random() < 0.6:
+                g.recipe(slots, 3, start=0)
         if menu in ('inventory', 'crafting'):
             slots[0] = '-'
         if menu in ('inventory', 'crafting') and rng.random() < 0.6:
             g.recipe(slots, 2 if menu == 'inventory' else 3)
+        def datum(i):
+            if menu in ('crafter', 'crafter_be'):
+                return rng.choice([0, 0, 1])
+            if menu == 'loom':
+                return rng.choice([-1, -1, 0, 0, 1, 2, 3, 30])
+            return 0
+        carried = (g.loom_stack() if menu == 'loom' else g.stack()) if rng.random() < 0.5 else '-'
         cases.append({'menu': menu, 'creative': rng.random() < 0.25, 'slots': slots,
-                      'carried': g.stack() if rng.random() < 0.5 else '-', 'data': [rng.choice([0, 0, 1]) if menu == 'crafter' else 0 for _ in range(DATA.get(menu, 0))],
-                      'ops': g.ops(size)})
+                      'carried': carried, 'data': [datum(i) for i in range(DATA.get(menu, 0))],
+                      'ops': g.ops(size, menu)})
     (work / 'cases.jsonl').write_text(''.join(json.dumps(c) + '\n' for c in cases))
     vanilla.run('VanillaMenuOracle', work / 'cases.jsonl', work / 'native.txt')
     lib.cargo_example('horizon-client', 'menu_fixture', lib.RESOURCES, work / 'cases.jsonl', work / 'rust.txt')

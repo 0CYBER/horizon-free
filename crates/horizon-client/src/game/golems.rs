@@ -4,7 +4,6 @@
 //! golem. Players placing the pumpkin and dispensers share it.
 use super::Game;
 use horizon_client::Result;
-use horizon_world::chunk::BlockState;
 
 impl Game<'_> {
     fn golem_block(&self, p: [i32; 3]) -> &str {
@@ -49,9 +48,20 @@ impl Game<'_> {
         }
         None
     }
-    /// `CarvedPumpkinBlock.canSpawnGolem`.
+    /// `CarvedPumpkinBlock.canSpawnGolem`: a snow or iron golem base, or a
+    /// copper block (`#minecraft:copper`) below.
     pub(super) fn can_spawn_golem(&self, head: [i32; 3]) -> bool {
-        self.find_golem(head).is_some()
+        self.find_golem(head).is_some() || self.copper_golem_base(head)
+    }
+    /// The copper golem pattern ("^", "#"): a block of `#minecraft:copper` under the head.
+    fn copper_golem_base(&self, head: [i32; 3]) -> bool {
+        let below = [head[0], head[1] - 1, head[2]];
+        let name = self.golem_block(below);
+        self.res
+            .items
+            .block_tags
+            .get("minecraft:copper")
+            .is_some_and(|t| t.contains(name))
     }
     /// `CarvedPumpkinBlock.trySpawnGolem`, after a pumpkin was placed.
     pub(super) fn check_golem_spawn(&mut self, head: [i32; 3]) -> Result<()> {
@@ -71,9 +81,9 @@ impl Game<'_> {
         self.create_triggered(kind, at, 0.0);
         self.update_pattern_blocks(&blocks)
     }
-    /// Whether placing a golem head at `head` completes a snow or iron golem.
+    /// Whether placing a golem head at `head` completes a golem.
     pub(super) fn completes_golem(&self, head: [i32; 3]) -> bool {
-        self.find_golem(head).is_some()
+        self.find_golem(head).is_some() || self.copper_golem_base(head)
     }
     /// `EntityType.create(level, TRIGGERED)` and `snapTo`: a built golem or
     /// wither has no spawn finalization and draws nothing from the level.
@@ -124,57 +134,67 @@ impl Game<'_> {
         }
         self.process_level_events()
     }
-    /// A pumpkin on a copper block: the block turns into the matching copper
-    /// chest (facing the pumpkin's way) and a copper golem appears where the
-    /// pumpkin was (`CarvedPumpkinBlock.spawnGolemInWorld` with
-    /// `CopperChestBlock.getFromCopperBlock`).
+    /// The copper golem (`CarvedPumpkinBlock.trySpawnGolem`, after the snow
+    /// and iron golems): both blocks clear, the golem appears where the
+    /// pumpkin was, the copper block becomes the matching copper chest facing
+    /// the pumpkin's way (`replaceCopperBlockWithChest`, flags 2) and the
+    /// golem takes the block's weathering (`CopperGolem.spawn`).
     fn try_spawn_copper_golem(&mut self, head: [i32; 3]) -> Result<()> {
-        let below = [head[0], head[1] - 1, head[2]];
-        let registry = self.res.assets.registry;
-        let name = self.golem_block(below).to_string();
-        let Some(base) = name.strip_prefix("minecraft:") else {
-            return Ok(());
-        };
-        let waxed = base.strip_prefix("waxed_").unwrap_or(base);
-        if !matches!(
-            waxed,
-            "copper_block" | "exposed_copper" | "weathered_copper" | "oxidized_copper"
-        ) {
+        if !self.copper_golem_base(head) {
             return Ok(());
         }
-        let chest = format!(
-            "minecraft:{}_chest",
-            base.strip_suffix("_block").unwrap_or(base)
-        );
+        let below = [head[0], head[1] - 1, head[2]];
+        let copper = self.world.block(below[0], below[1], below[2]);
         let pumpkin = self.world.block(head[0], head[1], head[2]);
+        let registry = self.res.assets.registry;
         let facing = registry
             .state(pumpkin)
             .and_then(|s| s.properties.get("facing").cloned())
             .unwrap_or_else(|| "north".into());
-        let chest_state = BlockState {
-            name: chest.clone(),
-            properties: [
-                ("facing".to_string(), facing),
-                ("type".to_string(), "single".to_string()),
-                ("waterlogged".to_string(), "false".to_string()),
-            ]
-            .into(),
-        };
-        let Some(chest_id) = registry
-            .id(&chest_state)
-            .or_else(|| registry.default_state(&chest))
-        else {
-            return Ok(());
-        };
-        self.destroy_particles(head, pumpkin);
-        self.level_set(head, self.world.air)?;
-        self.level_set(below, chest_id)?;
+        // getWeatherStateFromPattern: waxed blocks weather like their unwaxed form.
+        let base = self
+            .golem_block(below)
+            .trim_start_matches("minecraft:")
+            .trim_start_matches("waxed_");
+        let weather = ["exposed", "weathered", "oxidized"]
+            .iter()
+            .position(|w| base.starts_with(w))
+            .map_or(0, |i| i as u8 + 1);
+        let cells = [head, below];
+        self.clear_pattern_blocks(&cells)?;
         let at = [
             f64::from(head[0]) + 0.5,
             f64::from(head[1]) + 0.05,
             f64::from(head[2]) + 0.5,
         ];
-        let _ = self.spawn_mob("minecraft:copper_golem", at, false);
-        Ok(())
+        let id = self.create_triggered("minecraft:copper_golem", at, 0.0);
+        self.update_pattern_blocks(&cells)?;
+        let direction = match facing.as_str() {
+            "south" => horizon_core::geometry::Direction::South,
+            "west" => horizon_core::geometry::Direction::West,
+            "east" => horizon_core::geometry::Direction::East,
+            _ => horizon_core::geometry::Direction::North,
+        };
+        let pos = horizon_core::position::BlockPos::new(below[0], below[1], below[2]);
+        let chest = self.with_level(|b, level, ticks| {
+            b.copper_chest_from_block(level, ticks, copper, direction, pos)
+        });
+        if let Some(chest) = chest {
+            self.with_level(|b, level, ticks| b.set_block(level, ticks, pos, chest, 2));
+            if let Some(entity) =
+                horizon_client::containers::BlockEntity::for_block(&self.res.facts.get(chest).name)
+            {
+                self.world
+                    .block_entities
+                    .insert((below[0], below[1], below[2]), entity);
+            }
+        }
+        if let Some(m) = id.and_then(|id| self.mobs.iter_mut().find(|m| m.id == id)) {
+            m.extra.variant = weather;
+            let p = [m.position.x, m.position.y, m.position.z];
+            self.audio
+                .play("minecraft:entity.copper_golem.spawn", Some(p), 1.0, 1.0);
+        }
+        self.process_level_events()
     }
 }
