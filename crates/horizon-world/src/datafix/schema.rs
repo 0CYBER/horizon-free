@@ -9,7 +9,7 @@ use super::dynamic::{as_str, namespaced};
 use crate::nbt::Tag;
 
 #[path = "schema_flat.rs"]
-mod flat;
+pub(super) mod flat;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Ty {

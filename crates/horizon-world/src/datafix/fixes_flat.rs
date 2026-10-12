@@ -295,6 +295,13 @@ fn text_json_units(text: &JavaString) -> Tag {
 
 fn chunk_palettes(cx: &mut Cx) {
     let k = cx.k;
+    // The chunk is written with the old type and read with the new one: the numeric
+    // block names (`DSL.intType()`) come out as ints, whatever tag they were.
+    cx.each(Ty::BlockName, |v| {
+        if let Some(n) = as_number(v) {
+            *v = Tag::Int(n.int_value());
+        }
+    });
     cx.each(Ty::Chunk, |c| {
         super::chunk_flatten::fix(c);
         reread_as(Ty::Chunk, k, c);
@@ -483,18 +490,21 @@ fn remove_block_entity_tags(cx: &mut Cx) {
 }
 
 fn spawn_eggs(cx: &mut Cx) {
+    let input = cx.k - 1;
     cx.item(
         |id| id == "minecraft:spawn_egg",
         |s| {
+            // `getOrCreateTyped`: an EntityTag that is missing, or does not read as an entity
+            // of the schema, is a default entity of it (the first of its table: a wither).
             let entity_id = s
                 .get("tag")
                 .and_then(|t| t.get("EntityTag"))
-                .and_then(|e| as_str(e.get("id")));
-            if let Some(entity_id) = entity_id {
-                let egg = lookup(t::SPAWN_EGGS, &namespaced(&entity_id))
-                    .unwrap_or("minecraft:pig_spawn_egg");
-                set(s, "id", string(egg));
-            }
+                .and_then(|e| as_str(e.get("id")))
+                .map(|id| namespaced(&id))
+                .filter(|id| super::schema::flat::legacy_entity_known(id, input))
+                .unwrap_or_else(|| "minecraft:wither".to_owned());
+            let egg = lookup(t::SPAWN_EGGS, &entity_id).unwrap_or("minecraft:pig_spawn_egg");
+            set(s, "id", string(egg));
         },
     );
 }

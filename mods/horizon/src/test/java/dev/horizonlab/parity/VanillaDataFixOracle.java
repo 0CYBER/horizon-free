@@ -160,6 +160,17 @@ public final class VanillaDataFixOracle {
         }
         upgradeJson(out.resolve("advancements"), DataFixTypes.ADVANCEMENTS, true, target);
         upgradeJson(out.resolve("stats"), DataFixTypes.STATS, false, target);
+        // The saved data of the old layout (data/scoreboard.dat, data/map_N.dat).
+        for (Path file : list(out.resolve("data"), ".dat")) {
+            String name = file.getFileName().toString().replace(".dat", "");
+            DataFixTypes type = name.equals("scoreboard") ? DataFixTypes.SAVED_DATA_SCOREBOARD
+                : name.matches("map_\\d+") ? DataFixTypes.SAVED_DATA_MAP_DATA : null;
+            if (type != null) {
+                CompoundTag tag = NbtIo.readCompressed(file, NbtAccounter.unlimitedHeap());
+                tag = type.update(fixer, tag, NbtUtils.getDataVersion(tag, 1343), target);
+                NbtIo.writeCompressed(NbtUtils.addDataVersion(tag, target), file);
+            }
+        }
     }
 
     private static void upgradeJson(Path folder, DataFixTypes type, boolean removeVersion, int target) throws Exception {

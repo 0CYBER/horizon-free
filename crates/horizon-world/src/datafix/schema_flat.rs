@@ -3,6 +3,8 @@
 //! shape differs from the general code of [`super`]; the other types fall through.
 use super::{Key, Ty, Walker, as_str, key, namespaced};
 use crate::nbt::Tag;
+use std::collections::HashSet;
+use std::sync::OnceLock;
 
 /// The schemas below this key are described here.
 pub(super) const END: Key = key(1800, 0);
@@ -16,6 +18,32 @@ impl Walker<'_> {
                 self.legacy_entity(v);
                 true
             }
+            // An entity of an unknown id does not read as a typed value: nothing in it is fixed.
+            Ty::EntityTree => {
+                let id = namespaced(&as_str(v.get("id")).unwrap_or_default());
+                if legacy_entity_known(&id, k) {
+                    if let Some(Tag::List(trees)) = v.get_mut("Passengers")
+                        && trees.iter().all(|t| {
+                            legacy_entity_known(
+                                &namespaced(&as_str(t.get("id")).unwrap_or_default()),
+                                k,
+                            )
+                        })
+                    {
+                        for tree in trees {
+                            self.walk(Ty::EntityTree, tree);
+                        }
+                    }
+                    self.walk(Ty::Entity, v);
+                }
+                true
+            }
+            Ty::Chunk => {
+                if let Some(level) = v.get_mut("Level") {
+                    self.legacy_level_chunk(level);
+                }
+                true
+            }
             // STATS is a plain map until V1451_6 turns it into typed counters.
             Ty::Stats if k < key(1451, 6) => true,
             Ty::Objective if k < key(1451, 6) => {
@@ -23,6 +51,41 @@ impl Walker<'_> {
                 true
             }
             _ => false,
+        }
+    }
+
+    /// The `Level` of a chunk (V99 to V1510).
+    fn legacy_level_chunk(&mut self, v: &mut Tag) {
+        let k = self.k;
+        // A list of entity trees reads only if every entity of it is known.
+        if let Some(Tag::List(trees)) = v.get_mut("Entities")
+            && trees.iter().all(|t| {
+                legacy_entity_known(&namespaced(&as_str(t.get("id")).unwrap_or_default()), k)
+            })
+        {
+            for tree in trees {
+                self.walk(Ty::EntityTree, tree);
+            }
+        }
+        if let Some(Tag::List(items)) = v.get_mut("TileEntities") {
+            for be in items {
+                if super::block_entity_known(be, k) {
+                    self.walk(Ty::BlockEntity, be);
+                }
+            }
+        }
+        self.list_of_field(Ty::BlockName, v, "TileTicks", "i");
+        if k >= key(1451, 1)
+            && let Some(Tag::List(sections)) = v.get_mut("Sections")
+        {
+            for s in sections {
+                self.list(Ty::BlockState, s, "Palette");
+            }
+        }
+        if k >= key(1466, 0)
+            && let Some(s) = v.get_mut("Structures")
+        {
+            self.values(Ty::StructureFeature, s, "Starts");
         }
     }
 
@@ -167,4 +230,74 @@ pub(super) fn legacy_block_entity_known(id: &str, k: Key) -> bool {
         "minecraft:conduit" => k >= key(1481, 0),
         _ => false,
     }
+}
+
+/// Whether `id` is an entity registered by the schema at `k` (V705 to V1510).
+pub(in crate::datafix) fn legacy_entity_known(id: &str, k: Key) -> bool {
+    static ERAS: OnceLock<[HashSet<String>; 5]> = OnceLock::new();
+    let eras = ERAS.get_or_init(|| {
+        let mut set: HashSet<String> = crate::datafix::flat_tables::ENTITIES_V1460
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        let rename = |set: &mut HashSet<String>, from: &str, to: &str| {
+            if set.remove(from) {
+                set.insert(to.to_owned());
+            }
+        };
+        let base = set.clone();
+        // V1470
+        for id in [
+            "turtle",
+            "cod_mob",
+            "tropical_fish",
+            "salmon_mob",
+            "puffer_fish",
+            "phantom",
+            "dolphin",
+            "drowned",
+            "trident",
+        ] {
+            set.insert(format!("minecraft:{id}"));
+        }
+        let v1470 = set.clone();
+        rename(&mut set, "minecraft:puffer_fish", "minecraft:pufferfish");
+        let v1483 = set.clone();
+        rename(&mut set, "minecraft:cod_mob", "minecraft:cod");
+        rename(&mut set, "minecraft:salmon_mob", "minecraft:salmon");
+        let v1486 = set.clone();
+        for (from, to) in [
+            ("commandblock_minecart", "command_block_minecart"),
+            ("ender_crystal", "end_crystal"),
+            ("snowman", "snow_golem"),
+            ("evocation_illager", "evoker"),
+            ("evocation_fangs", "evoker_fangs"),
+            ("illusion_illager", "illusioner"),
+            ("vindication_illager", "vindicator"),
+            ("villager_golem", "iron_golem"),
+            ("xp_orb", "experience_orb"),
+            ("xp_bottle", "experience_bottle"),
+            ("eye_of_ender_signal", "eye_of_ender"),
+            ("fireworks_rocket", "firework_rocket"),
+        ] {
+            rename(
+                &mut set,
+                &format!("minecraft:{from}"),
+                &format!("minecraft:{to}"),
+            );
+        }
+        [base, v1470, v1483, v1486, set]
+    });
+    let era = if k < key(1470, 0) {
+        0
+    } else if k < key(1483, 0) {
+        1
+    } else if k < key(1486, 0) {
+        2
+    } else if k < key(1510, 0) {
+        3
+    } else {
+        4
+    };
+    eras[era].contains(id)
 }

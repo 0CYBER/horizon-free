@@ -83,6 +83,17 @@ def emit_strs(name, entries, doc=''):
     return '\n'.join(lines)
 
 
+def schema_entities(schema_file):
+    """The entity ids a schema's `registerEntities` registers."""
+    text = (FIXES.parent / 'schemas' / schema_file).read_text()
+    start = text.index('registerEntities')
+    body = text[start:text.index('return map;', start)]
+    names = re.findall(r'(?:registerMob|registerSimple|registerThrowableProjectile)\(schema, map, "([^"]+)"', body)
+    names += re.findall(r'schema\.registerSimple\(map, "([^"]+)"', body)
+    names += re.findall(r'schema\.register\(\s*map,\s*"([^"]+)"', body)
+    return sorted(set(names))
+
+
 def structure_renames():
     text = (FIXES / 'ChunkStructuresTemplateRenameFix.java').read_text()
     out = []
@@ -135,6 +146,8 @@ def main():
         emit_pairs('THE_RENAMENING_BLOCKS', pairs('EntityTheRenameningFix.java', 'RENAMED_BLOCKS')),
         emit_pairs('COD_SALMON', pairs('EntityCodSalmonFix.java', 'RENAMED_IDS')),
         emit_pairs('COD_SALMON_EGGS', pairs('EntityCodSalmonFix.java', 'RENAMED_EGG_IDS')),
+        emit_strs('ENTITIES_V1460', schema_entities('V1460.java'),
+                  doc='The entity ids V1460 registers (V705 has the same ones).'),
         structure_renames(),
     ]
     Path(args.out).write_text('\n\n'.join(parts) + '\n')

@@ -860,6 +860,29 @@ pub fn upgrade_band(base: &Path, target: i32) -> io::Result<()> {
             upgrade_json_to(&file, ty, target)?;
         }
     }
+    // The saved data of the old layout.
+    for file in files_with_suffix(&base.join("data"), ".dat") {
+        let name = file
+            .file_stem()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let ty = match name.as_str() {
+            "scoreboard" => Ty::SavedScoreboard,
+            n if n
+                .strip_prefix("map_")
+                .is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit())) =>
+            {
+                Ty::SavedMapData
+            }
+            _ => continue,
+        };
+        if let Some(mut tag) = read_dat(&file)? {
+            let from = data_version(&tag, 1343);
+            update(ty, &mut tag, from, target);
+            set(&mut tag, "DataVersion", Tag::Int(target));
+            write_dat(&file, &tag)?;
+        }
+    }
     Ok(())
 }
 
