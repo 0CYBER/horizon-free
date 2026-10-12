@@ -35,6 +35,8 @@ public final class VanillaMenuOracle {
     static java.lang.reflect.Method allocate;
     static RecipeManager recipes;
     static final List<String> drops = new ArrayList<>();
+    /** The block entity behind a "crafter_be" menu (slot state packets go to it). */
+    static net.minecraft.world.level.block.entity.CrafterBlockEntity crafter;
 
     @SuppressWarnings("unchecked")
     static <T> T make(Class<T> type) {
@@ -131,6 +133,19 @@ public final class VanillaMenuOracle {
             case "smoker" -> new SmokerMenu(0, inv);
             case "brewing" -> new BrewingStandMenu(0, inv);
             case "crafter" -> new CrafterMenu(0, inv);
+            case "crafter_be" -> {
+                // The server's menu: the block entity is the container and its data.
+                crafter = new net.minecraft.world.level.block.entity.CrafterBlockEntity(BlockPos.ZERO,
+                    net.minecraft.world.level.block.Blocks.CRAFTER.defaultBlockState());
+                try {
+                    Field data = net.minecraft.world.level.block.entity.CrafterBlockEntity.class.getDeclaredField("containerData");
+                    data.setAccessible(true);
+                    yield new CrafterMenu(0, inv, crafter, (ContainerData) data.get(crafter));
+                } catch (ReflectiveOperationException e) {
+                    throw new AssertionError(e);
+                }
+            }
+            case "loom" -> new LoomMenu(0, inv);
             default -> throw new IllegalArgumentException(kind);
         };
     }
@@ -180,6 +195,8 @@ public final class VanillaMenuOracle {
                     var slotsJson = f.getAsJsonArray("slots");
                     for (int i = 0; i < menu.slots.size(); i++) menu.getSlot(i).set(ParityData.stack(slotsJson.get(i).getAsString()));
                     menu.setCarried(ParityData.stack(f.get("carried").getAsString()));
+                    // The slot listener of the block crafter's menu refreshes the result.
+                    if (f.get("menu").getAsString().equals("crafter_be")) menu.broadcastChanges();
                     var dataJson = f.getAsJsonArray("data");
                     for (int i = 0; i < dataJson.size(); i++) menu.setData(i, dataJson.get(i).getAsInt());
                     drops.clear();
@@ -188,7 +205,20 @@ public final class VanillaMenuOracle {
                         var op = opJson.getAsJsonArray();
                         int slot = op.get(0).getAsInt();
                         int button = op.get(1).getAsInt();
-                        var input = ContainerInput.valueOf(op.get(2).getAsString());
+                        String kind = op.get(2).getAsString();
+                        if (kind.equals("BUTTON")) {
+                            // ServerGamePacketListenerImpl.handleContainerButtonClick
+                            if (menu.clickMenuButton(player, slot)) menu.broadcastChanges();
+                            out.println(state(menu, inv));
+                            continue;
+                        }
+                        if (kind.equals("SLOT_STATE")) {
+                            // handleContainerSlotStateChanged: CrafterBlockEntity.setSlotState
+                            if (slot >= 0 && slot < 9) crafter.setSlotState(slot, button == 1);
+                            out.println(state(menu, inv));
+                            continue;
+                        }
+                        var input = ContainerInput.valueOf(kind);
                         try {
                             menu.clicked(slot, button, input, player);
                         } catch (RuntimeException e) {

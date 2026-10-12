@@ -8,58 +8,6 @@ pub(super) fn is_shulker_box(name: &str) -> bool {
     name.ends_with("shulker_box")
 }
 impl Game<'_> {
-    /// Block-entity contents on removal: shulker boxes keep theirs for the
-    /// dropped box (`copy_components`), other containers spill them.
-    pub(super) fn release_contents(&mut self, pos: [i32; 3], entity: BlockEntity, block: &str) {
-        if let Some(name) = self
-            .world
-            .block_names
-            .remove(&(pos[0], pos[1], pos[2]))
-            .filter(|_| !matches!(entity, BlockEntity::Banner(_)))
-        {
-            self.pending_names.insert(pos, (block.to_owned(), name));
-        }
-        if let BlockEntity::Banner(banner) = entity {
-            self.pending_banner.insert(pos, banner);
-            return;
-        }
-        if is_shulker_box(block) {
-            if let BlockEntity::Chest(items) = entity {
-                let kept = items
-                    .into_iter()
-                    .enumerate()
-                    .filter_map(|(i, s)| Some((i as u8, s?)))
-                    .collect();
-                self.pending_shulker.insert(pos, kept);
-            }
-            return;
-        }
-        for stack in entity.contents() {
-            self.pop_resource(pos, stack);
-        }
-    }
-    /// The contents a shulker box dropped at `pos` carries.
-    pub(super) fn attach_shulker_contents(&mut self, pos: [i32; 3], stack: &mut ItemStack) {
-        if !is_shulker_box(&stack.item) {
-            return;
-        }
-        if let Some(contents) = self.pending_shulker.remove(&pos)
-            && !contents.is_empty()
-        {
-            stack.data_mut().container = contents;
-        }
-    }
-    /// The custom name a broken container drops with (`copy_components`).
-    pub(super) fn attach_container_name(&mut self, pos: [i32; 3], stack: &mut ItemStack) {
-        if self
-            .pending_names
-            .get(&pos)
-            .is_some_and(|(item, _)| **item == *stack.item)
-            && let Some((_, name)) = self.pending_names.remove(&pos)
-        {
-            stack.data_mut().custom_name = Some(name);
-        }
-    }
     /// A placed container takes the item's custom name.
     pub(super) fn name_placed_container(&mut self, pos: [i32; 3], stack: &ItemStack) {
         let key = (pos[0], pos[1], pos[2]);

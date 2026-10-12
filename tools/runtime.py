@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare an isolated, authenticated-by-launcher game runtime; local smoke tests use demo mode."""
+"""Prepare an isolated game runtime from your own launcher install; local smoke tests use demo mode."""
 
 from concurrent.futures import ThreadPoolExecutor
 import argparse
@@ -120,14 +120,10 @@ def native_library_matches(library, architecture=None):
 
 
 def prepare_client(assets=True):
+    """Classpath and natives from the user's own launcher install; nothing of the game is downloaded."""
     lock, directory = lab.config()
-    game = lock["minecraft"]
-    manifest_file = fetch(game["manifest_url"], directory / "manifest.json", game["manifest_sha1"])
-    manifest = json.loads(manifest_file.read_text())
-    if manifest["id"] != game["version"] or manifest["javaVersion"]["majorVersion"] != game["java_major"]:
-        raise ValueError("Game manifest does not match research lock")
-    artifact = manifest["downloads"]["client"]
-    jars = [fetch(artifact["url"], directory / "jars/client.jar", artifact["sha1"])]
+    manifest, client = lab.import_client(lock, directory)
+    jars = [client]
     natives = CACHE / "natives"
     natives.mkdir(parents=True, exist_ok=True)
     for library in manifest["libraries"]:
@@ -136,7 +132,7 @@ def prepare_client(assets=True):
         artifact = library.get("downloads", {}).get("artifact")
         if not artifact:
             continue
-        jar = fetch(artifact["url"], directory / "libraries/client" / artifact["path"], artifact["sha1"])
+        jar = lab.import_library(artifact, directory / "libraries/client")
         jars.append(jar)
         with zipfile.ZipFile(jar) as archive:
             for name in archive.namelist():
@@ -144,16 +140,11 @@ def prepare_client(assets=True):
                     (natives / Path(name).name).write_bytes(archive.read(name))
     jars.extend(fabric_libraries())
     if assets:
-        info = manifest["assetIndex"]
-        index = fetch(info["url"], CACHE / "assets/indexes" / f"{info['id']}.json", info["sha1"])
-        objects = json.loads(index.read_text())["objects"]
-        unique = {v["hash"] for v in objects.values()}
-        def asset(checksum):
-            return fetch(f"https://resources.download.minecraft.net/{checksum[:2]}/{checksum}",
-                         CACHE / "assets/objects" / checksum[:2] / checksum, checksum)
-        print(f"Verifying/downloading {len(unique)} unique game assets...", flush=True)
-        with ThreadPoolExecutor(max_workers=12) as pool:
-            list(pool.map(asset, sorted(unique)))
+        store, index = lab.launcher_assets(manifest)
+        unique = {v["hash"] for v in json.loads(index.read_text())["objects"].values()}
+        print(f"Verifying {len(unique)} game assets in {store}...", flush=True)
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(lambda checksum: lab.launcher_object(store, checksum), sorted(unique)))
     return manifest, jars, natives
 
 
@@ -179,7 +170,7 @@ def main():
                "-Dfabric.log.disableAnsi=true", "-cp", os.pathsep.join(map(str, jars)),
                "net.fabricmc.loader.impl.launch.knot.KnotClient",
                "--username", "HorizonDemo", "--version", manifest["id"], "--gameDir", str(instance),
-               "--assetsDir", str(CACHE / "assets"), "--assetIndex", manifest["assetIndex"]["id"],
+               "--assetsDir", str(lab.minecraft_dir() / "assets"), "--assetIndex", manifest["assetIndex"]["id"],
                "--accessToken", "0", "--uuid", "00000000000000000000000000000000", "--demo",
                "--width", "1280", "--height", "800"]
     subprocess.run(command, cwd=instance, check=True)

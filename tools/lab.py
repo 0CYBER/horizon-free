@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Pinned Java Edition acquisition/decompilation. All generated files stay in .local/."""
+"""Pinned Java Edition import/decompilation. Game files come from the user's own
+copy (their official launcher install and the server jar they downloaded); all
+generated files stay in .local/."""
 
 import argparse
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
@@ -57,6 +58,124 @@ def download(url, destination, checksum, algorithm="sha1"):
         if temporary is not None:
             temporary.unlink(missing_ok=True)
     return destination
+
+
+LAUNCHER_HINT = ("Horizon does not download the game: install Minecraft Java Edition with the official "
+                 "launcher, play {version} once, then rerun. If the launcher uses another game directory, "
+                 "pass --minecraft-dir or set HORIZON_MINECRAFT_DIR.")
+SERVER_HINT = ("Horizon does not download the game: download the {version} server jar yourself (minecraft.net/download/server "
+               "while {version} is the current release, otherwise the downloads.server.url in your launcher's "
+               "versions/{version}/{version}.json), then pass --server-jar PATH or set HORIZON_SERVER_JAR.")
+
+
+def minecraft_dir(override=None):
+    """The official launcher's game directory, which holds the user's own copy of the game."""
+    if override or os.environ.get("HORIZON_MINECRAFT_DIR"):
+        return Path(override or os.environ["HORIZON_MINECRAFT_DIR"]).expanduser()
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "minecraft"
+    if sys.platform == "win32":
+        return Path(os.environ.get("APPDATA", Path.home())) / ".minecraft"
+    return Path.home() / ".minecraft"
+
+
+def import_copy(source, destination, checksum, algorithm="sha1", hint=""):
+    """Copy one file from the user's own install, verified like a download."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists() and digest(destination, algorithm) == checksum:
+        return destination
+    if not source.is_file():
+        raise FileNotFoundError(f"Missing {source}. {hint}".strip())
+    actual = digest(source, algorithm)
+    if actual != checksum:
+        raise ValueError(f"{source} is not the pinned file: expected {algorithm} {checksum}, got {actual}")
+    with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+    try:
+        shutil.copyfile(source, temporary)
+        temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return destination
+
+
+def import_manifest(lock, directory, minecraft=None):
+    """The pinned version JSON, from the launcher's versions/ directory."""
+    game = lock["minecraft"]
+    version = game["version"]
+    destination = directory / "manifest.json"
+    source = minecraft_dir(minecraft) / "versions" / version / f"{version}.json"
+    if not (destination.exists() and digest(destination, "sha1") == game["manifest_sha1"]):
+        if not source.is_file():
+            raise FileNotFoundError(f"Missing {source}. {LAUNCHER_HINT.format(version=version)}")
+        manifest = json.loads(source.read_text(encoding="utf-8"))
+        downloads = manifest.get("downloads", {})
+        if (manifest.get("id") != version
+                or downloads.get("client", {}).get("sha1") != game["client_sha1"]
+                or downloads.get("server", {}).get("sha1") != game["server_sha1"]):
+            raise ValueError(f"{source} does not describe the pinned {version} release")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+    manifest = json.loads(destination.read_text(encoding="utf-8"))
+    if manifest["javaVersion"]["majorVersion"] != game["java_major"]:
+        raise ValueError("Manifest Java version does not match lock file")
+    return manifest
+
+
+def import_client(lock, directory, minecraft=None):
+    """The user's client jar from their launcher install, checked against the lock."""
+    version = lock["minecraft"]["version"]
+    manifest = import_manifest(lock, directory, minecraft)
+    source = minecraft_dir(minecraft) / "versions" / version / f"{version}.jar"
+    jar = import_copy(source, directory / "jars" / "client.jar", lock["minecraft"]["client_sha1"],
+                      hint=LAUNCHER_HINT.format(version=version))
+    return manifest, jar
+
+
+def import_server(lock, directory, server_jar=None):
+    """The server jar the user downloaded themselves, checked against the lock."""
+    version = lock["minecraft"]["version"]
+    destination = directory / "jars" / "server.jar"
+    checksum = lock["minecraft"]["server_sha1"]
+    source = server_jar or os.environ.get("HORIZON_SERVER_JAR")
+    hint = SERVER_HINT.format(version=version)
+    if source is None:
+        if destination.exists() and digest(destination, "sha1") == checksum:
+            return destination
+        raise FileNotFoundError(f"No {version} server jar. {hint}")
+    return import_copy(Path(source).expanduser(), destination, checksum, hint=hint)
+
+
+def import_library(artifact, destination_root, minecraft=None):
+    """One library jar from the launcher's libraries/ directory."""
+    relative = PurePosixPath(artifact["path"])
+    if relative.is_absolute() or ".." in relative.parts or "\\" in artifact["path"]:
+        raise ValueError("Unsafe library path")
+    source = minecraft_dir(minecraft) / "libraries" / relative
+    hint = LAUNCHER_HINT.format(version=json.loads(LOCK.read_text(encoding="utf-8"))["minecraft"]["version"])
+    return import_copy(source, destination_root / relative, artifact["sha1"], hint=hint)
+
+
+def launcher_assets(manifest, minecraft=None):
+    """The launcher's asset directory and the pinned version's verified asset index."""
+    assets = minecraft_dir(minecraft) / "assets"
+    info = manifest["assetIndex"]
+    index = assets / "indexes" / f"{info['id']}.json"
+    if not index.is_file():
+        raise FileNotFoundError(f"Missing {index}. {LAUNCHER_HINT.format(version=manifest['id'])}")
+    if digest(index, "sha1") != info["sha1"]:
+        raise ValueError(f"{index} is not the pinned asset index")
+    return assets, index
+
+
+def launcher_object(assets, checksum):
+    """One verified object from the launcher's asset store."""
+    path = assets / "objects" / checksum[:2] / checksum
+    if not path.is_file():
+        raise FileNotFoundError(f"Missing asset object {path}. Play the pinned version once in the official launcher.")
+    if digest(path, "sha1") != checksum:
+        raise ValueError(f"Corrupt asset object {path}; let the launcher repair it")
+    return path
 
 
 def config():
@@ -180,35 +299,18 @@ def inventory(jar):
             "packages": dict(packages.most_common()), "classes": classes}
 
 
-def prepare():
+def prepare(minecraft=None, server_jar=None):
     lock, directory = config()
-    minecraft = lock["minecraft"]
-    manifest_path = download(minecraft["manifest_url"], directory / "manifest.json",
-                             minecraft["manifest_sha1"])
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest["id"] != minecraft["version"]:
-        raise ValueError("Manifest version does not match lock file")
+    manifest, client = import_client(lock, directory, minecraft)
     if "client_mappings" in manifest["downloads"] or "server_mappings" in manifest["downloads"]:
         raise ValueError("This workflow targets unobfuscated releases. Older releases need a remapping stage.")
-    if manifest["javaVersion"]["majorVersion"] != minecraft["java_major"]:
-        raise ValueError("Manifest Java version does not match lock file")
-    jars = {}
-    for side in ["client", "server"]:
-        artifact = manifest["downloads"][side]
-        print(f"Preparing {side} {manifest['id']}...", flush=True)
-        jars[side] = download(artifact["url"], directory / "jars" / f"{side}.jar", artifact["sha1"])
+    print(f"Imported client {manifest['id']} from {minecraft_dir(minecraft)}", flush=True)
+    jars = {"client": client, "server": import_server(lock, directory, server_jar)}
     jars["server"], server_libraries = unpack_server(jars["server"], directory, manifest["id"])
     client_artifacts = [library["downloads"]["artifact"] for library in manifest["libraries"]
                         if "artifact" in library.get("downloads", {})]
-
-    def client_library(artifact):
-        relative = PurePosixPath(artifact["path"])
-        if relative.is_absolute() or ".." in relative.parts or "\\" in artifact["path"]:
-            raise ValueError("Unsafe library path")
-        return download(artifact["url"], directory / "libraries" / "client" / relative, artifact["sha1"])
-
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        client_libraries = list(pool.map(client_library, client_artifacts))
+    client_libraries = [import_library(artifact, directory / "libraries" / "client", minecraft)
+                        for artifact in client_artifacts]
     vf = lock["vineflower"]
     download(vf["url"], LOCAL / "tools" / f"vineflower-{vf['version']}.jar", vf["sha256"], "sha256")
     for side, jar in jars.items():
@@ -297,10 +399,17 @@ def status():
     return 2 if incomplete else 0
 
 
+def add_game_arguments(parser):
+    parser.add_argument("--minecraft-dir", type=Path,
+                        help="official launcher game directory with your installed copy (default: the launcher's own)")
+    parser.add_argument("--server-jar", type=Path, help="the pinned server jar you downloaded yourself")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("prepare", help="Download pinned official JARs, libraries, and decompiler; inventory classes")
+    preparer = commands.add_parser("prepare", help="Import your own pinned game files, fetch the decompiler; inventory classes")
+    add_game_arguments(preparer)
     decompiler = commands.add_parser("decompile", help="Decompile locally and check source-file coverage")
     decompiler.add_argument("--side", choices=["client", "server", "both"], default="both")
     decompiler.add_argument("--java", default="java")
@@ -314,7 +423,7 @@ def main():
         parser.error("--heap must look like 6G or 512M")
     try:
         if args.command == "prepare":
-            prepare()
+            prepare(args.minecraft_dir, args.server_jar)
             return 0
         if args.command == "decompile":
             return decompile(args)

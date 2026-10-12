@@ -1541,6 +1541,72 @@ impl Behaviours {
         let _ = ticks.fluids.finish_tick();
         ticks.handling_tick = false;
     }
+    /// `tick_scheduled` one tick at a time, for a caller that must act on
+    /// each tick's side effects before the next runs (as vanilla runs them
+    /// inline): `scheduled_begin`, then `scheduled_step` until it returns
+    /// false, then `scheduled_finish`; block ticks first, then fluid ticks.
+    /// Returns whether ticks are due (false: nothing to step or finish).
+    pub fn scheduled_begin<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        fluids: bool,
+    ) -> bool {
+        let time = level.game_time();
+        ticks.handling_tick = true;
+        let level_ref: &L = level;
+        let queue = if fluids {
+            &mut ticks.fluids
+        } else {
+            &mut ticks.blocks
+        };
+        let ok = queue
+            .begin_tick(time, 65536, |chunk: ChunkPos| {
+                level_ref.is_ticking_chunk(chunk)
+            })
+            .is_ok();
+        if !ok {
+            ticks.handling_tick = false;
+        }
+        ok
+    }
+    /// Run the next due tick; false when none is left.
+    pub fn scheduled_step<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        fluids: bool,
+    ) -> bool {
+        if fluids {
+            let Ok(Some(tick)) = ticks.fluids.next_tick() else {
+                return false;
+            };
+            let mut sim = self.sim(level, ticks);
+            let fluid = self.fluid(sim.state(tick.pos)).kind();
+            if TickTypeId(fluid as u32) == tick.kind {
+                sim.fluid_tick(tick.pos);
+            }
+        } else {
+            let Ok(Some(tick)) = ticks.blocks.next_tick() else {
+                return false;
+            };
+            let mut sim = self.sim(level, ticks);
+            let state = sim.state(tick.pos);
+            if u32::from(self.block(state).0) == tick.kind.0 {
+                sim.tick_block(state, tick.pos);
+            }
+        }
+        true
+    }
+    /// End a `scheduled_begin` phase.
+    pub fn scheduled_finish(&self, ticks: &mut Ticks, fluids: bool) {
+        let _ = if fluids {
+            ticks.fluids.finish_tick()
+        } else {
+            ticks.blocks.finish_tick()
+        };
+        ticks.handling_tick = false;
+    }
     /// Random-tick one chunk (`ServerLevel.tickChunk` block part). `sections`
     /// yields the minimum block Y of every section the caller considers
     /// randomly ticking (vanilla: sections containing randomly-ticking states),

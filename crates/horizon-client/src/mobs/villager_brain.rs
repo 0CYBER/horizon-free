@@ -19,13 +19,13 @@ use horizon_core::{
 };
 
 /// `MemorySlot.NEVER_EXPIRE`.
-const NEVER: i64 = i64::MAX;
+pub(super) const NEVER: i64 = i64::MAX;
 
 /// `MemorySlot`: a value and its time to live.
 #[derive(Clone, Debug)]
 pub struct Slot<T> {
     v: Option<T>,
-    ttl: i64,
+    pub(super) ttl: i64,
 }
 impl<T> Default for Slot<T> {
     fn default() -> Self {
@@ -36,7 +36,8 @@ impl<T> Default for Slot<T> {
     }
 }
 impl<T> Slot<T> {
-    fn tick(&mut self) {
+    /// `MemorySlot.tick`.
+    pub(super) fn tick(&mut self) {
         if self.v.is_some() && self.ttl != NEVER {
             if self.ttl <= 0 {
                 self.clear();
@@ -66,6 +67,9 @@ impl<T> Slot<T> {
     pub fn get(&self) -> Option<&T> {
         self.v.as_ref()
     }
+    pub fn get_mut(&mut self) -> Option<&mut T> {
+        self.v.as_mut()
+    }
     pub fn present(&self) -> bool {
         self.v.is_some()
     }
@@ -77,7 +81,7 @@ impl<T: Clone> Slot<T> {
 }
 impl<T> Slot<Vec<T>> {
     /// `Brain.setMemory` of a collection: an empty one erases the memory.
-    fn set_list(&mut self, v: Vec<T>) {
+    pub(super) fn set_list(&mut self, v: Vec<T>) {
         if v.is_empty() {
             self.clear();
         } else {
@@ -137,7 +141,7 @@ pub struct WalkTarget {
     pub close: i32,
 }
 impl WalkTarget {
-    fn block(p: [i32; 3], speed: f32, close: i32) -> Self {
+    pub(super) fn block(p: [i32; 3], speed: f32, close: i32) -> Self {
         Self {
             target: Tracker::Block(p),
             speed,
@@ -145,7 +149,7 @@ impl WalkTarget {
         }
     }
     /// `new WalkTarget(Vec3, ...)`: the block containing the point.
-    fn point(p: [f64; 3], speed: f32, close: i32) -> Self {
+    pub(super) fn point(p: [f64; 3], speed: f32, close: i32) -> Self {
         Self::block(
             [
                 p[0].floor() as i32,
@@ -162,8 +166,8 @@ impl WalkTarget {
 /// cache of `Sensor.isEntityTargetable`.
 #[derive(Clone, Debug, Default)]
 pub struct Visible {
-    list: Vec<Who>,
-    cache: Vec<(Who, bool)>,
+    pub(super) list: Vec<Who>,
+    pub(super) cache: Vec<(Who, bool)>,
 }
 
 /// The memories a villager's brain registers.
@@ -2514,7 +2518,7 @@ impl B {
                     if cx.lr.next_int_bound(20).unwrap_or(0) != 0 {
                         return false;
                     }
-                    if !super::villager::raid_nearby(m) {
+                    if super::villager::raid_over_or_lost(m) {
                         let b = brain_mut(m);
                         b.default_activity = Act::Idle;
                         b.update_from_schedule(cx.w.game_time, cx.w.day_time);

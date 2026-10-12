@@ -24,7 +24,7 @@ pub enum BorderStatus {
     Growing,
     Shrinking,
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum Extent {
     Static {
         size: f64,
@@ -40,6 +40,7 @@ enum Extent {
         previous: f64,
     },
 }
+#[derive(Clone, Debug)]
 pub struct BorderGeometry {
     center: [f64; 2],
     absolute_max: i32,
@@ -91,6 +92,9 @@ impl BorderGeometry {
     }
     pub fn center(&self) -> [f64; 2] {
         self.center
+    }
+    pub fn absolute_max(&self) -> i32 {
+        self.absolute_max
     }
     pub fn set_center(&mut self, center: [f64; 2]) -> Result<(), BorderError> {
         if !center.into_iter().all(f64::is_finite) {

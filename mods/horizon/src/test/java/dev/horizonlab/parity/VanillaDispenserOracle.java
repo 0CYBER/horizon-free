@@ -19,7 +19,9 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.CrafterBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.entity.CrafterBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.gamerules.GameRules;
 import net.minecraft.world.level.levelgen.LegacyRandomSource;
@@ -44,6 +46,8 @@ public final class VanillaDispenserOracle {
             case 1002 -> "minecraft:block.dispenser.launch";
             case 1004 -> "minecraft:entity.firework_rocket.shoot";
             case 1018 -> "minecraft:entity.blaze.shoot";
+            case 1049 -> "minecraft:block.crafter.craft";
+            case 1050 -> "minecraft:block.crafter.fail";
             case 1051 -> "minecraft:entity.wind_charge.throw";
             case 1505 -> "minecraft:item.bone_meal.use";
             case 1501 -> "minecraft:block.lava.extinguish";
@@ -67,6 +71,9 @@ public final class VanillaDispenserOracle {
         field.setAccessible(true);
         VanillaBlockUpdateOracle.unsafe = field.get(null);
         VanillaBlockUpdateOracle.allocate = allocator.getMethod("allocateInstance", Class.class);
+        var recipes = new net.minecraft.world.item.crafting.RecipeManager(ParityData.lookup);
+        recipes.finalizeRecipeLoading(net.minecraft.world.flag.FeatureFlags.VANILLA_SET);
+        VanillaBlockUpdateOracle.Server.recipes = recipes;
         try (var out = new PrintWriter(Files.newBufferedWriter(Path.of(args[2]))); var lines = Files.lines(Path.of(args[1]))) {
             int index = 0;
             for (var line : (Iterable<String>) lines::iterator) {
@@ -138,6 +145,49 @@ public final class VanillaDispenserOracle {
         throw new IllegalStateException("no slots in " + be);
     }
 
+    /** Put a stack in a slot: the item list of a container, else the one item a block entity holds (jukebox, lectern, decorated pot). */
+    static void setSlot(BlockEntity be, int slot, ItemStack stack) throws Exception {
+        for (Class<?> c = be.getClass(); c != null; c = c.getSuperclass()) {
+            for (Field fd : c.getDeclaredFields()) {
+                if (fd.getType() == NonNullList.class && !java.lang.reflect.Modifier.isStatic(fd.getModifiers())) {
+                    fd.setAccessible(true);
+                    @SuppressWarnings("unchecked") NonNullList<ItemStack> list = (NonNullList<ItemStack>) fd.get(be);
+                    list.set(slot, stack);
+                    return;
+                }
+            }
+        }
+        for (Class<?> c = be.getClass(); c != null; c = c.getSuperclass()) {
+            for (Field fd : c.getDeclaredFields()) {
+                if (fd.getType() == ItemStack.class && !java.lang.reflect.Modifier.isStatic(fd.getModifiers())) {
+                    fd.setAccessible(true);
+                    fd.set(be, stack);
+                    return;
+                }
+            }
+        }
+        throw new IllegalStateException("no slots in " + be);
+    }
+
+    /** The removal a "remove" case runs on the block at its origin. */
+    static void remove(VanillaBlockUpdateOracle.World w, BlockPos origin, JsonObject op) {
+        switch (op.get("op").getAsString()) {
+            case "set" -> w.setBlock(origin, Block.stateById(op.get("state").getAsInt()), op.get("flags").getAsInt());
+            case "destroy" -> w.destroyBlock(origin, op.get("drop").getAsBoolean());
+            case "remove" -> w.removeBlock(origin, false);
+            default -> throw new IllegalStateException(op.toString());
+        }
+    }
+
+    static boolean hasList(Object be) {
+        for (Class<?> c = be.getClass(); c != null; c = c.getSuperclass()) {
+            for (Field fd : c.getDeclaredFields()) {
+                if (fd.getType() == NonNullList.class && !java.lang.reflect.Modifier.isStatic(fd.getModifiers())) return true;
+            }
+        }
+        return false;
+    }
+
     static Method dispenseFrom(Class<?> type) throws Exception {
         for (Class<?> c = type; c != null; c = c.getSuperclass()) {
             try {
@@ -205,7 +255,14 @@ public final class VanillaDispenserOracle {
             for (var item : f.getAsJsonArray("items")) {
                 var it = item.getAsJsonArray();
                 BlockPos at = new BlockPos(it.get(0).getAsInt(), it.get(1).getAsInt(), it.get(2).getAsInt());
-                slots(w.getBlockEntity(at)).set(it.get(3).getAsInt(), stack(it.get(4).getAsString()));
+                setSlot(w.getBlockEntity(at), it.get(3).getAsInt(), stack(it.get(4).getAsString()));
+            }
+        }
+        if (f.has("disabled")) {
+            for (var d : f.getAsJsonArray("disabled")) {
+                var it = d.getAsJsonArray();
+                BlockPos at = new BlockPos(it.get(0).getAsInt(), it.get(1).getAsInt(), it.get(2).getAsInt());
+                ((CrafterBlockEntity) w.getBlockEntity(at)).setSlotState(it.get(3).getAsInt(), false);
             }
         }
         if (f.has("entities")) {
@@ -232,14 +289,40 @@ public final class VanillaDispenserOracle {
         List<Entity> targets = List.copyOf(w.entities);
         BlockPos origin = VanillaBlockUpdateOracle.readPos(f.getAsJsonArray("pos"));
         BlockState state = w.getBlockState(origin);
-        dispenseFrom(state.getBlock().getClass()).invoke(state.getBlock(), w, state, origin);
+        if (f.has("remove")) {
+            remove(w, origin, f.getAsJsonObject("remove"));
+        } else if (state.getBlock() instanceof CrafterBlock) {
+            Method craft = CrafterBlock.class.getDeclaredMethod("dispenseFrom", BlockState.class, ServerLevel.class, BlockPos.class);
+            craft.setAccessible(true);
+            craft.invoke(state.getBlock(), state, w, origin);
+            // CrafterBlockEntity.serverTick for every crafter, the animation running down.
+            int ticks = f.has("ticks") ? f.get("ticks").getAsInt() : 0;
+            for (int t = 0; t < ticks; t++) {
+                for (BlockPos at : sortedEntities(w)) {
+                    if (w.getBlockEntity(at) instanceof CrafterBlockEntity crafter) {
+                        CrafterBlockEntity.serverTick(w, at, w.getBlockState(at), crafter);
+                    }
+                }
+            }
+        } else {
+            dispenseFrom(state.getBlock().getClass()).invoke(state.getBlock(), w, state, origin);
+        }
 
         result.addAll(VanillaBlockUpdateOracle.summary(w, before));
-        List<BlockPos> containers = new ArrayList<>(w.blockEntities == null ? List.of() : w.blockEntities.keySet());
-        containers.sort(Comparator.<BlockPos>comparingInt(q -> q.getX()).thenComparingInt(q -> q.getY()).thenComparingInt(q -> q.getZ()));
+        List<BlockPos> containers = sortedEntities(w);
+        for (BlockPos at : containers) {
+            if (w.blockEntities.get(at) instanceof CrafterBlockEntity crafter && w.getBlockEntity(at) == crafter) {
+                Field ticksField = CrafterBlockEntity.class.getDeclaredField("craftingTicksRemaining");
+                ticksField.setAccessible(true);
+                StringBuilder disabled = new StringBuilder();
+                for (int i = 0; i < 9; i++) if (crafter.isSlotDisabled(i)) disabled.append(disabled.length() > 0 ? "," : "").append(i);
+                result.add("crafter " + VanillaBlockUpdateOracle.pos(at) + " ticks=" + ticksField.getInt(crafter) + " triggered=" + crafter.isTriggered()
+                    + " signal=" + crafter.getRedstoneSignal() + " disabled=" + disabled);
+            }
+        }
         for (BlockPos at : containers) {
             if (!(w.blockEntities.get(at) instanceof Container) || w.getBlockEntity(at) != w.blockEntities.get(at)) continue;
-            var items = slots(w.blockEntities.get(at));
+            List<ItemStack> items = w.blockEntities.get(at) instanceof Container c && !hasList(c) ? List.of(c.getItem(0)) : slots(w.blockEntities.get(at));
             for (int i = 0; i < items.size(); i++) {
                 if (!items.get(i).isEmpty()) result.add("inv " + VanillaBlockUpdateOracle.pos(at) + " " + i + " " + ParityData.canon(items.get(i)));
             }
@@ -268,6 +351,13 @@ public final class VanillaDispenserOracle {
         result.add("rng " + w.rng.nextLong());
     }
 
+    /** The level's block entity positions by x, y, z. */
+    static List<BlockPos> sortedEntities(VanillaBlockUpdateOracle.World w) {
+        List<BlockPos> out = new ArrayList<>(w.blockEntities == null ? List.of() : w.blockEntities.keySet());
+        out.sort(Comparator.<BlockPos>comparingInt(q -> q.getX()).thenComparingInt(q -> q.getY()).thenComparingInt(q -> q.getZ()));
+        return out;
+    }
+
     /** A target's state after dispensing: removal, equipment and readiness for shearing. */
     static String describe(int index, Entity e) {
         StringBuilder line = new StringBuilder("T " + index + " " + BuiltInRegistries.ENTITY_TYPE.getKey(e.getType()));
@@ -279,7 +369,8 @@ public final class VanillaDispenserOracle {
             }
         }
         boolean listed = e instanceof net.minecraft.world.entity.animal.sheep.Sheep || e instanceof net.minecraft.world.entity.animal.cow.MushroomCow
-            || e instanceof net.minecraft.world.entity.monster.skeleton.Bogged || e instanceof net.minecraft.world.entity.animal.golem.SnowGolem;
+            || e instanceof net.minecraft.world.entity.monster.skeleton.Bogged || e instanceof net.minecraft.world.entity.animal.golem.SnowGolem
+            || e instanceof net.minecraft.world.entity.animal.golem.CopperGolem;
         if (listed && e instanceof Shearable shearable) line.append(shearable.readyForShearing() ? " ready" : " unready");
         if (e instanceof net.minecraft.world.entity.animal.equine.AbstractChestedHorse chested && chested.hasChest()) line.append(" chest");
         if (e instanceof Leashable leashable && leashable.isLeashed()) line.append(" leashed");

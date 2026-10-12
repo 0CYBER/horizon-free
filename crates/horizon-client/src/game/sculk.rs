@@ -67,8 +67,9 @@ pub(super) struct SculkState {
     /// The player's warning level toward a warden.
     pub tracker: WardenSpawnTracker,
     tables: Tables,
-    index: HashSet<(i32, i32, i32)>,
-    known: HashSet<(i32, i32)>,
+    /// The sculk block entities in the order they were added.
+    index: Index,
+    pub known: HashSet<(i32, i32)>,
     steps: HashMap<Who, Steps>,
     damaged: HashMap<u32, i64>,
     last_health: Option<f32>,
@@ -77,7 +78,36 @@ pub(super) struct SculkState {
     /// Who causes the block changes being processed (the player's actions).
     pub actor: Option<Who>,
     ticks: u32,
-    tracker_loaded: bool,
+    pub tracker_loaded: bool,
+}
+/// An insertion-ordered set of block positions (`Level.blockEntityTickers`
+/// keeps the order block entities were added in).
+#[derive(Default)]
+struct Index {
+    order: Vec<(i32, i32, i32)>,
+    set: HashSet<(i32, i32, i32)>,
+}
+impl Index {
+    fn insert(&mut self, key: (i32, i32, i32)) {
+        if self.set.insert(key) {
+            self.order.push(key);
+        }
+    }
+    fn remove(&mut self, key: &(i32, i32, i32)) {
+        if self.set.remove(key) {
+            self.order.retain(|k| k != key);
+        }
+    }
+    fn contains(&self, key: &(i32, i32, i32)) -> bool {
+        self.set.contains(key)
+    }
+    fn iter(&self) -> impl Iterator<Item = &(i32, i32, i32)> {
+        self.order.iter()
+    }
+    fn retain(&mut self, mut keep: impl FnMut(&(i32, i32, i32)) -> bool) {
+        self.order.retain(|k| keep(k));
+        self.set = self.order.iter().copied().collect();
+    }
 }
 const KIND_SENSOR: u8 = 1;
 const KIND_CALIBRATED: u8 = 2;
@@ -228,7 +258,7 @@ impl Game<'_> {
 
     // ---- setup and the block entity index ----
 
-    fn sculk_prepare(&mut self) {
+    pub(super) fn sculk_prepare(&mut self) {
         if self.sculk.tables.built {
             return;
         }
@@ -293,7 +323,7 @@ impl Game<'_> {
     }
     /// Find the sculk blocks of chunks that just became resident, and apply
     /// the block writes recorded since the last tick.
-    fn sculk_sync_index(&mut self) {
+    pub(super) fn sculk_sync_index(&mut self) {
         // Chunks that arrived or left (every half second is plenty).
         if self.sculk.ticks.is_multiple_of(10) {
             let loaded: HashSet<(i32, i32)> = self.world.chunks.keys().copied().collect();
@@ -660,14 +690,22 @@ impl Game<'_> {
 
     // ---- ticking ----
 
-    /// The block entities of sculk: vibration tickers and catalysts, then the
-    /// entity-driven events of this tick.
-    pub(super) fn tick_sculk(&mut self) -> Result<()> {
+    /// The entity phase of a tick for sculk: the player's warden spawn
+    /// tracker (`ServerPlayer.tick`), and the events of entities standing on
+    /// and moving over blocks.
+    pub(super) fn tick_sculk_entities(&mut self) {
         self.sculk.ticks = self.sculk.ticks.wrapping_add(1);
         self.sculk_prepare();
         self.load_warden_tracker();
         self.sculk.tracker.tick();
         self.tick_darkness_blend();
+        self.sculk_step_on();
+        self.tick_entity_events();
+    }
+    /// The block entity phase for sculk: vibration tickers and catalysts, in
+    /// the order the block entities were added (`Level.tickBlockEntities`).
+    pub(super) fn tick_sculk_blocks(&mut self) -> Result<()> {
+        self.sculk_prepare();
         self.sculk_sync_index();
         let keys: Vec<(i32, i32, i32)> = self.sculk.index.iter().copied().collect();
         for key in keys {
@@ -677,8 +715,6 @@ impl Game<'_> {
             }
             self.tick_sculk_block(key)?;
         }
-        self.sculk_step_on();
-        self.tick_entity_events();
         Ok(())
     }
     /// `ServerLevel.shouldTickBlocksAt`, as `tick_blocks` decides it.
@@ -975,11 +1011,18 @@ impl Game<'_> {
         ];
         self.audio.play(sound, Some(at), 5.0, 1.0);
     }
-    /// `SpawnUtil.trySpawnMob` for a warden around the shrieker.
+    /// `SpawnUtil.trySpawnMob(WARDEN, TRIGGERED, level, pos, 20, 5, 6,
+    /// ON_TOP_OF_COLLIDER, false)`: every candidate spot creates a warden
+    /// (`EntityType.create` draws its yaw from the level random and
+    /// `finalizeSpawn` plays its agitated sound), which is discarded when
+    /// `checkSpawnObstruction` fails.
     fn try_summon_warden(&mut self, key: (i32, i32, i32), warning: i32) -> bool {
         if warning < 4 {
             return false;
         }
+        let Some(kind) = self.res.mob_types.get("minecraft:warden").cloned() else {
+            return false;
+        };
         for _ in 0..20 {
             let r = &mut self.world.random;
             let dx = r.next_int_bound(11).unwrap_or(0) - 5;
@@ -992,17 +1035,27 @@ impl Game<'_> {
                 f64::from(at.1),
                 f64::from(at.2) + 0.5,
             ];
-            if !self.warden_fits(spot) {
-                continue;
-            }
-            let Some(id) = self.spawn_mob("minecraft:warden", spot, false) else {
-                continue;
-            };
+            let yaw = horizon_client::camera::wrap_degrees(self.world.random.next_float() * 360.0);
+            self.next_entity += 1;
+            let mut mob = Mob::new(
+                self.next_entity,
+                kind.clone(),
+                horizon_core::geometry::Vec3::new(spot[0], spot[1], spot[2]),
+                yaw,
+            );
+            // Warden.finalizeSpawn, then Mob.finalizeSpawn's draws from the
+            // level random: the follow range bonus and left-handedness.
             let mut events = Vec::new();
-            if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-                warden::finalize(m, true, &mut events);
-            }
+            warden::finalize(&mut mob, true, &mut events);
             let _ = self.handle_mob_events(events);
+            let r = &mut self.world.random;
+            let bonus = r.triangle(0.0, 0.11485000000000001);
+            mob.attrs.follow_range += mob.kind.follow_range * bonus;
+            let _left_handed = r.next_float() < 0.05;
+            if !self.warden_fits(&mob) {
+                continue;
+            }
+            self.mobs.push(mob);
             return true;
         }
         false
@@ -1025,32 +1078,43 @@ impl Game<'_> {
         }
         None
     }
-    /// `Warden.checkSpawnObstruction`: no liquid and no collision in its box.
-    fn warden_fits(&self, at: [f64; 3]) -> bool {
-        use horizon_core::geometry::{Aabb, Vec3};
-        let Some(kind) = self.res.mob_types.get("minecraft:warden") else {
+    /// `Warden.checkSpawnObstruction`: no liquid in its box, no living entity
+    /// in the way (`isUnobstructed`), and no block collision.
+    fn warden_fits(&self, mob: &Mob) -> bool {
+        let bounds = mob.bounds();
+        let player_blocks = !self.spectator()
+            && self.player.as_ref().is_some_and(|p| {
+                let w = f64::from(p.dimensions.width) / 2.0;
+                let b = horizon_core::geometry::Aabb::new(
+                    horizon_core::geometry::Vec3::new(
+                        p.position.x - w,
+                        p.position.y,
+                        p.position.z - w,
+                    ),
+                    horizon_core::geometry::Vec3::new(
+                        p.position.x + w,
+                        p.position.y + f64::from(p.dimensions.height),
+                        p.position.z + w,
+                    ),
+                );
+                !p.health.dead_or_dying() && b.intersects(bounds)
+            });
+        if player_blocks
+            || self
+                .mobs
+                .iter()
+                .any(|m| !m.removed && m.alive() && m.bounds().intersects(bounds))
+        {
             return false;
-        };
-        let half = kind.width / 2.0;
-        let bounds = Aabb::new(
-            Vec3::new(at[0] - half, at[1], at[2] - half),
-            Vec3::new(at[0] + half, at[1] + kind.height, at[2] + half),
-        );
+        }
         let others: Vec<horizon_client::mobs::Seen> = Vec::new();
         let w = self.mob_world_base(&others);
-        let min = [
-            bounds.min_position().x,
-            bounds.min_position().y,
-            bounds.min_position().z,
-        ];
-        let max = [
-            bounds.max_position().x,
-            bounds.max_position().y,
-            bounds.max_position().z,
-        ];
-        for x in min[0].floor() as i32..=max[0].floor() as i32 {
-            for y in min[1].floor() as i32..=max[1].floor() as i32 {
-                for z in min[2].floor() as i32..=max[2].floor() as i32 {
+        let min = bounds.min_position();
+        let max = bounds.max_position();
+        // Level.containsAnyLiquid: floor(min) up to ceil(max), exclusive.
+        for x in min.x.floor() as i32..max.x.ceil() as i32 {
+            for y in min.y.floor() as i32..max.y.ceil() as i32 {
+                for z in min.z.floor() as i32..max.z.ceil() as i32 {
                     if w.fluid(x, y, z) != horizon_client::blocks::Fluid::None {
                         return false;
                     }
@@ -1162,20 +1226,28 @@ impl Game<'_> {
         at: [f64; 3],
         experience: impl FnOnce(&mut Self) -> u32,
     ) -> bool {
+        // GameEventDispatcher: catalysts are BY_DISTANCE listeners, handled
+        // nearest first (exact distance to the block centre); a tie keeps the
+        // order they were visited in: chunk x, chunk z, section y, then the
+        // order they registered in. The first one takes the experience.
         let source = block_of(at);
-        let mut nearest: Option<((i32, i32, i32), i64)> = None;
-        for key in self.sculk.index.iter().copied() {
-            let d = dist_sqr(source, key);
-            if d <= 64 && nearest.is_none_or(|(_, best)| d < best) {
-                let is_catalyst = matches!(
-                    self.world.block_entities.get(&key),
-                    Some(BlockEntity::Sculk(e)) if e.kind == SculkKind::Catalyst
-                );
-                if is_catalyst {
-                    nearest = Some((key, d));
-                }
+        let mut candidates: Vec<(f64, (i32, i32, i32), usize, (i32, i32, i32))> = Vec::new();
+        for (order, key) in self.sculk.index.iter().copied().enumerate() {
+            if dist_sqr(source, key) > 64 {
+                continue;
+            }
+            let is_catalyst = matches!(
+                self.world.block_entities.get(&key),
+                Some(BlockEntity::Sculk(e)) if e.kind == SculkKind::Catalyst
+            );
+            if is_catalyst {
+                let c = center(key);
+                let d = (at[0] - c[0]).powi(2) + (at[1] - c[1]).powi(2) + (at[2] - c[2]).powi(2);
+                candidates.push((d, (key.0 >> 4, key.2 >> 4, key.1 >> 4), order, key));
             }
         }
+        candidates.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+        let nearest = candidates.first().map(|c| (c.3, ()));
         let Some((key, _)) = nearest else {
             return false;
         };
@@ -1197,7 +1269,8 @@ impl Game<'_> {
         let c = center(key);
         let options = ParticleOptions::simple(ParticleType::SculkSoul);
         for _ in 0..2 {
-            let r = &mut self.world.random;
+            // Client-side (LevelEventHandler / particles): the client random.
+            let r = self.particles.random();
             let p = [
                 c[0] + r.next_gaussian() * 0.2,
                 c[1] + 0.65,
@@ -1217,7 +1290,8 @@ impl Game<'_> {
         let c = center((pos.x, pos.y, pos.z));
         let count = data >> 6;
         if count > 0 {
-            let r = &mut self.world.random;
+            // Client-side (LevelEventHandler / particles): the client random.
+            let r = self.particles.random();
             if r.next_float() < 0.3 + count as f32 * 0.1 {
                 let volume = 0.15 + 0.02 * (count * count) as f32 * r.next_float();
                 let pitch = 0.4 + 0.3 * count as f32 * r.next_float();
@@ -1256,7 +1330,11 @@ impl Game<'_> {
                     .collect()
             };
             for (direction, roll, factor) in faces {
-                let repetitions = self.world.random.next_int_bound(count + 1).unwrap_or(0);
+                let repetitions = self
+                    .particles
+                    .random()
+                    .next_int_bound(count + 1)
+                    .unwrap_or(0);
                 for _ in 0..repetitions {
                     self.spawn_particle_on_face(pos, direction, roll, factor);
                 }
@@ -1272,7 +1350,8 @@ impl Game<'_> {
             let (particles, spread) = if solid { (40, 0.45f32) } else { (20, 0.25f32) };
             let options = ParticleOptions::simple(ParticleType::SculkChargePop);
             for _ in 0..particles {
-                let r = &mut self.world.random;
+                // Client-side (LevelEventHandler / particles): the client random.
+                let r = self.particles.random();
                 let v = [
                     2.0 * r.next_float() - 1.0,
                     2.0 * r.next_float() - 1.0,
@@ -1296,7 +1375,8 @@ impl Game<'_> {
     fn spawn_particle_on_face(&mut self, pos: BlockPos, face: Direction, roll: f32, factor: f64) {
         let c = center((pos.x, pos.y, pos.z));
         let step = face.normal();
-        let r = &mut self.world.random;
+        // Client-side (LevelEventHandler / particles): the client random.
+        let r = self.particles.random();
         let mut jitter = || r.next_double() - 0.5;
         let mut at = [0.0; 3];
         for i in 0..3 {
@@ -1327,7 +1407,7 @@ impl Game<'_> {
         }
         let state = self.world.block(pos.x, pos.y, pos.z);
         if self.state_property(state, "waterlogged") != Some("true") {
-            let pitch = 0.6 + self.world.random.next_float() * 0.4;
+            let pitch = 0.6 + self.particles.random().next_float() * 0.4;
             self.audio.play(
                 "minecraft:block.sculk_shrieker.shriek",
                 Some([f64::from(pos.x) + 0.5, top, f64::from(pos.z) + 0.5]),
@@ -1356,7 +1436,8 @@ impl Game<'_> {
             return;
         };
         for _ in 0..30 {
-            let r = &mut self.world.random;
+            // Client-side (LevelEventHandler / particles): the client random.
+            let r = self.particles.random();
             let off = |v: f32| f64::from(v * 1.4 - 0.7);
             let p = [
                 at[0] + off(r.next_float()),

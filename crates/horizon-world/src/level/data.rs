@@ -477,6 +477,8 @@ tags! {
     mushroom_grow_block = "mushroom_grow_block",
     guarded_by_piglins = "guarded_by_piglins",
     copper = "copper",
+    copper_chests = "copper_chests",
+    copper_golem_statues = "copper_golem_statues",
 }
 
 /// Property keys interned at load.

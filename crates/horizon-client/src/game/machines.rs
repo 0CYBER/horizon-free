@@ -39,6 +39,8 @@ enum Kind {
     Hopper,
     /// `CrafterBlockEntity`: disabled slots and the smallest-stack-first rule.
     Crafter,
+    /// `BrewingStandBlockEntity` (a `WorldlyContainer`).
+    Brewing,
 }
 
 /// A container: one block entity, or a double chest (`CompoundContainer`).
@@ -66,6 +68,9 @@ impl View {
             (Kind::Furnace, Some(Direction::Down)) => vec![2, 1],
             (Kind::Furnace, Some(Direction::Up)) => vec![0],
             (Kind::Furnace, Some(_)) => vec![1],
+            (Kind::Brewing, Some(Direction::Up)) => vec![3],
+            (Kind::Brewing, Some(Direction::Down)) => vec![0, 1, 2, 3],
+            (Kind::Brewing, Some(_)) => vec![0, 1, 2, 4],
             _ => (0..self.len()).collect(),
         }
     }
@@ -112,6 +117,8 @@ struct Containers<'a> {
     behaviours: &'a Behaviours,
     items: &'a Items,
     registry: &'static horizon_world::registry::BlockRegistry,
+    /// Brewing recipes, for what a brewing stand accepts (not needed for signals).
+    brewing: Option<&'a horizon_client::brewing::Brewing>,
 }
 impl Containers<'_> {
     fn prop(&self, state: BlockStateId, key: &str) -> Option<&str> {
@@ -140,6 +147,7 @@ impl Containers<'_> {
         let kind = match (entity, name) {
             (BlockEntity::Furnace(_), _) => Kind::Furnace,
             (BlockEntity::Crafter(_), _) => Kind::Crafter,
+            (BlockEntity::Brewing(_), _) => Kind::Brewing,
             (_, "minecraft:hopper") => Kind::Hopper,
             _ => Kind::Generic,
         };
@@ -209,8 +217,31 @@ impl Containers<'_> {
     fn can_place(&self, view: &View, slot: usize, stack: &ItemStack) -> bool {
         if view.kind == Kind::Crafter {
             return match self.world.block_entities.get(&view.parts[0].0) {
-                Some(BlockEntity::Crafter(c)) => c.can_place(slot, stack, self.max_stack(stack)),
+                Some(BlockEntity::Crafter(c)) => {
+                    // The slot's own stack sets the limit (`slotStack.getMaxStackSize`).
+                    let max = c.items.get(slot).and_then(Option::as_ref).unwrap_or(stack);
+                    c.can_place(slot, stack, self.max_stack(max))
+                }
                 _ => false,
+            };
+        }
+        if view.kind == Kind::Brewing {
+            // BrewingStandBlockEntity.canPlaceItem
+            return match slot {
+                4 => self
+                    .items
+                    .get(&stack.item)
+                    .is_some_and(|i| i.brewing_fuel.is_some()),
+                3 => self.brewing.is_some_and(|b| b.is_reagent(stack)),
+                _ => {
+                    let input = self.brewing.is_some_and(|b| b.is_bottle(stack))
+                        || self
+                            .items
+                            .item_tags
+                            .get("minecraft:brewing_potion_inputs")
+                            .is_some_and(|m| m.contains(&*stack.item));
+                    input && self.get(view, slot).is_none()
+                }
             };
         }
         if view.kind != Kind::Furnace {
@@ -231,8 +262,11 @@ impl Containers<'_> {
             _ => true,
         }
     }
-    /// `canTakeItemThroughFace` (only furnaces restrict it).
+    /// `canTakeItemThroughFace` (furnaces and brewing stands restrict it).
     fn can_take(&self, view: &View, slot: usize, stack: &ItemStack, face: Direction) -> bool {
+        if view.kind == Kind::Brewing {
+            return slot != 3 || &*stack.item == "minecraft:glass_bottle";
+        }
         view.kind != Kind::Furnace
             || face != Direction::Down
             || slot != 1
@@ -279,6 +313,7 @@ pub(super) fn container_signal(
         behaviours,
         items,
         registry,
+        brewing: None,
     };
     c.view((pos.x, pos.y, pos.z), true)
         .map_or(0, |v| c.signal(&v))
@@ -291,6 +326,7 @@ impl Game<'_> {
             behaviours: &self.res.behaviours,
             items: &self.res.items,
             registry: self.res.assets.registry,
+            brewing: Some(&self.res.stations.brewing),
         }
     }
     fn slot_mut_at(&mut self, view: &View, slot: usize) -> Option<&mut Option<ItemStack>> {
@@ -346,9 +382,8 @@ impl Game<'_> {
                 success = true;
             }
             Some(current)
-                if current.item == stack.item
-                    && current.damage == stack.damage
-                    && current.count <= max =>
+                // HopperBlockEntity.canMergeItems
+                if current.count <= max && current.same_item_same_components(&stack) =>
             {
                 let space = max.saturating_sub(current.count);
                 let count = stack.count.min(space);
@@ -380,7 +415,7 @@ impl Game<'_> {
         stack: ItemStack,
         face: Option<Direction>,
     ) -> Option<ItemStack> {
-        let slots = if view.kind == Kind::Furnace && face.is_some() {
+        let slots = if matches!(view.kind, Kind::Furnace | Kind::Brewing) && face.is_some() {
             view.slots_for_face(face)
         } else {
             (0..view.len()).collect()

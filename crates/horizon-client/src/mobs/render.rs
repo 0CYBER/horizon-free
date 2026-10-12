@@ -292,6 +292,8 @@ pub fn body(m: &Mob) -> (String, String) {
                 )
             }
         }
+        // CopperGolemOxidationLevels: the texture of the weathering.
+        S::CopperGolem => (m.kind.model_key(), super::copper_golem::texture(m)),
         _ => (m.kind.model_key(), m.kind.texture.clone()),
     }
 }
@@ -510,6 +512,11 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
             white,
             true,
         ),
+        // The copper golem's eyes glow (LivingEntityEmissiveLayer, eyes render type).
+        S::CopperGolem => {
+            let eyes = super::copper_golem::eye_texture(m);
+            push(&mut v, "copper_golem#eyes", &eyes, white, true);
+        }
         S::Spider | S::CaveSpider => push(
             &mut v,
             &m.kind.model_key(),

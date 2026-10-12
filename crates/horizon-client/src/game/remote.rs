@@ -102,6 +102,16 @@ pub(super) struct Remote {
     pub chat_input: Option<String>,
     action_bar: Option<(String, Instant)>,
     players: HashMap<u128, String>,
+    /// `ClientPacketListener.playerInfoMap` as player-list entries, and
+    /// which of them are listed.
+    tab_players: HashMap<u128, horizon_client::tab_list::TabPlayer>,
+    listed: std::collections::HashSet<u128>,
+    /// `ClientboundLoginPacket.onlineMode`: the player list shows heads.
+    online_mode: bool,
+    /// Player entities in the level: entity id to profile UUID.
+    level_players: HashMap<i32, u128>,
+    /// The local player's profile UUID (always in the level).
+    profile: u128,
     destroying: Option<([i32; 3], u8, f32)>,
     destroy_delay: u32,
     placing: Option<([i32; 3], u64)>,
@@ -123,6 +133,16 @@ fn face_direction(face: [i32; 3]) -> u8 {
         [-1, 0, 0] => 4,
         [1, 0, 0] => 5,
         _ => 1,
+    }
+}
+
+/// A protocol number format as the scoreboard's.
+fn number_format(f: &play::NumberFormat) -> horizon_client::scoreboard::NumberFormat {
+    use horizon_client::scoreboard::{NumberFormat, tag_to_json};
+    match f {
+        play::NumberFormat::Blank => NumberFormat::Blank,
+        play::NumberFormat::Styled(t) => NumberFormat::Styled(tag_to_json(t)),
+        play::NumberFormat::Fixed(t) => NumberFormat::Fixed(tag_to_json(t)),
     }
 }
 
@@ -213,6 +233,11 @@ impl Game<'_> {
             chat_input: None,
             action_bar: None,
             players: HashMap::new(),
+            tab_players: HashMap::new(),
+            listed: Default::default(),
+            online_mode: false,
+            level_players: HashMap::new(),
+            profile: 0,
             destroying: None,
             destroy_delay: 0,
             placing: None,
@@ -231,6 +256,8 @@ impl Game<'_> {
         if let Some(mut r) = self.remote.take() {
             r.session.disconnect();
         }
+        self.tab_list.reset();
+        self.score.board = Default::default();
         self.streaming = Streaming::new(Arc::new(NoTerrain), self.res.context.clone(), 1);
         self.streaming.paused = true;
         self.world = World::new(self.res.facts.air, 0);
@@ -238,6 +265,9 @@ impl Game<'_> {
         self.mobs.clear();
         self.dropped.clear();
         self.particles.clear();
+        self.score.board = Default::default();
+        self.tab_list = Default::default();
+        self.border = Default::default();
         self.screen = Screen::Playing;
         self.container = None;
         if let Some(r) = self.renderer.as_mut() {
@@ -323,11 +353,14 @@ impl Game<'_> {
                     }
                 }
                 Event::Joined {
-                    registries, name, ..
+                    registries,
+                    name,
+                    uuid,
                 } => {
                     self.set_registries(registries);
                     if let Some(r) = self.remote.as_mut() {
                         r.joined = true;
+                        r.profile = uuid;
                         r.status = format!("Joined as {name}; loading terrain...");
                     }
                 }
@@ -662,6 +695,7 @@ impl Game<'_> {
         match packet {
             C::Login(p) => {
                 if let Some(r) = self.remote.as_mut() {
+                    r.online_mode = p.online_mode;
                     r.entity_id = p.player_id;
                     r.view_distance = p.chunk_radius;
                 }
@@ -797,10 +831,20 @@ impl Game<'_> {
                     .unwrap_or_default();
                 let yaw = horizon_protocol::buf::unpack_degrees(p.yaw);
                 let head = horizon_protocol::buf::unpack_degrees(p.head_yaw);
+                if let Some(r) = self.remote.as_mut() {
+                    if kind == "minecraft:player" {
+                        r.level_players.insert(p.id, p.uuid);
+                    } else {
+                        r.level_players.remove(&p.id);
+                    }
+                }
                 self.spawn_entity(p.id, &kind, p.position, yaw, head);
             }
             C::RemoveEntities(p) => {
                 for id in p.ids {
+                    if let Some(r) = self.remote.as_mut() {
+                        r.level_players.remove(&id);
+                    }
                     self.remove_entity(id);
                 }
             }
@@ -1068,7 +1112,45 @@ impl Game<'_> {
             }
             C::PlayerInfoUpdate(p) => {
                 if let Some(r) = self.remote.as_mut() {
+                    // handlePlayerInfoUpdate: new entries first, then every
+                    // action on every known entry.
+                    if p.actions & 1 != 0 {
+                        for e in &p.entries {
+                            if let Some(name) = &e.name {
+                                r.tab_players.entry(e.uuid).or_insert_with(|| {
+                                    horizon_client::tab_list::TabPlayer::new(e.uuid, name.clone())
+                                });
+                            }
+                        }
+                    }
                     for e in p.entries {
+                        if let Some(t) = r.tab_players.get_mut(&e.uuid) {
+                            if let Some(mode) = e.game_mode {
+                                t.game_mode = mode;
+                            }
+                            if let Some(latency) = e.latency {
+                                t.latency = latency;
+                            }
+                            if let Some(name) = &e.display_name {
+                                t.display_name =
+                                    name.as_ref().map(horizon_client::scoreboard::tag_to_json);
+                            }
+                            if let Some(order) = e.list_order {
+                                t.list_order = order;
+                            }
+                            if let Some(hat) = e.show_hat {
+                                t.show_hat = hat;
+                            }
+                            match e.listed {
+                                Some(true) => {
+                                    r.listed.insert(e.uuid);
+                                }
+                                Some(false) => {
+                                    r.listed.remove(&e.uuid);
+                                }
+                                None => {}
+                            }
+                        }
                         if let Some(name) = e.name {
                             r.players.insert(e.uuid, name);
                         }
@@ -1079,9 +1161,74 @@ impl Game<'_> {
                 if let Some(r) = self.remote.as_mut() {
                     for u in p.uuids {
                         r.players.remove(&u);
+                        r.tab_players.remove(&u);
+                        r.listed.remove(&u);
                     }
                 }
             }
+            C::TabList(p) => {
+                // handleTabListCustomisation: empty text clears it.
+                let text = |t: &Tag| {
+                    let json = horizon_client::scoreboard::tag_to_json(t);
+                    let text = horizon_client::scoreboard::comp_text(&json);
+                    (!text.plain().is_empty()).then_some(text)
+                };
+                self.tab_list.header = text(&p.header);
+                self.tab_list.footer = text(&p.footer);
+            }
+            C::InitializeBorder(p) => {
+                let b = &mut self.border;
+                b.set_center([p.center_x, p.center_z]);
+                if p.lerp_time > 0 {
+                    b.lerp_between(p.old_size, p.new_size, p.lerp_time);
+                } else {
+                    b.set_size(p.new_size);
+                }
+                b.set_absolute_max_size(p.absolute_max_size);
+                b.warning_distance = p.warning_blocks;
+                b.warning_time = p.warning_time;
+            }
+            C::SetBorderCenter(p) => self.border.set_center([p.x, p.z]),
+            C::SetBorderLerpSize(p) => {
+                self.border
+                    .lerp_between(p.old_size, p.new_size, p.lerp_time)
+            }
+            C::SetBorderSize(p) => self.border.set_size(p.size),
+            C::SetBorderWarningDelay(p) => self.border.warning_time = p.delay,
+            C::SetBorderWarningDistance(p) => self.border.warning_distance = p.blocks,
+            C::SetObjective(p) => self.remote_objective(p),
+            C::SetDisplayObjective(p) => {
+                // DisplaySlot ids: list, sidebar, below_name, then the team sidebars.
+                let slot = match p.slot {
+                    0 => "list".to_owned(),
+                    2 => "below_name".to_owned(),
+                    n @ 3..=18 => format!(
+                        "sidebar.team.{}",
+                        horizon_client::text::COLORS[(n - 3) as usize].1
+                    ),
+                    _ => "sidebar".to_owned(),
+                };
+                let board = &mut self.score.board;
+                let objective = board.objective(&p.objective).map(|o| o.name.clone());
+                board.set_display_objective(&slot, objective.as_deref());
+            }
+            C::SetScore(p) => {
+                let board = &mut self.score.board;
+                if board.objective(&p.objective).is_some() {
+                    let s = board.score_mut(&p.owner, &p.objective);
+                    s.value = p.score;
+                    s.display = p
+                        .display
+                        .as_ref()
+                        .map(horizon_client::scoreboard::tag_to_json);
+                    s.number_format = p.number_format.as_ref().map(number_format);
+                }
+            }
+            C::ResetScore(p) => match &p.objective {
+                Some(o) => self.score.board.reset_one(&p.owner, o),
+                None => self.score.board.reset_all(&p.owner),
+            },
+            C::SetPlayerTeam(p) => self.remote_team(p),
             C::SetChunkCacheRadius(p) => {
                 self.streaming.radius = self.settings.render_distance.min(p.distance + 1).max(2);
                 if let Some(r) = self.remote.as_mut() {
@@ -1102,6 +1249,104 @@ impl Game<'_> {
             _ => {}
         }
         Ok(())
+    }
+    /// `handleAddObjective`: add, remove or change an objective.
+    fn remote_objective(&mut self, p: play::SetObjective) {
+        use horizon_client::scoreboard::{RenderType, tag_to_json};
+        let board = &mut self.score.board;
+        match (p.method, p.display) {
+            (1, _) => board.remove_objective(&p.name),
+            (method, Some((name, render, format))) => {
+                let render = if render == 1 {
+                    RenderType::Hearts
+                } else {
+                    RenderType::Integer
+                };
+                let format = format.as_ref().map(number_format);
+                if method == 0 {
+                    board.add_objective(
+                        &p.name,
+                        "dummy",
+                        tag_to_json(&name),
+                        render,
+                        false,
+                        format,
+                    );
+                } else if let Some(o) = board.objective_mut(&p.name) {
+                    o.display_name = tag_to_json(&name);
+                    o.render_type = render;
+                    o.number_format = format;
+                }
+            }
+            _ => {}
+        }
+    }
+    /// `handleSetPlayerTeamPacket`.
+    fn remote_team(&mut self, p: play::SetPlayerTeam) {
+        use horizon_client::scoreboard::{CollisionRule, Visibility, tag_to_json};
+        let board = &mut self.score.board;
+        if p.method == 1 {
+            board.remove_team(&p.name);
+            return;
+        }
+        if p.method == 0 {
+            board.add_team(&p.name);
+        }
+        if let Some(params) = &p.parameters
+            && let Some(team) = board.team_mut(&p.name)
+        {
+            team.display_name = tag_to_json(&params.display_name);
+            team.prefix = tag_to_json(&params.prefix);
+            team.suffix = tag_to_json(&params.suffix);
+            team.color = params
+                .color
+                .and_then(|c| horizon_client::text::COLORS.get(c as usize))
+                .map(|c| c.1.to_owned());
+            team.allow_friendly_fire = params.options & 1 != 0;
+            team.see_friendly_invisibles = params.options & 2 != 0;
+            team.nametag_visibility = Visibility::ALL
+                .get(params.name_tag_visibility as usize)
+                .copied()
+                .unwrap_or(Visibility::Always);
+            team.collision_rule = CollisionRule::ALL
+                .get(params.collision_rule as usize)
+                .copied()
+                .unwrap_or(CollisionRule::Always);
+        }
+        match p.method {
+            0 | 3 => {
+                for player in &p.players {
+                    board.add_to_team(player, &p.name);
+                }
+            }
+            4 => {
+                for player in &p.players {
+                    board.remove_from_team(player);
+                }
+            }
+            _ => {}
+        }
+    }
+    /// The player list's view of the connection: the listed players, online
+    /// mode, and which players are in the level with an upside-down name.
+    pub(super) fn remote_tab_players(
+        &self,
+    ) -> Option<(Vec<horizon_client::tab_list::TabPlayer>, bool, Vec<u128>)> {
+        let r = self.remote.as_ref()?;
+        let players: Vec<_> = r
+            .listed
+            .iter()
+            .filter_map(|u| r.tab_players.get(u).cloned())
+            .collect();
+        let upside_down = players
+            .iter()
+            .filter(|p| {
+                (p.name == "Dinnerbone" || p.name == "Grumm")
+                    && (p.uuid == r.profile || r.level_players.values().any(|u| *u == p.uuid))
+            })
+            .map(|p| p.uuid)
+            .collect();
+        Some((players, r.online_mode, upside_down))
     }
     /// ChatType decoration: `chat.translation_key` with sender/content parameters.
     fn format_chat(&self, bound: &play::ChatTypeBound, content: &str) -> String {
@@ -1266,6 +1511,8 @@ impl Game<'_> {
         if self.use_delay > 0 {
             self.use_delay -= 1;
         }
+        // ClientLevel.tick: the border's size change.
+        self.border.tick();
         self.tick_remote_entities();
         self.tick_hand();
         self.tick_particles();
