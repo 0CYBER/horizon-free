@@ -254,7 +254,8 @@ def integrate_once(args, branches):
     if git("rev-parse", "HEAD", cwd=base_tree) == before:
         print(f"{names}: nothing new for {args.base}.")
         return []
-    gate = [sys.executable, "tools/gate.py", "--known-failures", ",".join(known)]
+    # The flake check covers what these branches bring: harnesses changed since the current integration branch.
+    gate = [sys.executable, "tools/gate.py", "--known-failures", ",".join(known), "--flake-base", before]
     gate += ["-j", str(args.jobs)] if args.jobs is not None else []
     gate += ["--no-parity"] if args.no_parity else []
     if subprocess.run(gate, cwd=base_tree).returncode:

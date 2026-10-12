@@ -8,7 +8,9 @@
 
 Runs, in order, stopping at the first failure: the public-tree check,
 rustfmt, clippy with warnings denied, the Rust tests, the Python tests, and
-then every vanilla harness whose inputs changed (tools/parity.py). Harnesses
+then every vanilla harness whose inputs changed (tools/parity.py); those whose
+script, oracle or probe is new or changed since the merge base with
+--flake-base must pass 3 runs in a row, which catches most flaky ones. Harnesses
 listed with --known-failures may still fail (they fail on the integration
 branch too); any other failing harness fails the gate. CI runs the
 same Rust and Python checks; the harnesses are the part CI cannot run.
@@ -41,7 +43,10 @@ def steps(args):
     yield "doc tests", ["cargo", "+stable", "test", "--locked", "--workspace", "--doc"]
     yield "python tests", [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-q"]
     if not args.no_parity:
-        yield "vanilla harnesses", [sys.executable, "tools/parity.py", *(["-j", str(args.jobs)] if args.jobs is not None else [])]
+        command = [sys.executable, "tools/parity.py", *(["-j", str(args.jobs)] if args.jobs is not None else [])]
+        if args.flake_base:
+            command += ["--flake-check", args.flake_base]
+        yield "vanilla harnesses", command
 
 
 def head():
@@ -54,6 +59,8 @@ def main():
     parser.add_argument("--quick", action="store_true", help="only formatting, lints and Python tests")
     parser.add_argument("--known-failures", default="", help="comma-separated harnesses allowed to keep failing")
     parser.add_argument("-j", "--jobs", type=int, help="harnesses at once on this machine (default: tools/parity.py's)")
+    parser.add_argument("--flake-base", default="parity-base", help="harnesses new or changed since the merge base "
+                        "with this ref must pass 3 runs in a row ('' to skip; default: parity-base)")
     args = parser.parse_args()
     logs = ROOT / ".local" / "gate"
     logs.mkdir(parents=True, exist_ok=True)
@@ -76,7 +83,7 @@ def main():
             else:
                 known = set(filter(None, args.known_failures.split(",")))
                 failing = set(finished["failed"])
-                new = sorted(failing - known)
+                new = sorted(name for name in failing if name not in known and name.split("#")[0] not in known)  # shards
                 if failing:
                     print(f"Failing harnesses: {', '.join(sorted(failing))}; new: {', '.join(new) or 'none'}")
                 status = 1 if new else 0
