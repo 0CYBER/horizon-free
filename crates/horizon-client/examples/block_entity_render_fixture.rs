@@ -8,7 +8,9 @@ use horizon_client::{
     assets::Assets,
     banner::{self, Banners},
     block_entity_anim::EnchantingBook,
-    block_entity_render::{BlockAnim, BlockEntityRenderer, Scene, TextCall},
+    block_entity_render::{
+        BlockAnim, BlockEntityRenderer, END_GATEWAY_LAYER, END_PORTAL_LAYER, Scene, TextCall,
+    },
     chunk::{Chunk, Light},
     hud::{HudAtlas, Rect},
     signs::{DYE_TEXT, SignData, SignText},
@@ -197,6 +199,25 @@ fn main() -> Result<()> {
                 world.chunks.insert((cx, cz), Arc::new(chunk));
             }
         }
+        // Neighbour blocks the case sets (End gateway faces).
+        for (direction, spec) in case["neighbours"].as_object().into_iter().flatten() {
+            let d = match direction.as_str() {
+                "down" => [0, -1, 0],
+                "up" => [0, 1, 0],
+                "north" => [0, 0, -1],
+                "south" => [0, 0, 1],
+                "west" => [-1, 0, 0],
+                _ => [1, 0, 0],
+            };
+            let neighbour = find_state(registry, spec.as_str().unwrap_or_default())
+                .ok_or("unknown neighbour state")?;
+            world.set(
+                pos[0] + d[0],
+                pos[1] + d[1],
+                pos[2] + d[2],
+                BlockStateId(neighbour),
+            )?;
+        }
         let book = case
             .get("book")
             .map_or_else(EnchantingBook::default, |book| {
@@ -257,6 +278,15 @@ fn main() -> Result<()> {
                 .as_array()
                 .map(|w| (w[0].as_str() == Some("POSITIVE"), float(&w[1]))),
             book,
+            gateway: (
+                case["gateway"]["age"].as_i64().unwrap_or(0),
+                int(&case["gateway"]["cooldown"]),
+            ),
+        };
+        // The case's level height (minimum y, height): the End's by default.
+        let max_y = match case["level"].as_array() {
+            Some(l) => int(&l[0]) + int(&l[1]) - 1,
+            None => 255,
         };
         let open = float(&case["open"]);
         let near = case["sign"]["near"].as_bool().unwrap_or(false);
@@ -290,7 +320,8 @@ fn main() -> Result<()> {
             anim: &|_| anim.clone(),
             texts: Some(&texts),
             partial: float(&case["partial"]),
-            game_time: 0,
+            game_time: case["gameTime"].as_i64().unwrap_or(0),
+            max_y,
             world: &world,
             sprites: &sprites,
             nether: false,
@@ -304,6 +335,26 @@ fn main() -> Result<()> {
         let quads: Vec<Value> = verts
             .chunks(4)
             .map(|q| {
+                // Custom geometry: the End portal shader's position-only cube (its
+                // render type samples end_sky first) and End gateway beams.
+                if q[0].layer == END_PORTAL_LAYER || q[0].layer == END_GATEWAY_LAYER {
+                    let v: Vec<Value> = q
+                        .iter()
+                        .map(|v| json!([v.pos[0], v.pos[1], v.pos[2], v.uv[0], v.uv[1]]))
+                        .collect();
+                    return json!({"texture": "environment/end_sky", "v": v, "color": q[0].color,
+                                  "light": q[0].light, "custom": true});
+                }
+                if q[0].layer == 6 {
+                    let texture = "entity/end_portal/end_gateway_beam";
+                    let u0 = sprites.get(texture).map_or(0.0, |r| r.u0);
+                    let v: Vec<Value> = q
+                        .iter()
+                        .map(|v| json!([v.pos[0], v.pos[1], v.pos[2], v.uv[0] - u0, v.uv[1]]))
+                        .collect();
+                    return json!({"texture": texture, "v": v, "color": q[0].color,
+                                  "light": q[0].light, "custom": true});
+                }
                 let (cu, cv) = ((q[0].uv[0] / 2.0).floor(), (q[0].uv[1] / 2.0).floor());
                 let texture = names
                     .get(cu as usize + cv as usize * grid)

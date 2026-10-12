@@ -867,6 +867,9 @@ impl BlockEntityAnims {
     ) -> BlockAnim {
         let mut anim = BlockAnim {
             sherds,
+            // End gateway ages and cooldowns are not tracked on the client yet:
+            // gateways render settled (no beam).
+            gateway: (i64::MAX, 0),
             ..BlockAnim::default()
         };
         if let Some(b) = self.books.get(&pos) {

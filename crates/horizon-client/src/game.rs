@@ -790,6 +790,13 @@ impl Dim {
             _ => Self::Overworld,
         }
     }
+    /// `Level.getMaxY`: the dimension type's minimum y plus height, less one.
+    fn max_y(self) -> i32 {
+        match self {
+            Self::Overworld => MIN_Y + HEIGHT - 1,
+            Self::Nether | Self::End => 255,
+        }
+    }
 }
 fn facing_offset(facing: &str) -> [i32; 3] {
     match facing {
@@ -4154,6 +4161,7 @@ impl Game<'_> {
                 texts: None,
                 partial: alpha as f32,
                 game_time: self.world.game_time,
+                max_y: self.dim.max_y(),
                 world: &self.world,
                 sprites: &self.res.atlas.sprites,
                 nether: self.dim == Dim::Nether,
@@ -7082,6 +7090,14 @@ impl Game<'_> {
             hand: &hand,
             screen: &screen,
             game_time: self.world.game_time as f32,
+            shader_game_time: ((self.world.game_time % 24000) as f32 + alpha as f32) / 24000.0,
+            end_portal_sprites: ["environment/end_sky", "entity/end_portal/end_portal"].map(|n| {
+                self.res
+                    .atlas
+                    .sprites
+                    .get(n)
+                    .map_or([0.0; 4], |r| [r.u0, r.v0, r.u1 - r.u0, r.v1 - r.v0])
+            }),
             ticks: self.ticks,
             darkness: self.darkness_lighting(alpha as f32),
             night_vision: self.night_vision_intensity(),
