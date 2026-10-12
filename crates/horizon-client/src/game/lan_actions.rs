@@ -525,7 +525,12 @@ impl Game<'_> {
         let lines = self.as_guest(host, conn, |g| {
             g.chat_capture = Some(Vec::new());
             g.run_command(&command);
-            g.chat_capture.take().unwrap_or_default()
+            g.chat_capture
+                .take()
+                .unwrap_or_default()
+                .iter()
+                .map(horizon_client::text::Text::plain)
+                .collect::<Vec<String>>()
         });
         for line in lines.unwrap_or_default() {
             host.hub.send_to(
@@ -551,7 +556,7 @@ impl Game<'_> {
         };
         let skip = usize::from(text.starts_with('/'));
         let command = &text[skip..];
-        let d = vanilla::dispatcher();
+        let d = vanilla::game_dispatcher();
         let level = std::mem::replace(&mut self.ui.registries.permission, permission);
         let parse = d.parse(command, &self.ui.registries);
         let ((start, end), suggestions) = d.suggestions(&parse, command.len(), &self.ui.registries);

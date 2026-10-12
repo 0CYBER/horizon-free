@@ -7,9 +7,10 @@
 use horizon_client::{
     component,
     hud::HudAtlas,
+    hud_layout::GuiDraw,
     lang,
     scoreboard::{NumberFormat, RenderType, Scoreboard},
-    tab_list::{self, TabDraw, TabInputs, TabList, TabPlayer},
+    tab_list::{self, TabInputs, TabList, TabPlayer},
     text::Text,
 };
 use serde_json::{Value, json};
@@ -144,24 +145,23 @@ fn main() -> Result<()> {
                     upside_down: &up,
                 };
                 for d in list.layout(&inputs, font) {
-                    match d {
-                        TabDraw::Fill { x0, y0, x1, y1, color } => draws.push(
-                            json!({"type": "fill", "x0": x0, "y0": y0, "x1": x1, "y1": y1, "color": color as i32}),
-                        ),
-                        TabDraw::Sprite { sprite, x, y, w, h } => {
-                            draws.push(json!({"type": "sprite", "sprite": sprite, "x": x, "y": y, "w": w, "h": h}))
+                    draws.push(match d {
+                        GuiDraw::Fill { x0, y0, x1, y1, color } => {
+                            json!({"type": "fill", "x0": x0, "y0": y0, "x1": x1, "y1": y1, "color": color as i32})
                         }
-                        TabDraw::Text { text, x, y, color } => draws.push(
-                            json!({"type": "text", "runs": runs(&text), "x": x, "y": y, "color": color as i32, "shadow": true}),
-                        ),
-                        TabDraw::Face { skin, x, y, size, hat, flip } => {
-                            let (v, h) = if flip { (16.0, -8.0) } else { (8.0, 8.0) };
-                            for u in [8.0, 40.0].into_iter().take(if hat { 2 } else { 1 }) {
-                                let a = [x as f64, y as f64, u, v, size as f64, size as f64, 8.0, h, 64.0, 64.0];
-                                draws.push(json!({"type": "blit", "texture": skin, "args": a, "color": -1}));
-                            }
+                        GuiDraw::Sprite { sprite, x, y, w, h, .. } => {
+                            json!({"type": "sprite", "sprite": sprite, "x": x, "y": y, "w": w, "h": h})
                         }
-                    }
+                        GuiDraw::Text { text, x, y, color, shadow } => json!({
+                            "type": "text", "runs": runs(&text), "x": x, "y": y, "color": color as i32, "shadow": shadow
+                        }),
+                        GuiDraw::Blit { texture, x, y, w, h, uv, src, tex, color, .. } => {
+                            let a = [x as f64, y as f64, f64::from(uv[0]), f64::from(uv[1]), w as f64, h as f64,
+                                src[0] as f64, src[1] as f64, tex[0] as f64, tex[1] as f64];
+                            json!({"type": "blit", "texture": texture, "args": a, "color": color as i32})
+                        }
+                        other => json!({"type": "unexpected", "draw": format!("{other:?}")}),
+                    });
                 }
             }
             frames.push(Value::Array(draws));

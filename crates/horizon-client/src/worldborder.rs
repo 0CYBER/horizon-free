@@ -153,17 +153,13 @@ impl WorldBorder {
     /// `Hud.extractVignette`: how strongly the vignette turns red at
     /// (x, z), 0 when outside the warning distance.
     pub fn warning_strength(&self, x: f64, z: f64) -> f32 {
-        let dist = self.distance(x, z) as f32;
-        let moving = jmin(
-            self.lerp_speed() * f64::from(self.warning_time),
-            (self.target_size() - self.size()).abs(),
-        );
-        let warning = jmax(f64::from(self.warning_distance), moving);
-        if f64::from(dist) < warning {
-            1.0 - (f64::from(dist) / warning) as f32
-        } else {
-            0.0
-        }
+        crate::hud_overlays::border_warning(
+            self.distance(x, z) as f32,
+            self.warning_distance,
+            self.warning_time,
+            self.lerp_speed(),
+            self.target_size() - self.size(),
+        )
     }
     /// Clamp a point so a body of half-width `half` stays inside.
     pub fn clamp(&self, x: f64, z: f64, half: f64) -> [f64; 2] {

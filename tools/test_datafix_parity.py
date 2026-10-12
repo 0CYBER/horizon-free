@@ -16,6 +16,10 @@ Then every file is compared: region files chunk by chunk, NBT files and JSON
 files value by value (compound and object key order does not matter). The only
 tolerated differences are listed in IGNORED (wall-clock time).
 
+tools/parity.py runs it in PARITY_SHARDS parts, each upgrading its share of
+the worlds (PARITY_SHARD=i/n). The vanilla outputs stay in .local/datafix/run
+so that the oracle's results are reused while its inputs are unchanged.
+
   test_datafix_parity.py [--keep] [--skip-build] [VERSION...]
 """
 import argparse
@@ -35,6 +39,15 @@ LOCAL = ROOT / '.local' / 'datafix'
 WORLDS = (ROOT / '.local' / 'minecraft').resolve().parent / 'datafix' / 'worlds'
 RUN = LOCAL / 'run'
 
+PARITY_SHARDS = 6
+# What the datafix_world probe can reach, checked by tools/parity.py: it reruns
+# this harness only when these sources (or the harness, oracle and data) change.
+PARITY_RUST_SCOPE = [
+    'crates/horizon-world/src/datafix/', 'crates/horizon-world/src/nbt.rs', 'crates/horizon-world/src/region.rs',
+    'crates/horizon-world/src/compression.rs', 'crates/horizon-core/src/position.rs', 'crates/horizon-core/src/position/',
+    'crates/horizon-core/src/geometry/',
+]
+
 IGNORED = {
     r'^level\.dat\.Data\.LastPlayed$': 'wall-clock time of the upgrade',
 }
@@ -46,7 +59,7 @@ def java_classpath():
     import test_model_baking_parity as baking
     lock, jars, _ = base.verify_artifacts()
     libraries = baking.client_libraries()
-    build = LOCAL / 'build'
+    build = LOCAL / 'build' / os.environ.get('PARITY_SHARD', 'all').replace('/', '-')  # shards compile apart
     build.mkdir(parents=True, exist_ok=True)
     classes, dependencies, _ = harness.compile_oracle(build, 'VanillaDataFixOracle', jars, libraries,
                                                       lock['minecraft']['java_major'])
@@ -61,8 +74,17 @@ def build_rust():
     return Path(meta['target_directory']) / 'release' / 'examples' / 'datafix_world'
 
 
+def shard(items):
+    """This run's share of items when tools/parity.py runs the harness in parts (PARITY_SHARD=i/n)."""
+    spec = os.environ.get('PARITY_SHARD')
+    if not spec:
+        return items
+    index, count = map(int, spec.split('/'))
+    return items[index - 1::count]
+
+
 def run_vanilla(classpath, world, out):
-    shutil.rmtree(out, ignore_errors=True)
+    # The oracle replaces OUT itself: left in place, an unchanged run's outputs can be reused.
     log = out.parent / (out.name + '.log')
     with log.open('w') as f:
         subprocess.run(['java', '-Xmx3g', '-Djava.awt.headless=true', '-cp', classpath,
@@ -195,7 +217,7 @@ def main():
             print('generating sample worlds:', ' '.join(missing), flush=True)
             subprocess.run([sys.executable, str(ROOT / 'tools' / 'datafix_worlds.py'), *missing], cwd=ROOT, check=True)
     worlds = sorted(p.name for p in WORLDS.iterdir() if p.is_dir())
-    versions = args.versions or worlds
+    versions = shard(args.versions or worlds)
     classpath = java_classpath()
     binary = None if args.vanilla_only else Path(args.binary) if args.binary else build_rust()
     total = 0
@@ -214,7 +236,8 @@ def main():
     if binary is not None:
         print('datafix parity', 'FAILED' if total else 'ok', f'({total} differences over {len(versions)} worlds)')
         if not total and not args.keep:
-            shutil.rmtree(RUN, ignore_errors=True)
+            for version in versions:  # vanilla outputs stay, for reuse
+                shutil.rmtree(RUN / f'{version}-horizon', ignore_errors=True)
         sys.exit(1 if total else 0)
 
 

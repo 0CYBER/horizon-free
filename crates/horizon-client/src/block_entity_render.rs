@@ -1,19 +1,22 @@
 //! Block-entity renderers (`BlockEntityRenderers`): chests (single, double,
 //! trapped, ender, copper), shulker boxes, banners, skulls and heads, bells,
 //! decorated pots, conduits, enchanting-table and lectern books and copper
-//! golem statues. Models are vanilla's baked `LayerDefinitions` layers
+//! golem statues, End portals and End gateways. Models are vanilla's baked `LayerDefinitions` layers
 //! (`entity-models.json`); transforms, animation and textures follow each
 //! vanilla renderer. Faces are lit like the `entity` shader: the lightmap at
 //! the block plus `minecraft_mix_light` with the level's two diffuse lights.
 use crate::{hud::Rect, mesher::Vertex, world::World};
 use glam::{DVec3, Mat4, Quat, Vec3};
-use horizon_core::{
-    geometry::trig::Mth,
-    random::{LegacyRandom, RandomSource},
+use horizon_core::geometry::{
+    Direction,
+    trig::{self, Mth},
 };
-use horizon_world::registry::{BlockRegistry, BlockStateId};
+use horizon_world::{
+    block_render::FaceVisibility,
+    registry::{BlockRegistry, BlockStateId},
+};
 use serde_json::Value;
-use std::{collections::HashMap, f32::consts::PI, path::Path};
+use std::{collections::HashMap, f32::consts::PI, path::Path, sync::Mutex};
 
 /// One baked `ModelPart`: initial pose, textured polygons (pixel units,
 /// normalized UVs) and named children.
@@ -256,6 +259,8 @@ enum SkullType {
 enum Kind {
     None,
     Chest {
+        /// The block (`neighbourState.is(state.getBlock())`).
+        block: String,
         texture: &'static str,
         part: ChestPart,
         y_rot: f32,
@@ -288,6 +293,12 @@ enum Kind {
         texture: &'static str,
         pose: &'static str,
         facing: &'static str,
+    },
+    /// `TheEndPortalRenderer`: the top and bottom faces of a 6/16-tall slab.
+    EndPortal,
+    /// `TheEndGatewayRenderer`: the visible faces of the cube and the beam.
+    EndGateway {
+        state: u32,
     },
     /// Sign text (`StandingSignRenderer` / `HangingSignRenderer`); the boards are block models.
     Sign {
@@ -323,6 +334,7 @@ fn classify(name: &str, prop: &dyn Fn(&str) -> Option<String>) -> Kind {
             ChestPart::Right => Some(step(opposite(clockwise(facing)))),
         };
         Kind::Chest {
+            block: name.to_owned(),
             texture: match part {
                 ChestPart::Single => texture,
                 ChestPart::Left => left,
@@ -413,6 +425,8 @@ fn classify(name: &str, prop: &dyn Fn(&str) -> Option<String>) -> Kind {
             };
         }
         "conduit" => return Kind::Conduit,
+        "end_portal" => return Kind::EndPortal,
+        "end_gateway" => return Kind::EndGateway { state: 0 },
         "enchanting_table" => return Kind::EnchantingTable,
         "lectern" => {
             return if prop("has_book").as_deref() == Some("true") {
@@ -512,72 +526,6 @@ fn classify(name: &str, prop: &dyn Fn(&str) -> Option<String>) -> Kind {
     Kind::None
 }
 
-/// `EnchantingTableBlockEntity` book animation state.
-#[derive(Clone, Copy, Default)]
-struct Book {
-    time: i32,
-    flip: f32,
-    o_flip: f32,
-    flip_t: f32,
-    flip_a: f32,
-    open: f32,
-    o_open: f32,
-    rot: f32,
-    o_rot: f32,
-    t_rot: f32,
-}
-fn wrap(mut a: f32) -> f32 {
-    while a >= PI {
-        a -= 2.0 * PI;
-    }
-    while a < -PI {
-        a += 2.0 * PI;
-    }
-    a
-}
-impl Book {
-    /// `EnchantingTableBlockEntity.bookAnimationTick`.
-    fn tick(&mut self, pos: [i32; 3], player: Option<[f64; 3]>, random: &mut LegacyRandom) {
-        self.o_open = self.open;
-        self.o_rot = self.rot;
-        let c = [
-            f64::from(pos[0]) + 0.5,
-            f64::from(pos[1]) + 0.5,
-            f64::from(pos[2]) + 0.5,
-        ];
-        let near = player.filter(|p| {
-            (p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) + (p[2] - c[2]).powi(2) < 9.0
-        });
-        if let Some(p) = near {
-            self.t_rot = (p[2] - c[2]).atan2(p[0] - c[0]) as f32;
-            self.open += 0.1;
-            if self.open < 0.5 || random.next_int_bound(40).unwrap_or(1) == 0 {
-                let old = self.flip_t;
-                loop {
-                    let a = random.next_int_bound(4).unwrap_or(0);
-                    let b = random.next_int_bound(4).unwrap_or(0);
-                    self.flip_t += (a - b) as f32;
-                    if old != self.flip_t {
-                        break;
-                    }
-                }
-            }
-        } else {
-            self.t_rot += 0.02;
-            self.open -= 0.1;
-        }
-        self.rot = wrap(self.rot);
-        self.t_rot = wrap(self.t_rot);
-        let dir = wrap(self.t_rot - self.rot);
-        self.rot += dir * 0.4;
-        self.open = self.open.clamp(0.0, 1.0);
-        self.time += 1;
-        self.o_flip = self.flip;
-        let diff = ((self.flip_t - self.flip) * 0.4).clamp(-0.2, 0.2);
-        self.flip_a += (diff - self.flip_a) * 0.9;
-        self.flip += self.flip_a;
-    }
-}
 /// `BookModel.setupAnim` for `BookModel.State(openness, pageFlip1, pageFlip2)`.
 fn book_pose(openness: f32, flip1: f32, flip2: f32) -> impl Fn(&str, &mut [f32; 9]) {
     move |name, p| match name {
@@ -737,6 +685,10 @@ pub struct BlockAnim {
     pub sherds: [Option<String>; 4],
     /// `DecoratedPotRenderState` wobble style (positive) and progress.
     pub wobble: Option<(bool, f32)>,
+    /// `EnchantingTableBlockEntity` book fields.
+    pub book: crate::block_entity_anim::EnchantingBook,
+    /// `TheEndGatewayBlockEntity` age and teleportCooldown.
+    pub gateway: (i64, i32),
 }
 
 /// One `submitText` call (`AbstractSignRenderer.submitSignText`).
@@ -765,6 +717,8 @@ pub struct Scene<'a> {
     pub texts: Option<&'a std::cell::RefCell<Vec<TextCall>>>,
     pub partial: f32,
     pub game_time: i64,
+    /// `Level.getMaxY` (End gateway beams while spawning).
+    pub max_y: i32,
     pub world: &'a World,
     pub sprites: &'a HashMap<String, Rect>,
     pub nether: bool,
@@ -781,10 +735,10 @@ pub struct Scene<'a> {
 pub struct BlockEntityRenderer {
     models: HashMap<&'static str, ModelPart>,
     kinds: Vec<Kind>,
-    books: HashMap<[i32; 3], Book>,
-    random: LegacyRandom,
     /// Item id to its `PROVIDES_POTTERY_PATTERN` side texture (`Sheets.DECORATED_POT_MAPPER`).
     pot_patterns: HashMap<String, String>,
+    /// `Block.shouldRenderFace` for End gateway faces (its occlusion pair cache needs a lock).
+    visibility: Option<Mutex<FaceVisibility>>,
 }
 const MODELS: [(&str, &str); 27] = [
     ("chest", "minecraft:chest#main"),
@@ -835,6 +789,7 @@ impl BlockEntityRenderer {
             .filter_map(|(key, layer)| all.get(*layer).map(|v| (*key, ModelPart::parse(v))))
             .collect();
         let mut renderer = Self::new(models, registry);
+        renderer.visibility = Some(Mutex::new(crate::models::load_visibility(root, registry)?));
         // Sherd items: provides_pottery_pattern -> decorated_pot_pattern asset id.
         if let Ok(bytes) = std::fs::read(root.join("items.json")) {
             let items: Value = serde_json::from_slice(&bytes)?;
@@ -864,16 +819,18 @@ impl BlockEntityRenderer {
             .map(|id| {
                 registry.state(BlockStateId(id)).map_or(Kind::None, |s| {
                     let prop = |k: &str| s.properties.get(k).cloned();
-                    classify(&s.name, &prop)
+                    match classify(&s.name, &prop) {
+                        Kind::EndGateway { .. } => Kind::EndGateway { state: id },
+                        kind => kind,
+                    }
                 })
             })
             .collect();
         Self {
             models,
             kinds,
-            books: HashMap::new(),
-            random: LegacyRandom::new(0x5EED_B00C),
             pot_patterns: HashMap::new(),
+            visibility: None,
         }
     }
     /// The standing banner's pole-and-bar and flag models (`BannerRenderer.submitSpecial`).
@@ -885,24 +842,6 @@ impl BlockEntityRenderer {
     }
     fn kind(&self, state: u32) -> &Kind {
         self.kinds.get(state as usize).unwrap_or(&Kind::None)
-    }
-    /// Client-side block-entity ticks (enchanting-table books).
-    pub fn tick<'a>(
-        &mut self,
-        blocks: impl Iterator<Item = &'a ([i32; 3], u32)>,
-        player: Option<[f64; 3]>,
-    ) {
-        let mut seen = Vec::new();
-        for (pos, state) in blocks {
-            if matches!(self.kind(*state), Kind::EnchantingTable) {
-                seen.push(*pos);
-            }
-        }
-        self.books.retain(|p, _| seen.contains(p));
-        for pos in seen {
-            let book = self.books.entry(pos).or_default();
-            book.tick(pos, player, &mut self.random);
-        }
     }
     pub fn render<'a>(
         &self,
@@ -921,7 +860,13 @@ impl BlockEntityRenderer {
                 f64::from(pos[1]) + 0.5,
                 f64::from(pos[2]) + 0.5,
             );
-            if center.distance_squared(scene.camera) > VIEW_DISTANCE * VIEW_DISTANCE {
+            // BlockEntityRenderer.getViewDistance: 256 for End gateways.
+            let distance = if matches!(kind, Kind::EndGateway { .. }) {
+                256.0
+            } else {
+                VIEW_DISTANCE
+            };
+            if center.distance_squared(scene.camera) > distance * distance {
                 continue;
             }
             let origin = (DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]))
@@ -951,21 +896,65 @@ impl BlockEntityRenderer {
     pub fn renders(&self, state: u32) -> bool {
         !matches!(self.kind(state), Kind::None)
     }
-    /// Sets an enchanting table's book fields (`EnchantingTableBlockEntity`):
-    /// time, flip, oFlip, open, oOpen, rot, oRot.
-    pub fn set_book(&mut self, pos: [i32; 3], time: i32, fields: [f32; 6]) {
-        let [flip, o_flip, open, o_open, rot, o_rot] = fields;
-        let book = self.books.entry(pos).or_default();
-        *book = Book {
-            time,
-            flip,
-            o_flip,
-            open,
-            o_open,
-            rot,
-            o_rot,
-            ..*book
+    /// `ChestRenderer.extractRenderState`'s openness for the chest of `state`
+    /// at `pos`: `ChestBlock.combine` (`DoubleBlockCombiner.combineWithNeigbour`)
+    /// pairs a double half with its neighbour only when that is the same
+    /// block, the other half and faces the same way; `opennessCombiner` then
+    /// takes the more open of both. Also returns the paired half's position.
+    /// `lid` is `getOpenNess(partial)` at a position; non-chests give 0.
+    pub fn chest_openness_of(
+        &self,
+        pos: [i32; 3],
+        state: u32,
+        block_at: &dyn Fn([i32; 3]) -> u32,
+        lid: &dyn Fn([i32; 3]) -> f32,
+    ) -> (f32, Option<[i32; 3]>) {
+        self.chest_openness(pos, self.kind(state), block_at, lid)
+    }
+    fn chest_openness(
+        &self,
+        pos: [i32; 3],
+        kind: &Kind,
+        block_at: &dyn Fn([i32; 3]) -> u32,
+        lid: &dyn Fn([i32; 3]) -> f32,
+    ) -> (f32, Option<[i32; 3]>) {
+        let Kind::Chest {
+            block,
+            part,
+            y_rot,
+            double_with,
+            ..
+        } = kind
+        else {
+            return (0.0, None);
         };
+        let open = lid(pos);
+        let Some(d) = double_with else {
+            return (open, None);
+        };
+        let other = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
+        match self.kind(block_at(other)) {
+            Kind::Chest {
+                block: other_block,
+                part: other_part,
+                y_rot: other_y_rot,
+                ..
+            } if other_block == block
+                && *other_part != ChestPart::Single
+                && other_part != part
+                && other_y_rot == y_rot =>
+            {
+                let other_open = lid(other);
+                // The right half is the first.
+                let open = if *part == ChestPart::Right {
+                    crate::block_entity_anim::combined_openness(open, Some(other_open))
+                } else {
+                    crate::block_entity_anim::combined_openness(other_open, Some(open))
+                };
+                (open, Some(other))
+            }
+            _ => (open, None),
+        }
     }
     /// One block entity of `state` drawn under `base` (minecart contents).
     pub fn render_state(
@@ -1060,7 +1049,7 @@ impl BlockEntityRenderer {
                 texture,
                 part,
                 y_rot,
-                double_with,
+                ..
             } => {
                 let model = match part {
                     ChestPart::Single => "chest",
@@ -1070,22 +1059,24 @@ impl BlockEntityRenderer {
                 let (Some(model), Some(_)) = (self.models.get(model), sprite(texture)) else {
                     return;
                 };
-                // ChestBlock.opennessCombiner / BrightnessCombiner: both halves.
-                let mut open = (scene.lid)(pos);
+                let (open, other) = self.chest_openness(
+                    pos,
+                    kind,
+                    &|p| scene.world.block(p[0], p[1], p[2]).0,
+                    scene.lid,
+                );
+                // BrightnessCombiner: the brighter of both halves, per channel.
                 let mut packed = packed;
-                if let Some(d) = double_with {
-                    let other = [pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]];
-                    open = open.max((scene.lid)(other));
+                if let Some(other) = other {
                     let l = scene.world.light(other[0], other[1], other[2]);
                     packed = (packed >> 4).max(l >> 4) << 4 | (packed & 15).max(l & 15);
                 }
-                let open = 1.0 - (1.0 - open).powi(3);
                 let m = base
                     * around(
                         Mat4::from_rotation_y((-y_rot).to_radians()),
                         Vec3::new(0.5, 0.0, 0.5),
                     );
-                let lid = -(open * PI / 2.0);
+                let lid = crate::block_entity_anim::chest_lid_x_rot(open);
                 let adjust = move |name: &str, p: &mut [f32; 9]| {
                     if name == "lid" || name == "lock" {
                         p[3] = lid;
@@ -1291,6 +1282,73 @@ impl BlockEntityRenderer {
                     }
                 }
             }
+            Kind::EndPortal => {
+                // TheEndPortalRenderer.TRANSFORMATION: y from 6/16 to 12/16; only the
+                // vertical faces (TheEndPortalBlockEntity.shouldRenderFace).
+                let m = base
+                    * Mat4::from_translation(Vec3::new(0.0, 0.375, 0.0))
+                    * Mat4::from_scale(Vec3::new(1.0, 0.375, 1.0));
+                portal_cube(m, &[Direction::Down, Direction::Up], END_PORTAL_LAYER, out);
+            }
+            Kind::EndGateway { state } => {
+                let anim = (scene.anim)(pos);
+                let (age, cooldown) = anim.gateway;
+                // TheEndGatewayRenderer.extractRenderState.
+                let spawning = age < 200;
+                if spawning || cooldown > 0 {
+                    let a = scene.partial;
+                    let percent = if spawning {
+                        ((age as f32 + a) / 200.0).clamp(0.0, 1.0)
+                    } else {
+                        1.0 - ((cooldown as f32 - a) / 40.0).clamp(0.0, 1.0)
+                    };
+                    let distance = if spawning {
+                        f64::from(scene.max_y)
+                    } else {
+                        50.0
+                    };
+                    let scale = trig::sin(f64::from(percent * PI));
+                    let height = (f64::from(scale) * distance).floor() as i32;
+                    // DyeColor.MAGENTA / PURPLE getTextureDiffuseColor.
+                    let color = if spawning { 0xC7_4EBD } else { 0x89_32B8 };
+                    let time = scene.game_time.rem_euclid(40) as f32 + a;
+                    if height > 0
+                        && let Some(s) = sprite("entity/end_portal/end_gateway_beam")
+                    {
+                        beam(
+                            base,
+                            BeamShape {
+                                scale,
+                                time,
+                                start: -height,
+                                height: height * 2,
+                                color,
+                                solid_radius: 0.15,
+                                glow_radius: 0.175,
+                            },
+                            s,
+                            out,
+                        );
+                    }
+                }
+                // AbstractEndPortalRenderer.extractRenderState: TheEndGatewayBlockEntity.shouldRenderFace.
+                let faces: Vec<Direction> = Direction::ALL
+                    .into_iter()
+                    .filter(|&d| {
+                        let [dx, dy, dz] = d.normal();
+                        let neighbor = scene.world.block(pos[0] + dx, pos[1] + dy, pos[2] + dz);
+                        self.visibility.as_ref().is_none_or(|v| {
+                            v.lock()
+                                .map(|mut v| {
+                                    v.should_render_face(BlockStateId(*state), neighbor, d, true)
+                                        .unwrap_or(true)
+                                })
+                                .unwrap_or(true)
+                        })
+                    })
+                    .collect();
+                portal_cube(base, &faces, END_GATEWAY_LAYER, out);
+            }
             Kind::Conduit => {
                 let (ticks, active, hunting, raw_rotation) = (scene.anim)(pos).conduit;
                 // ConduitRenderer.extractRenderState.
@@ -1363,21 +1421,18 @@ impl BlockEntityRenderer {
                 ) else {
                     return;
                 };
-                let b = self.books.get(&pos).copied().unwrap_or_default();
-                let a = scene.partial;
-                let flip = b.o_flip + (b.flip - b.o_flip) * a;
-                let open = b.o_open + (b.open - b.o_open) * a;
-                let time = b.time as f32 + a;
-                let y_rot = b.o_rot + wrap(b.rot - b.o_rot) * a;
+                // EnchantTableRenderer.extractRenderState and submit.
+                let b = (scene.anim)(pos).book.render(scene.partial);
                 let m = base
                     * Mat4::from_translation(Vec3::new(0.5, 0.75, 0.5))
-                    * Mat4::from_translation(Vec3::new(0.0, 0.1 + (time * 0.1).msin() * 0.01, 0.0))
-                    * Mat4::from_rotation_y(-y_rot)
+                    * Mat4::from_translation(Vec3::new(
+                        0.0,
+                        0.1 + (b.time * 0.1).msin() * 0.01,
+                        0.0,
+                    ))
+                    * Mat4::from_rotation_y(-b.y_rot)
                     * Mat4::from_rotation_z(80f32.to_radians());
-                let ff1 = (frac(flip + 0.25) * 1.6 - 0.3).clamp(0.0, 1.0);
-                let ff2 = (frac(flip + 0.75) * 1.6 - 0.3).clamp(0.0, 1.0);
-                // BookModel.State.forAnimation.
-                let openness = ((time * 0.02).msin() * 0.1 + 1.25) * open;
+                let (openness, ff1, ff2) = (b.openness, b.page_flip1, b.page_flip2);
                 draw_part(model, "root", m, &book_pose(openness, ff1, ff2), paint, out);
             }
             Kind::Lectern { y_rot } => {
@@ -1438,8 +1493,7 @@ impl BlockEntityRenderer {
 /// rotating solid beam and its translucent glow, the last section 2048
 /// blocks tall. `origin` is the beacon block's corner relative to the camera,
 /// `time` the animation time (game time mod 40 plus partial tick) and `scale`
-/// the radius scale. The sprite's v range rides in the light bytes (the
-/// entity shader wraps v for layer 6).
+/// the radius scale.
 pub fn beacon_beam(
     origin: Vec3,
     sections: &[(u32, i32)],
@@ -1448,9 +1502,7 @@ pub fn beacon_beam(
     s: Rect,
     out: &mut Vec<Vertex>,
 ) {
-    let q = |v: f32| (v * 65535.0).round().clamp(0.0, 65535.0) as u32;
-    let wrap = q(s.v0) | q(s.v1 - s.v0) << 16;
-    let o = origin + Vec3::new(0.5, 0.0, 0.5);
+    let base = Mat4::from_translation(origin);
     let mut start = 0i32;
     for (i, &(color, height)) in sections.iter().enumerate() {
         let height = if i == sections.len() - 1 {
@@ -1458,63 +1510,140 @@ pub fn beacon_beam(
         } else {
             height
         };
-        let end = start + height;
-        let scroll = if height < 0 { time } else { -time };
-        let v_off = frac(scroll * 0.2 - (scroll * 0.1).floor());
-        let abgr =
-            |a: u32| a << 24 | (color & 255) << 16 | (color >> 8 & 255) << 8 | (color >> 16 & 255);
-        // Solid beam: radius 0.2 * scale, rotated with time.
-        let r = 0.2 * scale;
-        let rot = glam::Mat3::from_rotation_y((time * 2.25 - 45.0).to_radians());
-        let corners = [
-            rot * Vec3::new(0.0, 0.0, r),
-            rot * Vec3::new(r, 0.0, 0.0),
-            rot * Vec3::new(-r, 0.0, 0.0),
-            rot * Vec3::new(0.0, 0.0, -r),
-        ];
-        let v2 = -1.0 + v_off;
-        let v1 = height as f32 * (0.5 / r) + v2;
-        beam_part(out, o, start, end, corners, [v1, v2], abgr(255), s, wrap);
-        // Glow: radius 0.25 * scale, translucent.
-        let g = 0.25 * scale;
-        let corners = [
-            Vec3::new(-g, 0.0, -g),
-            Vec3::new(g, 0.0, -g),
-            Vec3::new(-g, 0.0, g),
-            Vec3::new(g, 0.0, g),
-        ];
-        let v1 = height as f32 + v2;
-        beam_part(out, o, start, end, corners, [v1, v2], abgr(32), s, wrap);
-        start = end;
+        let shape = BeamShape {
+            scale: 1.0,
+            time,
+            start,
+            height,
+            color,
+            solid_radius: 0.2 * scale,
+            glow_radius: 0.25 * scale,
+        };
+        beam(base, shape, s, out);
+        start += height;
     }
 }
-/// `BeaconRenderer.renderPart`: four quads between the corners (wn, en, ws, es).
-#[allow(clippy::too_many_arguments)]
-fn beam_part(
-    out: &mut Vec<Vertex>,
-    o: Vec3,
+/// The arguments of `BeaconRenderer.submitBeaconBeam`.
+pub struct BeamShape {
+    /// Scales the v range (End gateways shrink and grow their beam with it).
+    pub scale: f32,
+    /// Animation time: game time mod 40 plus the partial tick.
+    pub time: f32,
+    pub start: i32,
+    pub height: i32,
+    /// RGB.
+    pub color: u32,
+    pub solid_radius: f32,
+    pub glow_radius: f32,
+}
+/// `BeaconRenderer.submitBeaconBeam` under `base` (the block's corner): the
+/// rotating solid beam and its translucent glow. The sprite's v range rides
+/// in the light bytes (the entity shader wraps v for layer 6).
+pub fn beam(base: Mat4, b: BeamShape, s: Rect, out: &mut Vec<Vertex>) {
+    let q = |v: f32| (v * 65535.0).round().clamp(0.0, 65535.0) as u32;
+    let wrap = q(s.v0) | q(s.v1 - s.v0) << 16;
+    let color = b.color;
+    let end = b.start + b.height;
+    let scroll = if b.height < 0 { b.time } else { -b.time };
+    let v_off = frac(scroll * 0.2 - (scroll * 0.1).floor());
+    let abgr =
+        |a: u32| a << 24 | (color & 255) << 16 | (color >> 8 & 255) << 8 | (color >> 16 & 255);
+    // Solid beam, rotated with time.
+    let r = b.solid_radius;
+    let rot = glam::Mat3::from_rotation_y((b.time * 2.25 - 45.0).to_radians());
+    let corners = [
+        rot * Vec3::new(0.0, 0.0, r),
+        rot * Vec3::new(r, 0.0, 0.0),
+        rot * Vec3::new(-r, 0.0, 0.0),
+        rot * Vec3::new(0.0, 0.0, -r),
+    ];
+    let v2 = -1.0 + v_off;
+    let v1 = b.height as f32 * b.scale * (0.5 / r) + v2;
+    let part = BeamPart {
+        base,
+        start: b.start,
+        end,
+        s,
+        wrap,
+    };
+    part.emit(out, corners, [v1, v2], abgr(255));
+    // Glow, translucent.
+    let g = b.glow_radius;
+    let corners = [
+        Vec3::new(-g, 0.0, -g),
+        Vec3::new(g, 0.0, -g),
+        Vec3::new(-g, 0.0, g),
+        Vec3::new(g, 0.0, g),
+    ];
+    let v1 = b.height as f32 * b.scale + v2;
+    part.emit(out, corners, [v1, v2], abgr(32));
+}
+struct BeamPart {
+    base: Mat4,
     start: i32,
     end: i32,
-    [wn, en, ws, es]: [Vec3; 4],
-    [v1, v2]: [f32; 2],
-    color: u32,
     s: Rect,
     wrap: u32,
-) {
-    for (a, b) in [(wn, en), (es, ws), (en, es), (ws, wn)] {
-        let at = |c: Vec3, y: i32| o + c + Vec3::new(0.0, y as f32, 0.0);
-        for (p, uv) in [
-            (at(a, end), [s.u1, v1]),
-            (at(a, start), [s.u1, v2]),
-            (at(b, start), [s.u0, v2]),
-            (at(b, end), [s.u0, v1]),
-        ] {
+}
+impl BeamPart {
+    /// `BeaconRenderer.renderPart`: four quads between the corners (wn, en, ws, es).
+    fn emit(
+        &self,
+        out: &mut Vec<Vertex>,
+        [wn, en, ws, es]: [Vec3; 4],
+        [v1, v2]: [f32; 2],
+        color: u32,
+    ) {
+        let s = self.s;
+        for (a, b) in [(wn, en), (es, ws), (en, es), (ws, wn)] {
+            let at = |c: Vec3, y: i32| {
+                self.base
+                    .transform_point3(Vec3::new(0.5, 0.0, 0.5) + c + Vec3::new(0.0, y as f32, 0.0))
+            };
+            for (p, uv) in [
+                (at(a, self.end), [s.u1, v1]),
+                (at(a, self.start), [s.u1, v2]),
+                (at(b, self.start), [s.u0, v2]),
+                (at(b, self.end), [s.u0, v1]),
+            ] {
+                out.push(Vertex {
+                    pos: p.to_array(),
+                    uv,
+                    layer: 6,
+                    color,
+                    light: self.wrap,
+                });
+            }
+        }
+    }
+}
+
+/// Entity-shader layers for `rendertype_end_portal`: end portals draw 15
+/// layers of `end_portal.png` over `end_sky.png`, End gateways 16.
+pub const END_PORTAL_LAYER: u32 = 9;
+pub const END_GATEWAY_LAYER: u32 = 10;
+/// `AbstractEndPortalRenderer.FACES`: the unit cube's corners for each face
+/// (`Direction` order) in `FaceInfo` vertex order.
+#[rustfmt::skip]
+const PORTAL_FACES: [[[f32; 3]; 4]; 6] = [
+    [[0.0, 0.0, 1.0], [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 1.0]],
+    [[0.0, 1.0, 0.0], [0.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 0.0]],
+    [[1.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+    [[0.0, 1.0, 1.0], [0.0, 0.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 1.0]],
+    [[0.0, 1.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 1.0]],
+    [[1.0, 1.0, 1.0], [1.0, 0.0, 1.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0]],
+];
+/// `AbstractEndPortalRenderer.submitCube`: position-only quads (the portal
+/// shader projects its textures from the screen; uv, colour and light are unused).
+fn portal_cube(m: Mat4, faces: &[Direction], layer: u32, out: &mut Vec<Vertex>) {
+    for &d in faces {
+        for c in PORTAL_FACES[d as usize] {
             out.push(Vertex {
-                pos: p.to_array(),
-                uv,
-                layer: 6,
-                color,
-                light: wrap,
+                pos: m.transform_point3(Vec3::from(c)).to_array(),
+                uv: [0.0; 2],
+                layer,
+                color: 0,
+                light: 0,
             });
         }
     }

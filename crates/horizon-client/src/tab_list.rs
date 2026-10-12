@@ -7,11 +7,12 @@
 //! the parity fixture can compare them with the vanilla client.
 use crate::{
     font::Font,
+    hud_layout::{Blend, GuiDraw, WHITE},
     java_text::float_to_string,
     scoreboard::{Comp, NumberFormat, Objective, RenderType, Scoreboard, comp_text},
     text::Text,
 };
-use std::{cmp::Ordering, collections::HashMap};
+use std::{borrow::Cow, cmp::Ordering, collections::HashMap};
 
 /// `GameType.SPECTATOR` id.
 pub const SPECTATOR: i32 = 3;
@@ -79,42 +80,37 @@ pub fn default_skin(uuid: u128) -> &'static str {
     SKINS[hash.rem_euclid(SKINS.len() as i32) as usize]
 }
 
-/// One `GuiGraphicsExtractor` call of the list.
-#[derive(Clone, Debug, PartialEq)]
-pub enum TabDraw {
-    /// `fill(x0, y0, x1, y1, argb)`.
-    Fill {
-        x0: i32,
-        y0: i32,
-        x1: i32,
-        y1: i32,
-        color: u32,
-    },
-    /// `text(font, text, x, y, argb)` with its drop shadow.
-    Text {
-        text: Text,
-        x: i32,
-        y: i32,
-        color: u32,
-    },
-    /// `blitSprite(sprite, x, y, w, h)`.
-    Sprite {
-        sprite: &'static str,
-        x: i32,
-        y: i32,
-        w: i32,
-        h: i32,
-    },
-    /// `PlayerFaceExtractor.extractRenderState`: the skin's face (and hat
-    /// layer), upside down for Dinnerbone and Grumm.
-    Face {
-        skin: String,
-        x: i32,
-        y: i32,
-        size: i32,
-        hat: bool,
-        flip: bool,
-    },
+/// `blitSprite(sprite, x, y, w, h)`.
+fn sprite(name: &'static str, x: i32, y: i32, w: i32, h: i32) -> GuiDraw {
+    GuiDraw::Sprite {
+        sprite: Cow::Borrowed(name),
+        x,
+        y,
+        w,
+        h,
+        region: None,
+        color: WHITE,
+    }
+}
+
+/// `PlayerFaceExtractor.extractRenderState`: the skin's face, then its hat
+/// layer, upside down for Dinnerbone and Grumm.
+fn face(out: &mut Vec<GuiDraw>, skin: &str, x: i32, y: i32, size: i32, hat: bool, flip: bool) {
+    let (v, height) = if flip { (16.0, -8) } else { (8.0, 8) };
+    for u in [8.0, 40.0].into_iter().take(if hat { 2 } else { 1 }) {
+        out.push(GuiDraw::Blit {
+            texture: Cow::Owned(skin.to_owned()),
+            blend: Blend::Textured,
+            x,
+            y,
+            w: size,
+            h: size,
+            uv: [u, v],
+            src: [8, height],
+            tex: [64, 64],
+            color: WHITE,
+        });
+    }
 }
 
 /// `Hud.extractTabList`: whether the list shows. A single-player world
@@ -329,7 +325,7 @@ impl TabList {
         self.footer = None;
     }
     /// `extractRenderState`.
-    pub fn layout(&mut self, i: &TabInputs, font: &Font) -> Vec<TabDraw> {
+    pub fn layout(&mut self, i: &TabInputs, font: &Font) -> Vec<GuiDraw> {
         let width = |t: &Text| font.width_text(t) as i32;
         let players = sorted_players(i.players, i.board);
         let spacer = font.width(" ") as i32;
@@ -397,8 +393,12 @@ impl TabList {
         let mut yyo = 10;
         let mut max_line = slot_width * cols + (cols - 1) * 5;
         let split = |t: &Option<Text>| {
-            t.as_ref()
-                .map(|t| font.split_lines(&t.resolve_legacy(), (sw - 50) as f32))
+            t.as_ref().map(|t| {
+                font.split_lines(&t.resolve_legacy(), (sw - 50) as f32)
+                    .into_iter()
+                    .map(|(line, _)| line)
+                    .collect::<Vec<_>>()
+            })
         };
         let header = split(&self.header);
         let footer = split(&self.footer);
@@ -406,7 +406,7 @@ impl TabList {
             max_line = max_line.max(width(line));
         }
         let mut out = Vec::new();
-        let band = |y0: i32, y1: i32| TabDraw::Fill {
+        let band = |y0: i32, y1: i32| GuiDraw::Fill {
             x0: sw / 2 - max_line / 2 - 1,
             y0,
             x1: sw / 2 + max_line / 2 + 1,
@@ -417,11 +417,12 @@ impl TabList {
             out.push(band(yyo - 1, yyo + lines.len() as i32 * 9));
             for line in lines {
                 let w = width(line);
-                out.push(TabDraw::Text {
+                out.push(GuiDraw::Text {
                     text: line.clone(),
                     x: sw / 2 - w / 2,
                     y: yyo,
                     color: 0xFFFF_FFFF,
+                    shadow: true,
                 });
                 yyo += 9;
             }
@@ -433,7 +434,7 @@ impl TabList {
             let (col, row) = (n / rows, n % rows);
             let mut xo = xxo + col * slot_width + col * 5;
             let yo = yyo + row * 9;
-            out.push(TabDraw::Fill {
+            out.push(GuiDraw::Fill {
                 x0: xo,
                 y0: yo,
                 x1: xo + slot_width,
@@ -441,22 +442,24 @@ impl TabList {
                 color: i.background,
             });
             if show_head {
-                out.push(TabDraw::Face {
-                    skin: p.skin.clone(),
-                    x: xo,
-                    y: yo,
-                    size: 8,
-                    hat: p.show_hat,
-                    flip: (i.upside_down)(p.uuid),
-                });
+                face(
+                    &mut out,
+                    &p.skin,
+                    xo,
+                    yo,
+                    8,
+                    p.show_hat,
+                    (i.upside_down)(p.uuid),
+                );
                 xo += 9;
             }
             let spectator = p.game_mode == SPECTATOR;
-            out.push(TabDraw::Text {
+            out.push(GuiDraw::Text {
                 text: entry.name.clone(),
                 x: xo,
                 y: yo,
                 color: if spectator { 0x90FF_FFFF } else { 0xFFFF_FFFF },
+                shadow: true,
             });
             if let Some(objective) = i.objective.filter(|_| !spectator) {
                 let left = xo + max_name + 1;
@@ -474,33 +477,35 @@ impl TabList {
                             &mut out,
                         );
                     } else if let Some(text) = &entry.formatted {
-                        out.push(TabDraw::Text {
+                        out.push(GuiDraw::Text {
                             text: text.clone(),
                             x: right - entry.score_width,
                             y: yo,
                             color: 0xFFFF_FFFF,
+                            shadow: true,
                         });
                     }
                 }
             }
-            out.push(TabDraw::Sprite {
-                sprite: ping_sprite(p.latency),
-                x: xo - head + slot_width - 11,
-                y: yo,
-                w: 10,
-                h: 8,
-            });
+            out.push(sprite(
+                ping_sprite(p.latency),
+                xo - head + slot_width - 11,
+                yo,
+                10,
+                8,
+            ));
         }
         if let Some(lines) = &footer {
             yyo += rows * 9 + 1;
             out.push(band(yyo - 1, yyo + lines.len() as i32 * 9));
             for line in lines {
                 let w = width(line);
-                out.push(TabDraw::Text {
+                out.push(GuiDraw::Text {
                     text: line.clone(),
                     x: sw / 2 - w / 2,
                     y: yyo,
                     color: 0xFFFF_FFFF,
+                    shadow: true,
                 });
                 yyo += 9;
             }
@@ -518,7 +523,7 @@ impl TabList {
         score: i32,
         tick: i64,
         font: &Font,
-        out: &mut Vec<TabDraw>,
+        out: &mut Vec<GuiDraw>,
     ) {
         let health = self
             .health
@@ -550,11 +555,12 @@ impl TabList {
                 Text::literal(float_to_string(hearts))
             };
             let w = font.width_text(&text) as i32;
-            out.push(TabDraw::Text {
+            out.push(GuiDraw::Text {
                 text,
                 x: (right + left - w) / 2,
                 y: yo,
                 color: color as u32 | 0xFF00_0000,
+                shadow: true,
             });
             return;
         }
@@ -563,13 +569,7 @@ impl TabList {
         } else {
             "hud/heart/container"
         };
-        let heart = |sprite: &'static str, n: i32| TabDraw::Sprite {
-            sprite,
-            x: left + n * per_heart,
-            y: yo,
-            w: 9,
-            h: 9,
-        };
+        let heart = |name: &'static str, n: i32| sprite(name, left + n * per_heart, yo, 9, 9);
         for n in full_hearts..to_render {
             out.push(heart(container, n));
         }
@@ -602,72 +602,6 @@ impl TabList {
                     },
                     n,
                 ));
-            }
-        }
-    }
-}
-
-/// Draws the list with the HUD batch (faces from the shared atlas).
-pub fn paint(batch: &mut crate::hud::HudBatch, atlas: &crate::hud::HudAtlas, draws: &[TabDraw]) {
-    let rgba = |argb: u32| {
-        let [a, r, g, b] = argb.to_be_bytes();
-        crate::hud::rgba(r, g, b, a)
-    };
-    for d in draws {
-        match d {
-            TabDraw::Fill {
-                x0,
-                y0,
-                x1,
-                y1,
-                color,
-            } => {
-                let (xa, xb) = (*x0.min(x1), *x0.max(x1));
-                let (ya, yb) = (*y0.min(y1), *y0.max(y1));
-                batch.fill(
-                    atlas,
-                    xa as f32,
-                    ya as f32,
-                    (xb - xa) as f32,
-                    (yb - ya) as f32,
-                    rgba(*color),
-                );
-            }
-            TabDraw::Text { text, x, y, color } => {
-                batch.text_styled(atlas, text, *x as f32, *y as f32, rgba(*color), true);
-            }
-            TabDraw::Sprite { sprite, x, y, w, h } => {
-                if let Some(r) = atlas.sprites.get(&format!("gui/sprites/{sprite}")).copied() {
-                    batch.rect_uv(*x as f32, *y as f32, *w as f32, *h as f32, r, u32::MAX);
-                }
-            }
-            TabDraw::Face {
-                skin,
-                x,
-                y,
-                size,
-                hat,
-                flip,
-            } => {
-                let Some(r) = atlas.sprites.get(skin.as_str()).copied() else {
-                    continue;
-                };
-                // blit(u, v, size, size, 8, ±8, 64, 64): the face then the hat layer.
-                let layer = |u: f32| {
-                    let mut t = r;
-                    let (du, dv) = (r.u1 - r.u0, r.v1 - r.v0);
-                    t.u0 = r.u0 + du * u / 64.0;
-                    t.u1 = t.u0 + du * 8.0 / 64.0;
-                    let (v0, v1) = if *flip { (16.0, 8.0) } else { (8.0, 16.0) };
-                    t.v0 = r.v0 + dv * v0 / 64.0;
-                    t.v1 = r.v0 + dv * v1 / 64.0;
-                    t
-                };
-                let s = *size as f32;
-                batch.rect_uv(*x as f32, *y as f32, s, s, layer(8.0), u32::MAX);
-                if *hat {
-                    batch.rect_uv(*x as f32, *y as f32, s, s, layer(40.0), u32::MAX);
-                }
             }
         }
     }

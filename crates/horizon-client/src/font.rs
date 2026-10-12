@@ -451,55 +451,114 @@ impl Font {
             .sum::<f32>()
             .ceil()
     }
-    /// Wrapped lines, as `split_lines` but never empty (one empty line for
-    /// empty text).
-    pub fn split(&self, t: &Text, max_width: f32) -> Vec<Text> {
-        let mut lines = self.split_lines(t, max_width);
-        if lines.is_empty() {
-            lines.push(Text::empty());
-        }
-        lines
-    }
-    /// `StringSplitter.splitLines` (`Font.split`): `\n` always breaks; a line
-    /// overflowing `max_width` breaks at its last space (dropped), or before
-    /// the overflowing character when it has none; the first character of
-    /// width always fits. Styles are kept; empty text gives no lines.
-    pub fn split_lines(&self, t: &Text, max_width: f32) -> Vec<Text> {
-        let chars: Vec<(char, Style)> = t.chars().map(|(c, s)| (c, s.clone())).collect();
+    /// `StringSplitter.splitLines`: each line and whether it continues a
+    /// wrapped one. A line breaks at a `\n`, or once a character overflows
+    /// `max_width` (never the first visible one) at the last space so far, or
+    /// before that character; the `\n` or space at the break is dropped.
+    pub fn split_lines(&self, t: &Text, max_width: f32) -> Vec<(Text, bool)> {
         let max_width = max_width.max(1.0);
+        let chars: Vec<(char, &Style)> = t.chars().collect();
+        let n = chars.len();
+        let mut out = Vec::new();
+        let (mut start, mut wrapped, mut force_new_line) = (0, false, false);
+        loop {
+            // LineBreakFinder over what is left.
+            let (mut width, mut had_visible, mut last_space) = (0.0f32, false, None);
+            let mut split = None;
+            for (i, &(c, style)) in chars.iter().enumerate().skip(start) {
+                if c == '\n' {
+                    split = Some(i);
+                    break;
+                }
+                if c == ' ' {
+                    last_space = Some(i);
+                }
+                let advance = self.advance(c, style);
+                width += advance;
+                if !had_visible || width <= max_width {
+                    had_visible |= advance != 0.0;
+                } else {
+                    split = Some(last_space.unwrap_or(i));
+                    break;
+                }
+            }
+            let Some(at) = split else { break };
+            let new_line = chars[at].0 == '\n';
+            let skip = usize::from(new_line || chars[at].0 == ' ');
+            force_new_line = new_line;
+            out.push((t.slice(start, at), wrapped));
+            wrapped = !new_line;
+            start = at + skip;
+        }
+        if start < n {
+            out.push((t.slice(start, n), wrapped));
+        } else if force_new_line {
+            out.push((Text::empty(), false));
+        }
+        out
+    }
+    /// `ComponentRenderUtils.wrapComponents`: the split lines, wrapped ones
+    /// indented by an unstyled space; one empty line for empty text.
+    pub fn wrap_components(&self, t: &Text, max_width: i32) -> Vec<Text> {
+        let lines: Vec<Text> = self
+            .split_lines(t, max_width as f32)
+            .into_iter()
+            .map(|(line, wrapped)| {
+                if wrapped {
+                    Text::literal(" ").append(line)
+                } else {
+                    line
+                }
+            })
+            .collect();
+        if lines.is_empty() {
+            vec![Text::empty()]
+        } else {
+            lines
+        }
+    }
+    /// StringSplitter.splitLines: wrap at the last space that fits (or
+    /// mid-word when none does); `\n` always breaks. Styles are kept.
+    pub fn split(&self, t: &Text, max_width: f32) -> Vec<Text> {
+        let chars: Vec<(char, Style)> = t.chars().map(|(c, s)| (c, s.clone())).collect();
         let mut lines = Vec::new();
         let mut start = 0;
-        let mut force_new_line = false;
-        loop {
-            let mut width = 0.0f32;
-            let mut had_width = false;
+        while start < chars.len() {
+            let mut width = 0.0;
+            let mut end = chars.len();
+            let mut next = chars.len();
             let mut last_space = None;
-            let mut split = None;
             for (i, (c, style)) in chars.iter().enumerate().skip(start) {
                 if *c == '\n' {
-                    split = Some(i);
+                    end = i;
+                    next = i + 1;
                     break;
                 }
                 if *c == ' ' {
                     last_space = Some(i);
                 }
-                let w = self.advance(*c, style);
-                width += w;
-                if had_width && width > max_width {
-                    split = Some(last_space.unwrap_or(i));
+                width += self.advance(*c, style);
+                if width > max_width {
+                    match last_space {
+                        Some(s) if s > start => {
+                            end = s;
+                            next = s + 1;
+                        }
+                        _ => {
+                            end = i.max(start + 1);
+                            next = end;
+                        }
+                    }
                     break;
                 }
-                had_width |= w != 0.0;
             }
-            let Some(at) = split else { break };
-            let tail = chars[at].0;
-            force_new_line = tail == '\n';
-            lines.push(t.slice(start, at));
-            start = at + usize::from(tail == '\n' || tail == ' ');
+            lines.push(t.slice(start, end));
+            start = next;
+            if start == chars.len() && chars.last().is_some_and(|c| c.0 == '\n') {
+                lines.push(Text::empty());
+            }
         }
-        if start < chars.len() {
-            lines.push(t.slice(start, chars.len()));
-        } else if force_new_line {
+        if lines.is_empty() {
             lines.push(Text::empty());
         }
         lines

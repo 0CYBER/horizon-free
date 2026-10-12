@@ -8,7 +8,7 @@ extract, prepare (the cached wall vertex buffer), prepareDynamicTransforms
 (colour, model offset, scrolling texture) and draw (which walls), and
 Hud.extractVignette (the red warning vignette colour). `examples/
 world_border_render_fixture` replays the same cases with `horizon_client::
-worldborder`, `border_render` and `screen_effects`; every value must agree
+worldborder`, `border_render` and `hud_overlays::vignette`; every value must agree
 bit for bit.
 
   test_world_border_parity.py [--count N] [--detail N]

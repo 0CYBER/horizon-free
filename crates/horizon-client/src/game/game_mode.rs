@@ -33,6 +33,11 @@ impl Game<'_> {
         let was_spectator = self.spectator();
         self.mode = mode;
         self.creative = mode == GameMode::Creative;
+        // GameType.updatePlayerAbilities applies at once.
+        if let Some(p) = self.player.as_mut() {
+            p.invulnerable = mode == GameMode::Creative || mode == GameMode::Spectator;
+            p.may_fly = p.invulnerable;
+        }
         if mode == GameMode::Spectator {
             self.mining = None;
             self.using = None;

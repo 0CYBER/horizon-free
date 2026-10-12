@@ -1,12 +1,13 @@
 //! Headless transport for the world border parity gate: replays each case's
 //! border changes, ticks and frames through `horizon_client::worldborder`,
-//! `border_render` and `screen_effects::vignette_color`, and writes what the
+//! `border_render` and `hud_overlays::vignette`, and writes what the
 //! vanilla renderer computes (bounds, fade, wall buffer, transforms, walls
 //! drawn, vignette colour) with floats as raw bits.
 #![forbid(unsafe_code)]
 use horizon_client::{
     border_render::{self, BorderRenderState, BorderRenderer},
-    screen_effects::vignette_color,
+    hud_layout::GuiDraw,
+    hud_overlays,
     worldborder::{BorderStatus, WorldBorder},
 };
 use serde_json::{Value, json};
@@ -92,8 +93,13 @@ fn main() -> Result<()> {
                         frame["sides"] = json!(BorderRenderer::sides(&state, camera, distance));
                     }
                     let warning = border.warning_strength(camera[0], camera[2]);
-                    frame["vignetteColor"] =
-                        json!(vignette_color(f(&op["vignette"]) as f32, warning) as i32);
+                    let vignette =
+                        hud_overlays::vignette(427, 240, f(&op["vignette"]) as f32, warning);
+                    let color = match vignette {
+                        GuiDraw::Blit { color, .. } => color,
+                        _ => 0,
+                    };
+                    frame["vignetteColor"] = json!(color as i32);
                     frames.push(frame);
                 }
                 other => return Err(format!("unknown op {other}").into()),

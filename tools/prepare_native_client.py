@@ -394,6 +394,23 @@ def main():
             subprocess.run(['java', '-Xmx1G', '-cp', str(classes) + os.pathsep + dependencies,
                             'dev.horizonlab.parity.VanillaMobDataExporter', str(mob_data), str(jars['client'])],
                            check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+    # Vanilla's built-in registries for in-game command parsing (mob effects,
+    # data component types, dialogs, block entity and tag members).
+    command_registries = root / 'command-registries.json'
+    command_oracle = oracle.with_name('VanillaCommandParseOracle.java')
+    command_sources = base.source_hashes([command_oracle])
+    if not (previous.get('command_registries_exporters_sha256') == command_sources and command_registries.exists()
+            and previous.get('server_sha256') == origin['server_sha256']):
+        export = lab.LOCAL / 'command-registries'; classes = export / 'classes'; classes.mkdir(parents=True, exist_ok=True)
+        dependencies = os.pathsep.join(map(str, [jars['server'], *libraries]))
+        with (root / 'command-registries-export.log').open('w') as log:
+            subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none',
+                            '-cp', dependencies, '-d', str(classes), str(command_oracle)],
+                           check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+            subprocess.run(['java', '-Xmx1G', '-cp', str(classes) + os.pathsep + dependencies,
+                            'dev.horizonlab.parity.VanillaCommandParseOracle', 'registries', str(export)],
+                           check=True, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+        command_registries.write_bytes((export / 'registries.json').read_bytes())
     creative = root / 'creative-tabs.json'
     creative_oracle = oracle.with_name('VanillaCreativeTabsExporter.java')
     creative_sources = base.source_hashes([creative_oracle])
@@ -425,6 +442,7 @@ def main():
                              'mob_data_exporters_sha256': mob_sources,
                              'entity_types_exporters_sha256': entity_types_sources,
                              'behaviour_exporters_sha256': behaviour_sources,
+                             'command_registries_exporters_sha256': command_sources,
                              'model_states_sha256': lab.digest(model_states, 'sha256'), 'data_version': version['world_version'],
                              'facts_sha256': lab.digest(facts, 'sha256'),
                              'block_tags_sha256': lab.digest(root / 'block-tags.json', 'sha256'), 'resource_files': count})

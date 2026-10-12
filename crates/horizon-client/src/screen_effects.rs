@@ -1,9 +1,10 @@
 //! Full-screen camera effects drawn between the world and the HUD:
 //! `ScreenEffectRenderer` (in-wall block texture, underwater overlay, fire)
-//! and the `Hud` camera overlays (vignette, pumpkin blur, powder-snow
+//! and the full-screen `Hud` camera overlays laid out by
+//! `hud_overlays::camera_overlays` (vignette, pumpkin blur, powder-snow
 //! outline, nether portal swirl). Positions are clip-space quads; textures
 //! come from the shared 2D atlas and may repeat.
-use crate::hud::Rect;
+use crate::{hud::Rect, hud_layout::GuiDraw};
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,14 +41,9 @@ pub struct ScreenInputs<'a> {
     /// Eye in water: (lightmap brightness at the eye, yaw, pitch).
     pub water: Option<(f32, f32, f32)>,
     pub on_fire: bool,
-    /// Equipment camera overlays (`Equippable.cameraOverlay`, e.g. `misc/pumpkinblur`).
-    pub camera_overlays: Vec<String>,
-    /// `Player.getPercentFrozen`.
-    pub frozen: f32,
-    /// `Options.vignette`.
-    pub vignette: bool,
-    /// `WorldBorder::warning_strength` at the camera (0 when far).
-    pub border_warning: f32,
+    /// `Hud.extractCameraOverlays` draws: the full-screen blits become
+    /// screen quads (the spyglass, its fills and the nausea swirl do not).
+    pub gui_overlays: &'a [GuiDraw],
 }
 
 /// Effect state advanced every tick.
@@ -65,22 +61,6 @@ impl Default for ScreenEffects {
             portal: 0.0,
             o_portal: 0.0,
         }
-    }
-}
-/// `Hud.extractVignette`: the vignette blit colour (ARGB) from
-/// `Hud.vignetteBrightness` and the world border warning strength.
-pub fn vignette_color(vignette_brightness: f32, border_warning: f32) -> u32 {
-    let channel = |v: f32| ((v * 255.0).floor() as i32 & 0xFF) as u32;
-    let argb =
-        |r: f32, g: f32, b: f32| 0xFF00_0000 | channel(r) << 16 | channel(g) << 8 | channel(b);
-    let b = vignette_brightness.clamp(0.0, 1.0);
-    if border_warning > 0.0 {
-        let w = border_warning.clamp(0.0, 1.0);
-        let red = b * (1.0 - w);
-        let green_blue = b + (1.0 - b) * w;
-        argb(red, green_blue, green_blue)
-    } else {
-        argb(b, b, b)
     }
 }
 /// `Lightmap.getBrightness`.
@@ -186,35 +166,42 @@ impl ScreenEffects {
             }),
             blend,
         };
-        if input.vignette
-            && let Some(rect) = sprite("misc/vignette")
-        {
-            let argb = vignette_color(self.vignette_brightness, input.border_warning);
-            let channel = |shift: u32| ((argb >> shift) & 0xFF) as f32 / 255.0;
-            let color = [channel(16), channel(8), channel(0), channel(24)];
-            out.push(gui(rect, color, Blend::Vignette));
-        }
-        for overlay in &input.camera_overlays {
-            if let Some(rect) = sprite(overlay) {
-                out.push(gui(rect, [1.0; 4], Blend::Alpha));
+        let rgba = |c: u32| {
+            let [a, r, g, b] = c.to_be_bytes();
+            [r, g, b, a].map(|v| f32::from(v) / 255.0)
+        };
+        for d in input.gui_overlays {
+            match d {
+                GuiDraw::Blit {
+                    texture,
+                    blend,
+                    x: 0,
+                    y: 0,
+                    color,
+                    ..
+                } if *blend != crate::hud_layout::Blend::Nausea
+                    && texture != "misc/spyglass_scope" =>
+                {
+                    let blend = if *blend == crate::hud_layout::Blend::Vignette {
+                        Blend::Vignette
+                    } else {
+                        Blend::Alpha
+                    };
+                    if let Some(rect) = sprite(texture) {
+                        out.push(gui(rect, rgba(*color), blend));
+                    }
+                }
+                GuiDraw::AtlasSprite {
+                    sprite: name,
+                    color,
+                    ..
+                } => {
+                    if let Some(rect) = sprite(name) {
+                        out.push(gui(rect, rgba(*color), Blend::Alpha));
+                    }
+                }
+                _ => {}
             }
-        }
-        if input.frozen > 0.0
-            && let Some(rect) = sprite("misc/powder_snow_outline")
-        {
-            out.push(gui(rect, [1.0, 1.0, 1.0, input.frozen], Blend::Alpha));
-        }
-        let portal = self.o_portal + (self.portal - self.o_portal) * input.partial;
-        if portal > 0.0
-            && let Some(rect) = sprite("block/nether_portal")
-        {
-            let mut a = portal;
-            if a < 1.0 {
-                a *= a;
-                a *= a;
-                a = a * 0.8 + 0.2;
-            }
-            out.push(gui(rect, [1.0, 1.0, 1.0, a], Blend::Alpha));
         }
         out
     }
@@ -263,10 +250,7 @@ mod tests {
             block_overlay: None,
             water: Some((1.0, 0.0, 0.0)),
             on_fire: false,
-            camera_overlays: vec![],
-            frozen: 0.0,
-            vignette: true,
-            border_warning: 0.0,
+            gui_overlays: &[crate::hud_overlays::vignette(320, 240, 1.0, 0.0)],
         };
         let quads = e.build(&input);
         assert_eq!(quads.len(), 1);

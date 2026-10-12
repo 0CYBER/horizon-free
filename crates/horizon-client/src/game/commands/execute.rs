@@ -23,6 +23,9 @@ pub(in crate::game) struct Source {
     pub silent: bool,
     /// Index of the newest `store` in `ExecState::stores`.
     pub store: Option<u32>,
+    /// `execute in` another dimension than the one Horizon has loaded: none
+    /// of its chunks are loaded.
+    pub elsewhere: bool,
 }
 
 /// Where `execute store` writes.
@@ -70,6 +73,7 @@ impl Game<'_> {
             eyes: false,
             silent: false,
             store: None,
+            elsewhere: false,
         }
     }
     /// The server as a source (function ticks and schedules): the world spawn.
@@ -81,6 +85,7 @@ impl Game<'_> {
             eyes: false,
             silent: true,
             store: None,
+            elsewhere: false,
         }
     }
     pub(super) fn target_rotation(&self, t: Target) -> [f32; 2] {
@@ -106,6 +111,11 @@ impl Game<'_> {
                 .iter()
                 .find(|c| c.id == id)
                 .map_or([0.0; 2], |c| [c.yaw, 0.0]),
+            Target::Other(id) => self
+                .others
+                .iter()
+                .find(|o| o.id == id)
+                .map_or([0.0; 2], |o| [o.yaw, o.pitch]),
             _ => [0.0; 2],
         }
     }
@@ -147,7 +157,7 @@ impl Game<'_> {
     /// Run one command line with `source` (no error reporting): the entry
     /// for functions and `execute run`.
     pub(in crate::game) fn execute_line(&mut self, line: &str, source: Source) -> R<i32> {
-        let d = vanilla::dispatcher();
+        let d = vanilla::game_dispatcher();
         let parse = d.parse(line, &self.ui.registries);
         let (ctx, _) = parse.executable()?;
         let ctx = ctx.clone();
@@ -189,6 +199,12 @@ impl Game<'_> {
     }
     /// `CommandResultCallback`s of a source's `store` chain, oldest first.
     fn deliver(&mut self, store: Option<u32>, success: bool, value: i32) {
+        // The outermost source's own CommandResultCallback (harness record).
+        if self.exec.function_depth == 0
+            && let Some(results) = self.cmds.results.as_mut()
+        {
+            results.push((success, value));
+        }
         let mut chain = Vec::new();
         let mut at = store;
         while let Some(i) = at {
@@ -235,6 +251,10 @@ impl Game<'_> {
     pub(in crate::game) fn run_execute(&mut self, ctx: &Context) -> R<i32> {
         let mut sources = vec![self.command_source.unwrap_or_else(|| self.player_source())];
         let mut c = ctx;
+        // A fork modifier (as, at, positioned as, rotated as, facing entity,
+        // on, a non-terminal if/unless) makes later errors silent
+        // (CommandSourceStack.handleError with `forked`).
+        let mut forked = false;
         loop {
             let word = c
                 .literals
@@ -257,7 +277,8 @@ impl Game<'_> {
                     for s in sources {
                         match self.with_source(s, |g| g.run_chain(command, last)) {
                             Ok(n) => total += n,
-                            // Forked executions report failures and carry on.
+                            Err(_) if forked => {}
+                            // Several sources: report each failure and carry on.
                             Err(e) if many => self.command_failure(e.message),
                             Err(e) => failure = Some(e),
                         }
@@ -275,6 +296,7 @@ impl Game<'_> {
                     if c.child.is_none() {
                         return self.run_conditional_terminal(c, sources, want);
                     }
+                    forked = true;
                     let mut kept = Vec::new();
                     for s in sources {
                         let (keep, _) = self.with_source(s, |g| g.condition(c, want))?;
@@ -285,6 +307,12 @@ impl Game<'_> {
                     sources = kept;
                 }
                 _ => {
+                    forked |= match word {
+                        "as" | "at" | "on" => true,
+                        "positioned" | "rotated" => c.has("as"),
+                        "facing" => c.has("entity"),
+                        _ => false,
+                    };
                     let mut next = Vec::new();
                     for s in sources {
                         next.extend(self.with_source(s, |g| g.modify(word, c, s))?);
@@ -407,6 +435,7 @@ impl Game<'_> {
                     Some(Source {
                         pos: self.target_position(t)?,
                         rot: self.target_rotation(t),
+                        elsewhere: false,
                         ..s
                     })
                 })
@@ -497,14 +526,21 @@ impl Game<'_> {
                 ..s
             }],
             "in" => {
-                // Horizon keeps one dimension loaded; others cannot be a source.
+                // Horizon keeps one dimension loaded: in another one, no
+                // chunk is loaded (as in vanilla without a player there).
                 let Some(Arg::Resource(dim)) = c.get("dimension") else {
                     return Ok(vec![s]);
                 };
-                if dim != self.dim.id() {
+                if !matches!(
+                    dim.as_str(),
+                    "minecraft:overworld" | "minecraft:the_nether" | "minecraft:the_end"
+                ) {
                     return Err(err("argument.dimension.invalid", &[dim]));
                 }
-                vec![s]
+                vec![Source {
+                    elsewhere: dim != self.dim.id(),
+                    ..s
+                }]
             }
             "summon" => {
                 let Some(Arg::Resource(kind)) = c.get("entity").cloned() else {

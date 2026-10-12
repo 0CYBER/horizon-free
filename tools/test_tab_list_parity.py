@@ -131,7 +131,7 @@ def cases(count):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--count', type=int, default=700)
+    parser.add_argument('--count', type=int, default=1000)
     parser.add_argument('--detail', type=int, default=3)
     args = parser.parse_args()
     lock, jars, _ = base.verify_artifacts()
