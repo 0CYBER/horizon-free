@@ -31,6 +31,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import datafix_scene as scene  # noqa: E402
+import datafix_scene_12 as scene12  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 LOCAL = ROOT / '.local' / 'datafix'
@@ -368,27 +369,32 @@ def build(version, force=False):
             problems.append((command[:160], bad[:2]))
         return out
 
-    run('forceload add -48 -48 79 79')
-    run('fill 0 99 0 47 99 47 minecraft:stone')
-    run('fill 0 100 0 47 112 47 minecraft:air')
-    for i, (block, nbt) in enumerate(scene.block_entities(era, data_version)):
-        x, z = 1 + 3 * (i % 15), 1 + 3 * (i // 15)
-        run(f'setblock {x} 100 {z} minecraft:{block}{nbt}')
-    for i, (kind, extra) in enumerate(scene.entities(era, data_version)):
-        x, z = 1.5 + 3 * (i % 15), 25.5 + 3 * (i // 15)
-        fields = f'UUID:{uuid_nbt(i)},NoAI:1b,Silent:1b,NoGravity:1b,Invulnerable:1b,PersistenceRequired:1b'
-        run(f'summon minecraft:{kind} {x} 100 {z} {{{fields}' + (',' + extra if extra else '') + '}')
-    run('setworldspawn 20 101 20')
-    bot = Bot(port, protocol, BOT)
-    time.sleep(3)
-    for command in scene.player_commands(era, BOT, data_version):
-        run(command)
-    time.sleep(3)
-    run('save-all flush')
-    time.sleep(2)
+    if data_version < 1631:   # 1.12 and older: tools/datafix_scene_12.py builds the scene and saves the world itself
+        bot = scene12.populate(server, Bot, port, protocol, BOT, problems)
+    else:
+        run('forceload add -48 -48 79 79')
+        run('fill 0 99 0 47 99 47 minecraft:stone')
+        run('fill 0 100 0 47 112 47 minecraft:air')
+        for i, (block, nbt) in enumerate(scene.block_entities(era, data_version)):
+            x, z = 1 + 3 * (i % 15), 1 + 3 * (i // 15)
+            run(f'setblock {x} 100 {z} minecraft:{block}{nbt}')
+        for i, (kind, extra) in enumerate(scene.entities(era, data_version)):
+            x, z = 1.5 + 3 * (i % 15), 25.5 + 3 * (i // 15)
+            fields = f'UUID:{uuid_nbt(i)},NoAI:1b,Silent:1b,NoGravity:1b,Invulnerable:1b,PersistenceRequired:1b'
+            run(f'summon minecraft:{kind} {x} 100 {z} {{{fields}' + (',' + extra if extra else '') + '}')
+        run('setworldspawn 20 101 20')
+        bot = Bot(port, protocol, BOT)
+        time.sleep(3)
+        for command in scene.player_commands(era, BOT, data_version):
+            run(command)
+        time.sleep(3)
+        run('save-all flush')
+        time.sleep(2)
     bot.leave()
     time.sleep(2)
     server.stop()
+    if data_version < 1631:
+        scene12.fixtures(work / 'world')   # the few statistics a passive bot cannot cause, written by hand
     # Copy aside, then rename: an interrupted copy must not look like a finished world.
     partial = target.with_name(target.name + '.partial')
     shutil.rmtree(partial, ignore_errors=True)
@@ -411,6 +417,8 @@ def main():
     args = p.parse_args()
     for version in args.versions or VERSIONS:
         build(version, args.force)
+        if version == '1.12.2':
+            scene12.build_flat(sys.modules[__name__], args.force)   # and the flat world 1.12.2-flat
 
 
 if __name__ == '__main__':
