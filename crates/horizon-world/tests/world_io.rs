@@ -120,12 +120,21 @@ fn malformed_region(path: &Path, first: u32, second: u32, payload_len: u32, code
 }
 
 #[test]
-fn corrupt_allocations_lengths_codecs_and_missing_external_files_fail() {
+fn corrupt_allocations_are_dropped_and_bad_payloads_fail() {
     let dir = Directory::new();
-    for (first, second) in [(257, 0), (512, 0), (1025, 0), (513, 513)] {
+    // RegionFile's constructor drops (and logs) entries whose sector overlaps the
+    // header, that have no sectors or that start past the end of the file; it
+    // does not check overlaps between chunks.
+    for (first, second, chunks) in [(257, 0, 0), (512, 0, 0), (1025, 0, 0), (513, 513, 2)] {
         malformed_region(&dir.region(), first, second, 1, 3);
-        assert!(RegionFile::open(dir.region()).is_err());
+        let reader = RegionFile::open(dir.region()).unwrap();
+        assert_eq!(reader.chunks().count(), chunks);
     }
+    // An empty or truncated file reads as a region without chunks.
+    fs::write(dir.region(), b"").unwrap();
+    assert_eq!(RegionFile::open(dir.region()).unwrap().chunks().count(), 0);
+    fs::write(dir.region(), [0, 0, 2, 1]).unwrap();
+    assert_eq!(RegionFile::open(dir.region()).unwrap().chunks().count(), 0);
     for (len, codec) in [
         (0, 3),
         (4093, 3),
