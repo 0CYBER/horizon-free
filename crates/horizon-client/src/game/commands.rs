@@ -1317,13 +1317,12 @@ impl Game<'_> {
             self.res.facts.get(previous).name.clone(),
             self.res.facts.get(state).name.clone(),
         );
+        // The command clears the old block entity without its side effects
+        // (UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS); the new block gets a fresh one.
+        let key = (pos[0], pos[1], pos[2]);
         if old != new {
-            let key = (pos[0], pos[1], pos[2]);
             self.jukebox_removed(pos);
             self.world.block_entities.remove(&key);
-            if let Some(entity) = horizon_client::containers::BlockEntity::for_block(&new) {
-                self.world.block_entities.insert(key, entity);
-            }
         }
         if strict {
             self.with_level(|b, level, ticks| {
@@ -1341,6 +1340,12 @@ impl Game<'_> {
         } else {
             self.level_set(pos, state)
                 .map_err(|e| CommandError::new(Text::literal(e.to_string())))?;
+        }
+        if old != new
+            && self.world.block(pos[0], pos[1], pos[2]) == state
+            && let Some(entity) = horizon_client::containers::BlockEntity::for_block(&new)
+        {
+            self.world.block_entities.insert(key, entity);
         }
         Ok(true)
     }

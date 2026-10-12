@@ -11,6 +11,7 @@ use horizon_world::{
     level::{
         Behaviours, Dimension, EntityQuery, GameRules, LevelAccess, LevelEvent, Ticks,
         data::load_registry,
+        removal::{PreRemove, drop_item_stack, pre_remove},
     },
     registry::BlockStateId,
 };
@@ -34,6 +35,8 @@ struct Cells {
     events: Vec<LevelEvent>,
     command_blocks: HashMap<BlockPos, bool>,
     lecterns_with_books: std::rc::Rc<std::collections::HashSet<BlockStateId>>,
+    /// `preRemoveSideEffects` of each state's block entity.
+    removals: std::rc::Rc<Vec<PreRemove>>,
 }
 impl LevelAccess for Cells {
     fn block_state(&self, pos: BlockPos) -> BlockStateId {
@@ -109,6 +112,30 @@ impl LevelAccess for Cells {
     fn emit(&mut self, event: LevelEvent) {
         self.events.push(event);
     }
+    /// The oracle level's block entities are fresh: containers spill only
+    /// empty slots (which still draw their spot), a lectern whose state has a
+    /// book drops its empty book, a fresh shrieker has no warning level.
+    fn remove_block_entity(&mut self, pos: BlockPos, old: BlockStateId, side_effects: bool) {
+        if !side_effects {
+            return;
+        }
+        let slots = match self.removals.get(old.0 as usize) {
+            Some(PreRemove::Contents { slots, .. }) => *slots,
+            Some(PreRemove::Campfire) => 4,
+            Some(PreRemove::Lectern) if self.lecterns_with_books.contains(&old) => {
+                self.events.push(LevelEvent::BlockEvent {
+                    pos,
+                    state: old,
+                    kind: "spawn_item",
+                });
+                return;
+            }
+            _ => return,
+        };
+        for _ in 0..slots {
+            drop_item_stack(&mut self.random, pos, 0);
+        }
+    }
 }
 
 fn pos_of(value: &Value) -> BlockPos {
@@ -161,6 +188,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 })
                 .collect(),
         );
+    let removals: std::rc::Rc<Vec<PreRemove>> = std::rc::Rc::new(
+        (0..registry.len() as u32)
+            .map(|id| {
+                registry
+                    .state(BlockStateId(id))
+                    .map_or(PreRemove::Nothing, |s| pre_remove(&s.name))
+            })
+            .collect(),
+    );
     let mut out = std::io::BufWriter::new(std::fs::File::create(output)?);
     for (index, line) in std::io::BufReader::new(std::fs::File::open(cases)?)
         .lines()
@@ -202,6 +238,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             events: Vec::new(),
             command_blocks: HashMap::new(),
             lecterns_with_books: lecterns_with_books.clone(),
+            removals: removals.clone(),
         };
         let mut ticks = Ticks::new(0);
         for x in -3..=3 {
@@ -327,6 +364,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 LevelEvent::PrimeTnt { .. } => {
                     let _ = writeln!(result, "E minecraft:tnt");
+                }
+                LevelEvent::BlockEvent {
+                    kind: "spawn_item", ..
+                } => {
+                    let _ = writeln!(result, "E minecraft:item");
                 }
                 LevelEvent::GameEvent { pos, event, .. } => {
                     let _ = writeln!(result, "G {} {}", p(*pos), event);

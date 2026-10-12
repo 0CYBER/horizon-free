@@ -115,6 +115,7 @@ mod portal;
 mod query;
 mod rails;
 mod redstone;
+pub mod removal;
 pub mod sculk;
 mod shapes;
 mod shelf;
@@ -383,6 +384,12 @@ pub trait LevelAccess {
         true
     }
     fn emit(&mut self, _event: LevelEvent) {}
+    /// `LevelChunk.setBlockState` replaced a block that had a block entity by
+    /// another block: run `BlockEntity.preRemoveSideEffects` when
+    /// `side_effects` (containers spill their contents, a jukebox pops its
+    /// record, a lectern its book...) and remove the block entity. Called
+    /// after the storage write, before `affectNeighborsAfterRemoval`.
+    fn remove_block_entity(&mut self, _pos: BlockPos, _old: BlockStateId, _side_effects: bool) {}
     /// Biome identifier at `pos` (`minecraft:plains`), for features placed by
     /// block behaviour (bone meal flowers). None when unknown.
     fn biome_name(&self, _pos: BlockPos) -> Option<&str> {

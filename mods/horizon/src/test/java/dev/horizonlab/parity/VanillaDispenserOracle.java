@@ -138,6 +138,49 @@ public final class VanillaDispenserOracle {
         throw new IllegalStateException("no slots in " + be);
     }
 
+    /** Put a stack in a slot: the item list of a container, else the one item a block entity holds (jukebox, lectern, decorated pot). */
+    static void setSlot(BlockEntity be, int slot, ItemStack stack) throws Exception {
+        for (Class<?> c = be.getClass(); c != null; c = c.getSuperclass()) {
+            for (Field fd : c.getDeclaredFields()) {
+                if (fd.getType() == NonNullList.class && !java.lang.reflect.Modifier.isStatic(fd.getModifiers())) {
+                    fd.setAccessible(true);
+                    @SuppressWarnings("unchecked") NonNullList<ItemStack> list = (NonNullList<ItemStack>) fd.get(be);
+                    list.set(slot, stack);
+                    return;
+                }
+            }
+        }
+        for (Class<?> c = be.getClass(); c != null; c = c.getSuperclass()) {
+            for (Field fd : c.getDeclaredFields()) {
+                if (fd.getType() == ItemStack.class && !java.lang.reflect.Modifier.isStatic(fd.getModifiers())) {
+                    fd.setAccessible(true);
+                    fd.set(be, stack);
+                    return;
+                }
+            }
+        }
+        throw new IllegalStateException("no slots in " + be);
+    }
+
+    /** The removal a "remove" case runs on the block at its origin. */
+    static void remove(VanillaBlockUpdateOracle.World w, BlockPos origin, JsonObject op) {
+        switch (op.get("op").getAsString()) {
+            case "set" -> w.setBlock(origin, Block.stateById(op.get("state").getAsInt()), op.get("flags").getAsInt());
+            case "destroy" -> w.destroyBlock(origin, op.get("drop").getAsBoolean());
+            case "remove" -> w.removeBlock(origin, false);
+            default -> throw new IllegalStateException(op.toString());
+        }
+    }
+
+    static boolean hasList(Object be) {
+        for (Class<?> c = be.getClass(); c != null; c = c.getSuperclass()) {
+            for (Field fd : c.getDeclaredFields()) {
+                if (fd.getType() == NonNullList.class && !java.lang.reflect.Modifier.isStatic(fd.getModifiers())) return true;
+            }
+        }
+        return false;
+    }
+
     static Method dispenseFrom(Class<?> type) throws Exception {
         for (Class<?> c = type; c != null; c = c.getSuperclass()) {
             try {
@@ -205,7 +248,7 @@ public final class VanillaDispenserOracle {
             for (var item : f.getAsJsonArray("items")) {
                 var it = item.getAsJsonArray();
                 BlockPos at = new BlockPos(it.get(0).getAsInt(), it.get(1).getAsInt(), it.get(2).getAsInt());
-                slots(w.getBlockEntity(at)).set(it.get(3).getAsInt(), stack(it.get(4).getAsString()));
+                setSlot(w.getBlockEntity(at), it.get(3).getAsInt(), stack(it.get(4).getAsString()));
             }
         }
         if (f.has("entities")) {
@@ -232,14 +275,18 @@ public final class VanillaDispenserOracle {
         List<Entity> targets = List.copyOf(w.entities);
         BlockPos origin = VanillaBlockUpdateOracle.readPos(f.getAsJsonArray("pos"));
         BlockState state = w.getBlockState(origin);
-        dispenseFrom(state.getBlock().getClass()).invoke(state.getBlock(), w, state, origin);
+        if (f.has("remove")) {
+            remove(w, origin, f.getAsJsonObject("remove"));
+        } else {
+            dispenseFrom(state.getBlock().getClass()).invoke(state.getBlock(), w, state, origin);
+        }
 
         result.addAll(VanillaBlockUpdateOracle.summary(w, before));
         List<BlockPos> containers = new ArrayList<>(w.blockEntities == null ? List.of() : w.blockEntities.keySet());
         containers.sort(Comparator.<BlockPos>comparingInt(q -> q.getX()).thenComparingInt(q -> q.getY()).thenComparingInt(q -> q.getZ()));
         for (BlockPos at : containers) {
             if (!(w.blockEntities.get(at) instanceof Container) || w.getBlockEntity(at) != w.blockEntities.get(at)) continue;
-            var items = slots(w.blockEntities.get(at));
+            List<ItemStack> items = w.blockEntities.get(at) instanceof Container c && !hasList(c) ? List.of(c.getItem(0)) : slots(w.blockEntities.get(at));
             for (int i = 0; i < items.size(); i++) {
                 if (!items.get(i).isEmpty()) result.add("inv " + VanillaBlockUpdateOracle.pos(at) + " " + i + " " + ParityData.canon(items.get(i)));
             }

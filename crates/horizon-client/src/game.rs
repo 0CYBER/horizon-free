@@ -75,6 +75,7 @@ mod sculk;
 mod shield;
 mod sign_edit;
 mod sniffers;
+mod spill;
 mod station_control;
 mod stations;
 mod stats;
@@ -322,6 +323,10 @@ struct GameLevel<'w> {
     items: &'w Items,
     registry: &'static horizon_world::registry::BlockRegistry,
     rules: horizon_world::level::GameRules,
+    /// Block loot random sequences (`ServerLevel.getRandomSequence`).
+    rand_sequences: &'w mut horizon_client::random_sequences::RandomSequences,
+    pending: &'w mut spill::Pending,
+    spill: &'w mut spill::Spill,
 }
 impl LevelAccess for GameLevel<'_> {
     fn precipitation(&self, pos: BlockPos) -> Option<horizon_world::level::Precipitation> {
@@ -465,7 +470,14 @@ impl LevelAccess for GameLevel<'_> {
         }
     }
     fn emit(&mut self, event: LevelEvent) {
-        self.events.push(event);
+        match event {
+            // Block.dropResources draws its loot and spots right away.
+            LevelEvent::DropResources { pos, state } => self.drop_resources_now(pos, state),
+            event => self.events.push(event),
+        }
+    }
+    fn remove_block_entity(&mut self, pos: BlockPos, old: BlockStateId, side_effects: bool) {
+        self.remove_entity(pos, old, side_effects);
     }
 }
 /// FallingBlockEntity carrying a block state.
@@ -702,12 +714,11 @@ struct Game<'a> {
     /// The ender inventory (27 slots) and the ender chest showing it.
     ender_items: Vec<Option<ItemStack>>,
     ender_open: Option<(i32, i32, i32)>,
-    /// Contents of broken shulker boxes waiting for their dropped item.
-    pending_shulker: HashMap<[i32; 3], Vec<(u8, ItemStack)>>,
-    /// Layers of broken banners waiting for their dropped item.
-    pending_banner: HashMap<[i32; 3], horizon_client::containers::Banner>,
-    /// Custom names of broken containers, for the dropped item (`copy_components`).
-    pending_names: HashMap<[i32; 3], (String, String)>,
+    /// Block entity data of broken blocks waiting for their dropped item.
+    pending: spill::Pending,
+    /// Item entities spawned and block entities removed while the block
+    /// behaviour ran (spilled contents, popped resources).
+    spill: spill::Spill,
     /// The recipe book of the open screen (game/recipe_book.rs).
     recipe_ui: recipe_book::RecipeUi,
     /// The horse inventory (game/mount_menu.rs).
@@ -1078,33 +1089,36 @@ impl Game<'_> {
     }
     /// `Block.getDrops`: the block's loot table, drawing from its server random
     /// sequence (`LootContext.Builder.create`), else the level random.
-    fn block_loot(&mut self, state: BlockStateId, held: Option<&ItemStack>) -> Vec<ItemStack> {
+    fn block_loot_at(
+        &mut self,
+        pos: [i32; 3],
+        state: BlockStateId,
+        held: Option<&ItemStack>,
+    ) -> Vec<ItemStack> {
         let registry = self.res.assets.registry;
+        let dynamic = self.pending.dynamic(pos);
         match self.res.items.block_loot_sequence(registry, state) {
             Some(sequence) => {
                 let random = self.rand_sequences.get(&sequence, self.level.seed);
-                self.res.items.block_drops(registry, state, held, random)
+                self.res
+                    .items
+                    .block_drops_with(registry, state, held, &dynamic, random)
             }
-            None => self
-                .res
-                .items
-                .block_drops(registry, state, held, &mut self.world.random),
+            None => self.res.items.block_drops_with(
+                registry,
+                state,
+                held,
+                &dynamic,
+                &mut self.world.random,
+            ),
         }
     }
     /// Block.popResource
     fn pop_resource(&mut self, pos: [i32; 3], mut stack: ItemStack) {
-        self.attach_shulker_contents(pos, &mut stack);
-        self.attach_container_name(pos, &mut stack);
-        self.attach_banner_layers(pos, &mut stack);
+        self.pending.attach(pos, &mut stack);
         // Block.popResource: Mth.nextDouble offsets from the level random; the
         // motion is `new ItemEntity(..)`'s own, from the item's random.
-        let r = &mut self.world.random;
-        let mut offset = || -0.25 + r.next_double() * 0.5;
-        let p = [
-            f64::from(pos[0]) + 0.5 + offset(),
-            f64::from(pos[1]) + 0.5 + offset() - 0.125,
-            f64::from(pos[2]) + 0.5 + offset(),
-        ];
+        let p = spill::pop_position(&mut self.world.random, pos);
         let v = dispenser::new_item_motion();
         self.spawn_item(stack, p, v, 10);
     }
@@ -1266,8 +1280,13 @@ impl Game<'_> {
             items: &self.res.items,
             registry: self.res.assets.registry,
             rules,
+            rand_sequences: &mut self.rand_sequences,
+            pending: &mut self.pending,
+            spill: &mut self.spill,
         };
-        f(&self.res.behaviours, &mut level, &mut self.block_ticks)
+        let result = f(&self.res.behaviours, &mut level, &mut self.block_ticks);
+        self.flush_spill();
+        result
     }
     /// Level.setBlock(pos, state, UPDATE_ALL) with neighbour/shape updates.
     fn level_set(&mut self, pos: [i32; 3], state: BlockStateId) -> Result<()> {
@@ -1452,18 +1471,9 @@ impl Game<'_> {
                     };
                     self.audio.play(&name, Some(c), volume, pitch);
                 }
+                // Handled as the behaviour emits it (GameLevel::emit).
                 LevelEvent::DropResources { pos, state } => {
-                    self.jukebox_removed([pos.x, pos.y, pos.z]);
-                    if let Some(entity) = self.world.block_entities.remove(&(pos.x, pos.y, pos.z)) {
-                        let name = self.res.facts.get(state).name.clone();
-                        self.release_contents([pos.x, pos.y, pos.z], entity, &name);
-                    }
-                    let drops = self.block_loot(state, None);
-                    for d in drops {
-                        if &*d.item != "minecraft:air" {
-                            self.pop_resource([pos.x, pos.y, pos.z], d);
-                        }
-                    }
+                    self.with_level(|_, level, _| level.drop_resources_now(pos, state));
                 }
                 LevelEvent::FallingBlock { pos, state } => {
                     let p = Vec3::new(
@@ -1788,23 +1798,63 @@ impl Game<'_> {
         self.with_player_actor(|game| game.break_block_as_player(pos))
     }
     fn break_block_as_player(&mut self, pos: [i32; 3]) -> Result<()> {
+        // ServerPlayerGameMode.destroyBlock.
         let state = self.world.block(pos[0], pos[1], pos[2]);
         let facts = self.res.facts.get(state).clone();
         // Block.playerWillDestroy: mining their gold angers all nearby piglins.
         if self.guarded_by_piglins(&facts.name) {
             self.anger_piglins(false);
         }
-        if !self.creative {
-            // Block.playerDestroy: the mined statistic and the exhaustion.
-            self.stats.add("mined", &facts.name, 1);
-            if let Some(p) = self.player.as_mut() {
-                p.health.food.exhaustion = (p.health.food.exhaustion + 0.005).min(40.0);
-            }
+        // The block entity as it was, for what the drops copy from it.
+        let key = (pos[0], pos[1], pos[2]);
+        if let Some(entity) = self.world.block_entities.get(&key).cloned() {
+            let name = self.world.block_names.get(&key).cloned();
+            self.pending.record(pos, &entity, &facts.name, name);
+        } else if let Some(tag) = spill::saved_entity(&self.world, pos) {
+            self.pending.record_saved(pos, &tag);
+        }
+        self.creaking_heart_broken(pos);
+        // playerWillDestroy and Level.removeBlock through the vanilla behaviour
+        // library: the block entity's side effects (containers spill), neighbour
+        // and shape updates, and the destroy event (particles, sound).
+        let creative = self.creative;
+        let removed = self.with_level(|b, level, ticks| {
+            b.player_destroy_block(
+                level,
+                ticks,
+                BlockPos::new(pos[0], pos[1], pos[2]),
+                creative,
+            )
+        });
+        if removed && !creative {
             let held = self.held().cloned();
+            // ItemStack.mineBlock: tools lose durability on blocks with nonzero hardness.
+            if facts.hardness > 0.0
+                && let Some(stack) = self.inventory[self.selected].clone()
+                && let Some(max) = self
+                    .res
+                    .items
+                    .get(&stack.item)
+                    .filter(|i| i.max_damage > 0 && !i.tool.is_empty())
+                    .map(|i| i.max_damage)
+            {
+                let loss = self.durability_loss(&stack, 1);
+                if let Some(stack) = self.inventory[self.selected].as_mut() {
+                    stack.damage += loss;
+                    if stack.damage >= max {
+                        self.inventory[self.selected] = None;
+                    }
+                }
+            }
             let harvest = !facts.requires_tool
                 || self.res.items.correct_for_drops(held.as_ref(), &facts.name);
             if harvest {
-                let drops = self.block_loot(state, held.as_ref());
+                // Block.playerDestroy: the mined statistic, the exhaustion and the drops.
+                self.stats.add("mined", &facts.name, 1);
+                if let Some(p) = self.player.as_mut() {
+                    p.health.food.exhaustion = (p.health.food.exhaustion + 0.005).min(40.0);
+                }
+                let drops = self.block_loot_at(pos, state, held.as_ref());
                 let silk = held
                     .as_ref()
                     .is_some_and(|h| h.enchantment_level("minecraft:silk_touch") > 0);
@@ -1829,53 +1879,8 @@ impl Game<'_> {
                     );
                 }
             }
-            // Tools lose durability on blocks with nonzero hardness.
-            if facts.hardness > 0.0
-                && let Some(stack) = self.inventory[self.selected].clone()
-                && let Some(max) = self
-                    .res
-                    .items
-                    .get(&stack.item)
-                    .filter(|i| i.max_damage > 0 && !i.tool.is_empty())
-                    .map(|i| i.max_damage)
-            {
-                let loss = self.durability_loss(&stack, 1);
-                if let Some(stack) = self.inventory[self.selected].as_mut() {
-                    stack.damage += loss;
-                    if stack.damage >= max {
-                        self.inventory[self.selected] = None;
-                    }
-                }
-            }
         }
-        let replacement = if facts.waterlogged {
-            self.res.assets.registry.default_state("minecraft:water")
-        } else {
-            None
-        }
-        .unwrap_or(self.world.air);
-        self.creaking_heart_broken(pos);
-        if let Some(entity) = self.world.block_entities.remove(&(pos[0], pos[1], pos[2])) {
-            // Containers.dropContents (shulker boxes keep theirs).
-            let name = facts.name.clone();
-            self.release_contents(pos, entity, &name);
-            if self.container == Some((pos[0], pos[1], pos[2])) {
-                self.container = None;
-                self.screen = Screen::Playing;
-            }
-        }
-        let _ = replacement;
-        // Block.playerDestroy through the vanilla behaviour library: removal,
-        // neighbour and shape updates, and the destroy event (particles, sound).
-        let creative = self.creative;
-        self.with_level(|b, level, ticks| {
-            b.player_destroy_block(
-                level,
-                ticks,
-                BlockPos::new(pos[0], pos[1], pos[2]),
-                creative,
-            );
-        });
+        self.pending.clear(pos);
         self.process_level_events()?;
         Ok(())
     }
@@ -5961,25 +5966,35 @@ impl Game<'_> {
         Ok(false)
     }
     /// ExperienceOrb.award: split into vanilla orb sizes.
+    /// `ExperienceOrb.award`: orbs of the largest sizes; each draws the id
+    /// `tryMergeToExisting` compares from the level random, then moves with
+    /// its own random.
     fn spawn_orbs(&mut self, at: [f64; 3], mut value: u32) {
         while value > 0 {
             let v = ExperienceOrb::split(value);
             value -= v;
-            let r = &mut self.world.random;
-            let p = Vec3::new(at[0], at[1], at[2]);
-            self.orbs.push(ExperienceOrb {
-                position: p,
-                previous: p,
-                velocity: Vec3::new(
-                    (r.next_double() * 0.2 - 0.1) * 2.0,
-                    r.next_double() * 0.2 * 2.0,
-                    (r.next_double() * 0.2 - 0.1) * 2.0,
-                ),
-                value: v,
-                age: 0,
-                on_ground: false,
-            });
+            let _merge_id = self.world.random.next_int_bound(40);
+            self.add_orb(at, v);
         }
+    }
+    /// `new ExperienceOrb(level, pos, Vec3.ZERO, value)`: yaw and motion from
+    /// the orb's own random.
+    fn add_orb(&mut self, at: [f64; 3], value: u32) {
+        let mut r = dispenser::entity_random();
+        let _yaw = r.next_float();
+        let p = Vec3::new(at[0], at[1], at[2]);
+        self.orbs.push(ExperienceOrb {
+            position: p,
+            previous: p,
+            velocity: Vec3::new(
+                (r.next_double() * 0.2 - 0.1) * 2.0,
+                r.next_double() * 0.2 * 2.0,
+                (r.next_double() * 0.2 - 0.1) * 2.0,
+            ),
+            value,
+            age: 0,
+            on_ground: false,
+        });
     }
     /// DropExperienceBlock / RedStoneOreBlock / SculkBlock experience ranges.
     fn block_experience(&mut self, name: &str) -> u32 {
@@ -8101,9 +8116,8 @@ pub fn run() -> Result<()> {
         riding: None,
         ender_items: vec![None; 27],
         ender_open: None,
-        pending_shulker: HashMap::new(),
-        pending_banner: HashMap::new(),
-        pending_names: HashMap::new(),
+        pending: Default::default(),
+        spill: Default::default(),
         recipe_ui: Default::default(),
         mount_menu: Default::default(),
         hook: None,

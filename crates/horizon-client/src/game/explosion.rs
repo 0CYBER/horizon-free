@@ -390,17 +390,29 @@ impl Game<'_> {
         }
         let name = self.res.facts.get(state).name.clone();
         let is_tnt = &*name == "minecraft:tnt";
+        // Block.onExplosionHit: the drops copy from the block entity, which
+        // then spills its contents as the block turns to air.
+        let key = (pos[0], pos[1], pos[2]);
+        if let Some(entity) = self.world.block_entities.get(&key).cloned() {
+            let custom = self.world.block_names.get(&key).cloned();
+            self.pending.record(pos, &entity, &name, custom);
+        } else if let Some(tag) = super::spill::saved_entity(&self.world, pos) {
+            self.pending.record_saved(pos, &tag);
+        }
         if !is_tnt {
-            let drops = self.res.items.block_drops(
+            let dynamic = self.pending.dynamic(pos);
+            let drops = self.res.items.block_drops_with(
                 self.res.assets.registry,
                 state,
                 None,
+                &dynamic,
                 &mut self.world.random,
             );
-            for stack in drops {
+            for mut stack in drops {
                 if &*stack.item == "minecraft:air" || stack.count == 0 {
                     continue;
                 }
+                self.pending.attach(pos, &mut stack);
                 // survives_explosion / explosion_decay: 1 / radius per stack.
                 if interaction == BlockInteraction::DestroyWithDecay
                     && self.world.random.next_float() > 1.0 / radius
@@ -410,17 +422,8 @@ impl Game<'_> {
                 add_or_append_stack(stacks, stack, pos);
             }
         }
-        let contents = self.world.block_entities.remove(&(pos[0], pos[1], pos[2]));
-        let name = self
-            .res
-            .facts
-            .get(self.world.block(pos[0], pos[1], pos[2]))
-            .name
-            .clone();
+        self.pending.clear(pos);
         self.level_set(pos, self.world.air)?;
-        if let Some(entity) = contents {
-            self.release_contents(pos, entity, &name);
-        }
         if is_tnt {
             self.spawn_primed_tnt(BlockPos::new(pos[0], pos[1], pos[2]), true);
         }

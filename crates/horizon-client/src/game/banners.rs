@@ -4,7 +4,7 @@
 use super::Game;
 use horizon_client::{
     banner::{self, BannerLayer},
-    containers::{Banner, BlockEntity},
+    containers::BlockEntity,
     items::ItemStack,
 };
 
@@ -19,7 +19,7 @@ impl Game<'_> {
     }
     /// A placed banner takes the item's layers and name.
     pub(super) fn fill_placed_banner(&mut self, pos: [i32; 3], stack: &ItemStack) {
-        self.pending_banner.remove(&pos);
+        self.pending.banner.remove(&pos);
         if !stack.item.ends_with("_banner") {
             return;
         }
@@ -28,20 +28,6 @@ impl Game<'_> {
         {
             b.layers = banner::layers(stack).to_vec();
             b.name = stack.custom_name().map(str::to_owned);
-        }
-    }
-    /// The layers a banner dropped at `pos` carries.
-    pub(super) fn attach_banner_layers(&mut self, pos: [i32; 3], stack: &mut ItemStack) {
-        if !stack.item.ends_with("_banner") {
-            return;
-        }
-        if let Some(Banner { layers, name }) = self.pending_banner.remove(&pos) {
-            let data = stack.data_mut();
-            data.banner_patterns = layers;
-            if name.is_some() {
-                data.custom_name = name;
-            }
-            stack.tidy();
         }
     }
 }
