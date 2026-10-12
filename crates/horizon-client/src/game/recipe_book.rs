@@ -183,11 +183,6 @@ impl Game<'_> {
             return;
         }
         self.ensure_book();
-        for id in recipes {
-            if !self.level.recipe_book.to_be_displayed.contains(id) {
-                self.level.recipe_book.to_be_displayed.push(id.clone());
-            }
-        }
         let icon = self
             .recipe_ui
             .book
@@ -225,12 +220,7 @@ impl Game<'_> {
         out
     }
     fn unlocked_recipes(&self) -> BTreeSet<String> {
-        self.adv
-            .recipes
-            .iter()
-            .chain(self.level.recipe_book.recipes.iter())
-            .cloned()
-            .collect()
+        self.level.recipe_book.recipes.clone()
     }
     fn ensure_book(&mut self) {
         if self.recipe_ui.book.is_none() {
@@ -263,7 +253,6 @@ impl Game<'_> {
             stack.map(|s| (s.item, s.count)).hash(&mut h);
         }
         self.craft_size.hash(&mut h);
-        self.adv.recipes.len().hash(&mut h);
         self.level.recipe_book.recipes.len().hash(&mut h);
         self.book_filtering(book_type).hash(&mut h);
         self.recipe_ui.tab.map(|t| format!("{t:?}")).hash(&mut h);

@@ -437,42 +437,158 @@ impl Book {
     }
 }
 
-/// The recipe book's saved state: the `recipeBook` compound of the player.
+/// What the server knows of each recipe of the datapack: whether it is
+/// special (`Recipe.isSpecial`: never learnable) and how many recipe book
+/// displays it has (`RecipeManager.listDisplaysForRecipe`).
+#[derive(Clone, Debug, Default)]
+pub struct RecipeIndex {
+    recipes: std::collections::BTreeMap<String, (bool, usize)>,
+}
+impl RecipeIndex {
+    /// Reads `data/minecraft/recipe/*.json` under `root`.
+    pub fn load(root: &std::path::Path) -> Self {
+        let mut recipes = std::collections::BTreeMap::new();
+        let dir = root.join("data/minecraft/recipe");
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|e| e != "json") {
+                continue;
+            }
+            let (Some(stem), Some(v)) = (
+                path.file_stem().and_then(|s| s.to_str()),
+                std::fs::read(&path)
+                    .ok()
+                    .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()),
+            ) else {
+                continue;
+            };
+            let kind = v["type"].as_str().unwrap_or_default();
+            let special = kind.starts_with("minecraft:crafting_special_")
+                || kind == "minecraft:crafting_decorated_pot";
+            let displays = if special {
+                0
+            } else if kind == "minecraft:crafting_transmute" {
+                // TransmuteRecipe.display: one per material count.
+                match &v["material_count"] {
+                    serde_json::Value::Object(o) => {
+                        let min = o.get("min").and_then(|m| m.as_u64()).unwrap_or(1);
+                        let max = o.get("max").and_then(|m| m.as_u64()).unwrap_or(8);
+                        (max.saturating_sub(min) + 1) as usize
+                    }
+                    _ => 1,
+                }
+            } else {
+                1
+            };
+            recipes.insert(format!("minecraft:{stem}"), (special, displays));
+        }
+        Self { recipes }
+    }
+    pub fn contains(&self, id: &str) -> bool {
+        self.recipes.contains_key(id)
+    }
+    pub fn special(&self, id: &str) -> bool {
+        self.recipes.get(id).is_some_and(|r| r.0)
+    }
+    pub fn displays(&self, id: &str) -> usize {
+        self.recipes.get(id).map_or(0, |r| r.1)
+    }
+    /// Every recipe id, in id order.
+    pub fn ids(&self) -> impl Iterator<Item = &String> {
+        self.recipes.keys()
+    }
+}
+
+/// `ServerRecipeBook`: the player's `recipeBook` compound, the known recipes
+/// and the ones still to highlight (`toBeDisplayed`) with the open and
+/// filter settings of each `RecipeBookType`.
 #[derive(Clone, Debug, Default)]
 pub struct Settings {
     /// `isGuiOpen`-style flags per `BookType`.
     pub open: [bool; 4],
     pub filtering: [bool; 4],
-    /// Unlocked recipe ids (`recipes`).
-    pub recipes: Vec<String>,
+    /// Known recipe ids (`recipes`).
+    pub recipes: BTreeSet<String>,
     /// Recipes not yet shown in the book (`toBeDisplayed`): they animate once.
-    pub to_be_displayed: Vec<String>,
+    pub to_be_displayed: BTreeSet<String>,
 }
 impl Settings {
+    /// `ServerRecipeBook.addRecipes`: the displays added (the count
+    /// `/recipe give` reports) and the recipes now known, in order.
+    pub fn add_recipes(&mut self, index: &RecipeIndex, ids: &[String]) -> (usize, Vec<String>) {
+        let mut displays = 0;
+        let mut added = Vec::new();
+        for id in ids {
+            if !self.recipes.contains(id) && !index.special(id) {
+                self.recipes.insert(id.clone());
+                self.to_be_displayed.insert(id.clone());
+                displays += index.displays(id);
+                added.push(id.clone());
+            }
+        }
+        (displays, added)
+    }
+    /// `ServerRecipeBook.removeRecipes`: the displays removed.
+    pub fn remove_recipes(&mut self, index: &RecipeIndex, ids: &[String]) -> usize {
+        let mut displays = 0;
+        for id in ids {
+            if self.recipes.remove(id) {
+                self.to_be_displayed.remove(id);
+                displays += index.displays(id);
+            }
+        }
+        displays
+    }
+    /// `removeHighlight` (`ServerboundRecipeBookSeenRecipePacket`).
+    pub fn remove_highlight(&mut self, id: &str) {
+        self.to_be_displayed.remove(id);
+    }
+    pub fn knows(&self, id: &str) -> bool {
+        self.recipes.contains(id)
+    }
+    /// The compound as saved, every recipe kept.
     pub fn read(tag: Option<&Tag>) -> Self {
+        Self::read_valid(tag, &|_| true)
+    }
+    /// `ServerRecipeBook.loadUntrusted`: unknown recipes are dropped. Without
+    /// both lists the compound does not decode and nothing is read.
+    pub fn read_valid(tag: Option<&Tag>, valid: &dyn Fn(&str) -> bool) -> Self {
         let mut s = Self::default();
         let Some(tag) = tag else { return s };
+        let ids = |key: &str| match tag.get(key) {
+            Some(Tag::List(list)) => Some(
+                list.iter()
+                    .filter_map(|t| match t {
+                        Tag::String(id) => Some(id.to_string_lossy()),
+                        _ => None,
+                    })
+                    .map(|id| {
+                        if id.contains(':') {
+                            id
+                        } else {
+                            format!("minecraft:{id}")
+                        }
+                    })
+                    .filter(|id| valid(id))
+                    .collect::<BTreeSet<String>>(),
+            ),
+            _ => None,
+        };
+        let (Some(recipes), Some(to_be_displayed)) = (ids("recipes"), ids("toBeDisplayed")) else {
+            return s;
+        };
         let flag = |k: &str| matches!(tag.get(k), Some(Tag::Byte(b)) if *b != 0);
         for b in BookType::ALL {
             let (open, filter) = b.keys();
             s.open[b.index()] = flag(open);
             s.filtering[b.index()] = flag(filter);
         }
-        let ids = |key: &str| match tag.get(key) {
-            Some(Tag::List(list)) => list
-                .iter()
-                .filter_map(|t| match t {
-                    Tag::String(id) => Some(id.to_string_lossy()),
-                    _ => None,
-                })
-                .collect(),
-            _ => Vec::new(),
-        };
-        s.recipes = ids("recipes");
-        s.to_be_displayed = ids("toBeDisplayed");
+        s.recipes = recipes;
+        s.to_be_displayed = to_be_displayed;
         s
     }
-    /// The compound written to the player file.
+    /// The compound written to the player file (vanilla's lists follow an
+    /// identity hash order; these are sorted).
     pub fn write(&self) -> Tag {
         let mut entries: Vec<(&str, Tag)> = Vec::new();
         for b in BookType::ALL {
@@ -485,7 +601,7 @@ impl Settings {
                 entries.push((filter, Tag::Byte(1)));
             }
         }
-        let list = |ids: &[String]| {
+        let list = |ids: &BTreeSet<String>| {
             Tag::List(ids.iter().map(|i| Tag::String(i.as_str().into())).collect())
         };
         entries.push(("recipes", list(&self.recipes)));
@@ -583,7 +699,7 @@ mod tests {
         let mut s = Settings::default();
         s.open[BookType::Furnace.index()] = true;
         s.filtering[BookType::Crafting.index()] = true;
-        s.recipes = vec!["minecraft:stick".into()];
+        s.recipes = ["minecraft:stick".to_owned()].into();
         let back = Settings::read(Some(&s.write()));
         assert_eq!(back.open, s.open);
         assert_eq!(back.filtering, s.filtering);

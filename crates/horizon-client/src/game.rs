@@ -3276,6 +3276,13 @@ impl Game<'_> {
         self.craft_recipe().map(|(_, result)| result)
     }
     /// The recipe id and result of the crafting grid.
+    /// `RecipeCraftingHolder.awardUsedRecipes`: a crafted recipe becomes known
+    /// (special ones never do).
+    fn award_crafted(&mut self, recipes: &[String]) {
+        let index = &self.res.stations.recipe_index;
+        let (_, unlocked) = self.level.recipe_book.add_recipes(index, recipes);
+        self.recipe_unlocked(&unlocked);
+    }
     fn craft_recipe(&self) -> Option<(String, ItemStack)> {
         let n = self.craft_size;
         let grid: Vec<Option<ItemStack>> = (0..n * n).map(|i| self.craft_grid[i].clone()).collect();
@@ -3773,6 +3780,7 @@ impl Game<'_> {
         let carried = menu.carried.take();
         let dropped = std::mem::take(&mut menu.dropped);
         let sounds = std::mem::take(&mut menu.sounds);
+        let crafted = std::mem::take(&mut menu.crafted);
         for (i, stack) in after.into_iter().enumerate() {
             if let Some(g) = game_of[i] {
                 *self.slot_mut(g) = stack;
@@ -3785,6 +3793,7 @@ impl Game<'_> {
         for stack in dropped {
             self.player_drop(stack);
         }
+        self.award_crafted(&crafted);
         if kind == Kind::Loom {
             if let Some(s) = self.station.as_mut() {
                 s.loom.selected = usize::try_from(menu.data[0]).ok();
@@ -4053,6 +4062,7 @@ impl Game<'_> {
                 }
                 crafted += 1;
                 self.stats.add("crafted", &made.0, made.1 as i32);
+                self.award_crafted(&[format!("minecraft:{recipe}")]);
                 if !shift || crafted >= 64 {
                     break;
                 }
@@ -5086,6 +5096,11 @@ impl Game<'_> {
         self.inventory = inventory;
         self.save = save;
         self.level = level;
+        // ServerRecipeBook.loadUntrusted: recipes the manager does not have are dropped.
+        let index = &self.res.stations.recipe_index;
+        let book = &mut self.level.recipe_book;
+        book.recipes.retain(|r| index.contains(r));
+        book.to_be_displayed.retain(|r| index.contains(r));
         self.dim = dim;
         self.world_root = save_root.clone();
         self.block_ticks = Ticks::new(self.level.seed as i32);
@@ -6966,7 +6981,6 @@ impl Game<'_> {
             self.ender_items = items.clone();
         }
         level.ender_items = self.ender_items.clone();
-        level.recipe_book.recipes = self.adv.recipes.iter().cloned().collect();
         level.active_effects = self
             .potions
             .effects

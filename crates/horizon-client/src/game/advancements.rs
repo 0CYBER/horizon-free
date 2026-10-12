@@ -10,7 +10,7 @@ use horizon_client::{
 };
 use serde_json::Value;
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, VecDeque},
     sync::Arc,
     time::Instant,
 };
@@ -46,7 +46,6 @@ pub(super) struct AdvState {
     pub(super) tree: Arc<Tree>,
     pub(super) progress: Progress,
     loaded: bool,
-    pub(super) recipes: BTreeSet<String>,
     pub(super) toasts: VecDeque<Toast>,
     /// Awards skip the toast (`/advancement grant ... everything`).
     pub(super) quiet: bool,
@@ -214,13 +213,9 @@ impl Game<'_> {
             .and_then(|t| serde_json::from_str::<Value>(&t).ok())
             .map(|v| Progress::from_json(&v))
             .unwrap_or_default();
-        // Unlocked recipes come from the done recipe advancements' rewards.
+        // The known recipes are the player's own (`recipeBook`), not the
+        // rewards of done advancements: /recipe take sticks.
         let tree = self.adv.tree.clone();
-        for a in &tree.list {
-            if progress.done(a) {
-                self.adv.recipes.extend(a.rewards.recipes.iter().cloned());
-            }
-        }
         self.adv.progress = progress;
         self.ui.registries.advancements = tree.list.iter().map(|a| a.id.clone()).collect();
     }
@@ -375,6 +370,17 @@ impl Game<'_> {
             }
         }
     }
+    /// After `ServerRecipeBook.addRecipes`: the toast and the
+    /// `recipe_unlocked` trigger of each recipe now known.
+    pub(super) fn recipe_unlocked(&mut self, unlocked: &[String]) {
+        self.recipe_toast(unlocked);
+        for r in unlocked {
+            let r = r.clone();
+            self.trigger("minecraft:recipe_unlocked", move |c, _| {
+                c["recipes"].as_str() == Some(r.as_str())
+            });
+        }
+    }
     /// `PlayerAdvancements.award` once done: rewards, toast, announcement.
     fn award(&mut self, index: usize) {
         let tree = self.adv.tree.clone();
@@ -383,12 +389,18 @@ impl Game<'_> {
         if a.rewards.experience > 0 {
             self.experience.give(a.rewards.experience);
         }
-        let mut unlocked = Vec::new();
-        for r in &a.rewards.recipes {
-            if self.adv.recipes.insert(r.clone()) {
-                unlocked.push(r.clone());
-            }
-        }
+        // ServerPlayer.awardRecipesByKey: the rewards that name a recipe.
+        let rewards: Vec<String> = a
+            .rewards
+            .recipes
+            .iter()
+            .filter(|r| self.res.stations.recipe_index.contains(r))
+            .cloned()
+            .collect();
+        let (_, unlocked) = self
+            .level
+            .recipe_book
+            .add_recipes(&self.res.stations.recipe_index, &rewards);
         for table in &a.rewards.loot {
             let items = self
                 .res
@@ -425,12 +437,7 @@ impl Game<'_> {
                 ));
             }
         }
-        self.recipe_toast(&unlocked);
-        for r in unlocked {
-            self.trigger("minecraft:recipe_unlocked", |c, _| {
-                c["recipes"].as_str() == Some(r.as_str())
-            });
-        }
+        self.recipe_unlocked(&unlocked);
     }
     /// `InventoryChangeTrigger`, checked when the inventory changes.
     pub(super) fn check_inventory_trigger(&mut self) {

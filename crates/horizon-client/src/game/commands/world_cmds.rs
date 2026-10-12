@@ -30,32 +30,9 @@ fn java_double_text(v: f64) -> Text {
 impl Game<'_> {
     // ---- /recipe -----------------------------------------------------------
 
-    /// Every `minecraft:` recipe that `/recipe` can give (non-special ones).
+    /// Every recipe id of the recipe manager (what `/recipe` resolves and suggests).
     pub(super) fn learnable_recipes(&self) -> Vec<String> {
-        let dir = self.options.resources.join("data/minecraft/recipe");
-        let mut out = Vec::new();
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            return out;
-        };
-        for e in entries.flatten() {
-            let path = e.path();
-            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-                continue;
-            };
-            if path.extension().and_then(|x| x.to_str()) != Some("json") {
-                continue;
-            }
-            let special = std::fs::read(&path)
-                .ok()
-                .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-                .and_then(|v| v["type"].as_str().map(|t| t.contains("crafting_special_")))
-                .unwrap_or(false);
-            if !special {
-                out.push(format!("minecraft:{stem}"));
-            }
-        }
-        out.sort();
-        out
+        self.res.stations.recipe_index.ids().cloned().collect()
     }
     pub(super) fn cmd_recipe(&mut self, id: &str, ctx: &Context) -> R<i32> {
         let targets = self.entities(ctx, "targets", true)?;
@@ -73,14 +50,15 @@ impl Game<'_> {
         for &t in &targets {
             let h = holder(self.target_name(t));
             let mut n = 0;
-            for r in &recipes {
-                let changed = if give {
-                    self.adv.recipes.insert(r.clone())
-                } else {
-                    self.adv.recipes.remove(r)
-                };
-                n += i32::from(changed);
-            }
+            // ServerPlayer.awardRecipes / resetRecipes: the displays changed.
+            let index = &self.res.stations.recipe_index;
+            n += if give {
+                let (count, unlocked) = self.level.recipe_book.add_recipes(index, &recipes);
+                self.recipe_unlocked(&unlocked);
+                count as i32
+            } else {
+                self.level.recipe_book.remove_recipes(index, &recipes) as i32
+            };
             tracker.track(&h, n);
         }
         let verb = if give { "give" } else { "take" };

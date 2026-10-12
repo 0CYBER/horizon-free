@@ -159,6 +159,8 @@ pub struct Menu {
     pub loom_patterns: Vec<Arc<str>>,
     /// Sounds the menu plays (`ui.loom.take_result`), for the caller.
     pub sounds: Vec<&'static str>,
+    /// Recipes whose result was taken (`awardUsedRecipes`), for the caller.
+    pub crafted: Vec<String>,
 }
 
 fn same_item(a: &ItemStack, b: &ItemStack) -> bool {
@@ -357,6 +359,7 @@ impl Menu {
             quick_slots: Vec::new(),
             loom_patterns: Vec::new(),
             sounds: Vec::new(),
+            crafted: Vec::new(),
         }
     }
 
@@ -699,6 +702,9 @@ impl Menu {
         }
         let n = self.grid_size;
         let grid = self.containers[GRID].clone();
+        if let Some((id, _)) = env.recipes.find(&grid, n) {
+            self.crafted.push(format!("minecraft:{id}"));
+        }
         let remaining = env
             .recipes
             .find(&grid, n)
