@@ -37,10 +37,6 @@ pub(super) struct EndState {
     job: Option<GatewayJob>,
     /// Ticks until the player can use a gateway again (TheEndGatewayBlockEntity cooldown).
     gateway_cooldown: u32,
-    /// End portal and gateway blocks per loaded chunk (true = gateway), for rendering.
-    portals: HashMap<(i32, i32), Vec<([i32; 3], bool)>>,
-    /// Chunks left to scan for portal blocks in the current round.
-    scan: Vec<(i32, i32)>,
     /// The Overworld generator, for stronghold positions (ServerLevel.findNearestMapStructure).
     locator: std::sync::Mutex<Option<Arc<VanillaTerrain>>>,
     /// Thrown eyes of ender in flight.
@@ -131,11 +127,6 @@ impl EyeOfEnder {
             + glam::DVec3::new(0.0, y + (wanted_y - y) * 0.015, 0.0)
     }
 }
-
-/// Chunks scanned for portal blocks per tick.
-const SCAN_PER_TICK: usize = 6;
-/// Radius (chunks) around the player in which portal blocks are rendered.
-const PORTAL_RADIUS: i32 = 10;
 
 impl Game<'_> {
     /// The environment attributes of the current dimension.
@@ -295,7 +286,6 @@ impl Game<'_> {
                     )?;
                 }
             }
-            self.rescan_portals_around(c, 1);
             // Global LevelEvent 1038: END_PORTAL_SPAWN.
             self.audio
                 .play("minecraft:block.end_portal.spawn", None, 1.0, 1.0);
@@ -350,7 +340,6 @@ impl Game<'_> {
             self.tick_fight();
             self.tick_dragon_fireballs();
         }
-        self.scan_portals();
         self.tick_eyes();
         if self.dim == Dim::End {
             self.end.flash.tick(self.world.game_time);
@@ -645,7 +634,6 @@ impl Game<'_> {
             let id = registry.resolve(&state)?;
             self.level_set([origin[0] + d[0], origin[1] + 2, origin[2] + d[1]], id)?;
         }
-        self.rescan_portals_around(origin, 4);
         Ok(())
     }
 
@@ -669,7 +657,6 @@ impl Game<'_> {
                 }
             }
         }
-        self.rescan_portals_around(origin, 0);
         Ok(())
     }
 
@@ -887,214 +874,10 @@ impl Game<'_> {
         Ok(())
     }
 
-    /// Scan a few loaded chunks per tick for End portal and gateway blocks.
-    fn scan_portals(&mut self) {
-        let Some(p) = self.player.as_ref() else {
-            return;
-        };
-        let (pcx, pcz) = (
-            (p.position.x.floor() as i32) >> 4,
-            (p.position.z.floor() as i32) >> 4,
-        );
-        let chunks = &self.world.chunks;
-        self.end.portals.retain(|k, _| chunks.contains_key(k));
-        if self.end.scan.is_empty() {
-            let mut queue: Vec<(i32, i32)> = chunks
-                .keys()
-                .copied()
-                .filter(|&(x, z)| {
-                    (x - pcx).abs() <= PORTAL_RADIUS && (z - pcz).abs() <= PORTAL_RADIUS
-                })
-                .collect();
-            // Nearest last: they are popped first.
-            queue.sort_by_key(|&(x, z)| std::cmp::Reverse((x - pcx).pow(2) + (z - pcz).pow(2)));
-            self.end.scan = queue;
-        }
-        for _ in 0..SCAN_PER_TICK {
-            let Some((cx, cz)) = self.end.scan.pop() else {
-                break;
-            };
-            self.scan_portal_chunk(cx, cz);
-        }
-    }
-
-    fn scan_portal_chunk(&mut self, cx: i32, cz: i32) {
-        let registry = self.res.assets.registry;
-        let (Some(portal), Some(gateway)) = (
-            registry.default_state("minecraft:end_portal"),
-            registry.default_state("minecraft:end_gateway"),
-        ) else {
-            return;
-        };
-        let (portal, gateway) = (portal.0 as u16, gateway.0 as u16);
-        let Some(chunk) = self.world.chunks.get(&(cx, cz)) else {
-            self.end.portals.remove(&(cx, cz));
-            return;
-        };
-        let mut found = Vec::new();
-        for (s, section) in chunk.sections.iter().enumerate() {
-            if !section
-                .blocks
-                .maybe_has(|v| v == u32::from(portal) || v == u32::from(gateway))
-            {
-                continue;
-            }
-            let mut blocks = Box::new([0u16; 4096]);
-            section.unpack(&mut blocks);
-            for (i, &b) in blocks.iter().enumerate() {
-                if b == portal || b == gateway {
-                    let y = horizon_client::chunk::MIN_Y + s as i32 * 16 + (i >> 8) as i32;
-                    found.push((
-                        [
-                            cx * 16 + (i & 15) as i32,
-                            y,
-                            cz * 16 + ((i >> 4) & 15) as i32,
-                        ],
-                        b == gateway,
-                    ));
-                }
-            }
-        }
-        if found.is_empty() {
-            self.end.portals.remove(&(cx, cz));
-        } else {
-            self.end.portals.insert((cx, cz), found);
-        }
-    }
-
-    fn rescan_portals_around(&mut self, p: [i32; 3], r: i32) {
-        for cz in (p[2] - r) >> 4..=(p[2] + r) >> 4 {
-            for cx in (p[0] - r) >> 4..=(p[0] + r) >> 4 {
-                self.scan_portal_chunk(cx, cz);
-            }
-        }
-    }
-
-    /// End portal and gateway surfaces (TheEndPortalRenderer: the starfield
-    /// approximated by end_portal.png in world space, unanimated) and the End
-    /// crystals on the spikes, as camera-relative entity geometry.
+    /// The End crystals on the spikes and thrown eyes of ender, as
+    /// camera-relative entity geometry (End portals and gateways are block
+    /// entities).
     pub(super) fn end_geometry(&self, camera: glam::DVec3, out: &mut Vec<Vertex>) {
-        let atlas = &self.res.atlas;
-        if let Some(r) = atlas.sprites.get("entity/end_portal/end_portal").copied() {
-            let full = (15 * 16) | ((15 * 16) << 8);
-            // Each block shows a quarter of the texture so neighbours join up.
-            let quarter = |a: i32, b: i32| {
-                let (fa, fb) = (a.rem_euclid(4) as f32 / 4.0, b.rem_euclid(4) as f32 / 4.0);
-                let (du, dv) = (r.u1 - r.u0, r.v1 - r.v0);
-                (
-                    r.u0 + du * fa,
-                    r.u0 + du * (fa + 0.25),
-                    r.v0 + dv * fb,
-                    r.v0 + dv * (fb + 0.25),
-                )
-            };
-            for blocks in self.end.portals.values() {
-                for &(p, gateway) in blocks {
-                    let base = glam::DVec3::new(f64::from(p[0]), f64::from(p[1]), f64::from(p[2]))
-                        - camera;
-                    if base.length_squared() > 160.0 * 160.0 {
-                        continue;
-                    }
-                    let b = base.as_vec3();
-                    // Portal: top face at 12/16 and bottom at 6/16; gateway: the whole cube.
-                    let (y0, y1) = if gateway { (0.0, 1.0) } else { (0.375, 0.75) };
-                    let color = if gateway { 0xFFE0_E0A0 } else { 0xFFD0_E070 };
-                    let mut quad =
-                        |corners: [glam::Vec3; 4], (u0, u1, v0, v1): (f32, f32, f32, f32)| {
-                            let uv = [[u0, v0], [u1, v0], [u1, v1], [u0, v1]];
-                            for (c, uv) in corners.into_iter().zip(uv) {
-                                out.push(Vertex {
-                                    pos: (b + c).to_array(),
-                                    uv,
-                                    layer: 0,
-                                    color,
-                                    light: full,
-                                });
-                            }
-                        };
-                    let v = glam::Vec3::new;
-                    let open = |d: [i32; 3]| {
-                        let n = [p[0] + d[0], p[1] + d[1], p[2] + d[2]];
-                        !self
-                            .res
-                            .facts
-                            .get(self.world.block(n[0], n[1], n[2]))
-                            .solid_render
-                    };
-                    let uv_xz = quarter(p[0], p[2]);
-                    if !gateway || open([0, 1, 0]) {
-                        quad(
-                            [
-                                v(0.0, y1, 0.0),
-                                v(1.0, y1, 0.0),
-                                v(1.0, y1, 1.0),
-                                v(0.0, y1, 1.0),
-                            ],
-                            uv_xz,
-                        );
-                    }
-                    if !gateway || open([0, -1, 0]) {
-                        quad(
-                            [
-                                v(0.0, y0, 0.0),
-                                v(1.0, y0, 0.0),
-                                v(1.0, y0, 1.0),
-                                v(0.0, y0, 1.0),
-                            ],
-                            uv_xz,
-                        );
-                    }
-                    if gateway {
-                        let uv_x = quarter(p[2], p[1]);
-                        let uv_z = quarter(p[0], p[1]);
-                        if open([-1, 0, 0]) {
-                            quad(
-                                [
-                                    v(0.0, 0.0, 0.0),
-                                    v(0.0, 0.0, 1.0),
-                                    v(0.0, 1.0, 1.0),
-                                    v(0.0, 1.0, 0.0),
-                                ],
-                                uv_x,
-                            );
-                        }
-                        if open([1, 0, 0]) {
-                            quad(
-                                [
-                                    v(1.0, 0.0, 0.0),
-                                    v(1.0, 0.0, 1.0),
-                                    v(1.0, 1.0, 1.0),
-                                    v(1.0, 1.0, 0.0),
-                                ],
-                                uv_x,
-                            );
-                        }
-                        if open([0, 0, -1]) {
-                            quad(
-                                [
-                                    v(0.0, 0.0, 0.0),
-                                    v(1.0, 0.0, 0.0),
-                                    v(1.0, 1.0, 0.0),
-                                    v(0.0, 1.0, 0.0),
-                                ],
-                                uv_z,
-                            );
-                        }
-                        if open([0, 0, 1]) {
-                            quad(
-                                [
-                                    v(0.0, 0.0, 1.0),
-                                    v(1.0, 0.0, 1.0),
-                                    v(1.0, 1.0, 1.0),
-                                    v(0.0, 1.0, 1.0),
-                                ],
-                                uv_z,
-                            );
-                        }
-                    }
-                }
-            }
-        }
         if self.dim == Dim::End {
             self.end_crystal_geometry(camera, out);
         }
