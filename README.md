@@ -14,7 +14,7 @@ Horizon is a Rust rewrite of Minecraft Java **26.3** targeting one-to-one vanill
 - shields, maps, books, fireworks, beacons, advancements and statistics;
 - Anvil saves.
 
-Parity is **not** complete. Still missing: the warden and the sculk family, the breeze, sniffer, creaking, happy ghast, llamas and a few other mobs, raids and pillager patrols, villager breeding and gossip, the loom, crafter and recipe book, scoreboards, subtitles, and spawned mob gear enchantments. Multiplayer joins vanilla servers but Horizon cannot host one. See [Rust rewrite status](docs/rust-parity.md).
+Parity is **not** complete. Still missing: the warden and the sculk family, the breeze, sniffer, creaking, happy ghast, llamas and a few other mobs, villager breeding and gossip, the loom, crafter and recipe book, scoreboards, subtitles, and spawned mob gear enchantments. Multiplayer joins vanilla servers but Horizon cannot host one. See [Rust rewrite status](docs/rust-parity.md).
 
 ### Java parity: 84%
 
@@ -38,7 +38,7 @@ round-trip harness has not been rerun.
 | Lighting | 1 | None: saved and relit light matches vanilla, slabs and stairs included |
 | World generation | 1 | None: 2,352 whole chunks over 225 structure sites, in all three dimensions, identical to vanilla |
 | Region files and saves | 0.75 | Saves round-trip with vanilla, and worlds from 1.18.2 to 26.2 upgrade as vanilla's DataFixers do over 22 sample worlds; worlds older than 1.18.2 are not upgraded |
-| Entities and physics | 0.75 | Attributes, dimensions, death loot, spawn rules and natural spawning (15,500 NaturalSpawner cases) match; AI not compared; drowned, villagers, traders and the wither unverified |
+| Entities and physics | 0.75 | Attributes, dimensions, death loot, spawn rules, natural spawning (15,500 NaturalSpawner cases), pillager patrols and raids (1,900 PatrolSpawner, Raid and raids.dat cases) match; AI not compared; drowned, villagers, traders and the wither unverified |
 | Interaction and inventory | 1 | None: menu clicks match over 6,000 click sequences |
 | Menus, HUD and chat | 0.75 | Commands parse as vanilla over 39,685 inputs, but /item modify, /spectate, /waypoint and /dialog do not run; no tab list or world border rendering |
 | Audio | 0.75 | Sound engine, music and ambience not compared with vanilla |
