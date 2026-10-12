@@ -1215,20 +1215,29 @@ impl Mob {
             },
             kind,
         };
-        // setCanPickUpLoot(true) in the Villager, AbstractPiglin, Allay,
-        // Dolphin, Fox and Panda constructors.
+        // setCanPickUpLoot(true) in the Villager, AbstractPiglin, Dolphin,
+        // Fox and Panda constructors (an allay's is false until it holds
+        // something: it overrides canPickUpLoot).
         mob.extra.pick_up_loot = matches!(
             mob.species(),
             Species::Villager
                 | Species::Piglin
                 | Species::PiglinBrute
-                | Species::Allay
                 | Species::Dolphin
                 | Species::Fox
                 | Species::Panda
         );
         ai::register(&mut mob);
         mob
+    }
+    /// `Mob.canPickUpLoot`, with the overrides: an allay that holds
+    /// something off its pickup cooldown, a sulfur cube with no block.
+    pub fn can_pick_up_loot(&self) -> bool {
+        match self.species() {
+            Species::Allay => self.extra.main_hand.is_some() && self.extra.ints[3] <= 0,
+            Species::SulfurCube => !sulfur_cube::has_body(self),
+            _ => self.extra.pick_up_loot,
+        }
     }
     pub fn bounds(&self) -> Aabb {
         let w = f64::from(self.width()) / 2.0;

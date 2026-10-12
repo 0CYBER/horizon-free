@@ -138,8 +138,8 @@ public final class VanillaFinalizeSpawnOracle {
         @Override public net.minecraft.world.level.StructureManager structureManager() { return structures; }
         @Override public BlockGetter getChunkForCollisions(int chunkX, int chunkZ) { return this; }
         @Override public boolean isSpawningMonsters() { return rules.get(GameRules.SPAWN_MOBS) && rules.get(GameRules.SPAWN_MONSTERS); }
-        @Override public void playSeededSound(Entity except, double x, double y, double z, Holder<SoundEvent> sound, SoundSource source, float volume, float pitch, long seed) {}
-        @Override public void playSeededSound(Entity except, Entity sourceEntity, Holder<SoundEvent> sound, SoundSource source, float volume, float pitch, long seed) {}
+        @Override public void playSeededSound(net.minecraft.world.entity.Entity except, double x, double y, double z, Holder<SoundEvent> sound, SoundSource source, float volume, float pitch, long seed) {}
+        @Override public void playSeededSound(net.minecraft.world.entity.Entity except, net.minecraft.world.entity.Entity sourceEntity, Holder<SoundEvent> sound, SoundSource source, float volume, float pitch, long seed) {}
         @Override public void gameEvent(Holder<net.minecraft.world.level.gameevent.GameEvent> gameEvent, Vec3 position, net.minecraft.world.level.gameevent.GameEvent.Context context) {}
         @Override public void broadcastEntityEvent(Entity entity, byte event) {}
         @SuppressWarnings({"unchecked", "rawtypes"})
@@ -429,6 +429,8 @@ public final class VanillaFinalizeSpawnOracle {
         level.fake = server;
         put(level, ServerLevel.class, "server", server);
         level.registries = access;
+        // Level.playSound draws a sound seed before the (ignored) seeded sound.
+        put(level, net.minecraft.world.level.Level.class, "soundSeedGenerator", RandomSource.create(0L));
         level.entities = new ArrayList<>();
         level.scoreboard = new net.minecraft.server.ServerScoreboard(server);
         level.border = new WorldBorder();

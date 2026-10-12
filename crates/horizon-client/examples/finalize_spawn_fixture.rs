@@ -74,7 +74,10 @@ impl FinalizeLevel for Level<'_> {
     fn no_collision(&self, bounds: Aabb) -> bool {
         // A floor under the spawn point and an optional roof layer.
         self.roof.is_none_or(|y| {
-            let (lo, hi) = (bounds.min(horizon_core::geometry::Axis::Y), bounds.max(horizon_core::geometry::Axis::Y));
+            let (lo, hi) = (
+                bounds.min(horizon_core::geometry::Axis::Y),
+                bounds.max(horizon_core::geometry::Axis::Y),
+            );
             !(lo < f64::from(y) + 1.0 && hi > f64::from(y))
         })
     }
@@ -115,13 +118,29 @@ fn hex64(v: f64) -> String {
 fn hex32(v: f32) -> String {
     format!("{:x}", v.to_bits())
 }
-const HORSE: [&str; 7] = ["white", "creamy", "chestnut", "brown", "black", "gray", "dark_brown"];
+const HORSE: [&str; 7] = [
+    "white",
+    "creamy",
+    "chestnut",
+    "brown",
+    "black",
+    "gray",
+    "dark_brown",
+];
 const MARKINGS: [&str; 5] = ["none", "white", "white_field", "white_dots", "black_dots"];
 const RABBITS: [&str; 6] = ["brown", "white", "black", "white_splotched", "gold", "salt"];
 const PARROTS: [&str; 5] = ["red_blue", "blue", "green", "yellow_blue", "gray"];
 const AXOLOTLS: [&str; 5] = ["lucy", "wild", "gold", "cyan", "blue"];
 const SALMON: [&str; 3] = ["small", "medium", "large"];
-const GENES: [&str; 7] = ["normal", "lazy", "worried", "playful", "brown", "weak", "aggressive"];
+const GENES: [&str; 7] = [
+    "normal",
+    "lazy",
+    "worried",
+    "playful",
+    "brown",
+    "weak",
+    "aggressive",
+];
 const MEMORIES: [&str; 7] = [
     "long_jump_cooldown",
     "ram_cooldown",
@@ -136,7 +155,10 @@ fn variant(m: &Mob, regs: &SpawnRegistries, v: &mut Vec<String>) {
     use Species as S;
     let s = m.species();
     let named = |reg: &finalize::VariantRegistry, i: u8| {
-        format!("minecraft:{}", reg.names.get(i as usize).map_or("?", |n| n.as_str()))
+        format!(
+            "minecraft:{}",
+            reg.names.get(i as usize).map_or("?", |n| n.as_str())
+        )
     };
     let var = format!("minecraft:{}", finalize::variant_name(s, m.extra.variant));
     match s {
@@ -212,7 +234,9 @@ fn variant(m: &Mob, regs: &SpawnRegistries, v: &mut Vec<String>) {
         S::Phantom => v.push(format!("size={}", m.extra.size)),
         S::Turtle => v.push(format!(
             "home={}",
-            m.extra.home.map_or("-".into(), |h| format!("{},{},{}", h[0], h[1], h[2]))
+            m.extra
+                .home
+                .map_or("-".into(), |h| format!("{},{},{}", h[0], h[1], h[2]))
         )),
         S::Dolphin => v.push(format!("air={}", m.air)),
         _ => {}
@@ -252,7 +276,7 @@ fn describe(m: &Mob, all: &[Mob], regs: &SpawnRegistries) -> String {
     }
     t.push(format!("hp={}", hex32(m.health)));
     t.push(format!("lh={}", m.extra.left_handed));
-    t.push(format!("loot={}", m.extra.pick_up_loot));
+    t.push(format!("loot={}", m.can_pick_up_loot()));
     t.push(format!("persist={}", m.persistent));
     let mut eq = Vec::new();
     for (slot, name) in finalize::SLOT_NAMES.iter().enumerate() {
@@ -284,7 +308,14 @@ fn describe(m: &Mob, all: &[Mob], regs: &SpawnRegistries) -> String {
         }
         eq.push(format!("{name}:{text}"));
     }
-    t.push(format!("eq={}", if eq.is_empty() { "-".into() } else { eq.join(";") }));
+    t.push(format!(
+        "eq={}",
+        if eq.is_empty() {
+            "-".into()
+        } else {
+            eq.join(";")
+        }
+    ));
     let drops: Vec<String> = finalize::SLOT_NAMES
         .iter()
         .enumerate()
@@ -295,7 +326,11 @@ fn describe(m: &Mob, all: &[Mob], regs: &SpawnRegistries) -> String {
         .collect();
     t.push(format!(
         "drop={}",
-        if drops.is_empty() { "-".into() } else { drops.join(";") }
+        if drops.is_empty() {
+            "-".into()
+        } else {
+            drops.join(";")
+        }
     ));
     let attrs: Vec<String> = [
         Attr::MaxHealth,
@@ -318,7 +353,14 @@ fn describe(m: &Mob, all: &[Mob], regs: &SpawnRegistries) -> String {
         .map(|(e, d, a)| format!("{e}:{a}:{d}"))
         .collect();
     fx.sort();
-    t.push(format!("fx={}", if fx.is_empty() { "-".into() } else { fx.join(",") }));
+    t.push(format!(
+        "fx={}",
+        if fx.is_empty() {
+            "-".into()
+        } else {
+            fx.join(",")
+        }
+    ));
     let mem: Vec<String> = MEMORIES
         .iter()
         .filter_map(|name| {
@@ -380,13 +422,18 @@ fn main() -> horizon_client::Result<()> {
                 None => name = token,
             }
         }
-        let get = |k: &str, d: &'static str| -> String { c.get(k).copied().unwrap_or(d).to_owned() };
+        let get =
+            |k: &str, d: &'static str| -> String { c.get(k).copied().unwrap_or(d).to_owned() };
         let p: Vec<f64> = get("pos", "0,0,0")
             .split(',')
             .map(|x| x.parse().unwrap_or(0.0))
             .collect();
         let pos = Vec3::new(p[0], p[1], p[2]);
-        let block = [p[0].floor() as i32, p[1].floor() as i32, p[2].floor() as i32];
+        let block = [
+            p[0].floor() as i32,
+            p[1].floor() as i32,
+            p[2].floor() as i32,
+        ];
         let base = match get("difficulty", "normal").as_str() {
             "peaceful" => 0,
             "easy" => 1,

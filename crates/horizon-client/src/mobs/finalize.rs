@@ -21,7 +21,10 @@
 //! `sound_variant` the index in the species' sound variant registry.
 use super::{Mob, Species, farm::Climate, gear, spawning::LocalDifficulty};
 use crate::{enchant::Enchantments, items::Items};
-use horizon_core::{geometry::Aabb, random::RandomSource};
+use horizon_core::{
+    geometry::Aabb,
+    random::{LegacyRandom, RandomSource},
+};
 use serde_json::Value;
 use std::{fs, path::Path, sync::Arc};
 
@@ -490,6 +493,23 @@ fn transient(m: &Mob, a: Attr) -> Option<(f64, Op)> {
         _ => None,
     }
 }
+/// The attribute modifiers of the mob's effects (`MobEffect.addAttributeModifier`,
+/// scaled by the amplifier plus one): strength and speed.
+fn effect_modifiers(m: &Mob, a: Attr) -> impl Iterator<Item = (f64, Op)> + '_ {
+    m.extra
+        .effects
+        .iter()
+        .filter_map(move |&(effect, _, amplifier)| {
+            let level = f64::from(amplifier + 1);
+            match (effect.trim_start_matches("minecraft:"), a) {
+                ("strength", Attr::AttackDamage) => Some((3.0 * level, Op::AddValue)),
+                ("speed", Attr::MovementSpeed) => {
+                    Some((f64::from(0.2f32) * level, Op::AddMultipliedTotal))
+                }
+                _ => None,
+            }
+        })
+}
 /// `AttributeInstance.getValue`: the base, then the modifiers by operation.
 pub fn value(m: &Mob, a: Attr) -> f64 {
     compute(m, a, true)
@@ -503,8 +523,9 @@ fn compute(m: &Mob, a: Attr, with_transient: bool) -> f64 {
         .filter(|x| x.attr == a)
         .map(|x| (x.amount, x.op))
         .collect();
-    if with_transient && let Some(t) = transient(m, a) {
-        ops.push(t);
+    if with_transient {
+        ops.extend(transient(m, a));
+        ops.extend(effect_modifiers(m, a));
     }
     for (amount, op) in &ops {
         if *op == Op::AddValue {
@@ -523,7 +544,11 @@ fn compute(m: &Mob, a: Attr, with_transient: bool) -> f64 {
         }
     }
     let (lo, hi) = a.range();
-    if result.is_nan() { lo } else { result.clamp(lo, hi) }
+    if result.is_nan() {
+        lo
+    } else {
+        result.clamp(lo, hi)
+    }
 }
 /// Copies the attribute values into the fields the game reads.
 fn refresh(m: &mut Mob, a: Attr) {
@@ -719,7 +744,7 @@ fn age_boundary_reached(m: &mut Mob) {
     match m.species() {
         Species::Goat => set_base(m, Attr::AttackDamage, if baby { 1.0 } else { 2.0 }),
         Species::Hoglin => set_base(m, Attr::AttackDamage, if baby { 0.5 } else { 6.0 }),
-        Species::SulfurCube if !baby => super::sulfur_cube::set_size(m, 2, true),
+        Species::SulfurCube if !baby => sulfur_size(m, 2),
         _ => {}
     }
 }
@@ -875,7 +900,14 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
             }
         }
         let partial = if self.difficulty.hard { 0.1 } else { 0.25 };
-        const MATERIAL: [&str; 6] = ["leather", "copper", "golden", "chainmail", "iron", "diamond"];
+        const MATERIAL: [&str; 6] = [
+            "leather",
+            "copper",
+            "golden",
+            "chainmail",
+            "iron",
+            "diamond",
+        ];
         let mut first = true;
         // EQUIPMENT_POPULATION_ORDER: head, chest, legs, feet.
         for (slot, piece) in [
@@ -1095,7 +1127,8 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                             m.extra.passenger = true;
                         }
                     } else if f64::from(self.float()) < 0.05
-                        && let Some(mut chicken) = self.create("minecraft:chicken", Reason::Jockey, m)
+                        && let Some(mut chicken) =
+                            self.create("minecraft:chicken", Reason::Jockey, m)
                     {
                         self.finalize(&mut chicken, Reason::Jockey, None);
                         chicken.extra.jockey = true;
@@ -1125,7 +1158,8 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
         let knockback = r.next_double() * f64::from(0.05f32);
         let follow = r.next_double() * 1.5 * f64::from(special);
         let leader = r.next_float() < special * 0.05;
-        let leader_rolls = leader.then(|| (r.next_double() * 0.25 + 0.5, r.next_double() * 3.0 + 1.0));
+        let leader_rolls =
+            leader.then(|| (r.next_double() * 0.25 + 0.5, r.next_double() * 3.0 + 1.0));
         set_base(m, Attr::SpawnReinforcements, reinforcements);
         add_modifier(
             m,
@@ -1192,7 +1226,11 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
             let (w, h) = self.data.camel_husk_size;
             let half = w / 2.0;
             let bounds = Aabb::new(
-                horizon_core::geometry::Vec3::new(bx + 0.5 - f64::from(half), by, bz + 0.5 - f64::from(half)),
+                horizon_core::geometry::Vec3::new(
+                    bx + 0.5 - f64::from(half),
+                    by,
+                    bz + 0.5 - f64::from(half),
+                ),
                 horizon_core::geometry::Vec3::new(
                     bx + 0.5 + f64::from(half),
                     by + f64::from(h),
@@ -1203,13 +1241,17 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                 *tried = true;
                 if self.float() < 0.1 {
                     set_item(m, MAINHAND, "minecraft:iron_spear");
-                    if let Some(mut camel) = self.level.create("minecraft:camel_husk", Reason::Natural) {
+                    if let Some(mut camel) =
+                        self.level.create("minecraft:camel_husk", Reason::Natural)
+                    {
                         // setPos: the husk's position, the camel's own rotation.
                         camel.position = m.position;
                         camel.previous = m.position;
                         self.finalize(&mut camel, reason, None);
                         self.ride(m, &mut camel);
-                        if let Some(mut parched) = self.create("minecraft:parched", Reason::Natural, m) {
+                        if let Some(mut parched) =
+                            self.create("minecraft:parched", Reason::Natural, m)
+                        {
                             self.finalize(&mut parched, reason, None);
                             self.ride(&mut parched, &mut camel);
                             self.created.push(camel);
@@ -1452,7 +1494,10 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
         let s = m.species();
         match s {
             S::Pig | S::Cow | S::Chicken => {
-                let (v, sound): (fn(&SpawnRegistries) -> &VariantRegistry, fn(&SpawnRegistries) -> &VariantRegistry) = match s {
+                let (v, sound): (
+                    fn(&SpawnRegistries) -> &VariantRegistry,
+                    fn(&SpawnRegistries) -> &VariantRegistry,
+                ) = match s {
                     S::Pig => (|r| &r.pig, |r| &r.pig_sound),
                     S::Cow => (|r| &r.cow, |r| &r.cow_sound),
                     _ => (|r| &r.chicken, |r| &r.chicken_sound),
@@ -1725,7 +1770,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                 let g = self.ageable(m, g);
                 if s == S::SulfurCube {
                     let size = if m.is_baby() { 1 } else { 2 };
-                    super::sulfur_cube::set_size(m, size, true);
+                    sulfur_size(m, size);
                 } else {
                     let mut scale = self.int(3);
                     if scale < 2 && self.float() < 0.5 * self.special() {
@@ -1784,7 +1829,13 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
             S::Zombie | S::ZombifiedPiglin => self.zombie(m, g, reason),
             S::ZombieVillager => {
                 self.villager_type(m);
-                m.extra.variant2 = m.random.next_int_bound(15).unwrap_or(0) as u8;
+                // ZombieVillager's constructor picks the profession from the
+                // fresh entity's random, before anything seeds it: an
+                // independent draw that leaves the mob's own random alone.
+                let mut fresh = LegacyRandom::new(
+                    (m.random.state() as i64).wrapping_mul(0x5851_F42D_4C95_7F2D) ^ i64::from(m.id),
+                );
+                m.extra.variant2 = fresh.next_int_bound(15).unwrap_or(0) as u8;
                 self.zombie(m, g, reason)
             }
             S::Husk => self.husk(m, g, reason),
@@ -1826,7 +1877,12 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                 super::warden::finalize(m, reason == Reason::Triggered, &mut Vec::new());
                 set_memory(m, "dig_cooldown", 0, 1200);
                 if reason == Reason::Triggered {
-                    set_memory(m, "is_emerging", 0, i64::from(super::warden::EMERGE_DURATION));
+                    set_memory(
+                        m,
+                        "is_emerging",
+                        0,
+                        i64::from(super::warden::EMERGE_DURATION),
+                    );
                 }
                 self.mob(m, g)
             }
@@ -1893,11 +1949,27 @@ pub fn panda_variant(main: u8, hidden: u8) -> u8 {
     if recessive && main != hidden { 0 } else { main }
 }
 /// `AbstractCubeMob.setSize(size, true)` for slimes and magma cubes.
+/// `SulfurCube.setSize(size, true)`, with the attribute bases it sets.
+fn sulfur_size(m: &mut Mob, size: i32) {
+    super::sulfur_cube::set_size(m, size, true);
+    let size = m.extra.size;
+    set_base(m, Attr::MaxHealth, f64::from(4 * size));
+    set_base(
+        m,
+        Attr::MovementSpeed,
+        f64::from(0.2f32 + 0.1f32 * size as f32),
+    );
+    m.health = max_health(m);
+}
 fn cube_size(m: &mut Mob, size: i32) {
     let size = size.clamp(1, 127);
     m.extra.size = size;
     set_base(m, Attr::MaxHealth, f64::from(size * size));
-    set_base(m, Attr::MovementSpeed, f64::from(0.2f32 + 0.1f32 * size as f32));
+    set_base(
+        m,
+        Attr::MovementSpeed,
+        f64::from(0.2f32 + 0.1f32 * size as f32),
+    );
     set_base(m, Attr::AttackDamage, f64::from(size));
     if m.species() == Species::MagmaCube {
         set_base(m, Attr::Armor, f64::from(size * 3));
@@ -1911,7 +1983,9 @@ pub fn variant_index(s: Species, name: &str) -> u8 {
         Species::Cat => super::tame::CAT_VARIANTS.iter().position(|v| *v == name),
         Species::Wolf => super::tame::WOLF_VARIANTS.iter().position(|v| v.0 == name),
         Species::ZombieNautilus => super::nautilus::VARIANTS.iter().position(|v| *v == name),
-        _ => ["temperate", "warm", "cold"].iter().position(|v| *v == name),
+        _ => ["temperate", "warm", "cold"]
+            .iter()
+            .position(|v| *v == name),
     };
     i.unwrap_or(0) as u8
 }
@@ -1921,8 +1995,14 @@ pub fn variant_name(s: Species, index: u8) -> &'static str {
     match s {
         Species::Cat => super::tame::CAT_VARIANTS.get(i).copied().unwrap_or("tabby"),
         Species::Wolf => super::tame::WOLF_VARIANTS.get(i).map_or("pale", |v| v.0),
-        Species::ZombieNautilus => super::nautilus::VARIANTS.get(i).copied().unwrap_or("temperate"),
-        _ => ["temperate", "warm", "cold"].get(i).copied().unwrap_or("temperate"),
+        Species::ZombieNautilus => super::nautilus::VARIANTS
+            .get(i)
+            .copied()
+            .unwrap_or("temperate"),
+        _ => ["temperate", "warm", "cold"]
+            .get(i)
+            .copied()
+            .unwrap_or("temperate"),
     }
 }
 /// `VillagerType.byBiome` (index into `render::VILLAGER_TYPES`: plains,
@@ -1936,8 +2016,12 @@ pub fn villager_type(biome: &str) -> u8 {
         | "snowy_taiga" | "snowy_plains" | "grove" | "snowy_slopes" | "frozen_peaks"
         | "jagged_peaks" => 4,
         "swamp" | "mangrove_swamp" => 5,
-        "old_growth_spruce_taiga" | "old_growth_pine_taiga" | "windswept_gravelly_hills"
-        | "windswept_hills" | "taiga" | "windswept_forest" => 6,
+        "old_growth_spruce_taiga"
+        | "old_growth_pine_taiga"
+        | "windswept_gravelly_hills"
+        | "windswept_hills"
+        | "taiga"
+        | "windswept_forest" => 6,
         _ => 0,
     }
 }

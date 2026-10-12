@@ -473,7 +473,10 @@ pub const COMMON_TROPICAL: [(u8, u8, u8); 22] = [
 pub fn finalize(m: &mut Mob) {
     if m.species() == Species::TropicalFish {
         let (p, b, c) = if m.random.next_float() < 0.9 {
-            COMMON_TROPICAL[m.random.next_int_bound(COMMON_TROPICAL.len() as i32).unwrap_or(0) as usize]
+            COMMON_TROPICAL[m
+                .random
+                .next_int_bound(COMMON_TROPICAL.len() as i32)
+                .unwrap_or(0) as usize]
         } else {
             (
                 m.random.next_int_bound(12).unwrap_or(0) as u8,

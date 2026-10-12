@@ -895,11 +895,14 @@ fn check_despawn(m: &mut Mob, w: &MobWorld) -> bool {
         || super::nautilus::is_nautilus(m.species()) && m.extra.tame
         || m.species() == Species::SulfurCube
             && (super::sulfur_cube::has_body(m) || m.extra.scratch[3] != 0);
-    // removeWhenFarAway: animals, wardens, patrols and raiders, zombie
-    // villagers being cured and ridden mobs stay.
+    // removeWhenFarAway: animals, wardens, allays, patrols and raiders,
+    // zombie villagers being cured and ridden mobs stay; the wither's
+    // checkDespawn never removes it for distance.
     let creature = m.kind.category == "creature";
-    let removable = !(m.species() == Species::Warden
-        || creature && m.kind.flags.animal && !m.extra.jockey
+    let removable = !(matches!(
+        m.species(),
+        Species::Warden | Species::Allay | Species::Wither
+    ) || creature && m.kind.flags.animal && !m.extra.jockey
         || super::raider::keeps_alive(m, d)
         || super::zombie_villager::keeps_alive(m)
         || super::riders::keeps_alive(m));
