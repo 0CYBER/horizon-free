@@ -1943,7 +1943,7 @@ impl Game<'_> {
         }
         // Leashable.dropLeash: a lead item at the leashed entity's feet.
         let drop = |game: &mut Self, j: usize| {
-            if game.mobs[j].extra.leash.take().is_some() {
+            if horizon_client::mobs::leash::remove(&mut game.mobs[j]).is_some() {
                 let at = game.mobs[j].position;
                 game.spawn_at_location(at, 0.0, ItemStack::new("minecraft:lead", 1));
             }

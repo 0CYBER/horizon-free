@@ -116,6 +116,22 @@ impl MobWorld<'_> {
         }
         out
     }
+    /// `BlockState.getCollisionShape(level, pos)` (the empty collision
+    /// context) as boxes in the world.
+    pub fn block_collision_boxes(&self, x: i32, y: i32, z: i32) -> Vec<Aabb> {
+        let mut scene = SceneCollisions {
+            world: self.world,
+            binding: self.collision,
+        };
+        let state = self.world.block(x, y, z);
+        let at = horizon_core::position::BlockPos::new(x, y, z);
+        let context = horizon_world::collision_context::CollisionContext::empty(false);
+        let offset = Vec3::new(f64::from(x), f64::from(y), f64::from(z));
+        self.collision
+            .collision_shape_with_context(&mut scene, state, at, &context)
+            .map(|shape| shape.boxes().iter().map(|b| b.move_by(offset)).collect())
+            .unwrap_or_default()
+    }
     pub fn no_collision(&self, b: Aabb) -> bool {
         let mut scene = SceneCollisions {
             world: self.world,
@@ -125,6 +141,38 @@ impl MobWorld<'_> {
     }
 }
 impl Mob {
+    /// `Entity.refreshDimensions` after growing from `old_w` by `old_h`:
+    /// `fudgePositionAfterSizeChange` moves the mob to the free spot nearest
+    /// its old centre where the bigger box fits (`findFreePosition`), or
+    /// failing that, one that fits at the old height.
+    pub fn fudge_position_after_size_change(&mut self, w: &MobWorld, old_w: f64, old_h: f64) {
+        let (new_w, new_h, _) = self.dims();
+        let small = new_w <= 4.0 && new_h <= 4.0;
+        if self.age == 0 || self.no_physics() || !small || !(new_w > old_w || new_h > old_h) {
+            return;
+        }
+        let center = Vec3::new(
+            self.position.x,
+            self.position.y + old_h / 2.0,
+            self.position.z,
+        );
+        let dw = (new_w - old_w).max(0.0) + 1.0e-6;
+        let dh = (new_h - old_h).max(0.0) + 1.0e-6;
+        let at = |allowed: Aabb, size_y: f64| free_position(w, allowed, center, new_w, size_y);
+        if let Some(p) = at(Aabb::of_size(center, Vec3::new(dw, dh, dw)), new_h) {
+            self.position = Vec3::new(p.x, p.y - new_h / 2.0, p.z);
+            return;
+        }
+        if new_w > old_w
+            && new_h > old_h
+            && let Some(p) = at(Aabb::of_size(center, Vec3::new(dw, 1.0e-6, dw)), old_h)
+        {
+            self.position = Vec3::new(p.x, p.y - old_h / 2.0 + 1.0e-6, p.z);
+        }
+    }
+    fn no_physics(&self) -> bool {
+        false
+    }
     pub fn eye_y(&self) -> f64 {
         self.position.y + self.eye_height()
     }
@@ -417,14 +465,21 @@ impl Mob {
             self.travel_in_air(w, input, events);
         }
     }
-    /// LivingEntity.travelFlying (ghast 0.02, phantom 0.2): no gravity, 0.91 drag.
+    /// LivingEntity.travelFlying: no gravity, `0.91F` drag in the air,
+    /// `0.8F` in water and 0.5 in lava. A happy ghast swims as fast as it
+    /// flies (`HappyGhast.travel`); the others at 0.02.
     fn travel_flying(&mut self, w: &MobWorld, input: Vec3, events: &mut Vec<MobEvent>) {
-        let (speed, drag) = if self.fluids.in_water {
-            (0.02, 0.8)
-        } else if self.fluids.in_lava {
-            (0.02, 0.5)
+        let fluid_speed = if self.species() == super::Species::HappyGhast {
+            self.kind.air_speed
         } else {
-            (self.kind.air_speed, 0.91)
+            0.02
+        };
+        let (speed, drag) = if self.fluids.in_water {
+            (fluid_speed, f64::from(0.8_f32))
+        } else if self.fluids.in_lava {
+            (fluid_speed, 0.5)
+        } else {
+            (self.kind.air_speed, f64::from(0.91_f32))
         };
         self.move_relative(speed, input);
         self.do_move(w, events);
@@ -637,4 +692,45 @@ fn fluid_falling(gravity: f64, falling: bool, m: Vec3) -> Vec3 {
     } else {
         m
     }
+}
+
+/// `CollisionGetter.findFreePosition`: within `allowed`, the point nearest
+/// `preferred` at which a box of the size, centred there, meets no block.
+fn free_position(
+    w: &MobWorld,
+    allowed: Aabb,
+    preferred: Vec3,
+    size_x: f64,
+    size_y: f64,
+) -> Option<Vec3> {
+    use horizon_core::geometry::{ShapeOp, VoxelShape};
+    let allowed_shape = VoxelShape::from_box(allowed).ok()?;
+    if allowed_shape.is_empty() {
+        return None;
+    }
+    let half = Vec3::new(size_x / 2.0, size_y / 2.0, size_x / 2.0);
+    let area = allowed.inflate(half);
+    let (lo, hi) = (area.min_position(), area.max_position());
+    let mut collisions = VoxelShape::empty();
+    // getBlockCollisions: the block shapes that reach into the area.
+    for x in (lo.x - 1.0e-7).floor() as i32 - 1..=(hi.x + 1.0e-7).floor() as i32 + 1 {
+        for y in (lo.y - 1.0e-7).floor() as i32 - 1..=(hi.y + 1.0e-7).floor() as i32 + 1 {
+            for z in (lo.z - 1.0e-7).floor() as i32 - 1..=(hi.z + 1.0e-7).floor() as i32 + 1 {
+                let boxes = w.block_collision_boxes(x, y, z);
+                let touches = boxes.iter().any(|b| {
+                    let (a, c) = (b.min_position(), b.max_position());
+                    a.x < hi.x && c.x > lo.x && a.y < hi.y && c.y > lo.y && a.z < hi.z && c.z > lo.z
+                });
+                if !touches {
+                    continue;
+                }
+                for b in boxes {
+                    let grown = VoxelShape::from_box(b.inflate(half)).ok()?;
+                    collisions = collisions.join(&grown, ShapeOp::OR).ok()?;
+                }
+            }
+        }
+    }
+    let free = allowed_shape.join(&collisions, ShapeOp::ONLY_FIRST).ok()?;
+    free.closest_point(preferred)
 }

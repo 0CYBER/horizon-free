@@ -10,20 +10,19 @@ use horizon_client::{
 use horizon_core::random::RandomSource;
 
 impl Game<'_> {
-    /// An egg item at the parent, a plop and some experience.
+    /// The egg item at the parent (`Sniffer.spawnChildFromBreeding`; the
+    /// brain already played the plop and dropped the experience).
     pub(super) fn lay_sniffer_egg(&mut self, parent: &Mob) {
         let at = [parent.position.x, parent.position.y, parent.position.z];
+        // new ItemEntity(level, x, y, z, stack): a little random push.
+        let vx = self.world.random.next_double() * 0.2 - 0.1;
+        let vz = self.world.random.next_double() * 0.2 - 0.1;
         self.spawn_item(
             ItemStack::new("minecraft:sniffer_egg", 1),
             at,
-            [0.0, 0.2, 0.0],
+            [vx, 0.2, vz],
             10,
         );
-        let pitch = (self.world.random.next_float() - self.world.random.next_float()) * 0.2 + 0.5;
-        self.audio
-            .play("minecraft:block.sniffer_egg.plop", Some(at), 1.0, pitch);
-        let xp = 1 + self.world.random.next_int_bound(7).unwrap_or(0) as u32;
-        self.spawn_orbs(at, xp);
     }
     /// A snifflet where the egg was.
     pub(super) fn hatch_sniffer(&mut self, pos: [i32; 3]) {
@@ -42,8 +41,10 @@ impl Game<'_> {
             m.head_yaw = yaw;
         }
     }
-    /// `Sniffer.emitDiggingParticles`: block dust and the digging sound
-    /// between the 1.7th and the 6th second of the digging animation.
+    /// The sniffer's client-side effects: `SnifferSoundInstance` when it
+    /// starts digging, `Sniffer.emitDiggingParticles` (block dust and the
+    /// block's hit sound between the 1.7th and the 6th second of the
+    /// digging animation) and `playSearchingSound`.
     pub(super) fn tick_sniffer_effects(&mut self) {
         let Some(camera) = self.player.as_ref().map(|p| p.position) else {
             return;
@@ -52,14 +53,27 @@ impl Game<'_> {
             let m = &self.mobs[i];
             if m.species() != Species::Sniffer
                 || !m.alive()
-                || !sniffer::digging(m)
+                || m.silent
                 || m.position.distance_squared(camera) > 32.0 * 32.0
             {
+                continue;
+            }
+            let at = [m.position.x, m.position.y, m.position.z];
+            if sniffer::state(m) == sniffer::SEARCHING && m.age.is_multiple_of(20) {
+                self.audio
+                    .play("minecraft:entity.sniffer.searching", Some(at), 1.0, 1.0);
+                continue;
+            }
+            if !sniffer::digging(m) {
                 continue;
             }
             let Some(ms) = m.anim.states[3].millis(m.age as f32) else {
                 continue;
             };
+            if ms == 0 {
+                self.audio
+                    .play("minecraft:entity.sniffer.digging", Some(at), 1.0, 1.0);
+            }
             if ms <= 1700 || ms >= 6000 {
                 continue;
             }
@@ -68,19 +82,19 @@ impl Game<'_> {
             let Some((sprite, tint)) = self.particle_sprite(below) else {
                 continue;
             };
-            let at = [
+            let dust = [
                 f64::from(head[0]) + 0.5,
                 f64::from(head[1]) + 0.5 - f64::from(0.65_f32),
                 f64::from(head[2]) + 0.5,
             ];
             for _ in 0..30 {
                 let particle =
-                    Particle::terrain(&mut self.world.random, at, [0.0; 3], sprite.clone(), tint);
+                    Particle::terrain(&mut self.world.random, dust, [0.0; 3], sprite.clone(), tint);
                 self.particles.push(particle);
             }
             if self.mobs[i].age.is_multiple_of(10) {
-                self.audio
-                    .play("minecraft:entity.sniffer.digging", Some(at), 0.5, 0.5);
+                let hit = self.res.facts.get(below).sounds.hit.clone();
+                self.audio.play(&hit, Some(at), 0.5, 0.5);
             }
         }
     }

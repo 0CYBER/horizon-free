@@ -466,7 +466,8 @@ pub fn setup(
         Anim::CopperGolem => super::copper_golem::anim(m, s, p, w_anims),
         Anim::HappyGhast => super::happy_ghast::anim(m, s, p),
         Anim::Nautilus => super::nautilus::anim(m, s, p, w_anims),
-        Anim::Llama => super::llama::anim(m, s, p),
+        // body_anim::llama runs first.
+        Anim::Llama => quadruped(p, s),
         Anim::Warden => super::warden::anim(m, s, p, w_anims),
         Anim::Allay => super::allay::anim(m, s, p),
         Anim::Creaking => super::creaking::anim(m, s, p, w_anims),

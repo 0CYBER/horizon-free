@@ -65,7 +65,7 @@ pub fn register(m: &mut Mob) {
     g.add(1, Float);
     g.add(1, TamePanic(Panic::new(1.5)));
     g.add(2, SitWhenOrdered);
-    g.add(3, AvoidLlamas);
+    g.add(3, AvoidLlamas::new());
     g.add(4, LeapAtTarget::new(0.4));
     g.add(5, MeleeAttack::new(1.0, true));
     g.add(6, FollowOwner::new(1.0, 10.0, 2.0));
@@ -255,38 +255,56 @@ impl Goal for SitWhenOrdered {
 }
 /// `Wolf.WolfAvoidEntityGoal`: untamed wolves flee llamas.
 #[derive(Clone, Debug)]
-struct AvoidLlamas;
+struct AvoidLlamas(super::goals::AvoidEntity);
+impl AvoidLlamas {
+    fn new() -> Self {
+        Self(super::goals::AvoidEntity::new(
+            super::goals::Avoid::Species(vec![Species::Llama, Species::TraderLlama]),
+            24.0,
+            1.5,
+            1.5,
+        ))
+    }
+}
+/// `Wolf.WolfAvoidEntityGoal`: a wild wolf runs from a llama, the more
+/// likely the stronger it is (`strength >= random.nextInt(5)`), and drops
+/// its target while it does.
 impl Goal for AvoidLlamas {
     goal_clone!();
+    fn name(&self) -> &'static str {
+        "WolfAvoidEntityGoal"
+    }
     fn flags(&self) -> u8 {
-        MOVE
+        self.0.flags()
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        if m.extra.tame {
+        if !self.0.can_use(m, cx) {
             return false;
         }
-        let pos = m.position;
-        let llama =
-            cx.w.nearby(pos, 24.0, |s| {
-                matches!(s.species, Species::Llama | Species::TraderLlama) && s.alive
-            })
-            .map(|s| s.position)
-            .next();
-        let Some(from) = llama else {
+        // Seen.profession is the llama's strength (`variant2`).
+        let Some(strength) = self
+            .0
+            .found
+            .and_then(|id| cx.w.seen(id))
+            .map(|s| s.profession)
+        else {
             return false;
         };
-        // DefaultRandomPos.getPosAway(16, 7, from).
-        let away = Vec3::new(pos.x - from.x, 0.0, pos.z - from.z);
-        let len = (away.x * away.x + away.z * away.z).sqrt().max(1e-6);
-        let target = [
-            pos.x + away.x / len * 16.0,
-            pos.y,
-            pos.z + away.z / len * 16.0,
-        ];
-        m.nav_move_to(cx.w, target, 1.5)
+        !m.extra.tame && i32::from(strength) >= m.random.next_int_bound(5).unwrap_or(0)
     }
-    fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
-        !m.ai.nav.is_done()
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        self.0.can_continue(m, cx)
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        m.ai.target = None;
+        self.0.start(m, cx)
+    }
+    fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.stop(m, cx)
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        m.ai.target = None;
+        self.0.tick(m, cx)
     }
 }
 /// `FollowOwnerGoal(speed, startDistance, stopDistance)`.

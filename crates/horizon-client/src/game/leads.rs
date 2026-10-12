@@ -76,7 +76,7 @@ impl Game<'_> {
         let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) else {
             return;
         };
-        if m.extra.leash.take().is_none() {
+        if horizon_client::mobs::leash::remove(m).is_none() {
             return;
         }
         let at = [m.position.x, m.position.y, m.position.z];

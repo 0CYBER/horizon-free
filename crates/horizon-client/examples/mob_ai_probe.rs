@@ -56,6 +56,7 @@ struct Scenario {
     spawning: bool,
     /// The player hits a mob for 1 at the start of a tick: (tick, mob index).
     hurts: Vec<(i32, usize)>,
+    hand: Option<String>,
     mobs: Vec<MobSpec>,
 }
 
@@ -101,6 +102,8 @@ fn parse(text: &str) -> Vec<Scenario> {
                     } else if let Some(t) = opt.strip_prefix("turn=") {
                         let (tick, yaw) = t.split_once(',').unwrap();
                         s.turn = Some((tick.parse().unwrap(), yaw.parse().unwrap()));
+                    } else if let Some(item) = opt.strip_prefix("hand=") {
+                        s.hand = Some(item.to_owned());
                     } else {
                         panic!("unknown player option {opt}");
                     }
@@ -262,6 +265,11 @@ fn seen(m: &Mob) -> Seen {
             .flatten(),
         profession: m.extra.variant2,
         xp: horizon_client::mobs::villager::xp(m),
+        stats: [
+            f64::from(m.attrs.max_health),
+            m.extra.vector[0],
+            m.attrs.speed,
+        ],
     }
 }
 
@@ -465,9 +473,10 @@ fn print(out: &mut String, t: i32, i: usize, m: &Mob) {
         u8::from(m.ai.jumping)
     );
     let _ = write!(out, "\trng {:x}", m.random.state());
-    if let Some((acts, mem)) = horizon_client::mobs::villager_brain::describe(m)
+    let brain = horizon_client::mobs::villager_brain::describe(m)
         .or_else(|| horizon_client::mobs::monster_brain::describe(m))
-    {
+        .or_else(|| horizon_client::mobs::animal_brain::describe(m));
+    if let Some((acts, mem)) = brain {
         let _ = write!(out, "\tact {acts}\tmem {mem}");
     }
     out.push('\n');
@@ -590,6 +599,15 @@ fn main() -> horizon_client::Result<()> {
                 match flag.as_str() {
                     "persistent" => m.persistent = true,
                     "noai" => m.no_ai = true,
+                    "inlove" => m.extra.in_love = 600,
+                    "tame" => m.extra.tame = true,
+                    x if x.starts_with("age=") => m.extra.age = x[4..].parse().unwrap(),
+                    x if x.starts_with("strength=") => m.extra.variant2 = x[9..].parse().unwrap(),
+                    "leashed" => m.extra.leash = Some(horizon_client::mobs::leash::Holder::Player),
+                    x if x.starts_with("leashto=") => {
+                        let n: u32 = x[8..].parse().unwrap();
+                        m.extra.leash = Some(horizon_client::mobs::leash::Holder::Mob(100_000 + n));
+                    }
                     other => panic!("unknown mob flag {other}"),
                 }
             }
@@ -609,6 +627,10 @@ fn main() -> horizon_client::Result<()> {
                     spec.seed,
                 );
             }
+            // The same for the sniffer's and the happy ghast's brains.
+            if horizon_client::mobs::animal_brain::kind_of(&m).is_some() {
+                horizon_client::mobs::animal_brain::init(&mut m, spec.seed);
+            }
             mobs.push(m);
         }
         let mut player = s.player.map(|p| {
@@ -624,7 +646,7 @@ fn main() -> horizon_client::Result<()> {
                 creative: s.creative,
                 sneaking: false,
                 look: [0.0, 0.0, 1.0],
-                main_hand: None,
+                main_hand: s.hand.as_deref().map(Into::into),
                 off_hand: None,
                 head: None,
                 armor_cover: 0.0,
@@ -642,6 +664,35 @@ fn main() -> horizon_client::Result<()> {
         let mut scratch = LegacyRandom::new(0);
         for (i, m) in mobs.iter().enumerate() {
             print(&mut out, 0, i, m);
+        }
+        // The MobWorld every step sees, over a snapshot of the mobs.
+        macro_rules! mob_world {
+            ($snapshot:expr) => {
+                MobWorld {
+                    teams: Default::default(),
+                    world: &world,
+                    registry,
+                    facts: &facts,
+                    collision: &collision,
+                    data: &data,
+                    player: player.clone(),
+                    others: $snapshot,
+                    daylight: (s.time.rem_euclid(24000)) < 12000,
+                    game_time: world.game_time,
+                    day_time: world.day_time,
+                    raining: s.rain,
+                    thundering: s.thunder,
+                    nether: false,
+                    block_tags: &items.block_tags,
+                    biomes: &biomes,
+                    mob_griefing: true,
+                    difficulty: LocalDifficulty::new(2, world.day_time, 0, 0.0),
+                    end: false,
+                    world_seed: 0,
+                    // FlatLevelSource.getSeaLevel.
+                    sea_level: -63,
+                }
+            };
         }
         for t in 1..=s.ticks {
             world.game_time += 1;
@@ -665,31 +716,8 @@ fn main() -> horizon_client::Result<()> {
                 p.look = [f64::from(sin), -0.0, f64::from(cos)];
                 p.yaw = yaw;
             }
-            let snapshot: Vec<Seen> = mobs.iter().filter(|m| !m.removed).map(seen).collect();
-            let w = MobWorld {
-                teams: Default::default(),
-                world: &world,
-                registry,
-                facts: &facts,
-                collision: &collision,
-                data: &data,
-                player: player.clone(),
-                others: &snapshot,
-                daylight: (s.time.rem_euclid(24000)) < 12000,
-                game_time: world.game_time,
-                day_time: world.day_time,
-                raining: s.rain,
-                thundering: s.thunder,
-                nether: false,
-                block_tags: &items.block_tags,
-                biomes: &biomes,
-                mob_griefing: true,
-                difficulty: LocalDifficulty::new(2, world.day_time, 0, 0.0),
-                end: false,
-                world_seed: 0,
-                // FlatLevelSource.getSeaLevel.
-                sea_level: -63,
-            };
+            let mut snapshot: Vec<Seen> = mobs.iter().filter(|m| !m.removed).map(seen).collect();
+            let w = mob_world!(&snapshot);
             let mut events = Vec::new();
             let mut heart_events = Vec::new();
             let mut added = Vec::new();
@@ -739,10 +767,12 @@ fn main() -> horizon_client::Result<()> {
             #[allow(unused_mut)] // filled only with the rng-trace feature
             let mut traces: Vec<String> = Vec::new();
             let mut pushes = Vec::new();
-            for (i, m) in mobs.iter_mut().enumerate() {
-                if m.removed {
+            for i in 0..mobs.len() {
+                if mobs[i].removed {
                     continue;
                 }
+                let w = mob_world!(&snapshot);
+                let m = &mut mobs[i];
                 horizon_client::mobs::apply_mob_pushes(m, &mut pushes);
                 let from = events.len();
                 #[cfg(feature = "rng-trace")]
@@ -756,14 +786,21 @@ fn main() -> horizon_client::Result<()> {
                     }
                 }
                 horizon_client::mobs::take_mob_pushes(&mut events, from, &mut pushes);
-                let _ = i;
                 if !alive {
                     m.removed = true;
+                }
+                horizon_client::mobs::apply_brain_events(&mut mobs, &mut events, from);
+                // ServerLevel ticks entities one after another: the ones
+                // after this mob see it as it is now.
+                if let Some(e) = snapshot.iter_mut().find(|e| e.id == mobs[i].id) {
+                    *e = seen(&mobs[i]);
+                    e.alive &= !mobs[i].removed;
                 }
             }
             for m in &mut mobs {
                 horizon_client::mobs::apply_mob_pushes(m, &mut pushes);
             }
+            let w = mob_world!(&snapshot);
             // ServerLevel.tickBlockEntities: the hearts (none ticks once uprooted).
             heart_events.append(&mut heart_events_later);
             for (at, h) in &mut hearts {

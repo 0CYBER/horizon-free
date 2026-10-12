@@ -162,6 +162,8 @@ public final class VanillaMobAiOracle {
         /** The tick from which the player faces turnYaw (head and body), else 0. */
         int turnTick = Integer.MAX_VALUE;
         float turnYaw;
+        /** What the player holds in its main hand (an item id), or null. */
+        String hand;
         List<MobSpec> mobs = new ArrayList<>();
         long levelSeed = 0;
         /** Blocks placed when the scenario starts, so their block entities start afresh and tick. */
@@ -207,7 +209,8 @@ public final class VanillaMobAiOracle {
                             String[] tv = f[i].substring(5).split(",");
                             s.turnTick = Integer.parseInt(tv[0]);
                             s.turnYaw = Float.parseFloat(tv[1]);
-                        } else throw new IllegalArgumentException(line);
+                        } else if (f[i].startsWith("hand=")) s.hand = f[i].substring(5);
+                        else throw new IllegalArgumentException(line);
                     }
                 }
                 case "mob" -> {
@@ -461,6 +464,8 @@ public final class VanillaMobAiOracle {
                     method(player.connection.getClass(), "markClientLoaded").invoke(player.connection);
                 }
                 player.setGameMode(s.creative ? GameType.CREATIVE : GameType.SURVIVAL);
+                player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, s.hand == null ? net.minecraft.world.item.ItemStack.EMPTY
+                    : new net.minecraft.world.item.ItemStack(BuiltInRegistries.ITEM.getValue(net.minecraft.resources.Identifier.parse(s.hand))));
                 player.snapTo(s.player[0], s.player[1], s.player[2], 0.0F, 0.0F);
                 // snapTo leaves the head and body as the player was created
                 // (a random head yaw): face +z like the probe's player.
@@ -493,6 +498,14 @@ public final class VanillaMobAiOracle {
                 for (String flag : spec.flags) {
                     if (flag.equals("persistent")) mob.setPersistenceRequired();
                     else if (flag.equals("noai")) mob.setNoAi(true);
+                    else if (flag.equals("inlove")) ((net.minecraft.world.entity.animal.Animal) mob).setInLoveTime(600);
+                    else if (flag.equals("tame") && mob instanceof net.minecraft.world.entity.animal.equine.AbstractHorse horse) horse.setTamed(true);
+                    else if (flag.startsWith("age=")) ((AgeableMob) mob).setAge(Integer.parseInt(flag.substring(4)));
+                    else if (flag.startsWith("strength=")) method(net.minecraft.world.entity.animal.equine.Llama.class, "setStrength", int.class)
+                        .invoke(mob, Integer.parseInt(flag.substring(9)));
+                    else if (flag.equals("leashed") || flag.startsWith("leashto=")) {
+                        // Leashed once every mob exists (below).
+                    }
                     else throw new IllegalArgumentException(flag);
                 }
                 level.addFreshEntity(mob);
@@ -505,6 +518,14 @@ public final class VanillaMobAiOracle {
                 mobs.add(mob);
                 brains.add(brain);
                 seeds.add(spec.seed);
+            }
+            // Leads: to the player ("leashed") or to the n-th mob ("leashto=n").
+            for (int i = 0; i < s.mobs.size(); i++) {
+                for (String flag : s.mobs.get(i).flags) {
+                    if (flag.equals("leashed")) ((net.minecraft.world.entity.Leashable) mobs.get(i)).setLeashedTo(player, true);
+                    else if (flag.startsWith("leashto=")) ((net.minecraft.world.entity.Leashable) mobs.get(i))
+                        .setLeashedTo(mobs.get(Integer.parseInt(flag.substring(8))), true);
+                }
             }
             // Hearts start with the scenario: their tickers have not run during the warm-up.
             var blockLookup = level.holderLookup(Registries.BLOCK);

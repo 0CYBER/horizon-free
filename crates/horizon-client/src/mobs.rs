@@ -8,6 +8,7 @@
 pub mod ai;
 pub mod allay;
 pub mod anim;
+pub mod animal_brain;
 pub mod aquatic;
 pub mod body_anim;
 pub mod brain;
@@ -545,6 +546,8 @@ pub struct Extra {
     pub raider: Option<Box<raider::State>>,
     /// A villager's raid activity and gossip.
     pub villager: Option<Box<villager::Ext>>,
+    /// The sniffer's and the ghastling's brain.
+    pub animal_brain: Option<Box<animal_brain::Brain>>,
     /// The mob this one rides, and the mob riding it (`getVehicle`, `getFirstPassenger`).
     pub mount: Option<u32>,
     pub rider: Option<u32>,
@@ -638,6 +641,18 @@ pub enum MobEvent {
     Gift {
         target: u32,
         item: &'static str,
+    },
+    /// `AnimalMakeLove`: the partner remembers this mob as its breed target
+    /// and walks to it and looks at it.
+    BreedTarget {
+        mob: u32,
+        partner: u32,
+    },
+    /// `BehaviorUtils.lockGazeAndWalkToEachOther`'s other half: the partner
+    /// looks at this mob and walks to it.
+    LockGaze {
+        mob: u32,
+        partner: u32,
     },
     /// A sound event id that is not a static string (variant sounds).
     SoundId(String, [f64; 3], f32, f32),
@@ -740,6 +755,9 @@ pub enum MobEvent {
     Breed {
         parent: u32,
         partner: u32,
+        /// A llama's baby, drawn from the parent's random as
+        /// `Llama.getBreedOffspring` does.
+        llama: Option<Box<super::mobs::llama::Offspring>>,
     },
     /// Replace a block by name (sheep turning grass to dirt), optionally with
     /// the destroy effect.
@@ -914,9 +932,13 @@ pub struct Seen {
     /// A villager's `POTENTIAL_JOB_SITE` and `MEETING_POINT`.
     pub potential_job: Option<[i32; 3]>,
     pub meeting: Option<[i32; 3]>,
-    /// A villager's profession (index into `render::PROFESSIONS`) and experience.
+    /// `variant2`: a villager's profession (index into
+    /// `render::PROFESSIONS`), a llama's strength. And a villager's experience.
     pub profession: u8,
     pub xp: i32,
+    /// `MAX_HEALTH`, `JUMP_STRENGTH` and `MOVEMENT_SPEED` base values (a
+    /// horse's breeding stock).
+    pub stats: [f64; 3],
 }
 impl Mob {
     /// `EntityType.getCategory`'s name.
@@ -961,6 +983,41 @@ pub fn apply_mob_pushes(m: &mut Mob, pending: &mut Vec<(u32, Vec3)>) {
         m.velocity = Vec3::new(m.velocity.x + v.x, m.velocity.y + v.y, m.velocity.z + v.z);
         false
     });
+}
+/// Applies the brain memories a mob's tick set on other mobs (from event
+/// index `from` on), at once: vanilla sets them on the other entity during
+/// the tick, before the mobs after it tick.
+pub fn apply_brain_events(mobs: &mut [Mob], events: &mut Vec<MobEvent>, from: usize) {
+    let mut i = from;
+    while i < events.len() {
+        match events[i] {
+            MobEvent::BreedTarget { mob, partner } => {
+                if let Some(m) = mobs.iter_mut().find(|m| m.id == mob) {
+                    animal_brain::set_breed_partner(m, partner);
+                }
+                events.remove(i);
+            }
+            MobEvent::LockGaze { mob, partner } => {
+                if let Some(m) = mobs.iter_mut().find(|m| m.id == mob) {
+                    animal_brain::lock_gaze(m, partner);
+                }
+                events.remove(i);
+            }
+            // Animal.finalizeSpawnChildFromBreeding: the partner rests and
+            // forgets it at once (the game still makes the baby).
+            MobEvent::Breed {
+                parent, partner, ..
+            } => {
+                if let Some(m) = mobs.iter_mut().find(|m| m.id == partner) {
+                    m.extra.age = 6000;
+                    m.extra.in_love = 0;
+                    animal_brain::forget_breed_target(m, parent);
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
 }
 /// The player as mobs see it.
 #[derive(Clone, Debug)]

@@ -19,6 +19,9 @@ use horizon_core::{
 
 #[derive(Clone, Debug, Default)]
 pub struct Ai {
+    /// `Mob.homePosition` and `homeRadius`: where a restricted mob stays
+    /// (a lead's holder, a happy ghast's float area).
+    pub home: Option<([i32; 3], i32)>,
     pub goals: GoalSelector,
     pub targets: GoalSelector,
     pub nav: Navigation,
@@ -563,6 +566,10 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
             .is_some_and(|t| t.position.distance_squared(m.position) > 121.0);
         super::witch::ai_step(m, events, far);
     }
+    // AbstractHorse.aiStep: the tail swishes now and then (moveTail).
+    if super::equine::is_equine(m.species()) {
+        let _ = m.random.next_int_bound(200);
+    }
     // Monster.aiStep: updateNoActionTime (Raider: always +2).
     if is_monster(m.species())
         && (super::raider::is_raider(m.species()) || super::hostile::mob_brightness(m, w) > 0.5)
@@ -608,7 +615,12 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
     // AgeableMob.aiStep
     if m.alive() {
         if m.extra.age < 0 {
+            let (bw, bh, _) = m.dims();
             m.extra.age += 1;
+            // setAge at the age boundary: refreshDimensions.
+            if m.extra.age >= 0 {
+                m.fudge_position_after_size_change(w, bw, bh);
+            }
         } else if m.extra.age > 0 {
             m.extra.age -= 1;
         }
@@ -619,13 +631,18 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
         if m.extra.in_love > 0 {
             m.extra.in_love -= 1;
             if m.extra.in_love % 10 == 0 {
+                // The heart's speed and getRandomX/Y/Z, drawn even on the server.
+                let (w, h) = (f64::from(m.width()), f64::from(m.height()));
+                let r = &mut m.random;
+                for _ in 0..3 {
+                    let _ = r.next_gaussian();
+                }
+                let x = m.position.x + w * (2.0 * r.next_double() - 1.0);
+                let y = m.position.y + h * r.next_double() + 0.5;
+                let z = m.position.z + w * (2.0 * r.next_double() - 1.0);
                 events.push(MobEvent::Particles {
                     kind: "heart",
-                    at: [
-                        m.position.x,
-                        m.position.y + f64::from(m.height()) + 0.5,
-                        m.position.z,
-                    ],
+                    at: [x, y, z],
                     count: 1,
                 });
             }
@@ -737,6 +754,10 @@ fn server_ai_step(
     events: &mut Vec<MobEvent>,
 ) {
     m.ai.no_action_time += 1;
+    // A happy ghast set up for its age (ageBoundaryReached runs at once).
+    if m.species() == Species::HappyGhast {
+        super::happy_ghast::ensure_setup(m);
+    }
     // A saddled mount follows its rider instead of its goals.
     if super::equine::controlled(m) {
         super::equine::ridden_step(m);
@@ -773,6 +794,11 @@ fn server_ai_step(
         // Villager.customServerAiStep: the brain, then the raid sound roll.
         super::villager_brain::tick(m, w, level_random, events);
         let _ = m.random.next_int_bound(100);
+    }
+    // Sniffer and HappyGhast.customServerAiStep: the brain (a happy ghast's
+    // only while it is a ghastling), then updateActivity.
+    if m.species() == Species::Sniffer || m.species() == Species::HappyGhast && m.is_baby() {
+        super::animal_brain::tick(m, w, level_random, events);
     }
     {
         let mut cx = Cx { w, events };
@@ -950,6 +976,17 @@ pub fn walk_target_value(m: &Mob, w: &MobWorld, p: [i32; 3]) -> f32 {
     // Guardian.getWalkTargetValue: water first.
     if family(m.species()) == Family::Guardian && w.fluid(p[0], p[1], p[2]) == Fluid::Water {
         return 10.0 + light();
+    }
+    // HappyGhast.getWalkTargetValue: open air, best just above the ground.
+    if m.species() == Species::HappyGhast {
+        let air = |y: i32| w.facts.is_air(w.world.block(p[0], y, p[2]));
+        return if !air(p[1]) {
+            0.0
+        } else if air(p[1] - 1) && !air(p[1] - 2) {
+            10.0
+        } else {
+            5.0
+        };
     }
     // AbstractNautilus and Creaking.getWalkTargetValue: everywhere alike.
     if matches!(
