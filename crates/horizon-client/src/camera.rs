@@ -288,6 +288,13 @@ pub mod joml {
 }
 use joml::{Mat4, Quat};
 
+/// Camera-relative world view used by terrain, sky and the first-person hand.
+pub fn view_matrix(yaw: f32, pitch: f32) -> glam::Mat4 {
+    // Vanilla uses the conjugate of Camera.rotation, not a world-up look-at.
+    let q = Quat::rotation_yxz(PI - yaw * DEG_TO_RAD, -pitch * DEG_TO_RAD, 0.0);
+    glam::Mat4::from_quat(glam::Quat::from_xyzw(-q.x, -q.y, -q.z, q.w))
+}
+
 /// `CameraType`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CameraType {
@@ -762,6 +769,27 @@ pub fn bob_matrix(state: &BobState, damage_tilt_strength: f64, bob_view_option: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn view_keeps_yaw_at_vertical_pitch_limits() {
+        for yaw in [0.0, 45.0, 90.0, 180.0, -90.0, 360.0] {
+            for pitch in [-90.0, -89.999, 0.0, 89.999, 90.0] {
+                let view = view_matrix(yaw, pitch);
+                let mut camera = Camera::default();
+                camera.set_rotation(yaw, pitch);
+                for (world, expected) in [
+                    (camera.forwards, -glam::Vec3::Z),
+                    (camera.up, glam::Vec3::Y),
+                    (camera.left, -glam::Vec3::X),
+                ] {
+                    let got = view.transform_vector3(glam::Vec3::from(world));
+                    assert!(
+                        (got - expected).length() < 1e-5,
+                        "yaw={yaw}, pitch={pitch}: {got:?} != {expected:?}"
+                    );
+                }
+            }
+        }
+    }
     #[test]
     fn camera_eases_eye_height_and_fov() {
         let mut camera = Camera::default();

@@ -4606,14 +4606,7 @@ impl Game<'_> {
                     f64::from(m.pos[2]),
                 ) - camera)
                     .as_vec3();
-                let e = 0.002;
-                let corner = |x: f32, y: f32, z: f32| {
-                    o + glam::Vec3::new(
-                        x * (1.0 + 2.0 * e) - e,
-                        y * (1.0 + 2.0 * e) - e,
-                        z * (1.0 + 2.0 * e) - e,
-                    )
-                };
+                let corner = |x: f32, y: f32, z: f32| o + glam::Vec3::new(x, y, z);
                 let faces = [
                     [
                         corner(0., 1., 0.),
@@ -4653,15 +4646,16 @@ impl Game<'_> {
                     ],
                 ];
                 for f in faces {
-                    for (v, uv) in
-                        f.iter()
-                            .zip([[r.u0, r.v1], [r.u1, r.v1], [r.u1, r.v0], [r.u0, r.v0]])
+                    for (v, uv) in f
+                        .iter()
+                        .zip([[r.u0, r.v1], [r.u1, r.v1], [r.u1, r.v0], [r.u0, r.v0]])
+                        .rev()
                     {
                         out.push(Vertex {
                             pos: v.to_array(),
                             uv,
-                            layer: 0,
-                            color: 0xB4FF_FFFF,
+                            layer: 11,
+                            color: 0xFFFF_FFFF,
                             light: (15 * 16) | ((15 * 16) << 8),
                         });
                     }
@@ -5079,69 +5073,74 @@ impl Game<'_> {
         let z_in = (cloud_z - cell_z as f64 * 12.0) as f32;
         let bottom = (cloud_height - camera.y) as f32;
         let filled = |cx: i64, cz: i64| cells[(cz.rem_euclid(h) * w + cx.rem_euclid(w)) as usize];
-        let radius = (self.streaming.radius * 16 / 12 + 1) as i64;
+        let radius = (self.streaming.radius * 16 + 11) / 12;
         let c = sky.cloud_color;
         let color = |shade: f32| {
             let ch = |v: f32| ((v * shade).clamp(0.0, 1.0) * 255.0) as u32;
             ch(c[3].clamp(0.0, 1.0)) << 24 | ch(c[2]) << 16 | ch(c[1]) << 8 | ch(c[0])
         };
         let light = 240 | 240 << 8;
-        for dz in -radius..=radius {
-            for dx in -radius..=radius {
-                if dx * dx + dz * dz > radius * radius {
-                    continue;
+        for (dx, dz) in horizon_client::clouds::cells(radius) {
+            let (dx, dz) = (i64::from(dx), i64::from(dz));
+            let (cx, cz) = (cell_x + dx, cell_z + dz);
+            if !filled(cx, cz) {
+                continue;
+            }
+            let x0 = dx as f32 * 12.0 - x_in;
+            let z0 = dz as f32 * 12.0 - z_in;
+            let (x1, z1, y0, y1) = (x0 + 12.0, z0 + 12.0, bottom, bottom + 4.0);
+            let mut quad = |p: [[f32; 3]; 4], shade: f32| {
+                for v in p {
+                    // Overlay 4: clouds (unlit, faded by the cloud fog end).
+                    out.push(Vertex {
+                        pos: v,
+                        uv,
+                        layer: 4,
+                        color: color(shade),
+                        light,
+                    });
                 }
-                let (cx, cz) = (cell_x + dx, cell_z + dz);
-                if !filled(cx, cz) {
-                    continue;
-                }
-                let x0 = dx as f32 * 12.0 - x_in;
-                let z0 = dz as f32 * 12.0 - z_in;
-                let (x1, z1, y0, y1) = (x0 + 12.0, z0 + 12.0, bottom, bottom + 4.0);
-                let mut quad = |p: [[f32; 3]; 4], shade: f32| {
-                    for v in p {
-                        // Overlay 4: clouds (unlit, faded by the cloud fog end).
-                        out.push(Vertex {
-                            pos: v,
-                            uv,
-                            layer: 4,
-                            color: color(shade),
-                            light,
-                        });
-                    }
-                };
-                quad(
-                    [[x0, y1, z0], [x0, y1, z1], [x1, y1, z1], [x1, y1, z0]],
-                    1.0,
-                );
-                quad(
+            };
+            let faces = [
+                (
                     [[x1, y0, z0], [x1, y0, z1], [x0, y0, z1], [x0, y0, z0]],
                     0.7,
-                );
-                if !filled(cx, cz - 1) {
-                    quad(
-                        [[x0, y0, z0], [x0, y1, z0], [x1, y1, z0], [x1, y0, z0]],
-                        0.8,
-                    );
-                }
-                if !filled(cx, cz + 1) {
-                    quad(
-                        [[x1, y0, z1], [x1, y1, z1], [x0, y1, z1], [x0, y0, z1]],
-                        0.8,
-                    );
-                }
-                if !filled(cx - 1, cz) {
-                    quad(
-                        [[x0, y0, z1], [x0, y1, z1], [x0, y1, z0], [x0, y0, z0]],
-                        0.9,
-                    );
-                }
-                if !filled(cx + 1, cz) {
-                    quad(
-                        [[x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]],
-                        0.9,
-                    );
-                }
+                ),
+                (
+                    [[x0, y1, z0], [x0, y1, z1], [x1, y1, z1], [x1, y1, z0]],
+                    1.0,
+                ),
+                (
+                    [[x0, y0, z0], [x0, y1, z0], [x1, y1, z0], [x1, y0, z0]],
+                    0.8,
+                ),
+                (
+                    [[x1, y0, z1], [x1, y1, z1], [x0, y1, z1], [x0, y0, z1]],
+                    0.8,
+                ),
+                (
+                    [[x0, y0, z1], [x0, y1, z1], [x0, y1, z0], [x0, y0, z0]],
+                    0.9,
+                ),
+                (
+                    [[x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]],
+                    0.9,
+                ),
+            ];
+            let mask = horizon_client::clouds::face_mask(
+                dx as i32,
+                dz as i32,
+                bottom,
+                [
+                    !filled(cx, cz - 1),
+                    !filled(cx, cz + 1),
+                    !filled(cx - 1, cz),
+                    !filled(cx + 1, cz),
+                ],
+            );
+            for (direction, inside) in horizon_client::clouds::faces(mask) {
+                let (p, shade) = faces[usize::from(direction)];
+                quad(if inside { [p[3], p[2], p[1], p[0]] } else { p }, shade);
             }
         }
     }
@@ -6490,13 +6489,7 @@ impl Game<'_> {
             0.0
         };
         let inverse_height = 1.0 - self.heights.interpolated(a)[0];
-        let (yaw, pitch) = (self.yaw.to_radians(), self.pitch.to_radians());
-        let forward = glam::Vec3::new(
-            -yaw.sin() * pitch.cos(),
-            -pitch.sin(),
-            yaw.cos() * pitch.cos(),
-        );
-        let view = glam::Mat4::look_to_rh(glam::Vec3::ZERO, forward, glam::Vec3::Y);
+        let view = horizon_client::camera::view_matrix(self.yaw, self.pitch);
         let to_world = view.inverse();
         let eye = self.eye_position().unwrap_or_default();
         let light = self.world.light(
@@ -8433,7 +8426,7 @@ pub fn run() -> Result<()> {
             (
                 w,
                 h,
-                px.as_chunks::<4>().0.iter().map(|p| p[3] > 0).collect(),
+                px.as_chunks::<4>().0.iter().map(|p| p[3] >= 10).collect(),
             )
         })
         .unwrap_or((1, 1, vec![false])),

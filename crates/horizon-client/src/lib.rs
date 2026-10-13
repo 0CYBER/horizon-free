@@ -25,6 +25,7 @@ pub mod cauldron;
 pub mod chat;
 pub mod chunk;
 pub mod clock;
+pub mod clouds;
 pub mod collisions;
 pub mod command;
 pub mod command_storage;
