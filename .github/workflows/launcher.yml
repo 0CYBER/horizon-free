@@ -59,6 +59,7 @@ jobs:
       - name: Smoke test
         env:
           HORIZON_LAUNCHER_NO_SELF_UPDATE: '1'
+          HORIZON_GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           export HORIZON_LAUNCHER_HOME="${RUNNER_TEMP//\\//}/horizon-launcher-smoke"

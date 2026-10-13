@@ -59,7 +59,14 @@ fn agent() -> ureq::Agent {
 }
 
 fn get(url: &str) -> Result<ureq::Response, String> {
-    agent().get(url).call().map_err(|e| match e {
+    let mut request = agent().get(url);
+    // CI runners share addresses and hit GitHub's anonymous rate limit; they pass their own token.
+    if let Some(token) = std::env::var("HORIZON_GITHUB_TOKEN").ok().filter(|t| !t.is_empty()) {
+        if url.starts_with("https://api.github.com/") {
+            request = request.set("Authorization", &format!("Bearer {token}"));
+        }
+    }
+    request.call().map_err(|e| match e {
         ureq::Error::Status(403, _) => "GitHub's rate limit was reached. Try again in a few minutes.".into(),
         ureq::Error::Status(code, _) => format!("{url} answered {code}"),
         ureq::Error::Transport(t) => format!("No connection: {t}"),
