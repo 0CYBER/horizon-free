@@ -17,7 +17,7 @@ The opening, then Play ([clip](docs/opening.webm)):
 - **Play**: prepares resources as `PLAY.txt` describes (your launcher's 26.3 install, the
   26.3 server jar from that version's own json, Python 3.10+ and Java 25), then starts the
   client, or a server (`--dedicated --nogui`) in a folder you choose, with a live console.
-- **Patch notes**: each release's notes, newest first, with a link to GitHub Sponsors. A quiet "Join Discord" link sits in the sidebar footer.
+- **Patch notes**: each release's notes, newest first, with a link to GitHub Sponsors. Quiet "Join Discord" and "Website" links sit in the sidebar footer.
 - **What's next**: the README's roadmap, from main.
 
 Data lives in the platform's data directory (`~/.local/share/horizon-launcher` on Linux,
@@ -31,8 +31,8 @@ Windows): `versions/<tag>/`, `server-jars/`, `server/` and `settings.json`.
   inside the game, so the launcher is where you return to Horizon's. It is the `menuStyle:` line
   of `horizon.txt` in the game's home folder (`HORIZON_HOME`, else `horizon` in the data
   directory), which the game reads when it starts.
-- **Links**: the Discord invite and the Sponsors page come from `launcher/links.json` on main
-  (`{"discord": "...", "sponsor": "..."}`), so they change without a launcher release. Offline,
+- **Links**: the Discord invite, the Sponsors page and the website come from `launcher/links.json` on main
+  (`{"discord": "...", "sponsor": "...", "website": "..."}`), so they change without a launcher release. Offline,
   the launcher uses the same values built in; an empty address hides its button.
 
 ## Updates
@@ -63,7 +63,7 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher server [--dir <dir>] [--version <tag>] [--accept-eula]
     horizon-launcher notes [<tag>]                  patch notes as plain text
     horizon-launcher next                           the roadmap
-    horizon-launcher links                          the Discord and sponsor links
+    horizon-launcher links                          the Discord, sponsor and website links
     horizon-launcher menu-style [horizon|classic]   show or set the game's menu style
     horizon-launcher update [--check]               Horizon and the launcher
 

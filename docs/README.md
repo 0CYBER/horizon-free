@@ -1,6 +1,6 @@
 # Horizon documentation
 
-To play, use [the launcher](../launcher/README.md). These pages are for developers.
+To play, use [the launcher](../launcher/README.md); the project site is [playhorizon.dev](https://playhorizon.dev). These pages are for developers.
 
 ## Build and run
 

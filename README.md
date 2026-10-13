@@ -12,6 +12,7 @@
 </p>
 
 <p align="center">
+  <a href="https://playhorizon.dev"><b>Website</b></a> ·
   <a href="#download"><b>Download</b></a> ·
   <a href="#screenshots"><b>Screenshots</b></a> ·
   <a href="#project-status"><b>Parity status</b></a> ·
@@ -28,7 +29,7 @@ Every subsystem matches vanilla in all 281 parity harnesses, on Linux and macOS:
 
 ## Download
 
-**[Download the Horizon launcher](https://github.com/ludovic111/horizon/releases?q=launcher-v&expanded=true)** for Linux x86-64, macOS Apple Silicon or Windows x64: take the newest `launcher-v*` release (currently [launcher-v0.1.1](https://github.com/ludovic111/horizon/releases/tag/launcher-v0.1.1)); the launcher then updates itself. The launcher is the way to get Horizon: it installs and updates the game, prepares its resources from your own copy of Minecraft, and starts the client or a dedicated server.
+**[Download the Horizon launcher](https://github.com/ludovic111/horizon/releases?q=launcher-v&expanded=true)** (or see [playhorizon.dev](https://playhorizon.dev)) for Linux x86-64, macOS Apple Silicon or Windows x64: take the newest `launcher-v*` release (currently [launcher-v0.1.1](https://github.com/ludovic111/horizon/releases/tag/launcher-v0.1.1)); the launcher then updates itself. The launcher is the way to get Horizon: it installs and updates the game, prepares its resources from your own copy of Minecraft, and starts the client or a dedicated server.
 
 **You need** Minecraft: Java Edition installed with the official launcher, with 26.3 played once; Python 3.10 or newer and Java 25 (a JDK, e.g. Eclipse Temurin 25) for the one-time resource preparation; and a GPU with Vulkan on Linux and Windows, or any Apple Silicon Mac.
 
