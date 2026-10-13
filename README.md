@@ -20,7 +20,7 @@
 
 # Horizon
 
-A Rust rewrite of Minecraft: Java Edition 26.3 with one-to-one vanilla parity, checked against the game itself with differential tests.
+A Rust rewrite of Minecraft: Java Edition 26.3 built for one-to-one vanilla parity, checked against the game itself with differential tests.
 
 Every subsystem matches vanilla in all 281 parity harnesses, on Linux and macOS: 100% of what the harnesses compare (see [Project status](#project-status)). The native client is playable on Linux, macOS (Apple Silicon) and Windows.
 
