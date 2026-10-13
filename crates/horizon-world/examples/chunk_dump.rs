@@ -119,6 +119,20 @@ fn main() -> Result<(), Error> {
         })
         .collect::<Result<Vec<_>, Error>>()?;
     let blocks = registry(&resources)?;
+    // HORIZON_LIST_ORDER=x,z,view: print the chunks vanilla decorates around a
+    // player standing in chunk x,z (`decoration_order::vanilla_order`) and exit.
+    if let Some(at) = std::env::var_os("HORIZON_LIST_ORDER") {
+        let v: Vec<i32> = at
+            .to_string_lossy()
+            .split(',')
+            .map(str::parse)
+            .collect::<Result<_, _>>()?;
+        let [x, z, view]: [i32; 3] = v.try_into().map_err(|_| "HORIZON_LIST_ORDER=x,z,view")?;
+        for (x, z) in horizon_world::worldgen::decoration_order::vanilla_order((x, z), view) {
+            println!("{x} {z}");
+        }
+        return Ok(());
+    }
     let data = GeneratorData::load(&resources.join("worldgen"), blocks)?;
     let generator = OverworldGenerator::for_dimension(data, seed, "minecraft:normal", &dimension)?;
     let mut worker = generator.worker();
