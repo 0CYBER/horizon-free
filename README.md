@@ -47,7 +47,7 @@ Horizon is downloaded only through **the Horizon launcher**: get it from [playho
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/media/launcher-play.webp" alt="The launcher's Play page: version v2026.10.13.1, Client and Server, the Play button, and the resources and Minecraft folder rows"></td>
+    <td width="50%"><img src="docs/media/launcher-play.webp" alt="The launcher's Play page: v2026.10.13.1 ready to play, its summary, Client and Server, the Play button and prepared resources"></td>
     <td width="50%"><img src="docs/media/launcher-patch-notes.webp" alt="The launcher's Patch notes page, showing the notes of Horizon 2026.10.13.1"></td>
   </tr>
 </table>
