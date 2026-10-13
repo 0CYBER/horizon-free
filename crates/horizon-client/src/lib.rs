@@ -47,6 +47,7 @@ pub mod gamerules;
 pub mod gfx;
 pub mod gossip;
 pub mod health;
+pub mod hotbar;
 pub mod hud;
 pub mod hud_layout;
 pub mod hud_overlays;
