@@ -53,6 +53,13 @@ pub trait PieceWorld {
     /// `addFreshEntity`: an entity from its NBT (absolute `Pos`).
     fn entity(&mut self, nbt: Compound) -> Result<()>;
     fn post_process(&mut self, pos: [i32; 3]) -> Result<()>;
+    /// `scheduleTick(pos, fluid, delay)`: kept in the proto chunk until it is live.
+    fn fluid_tick(
+        &mut self,
+        pos: [i32; 3],
+        fluid: crate::fluid::FluidKind,
+        delay: i32,
+    ) -> Result<()>;
     /// WorldGenLevel.getSeed.
     fn seed(&mut self) -> Result<i64>;
     /// Draws from WorldGenLevel.getRandom (the region random).
@@ -106,6 +113,14 @@ impl<W: FeatureWorld + PlacementContext> PieceWorld for W {
     }
     fn post_process(&mut self, pos: [i32; 3]) -> Result<()> {
         self.mark_postprocessing(pos)
+    }
+    fn fluid_tick(
+        &mut self,
+        pos: [i32; 3],
+        fluid: crate::fluid::FluidKind,
+        delay: i32,
+    ) -> Result<()> {
+        self.schedule_fluid_tick(pos, fluid, delay)
     }
     fn seed(&mut self) -> Result<i64> {
         self.world_seed()
@@ -381,7 +396,7 @@ impl PieceFrame {
         c.world.set(pos, state, 2)?;
         let fluid = c.world.fluid(pos)?;
         if fluid.kind() != crate::fluid::FluidKind::Empty {
-            // scheduleTick(pos, fluid, 0) is a no-op for generation output.
+            c.world.fluid_tick(pos, fluid.kind(), 0)?;
         }
         if matches!(
             c.name(state),
