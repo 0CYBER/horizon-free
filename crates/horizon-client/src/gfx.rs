@@ -78,6 +78,9 @@ pub struct Frame<'a> {
     pub celestial: &'a [Vertex],
     /// First-person hand and held item, drawn after clearing depth.
     pub hand: &'a [Vertex],
+    /// `CameraRenderState.hudFov`: the hand's own field of view
+    /// (`GameRenderer.render3dHud`).
+    pub hand_fov_degrees: f32,
     /// Full-screen camera effects drawn over the world and hand, under the HUD.
     pub screen: &'a [crate::screen_effects::ScreenQuad],
     /// The world border wall, when near enough to be drawn.
@@ -139,6 +142,9 @@ pub struct Renderer {
     screen_buffer: wgpu::Buffer,
     screen_capacity: u64,
     entity_group: wgpu::BindGroup,
+    /// The entity resources with the hand's projection (`hand_globals`).
+    hand_group: wgpu::BindGroup,
+    hand_globals: wgpu::Buffer,
     entity_buffer: wgpu::Buffer,
     entity_capacity: u64,
     group: wgpu::BindGroup,
@@ -470,6 +476,12 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let hand_globals = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("First-person hand globals"),
+            size: std::mem::size_of::<Globals>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let (mips, mip_levels) = mip_chain(sprite_pixels, sprite_size, layers);
         let sprite_texture = device.create_texture_with_data(
             &queue,
@@ -646,6 +658,32 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: globals.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&atlas_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&atlas_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&lightmap_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&lightmap_sampler),
+                },
+            ],
+        });
+        let hand_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("First-person hand resources"),
+            layout: &entity_bindings,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: hand_globals.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -1065,6 +1103,8 @@ impl Renderer {
             screen_buffer,
             screen_capacity,
             entity_group,
+            hand_group,
+            hand_globals,
             entity_buffer,
             entity_capacity,
             group,
@@ -1492,6 +1532,20 @@ impl Renderer {
         };
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
+        // GameRenderer.render3dHud: the hand's projection at hudFov, with the
+        // bob in its pose rather than the projection (same product).
+        let hand_projection = Mat4::from_cols_array(&crate::camera::hand_projection(
+            frame.hand_fov_degrees,
+            self.config.width as f32,
+            self.config.height.max(1) as f32,
+            (frame.distance * 4.0).max(1024.0),
+        ));
+        let hand_globals = Globals {
+            view_proj: (hand_projection * frame.bob * view).to_cols_array_2d(),
+            ..globals
+        };
+        self.queue
+            .write_buffer(&self.hand_globals, 0, bytemuck::bytes_of(&hand_globals));
         // Frustum culling and camera-relative origins.
         let planes = frustum(view_proj);
         let camera = frame.camera;
@@ -1803,7 +1857,7 @@ impl Renderer {
                 ..Default::default()
             });
             pass.set_pipeline(&self.entity_pipeline);
-            pass.set_bind_group(0, &self.entity_group, &[]);
+            pass.set_bind_group(0, &self.hand_group, &[]);
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
             pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
             pass.draw_indexed(

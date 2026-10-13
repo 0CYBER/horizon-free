@@ -7319,6 +7319,7 @@ impl Game<'_> {
             additive: &additive,
             celestial: &celestial,
             hand: &hand,
+            hand_fov_degrees: self.hud_fov_degrees(alpha as f32, camera.to_array()),
             screen: &screen,
             border,
             game_time: self.world.game_time as f32,

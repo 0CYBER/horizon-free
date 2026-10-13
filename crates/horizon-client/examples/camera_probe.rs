@@ -5,7 +5,7 @@ use horizon_client::{
     Result,
     camera::{
         AvatarBob, BobState, Camera, CameraEntity, CameraFluid, CameraType, FovPlayer, HurtBob,
-        LivingCamera, UseItem, bob_matrix, field_of_view_modifier,
+        LivingCamera, UseItem, bob_matrix, field_of_view_modifier, perspective,
     },
 };
 use horizon_core::{
@@ -257,6 +257,15 @@ fn camera(c: &Value, out: &mut impl Write) -> Result<()> {
                     camera.detached,
                     fb(fov),
                     fb(hud)
+                )?;
+                let (w, h, far) = (fl(&op[4]), fl(&op[5]), fl(&op[6]));
+                let matrix =
+                    |m: [f32; 16]| m.iter().map(|&x| format!(" {}", fb(x))).collect::<String>();
+                writeln!(
+                    out,
+                    "projection{}{}",
+                    matrix(perspective(fov, w, h, far, 0.05, true)),
+                    matrix(perspective(hud, w, h, far, 0.05, true))
                 )?;
             }
             other => panic!("{other}"),

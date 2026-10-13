@@ -4,8 +4,10 @@ field-of-view easing), alignWithEntity (view rotation quaternion and basis,
 interpolated eye, third person back and front, camera distance and scale
 attributes with mounts, getMaxZoom clipping against visual shapes, sleeping),
 calculateFov/calculateHudFov (option, modifier, death and fluid effects,
-panoramic mode), AbstractClientPlayer.getFieldOfViewModifier (flight, speed
-attribute against walking speed, bow draw, spyglass), the walk and bob
+panoramic mode) with the world projection and the first-person hand's
+(GameRenderer.render3dHud at hudFov, whatever the FOV option),
+AbstractClientPlayer.getFieldOfViewModifier (flight, speed attribute against
+walking speed, bow draw, spyglass), the walk and bob
 history (ClientAvatarState, updateBob) and GameRenderer.bobHurt/bobView,
 driven tick by tick and frame by frame with identical scripted states."""
 import json
@@ -91,6 +93,12 @@ def entity_state(rng, center):
     return s
 
 
+def window(rng):
+    """Window size and Camera.depthFar for the world and hand projections."""
+    w, h = rng.choice([(1600, 1000), (854, 480), (1920, 1080), (800, 1200), (1, 1), (rng.randint(1, 4000), rng.randint(1, 3000))])
+    return [fbits(w), fbits(h), fbits(rng.choice([768.0, 128.0, 2048.0, 4096.0, rng.uniform(32, 4096)]))]
+
+
 def camera_cases(rng):
     for n in range(2500):
         center = rng.choice([(0, 64, 0), (-10, -60, 7), (1000, 120, -3000), (0, 0, 0)])
@@ -105,12 +113,27 @@ def camera_cases(rng):
                 ops.append(['tick'])
             elif kind == 'frame':
                 pt = rng.choice([0.0, 1.0, 0.5, 0.25, 0.999, rng.random()])
-                ops.append(['frame', fbits(pt), rng.choice([0, 0, 0, 1, 2, 3]), rng.random() < 0.05])
+                ops.append(['frame', fbits(pt), rng.choice([0, 0, 0, 1, 2, 3]), rng.random() < 0.05] + window(rng))
             else:
                 ops.append(['type', rng.randrange(3)])
         yield dict(t='camera', fov=rng.choice([70, 30, 110, 90, rng.randint(30, 110)]),
                    effect=dbits(rng.choice([1.0, 0.0, 0.5, rng.random()])), type=rng.choice([0, 1, 1, 2]),
                    cells=world(rng, center), ops=ops)
+    # The hand's projection at FOV 30, 70 and 110 while walking, sprinting, under
+    # speed, drawing a bow, dying and in fluids: GameRenderer.render3dHud uses
+    # hudFov, never the option or the modifier.
+    for fov in (30, 70, 110):
+        for speed in (f32(0.1), f32(0.1) * 1.3, 0.2, 0.05):
+            for use in (None, ['bow', 10]):
+                for dead in (None, 5):
+                    for fluid in (0, 1, 2):
+                        s = dict(kind='player', pos=[dbits(0.5), dbits(64.0), dbits(0.5)], prev=[dbits(0.5), dbits(64.0), dbits(0.5)],
+                                 xr=fbits(0.0), yr=fbits(0.0), xro=fbits(0.0), yro=fbits(0.0), eye=fbits(1.62), flying=False,
+                                 ws=fbits(0.1), speed=dbits(speed), use=use, scale_attr=dbits(1.0), dist=dbits(4.0),
+                                 sleeping=None, dead=dead, mount=None)
+                        ops = [['entity', s]] + [['tick']] * 8 + [['frame', fbits(pt), fluid, False, fbits(1600.0), fbits(1000.0), fbits(768.0)]
+                                                                 for pt in (0.0, 0.5, 1.0)]
+                        yield dict(t='camera', fov=fov, effect=dbits(1.0), type=0, cells={}, ops=ops)
     # A walled-in third-person camera stepping through every distance bound.
     for dist in [0.0, 0.5, 1.0, 2.0, 4.0, 8.0, 32.0]:
         for wall in range(0, 6):
@@ -124,7 +147,7 @@ def camera_cases(rng):
                          xr=fbits(15.0), yr=fbits(yaw), xro=fbits(15.0), yro=fbits(yaw), eye=fbits(1.62), flying=False,
                          ws=fbits(0.1), speed=dbits(f32(0.1)), use=None, scale_attr=dbits(1.0), dist=dbits(dist),
                          sleeping=None, dead=None, mount=None)
-                ops = [['entity', s]] + [['tick']] * 6 + [['frame', fbits(pt), 0, False] for pt in (0.0, 0.5, 1.0)]
+                ops = [['entity', s]] + [['tick']] * 6 + [['frame', fbits(pt), 0, False] + window(rng) for pt in (0.0, 0.5, 1.0)]
                 yield dict(t='camera', fov=70, effect=dbits(1.0), type=1 + (wall % 2), cells=cells, ops=ops)
 
 
@@ -184,7 +207,9 @@ def main():
              'interpolated eye with eye-height easing, first person, third person back and mirrored front, scale and '
              'camera_distance attributes including a living mount, getMaxZoom over the actual Level.clip with '
              'ClipContext.Block.VISUAL against controlled visual shapes, sleeping bed orientation), calculateFov and '
-             'calculateHudFov (option, eased modifier, death, water/lava with the effect scale, panoramic), '
+             'calculateHudFov (option, eased modifier, death, water/lava with the effect scale, panoramic), the world projection '
+             '(Camera.setupPerspective) and the hand projection GameRenderer.render3dHud sets up at hudFov, as JOML setPerspective '
+             'matrices, at FOV options 30, 70 and 110 among others, '
              'AbstractClientPlayer.getFieldOfViewModifier with real Abilities, attribute maps and item stacks, '
              'ClientAvatarState walk/bob history with AbstractClientPlayer.updateBob, and GameRenderer.bobHurt/bobView '
              'as the full JOML pose matrix with its property flags. The camera entity is a shell with controlled '
