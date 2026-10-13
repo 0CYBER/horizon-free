@@ -1523,6 +1523,21 @@ suggestions the server's dispatcher answers as
 input's state and every call. Not compared: the mouse wheel over the
 suggestion list and clipboard keys.
 
+`horizon_client::creative` is the creative inventory. Its tabs come from
+`creative-inventory.json`, which `VanillaCreativeTabsExporter` writes from
+vanilla's own `CreativeModeTabs.tryRebuildTabContents` over the vanilla data
+pack's registries: every stack with its components, and for each stack of the
+search tab the creative tooltip lines and item tags that the client's search
+trees index. The search ports `refreshSearchResults` and `SessionSearchTrees`
+(substring matches over tooltip lines; after a colon the item id's namespace,
+then its path or a line; tags after `#`), and the scrollbar follows
+`mouseClicked`/`mouseDragged`/`mouseScrolled`. `tools/test_creative_parity.py`
+compares every shown tab's stacks, the search tab and 6,793 searches (fixed
+queries, then every stack's item path and tooltip lines and every tag, whole
+and halved) with the vanilla client's own search trees
+(`VanillaCreativeSearchOracle`). Not compared: the operator tab (off by
+default, `operatorItemsTab`) and the saved hotbars tab.
+
 ## Pillager patrols and raids
 
 `horizon_client::patrol` ports `PatrolSpawner` and `horizon_client::raid` ports
