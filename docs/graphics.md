@@ -46,6 +46,46 @@ vscreen is a headless compositor whose frames are software-rendered (lavapipe), 
 
 Two tools find where a slow frame goes: `HORIZON_SPIKES=MS` prints the timed spans (ticks by system, streaming, uploads, saving, renderer) of every frame slower than MS milliseconds, and a frame-pointer build (`RUSTFLAGS="-C force-frame-pointers=yes"`) profiles with `perf record --call-graph fp`.
 
+## Results
+
+Baseline `27a32cc3` (main) against `9006566b`, the same full run (render distances 8, 16 then 32 in one fresh world), on ludodesktop.
+
+RTX 4080, `--offscreen` (`benchmarks/graphics/baseline-4080.json`, `after-4080.json`):
+
+| RD | scene | avg FPS | 1% low FPS | p99 ms | CPU ms/frame | GPU ms/frame |
+| --- | --- | --- | --- | --- | --- | --- |
+| 8 | village | 363 → 2409 | 21.6 → 160.8 | 37 → 1 | 2.7 → 0.4 | 0.42 → 0.10 |
+| 8 | forest | 613 → 1099 | 49.6 → 82.9 | 10 → 10 | 1.6 → 0.9 | 0.40 → 0.26 |
+| 8 | ocean | 323 → 687 | 5.4 → 47.5 | 33 → 16 | 2.7 → 1.4 | 0.24 → 0.37 |
+| 8 | mountain | 28 → 344 | 7.4 → 30.0 | 111 → 33 | 12.4 → 1.6 | 0.46 → 0.34 |
+| 16 | village | 8 → 1041 | 2.4 → 64.0 | 409 → 10 | 138.3 → 1.0 | 3.59 → 0.23 |
+| 16 | forest | 28 → 316 | 0.5 → 49.6 | 159 → 18 | 37.9 → 3.2 | 2.68 → 0.75 |
+| 16 | ocean | 59 → 385 | 10.5 → 72.0 | 85 → 12 | 16.8 → 2.6 | 1.96 → 0.68 |
+| 16 | mountain | 27 → 220 | 7.8 → 30.0 | 109 → 33 | 20.2 → 3.1 | 7.14 → 0.94 |
+| 32 | village | 4 → 48 | 2.6 → 0.8 | 387 → 76 | 244.2 → 9.4 | 10.36 → 1.77 |
+| 32 | forest | 8 → 28 | 3.7 → 0.9 | 261 → 1108 | 118.7 → 40.1 | 15.90 → 2.30 |
+| 32 | ocean | 2 → 67 | 1.6 → 10.1 | 626 → 95 | 424.8 → 14.7 | 9.48 → 2.91 |
+| 32 | mountain | 3 → 29 | 2.5 → 15.2 | 407 → 64 | 300.5 → 16.1 | 9.73 → 8.47 |
+
+lavapipe on vscreen, CPU-rendered (`baseline-lavapipe.json`, `after-lavapipe.json`); at 16 and 32 chunks most of the frame is software rasterisation, which no change here touches:
+
+| RD | scene | avg FPS | 1% low FPS | p99 ms | CPU ms/frame | GPU ms/frame |
+| --- | --- | --- | --- | --- | --- | --- |
+| 8 | village | 16 → 58 | 6.6 → 31.3 | 134 → 29 | 48.2 → 11.4 | 26.73 → 13.52 |
+| 8 | forest | 20 → 42 | 9.9 → 20.0 | 95 → 37 | 31.0 → 18.0 | 37.27 → 21.36 |
+| 8 | ocean | 28 → 60 | 1.5 → 34.8 | 181 → 27 | 25.7 → 10.9 | 18.86 → 12.74 |
+| 8 | mountain | 27 → 38 | 11.2 → 27.3 | 75 → 34 | 22.5 → 11.5 | 23.76 → 14.11 |
+| 16 | village | 11 → 21 | 4.2 → 8.8 | 227 → 75 | 69.2 → 31.8 | 49.04 → 40.50 |
+| 16 | forest | 12 → 18 | 5.7 → 11.5 | 137 → 81 | 58.4 → 36.8 | 56.45 → 47.82 |
+| 16 | ocean | 8 → 8 | 2.6 → 4.8 | 385 → 209 | 98.4 → 96.7 | 71.51 → 57.30 |
+| 16 | mountain | 6 → 12 | 3.1 → 4.9 | 321 → 189 | 124.9 → 56.7 | 95.47 → 70.81 |
+| 32 | village | 3 → 5 | 2.0 → 3.6 | 497 → 278 | 345.6 → 111.2 | 85.50 → 121.35 |
+| 32 | forest | 2 → 4 | 1.5 → 3.4 | 656 → 296 | 354.8 → 155.5 | 201.54 → 192.78 |
+| 32 | ocean | 3 → 3 | 1.2 → 2.2 | 849 → 465 | 330.8 → 288.0 | 113.80 → 116.97 |
+| 32 | mountain | 3 → 4 | 1.8 → 2.4 | 570 → 414 | 325.2 → 171.4 | 104.99 → 166.80 |
+
+Render distance 32 still has long stalls in the forest and village flights: the slowest frames are game ticks (mob AI bursts as chunks load, and thousands of dropped items piling up in some chunks, which the sequential run accumulates), not rendering. Results swing between runs on the shared desktop; the probe runs during the work saw RD 32 forest from 15 to 335 FPS depending on what the world had accumulated.
+
 ## What changed
 
 The baseline was CPU-bound everywhere: on the RTX 4080 the GPU spent 0.2 to 16 ms per frame, the CPU 2 to 425.
