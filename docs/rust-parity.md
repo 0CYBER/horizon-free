@@ -1426,14 +1426,34 @@ vanilla's own classes, and the game uses that code:
   paints them. `tools/test_recipe_book_render_parity.py` builds vanilla's
   widgets for 600 states (`VanillaRecipeBookScreenOracle`) and compares every
   call. Ingredients cycle in their `HolderSet` order (tags in `TagLoader` order).
+- **The book's text search.** `recipe_book_view` also searches: the oracle
+  builds `SessionSearchTrees`' `FullTextSearchTree` over the tooltip lines and
+  ids of every result a display can show, and `item_tooltip` writes those
+  lines (attribute modifiers, smithing template, potion, dyed, pot, rocket and
+  disc lines; the names of potions, templates and banner patterns). Displays
+  with several results (map copies, tipped arrows, dyed armour) keep them in
+  `Entry::variants`.
+- **The ghost recipe.** `Book::ghost` is the one place that fills a recipe's
+  ingredients into the grid or furnace slots (`PlaceRecipeHelper`'s centring,
+  the first slots for shapeless recipes, every fuel for an empty fuel slot, in
+  the registry's component-lookup order); `tools/test_ghost_recipe_parity.py`
+  runs `fillGhostRecipe` against the real menus for all 2,698 recipe and menu
+  pairs.
 - **The loom's banner preview.** `item_render::gui::draw_banner_result` draws
   `GuiBannerResultRenderer`'s flag model and layers in the 20x40 picture in
   picture, lit with `ITEMS_FLAT`; the block entity render harness compares its
   quads under the picture-in-picture pose.
 
-Not compared yet: the recipe book's text search, furnaces awarding their
-recipes and experience when their output is taken, and the limited crafting
-game rule.
+Not compared yet: furnaces awarding their recipes and experience when their
+output is taken, and the limited crafting game rule. Tooltips in general lack
+the lines `item_tooltip` writes for recipe results (the game's hover tooltips
+do not show attribute modifiers yet).
+
+`horizon_client::hotbar` reads the creative toolbars of an older `hotbar.nbt`
+through the `HOTBAR` data fixers (`EmptyItemInHotbarFix`, every item stack
+fixer): `tools/test_hotbar_parity.py` loads generated files of 34 versions with
+the real `HotbarManager`. The toolbar screen (save and load keys) is not wired
+to it yet.
 
 ## Player list and world border rendering
 

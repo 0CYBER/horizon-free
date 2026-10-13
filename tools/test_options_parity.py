@@ -145,6 +145,15 @@ def make_cases(build):
         'graphicsMode:1\nlang:Fr_Ca\nresourcePacks:["a","programer_art"]\nincompatibleResourcePacks:["programer_art"]\n',
         'key_key.forward:abc\n', 'key_key.forward:\n', 'key_key.attack:k\n', 'chatOpacity:Infinity\n',
         'chatOpacity: 0.5d\n', 'menuBackgroundBlurriness:0.25\n', 'menuBackgroundBlurriness:1.04999\n',
+        # OptionsForceVBOFix writes a key nothing reads; the lower-casing, key and graphics fixers on odd values.
+        'useVbo:false\nao:true\nao:3\n', 'ao:\n', 'graphicsMode:3\nao:2\n', 'graphicsMode:abc\n', 'fancyGraphics:abc\n',
+        'fancyGraphics:TRUE\n', 'lang:\u039f\u0394\u03a5\u03a3\u03a3\u0395\u03a5\u03a3\n', 'lang:\u0130_TR\n', 'lang:\u00df_\u00dc\n',
+        'key_key.attack:-101\nkey_key.use:-92\nkey_key.forward:2147483647\nkey_key.back:99999\nkey_key.left:-2147483648\n',
+        'key_key.hotbar.1:2\nkey_key.hotbar.9:10\nkey_key.swapHands:33\nkey_key.drop:16\nkey_key.debug.modifier:292\n',
+        'showNowPlayingToast:maybe\n', 'showNowPlayingToast:true\nmusicToast:never\n',
+        'resourcePacks:["programer_art","x"]\nincompatibleResourcePacks:[]\n', 'resourcePacks:[\'programer_art\']\n',
+        'menuBackgroundBlurriness:-3\n', 'menuBackgroundBlurriness:1e3\n', 'menuBackgroundBlurriness:\n', 'chatOpacity:0\n',
+        'chatOpacity:1\ntextBackgroundOpacity:0.2\n', 'preferredGraphicsBackend:vulkan\n', 'onboardAccessibility:true\n',
     ]
     versions = [-1, 0, 100, 504, 505, 815, 816, 1343, 1344, 1445, 1446, 1935, 1936, 2555, 2556, 2557, 2558, 3200, 3201,
                 3213, 3214, 3318, 3319, 3942, 3943, 4650, 4651, 4660, 4661, 4891, 4892, 5022, 5023, 5024, 9999]
