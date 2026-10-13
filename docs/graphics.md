@@ -2,10 +2,12 @@
 
 ## Settings
 
-**Options → Video Settings** starts with two buttons for Horizon's own screens:
+In the Horizon menu style, the Options screen's **Video** section holds the graphics settings, with a Simple / Advanced switch at the top (remembered between sessions):
 
-- **Horizon Graphics…** (Simple): a preset (Performance, Balanced, Quality, Ultra or Custom), render distance, FOV, max framerate, VSync and GUI scale.
-- **Advanced Graphics…**: every setting, grouped under Rendering, Quality, Display, Performance and Overlay.
+- **Simple**: a preset (Performance, Balanced, Quality, Ultra or Custom), render distance, FOV, max framerate, VSync and GUI scale.
+- **Advanced**: every setting, grouped under Rendering, Quality, Display, Preferences, Performance and Overlay.
+
+In the Classic style, Video Settings starts with two buttons opening the same settings as vanilla-looking screens.
 
 Every row has a one-line description and its cost in frame time (none, low, medium, high), and applies at once, except worker threads, which apply at the next start. A preset sets the quality settings together; changing one of them turns it into Custom. Display preferences (FOV, framerate, VSync, GUI scale, fullscreen, present mode, pacing) leave the preset as it is.
 
@@ -25,7 +27,7 @@ Every row has a one-line description and its cost in frame time (none, low, medi
 
 `options.txt` keeps exactly vanilla's keys and values, so the options harness still compares it with vanilla; Horizon's settings live in `horizon-graphics.txt` beside it. Their defaults render as vanilla does: cave culling on, no upload budgets, sky, fog and weather on, 100% resolution, no FXAA, the present mode following VSync. Frame pacing defaults to Efficient: the limiter sleeps through the last half millisecond where vanilla spins, which changes timing, not pixels.
 
-The screens' layout is in `crates/horizon-client/src/graphics_ui.rs`; every colour, size and widget call is in `graphics_style.rs`, the one place a menu theme replaces.
+Which settings each level shows, their descriptions and costs are in `crates/horizon-client/src/graphics_ui.rs` (`rows`); the Horizon shell draws them in `options_horizon.rs` with `ui_theme::described_row`, and the Classic screens use `graphics_style.rs`.
 
 Not implemented: distant-terrain LOD, anisotropic filtering (wgpu needs linear magnification for it, which blurs close blocks), MSAA (FXAA instead) and exclusive fullscreen (fullscreen is borderless).
 
