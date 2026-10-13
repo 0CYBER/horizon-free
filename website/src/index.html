@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Horizon: a Rust rewrite for Minecraft: Java Edition 26.3</title>
+    <meta name="description" content="Horizon is an unofficial Rust rewrite of the Minecraft: Java Edition 26.3 client and game logic, checked against vanilla by {{HARNESSES}} differential harnesses. Not an official Minecraft product.">
+    <meta name="theme-color" content="#111113">
+    <meta name="color-scheme" content="dark">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png">
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Horizon">
+    <meta property="og:title" content="Horizon">
+    <meta property="og:description" content="An unofficial Rust rewrite for Minecraft: Java Edition 26.3, checked against vanilla by {{HARNESSES}} differential harnesses.">
+    <meta property="og:image" content="/og.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="Horizon, in Instrument Serif, over a dark frozen landscape">
+    <meta name="twitter:card" content="summary_large_image">
+    <link rel="preload" href="/fonts/InstrumentSerif-Regular.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="/fonts/Geist-Regular.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="/media/menu-title.webp" as="image" type="image/webp" imagesrcset="/media/menu-title-800.webp 800w, /media/menu-title.webp 1600w" imagesizes="(min-width: 1100px) 980px, 92vw">
+    <style>{{STYLE}}</style>
+    <script>document.documentElement.classList.replace("no-js", "js")</script>
+    <script type="module" src="{{JS}}"></script>
+  </head>
+  <body>
+    <div class="atmosphere" aria-hidden="true"></div>
+    <a class="skip" href="#main">Skip to the content</a>
+
+    <header class="topbar">
+      <a class="wordmark" href="#overview">Horizon</a>
+      <button class="menu-button" type="button" aria-expanded="false" aria-controls="nav">Menu</button>
+    </header>
+
+    <aside class="sidebar">
+      <a class="wordmark" href="#overview">Horizon</a>
+      <nav id="nav" aria-label="Sections">
+        <span class="nav-selection" aria-hidden="true"></span>
+        <a href="#overview">Overview</a>
+        <a href="#about">What it is</a>
+        <a href="#screenshots">Screenshots</a>
+        <a href="#parity">Parity</a>
+        <a href="#patch-notes">Patch notes</a>
+        <a href="#next">What's next</a>
+        <a href="#community">Community</a>
+      </nav>
+      <div class="sidebar-foot">
+        <a href="https://github.com/ludovic111/horizon">GitHub</a>
+        <span data-launcher-version>{{LAUNCHER_VERSION}}</span>
+      </div>
+    </aside>
+
+    <main id="main">
+      <section id="overview" class="hero" aria-labelledby="hero-title">
+        <p class="eyebrow">For Minecraft: Java Edition 26.3 <span aria-hidden="true">·</span> Written in Rust</p>
+        <h1 id="hero-title">Horizon</h1>
+        <p class="lede">A rewrite of the Java Edition client and its game logic in Rust, checked against the game itself with differential tests.</p>
+        <div class="actions">
+          <a class="button primary large" id="download" href="https://github.com/ludovic111/horizon/releases?q=launcher-v&amp;expanded=true">Download the launcher</a>
+          <a class="button secondary large" href="https://github.com/ludovic111/horizon">GitHub</a>
+        </div>
+        <p class="download-meta" id="download-meta">Linux x86-64, macOS on Apple Silicon and Windows x64. The launcher installs and updates Horizon.</p>
+
+        <dl class="rows">
+          <div class="row">
+            <dt>Parity</dt>
+            <dd>Every subsystem matches vanilla in all {{HARNESSES}} harnesses: {{PERCENT}} of what the harnesses compare.</dd>
+          </div>
+          <div class="row">
+            <dt>You need</dt>
+            <dd>Your own, legally obtained copy of Minecraft: Java Edition 26.3. Horizon contains no Minecraft code, assets or data.</dd>
+          </div>
+          <div class="row">
+            <dt>Not official</dt>
+            <dd class="disclaimer">Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft.</dd>
+          </div>
+        </dl>
+
+        <figure class="shot hero-shot">
+          <img src="/media/menu-title.webp" srcset="/media/menu-title-800.webp 800w, /media/menu-title.webp 1600w" sizes="(min-width: 1100px) 980px, 92vw" width="1600" height="1000" alt="Horizon's title screen: a sidebar, the Horizon title, Singleplayer and Multiplayer buttons and the last world played, over a blurred frozen landscape" fetchpriority="high">
+        </figure>
+      </section>
+
+      <section id="about" class="reveal" aria-labelledby="about-title">
+        <h2 id="about-title">What it is</h2>
+        <div class="prose">
+          <p>Horizon reimplements the Minecraft: Java Edition 26.3 client and its game logic in Rust, one subsystem at a time, and compares each piece with the vanilla game. Each of its {{HARNESSES}} differential harnesses drives the same inputs through Horizon and through the vanilla client and server, from your own copy of the game, and checks that the outputs are identical.</p>
+          <p>Every subsystem now matches vanilla in every harness that compares it. That is {{PERCENT}} of what the harnesses compare, not proof that nothing else differs: the remaining known differences are listed under <a href="#next">What's next</a>.</p>
+          <p>The native client runs on Linux, macOS on Apple Silicon and Windows. It opens on its own title screen, generates worlds with a Rust port of the vanilla generators and draws them with vanilla's block models, lighting, sky and fog.</p>
+        </div>
+        <dl class="rows">
+          <div class="row">
+            <dt>Your own copy</dt>
+            <dd>Install Java Edition with the official launcher and play 26.3 once. Horizon builds its resources from those files on your machine and never downloads or shares game files.</dd>
+          </div>
+          <div class="row">
+            <dt>For the setup</dt>
+            <dd>Python 3.10 or newer and Java 25 for the one-time resource preparation; a GPU with Vulkan on Linux and Windows, or any Apple Silicon Mac.</dd>
+          </div>
+          <div class="row">
+            <dt>Licence</dt>
+            <dd>Horizon's own code is <a href="https://github.com/ludovic111/horizon/blob/main/LICENSE">MIT</a>. Minecraft is a trademark of Mojang Synergies AB; its code and assets belong to Mojang and Microsoft and are covered by the <a href="https://www.minecraft.net/en-us/eula">Minecraft EULA</a>.</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section id="screenshots" class="reveal wide" aria-labelledby="screenshots-title">
+        <h2 id="screenshots-title">Screenshots</h2>
+        <p class="section-lede">Captured in the Rust client itself, with vanilla assets from the player's own copy and no mods or shaders.</p>
+        <div class="segmented" role="tablist" aria-label="Screenshots">
+          <span class="segment-selection" aria-hidden="true"></span>
+          <button type="button" role="tab" id="tab-menus" aria-controls="panel-menus" aria-selected="true">Menus</button>
+          <button type="button" role="tab" id="tab-world" aria-controls="panel-world" aria-selected="false" tabindex="-1">In game</button>
+        </div>
+        <div class="gallery" id="panel-menus" role="tabpanel" aria-labelledby="tab-menus">
+          <figure class="shot"><button type="button" class="zoom" aria-label="Enlarge: the world list"><img loading="lazy" src="/media/menu-worlds-800.webp" srcset="/media/menu-worlds-800.webp 800w, /media/menu-worlds.webp 1600w" sizes="(min-width: 1100px) 480px, 92vw" width="1600" height="1000" alt="The Singleplayer page: three worlds with their dates and game modes, and Create world and Play buttons"></button><figcaption>Singleplayer</figcaption></figure>
+          <figure class="shot"><button type="button" class="zoom" aria-label="Enlarge: the video options"><img loading="lazy" src="/media/menu-options-800.webp" srcset="/media/menu-options-800.webp 800w, /media/menu-options.webp 1600w" sizes="(min-width: 1100px) 480px, 92vw" width="1600" height="1000" alt="The Video options: fullscreen and VSync switches, and sliders for framerate, GUI scale, brightness and render distance"></button><figcaption>Options</figcaption></figure>
+          <figure class="shot"><button type="button" class="zoom" aria-label="Enlarge: the pause screen"><img loading="lazy" src="/media/menu-pause-800.webp" srcset="/media/menu-pause-800.webp 800w, /media/menu-pause.webp 1600w" sizes="(min-width: 1100px) 480px, 92vw" width="1600" height="1000" alt="The pause screen of the world Glacier Pass, with Back to game, Open to LAN and Save and quit"></button><figcaption>Pause</figcaption></figure>
+          <figure class="shot"><button type="button" class="zoom" aria-label="Enlarge: the title screen"><img loading="lazy" src="/media/menu-title-800.webp" srcset="/media/menu-title-800.webp 800w, /media/menu-title.webp 1600w" sizes="(min-width: 1100px) 480px, 92vw" width="1600" height="1000" alt="Horizon's title screen with the last world played"></button><figcaption>Title screen</figcaption></figure>
+        </div>
+        <div class="gallery" id="panel-world" role="tabpanel" aria-labelledby="tab-world" hidden>
+          <figure class="shot span"><button type="button" class="zoom" aria-label="Enlarge: sunset over a river valley"><img loading="lazy" src="/media/sunset-800.webp" srcset="/media/sunset-800.webp 800w, /media/sunset.webp 1600w" sizes="(min-width: 1100px) 980px, 92vw" width="1600" height="900" alt="Sunset over a savanna river valley and a plains village"></button><figcaption>Sunset over a savanna river valley</figcaption></figure>
+          <figure class="shot"><button type="button" class="zoom" aria-label="Enlarge: a plains village"><img loading="lazy" src="/media/village-800.webp" srcset="/media/village-800.webp 800w, /media/village.webp 1600w" sizes="(min-width: 1100px) 480px, 92vw" width="1600" height="900" alt="A plains village with farms, an iron golem and animals"></button><figcaption>A plains village</figcaption></figure>
+          <figure class="shot"><button type="button" class="zoom" aria-label="Enlarge: survival at dusk"><img loading="lazy" src="/media/survival-800.webp" srcset="/media/survival-800.webp 800w, /media/survival.webp 1600w" sizes="(min-width: 1100px) 480px, 92vw" width="1600" height="900" alt="Survival at dusk: a zombie attacks near the village, with the hotbar and chat"></button><figcaption>Survival at dusk</figcaption></figure>
+          <figure class="shot"><button type="button" class="zoom" aria-label="Enlarge: a crimson forest"><img loading="lazy" src="/media/nether-800.webp" srcset="/media/nether-800.webp 800w, /media/nether.webp 1600w" sizes="(min-width: 1100px) 480px, 92vw" width="1600" height="900" alt="A crimson forest in the Nether with a zombified piglin"></button><figcaption>A crimson forest in the Nether</figcaption></figure>
+          <figure class="shot"><button type="button" class="zoom" aria-label="Enlarge: moonrise over a village"><img loading="lazy" src="/media/night-800.webp" srcset="/media/night-800.webp 800w, /media/night.webp 1600w" sizes="(min-width: 1100px) 480px, 92vw" width="1600" height="900" alt="Moonrise over a torch-lit village and river"></button><figcaption>Moonrise over a village</figcaption></figure>
+          <figure class="shot span"><button type="button" class="zoom" aria-label="Enlarge: salmon in a river"><img loading="lazy" src="/media/underwater-800.webp" srcset="/media/underwater-800.webp 800w, /media/underwater.webp 1600w" sizes="(min-width: 1100px) 980px, 92vw" width="1600" height="900" alt="Salmon swimming in a river"></button><figcaption>Salmon in a river</figcaption></figure>
+        </div>
+      </section>
+
+      <section id="parity" class="reveal wide" aria-labelledby="parity-title">
+        <h2 id="parity-title">Parity</h2>
+        <div class="prose section-lede">{{PARITY_INTRO}}</div>
+        <p class="table-meta">From the README on main<span aria-hidden="true"> · </span>last audited {{AUDITED}}<span aria-hidden="true"> · </span>{{PERCENT}} of what the harnesses compare</p>
+        <div class="table-scroll" tabindex="0" role="region" aria-labelledby="parity-title">
+          <table class="parity">
+            <thead>
+              <tr><th scope="col">Subsystem</th><th scope="col">Score</th><th scope="col">What the harnesses check</th></tr>
+            </thead>
+            <tbody>
+        {{PARITY_ROWS}}
+            </tbody>
+          </table>
+        </div>
+        <p class="table-meta">Each subsystem scores 0 (absent), 0.25 (started), 0.5 (playable, major features missing), 0.75 (mostly complete) or 1 (complete and verified against vanilla by differential tests).</p>
+      </section>
+
+      <section id="patch-notes" class="reveal" aria-labelledby="notes-title">
+        <h2 id="notes-title">Patch notes</h2>
+        <p class="section-lede">What changed in each release, newest first.</p>
+        <div class="releases" id="releases" aria-live="polite">
+        {{NOTES}}
+        </div>
+      </section>
+
+      <section id="next" class="reveal" aria-labelledby="next-title">
+        <h2 id="next-title">What's next</h2>
+        <p class="section-lede">The roadmap from the README, as it stands on main.</p>
+        <div class="prose" id="roadmap">{{ROADMAP}}</div>
+      </section>
+
+      <section id="community" class="reveal" aria-labelledby="community-title">
+        <h2 id="community-title">Community</h2>
+        <dl class="rows">
+          <div class="row">
+            <dt>Discord</dt>
+            <dd>Questions, bug reports and screenshots.</dd>
+            <dd class="row-action"><a class="button secondary" data-link="discord" href="{{DISCORD}}">Join the Discord</a></dd>
+          </div>
+          <div class="row">
+            <dt>Sponsor</dt>
+            <dd>Horizon is built in the open. Sponsors fund the next release.</dd>
+            <dd class="row-action"><a class="button secondary" data-link="sponsor" href="{{SPONSOR}}">Sponsor on GitHub</a></dd>
+          </div>
+          <div class="row">
+            <dt>Source</dt>
+            <dd>Issues and pull requests are welcome.</dd>
+            <dd class="row-action"><a class="button secondary" href="https://github.com/ludovic111/horizon">Open on GitHub</a></dd>
+          </div>
+        </dl>
+      </section>
+
+      <footer class="footer">
+        <p class="disclaimer-strong">Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft.</p>
+        <p>Horizon is made by <a href="https://lu4ovic.com">Ludovic Marie</a>, who is responsible for it and for this site; reach him through <a href="https://lu4ovic.com/#contact">lu4ovic.com</a>. Horizon contains no Minecraft code, assets or data, and this site offers no game files: you need your own legally obtained copy of Minecraft: Java Edition. Minecraft is a trademark of Mojang Synergies AB.</p>
+        <p>Horizon's original work is under the <a href="https://github.com/ludovic111/horizon/blob/main/LICENSE">MIT licence</a>. The fonts are Geist and Instrument Serif, under the SIL Open Font License (<a href="/fonts/OFL-Geist.txt">Geist</a>, <a href="/fonts/OFL-InstrumentSerif.txt">Instrument Serif</a>). Every asset on this site is listed in <a href="/LEGAL.md">LEGAL.md</a>.</p>
+        <p>Privacy: this site sets no cookies, has no analytics or trackers and loads nothing from third parties except GitHub. To show the latest releases, patch notes, roadmap and links, your browser asks <code>api.github.com</code> and <code>raw.githubusercontent.com</code> for them; <a href="https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement">GitHub's privacy statement</a> covers those requests.</p>
+        <p class="footer-links"><a href="https://github.com/ludovic111/horizon">GitHub</a><a href="https://github.com/ludovic111/horizon/blob/main/LICENSE">Licence</a><a href="https://github.com/ludovic111/horizon/releases">Releases</a></p>
+      </footer>
+    </main>
+
+    <dialog class="lightbox" aria-label="Screenshot">
+      <form method="dialog"><button class="button secondary close" type="submit">Close</button></form>
+      <img alt="">
+      <p class="lightbox-caption"></p>
+    </dialog>
+
+    <script type="application/json" id="baked">{{BAKED}}</script>
+  </body>
+</html>

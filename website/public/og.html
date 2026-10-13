@@ -1,0 +1,33 @@
+<!doctype html>
+<!-- The social preview, rendered to og.png by scripts/shots.mjs. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex">
+<style>
+  @font-face { font-family: "Instrument Serif"; src: url("/fonts/InstrumentSerif-Regular.woff2"); }
+  @font-face { font-family: "Geist"; src: url("/fonts/Geist-Regular.woff2"); }
+  html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; background: #111113; color: #e8e8ea; font-family: "Geist"; }
+  .bg { position: absolute; inset: 0; background:
+    linear-gradient(90deg, rgba(17,17,19,.92) 0%, rgba(17,17,19,0) 75%),
+    linear-gradient(180deg, rgba(17,17,19,0) 30%, rgba(17,17,19,.9) 100%),
+    linear-gradient(rgba(17,17,19,.45), rgba(17,17,19,.45)),
+    url("/background.webp") center / cover; }
+  .side { position: absolute; inset: 0 auto 0 0; width: 8px; background: #7c5cc4; }
+  main { position: absolute; left: 96px; top: 150px; right: 96px; }
+  p.eyebrow { margin: 0 0 18px; font-size: 22px; color: #7a7a82; }
+  h1 { margin: 0; font: 400 168px/0.95 "Instrument Serif"; letter-spacing: -0.02em; }
+  p.line { margin: 30px 0 0; font-size: 30px; line-height: 1.4; color: #9a9aa1; max-width: 860px; }
+  footer { position: absolute; left: 96px; right: 96px; bottom: 52px; display: flex; justify-content: space-between; font-size: 18px; color: #7a7a82; border-top: 1px solid #26262a; padding-top: 20px; }
+</style>
+</head>
+<body>
+  <div class="bg"></div>
+  <main>
+    <p class="eyebrow">For Minecraft: Java Edition 26.3 · Written in Rust</p>
+    <h1>Horizon</h1>
+    <p class="line">Checked against vanilla by differential harnesses.</p>
+  </main>
+  <footer><span>Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft.</span><span>github.com/ludovic111/horizon</span></footer>
+</body>
+</html>
