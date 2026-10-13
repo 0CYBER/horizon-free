@@ -57,6 +57,14 @@ enum Cmd {
     Notes { tag: Option<String> },
     /// Show the roadmap
     Next,
+    /// Show the Discord and sponsor links
+    Links,
+    /// Show or set the game's menu style (classic is vanilla's own screens)
+    MenuStyle {
+        /// Omit to show the current style
+        #[arg(value_parser = ["horizon", "classic"])]
+        style: Option<String>,
+    },
     /// Look for a newer Horizon release and launcher, and install them
     Update {
         /// Only report what is available
@@ -196,6 +204,27 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 json(serde_json::json!({ "roadmap": roadmap }));
             } else {
                 print!("{}", backend::markdown_to_text(&roadmap));
+            }
+        }
+        Cmd::Links => {
+            let links = backend::links();
+            if as_json {
+                json(serde_json::to_value(&links).unwrap());
+            } else {
+                for (name, url) in [("Discord", &links.discord), ("Sponsor", &links.sponsor)] {
+                    println!("{name:<8} {}", if url.is_empty() { "(none)" } else { url });
+                }
+            }
+        }
+        Cmd::MenuStyle { style } => {
+            if let Some(style) = style.as_deref().and_then(backend::MenuStyle::parse) {
+                backend::set_menu_style(style)?;
+            }
+            let style = backend::menu_style().name();
+            if as_json {
+                json(serde_json::json!({ "menu_style": style }));
+            } else {
+                println!("Menu style: {style}");
             }
         }
         Cmd::Update { check } => update(check, as_json)?,
