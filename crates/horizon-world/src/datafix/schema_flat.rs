@@ -15,20 +15,25 @@ impl Walker<'_> {
         let k = self.k;
         match ty {
             Ty::Entity => {
-                self.legacy_entity(v);
+                if k < key(705, 0) {
+                    self.legacy_entity_old(v);
+                } else {
+                    self.legacy_entity(v);
+                }
                 true
             }
             // An entity of an unknown id does not read as a typed value: nothing in it is fixed.
             Ty::EntityTree => {
-                let id = namespaced(&as_str(v.get("id")).unwrap_or_default());
-                if legacy_entity_known(&id, k) {
-                    if let Some(Tag::List(trees)) = v.get_mut("Passengers")
-                        && trees.iter().all(|t| {
-                            legacy_entity_known(
-                                &namespaced(&as_str(t.get("id")).unwrap_or_default()),
-                                k,
-                            )
-                        })
+                if entity_tree_known(v, k) {
+                    if k < key(135, 0) {
+                        // The vehicle this entity rides is a tree of its own.
+                        if let Some(vehicle) = v.get_mut("Riding")
+                            && entity_tree_known(vehicle, k)
+                        {
+                            self.walk(Ty::EntityTree, vehicle);
+                        }
+                    } else if let Some(Tag::List(trees)) = v.get_mut("Passengers")
+                        && trees.iter().all(|t| entity_tree_known(t, k))
                     {
                         for tree in trees {
                             self.walk(Ty::EntityTree, tree);
@@ -36,6 +41,10 @@ impl Walker<'_> {
                     }
                     self.walk(Ty::Entity, v);
                 }
+                true
+            }
+            Ty::BlockEntity if k < key(704, 0) => {
+                self.legacy_block_entity_old(v);
                 true
             }
             Ty::Chunk => {
@@ -86,6 +95,98 @@ impl Walker<'_> {
             && let Some(s) = v.get_mut("Structures")
         {
             self.values(Ty::StructureFeature, s, "Starts");
+        }
+    }
+
+    /// `ENTITY` of the schemas V99 to V703 (CamelCase ids).
+    fn legacy_entity_old(&mut self, v: &mut Tag) {
+        let k = self.k;
+        if k < key(100, 0) {
+            self.list(Ty::ItemStack, v, "Equipment");
+        } else {
+            self.list(Ty::ItemStack, v, "ArmorItems");
+            self.list(Ty::ItemStack, v, "HandItems");
+        }
+        let id = as_str(v.get("id")).unwrap_or_default();
+        match id.as_str() {
+            "Item" | "ItemFrame" => self.field(Ty::ItemStack, v, "Item"),
+            "ThrownEgg" | "Snowball" | "Fireball" | "SmallFireball" | "ThrownEnderpearl"
+            | "ThrownExpBottle" | "WitherSkull" | "Arrow" | "TippedArrow" | "SpectralArrow" => {
+                self.field(Ty::BlockName, v, "inTile")
+            }
+            "ThrownPotion" => {
+                self.field(Ty::BlockName, v, "inTile");
+                self.field(Ty::ItemStack, v, "Potion");
+            }
+            "FallingSand" => {
+                self.field(Ty::BlockName, v, "Block");
+                self.field(Ty::BlockEntity, v, "TileEntityData");
+            }
+            "FireworksRocketEntity" => self.field(Ty::ItemStack, v, "FireworksItem"),
+            "Minecart" | "MinecartChest" | "MinecartHopper" => {
+                self.field(Ty::BlockName, v, "DisplayTile");
+                self.list(Ty::ItemStack, v, "Items");
+            }
+            "MinecartRideable" | "MinecartFurnace" | "MinecartTNT" => {
+                self.field(Ty::BlockName, v, "DisplayTile")
+            }
+            "MinecartSpawner" => {
+                self.field(Ty::BlockName, v, "DisplayTile");
+                self.spawner(v);
+            }
+            "MinecartCommandBlock" => {
+                self.field(Ty::BlockName, v, "DisplayTile");
+                self.field(Ty::TextComponent, v, "LastOutput");
+            }
+            "Enderman" => self.field(Ty::BlockName, v, "carried"),
+            "EntityHorse" => {
+                self.list(Ty::ItemStack, v, "Items");
+                self.field(Ty::ItemStack, v, "ArmorItem");
+                self.field(Ty::ItemStack, v, "SaddleItem");
+            }
+            "Horse" => {
+                self.field(Ty::ItemStack, v, "ArmorItem");
+                self.field(Ty::ItemStack, v, "SaddleItem");
+            }
+            "Donkey" | "Mule" => {
+                self.list(Ty::ItemStack, v, "Items");
+                self.field(Ty::ItemStack, v, "SaddleItem");
+            }
+            "ZombieHorse" | "SkeletonHorse" => self.field(Ty::ItemStack, v, "SaddleItem"),
+            "Villager" => {
+                self.list(Ty::ItemStack, v, "Inventory");
+                if let Some(o) = v.get_mut("Offers") {
+                    self.list(Ty::VillagerTrade, o, "Recipes");
+                }
+            }
+            "ZombieVillager" => {
+                if let Some(o) = v.get_mut("Offers") {
+                    self.list(Ty::VillagerTrade, o, "Recipes");
+                }
+            }
+            "AreaEffectCloud" => self.field(Ty::Particle, v, "Particle"),
+            _ => {}
+        }
+    }
+
+    /// `BLOCK_ENTITY` of the schemas V99 to V703 (CamelCase ids).
+    fn legacy_block_entity_old(&mut self, v: &mut Tag) {
+        let id = as_str(v.get("id")).unwrap_or_default();
+        match id.as_str() {
+            "Furnace" | "Chest" | "Trap" | "Dropper" | "Cauldron" | "Hopper" => {
+                self.list(Ty::ItemStack, v, "Items")
+            }
+            "RecordPlayer" => self.field(Ty::ItemStack, v, "RecordItem"),
+            "Sign" => {
+                for line in ["Text1", "Text2", "Text3", "Text4"] {
+                    self.field(Ty::TextComponent, v, line);
+                }
+            }
+            "MobSpawner" => self.spawner(v),
+            "FlowerPot" => self.field(Ty::ItemName, v, "Item"),
+            "Control" => self.field(Ty::TextComponent, v, "LastOutput"),
+            "Banner" => self.field(Ty::TextComponent, v, "CustomName"),
+            _ => {}
         }
     }
 
@@ -199,6 +300,9 @@ impl Walker<'_> {
 
 /// Whether the block entity id is registered in the schema at `k` (before 1.14).
 pub(super) fn legacy_block_entity_known(id: &str, k: Key) -> bool {
+    if k < key(704, 0) {
+        return crate::datafix::flat_tables::BLOCK_ENTITIES_V99.contains(&id);
+    }
     match id {
         "minecraft:furnace"
         | "minecraft:chest"
@@ -220,8 +324,9 @@ pub(super) fn legacy_block_entity_known(id: &str, k: Key) -> bool {
         | "minecraft:banner"
         | "minecraft:structure_block"
         | "minecraft:end_gateway"
-        | "minecraft:command_block"
-        | "minecraft:shulker_box" => true,
+        | "minecraft:command_block" => true,
+        // V808 adds the shulker box.
+        "minecraft:shulker_box" => k >= key(808, 0),
         // Registered by V1125 and dropped by V1451_5.
         "minecraft:bed" => k >= key(1125, 0),
         "minecraft:noteblock" | "minecraft:flower_pot" => k < key(1451, 5),
@@ -234,6 +339,9 @@ pub(super) fn legacy_block_entity_known(id: &str, k: Key) -> bool {
 
 /// Whether `id` is an entity registered by the schema at `k` (V705 to V1510).
 pub(in crate::datafix) fn legacy_entity_known(id: &str, k: Key) -> bool {
+    if k < key(705, 0) {
+        return old_entity_known(id, k);
+    }
     static ERAS: OnceLock<[HashSet<String>; 5]> = OnceLock::new();
     let eras = ERAS.get_or_init(|| {
         let mut set: HashSet<String> = crate::datafix::flat_tables::ENTITIES_V1460
@@ -300,4 +408,24 @@ pub(in crate::datafix) fn legacy_entity_known(id: &str, k: Key) -> bool {
         4
     };
     eras[era].contains(id)
+}
+
+/// Whether the entity tree's own entity reads as a typed value at `k`.
+pub(in crate::datafix) fn entity_tree_known(tree: &Tag, k: Key) -> bool {
+    legacy_entity_known(&namespaced(&as_str(tree.get("id")).unwrap_or_default()), k)
+}
+
+/// Whether `id` is an entity registered by the schemas V99 to V703 (CamelCase ids).
+fn old_entity_known(id: &str, k: Key) -> bool {
+    match id {
+        "Minecart" => k < key(107, 0),
+        "TippedArrow" => k < key(143, 0),
+        "PolarBear" => k >= key(501, 0),
+        "ElderGuardian" => k >= key(700, 0),
+        "WitherSkeleton" | "Stray" => k >= key(701, 0),
+        "ZombieVillager" | "Husk" => k >= key(702, 0),
+        "Horse" | "Donkey" | "Mule" | "ZombieHorse" | "SkeletonHorse" => k >= key(703, 0),
+        "EntityHorse" => k < key(703, 0),
+        _ => crate::datafix::flat_tables::ENTITIES_V99.contains(&id),
+    }
 }

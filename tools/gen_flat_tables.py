@@ -50,6 +50,19 @@ def pairs(path, var, value_int=False, key_int=False):
     return out
 
 
+def pairs_array(path, var, nullable=False):
+    """`map[N] = "x";` entries of an array declaration."""
+    text = (FIXES / path).read_text()
+    start = text.index(var)
+    body = text[start:text.index('});', start)]
+    out = re.findall(r'map\[(\d+)\]\s*=\s*' + STR + r';', body)
+    if nullable:
+        out = [(i, v) for i, v in out]
+    if not out:
+        sys.exit(f'{path} {var}: no entries')
+    return out
+
+
 def strings(path, var, call):
     body = declaration((FIXES / path).read_text(), var)
     out = re.findall(call + r'\(\s*' + STR + r'\s*\)', body) if call else re.findall(STR, body)
@@ -83,12 +96,12 @@ def emit_strs(name, entries, doc=''):
     return '\n'.join(lines)
 
 
-def schema_entities(schema_file):
-    """The entity ids a schema's `registerEntities` registers."""
+def schema_entities(schema_file, method='registerEntities'):
+    """The entity (or block entity) ids a schema's `registerEntities` registers."""
     text = (FIXES.parent / 'schemas' / schema_file).read_text()
-    start = text.index('registerEntities')
+    start = text.index(method)
     body = text[start:text.index('return map;', start)]
-    names = re.findall(r'(?:registerMob|registerSimple|registerThrowableProjectile)\(schema, map, "([^"]+)"', body)
+    names = re.findall(r'(?:registerMob|registerSimple|registerThrowableProjectile|registerMinecart|registerInventory)\(schema, map, "([^"]+)"', body)
     names += re.findall(r'schema\.registerSimple\(map, "([^"]+)"', body)
     names += re.findall(r'schema\.register\(\s*map,\s*"([^"]+)"', body)
     return sorted(set(names))
@@ -148,6 +161,17 @@ def main():
         emit_pairs('COD_SALMON_EGGS', pairs('EntityCodSalmonFix.java', 'RENAMED_EGG_IDS')),
         emit_strs('ENTITIES_V1460', schema_entities('V1460.java'),
                   doc='The entity ids V1460 registers (V705 has the same ones).'),
+        emit_strs('ENTITIES_V99', schema_entities('V99.java'), doc='The entity ids V99 registers.'),
+        emit_strs('BLOCK_ENTITIES_V99', schema_entities('V99.java', 'registerBlockEntities'),
+                  doc='The block entity ids V99 registers.'),
+        emit_pairs('SPAWN_EGG_ENTITIES', pairs_array('ItemSpawnEggFix.java', 'ID_TO_ENTITY'), int_key=True,
+                   doc='`ItemSpawnEggFix.ID_TO_ENTITY`: spawn egg damage to entity id.'),
+        emit_pairs('ENTITY_IDS', pairs('EntityIdFix.java', 'ID_MAP'), doc='`EntityIdFix.ID_MAP`.'),
+        emit_pairs('BLOCK_ENTITY_IDS', pairs('BlockEntityIdFix.java', 'ID_MAP'), doc='`BlockEntityIdFix.ID_MAP`.'),
+        emit_pairs('ITEM_TO_BLOCK_ENTITY_V99', pairs('../schemas/V99.java', 'ITEM_TO_BLOCKENTITY'),
+                   doc='`V99.ITEM_TO_BLOCKENTITY`.'),
+        emit_pairs('ITEM_POTIONS', pairs_array('ItemPotionFix.java', 'POTIONS', nullable=True), int_key=True,
+                   doc='`ItemPotionFix.POTIONS`: damage & 127 to potion (absent: null).'),
         structure_renames(),
     ]
     Path(args.out).write_text('\n\n'.join(parts) + '\n')

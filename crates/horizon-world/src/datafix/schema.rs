@@ -96,6 +96,21 @@ impl Walker<'_> {
         }
     }
     fn list(&mut self, ty: Ty, v: &mut Tag, name: &str) {
+        // A list of block names reads the numbers of an array tag and writes them as a list.
+        if ty == Ty::BlockName
+            && self.k < key(1451, 4)
+            && let Some(array) = v.get_mut(name)
+        {
+            let numbers: Option<Vec<Tag>> = match array {
+                Tag::IntArray(a) => Some(a.iter().map(|x| Tag::Int(*x)).collect()),
+                Tag::ByteArray(a) => Some(a.iter().map(|x| Tag::Byte(*x as i8)).collect()),
+                Tag::LongArray(a) => Some(a.iter().map(|x| Tag::Long(*x)).collect()),
+                _ => None,
+            };
+            if let Some(numbers) = numbers {
+                *array = Tag::List(numbers);
+            }
+        }
         if let Some(Tag::List(items)) = v.get_mut(name) {
             for item in items {
                 self.walk(ty, item);
@@ -552,6 +567,7 @@ impl Walker<'_> {
             }
             "minecraft:crafter" if k >= key(3682, 0) => named_inventory(self, v),
             "minecraft:jukebox" => self.field(Ty::ItemStack, v, "RecordItem"),
+            "minecraft:flower_pot" if k < key(1451, 5) => self.field(Ty::ItemName, v, "Item"),
             "minecraft:sign" | "minecraft:hanging_sign" => {
                 for side in ["front_text", "back_text"] {
                     if let Some(s) = v.get_mut(side) {

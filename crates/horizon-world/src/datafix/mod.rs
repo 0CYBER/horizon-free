@@ -223,7 +223,7 @@ pub fn update(root: Ty, data: &mut Tag, from: i32, to: i32) {
 fn read_hooks(root: Ty, data: &mut Tag, k: Key) {
     walk(root, data, k, Ty::ItemStack, &mut |stack| {
         if k < key(3818, 5) {
-            items::add_names(stack);
+            items::add_names_at(stack, k);
         } else if let Tag::String(_) = stack {
             // V3818_5 UNPACK_PLAIN_ID: a bare item id is a stack of one.
             *stack = Tag::compound([("id", stack.clone()), ("count", Tag::Int(1))]);
@@ -232,8 +232,19 @@ fn read_hooks(root: Ty, data: &mut Tag, k: Key) {
     if k >= key(1451, 6) {
         walk(root, data, k, Ty::Objective, &mut fixes_a::unpack_objective);
     }
+    // Block names are numbers or namespaced strings until V1451_4: a number is read as an
+    // int and written as one.
+    walk(root, data, k, Ty::BlockName, &mut |name| {
+        if let Some(n) = as_str(Some(name)) {
+            *name = string(&dynamic::namespaced(&n));
+        } else if k < key(1451, 4)
+            && let Some(n) = dynamic::as_number(name)
+        {
+            *name = Tag::Int(n.int_value());
+        }
+    });
     // Namespaced name types read their strings with `ensureNamespaced`.
-    for ty in [Ty::Biome, Ty::EntityName] {
+    for ty in [Ty::Biome, Ty::EntityName, Ty::ItemName] {
         walk(root, data, k, ty, &mut |name| {
             if let Some(n) = as_str(Some(name)) {
                 *name = string(&dynamic::namespaced(&n));
