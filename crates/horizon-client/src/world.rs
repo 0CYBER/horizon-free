@@ -9,7 +9,7 @@ use std::{
 };
 
 pub struct World {
-    pub chunks: HashMap<(i32, i32), Arc<Chunk>>,
+    pub chunks: crate::fast_hash::FxHashMap<(i32, i32), Arc<Chunk>>,
     pub random: LegacyRandom,
     pub revision: u64,
     pub health_rules: crate::health::HealthRules,
@@ -108,7 +108,7 @@ impl Weather {
 impl World {
     pub fn new(air: BlockStateId, seed: i64) -> Self {
         Self {
-            chunks: HashMap::new(),
+            chunks: Default::default(),
             random: LegacyRandom::new(seed),
             revision: 0,
             health_rules: crate::health::HealthRules::default(),

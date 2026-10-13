@@ -13,6 +13,8 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Instant};
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
+mod arena;
+mod occlusion;
 mod timing;
 
 #[repr(C)]
@@ -35,10 +37,13 @@ struct Globals {
 }
 pub type SectionKey = (i32, i32, i32);
 struct SectionGpu {
-    buffer: wgpu::Buffer,
+    /// First vertex in the section arena: solid quads, then translucent ones.
+    start: u64,
     solid: u32,
     translucent: u32,
 }
+/// A visible section this frame: key, squared distance, camera-relative origin.
+type Visible = (SectionKey, f64, [f32; 3]);
 /// Line segments the hit outline can hold.
 const MAX_OUTLINE_EDGES: u64 = 256;
 pub struct Frame<'a> {
@@ -169,13 +174,22 @@ pub struct Renderer {
     outline: wgpu::Buffer,
     depth: wgpu::TextureView,
     sections: HashMap<SectionKey, SectionGpu>,
+    arena: arena::Arena,
+    /// `DrawIndexedIndirectArgs` for this frame's solid then translucent draws.
+    indirect: wgpu::Buffer,
+    indirect_capacity: u64,
+    /// Indirect draws may set `first_instance` (the section origin).
+    multi_draw: bool,
+    /// Per-frame scratch, kept to avoid allocating every frame.
+    visible: Vec<Visible>,
+    origins: Vec<[f32; 4]>,
+    /// `DrawIndexedIndirectArgs` words: index count, instance count, first
+    /// index, base vertex, first instance.
+    draws: Vec<[u32; 5]>,
     /// Block-entity blocks per meshed section (world position, state id).
     block_entities: HashMap<SectionKey, Vec<([i32; 3], u32)>>,
     /// VisGraph face connectivity per meshed section (cave culling).
-    visibility: HashMap<SectionKey, u64>,
-    reachable: std::collections::HashSet<SectionKey>,
-    reachable_from: Option<SectionKey>,
-    visibility_dirty: bool,
+    occlusion: occlusion::Occlusion,
     pub hud: HudRenderer,
     pub info: wgpu::AdapterInfo,
     pub suspended: bool,
@@ -188,6 +202,8 @@ pub struct Renderer {
     pub screenshot_result: Option<std::result::Result<[u32; 2], String>>,
     /// Brightness option (lightmap gamma), 0..1.
     pub gamma: f32,
+    /// Advance animated block textures (Horizon setting; vanilla always does).
+    pub animated_textures: bool,
     present_modes: Vec<wgpu::PresentMode>,
 }
 fn mip_chain(pixels: &[u8], size: u32, layers: u32) -> (Vec<u8>, u32) {
@@ -1085,6 +1101,16 @@ impl Renderer {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let arena = arena::Arena::new(&device, std::mem::size_of::<Vertex>() as u64, 1 << 20);
+        let indirect = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Section draws"),
+            size: 1024 * 20,
+            usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let multi_draw = device
+            .features()
+            .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE);
         Ok(Self {
             instance,
             surface,
@@ -1130,11 +1156,15 @@ impl Renderer {
             outline,
             depth,
             sections: HashMap::new(),
+            arena,
+            indirect,
+            indirect_capacity: 1024,
+            multi_draw,
+            visible: Vec::new(),
+            origins: Vec::new(),
+            draws: Vec::new(),
             block_entities: HashMap::new(),
-            visibility: HashMap::new(),
-            reachable: std::collections::HashSet::new(),
-            reachable_from: None,
-            visibility_dirty: true,
+            occlusion: occlusion::Occlusion::new(crate::chunk::HEIGHT / 16),
             hud,
             info,
             suspended: size.width == 0 || size.height == 0,
@@ -1144,6 +1174,7 @@ impl Renderer {
             screenshot: None,
             screenshot_result: None,
             gamma: 0.5,
+            animated_textures: true,
             present_modes,
         })
     }
@@ -1202,6 +1233,27 @@ impl Renderer {
             .create_view(&Default::default())
     }
     /// VSync on: tear-free presentation (Mailbox, else Fifo); off: Immediate when available.
+    /// VSync, unless Horizon's present-mode setting names a supported mode.
+    pub fn set_present_mode(&mut self, vsync: bool, mode: crate::graphics::PresentMode) {
+        use crate::graphics::PresentMode as P;
+        let wanted = match mode {
+            P::Auto => None,
+            P::Fifo => Some(wgpu::PresentMode::Fifo),
+            P::Mailbox => Some(wgpu::PresentMode::Mailbox),
+            P::Immediate => Some(wgpu::PresentMode::Immediate),
+        };
+        match wanted.filter(|m| self.present_modes.contains(m)) {
+            Some(m) => {
+                if self.config.present_mode != m
+                    && let Some(surface) = &self.surface
+                {
+                    self.config.present_mode = m;
+                    surface.configure(&self.device, &self.config);
+                }
+            }
+            None => self.set_vsync(vsync),
+        }
+    }
     pub fn set_vsync(&mut self, vsync: bool) {
         use crate::window::{PresentMode, vsync_present_mode};
         let supported: Vec<PresentMode> = self
@@ -1245,9 +1297,7 @@ impl Renderer {
         self.sections.len()
     }
     pub fn upload(&mut self, key: SectionKey, mesh: &SectionMesh) {
-        if self.visibility.insert(key, mesh.visibility) != Some(mesh.visibility) {
-            self.visibility_dirty = true;
-        }
+        self.occlusion.set(key, mesh.visibility);
         if mesh.block_entities.is_empty() {
             self.block_entities.remove(&key);
         } else {
@@ -1255,8 +1305,8 @@ impl Renderer {
         }
         let solid = (mesh.solid.len() / 4) as u32;
         let translucent = (mesh.translucent.len() / 4) as u32;
+        self.release_section(key);
         if solid + translucent == 0 {
-            self.sections.remove(&key);
             return;
         }
         let max = solid.max(translucent);
@@ -1264,26 +1314,48 @@ impl Renderer {
             self.index_quads = max.next_power_of_two();
             self.indices = Self::quad_indices(&self.device, self.index_quads);
         }
-        let mut data = Vec::with_capacity(mesh.solid.len() + mesh.translucent.len());
-        data.extend_from_slice(&mesh.solid);
-        data.extend_from_slice(&mesh.translucent);
-        let bytes: &[u8] = bytemuck::cast_slice(&data);
-        self.uploaded_bytes += bytes.len() as u64;
-        let buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Section mesh"),
-                contents: bytes,
-                usage: wgpu::BufferUsages::VERTEX,
-            });
+        let vertices = (mesh.solid.len() + mesh.translucent.len()) as u64;
+        let start = self.arena.alloc(&self.device, &self.queue, vertices);
+        let stride = std::mem::size_of::<Vertex>() as u64;
+        for (offset, part) in [(0, &mesh.solid), (mesh.solid.len(), &mesh.translucent)] {
+            if !part.is_empty() {
+                let bytes: &[u8] = bytemuck::cast_slice(part);
+                self.uploaded_bytes += bytes.len() as u64;
+                self.queue.write_buffer(
+                    &self.arena.buffer,
+                    (start + offset as u64) * stride,
+                    bytes,
+                );
+            }
+        }
         self.sections.insert(
             key,
             SectionGpu {
-                buffer,
+                start,
                 solid,
                 translucent,
             },
         );
+    }
+    /// Draws `count` section draws from `first` with the arena and section
+    /// origins bound: one indirect multi-draw, or a loop without it.
+    fn draw_sections(&self, pass: &mut wgpu::RenderPass<'_>, first: u32, count: u32) {
+        if count == 0 {
+            return;
+        }
+        if self.multi_draw {
+            pass.multi_draw_indexed_indirect(&self.indirect, u64::from(first) * 20, count);
+        } else {
+            for d in &self.draws[first as usize..(first + count) as usize] {
+                pass.draw_indexed(0..d[0], d[3] as i32, d[4]..d[4] + 1);
+            }
+        }
+    }
+    fn release_section(&mut self, key: SectionKey) {
+        if let Some(s) = self.sections.remove(&key) {
+            self.arena
+                .release(s.start, u64::from(s.solid + s.translucent) * 4);
+        }
     }
     /// Block-entity blocks of every meshed section (see `SectionMesh::block_entities`).
     pub fn block_entities(&self) -> impl Iterator<Item = &([i32; 3], u32)> {
@@ -1292,63 +1364,13 @@ impl Renderer {
     pub fn clear_sections(&mut self) {
         self.block_entities.clear();
         self.sections.clear();
-        self.visibility.clear();
-        self.visibility_dirty = true;
-    }
-    /// SectionOcclusionGraph: breadth-first from the camera section through
-    /// faces its VisGraph connects, never stepping back towards the camera.
-    fn update_reachable(&mut self, from: SectionKey, radius: i32) {
-        const STEPS: [(i32, i32, i32); 6] = [
-            (0, -1, 0),
-            (0, 1, 0),
-            (0, 0, -1),
-            (0, 0, 1),
-            (-1, 0, 0),
-            (1, 0, 0),
-        ];
-        let opposite = |d: usize| d ^ 1;
-        self.reachable.clear();
-        let mut queue = std::collections::VecDeque::new();
-        // (section, entered face, directions travelled)
-        queue.push_back((from, None::<usize>, 0u8));
-        self.reachable.insert(from);
-        let sections = crate::chunk::HEIGHT / 16;
-        while let Some((key, entered, travelled)) = queue.pop_front() {
-            let vis = self
-                .visibility
-                .get(&key)
-                .copied()
-                .unwrap_or(crate::mesher::ALL_VISIBLE);
-            for (d, step) in STEPS.iter().enumerate() {
-                if travelled & (1 << opposite(d)) != 0 {
-                    continue;
-                }
-                if let Some(e) = entered
-                    && vis & (1 << (e * 6 + d)) == 0
-                {
-                    continue;
-                }
-                let next = (key.0 + step.0, key.1 + step.1, key.2 + step.2);
-                if next.1 < -1
-                    || next.1 > sections
-                    || (next.0 - from.0).abs() > radius
-                    || (next.2 - from.2).abs() > radius
-                {
-                    continue;
-                }
-                if self.reachable.insert(next) {
-                    queue.push_back((next, Some(opposite(d)), travelled | (1 << d)));
-                }
-            }
-        }
-        self.reachable_from = Some(from);
-        self.visibility_dirty = false;
+        self.arena.clear();
+        self.occlusion.clear();
     }
     pub fn remove(&mut self, key: SectionKey) {
         self.block_entities.remove(&key);
-        self.visibility.remove(&key);
-        self.visibility_dirty = true;
-        self.sections.remove(&key);
+        self.occlusion.remove(key);
+        self.release_section(key);
     }
     pub fn view_projection(&self, frame: &Frame) -> Mat4 {
         let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
@@ -1497,7 +1519,9 @@ impl Renderer {
             Some(f) => f.texture.clone(),
             None => self.offscreen.clone().ok_or("no offscreen target")?,
         };
-        self.animate(frame.ticks);
+        if self.animated_textures {
+            self.animate(frame.ticks);
+        }
         self.update_lightmap(
             &frame.sky,
             frame.darkness.1,
@@ -1592,15 +1616,17 @@ impl Renderer {
             (camera.z.floor() as i32) >> 4,
         );
         let culling = !frame.title && frame.cave_culling;
-        if culling && (self.visibility_dirty || self.reachable_from != Some(camera_section)) {
+        if culling {
             let radius = (frame.distance / 16.0) as i32 + 2;
-            self.update_reachable(camera_section, radius);
+            self.occlusion.update(camera_section, radius);
         }
-        let reachable = &self.reachable;
-        let mut visible: Vec<(SectionKey, f64, [f32; 3])> = self
-            .sections
+        let reachable = &self.occlusion;
+        let mut visible = std::mem::take(&mut self.visible);
+        visible.clear();
+        visible.extend(
+            self.sections
             .keys()
-            .filter(|k| !culling || reachable.contains(k))
+            .filter(|&&k| !culling || reachable.contains(k))
             .filter_map(|&(sx, sy, sz)| {
                 let origin = DVec3::new(
                     f64::from(sx * 16),
@@ -1629,9 +1655,9 @@ impl Renderer {
                     center.length_squared(),
                     origin.as_vec3().to_array(),
                 ))
-            })
-            .collect();
-        visible.sort_by(|a, b| a.1.total_cmp(&b.1));
+            }),
+        );
+        visible.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
         self.drawn_sections = visible.len();
         if visible.len() as u64 > self.instance_capacity {
             self.instance_capacity = (visible.len() as u64).next_power_of_two();
@@ -1642,13 +1668,47 @@ impl Renderer {
                 mapped_at_creation: false,
             });
         }
-        let origins: Vec<[f32; 4]> = visible
-            .iter()
-            .map(|(_, _, o)| [o[0], o[1], o[2], 0.0])
-            .collect();
-        if !origins.is_empty() {
+        self.origins.clear();
+        self.origins
+            .extend(visible.iter().map(|(_, _, o)| [o[0], o[1], o[2], 0.0]));
+        if !self.origins.is_empty() {
             self.queue
-                .write_buffer(&self.instances, 0, bytemuck::cast_slice(&origins));
+                .write_buffer(&self.instances, 0, bytemuck::cast_slice(&self.origins));
+        }
+        if frame.title {
+            visible.clear();
+        }
+        // Solid sections front to back, then translucent ones back to front,
+        // as one list of indirect draws over the section arena.
+        self.draws.clear();
+        let draw = |s: &SectionGpu, i: usize, translucent: bool| {
+            let (quads, first) = if translucent {
+                (s.translucent, s.start + u64::from(s.solid) * 4)
+            } else {
+                (s.solid, s.start)
+            };
+            (quads > 0).then_some([quads * 6, 1, 0, first as u32, i as u32])
+        };
+        for (i, (key, _, _)) in visible.iter().enumerate() {
+            self.draws.extend(draw(&self.sections[key], i, false));
+        }
+        let solid_draws = self.draws.len() as u32;
+        for (i, (key, _, _)) in visible.iter().enumerate().rev() {
+            self.draws.extend(draw(&self.sections[key], i, true));
+        }
+        let translucent_draws = self.draws.len() as u32 - solid_draws;
+        if self.multi_draw && !self.draws.is_empty() {
+            if self.draws.len() as u64 > self.indirect_capacity {
+                self.indirect_capacity = (self.draws.len() as u64).next_power_of_two();
+                self.indirect = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Section draws"),
+                    size: self.indirect_capacity * 20,
+                    usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+            }
+            self.queue
+                .write_buffer(&self.indirect, 0, bytemuck::cast_slice(&self.draws));
         }
         let outline_edges = frame.outline.len().min(MAX_OUTLINE_EDGES as usize);
         if outline_edges > 0 {
@@ -1811,20 +1871,11 @@ impl Renderer {
                     pass.draw(0..3, 0..1);
                 }
             }
-            if frame.title {
-                visible.clear();
-            }
             pass.set_pipeline(&self.solid);
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.set_vertex_buffer(0, self.arena.buffer.slice(..));
             pass.set_vertex_buffer(1, self.instances.slice(..));
-            for (i, (key, _, _)) in visible.iter().enumerate() {
-                let s = &self.sections[key];
-                if s.solid == 0 {
-                    continue;
-                }
-                pass.set_vertex_buffer(0, s.buffer.slice(..));
-                pass.draw_indexed(0..s.solid * 6, 0, i as u32..i as u32 + 1);
-            }
+            self.draw_sections(&mut pass, 0, solid_draws);
             if entity_quads > 0 {
                 pass.set_pipeline(&self.entity_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
@@ -1845,19 +1896,10 @@ impl Renderer {
                 pass.draw(0..outline_edges as u32 * 2, 0..1);
             }
             pass.set_pipeline(&self.translucent);
+            pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.set_vertex_buffer(0, self.arena.buffer.slice(..));
             pass.set_vertex_buffer(1, self.instances.slice(..));
-            for (i, (key, _, _)) in visible.iter().enumerate().rev() {
-                let s = &self.sections[key];
-                if s.translucent == 0 {
-                    continue;
-                }
-                pass.set_vertex_buffer(0, s.buffer.slice(..));
-                pass.draw_indexed(
-                    0..s.translucent * 6,
-                    (s.solid * 4) as i32,
-                    i as u32..i as u32 + 1,
-                );
-            }
+            self.draw_sections(&mut pass, solid_draws, translucent_draws);
             // LevelRenderer: the world border after translucent terrain and weather.
             if let Some(b) = frame.border.as_ref().filter(|_| !frame.title) {
                 pass.set_pipeline(&self.border_pipeline);
@@ -1992,6 +2034,7 @@ impl Renderer {
         self.last_wait += present.elapsed();
         self.last_encode = started.elapsed().saturating_sub(self.last_wait);
         let _ = self.started;
+        self.visible = visible;
         Ok(true)
     }
 }

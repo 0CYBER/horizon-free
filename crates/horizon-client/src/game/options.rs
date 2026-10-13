@@ -142,7 +142,8 @@ impl Game<'_> {
         let s = &self.settings;
         if let Some(r) = self.renderer.as_mut() {
             r.gamma = s.gamma;
-            r.set_vsync(s.vsync);
+            r.set_present_mode(s.vsync, s.horizon.present_mode);
+            r.animated_textures = s.horizon.animated_textures;
         }
         if let Some(w) = &self.window {
             let want = s.fullscreen;
@@ -207,6 +208,14 @@ impl Game<'_> {
             return;
         }
         let limit = self.framerate_limit();
-        horizon_client::window::end_frame(&mut self.limiter, limit, &mut self.frame_clock);
+        match self.settings.horizon.pacing {
+            horizon_client::graphics::Pacing::Precise => {
+                horizon_client::window::end_frame(&mut self.limiter, limit, &mut self.frame_clock)
+            }
+            horizon_client::graphics::Pacing::Efficient => {
+                let mut clock = horizon_client::window::SleepingClock(self.frame_clock);
+                horizon_client::window::end_frame(&mut self.limiter, limit, &mut clock);
+            }
+        }
     }
 }

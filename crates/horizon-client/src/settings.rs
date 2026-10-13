@@ -175,6 +175,8 @@ pub struct Settings {
     pub toggle_use: bool,
     /// Taps of the sprint key counted as double taps (sprintWindow).
     pub sprint_window: i32,
+    /// Horizon's own graphics settings (`horizon-graphics.txt`, not options.txt).
+    pub horizon: crate::graphics::Graphics,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -243,6 +245,7 @@ impl Default for Settings {
             toggle_attack: false,
             toggle_use: false,
             sprint_window: 7,
+            horizon: Default::default(),
         }
     }
 }
@@ -273,10 +276,20 @@ fn put_s(f: &mut OptionsFile, key: &str, v: &str) {
 }
 impl Settings {
     pub fn load(path: &Path) -> Self {
+        let horizon = path
+            .parent()
+            .map(crate::graphics::Graphics::load)
+            .unwrap_or_default();
         let Ok(bytes) = fs::read(path) else {
-            return Self::default();
+            return Self {
+                horizon,
+                ..Self::default()
+            };
         };
-        Self::parse(&String::from_utf8_lossy(&bytes))
+        Self {
+            horizon,
+            ..Self::parse(&String::from_utf8_lossy(&bytes))
+        }
     }
     pub fn parse(text: &str) -> Self {
         Self::from_file(OptionsFile::parse(text))
@@ -332,6 +345,7 @@ impl Settings {
             toggle_attack: f.bool("toggleAttack"),
             toggle_use: f.bool("toggleUse"),
             sprint_window: f.int("sprintWindow"),
+            horizon: Default::default(),
             auto_jump: f.bool("autoJump"),
             language: f.string("lang"),
             force_unicode: f.bool("forceUnicodeFont"),
@@ -461,6 +475,9 @@ impl Settings {
     }
     pub fn save(&self, path: &Path) {
         let _ = fs::write(path, self.serialize());
+        if let Some(dir) = path.parent() {
+            self.horizon.save(dir);
+        }
     }
     /// Volume of a sound source (master excluded).
     pub fn volume(&self, source: &str) -> f32 {

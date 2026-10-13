@@ -403,6 +403,25 @@ impl Game<'_> {
         self.tick_raids();
         self.tick_creature_entities()
     }
+    /// `DistanceManager.inEntityTickingRange`: chunks within the simulation
+    /// distance (Chebyshev, in chunks) of the player or of a guest.
+    pub(super) fn entity_ticking_area(&self) -> impl Fn(i32, i32) -> bool + use<> {
+        let d = self.settings.simulation_distance.max(2);
+        let mut centres: Vec<(i32, i32)> = self.streaming.extra.iter().map(|&(c, _)| c).collect();
+        if let Some(p) = &self.player {
+            centres.push((
+                (p.position.x.floor() as i32) >> 4,
+                (p.position.z.floor() as i32) >> 4,
+            ));
+        }
+        let everywhere = centres.is_empty();
+        move |x, z| {
+            everywhere
+                || centres
+                    .iter()
+                    .any(|&(cx, cz)| ((x >> 4) - cx).abs().max(((z >> 4) - cz).abs()) <= d)
+        }
+    }
     /// The entity phase of `tick_creatures`: every mob's tick, deaths, and the
     /// projectiles and effects that follow from them.
     pub(super) fn tick_creature_entities(&mut self) -> Result<()> {
@@ -424,6 +443,7 @@ impl Game<'_> {
         let mut mobs = std::mem::take(&mut self.mobs);
         let mut dead = Vec::new();
         let mut died = std::mem::take(&mut self.died);
+        let ticking = self.entity_ticking_area();
         let level_random;
         {
             // The level random, lent to the mobs (brain behaviours draw from
@@ -439,6 +459,18 @@ impl Game<'_> {
                     .loaded(m.position.x.floor() as i32, m.position.z.floor() as i32)
                 {
                     keep.push(!m.hostile() || m.persistent);
+                    continue;
+                }
+                // ServerLevel.tick: every loaded entity checks despawning, but
+                // only those in entity-ticking chunks (within the simulation
+                // distance) tick.
+                if !ticking(m.position.x.floor() as i32, m.position.z.floor() as i32) {
+                    let kept = horizon_client::mobs::ai::despawn_check(m, &w);
+                    if !kept {
+                        died.remove(&m.id);
+                        snapshot[i].alive = false;
+                    }
+                    keep.push(kept);
                     continue;
                 }
                 horizon_client::mobs::apply_mob_pushes(m, &mut pushes);

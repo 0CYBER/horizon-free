@@ -130,7 +130,7 @@ def main():
     p.add_argument("--build", default=str(ROOT / "target/release"))
     p.add_argument("--out", help="JSON file (default benchmarks/graphics/<label>.json)")
     args = p.parse_args()
-    ctl = Path(args.build) / "horizon-ctl"
+    ctl = Path(args.build).resolve() / "horizon-ctl"
     if not ctl.exists():
         sys.exit(f"{ctl} missing: cargo build --release -p horizon-client --bins")
     cwd = ROOT / ".local/graphics-bench"

@@ -783,6 +783,8 @@ struct Game<'a> {
     pending_bench: Option<(Instant, std::sync::mpsc::Sender<String>)>,
     /// A scripted flight from the control socket (`fly`).
     flight: Option<control::Flight>,
+    /// The overworld's last `sky_darken` and its inputs (time, rain, thunder).
+    sky_darken_memo: std::cell::Cell<Option<((i64, u32, u32), i32)>>,
     persist: persist::EntityMemory,
     /// Connected to a server: the world comes from the network (game/remote.rs).
     remote: Option<remote::Remote>,
@@ -4608,11 +4610,20 @@ impl Game<'_> {
                 .sample(self.world.day_time, None, None);
             return (15.0 - 15.0 * sky.sky_light_level).round() as i32;
         }
-        let mut sky = self.res.environment.sample(self.world.day_time, None, None);
         let (rain, thunder) = self.world.weather.levels(1.0);
+        // Sampled once per (time, weather): every mob asks each tick.
+        let key = (self.world.day_time, rain.to_bits(), thunder.to_bits());
+        if let Some((k, darken)) = self.sky_darken_memo.get()
+            && k == key
+        {
+            return darken;
+        }
+        let mut sky = self.res.environment.sample(self.world.day_time, None, None);
         horizon_client::environment::apply_weather(&mut sky, rain, thunder);
         // Level.updateSkyBrightness: darkening from the sky light level.
-        (15.0 - 15.0 * sky.sky_light_level).round() as i32
+        let darken = (15.0 - 15.0 * sky.sky_light_level).round() as i32;
+        self.sky_darken_memo.set(Some((key, darken)));
+        darken
     }
     fn mob_hit(&self) -> Option<(usize, f64)> {
         let eye = self.eye_position()?;
@@ -8178,10 +8189,7 @@ pub fn run() -> Result<()> {
         biomes: biomes.clone(),
         light,
     });
-    let threads = std::thread::available_parallelism()
-        .map_or(2, |n| n.get())
-        .saturating_sub(1)
-        .max(1);
+    let threads = early_settings.horizon.worker_threads();
     eprintln!(
         "Horizon: resources loaded in {:.1}s; {} block states, {} items, {} biomes; {} worker threads",
         started.elapsed().as_secs_f32(),
@@ -8456,6 +8464,7 @@ pub fn run() -> Result<()> {
         pending_screenshot: None,
         pending_bench: None,
         flight: None,
+        sky_darken_memo: Default::default(),
         persist: Default::default(),
         remote: None,
         lan: None,

@@ -18,7 +18,7 @@ use horizon_core::{
 };
 use horizon_world::registry::BlockStateId;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     sync::Arc,
 };
 
@@ -319,7 +319,16 @@ impl Game<'_> {
             let Some(chunk) = self.world.chunks.get(&key).cloned() else {
                 continue;
             };
-            let name = |id: u16| &*self.res.facts.get(BlockStateId(u32::from(id))).name;
+            if self.creaking.hearts.is_empty() {
+                self.creaking.hearts = self
+                    .res
+                    .facts
+                    .states
+                    .iter()
+                    .map(|f| &*f.name == "minecraft:creaking_heart")
+                    .collect();
+            }
+            let hearts = &self.creaking.hearts;
             let _ = heart;
             for (si, section) in chunk.sections.iter().enumerate() {
                 if section.is_uniform(0) {
@@ -327,7 +336,7 @@ impl Game<'_> {
                 }
                 for i in 0..4096 {
                     let id = section.get(i);
-                    if name(id) != "minecraft:creaking_heart" {
+                    if !hearts.get(usize::from(id)).copied().unwrap_or(false) {
                         continue;
                     }
                     let (lx, lz, ly) = ((i & 15) as i32, ((i >> 4) & 15) as i32, (i >> 8) as i32);
@@ -343,8 +352,8 @@ impl Game<'_> {
                 }
             }
         }
-        let loaded: HashSet<(i32, i32)> = self.world.chunks.keys().copied().collect();
-        self.creaking.scanned.retain(|k| loaded.contains(k));
+        let chunks = &self.world.chunks;
+        self.creaking.scanned.retain(|k| chunks.contains_key(k));
     }
 }
 
@@ -352,5 +361,7 @@ impl Game<'_> {
 #[derive(Default)]
 pub(super) struct CreakingState {
     /// Chunks already scanned for heart blocks.
-    scanned: HashSet<(i32, i32)>,
+    scanned: horizon_client::fast_hash::FxHashSet<(i32, i32)>,
+    /// Which block states are creaking hearts, by state id.
+    hearts: Vec<bool>,
 }

@@ -359,7 +359,7 @@ pub trait LightWorld {
     fn light(&self, x: i32, y: i32, z: i32) -> Option<u8>;
     fn set_light(&mut self, x: i32, y: i32, z: i32, packed: u8);
 }
-impl LightWorld for HashMap<(i32, i32), Arc<Chunk>> {
+impl<S: std::hash::BuildHasher> LightWorld for HashMap<(i32, i32), Arc<Chunk>, S> {
     fn state(&self, x: i32, y: i32, z: i32) -> Option<u16> {
         if !(MIN_Y..MIN_Y + HEIGHT).contains(&y) {
             return None;

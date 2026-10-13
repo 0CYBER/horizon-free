@@ -376,6 +376,7 @@ impl Game<'_> {
         self.set_default_game_mode(game_mode);
         self.ui.difficulty = props.difficulty as u8;
         self.settings.render_distance = props.view_distance.clamp(2, 32);
+        self.settings.simulation_distance = props.simulation_distance.clamp(2, 32);
         self.streaming.radius = self.settings.render_distance;
         self.settle_spawn()?;
         let gate_lists = lists.clone();
