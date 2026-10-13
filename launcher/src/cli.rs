@@ -2,7 +2,7 @@
 //! command goes through `backend`; this file only parses arguments and prints.
 use clap::{Parser, Subcommand};
 use horizon_launcher::backend::{self, Release};
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -84,9 +84,16 @@ pub fn run() -> Option<i32> {
     })
 }
 
+/// Download progress on one terminal line, only when stderr is a terminal and the percentage moves.
 fn progress(label: String) -> impl Fn(f32) {
+    let last = std::cell::Cell::new(-1);
+    let tty = std::io::stderr().is_terminal();
     move |p| {
-        eprint!("\r{label} {:>3.0}%", p * 100.);
+        let pct = (p * 100.) as i32;
+        if !tty || pct == last.replace(pct) {
+            return;
+        }
+        eprint!("\r{label} {pct:>3}%");
         let _ = std::io::stderr().flush();
         if p >= 1.0 {
             eprintln!();

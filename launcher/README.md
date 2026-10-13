@@ -6,6 +6,10 @@ Zed's UI framework; it has its own Cargo workspace and is not part of the game's
 
 ![Play](docs/play.png)
 
+The opening, then Play ([clip](docs/opening.webm)):
+
+![Opening](docs/opening-1.png)
+
 ## What it does
 
 - **Versions**: lists the published releases of ludovic111/horizon, installs the build for
@@ -20,13 +24,68 @@ Data lives in the platform's data directory (`~/.local/share/horizon-launcher` o
 `~/Library/Application Support/horizon-launcher` on macOS, `%APPDATA%\horizon-launcher` on
 Windows): `versions/<tag>/`, `server-jars/`, `server/` and `settings.json`.
 
+- **Settings**: install new Horizon versions automatically (off by default; the selected
+  version only moves to the new one if you were on the newest), the opening animation, and the
+  launcher's own version and update state.
+
+## Updates
+
+The launcher looks for a newer Horizon release when it starts and every four hours while it
+is open, and shows a small "available, Install" line on Play.
+
+It also updates itself from GitHub releases tagged `launcher-vX.Y.Z` (Horizon's own are
+`vYYYY.MM.DD`; neither is ever taken for the other). It downloads the new build, replaces its
+own binary, and offers "Restart to update" in the sidebar. Development builds and
+`HORIZON_LAUNCHER_NO_SELF_UPDATE=1` never replace themselves.
+
+To release the launcher: set `version` in `Cargo.toml`, then push a tag `launcher-vX.Y.Z`. The
+`launcher` workflow builds Linux, macOS and Windows and attaches
+`horizon-launcher-linux-x86_64.tar.gz`, `horizon-launcher-macos-arm64.zip` and
+`horizon-launcher-windows-x64.zip` to a draft release of that tag, never marked latest. Publish
+it by hand.
+
+## Command line
+
+The same binary is a command-line tool; without a subcommand it opens the window.
+
+    horizon-launcher versions [--installed]       releases on GitHub, or what is installed (* = selected)
+    horizon-launcher install <tag|latest>
+    horizon-launcher remove <tag>
+    horizon-launcher prepare [--minecraft <dir>] [--version <tag>]
+    horizon-launcher play [--version <tag>]
+    horizon-launcher server [--dir <dir>] [--version <tag>] [--accept-eula]
+    horizon-launcher notes [<tag>]                  patch notes as plain text
+    horizon-launcher next                           the roadmap
+    horizon-launcher update [--check]               Horizon and the launcher
+
+`--json` prints JSON where there is something to report (`versions`, `install`, `notes`,
+`next`, `update --check`). Errors go to stderr with exit code 1. `server` runs in the terminal,
+so lines you type reach its console. `HORIZON_LAUNCHER_HOME` replaces the data folder (for
+scripts and tests).
+
+## AI agents (MCP)
+
+`horizon-launcher mcp` is a Model Context Protocol server over stdio. To use it from Claude Code:
+
+    claude mcp add horizon -- horizon-launcher mcp
+
+(with the full path to the binary if it is not on your `PATH`). Its tools: `list_versions`,
+`install_version`, `remove_version`, `prepare_resources`, `launch_client`, `start_server`,
+`server_command`, `server_log`, `stop_server`, `patch_notes`, `roadmap` and `check_updates`.
+A server started through MCP stops (cleanly, with `stop`) when the session ends. Starting one
+needs `accept_eula`, which an agent should only pass with the player's consent.
+
+The window, the command line and the MCP server all call the same core, `src/backend.rs`.
+
 ## Building
 
     cargo build --release
 
 On NixOS, `nix-shell` in this folder provides the libraries GPUI links to (Wayland, X11,
 xkbcommon, Vulkan, fontconfig). macOS needs Xcode's command line tools. The `launcher`
-workflow builds macOS and Windows binaries as artifacts.
+workflow builds all three platforms on every push to the `launcher` branch.
+
+    cargo test --lib    # tag separation, version order, update selection, notes as text
 
 Geist, Geist Mono and Instrument Serif (SIL Open Font License, `assets/fonts/OFL-*.txt`) are
 bundled so the type is the same on every platform.
@@ -38,3 +97,4 @@ Background image (`assets/background.jpg`): backgrounds.supply (free preview), l
 ![Server](docs/server.png)
 ![Versions](docs/versions.png)
 ![Patch notes](docs/patch-notes.png)
+![Settings](docs/settings.png)

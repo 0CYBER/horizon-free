@@ -1,10 +1,16 @@
 name: launcher
+# Builds the launcher on Linux, macOS and Windows. A pushed `launcher-vX.Y.Z` tag also puts the
+# three archives on a draft GitHub release of that tag, to publish by hand. Horizon's own
+# releases are tagged `vYYYY.MM.DD`; the launcher reads only `launcher-v*` releases for itself.
 
 on:
   workflow_dispatch:
   push:
     branches: [launcher]
-    paths: ['launcher/**', '.github/workflows/launcher.yml']
+    tags: ['launcher-v*']
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -12,24 +18,69 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - os: ubuntu-latest
+            asset: horizon-launcher-linux-x86_64.tar.gz
+            binary: horizon-launcher
           - os: macos-latest
-            artifact: horizon-launcher-macos-arm64
+            asset: horizon-launcher-macos-arm64.zip
             binary: horizon-launcher
           - os: windows-latest
-            artifact: horizon-launcher-windows-x64
+            asset: horizon-launcher-windows-x64.zip
             binary: horizon-launcher.exe
     runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: launcher
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: launcher
+      - name: Linux libraries GPUI links to
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libfontconfig-dev libvulkan-dev libasound2-dev
+      - name: The tag matches Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/launcher-v')
+        run: grep -qx "version = \"${GITHUB_REF_NAME#launcher-v}\"" Cargo.toml
+      - run: cargo test --release --locked --lib
       - run: cargo build --release --locked
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp target/release/${{ matrix.binary }} dist/
+          cd dist
+          if [[ "${{ matrix.asset }}" == *.tar.gz ]]; then
+            tar czf ../${{ matrix.asset }} ${{ matrix.binary }}
+          elif [[ "$RUNNER_OS" == "Windows" ]]; then
+            7z a ../${{ matrix.asset }} ${{ matrix.binary }}
+          else
+            zip ../${{ matrix.asset }} ${{ matrix.binary }}
+          fi
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: launcher/target/release/${{ matrix.binary }}
+          name: ${{ matrix.asset }}
+          path: launcher/${{ matrix.asset }}
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/launcher-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      # A draft, and never marked latest: Horizon's own releases stay the repository's latest.
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Horizon launcher ${{ github.ref_name }}
+          draft: true
+          make_latest: false
+          files: dist/*
