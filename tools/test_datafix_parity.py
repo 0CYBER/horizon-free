@@ -53,6 +53,10 @@ IGNORED = {
 }
 
 
+def world_path(name):
+    return (LOCAL / 'worlds-pre-1.17' if (LOCAL / 'worlds-pre-1.17' / name).is_dir() else WORLDS) / name
+
+
 def java_classpath():
     import oracle_harness as harness
     import test_rust_parity as base
@@ -214,20 +218,20 @@ def main():
     WORLDS.parent.mkdir(parents=True, exist_ok=True)
     with open(WORLDS.parent / 'generate.lock', 'w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)  # another worktree may be generating them
-        missing = [v for v in [*datafix_worlds.VERSIONS, *datafix_worlds.VARIANTS] if not (WORLDS / v / 'level.dat').exists()]
+        missing = [v for v in [*datafix_worlds.VERSIONS, *datafix_worlds.VARIANTS] if not (datafix_worlds.worlds_dir(v) / v / 'level.dat').exists()]
         if missing:
             print('generating sample worlds:', ' '.join(missing), flush=True)
             subprocess.run([sys.executable, str(ROOT / 'tools' / 'datafix_worlds.py'), *missing], cwd=ROOT, check=True)
-    worlds = sorted(p.name for p in WORLDS.iterdir() if p.is_dir())
+    worlds = sorted(p.name for d in (WORLDS, LOCAL / 'worlds-pre-1.17') if d.is_dir() for p in d.iterdir() if p.is_dir())
     band = args.band
     if band and not args.versions:  # worlds in the layout of before 1.16, saved before the target
-        worlds = [w for w in worlds if json.loads((WORLDS / w / 'datafix-source.json').read_text())['data_version'] < band]
+        worlds = [w for w in worlds if json.loads((world_path(w) / 'datafix-source.json').read_text())['data_version'] < band]
     versions = shard(args.versions or worlds)
     classpath = java_classpath()
     binary = None if args.vanilla_only else Path(args.binary) if args.binary else build_rust()
     total = 0
     for version in versions:
-        world = WORLDS / version
+        world = world_path(version)
         source = json.loads((world / 'datafix-source.json').read_text())
         print(f'{version} (DataVersion {source["data_version"]})')
         RUN.mkdir(parents=True, exist_ok=True)
