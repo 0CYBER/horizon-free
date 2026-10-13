@@ -120,7 +120,7 @@ major vanilla features missing), 0.75 (playable, mostly complete) or 1 (complete
 and verified against vanilla by differential tests). The percentage is the
 average; `tests/test_parity.py` keeps it in sync with this table. Last audited
 2026-10-12 against the harness results: 270 harnesses pass. Two still differ
-from vanilla in places: `mob_ai` (78 of 79 scenarios; a tempted ghastling) and
+from vanilla in places: `mob_ai` (83 of 84 scenarios; a tempted ghastling) and
 `sculk` (427 of 435; shrieker warnings and warden summoning).
 
 | Subsystem | Score | Main gaps |
@@ -134,9 +134,9 @@ from vanilla in places: `mob_ai` (78 of 79 scenarios; a tempted ghastling) and
 | Lighting | 1 | None: saved and relit light matches vanilla, slabs and stairs included |
 | World generation | 1 | None: 2,352 whole chunks over 225 structure sites, in all three dimensions, identical to vanilla |
 | Region files and saves | 0.75 | Saves round-trip with vanilla, and worlds from 1.17 to 26.2 upgrade as vanilla's DataFixers do; worlds older than 1.17 are not upgraded |
-| Entities and physics | 0.75 | Attributes, dimensions, death loot, spawn rules, natural spawning (15,500 cases), raids and patrols (1,900 cases) and mob AI (78 of 79 scenarios, villager and copper golem brains included) match; the warden's brain, villager breeding and gossip, and spawned mob gear are missing |
+| Entities and physics | 0.75 | Attributes, dimensions, death loot, spawn rules, natural spawning (15,500 cases), raids and patrols (1,900 cases) and mob AI (83 of 84 scenarios, villager and copper golem brains included) match; the warden's brain, villager breeding and gossip, and spawned mob gear are missing |
 | Interaction and inventory | 1 | None: menu clicks match over 8,000 click sequences, the loom and the crafter included; recipe book placement (6,000 cases), its buttons (1,200), the saved book (1,500) and the loom and crafter screens (1,600) match vanilla |
-| Menus, HUD and chat | 0.75 | Every command runs as vanilla (758 commands over 39,685 parsed inputs), scoreboards and teams match (81,000 operations), the player list matches over 872,000 draw calls with heads drawn from players' skins (authlib's textures, SkinManager's lookup, legacy skin conversion), and the chat matches focused and scrolled; the chat input box and command suggestions are not compared, and there is no resource pack screen |
+| Menus, HUD and chat | 0.75 | Every command runs as vanilla (758 commands over 39,685 parsed inputs), scoreboards and teams match (81,000 operations), the player list matches over 872,000 draw calls with heads drawn from players' skins (authlib's textures, SkinManager's lookup, legacy skin conversion), and the chat matches focused and scrolled; the resource pack screen's selection (moving packs between the lists, ordering, required and fixed packs) matches over 4,000 cases; the pack screen's drawing, its incompatibility confirmation, and the chat input box and command suggestions are not compared |
 | Audio | 1 | None: the sound engine, sound events, music, situational music, ambience and subtitles match vanilla |
 | Block behaviours and ticking | 0.75 | Block updates, random ticks, redstone, dispensers (6,000 cases), crafters (4,000 crafts) and block entity removal (containers spill, 4,000 cases) match vanilla; copper golems sort chests as vanilla's brain does (7 scenarios, tick for tick); 8 of 435 sculk scenarios differ (shrieker warnings and warden summoning) |
 

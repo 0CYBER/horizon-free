@@ -57,28 +57,19 @@ impl Game<'_> {
     /// PackSelectionModel: available (unselected) and selected (top first).
     pub(super) fn refresh_pack_lists(&mut self) {
         let all = packs::discover(&self.vanilla_root(), &packs_dir());
-        let selected_ids = &self.settings.resource_packs;
-        let mut selected: Vec<PackEntry> = selected_ids
-            .iter()
-            .rev()
-            .filter_map(|id| {
-                if id == "vanilla" {
-                    Some(vanilla_entry())
-                } else {
-                    all.iter().find(|p| &p.id == id).map(entry)
-                }
-            })
-            .collect();
-        if !selected.iter().any(|p| p.id == "vanilla") {
-            selected.push(vanilla_entry());
-        }
-        let available = all
-            .iter()
-            .filter(|p| !selected_ids.contains(&p.id))
-            .map(entry)
-            .collect();
-        self.ui.options.available = available;
-        self.ui.options.selected = selected;
+        let mut choices = vec![packs::Selectable::vanilla()];
+        choices.extend(
+            all.iter()
+                .map(|p| packs::Selectable::optional(&p.id, p.compatible)),
+        );
+        let model = packs::SelectionModel::new(choices, &self.settings.resource_packs);
+        let mut entries: Vec<PackEntry> = all.iter().map(entry).collect();
+        entries.push(vanilla_entry());
+        let o = &mut self.ui.options;
+        o.available = entries;
+        o.selected = Vec::new();
+        o.pack_model = model;
+        o.sync_pack_lists();
     }
     /// Rebuild the overlay and reload what can change while running.
     pub(super) fn reload_packs(&mut self) {
