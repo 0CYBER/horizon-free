@@ -38,6 +38,15 @@ LOCAL = ROOT / '.local' / 'datafix'
 # Old server jars and their worlds are inputs, not outputs: keep them beside the
 # vanilla data, which parallel worktrees share (.local/minecraft links there).
 SHARED = (ROOT / '.local' / 'minecraft').resolve().parent / 'datafix'
+# Worlds saved before 1.17 are only read by branches that carry the fixes for them: until those are
+# integrated they stay in the worktree's own .local, not in the folder every worktree's harness reads.
+LEGACY = {'1.8.9', '1.9.4', '1.10.2', '1.11.2', '1.12.2', '1.13.2', '1.14.4', '1.15.2', '1.16.1', '1.16.5'}
+
+
+def worlds_dir(name):
+    return (LOCAL if name.split('-')[0] in LEGACY else SHARED) / 'worlds'
+
+
 VERSIONS = ['1.8.9', '1.9.4', '1.10.2', '1.11.2', '1.12.2', '1.13.2', '1.14.4', '1.15.2', '1.16.1', '1.16.5', '1.17.1', '1.18.1', '1.18.2', '1.19', '1.19.2', '1.19.3', '1.19.4', '1.20.1', '1.20.2', '1.20.4', '1.20.5', '1.20.6', '1.21.1',
             '1.21.3', '1.21.4', '1.21.5', '1.21.6', '1.21.8', '1.21.9', '1.21.10', '1.21.11', '26.1', '26.1.2', '26.2']
 # Extra worlds of one version with another world type, for the level.dat generator settings:
@@ -407,7 +416,7 @@ def build(name, force=False):
     version, props = VARIANTS.get(name, (name, None))
     jar, data_version, protocol = server_jar(version)
     data_version = data_version or 0   # 1.8 saves have no DataVersion
-    target = SHARED / 'worlds' / name
+    target = worlds_dir(name) / name
     if target.exists() and not force:
         print(f'{version}: kept {target}')
         return []
