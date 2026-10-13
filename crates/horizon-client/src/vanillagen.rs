@@ -20,6 +20,9 @@ pub struct VanillaTerrain {
     loot: Option<Arc<horizon_world::loot::LootData>>,
     /// A worker for structure queries from the game thread.
     query: std::sync::Mutex<Option<GeneratorWorker>>,
+    /// Block state id -> block index, the game's block tick type: worldgen
+    /// schedules block ticks by default state id.
+    tick_blocks: Vec<u32>,
 }
 /// A proto chunk, or the position of one whose generation failed.
 enum VanillaProto {
@@ -64,11 +67,25 @@ impl VanillaTerrain {
             }
         }
         let loot = dir.parent().and_then(crate::structure_blocks::loot_data);
+        let mut tick_blocks = Vec::with_capacity(registry.len());
+        let mut last: Option<&str> = None;
+        let mut index = 0u32;
+        for id in 0..registry.len() {
+            let name = registry
+                .state(horizon_world::registry::BlockStateId(id as u32))
+                .map_or("", |s| s.name.as_str());
+            if last.is_some_and(|l| l != name) {
+                index += 1;
+            }
+            last = Some(name);
+            tick_blocks.push(index);
+        }
         Ok(Self {
             generator,
             biome_map,
             loot,
             query: std::sync::Mutex::new(None),
+            tick_blocks,
         })
     }
     /// The structure starts owned by a chunk (cached by the generator).
@@ -216,6 +233,30 @@ impl ChunkGenerator for VanillaTerrain {
                 Arc::make_mut(&mut out.sections[si as usize]).blocks =
                     Section::from_blocks(&values);
             }
+        }
+        // Ticks the features scheduled (leaves reshaped at a tree's edge,
+        // fluids of lakes and springs) run once the chunk is live, as
+        // LevelChunk takes over ProtoChunk's ticks.
+        let block_ticks: Vec<_> = chunk
+            .terrain
+            .block_ticks()
+            .pack(0)
+            .iter()
+            .filter_map(|t| {
+                let kind = *self.tick_blocks.get(t.kind.0 as usize)?;
+                Some(horizon_core::ticks::SavedTick {
+                    kind: horizon_core::ticks::TickTypeId(kind),
+                    ..*t
+                })
+            })
+            .collect();
+        let fluid_ticks = chunk.terrain.fluid_ticks().pack(0).to_vec();
+        if !block_ticks.is_empty() || !fluid_ticks.is_empty() {
+            out.saved = Some(Arc::new(crate::save::ChunkExtras {
+                block_ticks,
+                fluid_ticks,
+                ..Default::default()
+            }));
         }
         let base_section = chunk.terrain.min_y() >> 4;
         for (i, marks) in chunk.terrain.postprocessing().iter().enumerate() {
