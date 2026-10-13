@@ -329,12 +329,26 @@ fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
 }
 impl Audio {
     pub fn new(root: &Path) -> Self {
+        Self::with_output(root, true)
+    }
+    /// No output device: the dedicated server.
+    pub fn silent(root: &Path) -> Self {
+        Self::with_output(root, false)
+    }
+    fn with_output(root: &Path, output: bool) -> Self {
         let registry = SoundRegistry::load(root);
         let mixer = Arc::new(Mutex::new(Mixer::default()));
-        let (stream, live) = match Self::open(mixer.clone()) {
+        let opened = if output {
+            Self::open(mixer.clone())
+        } else {
+            Err("no output on a dedicated server".into())
+        };
+        let (stream, live) = match opened {
             Ok(v) => (Some(v), true),
             Err(e) => {
-                eprintln!("Horizon: audio unavailable: {e}");
+                if output {
+                    eprintln!("Horizon: audio unavailable: {e}");
+                }
                 (None, false)
             }
         };

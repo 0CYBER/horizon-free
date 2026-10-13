@@ -639,6 +639,32 @@ fn heightmaps(chunk: &Chunk, tables: &SaveTables) -> Tag {
         )
     }))
 }
+/// The heightmaps a ClientboundLevelChunkPacketData carries (the types with
+/// sendToClient: WORLD_SURFACE, MOTION_BLOCKING, MOTION_BLOCKING_NO_LEAVES),
+/// as (network id, packed longs) in Heightmap.Types order.
+pub fn client_heightmaps(chunk: &Chunk, tables: &SaveTables) -> Vec<(i32, Vec<i64>)> {
+    let kinds = [
+        (1, HeightmapType::WorldSurface),
+        (4, HeightmapType::MotionBlocking),
+        (5, HeightmapType::MotionBlockingNoLeaves),
+    ];
+    let mut maps: Vec<(i32, Heightmap)> = kinds
+        .iter()
+        .filter_map(|(id, k)| {
+            Heightmap::new(*k, MIN_Y, SECTIONS as i32 * 16)
+                .ok()
+                .map(|m| (*id, m))
+        })
+        .collect();
+    let view = HeightmapView { chunk, tables };
+    let mut refs: Vec<&mut Heightmap> = maps.iter_mut().map(|(_, m)| m).collect();
+    if Heightmap::prime(&view, &mut refs).is_err() {
+        return Vec::new();
+    }
+    maps.iter()
+        .map(|(id, m)| (*id, m.raw_data().iter().map(|&w| w as i64).collect()))
+        .collect()
+}
 /// Vanilla light layer (nibbles, index y<<8|z<<4|x, low nibble first).
 fn nibbles(light: &Light, sky: bool) -> Vec<u8> {
     let mut out = vec![0u8; 2048];

@@ -302,7 +302,8 @@ fn status_and_join() {
     });
     let v: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(v["version"]["protocol"], 777);
-    assert_eq!(v["description"]["text"], "Test - World");
+    // ServerStatus.CODEC writes a plain literal MOTD as a bare string.
+    assert_eq!(v["description"], "Test - World");
 
     // Join, receive the world, place a block, see another player arrive.
     let report = run(&mut s, move || {

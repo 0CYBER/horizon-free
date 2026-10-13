@@ -67,6 +67,8 @@ import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.AgeableMob;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.npc.villager.Villager;
 import net.minecraft.world.entity.ai.Brain;
 import net.minecraft.world.entity.ai.behavior.BehaviorControl;
 import net.minecraft.world.entity.ai.behavior.BlockPosTracker;
@@ -140,6 +142,10 @@ public final class VanillaMobAiOracle {
         }
     }
     static final List<String> TRACE = new ArrayList<>();
+    /** The entities a scenario ticks, in order: its mobs, then what they spawned. */
+    static final List<Entity> ENTS = new ArrayList<>();
+    static final Map<Entity, Integer> LABELS = new java.util.IdentityHashMap<>();
+    static final UUID PLAYER_UUID = new UUID(0x1234L, 0x5678L);
 
     static final class MobSpec {
         String type;
@@ -166,6 +172,12 @@ public final class VanillaMobAiOracle {
         String hand;
         List<MobSpec> mobs = new ArrayList<>();
         long levelSeed = 0;
+        /** The day time advances with the game time (sleeping, waking). */
+        boolean daycycle;
+        /** Blocks changed before a given tick: (tick, block or fill line). */
+        List<Object[]> timed = new ArrayList<>();
+        /** Boxes whose block changes are printed every tick. */
+        List<int[]> watches = new ArrayList<>();
         /** Blocks placed when the scenario starts, so their block entities start afresh and tick. */
         List<String[]> hearts = new ArrayList<>();
         /** ServerLevel.isSpawningMonsters during the scenario (a heart spawns creakings). */
@@ -192,6 +204,7 @@ public final class VanillaMobAiOracle {
                             case "rain" -> s.rain = true;
                             case "thunder" -> s.thunder = true;
                             case "levelseed" -> s.levelSeed = Long.parseLong(kv[1]);
+                            case "daycycle" -> s.daycycle = true;
                             case "spawning" -> s.spawning = true;
                             default -> throw new IllegalArgumentException(line);
                         }
@@ -199,6 +212,12 @@ public final class VanillaMobAiOracle {
                 }
                 case "origin" -> { s.originX = Integer.parseInt(f[1]); s.originZ = Integer.parseInt(f[2]); }
                 case "fill", "block" -> s.blocks.add(f);
+                case "at" -> s.timed.add(new Object[] {Integer.parseInt(f[1]), java.util.Arrays.copyOfRange(f, 2, f.length)});
+                case "watch" -> {
+                    int[] box = new int[6];
+                    for (int i = 0; i < 6; i++) box[i] = Integer.parseInt(f[i + 1]);
+                    s.watches.add(box);
+                }
                 case "heart" -> s.hearts.add(f);
                 case "hurt" -> s.hurts.add(new int[] {Integer.parseInt(f[1]), Integer.parseInt(f[2])});
                 case "player" -> {
@@ -425,8 +444,12 @@ public final class VanillaMobAiOracle {
         }
 
         void build(Scenario s, ServerLevel level) throws Exception {
+            for (String[] b : s.blocks) place(b, level);
+        }
+
+        static void place(String[] b, ServerLevel level) throws Exception {
             var blocks = level.holderLookup(Registries.BLOCK);
-            for (String[] b : s.blocks) {
+            {
                 if (b[0].equals("block")) {
                     BlockState state = BlockStateParser.parseForBlock(blocks, b[4], false).blockState();
                     level.setBlock(new BlockPos(Integer.parseInt(b[1]), Integer.parseInt(b[2]), Integer.parseInt(b[3])), state, 2 | 16);
@@ -453,7 +476,7 @@ public final class VanillaMobAiOracle {
             level.setThunderLevel(s.thunder ? 1.0F : 0.0F);
             if (s.player != null) {
                 if (player == null) {
-                    CommonListenerCookie cookie = CommonListenerCookie.createInitial(new GameProfile(new UUID(0x1234L, 0x5678L), "horizon-ai"), false);
+                    CommonListenerCookie cookie = CommonListenerCookie.createInitial(new GameProfile(PLAYER_UUID, "horizon-ai"), false);
                     player = new ServerPlayer(this, level, cookie.gameProfile(), cookie.clientInformation());
                     Connection connection = new Connection(PacketFlow.SERVERBOUND);
                     new EmbeddedChannel(connection);
@@ -479,14 +502,15 @@ public final class VanillaMobAiOracle {
             } else if (player != null) {
                 player.snapTo(s.originX + 5000, -60, s.originZ, 0.0F, 0.0F);
             }
-            List<Mob> mobs = new ArrayList<>();
+            ENTS.clear();
+            LABELS.clear();
             List<Brain<?>> brains = new ArrayList<>();
             List<Long> seeds = new ArrayList<>();
             int id = 100000;
             for (MobSpec spec : s.mobs) {
                 EntityType<?> type = BuiltInRegistries.ENTITY_TYPE.getValue(net.minecraft.resources.Identifier.parse(spec.type));
                 Mob mob = (Mob) type.create(level, EntitySpawnReason.COMMAND);
-                if (tracing(s)) field(Entity.class, "random").set(mob, new TracingRandom(0L, TRACE, mobs.size()));
+                if (tracing(s)) field(Entity.class, "random").set(mob, new TracingRandom(0L, TRACE, ENTS.size()));
                 mob.setId(id++);
                 mob.snapTo(spec.x, spec.y, spec.z, spec.yaw, 0.0F);
                 mob.setYHeadRot(spec.yaw);
@@ -495,36 +519,74 @@ public final class VanillaMobAiOracle {
                     if (mob instanceof AgeableMob a) a.setBaby(true);
                     else mob.setBaby(true);
                 }
+                List<Runnable> afterAdd = new ArrayList<>();
                 for (String flag : spec.flags) {
-                    if (flag.equals("persistent")) mob.setPersistenceRequired();
-                    else if (flag.equals("noai")) mob.setNoAi(true);
-                    else if (flag.equals("inlove")) ((net.minecraft.world.entity.animal.Animal) mob).setInLoveTime(600);
-                    else if (flag.equals("tame") && mob instanceof net.minecraft.world.entity.animal.equine.AbstractHorse horse) horse.setTamed(true);
-                    else if (flag.startsWith("age=")) ((AgeableMob) mob).setAge(Integer.parseInt(flag.substring(4)));
-                    else if (flag.startsWith("strength=")) method(net.minecraft.world.entity.animal.equine.Llama.class, "setStrength", int.class)
-                        .invoke(mob, Integer.parseInt(flag.substring(9)));
-                    else if (flag.equals("leashed") || flag.startsWith("leashto=")) {
-                        // Leashed once every mob exists (below).
+                    String[] kv = flag.split("=", 2);
+                    String v = kv.length > 1 ? kv[1] : "";
+                    switch (kv[0]) {
+                        case "persistent" -> mob.setPersistenceRequired();
+                        case "noai" -> mob.setNoAi(true);
+                        case "profession" -> {
+                            Villager villager = (Villager) mob;
+                            villager.setVillagerData(villager.getVillagerData().withProfession(level.registryAccess(),
+                                ResourceKey.create(Registries.VILLAGER_PROFESSION, net.minecraft.resources.Identifier.withDefaultNamespace(v))));
+                            villager.refreshBrain(level);
+                        }
+                        case "level" -> {
+                            Villager villager = (Villager) mob;
+                            villager.setVillagerData(villager.getVillagerData().withLevel(Integer.parseInt(v)));
+                        }
+                        case "xp" -> ((Villager) mob).setVillagerXp(Integer.parseInt(v));
+                        case "food" -> field(Villager.class, "foodLevel").setInt(mob, Integer.parseInt(v));
+                        case "age" -> ((AgeableMob) mob).setAge(Integer.parseInt(v));
+                        case "inv" -> {
+                            for (String item : v.split(",")) {
+                                String[] ic = item.split("\\*");
+                                ((Villager) mob).getInventory().addItem(new net.minecraft.world.item.ItemStack(
+                                    BuiltInRegistries.ITEM.getValue(net.minecraft.resources.Identifier.parse(ic[0])),
+                                    ic.length > 1 ? Integer.parseInt(ic[1]) : 1));
+                            }
+                        }
+                        case "gossip" -> {
+                            // gossip=player:minor_negative:100
+                            String[] g = v.split(":");
+                            UUID target = g[0].equals("player") ? PLAYER_UUID : UUID.fromString(g[0]);
+                            ((Villager) mob).getGossips().add(target,
+                                net.minecraft.world.entity.ai.gossip.GossipType.valueOf(g[1].toUpperCase(java.util.Locale.ROOT)), Integer.parseInt(g[2]));
+                        }
+                        case "slept" -> {
+                            long at = Long.parseLong(v);
+                            afterAdd.add(() -> mob.getBrain().setMemory(MemoryModuleType.LAST_SLEPT, at));
+                        }
+                        case "inlove" -> ((net.minecraft.world.entity.animal.Animal) mob).setInLoveTime(600);
+                        case "tame" -> { if (mob instanceof net.minecraft.world.entity.animal.equine.AbstractHorse horse) horse.setTamed(true); }
+                        case "strength" -> method(net.minecraft.world.entity.animal.equine.Llama.class, "setStrength", int.class)
+                            .invoke(mob, Integer.parseInt(v));
+                        case "leashed", "leashto" -> {
+                            // Leashed once every mob exists (below).
+                        }
+                        default -> throw new IllegalArgumentException(flag);
                     }
-                    else throw new IllegalArgumentException(flag);
                 }
                 level.addFreshEntity(mob);
+                for (Runnable r : afterAdd) r.run();
                 mob.getRandom().setSeed(spec.seed);
                 Brain<?> brain = mob.getBrain();
                 @SuppressWarnings("unchecked")
                 Map<Object, Sensor<?>> sensors = (Map<Object, Sensor<?>>) get(brain, "sensors");
                 for (Sensor<?> sensor : sensors.values()) sensor.randomlyDelayStart(mob.getRandom());
                 seedGates(brain, spec.seed);
-                mobs.add(mob);
+                LABELS.put(mob, ENTS.size());
+                ENTS.add(mob);
                 brains.add(brain);
                 seeds.add(spec.seed);
             }
             // Leads: to the player ("leashed") or to the n-th mob ("leashto=n").
             for (int i = 0; i < s.mobs.size(); i++) {
                 for (String flag : s.mobs.get(i).flags) {
-                    if (flag.equals("leashed")) ((net.minecraft.world.entity.Leashable) mobs.get(i)).setLeashedTo(player, true);
-                    else if (flag.startsWith("leashto=")) ((net.minecraft.world.entity.Leashable) mobs.get(i))
-                        .setLeashedTo(mobs.get(Integer.parseInt(flag.substring(8))), true);
+                    if (flag.equals("leashed")) ((net.minecraft.world.entity.Leashable) ENTS.get(i)).setLeashedTo(player, true);
+                    else if (flag.startsWith("leashto=")) ((net.minecraft.world.entity.Leashable) ENTS.get(i))
+                        .setLeashedTo(ENTS.get(Integer.parseInt(flag.substring(8))), true);
                 }
             }
             // Hearts start with the scenario: their tickers have not run during the warm-up.
@@ -541,12 +603,11 @@ public final class VanillaMobAiOracle {
             List<Mob> created = new ArrayList<>();
             Field factoryField = field(EntityType.class, "factory");
             Object creakingFactory = factoryField.get(EntityTypes.CREAKING);
-            final List<Mob> mobsView = mobs;
             factoryField.set(EntityTypes.CREAKING, (EntityType.EntityFactory<Creaking>) (type, lvl) -> {
                 Creaking c = new Creaking(type, lvl);
                 try {
                     long seed = 1000 + created.size();
-                    if (tracing(s)) field(Entity.class, "random").set(c, new TracingRandom(0L, TRACE, mobsView.size() + created.size()));
+                    if (tracing(s)) field(Entity.class, "random").set(c, new TracingRandom(0L, TRACE, ENTS.size() + created.size()));
                     c.getRandom().setSeed(seed);
                     @SuppressWarnings("unchecked")
                     Map<Object, Sensor<?>> cs = (Map<Object, Sensor<?>>) get(c.getBrain(), "sensors");
@@ -562,14 +623,25 @@ public final class VanillaMobAiOracle {
             boolean spawnMonsters = this.getGameRules().get(GameRules.SPAWN_MONSTERS);
             this.getGameRules().set(GameRules.SPAWN_MOBS, s.spawning, this);
             this.getGameRules().set(GameRules.SPAWN_MONSTERS, s.spawning, this);
-            int adopted = 0;
             level.getRandom().setSeed(s.levelSeed);
+            // Loot drawn from random sequences starts afresh in every scenario.
+            this.getRandomSequences().clear();
             SOUNDS.clear();
             Method tickTime = method(ServerLevel.class, "tickTime");
             Object manager = get(level, "entityManager");
             Method managerTick = method(manager.getClass(), "tick");
-            for (int i = 0; i < mobs.size(); i++) print(0, i, mobs.get(i));
+            Map<BlockPos, BlockState> watched = new java.util.LinkedHashMap<>();
+            for (int[] box : s.watches)
+                for (int y = box[1]; y <= box[4]; y++)
+                    for (int z = box[2]; z <= box[5]; z++)
+                        for (int x = box[0]; x <= box[3]; x++) {
+                            BlockPos pos = new BlockPos(x + s.originX, y, z + s.originZ);
+                            watched.put(pos, level.getBlockState(pos));
+                        }
+            for (int i = 0; i < ENTS.size(); i++) print(0, i, ENTS.get(i));
             for (int t = 1; t <= s.ticks; t++) {
+                if (s.daycycle) this.clockManager().setTotalTicks(clock, s.time + t);
+                for (Object[] e : s.timed) if ((Integer) e[0] == t) place((String[]) e[1], level);
                 level.environmentAttributes().invalidateTickCache();
                 level.updateSkyBrightness();
                 tickTime.invoke(level);
@@ -591,47 +663,96 @@ public final class VanillaMobAiOracle {
                 TracingRandom.tick = t;
                 TracingRandom.on = tracing(s) && t >= traceFrom() && t <= traceTo();
                 SOUNDS.clear();
-                for (int i = 0; i < mobs.size(); i++) {
+                for (int i = 0; i < ENTS.size(); i++) {
                     // Villager.refreshBrain builds a new brain with new gates: seed those too.
-                    if (mobs.get(i).getBrain() != brains.get(i)) {
-                        brains.set(i, mobs.get(i).getBrain());
+                    if (ENTS.get(i) instanceof Mob m && m.getBrain() != brains.get(i)) {
+                        brains.set(i, m.getBrain());
                         seedGates(brains.get(i), seeds.get(i));
                     }
                 }
                 for (int[] hurt : s.hurts) {
-                    if (hurt[0] == t && hurt[1] < mobs.size() && !mobs.get(hurt[1]).isRemoved())
-                        mobs.get(hurt[1]).hurtServer(level, level.damageSources().playerAttack(player), 1.0F);
+                    if (hurt[0] == t && hurt[1] < ENTS.size() && ENTS.get(hurt[1]) instanceof LivingEntity hurtMob && !hurtMob.isRemoved())
+                        hurtMob.hurtServer(level, level.damageSources().playerAttack(player), 1.0F);
                 }
-                for (Mob mob : mobs) {
-                    if (mob.isRemoved()) continue;
-                    mob.checkDespawn();
-                    if (mob.isRemoved()) continue;
-                    level.tickNonPassenger(mob);
+                for (Entity e : List.copyOf(ENTS)) {
+                    if (e.isRemoved()) continue;
+                    e.checkDespawn();
+                    if (e.isRemoved()) continue;
+                    level.tickNonPassenger(e);
                 }
                 if (!heartPositions.isEmpty()) level.tickBlockEntities();
                 managerTick.invoke(manager);
-                // Created mobs that made it into the level, in creation order.
-                for (; adopted < created.size(); adopted++) {
-                    Mob c = created.get(adopted);
-                    if (!c.isRemoved()) {
-                        mobs.add(c);
-                        brains.add(c.getBrain());
-                        seeds.add(1000L + adopted);
+                // Villagers the tick spawned (babies) and a heart's creakings tick from the next
+                // one, in the order they were added, with a seeded random of their own. Other
+                // newcomers (animal babies, dropped items) are left out, as the probe leaves them.
+                List<Entity> fresh = new ArrayList<>();
+                for (Entity e : level.getAllEntities())
+                    if (!LABELS.containsKey(e) && (e instanceof Villager || created.contains(e))) fresh.add(e);
+                fresh.sort(java.util.Comparator.comparingInt(Entity::getId));
+                for (Entity e : fresh) {
+                    int index = ENTS.size();
+                    int made = created.indexOf(e);
+                    if (made >= 0) {
+                        // A heart's creaking: seeded when it was created.
+                        LABELS.put(e, index);
+                        ENTS.add(e);
+                        seeds.add(1000L + made);
+                        brains.add(((Mob) e).getBrain());
+                        continue;
+                    }
+                    long seed = spawnSeed(index);
+                    LABELS.put(e, index);
+                    ENTS.add(e);
+                    seeds.add(seed);
+                    if (e instanceof Mob mob) {
+                        // LivingEntity's constructor turns the head at random (Math.random):
+                        // face it the way the body does, as the probe's newborns.
+                        mob.setYHeadRot(mob.getYRot());
+                        mob.yHeadRotO = mob.getYRot();
+                        if (tracing(s)) field(Entity.class, "random").set(mob, new TracingRandom(0L, TRACE, index));
+                        mob.getRandom().setSeed(seed);
+                        @SuppressWarnings("unchecked")
+                        Map<Object, Sensor<?>> sensors = (Map<Object, Sensor<?>>) get(mob.getBrain(), "sensors");
+                        for (Sensor<?> sensor : sensors.values()) sensor.randomlyDelayStart(mob.getRandom());
+                        seedGates(mob.getBrain(), seed);
+                        brains.add(mob.getBrain());
+                    } else {
+                        brains.add(null);
                     }
                 }
-                for (int i = 0; i < mobs.size(); i++) print(t, i, mobs.get(i));
+                for (int i = 0; i < ENTS.size(); i++) print(t, i, ENTS.get(i));
                 for (BlockPos h : heartPositions) printHeart(t, level, h);
                 for (String sound : SOUNDS) out.println(t + " sound " + sound);
+                for (var w : watched.entrySet()) {
+                    BlockState now = level.getBlockState(w.getKey());
+                    if (now != w.getValue()) {
+                        w.setValue(now);
+                        BlockPos p = w.getKey();
+                        out.println(t + " block " + (p.getX() - s.originX) + "," + p.getY() + "," + (p.getZ() - s.originZ) + " " + stateName(now));
+                    }
+                }
                 for (String line : TRACE) out.println(line);
                 TRACE.clear();
             }
-            for (Mob mob : mobs) mob.discard();
+            for (Entity e : ENTS) e.discard();
             for (BlockPos h : heartPositions) level.setBlock(h, net.minecraft.world.level.block.Blocks.AIR.defaultBlockState(), 2 | 16);
             factoryField.set(EntityTypes.CREAKING, creakingFactory);
             this.getGameRules().set(GameRules.SPAWN_MOBS, spawnMobs, this);
             this.getGameRules().set(GameRules.SPAWN_MONSTERS, spawnMonsters, this);
             managerTick.invoke(manager);
             out.flush();
+        }
+
+        /** The random seed of the entity a scenario spawned at this index. */
+        static long spawnSeed(int index) { return 1000L + 7919L * index; }
+
+        static String stateName(BlockState state) {
+            StringBuilder sb = new StringBuilder(BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString());
+            List<String> props = new ArrayList<>();
+            state.getValues().forEach(v -> props.add(v.toString()));
+            props.sort(null);
+            if (!props.isEmpty()) sb.append('[').append(String.join(",", props)).append(']');
+            return sb.toString();
         }
 
         /** A heart's block state and block entity, and the level random. */
@@ -663,16 +784,44 @@ public final class VanillaMobAiOracle {
         }
 
         static void seedGate(Object behavior, long seed) throws Exception {
-            if (!(behavior instanceof GateBehavior<?>)) return;
-            ShufflingList<?> list = (ShufflingList<?>) field(GateBehavior.class, "behaviors").get(behavior);
-            field(ShufflingList.class, "random").set(list, new net.minecraft.world.level.levelgen.LegacyRandomSource(seed));
-            for (Object child : list) seedGate(child, seed);
+            seedLists(behavior, seed, java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>()), 0);
+        }
+
+        /**
+         * Seeds every ShufflingList a behaviour holds: a GateBehavior's, and the ones TriggerGate
+         * captures in its lambdas (BehaviorBuilder's one-shots), found through their fields.
+         */
+        static void seedLists(Object o, long seed, Set<Object> seen, int depth) throws Exception {
+            if (o == null || depth > 8 || !seen.add(o)) return;
+            if (o instanceof ShufflingList<?> list) {
+                field(ShufflingList.class, "random").set(list, new net.minecraft.world.level.levelgen.LegacyRandomSource(seed));
+                for (Object child : list) seedLists(child, seed, seen, depth + 1);
+                return;
+            }
+            String name = o.getClass().getName();
+            if (!name.startsWith("net.minecraft.world.entity.ai.behavior") || o instanceof Enum<?>) return;
+            for (Class<?> c = o.getClass(); c != null && c.getName().startsWith("net.minecraft"); c = c.getSuperclass()) {
+                for (Field f : c.getDeclaredFields()) {
+                    if (java.lang.reflect.Modifier.isStatic(f.getModifiers()) || f.getType().isPrimitive()) continue;
+                    f.setAccessible(true);
+                    Object v = f.get(o);
+                    if (v instanceof Iterable<?> it && !(v instanceof ShufflingList<?>)) {
+                        for (Object x : it) seedLists(x, seed, seen, depth + 1);
+                    } else if (v instanceof com.mojang.datafixers.util.Pair<?, ?> pair) {
+                        seedLists(pair.getFirst(), seed, seen, depth + 1);
+                        seedLists(pair.getSecond(), seed, seen, depth + 1);
+                    } else {
+                        seedLists(v, seed, seen, depth + 1);
+                    }
+                }
+            }
         }
 
         static String who(Entity e) {
             if (e == null) return "none";
             if (e instanceof ServerPlayer) return "player";
-            return "e" + e.getId();
+            Integer label = LABELS.get(e);
+            return "e" + (label != null ? 100000 + label : e.getId());
         }
 
         static String goals(GoalSelector selector) {
@@ -705,13 +854,24 @@ public final class VanillaMobAiOracle {
             return v.getClass().getSimpleName();
         }
 
-        void print(int t, int i, Mob m) throws Exception {
+        void print(int t, int i, Entity e) throws Exception {
             StringBuilder sb = new StringBuilder();
             sb.append(t).append(' ').append(i);
-            if (m.isRemoved()) {
-                out.println(sb.append(" removed ").append(m.getRemovalReason()));
+            if (e.isRemoved()) {
+                out.println(sb.append(" removed ").append(e.getRemovalReason()));
                 return;
             }
+            if (e instanceof ItemEntity item) {
+                sb.append("\tp ").append(d(item.getX())).append(',').append(d(item.getY())).append(',').append(d(item.getZ()));
+                Vec3 v = item.getDeltaMovement();
+                sb.append("\tv ").append(d(v.x)).append(',').append(d(v.y)).append(',').append(d(v.z));
+                sb.append("\tg ").append(item.onGround() ? 1 : 0).append(item.horizontalCollision ? 1 : 0);
+                sb.append("\titem ").append(stack(item.getItem())).append(' ').append(item.getAge()).append(' ')
+                    .append(field(ItemEntity.class, "pickupDelay").getInt(item));
+                out.println(sb);
+                return;
+            }
+            Mob m = (Mob) e;
             sb.append("\tp ").append(d(m.getX())).append(',').append(d(m.getY())).append(',').append(d(m.getZ()));
             Vec3 v = m.getDeltaMovement();
             sb.append("\tv ").append(d(v.x)).append(',').append(d(v.y)).append(',').append(d(v.z));
@@ -752,7 +912,50 @@ public final class VanillaMobAiOracle {
                 mem.sort(null);
                 sb.append("\tmem ").append(String.join(" ", mem));
             }
+            if (m instanceof Villager villager) sb.append("\tvx ").append(villager(villager));
             out.println(sb);
+        }
+
+        static String stack(net.minecraft.world.item.ItemStack stack) {
+            if (stack.isEmpty()) return "-";
+            return BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath() + "*" + stack.getCount();
+        }
+
+        static String uuidLabel(UUID uuid) {
+            if (uuid.equals(PLAYER_UUID)) return "player";
+            for (Entity e : ENTS) if (e.getUUID().equals(uuid)) return who(e);
+            return uuid.toString();
+        }
+
+        /** A villager's data, food, inventory slots, gossip and offers. */
+        static String villager(Villager v) throws Exception {
+            StringBuilder sb = new StringBuilder();
+            var data = v.getVillagerData();
+            sb.append("prof ").append(data.profession().unwrapKey().get().identifier().getPath()).append(" lvl ").append(data.level())
+                .append(" xp ").append(v.getVillagerXp()).append(" food ").append(field(Villager.class, "foodLevel").getInt(v))
+                .append(" age ").append(v.getAge());
+            List<String> slots = new ArrayList<>();
+            var inv = v.getInventory();
+            for (int k = 0; k < inv.getContainerSize(); k++) slots.add(stack(inv.getItem(k)));
+            while (!slots.isEmpty() && slots.getLast().equals("-")) slots.removeLast();
+            sb.append(" inv ").append(slots.isEmpty() ? "-" : String.join(",", slots));
+            List<String> gossips = new ArrayList<>();
+            v.getGossips().getGossipEntries().forEach((uuid, types) -> types.forEach((type, value) ->
+                gossips.add(uuidLabel(uuid) + ":" + type.getSerializedName() + "=" + value)));
+            gossips.sort(null);
+            sb.append(" gossip ").append(gossips.isEmpty() ? "-" : String.join(",", gossips));
+            sb.append(" rep ").append(v.getGossips().getReputation(PLAYER_UUID, x -> true));
+            sb.append(" sleep ").append(v.getSleepingPos().map(Server::pos).orElse("-"));
+            Object offers = get(v, "offers");
+            if (offers != null) {
+                List<String> list = new ArrayList<>();
+                for (var o : (net.minecraft.world.item.trading.MerchantOffers) offers) {
+                    list.add(stack(o.getBaseCostA()) + "+" + stack(o.getCostB()) + ">" + stack(o.getResult()) + "/" + o.getUses() + "/"
+                        + o.getMaxUses() + "/" + o.getDemand() + "/" + o.getSpecialPriceDiff());
+                }
+                sb.append(" offers ").append(list.isEmpty() ? "-" : String.join(",", list));
+            }
+            return sb.toString();
         }
 
         static String name(MemoryModuleType<?> type) {

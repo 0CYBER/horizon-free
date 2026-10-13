@@ -8,7 +8,6 @@ use horizon_client::{
     mobs::{Mob, Species, spawning, villager},
 };
 use horizon_core::{geometry::Vec3, random::RandomSource};
-use std::collections::HashMap;
 
 fn block_of(p: Vec3) -> [i32; 3] {
     [p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32]
@@ -59,68 +58,13 @@ impl Game<'_> {
         };
         let now = self.world.game_time;
         let items = &self.res.items;
-        let max = |item: &str| items.get(item).map_or(64, |i| i.max_stack);
-        // Villager.gossip: both must be past their cool-down.
-        let ready = {
-            let ea = villager::ext(&self.mobs[ia]);
-            let eb = villager::ext(&self.mobs[ib]);
-            ea.is_none_or(|e| e.can_gossip(now)) && eb.is_none_or(|e| e.can_gossip(now))
-        };
-        let mut golem = false;
-        if ready {
-            let source = villager::ext(&self.mobs[ib]).cloned().unwrap_or_default();
-            let me = &mut self.mobs[ia];
-            let mut random = me.random.clone();
-            let e = villager::ext_mut(me);
-            e.gossips.transfer_from(&source.gossips, &mut random, 10);
-            e.last_gossip_time = now;
-            me.random = random;
-            villager::ext_mut(&mut self.mobs[ib]).last_gossip_time = now;
-            golem = true;
+        let meeting = villager::meet(&mut self.mobs, ia, ib, now, |item| {
+            items.get(item).map_or(64, |i| i.max_stack)
+        });
+        for stack in meeting.thrown {
+            self.villager_throw(meeting.from, meeting.eye, meeting.to, stack);
         }
-        // Surplus food goes to a hungry neighbour (farmers hand it to anyone).
-        let farmer = villager::is_farmer(&self.mobs[ia]);
-        let (from, eye, to) = (
-            self.mobs[ia].position,
-            self.mobs[ia].eye_y(),
-            self.mobs[ib].position,
-        );
-        let wants_more = villager::ext(&self.mobs[ib]).is_none_or(|e| e.wants_more_food());
-        let excess = villager::ext(&self.mobs[ia]).is_some_and(|e| e.has_excess_food());
-        let mut thrown = Vec::new();
-        if excess
-            && (farmer || wants_more)
-            && let Some(s) = villager::ext_mut(&mut self.mobs[ia])
-                .take_half_stack(|s| villager::food_points(&s.item) > 0, max)
-        {
-            thrown.push(s);
-        }
-        // A farmer's wheat.
-        if farmer
-            && villager::ext(&self.mobs[ia]).is_some_and(|e| e.count_item("minecraft:wheat") > 32)
-            && let Some(s) = villager::ext_mut(&mut self.mobs[ia])
-                .take_half_stack(|s| &*s.item == "minecraft:wheat", max)
-        {
-            thrown.push(s);
-        }
-        // Wares the neighbour's profession asks for and ours does not.
-        let theirs = villager::requested_items(&self.mobs[ib]);
-        let mine = villager::requested_items(&self.mobs[ia]);
-        let wanted: Vec<&str> = theirs
-            .iter()
-            .copied()
-            .filter(|i| !mine.contains(i))
-            .collect();
-        if !wanted.is_empty()
-            && let Some(s) = villager::ext_mut(&mut self.mobs[ia])
-                .take_half_stack(|s| wanted.contains(&&*s.item), max)
-        {
-            thrown.push(s);
-        }
-        for stack in thrown {
-            self.villager_throw(from, eye, to, stack);
-        }
-        if golem {
+        if meeting.gossiped {
             self.villager_golem_check(a, 5);
         }
     }
@@ -219,46 +163,39 @@ impl Game<'_> {
     /// `VillagerMakeLove.tryToGiveBirth`: both eat, a free bed within 48
     /// blocks is taken for the child, who is a baby villager of one of
     /// three villager types.
-    pub(super) fn villager_birth(&mut self, parent: u32, partner: u32) {
+    pub(super) fn villager_birth(
+        &mut self,
+        parent: u32,
+        partner: u32,
+        child: Option<([i32; 3], Option<u8>)>,
+    ) {
         let (Some(ia), Some(ib)) = (self.villager_index(parent), self.villager_index(partner))
         else {
             return;
         };
-        villager::ext_mut(&mut self.mobs[ia]).eat_and_digest();
         villager::ext_mut(&mut self.mobs[ib]).eat_and_digest();
         let from = self.mobs[ia].position;
-        let angry = |g: &mut Self| {
+        let Some((bed, variant)) = child else {
             for i in [ia, ib] {
-                let p = g.mobs[i].position;
-                g.particles_at("angry_villager", [p.x, p.y + 1.8, p.z]);
+                let p = self.mobs[i].position;
+                self.particles_at("angry_villager", [p.x, p.y + 1.8, p.z]);
             }
-        };
-        let Some(bed) = self.take_vacant_bed(block_of(from)) else {
-            angry(self);
             return;
         };
-        // Villager.getBreedOffspring: half the biome's type, a quarter each parent's.
-        let roll = self.mobs[ia].random.next_double();
-        let kind_of = |m: &Mob| m.extra.variant;
-        let facts = self.biome_facts(
-            from.x.floor() as i32,
-            from.y.floor() as i32,
-            from.z.floor() as i32,
-        );
-        let variant = if roll < 0.5 {
+        let variant = variant.unwrap_or_else(|| {
+            let facts = self.biome_facts(
+                from.x.floor() as i32,
+                from.y.floor() as i32,
+                from.z.floor() as i32,
+            );
             spawning::villager_type(&facts)
-        } else if roll < 0.75 {
-            kind_of(&self.mobs[ia])
-        } else {
-            kind_of(&self.mobs[ib])
-        };
+        });
+        self.mobs[ib].extra.age = 6000;
         let Some(id) =
             self.spawn_mob_for("minecraft:villager", [from.x, from.y, from.z], true, true)
         else {
             return;
         };
-        self.mobs[ia].extra.age = 6000;
-        self.mobs[ib].extra.age = 6000;
         if let Some(child) = self.mobs.iter_mut().find(|m| m.id == id) {
             child.extra.variant = variant;
             child.extra.variant2 = villager::NONE;
@@ -266,44 +203,6 @@ impl Game<'_> {
             child.extra.bed = Some(bed);
         }
         self.particles_at("heart", [from.x, from.y + 1.8, from.z]);
-    }
-    /// `PoiManager.take(HOME, ..., 48)`: the nearest unclaimed bed head.
-    fn take_vacant_bed(&self, from: [i32; 3]) -> Option<[i32; 3]> {
-        let claimed: Vec<[i32; 3]> = self
-            .mobs
-            .iter()
-            .filter(|m| m.species() == Species::Villager)
-            .filter_map(|m| m.extra.bed)
-            .collect();
-        let mut known: HashMap<u32, bool> = HashMap::new();
-        let mut best: Option<(i32, [i32; 3])> = None;
-        for y in from[1] - 8..=from[1] + 8 {
-            for z in from[2] - 48..=from[2] + 48 {
-                for x in from[0] - 48..=from[0] + 48 {
-                    let state = self.world.block(x, y, z);
-                    if self.res.facts.is_air(state) {
-                        continue;
-                    }
-                    let free_head = *known.entry(state.0).or_insert_with(|| {
-                        self.res.facts.get(state).name.ends_with("_bed")
-                            && self.res.assets.registry.state(state).is_some_and(|s| {
-                                s.properties.get("part").map(String::as_str) == Some("head")
-                                    && s.properties.get("occupied").map(String::as_str)
-                                        != Some("true")
-                            })
-                    });
-                    let d = (x - from[0]).pow(2) + (y - from[1]).pow(2) + (z - from[2]).pow(2);
-                    if free_head
-                        && d <= 48 * 48
-                        && !claimed.contains(&[x, y, z])
-                        && best.is_none_or(|(b, _)| d < b)
-                    {
-                        best = Some((d, [x, y, z]));
-                    }
-                }
-            }
-        }
-        best.map(|(_, p)| p)
     }
     fn particles_at(&mut self, kind: &'static str, at: [f64; 3]) {
         if let Some(ty) = horizon_client::particles::ParticleType::from_name(kind) {

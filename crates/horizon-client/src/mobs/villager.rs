@@ -496,6 +496,144 @@ impl Ext {
         now < self.last_gossip_time || now >= self.last_gossip_time + 1200
     }
 }
+/// What a villager ticking later reads of another one this tick (vanilla
+/// reads the other villager itself).
+#[derive(Clone, Debug, Default)]
+pub struct Seen {
+    pub gossips: crate::gossip::Gossips,
+    pub last_gossip_time: i64,
+    /// `countFoodPointsInInventory`.
+    pub food_points: i32,
+    /// The `INTERACTION_TARGET` memory (play tag's chases).
+    pub interaction_target: Option<super::Who>,
+    /// The `PATH` memory, when not done: its previous and next nodes.
+    pub path_nodes: Option<(Option<[i32; 3]>, [i32; 3])>,
+    /// `LAST_SLEPT` and whether `GOLEM_DETECTED_RECENTLY` is remembered.
+    pub last_slept: Option<i64>,
+    pub golem_detected: bool,
+}
+impl Seen {
+    /// `Villager.wantsToSpawnGolem`.
+    pub fn wants_golem(&self, now: i64) -> bool {
+        self.last_slept.is_some_and(|t| now - t < 24000) && !self.golem_detected
+    }
+    /// `Villager.wantsMoreFood`.
+    pub fn wants_more_food(&self) -> bool {
+        self.food_points < 12
+    }
+}
+pub fn seen(m: &Mob) -> Seen {
+    let e = ext(m);
+    let (interaction_target, path_nodes, golem_detected, last_slept) =
+        super::villager_brain::seen_memories(m);
+    Seen {
+        gossips: e.map(|e| e.gossips.clone()).unwrap_or_default(),
+        last_gossip_time: e.map_or(0, |e| e.last_gossip_time),
+        food_points: e.map_or(0, Ext::food_in_inventory),
+        interaction_target,
+        path_nodes,
+        last_slept: last_slept.or(e.and_then(|e| e.last_slept)),
+        golem_detected,
+    }
+}
+/// What `TradeWithVillager.tick` hands over: stacks tossed from the first
+/// villager's hand (`from`, its eye height) toward the second (`to`), and
+/// whether the gossip happened (`spawnGolemIfNeeded` follows).
+pub struct Meeting {
+    pub thrown: Vec<ItemStack>,
+    pub from: horizon_core::geometry::Vec3,
+    pub eye: f64,
+    pub to: horizon_core::geometry::Vec3,
+    pub gossiped: bool,
+}
+/// `TradeWithVillager.tick` for villagers `a` and `b` (indices into `mobs`):
+/// `Villager.gossip` (at most once in 1200 ticks for both), then surplus
+/// food and wanted wares taken out of `a`'s inventory.
+pub fn meet(
+    mobs: &mut [Mob],
+    a: usize,
+    b: usize,
+    now: i64,
+    max_stack: impl Fn(&str) -> u32,
+) -> Meeting {
+    let ready = ext(&mobs[a]).is_none_or(|e| e.can_gossip(now))
+        && ext(&mobs[b]).is_none_or(|e| e.can_gossip(now));
+    if ready {
+        let source = ext(&mobs[b]).map(|e| e.gossips.clone()).unwrap_or_default();
+        let me = &mut mobs[a];
+        let mut random = me.random.clone();
+        let e = ext_mut(me);
+        e.gossips.transfer_from(&source, &mut random, 10);
+        e.last_gossip_time = now;
+        me.random = random;
+        ext_mut(&mut mobs[b]).last_gossip_time = now;
+    }
+    // Surplus food goes to a hungry neighbour (farmers hand it to anyone).
+    let farmer = is_farmer(&mobs[a]);
+    let wants_more = ext(&mobs[b]).is_none_or(Ext::wants_more_food);
+    let excess = ext(&mobs[a]).is_some_and(Ext::has_excess_food);
+    let mut thrown = Vec::new();
+    if excess
+        && (farmer || wants_more)
+        && let Some(s) =
+            ext_mut(&mut mobs[a]).take_half_stack(|s| food_points(&s.item) > 0, &max_stack)
+    {
+        thrown.push(s);
+    }
+    // A farmer's wheat.
+    if farmer
+        && ext(&mobs[a]).is_some_and(|e| e.count_item("minecraft:wheat") > 32)
+        && let Some(s) =
+            ext_mut(&mut mobs[a]).take_half_stack(|s| &*s.item == "minecraft:wheat", &max_stack)
+    {
+        thrown.push(s);
+    }
+    // Wares the neighbour's profession asks for and ours does not.
+    let theirs = requested_items(&mobs[b]);
+    let mine = requested_items(&mobs[a]);
+    let wanted: Vec<&str> = theirs
+        .iter()
+        .copied()
+        .filter(|i| !mine.contains(i))
+        .collect();
+    if !wanted.is_empty()
+        && let Some(s) =
+            ext_mut(&mut mobs[a]).take_half_stack(|s| wanted.contains(&&*s.item), &max_stack)
+    {
+        thrown.push(s);
+    }
+    Meeting {
+        thrown,
+        from: mobs[a].position,
+        eye: mobs[a].eye_y(),
+        to: mobs[b].position,
+        gossiped: ready,
+    }
+}
+/// `PoiManager.take(HOME, ..., 48)`: the nearest bed head not `claimed`
+/// (`free_head`: a bed head that is not occupied).
+pub fn take_vacant_bed(
+    claimed: &[[i32; 3]],
+    from: [i32; 3],
+    mut free_head: impl FnMut(i32, i32, i32) -> bool,
+) -> Option<[i32; 3]> {
+    let mut best: Option<(i32, [i32; 3])> = None;
+    for y in from[1] - 8..=from[1] + 8 {
+        for z in from[2] - 48..=from[2] + 48 {
+            for x in from[0] - 48..=from[0] + 48 {
+                let d = (x - from[0]).pow(2) + (y - from[1]).pow(2) + (z - from[2]).pow(2);
+                if d <= 48 * 48
+                    && best.is_none_or(|(b, _)| d < b)
+                    && free_head(x, y, z)
+                    && !claimed.contains(&[x, y, z])
+                {
+                    best = Some((d, [x, y, z]));
+                }
+            }
+        }
+    }
+    best.map(|(_, p)| p)
+}
 /// `Villager.canBreed`: enough food, awake and an adult.
 pub fn can_breed(m: &Mob) -> bool {
     m.species() == Species::Villager
