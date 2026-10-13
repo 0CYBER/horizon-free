@@ -224,6 +224,24 @@ fn mip_chain(pixels: &[u8], size: u32, layers: u32) -> (Vec<u8>, u32) {
     }
     (out, levels)
 }
+/// What to tell a player whose system offers no usable graphics adapter.
+/// Vulkan is loaded at run time (the game links no graphics library), so a
+/// missing driver shows here rather than as a missing-DLL dialog.
+#[cfg(target_os = "windows")]
+const NO_GPU_DRIVER: &str = "No Vulkan graphics driver found: Horizon needs a GPU driver with Vulkan \
+     (vulkan-1.dll comes with it). Install the latest driver for your NVIDIA, AMD or Intel GPU \
+     and start the game again";
+#[cfg(target_os = "macos")]
+const NO_GPU_DRIVER: &str = "No Metal graphics device found";
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+const NO_GPU_DRIVER: &str = "No Vulkan graphics driver found: Horizon needs the Vulkan loader \
+     (libvulkan.so.1) and a Vulkan driver for your GPU (Mesa's, or NVIDIA's)";
+impl Renderer {
+    /// Sections with GPU buffers, for soak tests watching residency.
+    pub fn resident_sections(&self) -> usize {
+        self.sections.len()
+    }
+}
 impl Renderer {
     pub async fn new(
         window: Arc<Window>,
@@ -244,7 +262,8 @@ impl Renderer {
                 force_fallback_adapter: false,
                 ..Default::default()
             })
-            .await?;
+            .await
+            .map_err(|e| format!("{NO_GPU_DRIVER} ({e})"))?;
         let info = adapter.get_info();
         eprintln!(
             "Horizon renderer: {} ({:?}, {:?})",
