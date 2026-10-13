@@ -296,6 +296,37 @@ pub enum Special {
     RepairItem,
 }
 impl Special {
+    /// Every result the display of a learnable recipe can show
+    /// (`SlotDisplay.resolve*` of its result): empty when it is one stack.
+    pub fn result_variants(&self) -> Vec<ItemStack> {
+        match self {
+            // The result keeps the input's item: any item of the ingredient.
+            Self::Transmute { input, result, .. } if result.item.is_none() => {
+                let mut items: Vec<&String> = input.0.iter().collect();
+                items.sort();
+                items
+                    .into_iter()
+                    .map(|item| {
+                        let mut made = result.create();
+                        made.item = Arc::from(item.as_str());
+                        made
+                    })
+                    .collect()
+            }
+            // DyedSlotDemo: the target dyed.
+            Self::Dye { result, .. } => {
+                let mut made = result.create();
+                made.data_mut().dyed_color = Some(0);
+                vec![made]
+            }
+            // Any potion's tipped arrow.
+            Self::Imbue { result, .. } => crate::brewing::POTIONS
+                .iter()
+                .map(|p| result.create().with_potion(p.id))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
     /// The recipe-book displays of a learnable (non-custom) crafting recipe:
     /// its layout and result.
     pub fn book_displays(&self) -> Vec<(crate::recipe_book::Display, ItemStack)> {

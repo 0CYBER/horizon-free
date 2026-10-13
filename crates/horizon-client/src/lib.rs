@@ -54,6 +54,7 @@ pub mod hunger;
 pub mod input;
 pub mod item_data;
 pub mod item_render;
+pub mod item_tooltip;
 pub mod items;
 pub mod java_text;
 pub mod key_names;

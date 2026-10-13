@@ -26,6 +26,11 @@ fn main() -> horizon_client::Result<()> {
     let mut book = Book::build(&recipes, &items);
     book.set_display_ids(&index);
     let max = |s: &horizon_client::items::ItemStack| items.get(&s.item).map_or(64, |i| i.max_stack);
+    let names = horizon_client::creative::Names::load(root);
+    let translate = |k: &str| names.get(k).map(str::to_owned);
+    let tooltip = |s: &horizon_client::items::ItemStack| {
+        horizon_client::item_tooltip::lines(s, items.get(&s.item), &translate)
+    };
     let mut out = String::new();
     for line in cases.lines() {
         let case: Value = serde_json::from_str(line)?;
@@ -69,6 +74,7 @@ fn main() -> horizon_client::Result<()> {
             _ => BookType::Smoker,
         };
         let filtering = case["filtering"].as_bool().unwrap_or(false);
+        let query = case["search"].as_str().unwrap_or_default();
         for tab in book_type.tabs() {
             let collections = client.collections(&book, book_type, tab);
             let selected = |i: usize| match (&book.entries[i].display, book_type) {
@@ -85,6 +91,9 @@ fn main() -> horizon_client::Result<()> {
             let shown: Vec<_> = collections
                 .iter()
                 .filter(|c| c.entries.iter().any(|&i| selected(i)))
+                .filter(|c| {
+                    query.is_empty() || book.collection_matches(&c.entries, query, &tooltip)
+                })
                 .filter(|c| !filtering || c.entries.iter().any(|&i| craftable(i)))
                 .collect();
             let name = match tab {

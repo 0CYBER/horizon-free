@@ -423,7 +423,11 @@ impl Game<'_> {
             }
             if !query.is_empty()
                 && !book.collection_matches(&c.entries, &query, &|stack| {
-                    self.stack_tooltip(stack).into_iter().map(|l| l.0).collect()
+                    horizon_client::item_tooltip::lines(
+                        stack,
+                        self.res.items.get(&stack.item),
+                        &|k| self.res.names.get(k).map(str::to_owned),
+                    )
                 })
             {
                 continue;

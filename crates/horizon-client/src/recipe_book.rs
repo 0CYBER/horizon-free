@@ -157,6 +157,10 @@ pub struct Entry {
     pub group: Option<String>,
     pub display: Display,
     pub result: ItemStack,
+    /// Every stack its display can show as the result when that is more than
+    /// `result` (a map copy of any map, an arrow of any potion): the search
+    /// tree reads them all, the button shows the first.
+    pub variants: Vec<ItemStack>,
 }
 impl Entry {
     /// The ingredients that must be matched to craft it, in order.
@@ -306,6 +310,7 @@ impl Book {
                 // Custom recipes are never learnable; the others show one
                 // display per material count (TransmuteRecipe.display).
                 Recipe::Special(special) => {
+                    let variants = special.result_variants();
                     for (display, result) in special.book_displays() {
                         entries.push(Entry {
                             id: format!("minecraft:{name}"),
@@ -314,6 +319,7 @@ impl Book {
                             group: group(&grp),
                             display,
                             result,
+                            variants: variants.clone(),
                         });
                     }
                     continue;
@@ -326,6 +332,7 @@ impl Book {
                 group: group(&grp),
                 display,
                 result: result.create(),
+                variants: Vec::new(),
             });
         }
         for c in &recipes.cooking {
@@ -345,6 +352,7 @@ impl Book {
                 group: group(&c.group),
                 display: Display::Furnace(c.ingredient.clone()),
                 result: c.result.clone(),
+                variants: Vec::new(),
             });
         }
         let order = items
@@ -421,7 +429,17 @@ impl Book {
         tooltip: &dyn Fn(&ItemStack) -> Vec<String>,
     ) -> bool {
         let query = query.to_lowercase();
-        let results: Vec<&ItemStack> = entries.iter().map(|&i| &self.entries[i].result).collect();
+        let results: Vec<&ItemStack> = entries
+            .iter()
+            .flat_map(|&i| {
+                let e = &self.entries[i];
+                if e.variants.is_empty() {
+                    std::slice::from_ref(&e.result).iter()
+                } else {
+                    e.variants.iter()
+                }
+            })
+            .collect();
         let in_lines = |text: &str| {
             results
                 .iter()
@@ -747,6 +765,7 @@ mod tests {
             group: group.map(str::to_owned),
             display: Display::Shapeless(vec![ing(&["minecraft:stick"])]),
             result: ItemStack::new("minecraft:stick", 1),
+            variants: Vec::new(),
         };
         let book = Book {
             entries: vec![
@@ -793,6 +812,7 @@ mod tests {
                 group: None,
                 display: Display::Shapeless(Vec::new()),
                 result: ItemStack::new("minecraft:stick", 4),
+                variants: Vec::new(),
             }],
             placements: HashMap::new(),
             order: HashMap::new(),
