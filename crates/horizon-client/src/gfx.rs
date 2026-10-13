@@ -99,6 +99,8 @@ pub struct Frame<'a> {
     pub night_vision: f32,
     /// Torch flicker added to the block light factor of 1.4.
     pub block_flicker: f32,
+    /// Blur and grade the frame under a Horizon-style menu (`post`).
+    pub post: Option<crate::post::PostGrade>,
 }
 /// One frame of the world border wall (`WorldBorderRenderer.render`).
 #[derive(Clone, Debug)]
@@ -168,6 +170,8 @@ pub struct Renderer {
     reachable_from: Option<SectionKey>,
     visibility_dirty: bool,
     pub hud: HudRenderer,
+    /// The menus' backdrop blur, made on first use.
+    post: Option<crate::post::Post>,
     pub info: wgpu::AdapterInfo,
     pub suspended: bool,
     pub drawn_sections: usize,
@@ -1126,6 +1130,7 @@ impl Renderer {
             reachable_from: None,
             visibility_dirty: true,
             hud,
+            post: None,
             info,
             suspended: size.width == 0 || size.height == 0,
             drawn_sections: 0,
@@ -1906,6 +1911,23 @@ impl Renderer {
                 pass.set_pipeline(pipeline);
                 pass.draw_indexed(0..6, (i * 4) as i32, 0..1);
             }
+        }
+        if let Some(grade) = &frame.post
+            && self.config.usage.contains(wgpu::TextureUsages::COPY_SRC)
+        {
+            let format = self.config.format;
+            let device = &self.device;
+            self.post
+                .get_or_insert_with(|| crate::post::Post::new(device, format))
+                .apply(
+                    &self.device,
+                    &self.queue,
+                    &mut encoder,
+                    &surface_frame.texture,
+                    &view_target,
+                    [self.config.width, self.config.height],
+                    grade,
+                );
         }
         self.hud.draw(
             &self.device,

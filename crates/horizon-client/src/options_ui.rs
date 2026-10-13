@@ -92,13 +92,13 @@ fn chat_px(caption: &str, px: f32) -> Text {
         &[tr(caption), Text::literal((px as i32).to_string())],
     )
 }
-enum Kind {
+pub(crate) enum Kind {
     /// Slider position 0..1.
     Slider(f32),
     Cycle,
 }
 impl Opt {
-    fn caption(self) -> &'static str {
+    pub(crate) fn caption(self) -> &'static str {
         match self {
             Opt::Fov => "options.fov",
             Opt::RenderDistance => "options.renderDistance",
@@ -155,7 +155,7 @@ impl Opt {
             Opt::JapaneseGlyphs => "options.japaneseGlyphVariants",
         }
     }
-    fn kind(self, s: &Settings) -> Kind {
+    pub(crate) fn kind(self, s: &Settings) -> Kind {
         let unit = |v: f32, lo: f32, hi: f32| Kind::Slider(((v - lo) / (hi - lo)).clamp(0.0, 1.0));
         match self {
             Opt::Fov => unit(s.fov, 30.0, 110.0),
@@ -590,7 +590,12 @@ pub enum Event {
 pub struct OptionsUi {
     pub stack: Vec<Page>,
     scroll: f32,
-    dragging: Option<Opt>,
+    pub(crate) dragging: Option<Opt>,
+    /// Horizon style: the selected sidebar section, the one last drawn and
+    /// the rows' scroll in dp (`options_horizon`).
+    pub section: usize,
+    pub(crate) section_shown: Option<usize>,
+    pub(crate) hscroll: f32,
     /// Key Binds: the mapping waiting for a key.
     pub selected_key: Option<&'static str>,
     pub languages: Vec<LanguageInfo>,
@@ -615,6 +620,9 @@ impl Default for OptionsUi {
             stack: vec![Page::Main],
             scroll: 0.0,
             dragging: None,
+            section: 0,
+            section_shown: None,
+            hscroll: 0.0,
             selected_key: None,
             languages: Vec::new(),
             language_choice: None,
@@ -692,6 +700,10 @@ impl OptionsUi {
         self.scroll = 0.0;
         self.in_world = in_world;
         self.selected_key = None;
+    }
+    /// Open one of vanilla's pages over the current one.
+    pub(crate) fn open_page(&mut self, page: Page) {
+        self.push(page);
     }
     fn push(&mut self, page: Page) {
         self.stack.push(page);
@@ -1175,6 +1187,10 @@ impl OptionsUi {
         cursor: (f32, f32),
     ) {
         let (w, h) = (batch.width, batch.height);
+        if crate::ui_theme::horizon() && self.page() == Page::Main {
+            self.draw_horizon(s, batch, atlas, cursor);
+            return;
+        }
         if self.page() == Page::Packs {
             ui::menu_background(batch, atlas, 0.0, 0.0, w, h, self.in_world);
             let blink = self.pack_focus.elapsed().as_millis() as u64;
@@ -1324,6 +1340,9 @@ impl OptionsUi {
         drag: bool,
         right: bool,
     ) -> Vec<Event> {
+        if crate::ui_theme::horizon() && self.page() == Page::Main {
+            return self.click_horizon(s, atlas, x, y, drag, right);
+        }
         if self.page() == Page::Packs {
             let mut events = Vec::new();
             if drag || right {
@@ -1427,6 +1446,10 @@ impl OptionsUi {
     }
     /// The mouse wheel at the cursor.
     pub fn scroll_at(&mut self, cursor: (f32, f32), amount: f32) {
+        if crate::ui_theme::horizon() && self.page() == Page::Main {
+            self.scroll_horizon(amount);
+            return;
+        }
         match &mut self.pack_screen {
             Some(p) if self.stack.last() == Some(&Page::Packs) => {
                 p.scroll(cursor.0 as f64, cursor.1 as f64, amount as f64)
