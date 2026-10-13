@@ -599,6 +599,87 @@ impl TextField {
         }
         self.display = display.clamp(0, len as isize) as usize;
     }
+    /// `getWordPosition(dir, from)`: past the next space run, or back to the
+    /// start of the word.
+    pub fn word_position(&self, dir: isize, from: usize) -> usize {
+        let v: Vec<char> = self.value.chars().collect();
+        let mut at = from;
+        if dir > 0 {
+            at = v
+                .iter()
+                .skip(at)
+                .position(|c| *c == ' ')
+                .map_or(v.len(), |p| p + at);
+            while at < v.len() && v[at] == ' ' {
+                at += 1;
+            }
+        } else {
+            while at > 0 && v[at - 1] == ' ' {
+                at -= 1;
+            }
+            while at > 0 && v[at - 1] != ' ' {
+                at -= 1;
+            }
+        }
+        at
+    }
+    /// `keyPressed` of a focused, editable box: `Some(changed)` when handled.
+    pub fn key(
+        &mut self,
+        m: &Measure,
+        key: winit::keyboard::KeyCode,
+        shift: bool,
+        ctrl: bool,
+    ) -> Option<bool> {
+        use winit::keyboard::KeyCode as K;
+        let len = chars(&self.value);
+        match key {
+            K::Backspace | K::Delete => {
+                let dir = if key == K::Backspace { -1 } else { 1 };
+                if !ctrl {
+                    return Some(self.delete_chars(m, dir));
+                }
+                // deleteWords.
+                if self.value.is_empty() {
+                    return Some(false);
+                }
+                if self.highlight != self.cursor {
+                    return Some(self.insert_text(m, ""));
+                }
+                let to = self.word_position(dir, self.cursor);
+                return Some(self.delete_chars(m, to as isize - self.cursor as isize));
+            }
+            K::Home => self.move_cursor_to(m, 0, shift),
+            K::End => self.move_cursor_to(m, len, shift),
+            K::ArrowRight | K::ArrowLeft => {
+                let dir = if key == K::ArrowRight { 1 } else { -1 };
+                let to = if ctrl {
+                    self.word_position(dir, self.cursor)
+                } else {
+                    (self.cursor as isize + dir).clamp(0, len as isize) as usize
+                };
+                self.move_cursor_to(m, to, shift);
+            }
+            K::KeyA if ctrl && !shift => {
+                self.move_cursor_to(m, len, false);
+                self.set_highlight(m, 0);
+            }
+            _ => return None,
+        }
+        Some(false)
+    }
+    /// `getScreenX`: where a character index is drawn, from the box's left.
+    pub fn screen_x(&self, m: &Measure, index: usize) -> i32 {
+        if index > chars(&self.value) {
+            return self.x;
+        }
+        self.x + m.width_str(&sub(&self.value, 0, index))
+    }
+    /// `setCursorPosition` then `setHighlightPos`.
+    pub fn set_cursor_and_highlight(&mut self, m: &Measure, pos: usize) {
+        self.set_cursor(m, pos);
+        self.set_highlight(m, pos);
+    }
     /// `onClick`: the cursor where the mouse is (`findClickedPositionInText`).
     pub fn click(&mut self, m: &Measure, x: f64, extend: bool) {
         let pos = (x.floor() as i32 - self.text_x()).min(self.inner_width());

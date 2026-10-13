@@ -196,6 +196,13 @@ public final class VanillaPackScreenOracle {
             o.add("lines", a);
             o.addProperty("x", x); o.addProperty("y", y);
         }
+        @Override public void setTooltipForNextFrame(Font font, List<? extends FormattedCharSequence> lines, int x, int y, Identifier style) {
+            var o = add("tooltip");
+            var a = new JsonArray();
+            for (var l : lines) a.add(runs(l));
+            o.add("lines", a);
+            o.addProperty("x", x); o.addProperty("y", y);
+        }
     }
 
     /** The window's text input area: not tracked. */
@@ -232,6 +239,7 @@ public final class VanillaPackScreenOracle {
                     current.removed();
                 }
                 current = screen;
+                if (screen == null) return;
                 screen.added();
                 show(screen, width, height);
             } catch (Exception e) {

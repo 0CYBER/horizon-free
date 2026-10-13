@@ -2,10 +2,11 @@
 //! (game rules, the world clock, difficulty), bound to the game.
 use super::{Dim, Game, Screen};
 use horizon_client::{
-    chat::{Chat, ChatScreen, SYSTEM_INDICATOR},
+    chat::{Chat, ChatAction, ChatScreen, Commands, SYSTEM_INDICATOR},
     command::{Registries, vanilla},
     gamerules::GameRules,
     hud::{HudBatch, rgba},
+    screen_draw::Measure,
     text::Text,
 };
 use std::collections::BTreeMap;
@@ -63,6 +64,8 @@ impl TimeMarker {
 pub struct UiState {
     pub chat: Chat,
     pub chat_screen: Option<ChatScreen>,
+    /// When the chat screen opened (its input took the focus: the cursor blink).
+    pub chat_opened: Option<std::time::Instant>,
     pub registries: Registries,
     pub rules: GameRules,
     pub clock: WorldClock,
@@ -368,9 +371,22 @@ impl Game<'_> {
             .as_ref()
             .map_or([1280, 720], |r| [r.config.width, r.config.height]);
         let b = HudBatch::new(size);
-        let mut screen = ChatScreen::new(initial, self.ui.chat.recent.len(), b.width, b.height);
-        screen.auto_suggestions = true;
+        let m = Measure(&self.res.atlas.font);
+        let c = Commands {
+            dispatcher: vanilla::game_dispatcher(),
+            registries: &self.ui.registries,
+        };
+        let mut screen = ChatScreen::new(
+            &m,
+            &c,
+            initial,
+            self.ui.chat.recent.len(),
+            b.width as i32,
+            b.height as i32,
+        );
+        screen.auto_suggestions = self.settings.auto_suggestions;
         self.ui.chat_screen = Some(screen);
+        self.ui.chat_opened = Some(std::time::Instant::now());
         self.screen = Screen::Chat;
         self.keys.clear();
         self.left = false;
@@ -413,63 +429,59 @@ impl Game<'_> {
             self.keys.contains(&KeyCode::ControlLeft) || self.keys.contains(&KeyCode::ControlRight);
         let shift =
             self.keys.contains(&KeyCode::ShiftLeft) || self.keys.contains(&KeyCode::ShiftRight);
+        match key {
+            // ChatScreen.keyPressed: the chat scrolls a page.
+            KeyCode::PageUp | KeyCode::PageDown
+                if !self
+                    .ui
+                    .chat_screen
+                    .as_ref()
+                    .is_some_and(|s| s.suggestions_visible()) =>
+            {
+                let n = self.ui.chat.lines_per_page(true) as i32 - 1;
+                self.ui
+                    .chat
+                    .scroll_by(if key == KeyCode::PageUp { n } else { -n }, true);
+                return;
+            }
+            _ => {}
+        }
         let Some(mut screen) = self.ui.chat_screen.take() else {
             return;
         };
-        let atlas = &self.res.atlas;
-        let d = vanilla::game_dispatcher();
-        if screen.suggestion_key(atlas, d, &self.ui.registries, key, shift) {
-            self.ui.chat_screen = Some(screen);
-            return;
-        }
-        let mut close = false;
-        let mut submit = None;
-        match key {
-            KeyCode::Escape => close = true,
-            KeyCode::Enter | KeyCode::NumpadEnter => {
-                submit = Some(screen.normalized());
-                close = true;
-            }
-            KeyCode::ArrowUp => screen.move_in_history(&self.ui.chat.recent, -1),
-            KeyCode::ArrowDown => screen.move_in_history(&self.ui.chat.recent, 1),
-            KeyCode::PageUp => {
-                let n = self.ui.chat.lines_per_page(true) as i32 - 1;
-                self.ui.chat.scroll_by(n, true);
-            }
-            KeyCode::PageDown => {
-                let n = self.ui.chat.lines_per_page(true) as i32 - 1;
-                self.ui.chat.scroll_by(-n, true);
-            }
-            _ => {
-                if screen.input.key(key, ctrl, shift) {
-                    screen.edited();
-                } else if let Some(text) = typed_text
-                    && !ctrl
-                {
-                    let typed: String = text.chars().filter(|c| !c.is_control()).collect();
-                    if !typed.is_empty() {
-                        screen.input.insert_text(&typed);
-                        screen.edited();
-                    }
+        let m = Measure(&self.res.atlas.font);
+        let c = Commands {
+            dispatcher: vanilla::game_dispatcher(),
+            registries: &self.ui.registries,
+        };
+        match screen.key(&m, &c, &self.ui.chat.recent, key, shift, ctrl) {
+            ChatAction::Close => self.close_chat(),
+            ChatAction::Submit(message) => {
+                self.close_chat();
+                if !message.is_empty() {
+                    self.handle_chat_input(&message);
                 }
             }
-        }
-        if close {
-            self.close_chat();
-        } else {
-            self.ui.chat_screen = Some(screen);
-        }
-        if let Some(message) = submit
-            && !message.is_empty()
-        {
-            self.handle_chat_input(&message);
+            ChatAction::None => {
+                // charTyped: the text the key typed.
+                if let Some(text) = typed_text
+                    && !ctrl
+                {
+                    screen.type_text(&m, &c, text);
+                }
+                self.ui.chat_screen = Some(screen);
+            }
         }
     }
     /// Text typed into the chat box (control socket `chat`).
     pub(super) fn chat_type(&mut self, text: &str) {
+        let m = Measure(&self.res.atlas.font);
+        let c = Commands {
+            dispatcher: vanilla::game_dispatcher(),
+            registries: &self.ui.registries,
+        };
         if let Some(screen) = self.ui.chat_screen.as_mut() {
-            screen.input.insert_text(text);
-            screen.edited();
+            screen.type_text(&m, &c, text);
         }
     }
     /// ChatScreen.handleChatInput: history, then a command or a chat line.
@@ -494,8 +506,10 @@ impl Game<'_> {
         let height = self.renderer.as_ref().map_or(720.0, |r| {
             HudBatch::new([r.config.width, r.config.height]).height
         });
+        let _ = height;
+        let mouse = (cursor.0.floor() as i32, cursor.1.floor() as i32);
         if let Some(screen) = self.ui.chat_screen.as_mut()
-            && screen.scroll_suggestions(cursor, height, amount)
+            && screen.scroll(mouse, amount as f64)
         {
             return;
         }
@@ -508,12 +522,14 @@ impl Game<'_> {
         let height = self.renderer.as_ref().map_or(720.0, |r| {
             HudBatch::new([r.config.width, r.config.height]).height
         });
-        if let Some(screen) = self.ui.chat_screen.as_mut()
-            && !screen.click(cursor, height)
-            && screen.input.y <= cursor.1
-        {
-            let i = screen.input.index_at(&self.res.atlas, cursor.0);
-            screen.input.set_cursor(i, false);
+        let _ = height;
+        let m = Measure(&self.res.atlas.font);
+        let c = Commands {
+            dispatcher: vanilla::game_dispatcher(),
+            registries: &self.ui.registries,
+        };
+        if let Some(screen) = self.ui.chat_screen.as_mut() {
+            screen.click(&m, &c, cursor.0 as f64, cursor.1 as f64);
         }
     }
     /// Chat lines over the HUD (focused while the chat screen is open).
@@ -530,16 +546,25 @@ impl Game<'_> {
         let Some(mut screen) = self.ui.chat_screen.take() else {
             return;
         };
-        screen.resize(batch.width, batch.height);
-        let bg = self.ui.chat.options.background_opacity as f32;
-        screen.draw(
-            batch,
-            &self.res.atlas,
-            vanilla::game_dispatcher(),
-            &self.ui.registries,
-            self.cursor,
-            bg,
-        );
+        let m = Measure(&self.res.atlas.font);
+        let c = Commands {
+            dispatcher: vanilla::game_dispatcher(),
+            registries: &self.ui.registries,
+        };
+        screen.resize(&m, &c, batch.width as i32, batch.height as i32);
+        // Options.getBackgroundColor(Integer.MIN_VALUE).
+        let background = if self.settings.file.bool("backgroundForChatOnly") {
+            i32::MIN
+        } else {
+            self.settings.text_background(0.0) as i32
+        };
+        let mouse = (self.cursor.0.floor() as i32, self.cursor.1.floor() as i32);
+        let blink = self
+            .ui
+            .chat_opened
+            .map_or(0, |t| t.elapsed().as_millis() as u64);
+        let draws = screen.draw(&m, mouse, blink, background);
+        horizon_client::screen_draw::paint(batch, &self.res.atlas, &draws);
         self.ui.chat_screen = Some(screen);
     }
     /// Advance the overworld clock (ServerClockManager.tick) when
