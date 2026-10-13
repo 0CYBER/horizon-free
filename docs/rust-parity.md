@@ -1489,7 +1489,7 @@ calls (`screen_draw`, which also ports `StringWidget`, `MultiLineTextWidget`,
 `Button`, `EditBox` with its scrolling, and `StringSplitter`'s line splitting
 with legacy formatting codes, whose split remainder takes the style found at
 the break). `tools/test_pack_screen_parity.py` drives a real
-`PackSelectionScreen` (`VanillaPackScreenOracle`) through 1,500 random sessions
+`PackSelectionScreen` (`VanillaPackScreenOracle`) through 3,000 random sessions
 of clicks, typing and the mouse wheel and compares every call.
 
 `horizon_client::chat::ChatScreen` ports `ChatScreen`, its `EditBox` and
