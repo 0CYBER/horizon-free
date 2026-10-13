@@ -31,14 +31,39 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import datafix_scene as scene  # noqa: E402
+import datafix_scene_12 as scene12  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 LOCAL = ROOT / '.local' / 'datafix'
 # Old server jars and their worlds are inputs, not outputs: keep them beside the
 # vanilla data, which parallel worktrees share (.local/minecraft links there).
 SHARED = (ROOT / '.local' / 'minecraft').resolve().parent / 'datafix'
-VERSIONS = ['1.17.1', '1.18.1', '1.18.2', '1.19', '1.19.2', '1.19.3', '1.19.4', '1.20.1', '1.20.2', '1.20.4', '1.20.5', '1.20.6', '1.21.1',
+# Worlds saved before 1.17 are only read by branches that carry the fixes for them: until those are
+# integrated they stay in the worktree's own .local, not in the folder every worktree's harness reads.
+LEGACY = {'1.8.9', '1.9.4', '1.10.2', '1.11.2', '1.12.2', '1.13.2', '1.14.4', '1.15.2', '1.16.1', '1.16.5'}
+
+
+def worlds_dir(name):
+    return LOCAL / 'worlds-pre-1.17' if name.split('-')[0] in LEGACY else SHARED / 'worlds'
+
+
+VERSIONS = ['1.8.9', '1.9.4', '1.10.2', '1.11.2', '1.12.2', '1.13.2', '1.14.4', '1.15.2', '1.16.1', '1.16.5', '1.17.1', '1.18.1', '1.18.2', '1.19', '1.19.2', '1.19.3', '1.19.4', '1.20.1', '1.20.2', '1.20.4', '1.20.5', '1.20.6', '1.21.1',
             '1.21.3', '1.21.4', '1.21.5', '1.21.6', '1.21.8', '1.21.9', '1.21.10', '1.21.11', '26.1', '26.1.2', '26.2']
+# Extra worlds of one version with another world type, for the level.dat generator settings:
+# name -> (version, server.properties). They get no scene, only a joined player.
+VARIANTS = {
+    '1.13.2-flat': ('1.13.2', {'level-type': 'flat', 'generator-settings':
+                               '3;minecraft:bedrock,2*minecraft:dirt,minecraft:grass_block;1;village,oceanmonument,mansion(distance=30)'}),
+    '1.14.4-flat': ('1.14.4', {'level-type': 'flat', 'generator-settings':
+                               '3;minecraft:bedrock,3*minecraft:stone,minecraft:grass_block;2;stronghold(distance=20 count=5),village(distance=12),'
+                               'oceanmonument(spacing=10 separation=4)'}),
+    '1.14.4-largebiomes': ('1.14.4', {'level-type': 'largebiomes'}),
+    '1.14.4-amplified': ('1.14.4', {'level-type': 'amplified'}),
+    '1.13.2-debug': ('1.13.2', {'level-type': 'debug_all_block_states'}),
+    '1.14.4-buffet': ('1.14.4', {'level-type': 'buffet', 'generator-settings':
+                                 '{"chunk_generator":{"type":"minecraft:surface"},"biome_source":{"type":"minecraft:fixed","options":'
+                                 '{"biomes":["minecraft:desert"]}}}'}),
+}
 MANIFEST = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'
 LOCK = json.loads((ROOT / 'research-lock.json').read_text())['java_runtimes']
 BOT = 'Upgrader'
@@ -136,14 +161,16 @@ def install_runtime(pin, home):
 
 
 class Server:
-    def __init__(self, directory, jar, port, packs=(), java='java'):
+    def __init__(self, directory, jar, port, packs=(), java='java', props_override=None):
         directory.mkdir(parents=True, exist_ok=True)
+        self.directory = directory
         (directory / 'eula.txt').write_text('eula=true\n')
         props = {'server-port': port, 'online-mode': 'false', 'level-name': 'world', 'level-seed': '4242',
                  'view-distance': '4', 'simulation-distance': '4', 'spawn-protection': '0', 'sync-chunk-writes': 'true',
                  'enable-rcon': 'false', 'enable-query': 'false', 'max-tick-time': '-1'}
         if packs:
             props['initial-enabled-packs'] = ','.join(['vanilla', *packs])
+        props.update(props_override or {})
         (directory / 'server.properties').write_text(''.join(f'{k}={v}\n' for k, v in props.items()))
         self.process = subprocess.Popen([java, '-Xmx2G', '-jar', str(jar), 'nogui'], cwd=directory,
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -348,17 +375,56 @@ def uuid_nbt(i):
     return f'[I;{UUID_BASE},0,0,{i}]'
 
 
-def build(version, force=False):
+def uuid_fields(data_version, i):
+    """The UUID of a summoned entity: an int array since 1.16, two longs before."""
+    if data_version >= 2514:
+        return f'UUID:{uuid_nbt(i)}'
+    return f'UUIDMost:{UUID_BASE << 32}L,UUIDLeast:{i + 1}L'
+
+
+def build_scene(server, run, Bot, port, protocol, props, era, data_version):
+    """The scene of the generic generator; returns the bot that stays joined."""
+    if not props:  # variants only differ in their world type
+        run('forceload add -48 -48 79 79')
+        run('fill 0 99 0 47 99 47 minecraft:stone')
+        run('fill 0 100 0 47 112 47 minecraft:air')
+        for i, (block, nbt) in enumerate(scene.block_entities(era, data_version)):
+            x, z = 1 + 3 * (i % 15), 1 + 3 * (i // 15)
+            run(f'setblock {x} 100 {z} minecraft:{block}{nbt}')
+        for i, (kind, extra) in enumerate(scene.entities(era, data_version)):
+            x, z = 1.5 + 3 * (i % 15), 25.5 + 3 * (i // 15)
+            fields = f'{uuid_fields(data_version, i)},NoAI:1b,Silent:1b,NoGravity:1b,Invulnerable:1b,PersistenceRequired:1b'
+            run(f'summon minecraft:{kind} {x} 100 {z} {{{fields}' + (',' + extra if extra else '') + '}')
+        for i, block in enumerate(scene.blocks(data_version)):
+            run(f'setblock {1 + 3 * (i % 15)} 100 {19 + 3 * (i // 15)} minecraft:{block}')
+    if not props:
+        run('setworldspawn 20 101 20')
+    bot = Bot(port, protocol, BOT)
+    time.sleep(3)
+    for command in scene.player_commands(era, BOT, data_version):
+        run(command)
+    time.sleep(3)
+    for command, wait in ([] if props else scene.world_commands(data_version)):
+        run(command)
+        time.sleep(wait)
+    run('save-all flush')
+    time.sleep(2)
+    return bot
+
+
+def build(name, force=False):
+    version, props = VARIANTS.get(name, (name, None))
     jar, data_version, protocol = server_jar(version)
-    target = SHARED / 'worlds' / version
+    data_version = data_version or 0   # 1.8 saves have no DataVersion
+    target = worlds_dir(name) / name
     if target.exists() and not force:
         print(f'{version}: kept {target}')
         return []
     era = scene.era(data_version)
-    work = LOCAL / 'gen' / version
+    work = LOCAL / 'gen' / name
     shutil.rmtree(work, ignore_errors=True)
     port = 30000 + (os.getpid() + data_version) % 20000
-    server = Server(work, jar, port, scene.experiments(data_version), java(version))
+    server = Server(work, jar, port, scene.experiments(data_version), java(version), props)
     problems = []
 
     def run(command):
@@ -368,27 +434,15 @@ def build(version, force=False):
             problems.append((command[:160], bad[:2]))
         return out
 
-    run('forceload add -48 -48 79 79')
-    run('fill 0 99 0 47 99 47 minecraft:stone')
-    run('fill 0 100 0 47 112 47 minecraft:air')
-    for i, (block, nbt) in enumerate(scene.block_entities(era, data_version)):
-        x, z = 1 + 3 * (i % 15), 1 + 3 * (i // 15)
-        run(f'setblock {x} 100 {z} minecraft:{block}{nbt}')
-    for i, (kind, extra) in enumerate(scene.entities(era, data_version)):
-        x, z = 1.5 + 3 * (i % 15), 25.5 + 3 * (i // 15)
-        fields = f'UUID:{uuid_nbt(i)},NoAI:1b,Silent:1b,NoGravity:1b,Invulnerable:1b,PersistenceRequired:1b'
-        run(f'summon minecraft:{kind} {x} 100 {z} {{{fields}' + (',' + extra if extra else '') + '}')
-    run('setworldspawn 20 101 20')
-    bot = Bot(port, protocol, BOT)
-    time.sleep(3)
-    for command in scene.player_commands(era, BOT, data_version):
-        run(command)
-    time.sleep(3)
-    run('save-all flush')
-    time.sleep(2)
+    if data_version < 1631 and not props:   # 1.12 and older: tools/datafix_scene_12.py builds the scene and saves the world itself
+        bot = scene12.populate(server, Bot, port, protocol, BOT, problems)
+    else:
+        bot = build_scene(server, run, Bot, port, protocol, props, era, data_version)
     bot.leave()
     time.sleep(2)
     server.stop()
+    if data_version < 1631 and not props:
+        scene12.fixtures(work / 'world')   # the few statistics a passive bot cannot cause, written by hand
     # Copy aside, then rename: an interrupted copy must not look like a finished world.
     partial = target.with_name(target.name + '.partial')
     shutil.rmtree(partial, ignore_errors=True)
@@ -409,8 +463,10 @@ def main():
     p.add_argument('versions', nargs='*')
     p.add_argument('--force', action='store_true')
     args = p.parse_args()
-    for version in args.versions or VERSIONS:
+    for version in args.versions or [*VERSIONS, *VARIANTS]:
         build(version, args.force)
+        if version == '1.12.2':
+            scene12.build_flat(sys.modules[__name__], args.force)   # and the flat world 1.12.2-flat
 
 
 if __name__ == '__main__':
