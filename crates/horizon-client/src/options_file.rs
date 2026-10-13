@@ -298,7 +298,7 @@ fn double_range(v: f64, lo: f64, hi: f64) -> Option<f64> {
     (v.total_cmp(&lo).is_ge() && v.total_cmp(&hi).is_le() && !v.is_nan()).then_some(v)
 }
 fn log_mouse(value: i32) -> f64 {
-    10f64.powf(f64::from(value) / 100.0)
+    horizon_core::jmath::pow(10.0, f64::from(value) / 100.0)
 }
 fn unit_alt(json: &Json) -> Option<f64> {
     codec_double(json)
@@ -366,7 +366,7 @@ impl Spec {
             }
             (Spec::Fov, V::Int(x)) => (30..=110).contains(x).then(|| v.clone()),
             (Spec::WheelSensitivity, V::Double(x)) => {
-                let i = floor_int(x.log10() * 100.0);
+                let i = floor_int(horizon_core::jmath::log10(*x) * 100.0);
                 (-200..=100).contains(&i).then(|| V::Double(log_mouse(i)))
             }
             (Spec::Unit, V::Double(x)) => (*x >= 0.0 && *x <= 1.0).then(|| v.clone()),

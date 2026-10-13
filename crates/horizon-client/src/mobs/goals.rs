@@ -1,7 +1,7 @@
 //! Vanilla's `GoalSelector` (priorities, MOVE/LOOK/JUMP/TARGET control flags,
 //! interruption) and the shared goals of `net.minecraft.world.entity.ai.goal`.
 use super::{Mob, MobEvent, MobWorld, Seen, Species, Who, world::TargetInfo};
-use horizon_core::{geometry::Vec3, random::RandomSource};
+use horizon_core::{geometry::Vec3, jmath, random::RandomSource};
 use std::sync::Arc;
 
 pub const MOVE: u8 = 1;
@@ -208,8 +208,8 @@ impl Mob {
         let yrad = center + f64::from(2.0 * self.random.next_float() - 1.0) * max_rad;
         let dist = (min + self.random.next_double().sqrt() * (max - min))
             * f64::from(std::f32::consts::SQRT_2);
-        let xt = -dist * yrad.sin();
-        let zt = dist * yrad.cos();
+        let xt = -dist * jmath::sin(yrad);
+        let zt = dist * jmath::cos(yrad);
         if xt.abs() > max || zt.abs() > max {
             return None;
         }
@@ -932,7 +932,7 @@ impl Goal for RandomLookAround {
     }
     fn start(&mut self, m: &mut Mob, _: &mut Cx) {
         let r = std::f64::consts::TAU * m.random.next_double();
-        self.rel = [r.cos(), r.sin()];
+        self.rel = [jmath::cos(r), jmath::sin(r)];
         self.time = 20 + m.random.next_int_bound(20).unwrap_or(0);
     }
     fn every_tick(&self) -> bool {
