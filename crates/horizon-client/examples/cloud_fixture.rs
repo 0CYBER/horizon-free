@@ -27,7 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 cell(x, z, 0);
             }
         }
-        output.push_str("\n");
+        output.push('\n');
     }
     fs::write(&args[2], output)?;
     Ok(())

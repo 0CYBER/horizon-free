@@ -28,13 +28,14 @@ fn batch_entities(
     entities: &[Vertex],
     additive: &[Vertex],
     hand: &[Vertex],
-) -> (Vec<Vertex>, [u32; 3]) {
+) -> (Vec<Vertex>, [u32; 4]) {
     let mut combined = Vec::with_capacity(entities.len() + additive.len() + hand.len());
-    let mut counts = [0u32; 3];
-    for (i, layer) in [0, 11, 4].into_iter().enumerate() {
+    let mut counts = [0u32; 4];
+    for (i, layer) in [0, 11, 12, 4].into_iter().enumerate() {
         for quad in entities.as_chunks::<4>().0 {
             let material = match quad[0].layer {
                 11 => 11,
+                12 => 12,
                 4 => 4,
                 _ => 0,
             };
@@ -71,6 +72,7 @@ struct Globals {
     end_portal_sprites: [[f32; 4]; 2],
     /// x: vanilla's `GameTime` uniform; yzw unused.
     time: [f32; 4],
+    crumbling_sprite: [f32; 4],
 }
 pub type SectionKey = (i32, i32, i32);
 struct SectionGpu {
@@ -136,6 +138,8 @@ pub struct Frame<'a> {
     /// Atlas rects (u0, v0, width, height) of end_sky.png and end_portal.png
     /// (`rendertype_end_portal`'s Sampler0 and Sampler1).
     pub end_portal_sprites: [[f32; 4]; 2],
+    /// Current destroy-stage sprite: projected UVs repeat inside this atlas rect.
+    pub crumbling_sprite: [f32; 4],
     pub ticks: u64,
     /// The darkness effect on the lightmap: the brightness it takes off the
     /// gamma option and the pulsing scale subtracted from the light.
@@ -1815,6 +1819,7 @@ impl Renderer {
                 0.0,
             ],
             end_portal_sprites: frame.end_portal_sprites,
+            crumbling_sprite: frame.crumbling_sprite,
             time: [frame.shader_game_time, 0.0, 0.0, 0.0],
         };
         self.queue
@@ -1968,9 +1973,17 @@ impl Renderer {
             self.queue
                 .write_buffer(&self.outline, 0, bytemuck::cast_slice(&lines));
         }
-        let (combined, [entity_quads, crumbling_quads, cloud_quads]) =
-            batch_entities(frame.entities, frame.additive, frame.hand);
-        let world_quads = entity_quads + crumbling_quads + cloud_quads;
+        let (
+            combined,
+            [
+                entity_quads,
+                crumbling_quads,
+                translucent_crumbling_quads,
+                cloud_quads,
+            ],
+        ) = batch_entities(frame.entities, frame.additive, frame.hand);
+        let world_quads =
+            entity_quads + crumbling_quads + translucent_crumbling_quads + cloud_quads;
         let all_entities = &combined;
         let hand_quads = (frame.hand.len() / 4) as u32;
         let additive_quads = (frame.additive.len() / 4) as u32;
@@ -2145,13 +2158,23 @@ impl Renderer {
                 }
                 pass.set_bind_group(0, &self.group, &[]);
             }
+            if translucent_crumbling_quads > 0 {
+                pass.set_pipeline(&self.crumbling_pipeline);
+                pass.set_bind_group(0, &self.entity_group, &[]);
+                pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
+                pass.draw_indexed(
+                    0..translucent_crumbling_quads * 6,
+                    ((entity_quads + crumbling_quads) * 4) as i32,
+                    0..1,
+                );
+            }
             if cloud_quads > 0 {
                 pass.set_pipeline(&self.cloud_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
                 pass.draw_indexed(
                     0..cloud_quads * 6,
-                    ((entity_quads + crumbling_quads) * 4) as i32,
+                    ((entity_quads + crumbling_quads + translucent_crumbling_quads) * 4) as i32,
                     0..1,
                 );
             }
@@ -2427,12 +2450,12 @@ mod tests {
                 light: id,
             }; 4]
         };
-        let entities: Vec<_> = [(0, 0), (4, 1), (11, 2), (7, 3), (4, 4)]
+        let entities: Vec<_> = [(0, 0), (4, 1), (11, 2), (7, 3), (4, 4), (12, 7)]
             .into_iter()
             .flat_map(|(layer, id)| quad(layer, id))
             .collect();
         let (vertices, counts) = super::batch_entities(&entities, &quad(3, 5), &quad(0, 6));
-        assert_eq!(counts, [2, 1, 2]);
+        assert_eq!(counts, [2, 1, 1, 2]);
         assert_eq!(
             vertices
                 .as_chunks::<4>()
@@ -2440,7 +2463,7 @@ mod tests {
                 .iter()
                 .map(|q| q[0].light)
                 .collect::<Vec<_>>(),
-            [0, 3, 2, 1, 4, 5, 6]
+            [0, 3, 2, 7, 1, 4, 5, 6]
         );
     }
     #[test]
