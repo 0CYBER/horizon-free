@@ -13,6 +13,8 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Instant};
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
+mod timing;
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Globals {
@@ -115,7 +117,20 @@ struct BorderUniform {
 }
 pub struct Renderer {
     instance: wgpu::Instance,
-    surface: wgpu::Surface<'static>,
+    /// The window's swapchain; `None` when rendering offscreen (`--offscreen`).
+    surface: Option<wgpu::Surface<'static>>,
+    /// The offscreen colour target, sized like `config`.
+    offscreen: Option<wgpu::Texture>,
+    /// Offscreen submissions still on the GPU: at most two frames run ahead.
+    in_flight: std::collections::VecDeque<wgpu::SubmissionIndex>,
+    gpu_timer: Option<timing::GpuTimer>,
+    /// GPU frame times (ms) read back since the caller last drained them.
+    pub gpu_times: Vec<f32>,
+    /// Time the last `render` spent blocked on the GPU or the display
+    /// (acquiring, presenting, offscreen pacing), excluded from CPU time.
+    pub last_wait: std::time::Duration,
+    /// CPU time of the last `render`, waits excluded.
+    pub last_encode: std::time::Duration,
     window: Arc<Window>,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
@@ -217,6 +232,7 @@ fn mip_chain(pixels: &[u8], size: u32, layers: u32) -> (Vec<u8>, u32) {
 impl Renderer {
     pub async fn new(
         window: Arc<Window>,
+        offscreen: bool,
         sprite_pixels: &[u8],
         sprite_size: u32,
         layers: u32,
@@ -226,11 +242,17 @@ impl Renderer {
     ) -> Result<Self> {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        let surface = instance.create_surface(window.clone())?;
+        // Offscreen rendering needs no surface, so it can use a GPU the
+        // window's display cannot present from (a headless compositor).
+        let surface = if offscreen {
+            None
+        } else {
+            Some(instance.create_surface(window.clone())?)
+        };
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
+                compatible_surface: surface.as_ref(),
                 force_fallback_adapter: false,
                 ..Default::default()
             })
@@ -251,34 +273,56 @@ impl Renderer {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("Horizon device"),
+                required_features: timing::GpuTimer::features(&adapter)
+                    | (adapter.features() & wgpu::Features::INDIRECT_FIRST_INSTANCE),
                 required_limits: limits.clone(),
                 ..Default::default()
             })
             .await?;
         let size = window.inner_size();
-        let mut config = surface
-            .get_default_config(&adapter, size.width.max(1), size.height.max(1))
-            .ok_or("surface has no supported configuration")?;
-        let caps = surface.get_capabilities(&adapter);
-        // Vanilla blends and tints in gamma space: use a non-sRGB target.
-        config.format = caps
-            .formats
-            .iter()
-            .copied()
-            .find(|f| !f.is_srgb())
-            .unwrap_or(config.format);
-        config.view_formats = vec![config.format.remove_srgb_suffix()];
-        // Screenshots copy the presented frame back from the swapchain.
-        if caps.usages.contains(wgpu::TextureUsages::COPY_SRC) {
-            config.usage |= wgpu::TextureUsages::COPY_SRC;
-        }
-        let present_modes = caps.present_modes.clone();
-        config.present_mode = if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
-            wgpu::PresentMode::Mailbox
+        let (config, present_modes) = if let Some(surface) = &surface {
+            let mut config = surface
+                .get_default_config(&adapter, size.width.max(1), size.height.max(1))
+                .ok_or("surface has no supported configuration")?;
+            let caps = surface.get_capabilities(&adapter);
+            // Vanilla blends and tints in gamma space: use a non-sRGB target.
+            config.format = caps
+                .formats
+                .iter()
+                .copied()
+                .find(|f| !f.is_srgb())
+                .unwrap_or(config.format);
+            config.view_formats = vec![config.format.remove_srgb_suffix()];
+            // Screenshots copy the presented frame back from the swapchain.
+            if caps.usages.contains(wgpu::TextureUsages::COPY_SRC) {
+                config.usage |= wgpu::TextureUsages::COPY_SRC;
+            }
+            config.present_mode = if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
+                wgpu::PresentMode::Mailbox
+            } else {
+                wgpu::PresentMode::Fifo
+            };
+            surface.configure(&device, &config);
+            (config, caps.present_modes.clone())
         } else {
-            wgpu::PresentMode::Fifo
+            let format = wgpu::TextureFormat::Bgra8Unorm;
+            let config = wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                format,
+                width: size.width.max(1),
+                height: size.height.max(1),
+                present_mode: wgpu::PresentMode::Immediate,
+                desired_maximum_frame_latency: 2,
+                alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+                view_formats: vec![format],
+                color_space: wgpu::SurfaceColorSpace::default(),
+            };
+            (config, Vec::new())
         };
-        surface.configure(&device, &config);
+        let offscreen = surface
+            .is_none()
+            .then(|| Self::offscreen_target(&device, &config));
+        let gpu_timer = timing::GpuTimer::new(&device, &queue);
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Horizon terrain"),
             source: wgpu::ShaderSource::Wgsl(include_str!("terrain.wgsl").into()),
@@ -1044,6 +1088,12 @@ impl Renderer {
         Ok(Self {
             instance,
             surface,
+            offscreen,
+            in_flight: std::collections::VecDeque::new(),
+            gpu_timer,
+            gpu_times: Vec::new(),
+            last_wait: std::time::Duration::ZERO,
+            last_encode: std::time::Duration::ZERO,
             window,
             device,
             queue,
@@ -1110,6 +1160,29 @@ impl Renderer {
             usage: wgpu::BufferUsages::INDEX,
         })
     }
+    fn offscreen_target(
+        device: &wgpu::Device,
+        config: &wgpu::SurfaceConfiguration,
+    ) -> wgpu::Texture {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Offscreen frame"),
+            size: wgpu::Extent3d {
+                width: config.width,
+                height: config.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: config.format,
+            usage: config.usage,
+            view_formats: &config.view_formats,
+        })
+    }
+    /// Rendering to a texture instead of the window (`--offscreen`).
+    pub fn is_offscreen(&self) -> bool {
+        self.surface.is_none()
+    }
     fn depth(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> wgpu::TextureView {
         device
             .create_texture(&wgpu::TextureDescriptor {
@@ -1147,9 +1220,11 @@ impl Renderer {
             Some(PresentMode::Immediate) => wgpu::PresentMode::Immediate,
             _ => wgpu::PresentMode::Fifo,
         };
-        if self.config.present_mode != mode {
+        if self.config.present_mode != mode
+            && let Some(surface) = &self.surface
+        {
             self.config.present_mode = mode;
-            self.surface.configure(&self.device, &self.config);
+            surface.configure(&self.device, &self.config);
         }
     }
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -1159,7 +1234,11 @@ impl Renderer {
         }
         self.config.width = width;
         self.config.height = height;
-        self.surface.configure(&self.device, &self.config);
+        if let Some(surface) = &self.surface {
+            surface.configure(&self.device, &self.config);
+        } else {
+            self.offscreen = Some(Self::offscreen_target(&self.device, &self.config));
+        }
         self.depth = Self::depth(&self.device, &self.config);
     }
     pub fn section_count(&self) -> usize {
@@ -1387,24 +1466,36 @@ impl Renderer {
         if self.suspended {
             return Ok(false);
         }
-        let (surface_frame, reconfigure) = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(f) => (f, false),
-            wgpu::CurrentSurfaceTexture::Suboptimal(f) => (f, true),
-            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+        let started = Instant::now();
+        let acquire = Instant::now();
+        let acquired = self.surface.as_ref().map(|s| s.get_current_texture());
+        self.last_wait = acquire.elapsed();
+        let (surface_frame, reconfigure) = match acquired {
+            None => (None, false),
+            Some(wgpu::CurrentSurfaceTexture::Success(f)) => (Some(f), false),
+            Some(wgpu::CurrentSurfaceTexture::Suboptimal(f)) => (Some(f), true),
+            Some(wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded) => {
                 return Ok(false);
             }
-            wgpu::CurrentSurfaceTexture::Outdated => {
-                self.surface.configure(&self.device, &self.config);
+            Some(wgpu::CurrentSurfaceTexture::Outdated) => {
+                if let Some(surface) = &self.surface {
+                    surface.configure(&self.device, &self.config);
+                }
                 return Ok(false);
             }
-            wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface = self.instance.create_surface(self.window.clone())?;
-                self.surface.configure(&self.device, &self.config);
+            Some(wgpu::CurrentSurfaceTexture::Lost) => {
+                let surface = self.instance.create_surface(self.window.clone())?;
+                surface.configure(&self.device, &self.config);
+                self.surface = Some(surface);
                 return Ok(false);
             }
-            wgpu::CurrentSurfaceTexture::Validation => {
+            Some(wgpu::CurrentSurfaceTexture::Validation) => {
                 return Err("surface acquisition failed validation".into());
             }
+        };
+        let target_texture = match &surface_frame {
+            Some(f) => f.texture.clone(),
+            None => self.offscreen.clone().ok_or("no offscreen target")?,
         };
         self.animate(frame.ticks);
         self.update_lightmap(
@@ -1650,9 +1741,7 @@ impl Renderer {
             self.queue
                 .write_buffer(&self.border_uniform, 0, bytemuck::bytes_of(&uniform));
         }
-        let view_target = surface_frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor {
+        let view_target = target_texture.create_view(&wgpu::TextureViewDescriptor {
                 format: Some(self.config.format.remove_srgb_suffix()),
                 ..Default::default()
             });
@@ -1661,6 +1750,9 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Horizon frame"),
             });
+        if let Some(timer) = &mut self.gpu_timer {
+            timer.begin(&mut encoder);
+        }
         {
             let attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: &view_target,
@@ -1861,22 +1953,44 @@ impl Renderer {
             frame.hud,
             [self.config.width, self.config.height],
         );
+        if let Some(timer) = &mut self.gpu_timer {
+            timer.end(&mut encoder);
+        }
         let readback = self
             .screenshot
             .take()
-            .map(|path| (path, self.copy_frame(&mut encoder, &surface_frame.texture)));
-        self.queue.submit([encoder.finish()]);
+            .map(|path| (path, self.copy_frame(&mut encoder, &target_texture)));
+        let submission = self.queue.submit([encoder.finish()]);
+        if let Some(timer) = &mut self.gpu_timer {
+            timer.submitted();
+            timer.collect(&self.device, &mut self.gpu_times);
+        }
         if let Some((path, buffer)) = readback {
             self.screenshot_result = Some(
                 self.write_screenshot(&path, &buffer)
                     .map_err(|e| e.to_string()),
             );
         }
-        self.window.pre_present_notify();
-        self.queue.present(surface_frame);
-        if reconfigure {
-            self.surface.configure(&self.device, &self.config);
+        let present = Instant::now();
+        if let Some(surface_frame) = surface_frame {
+            self.window.pre_present_notify();
+            self.queue.present(surface_frame);
+            if reconfigure && let Some(surface) = &self.surface {
+                surface.configure(&self.device, &self.config);
+            }
+        } else {
+            // No swapchain paces offscreen frames: keep two on the GPU at most.
+            self.in_flight.push_back(submission);
+            while self.in_flight.len() > 2 {
+                let index = self.in_flight.pop_front();
+                let _ = self.device.poll(wgpu::PollType::Wait {
+                    submission_index: index,
+                    timeout: Some(std::time::Duration::from_secs(5)),
+                });
+            }
         }
+        self.last_wait += present.elapsed();
+        self.last_encode = started.elapsed().saturating_sub(self.last_wait);
         let _ = self.started;
         Ok(true)
     }

@@ -183,6 +183,9 @@ struct Options {
     no_pause: bool,
     /// Control socket path (`--control`), for `horizon-ctl`.
     control: Option<PathBuf>,
+    /// Render into a texture instead of the window (`--offscreen`), so a
+    /// GPU the display cannot present from can still be benchmarked.
+    offscreen: bool,
     /// Multiplayer: `--server HOST[:PORT]` joins at start; `--name` is the offline player name.
     server: Option<String>,
     player_name: String,
@@ -218,6 +221,7 @@ impl Options {
             dimension: None,
             no_pause: false,
             control: None,
+            offscreen: false,
             server: None,
             player_name: std::env::var("HORIZON_PLAYER_NAME").unwrap_or_else(|_| "Player".into()),
             dedicated: None,
@@ -238,6 +242,7 @@ impl Options {
                 "--creative" => o.creative = true,
                 "--test-terrain" => o.test_terrain = true,
                 "--no-pause" => o.no_pause = true,
+                "--offscreen" => o.offscreen = true,
                 "--control" => o.control = Some(horizon_client::control::default_path()),
                 _ => {
                     let value = args
@@ -776,6 +781,8 @@ struct Game<'a> {
     /// Control replies waiting for a rendered frame or a benchmark deadline.
     pending_screenshot: Option<std::sync::mpsc::Sender<String>>,
     pending_bench: Option<(Instant, std::sync::mpsc::Sender<String>)>,
+    /// A scripted flight from the control socket (`fly`).
+    flight: Option<control::Flight>,
     persist: persist::EntityMemory,
     /// Connected to a server: the world comes from the network (game/remote.rs).
     remote: Option<remote::Remote>,
@@ -7593,6 +7600,7 @@ impl ApplicationHandler for Game<'_> {
         let assets = &self.res.assets;
         match pollster::block_on(Renderer::new(
             window.clone(),
+            self.options.offscreen,
             &assets.pixels,
             assets.sprite_size,
             assets.texture_layers,
@@ -8005,6 +8013,7 @@ impl ApplicationHandler for Game<'_> {
                         self.update_world();
                         self.spawn_player()?;
                     }
+                    let updated = Instant::now();
                     self.track_toggle_screens();
                     let steps = self.clock.advance(elapsed);
                     for _ in 0..steps {
@@ -8022,7 +8031,25 @@ impl ApplicationHandler for Game<'_> {
                         }
                     }
                     self.apply_mouse_look();
+                    self.advance_flight();
+                    let ticked = Instant::now();
                     let rendered = self.render()?;
+                    if let Some(r) = self.renderer.as_mut() {
+                        let cpu = now.elapsed().saturating_sub(r.last_wait);
+                        if rendered {
+                            let ms = |d: Duration| d.as_secs_f32() * 1000.0;
+                            self.frame_stats.record_cpu(ms(cpu));
+                            let render = r.last_encode;
+                            self.frame_stats.record_phases([
+                                ms(updated - now),
+                                ms(ticked - updated),
+                                ms(ticked.elapsed().saturating_sub(r.last_wait + render)),
+                                ms(render),
+                            ]);
+                        }
+                        self.frame_stats.record_gpu(&r.gpu_times);
+                        r.gpu_times.clear();
+                    }
                     self.limit_frame();
                     self.pause = self.pauses_game();
                     self.clock.end_frame(self.pause);
@@ -8428,6 +8455,7 @@ pub fn run() -> Result<()> {
         frame_stats: Default::default(),
         pending_screenshot: None,
         pending_bench: None,
+        flight: None,
         persist: Default::default(),
         remote: None,
         lan: None,

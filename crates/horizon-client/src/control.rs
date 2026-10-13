@@ -140,10 +140,38 @@ fn serve(stream: UnixStream, sender: &mpsc::Sender<Request>) {
     }
 }
 
-/// Frame durations since the last reset, summarized like the Java recorder.
+/// Frame durations since the last reset, summarized like the Java recorder,
+/// with the CPU part of each frame and GPU times from timestamp queries.
 #[derive(Default)]
 pub struct FrameStats {
     millis: Vec<f32>,
+    cpu: Vec<f32>,
+    gpu: Vec<f32>,
+    /// Summed milliseconds per frame phase (`PHASES`) and the frames counted.
+    phases: [f64; PHASES.len()],
+    phase_frames: u64,
+}
+
+/// The parts of a frame's CPU time: world streaming and uploads, game ticks,
+/// building the frame's geometry and HUD, and the renderer's own work.
+pub const PHASES: [&str; 4] = ["update", "tick", "prepare", "render"];
+
+fn percentiles(values: &[f32]) -> serde_json::Value {
+    let mut sorted = values.to_vec();
+    sorted.sort_by(f32::total_cmp);
+    let n = sorted.len();
+    if n == 0 {
+        return serde_json::Value::Null;
+    }
+    let total: f64 = sorted.iter().map(|&m| f64::from(m)).sum();
+    let percentile = |p: f64| sorted[((n as f64 * p).ceil() as usize).clamp(1, n) - 1];
+    serde_json::json!({
+        "avg_ms": total / n as f64,
+        "p50_ms": percentile(0.5),
+        "p95_ms": percentile(0.95),
+        "p99_ms": percentile(0.99),
+        "max_ms": sorted[n - 1],
+    })
 }
 
 impl FrameStats {
@@ -153,8 +181,30 @@ impl FrameStats {
             self.millis.push(millis);
         }
     }
+    /// The frame's own work: its duration minus waits for the GPU, the
+    /// display and the frame limiter.
+    pub fn record_cpu(&mut self, millis: f32) {
+        if self.cpu.len() < Self::LIMIT {
+            self.cpu.push(millis);
+        }
+    }
+    pub fn record_phases(&mut self, millis: [f32; PHASES.len()]) {
+        for (sum, m) in self.phases.iter_mut().zip(millis) {
+            *sum += f64::from(m);
+        }
+        self.phase_frames += 1;
+    }
+    pub fn record_gpu(&mut self, millis: &[f32]) {
+        if self.gpu.len() < Self::LIMIT {
+            self.gpu.extend_from_slice(millis);
+        }
+    }
     pub fn reset(&mut self) {
         self.millis.clear();
+        self.cpu.clear();
+        self.gpu.clear();
+        self.phases = [0.0; PHASES.len()];
+        self.phase_frames = 0;
     }
     pub fn summary(&self) -> serde_json::Value {
         let mut sorted = self.millis.clone();
@@ -181,6 +231,13 @@ impl FrameStats {
             "p95_ms": percentile(0.95),
             "p99_ms": percentile(0.99),
             "max_ms": sorted[n - 1],
+            "cpu": percentiles(&self.cpu),
+            "gpu": percentiles(&self.gpu),
+            "phases_avg_ms": PHASES
+                .iter()
+                .zip(self.phases)
+                .map(|(name, sum)| (name.to_string(), (sum / self.phase_frames.max(1) as f64).into()))
+                .collect::<serde_json::Map<_, _>>(),
         })
     }
 }

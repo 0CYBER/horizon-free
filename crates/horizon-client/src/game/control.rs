@@ -32,6 +32,7 @@ const HELP: &[&str] = &[
     "options [PAGE]                 open the options (video sound controls keybinds mouse chat accessibility language font packs)",
     "stats [reset]                  frame-time summary since the last reset",
     "bench SECONDS                  reset stats, wait, then reply with the summary",
+    "fly X1 Y1 Z1 X2 Y2 Z2 SECONDS [PITCH]  fly the camera along a line at constant speed, then reply with the frame summary",
     "open WORLD [SEED] [creative]   open or create a world from the title screen",
     "save                           save the world",
     "save-all                       save the world, rewriting every resident chunk",
@@ -42,7 +43,42 @@ const HELP: &[&str] = &[
     "quit                           save and exit",
 ];
 
+/// A straight camera path at constant speed, for repeatable benchmarks: the
+/// player is placed on it every frame, facing along it.
+pub struct Flight {
+    from: Vec3,
+    to: Vec3,
+    pitch: f32,
+    started: Instant,
+    seconds: f64,
+    reply: Sender<String>,
+}
+
 impl Game<'_> {
+    /// Move the camera along the running flight; reply when it ends.
+    pub(super) fn advance_flight(&mut self) {
+        let Some(flight) = &self.flight else { return };
+        let t = (flight.started.elapsed().as_secs_f64() / flight.seconds).min(1.0);
+        let (a, b) = (flight.from, flight.to);
+        let d = [b.x - a.x, b.y - a.y, b.z - a.z];
+        let at = Vec3::new(a.x + d[0] * t, a.y + d[1] * t, a.z + d[2] * t);
+        // Minecraft yaw: 0 faces +Z, 90 faces -X.
+        self.yaw = (-d[0]).atan2(d[2]).to_degrees() as f32;
+        self.pitch = flight.pitch;
+        if let Some(player) = self.player.as_mut() {
+            player.position = at;
+            player.velocity = Vec3::new(0.0, 0.0, 0.0);
+            player.fall_distance = 0.0;
+            // Stay where the flight ends (creative flight).
+            player.flying = true;
+            self.previous_position = at;
+        }
+        if t >= 1.0
+            && let Some(flight) = self.flight.take()
+        {
+            let _ = flight.reply.send(self.frame_stats.summary().to_string());
+        }
+    }
     pub(super) fn poll_control(&mut self, event_loop: &ActiveEventLoop) {
         if let Some((deadline, reply)) = self.pending_bench.take() {
             if Instant::now() >= deadline {
@@ -355,6 +391,24 @@ impl Game<'_> {
                     Instant::now() + Duration::from_secs_f64(seconds),
                     reply.clone(),
                 ));
+                Ok(None)
+            }
+            "fly" => {
+                self.require_world()?;
+                if self.flight.is_some() || self.pending_bench.is_some() {
+                    return Err("a benchmark is already running".into());
+                }
+                let n = |i: usize| -> Result<f64> { Ok(arg(i)?.parse()?) };
+                let pitch = words.get(8).map_or(Ok(10.0), |p| p.parse::<f32>())?;
+                self.frame_stats.reset();
+                self.flight = Some(Flight {
+                    from: Vec3::new(n(1)?, n(2)?, n(3)?),
+                    to: Vec3::new(n(4)?, n(5)?, n(6)?),
+                    pitch,
+                    started: Instant::now(),
+                    seconds: n(7)?.max(0.1),
+                    reply: reply.clone(),
+                });
                 Ok(None)
             }
             "open" => {
