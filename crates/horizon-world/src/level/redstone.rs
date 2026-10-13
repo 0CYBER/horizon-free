@@ -1092,7 +1092,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let pitch = if mob_head {
             1.0
         } else {
-            2f64.powf(f64::from(note - 12) / 12.0) as f32
+            horizon_core::jmath::pow(2.0, f64::from(note - 12) / 12.0) as f32
         };
         let sound = match instrument.as_str() {
             "custom_head" => "minecraft:ui.button.click".to_owned(),

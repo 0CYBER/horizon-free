@@ -300,7 +300,7 @@ pub fn marsaglia_polar(cache: &mut Option<f64>, mut next_double: impl FnMut() ->
         if radius >= 1.0 || radius == 0.0 {
             continue;
         }
-        let multiplier = (-2.0 * radius.ln() / radius).sqrt();
+        let multiplier = (-2.0 * crate::jmath::log(radius) / radius).sqrt();
         *cache = Some(y * multiplier);
         return x * multiplier;
     }

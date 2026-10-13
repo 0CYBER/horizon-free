@@ -1061,8 +1061,8 @@ fn attack(m: &mut Mob, target: Who, cx: &mut Cx) {
 fn run_one(m: &mut Mob, st: &mut Warden, cx: &mut Cx) {
     let now = i64::from(m.age);
     // ShufflingList.shuffle: each entry sorts by -ln(random) / weight.
-    let stroll_key = -f64::from(m.random.next_float()).ln() / 2.0;
-    let pause_key = -f64::from(m.random.next_float()).ln();
+    let stroll_key = -horizon_core::jmath::log(f64::from(m.random.next_float())) / 2.0;
+    let pause_key = -horizon_core::jmath::log(f64::from(m.random.next_float()));
     let pause_first = pause_key < stroll_key;
     let order = if pause_first {
         [false, true]
