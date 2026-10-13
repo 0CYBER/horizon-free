@@ -54,6 +54,8 @@ pub struct StateFacts {
     pub waterlogged: bool,
     /// `hasOffsetFunction`: the model is jittered per column.
     pub random_offset: bool,
+    /// Whether the outline, not just the model, follows BlockState.getOffset.
+    pub outline_offset: bool,
     /// `BlockState.isSolid()` (legacy solidity; fluid surfaces read it).
     pub legacy_solid: bool,
     /// `isFaceSturdy(.., SupportType.FULL)` by Direction ordinal.
@@ -62,8 +64,8 @@ pub struct StateFacts {
     pub classes: Arc<[Arc<str>]>,
     /// `getShape` (the outline used for picking) as boxes in block space,
     /// without the random offset; and its edges as LevelRenderer draws them.
-    pub outline: Arc<[[f32; 6]]>,
-    pub outline_edges: Arc<[[f32; 6]]>,
+    pub outline: Arc<[[f64; 6]]>,
+    pub outline_edges: Arc<[[f64; 6]]>,
     /// `getMapColor(..).id` (0 = NONE).
     pub map_color: u8,
 }
@@ -78,11 +80,11 @@ pub const MAP_COLORS: [u32; 62] = [
     14200723, 8365974,
 ];
 /// The 12 edges of the unit cube (outline data predating the export).
-fn cube_edges() -> Vec<[f32; 6]> {
+fn cube_edges() -> Vec<[f64; 6]> {
     let mut edges = Vec::new();
     for a in 0..3 {
         for (u, v) in [(0., 0.), (1., 0.), (0., 1.), (1., 1.)] {
-            let mut from = [0.0f32; 3];
+            let mut from = [0.0f64; 3];
             let (b, c) = ((a + 1) % 3, (a + 2) % 3);
             from[b] = u;
             from[c] = v;
@@ -147,8 +149,8 @@ impl BlockFacts {
                 .or_insert_with(|| Arc::from(s))
                 .clone()
         };
-        let mut shapes: HashMap<String, Arc<[[f32; 6]]>> = HashMap::new();
-        let mut shape = |v: &Value, fallback: &dyn Fn() -> Vec<[f32; 6]>| -> Arc<[[f32; 6]]> {
+        let mut shapes: HashMap<String, Arc<[[f64; 6]]>> = HashMap::new();
+        let mut shape = |v: &Value, fallback: &dyn Fn() -> Vec<[f64; 6]>| -> Arc<[[f64; 6]]> {
             let Some(list) = v.as_array() else {
                 return fallback().into();
             };
@@ -158,8 +160,7 @@ impl BlockFacts {
                     list.iter()
                         .filter_map(|b| {
                             let b = b.as_array()?;
-                            let n =
-                                |i: usize| b.get(i).and_then(Value::as_f64).unwrap_or(0.0) as f32;
+                            let n = |i: usize| b.get(i).and_then(Value::as_f64).unwrap_or(0.0);
                             Some([n(0), n(1), n(2), n(3), n(4), n(5)])
                         })
                         .collect()
@@ -263,6 +264,9 @@ impl BlockFacts {
                 fluid_falling,
                 waterlogged: prop("waterlogged") == Some("true"),
                 random_offset: flag("offset"),
+                outline_offset: entry["outline_offset"]
+                    .as_bool()
+                    .unwrap_or_else(|| flag("offset")),
                 legacy_solid: behaviour_states[index][1].as_u64().unwrap_or(0) & 1 != 0,
                 sturdy_full: (behaviour_states[index][0].as_u64().unwrap_or(0) & 63) as u8,
                 classes: classes

@@ -414,6 +414,64 @@ fn aabb_at(p: [f64; 3], w: f32, h: f32) -> Aabb {
         Vec3::new(p[0] + w, p[1] + f64::from(h), p[2] + w),
     )
 }
+/// ClientLevel.addBreakingParticles placement, using local outline boxes.
+pub fn breaking_position(
+    random: &mut impl RandomSource,
+    pos: [i32; 3],
+    face: [i32; 3],
+    boxes: &[[f64; 6]],
+) -> Option<[f64; 3]> {
+    let mut bounds = *boxes.first()?;
+    for b in &boxes[1..] {
+        for i in 0..3 {
+            bounds[i] = bounds[i].min(b[i]);
+            bounds[i + 3] = bounds[i + 3].max(b[i + 3]);
+        }
+    }
+    // Vanilla consumes all three doubles before replacing the hit-face coordinate.
+    let mut p = std::array::from_fn(|i| {
+        f64::from(pos[i])
+            + random.next_double() * (bounds[i + 3] - bounds[i] - f64::from(0.2f32))
+            + f64::from(0.1f32)
+            + bounds[i]
+    });
+    for i in 0..3 {
+        match face[i] {
+            -1 => p[i] = f64::from(pos[i]) + bounds[i] - f64::from(0.1f32),
+            1 => p[i] = f64::from(pos[i]) + bounds[i + 3] + f64::from(0.1f32),
+            _ => {}
+        }
+    }
+    Some(p)
+}
+
+/// ClientLevel.addDestroyBlockEffect placement and pre-constructor velocities.
+pub fn destroy_positions(
+    pos: [i32; 3],
+    boxes: &[[f64; 6]],
+    mut emit: impl FnMut([f64; 3], [f64; 3]),
+) {
+    for b in boxes {
+        let widths: [f64; 3] = std::array::from_fn(|i| (b[i + 3] - b[i]).min(1.0));
+        let counts: [usize; 3] = widths.map(|w| ((w / 0.25).ceil() as usize).max(2));
+        for x in 0..counts[0] {
+            for y in 0..counts[1] {
+                for z in 0..counts[2] {
+                    let cells = [x, y, z];
+                    let relative: [f64; 3] =
+                        std::array::from_fn(|i| (cells[i] as f64 + 0.5) / counts[i] as f64);
+                    emit(
+                        std::array::from_fn(|i| {
+                            f64::from(pos[i]) + (relative[i] * widths[i] + b[i])
+                        }),
+                        relative.map(|v| v - 0.5),
+                    );
+                }
+            }
+        }
+    }
+}
+
 impl Particle {
     /// `Particle(level, x, y, z)` + `SingleQuadParticle` (no initial velocity).
     fn at(random: &mut LegacyRandom, ty: ParticleType, p: [f64; 3]) -> Self {
@@ -2829,6 +2887,81 @@ fn lifetime_alpha(a: [f32; 4], age: i32, lifetime: i32, partial: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mining_particles_follow_slab_and_trapdoor_height() {
+        for height in [0.5, 3.0 / 16.0] {
+            let boxes = [[0.0, 0.0, 0.0, 1.0, height, 1.0]];
+            let p = breaking_position(&mut LegacyRandom::new(1), [2, 97, 3], [0, 1, 0], &boxes)
+                .unwrap();
+            assert_eq!(p[1], 97.0 + height + f64::from(0.1f32));
+            for seed in 0..128 {
+                let p = breaking_position(&mut LegacyRandom::new(seed), [0; 3], [0, 0, -1], &boxes)
+                    .unwrap();
+                assert!(p[1] <= height, "crumb above shape: {p:?}");
+            }
+        }
+    }
+    #[test]
+    fn destroyed_slab_uses_its_shape_and_particle_density() {
+        let mut burst = Vec::new();
+        destroy_positions([0; 3], &[[0.0, 0.0, 0.0, 1.0, 0.5, 1.0]], |p, v| {
+            burst.push((p, v))
+        });
+        assert_eq!(burst.len(), 32);
+        assert!(burst.iter().all(|(p, _)| p[1] < 0.5));
+        assert_eq!(burst[0], ([0.125, 0.125, 0.125], [-0.375, -0.25, -0.375]));
+    }
+    #[test]
+    fn empty_outline_emits_no_terrain_particles_or_random_draws() {
+        let mut r = LegacyRandom::new(1);
+        assert_eq!(breaking_position(&mut r, [0; 3], [0, 1, 0], &[]), None);
+        assert_eq!(r.next_long(), LegacyRandom::new(1).next_long());
+        destroy_positions([0; 3], &[], |_, _| panic!("empty shape emitted a particle"));
+    }
+    #[test]
+    fn every_hit_face_consumes_three_position_draws() {
+        let boxes = [[0.25, 0.0, 0.25, 0.75, 0.5, 0.75]];
+        for face in [
+            [-1, 0, 0],
+            [1, 0, 0],
+            [0, -1, 0],
+            [0, 1, 0],
+            [0, 0, -1],
+            [0, 0, 1],
+        ] {
+            let mut random = LegacyRandom::new(42);
+            let p = breaking_position(&mut random, [0; 3], face, &boxes).unwrap();
+            let i = face.iter().position(|v| *v != 0).unwrap();
+            let expected = if face[i] < 0 {
+                boxes[0][i] - f64::from(0.1f32)
+            } else {
+                boxes[0][i + 3] + f64::from(0.1f32)
+            };
+            assert_eq!(p[i], expected);
+            let mut reference = LegacyRandom::new(42);
+            for _ in 0..3 {
+                reference.next_double();
+            }
+            assert_eq!(random.next_long(), reference.next_long());
+        }
+    }
+    #[test]
+    fn multipart_destroy_burst_uses_each_box_and_caps_widths() {
+        let boxes = [
+            [0.0, 0.0, 0.0, 1.0, 0.5, 1.0],
+            [0.0, 0.5, 0.5, 1.0, 1.0, 1.0],
+        ];
+        let mut burst = Vec::new();
+        destroy_positions([0; 3], &boxes, |p, v| burst.push((p, v)));
+        assert_eq!(burst.len(), 48);
+        assert_eq!(burst[32].0, [0.125, 0.625, 0.625]);
+        let mut tall = Vec::new();
+        destroy_positions([0; 3], &[[0.0, 0.0, 0.0, 1.0, 1.5, 1.0]], |p, _| {
+            tall.push(p)
+        });
+        assert_eq!(tall.len(), 64);
+        assert!(tall.iter().all(|p| p[1] < 1.0));
+    }
     #[test]
     fn particle_names_round_trip() {
         for &ty in ParticleType::ALL {

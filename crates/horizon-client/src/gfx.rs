@@ -13,6 +13,66 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Instant};
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
+// RenderPipelines.CRUMBLING: dst * src + src * dst, alpha replaced.
+const CRUMBLING_BLEND: wgpu::BlendState = wgpu::BlendState {
+    color: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::Dst,
+        dst_factor: wgpu::BlendFactor::Src,
+        operation: wgpu::BlendOperation::Add,
+    },
+    alpha: wgpu::BlendComponent::REPLACE,
+};
+
+// Separate special materials without changing entity order or their overlays.
+fn batch_entities(
+    entities: &[Vertex],
+    additive: &[Vertex],
+    hand: &[Vertex],
+) -> (Vec<Vertex>, [u32; 4]) {
+    let mut combined = Vec::with_capacity(entities.len() + additive.len() + hand.len());
+    let mut counts = [0u32; 4];
+    for (i, layer) in [0, 11, 12, 4].into_iter().enumerate() {
+        for quad in entities.as_chunks::<4>().0 {
+            let material = match quad[0].layer {
+                11 => 11,
+                12 => 12,
+                4 => 4,
+                _ => 0,
+            };
+            if material == layer {
+                combined.extend_from_slice(quad);
+                counts[i] += 1;
+            }
+        }
+    }
+    combined.extend_from_slice(additive);
+    combined.extend_from_slice(hand);
+    (combined, counts)
+}
+
+/// Window.getAppropriateLineWidth, in framebuffer pixels.
+pub fn outline_width(width: u32) -> f32 {
+    2.5f32.max(width as f32 / 1920.0 * 2.5)
+}
+
+/// ScreenSize, stroke width and ProjectionType.PERSPECTIVE layering.
+pub fn outline_params(width: u32, height: u32) -> [f32; 4] {
+    [
+        width as f32,
+        height.max(1) as f32,
+        outline_width(width),
+        1.0 - 1.0 / 4096.0,
+    ]
+}
+
+/// Camera-relative segment endpoints; no shape expansion in vanilla 26.3.
+pub fn outline_vertices(edges: &[[f64; 6]], camera: glam::DVec3) -> Vec<[f32; 6]> {
+    edges
+        .iter()
+        .map(|e| std::array::from_fn(|i| (e[i] - camera.to_array()[i % 3]) as f32))
+        .collect()
+}
+
 mod arena;
 mod occlusion;
 mod timing;
@@ -35,6 +95,10 @@ struct Globals {
     end_portal_sprites: [[f32; 4]; 2],
     /// x: vanilla's `GameTime` uniform; yzw unused.
     time: [f32; 4],
+    /// Atlas rect of the current destroy stage (entity.wgsl).
+    crumbling_sprite: [f32; 4],
+    /// Framebuffer size, selection stroke width, perspective layering scale.
+    outline_params: [f32; 4],
 }
 pub type SectionKey = (i32, i32, i32);
 struct SectionGpu {
@@ -100,6 +164,8 @@ pub struct Frame<'a> {
     /// Atlas rects (u0, v0, width, height) of end_sky.png and end_portal.png
     /// (`rendertype_end_portal`'s Sampler0 and Sampler1).
     pub end_portal_sprites: [[f32; 4]; 2],
+    /// Current destroy-stage sprite: projected UVs repeat inside this atlas rect.
+    pub crumbling_sprite: [f32; 4],
     pub ticks: u64,
     /// The darkness effect on the lightmap: the brightness it takes off the
     /// gamma option and the pulsing scale subtracted from the light.
@@ -153,6 +219,8 @@ pub struct Renderer {
     dark_disc: wgpu::RenderPipeline,
     lines: wgpu::RenderPipeline,
     entity_pipeline: wgpu::RenderPipeline,
+    crumbling_pipeline: wgpu::RenderPipeline,
+    cloud_pipeline: wgpu::RenderPipeline,
     additive_pipeline: wgpu::RenderPipeline,
     celestial_pipeline: wgpu::RenderPipeline,
     celestial_buffer: wgpu::Buffer,
@@ -453,10 +521,10 @@ impl Renderer {
                 attributes: &instance_attributes,
             }),
         ];
-        let line_attributes = wgpu::vertex_attr_array![0=>Float32x3];
+        let line_attributes = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3];
         let line_buffers = [Some(wgpu::VertexBufferLayout {
-            array_stride: 12,
-            step_mode: wgpu::VertexStepMode::Vertex,
+            array_stride: 24,
+            step_mode: wgpu::VertexStepMode::Instance,
             attributes: &line_attributes,
         })];
         let alpha_blend = wgpu::BlendState::ALPHA_BLENDING;
@@ -559,7 +627,7 @@ impl Renderer {
             "vs_line",
             "fs_line",
             &line_buffers,
-            wgpu::PrimitiveTopology::LineList,
+            wgpu::PrimitiveTopology::TriangleStrip,
             None,
             false,
             true,
@@ -808,40 +876,62 @@ impl Renderer {
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &vertex_attributes,
         })];
-        let entity_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Entities"),
-            layout: Some(&entity_layout),
-            vertex: wgpu::VertexState {
-                module: &entity_shader,
-                entry_point: Some("vs_entity"),
-                compilation_options: Default::default(),
-                buffers: &entity_vertex,
+        let entity_pipeline = |label, cull_mode, depth_write, bias, blend| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&entity_layout),
+                vertex: wgpu::VertexState {
+                    module: &entity_shader,
+                    entry_point: Some("vs_entity"),
+                    compilation_options: Default::default(),
+                    buffers: &entity_vertex,
+                },
+                primitive: wgpu::PrimitiveState {
+                    cull_mode,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(depth_write),
+                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                    stencil: Default::default(),
+                    bias,
+                }),
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &entity_shader,
+                    entry_point: Some("fs_entity"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: config.format.remove_srgb_suffix(),
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let crumbling_pipeline = entity_pipeline(
+            "Breaking cracks",
+            Some(wgpu::Face::Back),
+            false,
+            wgpu::DepthBiasState {
+                constant: -10,
+                slope_scale: -1.0,
+                clamp: 0.0,
             },
-            primitive: wgpu::PrimitiveState {
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &entity_shader,
-                entry_point: Some("fs_entity"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format.remove_srgb_suffix(),
-                    blend: Some(alpha_blend),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+            CRUMBLING_BLEND,
+        );
+        let cloud_pipeline = entity_pipeline(
+            "Clouds",
+            Some(wgpu::Face::Back),
+            true,
+            Default::default(),
+            alpha_blend,
+        );
+        let entity_pipeline =
+            entity_pipeline("Entities", None, true, Default::default(), alpha_blend);
         // BlendFunction.LIGHTNING: src alpha, one; no depth writes.
         let additive_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Additive entities"),
@@ -1204,6 +1294,8 @@ impl Renderer {
             dark_disc,
             lines,
             entity_pipeline,
+            crumbling_pipeline,
+            cloud_pipeline,
             additive_pipeline,
             celestial_pipeline,
             celestial_buffer,
@@ -1538,17 +1630,10 @@ impl Renderer {
     }
     fn projection(&self, fov_degrees: f32, yaw: f32, pitch: f32, bob: Mat4, distance: f32) -> Mat4 {
         let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
-        let (yaw, pitch) = (yaw.to_radians(), pitch.to_radians());
-        // Minecraft yaw: 0 = +Z (south), 90 = -X (west); pitch positive looks down.
-        let forward = Vec3::new(
-            -yaw.sin() * pitch.cos(),
-            -pitch.sin(),
-            yaw.cos() * pitch.cos(),
-        );
         let far = (distance * 4.0).max(1024.0);
         Mat4::perspective_rh(fov_degrees.to_radians(), aspect, 0.05, far)
             * bob
-            * Mat4::look_to_rh(Vec3::ZERO, forward, Vec3::Y)
+            * crate::camera::view_matrix(yaw, pitch)
     }
     fn update_lightmap(
         &self,
@@ -1694,13 +1779,7 @@ impl Renderer {
         );
         let view_proj = self.view_projection(frame);
         let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
-        let (yaw, pitch) = (frame.yaw.to_radians(), frame.pitch.to_radians());
-        let forward = Vec3::new(
-            -yaw.sin() * pitch.cos(),
-            -pitch.sin(),
-            yaw.cos() * pitch.cos(),
-        );
-        let view = Mat4::look_to_rh(Vec3::ZERO, forward, Vec3::Y);
+        let view = crate::camera::view_matrix(frame.yaw, frame.pitch);
         let sun_angle = frame.sky.sun_angle.to_radians();
         // Celestial bodies rotate around the X axis; angle 0 = noon.
         let sun = Vec3::new(0.0, sun_angle.cos(), -sun_angle.sin());
@@ -1766,7 +1845,9 @@ impl Renderer {
                 0.0,
             ],
             end_portal_sprites: frame.end_portal_sprites,
+            crumbling_sprite: frame.crumbling_sprite,
             time: [frame.shader_game_time, 0.0, 0.0, 0.0],
+            outline_params: outline_params(self.config.width, self.config.height),
         };
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
@@ -1891,45 +1972,22 @@ impl Renderer {
         }
         let outline_edges = frame.outline.len().min(MAX_OUTLINE_EDGES as usize);
         if outline_edges > 0 {
-            // A hair outside the block, like vanilla's line depth offset.
-            let lines: Vec<[f32; 3]> = frame.outline[..outline_edges]
-                .iter()
-                .flat_map(|e| {
-                    let center = [
-                        (e[0] + e[3]) / 2.0,
-                        (e[1] + e[4]) / 2.0,
-                        (e[2] + e[5]) / 2.0,
-                    ];
-                    let point = |i: usize| -> [f32; 3] {
-                        std::array::from_fn(|a| {
-                            let v = e[i + a];
-                            let grow = if v < center[a] {
-                                -0.002
-                            } else if v > center[a] {
-                                0.002
-                            } else {
-                                0.0
-                            };
-                            (v - [camera.x, camera.y, camera.z][a]) as f32 + grow
-                        })
-                    };
-                    [point(0), point(3)]
-                })
-                .collect();
+            let lines = outline_vertices(&frame.outline[..outline_edges], camera);
             self.queue
                 .write_buffer(&self.outline, 0, bytemuck::cast_slice(&lines));
         }
-        let mut combined;
-        let all_entities: &[Vertex] = if frame.hand.is_empty() && frame.additive.is_empty() {
-            frame.entities
-        } else {
-            combined =
-                Vec::with_capacity(frame.entities.len() + frame.additive.len() + frame.hand.len());
-            combined.extend_from_slice(frame.entities);
-            combined.extend_from_slice(frame.additive);
-            combined.extend_from_slice(frame.hand);
-            &combined
-        };
+        let (
+            combined,
+            [
+                entity_quads,
+                crumbling_quads,
+                translucent_crumbling_quads,
+                cloud_quads,
+            ],
+        ) = batch_entities(frame.entities, frame.additive, frame.hand);
+        let world_quads =
+            entity_quads + crumbling_quads + translucent_crumbling_quads + cloud_quads;
+        let all_entities = &combined;
         let hand_quads = (frame.hand.len() / 4) as u32;
         let additive_quads = (frame.additive.len() / 4) as u32;
         let entity_vertices = all_entities.len() as u64;
@@ -1954,9 +2012,8 @@ impl Renderer {
                 bytemuck::cast_slice(&frame.celestial[..celestial_vertices]),
             );
         }
-        let entity_quads = (entity_vertices / 4) as u32 - hand_quads - additive_quads;
-        if entity_quads + additive_quads + hand_quads > self.index_quads {
-            self.index_quads = (entity_quads + additive_quads + hand_quads).next_power_of_two();
+        if world_quads + additive_quads + hand_quads > self.index_quads {
+            self.index_quads = (world_quads + additive_quads + hand_quads).next_power_of_two();
             self.indices = Self::quad_indices(&self.device, self.index_quads);
         }
         if let Some(b) = &frame.border {
@@ -2069,17 +2126,24 @@ impl Renderer {
                 pass.draw_indexed(0..entity_quads * 6, 0, 0..1);
                 pass.set_bind_group(0, &self.group, &[]);
             }
+            if crumbling_quads > 0 {
+                pass.set_pipeline(&self.crumbling_pipeline);
+                pass.set_bind_group(0, &self.entity_group, &[]);
+                pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
+                pass.draw_indexed(0..crumbling_quads * 6, (entity_quads * 4) as i32, 0..1);
+                pass.set_bind_group(0, &self.group, &[]);
+            }
             if additive_quads > 0 {
                 pass.set_pipeline(&self.additive_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
-                pass.draw_indexed(0..additive_quads * 6, (entity_quads * 4) as i32, 0..1);
+                pass.draw_indexed(0..additive_quads * 6, (world_quads * 4) as i32, 0..1);
                 pass.set_bind_group(0, &self.group, &[]);
             }
             if outline_edges > 0 {
                 pass.set_pipeline(&self.lines);
                 pass.set_vertex_buffer(0, self.outline.slice(..));
-                pass.draw(0..outline_edges as u32 * 2, 0..1);
+                pass.draw(0..4, 0..outline_edges as u32);
             }
             pass.set_pipeline(&self.translucent);
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -2096,6 +2160,26 @@ impl Renderer {
                     pass.draw_indexed(first..first + 6, 0, 0..1);
                 }
                 pass.set_bind_group(0, &self.group, &[]);
+            }
+            if translucent_crumbling_quads > 0 {
+                pass.set_pipeline(&self.crumbling_pipeline);
+                pass.set_bind_group(0, &self.entity_group, &[]);
+                pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
+                pass.draw_indexed(
+                    0..translucent_crumbling_quads * 6,
+                    ((entity_quads + crumbling_quads) * 4) as i32,
+                    0..1,
+                );
+            }
+            if cloud_quads > 0 {
+                pass.set_pipeline(&self.cloud_pipeline);
+                pass.set_bind_group(0, &self.entity_group, &[]);
+                pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
+                pass.draw_indexed(
+                    0..cloud_quads * 6,
+                    ((entity_quads + crumbling_quads + translucent_crumbling_quads) * 4) as i32,
+                    0..1,
+                );
             }
         }
         if scaled.is_some() {
@@ -2130,7 +2214,7 @@ impl Renderer {
             pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
             pass.draw_indexed(
                 0..hand_quads * 6,
-                ((entity_quads + additive_quads) * 4) as i32,
+                ((world_quads + additive_quads) * 4) as i32,
                 0..1,
             );
         }
@@ -2354,4 +2438,94 @@ fn frustum(m: Mat4) -> [Vec4; 6] {
         r(3) - r(2),
     ];
     planes.map(|p| p / p.truncate().length())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn special_material_batches_preserve_quad_order_and_offsets() {
+        let quad = |layer, id| {
+            [super::Vertex {
+                pos: [0.0; 3],
+                uv: [0.0; 2],
+                layer,
+                color: 0xffff_ffff,
+                light: id,
+            }; 4]
+        };
+        let entities: Vec<_> = [(0, 0), (4, 1), (11, 2), (7, 3), (4, 4), (12, 7)]
+            .into_iter()
+            .flat_map(|(layer, id)| quad(layer, id))
+            .collect();
+        let (vertices, counts) = super::batch_entities(&entities, &quad(3, 5), &quad(0, 6));
+        assert_eq!(counts, [2, 1, 1, 2]);
+        assert_eq!(
+            vertices
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|q| q[0].light)
+                .collect::<Vec<_>>(),
+            [0, 3, 2, 7, 1, 4, 5, 6]
+        );
+    }
+    #[test]
+    fn cracks_multiply_instead_of_covering_the_block() {
+        let blend = super::CRUMBLING_BLEND;
+        assert_eq!(blend.color.src_factor, wgpu::BlendFactor::Dst);
+        assert_eq!(blend.color.dst_factor, wgpu::BlendFactor::Src);
+        assert_eq!(blend.alpha.src_factor, wgpu::BlendFactor::One);
+        assert_eq!(blend.alpha.dst_factor, wgpu::BlendFactor::Zero);
+    }
+    #[test]
+    fn shader_globals_match_the_rust_layout() {
+        // terrain.wgsl and entity.wgsl bind the same buffer: same fields, same order.
+        let fields = |source: &str| -> Vec<String> {
+            let body = source.split("struct Globals {").nth(1).unwrap();
+            body[..body.find('}').unwrap()]
+                .lines()
+                .filter_map(|l| l.trim().split_once(':').map(|(name, _)| name.to_string()))
+                .filter(|name| !name.starts_with("//"))
+                .collect()
+        };
+        let terrain = fields(include_str!("terrain.wgsl"));
+        assert_eq!(terrain, fields(include_str!("entity.wgsl")));
+        let rust = fields(include_str!("gfx.rs"));
+        assert_eq!(terrain, rust);
+    }
+    #[test]
+    fn selection_outline_uses_vanilla_pixel_width() {
+        for width in [640, 1280, 1920] {
+            assert_eq!(super::outline_width(width), 2.5);
+        }
+        assert_eq!(super::outline_width(2560), 2560.0 / 1920.0 * 2.5);
+        assert_eq!(super::outline_width(3840), 5.0);
+    }
+    #[test]
+    fn selection_outline_has_vanilla_perspective_layering() {
+        assert_eq!(
+            super::outline_params(1280, 720),
+            [1280.0, 720.0, 2.5, 0.99975586]
+        );
+        assert_eq!(
+            super::outline_params(3840, 0),
+            [3840.0, 1.0, 5.0, 0.99975586]
+        );
+    }
+    #[test]
+    fn selection_outline_preserves_shape_edges_without_inflation() {
+        let edges = [[2.0, 97.5, 3.0, 3.0, 97.5, 3.0]];
+        assert_eq!(
+            super::outline_vertices(&edges, glam::DVec3::new(0.5, 98.62, 0.5)),
+            vec![[
+                1.5,
+                (97.5 - 98.62) as f32,
+                2.5,
+                2.5,
+                (97.5 - 98.62) as f32,
+                2.5
+            ]]
+        );
+        assert!(super::outline_vertices(&[], glam::DVec3::ZERO).is_empty());
+    }
 }

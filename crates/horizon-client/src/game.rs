@@ -908,7 +908,7 @@ impl Game<'_> {
     fn outline_boxes(&self, pos: [i32; 3]) -> Vec<[f64; 6]> {
         let state = self.world.block(pos[0], pos[1], pos[2]);
         let f = self.res.facts.get(state);
-        let o = if f.random_offset {
+        let o = if f.outline_offset {
             self.res
                 .context
                 .tables
@@ -924,7 +924,7 @@ impl Game<'_> {
         ];
         f.outline
             .iter()
-            .map(|b| std::array::from_fn(|i| base[i % 3] + f64::from(b[i])))
+            .map(|b| std::array::from_fn(|i| base[i % 3] + b[i]))
             .collect()
     }
     /// Voxel traversal against non-air, non-fluid blocks, clipped against
@@ -1102,51 +1102,47 @@ impl Game<'_> {
         };
         Some((name, tint))
     }
-    /// ParticleEngine.destroy: a 4x4x4 burst.
+    fn particle_shape(&self, pos: [i32; 3], state: BlockStateId) -> Vec<[f64; 6]> {
+        let f = self.res.facts.get(state);
+        let offset = if f.outline_offset {
+            self.res
+                .context
+                .tables
+                .offset(state, pos[0], pos[2])
+                .unwrap_or([0.0; 3])
+        } else {
+            [0.0; 3]
+        };
+        f.outline
+            .iter()
+            .map(|b| std::array::from_fn(|i| b[i] + offset[i % 3]))
+            .collect()
+    }
+    /// ClientLevel.addDestroyBlockEffect: a burst per outline box.
     fn destroy_particles(&mut self, pos: [i32; 3], state: BlockStateId) {
         let Some((sprite, tint)) = self.particle_sprite(state) else {
             return;
         };
-        for x in 0..4 {
-            for y in 0..4 {
-                for z in 0..4 {
-                    let d = |i: i32| (f64::from(i) + 0.5) / 4.0;
-                    let p = [
-                        f64::from(pos[0]) + d(x),
-                        f64::from(pos[1]) + d(y),
-                        f64::from(pos[2]) + d(z),
-                    ];
-                    let v = [d(x) - 0.5, d(y) - 0.5, d(z) - 0.5];
-                    // LevelEventHandler (2001) runs on the client: its random, not the level's.
-                    let particle =
-                        Particle::terrain(self.particles.random(), p, v, sprite.clone(), tint);
-                    self.particles.push(particle);
-                }
-            }
-        }
+        let boxes = self.particle_shape(pos, state);
+        horizon_client::particles::destroy_positions(pos, &boxes, |p, v| {
+            let particle = Particle::terrain(self.particles.random(), p, v, sprite.clone(), tint);
+            self.particles.push(particle);
+        });
     }
-    /// ParticleEngine.crack: one crumb on the face being mined.
+    /// ClientLevel.addBreakingParticles: one crumb on the face being mined.
     fn crack_particle(&mut self, pos: [i32; 3], face: [i32; 3], state: BlockStateId) {
         let Some((sprite, tint)) = self.particle_sprite(state) else {
             return;
         };
-        // Client-side particles draw from the client random, not the level's.
+        let boxes = self.particle_shape(pos, state);
+        // Keep client effects separate from the authoritative world RNG.
         let r = self.particles.random();
-        let mut p = [0.0; 3];
-        for i in 0..3 {
-            let base = f64::from(pos[i]);
-            p[i] = match face[i] {
-                1 => base + 1.0 + 0.1,
-                -1 => base - 0.1,
-                _ => base + 0.1 + r.next_double() * 0.8,
-            };
-        }
+        let Some(p) = horizon_client::particles::breaking_position(r, pos, face, &boxes) else {
+            return;
+        };
         let mut particle = Particle::terrain(r, p, [0.0; 3], sprite, tint);
-        for c in &mut particle.velocity {
-            *c *= 0.2;
-        }
-        particle.velocity[1] = (particle.velocity[1] - 0.1) * 0.2 + 0.1;
-        particle.size *= 0.6;
+        particle.set_power(0.2);
+        particle.scale(0.6);
         self.particles.push(particle);
     }
     fn spawn_item(
@@ -4595,10 +4591,9 @@ impl Game<'_> {
             && m.progress > 0.0
         {
             let stage = ((m.progress * 10.0) as u32).min(9);
-            if let Some(r) = atlas
+            if atlas
                 .sprites
-                .get(&format!("block/destroy_stage_{stage}"))
-                .copied()
+                .contains_key(&format!("block/destroy_stage_{stage}"))
             {
                 let o = (glam::DVec3::new(
                     f64::from(m.pos[0]),
@@ -4606,64 +4601,27 @@ impl Game<'_> {
                     f64::from(m.pos[2]),
                 ) - camera)
                     .as_vec3();
-                let e = 0.002;
-                let corner = |x: f32, y: f32, z: f32| {
-                    o + glam::Vec3::new(
-                        x * (1.0 + 2.0 * e) - e,
-                        y * (1.0 + 2.0 * e) - e,
-                        z * (1.0 + 2.0 * e) - e,
-                    )
-                };
-                let faces = [
-                    [
-                        corner(0., 1., 0.),
-                        corner(1., 1., 0.),
-                        corner(1., 1., 1.),
-                        corner(0., 1., 1.),
-                    ],
-                    [
-                        corner(0., 0., 1.),
-                        corner(1., 0., 1.),
-                        corner(1., 0., 0.),
-                        corner(0., 0., 0.),
-                    ],
-                    [
-                        corner(0., 0., 0.),
-                        corner(1., 0., 0.),
-                        corner(1., 1., 0.),
-                        corner(0., 1., 0.),
-                    ],
-                    [
-                        corner(1., 0., 1.),
-                        corner(0., 0., 1.),
-                        corner(0., 1., 1.),
-                        corner(1., 1., 1.),
-                    ],
-                    [
-                        corner(0., 0., 1.),
-                        corner(0., 0., 0.),
-                        corner(0., 1., 0.),
-                        corner(0., 1., 1.),
-                    ],
-                    [
-                        corner(1., 0., 0.),
-                        corner(1., 0., 1.),
-                        corner(1., 1., 1.),
-                        corner(1., 1., 0.),
-                    ],
-                ];
-                for f in faces {
-                    for (v, uv) in
-                        f.iter()
-                            .zip([[r.u0, r.v1], [r.u1, r.v1], [r.u1, r.v0], [r.u0, r.v0]])
-                    {
-                        out.push(Vertex {
-                            pos: v.to_array(),
-                            uv,
-                            layer: 0,
-                            color: 0xB4FF_FFFF,
-                            light: (15 * 16) | ((15 * 16) << 8),
-                        });
+                let state = self.world.block(m.pos[0], m.pos[1], m.pos[2]);
+                if self.res.facts.get(state).render_shape
+                    == horizon_client::blocks::RenderShape::Model
+                    && let Ok(models) = self
+                        .res
+                        .assets
+                        .model_catalog
+                        .collect(state, BlockPos::new(m.pos[0], m.pos[1], m.pos[2]))
+                {
+                    let offset = self
+                        .res
+                        .context
+                        .tables
+                        .offset(state, m.pos[0], m.pos[2])
+                        .unwrap_or([0.0; 3]);
+                    let origin = o + glam::DVec3::from(offset).as_vec3();
+                    let translucent = models
+                        .iter()
+                        .any(|(_, model)| model.faces.iter().any(|f| f.translucent));
+                    for (_, model) in models {
+                        horizon_client::breaking::geometry(model, origin, translucent, &mut out);
                     }
                 }
             }
@@ -5079,69 +5037,74 @@ impl Game<'_> {
         let z_in = (cloud_z - cell_z as f64 * 12.0) as f32;
         let bottom = (cloud_height - camera.y) as f32;
         let filled = |cx: i64, cz: i64| cells[(cz.rem_euclid(h) * w + cx.rem_euclid(w)) as usize];
-        let radius = (self.streaming.radius * 16 / 12 + 1) as i64;
+        let radius = (self.streaming.radius * 16 + 11) / 12;
         let c = sky.cloud_color;
         let color = |shade: f32| {
             let ch = |v: f32| ((v * shade).clamp(0.0, 1.0) * 255.0) as u32;
             ch(c[3].clamp(0.0, 1.0)) << 24 | ch(c[2]) << 16 | ch(c[1]) << 8 | ch(c[0])
         };
         let light = 240 | 240 << 8;
-        for dz in -radius..=radius {
-            for dx in -radius..=radius {
-                if dx * dx + dz * dz > radius * radius {
-                    continue;
+        for (dx, dz) in horizon_client::clouds::cells(radius) {
+            let (dx, dz) = (i64::from(dx), i64::from(dz));
+            let (cx, cz) = (cell_x + dx, cell_z + dz);
+            if !filled(cx, cz) {
+                continue;
+            }
+            let x0 = dx as f32 * 12.0 - x_in;
+            let z0 = dz as f32 * 12.0 - z_in;
+            let (x1, z1, y0, y1) = (x0 + 12.0, z0 + 12.0, bottom, bottom + 4.0);
+            let mut quad = |p: [[f32; 3]; 4], shade: f32| {
+                for v in p {
+                    // Overlay 4: clouds (unlit, faded by the cloud fog end).
+                    out.push(Vertex {
+                        pos: v,
+                        uv,
+                        layer: 4,
+                        color: color(shade),
+                        light,
+                    });
                 }
-                let (cx, cz) = (cell_x + dx, cell_z + dz);
-                if !filled(cx, cz) {
-                    continue;
-                }
-                let x0 = dx as f32 * 12.0 - x_in;
-                let z0 = dz as f32 * 12.0 - z_in;
-                let (x1, z1, y0, y1) = (x0 + 12.0, z0 + 12.0, bottom, bottom + 4.0);
-                let mut quad = |p: [[f32; 3]; 4], shade: f32| {
-                    for v in p {
-                        // Overlay 4: clouds (unlit, faded by the cloud fog end).
-                        out.push(Vertex {
-                            pos: v,
-                            uv,
-                            layer: 4,
-                            color: color(shade),
-                            light,
-                        });
-                    }
-                };
-                quad(
-                    [[x0, y1, z0], [x0, y1, z1], [x1, y1, z1], [x1, y1, z0]],
-                    1.0,
-                );
-                quad(
+            };
+            let faces = [
+                (
                     [[x1, y0, z0], [x1, y0, z1], [x0, y0, z1], [x0, y0, z0]],
                     0.7,
-                );
-                if !filled(cx, cz - 1) {
-                    quad(
-                        [[x0, y0, z0], [x0, y1, z0], [x1, y1, z0], [x1, y0, z0]],
-                        0.8,
-                    );
-                }
-                if !filled(cx, cz + 1) {
-                    quad(
-                        [[x1, y0, z1], [x1, y1, z1], [x0, y1, z1], [x0, y0, z1]],
-                        0.8,
-                    );
-                }
-                if !filled(cx - 1, cz) {
-                    quad(
-                        [[x0, y0, z1], [x0, y1, z1], [x0, y1, z0], [x0, y0, z0]],
-                        0.9,
-                    );
-                }
-                if !filled(cx + 1, cz) {
-                    quad(
-                        [[x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]],
-                        0.9,
-                    );
-                }
+                ),
+                (
+                    [[x0, y1, z0], [x0, y1, z1], [x1, y1, z1], [x1, y1, z0]],
+                    1.0,
+                ),
+                (
+                    [[x0, y0, z0], [x0, y1, z0], [x1, y1, z0], [x1, y0, z0]],
+                    0.8,
+                ),
+                (
+                    [[x1, y0, z1], [x1, y1, z1], [x0, y1, z1], [x0, y0, z1]],
+                    0.8,
+                ),
+                (
+                    [[x0, y0, z1], [x0, y1, z1], [x0, y1, z0], [x0, y0, z0]],
+                    0.9,
+                ),
+                (
+                    [[x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]],
+                    0.9,
+                ),
+            ];
+            let mask = horizon_client::clouds::face_mask(
+                dx as i32,
+                dz as i32,
+                bottom,
+                [
+                    !filled(cx, cz - 1),
+                    !filled(cx, cz + 1),
+                    !filled(cx - 1, cz),
+                    !filled(cx + 1, cz),
+                ],
+            );
+            for (direction, inside) in horizon_client::clouds::faces(mask) {
+                let (p, shade) = faces[usize::from(direction)];
+                quad(if inside { [p[3], p[2], p[1], p[0]] } else { p }, shade);
             }
         }
     }
@@ -6490,13 +6453,7 @@ impl Game<'_> {
             0.0
         };
         let inverse_height = 1.0 - self.heights.interpolated(a)[0];
-        let (yaw, pitch) = (self.yaw.to_radians(), self.pitch.to_radians());
-        let forward = glam::Vec3::new(
-            -yaw.sin() * pitch.cos(),
-            -pitch.sin(),
-            yaw.cos() * pitch.cos(),
-        );
-        let view = glam::Mat4::look_to_rh(glam::Vec3::ZERO, forward, glam::Vec3::Y);
+        let view = horizon_client::camera::view_matrix(self.yaw, self.pitch);
         let to_world = view.inverse();
         let eye = self.eye_position().unwrap_or_default();
         let light = self.world.light(
@@ -7259,7 +7216,7 @@ impl Game<'_> {
                 .map(|h| {
                     let state = self.world.block(h.pos[0], h.pos[1], h.pos[2]);
                     let f = self.res.facts.get(state);
-                    let o = if f.random_offset {
+                    let o = if f.outline_offset {
                         self.res
                             .context
                             .tables
@@ -7271,7 +7228,7 @@ impl Game<'_> {
                     let p = h.pos.map(f64::from);
                     f.outline_edges
                         .iter()
-                        .map(|e| std::array::from_fn(|i| p[i % 3] + o[i % 3] + f64::from(e[i])))
+                        .map(|e| std::array::from_fn(|i| p[i % 3] + o[i % 3] + e[i]))
                         .collect()
                 })
                 .unwrap_or_default()
@@ -7415,6 +7372,16 @@ impl Game<'_> {
             border,
             game_time: self.world.game_time as f32,
             shader_game_time: ((self.world.game_time % 24000) as f32 + alpha as f32) / 24000.0,
+            crumbling_sprite: self
+                .mining
+                .as_ref()
+                .and_then(|m| {
+                    self.res.atlas.sprites.get(&format!(
+                        "block/destroy_stage_{}",
+                        ((m.progress * 10.0) as u32).min(9)
+                    ))
+                })
+                .map_or([0.0; 4], |r| [r.u0, r.v0, r.u1 - r.u0, r.v1 - r.v0]),
             end_portal_sprites: ["environment/end_sky", "entity/end_portal/end_portal"].map(|n| {
                 self.res
                     .atlas
@@ -8429,7 +8396,7 @@ pub fn run() -> Result<()> {
             (
                 w,
                 h,
-                px.as_chunks::<4>().0.iter().map(|p| p[3] > 0).collect(),
+                px.as_chunks::<4>().0.iter().map(|p| p[3] >= 10).collect(),
             )
         })
         .unwrap_or((1, 1, vec![false])),

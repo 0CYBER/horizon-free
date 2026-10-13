@@ -11,6 +11,8 @@ import net.minecraft.server.Bootstrap;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.world.level.EmptyBlockGetter;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.phys.shapes.BooleanOp;
+import net.minecraft.world.phys.shapes.Shapes;
 
 /**
  * Original exporter of per-state gameplay facts read through vanilla's own accessors:
@@ -52,7 +54,12 @@ public final class VanillaGameplayFactsExporter {
             // The outline (selection) shape without the random offset, as boxes
             // for picking and as the edges LevelRenderer draws.
             var offset = state.getOffset(BlockPos.ZERO);
-            var shape = state.getShape(level, BlockPos.ZERO).move(-offset.x, -offset.y, -offset.z);
+            var shape = state.getShape(level, BlockPos.ZERO);
+            // Some offset models (e.g. tall flowers) have an unshifted outline.
+            boolean outlineOffset = state.hasOffsetFunction() && Shapes.joinIsNotEmpty(
+                shape, state.getShape(level, new BlockPos(17, 0, 29)), BooleanOp.NOT_SAME);
+            o.addProperty("outline_offset", outlineOffset);
+            if (outlineOffset) shape = shape.move(-offset.x, -offset.y, -offset.z);
             var boxes = new JsonArray();
             for (var box : shape.toAabbs()) {
                 var b = new JsonArray();
