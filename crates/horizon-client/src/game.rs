@@ -2930,6 +2930,10 @@ impl Game<'_> {
         // `GuiGraphics.renderItem`: the resolved item model (tints, foil and
         // special renderers included), then the decorations.
         self.draw_item_model(batch, stack, x, y);
+        self.draw_item_decorations(batch, stack, x, y);
+    }
+    /// `GuiGraphicsExtractor.itemDecorations`: the count and damage bar.
+    fn draw_item_decorations(&mut self, batch: &mut HudBatch, stack: &ItemStack, x: f32, y: f32) {
         // GuiGraphicsExtractor.itemDecorations, laid out at the origin and
         // moved to (x, y). Horizon tracks no item cooldowns to shade yet.
         let max_damage = self

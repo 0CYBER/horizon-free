@@ -6,7 +6,7 @@
   <a href="https://github.com/ludovic111/horizon/actions/workflows/ci.yml"><img src="https://github.com/ludovic111/horizon/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <img src="https://img.shields.io/badge/Minecraft-Java%2026.3-5D9C3F" alt="Minecraft Java 26.3">
   <img src="https://img.shields.io/badge/Rust-stable-B7410E?logo=rust&logoColor=white" alt="Rust">
-  <img src="https://img.shields.io/badge/vanilla%20parity-88%25-F0795A" alt="Vanilla parity 88%">
+  <img src="https://img.shields.io/badge/vanilla%20parity-89%25-F0795A" alt="Vanilla parity 89%">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-2A2470" alt="Linux, macOS and Windows">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-3B2F7E" alt="MIT license"></a>
 </p>
@@ -22,7 +22,7 @@
 
 A Rust rewrite of Minecraft: Java Edition 26.3 that aims for one-to-one vanilla parity, checked against the game itself with differential tests.
 
-**Status:** in development. The native client is playable on Linux, macOS (Apple Silicon) and Windows; Java parity is 88% (see [Project status](#project-status)).
+**Status:** in development. The native client is playable on Linux, macOS (Apple Silicon) and Windows; Java parity is 89% (see [Project status](#project-status)).
 
 > Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft. Horizon contains no Minecraft code, assets or data: you need your own legally obtained copy of Minecraft: Java Edition 26.3.
 
@@ -113,7 +113,7 @@ The client starts on the title screen. Command-line options (`--world`, `--seed`
 
 Parity is **not** complete. The table below is the project's own audit of each subsystem. Still missing: the warden's brain and the sculk shrieker summoning it, villager breeding and gossip, the resource pack screen, a dedicated server mode, and worlds older than 1.17.
 
-### Java parity: 88%
+### Java parity: 89%
 
 Each subsystem scores 0 (absent), 0.25 (started, not playable), 0.5 (playable,
 major vanilla features missing), 0.75 (playable, mostly complete) or 1 (complete
@@ -130,7 +130,7 @@ from vanilla in places: `mob_ai` (71 of 72 scenarios; a tempted ghastling) and
 | Network protocol and multiplayer | 0.75 | Joins vanilla servers and opens worlds to LAN; server.properties, eula.txt and the user lists match vanilla, but there is no dedicated server mode and LAN hosting is not tested against a vanilla client |
 | Chunk storage and palettes | 1 | None: client and saves share paletted containers, identical to vanilla over 266 scenarios |
 | Section meshing | 1 | None: 112 scenes and over a million quads identical to vanilla |
-| Rendering | 0.75 | Entity models, block entity renderers (400 cases, End portals and gateways included) and their animations (256 cases), the HUD overlays (2,200 states), the player list, subtitles and the world border match vanilla; the recipe book's drawing and the banner preview are not compared, and End gateways show no beam in game |
+| Rendering | 1 | None: entity models, block entity renderers (407 cases, End portals, gateways and the loom's banner preview included) and their animations (296 cases, End gateway beams included), the HUD overlays (2,200 states), the recipe book (600 states), the player list, subtitles and the world border match vanilla |
 | Lighting | 1 | None: saved and relit light matches vanilla, slabs and stairs included |
 | World generation | 1 | None: 2,352 whole chunks over 225 structure sites, in all three dimensions, identical to vanilla |
 | Region files and saves | 0.75 | Saves round-trip with vanilla, and worlds from 1.17 to 26.2 upgrade as vanilla's DataFixers do; worlds older than 1.17 are not upgraded |

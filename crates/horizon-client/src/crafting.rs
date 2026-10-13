@@ -24,17 +24,26 @@ const FIREWORK_COLORS: [u32; 16] = [
     11_250_603, 2_651_799, 8_073_150, 2_437_522, 5_320_730, 3_887_386, 11_743_532, 1_973_019,
 ];
 
-/// A set of accepted items (expanded from an item, list or tag).
+/// A set of accepted items (expanded from an item, list or tag), and the
+/// items in its `HolderSet` order (`Ingredient.display`'s `TagSlotDisplay`).
 #[derive(Clone, Debug)]
-pub struct Ingredient(pub HashSet<String>);
+pub struct Ingredient(pub HashSet<String>, pub Vec<String>);
 impl Ingredient {
+    /// The items of a list, in order.
+    pub fn of(items: Vec<String>) -> Self {
+        Self(items.iter().cloned().collect(), items)
+    }
     fn parse(v: &Value, items: &Items) -> Option<Self> {
-        let mut set = HashSet::new();
+        let mut list: Vec<String> = Vec::new();
         let mut add = |s: &str| {
-            if let Some(tag) = s.strip_prefix('#') {
-                set.extend(items.item_tags.get(tag).into_iter().flatten().cloned());
-            } else {
-                set.insert(s.to_owned());
+            let more: Vec<String> = match s.strip_prefix('#') {
+                Some(tag) => items.item_tag_order.get(tag).cloned().unwrap_or_default(),
+                None => vec![s.to_owned()],
+            };
+            for i in more {
+                if !list.contains(&i) {
+                    list.push(i);
+                }
             }
         };
         match v {
@@ -50,7 +59,7 @@ impl Ingredient {
             }
             _ => return None,
         }
-        (!set.is_empty()).then_some(Self(set))
+        (!list.is_empty()).then(|| Self::of(list))
     }
     pub fn test(&self, stack: &ItemStack) -> bool {
         self.0.contains(&*stack.item)
@@ -1525,7 +1534,7 @@ mod tests {
     use crate::banner::BannerLayer;
 
     fn ingredient(items: &[&str]) -> Ingredient {
-        Ingredient(items.iter().map(|s| (*s).to_owned()).collect())
+        Ingredient::of(items.iter().map(|s| (*s).to_owned()).collect())
     }
     fn patterned(item: &str) -> ItemStack {
         let mut s = ItemStack::new(item, 1);

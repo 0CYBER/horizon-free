@@ -95,6 +95,16 @@ impl Game<'_> {
             extras.fluid_ticks.clear();
         }
         extras.last_update = time;
+        // TheEndGatewayBlockEntity saves its Age (the server copy's).
+        for tag in &mut extras.block_entities {
+            let pos = [tag.get("x"), tag.get("y"), tag.get("z")]
+                .map(|v| horizon_client::save::number(v).unwrap_or(0) as i32);
+            if let Some(g) = self.be_anims.gateway_servers.get(&pos)
+                && let Some(age) = tag.get_mut("Age")
+            {
+                *age = horizon_world::nbt::Tag::Long(g.age);
+            }
+        }
         if let Some(t) = self.world.inhabited.get(&(chunk.x, chunk.z)) {
             extras
                 .root
