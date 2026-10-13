@@ -6,7 +6,7 @@
   <a href="https://github.com/ludovic111/horizon/actions/workflows/ci.yml"><img src="https://github.com/ludovic111/horizon/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <img src="https://img.shields.io/badge/Minecraft-Java%2026.3-5D9C3F" alt="Minecraft Java 26.3">
   <img src="https://img.shields.io/badge/Rust-stable-B7410E?logo=rust&logoColor=white" alt="Rust">
-  <img src="https://img.shields.io/badge/vanilla%20parity-93%25-F0795A" alt="Vanilla parity 93%">
+  <img src="https://img.shields.io/badge/vanilla%20parity-100%25-F0795A" alt="Vanilla parity 100%">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-2A2470" alt="Linux, macOS and Windows">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-3B2F7E" alt="MIT license"></a>
 </p>
@@ -22,7 +22,7 @@
 
 A Rust rewrite of Minecraft: Java Edition 26.3 that aims for one-to-one vanilla parity, checked against the game itself with differential tests.
 
-**Status:** in development. The native client is playable on Linux, macOS (Apple Silicon) and Windows; Java parity is 93% (see [Project status](#project-status)).
+**Status:** in development. The native client is playable on Linux, macOS (Apple Silicon) and Windows; Java parity is 100% of what its harnesses compare, pending the final audit (see [Project status](#project-status)).
 
 > Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft. Horizon contains no Minecraft code, assets or data: you need your own legally obtained copy of Minecraft: Java Edition 26.3.
 
@@ -111,52 +111,51 @@ The client starts on the title screen. Command-line options (`--world`, `--seed`
 
 ## Project status
 
-Parity is **not** complete. The table below is the project's own audit of each subsystem. Still missing: the warden's brain and the sculk shrieker summoning it, villager breeding and gossip, a dedicated server mode, and worlds older than 1.17.
+The table below is the project's own audit of each subsystem. Every subsystem now matches vanilla in every harness that compares it. 100% means 100% of what the harnesses compare, not proof that nothing else differs. Parity is declared complete only after the from-scratch audit (`tools/parity.py --all` on Linux and macOS) and the launch checks on packaged builds pass; see the roadmap.
 
-### Java parity: 93%
+### Java parity: 100%
 
 Each subsystem scores 0 (absent), 0.25 (started, not playable), 0.5 (playable,
 major vanilla features missing), 0.75 (playable, mostly complete) or 1 (complete
 and verified against vanilla by differential tests). The percentage is the
 average; `tests/test_parity.py` keeps it in sync with this table. Last audited
-2026-10-12 against the harness results: 272 harnesses pass. Two still differ
-from vanilla in places: `mob_ai` (83 of 84 scenarios; a tempted ghastling) and
-`sculk` (427 of 435; shrieker warnings and warden summoning).
+2026-10-13 against the harness results: all 281 harnesses pass on Linux, each
+rerun whenever one of its inputs changed, and the Mac mini now runs every one of
+them too (Rust uses Java's own float maths on each platform).
 
 | Subsystem | Score | Main gaps |
 | --- | ---: | --- |
 | Window, input and game loop | 1 | None: the game loop, options, camera, auto-jump, toggle sprint/sneak, local input and the frame limiter match vanilla |
 | Assets and resources | 1 | None: item models match vanilla over 196,290 stacks and the client draws every item through them; the resource pack screen matches vanilla's drawing over 3,000 sessions of clicks, scrolling and searching, its incompatibility confirmation included |
-| Network protocol and multiplayer | 0.75 | Joins vanilla servers and opens worlds to LAN; server.properties, eula.txt and the user lists match vanilla, but there is no dedicated server mode and LAN hosting is not tested against a vanilla client |
+| Network protocol and multiplayer | 1 | None: joins vanilla servers; the dedicated server (`--dedicated`) matches vanilla's files, status ping, login, configuration, play, chunks, chat, recipes, advancements and command tree, a client built from vanilla's packet code joins it, Horizon joins a vanilla server, and LAN discovery matches over 462 cases (offline mode only) |
 | Chunk storage and palettes | 1 | None: client and saves share paletted containers, identical to vanilla over 266 scenarios |
 | Section meshing | 1 | None: 112 scenes and over a million quads identical to vanilla |
 | Rendering | 1 | None: entity models, block entity renderers (407 cases, End portals, gateways and the loom's banner preview included) and their animations (296 cases, End gateway beams included), the HUD overlays (2,200 states), the recipe book (600 states), the player list, subtitles and the world border match vanilla |
 | Lighting | 1 | None: saved and relit light matches vanilla, slabs and stairs included |
 | World generation | 1 | None: 2,352 whole chunks over 225 structure sites, in all three dimensions, identical to vanilla |
-| Region files and saves | 0.75 | Saves round-trip with vanilla, and worlds from 1.17 to 26.2 upgrade as vanilla's DataFixers do; worlds older than 1.17 are not upgraded |
-| Entities and physics | 0.75 | Attributes, dimensions, death loot, spawn rules, natural spawning (15,500 cases), raids and patrols (1,900 cases), spawned mobs' gear, enchantments and state (`finalizeSpawn`, 24,000 cases) and mob AI (83 of 84 scenarios, villager and copper golem brains included) match; the warden's brain and villager breeding and gossip are missing |
+| Region files and saves | 1 | None: saves round-trip with vanilla, and worlds from 1.8 to 26.2 upgrade as vanilla's DataFixers do, superflat worlds included; old options.txt and hotbar.nbt files are upgraded too |
+| Entities and physics | 1 | None: attributes, dimensions, death loot, spawn rules, natural spawning (15,500 cases), raids and patrols (1,900 cases), spawned mobs' gear, enchantments and state (`finalizeSpawn`, 24,000 cases) and mob AI (92 scenarios: villager breeding and gossip, the warden, ghastlings and copper golems included) match vanilla |
 | Interaction and inventory | 1 | None: menu clicks match over 8,000 click sequences, the loom and the crafter included; recipe book placement (6,000 cases), its buttons (1,200), the saved book (1,500) and the loom and crafter screens (1,600) match vanilla |
 | Menus, HUD and chat | 1 | None: every command runs as vanilla (758 commands over 39,685 parsed inputs), scoreboards and teams match (81,000 operations), the player list matches over 872,000 draw calls with heads drawn from players' skins (authlib's textures, SkinManager's lookup, legacy skin conversion), and the chat matches focused and scrolled; the resource pack screen (selection over 4,000 cases, drawing and its incompatibility confirmation over 3,000 sessions) and the chat input with its command suggestions, usage lines, Tab completion and history (3,000 sessions on vanilla's client command tree) match vanilla |
 | Audio | 1 | None: the sound engine, sound events, music, situational music, ambience and subtitles match vanilla |
-| Block behaviours and ticking | 0.75 | Block updates, random ticks, redstone, dispensers (6,000 cases), crafters (4,000 crafts) and block entity removal (containers spill, 4,000 cases) match vanilla; copper golems sort chests as vanilla's brain does (7 scenarios, tick for tick); 8 of 435 sculk scenarios differ (shrieker warnings and warden summoning) |
+| Block behaviours and ticking | 1 | None: block updates, random ticks, redstone, dispensers (6,000 cases), crafters (4,000 crafts), block entity removal (containers spill, 4,000 cases), copper golem chest sorting and the sculk family (435 scenarios: shrieker warnings and warden summoning included) match vanilla |
 
 ### What's new since the previous version
 
-- **Mob AI matches vanilla**, compared tick by tick in 72 scenarios, with villagers on a port of vanilla's brain (memories, sensors, schedules and behaviours).
-- **New mobs:** the breeze and wind charges, the creaking and the creaking heart, the sniffer, the happy ghast and ghastlings, llamas and trader llamas, and the copper golem; the warden's model, animations and emissive layers.
-- **Raids and pillager patrols**, with the Raid Omen, the waves and the Hero of the Village effect.
-- **Dispensers, crafters, the loom and the recipe book**, and containers spill their items when their block is replaced.
-- **Every command runs as vanilla**, including /item modify, /spectate, /waypoint, /dialog and /place.
-- **Scoreboards and teams** in gameplay (criteria, friendly fire, collision, name tags), the **player list**, **subtitles**, every **HUD overlay**, **block entity animations** (chests, shulker boxes, bells, conduits, heads, the enchanting table's book) and **End portals and gateways** drawn with vanilla's shader.
-- **Worlds from 1.17 onwards** open and are upgraded as vanilla does; server.properties, eula.txt and the server user lists are read and written as vanilla does.
-- **Builds for Linux, macOS (Apple Silicon) and Windows.**
+- **Every subsystem matches vanilla** in its harnesses: Java parity goes from 88% to 100% of what the harnesses compare.
+- **Dedicated server:** `horizon-client --dedicated --nogui` runs a server that vanilla clients can join (offline mode), with vanilla's server.properties, status ping, chat, recipes, advancements and command tree; Horizon also joins vanilla servers, and LAN discovery matches vanilla.
+- **Worlds from 1.8 onwards** open and are upgraded as vanilla does, superflat worlds included, along with old options.txt and creative hotbars.
+- **Mob AI matches vanilla** tick by tick in 92 scenarios: villagers (breeding and gossip included), the warden and the sculk shrieker summoning it, ghastlings and copper golems sorting chests.
+- **Spawned mobs' gear and enchantments** match vanilla over 24,000 cases.
+- **Screens:** the resource pack screen, the open chat (input, history, command suggestions), the recipe book (drawing, search, ingredient placement), the loom's banner preview, End gateway beams, and player-list heads drawn from players' skins.
+- **Render distance 2** now loads (it used to stay on "Loading terrain…").
+- **macOS gives vanilla's results** in every harness: Rust now uses the float maths Java uses on each platform.
 
 ### Roadmap
 
-1. Finish the warden's brain and the sculk shrieker summoning it, and the tempted ghastling.
-2. A dedicated server mode, and LAN hosting tested with a vanilla client.
-3. Save upgrades from before 1.17.
-4. Platform-independent float math, so every harness also gives vanilla's results on macOS.
+1. A from-scratch audit (`tools/parity.py --all`) on Linux and on macOS.
+2. Launch checks on the packaged Linux, macOS and Windows builds.
+3. Remaining known differences: online-mode servers (Mojang's session servers) are not supported; skins served over https show the default skin unless already cached; pack icons show the unknown-pack texture in game; the creative hotbar keys (C/X) aren't wired to the hotbar loader; item tooltips lack attribute lines.
 
 The rewrite is complete when it reaches one-to-one parity and packaged native builds pass the launch checks in [Rust rewrite status](docs/rust-parity.md#completion-criteria-and-playable-builds).
 
