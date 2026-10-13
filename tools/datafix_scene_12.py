@@ -459,11 +459,12 @@ MERGED = {
     'zombie_horse': ('EntityHorse', 'Type:3'), 'skeleton_horse': ('EntityHorse', 'Type:4'), 'elder_guardian': ('Guardian', 'Elder:1b'),
 }
 ABSENT = {   # kinds a version lacks
-    8: {'shulker', 'shulker_bullet', 'area_effect_cloud', 'spectral_arrow', 'dragon_fireball', 'polar_bear', 'husk', 'stray',
+    # (thrown potions: vanilla's fix of key 705 crashes on them, so none before 1.11; 1.8 zombie villagers get a random profession)
+    8: {'potion', 'zombie_villager', 'shulker', 'shulker_bullet', 'area_effect_cloud', 'spectral_arrow', 'dragon_fireball', 'polar_bear', 'husk', 'stray',
         'vex', 'evocation_illager', 'vindication_illager', 'illusion_illager', 'llama', 'llama_spit', 'evocation_fangs', 'parrot'},
-    9: {'polar_bear', 'husk', 'stray', 'vex', 'evocation_illager', 'vindication_illager', 'illusion_illager', 'llama',
+    9: {'potion', 'polar_bear', 'husk', 'stray', 'vex', 'evocation_illager', 'vindication_illager', 'illusion_illager', 'llama',
         'llama_spit', 'evocation_fangs', 'parrot'},
-    10: {'vex', 'evocation_illager', 'vindication_illager', 'illusion_illager', 'llama', 'llama_spit', 'evocation_fangs', 'parrot'},
+    10: {'potion', 'vex', 'evocation_illager', 'vindication_illager', 'illusion_illager', 'llama', 'llama_spit', 'evocation_fangs', 'parrot'},
     11: {'parrot', 'illusion_illager'},
     12: set(),
 }
@@ -1276,7 +1277,8 @@ def entity_list(stacks):
     add('zombie_villager', 'Profession:1,ConversionTime:-1,IsVillager:1b')
     for prof in range(6):
         add('zombie_villager', 'Profession:%d,ConversionTime:%d,IsBaby:%db,CustomName:"Zombie %d"' % (prof, [-1, 999999, -1][prof % 3], prof % 2, prof))
-    add('zombie', 'IsVillager:1b,VillagerProfession:2')
+    if ERA > 8:
+        add('zombie', 'IsVillager:1b,VillagerProfession:2')
     # animals
     for color in range(16):
         add('sheep', 'Color:%db,Sheared:%db,Age:%d,InLove:0,%s' % (color, color % 2, -24000 if color % 3 == 0 else 0, ATTRS if color == 3 else 'Health:8.0f'))
