@@ -7,13 +7,18 @@ use gpui::{
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use std::ops::Range;
 
+/// A run of text's styled ranges.
+type Spans = Vec<(Range<usize>, Span)>;
+/// A table row: each cell's text and its spans.
+type Row = Vec<(String, Spans)>;
+
 enum Block {
-    Heading(u8, String, Vec<(Range<usize>, Span)>),
-    Paragraph(String, Vec<(Range<usize>, Span)>),
-    Item(usize, Option<u64>, String, Vec<(Range<usize>, Span)>),
+    Heading(u8, String, Spans),
+    Paragraph(String, Spans),
+    Item(usize, Option<u64>, String, Spans),
     Code(String),
     Rule,
-    Table(Vec<Vec<(String, Vec<(Range<usize>, Span)>)>>),
+    Table(Vec<Row>),
 }
 
 #[derive(Clone, Copy)]
@@ -32,7 +37,7 @@ pub fn render(source: &str, t: &Theme) -> AnyElement {
     let mut item: Option<(usize, Option<u64>)> = None;
     let mut heading = None;
     let mut code: Option<String> = None;
-    let mut table: Option<Vec<Vec<(String, Vec<(Range<usize>, Span)>)>>> = None;
+    let mut table: Option<Vec<Row>> = None;
     let flush = |blocks: &mut Vec<Block>,
                  text: &mut String,
                  spans: &mut Vec<_>,
@@ -134,7 +139,7 @@ pub fn render(source: &str, t: &Theme) -> AnyElement {
     }
     flush(&mut blocks, &mut text, &mut spans, &mut item, None);
 
-    let styled = |text: String, spans: Vec<(Range<usize>, Span)>| {
+    let styled = |text: String, spans: Spans| {
         let highlights = spans.into_iter().map(|(range, span)| {
             let style = match span {
                 Span::Strong => HighlightStyle {

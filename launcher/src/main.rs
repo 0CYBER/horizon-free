@@ -246,7 +246,9 @@ impl Launcher {
     fn check_updates(&mut self) {
         self.checked = Some(Instant::now());
         let tx = self.tx.clone();
-        std::thread::spawn(move || tx.send(Msg::Updates(backend::check_updates())));
+        std::thread::spawn(move || {
+            let _ = tx.send(Msg::Updates(backend::check_updates()));
+        });
     }
 
     fn update_launcher(&mut self, release: Release) {
@@ -291,18 +293,24 @@ impl Launcher {
     fn fetch_releases(&mut self) {
         self.releases = Load::Loading;
         let tx = self.tx.clone();
-        std::thread::spawn(move || tx.send(Msg::Releases(backend::releases())));
+        std::thread::spawn(move || {
+            let _ = tx.send(Msg::Releases(backend::releases()));
+        });
     }
 
     fn fetch_links(&self) {
         let tx = self.tx.clone();
-        std::thread::spawn(move || tx.send(Msg::Links(backend::links())));
+        std::thread::spawn(move || {
+            let _ = tx.send(Msg::Links(backend::links()));
+        });
     }
 
     fn fetch_roadmap(&mut self) {
         self.roadmap = Load::Loading;
         let tx = self.tx.clone();
-        std::thread::spawn(move || tx.send(Msg::Roadmap(backend::roadmap())));
+        std::thread::spawn(move || {
+            let _ = tx.send(Msg::Roadmap(backend::roadmap()));
+        });
     }
 
     fn drain(&mut self, cx: &mut Context<Self>) {
