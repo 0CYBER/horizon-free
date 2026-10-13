@@ -158,11 +158,32 @@ pub struct ItemStack {
     /// Components beyond count and damage (see `item_data`); None when default.
     pub extra: Option<Box<crate::item_data::StackData>>,
 }
+/// `order`'s items in the registry's order (`command-registries.json`'s
+/// `items`, exported from the game); `order` itself when that is missing.
+fn registry_order(root: &Path, order: &[Arc<str>]) -> Vec<Arc<str>> {
+    let listed: Vec<String> = fs::read(root.join("command-registries.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .and_then(|v| serde_json::from_value(v["items"].clone()).ok())
+        .unwrap_or_default();
+    if listed.is_empty() {
+        return order.to_vec();
+    }
+    let known: HashSet<&str> = order.iter().map(|i| &**i).collect();
+    listed
+        .iter()
+        .filter(|i| known.contains(i.as_str()))
+        .map(|i| Arc::from(i.as_str()))
+        .collect()
+}
 /// Item ids standing for a loot table's `minecraft:dynamic` entries.
 const DYNAMIC: &str = "#dynamic:";
 pub struct Items {
     pub items: HashMap<Arc<str>, ItemInfo>,
     pub order: Vec<Arc<str>>,
+    /// The same items in item registry (network id) order, as vanilla lists
+    /// them; sorted by name when the registry export is missing.
+    pub registry_order: Vec<Arc<str>>,
     /// Block tag name (without '#') -> member block names.
     pub block_tags: HashMap<String, HashSet<String>>,
     pub item_tags: HashMap<String, HashSet<String>>,
@@ -456,9 +477,11 @@ impl Items {
         }
         let loot_root = root.join("data/minecraft/loot_table");
         walk_loot(&loot_root, &loot_root, &mut loot)?;
+        let registry_order = registry_order(root, &order);
         Ok(Self {
             items,
             order,
+            registry_order,
             block_tags: load_tags(root, "block")?,
             item_tags: load_tags(root, "item")?,
             item_tag_order: load_tag_lists(root, "item")?,
@@ -474,6 +497,7 @@ impl Items {
         Ok(Self {
             items: HashMap::new(),
             order: Vec::new(),
+            registry_order: Vec::new(),
             block_tags: load_tags(root, "block")?,
             item_tags: load_tags(root, "item")?,
             item_tag_order: load_tag_lists(root, "item")?,
@@ -487,6 +511,7 @@ impl Items {
         Self {
             items: HashMap::new(),
             order: Vec::new(),
+            registry_order: Vec::new(),
             block_tags: HashMap::new(),
             item_tag_order: item_tags
                 .iter()

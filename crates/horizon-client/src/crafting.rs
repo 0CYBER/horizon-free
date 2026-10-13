@@ -296,41 +296,20 @@ pub enum Special {
     RepairItem,
 }
 impl Special {
-    /// Every result the display of a learnable recipe can show
-    /// (`SlotDisplay.resolve*` of its result): empty when it is one stack.
-    pub fn result_variants(&self) -> Vec<ItemStack> {
-        match self {
-            // The result keeps the input's item: any item of the ingredient.
-            Self::Transmute { input, result, .. } if result.item.is_none() => {
-                let mut items: Vec<&String> = input.0.iter().collect();
-                items.sort();
-                items
-                    .into_iter()
-                    .map(|item| {
-                        let mut made = result.create();
-                        made.item = Arc::from(item.as_str());
-                        made
-                    })
-                    .collect()
-            }
-            // DyedSlotDemo: the target dyed.
-            Self::Dye { result, .. } => {
-                let mut made = result.create();
-                made.data_mut().dyed_color = Some(0);
-                vec![made]
-            }
-            // Any potion's tipped arrow.
-            Self::Imbue { result, .. } => crate::brewing::POTIONS
-                .iter()
-                .map(|p| result.create().with_potion(p.id))
-                .collect(),
-            _ => Vec::new(),
-        }
-    }
     /// The recipe-book displays of a learnable (non-custom) crafting recipe:
-    /// its layout and result.
-    pub fn book_displays(&self) -> Vec<(crate::recipe_book::Display, ItemStack)> {
+    /// its layout, its result as the button shows it, and every stack the
+    /// result display cycles through when it is more than that one
+    /// (`SlotDisplay.resolveForStacks`).
+    pub fn book_displays(&self) -> Vec<BookDisplay> {
         use crate::recipe_book::Display;
+        let first_of =
+            |all: &Vec<ItemStack>, single: ItemStack| all.first().cloned().unwrap_or(single);
+        let shown = |display, result, variants| BookDisplay {
+            display,
+            result,
+            variants,
+            stacks: Vec::new(),
+        };
         match self {
             Self::Transmute {
                 input,
@@ -344,26 +323,54 @@ impl Special {
                     let mut ingredients = vec![input.clone()];
                     ingredients.extend(std::iter::repeat_n(material.clone(), n));
                     let mut made = result.create();
-                    if result.item.is_none() {
-                        // The result keeps the input's item: show the first one.
-                        if let Some(first) = input.0.iter().min() {
-                            made.item = Arc::from(first.as_str());
-                        }
-                    }
                     if *add_count {
                         made.count += n as u32;
                     }
-                    (Display::Shapeless(ingredients), made)
+                    // The result keeps the input's item: any item of the ingredient.
+                    let all: Vec<ItemStack> = if result.item.is_none() {
+                        input
+                            .1
+                            .iter()
+                            .map(|item| {
+                                let mut stack = made.clone();
+                                stack.item = Arc::from(item.as_str());
+                                stack
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    shown(Display::Shapeless(ingredients), first_of(&all, made), all)
                 })
                 .collect(),
             Self::Dye {
                 target,
                 dye,
                 result,
-            } => vec![(
-                Display::Shapeless(vec![target.clone(), dye.clone()]),
-                result.create(),
-            )],
+            } => {
+                // DyedSlotDemo: the targets cycle fastest, 16 stacks at most.
+                let (targets, dyes) = (&target.1, &dye.1);
+                let all: Vec<ItemStack> = (0..targets.len() * dyes.len())
+                    .map(|i| {
+                        let mut made = result.create();
+                        made.item = Arc::from(targets[i % targets.len()].as_str());
+                        let name = dyes[i / targets.len()].trim_start_matches("minecraft:");
+                        let color = crate::block_entity_render::DYES
+                            .iter()
+                            .find(|(c, _)| name.strip_suffix("_dye") == Some(c))
+                            .map_or(crate::block_entity_render::DYES[0].1, |d| d.1);
+                        made.data_mut().dyed_color = Some(color as i32);
+                        made
+                    })
+                    .take(16)
+                    .collect();
+                let first = result.create();
+                vec![shown(
+                    Display::Shapeless(vec![target.clone(), dye.clone()]),
+                    first_of(&all, first),
+                    all,
+                )]
+            }
             Self::Imbue {
                 source,
                 material,
@@ -372,18 +379,47 @@ impl Special {
                 let cells = (0..9)
                     .map(|i| Some(if i == 4 { source } else { material }.clone()))
                     .collect();
-                vec![(
-                    Display::Shaped {
-                        width: 3,
-                        height: 3,
-                        cells,
-                    },
-                    result.create(),
-                )]
+                // Any potion's tipped arrow.
+                let potions = |item: ItemStack| -> Vec<ItemStack> {
+                    crate::brewing::POTIONS
+                        .iter()
+                        .map(|p| item.clone().with_potion(&format!("minecraft:{}", p.id)))
+                        .collect()
+                };
+                let all = potions(result.create());
+                // The source ingredient is shown as a lingering potion of each kind.
+                let lingering = source
+                    .1
+                    .iter()
+                    .flat_map(|item| potions(ItemStack::new(item, 1)))
+                    .collect();
+                vec![BookDisplay {
+                    stacks: vec![(4, lingering)],
+                    ..shown(
+                        Display::Shaped {
+                            width: 3,
+                            height: 3,
+                            cells,
+                        },
+                        first_of(&all, result.create()),
+                        all,
+                    )
+                }]
             }
             _ => Vec::new(),
         }
     }
+}
+/// One recipe-book display of a special recipe.
+pub struct BookDisplay {
+    pub display: crate::recipe_book::Display,
+    /// The result as the button shows it (the first of `variants`).
+    pub result: ItemStack,
+    /// Every stack the result display cycles through; empty for one stack.
+    pub variants: Vec<ItemStack>,
+    /// Ingredients shown as other stacks than their items, by index in
+    /// `Entry::requirements`.
+    pub stacks: Vec<(usize, Vec<ItemStack>)>,
 }
 /// `CraftingInput`: the occupied bounding box of the grid.
 pub struct Input<'a> {
