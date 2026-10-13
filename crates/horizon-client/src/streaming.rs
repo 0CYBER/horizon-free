@@ -546,10 +546,28 @@ impl Streaming {
             });
         }
         if self.decorates && self.decorating < workers * 2 {
+            // The generation margins below.
+            let (margin, reach) = (3, 2);
             let wants = |s: &Self, x: i32, z: i32| {
                 !s.decorated.contains(&(x, z))
                     && !world.chunks.contains_key(&(x, z))
                     && (s.in_range(x, z, 2) || s.near_finished(x, z, 1))
+            };
+            // A wanted chunk holds back higher-ranked ones only if it can be
+            // decorated: its 3x3 neighbourhood is (or will be) generated as
+            // protos, none of them already final.
+            let waits_for = |s: &Self, x: i32, z: i32| {
+                wants(s, x, z)
+                    && (-1..=1).all(|dz| {
+                        (-1..=1).all(|dx| {
+                            let n = (x + dx, z + dz);
+                            !world.chunks.contains_key(&n)
+                                && (s.protos.contains_key(&n)
+                                    || s.generating.contains(&n)
+                                    || s.in_range(n.0, n.1, margin)
+                                    || s.near_finished(n.0, n.1, reach))
+                        })
+                    })
             };
             let keys: Vec<(i32, i32)> = self
                 .protos
@@ -573,7 +591,7 @@ impl Streaming {
                 }
                 if self
                     .decoration_order
-                    .blocked(x, z, |nx, nz| wants(self, nx, nz))
+                    .blocked(x, z, |nx, nz| waits_for(self, nx, nz))
                 {
                     continue;
                 }
