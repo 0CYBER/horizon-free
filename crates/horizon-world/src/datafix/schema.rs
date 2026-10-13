@@ -8,6 +8,9 @@
 use super::dynamic::{as_str, namespaced};
 use crate::nbt::Tag;
 
+#[path = "schema_flat.rs"]
+pub(super) mod flat;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Ty {
     Level,
@@ -93,6 +96,21 @@ impl Walker<'_> {
         }
     }
     fn list(&mut self, ty: Ty, v: &mut Tag, name: &str) {
+        // A list of block names reads the numbers of an array tag and writes them as a list.
+        if ty == Ty::BlockName
+            && self.k < key(1451, 4)
+            && let Some(array) = v.get_mut(name)
+        {
+            let numbers: Option<Vec<Tag>> = match array {
+                Tag::IntArray(a) => Some(a.iter().map(|x| Tag::Int(*x)).collect()),
+                Tag::ByteArray(a) => Some(a.iter().map(|x| Tag::Byte(*x as i8)).collect()),
+                Tag::LongArray(a) => Some(a.iter().map(|x| Tag::Long(*x)).collect()),
+                _ => None,
+            };
+            if let Some(numbers) = numbers {
+                *array = Tag::List(numbers);
+            }
+        }
         if let Some(Tag::List(items)) = v.get_mut(name) {
             for item in items {
                 self.walk(ty, item);
@@ -144,6 +162,9 @@ impl Walker<'_> {
 
     fn children(&mut self, ty: Ty, v: &mut Tag) {
         let k = self.k;
+        if k < flat::END && self.legacy_children(ty, v) {
+            return;
+        }
         match ty {
             Ty::Level => {
                 if k < key(4771, 0) {
@@ -203,6 +224,8 @@ impl Walker<'_> {
                 }
             }
             Ty::EntityChunk => self.list(Ty::EntityTree, v, "Entities"),
+            // What the schema it was read with did not know stays untyped (see `flat::UNTYPED`).
+            Ty::EntityTree if v.get(flat::UNTYPED).is_some() => {}
             Ty::EntityTree => {
                 self.list(Ty::EntityTree, v, "Passengers");
                 self.walk(Ty::Entity, v);
@@ -420,7 +443,11 @@ impl Walker<'_> {
             "minecraft:item" | "minecraft:item_frame" | "minecraft:glow_item_frame" => {
                 self.field(Ty::ItemStack, v, "Item");
             }
-            "minecraft:potion" if k < key(4306, 0) => self.field(Ty::ItemStack, v, "Item"),
+            "minecraft:potion" if k < key(4306, 0) => {
+                // V2511_1 renamed the typed field.
+                let field = if k < key(2511, 1) { "Potion" } else { "Item" };
+                self.field(Ty::ItemStack, v, field);
+            }
             "minecraft:splash_potion" | "minecraft:lingering_potion" if k >= key(4306, 0) => {
                 self.field(Ty::ItemStack, v, "Item");
             }
@@ -542,6 +569,7 @@ impl Walker<'_> {
             }
             "minecraft:crafter" if k >= key(3682, 0) => named_inventory(self, v),
             "minecraft:jukebox" => self.field(Ty::ItemStack, v, "RecordItem"),
+            "minecraft:flower_pot" if k < key(1451, 5) => self.field(Ty::ItemName, v, "Item"),
             "minecraft:sign" | "minecraft:hanging_sign" => {
                 for side in ["front_text", "back_text"] {
                     if let Some(s) = v.get_mut(side) {
@@ -833,6 +861,9 @@ impl Walker<'_> {
 /// Block entity ids the schema at `k` knows (others are read as remainder).
 pub fn block_entity_known(be: &Tag, k: Key) -> bool {
     let id = namespaced(&as_str(be.get("id")).unwrap_or_default());
+    if k < flat::END {
+        return flat::legacy_block_entity_known(&id, k);
+    }
     let since = match id.as_str() {
         "minecraft:sculk_catalyst" => key(3076, 0),
         "minecraft:sculk_shrieker" => key(3078, 0),

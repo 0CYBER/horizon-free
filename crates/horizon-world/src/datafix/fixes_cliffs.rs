@@ -4,12 +4,69 @@ use super::dynamic::{
     as_bool, as_byte_buffer, as_int, as_int_stream, as_long_stream, as_number, as_str, ceillog2,
     empty_map, remove, rename, set, stream, string,
 };
+use super::fixes_a::block_rename;
 use super::fixes_b::advancements_rename;
 use super::schema::{Key, Ty, key};
 use super::{Cx, FixFn, renamer};
 use crate::nbt::{Compound, JavaString, Tag};
 
 pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
+    out.push((key(2679, 0), cauldron_rename));
+    out.push((key(2680, 0), |cx| {
+        let t = &[("minecraft:grass_path", "minecraft:dirt_path")];
+        cx.rename(Ty::ItemName, renamer(t));
+    }));
+    out.push((key(2680, 0), |cx| {
+        block_rename(cx, &[("minecraft:grass_path", "minecraft:dirt_path")])
+    }));
+    out.push((key(2690, 0), |cx| cx.rename(Ty::ItemName, renamer(COPPER))));
+    out.push((key(2690, 0), |cx| block_rename(cx, COPPER)));
+    out.push((key(2691, 0), |cx| {
+        cx.rename(Ty::ItemName, renamer(WAXED_COPPER))
+    }));
+    out.push((key(2691, 0), |cx| block_rename(cx, WAXED_COPPER)));
+    out.push((key(2693, 0), |cx| {
+        add_flag(cx, "has_increased_height_already", false)
+    }));
+    out.push((key(2696, 0), |cx| {
+        cx.rename(Ty::ItemName, renamer(GRIMSTONE))
+    }));
+    out.push((key(2696, 0), |cx| block_rename(cx, GRIMSTONE)));
+    out.push((key(2700, 0), |cx| {
+        block_rename(
+            cx,
+            &[
+                ("minecraft:cave_vines_head", "minecraft:cave_vines"),
+                ("minecraft:cave_vines_body", "minecraft:cave_vines_plant"),
+            ],
+        )
+    }));
+    out.push((key(2701, 0), feature_pool_elements));
+    out.push((key(2702, 0), arrow_pickup));
+    out.push((key(2707, 0), |cx| {
+        add_flag(cx, "has_increased_height_already", true)
+    }));
+    out.push((key(2710, 0), |cx| {
+        stats_rename(cx, &[("minecraft:play_one_minute", "minecraft:play_time")])
+    }));
+    out.push((key(2717, 0), |cx| {
+        cx.rename(
+            Ty::ItemName,
+            renamer(&[(
+                "minecraft:azalea_leaves_flowers",
+                "minecraft:flowering_azalea_leaves",
+            )]),
+        )
+    }));
+    out.push((key(2717, 0), |cx| {
+        block_rename(
+            cx,
+            &[(
+                "minecraft:azalea_leaves_flowers",
+                "minecraft:flowering_azalea_leaves",
+            )],
+        )
+    }));
     out.push((key(2825, 0), |cx| {
         add_flag(cx, "has_increased_height_already", false)
     }));
@@ -308,6 +365,362 @@ fn structures_become_configured(cx: &mut Cx) {
     });
 }
 
+// ------------------------------------------------------------------ 2679 to 2717
+
+/// `CauldronRenameFix`.
+fn cauldron_rename(cx: &mut Cx) {
+    cx.each(Ty::BlockState, |v| {
+        if as_str(v.get("Name")).as_deref() != Some("minecraft:cauldron") {
+            return;
+        }
+        let level = v
+            .get("Properties")
+            .and_then(|p| as_str(p.get("level")))
+            .unwrap_or_else(|| "0".into());
+        if level == "0" {
+            remove(v, "Properties");
+        } else {
+            set(v, "Name", string("minecraft:water_cauldron"));
+        }
+    });
+}
+
+const COPPER: &[(&str, &str)] = &[
+    (
+        "minecraft:weathered_copper_block",
+        "minecraft:oxidized_copper_block",
+    ),
+    (
+        "minecraft:semi_weathered_copper_block",
+        "minecraft:weathered_copper_block",
+    ),
+    (
+        "minecraft:lightly_weathered_copper_block",
+        "minecraft:exposed_copper_block",
+    ),
+    (
+        "minecraft:weathered_cut_copper",
+        "minecraft:oxidized_cut_copper",
+    ),
+    (
+        "minecraft:semi_weathered_cut_copper",
+        "minecraft:weathered_cut_copper",
+    ),
+    (
+        "minecraft:lightly_weathered_cut_copper",
+        "minecraft:exposed_cut_copper",
+    ),
+    (
+        "minecraft:weathered_cut_copper_stairs",
+        "minecraft:oxidized_cut_copper_stairs",
+    ),
+    (
+        "minecraft:semi_weathered_cut_copper_stairs",
+        "minecraft:weathered_cut_copper_stairs",
+    ),
+    (
+        "minecraft:lightly_weathered_cut_copper_stairs",
+        "minecraft:exposed_cut_copper_stairs",
+    ),
+    (
+        "minecraft:weathered_cut_copper_slab",
+        "minecraft:oxidized_cut_copper_slab",
+    ),
+    (
+        "minecraft:semi_weathered_cut_copper_slab",
+        "minecraft:weathered_cut_copper_slab",
+    ),
+    (
+        "minecraft:lightly_weathered_cut_copper_slab",
+        "minecraft:exposed_cut_copper_slab",
+    ),
+    (
+        "minecraft:waxed_semi_weathered_copper",
+        "minecraft:waxed_weathered_copper",
+    ),
+    (
+        "minecraft:waxed_lightly_weathered_copper",
+        "minecraft:waxed_exposed_copper",
+    ),
+    (
+        "minecraft:waxed_semi_weathered_cut_copper",
+        "minecraft:waxed_weathered_cut_copper",
+    ),
+    (
+        "minecraft:waxed_lightly_weathered_cut_copper",
+        "minecraft:waxed_exposed_cut_copper",
+    ),
+    (
+        "minecraft:waxed_semi_weathered_cut_copper_stairs",
+        "minecraft:waxed_weathered_cut_copper_stairs",
+    ),
+    (
+        "minecraft:waxed_lightly_weathered_cut_copper_stairs",
+        "minecraft:waxed_exposed_cut_copper_stairs",
+    ),
+    (
+        "minecraft:waxed_semi_weathered_cut_copper_slab",
+        "minecraft:waxed_weathered_cut_copper_slab",
+    ),
+    (
+        "minecraft:waxed_lightly_weathered_cut_copper_slab",
+        "minecraft:waxed_exposed_cut_copper_slab",
+    ),
+];
+
+const WAXED_COPPER: &[(&str, &str)] = &[
+    ("minecraft:waxed_copper", "minecraft:waxed_copper_block"),
+    (
+        "minecraft:oxidized_copper_block",
+        "minecraft:oxidized_copper",
+    ),
+    (
+        "minecraft:weathered_copper_block",
+        "minecraft:weathered_copper",
+    ),
+    ("minecraft:exposed_copper_block", "minecraft:exposed_copper"),
+];
+
+const GRIMSTONE: &[(&str, &str)] = &[
+    ("minecraft:grimstone", "minecraft:deepslate"),
+    (
+        "minecraft:grimstone_slab",
+        "minecraft:cobbled_deepslate_slab",
+    ),
+    (
+        "minecraft:grimstone_stairs",
+        "minecraft:cobbled_deepslate_stairs",
+    ),
+    (
+        "minecraft:grimstone_wall",
+        "minecraft:cobbled_deepslate_wall",
+    ),
+    (
+        "minecraft:polished_grimstone",
+        "minecraft:polished_deepslate",
+    ),
+    (
+        "minecraft:polished_grimstone_slab",
+        "minecraft:polished_deepslate_slab",
+    ),
+    (
+        "minecraft:polished_grimstone_stairs",
+        "minecraft:polished_deepslate_stairs",
+    ),
+    (
+        "minecraft:polished_grimstone_wall",
+        "minecraft:polished_deepslate_wall",
+    ),
+    ("minecraft:grimstone_tiles", "minecraft:deepslate_tiles"),
+    (
+        "minecraft:grimstone_tile_slab",
+        "minecraft:deepslate_tile_slab",
+    ),
+    (
+        "minecraft:grimstone_tile_stairs",
+        "minecraft:deepslate_tile_stairs",
+    ),
+    (
+        "minecraft:grimstone_tile_wall",
+        "minecraft:deepslate_tile_wall",
+    ),
+    ("minecraft:grimstone_bricks", "minecraft:deepslate_bricks"),
+    (
+        "minecraft:grimstone_brick_slab",
+        "minecraft:deepslate_brick_slab",
+    ),
+    (
+        "minecraft:grimstone_brick_stairs",
+        "minecraft:deepslate_brick_stairs",
+    ),
+    (
+        "minecraft:grimstone_brick_wall",
+        "minecraft:deepslate_brick_wall",
+    ),
+    (
+        "minecraft:chiseled_grimstone",
+        "minecraft:chiseled_deepslate",
+    ),
+];
+
+/// `SavedDataFeaturePoolElementFix`: the feature of jigsaw pieces' feature pool
+/// elements, from an inline configuration to a configured feature id.
+fn feature_pool_elements(cx: &mut Cx) {
+    cx.each(Ty::StructureFeature, |v| {
+        let Some(children) = v.get("Children") else {
+            return;
+        };
+        if !super::dynamic::is_list(Some(children)) {
+            return;
+        }
+        let fixed = stream(Some(children))
+            .into_iter()
+            .map(|mut child| {
+                let id = as_str(child.get("id")).unwrap_or_default();
+                if !matches!(
+                    id.as_str(),
+                    "minecraft:jigsaw"
+                        | "minecraft:nvi"
+                        | "minecraft:pcp"
+                        | "minecraft:bastionremnant"
+                        | "minecraft:runtime"
+                ) {
+                    return child;
+                }
+                let element = child.get("pool_element");
+                let is_feature = element
+                    .and_then(|e| as_str(e.get("element_type")))
+                    .as_deref()
+                    == Some("minecraft:feature_pool_element");
+                if is_feature
+                    && let Some(f) = child
+                        .get_mut("pool_element")
+                        .and_then(|p| p.get_mut("feature"))
+                    && let Some(new) = feature_replacement(f)
+                {
+                    *f = string(new);
+                }
+                child
+            })
+            .collect();
+        set(v, "Children", Tag::List(fixed));
+    });
+}
+
+fn path_str(v: &Tag, path: &[&str]) -> String {
+    let mut cur = Some(v.clone());
+    for p in path {
+        cur = match (cur, p.strip_prefix('[').and_then(|s| s.strip_suffix(']'))) {
+            (Some(c), Some(index)) => {
+                let i: usize = index.parse().unwrap_or(usize::MAX);
+                stream(Some(&c)).into_iter().nth(i)
+            }
+            (Some(c), None) => c.get(p).cloned(),
+            (None, _) => None,
+        };
+    }
+    as_str(cur.as_ref()).unwrap_or_default()
+}
+
+/// `SavedDataFeaturePoolElementFix.getReplacement`.
+fn feature_replacement(value: &Tag) -> Option<&'static str> {
+    let ty = path_str(value, &["type"]);
+    let name = path_str(value, &["name"]);
+    let provider = path_str(value, &["config", "state_provider", "type"]);
+    let state = path_str(value, &["config", "state_provider", "state", "Name"]);
+    let first = path_str(
+        value,
+        &["config", "state_provider", "entries", "[0]", "data", "Name"],
+    );
+    let foliage = path_str(value, &["config", "foliage_placer", "type"]);
+    let leaves = path_str(value, &["config", "leaves_provider", "state", "Name"]);
+    let feature = if !ty.is_empty() {
+        ty
+    } else if name.is_empty() {
+        return None;
+    } else if name == "minecraft:normal_tree" {
+        "minecraft:tree".to_owned()
+    } else {
+        name
+    };
+    match feature.as_str() {
+        "minecraft:random_patch" => {
+            if provider == "minecraft:simple_state_provider" {
+                match state.as_str() {
+                    "minecraft:sweet_berry_bush" => return Some("minecraft:patch_berry_bush"),
+                    "minecraft:cactus" => return Some("minecraft:patch_cactus"),
+                    _ => {}
+                }
+            } else if provider == "minecraft:weighted_state_provider"
+                && (first == "minecraft:grass" || first == "minecraft:fern")
+            {
+                return Some("minecraft:patch_taiga_grass");
+            }
+        }
+        "minecraft:block_pile" => {
+            if provider != "minecraft:simple_state_provider"
+                && provider != "minecraft:rotated_block_provider"
+            {
+                if provider == "minecraft:weighted_state_provider" {
+                    match first.as_str() {
+                        "minecraft:packed_ice" | "minecraft:blue_ice" => {
+                            return Some("minecraft:pile_ice");
+                        }
+                        "minecraft:jack_o_lantern" | "minecraft:pumpkin" => {
+                            return Some("minecraft:pile_pumpkin");
+                        }
+                        _ => {}
+                    }
+                }
+            } else {
+                match state.as_str() {
+                    "minecraft:hay_block" => return Some("minecraft:pile_hay"),
+                    "minecraft:melon" => return Some("minecraft:pile_melon"),
+                    "minecraft:snow" => return Some("minecraft:pile_snow"),
+                    _ => {}
+                }
+            }
+        }
+        "minecraft:flower" => return Some("minecraft:flower_plain"),
+        "minecraft:tree" => match foliage.as_str() {
+            "minecraft:acacia_foliage_placer" => return Some("minecraft:acacia"),
+            "minecraft:blob_foliage_placer" if leaves == "minecraft:oak_leaves" => {
+                return Some("minecraft:oak");
+            }
+            "minecraft:pine_foliage_placer" => return Some("minecraft:pine"),
+            "minecraft:spruce_foliage_placer" => return Some("minecraft:spruce"),
+            _ => {}
+        },
+        _ => {}
+    }
+    None
+}
+
+/// `AbstractArrowPickupFix`.
+fn arrow_pickup(cx: &mut Cx) {
+    cx.each(Ty::Entity, |e| {
+        let id = as_str(e.get("id")).map(|s| super::dynamic::namespaced(&s));
+        if !matches!(
+            id.as_deref(),
+            Some("minecraft:arrow" | "minecraft:spectral_arrow" | "minecraft:trident")
+        ) || e.get("pickup").is_some()
+        {
+            return;
+        }
+        let from_player = as_bool(e.get("player"), true);
+        set(e, "pickup", Tag::Byte(i8::from(from_player)));
+        remove(e, "player");
+    });
+}
+
+/// `StatsRenameFix`: custom statistics and the objectives that count them.
+pub(super) fn stats_rename(cx: &mut Cx, table: &[(&str, &'static str)]) {
+    let r = renamer(table);
+    cx.each(Ty::Stats, |v| {
+        if let Some(Tag::Compound(custom)) = v
+            .get_mut("stats")
+            .and_then(|s| s.get_mut("minecraft:custom"))
+        {
+            let old = std::mem::take(custom);
+            for (k, value) in old {
+                let name = super::dynamic::namespaced(&k.to_string_lossy());
+                let name = r(&name).map_or(name, str::to_owned);
+                custom.insert(JavaString::from(name.as_str()), value);
+            }
+        }
+    });
+    cx.each(Ty::Objective, |v| {
+        if let Some(ct) = v.get_mut("CriteriaType")
+            && as_str(ct.get("type")).as_deref() == Some("minecraft:custom")
+            && let Some(id) = as_str(ct.get("id"))
+        {
+            let id = super::dynamic::namespaced(&id);
+            let new = r(&id).map_or(id, str::to_owned);
+            set(ct, "id", string(&new));
+        }
+    });
+}
+
 // ------------------------------------------------------------------ 2825 to 2843
 
 /// `AddFlagIfNotPresentFix` over the world generation settings.
@@ -323,11 +736,20 @@ pub(super) fn add_flag(cx: &mut Cx, flag: &str, value: bool) {
 
 /// `SpawnerDataFix`: spawn data and potentials wrapped as weighted entries.
 fn spawner_data(cx: &mut Cx) {
+    use super::schema::flat::UNTYPED;
     cx.each(Ty::UntaggedSpawner, |v| {
-        if let Some(data) = remove(v, "SpawnData") {
+        // Only what read as typed is wrapped.
+        if v.get("SpawnData").is_some_and(|d| d.get(UNTYPED).is_none())
+            && let Some(data) = remove(v, "SpawnData")
+        {
             set(v, "SpawnData", Tag::compound([("entity", data)]));
         }
-        if let Some(potentials) = v.get("SpawnPotentials").cloned() {
+        let untyped = |entries: &Tag| {
+            stream(Some(entries))
+                .iter()
+                .any(|e| e.get("Entity").is_some_and(|t| t.get(UNTYPED).is_some()))
+        };
+        if let Some(potentials) = v.get("SpawnPotentials").filter(|p| !untyped(p)).cloned() {
             let entries = stream(Some(&potentials))
                 .into_iter()
                 .map(|mut entry| {
