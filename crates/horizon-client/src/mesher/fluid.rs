@@ -305,6 +305,7 @@ pub(super) fn tesselate(
     let mut quad =
         |v: [([f32; 3], [f32; 2]); 4], layer: u32, color: u32, light: u32, back: bool| {
             let vertex = |(pos, uv): ([f32; 3], [f32; 2])| Vertex {
+                normal: [0; 4],
                 pos,
                 uv,
                 layer,

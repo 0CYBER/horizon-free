@@ -2109,6 +2109,7 @@ impl Game<'_> {
                 // A triangle as a quad with its last corner repeated.
                 for (p, c) in [(o, inner), (p1, outer), (p2, outer), (p2, outer)] {
                     out.push(Vertex {
+                        normal: [0; 4],
                         pos: m.transform_point3(p).to_array(),
                         uv,
                         layer: 2,
@@ -2173,6 +2174,7 @@ impl Game<'_> {
                 ),
             ] {
                 out.push(Vertex {
+                    normal: [0; 4],
                     pos: m.transform_point3(p).to_array(),
                     uv,
                     layer: 6,
@@ -2217,6 +2219,7 @@ impl Game<'_> {
                 (p - right * h + up * h, [s.u0, s.v0]),
             ] {
                 out.push(Vertex {
+                    normal: [0; 4],
                     pos: c.as_vec3().to_array(),
                     uv,
                     layer: 0,

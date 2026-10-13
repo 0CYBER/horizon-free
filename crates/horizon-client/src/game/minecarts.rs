@@ -1113,6 +1113,7 @@ impl Game<'_> {
                     let p = face.quad.positions[k];
                     let uv = face.quad.uv[k];
                     out.push(Vertex {
+                        normal: [0; 4],
                         pos: m.transform_point3(glam::Vec3::from_array(p)).to_array(),
                         uv: [s.u0 + uv[0] * (s.u1 - s.u0), s.v0 + uv[1] * (s.v1 - s.v0)],
                         layer: 0,

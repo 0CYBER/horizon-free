@@ -256,6 +256,7 @@ impl Game<'_> {
                 {
                     // Overlay 5: OverlayTexture white flash.
                     out.push(Vertex {
+                        normal: [0; 4],
                         pos: p.to_array(),
                         uv,
                         layer: if lit { 5 } else { 0 },

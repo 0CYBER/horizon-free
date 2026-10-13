@@ -283,6 +283,7 @@ impl Game<'_> {
                 let color = 0xFF00_0000 | k << 16 | k << 8 | k;
                 for (p, uv) in corners.iter().zip(uv) {
                     out.push(Vertex {
+                        normal: [0; 4],
                         pos: p.as_vec3().to_array(),
                         uv,
                         layer: 0,

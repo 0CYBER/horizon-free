@@ -169,6 +169,7 @@ impl Game<'_> {
                     for (x, z, uv) in corners {
                         let p = pose.transform_point3(glam::Vec3::new(x, -100.0, z));
                         out.push(Vertex {
+                            normal: [0; 4],
                             pos: p.to_array(),
                             uv,
                             layer: 2,
@@ -203,6 +204,7 @@ impl Game<'_> {
             for (x, z, uv) in corners {
                 let p = pose.transform_point3(glam::Vec3::new(x * 60.0, 100.0, z * 60.0));
                 out.push(Vertex {
+                    normal: [0; 4],
                     pos: p.to_array(),
                     uv,
                     layer: 2,
@@ -990,6 +992,7 @@ impl Game<'_> {
                     ];
                     for (pos, uv) in quad {
                         out.push(Vertex {
+                            normal: [0; 4],
                             pos: pos.to_array(),
                             uv,
                             layer: 0,
@@ -1127,6 +1130,7 @@ impl Game<'_> {
             ];
             for (pos, uv) in corners {
                 out.push(Vertex {
+                    normal: [0; 4],
                     pos: pos.to_array(),
                     uv,
                     layer: 0,

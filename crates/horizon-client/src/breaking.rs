@@ -34,6 +34,7 @@ pub fn geometry(model: &BakedModel, origin: glam::Vec3, translucent: bool, out: 
                     layer: if translucent { 12 } else { 11 },
                     color: 0xffff_ffff,
                     light: 240 | (240 << 8),
+                    normal: [0; 4],
                 });
             }
         }

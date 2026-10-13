@@ -532,6 +532,7 @@ impl Game<'_> {
         let quad = |corners: [[f32; 3]; 4], uv: [[f32; 2]; 4], out: &mut Vec<Vertex>| {
             for (c, uv) in corners.into_iter().zip(uv) {
                 out.push(Vertex {
+                    normal: [0; 4],
                     pos: m.transform_point3(glam::Vec3::from_array(c)).to_array(),
                     uv,
                     layer: 0,
@@ -578,6 +579,7 @@ impl Game<'_> {
             let mut q = |corners: [[f32; 3]; 4], uv: [[f32; 2]; 4]| {
                 for (c, uv) in corners.into_iter().zip(uv) {
                     out.push(Vertex {
+                        normal: [0; 4],
                         pos: m.transform_point3(glam::Vec3::from_array(c)).to_array(),
                         uv,
                         layer: 0,
@@ -646,6 +648,7 @@ impl Game<'_> {
                 ([-7.0, -7.0, 0.0], [r.u0, r.v0]),
             ] {
                 out.push(Vertex {
+                    normal: [0; 4],
                     pos: m.transform_point3(glam::Vec3::from_array(c)).to_array(),
                     uv,
                     layer: 0,
