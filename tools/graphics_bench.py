@@ -54,6 +54,8 @@ def vscreen_env():
             k, v = part.split("=", 1)
             env[k] = v
     env.pop("DISPLAY", None)
+    # Benchmark games never play sound on the machine's speakers.
+    env["HORIZON_NO_AUDIO"] = "1"
     return env
 
 
