@@ -6916,24 +6916,18 @@ impl Game<'_> {
         let mut hovered: Option<String> = None;
         for r in 0..5 {
             for c in 0..9 {
-                let Some(item) = items.get((first + r) * 9 + c) else {
+                let Some(stack) = items.get((first + r) * 9 + c) else {
                     continue;
                 };
                 let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 18.0 + r as f32 * 18.0);
-                let stack = ItemStack {
-                    item: Arc::from(item.as_str()),
-                    count: 1,
-                    damage: 0,
-                    extra: None,
-                };
-                self.draw_item(batch, &stack, x, y);
+                self.draw_item(batch, stack, x, y);
                 if self.cursor.0 >= x
                     && self.cursor.0 < x + 16.0
                     && self.cursor.1 >= y
                     && self.cursor.1 < y + 16.0
                 {
                     batch.fill(&self.res.atlas, x, y, 16.0, 16.0, rgba(255, 255, 255, 128));
-                    hovered = Some(item.clone());
+                    hovered = Some(stack.item.to_string());
                 }
             }
         }
@@ -6959,8 +6953,8 @@ impl Game<'_> {
         batch.sprite(
             &self.res.atlas,
             scroller,
-            ox + 175.0,
-            oy + 18.0 + self.creative_screen.scroll * (112.0 - 15.0),
+            ox + Creative::SCROLL_X,
+            oy + Creative::SCROLL_Y + self.creative_screen.scroller_offset(),
         );
         for t in &tabs {
             let (tx, ty) = Creative::tab_position(t);
@@ -6998,13 +6992,16 @@ impl Game<'_> {
                     self.screen = Screen::Inventory;
                     return;
                 }
-                self.creative_screen.selected = i;
-                self.creative_screen.scroll = 0.0;
+                self.creative_screen.select(i);
                 return;
             }
         }
-        if cx >= ox + 175.0 && cx < ox + 187.0 && cy >= oy + 18.0 && cy < oy + 130.0 {
-            self.creative_screen.scroll = ((cy - oy - 18.0 - 7.5) / (112.0 - 15.0)).clamp(0.0, 1.0);
+        // Holding the scrollbar scrolls as the mouse moves (mouseDragged).
+        if !right
+            && self
+                .creative_screen
+                .press_scrollbar(cx - ox, cy - oy, &self.res.names)
+        {
             return;
         }
         let shift = self.keys.contains(&KeyCode::ShiftLeft);
@@ -7020,15 +7017,13 @@ impl Game<'_> {
                 if self.carried.take().is_some() {
                     return;
                 }
-                let Some(item) = items.get((first + r) * 9 + c) else {
+                let Some(stack) = items.get((first + r) * 9 + c) else {
                     return;
                 };
-                let max = self.res.items.get(item).map_or(64, |i| i.max_stack);
+                let max = self.res.items.get(&stack.item).map_or(64, |i| i.max_stack);
                 let stack = ItemStack {
-                    item: Arc::from(item.as_str()),
                     count: if right { 1 } else { max },
-                    damage: 0,
-                    extra: None,
+                    ..stack.clone()
                 };
                 if shift {
                     let _ = self.give(stack);
@@ -7796,6 +7791,10 @@ impl ApplicationHandler for Game<'_> {
                         if self.screen == Screen::Advancements {
                             self.advancements_drag();
                         }
+                        if self.screen == Screen::Creative {
+                            let (_, oy) = Self::creative_origin(&b);
+                            self.creative_screen.drag_scrollbar(self.cursor.1 - oy);
+                        }
                         if self.screen == Screen::Inventory {
                             self.loom_drag();
                             self.inventory_drag_move();
@@ -7841,13 +7840,7 @@ impl ApplicationHandler for Game<'_> {
                         self.options_scroll(d);
                     }
                     if self.screen == Screen::Creative && d != 0.0 {
-                        let rows = self
-                            .creative_screen
-                            .rows(&self.res.names)
-                            .saturating_sub(5)
-                            .max(1) as f32;
-                        self.creative_screen.scroll =
-                            (self.creative_screen.scroll - d.signum() / rows).clamp(0.0, 1.0);
+                        self.creative_screen.wheel(f64::from(d), &self.res.names);
                     }
                     if self.screen == Screen::Inventory && d != 0.0 {
                         self.station_scroll(d);
@@ -7958,6 +7951,9 @@ impl ApplicationHandler for Game<'_> {
                         Screen::Chat if pressed && button == MouseButton::Left => self.chat_click(),
                         Screen::Creative if pressed => {
                             self.click_creative(button == MouseButton::Right);
+                        }
+                        Screen::Creative if button == MouseButton::Left => {
+                            self.creative_screen.release();
                         }
                         Screen::Paused if pressed => self.pause_click()?,
                         Screen::WorldOptions if pressed && button == MouseButton::Left => {
