@@ -96,6 +96,8 @@ fn main() -> horizon_client::Result<()> {
                         "escape" => K::Escape,
                         _ => K::KeyA,
                     };
+                    // InputQuirks.EDIT_SHORTCUT_KEY_MODIFIER: Cmd, not Ctrl, on macOS.
+                    let ctrl = ctrl && !cfg!(target_os = "macos");
                     if screen.key(&m, &c, &history, key, shift, ctrl) != ChatAction::None {
                         closed = true;
                         break;

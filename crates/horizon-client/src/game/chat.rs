@@ -425,8 +425,13 @@ impl Game<'_> {
     }
     /// A key (and the text it typed) while the chat screen is open.
     pub(super) fn chat_key_code(&mut self, key: KeyCode, typed_text: Option<&str>) {
-        let ctrl =
-            self.keys.contains(&KeyCode::ControlLeft) || self.keys.contains(&KeyCode::ControlRight);
+        // InputQuirks.EDIT_SHORTCUT_KEY_MODIFIER: Cmd on macOS, Ctrl elsewhere.
+        let (left, right) = if cfg!(target_os = "macos") {
+            (KeyCode::SuperLeft, KeyCode::SuperRight)
+        } else {
+            (KeyCode::ControlLeft, KeyCode::ControlRight)
+        };
+        let ctrl = self.keys.contains(&left) || self.keys.contains(&right);
         let shift =
             self.keys.contains(&KeyCode::ShiftLeft) || self.keys.contains(&KeyCode::ShiftRight);
         match key {
