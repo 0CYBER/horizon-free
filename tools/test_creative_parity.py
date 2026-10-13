@@ -30,7 +30,6 @@ except ImportError:
     import test_rust_parity as base
     import test_model_baking_parity as baking
 
-PARITY_RUST_SCOPE = ['crates/horizon-client/src/creative.rs', 'crates/horizon-client/examples/creative_search_fixture.rs']
 PARITY = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity'
 # Players' reports (anvil, crafting table, smithing table), other blocks of the
 # functional tab, case, spaces, colons and tag searches.
