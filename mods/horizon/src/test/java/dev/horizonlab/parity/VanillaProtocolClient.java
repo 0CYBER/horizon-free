@@ -478,9 +478,12 @@ public final class VanillaProtocolClient {
                     record("play", r.type + " " + json(p.reason()));
                     break;
                 }
-                // The clock goes out every second: after the first, where it
-                // falls among the joining packets is timing.
-                if (ordered && !(r.type.equals("minecraft:set_time") && counts.get(r.type) > 1)) {
+                // MinecraftServer.tickServer syncs the game time every 20 ticks
+                // (no clocks): whether one lands before the first chunk batch
+                // depends on when the client joined, so it isn't compared.
+                boolean periodicTime = packet instanceof net.minecraft.network.protocol.game.ClientboundSetTimePacket p
+                    && p.clockUpdates().isEmpty();
+                if (ordered && !periodicTime) {
                     record("play-start", r.type + " " + summary(r));
                 }
                 if (packet instanceof net.minecraft.network.protocol.game.ClientboundCommandsPacket p && counts.get(r.type) == 1) {

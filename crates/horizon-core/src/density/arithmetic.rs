@@ -8,7 +8,7 @@ pub(super) fn java_power(base: f64, exponent: f64) -> f64 {
     } else if exponent.is_nan() || (base.abs() == 1.0 && exponent.is_infinite()) {
         f64::NAN
     } else {
-        base.powf(exponent)
+        crate::jmath::pow(base, exponent)
     }
 }
 
@@ -83,7 +83,7 @@ impl UnaryOp {
             Self::Square => value * value,
             Self::Cube => value * value * value,
             Self::Sqrt => (value as f64).sqrt() as f32,
-            Self::Log => (value as f64).ln() as f32,
+            Self::Log => crate::jmath::log(value as f64) as f32,
             Self::PowerBase(base) => java_power(base, value as f64) as f32,
             Self::PowerExponent(exponent) => java_power(value as f64, exponent) as f32,
             Self::Reciprocal => 1.0 / value,

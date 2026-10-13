@@ -10,6 +10,9 @@ description = "Horizon simulation foundations for the pinned vanilla Java Editio
 # Records the call sites of LegacyRandom draws (mob AI parity debugging).
 rng-trace = []
 
+[dependencies]
+libm = "=0.2.16"
+
 [[bin]]
 name = "horizon-parity"
 path = "src/bin/parity.rs"

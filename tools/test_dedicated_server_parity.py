@@ -9,9 +9,9 @@ headless client made of vanilla's own codecs (any byte vanilla would not
 read is an error), pings each server, joins it in offline mode through
 login, configuration and play, accepts the spawn teleport, receives the
 chunks around the spawn (their bytes are compared: the world is loaded from
-the same files), chats, runs /list, then commands that fail (`/random value
-7..7`, `/random value x`, `/trigger nope`) and leaves. The console then runs `list`
-and `say` and `stop`. Compared, all of them exactly:
+the same files), chats, runs /list and commands that fail (`/random value
+7..7`, `/random value x`, `/trigger nope`) and leaves. The console then
+runs `list` and `say` and `stop`. Compared, all of them exactly:
 
 - the status response (MOTD, players, version, favicon) and the ping;
 - the legacy (pre-1.7, 0xFE) ping reply;
@@ -141,6 +141,36 @@ class Server:
                 self.process.wait()
         self.reader.join(timeout=10)
         self.log.close()
+
+
+def settle(server, ticks=600, timeout=600):
+    """Waits until every force-loaded chunk is loaded, then for `ticks` game
+    ticks, so their fluids have finished flowing however slow the machine."""
+    deadline = time.time() + timeout
+    offsets = range(-80, 81, 16)
+    for poll in range(1_000_000):
+        start = len(server.lines)
+        for dx in offsets:
+            for dz in offsets:
+                server.console(f'execute unless loaded ~{dx} ~ ~{dz} run say unloaded')
+        server.console(f'say poll {poll}')
+        server.wait_for(rf'\[Server\] poll {poll}$', timeout=max(1, deadline - time.time()))
+        if not any(l.endswith('[Server] unloaded') for l in server.lines[start:]):
+            break
+        time.sleep(2)
+
+    def game_time():
+        start = len(server.lines)
+        server.console('time query gametime')
+        while time.time() < deadline:
+            for line in server.lines[start:]:
+                if m := re.search(r'The (?:game )?time is (\d+)', line):
+                    return int(m.group(1))
+            time.sleep(0.2)
+        raise AssertionError(f'{server.log_path.name}: no game time in {timeout} s')
+    until = game_time() + ticks
+    while game_time() < until:
+        time.sleep(2)
 
 
 def legacy_ping(port):
@@ -307,16 +337,17 @@ def main():
         server.wait_for(r'Done \(')
         server.console('gamerule respawn_radius 0')
         server.wait_for(r'respawn_radius', timeout=30)
-        # No random ticks: which of the chunks around the player have grown
-        # kelp or spread grass by the time they are sent is timing.
-        server.console('gamerule random_tick_speed 0')
-        server.wait_for(r'random_tick_speed', timeout=30)
         # Vanilla keeps no spawn chunks: force-load the area the client is
         # sent and its neighbours (the console stands at the world spawn) so
         # both servers load full chunks instead of finishing proto-chunks.
+        # Random ticks change blocks while the client is being sent its
+        # chunks, more of them the busier the machine: none, so both servers
+        # send the world as it was saved.
+        server.console('gamerule random_tick_speed 0')
+        server.wait_for(r'random_tick_speed', timeout=30)
         server.console('forceload add ~-80 ~-80 ~80 ~80')
         server.wait_for(r'chunks in the Overworld are now force loaded|forceloaded|force loaded', timeout=60)
-        time.sleep(20)
+        settle(server)
         server.console('forceload remove all')
         server.console('save-all flush')
         server.wait_for(r'Saved the game', timeout=120)
@@ -361,7 +392,8 @@ def main():
         java=subprocess.check_output(['java', '--version'], text=True).splitlines()[0],
         lines=len(vanilla), output_sha256=lab.digest(build / 'horizon.txt', 'sha256'),
         scope='Dedicated server seen by a vanilla-codec client: status, legacy ping, login, configuration, play '
-              'start, chunks, chat, /list, console list/say/stop, files written. Offline mode.'))
+              'start (recipes, advancements, command tree), chunks, chat, /list, failing commands\' replies, '
+              'console list/say/stop, files written. Offline mode.'))
     print(f'dedicated server: {len(vanilla)} transcript lines identical')
 
 
