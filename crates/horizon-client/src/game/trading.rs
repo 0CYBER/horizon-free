@@ -96,6 +96,8 @@ impl Game<'_> {
             items: &self.res.items,
             enchantments: &self.res.stations.enchantments,
             variant,
+            origin: [0.0; 3],
+            maps: None,
         };
         self.res.stations.trades.offers_from_set(&ctx, set, random)
     }

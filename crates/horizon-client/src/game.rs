@@ -3896,6 +3896,7 @@ impl Game<'_> {
             recipes: &self.res.recipes,
             brewing: &self.res.stations.brewing,
             banners: &self.res.stations.banners,
+            trade: None,
         };
         menu.creative = creative;
         menu.selected = self.selected;

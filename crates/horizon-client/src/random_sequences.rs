@@ -41,6 +41,14 @@ impl RandomSequences {
             .entry(id.to_owned())
             .or_insert_with(|| create(id, world_seed, salt, w, i))
     }
+    /// Lends sequence `id` out (created if missing); `give_back` returns it.
+    pub fn lend(&mut self, id: &str, world_seed: i64) -> XoroshiroRandom {
+        self.get(id, world_seed);
+        self.sequences.remove(id).expect("created")
+    }
+    pub fn give_back(&mut self, id: String, random: XoroshiroRandom) {
+        self.sequences.insert(id, random);
+    }
     pub fn ids(&self) -> Vec<String> {
         self.sequences.keys().cloned().collect()
     }

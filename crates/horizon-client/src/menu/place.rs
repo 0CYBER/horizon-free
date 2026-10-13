@@ -538,7 +538,7 @@ impl Menu {
     }
 
     /// `Inventory.placeItemBackInInventory`.
-    fn place_back(&mut self, env: &Env, stack: &mut ItemStack) {
+    pub(super) fn place_back(&mut self, env: &Env, stack: &mut ItemStack) {
         while stack.count > 0 {
             let slot = self
                 .slot_with_space(env, stack)

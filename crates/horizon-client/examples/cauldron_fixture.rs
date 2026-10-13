@@ -87,6 +87,7 @@ fn main() -> horizon_client::Result<()> {
         recipes: &recipes,
         brewing: &brewing,
         banners: &banners,
+        trade: None,
     };
     let mut out = String::new();
     for line in input.lines() {

@@ -573,10 +573,12 @@ pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
                     d.stew_effects
                         .iter()
                         .map(|(id, duration)| {
-                            Tag::compound([
-                                ("id", Tag::String((&**id).into())),
-                                ("duration", Tag::Int(*duration)),
-                            ])
+                            // The codec leaves out the default duration (160).
+                            let mut e = vec![("id", Tag::String((&**id).into()))];
+                            if *duration != 160 {
+                                e.push(("duration", Tag::Int(*duration)));
+                            }
+                            Tag::compound(e)
                         })
                         .collect(),
                 ),
