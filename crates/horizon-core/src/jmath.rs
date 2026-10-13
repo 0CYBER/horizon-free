@@ -124,7 +124,8 @@ fn with_hi(x: f64, high: i32) -> f64 {
 
 /// `java.lang.FdLibm` ports (`StrictMath`) of what the `libm` crate computes
 /// differently.
-#[allow(clippy::excessive_precision, clippy::approx_constant, clippy::eq_op)] // fdlibm's constants and NaN, verbatim.
+// fdlibm's constants and NaN, verbatim.
+#[allow(clippy::excessive_precision, clippy::approx_constant, clippy::eq_op)]
 pub mod fdlibm {
     use super::{hi, with_hi};
 
@@ -337,7 +338,8 @@ pub mod fdlibm {
 /// HotSpot's AArch64 `Math.sin` / `Math.cos` stubs
 /// (`MacroAssembler::generate_dsin_dcos`): fdlibm with fused multiply-adds.
 /// Exposed on every architecture so they can be tested anywhere.
-#[allow(clippy::excessive_precision, clippy::approx_constant, clippy::unreadable_literal)] // HotSpot's tables, verbatim.
+// HotSpot's tables, verbatim.
+#[allow(clippy::excessive_precision, clippy::approx_constant, clippy::unreadable_literal)]
 pub mod aarch64 {
     use super::hi;
 
