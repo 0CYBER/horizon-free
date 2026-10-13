@@ -30,7 +30,10 @@ pub fn ring_positions(
         let dist = f64::from(4 * distance + distance * circle * 6)
             + (random.next_double() - 0.5) * (f64::from(distance) * 2.5);
         let round = |v: f64| (v + 0.5).floor() as i64 as i32;
-        let (x, z) = (round(angle.cos() * dist), round(angle.sin() * dist));
+        let (x, z) = (
+            round(horizon_core::jmath::cos(angle) * dist),
+            round(horizon_core::jmath::sin(angle) * dist),
+        );
         let mut search = random.fork();
         let (cx, cz) = ((x * 16 + 8) >> 2, (z * 16 + 8) >> 2);
         let mut found = 0;

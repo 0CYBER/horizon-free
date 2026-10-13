@@ -155,7 +155,10 @@ impl OreFeature {
         let spread_xy = self.size as f32 / 8.0;
         let max_radius = ((self.size as f32 / 16.0 * 2.0 + 1.0) / 2.0).ceil() as i32;
         let (ox, oz) = (f64::from(origin[0]), f64::from(origin[2]));
-        let (sin, cos) = (f64::from(dir).sin(), f64::from(dir).cos());
+        let (sin, cos) = (
+            horizon_core::jmath::sin(f64::from(dir)),
+            horizon_core::jmath::cos(f64::from(dir)),
+        );
         let spread = f64::from(spread_xy);
         let x0 = ox + sin * spread;
         let x1 = ox - sin * spread;

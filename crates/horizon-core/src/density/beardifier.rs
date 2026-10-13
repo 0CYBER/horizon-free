@@ -208,7 +208,7 @@ fn kernel() -> &'static [f32; 13824] {
             let x = ((i / 24) % 24) as f64 - 12.;
             let y = (i % 24) as f64 - 12. + 0.5;
             let squared = (x * x + y * y) + z * z;
-            std::f64::consts::E.powf(-squared / 16.) as f32
+            crate::jmath::pow(std::f64::consts::E, -squared / 16.) as f32
         })
     })
 }

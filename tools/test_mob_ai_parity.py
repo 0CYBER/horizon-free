@@ -186,6 +186,28 @@ def scenarios():
                                'mob minecraft:wandering_trader 0.5 -60 0.5 0 104 persistent',
                                'mob minecraft:trader_llama 3.5 -60 1.5 0 105 persistent leashto=0 strength=2',
                                'mob minecraft:trader_llama 3.5 -60 -1.5 0 106 persistent leashto=0 strength=4'])
+    # Copper golems sorting chests (TransportItemsBetweenContainers): from a copper chest to a chest,
+    # skipping a chest without the carried item, queueing at a chest another golem has open, a double
+    # chest, a blocked copper chest, a part-full chest, and idling with nothing to carry.
+    def chest(x, z, slots='-', kind='chest', facing='north', half='single', y=-60):
+        return f'chest {x} {y} {z} minecraft:{kind}[facing={facing},type={half},waterlogged=false] {slots}'
+    golem = 'mob minecraft:copper_golem {} -60 {} {} {} persistent cooldown=0'
+    add('golem_copper_to_chest', 600, [chest(4, 0, 'cobblestone*20,-,iron_ingot*5', 'copper_chest'),
+                                       chest(-4, 3), golem.format(0.5, 0.5, 0, 111)])
+    add('golem_skips_other_items', 700, [chest(4, 0, 'cobblestone*40', 'copper_chest'),
+                                         chest(-3, 0, 'dirt*3'), chest(-6, 5, 'cobblestone*10'),
+                                         golem.format(0.5, 0.5, 90, 112)])
+    add('golem_queue', 600, [chest(3, 0, 'oak_log*48,stick*7', 'copper_chest'), chest(-4, 0),
+                             golem.format(0.5, 0.5, 0, 113), golem.format(0.5, 3.5, 180, 114)])
+    add('golem_double_chest', 600, [chest(4, 0, 'apple*30', 'exposed_copper_chest'),
+                                    chest(-4, 2, '-', 'chest', 'north', 'left'), chest(-5, 2, 'apple*2', 'chest', 'north', 'right'),
+                                    golem.format(0.5, 0.5, 0, 115)])
+    add('golem_blocked_chest', 400, [chest(3, 0, 'sand*5', 'copper_chest'), 'block 3 -59 0 minecraft:stone',
+                                     chest(-5, -2, 'gravel*9', 'oxidized_copper_chest'), chest(0, 6),
+                                     golem.format(0.5, 0.5, 0, 116)])
+    add('golem_part_full', 500, [chest(-3, 1, 'cobblestone*60,cobblestone*64,-,cobblestone*63'),
+                                 'mob minecraft:copper_golem 0.5 -60 0.5 0 117 persistent cooldown=0 hand=cobblestone*16'])
+    add('golem_idle', 400, ['player 4.5 -60 2.5', 'mob minecraft:copper_golem 0.5 -60 0.5 0 118 persistent'])
     return s
 
 
@@ -205,7 +227,7 @@ def write_scenarios(path, chosen):
             elif f[0] == 'mob':
                 f[2] = repr(float(f[2]) + ox)
                 f[4] = repr(float(f[4]) + oz)
-            elif f[0] in ('block', 'heart'):
+            elif f[0] in ('block', 'heart', 'chest'):
                 f[1] = str(int(f[1]) + ox)
                 f[3] = str(int(f[3]) + oz)
             elif f[0] == 'fill':
@@ -239,6 +261,9 @@ def parse(path):
             continue
         if parts[1] == 'heart':
             cur.setdefault('hearts', {}).setdefault(t, []).append(line.split(' ', 2)[2])
+            continue
+        if parts[1] == 'chest':
+            cur.setdefault('chests', {}).setdefault(t, []).append(parts[2])
             continue
         mob = int(parts[1])
         row = {}
@@ -333,8 +358,8 @@ def compare(vanilla, rust, fields=None):
                 report.append(f'{name}: hearts differ at tick {t}: vanilla {v.get("hearts", {}).get(t)} | horizon {r.get("hearts", {}).get(t)}')
                 clean = False
                 break
-        # Sounds and watched block changes: first differing tick.
-        for kind in ('sounds', 'blocks'):
+        # Sounds, watched block changes and chest contents: first differing tick.
+        for kind in ('sounds', 'blocks', 'chests'):
             va, ra = v.get(kind, {}), r.get(kind, {})
             for t in sorted(set(va) | set(ra)):
                 if va.get(t, []) != ra.get(t, []):

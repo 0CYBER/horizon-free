@@ -322,5 +322,9 @@ fn chat(c: &Value, h: i32, atlas: &HudAtlas) -> Vec<GuiDraw> {
             false,
         );
     }
-    chat.layout(h, c["now"].as_u64().unwrap_or(0), false)
+    let focused = c["focused"].as_bool().unwrap_or(false);
+    if let Some(n) = c["scroll"].as_i64() {
+        chat.scroll_by(n as i32, focused);
+    }
+    chat.layout(h, c["now"].as_u64().unwrap_or(0), focused)
 }

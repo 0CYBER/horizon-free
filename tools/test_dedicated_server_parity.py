@@ -163,6 +163,36 @@ class Server:
         self.log.close()
 
 
+def settle(server, ticks=600, timeout=600):
+    """Waits until every force-loaded chunk is loaded, then for `ticks` game
+    ticks, so their fluids have finished flowing however slow the machine."""
+    deadline = time.time() + timeout
+    offsets = range(-80, 81, 16)
+    for poll in range(1_000_000):
+        start = len(server.lines)
+        for dx in offsets:
+            for dz in offsets:
+                server.console(f'execute unless loaded ~{dx} ~ ~{dz} run say unloaded')
+        server.console(f'say poll {poll}')
+        server.wait_for(rf'\[Server\] poll {poll}$', timeout=max(1, deadline - time.time()))
+        if not any(l.endswith('[Server] unloaded') for l in server.lines[start:]):
+            break
+        time.sleep(2)
+
+    def game_time():
+        start = len(server.lines)
+        server.console('time query gametime')
+        while time.time() < deadline:
+            for line in server.lines[start:]:
+                if m := re.search(r'The (?:game )?time is (\d+)', line):
+                    return int(m.group(1))
+            time.sleep(0.2)
+        raise AssertionError(f'{server.log_path.name}: no game time in {timeout} s')
+    until = game_time() + ticks
+    while game_time() < until:
+        time.sleep(2)
+
+
 def legacy_ping(port):
     """The reply to a 1.6 client's 0xFE 0x01 0xFA MC|PingHost query (LegacyQueryHandler)."""
     host = 'localhost'
@@ -330,9 +360,14 @@ def main():
         # Vanilla keeps no spawn chunks: force-load the area the client is
         # sent and its neighbours (the console stands at the world spawn) so
         # both servers load full chunks instead of finishing proto-chunks.
+        # Random ticks change blocks while the client is being sent its
+        # chunks, more of them the busier the machine: none, so both servers
+        # send the world as it was saved.
+        server.console('gamerule random_tick_speed 0')
+        server.wait_for(r'random_tick_speed', timeout=30)
         server.console('forceload add ~-80 ~-80 ~80 ~80')
         server.wait_for(r'chunks in the Overworld are now force loaded|forceloaded|force loaded', timeout=60)
-        time.sleep(20)
+        settle(server)
         server.console('forceload remove all')
         server.console('save-all flush')
         server.wait_for(r'Saved the game', timeout=120)

@@ -192,6 +192,10 @@ pub struct Memories {
     pub sniffer_sniffing_target: Slot<[i32; 3]>,
     pub sniffer_happy: Slot<bool>,
     pub sniff_cooldown: Slot<()>,
+    pub gaze_cooldown_ticks: Slot<i32>,
+    pub transport_items_cooldown_ticks: Slot<i32>,
+    pub visited_block_positions: Slot<Vec<[i32; 3]>>,
+    pub unreachable_transport_block_positions: Slot<Vec<[i32; 3]>>,
 }
 impl Memories {
     fn tick(&mut self) {
@@ -216,6 +220,10 @@ impl Memories {
         self.sniffer_sniffing_target.tick();
         self.sniffer_happy.tick();
         self.sniff_cooldown.tick();
+        self.gaze_cooldown_ticks.tick();
+        self.transport_items_cooldown_ticks.tick();
+        self.visited_block_positions.tick();
+        self.unreachable_transport_block_positions.tick();
     }
 }
 
@@ -246,6 +254,8 @@ pub enum Kind {
     Sniffer,
     /// A happy ghast (the brain ticks while it is a ghastling).
     Ghastling,
+    /// `CopperGolemAi`.
+    CopperGolem,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -273,6 +283,7 @@ impl Kind {
                 Sensor::AdultAnyType,
                 Sensor::Players,
             ],
+            Kind::CopperGolem => &[Sensor::Living, Sensor::HurtBy],
         }
     }
 }
@@ -302,10 +313,10 @@ fn brain_mut(m: &mut Mob) -> &mut Brain {
         .as_deref_mut()
         .expect("the animal brain is built before it is used")
 }
-fn mem(m: &mut Mob) -> &mut Memories {
+pub(super) fn mem(m: &mut Mob) -> &mut Memories {
     &mut brain_mut(m).mem
 }
-fn mem_ref(m: &Mob) -> Option<&Memories> {
+pub(super) fn mem_ref(m: &Mob) -> Option<&Memories> {
     brain(m).map(|b| &b.mem)
 }
 
@@ -315,6 +326,7 @@ pub fn kind_of(m: &Mob) -> Option<Kind> {
         Species::Sniffer => Some(Kind::Sniffer),
         // Every happy ghast has the brain; only the ghastling's ticks.
         Species::HappyGhast => Some(Kind::Ghastling),
+        Species::CopperGolem => Some(Kind::CopperGolem),
         _ => None,
     }
 }
@@ -324,6 +336,10 @@ pub fn kind_of(m: &Mob) -> Option<Kind> {
 /// The gates shuffle with a random seeded with `shuffle_seed`.
 pub fn init(m: &mut Mob, shuffle_seed: i64) {
     let Some(kind) = kind_of(m) else { return };
+    // The copper golem's constructor: TRANSPORT_ITEMS_COOLDOWN_TICKS of
+    // nextInt(60, 100).
+    let cooldown =
+        (kind == Kind::CopperGolem).then(|| 60 + m.random.next_int_bound(40).unwrap_or(0));
     let sensors = kind
         .sensors()
         .iter()
@@ -339,8 +355,25 @@ pub fn init(m: &mut Mob, shuffle_seed: i64) {
     b.list = match kind {
         Kind::Sniffer => sniffer_package(shuffle_seed),
         Kind::Ghastling => ghastling_package(shuffle_seed),
+        Kind::CopperGolem => copper_golem_package(shuffle_seed),
     };
+    if let Some(c) = cooldown {
+        b.mem.transport_items_cooldown_ticks.set(c);
+    }
     m.extra.animal_brain = Some(Box::new(b));
+}
+
+/// A copper golem's `TRANSPORT_ITEMS_COOLDOWN_TICKS`, or none for 0.
+pub fn set_transport_cooldown(m: &mut Mob, ticks: i32) {
+    if m.extra.animal_brain.is_none() {
+        return;
+    }
+    let slot = &mut mem(m).transport_items_cooldown_ticks;
+    if ticks > 0 {
+        slot.set(ticks);
+    } else {
+        slot.clear();
+    }
 }
 
 /// The happy ghast grew up (`adultGhastSetup`): every running behaviour
@@ -434,6 +467,7 @@ fn update_activity(m: &mut Mob) {
     let order: &[Act] = match b.kind {
         Kind::Sniffer => &[Act::Dig, Act::Sniff, Act::Idle],
         Kind::Ghastling => &[Act::Panic, Act::Idle],
+        Kind::CopperGolem => &[Act::Idle],
     };
     for &a in order {
         let ok = match a {
@@ -727,6 +761,8 @@ struct Gate {
     running: bool,
     random: LegacyRandom,
     kids: Vec<(B, i32, f64)>,
+    /// The gate's memory requirements.
+    when: Option<fn(&Memories) -> bool>,
 }
 impl Gate {
     fn run_one(seed: i64, kids: Vec<(B, i32)>) -> Self {
@@ -734,15 +770,25 @@ impl Gate {
             running: false,
             random: LegacyRandom::new(seed),
             kids: kids.into_iter().map(|(b, w)| (b, w, 0.0)).collect(),
+            when: None,
         }
     }
+    fn when(mut self, f: fn(&Memories) -> bool) -> Self {
+        self.when = Some(f);
+        self
+    }
     fn try_start(&mut self, m: &mut Mob, cx: &mut Bx) -> bool {
+        if let Some(f) = self.when
+            && !f(mem(m))
+        {
+            return false;
+        }
         self.running = true;
         // ShufflingList.shuffle: a fresh weight for each entry in the
         // current order, then a stable sort.
         for k in &mut self.kids {
             let r = self.random.next_float();
-            k.2 = -f64::from(r).powf(f64::from(1.0_f32 / k.1 as f32));
+            k.2 = -horizon_core::jmath::pow(f64::from(r), f64::from(1.0_f32 / k.1 as f32));
         }
         self.kids.sort_by(|a, b| a.2.total_cmp(&b.2));
         for k in &mut self.kids {
@@ -780,6 +826,7 @@ enum B {
     AnimalPanic {
         t: Timed,
         fly: bool,
+        speed: f32,
     },
     MoveToTargetSink {
         t: Timed,
@@ -819,6 +866,8 @@ enum B {
         running: bool,
         fly: bool,
         speed: f32,
+        /// Horizontal and vertical range (land strolls).
+        range: (i32, i32),
     },
     /// `BabyFollowAdult.create(3..16, 1.1, memory, true)`: the nearest
     /// visible player or adult.
@@ -827,6 +876,15 @@ enum B {
         player: bool,
     },
     Gate(Box<Gate>),
+    /// `CountDownCooldownTicks(GAZE_COOLDOWN_TICKS)` and
+    /// `(TRANSPORT_ITEMS_COOLDOWN_TICKS)`.
+    CountDownGaze(Timed),
+    CountDownTransport(Timed),
+    /// `SetEntityLookTargetSometimes.create(PLAYER, 6, 40..80)`: running,
+    /// and the ticker's ticks until the next start.
+    LookAtPlayerSometimes(bool, i32),
+    /// `TransportItemsBetweenContainers`.
+    Transport(Box<super::transport_items::Transport>),
 }
 
 impl B {
@@ -845,7 +903,11 @@ impl B {
             | B::Searching(t)
             | B::Scenting(t)
             | B::Sniffing(t)
-            | B::DoNothing(t) => t.running,
+            | B::DoNothing(t)
+            | B::CountDownGaze(t)
+            | B::CountDownTransport(t) => t.running,
+            B::Transport(x) => x.running,
+            B::LookAtPlayerSometimes(running, _) => *running,
             B::WalkToLookTarget { running, .. }
             | B::LookAtPlayer(running)
             | B::Stroll { running, .. }
@@ -869,7 +931,10 @@ impl B {
             | B::Searching(t)
             | B::Scenting(t)
             | B::Sniffing(t)
-            | B::DoNothing(t) => t.running = false,
+            | B::DoNothing(t)
+            | B::CountDownGaze(t)
+            | B::CountDownTransport(t) => t.running = false,
+            B::Transport(x) => x.running = false,
             B::MoveToTargetSink { t, path, .. } => {
                 t.running = false;
                 *path = None;
@@ -889,6 +954,7 @@ impl B {
             self,
             B::WalkToLookTarget { .. }
                 | B::LookAtPlayer(_)
+                | B::LookAtPlayerSometimes(..)
                 | B::Stroll { .. }
                 | B::FollowAdult { .. }
         )
@@ -897,6 +963,7 @@ impl B {
         match self {
             B::WalkToLookTarget { running, .. }
             | B::LookAtPlayer(running)
+            | B::LookAtPlayerSometimes(running, _)
             | B::Stroll { running, .. }
             | B::FollowAdult { running, .. } => *running = on,
             _ => {}
@@ -975,6 +1042,21 @@ impl B {
                 t.begin(cx);
                 true
             }
+            B::CountDownGaze(t) => {
+                if !mem(m).gaze_cooldown_ticks.present() {
+                    return false;
+                }
+                t.begin(cx);
+                true
+            }
+            B::CountDownTransport(t) => {
+                if !mem(m).transport_items_cooldown_ticks.present() {
+                    return false;
+                }
+                t.begin(cx);
+                true
+            }
+            B::Transport(x) => x.try_start(m, cx),
             B::MakeLove { t, spawn_at } => {
                 let mm = mem(m);
                 if !mm.visible_mobs.present()
@@ -1116,6 +1198,7 @@ impl B {
             }
             B::WalkToLookTarget { .. }
             | B::LookAtPlayer(_)
+            | B::LookAtPlayerSometimes(..)
             | B::Stroll { .. }
             | B::FollowAdult { .. } => unreachable!("one-shots trigger"),
         }
@@ -1155,7 +1238,33 @@ impl B {
                 mem(m).look_target.set(Tracker::entity(t, true));
                 true
             }
-            B::Stroll { fly, speed, .. } => {
+            B::LookAtPlayerSometimes(_, ref mut ticks) => {
+                let mm = mem(m);
+                if mm.look_target.present() || !mm.visible_mobs.present() {
+                    return false;
+                }
+                let w = cx.w;
+                let found = find_closest(m, w, |m, who| {
+                    who == Who::Player
+                        && w.target_info(who)
+                            .is_some_and(|t| t.position.distance_squared(m.position) <= 36.0)
+                });
+                let Some(t) = found else { return false };
+                // Ticker.tickDownAndCheck (UniformInt 40..80 on the level random).
+                if *ticks == 0 {
+                    *ticks = 40 + cx.lr.next_int_bound(41).unwrap_or(0) - 1;
+                    return false;
+                }
+                *ticks -= 1;
+                if *ticks != 0 {
+                    return false;
+                }
+                mem(m).look_target.set(Tracker::entity(t, true));
+                true
+            }
+            B::Stroll {
+                fly, speed, range, ..
+            } => {
                 if mem(m).walk_target.present() {
                     return false;
                 }
@@ -1163,7 +1272,7 @@ impl B {
                     let view = m.view_vector();
                     m.air_and_water_random_pos(cx.w, 10, 7, -2, view[0], view[2])
                 } else {
-                    m.land_random_pos(cx.w, 10, 7)
+                    m.land_random_pos(cx.w, range.0, range.1)
                 };
                 mem(m)
                     .walk_target
@@ -1226,7 +1335,7 @@ impl B {
                     m.ai.jump = true;
                 }
             }
-            B::AnimalPanic { t, fly } => {
+            B::AnimalPanic { t, fly, speed } => {
                 if t.timed_out(now) {
                     self.do_stop(m, cx);
                     return;
@@ -1234,7 +1343,7 @@ impl B {
                 if m.ai.nav.is_done() {
                     let pos = panic_pos(m, cx.w, *fly);
                     if let Some(p) = pos {
-                        mem(m).walk_target.set(WalkTarget::point(p, 2.0, 0));
+                        mem(m).walk_target.set(WalkTarget::point(p, *speed, 0));
                     }
                 }
             }
@@ -1280,6 +1389,21 @@ impl B {
                     _ => self.do_stop(m, cx),
                 }
             }
+            B::CountDownGaze(_) => {
+                let v = mem(m).gaze_cooldown_ticks.value();
+                match v {
+                    Some(v) if v > 0 => mem(m).gaze_cooldown_ticks.set(v - 1),
+                    _ => self.do_stop(m, cx),
+                }
+            }
+            B::CountDownTransport(_) => {
+                let v = mem(m).transport_items_cooldown_ticks.value();
+                match v {
+                    Some(v) if v > 0 => mem(m).transport_items_cooldown_ticks.set(v - 1),
+                    _ => self.do_stop(m, cx),
+                }
+            }
+            B::Transport(x) => x.tick_or_stop(m, cx),
             B::MakeLove { spawn_at, .. } => {
                 let Some(partner) = mem(m).breed_target.value() else {
                     self.do_stop(m, cx);
@@ -1422,6 +1546,7 @@ impl B {
             }
             B::WalkToLookTarget { .. }
             | B::LookAtPlayer(_)
+            | B::LookAtPlayerSometimes(..)
             | B::Stroll { .. }
             | B::FollowAdult { .. } => {}
         }
@@ -1461,6 +1586,15 @@ impl B {
                 t.running = false;
                 mem(m).temptation_cooldown_ticks.clear();
             }
+            B::CountDownGaze(t) => {
+                t.running = false;
+                mem(m).gaze_cooldown_ticks.clear();
+            }
+            B::CountDownTransport(t) => {
+                t.running = false;
+                mem(m).transport_items_cooldown_ticks.clear();
+            }
+            B::Transport(x) => x.do_stop(m, cx),
             B::MakeLove { t, spawn_at } => {
                 t.running = false;
                 let mm = mem(m);
@@ -1536,6 +1670,7 @@ impl B {
             }
             B::WalkToLookTarget { .. }
             | B::LookAtPlayer(_)
+            | B::LookAtPlayerSometimes(..)
             | B::Stroll { .. }
             | B::FollowAdult { .. } => {}
         }
@@ -1653,7 +1788,7 @@ fn follow_temptation_close(m: &mut Mob) -> f64 {
                 3.5
             }
         }
-        Kind::Ghastling => 3.0,
+        Kind::Ghastling | Kind::CopperGolem => 3.0,
     }
 }
 fn can_mate_with(m: &Mob, w: &MobWorld, partner: Who) -> bool {
@@ -1777,6 +1912,7 @@ fn sniffer_package(seed: i64) -> Vec<Entry> {
             B::AnimalPanic {
                 t: Timed::new(100, 120),
                 fly: false,
+                speed: 2.0,
             },
         ),
         e(
@@ -1815,6 +1951,7 @@ fn sniffer_package(seed: i64) -> Vec<Entry> {
                         running: false,
                         fly: false,
                         speed: 1.0,
+                        range: (10, 7),
                     },
                     1,
                 ),
@@ -1825,6 +1962,59 @@ fn sniffer_package(seed: i64) -> Vec<Entry> {
     l
 }
 /// `HappyGhastAi.getActivities`, in `availableBehaviorsByPriority` order.
+/// `CopperGolemAi.getActivities`, in tick order: the core behaviours take
+/// priorities 0 to 5 in turn (`ActivityData.create(CORE, 0, ..)`), the idle
+/// ones 0, 1 and 2.
+fn copper_golem_package(seed: i64) -> Vec<Entry> {
+    let e = |act: Act, b: B| Entry { act, b };
+    vec![
+        // Priority 0.
+        e(
+            Act::Core,
+            B::AnimalPanic {
+                t: Timed::new(100, 120),
+                fly: false,
+                speed: 1.5,
+            },
+        ),
+        e(Act::Idle, B::Transport(Box::default())),
+        // Priority 1.
+        e(Act::Core, B::LookAtTargetSink(Timed::new(45, 90))),
+        e(Act::Idle, B::LookAtPlayerSometimes(false, 0)),
+        // Priority 2: RunOne(stroll or do nothing) while there is no walk
+        // target and the transport cools down.
+        e(Act::Core, move_to_target_sink(150, 250)),
+        e(
+            Act::Idle,
+            B::Gate(Box::new(
+                Gate::run_one(
+                    seed,
+                    vec![
+                        (
+                            B::Stroll {
+                                running: false,
+                                fly: false,
+                                speed: 1.0,
+                                range: (2, 2),
+                            },
+                            1,
+                        ),
+                        (B::DoNothing(Timed::new(30, 60)), 1),
+                    ],
+                )
+                .when(|mm| {
+                    !mm.walk_target.present() && mm.transport_items_cooldown_ticks.present()
+                }),
+            )),
+        ),
+        // Priority 3 is InteractWithDoor, which only acts on doors along the
+        // path; these golems pass none.
+        // Priorities 4 and 5.
+        e(Act::Core, B::CountDownGaze(Timed::new(60, 60))),
+        e(Act::Core, B::CountDownTransport(Timed::new(60, 60))),
+    ]
+}
+
 fn ghastling_package(seed: i64) -> Vec<Entry> {
     let e = |act: Act, b: B| Entry { act, b };
     vec![
@@ -1836,6 +2026,7 @@ fn ghastling_package(seed: i64) -> Vec<Entry> {
             B::AnimalPanic {
                 t: Timed::new(100, 120),
                 fly: true,
+                speed: 2.0,
             },
         ),
         e(
@@ -1875,6 +2066,7 @@ fn ghastling_package(seed: i64) -> Vec<Entry> {
                             running: false,
                             fly: true,
                             speed: 1.0,
+                            range: (10, 7),
                         },
                         1,
                     ),
@@ -2000,6 +2192,23 @@ pub fn describe(m: &Mob) -> Option<(String, String)> {
     slot!("sniffer_happy", mm.sniffer_happy, |b: &bool| b.to_string());
     slot!("sniff_cooldown", mm.sniff_cooldown, |_: &()| "u"
         .to_string());
+    slot!("gaze_cooldown_ticks", mm.gaze_cooldown_ticks, |t: &i32| t
+        .to_string());
+    slot!(
+        "transport_items_cooldown_ticks",
+        mm.transport_items_cooldown_ticks,
+        |t: &i32| t.to_string()
+    );
+    slot!(
+        "visited_block_positions",
+        mm.visited_block_positions,
+        |l: &Vec<[i32; 3]>| format!("n{}", l.len())
+    );
+    slot!(
+        "unreachable_transport_block_positions",
+        mm.unreachable_transport_block_positions,
+        |l: &Vec<[i32; 3]>| format!("n{}", l.len())
+    );
     if b.kind == Kind::Sniffer && !m.extra.positions.is_empty() {
         put(
             "sniffer_explored_positions",

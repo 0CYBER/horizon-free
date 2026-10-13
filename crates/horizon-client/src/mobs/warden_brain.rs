@@ -844,7 +844,7 @@ impl B {
                 // current order, then a stable sort.
                 for k in &mut g.kids {
                     let r = g.random.next_float();
-                    k.2 = -f64::from(r).powf(f64::from(1.0_f32 / k.1 as f32));
+                    k.2 = -horizon_core::jmath::pow(f64::from(r), f64::from(1.0_f32 / k.1 as f32));
                 }
                 g.kids.sort_by(|a, b| a.2.total_cmp(&b.2));
                 for k in &mut g.kids {

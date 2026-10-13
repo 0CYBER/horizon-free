@@ -78,7 +78,7 @@ pub fn extract(
         || z > max_z + render_distance;
     if !deep_inside && !far_outside {
         let alpha = 1.0 - border.distance(x, z) / render_distance;
-        state.alpha = jclamp(alpha.powf(4.0), 0.0, 1.0);
+        state.alpha = jclamp(horizon_core::jmath::pow(alpha, 4.0), 0.0, 1.0);
         state.tint = status_color(border.status());
     } else {
         state.alpha = 0.0;

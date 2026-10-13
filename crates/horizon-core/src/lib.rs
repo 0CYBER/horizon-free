@@ -8,6 +8,7 @@ pub mod biome;
 pub mod carving;
 pub mod density;
 pub mod geometry;
+pub mod jmath;
 pub mod noise;
 pub mod paletted;
 pub mod position;

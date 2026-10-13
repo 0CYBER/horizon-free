@@ -225,7 +225,9 @@ def chat(rng, n):
             'chatScale': rng.choice([1.0, 1.0, 0.5, 0.0 + 0.75, 0.25]), 'chatWidth': rng.choice([1.0, 1.0, 0.5, 0.0, 0.3]),
             'chatOpacity': rng.choice([1.0, 0.5, 0.0, 0.25]), 'textOpacity': rng.choice([0.5, 0.0, 1.0, 0.25]),
             'chatLineSpacing': rng.choice([0.0, 0.0, 0.5, 1.0, 0.25]), 'chatHeightUnfocused': rng.choice([70 / 160, 1.0, 0.0, 0.5]),
-            'chatHeightFocused': 1.0}
+            'chatHeightFocused': rng.choice([1.0, 1.0, 0.5, 0.25]),
+            # The chat screen open: foreground, focused height, scrolled up or down.
+            'focused': rng.random() < 0.5, 'scroll': rng.choice([0, 0, 1, 3, 7, 20, -2, 1000])}
 
 
 # Generators by kind: (rng, index) -> case. Cases are drawn round-robin.

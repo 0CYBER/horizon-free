@@ -10,7 +10,7 @@ use horizon_client::{
     chunk::{Chunk, HEIGHT, MIN_Y},
     collisions,
     containers::{BlockEntity, CreakingHeart},
-    items::Items,
+    items::{ItemStack, Items},
     light::{LightTables, light_chunk},
     mobs::{
         Damage, MobType, creaking,
@@ -87,7 +87,9 @@ fn parse(text: &str) -> Vec<Scenario> {
                 }
             }
             "origin" => s.origin = [f[1].parse().unwrap(), f[2].parse().unwrap()],
-            "fill" | "block" => s.blocks.push(f.iter().map(|x| (*x).to_owned()).collect()),
+            "fill" | "block" | "chest" => {
+                s.blocks.push(f.iter().map(|x| (*x).to_owned()).collect())
+            }
             "heart" => s.hearts.push(f.iter().map(|x| (*x).to_owned()).collect()),
             "hurt" => s.hurts.push((f[1].parse().unwrap(), f[2].parse().unwrap())),
             "player" => {
@@ -575,6 +577,14 @@ fn print(out: &mut String, t: i32, i: usize, m: &Mob, player_down: bool) {
     if m.species() == Species::Villager {
         let _ = write!(out, "\tvx {}", villager(m));
     }
+    if m.species() == Species::CopperGolem {
+        let held = horizon_client::mobs::transport_items::held(m).map_or("-".into(), stack);
+        let opened = m
+            .extra
+            .opened_chest
+            .map_or("-".into(), |p| format!("{},{},{}", p[0], p[1], p[2]));
+        let _ = write!(out, "\tcg {} {held} {opened}", m.extra.variant3);
+    }
     out.push('\n');
 }
 
@@ -712,8 +722,23 @@ fn main() -> horizon_client::Result<()> {
         }
         for b in &s.blocks {
             let n = |i: usize| b[i].parse::<i32>().unwrap();
-            if b[0] == "block" {
+            if b[0] == "block" || b[0] == "chest" {
                 world.set(n(1), n(2), n(3), state(registry, &b[4]))?;
+                if b[0] == "chest" {
+                    // chest X Y Z STATE SLOTS: item*count or - per slot.
+                    let mut slots = vec![None; 27];
+                    for (k, item) in b.get(5).map_or("", String::as_str).split(',').enumerate() {
+                        if let Some((id, count)) = item.split_once('*') {
+                            slots[k] = Some(ItemStack::new(
+                                &format!("minecraft:{id}"),
+                                count.parse().unwrap(),
+                            ));
+                        }
+                    }
+                    world
+                        .block_entities
+                        .insert((n(1), n(2), n(3)), BlockEntity::Chest(slots));
+                }
             } else {
                 let st = state(registry, &b[7]);
                 for x in n(1).min(n(4))..=n(1).max(n(4)) {
@@ -788,6 +813,14 @@ fn main() -> horizon_client::Result<()> {
                     "tame" => m.extra.tame = true,
                     x if x.starts_with("age=") => m.extra.age = x[4..].parse().unwrap(),
                     x if x.starts_with("strength=") => m.extra.variant2 = x[9..].parse().unwrap(),
+                    x if x.starts_with("hand=") => {
+                        let (id, count) = x[5..].split_once('*').unwrap();
+                        let stack =
+                            ItemStack::new(&format!("minecraft:{id}"), count.parse().unwrap());
+                        horizon_client::mobs::transport_items::set_held(&mut m, Some(stack));
+                    }
+                    // Set once the brain exists (below).
+                    x if x.starts_with("cooldown=") => {}
                     "leashed" => m.extra.leash = Some(horizon_client::mobs::leash::Holder::Player),
                     x if x.starts_with("leashto=") => {
                         let n: u32 = x[8..].parse().unwrap();
@@ -819,6 +852,12 @@ fn main() -> horizon_client::Result<()> {
             // The same for the sniffer's and the happy ghast's brains.
             if horizon_client::mobs::animal_brain::kind_of(&m).is_some() {
                 horizon_client::mobs::animal_brain::init(&mut m, spec.seed);
+            }
+            if let Some(c) = spec.flags.iter().find_map(|f| f.strip_prefix("cooldown=")) {
+                horizon_client::mobs::animal_brain::set_transport_cooldown(
+                    &mut m,
+                    c.parse().unwrap(),
+                );
             }
             mobs.push(m);
         }
@@ -883,6 +922,7 @@ fn main() -> horizon_client::Result<()> {
                     world_seed: 0,
                     // FlatLevelSource.getSeaLevel.
                     sea_level: -63,
+                    items: Some(&items),
                 }
             };
         }
@@ -1013,6 +1053,36 @@ fn main() -> horizon_client::Result<()> {
                     }
                     k += 1;
                 }
+                // What a copper golem did to chests, before the next mob ticks.
+                for e in &events[from.min(events.len())..] {
+                    match e {
+                        MobEvent::ChestOpen { chest, open } => {
+                            let o = world
+                                .chest_openers
+                                .entry((chest[0], chest[1], chest[2]))
+                                .or_insert((0, 0.0));
+                            if *open {
+                                o.0 += 1;
+                                o.1 = o.1.max(3.0);
+                            } else {
+                                o.0 -= 1;
+                                if o.0 == 0 {
+                                    o.1 = 0.0;
+                                }
+                            }
+                        }
+                        MobEvent::ChestSlot { chest, slot, stack } => {
+                            if let Some(e) = world
+                                .block_entities
+                                .get_mut(&(chest[0], chest[1], chest[2]))
+                                && let Some(sl) = e.slots_mut().get_mut(*slot)
+                            {
+                                *sl = stack.clone();
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 // ServerLevel ticks entities one after another: the ones
                 // after this mob see it as it is now.
                 if let Some(e) = snapshot.iter_mut().find(|e| e.id == mobs[i].id) {
@@ -1091,6 +1161,34 @@ fn main() -> horizon_client::Result<()> {
             }
             for (at, h) in &hearts {
                 print_heart(&mut out, t, registry, &world, *at, h, &scratch);
+            }
+            for b in s.blocks.iter().filter(|b| b[0] == "chest") {
+                let n = |i: usize| b[i].parse::<i32>().unwrap();
+                let key = (n(1), n(2), n(3));
+                let Some(e) = world.block_entities.get(&key) else {
+                    continue;
+                };
+                let mut slots: Vec<String> = e
+                    .slots()
+                    .iter()
+                    .map(|s| s.as_ref().map_or("-".into(), stack))
+                    .collect();
+                while slots.last().is_some_and(|s| s == "-") {
+                    slots.pop();
+                }
+                let count = world.chest_openers.get(&key).map_or(0, |o| o.0);
+                let _ = writeln!(
+                    out,
+                    "{t} chest {},{},{} {} {count}",
+                    key.0 - s.origin[0],
+                    key.1,
+                    key.2 - s.origin[1],
+                    if slots.is_empty() {
+                        "-".into()
+                    } else {
+                        slots.join(",")
+                    }
+                );
             }
             for line in traces {
                 let _ = writeln!(out, "{line}");

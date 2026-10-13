@@ -2,6 +2,22 @@ package dev.horizonlab.parity;
 
 import com.google.gson.*;
 import com.mojang.authlib.GameProfile;
+import com.mojang.authlib.minecraft.MinecraftProfileTexture;
+import com.mojang.authlib.properties.Property;
+import com.mojang.authlib.properties.PropertyMap;
+import com.mojang.authlib.services.MinecraftServicesDiscoveryService;
+import com.mojang.authlib.services.MinecraftServicesSessionService;
+import com.mojang.authlib.services.ServicesKeyInfo;
+import com.mojang.authlib.services.ServicesKeySet;
+import com.mojang.authlib.services.response.discovery.Discovery;
+import com.mojang.authlib.services.response.discovery.DiscoveryResponse;
+import com.mojang.authlib.services.response.discovery.Endpoint;
+import com.mojang.authlib.services.response.discovery.Endpoints;
+import java.util.concurrent.CompletableFuture;
+import net.minecraft.client.renderer.texture.SkinTextureDownloader;
+import net.minecraft.client.resources.SkinManager;
+import net.minecraft.core.ClientAsset;
+import net.minecraft.server.Services;
 import com.mojang.renderpearl.api.pipeline.RenderPipeline;
 import com.mojang.serialization.JsonOps;
 import java.lang.reflect.*;
@@ -46,6 +62,9 @@ import net.minecraft.world.scores.criteria.ObjectiveCriteria;
  * records every fill, text (as styled runs), sprite and face blit.
  * Visibility changes clear the heart states as setVisible does (without
  * the narration).
+ *
+ * Profiles may carry a signed or unsigned `textures` property; a real
+ * SkinManager (see skinManager) decides each face's texture.
  *
  * Input lines: case JSON. Output lines: {case, frames:[[draws]...]} or {case, error}.
  */
@@ -104,6 +123,47 @@ public final class VanillaTabListOracle {
             case "fixed" -> new FixedFormat(component(o.get("value")));
             default -> throw new IllegalArgumentException(o.toString());
         };
+    }
+
+    /**
+     * A real SkinManager over a real MinecraftServicesSessionService whose
+     * discovery lists the case's texture URIs and whose profile property key
+     * accepts the signature "valid". Downloads succeed, fail or never finish
+     * by texture hash, as the case says.
+     */
+    static SkinManager skinManager(JsonObject c) throws Exception {
+        var uris = new ArrayList<String>();
+        for (var u : c.getAsJsonArray("validUris")) uris.add(u.getAsString());
+        var endpoints = new Endpoints(Map.of("getTexture", new Endpoint(null, uris)));
+        var response = new DiscoveryResponse("prod", "minecraft", new Discovery("minecraft", Endpoints.empty(), Endpoints.empty(), Endpoints.empty(), endpoints, Endpoints.empty()));
+        var dc = MinecraftServicesDiscoveryService.class.getDeclaredConstructor(java.net.Proxy.class, boolean.class, java.util.function.Supplier.class);
+        dc.setAccessible(true);
+        var discovery = dc.newInstance(java.net.Proxy.NO_PROXY, false, (java.util.function.Supplier<DiscoveryResponse>) () -> response);
+        var key = (ServicesKeyInfo) Proxy.newProxyInstance(ServicesKeyInfo.class.getClassLoader(), new Class<?>[] {ServicesKeyInfo.class},
+            (proxy, method, a) -> switch (method.getName()) {
+                case "validateProperty" -> "valid".equals(((Property) a[0]).signature());
+                case "keyBitCount" -> 4096;
+                default -> throw new UnsupportedOperationException(method.getName());
+            });
+        ServicesKeySet keys = type -> List.of(key);
+        var sc = MinecraftServicesSessionService.class.getDeclaredConstructor(ServicesKeySet.class, java.net.Proxy.class, MinecraftServicesDiscoveryService.class);
+        sc.setAccessible(true);
+        var session = sc.newInstance(keys, java.net.Proxy.NO_PROXY, discovery);
+        var downloads = c.getAsJsonObject("downloads");
+        var downloader = new SkinTextureDownloader(java.net.Proxy.NO_PROXY, null, Runnable::run) {
+            @Override
+            public CompletableFuture<ClientAsset.Texture> downloadAndRegisterSkin(Identifier textureId, Path localCopy, String url, boolean processLegacySkin) {
+                String hash = new MinecraftProfileTexture(url, Map.of()).getHash();
+                String state = downloads.has(hash) ? downloads.get(hash).getAsString() : "ok";
+                return switch (state) {
+                    case "ok" -> CompletableFuture.completedFuture(new ClientAsset.DownloadedTexture(textureId, url));
+                    case "pending" -> new CompletableFuture<>();
+                    default -> CompletableFuture.failedFuture(new java.io.IOException("download failed"));
+                };
+            }
+        };
+        var services = new Services(session, keys, null, null, null);
+        return new SkinManager(Path.of("skins"), services, downloader, Runnable::run);
     }
 
     /** Records GuiGraphicsExtractor calls. */
@@ -219,18 +279,35 @@ public final class VanillaTabListOracle {
                 var player = alloc(LocalPlayer.class);
                 put(player, LocalPlayer.class, "connection", connection);
                 put(mc, Minecraft.class, "player", player);
+                var user = alloc(net.minecraft.client.User.class);
+                put(user, net.minecraft.client.User.class, "uuid", c.get("local").isJsonNull() ? new UUID(0, 0) : UUID.fromString(c.get("local").getAsString()));
+                put(mc, Minecraft.class, "user", user);
+                var skins = skinManager(c);
+                put(mc, Minecraft.class, "skinManager", skins);
                 for (var p : c.getAsJsonArray("players")) {
                     var o = p.getAsJsonObject();
                     var uuid = UUID.fromString(o.get("uuid").getAsString());
-                    var profile = new GameProfile(uuid, o.get("name").getAsString());
+                    var properties = com.google.common.collect.LinkedHashMultimap.<String, Property>create();
+                    if (o.has("textures") && !o.get("textures").isJsonNull()) {
+                        var t = o.getAsJsonObject("textures");
+                        var sig = t.get("signature");
+                        properties.put("textures", sig.isJsonNull()
+                            ? new Property("textures", t.get("value").getAsString())
+                            : new Property("textures", t.get("value").getAsString(), sig.getAsString()));
+                    }
+                    var profile = new GameProfile(uuid, o.get("name").getAsString(), new PropertyMap(properties));
+                    // Let the lookup's unpacking and downloads run before the first frame,
+                    // as they would have by the time a player list shows.
+                    try {
+                        skins.get(profile).get(1, java.util.concurrent.TimeUnit.SECONDS);
+                    } catch (java.util.concurrent.TimeoutException pending) {
+                    }
                     var info = new PlayerInfo(profile, false);
                     put(info, PlayerInfo.class, "gameMode", GameType.byId(o.get("gameMode").getAsInt()));
                     put(info, PlayerInfo.class, "latency", o.get("latency").getAsInt());
                     if (!o.get("displayName").isJsonNull()) info.setTabListDisplayName(component(o.get("displayName")));
                     info.setTabListOrder(o.get("listOrder").getAsInt());
                     info.setShowHat(o.get("showHat").getAsBoolean());
-                    var skin = net.minecraft.client.resources.DefaultPlayerSkin.get(uuid);
-                    put(info, PlayerInfo.class, "skinLookup", (java.util.function.Supplier<?>) () -> skin);
                     listed.add(info);
                     if (o.get("inLevel").getAsBoolean()) {
                         var entity = alloc(RemotePlayer.class);

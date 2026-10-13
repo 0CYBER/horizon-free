@@ -328,6 +328,7 @@ impl Game<'_> {
             world_seed: self.level.seed,
             sea_level: if self.dim == Dim::Nether { 32 } else { 63 },
             teams: self.mob_teams(),
+            items: Some(&self.res.items),
             difficulty: self.local_difficulty(
                 self.player
                     .as_ref()
@@ -761,6 +762,11 @@ impl Game<'_> {
                         }
                     }
                 },
+                MobEvent::ChestOpen { chest, open } => self.golem_chest_open(chest, open),
+                MobEvent::ChestSlot { chest, slot, stack } => {
+                    self.golem_chest_slot(chest, slot, stack)
+                }
+                MobEvent::BecomeStatue { mob } => self.golem_become_statue(mob),
                 MobEvent::Gift { target, item } => {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == target)
                         && m.saddle_item().is_none()
