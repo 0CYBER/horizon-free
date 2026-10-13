@@ -10,6 +10,8 @@
 //! of control belong in `ui_theme` so the launcher-matching look stays in one
 //! place. Everything else (sliders dragging, scrolling, Done) is handled here.
 use crate::{
+    graphics_style::Cost,
+    graphics_ui::{self, Item, Level},
     hud::{HudAtlas, HudBatch},
     options_ui::{Event, Kind, Opt, OptionsUi, Page, apply_preset},
     settings::{SOUND_SOURCES, Settings},
@@ -28,6 +30,10 @@ pub enum HRow {
     Page(&'static str, &'static str, Page),
     /// Menu style: Horizon / Classic.
     Style,
+    /// Graphics settings level: Simple / Advanced.
+    Level,
+    /// A graphics setting with its frame-time cost and description.
+    Graphics(Item, Cost, &'static str),
 }
 /// A sidebar section: name, description, rows.
 pub struct Section {
@@ -38,53 +44,18 @@ pub struct Section {
 pub const SECTIONS: &[Section] = &[
     Section {
         name: "Video",
-        blurb: "Display, quality and how the world is drawn.",
-        rows: |_| {
-            let mut r = vec![HRow::Header("Display")];
-            r.extend(
-                [
-                    Opt::Fullscreen,
-                    Opt::Vsync,
-                    Opt::MaxFps,
-                    Opt::InactivityFps,
-                    Opt::GuiScale,
-                    Opt::Gamma,
-                ]
-                .map(HRow::Opt),
-            );
-            r.push(HRow::Header("Quality"));
-            r.extend(
-                [
-                    Opt::Preset,
-                    Opt::RenderDistance,
-                    Opt::SimulationDistance,
-                    Opt::SmoothLighting,
-                    Opt::Clouds,
-                    Opt::CloudRange,
-                    Opt::Particles,
-                    Opt::Mipmaps,
-                    Opt::EntityShadows,
-                    Opt::EntityDistance,
-                    Opt::BiomeBlend,
-                    Opt::CutoutLeaves,
-                    Opt::ImprovedTransparency,
-                    Opt::WeatherRadius,
-                    Opt::ChunkBuilder,
-                ]
-                .map(HRow::Opt),
-            );
-            r.push(HRow::Header("Preferences"));
-            r.extend(
-                [
-                    Opt::Fov,
-                    Opt::ViewBobbing,
-                    Opt::Autosave,
-                    Opt::Vignette,
-                    Opt::AttackIndicator,
-                    Opt::ChunkFade,
-                ]
-                .map(HRow::Opt),
-            );
+        blurb: "Graphics, Simple or Advanced: each setting says what it costs.",
+        rows: |s| {
+            let level = if s.horizon.advanced {
+                Level::Advanced
+            } else {
+                Level::Simple
+            };
+            let mut r = vec![HRow::Level];
+            r.extend(graphics_ui::rows(level).into_iter().map(|row| match row {
+                graphics_ui::Row::Header(name) => HRow::Header(name),
+                graphics_ui::Row::Setting(g) => HRow::Graphics(g.item, g.cost, g.text),
+            }));
             r
         },
     },
@@ -187,6 +158,7 @@ const NAV: u64 = id("options.nav", 0);
 const DONE: u64 = id("options.done", 0);
 const ROW: u64 = id("options.row", 0);
 const STYLE: u64 = id("options.style", 0);
+const LEVEL: u64 = id("options.level", 0);
 const ROW_H: f32 = 12.0 + CONTROL + 12.0;
 const HEADER_H: f32 = 40.0;
 
@@ -234,13 +206,19 @@ enum Target {
     Nav(usize),
     Done,
     Row(usize),
-    Slider(Opt, f32),
+    Slider(Item, f32),
     Style(usize),
+    Level(usize),
 }
 impl OptionsUi {
     /// Lay out (and draw, on a real frame) the Horizon options shell.
     /// Returns the sliders' tracks (option, x, width) for dragging.
-    fn horizon_layout(&mut self, s: &Settings, ui: &mut Ui, backdrop: f32) -> Vec<(Opt, f32, f32)> {
+    fn horizon_layout(
+        &mut self,
+        s: &Settings,
+        ui: &mut Ui,
+        backdrop: f32,
+    ) -> Vec<(Item, f32, f32)> {
         let (w, h) = (ui.w, ui.h);
         if self.in_world {
             ui.atmosphere(0.45, 1.0);
@@ -326,7 +304,7 @@ impl OptionsUi {
                         ui.row(x, y, &caption, &value, cw - ROW_LABEL - 16.0 - sw - 24.0);
                         let sx = control_x - sw - 8.0;
                         ui.slider(ROW + i as u64, sx, cy, sw, v);
-                        sliders.push((opt, sx, sw));
+                        sliders.push((Item::Vanilla(opt), sx, sw));
                     } else {
                         ui.row(x, y, &caption, "", 0.0);
                         let bw = ui.button_width(&value, false).max(96.0);
@@ -363,6 +341,42 @@ impl OptionsUi {
                         Button::Secondary,
                         true,
                     );
+                }
+                HRow::Level => {
+                    ui.row(x, y, "Settings", "", 0.0);
+                    let labels = ["Simple", "Advanced"];
+                    let probe = ui.segmented(LEVEL, -10_000.0, -10_000.0, &labels, 0);
+                    let selected = usize::from(s.horizon.advanced);
+                    ui.segmented(LEVEL, control_x - probe, y + 12.0 - 3.0, &labels, selected);
+                }
+                HRow::Graphics(item, cost, text) => {
+                    let (caption, value) = item.caption_value(s);
+                    let cost = (cost as u8, cost.label());
+                    let cy = y + ROW_H / 2.0;
+                    let id = ROW + i as u64;
+                    if let Some(on) = item.switch(s) {
+                        ui.described_row(x, y, &caption, "", 0.0, cost, text, cw - 60.0);
+                        ui.switch(id, control_x, cy, on);
+                    } else if let Some(v) = item.slider(s) {
+                        let sw = 220.0_f32.min(cw - ROW_LABEL - 200.0).max(80.0);
+                        let value_w = cw - ROW_LABEL - 16.0 - sw - 24.0;
+                        let text_w = cw - sw - 24.0;
+                        ui.described_row(x, y, &caption, &value, value_w, cost, text, text_w);
+                        let sx = control_x - sw - 8.0;
+                        ui.slider(id, sx, cy, sw, v);
+                        sliders.push((item, sx, sw));
+                    } else {
+                        let bw = ui.button_width(&value, false).max(96.0);
+                        let text_w = cw - bw - 24.0;
+                        ui.described_row(x, y, &caption, "", 0.0, cost, text, text_w);
+                        ui.button(
+                            id,
+                            [control_x - bw, y + 12.0, bw, CONTROL],
+                            &value,
+                            Button::Secondary,
+                            true,
+                        );
+                    }
                 }
                 HRow::Style => {
                     ui.row(x, y, "Menu style", "", 0.0);
@@ -434,13 +448,21 @@ impl OptionsUi {
         if hit == STYLE || hit == STYLE + 1 {
             return Some(Target::Style((hit - STYLE) as usize));
         }
+        if hit == LEVEL || hit == LEVEL + 1 {
+            return Some(Target::Level((hit - LEVEL) as usize));
+        }
         let i = hit.checked_sub(ROW)? as usize;
         let rows = (SECTIONS[section].rows)(s);
-        if let Some(HRow::Opt(opt)) = rows.get(i)
-            && let Some(&(_, sx, sw)) = sliders.iter().find(|(o, ..)| o == opt)
+        let item = match rows.get(i) {
+            Some(HRow::Opt(opt)) => Some(Item::Vanilla(*opt)),
+            Some(HRow::Graphics(item, ..)) => Some(*item),
+            _ => None,
+        };
+        if let Some(item) = item
+            && let Some(&(_, sx, sw)) = sliders.iter().find(|(o, ..)| *o == item)
         {
             let v = t::slider_value(&ui, sx, sw, x);
-            return Some(Target::Slider(*opt, v));
+            return Some(Target::Slider(item, v));
         }
         (i < rows.len()).then_some(Target::Row(i))
     }
@@ -456,15 +478,12 @@ impl OptionsUi {
     ) -> Vec<Event> {
         let mut events = Vec::new();
         if drag {
-            if let Some(opt) = self.dragging {
+            if let Some(item) = self.hdragging {
                 let mut batch = t::scratch_batch();
                 let mut ui = Ui::dry(atlas, &mut batch, (x, y));
                 let sliders = self.horizon_layout(s, &mut ui, 1.0);
-                if let Some(&(_, sx, sw)) = sliders.iter().find(|(o, ..)| *o == opt) {
-                    opt.set_slider(s, t::slider_value(&ui, sx, sw, x));
-                    if opt == Opt::Preset {
-                        apply_preset(s);
-                    }
+                if let Some(&(_, sx, sw)) = sliders.iter().find(|(o, ..)| *o == item) {
+                    set_item_slider(item, s, t::slider_value(&ui, sx, sw, x));
                     events.push(Event::Changed);
                 }
             }
@@ -486,12 +505,14 @@ impl OptionsUi {
                     t::save_preferences(&dir);
                 }
             }
-            Some(Target::Slider(opt, v)) => {
-                self.dragging = Some(opt);
-                opt.set_slider(s, v);
-                if opt == Opt::Preset {
-                    apply_preset(s);
-                }
+            Some(Target::Level(i)) => {
+                s.horizon.advanced = i == 1;
+                self.hscroll = 0.0;
+                events.push(Event::Changed);
+            }
+            Some(Target::Slider(item, v)) => {
+                self.hdragging = Some(item);
+                set_item_slider(item, s, v);
                 events.push(Event::Changed);
             }
             Some(Target::Row(i)) => {
@@ -504,6 +525,10 @@ impl OptionsUi {
                         }
                         events.push(Event::Changed);
                     }
+                    Some(HRow::Graphics(item, ..)) => {
+                        item.cycle(s, right);
+                        events.push(Event::Changed);
+                    }
                     Some(HRow::Page(_, _, page)) => self.open_page(*page),
                     _ => {}
                 }
@@ -514,5 +539,19 @@ impl OptionsUi {
     }
     pub(crate) fn scroll_horizon(&mut self, amount: f32) {
         self.hscroll -= amount * 40.0;
+    }
+}
+
+/// A slider moved: vanilla options keep their preset handling, Horizon's own
+/// settings go through `graphics_ui`.
+fn set_item_slider(item: Item, s: &mut Settings, v: f32) {
+    match item {
+        Item::Vanilla(opt) => {
+            opt.set_slider(s, v);
+            if opt == Opt::Preset {
+                apply_preset(s);
+            }
+        }
+        Item::Horizon(_) => item.set_slider(s, v),
     }
 }

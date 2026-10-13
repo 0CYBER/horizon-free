@@ -9,15 +9,15 @@ use std::{
 };
 
 pub struct World {
-    pub chunks: HashMap<(i32, i32), Arc<Chunk>>,
+    pub chunks: crate::fast_hash::FxHashMap<(i32, i32), Arc<Chunk>>,
     pub random: LegacyRandom,
     pub revision: u64,
     pub health_rules: crate::health::HealthRules,
     pub air: BlockStateId,
     /// Sections whose geometry changed and need remeshing.
-    pub dirty_sections: HashSet<(i32, i32, i32)>,
+    pub dirty_sections: crate::fast_hash::FxHashSet<(i32, i32, i32)>,
     /// Chunks whose light must be recomputed.
-    pub dirty_light: HashSet<(i32, i32)>,
+    pub dirty_light: crate::fast_hash::FxHashSet<(i32, i32)>,
     /// Edits on lit chunks (position, old state, new state), relit
     /// incrementally by streaming.
     pub light_edits: Vec<((i32, i32, i32), u16, u16)>,
@@ -108,13 +108,13 @@ impl Weather {
 impl World {
     pub fn new(air: BlockStateId, seed: i64) -> Self {
         Self {
-            chunks: HashMap::new(),
+            chunks: Default::default(),
             random: LegacyRandom::new(seed),
             revision: 0,
             health_rules: crate::health::HealthRules::default(),
             air,
-            dirty_sections: HashSet::new(),
-            dirty_light: HashSet::new(),
+            dirty_sections: Default::default(),
+            dirty_light: Default::default(),
             light_edits: Vec::new(),
             loaded_entities: Vec::new(),
             modified: HashSet::new(),

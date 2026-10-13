@@ -83,6 +83,10 @@ $C bench 10                       # avg/1%-low FPS and p50/p95/p99/max frame tim
 $C quit                           # save and exit
 ```
 
+`fly X1 Y1 Z1 X2 Y2 Z2 SECONDS [PITCH]` moves the camera along a line at
+constant speed and replies with the same summary as `bench`, plus CPU and GPU
+time per frame; [the graphics benchmark](graphics.md#benchmark) is built on it.
+
 Other commands: `status`, `key KEY down|up|tap`, `mouse left|right|middle
 down|up|click`, `turn`, `tp X Y Z`, `hotbar N`, `give ITEM [COUNT]`,
 `render-distance N`, `time TICKS`, `resume`, `stats [reset]`, `open WORLD [SEED]

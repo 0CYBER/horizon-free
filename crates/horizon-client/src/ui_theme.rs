@@ -1027,6 +1027,54 @@ impl<'a> Ui<'a> {
         );
         h
     }
+    /// A settings row with, under its label, a one-line description led by
+    /// the setting's frame-time cost (`cost` 0 none .. 3 high, coloured from
+    /// faint to the danger colour). Same height as [`Ui::row`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn described_row(
+        &mut self,
+        x: f32,
+        y: f32,
+        label: &str,
+        value: &str,
+        value_w: f32,
+        cost: (u8, &str),
+        description: &str,
+        description_w: f32,
+    ) -> f32 {
+        let h = 12.0 + CONTROL + 12.0;
+        let top = y + 8.0;
+        self.text(Face::Regular, BODY, x, top, color::TEXT, label);
+        let value = self.fit(Face::Regular, BODY, value, value_w);
+        self.text(
+            Face::Regular,
+            BODY,
+            x + ROW_LABEL + 16.0,
+            top,
+            color::MUTED,
+            &value,
+        );
+        let dy = top + (BODY * 1.45).round();
+        let tint = [0.0, 0.2, 0.55, 1.0][usize::from(cost.0.min(3))];
+        let cost_color = color::mix(color::FAINT, color::DANGER, tint);
+        self.text(Face::Medium, SMALL, x, dy, cost_color, cost.1);
+        let used = self.measure(Face::Medium, SMALL, cost.1);
+        let rest = self.fit(
+            Face::Regular,
+            SMALL,
+            description,
+            (description_w - used - 8.0).max(0.0),
+        );
+        self.text(
+            Face::Regular,
+            SMALL,
+            x + used + 8.0,
+            dy,
+            color::FAINT,
+            &rest,
+        );
+        h
+    }
     /// A slider in the launcher's language: a 4px track in the border colour
     /// filled with the accent, a white 14px knob. Dragging is the screen's
     /// job (see [`slider_value`]).

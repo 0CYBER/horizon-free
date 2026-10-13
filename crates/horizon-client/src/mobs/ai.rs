@@ -899,6 +899,18 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         _ => {}
     }
 }
+/// `Entity.checkDespawn` alone, for a mob outside the entity-ticking
+/// chunks. Returns false when the mob is gone.
+pub fn despawn_check(m: &mut Mob, w: &MobWorld) -> bool {
+    if m.removed {
+        return false;
+    }
+    if !check_despawn(m, w) {
+        m.removed = true;
+        return false;
+    }
+    true
+}
 /// Mob.checkDespawn, before the tick (players are the only despawn
 /// reference). Returns false when the mob is discarded.
 fn check_despawn(m: &mut Mob, w: &MobWorld) -> bool {

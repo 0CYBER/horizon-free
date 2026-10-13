@@ -185,6 +185,11 @@ struct Options {
     no_pause: bool,
     /// Control socket path (`--control`), for `horizon-ctl`.
     control: Option<PathBuf>,
+    /// `HORIZON_SPIKES=MS`: print the timed spans of frames slower than MS.
+    spikes: Option<f32>,
+    /// Render into a texture instead of the window (`--offscreen`), so a
+    /// GPU the display cannot present from can still be benchmarked.
+    offscreen: bool,
     /// Multiplayer: `--server HOST[:PORT]` joins at start; `--name` is the offline player name.
     server: Option<String>,
     player_name: String,
@@ -220,6 +225,10 @@ impl Options {
             dimension: None,
             no_pause: false,
             control: None,
+            offscreen: false,
+            spikes: std::env::var("HORIZON_SPIKES")
+                .ok()
+                .and_then(|v| v.parse().ok()),
             server: None,
             player_name: std::env::var("HORIZON_PLAYER_NAME").unwrap_or_else(|_| "Player".into()),
             dedicated: None,
@@ -240,6 +249,7 @@ impl Options {
                 "--creative" => o.creative = true,
                 "--test-terrain" => o.test_terrain = true,
                 "--no-pause" => o.no_pause = true,
+                "--offscreen" => o.offscreen = true,
                 "--control" => o.control = Some(horizon_client::control::default_path()),
                 _ => {
                     let value = args
@@ -788,6 +798,16 @@ struct Game<'a> {
     /// Control replies waiting for a rendered frame or a benchmark deadline.
     pending_screenshot: Option<std::sync::mpsc::Sender<String>>,
     pending_bench: Option<(Instant, std::sync::mpsc::Sender<String>)>,
+    /// Recent frame times for the performance overlay.
+    frame_graph: horizon_client::perf_overlay::FrameGraph,
+    /// Meshed sections waiting for an upload budget (Horizon settings).
+    pending_uploads: Vec<((i32, i32, i32), horizon_client::mesher::SectionMesh)>,
+    /// This frame's view frustum, for culling entities and block entities.
+    view_frustum: Option<horizon_client::gfx::Frustum>,
+    /// A scripted flight from the control socket (`fly`).
+    flight: Option<control::Flight>,
+    /// The overworld's last `sky_darken` and its inputs (time, rain, thunder).
+    sky_darken_memo: std::cell::Cell<Option<((i64, u32, u32), i32)>>,
     persist: persist::EntityMemory,
     /// Connected to a server: the world comes from the network (game/remote.rs).
     remote: Option<remote::Remote>,
@@ -1230,7 +1250,14 @@ impl Game<'_> {
     }
     fn tick_items(&mut self) {
         let mut items = std::mem::take(&mut self.dropped);
-        items.retain_mut(|item| item.tick(&self.world, &self.res.facts, self.collision));
+        // ServerLevel.tick: only entities in entity-ticking chunks tick.
+        let ticking = self.entity_ticking_area();
+        items.retain_mut(|item| {
+            !ticking(
+                item.position.x.floor() as i32,
+                item.position.z.floor() as i32,
+            ) || item.tick(&self.world, &self.res.facts, self.collision)
+        });
         let Some(p) = self.player.as_ref() else {
             self.dropped = items;
             return;
@@ -2793,64 +2820,66 @@ impl Game<'_> {
     /// What the tick runs after the local player's own update: effects, the
     /// world's entities and blocks, and the network hub.
     fn tick_world(&mut self, running: bool) -> Result<()> {
-        self.tick_effects();
-        self.tick_burning();
-        self.tick_using();
-        self.tick_hud();
+        horizon_client::spans::time("tick_effects", || self.tick_effects());
+        horizon_client::spans::time("tick_burning", || self.tick_burning());
+        horizon_client::spans::time("tick_using", || self.tick_using());
+        horizon_client::spans::time("tick_hud", || self.tick_hud());
         // The player's digging comes in with its packets, before the level
         // ticks; ServerLevel.tick then runs the scheduled and random block
         // ticks before any entity, so what they drop or spawn (dispensed
         // items, popped crops) moves on the tick it appears, as in vanilla.
-        self.tick_local_hand()?;
-        self.postprocess_chunks()?;
+        horizon_client::spans::time("tick_local_hand", || self.tick_local_hand())?;
+        horizon_client::spans::time("postprocess_chunks", || self.postprocess_chunks())?;
         if running {
-            self.tick_blocks()?;
+            horizon_client::spans::time("tick_blocks", || self.tick_blocks())?;
         }
         if running {
-            self.tick_paintings();
-            self.tick_item_frames();
-            self.tick_armor_stands();
-            self.tick_boats();
-            self.tick_carts();
-            self.tick_thunder();
-            self.tick_lecterns();
-            self.tick_maps();
-            self.tick_bolts();
-            self.tick_fishing();
-            self.tick_tridents();
-            self.tick_rockets();
+            horizon_client::spans::time("tick_paintings", || self.tick_paintings());
+            horizon_client::spans::time("tick_item_frames", || self.tick_item_frames());
+            horizon_client::spans::time("tick_armor_stands", || self.tick_armor_stands());
+            horizon_client::spans::time("tick_boats", || self.tick_boats());
+            horizon_client::spans::time("tick_carts", || self.tick_carts());
+            horizon_client::spans::time("tick_thunder", || self.tick_thunder());
+            horizon_client::spans::time("tick_lecterns", || self.tick_lecterns());
+            horizon_client::spans::time("tick_maps", || self.tick_maps());
+            horizon_client::spans::time("tick_bolts", || self.tick_bolts());
+            horizon_client::spans::time("tick_fishing", || self.tick_fishing());
+            horizon_client::spans::time("tick_tridents", || self.tick_tridents());
+            horizon_client::spans::time("tick_rockets", || self.tick_rockets());
         }
         if running {
-            self.tick_items();
+            horizon_client::spans::time("tick_items", || self.tick_items());
         }
-        self.spawn_loaded_entities();
+        horizon_client::spans::time("spawn_loaded_entities", || self.spawn_loaded_entities());
         if running {
-            self.tick_mobs()?;
-            self.recheck_golem_openers();
-            self.tick_experience();
+            horizon_client::spans::time("tick_mobs", || self.tick_mobs())?;
+            horizon_client::spans::time("recheck_golem_openers", || self.recheck_golem_openers());
+            horizon_client::spans::time("tick_experience", || self.tick_experience());
         }
-        self.tick_lan();
-        self.tick_hand();
-        self.tick_sleep();
-        self.tick_portal()?;
+        horizon_client::spans::time("tick_lan", || self.tick_lan());
+        horizon_client::spans::time("tick_hand", || self.tick_hand());
+        horizon_client::spans::time("tick_sleep", || self.tick_sleep());
+        horizon_client::spans::time("tick_portal", || self.tick_portal())?;
         if running {
-            self.tick_end()?;
-        }
-        if running {
-            self.tick_falling()?;
-            self.tick_tnt()?;
+            horizon_client::spans::time("tick_end", || self.tick_end())?;
         }
         if running {
-            self.tick_block_entities()?;
-            self.tick_sculk_entities();
-            self.tick_sculk_blocks()?;
-            self.tick_brewing_stands()?;
+            horizon_client::spans::time("tick_falling", || self.tick_falling())?;
+            horizon_client::spans::time("tick_tnt", || self.tick_tnt())?;
+        }
+        if running {
+            horizon_client::spans::time("tick_block_entities", || self.tick_block_entities())?;
+            horizon_client::spans::time("tick_sculk_entities", || self.tick_sculk_entities());
+            horizon_client::spans::time("tick_sculk_blocks", || self.tick_sculk_blocks())?;
+            horizon_client::spans::time("tick_brewing_stands", || self.tick_brewing_stands())?;
         }
         if running {
             // ClientLevel.tickBlockEntities (not while paused or frozen):
             // chest lids, books, shulker boxes, bells, conduits, heads.
-            self.tick_block_entity_anims();
-            self.tick_particles();
+            horizon_client::spans::time("tick_block_entity_anims", || {
+                self.tick_block_entity_anims()
+            });
+            horizon_client::spans::time("tick_particles", || self.tick_particles());
         }
         if self.right && self.use_delay == 0 && self.screen == Screen::Playing {
             self.use_with_hand()?;
@@ -2974,6 +3003,12 @@ impl Game<'_> {
         hud_layout::paint(batch, &self.res.atlas, &draws);
     }
     fn hud(&mut self, size: [u32; 2]) -> HudBatch {
+        let mut batch = self.hud_layers(size);
+        self.frame_graph
+            .draw(self.settings.horizon.overlay, &mut batch, &self.res.atlas);
+        batch
+    }
+    fn hud_layers(&mut self, size: [u32; 2]) -> HudBatch {
         let mut batch = HudBatch::new(size);
         let (w, h) = (batch.width, batch.height);
         if self.screen == Screen::Options {
@@ -4386,9 +4421,34 @@ impl Game<'_> {
                 banner: &|p| self.banner_layers_at(p),
                 glyph: &|c| self.res.atlas.glyph_cell(c),
             };
+            // Block entities outside the view frustum are skipped (with a
+            // block of margin for models larger than their block).
+            let view = self.view_frustum;
+            // Beams and structure outlines reach far outside their block
+            // (BlockEntityRenderer.shouldRenderOffScreen): never culled.
+            let off_screen = |state: u32| {
+                let name = &*self.res.facts.get(BlockStateId(state)).name;
+                matches!(
+                    name,
+                    "minecraft:beacon"
+                        | "minecraft:end_gateway"
+                        | "minecraft:structure_block"
+                        | "minecraft:test_instance_block"
+                )
+            };
+            let visible = r.block_entities().filter(|(p, state)| {
+                off_screen(*state)
+                    || view.is_none_or(|v| {
+                        let o =
+                            (glam::DVec3::new(f64::from(p[0]), f64::from(p[1]), f64::from(p[2]))
+                                - camera)
+                                .as_vec3();
+                        v.intersects(o - glam::Vec3::ONE, o + glam::Vec3::splat(2.0))
+                    })
+            });
             self.res
                 .block_entity_render
-                .render(&scene, r.block_entities(), &mut out);
+                .render(&scene, visible, &mut out);
         }
         // Experience orbs (ExperienceOrbRenderer): pulsing billboards from a 4x4 icon sheet.
         if let Some(r) = self
@@ -4622,11 +4682,20 @@ impl Game<'_> {
                 .sample(self.world.day_time, None, None);
             return (15.0 - 15.0 * sky.sky_light_level).round() as i32;
         }
-        let mut sky = self.res.environment.sample(self.world.day_time, None, None);
         let (rain, thunder) = self.world.weather.levels(1.0);
+        // Sampled once per (time, weather): every mob asks each tick.
+        let key = (self.world.day_time, rain.to_bits(), thunder.to_bits());
+        if let Some((k, darken)) = self.sky_darken_memo.get()
+            && k == key
+        {
+            return darken;
+        }
+        let mut sky = self.res.environment.sample(self.world.day_time, None, None);
         horizon_client::environment::apply_weather(&mut sky, rain, thunder);
         // Level.updateSkyBrightness: darkening from the sky light level.
-        (15.0 - 15.0 * sky.sky_light_level).round() as i32
+        let darken = (15.0 - 15.0 * sky.sky_light_level).round() as i32;
+        self.sky_darken_memo.set(Some((key, darken)));
+        darken
     }
     fn mob_hit(&self) -> Option<(usize, f64)> {
         let eye = self.eye_position()?;
@@ -7214,14 +7283,39 @@ impl Game<'_> {
         } else {
             Vec::new()
         };
-        let mut hud = self.hud(size);
+        let mut hud = horizon_client::spans::time("hud", || self.hud(size));
         // Map textures changed since the last drawn frame (game/maps.rs).
         hud.patches.append(&mut self.map_patches);
         let title = self.title.is_some();
+        let (yaw, pitch) = if live {
+            (view_yaw, view_pitch)
+        } else if title {
+            // PanoramaRenderer: the title cube spins at 0.1 degrees per tick, pitched 10 degrees.
+            (-(self.started.elapsed().as_secs_f32() * 2.0) % 360.0, 10.0)
+        } else {
+            (view_yaw, view_pitch)
+        };
+        let fov_degrees = if live {
+            72.0
+        } else if title {
+            85.0
+        } else {
+            self.fov_degrees(alpha as f32, camera.to_array())
+        };
+        let bob = if title {
+            glam::Mat4::IDENTITY
+        } else {
+            self.bob_matrix(alpha as f32)
+        };
+        let distance = (self.streaming.radius * 16) as f32;
+        self.view_frustum = self
+            .renderer
+            .as_ref()
+            .map(|r| r.camera_frustum(fov_degrees, yaw, pitch, bob, distance));
         let mut entities = if title {
             Vec::new()
         } else {
-            self.entity_geometry(camera, alpha)
+            horizon_client::spans::time("entity_geometry", || self.entity_geometry(camera, alpha))
         };
         let mut additive = Vec::new();
         if !title {
@@ -7260,17 +7354,15 @@ impl Game<'_> {
             self.end_geometry(camera, &mut entities);
         }
         if (!title || live) && self.dim == Dim::Overworld {
-            self.cloud_geometry(&sky, camera, alpha, &mut entities);
-            self.weather_geometry(camera, alpha, &mut entities);
+            horizon_client::spans::time("clouds", || {
+                self.cloud_geometry(&sky, camera, alpha, &mut entities)
+            });
+            if self.settings.horizon.weather {
+                horizon_client::spans::time("weather", || {
+                    self.weather_geometry(camera, alpha, &mut entities)
+                });
+            }
         }
-        // PanoramaRenderer: the title cube spins at 0.1 degrees per tick, pitched 10 degrees.
-        let (yaw, pitch) = if live {
-            (view_yaw, view_pitch)
-        } else if title {
-            (-(self.started.elapsed().as_secs_f32() * 2.0) % 360.0, 10.0)
-        } else {
-            (view_yaw, view_pitch)
-        };
         let water_fog = {
             let c = info.water_fog;
             [
@@ -7286,39 +7378,42 @@ impl Game<'_> {
             camera,
             yaw,
             pitch,
-            fov_degrees: if live {
-                72.0
-            } else if title {
-                85.0
-            } else {
-                self.fov_degrees(alpha as f32, camera.to_array())
-            },
-            bob: if title {
-                glam::Mat4::IDENTITY
-            } else {
-                self.bob_matrix(alpha as f32)
-            },
+            fov_degrees,
+            bob,
             sky,
-            distance: (self.streaming.radius * 16) as f32,
+            distance,
             underwater,
             title: title && !live,
-            skybox: self.dim == Dim::Overworld,
-            end_sky: self.dim == Dim::End,
+            skybox: self.dim == Dim::Overworld && self.settings.horizon.sky,
+            end_sky: self.dim == Dim::End && self.settings.horizon.sky,
             environment_fog: (self.dim == Dim::Nether).then_some((sky.fog_start, sky.fog_end)),
             // The camera inside an opaque block sees nothing through it: disable.
-            cave_culling: !self
-                .res
-                .facts
-                .get(self.world.block(block[0], block[1], block[2]))
-                .solid_render,
+            cave_culling: self.settings.horizon.cave_culling
+                && !self
+                    .res
+                    .facts
+                    .get(self.world.block(block[0], block[1], block[2]))
+                    .solid_render,
             water_fog,
-            fog: Some(self.frame_fog(camera, &sky, biome)),
+            fog: Some({
+                let mut fog = self.frame_fog(camera, &sky, biome);
+                // Horizon's fog setting: no distance fog (fluids keep theirs).
+                if !self.settings.horizon.fog && !underwater && fog.environmental_end >= distance {
+                    (fog.render_distance_start, fog.render_distance_end) = (1e9, 2e9);
+                    (fog.environmental_start, fog.environmental_end) = (1e9, 2e9);
+                }
+                fog
+            }),
             dark_disc: self.dark_disc(camera),
             outline,
             hud: &hud,
             entities: &entities,
             additive: &additive,
-            celestial: &celestial,
+            celestial: if self.settings.horizon.sky || title {
+                &celestial
+            } else {
+                &[]
+            },
             hand: &hand,
             hand_fov_degrees: self.hud_fov_degrees(alpha as f32, camera.to_array()),
             screen: &screen,
@@ -7344,7 +7439,8 @@ impl Game<'_> {
                 None
             },
         };
-        self.renderer.as_mut().ok_or("renderer")?.render(&frame)
+        let renderer = self.renderer.as_mut().ok_or("renderer")?;
+        horizon_client::spans::time("renderer", || renderer.render(&frame))
     }
     /// `LevelExtractor` / `LevelRenderer`: the world border wall this frame.
     fn border_draw(
@@ -7545,32 +7641,79 @@ impl Game<'_> {
                 (p.position.z.floor() as i32) >> 4,
             );
         }
-        let (uploads, unloaded) = self.streaming.update(&mut self.world);
+        let (uploads, unloaded) =
+            horizon_client::spans::time("streaming", || self.streaming.update(&mut self.world));
         let dirty: Vec<_> = unloaded
             .iter()
             .filter(|c| self.world.modified.remove(&(c.x, c.z)))
             .cloned()
             .collect();
-        let modified: Vec<_> = dirty.iter().map(|c| self.with_entities(c)).collect();
-        self.unload_entities(&unloaded);
-        for c in &unloaded {
+        let modified: Vec<_> = horizon_client::spans::time("with_entities", || {
+            dirty.iter().map(|c| self.with_entities(c)).collect()
+        });
+        horizon_client::spans::time("unload_entities", || self.unload_entities(&unloaded));
+        if !unloaded.is_empty() {
+            let gone: horizon_client::fast_hash::FxHashSet<(i32, i32)> =
+                unloaded.iter().map(|c| (c.x, c.z)).collect();
             self.world
                 .block_entities
-                .retain(|p, _| !(p.0 >> 4 == c.x && p.2 >> 4 == c.z));
+                .retain(|p, _| !gone.contains(&(p.0 >> 4, p.2 >> 4)));
             self.world
                 .block_names
-                .retain(|p, _| !(p.0 >> 4 == c.x && p.2 >> 4 == c.z));
+                .retain(|p, _| !gone.contains(&(p.0 >> 4, p.2 >> 4)));
         }
         if !modified.is_empty()
-            && let Err(e) = self
-                .save
-                .save(&modified, self.res.assets.registry, &self.res.biomes)
+            && let Err(e) = horizon_client::spans::time("save_chunks", || {
+                self.save
+                    .save_later(&modified, self.res.assets.registry, &self.res.biomes)
+            })
         {
             eprintln!("Horizon: failed to save unloaded chunks: {e}");
         }
         if let Some(renderer) = self.renderer.as_mut() {
-            for (key, mesh) in uploads {
-                renderer.upload(key, &mesh);
+            let g = &self.settings.horizon;
+            let budgeted = g.chunk_updates > 0 || g.upload_budget_kib > 0;
+            if !budgeted && self.pending_uploads.is_empty() {
+                horizon_client::spans::time("upload", || {
+                    for (key, mesh) in uploads {
+                        renderer.upload(key, &mesh);
+                    }
+                });
+            } else {
+                // Horizon's chunk-update and upload budgets: the nearest
+                // sections go first, the rest wait for later frames; a newer
+                // mesh of a waiting section replaces it.
+                let pending = &mut self.pending_uploads;
+                let fresh: horizon_client::fast_hash::FxHashSet<(i32, i32, i32)> =
+                    uploads.iter().map(|(k, _)| *k).collect();
+                let gone: horizon_client::fast_hash::FxHashSet<(i32, i32)> =
+                    unloaded.iter().map(|c| (c.x, c.z)).collect();
+                pending.retain(|(k, _)| !fresh.contains(k) && !gone.contains(&(k.0, k.2)));
+                pending.extend(uploads);
+                let centre = self.streaming.center;
+                let far = |k: &(i32, i32, i32)| (k.0 - centre.0).pow(2) + (k.2 - centre.1).pow(2);
+                pending.sort_unstable_by_key(|(k, _)| std::cmp::Reverse(far(k)));
+                let (limit, budget) = if budgeted {
+                    (
+                        g.chunk_updates as usize,
+                        u64::from(g.upload_budget_kib) * 1024,
+                    )
+                } else {
+                    (0, 0)
+                };
+                let (mut count, mut bytes) = (0, 0u64);
+                while let Some((_, mesh)) = pending.last() {
+                    let size = ((mesh.solid.len() + mesh.translucent.len()) * 32) as u64;
+                    if (limit > 0 && count >= limit)
+                        || (budget > 0 && bytes > 0 && bytes + size > budget)
+                    {
+                        break;
+                    }
+                    let (key, mesh) = pending.pop().expect("checked above");
+                    renderer.upload(key, &mesh);
+                    count += 1;
+                    bytes += size;
+                }
             }
             for c in unloaded {
                 for sy in 0..(HEIGHT / 16) {
@@ -7600,6 +7743,7 @@ impl ApplicationHandler for Game<'_> {
         let assets = &self.res.assets;
         match pollster::block_on(Renderer::new(
             window.clone(),
+            self.options.offscreen,
             &assets.pixels,
             assets.sprite_size,
             assets.texture_layers,
@@ -8029,15 +8173,16 @@ impl ApplicationHandler for Game<'_> {
                         self.pause_since = None;
                     }
                     if self.title.is_none() {
-                        self.update_world();
-                        self.spawn_player()?;
+                        horizon_client::spans::time("update_world", || self.update_world());
+                        horizon_client::spans::time("spawn_player", || self.spawn_player())?;
                     }
+                    let updated = Instant::now();
                     self.track_toggle_screens();
                     let steps = self.clock.advance(elapsed);
                     for _ in 0..steps {
                         let started = Instant::now();
                         if self.title.is_none() && !self.pause {
-                            self.tick()?;
+                            horizon_client::spans::time("tick", || self.tick())?;
                             self.tick_ambience();
                             self.tick_fov();
                         } else if self.title.is_some() {
@@ -8051,7 +8196,48 @@ impl ApplicationHandler for Game<'_> {
                         }
                     }
                     self.apply_mouse_look();
+                    self.advance_flight();
+                    let ticked = Instant::now();
                     let rendered = self.render()?;
+                    if let Some(threshold) = self.options.spikes
+                        && let Some(r) = self.renderer.as_ref()
+                    {
+                        let cpu = now.elapsed().saturating_sub(r.last_wait).as_secs_f32() * 1000.0;
+                        let spans = horizon_client::spans::take();
+                        if cpu > threshold {
+                            let list: Vec<String> = spans
+                                .iter()
+                                .filter(|(_, ms)| *ms >= 0.5)
+                                .map(|(n, ms)| format!("{n} {ms:.1}"))
+                                .collect();
+                            eprintln!(
+                                "Horizon: slow frame {cpu:.1} ms ({} ticks): {}",
+                                steps,
+                                list.join(", ")
+                            );
+                        }
+                    }
+                    if let Some(r) = self.renderer.as_mut() {
+                        let cpu = now.elapsed().saturating_sub(r.last_wait);
+                        if rendered {
+                            let ms = |d: Duration| d.as_secs_f32() * 1000.0;
+                            self.frame_graph.record(
+                                ms(elapsed),
+                                ms(cpu),
+                                r.gpu_times.last().copied(),
+                            );
+                            self.frame_stats.record_cpu(ms(cpu));
+                            let render = r.last_encode;
+                            self.frame_stats.record_phases([
+                                ms(updated - now),
+                                ms(ticked - updated),
+                                ms(ticked.elapsed().saturating_sub(r.last_wait + render)),
+                                ms(render),
+                            ]);
+                        }
+                        self.frame_stats.record_gpu(&r.gpu_times);
+                        r.gpu_times.clear();
+                    }
                     self.limit_frame();
                     self.pause = self.pauses_game();
                     self.clock.end_frame(self.pause);
@@ -8132,6 +8318,7 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
     let started = Instant::now();
+    horizon_client::spans::enable(options.spikes.is_some());
     let vanilla_root = options.resources.clone();
     let early_settings = Settings::load(&std::env::current_dir()?.join("options.txt"));
     options.resources = packs::startup_root(&vanilla_root, &early_settings.resource_packs);
@@ -8180,10 +8367,7 @@ pub fn run() -> Result<()> {
         biomes: biomes.clone(),
         light,
     });
-    let threads = std::thread::available_parallelism()
-        .map_or(2, |n| n.get())
-        .saturating_sub(1)
-        .max(1);
+    let threads = early_settings.horizon.worker_threads();
     eprintln!(
         "Horizon: resources loaded in {:.1}s; {} block states, {} items, {} biomes; {} worker threads",
         started.elapsed().as_secs_f32(),
@@ -8470,6 +8654,11 @@ pub fn run() -> Result<()> {
         frame_stats: Default::default(),
         pending_screenshot: None,
         pending_bench: None,
+        flight: None,
+        view_frustum: None,
+        pending_uploads: Vec::new(),
+        frame_graph: Default::default(),
+        sky_darken_memo: Default::default(),
         persist: Default::default(),
         remote: None,
         lan: None,

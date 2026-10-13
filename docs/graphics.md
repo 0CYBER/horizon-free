@@ -1,0 +1,96 @@
+# Graphics: settings and performance
+
+## Settings
+
+In the Horizon menu style, the Options screen's **Video** section holds the graphics settings, with a Simple / Advanced switch at the top (remembered between sessions):
+
+- **Simple**: a preset (Performance, Balanced, Quality, Ultra or Custom), render distance, FOV, max framerate, VSync and GUI scale.
+- **Advanced**: every setting, grouped under Rendering, Quality, Display, Preferences, Performance and Overlay.
+
+In the Classic style, Video Settings starts with two buttons opening the same settings as vanilla-looking screens.
+
+Every row has a one-line description and its cost in frame time (none, low, medium, high), and applies at once, except worker threads, which apply at the next start. A preset sets the quality settings together; changing one of them turns it into Custom. Display preferences (FOV, framerate, VSync, GUI scale, fullscreen, present mode, pacing) leave the preset as it is.
+
+![Simple](media/settings-simple.png)
+![Advanced](media/settings-advanced.png)
+
+| Group | Setting | Stored in |
+| --- | --- | --- |
+| Rendering | render distance, simulation distance, entity distance | `options.txt` (vanilla keys) |
+| | cave culling, chunk updates per frame | `horizon-graphics.txt` |
+| Quality | smooth lighting, mipmap levels, biome blend, clouds, cloud distance, weather radius, particles, entity shadows, cutout leaves | `options.txt` |
+| | sky, fog, weather, animated textures | `horizon-graphics.txt` |
+| Display | FOV, max framerate, VSync, fullscreen, GUI scale | `options.txt` |
+| | resolution scale, anti-aliasing (FXAA), present mode, frame pacing | `horizon-graphics.txt` |
+| Performance | worker threads, upload budget per frame | `horizon-graphics.txt` |
+| Overlay | performance overlay: FPS, frame/CPU/GPU times, frame-time graph | `horizon-graphics.txt` |
+
+`options.txt` keeps exactly vanilla's keys and values, so the options harness still compares it with vanilla; Horizon's settings live in `horizon-graphics.txt` beside it. Their defaults render as vanilla does: cave culling on, no upload budgets, sky, fog and weather on, 100% resolution, no FXAA, the present mode following VSync. Frame pacing defaults to Efficient: the limiter sleeps through the last half millisecond where vanilla spins, which changes timing, not pixels.
+
+Which settings each level shows, their descriptions and costs are in `crates/horizon-client/src/graphics_ui.rs` (`rows`); the Horizon shell draws them in `options_horizon.rs` with `ui_theme::described_row`, and the Classic screens use `graphics_style.rs`.
+
+Not implemented: distant-terrain LOD, anisotropic filtering (wgpu needs linear magnification for it, which blurs close blocks), MSAA (FXAA instead) and exclusive fullscreen (fullscreen is borderless).
+
+## Benchmark
+
+`tools/graphics_bench.py` opens a fresh creative world (seed 1234) on a virtual screen and flies the camera along four fixed 192-block paths, over a village, a forest, the ocean and a mountain, at render distances 8, 16 and 32, one game per distance. Each flight takes 12 seconds and reports average FPS, 1% lows, frame-time percentiles, CPU time per frame (frame time minus waits for the GPU, the display and the limiter), the split of that CPU time (world update, ticks, frame preparation, renderer) for all frames and for the slowest 1%, and GPU time per frame from timestamp queries.
+
+```sh
+cargo build --release -p horizon-client --bins
+python3 tools/graphics_bench.py --label mine                 # lavapipe on vscreen: CPU-side numbers
+python3 tools/graphics_bench.py --label mine-gpu --offscreen  # the desktop's RTX 4080
+python3 tools/graphics_bench.py --compare baseline-4080 mine-gpu   # markdown table
+```
+
+vscreen is a headless compositor whose frames are software-rendered (lavapipe), so its frame times measure the CPU, rasterisation included. `--offscreen` (`horizon-client --offscreen`) renders into a texture on the most powerful GPU instead of the window, which measures the RTX 4080 under the same compositor. `--distances`, `--scenes` and `--build` pick a subset or another build. Results go to `benchmarks/graphics/<label>.json`, with the load average before and after: the desktop is shared, and other sessions' builds move the numbers.
+
+Two tools find where a slow frame goes: `HORIZON_SPIKES=MS` prints the timed spans (ticks by system, streaming, uploads, saving, renderer) of every frame slower than MS milliseconds, and a frame-pointer build (`RUSTFLAGS="-C force-frame-pointers=yes"`) profiles with `perf record --call-graph fp`.
+
+## Results
+
+Baseline `27a32cc3` (main) against `9006566b`, the same full run (render distances 8, 16 then 32 in one fresh world), on ludodesktop.
+
+RTX 4080, `--offscreen` (`benchmarks/graphics/baseline-4080.json`, `after-4080.json`):
+
+| RD | scene | avg FPS | 1% low FPS | p99 ms | CPU ms/frame | GPU ms/frame |
+| --- | --- | --- | --- | --- | --- | --- |
+| 8 | village | 363 → 2409 | 21.6 → 160.8 | 37 → 1 | 2.7 → 0.4 | 0.42 → 0.10 |
+| 8 | forest | 613 → 1099 | 49.6 → 82.9 | 10 → 10 | 1.6 → 0.9 | 0.40 → 0.26 |
+| 8 | ocean | 323 → 687 | 5.4 → 47.5 | 33 → 16 | 2.7 → 1.4 | 0.24 → 0.37 |
+| 8 | mountain | 28 → 344 | 7.4 → 30.0 | 111 → 33 | 12.4 → 1.6 | 0.46 → 0.34 |
+| 16 | village | 8 → 1041 | 2.4 → 64.0 | 409 → 10 | 138.3 → 1.0 | 3.59 → 0.23 |
+| 16 | forest | 28 → 316 | 0.5 → 49.6 | 159 → 18 | 37.9 → 3.2 | 2.68 → 0.75 |
+| 16 | ocean | 59 → 385 | 10.5 → 72.0 | 85 → 12 | 16.8 → 2.6 | 1.96 → 0.68 |
+| 16 | mountain | 27 → 220 | 7.8 → 30.0 | 109 → 33 | 20.2 → 3.1 | 7.14 → 0.94 |
+| 32 | village | 4 → 48 | 2.6 → 0.8 | 387 → 76 | 244.2 → 9.4 | 10.36 → 1.77 |
+| 32 | forest | 8 → 28 | 3.7 → 0.9 | 261 → 1108 | 118.7 → 40.1 | 15.90 → 2.30 |
+| 32 | ocean | 2 → 67 | 1.6 → 10.1 | 626 → 95 | 424.8 → 14.7 | 9.48 → 2.91 |
+| 32 | mountain | 3 → 29 | 2.5 → 15.2 | 407 → 64 | 300.5 → 16.1 | 9.73 → 8.47 |
+
+lavapipe on vscreen, CPU-rendered (`baseline-lavapipe.json`, `after-lavapipe.json`); at 16 and 32 chunks most of the frame is software rasterisation, which no change here touches:
+
+| RD | scene | avg FPS | 1% low FPS | p99 ms | CPU ms/frame | GPU ms/frame |
+| --- | --- | --- | --- | --- | --- | --- |
+| 8 | village | 16 → 58 | 6.6 → 31.3 | 134 → 29 | 48.2 → 11.4 | 26.73 → 13.52 |
+| 8 | forest | 20 → 42 | 9.9 → 20.0 | 95 → 37 | 31.0 → 18.0 | 37.27 → 21.36 |
+| 8 | ocean | 28 → 60 | 1.5 → 34.8 | 181 → 27 | 25.7 → 10.9 | 18.86 → 12.74 |
+| 8 | mountain | 27 → 38 | 11.2 → 27.3 | 75 → 34 | 22.5 → 11.5 | 23.76 → 14.11 |
+| 16 | village | 11 → 21 | 4.2 → 8.8 | 227 → 75 | 69.2 → 31.8 | 49.04 → 40.50 |
+| 16 | forest | 12 → 18 | 5.7 → 11.5 | 137 → 81 | 58.4 → 36.8 | 56.45 → 47.82 |
+| 16 | ocean | 8 → 8 | 2.6 → 4.8 | 385 → 209 | 98.4 → 96.7 | 71.51 → 57.30 |
+| 16 | mountain | 6 → 12 | 3.1 → 4.9 | 321 → 189 | 124.9 → 56.7 | 95.47 → 70.81 |
+| 32 | village | 3 → 5 | 2.0 → 3.6 | 497 → 278 | 345.6 → 111.2 | 85.50 → 121.35 |
+| 32 | forest | 2 → 4 | 1.5 → 3.4 | 656 → 296 | 354.8 → 155.5 | 201.54 → 192.78 |
+| 32 | ocean | 3 → 3 | 1.2 → 2.2 | 849 → 465 | 330.8 → 288.0 | 113.80 → 116.97 |
+| 32 | mountain | 3 → 4 | 1.8 → 2.4 | 570 → 414 | 325.2 → 171.4 | 104.99 → 166.80 |
+
+Render distance 32 still has long stalls in the forest and village flights: the slowest frames are game ticks (mob AI bursts as chunks load, and thousands of dropped items piling up in some chunks, which the sequential run accumulates), not rendering. Results swing between runs on the shared desktop; the probe runs during the work saw RD 32 forest from 15 to 335 FPS depending on what the world had accumulated.
+
+## What changed
+
+The baseline was CPU-bound everywhere: on the RTX 4080 the GPU spent 0.2 to 16 ms per frame, the CPU 2 to 425.
+
+- **Ticking**: mobs, minecarts and dropped items outside the entity-ticking chunks (the simulation distance, as `DistanceManager.inEntityTickingRange`) only check despawning, as in `ServerLevel.tick`; every loaded one used to tick, so render distance 32 ticked seven times as many as vanilla. Villager POI searches skip sections whose palette holds no POI block. Sky darkening is sampled once per time and weather instead of once per mob, and the world's chunk map uses a fast hash.
+- **Stalls**: chunks and entity chunks unloaded while moving are encoded and written by a background region writer (loads see queued records first, saves wait for the queue); deleting entity chunks a region doesn't hold no longer rewrites the region file; unloading drops block entities in one pass instead of one per chunk.
+- **Rendering**: terrain sections share one vertex arena drawn with one indirect multi-draw per pass, instead of a buffer and draw call each; the cave-culling search runs on dense arrays; mobs are culled by the view frustum and vanilla's per-entity render distance, block entities by the frustum; per-frame scratch buffers are reused.
+- **Streaming**: its bookkeeping uses the fast hash, and a column's readiness for meshing is checked once per frame rather than once per dirty section.

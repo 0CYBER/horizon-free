@@ -831,7 +831,7 @@ impl Game<'_> {
         self.spawn_loaded_entities();
         let keys: HashSet<(i32, i32)> = unloaded.iter().map(|c| (c.x, c.z)).collect();
         let chunks = self.entity_chunks(&keys, true);
-        if let Err(e) = self.save.save_entities(chunks) {
+        if let Err(e) = self.save.save_entities_later(chunks) {
             eprintln!("Horizon: failed to save entities: {e}");
         }
     }

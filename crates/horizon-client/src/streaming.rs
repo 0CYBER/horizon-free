@@ -2,6 +2,7 @@
 //! around the player, closest first. The game thread owns the world and only
 //! hands immutable `Arc` snapshots to workers; results carry a sequence number
 //! so stale work is dropped.
+use crate::fast_hash::{FxHashMap, FxHashSet};
 use crate::{
     chunk::{Chunk, SECTIONS},
     light::{LightTables, light_chunk},
@@ -10,7 +11,7 @@ use crate::{
 };
 use horizon_core::biome::BiomeZoom;
 use std::{
-    collections::{BinaryHeap, HashMap, HashSet},
+    collections::{BinaryHeap, HashSet},
     sync::{
         Arc, Condvar, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -98,19 +99,19 @@ pub struct Streaming {
     results: mpsc::Receiver<Done>,
     threads: Vec<thread::JoinHandle<()>>,
     order: u64,
-    generating: HashSet<(i32, i32)>,
+    generating: FxHashSet<(i32, i32)>,
     /// Proto chunks: `None` while checked out to a decoration job.
-    protos: HashMap<(i32, i32), Option<Proto>>,
-    decorated: HashSet<(i32, i32)>,
+    protos: FxHashMap<(i32, i32), Option<Proto>>,
+    decorated: FxHashSet<(i32, i32)>,
     decorating: usize,
-    finishing: HashSet<(i32, i32)>,
+    finishing: FxHashSet<(i32, i32)>,
     decorates: bool,
-    lighting: HashMap<(i32, i32), u64>,
-    meshing: HashMap<(i32, i32, i32), u64>,
+    lighting: FxHashMap<(i32, i32), u64>,
+    meshing: FxHashMap<(i32, i32, i32), u64>,
     /// Chunks whose light is current.
-    lit: HashSet<(i32, i32)>,
+    lit: FxHashSet<(i32, i32)>,
     /// Columns whose sections have been meshed at least once.
-    meshed: HashSet<(i32, i32)>,
+    meshed: FxHashSet<(i32, i32)>,
     sequence: u64,
     pub center: (i32, i32),
     pub radius: i32,
@@ -133,7 +134,7 @@ pub struct Streaming {
     light_log: Vec<(u64, (i32, i32, i32))>,
     light_edit_sequence: u64,
     /// Edit sequence at each in-flight light job's snapshot.
-    light_snapshots: HashMap<(i32, i32), u64>,
+    light_snapshots: FxHashMap<(i32, i32), u64>,
     pub generated_total: u64,
     pub meshed_total: u64,
     /// Chunks come from a server (`insert_remote`/`forget`): nothing is
@@ -234,16 +235,16 @@ impl Streaming {
             results,
             threads,
             order: 0,
-            generating: HashSet::new(),
-            protos: HashMap::new(),
-            decorated: HashSet::new(),
+            generating: Default::default(),
+            protos: Default::default(),
+            decorated: Default::default(),
             decorating: 0,
-            finishing: HashSet::new(),
+            finishing: Default::default(),
             decorates: generator.decorates(),
-            lighting: HashMap::new(),
-            meshing: HashMap::new(),
-            lit: HashSet::new(),
-            meshed: HashSet::new(),
+            lighting: Default::default(),
+            meshing: Default::default(),
+            lit: Default::default(),
+            meshed: Default::default(),
             sequence: 0,
             center: (0, 0),
             radius: 8,
@@ -258,7 +259,7 @@ impl Streaming {
             light_tables,
             light_log: Vec::new(),
             light_edit_sequence: 0,
-            light_snapshots: HashMap::new(),
+            light_snapshots: Default::default(),
             generated_total: 0,
             meshed_total: 0,
             remote: false,
@@ -631,13 +632,19 @@ impl Streaming {
         }
         // Meshing once the column and its neighbours are lit.
         let dirty: Vec<_> = world.dirty_sections.iter().copied().collect();
-        let mut columns: HashMap<(i32, i32), Option<Box<Region>>> = HashMap::new();
+        let mut columns: FxHashMap<(i32, i32), Option<Box<Region>>> = FxHashMap::default();
+        let mut ready_columns: FxHashMap<(i32, i32), bool> = FxHashMap::default();
         for (x, sy, z) in dirty {
             if !world.chunks.contains_key(&(x, z)) || !self.in_main_range(x, z, 0) {
                 world.dirty_sections.remove(&(x, sy, z));
                 continue;
             }
-            let ready = (-1..=1).all(|dz| (-1..=1).all(|dx| self.lit.contains(&(x + dx, z + dz))));
+            // Once per column: the 3x3 lit check would otherwise repeat for
+            // each of its sections every frame.
+            let lit = &self.lit;
+            let ready = *ready_columns.entry((x, z)).or_insert_with(|| {
+                (-1..=1).all(|dz| (-1..=1).all(|dx| lit.contains(&(x + dx, z + dz))))
+            });
             if !ready || self.lighting.contains_key(&(x, z)) {
                 continue;
             }

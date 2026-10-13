@@ -174,6 +174,23 @@ impl LimiterClock for SystemClock {
     }
 }
 
+/// The real clock without busy waiting: where vanilla spins on
+/// `Thread.onSpinWait` for the last half millisecond, this sleeps in short
+/// steps, so a capped frame rate leaves the core idle.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SleepingClock(pub SystemClock);
+impl LimiterClock for SleepingClock {
+    fn nanos(&mut self) -> i64 {
+        self.0.nanos()
+    }
+    fn park(&mut self, nanos: i64) {
+        self.0.park(nanos);
+    }
+    fn spin(&mut self) {
+        std::thread::sleep(std::time::Duration::from_micros(50));
+    }
+}
+
 /// `Minecraft.runTick`'s frame-limiter step: only limits below 260
 /// (the "unlimited" setting) pace frames.
 pub fn end_frame(
