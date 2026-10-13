@@ -21,6 +21,8 @@ except ImportError:
     import lab
 
 ROOT = lab.ROOT
+library_allowed = lab.library_allowed
+native_library_matches = lab.native_library_matches
 
 
 def install_original_mod(source, mod_dir, filename=None):
@@ -74,25 +76,6 @@ def fabric_libraries():
     return jars
 
 
-def library_allowed(library, system=None, architecture=None):
-    system = system or {"Darwin": "osx", "Linux": "linux", "Windows": "windows"}[platform.system()]
-    architecture = (architecture or platform.machine()).lower()
-    rules = library.get("rules", [])
-    allowed = not rules
-    for rule in rules:
-        operating_system = rule.get("os", {})
-        if operating_system.get("name", system) != system:
-            continue
-        if "arch" in operating_system and not re.fullmatch(operating_system["arch"], architecture):
-            continue
-        if "version" in operating_system and not re.search(operating_system["version"], platform.release()):
-            continue
-        if rule.get("features"):
-            continue
-        allowed = rule["action"] == "allow"
-    return allowed
-
-
 def conditional_client_jvm_options(manifest, system=None, architecture=None):
     """Use official OS/architecture flags alongside our managed JVM/classpath options."""
     options = []
@@ -107,18 +90,6 @@ def conditional_client_jvm_options(manifest, system=None, architecture=None):
     return options
 
 
-def native_library_matches(library, architecture=None):
-    """Modern manifests list both x64 and ARM natives with OS-only rules."""
-    architecture = (architecture or platform.machine()).lower()
-    name = library["name"]
-    if ":natives-" not in name:
-        return True
-    arm = architecture in {"arm64", "aarch64"}
-    if "-arm64" in name or "-aarch64" in name:
-        return arm
-    return not arm
-
-
 def prepare_client(assets=True):
     """Classpath and natives from the user's own launcher install; nothing of the game is downloaded."""
     lock, directory = lab.config()
@@ -126,12 +97,7 @@ def prepare_client(assets=True):
     jars = [client]
     natives = CACHE / "natives"
     natives.mkdir(parents=True, exist_ok=True)
-    for library in manifest["libraries"]:
-        if not library_allowed(library) or not native_library_matches(library):
-            continue
-        artifact = library.get("downloads", {}).get("artifact")
-        if not artifact:
-            continue
+    for artifact in lab.client_library_artifacts(manifest):
         jar = lab.import_library(artifact, directory / "libraries/client")
         jars.append(jar)
         with zipfile.ZipFile(jar) as archive:
