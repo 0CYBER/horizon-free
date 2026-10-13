@@ -83,6 +83,94 @@ packet!(ContainerSetContent {
     items: Vec<Option<Stack>> => List<Slot>,
     carried: Option<Stack> => Slot,
 });
+/// ItemCost.STREAM_CODEC: item, count, then the exact component predicate
+/// (Horizon sends and reads it as a component patch without removals).
+#[derive(Clone, Debug, PartialEq)]
+pub struct NetCost {
+    pub item: i32,
+    pub count: i32,
+}
+/// MerchantOffer.STREAM_CODEC.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NetOffer {
+    pub cost_a: NetCost,
+    pub result: Stack,
+    pub cost_b: Option<NetCost>,
+    pub out_of_stock: bool,
+    pub uses: i32,
+    pub max_uses: i32,
+    pub xp: i32,
+    pub special_price: i32,
+    pub price_multiplier: f32,
+    pub demand: i32,
+}
+pub struct Offers;
+impl Codec<Vec<NetOffer>> for Offers {
+    fn read(r: &mut Reader) -> Result<Vec<NetOffer>> {
+        fn cost(r: &mut Reader) -> Result<NetCost> {
+            let item = r.varint()?;
+            let count = r.varint()?;
+            if r.varint()? != 0 {
+                return Err(Error::new("item cost components are not supported"));
+            }
+            Ok(NetCost { item, count })
+        }
+        let n = r.count(r.remaining())?;
+        let mut out = Vec::with_capacity(n.min(64));
+        for _ in 0..n {
+            let cost_a = cost(r)?;
+            let result = Slot::read(r)?.ok_or_else(|| Error::new("empty merchant result"))?;
+            let cost_b = if r.bool()? { Some(cost(r)?) } else { None };
+            out.push(NetOffer {
+                cost_a,
+                result,
+                cost_b,
+                out_of_stock: r.bool()?,
+                uses: r.i32()?,
+                max_uses: r.i32()?,
+                xp: r.i32()?,
+                special_price: r.i32()?,
+                price_multiplier: r.f32()?,
+                demand: r.i32()?,
+            });
+        }
+        Ok(out)
+    }
+    fn write(v: &Vec<NetOffer>, w: &mut Writer) {
+        fn cost(c: &NetCost, w: &mut Writer) {
+            w.varint(c.item);
+            w.varint(c.count);
+            w.varint(0);
+        }
+        w.varint(v.len() as i32);
+        for o in v {
+            cost(&o.cost_a, w);
+            Slot::write(&Some(o.result.clone()), w);
+            w.bool(o.cost_b.is_some());
+            if let Some(b) = &o.cost_b {
+                cost(b, w);
+            }
+            w.bool(o.out_of_stock);
+            w.i32(o.uses);
+            w.i32(o.max_uses);
+            w.i32(o.xp);
+            w.i32(o.special_price);
+            w.f32(o.price_multiplier);
+            w.i32(o.demand);
+        }
+    }
+}
+packet!(
+    /// ClientboundMerchantOffersPacket.
+    MerchantOffers {
+        container: i32 => VarInt,
+        offers: Vec<NetOffer> => Offers,
+        level: i32 => VarInt,
+        xp: i32 => VarInt,
+        show_progress: bool => Bool,
+        can_restock: bool => Bool,
+    }
+);
 packet!(ContainerSetData { container: i32 => VarInt, id: i16 => Short, value: i16 => Short });
 packet!(ContainerSetSlot { container: i32 => VarInt, state: i32 => VarInt, slot: i16 => Short, item: Option<Stack> => Slot });
 /// A holder reference: registry id + 1, or 0 for an inline value (unsupported).
@@ -921,6 +1009,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     MoveEntityPos(MoveEntityPos) = MOVE_ENTITY_POS,
     MoveEntityPosRot(MoveEntityPosRot) = MOVE_ENTITY_POS_ROT,
     MoveEntityRot(MoveEntityRot) = MOVE_ENTITY_ROT,
+    MerchantOffers(MerchantOffers) = MERCHANT_OFFERS,
     OpenScreen(OpenScreen) = OPEN_SCREEN,
     Ping(Ping) = PING,
     PlayerAbilities(PlayerAbilities) = PLAYER_ABILITIES,
@@ -1037,6 +1126,7 @@ packet!(
         carried: Option<Hashed> => HashedSlot,
     }
 );
+packet!(SelectTrade { item: i32 => VarInt });
 packet!(Interact { id: i32 => VarInt, hand: i32 => VarInt, location: [f64; 3] => LpVec3, secondary: bool => Bool });
 packet!(
     /// ServerboundMovePlayerPacket flags: 1 on ground, 2 horizontal collision.
@@ -1111,6 +1201,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     Pong(Ping) = PONG,
     Punch(Empty) = PUNCH,
     ResourcePack(ResourcePackResponse) = RESOURCE_PACK,
+    SelectTrade(SelectTrade) = SELECT_TRADE,
     SetCarriedItem(SetCarriedItem) = SET_CARRIED_ITEM,
     SetCreativeModeSlot(SetCreativeModeSlot) = SET_CREATIVE_MODE_SLOT,
     UseItem(UseItem) = USE_ITEM,
@@ -1301,6 +1392,25 @@ mod tests {
                 container: 1,
                 menu: 2,
                 title: literal("Chest"),
+            }),
+            Clientbound::MerchantOffers(MerchantOffers {
+                container: 3,
+                offers: vec![NetOffer {
+                    cost_a: NetCost { item: 5, count: 24 },
+                    result: Stack::new(7, 1),
+                    cost_b: Some(NetCost { item: 9, count: 1 }),
+                    out_of_stock: false,
+                    uses: 2,
+                    max_uses: 16,
+                    xp: 2,
+                    special_price: -3,
+                    price_multiplier: 0.05,
+                    demand: 4,
+                }],
+                level: 2,
+                xp: 12,
+                show_progress: true,
+                can_restock: true,
             }),
             Clientbound::PlayerChat(PlayerChat {
                 global_index: 0,
@@ -1499,6 +1609,11 @@ mod tests {
             }
             round_trip(p, Serverbound::encode, Serverbound::decode);
         }
+        round_trip(
+            Serverbound::SelectTrade(SelectTrade { item: 3 }),
+            Serverbound::encode,
+            Serverbound::decode,
+        );
     }
 
     #[test]

@@ -887,6 +887,8 @@ mod tests {
             items: &items,
             enchantments: e,
             variant: "minecraft:plains",
+            origin: [0.0; 3],
+            maps: None,
         };
         for p in crate::merchant::PROFESSIONS {
             let set = crate::merchant::Trades::set_for(p, 1);

@@ -1061,7 +1061,7 @@ impl Special {
     }
 }
 /// `DyedItemColor.applyDyes` over dye indexes.
-fn apply_dyes(current: Option<i32>, dyes: &[usize]) -> i32 {
+pub(crate) fn apply_dyes(current: Option<i32>, dyes: &[usize]) -> i32 {
     let (mut r, mut g, mut b, mut intensity, mut n) = (0i32, 0i32, 0i32, 0i32, 0i32);
     let mut add = |rgb: u32| {
         let (red, green, blue) = (

@@ -505,6 +505,7 @@ impl Game<'_> {
         self.tick_skeleton_traps();
         self.tick_apparition();
         self.villager_reputation_tick();
+        self.merchant_tick();
         self.villager_pickups();
         for m in dead {
             self.mob_died(&m);

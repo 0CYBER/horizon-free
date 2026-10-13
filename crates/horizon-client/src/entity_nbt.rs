@@ -1256,20 +1256,44 @@ fn villager_data(m: &Mob) -> Tag {
 }
 /// `AbstractVillager` "Offers" (`MerchantOffers.CODEC`).
 fn put_offers(map: &mut Compound, m: &Mob) {
-    let Some(t) = &m.extra.trade else { return };
-    let recipes = t
-        .offers
+    let Some(t) = m.extra.trade.as_ref().filter(|t| !t.unset) else {
+        return;
+    };
+    map.insert("Offers".into(), offers_to_nbt(&t.offers));
+}
+/// `ItemCost.CODEC`: id, count (always written) and the exact components.
+fn item_cost_to_nbt(stack: &crate::items::ItemStack) -> Tag {
+    let mut tag = item_to_nbt(stack);
+    if let Tag::Compound(c) = &mut tag
+        && !c.contains_key(&"count".into())
+    {
+        c.insert("count".into(), Tag::Int(stack.count as i32));
+    }
+    tag
+}
+/// `MerchantOffers.CODEC`: `{Recipes: [...]}`, each offer without the
+/// fields at their defaults.
+pub fn offers_to_nbt(offers: &[crate::merchant::MerchantOffer]) -> Tag {
+    let recipes = offers
         .iter()
         .map(|o| {
             let mut entries = vec![
-                ("buy", item_to_nbt(&o.base_cost_a.stack)),
+                ("buy", item_cost_to_nbt(&o.base_cost_a.stack)),
                 ("sell", item_to_nbt(&o.result)),
-                ("uses", Tag::Int(o.uses)),
-                ("maxUses", Tag::Int(o.max_uses)),
-                ("priceMultiplier", Tag::Float(o.price_multiplier.to_bits())),
-                ("xp", Tag::Int(o.xp)),
             ];
             // `MerchantOffer.CODEC` omits fields at their defaults.
+            if o.uses != 0 {
+                entries.push(("uses", Tag::Int(o.uses)));
+            }
+            if o.max_uses != 4 {
+                entries.push(("maxUses", Tag::Int(o.max_uses)));
+            }
+            if o.price_multiplier != 0.0 {
+                entries.push(("priceMultiplier", Tag::Float(o.price_multiplier.to_bits())));
+            }
+            if o.xp != 1 {
+                entries.push(("xp", Tag::Int(o.xp)));
+            }
             if !o.reward_exp {
                 entries.push(("rewardExp", Tag::Byte(0)));
             }
@@ -1280,15 +1304,45 @@ fn put_offers(map: &mut Compound, m: &Mob) {
                 entries.push(("demand", Tag::Int(o.demand)));
             }
             if let Some(b) = &o.cost_b {
-                entries.push(("buyB", item_to_nbt(&b.stack)));
+                entries.push(("buyB", item_cost_to_nbt(&b.stack)));
             }
             Tag::compound(entries)
         })
-        .collect();
-    map.insert(
-        "Offers".into(),
-        Tag::compound([("Recipes", Tag::List(recipes))]),
-    );
+        .collect::<Vec<_>>();
+    // An empty list is the field's default: left out.
+    if recipes.is_empty() {
+        return Tag::Compound(Compound::new());
+    }
+    Tag::compound([("Recipes", Tag::List(recipes))])
+}
+/// The offers of a `MerchantOffers.CODEC` tag.
+pub fn offers_from_nbt(tag: &Tag) -> Vec<crate::merchant::MerchantOffer> {
+    use crate::merchant::{ItemCost, MerchantOffer};
+    let Some(Tag::List(recipes)) = tag.get("Recipes") else {
+        return Vec::new();
+    };
+    recipes
+        .iter()
+        .filter_map(|r| {
+            let cost = |key| {
+                r.get(key)
+                    .and_then(item_from_nbt)
+                    .map(|stack| ItemCost { stack })
+            };
+            Some(MerchantOffer {
+                base_cost_a: cost("buy")?,
+                cost_b: cost("buyB"),
+                result: r.get("sell").and_then(item_from_nbt)?,
+                uses: number(r.get("uses")).unwrap_or(0) as i32,
+                max_uses: number(r.get("maxUses")).unwrap_or(4) as i32,
+                reward_exp: number(r.get("rewardExp")).unwrap_or(1) != 0,
+                special_price_diff: number(r.get("specialPrice")).unwrap_or(0) as i32,
+                demand: number(r.get("demand")).unwrap_or(0) as i32,
+                price_multiplier: float(r.get("priceMultiplier")).unwrap_or(0.0) as f32,
+                xp: number(r.get("xp")).unwrap_or(1) as i32,
+            })
+        })
+        .collect()
 }
 /// The villager brain's `job_site`, `home` and `meeting_point` memories.
 fn put_memories(map: &mut Compound, m: &Mob) {
@@ -1314,7 +1368,7 @@ fn put_memories(map: &mut Compound, m: &Mob) {
 }
 fn read_villager(m: &mut Mob, tag: &Tag) {
     use crate::{
-        merchant::{ItemCost, MerchantOffer, Trader},
+        merchant::Trader,
         mobs::render::{PROFESSIONS, VILLAGER_TYPES},
     };
     if let Some(data) = tag.get("VillagerData") {
@@ -1343,32 +1397,14 @@ fn read_villager(m: &mut Mob, tag: &Tag) {
     if m.species() == crate::mobs::Species::Villager {
         crate::mobs::villager::read_nbt(m, tag);
     }
-    let Some(Tag::List(recipes)) = tag.get("Offers").and_then(|o| o.get("Recipes")) else {
+    let offers_tag = tag.get("Offers");
+    let xp = number(tag.get("Xp")).unwrap_or(0) as i32;
+    if offers_tag.is_none() && xp == 0 && tag.get("LastRestock").is_none() {
         return;
-    };
-    let offers = recipes
-        .iter()
-        .filter_map(|r| {
-            let cost = |key| {
-                r.get(key)
-                    .and_then(item_from_nbt)
-                    .map(|stack| ItemCost { stack })
-            };
-            Some(MerchantOffer {
-                base_cost_a: cost("buy")?,
-                cost_b: cost("buyB"),
-                result: r.get("sell").and_then(item_from_nbt)?,
-                uses: number(r.get("uses")).unwrap_or(0) as i32,
-                max_uses: number(r.get("maxUses")).unwrap_or(4) as i32,
-                reward_exp: number(r.get("rewardExp")).unwrap_or(1) != 0,
-                special_price_diff: number(r.get("specialPrice")).unwrap_or(0) as i32,
-                demand: number(r.get("demand")).unwrap_or(0) as i32,
-                price_multiplier: float(r.get("priceMultiplier")).unwrap_or(0.0) as f32,
-                xp: number(r.get("xp")).unwrap_or(1) as i32,
-            })
-        })
-        .collect();
+    }
+    let offers = offers_tag.map(offers_from_nbt).unwrap_or_default();
     m.extra.trade = Some(Box::new(Trader {
+        unset: offers_tag.is_none(),
         xp: number(tag.get("Xp")).unwrap_or(0) as i32,
         offers,
         last_restock: number(tag.get("LastRestock")).unwrap_or(0),

@@ -212,6 +212,11 @@ impl XoroshiroRandom {
         )
     }
 
+    /// The generator's two state words (`Xoroshiro128PlusPlus.CODEC`).
+    pub fn state_words(&self) -> (u64, u64) {
+        (self.lo, self.hi)
+    }
+
     pub fn from_state(lo: u64, hi: u64) -> Self {
         if lo | hi == 0 {
             Self {

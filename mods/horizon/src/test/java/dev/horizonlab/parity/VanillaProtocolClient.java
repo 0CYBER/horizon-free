@@ -430,6 +430,9 @@ public final class VanillaProtocolClient {
         long deadline = System.currentTimeMillis() + 90_000;
         int step = 0;
         long stepAt = 0;
+        // The villager the server's console summoned beside the spawn.
+        int villager = -1;
+        net.minecraft.world.phys.Vec3 villagerAt = null;
         while (System.currentTimeMillis() < deadline) {
             Received r;
             try {
@@ -474,6 +477,28 @@ public final class VanillaProtocolClient {
                         + p.chatType().targetName().map(VanillaProtocolClient::json));
                 } else if (packet instanceof ClientboundDisguisedChatPacket p && step > 0) {
                     record("play-chat", "disguised " + json(p.message()) + " " + p.chatType().chatType().getRegisteredName());
+                } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundAddEntityPacket p
+                    && p.getType() == net.minecraft.world.entity.EntityTypes.VILLAGER) {
+                    villager = p.getId();
+                    villagerAt = new net.minecraft.world.phys.Vec3(p.getX(), p.getY(), p.getZ());
+                } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundOpenScreenPacket p && step > 0) {
+                    record("play-trade", "open " + p.getContainerId() + " "
+                        + net.minecraft.core.registries.BuiltInRegistries.MENU.getKey(p.getType()) + " "
+                        // The villager's UUID is each server's own.
+                        + json(p.getTitle()).replaceAll("\"uuid\":\\[[^\\]]*\\]", "\"uuid\":\"<uuid>\"")
+                            .replaceAll("\"insertion\":\"[^\"]*\"", "\"insertion\":\"<uuid>\""));
+                } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundMerchantOffersPacket p && step > 0) {
+                    StringBuilder sb = new StringBuilder("offers " + p.getContainerId() + " " + p.getVillagerLevel() + " "
+                        + p.getVillagerXp() + " " + p.showProgress() + " " + p.canRestock());
+                    for (var o : p.getOffers()) {
+                        sb.append(" | ").append(o.getItemCostA()).append(' ').append(o.getItemCostB()).append(' ')
+                            .append(net.minecraft.world.item.ItemStack.CODEC.encodeStart(
+                                ParityData.access.createSerializationContext(com.mojang.serialization.JsonOps.INSTANCE), o.getResult()).getOrThrow())
+                            .append(' ').append(o.isOutOfStock()).append(' ').append(o.getUses()).append(' ').append(o.getMaxUses())
+                            .append(' ').append(o.getXp()).append(' ').append(o.getSpecialPriceDiff()).append(' ')
+                            .append(Float.floatToRawIntBits(o.getPriceMultiplier())).append(' ').append(o.getDemand());
+                    }
+                    record("play-trade", sb.toString());
                 } else if (packet instanceof ClientboundDisconnectPacket p) {
                     record("play", r.type + " " + json(p.reason()));
                     break;
@@ -521,6 +546,20 @@ public final class VanillaProtocolClient {
                 step++;
                 stepAt = now;
             } else if (step == 2 + REPLIES.length && now - stepAt > 1500) {
+                // Right-click the villager: the trading screen and its offers.
+                record("play-trade", "villager " + (villager >= 0));
+                if (villager >= 0) {
+                    send(new net.minecraft.network.protocol.game.ServerboundInteractPacket(villager,
+                        net.minecraft.world.InteractionHand.MAIN_HAND, new net.minecraft.world.phys.Vec3(0.0, 1.0, 0.0), false));
+                }
+                step++;
+                stepAt = now;
+            } else if (step == 3 + REPLIES.length && now - stepAt > 1500) {
+                send(new net.minecraft.network.protocol.game.ServerboundSelectTradePacket(0));
+                step++;
+                stepAt = now;
+            } else if (step == 4 + REPLIES.length && now - stepAt > 1500) {
+                send(new net.minecraft.network.protocol.game.ServerboundContainerClosePacket(1));
                 record("play-counts", "chunks " + counts.getOrDefault("minecraft:level_chunk_with_light", 0));
                 return;
             }

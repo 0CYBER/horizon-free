@@ -47,6 +47,7 @@ mod jukebox;
 mod lan;
 mod lan_actions;
 mod lan_screen;
+mod lan_trading;
 mod leads;
 mod lightning;
 mod llamas;
@@ -3796,7 +3797,20 @@ impl Game<'_> {
             .station
             .as_ref()
             .is_some_and(|s| s.kind == stations::Kind::Loom);
-        let (kind, game_of): (Kind, Vec<Option<usize>>) = if crafter_open {
+        let merchant_open = self
+            .station
+            .as_ref()
+            .is_some_and(|s| s.kind == stations::Kind::Merchant);
+        let (kind, game_of): (Kind, Vec<Option<usize>>) = if merchant_open {
+            // MerchantMenu: two payment slots, the result, then the inventory.
+            let mut v: Vec<Option<usize>> = vec![
+                Some(stations::INPUT),
+                Some(stations::INPUT + 1),
+                Some(stations::RESULT),
+            ];
+            v.extend((9..36).chain(0..9).map(Some));
+            (Kind::Merchant, v)
+        } else if crafter_open {
             // CrafterMenu: the grid, the inventory, then the result.
             let mut v: Vec<Option<usize>> = (300..309).map(Some).collect();
             v.extend((9..36).chain(0..9).map(Some));
@@ -3890,11 +3904,34 @@ impl Game<'_> {
             Some(BlockEntity::Crafter(c)) => Some((c.disabled, c.triggered)),
             _ => None,
         };
+        // The merchant's session, lent to the menu for this click.
+        let mut session = self
+            .station
+            .as_ref()
+            .and_then(|s| s.merchant.as_ref())
+            .map(|m| (m.session.clone(), m.mob));
+        if let Some((s, mob)) = session.as_mut() {
+            self.merchant_sync_in(s, *mob);
+        }
+        let next_map = if merchant_open { self.peek_map_id() } else { 0 };
+        let tag = |t: &str| self.structure_tag(t);
+        let maps = trading::GameMaps {
+            terrain: self.end.locator(),
+            structure_tag: &tag,
+            made: Default::default(),
+            next_id: std::cell::Cell::new(next_map),
+        };
+        let trade_env = horizon_client::merchant::TradeEnv {
+            trades: &self.res.stations.trades,
+            enchantments: &self.res.stations.enchantments,
+            maps: Some(&maps),
+        };
         let env = Env {
             items: &self.res.items,
             recipes: &self.res.recipes,
             brewing: &self.res.stations.brewing,
             banners: &self.res.stations.banners,
+            trade: Some(&trade_env),
         };
         menu.creative = creative;
         menu.selected = self.selected;
@@ -3923,10 +3960,20 @@ impl Game<'_> {
         }
         menu.carried = carried;
         menu.drops.clear();
-        match run(&mut menu, &env, &to_menu) {
+        if kind == Kind::Merchant {
+            // Attached after the slots were set: setting them is not a click.
+            menu.merchant = session.map(|(s, _)| s);
+        }
+        let outcome = run(&mut menu, &env, &to_menu);
+        let made = maps.made.take();
+        match outcome {
             None => return false,
             Some(false) => return true,
             Some(true) => {}
+        }
+        self.register_exploration_maps(made);
+        if let Some(s) = menu.merchant.take() {
+            self.merchant_sync_out(s);
         }
         let after: Vec<Option<ItemStack>> = (0..total).map(|i| menu.slot(i).cloned()).collect();
         let carried = menu.carried.take();
@@ -5128,7 +5175,12 @@ impl Game<'_> {
         self.score = Default::default();
         self.fns = Default::default();
         self.bosses = Default::default();
-        self.rand_sequences = Default::default();
+        // RandomSequences: the world's data/minecraft/random_sequences.dat.
+        self.rand_sequences =
+            horizon_client::save::read_dat(&save_root.join("data/minecraft/random_sequences.dat"))
+                .and_then(|t| t.get("data").cloned())
+                .map(|d| horizon_client::random_sequences::RandomSequences::from_nbt(&d))
+                .unwrap_or_default();
         self.border = Default::default();
         let level = Level::read(&save_root).unwrap_or_else(|| Level {
             name: name.unwrap_or(folder).to_owned(),
@@ -7141,6 +7193,7 @@ impl Game<'_> {
             .save(&chunks, self.res.assets.registry, &self.res.biomes)?;
         self.save_entities()?;
         self.save_maps();
+        self.save_random_sequences();
         self.save_raids();
         self.save_fight();
         self.save_wandering_trader();

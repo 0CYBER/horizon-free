@@ -287,7 +287,7 @@ impl Game<'_> {
         Ok(())
     }
 
-    fn send(&self, packet: S) {
+    pub(super) fn send(&self, packet: S) {
         if let Some(r) = &self.remote {
             r.session.send(packet);
         }
@@ -315,12 +315,20 @@ impl Game<'_> {
     }
     fn to_stack(&self, s: &Option<Stack>) -> Option<ItemStack> {
         let s = s.as_ref()?;
-        Some(ItemStack {
+        let mut out = ItemStack {
             item: self.item_name(s.item),
             count: s.count.max(0) as u32,
             damage: s.damage().max(0) as u32,
             extra: None,
-        })
+        };
+        use horizon_protocol::item::{Component, component};
+        if let Some(Component::Int(rgb)) = s.component(component::DYED_COLOR) {
+            out.data_mut().dyed_color = Some(*rgb);
+        }
+        if let Some(Component::Int(id)) = s.component(component::MAP_ID) {
+            out.data_mut().map_id = Some(*id);
+        }
+        Some(out)
     }
     fn to_network(&self, s: &Option<ItemStack>) -> Option<Stack> {
         let s = s.as_ref()?;
@@ -657,6 +665,13 @@ impl Game<'_> {
                 1..=9 => Some(100 + s - 1),
                 10..=36 => Some(9 + s - 10),
                 37..=45 => Some(s - 37),
+                _ => None,
+            },
+            "minecraft:merchant" => match s {
+                0 | 1 => Some(super::stations::INPUT + s),
+                2 => Some(super::stations::RESULT),
+                3..=29 => Some(9 + s - 3),
+                30..=38 => Some(s - 30),
                 _ => None,
             },
             "minecraft:furnace" | "minecraft:blast_furnace" | "minecraft:smoker" => match s {
@@ -1066,6 +1081,7 @@ impl Game<'_> {
                 }
             }
             C::OpenScreen(p) => self.remote_open_screen(p),
+            C::MerchantOffers(p) => self.remote_merchant_offers(p),
             C::ContainerClose(_) => {
                 if self.screen == Screen::Inventory {
                     self.remote_close_local();
@@ -2293,6 +2309,13 @@ impl Game<'_> {
         if let Some(r) = self.remote.as_mut() {
             r.menu = None;
         }
+        if self
+            .station
+            .as_ref()
+            .is_some_and(|s| s.kind == super::stations::Kind::Merchant)
+        {
+            self.station = None;
+        }
         self.craft_size = 2;
         if let Some(key) = self.container.take() {
             // Server containers stay renderable but lose their copied slots.
@@ -2301,6 +2324,52 @@ impl Game<'_> {
                     *s = None;
                 }
             }
+        }
+    }
+    /// A server's trading window (MerchantScreen over a ClientSideMerchant).
+    fn remote_open_merchant(&mut self, container: i32, title: String) {
+        if let Some(r) = self.remote.as_mut() {
+            r.menu = Some((container, "minecraft:merchant".to_owned()));
+        }
+        let session = horizon_client::merchant::Session::new(Vec::new(), true);
+        self.open_remote_merchant(session, (!title.is_empty()).then_some(title));
+    }
+    /// ClientboundMerchantOffersPacket.
+    fn remote_merchant_offers(&mut self, p: play::MerchantOffers) {
+        if self.open_menu_name(p.container) != "minecraft:merchant" {
+            return;
+        }
+        let cost = |g: &Self, c: &play::NetCost| horizon_client::merchant::ItemCost {
+            stack: ItemStack::new(&g.item_name(c.item), c.count.max(0) as u32),
+        };
+        let offers: Vec<_> = p
+            .offers
+            .iter()
+            .filter_map(|o| {
+                let mut offer = horizon_client::merchant::MerchantOffer {
+                    base_cost_a: cost(self, &o.cost_a),
+                    cost_b: o.cost_b.as_ref().map(|b| cost(self, b)),
+                    result: self.to_stack(&Some(o.result.clone()))?,
+                    uses: o.uses,
+                    max_uses: o.max_uses,
+                    reward_exp: true,
+                    special_price_diff: o.special_price,
+                    demand: o.demand,
+                    price_multiplier: o.price_multiplier,
+                    xp: o.xp,
+                };
+                // setToOutOfStock.
+                if o.out_of_stock {
+                    offer.uses = offer.max_uses;
+                }
+                Some(offer)
+            })
+            .collect();
+        if let Some(m) = self.station.as_mut().and_then(|s| s.merchant.as_mut()) {
+            m.session.offers = offers;
+            m.session.level = p.level;
+            m.session.xp = p.xp;
+            m.session.villager = p.show_progress;
         }
     }
     /// ClientboundOpenScreenPacket for the menus Horizon draws.
@@ -2320,6 +2389,19 @@ impl Game<'_> {
             .as_ref()
             .and_then(|r| r.use_target)
             .map(|t| (t[0], t[1], t[2]));
+        if menu == "minecraft:merchant" {
+            // A trading window: its offers follow in a MerchantOffers packet.
+            let title = plain(
+                &p.title,
+                &self
+                    .remote
+                    .as_ref()
+                    .map(|r| r.lang.clone())
+                    .unwrap_or_default(),
+            );
+            self.remote_open_merchant(p.container, title);
+            return;
+        }
         let entity = match menu.as_str() {
             "minecraft:crafting" => None,
             "minecraft:furnace" | "minecraft:blast_furnace" | "minecraft:smoker" => {

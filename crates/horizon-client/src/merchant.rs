@@ -57,6 +57,9 @@ pub struct Trader {
     pub last_restock: i64,
     pub restocks_today: i32,
     pub check_day: i64,
+    /// The offers are not made yet (vanilla's `offers` is null): they are
+    /// generated when first asked for, keeping the experience.
+    pub unset: bool,
 }
 impl Trader {
     fn update_demand(&mut self) {
@@ -146,8 +149,9 @@ impl MerchantOffer {
     /// `getModifiedCostCount` for cost A.
     pub fn cost_a_count(&self, items: &Items) -> u32 {
         let base = self.base_cost_a.stack.count as i32;
+        // Mth.floor(basePrice * demand * priceMultiplier): an int product, then the float.
         let demand_diff =
-            ((base as f32 * self.demand as f32 * self.price_multiplier).floor() as i32).max(0);
+            ((base.wrapping_mul(self.demand) as f32 * self.price_multiplier).floor() as i32).max(0);
         (base + demand_diff + self.special_price_diff)
             .clamp(1, Self::max_stack(items, &self.base_cost_a.stack) as i32) as u32
     }
@@ -210,7 +214,8 @@ impl MerchantOffer {
         true
     }
 }
-/// `MerchantOffers.getRecipeFor`: the hinted offer if it fits, else the first that does.
+/// `MerchantOffers.getRecipeFor`: a hint past the first offer names the only
+/// offer that may match; otherwise the first offer that fits.
 pub fn recipe_for(
     offers: &[MerchantOffer],
     items: &Items,
@@ -219,9 +224,10 @@ pub fn recipe_for(
     hint: Option<usize>,
 ) -> Option<usize> {
     if let Some(h) = hint
-        && offers.get(h).is_some_and(|o| o.satisfied_by(items, a, b))
+        && h > 0
+        && h < offers.len()
     {
-        return Some(h);
+        return offers[h].satisfied_by(items, a, b).then_some(h);
     }
     offers.iter().position(|o| o.satisfied_by(items, a, b))
 }
@@ -259,12 +265,187 @@ pub fn sequence_random(world_seed: i64, id: &str) -> XoroshiroRandom {
     XoroshiroRandom::from_state(mix_stafford13(lo ^ key[0]), mix_stafford13(hi ^ key[1]))
 }
 
+/// What a trade screen's session changes besides the menu, for the caller.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Event {
+    /// An experience orb of this value at the merchant (`rewardTradeXp`).
+    Orb(i32),
+    /// The villager reached this level (regeneration for 200 ticks).
+    LevelUp(i32),
+    /// `notifyTradeUpdated`: the merchant says yes (a result) or no, at
+    /// this pitch.
+    TradeUpdated(bool, f32),
+    /// `MerchantMenu.playTradeSound` (a shift-clicked trade).
+    TradeSound,
+    /// A trade of this offer was made (`notifyTrade`).
+    Traded(usize),
+}
+/// What the world lends a trading session for offers made while it is open.
+pub struct TradeEnv<'a> {
+    pub trades: &'a Trades,
+    pub enchantments: &'a Enchantments,
+    pub maps: Option<&'a dyn MapMaker>,
+}
+/// The merchant side of an open trading screen: `AbstractVillager` /
+/// `Villager` / `WanderingTrader` as `MerchantMenu` sees it (offers,
+/// experience, level-ups, special prices for the trading player) and the
+/// `MerchantContainer` state (selection hint, active offer, future xp).
+#[derive(Clone, Debug)]
+pub struct Session {
+    pub offers: Vec<MerchantOffer>,
+    pub xp: i32,
+    pub level: i32,
+    /// A villager (progress bar, restocks, level-ups), not a wandering trader.
+    pub villager: bool,
+    /// `minecraft:` ids of the profession and villager type.
+    pub profession: String,
+    pub variant: String,
+    /// The merchant's own random (`rewardTradeXp`).
+    pub random: horizon_core::random::LegacyRandom,
+    pub origin: [f64; 3],
+    /// The trading player's reputation and Hero of the Village amplifier.
+    pub reputation: i32,
+    pub hero: Option<i32>,
+    /// Trade set sequences the session may draw from (the next levels'), lent
+    /// by the world's `RandomSequences` and given back when it closes.
+    pub sequences: std::collections::BTreeMap<String, XoroshiroRandom>,
+    pub selection_hint: usize,
+    pub active: Option<usize>,
+    pub future_xp: i32,
+    /// `Mob.ambientSoundTime`.
+    pub ambient_sound_time: i32,
+    /// `Villager.lastTradedPlayer` is set: the TRADE reputation event is due.
+    pub last_traded: bool,
+    pub events: Vec<Event>,
+}
+impl Session {
+    pub fn new(offers: Vec<MerchantOffer>, villager: bool) -> Self {
+        Self {
+            offers,
+            xp: 0,
+            level: 1,
+            villager,
+            profession: String::new(),
+            variant: "minecraft:plains".into(),
+            random: horizon_core::random::LegacyRandom::new(0),
+            origin: [0.0; 3],
+            reputation: 0,
+            hero: None,
+            sequences: Default::default(),
+            selection_hint: 0,
+            active: None,
+            future_xp: 0,
+            ambient_sound_time: 0,
+            last_traded: false,
+            events: Vec::new(),
+        }
+    }
+    /// `Merchant.showProgressBar` / `canRestock`.
+    pub fn show_progress(&self) -> bool {
+        self.villager
+    }
+    /// The trade sets whose sequences a villager of `profession` at `level`
+    /// may draw while trading: those of the levels above it.
+    pub fn sequences_needed(trades: &Trades, profession: &str, level: i32) -> Vec<String> {
+        (level + 1..=5)
+            .filter_map(|l| trades.sequence(&Trades::set_for(profession, l)))
+            .collect()
+    }
+    /// `Villager.updateSpecialPrices` for the trading player.
+    pub fn update_special_prices(&mut self) {
+        if self.villager {
+            update_special_prices(&mut self.offers, self.reputation, self.hero);
+        }
+    }
+    /// `AbstractVillager.notifyTrade`: the offer's use, then `rewardTradeXp`
+    /// (and a level-up with its offers). True when the special prices were
+    /// recomputed (the menu then updates its result).
+    pub fn notify_trade(
+        &mut self,
+        index: usize,
+        env: Option<&TradeEnv<'_>>,
+        items: &Items,
+    ) -> bool {
+        let Some(offer) = self.offers.get_mut(index) else {
+            return false;
+        };
+        offer.uses += 1;
+        let offer = offer.clone();
+        self.ambient_sound_time = -80;
+        self.events.push(Event::Traded(index));
+        let mut prices = false;
+        if self.villager {
+            let mut pop = 3 + self.random.next_int_bound(4).unwrap_or(0);
+            self.xp += offer.xp;
+            self.last_traded = true;
+            if can_level_up(self.level) && self.xp >= max_xp(self.level) {
+                self.level += 1;
+                if let Some(env) = env {
+                    let set = Trades::set_for(&self.profession, self.level);
+                    if env.trades.sets.contains_key(&set) {
+                        let more = self.offers_from_set(env, items, &set);
+                        self.offers.extend(more);
+                        self.update_special_prices();
+                        prices = true;
+                    }
+                }
+                self.events.push(Event::LevelUp(self.level));
+                pop += 5;
+            }
+            if offer.reward_exp {
+                self.events.push(Event::Orb(pop));
+            }
+        } else if offer.reward_exp {
+            let pop = 3 + self.random.next_int_bound(4).unwrap_or(0);
+            self.events.push(Event::Orb(pop));
+        }
+        prices
+    }
+    fn offers_from_set(
+        &mut self,
+        env: &TradeEnv<'_>,
+        items: &Items,
+        set: &str,
+    ) -> Vec<MerchantOffer> {
+        let Some(sequence) = env.trades.sequence(set) else {
+            return Vec::new();
+        };
+        let Some(mut random) = self.sequences.remove(&sequence) else {
+            return Vec::new();
+        };
+        let ctx = TradeContext {
+            items,
+            enchantments: env.enchantments,
+            variant: &self.variant,
+            origin: self.origin,
+            maps: env.maps,
+        };
+        let out = env.trades.offers_from_set(&ctx, set, &mut random);
+        self.sequences.insert(sequence, random);
+        out
+    }
+    /// `AbstractVillager.notifyTradeUpdated`.
+    pub fn notify_trade_updated(&mut self, has_result: bool) {
+        if self.ambient_sound_time > -80 + 20 {
+            self.ambient_sound_time = -80;
+            let pitch = self.voice_pitch();
+            self.events.push(Event::TradeUpdated(has_result, pitch));
+        }
+    }
+    /// `LivingEntity.getVoicePitch` of an adult merchant.
+    pub fn voice_pitch(&mut self) -> f32 {
+        (self.random.next_float() - self.random.next_float()) * 0.2 + 1.0
+    }
+}
+
 /// The trade registries.
 pub struct Trades {
     pub trades: HashMap<String, Value>,
     /// villager_trade tags, ordered.
     pub tags: HashMap<String, Vec<String>>,
     pub sets: HashMap<String, Value>,
+    /// potion tags, ordered (`set_random_potion` options).
+    pub potion_tags: HashMap<String, Vec<String>>,
 }
 fn walk(dir: &Path, base: &Path, out: &mut HashMap<String, Value>) {
     let Ok(entries) = fs::read_dir(dir) else {
@@ -304,6 +485,24 @@ impl Trades {
             &mut raw_tags,
         );
         walk(&data.join("trade_set"), &data.join("trade_set"), &mut sets);
+        let mut raw_potions = HashMap::new();
+        walk(
+            &data.join("tags/potion"),
+            &data.join("tags/potion"),
+            &mut raw_potions,
+        );
+        let values = |v: Value| -> Vec<String> {
+            v["values"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|e| e.as_str().map(str::to_owned))
+                .collect()
+        };
+        let raw_potions: HashMap<String, Vec<String>> = raw_potions
+            .into_iter()
+            .map(|(k, v)| (k, values(v)))
+            .collect();
         let raw: HashMap<String, Vec<String>> = raw_tags
             .into_iter()
             .map(|(k, v)| {
@@ -333,15 +532,35 @@ impl Trades {
                 }
             }
         }
-        let tags = raw
-            .keys()
-            .map(|k| {
-                let mut v = Vec::new();
-                expand(k, &raw, &mut v, 0);
-                (k.clone(), v)
-            })
-            .collect();
-        Self { trades, tags, sets }
+        let expand_all = |raw: &HashMap<String, Vec<String>>| {
+            raw.keys()
+                .map(|k| {
+                    let mut v = Vec::new();
+                    expand(k, raw, &mut v, 0);
+                    (k.clone(), v)
+                })
+                .collect()
+        };
+        Self {
+            trades,
+            tags: expand_all(&raw),
+            sets,
+            potion_tags: expand_all(&raw_potions),
+        }
+    }
+    /// The random sequence of a trade set (`TradeSet.randomSequence`).
+    pub fn sequence(&self, set_id: &str) -> Option<String> {
+        self.sets
+            .get(set_id)?
+            .get("random_sequence")?
+            .as_str()
+            .map(str::to_owned)
+    }
+    /// Every trade set's random sequence, sorted.
+    pub fn sequences(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.sets.keys().filter_map(|k| self.sequence(k)).collect();
+        v.sort();
+        v
     }
     /// `VillagerProfession.getTrades(level)`.
     pub fn set_for(profession: &str, level: i32) -> String {
@@ -387,7 +606,7 @@ impl Trades {
             match self
                 .trades
                 .get(&id)
-                .and_then(|t| offer_from(ctx, t, random))
+                .and_then(|t| self.offer_from(ctx, t, random))
             {
                 Some(o) => out.push(o),
                 None if duplicates => {
@@ -405,6 +624,31 @@ pub struct TradeContext<'a> {
     pub enchantments: &'a Enchantments,
     /// Villager type (`minecraft:plains`, ...), for `merchant_predicate`.
     pub variant: &'a str,
+    /// The merchant's position (the loot context's origin).
+    pub origin: [f64; 3],
+    /// Finds structures for exploration maps; None finds nothing.
+    pub maps: Option<&'a dyn MapMaker>,
+}
+/// `ExplorationMapFunction`: `ServerLevel.findNearestMapStructure` and the
+/// map it makes, for the world the merchant is in.
+pub trait MapMaker {
+    /// The map for the nearest structure in `destination` (a structure tag)
+    /// within `radius` chunks of `origin`, or the stack unchanged when none is
+    /// found.
+    fn exploration_map(
+        &self,
+        stack: ItemStack,
+        map: &ExplorationMap,
+        origin: [f64; 3],
+    ) -> ItemStack;
+}
+/// An `exploration_map` function's settings.
+pub struct ExplorationMap {
+    pub destination: String,
+    pub decoration: String,
+    pub zoom: u8,
+    pub search_radius: i32,
+    pub skip_existing_chunks: bool,
 }
 fn int_provider<R: RandomSource>(v: &Value, random: &mut R) -> i32 {
     match v {
@@ -422,18 +666,55 @@ fn int_provider<R: RandomSource>(v: &Value, random: &mut R) -> i32 {
                 }
             }
             "minecraft:constant" => o["value"].as_i64().unwrap_or(0) as i32,
+            // Sum: inputs in order, summed in a long and clamped.
+            "minecraft:add" => {
+                let mut total = 0i64;
+                for input in o["inputs"].as_array().into_iter().flatten() {
+                    total += i64::from(int_provider(input, random));
+                }
+                total.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+            }
+            "minecraft:binomial" => {
+                let n = int_provider(&o["n"], random);
+                let p = float_provider(&o["p"], random);
+                (0..n).filter(|_| random.next_float() < p).count() as i32
+            }
             _ => o.get("value").and_then(Value::as_i64).unwrap_or(0) as i32,
         },
         _ => 0,
     }
 }
+fn float_provider<R: RandomSource>(v: &Value, random: &mut R) -> f32 {
+    match v {
+        Value::Number(n) => n.as_f64().unwrap_or(0.0) as f32,
+        Value::Object(o) => match o.get("type").and_then(Value::as_str).unwrap_or("") {
+            "minecraft:uniform" => {
+                let min = float_provider(&o["min"], random);
+                let max = float_provider(&o["max"], random);
+                // Mth.randomBetween
+                random.next_float() * (max - min) + min
+            }
+            _ => o.get("value").and_then(Value::as_f64).unwrap_or(0.0) as f32,
+        },
+        _ => 0.0,
+    }
+}
+/// `MobEffect.isInstantaneous`.
+fn instantaneous(effect: &str) -> bool {
+    matches!(
+        effect,
+        "minecraft:saturation" | "minecraft:instant_health" | "minecraft:instant_damage"
+    )
+}
 fn cost(items: &Items, v: &Value, additional: i32) -> ItemCost {
     let id = v["id"].as_str().unwrap_or("minecraft:air");
     let max = items.get(id).map_or(64, |i| i.max_stack) as i32;
     let count = (v["count"].as_i64().unwrap_or(1) as i32 + additional).clamp(0, max);
-    ItemCost {
-        stack: ItemStack::new(id, count as u32),
+    let mut stack = ItemStack::new(id, count as u32);
+    if let Some(potion) = v["components"]["minecraft:potion_contents"]["potion"].as_str() {
+        stack = stack.with_potion(potion);
     }
+    ItemCost { stack }
 }
 fn variant_ok(pred: &Value, variant: &str) -> bool {
     match &pred["predicate"]["minecraft:predicates"]["minecraft:villager/variant"] {
@@ -442,162 +723,254 @@ fn variant_ok(pred: &Value, variant: &str) -> bool {
         _ => true,
     }
 }
-/// `VillagerTrade.getOffer`.
-pub fn offer_from<R: RandomSource>(
-    ctx: &TradeContext<'_>,
-    t: &Value,
-    random: &mut R,
-) -> Option<MerchantOffer> {
-    if let Some(p) = t.get("merchant_predicate")
-        && !variant_ok(p, ctx.variant)
-    {
-        return None;
-    }
-    let gives = &t["gives"];
-    let mut result = ItemStack::new(
-        gives["id"].as_str()?,
-        gives["count"].as_u64().unwrap_or(1) as u32,
-    );
-    let mut additional = 0;
-    let modifiers: Vec<&Value> = match &t["given_item_modifier"] {
-        Value::Array(a) => a.iter().collect(),
-        v @ Value::Object(_) => vec![v],
-        _ => vec![],
-    };
-    for m in modifiers {
-        let (stack, extra) = apply_modifier(ctx, m, result, random)?;
-        result = stack;
-        additional += extra;
-    }
-    if let Some(Value::String(tag)) = t.get("double_trade_price_enchantments")
-        && result
-            .stored_enchantments()
-            .iter()
-            .any(|(e, _)| ctx.enchantments.in_tag(tag, e))
-    {
-        additional *= 2;
-    }
-    let a = cost(ctx.items, &t["wants"], additional);
-    if a.stack.count < 1 {
-        return None;
-    }
-    let b = t.get("additional_wants").map(|w| cost(ctx.items, w, 0));
-    if b.as_ref().is_some_and(|b| b.stack.count < 1) {
-        return None;
-    }
-    Some(MerchantOffer {
-        base_cost_a: a,
-        cost_b: b,
-        result,
-        uses: 0,
-        max_uses: (t["max_uses"].as_i64().unwrap_or(4) as i32).max(1),
-        reward_exp: true,
-        special_price_diff: 0,
-        demand: 0,
-        price_multiplier: (t["reputation_discount"].as_f64().unwrap_or(0.0) as f32).max(0.0),
-        xp: (t["xp"].as_i64().unwrap_or(1) as i32).max(0),
-    })
-}
-/// The loot functions trades use; None discards the offer.
-fn apply_modifier<R: RandomSource>(
-    ctx: &TradeContext<'_>,
-    m: &Value,
-    stack: ItemStack,
-    random: &mut R,
-) -> Option<(ItemStack, i32)> {
-    let e = ctx.enchantments;
-    let pool = |options: &Value| -> Vec<Arc<str>> {
-        match options {
-            Value::String(s) if s.starts_with('#') => e.tag(s).to_vec(),
-            Value::String(s) => vec![Arc::from(s.as_str())],
-            Value::Array(a) => a.iter().filter_map(|x| x.as_str().map(Arc::from)).collect(),
-            _ => e.list.iter().map(|x| x.id.clone()).collect(),
+impl Trades {
+    /// `VillagerTrade.getOffer`.
+    pub fn offer_from<R: RandomSource>(
+        &self,
+        ctx: &TradeContext<'_>,
+        t: &Value,
+        random: &mut R,
+    ) -> Option<MerchantOffer> {
+        if let Some(p) = t.get("merchant_predicate")
+            && !variant_ok(p, ctx.variant)
+        {
+            return None;
         }
-    };
-    match m["type"].as_str().or(m["function"].as_str()).unwrap_or("") {
-        "minecraft:enchant_with_levels" => {
-            let levels = int_provider(&m["levels"], random);
-            // EnchantmentHelper.enchantItem on the loot context's random.
-            let chosen = e.select(ctx.items, random, &stack.item, levels, &pool(&m["options"]));
-            let mut out = if &*stack.item == "minecraft:book" {
-                ItemStack::new("minecraft:enchanted_book", stack.count)
-            } else {
-                stack
-            };
-            for (id, l) in chosen {
-                out.enchant(&id, l);
+        let gives = &t["gives"];
+        let mut result = ItemStack::new(
+            gives["id"].as_str()?,
+            gives["count"].as_u64().unwrap_or(1) as u32,
+        );
+        let mut additional = 0;
+        let modifiers: Vec<&Value> = match &t["given_item_modifier"] {
+            Value::Array(a) => a.iter().collect(),
+            v @ Value::Object(_) => vec![v],
+            _ => vec![],
+        };
+        for m in modifiers {
+            let (stack, extra) = self.apply_modifier(ctx, m, result, random)?;
+            result = stack;
+            additional += extra;
+        }
+        if let Some(Value::String(tag)) = t.get("double_trade_price_enchantments")
+            && result
+                .stored_enchantments()
+                .iter()
+                .any(|(e, _)| ctx.enchantments.in_tag(tag, e))
+        {
+            additional *= 2;
+        }
+        let a = cost(ctx.items, &t["wants"], additional);
+        if a.stack.count < 1 {
+            return None;
+        }
+        let b = t.get("additional_wants").map(|w| cost(ctx.items, w, 0));
+        if b.as_ref().is_some_and(|b| b.stack.count < 1) {
+            return None;
+        }
+        let max_uses = match t.get("max_uses") {
+            Some(v) => int_provider(v, random),
+            None => 4,
+        };
+        let xp = match t.get("xp") {
+            Some(v) => int_provider(v, random),
+            None => 1,
+        };
+        let discount = match t.get("reputation_discount") {
+            Some(v) => float_provider(v, random),
+            None => 0.0,
+        };
+        Some(MerchantOffer {
+            base_cost_a: a,
+            cost_b: b,
+            result,
+            uses: 0,
+            max_uses: max_uses.max(1),
+            reward_exp: true,
+            special_price_diff: 0,
+            demand: 0,
+            price_multiplier: discount.max(0.0),
+            xp: xp.max(0),
+        })
+    }
+    /// The loot functions trades use; None discards the offer.
+    fn apply_modifier<R: RandomSource>(
+        &self,
+        ctx: &TradeContext<'_>,
+        m: &Value,
+        stack: ItemStack,
+        random: &mut R,
+    ) -> Option<(ItemStack, i32)> {
+        let e = ctx.enchantments;
+        let pool = |options: &Value| -> Vec<Arc<str>> {
+            match options {
+                Value::String(s) if s.starts_with('#') => e.tag(s).to_vec(),
+                Value::String(s) => vec![Arc::from(s.as_str())],
+                Value::Array(a) => a.iter().filter_map(|x| x.as_str().map(Arc::from)).collect(),
+                _ => e.list.iter().map(|x| x.id.clone()).collect(),
             }
-            let extra = if m["include_additional_cost_component"]
-                .as_bool()
-                .unwrap_or(false)
-                && levels > 0
-            {
-                levels
-            } else {
-                0
-            };
-            Some((out, extra))
-        }
-        "minecraft:enchant_randomly" => {
-            let book = &*stack.item == "minecraft:book";
-            let only_compatible = m["only_compatible"].as_bool().unwrap_or(true);
-            let options: Vec<Arc<str>> = pool(&m["options"])
-                .into_iter()
-                .filter(|id| book || !only_compatible || e.can_enchant(ctx.items, id, &stack.item))
-                .collect();
-            if options.is_empty() {
-                return Some((stack, 0));
+        };
+        match m["type"].as_str().or(m["function"].as_str()).unwrap_or("") {
+            "minecraft:enchant_with_levels" => {
+                let levels = int_provider(&m["levels"], random);
+                // EnchantmentHelper.enchantItem on the loot context's random.
+                let chosen = e.select(ctx.items, random, &stack.item, levels, &pool(&m["options"]));
+                let mut out = if &*stack.item == "minecraft:book" {
+                    ItemStack::new("minecraft:enchanted_book", stack.count)
+                } else {
+                    stack
+                };
+                for (id, l) in chosen {
+                    out.enchant(&id, l);
+                }
+                let extra = if m["include_additional_cost_component"]
+                    .as_bool()
+                    .unwrap_or(false)
+                    && levels > 0
+                {
+                    levels
+                } else {
+                    0
+                };
+                Some((out, extra))
             }
-            let id =
-                options[random.next_int_bound(options.len() as i32).unwrap_or(0) as usize].clone();
-            let max = e.get(&id).map_or(1, |d| d.max_level) as i32;
-            let level = if max <= 1 {
-                1
-            } else {
-                1 + random.next_int_bound(max).unwrap_or(0)
-            };
-            let mut out = if book {
-                ItemStack::new("minecraft:enchanted_book", 1)
-            } else {
-                stack
-            };
-            out.enchant(&id, level as u32);
-            let extra = if m["include_additional_cost_component"]
-                .as_bool()
-                .unwrap_or(false)
-            {
-                2 + random.next_int_bound(5 + level * 10).unwrap_or(0) + 3 * level
-            } else {
-                0
-            };
-            Some((out, extra))
-        }
-        "minecraft:filtered" => {
-            let filter = &m["item_filter"];
-            let item_ok = filter["items"].as_str().is_none_or(|i| i == &*stack.item);
-            let needs =
-                |key: &str, have: bool| filter["predicates"][key].as_array().is_none_or(|_| have);
-            let ok = item_ok
-                && needs("minecraft:enchantments", !stack.enchantments().is_empty())
-                && needs(
-                    "minecraft:stored_enchantments",
-                    !stack.stored_enchantments().is_empty(),
-                );
-            if ok {
-                Some((stack, 0))
-            } else if m["on_fail"]["type"] == "minecraft:discard" {
-                None
-            } else {
-                Some((stack, 0))
+            "minecraft:enchant_randomly" => {
+                let book = &*stack.item == "minecraft:book";
+                let only_compatible = m["only_compatible"].as_bool().unwrap_or(true);
+                let options: Vec<Arc<str>> = pool(&m["options"])
+                    .into_iter()
+                    .filter(|id| {
+                        book || !only_compatible || e.can_enchant(ctx.items, id, &stack.item)
+                    })
+                    .collect();
+                if options.is_empty() {
+                    return Some((stack, 0));
+                }
+                let id = options[random.next_int_bound(options.len() as i32).unwrap_or(0) as usize]
+                    .clone();
+                let max = e.get(&id).map_or(1, |d| d.max_level) as i32;
+                let level = if max <= 1 {
+                    1
+                } else {
+                    1 + random.next_int_bound(max).unwrap_or(0)
+                };
+                let mut out = if book {
+                    ItemStack::new("minecraft:enchanted_book", 1)
+                } else {
+                    stack
+                };
+                out.enchant(&id, level as u32);
+                let extra = if m["include_additional_cost_component"]
+                    .as_bool()
+                    .unwrap_or(false)
+                {
+                    2 + random.next_int_bound(5 + level * 10).unwrap_or(0) + 3 * level
+                } else {
+                    0
+                };
+                Some((out, extra))
             }
+            "minecraft:filtered" => {
+                let filter = &m["item_filter"];
+                let item_ok = filter["items"].as_str().is_none_or(|i| i == &*stack.item);
+                let needs = |key: &str, have: bool| filter["predicates"].get(key).is_none() || have;
+                let data = stack.data();
+                let ok = item_ok
+                    && needs("minecraft:enchantments", !stack.enchantments().is_empty())
+                    && needs(
+                        "minecraft:stored_enchantments",
+                        !stack.stored_enchantments().is_empty(),
+                    )
+                    && needs(
+                        "minecraft:dyed_color",
+                        data.is_some_and(|d| d.dyed_color.is_some()),
+                    )
+                    && needs("minecraft:map_id", data.is_some_and(|d| d.map_id.is_some()));
+                if ok {
+                    Some((stack, 0))
+                } else if m["on_fail"]["type"] == "minecraft:discard" {
+                    None
+                } else {
+                    Some((stack, 0))
+                }
+            }
+            "minecraft:set_potion" => Some((
+                stack.with_potion(m["id"].as_str().unwrap_or("minecraft:water")),
+                0,
+            )),
+            "minecraft:discard" => None,
+            "minecraft:set_random_dyes" => {
+                let rolls = int_provider(&m["number_of_dyes"], random);
+                if rolls <= 0 {
+                    return Some((stack, 0));
+                }
+                let dyes: Vec<usize> = (0..rolls)
+                    .map(|_| random.next_int_bound(16).unwrap_or(0) as usize)
+                    .collect();
+                // DyedItemColor.applyDyes: one item, the colours mixed in.
+                let current = stack.data().and_then(|d| d.dyed_color);
+                let mut out = ItemStack { count: 1, ..stack };
+                out.data_mut().dyed_color = Some(crate::crafting::apply_dyes(current, &dyes));
+                Some((out, 0))
+            }
+            "minecraft:set_random_potion" => {
+                let options: Vec<String> = match &m["options"] {
+                    Value::String(s) => match s.strip_prefix('#') {
+                        Some(tag) => self.potion_tags.get(tag).cloned().unwrap_or_default(),
+                        None => vec![s.clone()],
+                    },
+                    Value::Array(a) => a
+                        .iter()
+                        .filter_map(|v| v.as_str().map(str::to_owned))
+                        .collect(),
+                    _ => vec![],
+                };
+                if options.is_empty() {
+                    return Some((stack, 0));
+                }
+                let pick = random.next_int_bound(options.len() as i32).unwrap_or(0) as usize;
+                Some((stack.with_potion(&options[pick]), 0))
+            }
+            "minecraft:set_stew_effect" => {
+                let effects = m["effects"].as_array().cloned().unwrap_or_default();
+                if &*stack.item != "minecraft:suspicious_stew" || effects.is_empty() {
+                    return Some((stack, 0));
+                }
+                let entry =
+                    &effects[random.next_int_bound(effects.len() as i32).unwrap_or(0) as usize];
+                let effect = entry["type"].as_str().unwrap_or("").to_owned();
+                let mut duration = int_provider(&entry["duration"], random);
+                if !instantaneous(&effect) {
+                    duration *= 20;
+                }
+                let mut out = stack;
+                let d = out.data_mut();
+                // SuspiciousStewEffects.withEffectAdded
+                d.stew_effects.push((Arc::from(effect.as_str()), duration));
+                Some((out, 0))
+            }
+            "minecraft:exploration_map" => {
+                let Some(maps) = ctx.maps else {
+                    return Some((stack, 0));
+                };
+                let map = ExplorationMap {
+                    destination: m["destination"]
+                        .as_str()
+                        .unwrap_or("#minecraft:on_treasure_maps")
+                        .trim_start_matches('#')
+                        .to_owned(),
+                    decoration: m["decoration"]
+                        .as_str()
+                        .unwrap_or("minecraft:mansion")
+                        .to_owned(),
+                    zoom: m["zoom"].as_u64().unwrap_or(2) as u8,
+                    search_radius: m["search_radius"].as_i64().unwrap_or(50) as i32,
+                    skip_existing_chunks: m["skip_existing_chunks"].as_bool().unwrap_or(true),
+                };
+                Some((maps.exploration_map(stack, &map, ctx.origin), 0))
+            }
+            _ => Some((stack, 0)),
         }
-        "minecraft:set_potion" => Some((
-            stack.with_potion(m["id"].as_str().unwrap_or("minecraft:water")),
-            0,
-        )),
-        "minecraft:discard" => None,
-        // Dyes, stew effects, random potions and exploration maps keep the plain item.
-        _ => Some((stack, 0)),
     }
 }
 
@@ -773,11 +1146,18 @@ mod tests {
             "minecraft:t/level_1".into(),
             json!({"amount": 5, "trades": "#minecraft:t/level_1"}),
         );
-        let t = Trades { trades, tags, sets };
+        let t = Trades {
+            trades,
+            tags,
+            sets,
+            potion_tags: HashMap::new(),
+        };
         let ctx = TradeContext {
             items: &items,
             enchantments: &e,
             variant: "minecraft:plains",
+            origin: [0.0; 3],
+            maps: None,
         };
         let offers = t.offers_from_set(&ctx, "minecraft:t/level_1", &mut sequence_random(1, "x"));
         // The desert-only trade is skipped for a plains villager; no duplicates.

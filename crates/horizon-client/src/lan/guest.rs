@@ -265,6 +265,31 @@ pub fn stack_to_network(
             horizon_protocol::item::Component::Enchantments(enchantments),
         ));
     }
+    let stored: Vec<(i32, i32)> = s
+        .stored_enchantments()
+        .iter()
+        .filter_map(|(e, level)| Some((enchantment_id(e)?, *level as i32)))
+        .collect();
+    if !stored.is_empty() {
+        stack.added.push((
+            horizon_protocol::item::component::STORED_ENCHANTMENTS,
+            horizon_protocol::item::Component::Enchantments(stored),
+        ));
+    }
+    if let Some(d) = s.data() {
+        if let Some(rgb) = d.dyed_color {
+            stack.added.push((
+                horizon_protocol::item::component::DYED_COLOR,
+                horizon_protocol::item::Component::Int(rgb),
+            ));
+        }
+        if let Some(id) = d.map_id {
+            stack.added.push((
+                horizon_protocol::item::component::MAP_ID,
+                horizon_protocol::item::Component::Int(id),
+            ));
+        }
+    }
     if let Some(name) = s.custom_name() {
         stack.added.push((
             horizon_protocol::item::component::CUSTOM_NAME,

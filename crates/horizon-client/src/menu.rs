@@ -3,7 +3,9 @@
 //! craft drags, pickup all) for the player inventory, the crafting table, the
 //! chest family, hoppers, dispensers, shulker boxes, the furnaces, the brewing
 //! stand, the crafter (its client menu and the block entity's server menu with
-//! `setSlotState`) and the loom (`clickMenuButton`, `slotsChanged`).
+//! `setSlotState`), the loom (`clickMenuButton`, `slotsChanged`) and the
+//! merchant (`MerchantMenu` over a `merchant::Session`: payment slots, the
+//! result slot's trade, `tryMoveItems`).
 //! `tools/test_menu_click_parity.py` compares every click with vanilla's menu
 //! classes.
 use crate::{
@@ -22,6 +24,8 @@ pub struct Env<'a> {
     pub recipes: &'a Recipes,
     pub brewing: &'a Brewing,
     pub banners: &'a Banners,
+    /// What a merchant menu needs for offers made while it is open (level-ups).
+    pub trade: Option<&'a crate::merchant::TradeEnv<'a>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -67,6 +71,8 @@ pub enum Kind {
     /// result follows the grid, and filling a disabled slot enables it.
     CrafterBlock,
     Loom,
+    /// `MerchantMenu`: two payment slots, the result, then the inventory.
+    Merchant,
 }
 
 impl Kind {
@@ -87,6 +93,7 @@ impl Kind {
             "crafter" => Self::Crafter,
             "crafter_be" => Self::CrafterBlock,
             "loom" => Self::Loom,
+            "merchant" => Self::Merchant,
             _ => return None,
         })
     }
@@ -120,6 +127,8 @@ enum Role {
     LoomPattern,
     /// The loom's result slot (a plain slot whose `onTake` uses the inputs).
     LoomResult,
+    /// `MerchantResultSlot`.
+    MerchantResult,
 }
 
 #[derive(Clone, Copy)]
@@ -161,6 +170,8 @@ pub struct Menu {
     pub sounds: Vec<&'static str>,
     /// Recipes whose result was taken (`awardUsedRecipes`), for the caller.
     pub crafted: Vec<String>,
+    /// The merchant a merchant menu trades with.
+    pub merchant: Option<Box<crate::merchant::Session>>,
 }
 
 fn same_item(a: &ItemStack, b: &ItemStack) -> bool {
@@ -297,6 +308,16 @@ impl Menu {
                 player(&mut slots);
                 data = 1;
             }
+            Kind::Merchant => {
+                containers[MAIN] = vec![None; 2];
+                slots.extend(main(2, Role::Plain));
+                slots.push(Slot {
+                    container: RESULT,
+                    index: 0,
+                    role: Role::MerchantResult,
+                });
+                player(&mut slots);
+            }
             Kind::Brewing => {
                 containers[MAIN] = vec![None; 5];
                 for (index, role) in [
@@ -360,6 +381,7 @@ impl Menu {
             loom_patterns: Vec::new(),
             sounds: Vec::new(),
             crafted: Vec::new(),
+            merchant: None,
         }
     }
 
@@ -470,6 +492,11 @@ impl Menu {
     /// `Slot.setChanged` on slot `s`: the loom recomputes from its inputs,
     /// the block crafter refreshes its result.
     fn slot_changed(&mut self, env: &Env, s: usize) {
+        // MerchantContainer.setChanged: every slot of it, the result too.
+        if self.kind == Kind::Merchant && self.slots[s].container != PLAYER {
+            self.merchant_update(env);
+            return;
+        }
         if self.slots[s].container != MAIN {
             return;
         }
@@ -586,7 +613,7 @@ impl Menu {
             Role::LoomBanner => Self::is_banner(stack),
             Role::LoomDye => env.banners.loom_dye(env.items, stack).is_some(),
             Role::LoomPattern => env.banners.is_pattern_item(env.items, stack),
-            Role::LoomResult => false,
+            Role::LoomResult | Role::MerchantResult => false,
         }
     }
 
@@ -595,9 +622,20 @@ impl Menu {
         stack.item.ends_with("_banner")
     }
 
-    fn may_pickup(&self, s: usize) -> bool {
+    fn may_pickup(&self, env: &Env, s: usize) -> bool {
         match self.slots[s].role {
             Role::Inert => false,
+            Role::MerchantResult => self
+                .merchant
+                .as_ref()
+                .and_then(|m| m.offers.get(m.active?))
+                .is_some_and(|o| {
+                    let (a, b) = (
+                        self.containers[MAIN][0].as_ref(),
+                        self.containers[MAIN][1].as_ref(),
+                    );
+                    o.satisfied_by(env.items, a, b) || o.satisfied_by(env.items, b, a)
+                }),
             Role::Armor(_) => match self.slot(s) {
                 Some(stack) => {
                     self.creative || stack.enchantment_level("minecraft:binding_curse") == 0
@@ -661,8 +699,9 @@ impl Menu {
         if out.is_some() && slot.container == GRID {
             self.recompute(env);
         }
-        // SimpleContainer.removeItem calls setChanged when it took something.
-        if out.is_some() && self.kind == Kind::Loom {
+        // SimpleContainer.removeItem calls setChanged when it took something;
+        // MerchantContainer.removeItem updates the result after a payment slot.
+        if out.is_some() && matches!(self.kind, Kind::Loom | Kind::Merchant) {
             self.slot_changed(env, s);
         }
         out
@@ -682,6 +721,10 @@ impl Menu {
 
     /// `ResultSlot.onTake` and the other `Slot.onTake` overrides.
     fn on_take(&mut self, env: &Env, s: usize) {
+        if self.slots[s].role == Role::MerchantResult {
+            self.merchant_take(env);
+            return;
+        }
         if self.slots[s].role == Role::LoomResult {
             // LoomMenu's result onTake: one banner and one dye are used up.
             self.remove(env, 0, 1);
@@ -764,7 +807,7 @@ impl Menu {
         amount: u32,
         max_amount: u32,
     ) -> Option<ItemStack> {
-        if !self.may_pickup(s) {
+        if !self.may_pickup(env, s) {
             return None;
         }
         if !self.allow_modification(env, s) && max_amount < self.slot(s).map_or(0, |c| c.count) {
@@ -778,7 +821,7 @@ impl Menu {
     }
 
     fn allow_modification(&self, env: &Env, s: usize) -> bool {
-        self.may_pickup(s)
+        self.may_pickup(env, s)
             && match self.slot(s) {
                 Some(stack) => self.may_place(env, s, stack),
                 None => true,
@@ -1119,6 +1162,29 @@ impl Menu {
                     return None;
                 }
             }
+            Kind::Merchant => {
+                after_take = true;
+                if index == 2 {
+                    if !self.move_to(env, &mut stack, 3, 39, true) {
+                        return None;
+                    }
+                    if let Some(m) = self.merchant.as_mut() {
+                        m.events.push(crate::merchant::Event::TradeSound);
+                    }
+                } else if index != 0 && index != 1 {
+                    if (3..30).contains(&index) {
+                        if !self.move_to(env, &mut stack, 30, 39, false) {
+                            return None;
+                        }
+                    } else if (30..39).contains(&index)
+                        && !self.move_to(env, &mut stack, 3, 30, false)
+                    {
+                        return None;
+                    }
+                } else if !self.move_to(env, &mut stack, 3, 39, false) {
+                    return None;
+                }
+            }
             Kind::Crafter | Kind::CrafterBlock => {
                 after_take = true;
                 if index < 9 {
@@ -1364,7 +1430,7 @@ impl Menu {
                     return Err(OUT_OF_BOUNDS);
                 }
                 let s = slot_index as usize;
-                if !self.may_pickup(s) {
+                if !self.may_pickup(env, s) {
                     return Ok(());
                 }
                 let mut clicked = self.quick_move(env, s);
@@ -1459,7 +1525,7 @@ impl Menu {
                     tidy(&mut self.carried);
                 }
             }
-            Some(clicked) if self.may_pickup(s) => match self.carried.take() {
+            Some(clicked) if self.may_pickup(env, s) => match self.carried.take() {
                 None => {
                     let amount = if primary {
                         clicked.count
@@ -1518,7 +1584,7 @@ impl Menu {
         }
         match (source, target_stack) {
             (None, Some(taken)) => {
-                if self.may_pickup(target) {
+                if self.may_pickup(env, target) {
                     self.containers[PLAYER][inv_slot] = Some(taken.clone());
                     self.put(env, target, None);
                     self.on_take(env, target);
@@ -1538,7 +1604,7 @@ impl Menu {
                 }
             }
             (Some(mut source), Some(mut taken)) => {
-                if self.may_pickup(target) && self.may_place(env, target, &source) {
+                if self.may_pickup(env, target) && self.may_place(env, target, &source) {
                     let max = self.slot_max(env, target, &source);
                     if source.count > max {
                         let part = split(&mut source, max);
@@ -1564,7 +1630,7 @@ impl Menu {
         let Some(carried) = self.carried.clone() else {
             return;
         };
-        if self.has_item(s) && self.may_pickup(s) {
+        if self.has_item(s) && self.may_pickup(env, s) {
             return;
         }
         let total = self.slots.len() as i32;
@@ -1577,9 +1643,11 @@ impl Menu {
                 let t = i as usize;
                 i += step;
                 let have = self.carried.clone().expect("some");
-                if self.has_item(t)
+                // MerchantMenu.canTakeItemForPickAll is always false.
+                if self.kind != Kind::Merchant
+                    && self.has_item(t)
                     && self.quick_replace(t, &have, env)
-                    && self.may_pickup(t)
+                    && self.may_pickup(env, t)
                     && (self.slots[t].container != RESULT || self.kind == Kind::Loom)
                 {
                     let item = self.slot(t).expect("has item").clone();
@@ -1592,6 +1660,152 @@ impl Menu {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/// `MerchantMenu` and `MerchantContainer` over the menu's `merchant` session.
+impl Menu {
+    /// `MerchantContainer.updateSellItem`.
+    pub fn merchant_update(&mut self, env: &Env) {
+        let Some(m) = self.merchant.as_mut() else {
+            return;
+        };
+        let (a, b) = (
+            self.containers[MAIN][0].as_ref(),
+            self.containers[MAIN][1].as_ref(),
+        );
+        let (a, b) = if a.is_none() { (b, None) } else { (a, b) };
+        m.active = None;
+        if a.is_none() {
+            self.containers[RESULT][0] = None;
+            m.future_xp = 0;
+            return;
+        }
+        if !m.offers.is_empty() {
+            let (active, result) =
+                crate::merchant::sell_item(&m.offers, env.items, a, b, Some(m.selection_hint));
+            m.active = active;
+            m.future_xp = if result.is_some() {
+                active.map_or(0, |i| m.offers[i].xp)
+            } else {
+                0
+            };
+            self.containers[RESULT][0] = result;
+        }
+        let has = self.containers[RESULT][0].is_some();
+        m.notify_trade_updated(has);
+    }
+    /// `MerchantResultSlot.onTake`: the payment is taken and the merchant
+    /// told (`notifyTrade`).
+    fn merchant_take(&mut self, env: &Env) {
+        let Some(m) = self.merchant.as_mut() else {
+            return;
+        };
+        let Some(i) = m.active else { return };
+        let Some(offer) = m.offers.get(i).cloned() else {
+            return;
+        };
+        let (mut a, mut b) = (
+            self.containers[MAIN][0].take(),
+            self.containers[MAIN][1].take(),
+        );
+        let took = offer.take(env.items, &mut a, &mut b) || offer.take(env.items, &mut b, &mut a);
+        // The payment stacks shrink in place, before the merchant hears of it.
+        self.containers[MAIN][0] = a;
+        self.containers[MAIN][1] = b;
+        if took {
+            let prices = m.notify_trade(i, env.trade, env.items);
+            if prices {
+                self.merchant_update(env);
+            }
+            // setItem(0, buyA), setItem(1, buyB).
+            self.merchant_update(env);
+            self.merchant_update(env);
+        }
+    }
+    /// `MerchantMenu.tryMoveItems` (the select trade packet, with the
+    /// selection hint set first).
+    pub fn merchant_select(&mut self, env: &Env, index: usize) {
+        let Some(m) = self.merchant.as_mut() else {
+            return;
+        };
+        // MerchantContainer.setSelectionHint updates the result.
+        m.selection_hint = index;
+        let count = m.offers.len();
+        self.merchant_update(env);
+        if index >= count {
+            return;
+        }
+        for slot in [0usize, 1] {
+            if let Some(mut old) = self.containers[MAIN][slot].clone() {
+                if !self.move_to(env, &mut old, 3, 39, true) {
+                    return;
+                }
+                self.containers[MAIN][slot] = (old.count > 0).then_some(old);
+                self.put(env, slot, self.containers[MAIN][slot].clone());
+            }
+        }
+        if self.containers[MAIN][0].is_some() || self.containers[MAIN][1].is_some() {
+            return;
+        }
+        let Some(offer) = self
+            .merchant
+            .as_ref()
+            .and_then(|m| m.offers.get(index))
+            .cloned()
+        else {
+            return;
+        };
+        self.merchant_fill(env, 0, &offer.base_cost_a);
+        if let Some(b) = &offer.cost_b {
+            self.merchant_fill(env, 1, b);
+        }
+    }
+    /// `MerchantMenu.moveFromInventoryToPaymentSlot`.
+    fn merchant_fill(&mut self, env: &Env, payment: usize, cost: &crate::merchant::ItemCost) {
+        for i in 3..39 {
+            let Some(have) = self.slot(i).cloned() else {
+                continue;
+            };
+            if !cost.test(&have) {
+                continue;
+            }
+            let current = self.containers[MAIN][payment].clone();
+            if current
+                .as_ref()
+                .is_some_and(|c| !c.same_item_same_components(&have))
+            {
+                continue;
+            }
+            let max = Self::max_stack(env, &have);
+            let current_count = current.as_ref().map_or(0, |c| c.count);
+            let moved = max.saturating_sub(current_count).min(have.count);
+            let payment_stack = ItemStack {
+                count: current_count + moved,
+                ..have.clone()
+            };
+            let slot = self.slots[i];
+            let mut left = have;
+            left.count -= moved;
+            self.containers[slot.container][slot.index] = (left.count > 0).then_some(left);
+            self.put(env, payment, Some(payment_stack.clone()));
+            if payment_stack.count >= max {
+                break;
+            }
+        }
+    }
+    /// `MerchantMenu.removed` for a living player: the payment goes back to
+    /// the inventory (`placeItemBackInInventory`), or is dropped.
+    pub fn merchant_close(&mut self, env: &Env) {
+        // AbstractContainerMenu.removed: the carried stack first.
+        if let Some(mut carried) = self.carried.take() {
+            self.place_back(env, &mut carried);
+        }
+        for slot in [0usize, 1] {
+            if let Some(mut stack) = self.containers[MAIN][slot].take() {
+                self.place_back(env, &mut stack);
             }
         }
     }
