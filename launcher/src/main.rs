@@ -6,13 +6,14 @@ mod markdown;
 mod mcp;
 mod theme;
 
-use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Updates};
 use gpui::{
-    div, ease_out_quint, img, linear_color_stop, linear_gradient, prelude::*, px, relative, size, Animation, AnimationExt, AnyElement, App, Application, Bounds,
-    ClickEvent, Context, Div, ElementId, FocusHandle, FontWeight, Hsla, KeyDownEvent, RenderImage,
-    ObjectFit, PathPromptOptions, ScrollHandle, SharedString, Stateful, Subscription, TitlebarOptions, Window,
+    div, ease_out_quint, img, linear_color_stop, linear_gradient, prelude::*, px, relative, size,
+    Animation, AnimationExt, AnyElement, App, Application, Bounds, ClickEvent, Context, Div,
+    ElementId, FocusHandle, FontWeight, Hsla, KeyDownEvent, ObjectFit, PathPromptOptions,
+    RenderImage, ScrollHandle, SharedString, Stateful, Subscription, TitlebarOptions, Window,
     WindowBounds, WindowOptions,
 };
+use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Updates};
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -67,9 +68,12 @@ struct Opening {
 
 /// The background, decoded before the first frame so the opening never shows without it.
 fn background_image() -> Arc<RenderImage> {
-    let mut rgba = image::load_from_memory_with_format(include_bytes!("../assets/background.jpg"), image::ImageFormat::Jpeg)
-        .expect("bundled background")
-        .into_rgba8();
+    let mut rgba = image::load_from_memory_with_format(
+        include_bytes!("../assets/background.jpg"),
+        image::ImageFormat::Jpeg,
+    )
+    .expect("bundled background")
+    .into_rgba8();
     // GPUI draws BGRA.
     for px in rgba.pixels_mut() {
         px.0.swap(0, 2);
@@ -152,7 +156,9 @@ impl Launcher {
             cx.notify();
         });
         cx.spawn(async move |this, cx| loop {
-            cx.background_executor().timer(Duration::from_millis(80)).await;
+            cx.background_executor()
+                .timer(Duration::from_millis(80))
+                .await;
             if this.update(cx, |this, cx| this.drain(cx)).is_err() {
                 break;
             }
@@ -166,7 +172,11 @@ impl Launcher {
             settings.server_dir = Some(backend::data_dir().join("server"));
         }
         let installed = backend::installed();
-        if settings.selected.as_ref().is_none_or(|s| !installed.contains(s)) {
+        if settings
+            .selected
+            .as_ref()
+            .is_none_or(|s| !installed.contains(s))
+        {
             settings.selected = installed.first().cloned();
         }
         let mut this = Self {
@@ -177,7 +187,11 @@ impl Launcher {
             opening: (!settings.skip_opening).then(|| {
                 let focus = cx.focus_handle();
                 window.focus(&focus);
-                Opening { started: None, reveal: None, focus }
+                Opening {
+                    started: None,
+                    reveal: None,
+                    focus,
+                }
             }),
             background: background_image(),
             updates: Updates::default(),
@@ -213,6 +227,13 @@ impl Launcher {
             rx,
             _appearance: appearance,
         };
+        let tx = this.tx.clone();
+        std::thread::spawn(move || {
+            let reused = backend::reuse_prepared_everywhere();
+            if !reused.is_empty() {
+                let _ = tx.send(Msg::Reused(reused));
+            }
+        });
         this.fetch_releases();
         this.fetch_roadmap();
         this.fetch_links();
@@ -232,32 +253,46 @@ impl Launcher {
     fn check_updates(&mut self) {
         self.checked = Some(Instant::now());
         let tx = self.tx.clone();
-        std::thread::spawn(move || tx.send(Msg::Updates(backend::check_updates())));
+        std::thread::spawn(move || {
+            let _ = tx.send(Msg::Updates(backend::check_updates()));
+        });
     }
 
     fn update_launcher(&mut self, release: Release) {
-        if !backend::self_update_allowed() || matches!(self.self_update, SelfUpdate::Downloading(..) | SelfUpdate::Ready(_)) {
+        if !backend::self_update_allowed()
+            || matches!(
+                self.self_update,
+                SelfUpdate::Downloading(..) | SelfUpdate::Ready(_)
+            )
+        {
             return;
         }
-        let version = backend::launcher_version(&release.tag).unwrap_or_default().to_string();
+        let version = backend::launcher_version(&release.tag)
+            .unwrap_or_default()
+            .to_string();
         self.self_update = SelfUpdate::Downloading(version, 0.);
         let tx = self.tx.clone();
         std::thread::spawn(move || {
             let progress = |p| {
                 let _ = tx.send(Msg::LauncherProgress(p));
             };
-            let _ = tx.send(Msg::LauncherUpdated(backend::self_update(&release, progress)));
+            let _ = tx.send(Msg::LauncherUpdated(backend::self_update(
+                &release, progress,
+            )));
         });
     }
 
     /// Installs the Horizon version the last check found, keeping the player's choice of
     /// version unless they were on the newest one.
     fn install_update(&mut self) {
-        let Some(release) = self.updates.horizon.clone() else { return };
+        let Some(release) = self.updates.horizon.clone() else {
+            return;
+        };
         if self.installing.is_some() {
             return;
         }
-        let select = backend::select_after_update(self.settings.selected.as_deref(), &self.installed);
+        let select =
+            backend::select_after_update(self.settings.selected.as_deref(), &self.installed);
         self.update_install = Some((release.tag.clone(), select));
         self.install(&release);
     }
@@ -265,18 +300,24 @@ impl Launcher {
     fn fetch_releases(&mut self) {
         self.releases = Load::Loading;
         let tx = self.tx.clone();
-        std::thread::spawn(move || tx.send(Msg::Releases(backend::releases())));
+        std::thread::spawn(move || {
+            let _ = tx.send(Msg::Releases(backend::releases()));
+        });
     }
 
     fn fetch_links(&self) {
         let tx = self.tx.clone();
-        std::thread::spawn(move || tx.send(Msg::Links(backend::links())));
+        std::thread::spawn(move || {
+            let _ = tx.send(Msg::Links(backend::links()));
+        });
     }
 
     fn fetch_roadmap(&mut self) {
         self.roadmap = Load::Loading;
         let tx = self.tx.clone();
-        std::thread::spawn(move || tx.send(Msg::Roadmap(backend::roadmap())));
+        std::thread::spawn(move || {
+            let _ = tx.send(Msg::Roadmap(backend::roadmap()));
+        });
     }
 
     fn drain(&mut self, cx: &mut Context<Self>) {
@@ -287,6 +328,8 @@ impl Launcher {
                 Msg::Releases(r) => self.releases = r.map_or_else(Load::Failed, Load::Ready),
                 Msg::Roadmap(r) => self.roadmap = r.map_or_else(Load::Failed, Load::Ready),
                 Msg::Links(links) => self.links = links,
+                // The page reads is_prepared when drawn; `changed` redraws it.
+                Msg::Reused(_) => self.installed = backend::installed(),
                 Msg::Progress(tag, p) => {
                     self.bar = (self.bar.1, p);
                     self.installing = Some((tag, p));
@@ -336,7 +379,11 @@ impl Launcher {
                     };
                 }
                 Msg::Line(job, line) => {
-                    let log = if job == Job::Server { &mut self.server_log } else { &mut self.prepare_log };
+                    let log = if job == Job::Server {
+                        &mut self.server_log
+                    } else {
+                        &mut self.prepare_log
+                    };
                     log.push_back(line);
                     if log.len() > LOG_LINES {
                         log.pop_front();
@@ -351,25 +398,32 @@ impl Launcher {
                         Job::Prepare => {
                             self.preparing = false;
                             self.prepare_error = error.map(|e| {
-                                let tail = self.prepare_log.iter().rev().find(|l| !l.trim().is_empty());
+                                let tail =
+                                    self.prepare_log.iter().rev().find(|l| !l.trim().is_empty());
                                 tail.map_or(e.clone(), |t| format!("{e}: {t}"))
                             });
                         }
                         Job::Client => {
                             self.client = None;
                             self.client_error = error.map(|e| {
-                                let tail = self.prepare_log.iter().rev().find(|l| !l.trim().is_empty());
+                                let tail =
+                                    self.prepare_log.iter().rev().find(|l| !l.trim().is_empty());
                                 tail.map_or(e.clone(), |t| format!("{e}: {t}"))
                             });
                         }
                         Job::Server => {
                             self.server = None;
-                            let old = self.server_log.iter().any(|l| l.contains("unknown option --dedicated"));
+                            let old = self
+                                .server_log
+                                .iter()
+                                .any(|l| l.contains("unknown option --dedicated"));
                             self.server_error = error.map(|e| {
                                 if old {
-                                    "This version has no dedicated server. Pick a newer one.".to_string()
+                                    "This version has no dedicated server. Pick a newer one."
+                                        .to_string()
                                 } else {
-                                    let tail = self.server_log.iter().rev().find(|l| !l.trim().is_empty());
+                                    let tail =
+                                        self.server_log.iter().rev().find(|l| !l.trim().is_empty());
                                     tail.map_or(e.clone(), |t| format!("{e}: {t}"))
                                 }
                             });
@@ -387,11 +441,16 @@ impl Launcher {
     }
 
     fn selected(&self) -> Option<&String> {
-        self.settings.selected.as_ref().filter(|s| self.installed.contains(s))
+        self.settings
+            .selected
+            .as_ref()
+            .filter(|s| self.installed.contains(s))
     }
 
     fn install(&mut self, release: &Release) {
-        let Some((url, size)) = release.asset.clone() else { return };
+        let Some((url, size)) = release.asset.clone() else {
+            return;
+        };
         let (tag, tx) = (release.tag.clone(), self.tx.clone());
         self.installing = Some((tag.clone(), 0.0));
         self.bar = (0., 0.);
@@ -411,18 +470,23 @@ impl Launcher {
         }
         self.confirm_remove = None;
         self.installed = backend::installed();
-        self.settings.selected = Settings::load().selected.or_else(|| self.installed.first().cloned());
+        self.settings.selected = Settings::load()
+            .selected
+            .or_else(|| self.installed.first().cloned());
     }
 
     fn prepare(&mut self) {
-        let Some(tag) = self.selected().cloned() else { return };
+        let Some(tag) = self.selected().cloned() else {
+            return;
+        };
         let Some(minecraft) = self.settings.minecraft_dir.clone() else {
             self.prepare_error = Some("Choose your Minecraft folder first.".into());
             return;
         };
         self.prepare_log.clear();
         self.prepare_error = None;
-        self.prepare_log.push_back("Checking Java, Python and your Minecraft install".into());
+        self.prepare_log
+            .push_back("Checking Java, Python and your Minecraft install".into());
         let tx = self.tx.clone();
         // The checks may download the server jar, so they run on the thread too.
         std::thread::spawn(move || {
@@ -442,7 +506,9 @@ impl Launcher {
     }
 
     fn play(&mut self) {
-        let Some(tag) = self.selected().cloned() else { return };
+        let Some(tag) = self.selected().cloned() else {
+            return;
+        };
         match self.mode {
             Mode::Client => {
                 if self.client.is_some() {
@@ -460,14 +526,20 @@ impl Launcher {
                     server.send("stop");
                     return;
                 }
-                let Some(folder) = self.settings.server_dir.clone() else { return };
+                let Some(folder) = self.settings.server_dir.clone() else {
+                    return;
+                };
                 if let Err(e) = std::fs::create_dir_all(&folder) {
                     self.server_error = Some(e.to_string());
                     return;
                 }
                 self.server_error = None;
                 self.server_log.clear();
-                match backend::spawn(Job::Server, backend::server_command(&tag, &folder), self.tx.clone()) {
+                match backend::spawn(
+                    Job::Server,
+                    backend::server_command(&tag, &folder),
+                    self.tx.clone(),
+                ) {
                     Ok(r) => self.server = Some(r),
                     Err(e) => self.server_error = Some(e),
                 }
@@ -529,7 +601,10 @@ struct HoverState {
     off: Option<(SharedString, Instant)>,
 }
 
-static HOVER: Mutex<HoverState> = Mutex::new(HoverState { on: None, off: None });
+static HOVER: Mutex<HoverState> = Mutex::new(HoverState {
+    on: None,
+    off: None,
+});
 
 fn track_hover(el: Stateful<Div>, id: SharedString) -> Stateful<Div> {
     el.on_hover(move |hovered, window, _| {
@@ -548,27 +623,47 @@ fn track_hover(el: Stateful<Div>, id: SharedString) -> Stateful<Div> {
 
 /// A layer under an element's content that fades `color` in while it is hovered.
 fn hover_layer(id: &SharedString, color: Hsla, radius: f32) -> AnyElement {
-    let layer = div().absolute().top_0().left_0().size_full().rounded(px(radius));
+    let layer = div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .rounded(px(radius));
     let state = HOVER.lock().unwrap();
     // Each transition gets its own animation id, from when it started, so it plays once.
     static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
     let start = *START.get_or_init(Instant::now);
-    let key = |dir: &str, at: Instant| ElementId::named_usize(format!("{id}-{dir}"), (at - start).as_micros() as usize);
+    let key = |dir: &str, at: Instant| {
+        ElementId::named_usize(format!("{id}-{dir}"), (at - start).as_micros() as usize)
+    };
     let ease = || Animation::new(theme::QUICK).with_easing(ease_out_quint());
     if let Some((_, at)) = state.on.as_ref().filter(|(h, _)| h == id) {
         return layer
-            .with_animation(key("in", *at), ease(), move |d, t| d.bg(color.opacity(color.a * t)))
+            .with_animation(key("in", *at), ease(), move |d, t| {
+                d.bg(color.opacity(color.a * t))
+            })
             .into_any_element();
     }
-    if let Some((_, at)) = state.off.as_ref().filter(|(h, at)| h == id && at.elapsed() < theme::QUICK) {
+    if let Some((_, at)) = state
+        .off
+        .as_ref()
+        .filter(|(h, at)| h == id && at.elapsed() < theme::QUICK)
+    {
         return layer
-            .with_animation(key("out", *at), ease(), move |d, t| d.bg(color.opacity(color.a * (1. - t))))
+            .with_animation(key("out", *at), ease(), move |d, t| {
+                d.bg(color.opacity(color.a * (1. - t)))
+            })
             .into_any_element();
     }
     layer.into_any_element()
 }
 
-fn button(id: impl Into<SharedString>, label: impl Into<SharedString>, kind: Kind, t: &Theme) -> Stateful<Div> {
+fn button(
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    kind: Kind,
+    t: &Theme,
+) -> Stateful<Div> {
     let id: SharedString = id.into();
     let t = *t;
     let hover = match kind {
@@ -592,9 +687,20 @@ fn button(id: impl Into<SharedString>, label: impl Into<SharedString>, kind: Kin
         .child(div().relative().child(label.into()));
     let base = track_hover(base, id);
     match kind {
-        Kind::Primary => base.bg(t.accent).text_color(t.on_accent).active(|s| s.opacity(theme::PRESSED)),
-        Kind::Secondary => base.border_1().border_color(t.border).bg(t.raised).text_color(t.text).active(|s| s.opacity(theme::PRESSED_SOFT)),
-        Kind::Ghost => base.text_color(t.muted).hover(move |s| s.text_color(t.text)).active(|s| s.opacity(theme::PRESSED_SOFT)),
+        Kind::Primary => base
+            .bg(t.accent)
+            .text_color(t.on_accent)
+            .active(|s| s.opacity(theme::PRESSED)),
+        Kind::Secondary => base
+            .border_1()
+            .border_color(t.border)
+            .bg(t.raised)
+            .text_color(t.text)
+            .active(|s| s.opacity(theme::PRESSED_SOFT)),
+        Kind::Ghost => base
+            .text_color(t.muted)
+            .hover(move |s| s.text_color(t.text))
+            .active(|s| s.opacity(theme::PRESSED_SOFT)),
     }
 }
 
@@ -610,11 +716,17 @@ fn switch(id: &'static str, on: bool, t: &Theme) -> Stateful<Div> {
         .cursor_pointer()
         .bg(if on { t.accent } else { t.border })
         .child(
-            div().absolute().top(px(2.)).size(px(16.)).rounded_full().bg(gpui::white()).with_animation(
-                ElementId::named_usize(id, on as usize),
-                Animation::new(theme::QUICK).with_easing(ease_out_quint()),
-                move |d, p| d.left(px(if on { 2. + 14. * p } else { 16. - 14. * p })),
-            ),
+            div()
+                .absolute()
+                .top(px(2.))
+                .size(px(16.))
+                .rounded_full()
+                .bg(gpui::white())
+                .with_animation(
+                    ElementId::named_usize(id, on as usize),
+                    Animation::new(theme::QUICK).with_easing(ease_out_quint()),
+                    move |d, p| d.left(px(if on { 2. + 14. * p } else { 16. - 14. * p })),
+                ),
         )
 }
 
@@ -635,7 +747,12 @@ fn page_header(title: &str, description: &str, t: &Theme) -> Div {
                 .text_color(t.text)
                 .child(title.to_string()),
         )
-        .child(div().text_size(px(theme::BODY)).text_color(t.muted).child(description.to_string()))
+        .child(
+            div()
+                .text_size(px(theme::BODY))
+                .text_color(t.muted)
+                .child(description.to_string()),
+        )
 }
 
 fn divider(t: &Theme) -> Div {
@@ -649,8 +766,22 @@ fn row(label: &str, value: impl IntoElement, action: Option<Stateful<Div>>, t: &
         .items_center()
         .gap(px(16.))
         .py(px(12.))
-        .child(div().w(px(theme::ROW_LABEL)).flex_none().text_size(px(13.)).text_color(t.muted).child(label.to_string()))
-        .child(div().flex_1().min_w_0().text_size(px(13.)).text_color(t.text).child(value))
+        .child(
+            div()
+                .w(px(theme::ROW_LABEL))
+                .flex_none()
+                .text_size(px(13.))
+                .text_color(t.muted)
+                .child(label.to_string()),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_size(px(13.))
+                .text_color(t.text)
+                .child(value),
+        )
         .children(action)
 }
 
@@ -665,7 +796,14 @@ fn notice(text: String, t: &Theme) -> Div {
         .text_size(px(13.))
         .line_height(px(19.))
         .text_color(t.text)
-        .child(div().flex_none().mt(px(6.)).size(px(6.)).rounded_full().bg(t.danger))
+        .child(
+            div()
+                .flex_none()
+                .mt(px(6.))
+                .size(px(6.))
+                .rounded_full()
+                .bg(t.danger),
+        )
         .child(div().flex_1().min_w_0().child(text))
 }
 
@@ -702,7 +840,10 @@ impl Launcher {
         const STEP: f32 = theme::CONTROL + 2.;
         let mut nav = div().relative().flex().flex_col().gap(px(2.));
         // The selection is one pill that slides to the chosen item.
-        let (from, to) = (self.previous_page.index() as f32 * STEP, self.page.index() as f32 * STEP);
+        let (from, to) = (
+            self.previous_page.index() as f32 * STEP,
+            self.page.index() as f32 * STEP,
+        );
         nav = nav.child(
             div()
                 .absolute()
@@ -732,11 +873,15 @@ impl Launcher {
                 .rounded(px(theme::RADIUS))
                 .text_size(px(theme::BODY))
                 .cursor_pointer()
-                .when(!active, |d| d.child(hover_layer(&id, t.hover.opacity(0.7), theme::RADIUS)))
+                .when(!active, |d| {
+                    d.child(hover_layer(&id, t.hover.opacity(0.7), theme::RADIUS))
+                })
                 .child(
                     div()
                         .relative()
-                        .when(active, |d| d.text_color(t.text).font_weight(FontWeight::MEDIUM))
+                        .when(active, |d| {
+                            d.text_color(t.text).font_weight(FontWeight::MEDIUM)
+                        })
                         .when(!active, |d| d.text_color(t.muted))
                         .child(label),
                 )
@@ -808,7 +953,15 @@ impl Launcher {
             )
             .child(nav)
             .child(div().flex_1())
-            .child(div().px(px(10.)).text_size(px(theme::SMALL)).text_color(t.faint).children(discord).children(website).child(footer))
+            .child(
+                div()
+                    .px(px(10.))
+                    .text_size(px(theme::SMALL))
+                    .text_color(t.faint)
+                    .children(discord)
+                    .children(website)
+                    .child(footer),
+            )
     }
 
     fn segmented(&self, cx: &mut Context<Self>) -> Div {
@@ -825,9 +978,15 @@ impl Launcher {
                 .text_size(px(13.))
                 .cursor_pointer()
                 .when(active, |d| {
-                    d.bg(t.bg).border_1().border_color(t.border).text_color(t.text).font_weight(FontWeight::MEDIUM)
+                    d.bg(t.bg)
+                        .border_1()
+                        .border_color(t.border)
+                        .text_color(t.text)
+                        .font_weight(FontWeight::MEDIUM)
                 })
-                .when(!active, |d| d.text_color(t.muted).hover(move |s| s.text_color(t.text)))
+                .when(!active, |d| {
+                    d.text_color(t.muted).hover(move |s| s.text_color(t.text))
+                })
                 .child(label)
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.mode = mode;
@@ -848,7 +1007,10 @@ impl Launcher {
 
     fn picker(&self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let label = self.selected().cloned().unwrap_or_else(|| "No version".into());
+        let label = self
+            .selected()
+            .cloned()
+            .unwrap_or_else(|| "No version".into());
         let mut wrap = div().relative().child(
             div()
                 .id("picker")
@@ -902,7 +1064,9 @@ impl Launcher {
                         .cursor_pointer()
                         .hover(move |s| s.bg(t.hover))
                         .child(tag.clone())
-                        .when(selected, |d| d.child(div().size(px(6.)).rounded_full().bg(t.accent)))
+                        .when(selected, |d| {
+                            d.child(div().size(px(6.)).rounded_full().bg(t.accent))
+                        })
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             this.settings.selected = Some(tag.clone());
                             this.settings.save();
@@ -937,16 +1101,20 @@ impl Launcher {
 
     fn play_page(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let header = page_header("Play", "Start the game, or run a server for others to join.", &t);
+        let header = page_header(
+            "Play",
+            "Start the game, or run a server for others to join.",
+            &t,
+        );
         let Some(tag) = self.selected().cloned() else {
             return div().flex().flex_col().gap(px(24.)).child(header).child(
                 centered("No version installed yet.", &t).child(
-                    button("go-versions", "Choose a version", Kind::Secondary, &t).on_click(cx.listener(
-                        |this, _: &ClickEvent, _, cx| {
+                    button("go-versions", "Choose a version", Kind::Secondary, &t).on_click(
+                        cx.listener(|this, _: &ClickEvent, _, cx| {
                             this.go(Page::Versions);
                             cx.notify();
-                        },
-                    )),
+                        }),
+                    ),
                 ),
             );
         };
@@ -963,11 +1131,26 @@ impl Launcher {
             (Mode::Server, false) => "Start server",
             (Mode::Server, true) => "Stop server",
         };
-        let kind = if self.mode == Mode::Server && running { Kind::Secondary } else { Kind::Primary };
-        let mut play =
-            button("play", play_label, kind, &t).min_w(px(120.)).h(px(40.)).px(px(24.)).text_size(px(theme::LARGE));
-        let eula = self.settings.server_dir.as_ref().is_some_and(|d| backend::eula_agreed(d));
-        if !prepared || self.preparing || (self.mode == Mode::Client && running) || (self.mode == Mode::Server && !eula) {
+        let kind = if self.mode == Mode::Server && running {
+            Kind::Secondary
+        } else {
+            Kind::Primary
+        };
+        let mut play = button("play", play_label, kind, &t)
+            .min_w(px(120.))
+            .h(px(40.))
+            .px(px(24.))
+            .text_size(px(theme::LARGE));
+        let eula = self
+            .settings
+            .server_dir
+            .as_ref()
+            .is_some_and(|d| backend::eula_agreed(d));
+        if !prepared
+            || self.preparing
+            || (self.mode == Mode::Client && running)
+            || (self.mode == Mode::Server && !eula)
+        {
             play = disabled(play);
         } else {
             play = play.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -981,17 +1164,34 @@ impl Launcher {
             .items_center()
             .justify_between()
             .child(self.segmented(cx))
-            .child(div().flex().items_center().gap(px(8.)).child(self.picker(cx)).child(play));
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(self.picker(cx))
+                    .child(play),
+            );
 
         let resources_value = if self.preparing {
             div().text_color(t.muted).child("Preparing…")
         } else if prepared {
             div().child(format!("Prepared for Minecraft {version}"))
         } else {
-            div().text_color(t.muted).child(format!("Not prepared. Horizon needs the files of your own Minecraft {version}."))
+            div().text_color(t.muted).child(format!(
+                "Not prepared. Horizon needs the files of your own Minecraft {version}."
+            ))
         };
-        let mut prepare = button("prepare", if prepared { "Prepare again" } else { "Prepare" },
-            if prepared { Kind::Ghost } else { Kind::Secondary }, &t);
+        let mut prepare = button(
+            "prepare",
+            if prepared { "Prepare again" } else { "Prepare" },
+            if prepared {
+                Kind::Ghost
+            } else {
+                Kind::Secondary
+            },
+            &t,
+        );
         if self.preparing {
             prepare = disabled(prepare);
         } else {
@@ -1000,11 +1200,14 @@ impl Launcher {
                 cx.notify();
             }));
         }
-        let minecraft = self
-            .settings
-            .minecraft_dir
-            .as_deref()
-            .map_or_else(|| div().text_color(t.muted).child("Not found. Choose the official launcher's game folder."), |p| div().child(short(p)));
+        let minecraft = self.settings.minecraft_dir.as_deref().map_or_else(
+            || {
+                div()
+                    .text_color(t.muted)
+                    .child("Not found. Choose the official launcher's game folder.")
+            },
+            |p| div().child(short(p)),
+        );
         let mut rows = div()
             .flex()
             .flex_col()
@@ -1014,41 +1217,52 @@ impl Launcher {
             .child(row(
                 "Minecraft folder",
                 minecraft,
-                Some(button("choose-mc", "Choose…", Kind::Ghost, &t).on_click(cx.listener(
-                    |this, _: &ClickEvent, _, cx| this.choose_folder(false, cx),
-                ))),
+                Some(button("choose-mc", "Choose…", Kind::Ghost, &t).on_click(
+                    cx.listener(|this, _: &ClickEvent, _, cx| this.choose_folder(false, cx)),
+                )),
                 &t,
             ));
         if self.mode == Mode::Server {
-            let folder = self.settings.server_dir.as_deref().map(short).unwrap_or_default();
+            let folder = self
+                .settings
+                .server_dir
+                .as_deref()
+                .map(short)
+                .unwrap_or_default();
             rows = rows.child(divider(&t)).child(row(
                 "Server folder",
                 div().child(folder),
-                Some(button("choose-server", "Choose…", Kind::Ghost, &t).on_click(cx.listener(
-                    |this, _: &ClickEvent, _, cx| this.choose_folder(true, cx),
-                ))),
+                Some(
+                    button("choose-server", "Choose…", Kind::Ghost, &t).on_click(
+                        cx.listener(|this, _: &ClickEvent, _, cx| this.choose_folder(true, cx)),
+                    ),
+                ),
                 &t,
             ));
             let value = if eula {
                 div().child("Agreed")
             } else {
-                div().text_color(t.muted).child("Running a server needs your agreement to the Minecraft EULA.")
+                div()
+                    .text_color(t.muted)
+                    .child("Running a server needs your agreement to the Minecraft EULA.")
             };
             let mut actions = div().flex().gap(px(4.)).child(
-                button("eula-read", "Read", Kind::Ghost, &t)
-                    .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.open_url("https://aka.ms/MinecraftEULA"))),
+                button("eula-read", "Read", Kind::Ghost, &t).on_click(cx.listener(
+                    |_, _: &ClickEvent, _, cx| cx.open_url("https://aka.ms/MinecraftEULA"),
+                )),
             );
             if !eula {
-                actions = actions.child(button("eula-agree", "Agree", Kind::Secondary, &t).on_click(cx.listener(
-                    |this, _: &ClickEvent, _, cx| {
-                        if let Some(dir) = &this.settings.server_dir {
-                            if let Err(e) = backend::agree_eula(dir) {
-                                this.server_error = Some(e);
+                actions =
+                    actions.child(button("eula-agree", "Agree", Kind::Secondary, &t).on_click(
+                        cx.listener(|this, _: &ClickEvent, _, cx| {
+                            if let Some(dir) = &this.settings.server_dir {
+                                if let Err(e) = backend::agree_eula(dir) {
+                                    this.server_error = Some(e);
+                                }
                             }
-                        }
-                        cx.notify();
-                    },
-                )));
+                            cx.notify();
+                        }),
+                    ));
             }
             rows = rows.child(divider(&t)).child(
                 div()
@@ -1056,15 +1270,35 @@ impl Launcher {
                     .items_center()
                     .gap(px(16.))
                     .py(px(12.))
-                    .child(div().w(px(150.)).flex_none().text_size(px(13.)).text_color(t.muted).child("Minecraft EULA"))
-                    .child(div().flex_1().min_w_0().text_size(px(13.)).text_color(t.text).child(value))
+                    .child(
+                        div()
+                            .w(px(150.))
+                            .flex_none()
+                            .text_size(px(13.))
+                            .text_color(t.muted)
+                            .child("Minecraft EULA"),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(px(13.))
+                            .text_color(t.text)
+                            .child(value),
+                    )
                     .child(actions),
             );
         }
         rows = rows.child(divider(&t));
 
         let _ = header;
-        let mut page = div().flex().flex_col().gap(px(24.)).child(hero).child(actions).child(rows);
+        let mut page = div()
+            .flex()
+            .flex_col()
+            .gap(px(24.))
+            .child(hero)
+            .child(actions)
+            .child(rows);
         if self.preparing {
             let last = self.prepare_log.back().cloned().unwrap_or_default();
             page = page.child(
@@ -1073,7 +1307,13 @@ impl Launcher {
                     .flex_col()
                     .gap(px(10.))
                     .child(progress_bar(None, &t))
-                    .child(div().text_size(px(12.)).text_color(t.faint).truncate().child(last))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(t.faint)
+                            .truncate()
+                            .child(last),
+                    )
                     .child(
                         div()
                             .text_size(px(12.))
@@ -1102,21 +1342,34 @@ impl Launcher {
     fn hero(&self, tag: &str, version: &str, prepared: bool, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let summary = match &self.releases {
-            Load::Ready(list) => list.iter().find(|r| r.tag == tag).and_then(|r| backend::notes_summary(&r.body)),
+            Load::Ready(list) => list
+                .iter()
+                .find(|r| r.tag == tag)
+                .and_then(|r| backend::notes_summary(&r.body)),
             _ => None,
         };
         let status = format!(
             "Minecraft {version}  ·  {}",
             if prepared { "Ready" } else { "Needs preparing" }
         );
-        let title = if self.mode == Mode::Server { "Horizon server" } else { "Horizon" };
+        let title = if self.mode == Mode::Server {
+            "Horizon server"
+        } else {
+            "Horizon"
+        };
         let mut hero = div()
             .flex()
             .flex_col()
             .gap(px(12.))
             .pt(px(28.))
             .pb(px(4.))
-            .child(div().text_size(px(theme::SMALL)).font_weight(FontWeight::MEDIUM).text_color(t.faint).child(status))
+            .child(
+                div()
+                    .text_size(px(theme::SMALL))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(t.faint)
+                    .child(status),
+            )
             .child(
                 div()
                     .font_family(theme::DISPLAY)
@@ -1147,7 +1400,14 @@ impl Launcher {
                 .child(div().size(px(6.)).rounded_full().bg(t.accent))
                 .child(format!("{} available", release.tag));
             hero = hero.child(match installing {
-                Some((_, p)) => line.child(div().w(px(120.)).flex().child(progress_bar(Some(self.bar), &t))).child(format!("{:.0}%", p * 100.)),
+                Some((_, p)) => line
+                    .child(
+                        div()
+                            .w(px(120.))
+                            .flex()
+                            .child(progress_bar(Some(self.bar), &t)),
+                    )
+                    .child(format!("{:.0}%", p * 100.)),
                 None => line.child(
                     div()
                         .id("install-update")
@@ -1168,16 +1428,16 @@ impl Launcher {
 
     fn settings_page(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let toggle = switch("auto-install", self.settings.auto_install(), &t).on_click(cx.listener(
-            |this, _: &ClickEvent, _, cx| {
+        let toggle = switch("auto-install", self.settings.auto_install(), &t).on_click(
+            cx.listener(|this, _: &ClickEvent, _, cx| {
                 this.settings.install_new_versions = Some(!this.settings.auto_install());
                 this.settings.save();
                 if this.settings.auto_install() {
                     this.install_update();
                 }
                 cx.notify();
-            },
-        ));
+            }),
+        );
         let opening = switch("opening", !self.settings.skip_opening, &t).on_click(cx.listener(
             |this, _: &ClickEvent, _, cx| {
                 this.settings.skip_opening = !this.settings.skip_opening;
@@ -1195,8 +1455,12 @@ impl Launcher {
             .bg(t.raised)
             .border_1()
             .border_color(t.border)
-            .children([(backend::MenuStyle::Horizon, "Horizon"), (backend::MenuStyle::Classic, "Classic")].map(
-                |(style, label)| {
+            .children(
+                [
+                    (backend::MenuStyle::Horizon, "Horizon"),
+                    (backend::MenuStyle::Classic, "Classic"),
+                ]
+                .map(|(style, label)| {
                     let active = self.menu_style == style;
                     div()
                         .id(label)
@@ -1208,9 +1472,15 @@ impl Launcher {
                         .text_size(px(13.))
                         .cursor_pointer()
                         .when(active, |d| {
-                            d.bg(t.bg).border_1().border_color(t.border).text_color(t.text).font_weight(FontWeight::MEDIUM)
+                            d.bg(t.bg)
+                                .border_1()
+                                .border_color(t.border)
+                                .text_color(t.text)
+                                .font_weight(FontWeight::MEDIUM)
                         })
-                        .when(!active, |d| d.text_color(t.muted).hover(move |s| s.text_color(t.text)))
+                        .when(!active, |d| {
+                            d.text_color(t.muted).hover(move |s| s.text_color(t.text))
+                        })
                         .child(label)
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             if backend::set_menu_style(style).is_ok() {
@@ -1218,52 +1488,75 @@ impl Launcher {
                             }
                             cx.notify();
                         }))
-                },
-            ));
+                }),
+            );
         let menu_note = div().flex().flex_col().gap(px(2.)).child("Menu style").child(
             div().text_size(px(theme::SMALL)).text_color(t.muted).child(
                 "Classic is vanilla's own screens, with no way back inside the game: switch back here. Applies the next time the game starts.",
             ),
         );
-        let auto = div()
-            .flex()
-            .flex_col()
-            .gap(px(2.))
-            .child("Install new versions automatically")
-            .child(div().text_size(px(theme::SMALL)).text_color(t.muted).child(
-                "Your selected version only changes if you were playing the newest one.",
-            ));
+        let auto =
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child("Install new versions automatically")
+                .child(div().text_size(px(theme::SMALL)).text_color(t.muted).child(
+                    "Your selected version only changes if you were playing the newest one.",
+                ));
         let horizon = match (&self.updates.horizon, &self.update_error) {
             (Some(r), _) => div().child(format!("{} available", r.tag)),
             (None, Some(e)) => div().text_color(t.muted).child(e.clone()),
             (None, None) if self.checked.is_some() => div().child("Up to date"),
             _ => div().text_color(t.muted).child("Checking…"),
         };
-        let horizon_action = self.updates.horizon.as_ref().filter(|_| self.installing.is_none()).map(|_| {
-            button("settings-install", "Install", Kind::Secondary, &t).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.install_update();
-                cx.notify();
-            }))
-        });
+        let horizon_action = self
+            .updates
+            .horizon
+            .as_ref()
+            .filter(|_| self.installing.is_none())
+            .map(|_| {
+                button("settings-install", "Install", Kind::Secondary, &t).on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
+                        this.install_update();
+                        cx.notify();
+                    },
+                ))
+            });
         let launcher = match &self.self_update {
-            SelfUpdate::Downloading(v, p) => format!("{}  ·  downloading {v}, {:.0}%", backend::VERSION, p * 100.),
-            SelfUpdate::Ready(v) => format!("{}  ·  {v} is ready, restart to use it", backend::VERSION),
+            SelfUpdate::Downloading(v, p) => {
+                format!("{}  ·  downloading {v}, {:.0}%", backend::VERSION, p * 100.)
+            }
+            SelfUpdate::Ready(v) => {
+                format!("{}  ·  {v} is ready, restart to use it", backend::VERSION)
+            }
             SelfUpdate::Failed(e) => format!("{}  ·  the update failed: {e}", backend::VERSION),
             SelfUpdate::Idle => match &self.updates.launcher {
-                Some(r) => format!("{}  ·  {} available", backend::VERSION, backend::launcher_version(&r.tag).unwrap_or_default()),
-                None if self.checked.is_some() && self.update_error.is_none() => format!("{}  ·  up to date", backend::VERSION),
+                Some(r) => format!(
+                    "{}  ·  {} available",
+                    backend::VERSION,
+                    backend::launcher_version(&r.tag).unwrap_or_default()
+                ),
+                None if self.checked.is_some() && self.update_error.is_none() => {
+                    format!("{}  ·  up to date", backend::VERSION)
+                }
                 None => backend::VERSION.to_string(),
             },
         };
         let launcher_action = match &self.self_update {
             SelfUpdate::Ready(_) => Some(
-                button("restart-settings", "Restart", Kind::Secondary, &t).on_click(|_, _, _| backend::restart()),
+                button("restart-settings", "Restart", Kind::Secondary, &t)
+                    .on_click(|_, _, _| backend::restart()),
             ),
             SelfUpdate::Downloading(..) => None,
-            _ => Some(button("check", "Check now", Kind::Ghost, &t).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.check_updates();
-                cx.notify();
-            }))),
+            _ => Some(
+                button("check", "Check now", Kind::Ghost, &t).on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
+                        this.check_updates();
+                        cx.notify();
+                    },
+                )),
+            ),
         };
         let agents = div()
             .flex()
@@ -1299,7 +1592,11 @@ impl Launcher {
             .flex()
             .flex_col()
             .gap(px(24.))
-            .child(page_header("Settings", "Updates, menus, and the launcher itself.", &t))
+            .child(page_header(
+                "Settings",
+                "Updates, menus, and the launcher itself.",
+                &t,
+            ))
             .child(
                 div()
                     .flex()
@@ -1307,7 +1604,12 @@ impl Launcher {
                     .child(divider(&t))
                     .child(row("Updates", auto, Some(toggle), &t))
                     .child(divider(&t))
-                    .child(row("Opening", div().child("Show opening animation"), Some(opening), &t))
+                    .child(row(
+                        "Opening",
+                        div().child("Show opening animation"),
+                        Some(opening),
+                        &t,
+                    ))
                     .child(divider(&t))
                     .child(row("Game menus", menu_note, Some(menus), &t))
                     .child(divider(&t))
@@ -1315,7 +1617,12 @@ impl Launcher {
                     .child(divider(&t))
                     .child(row("Launcher", div().child(launcher), launcher_action, &t))
                     .child(divider(&t))
-                    .child(row("Data folder", div().child(short(&backend::data_dir())), None, &t))
+                    .child(row(
+                        "Data folder",
+                        div().child(short(&backend::data_dir())),
+                        None,
+                        &t,
+                    ))
                     .child(divider(&t)),
             )
             .child(agents)
@@ -1337,7 +1644,11 @@ impl Launcher {
             .line_height(px(18.))
             .text_color(t.muted)
             .when(self.server_log.is_empty(), |d| {
-                d.child(div().text_color(t.faint).child(if running { "Starting…" } else { "The server's output shows here." }))
+                d.child(div().text_color(t.faint).child(if running {
+                    "Starting…"
+                } else {
+                    "The server's output shows here."
+                }))
             })
             .children(lines);
         let input = div()
@@ -1354,7 +1665,11 @@ impl Launcher {
             .cursor_text()
             .child(div().text_color(t.faint).mr(px(8.)).child(">"))
             .child(if self.input.is_empty() && !focused {
-                div().text_color(t.faint).child(if running { "Type a command, e.g. list" } else { "Start the server to send commands" })
+                div().text_color(t.faint).child(if running {
+                    "Type a command, e.g. list"
+                } else {
+                    "Start the server to send commands"
+                })
             } else {
                 div().text_color(t.text).child(self.input.clone())
             })
@@ -1403,18 +1718,26 @@ impl Launcher {
                             .items_center()
                             .gap(px(8.))
                             .text_color(t.muted)
-                            .child(div().size(px(6.)).rounded_full().bg(if running { t.accent } else { t.faint }))
+                            .child(div().size(px(6.)).rounded_full().bg(if running {
+                                t.accent
+                            } else {
+                                t.faint
+                            }))
                             .child(if running { "Running" } else { "Stopped" }),
                     )
                     .when(running, |d| {
-                        d.child(button("kill", "Force stop", Kind::Ghost, &t).h(px(24.)).px(px(8.)).text_size(px(12.)).on_click(
-                            cx.listener(|this, _: &ClickEvent, _, cx| {
-                                if let Some(s) = &this.server {
-                                    s.kill();
-                                }
-                                cx.notify();
-                            }),
-                        ))
+                        d.child(
+                            button("kill", "Force stop", Kind::Ghost, &t)
+                                .h(px(24.))
+                                .px(px(8.))
+                                .text_size(px(12.))
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                    if let Some(s) = &this.server {
+                                        s.kill();
+                                    }
+                                    cx.notify();
+                                })),
+                        )
                     }),
             )
             .child(log)
@@ -1423,16 +1746,22 @@ impl Launcher {
 
     fn versions_page(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let header = page_header("Versions", "Builds from GitHub. Each one installs into its own folder.", &t);
+        let header = page_header(
+            "Versions",
+            "Builds from GitHub. Each one installs into its own folder.",
+            &t,
+        );
         let page = div().flex().flex_col().gap(px(24.)).child(header);
         let releases = match &self.releases {
             Load::Loading => return page.child(centered("Loading releases…", &t)),
             Load::Failed(e) => {
                 return page.child(centered(&format!("Couldn't load releases. {e}"), &t).child(
-                    button("retry", "Try again", Kind::Secondary, &t).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.fetch_releases();
-                        cx.notify();
-                    })),
+                    button("retry", "Try again", Kind::Secondary, &t).on_click(cx.listener(
+                        |this, _: &ClickEvent, _, cx| {
+                            this.fetch_releases();
+                            cx.notify();
+                        },
+                    )),
                 ))
             }
             Load::Ready(r) if r.is_empty() => return page.child(centered("No releases yet.", &t)),
@@ -1447,68 +1776,105 @@ impl Launcher {
             if let Some((_, size)) = release.asset {
                 meta.push(megabytes(size));
             }
-            let title = if release.name.is_empty() { tag.clone() } else { release.name.clone() };
-            let right: gpui::AnyElement = if let Some((_, p)) = self.installing.as_ref().filter(|(t, _)| *t == tag) {
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(10.))
-                    .w(px(180.))
-                    .child(progress_bar(Some(self.bar), &t))
-                    .child(div().w(px(36.)).text_size(px(12.)).text_color(t.muted).child(format!("{:.0}%", p * 100.)))
-                    .into_any_element()
-            } else if installed {
-                let confirming = self.confirm_remove.as_ref() == Some(&tag);
-                let (t1, t2) = (tag.clone(), tag.clone());
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(4.))
-                    .when(!selected && !confirming, |d| {
-                        d.child(button(format!("use-{tag}"), "Use", Kind::Ghost, &t).on_click(cx.listener(
-                            move |this, _: &ClickEvent, _, cx| {
-                                this.settings.selected = Some(t1.clone());
-                                this.settings.save();
-                                cx.notify();
-                            },
-                        )))
-                    })
-                    .when(selected && !confirming, |d| {
-                        d.child(div().px(px(12.)).text_size(px(13.)).text_color(t.faint).child("In use"))
-                    })
-                    .child(
-                        button(
-                            format!("remove-{tag}"),
-                            if confirming { "Remove for good" } else { "Remove" },
-                            if confirming { Kind::Secondary } else { Kind::Ghost },
-                            &t,
-                        )
-                        .when(confirming, |b| b.text_color(t.danger))
-                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            if this.confirm_remove.as_ref() == Some(&t2) {
-                                this.remove(&t2);
-                            } else {
-                                this.confirm_remove = Some(t2.clone());
-                            }
-                            cx.notify();
-                        })),
-                    )
-                    .into_any_element()
-            } else if release.asset.is_none() {
-                div().text_size(px(13.)).text_color(t.faint).child("No build for this platform").into_any_element()
+            let title = if release.name.is_empty() {
+                tag.clone()
             } else {
-                let mut b = button(format!("install-{tag}"), "Install", Kind::Secondary, &t);
-                if self.installing.is_some() {
-                    b = disabled(b);
-                } else {
-                    b = b.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.install(&release);
-                        cx.notify();
-                    }));
-                }
-                b.into_any_element()
+                release.name.clone()
             };
-            let error = self.install_error.as_ref().filter(|(t, _)| *t == tag).map(|(_, e)| e.clone());
+            let right: gpui::AnyElement =
+                if let Some((_, p)) = self.installing.as_ref().filter(|(t, _)| *t == tag) {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .w(px(180.))
+                        .child(progress_bar(Some(self.bar), &t))
+                        .child(
+                            div()
+                                .w(px(36.))
+                                .text_size(px(12.))
+                                .text_color(t.muted)
+                                .child(format!("{:.0}%", p * 100.)),
+                        )
+                        .into_any_element()
+                } else if installed {
+                    let confirming = self.confirm_remove.as_ref() == Some(&tag);
+                    let (t1, t2) = (tag.clone(), tag.clone());
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.))
+                        .when(!selected && !confirming, |d| {
+                            d.child(
+                                button(format!("use-{tag}"), "Use", Kind::Ghost, &t).on_click(
+                                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                        this.settings.selected = Some(t1.clone());
+                                        this.settings.save();
+                                        cx.notify();
+                                    }),
+                                ),
+                            )
+                        })
+                        .when(selected && !confirming, |d| {
+                            d.child(
+                                div()
+                                    .px(px(12.))
+                                    .text_size(px(13.))
+                                    .text_color(t.faint)
+                                    .child("In use"),
+                            )
+                        })
+                        .child(
+                            button(
+                                format!("remove-{tag}"),
+                                if confirming {
+                                    "Remove for good"
+                                } else {
+                                    "Remove"
+                                },
+                                if confirming {
+                                    Kind::Secondary
+                                } else {
+                                    Kind::Ghost
+                                },
+                                &t,
+                            )
+                            .when(confirming, |b| b.text_color(t.danger))
+                            .on_click(cx.listener(
+                                move |this, _: &ClickEvent, _, cx| {
+                                    if this.confirm_remove.as_ref() == Some(&t2) {
+                                        this.remove(&t2);
+                                    } else {
+                                        this.confirm_remove = Some(t2.clone());
+                                    }
+                                    cx.notify();
+                                },
+                            )),
+                        )
+                        .into_any_element()
+                } else if release.asset.is_none() {
+                    div()
+                        .text_size(px(13.))
+                        .text_color(t.faint)
+                        .child("No build for this platform")
+                        .into_any_element()
+                } else {
+                    let mut b = button(format!("install-{tag}"), "Install", Kind::Secondary, &t);
+                    if self.installing.is_some() {
+                        b = disabled(b);
+                    } else {
+                        b = b.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.install(&release);
+                            cx.notify();
+                        }));
+                    }
+                    b.into_any_element()
+                };
+            let error = self
+                .install_error
+                .as_ref()
+                .filter(|(t, _)| *t == tag)
+                .map(|(_, e)| e.clone());
             list = list
                 .child(
                     div()
@@ -1533,7 +1899,13 @@ impl Launcher {
                                                 .flex()
                                                 .items_center()
                                                 .gap(px(8.))
-                                                .child(div().text_size(px(13.5)).text_color(t.text).truncate().child(title))
+                                                .child(
+                                                    div()
+                                                        .text_size(px(13.5))
+                                                        .text_color(t.text)
+                                                        .truncate()
+                                                        .child(title),
+                                                )
                                                 .when(installed, |d| {
                                                     d.child(
                                                         div()
@@ -1547,7 +1919,12 @@ impl Launcher {
                                                     )
                                                 }),
                                         )
-                                        .child(div().text_size(px(12.)).text_color(t.faint).child(meta.join("  ·  "))),
+                                        .child(
+                                            div()
+                                                .text_size(px(12.))
+                                                .text_color(t.faint)
+                                                .child(meta.join("  ·  ")),
+                                        ),
                                 )
                                 .child(right),
                         )
@@ -1560,49 +1937,61 @@ impl Launcher {
 
     fn notes_page(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let sponsor = (!self.links.sponsor.is_empty()).then(|| div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap(px(16.))
-            .p(px(16.))
-            .rounded(px(8.))
-            .border_1()
-            .border_color(t.border)
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.))
-                    .child(div().text_size(px(13.)).text_color(t.text).child("Support the work below"))
-                    .child(
-                        div()
-                            .text_size(px(12.5))
-                            .text_color(t.muted)
-                            .child("Horizon is built in the open. Sponsors fund the next release."),
-                    ),
-            )
-            .child(button("sponsor", "Sponsor on GitHub", Kind::Secondary, &t).on_click({
-                let url = self.links.sponsor.clone();
-                move |_: &ClickEvent, _, cx| cx.open_url(&url)
-            })));
+        let sponsor = (!self.links.sponsor.is_empty()).then(|| {
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(16.))
+                .p(px(16.))
+                .rounded(px(8.))
+                .border_1()
+                .border_color(t.border)
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .text_color(t.text)
+                                .child("Support the work below"),
+                        )
+                        .child(div().text_size(px(12.5)).text_color(t.muted).child(
+                            "Horizon is built in the open. Sponsors fund the next release.",
+                        )),
+                )
+                .child(
+                    button("sponsor", "Sponsor on GitHub", Kind::Secondary, &t).on_click({
+                        let url = self.links.sponsor.clone();
+                        move |_: &ClickEvent, _, cx| cx.open_url(&url)
+                    }),
+                )
+        });
         let page = div()
             .flex()
             .flex_col()
             .gap(px(24.))
-            .child(page_header("Patch notes", "What changed in each release, newest first.", &t))
+            .child(page_header(
+                "Patch notes",
+                "What changed in each release, newest first.",
+                &t,
+            ))
             .children(sponsor);
         let releases = match &self.releases {
             Load::Loading => return page.child(centered("Loading patch notes…", &t)),
             Load::Failed(e) => {
-                return page.child(centered(&format!("Couldn't load patch notes. {e}"), &t).child(
-                    button("retry-notes", "Try again", Kind::Secondary, &t).on_click(cx.listener(
-                        |this, _: &ClickEvent, _, cx| {
-                            this.fetch_releases();
-                            cx.notify();
-                        },
-                    )),
-                ))
+                return page.child(
+                    centered(&format!("Couldn't load patch notes. {e}"), &t).child(
+                        button("retry-notes", "Try again", Kind::Secondary, &t).on_click(
+                            cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.fetch_releases();
+                                cx.notify();
+                            }),
+                        ),
+                    ),
+                )
             }
             Load::Ready(r) => r.clone(),
         };
@@ -1628,12 +2017,26 @@ impl Launcher {
                                     .text_size(px(15.))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(t.text)
-                                    .child(if release.name.is_empty() { release.tag.clone() } else { release.name.clone() }),
+                                    .child(if release.name.is_empty() {
+                                        release.tag.clone()
+                                    } else {
+                                        release.name.clone()
+                                    }),
                             )
-                            .child(div().flex_none().text_size(px(12.)).text_color(t.faint).child(release.date.clone())),
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_size(px(12.))
+                                    .text_color(t.faint)
+                                    .child(release.date.clone()),
+                            ),
                     )
                     .child(if release.body.trim().is_empty() {
-                        div().text_size(px(13.)).text_color(t.faint).child("No notes for this release.").into_any_element()
+                        div()
+                            .text_size(px(13.))
+                            .text_color(t.faint)
+                            .child("No notes for this release.")
+                            .into_any_element()
                     } else {
                         markdown::render(&release.body, &t)
                     }),
@@ -1644,11 +2047,11 @@ impl Launcher {
 
     fn next_page(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let page = div()
-            .flex()
-            .flex_col()
-            .gap(px(24.))
-            .child(page_header("What's next", "The roadmap, from the README on GitHub.", &t));
+        let page = div().flex().flex_col().gap(px(24.)).child(page_header(
+            "What's next",
+            "The roadmap, from the README on GitHub.",
+            &t,
+        ));
         match &self.roadmap {
             Load::Loading => page.child(centered("Loading the roadmap…", &t)),
             Load::Failed(e) => page.child(centered(e, &t).child(
@@ -1666,8 +2069,19 @@ impl Launcher {
 
 /// A thin bar. A known fraction eases from its previous value; an unknown one shuttles slowly.
 fn progress_bar(fraction: Option<(f32, f32)>, t: &Theme) -> Div {
-    let bar = div().absolute().top_0().h(px(4.)).rounded_full().bg(t.accent);
-    let track = div().relative().flex_1().h(px(4.)).rounded_full().bg(t.border).overflow_hidden();
+    let bar = div()
+        .absolute()
+        .top_0()
+        .h(px(4.))
+        .rounded_full()
+        .bg(t.accent);
+    let track = div()
+        .relative()
+        .flex_1()
+        .h(px(4.))
+        .rounded_full()
+        .bg(t.border)
+        .overflow_hidden();
     match fraction {
         Some((from, to)) => {
             let (from, to) = (from.clamp(0.02, 1.), to.clamp(0.02, 1.));
@@ -1677,11 +2091,15 @@ fn progress_bar(fraction: Option<(f32, f32)>, t: &Theme) -> Div {
                 move |d, p| d.w(relative(from + (to - from) * p)),
             ))
         }
-        None => track.child(bar.w(relative(0.3)).with_animation(
-            "shuttle",
-            Animation::new(Duration::from_millis(1600)).repeat().with_easing(gpui::ease_in_out),
-            |d, p| d.left(relative(-0.3 + 1.3 * p)),
-        )),
+        None => track.child(
+            bar.w(relative(0.3)).with_animation(
+                "shuttle",
+                Animation::new(Duration::from_millis(1600))
+                    .repeat()
+                    .with_easing(gpui::ease_in_out),
+                |d, p| d.left(relative(-0.3 + 1.3 * p)),
+            ),
+        ),
     }
 }
 
@@ -1697,11 +2115,16 @@ impl Render for Launcher {
             Page::Settings => self.settings_page(cx),
         };
         // The new page fades in and rises a few pixels.
-        let content = div().relative().w_full().max_w(px(760.)).child(content).with_animation(
-            ElementId::named_usize("page", self.switches),
-            Animation::new(theme::MOVE).with_easing(ease_out_quint()),
-            |d, p| d.opacity(p).top(px(8. * (1. - p))),
-        );
+        let content = div()
+            .relative()
+            .w_full()
+            .max_w(px(760.))
+            .child(content)
+            .with_animation(
+                ElementId::named_usize("page", self.switches),
+                Animation::new(theme::MOVE).with_easing(ease_out_quint()),
+                |d, p| d.opacity(p).top(px(8. * (1. - p))),
+            );
         // The opening: the image at full strength under the wordmark, then the launcher.
         let (reveal, hold) = self.opening_phase(window);
         let side = ease_out_cubic((reveal - 0.2) / 0.7);
@@ -1731,16 +2154,28 @@ impl Render for Launcher {
                 )
                 .when(t.dark, |d| {
                     d.child(div().absolute().size_full().bg(t.bg.opacity(veil)))
-                        .child(div().absolute().size_full().opacity(shade).bg(linear_gradient(
-                            90.,
-                            linear_color_stop(t.bg.opacity(0.9), 0.),
-                            linear_color_stop(t.bg.opacity(0.), 0.7),
-                        )))
-                        .child(div().absolute().size_full().opacity(shade).bg(linear_gradient(
-                            180.,
-                            linear_color_stop(t.bg.opacity(0.), 0.25),
-                            linear_color_stop(t.bg.opacity(0.75), 1.),
-                        )))
+                        .child(
+                            div()
+                                .absolute()
+                                .size_full()
+                                .opacity(shade)
+                                .bg(linear_gradient(
+                                    90.,
+                                    linear_color_stop(t.bg.opacity(0.9), 0.),
+                                    linear_color_stop(t.bg.opacity(0.), 0.7),
+                                )),
+                        )
+                        .child(
+                            div()
+                                .absolute()
+                                .size_full()
+                                .opacity(shade)
+                                .bg(linear_gradient(
+                                    180.,
+                                    linear_color_stop(t.bg.opacity(0.), 0.25),
+                                    linear_color_stop(t.bg.opacity(0.75), 1.),
+                                )),
+                        )
                 })
             });
         let mut root = div()
@@ -1801,10 +2236,12 @@ impl Render for Launcher {
                             this.skip_opening();
                             cx.notify();
                         }))
-                        .on_key_down(cx.listener(|this, _: &KeyDownEvent, _, cx| {
-                            this.skip_opening();
-                            cx.notify();
-                        }))
+                        .on_key_down(cx.listener(
+                            |this, _: &KeyDownEvent, _, cx| {
+                                this.skip_opening();
+                                cx.notify();
+                            },
+                        ))
                     }),
             );
         }
@@ -1816,13 +2253,17 @@ impl Launcher {
     /// Where the opening is: the reveal's progress (1 when there is no opening) and the hold's.
     fn opening_phase(&mut self, window: &mut Window) -> (f32, f32) {
         let loaded = !matches!(self.releases, Load::Loading);
-        let Some(opening) = &mut self.opening else { return (1., 0.) };
+        let Some(opening) = &mut self.opening else {
+            return (1., 0.);
+        };
         let held = opening.started.get_or_insert_with(Instant::now).elapsed();
         if opening.reveal.is_none() && ((held >= OPENING_HOLD && loaded) || held >= OPENING_MAX) {
             opening.reveal = Some(Instant::now());
         }
         let hold = held.as_secs_f32() / OPENING_MAX.as_secs_f32();
-        let reveal = opening.reveal.map_or(0., |at| at.elapsed().as_secs_f32() / OPENING_REVEAL.as_secs_f32());
+        let reveal = opening.reveal.map_or(0., |at| {
+            at.elapsed().as_secs_f32() / OPENING_REVEAL.as_secs_f32()
+        });
         if reveal >= 1. {
             self.opening = None;
             return (1., 0.);
@@ -1858,7 +2299,10 @@ fn main() {
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(size(px(820.), px(560.))),
-                titlebar: Some(TitlebarOptions { title: Some("Horizon".into()), ..Default::default() }),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("Horizon".into()),
+                    ..Default::default()
+                }),
                 app_id: Some("horizon-launcher".into()),
                 ..Default::default()
             },

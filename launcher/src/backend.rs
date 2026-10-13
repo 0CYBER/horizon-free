@@ -50,9 +50,17 @@ pub const LAUNCHER_ASSET: Option<&str> = Some("horizon-launcher-windows-x64.zip"
 )))]
 pub const LAUNCHER_ASSET: Option<&str> = None;
 
-const LAUNCHER_BINARY: &str = if cfg!(windows) { "horizon-launcher.exe" } else { "horizon-launcher" };
+const LAUNCHER_BINARY: &str = if cfg!(windows) {
+    "horizon-launcher.exe"
+} else {
+    "horizon-launcher"
+};
 
-const CLIENT: &str = if cfg!(windows) { "horizon-client.exe" } else { "horizon-client" };
+const CLIENT: &str = if cfg!(windows) {
+    "horizon-client.exe"
+} else {
+    "horizon-client"
+};
 
 fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new().user_agent(AGENT).build()
@@ -61,13 +69,18 @@ fn agent() -> ureq::Agent {
 fn get(url: &str) -> Result<ureq::Response, String> {
     let mut request = agent().get(url);
     // CI runners share addresses and hit GitHub's anonymous rate limit; they pass their own token.
-    if let Some(token) = std::env::var("HORIZON_GITHUB_TOKEN").ok().filter(|t| !t.is_empty()) {
+    if let Some(token) = std::env::var("HORIZON_GITHUB_TOKEN")
+        .ok()
+        .filter(|t| !t.is_empty())
+    {
         if url.starts_with("https://api.github.com/") {
             request = request.set("Authorization", &format!("Bearer {token}"));
         }
     }
     request.call().map_err(|e| match e {
-        ureq::Error::Status(403, _) => "GitHub's rate limit was reached. Try again in a few minutes.".into(),
+        ureq::Error::Status(403, _) => {
+            "GitHub's rate limit was reached. Try again in a few minutes.".into()
+        }
         ureq::Error::Status(code, _) => format!("{url} answered {code}"),
         ureq::Error::Transport(t) => format!("No connection: {t}"),
     })
@@ -75,19 +88,28 @@ fn get(url: &str) -> Result<ureq::Response, String> {
 
 /// A Horizon game tag: `v` then a digit (`v2026.10.13`). Launcher tags never match.
 pub fn is_game_tag(tag: &str) -> bool {
-    tag.strip_prefix('v').is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+    tag.strip_prefix('v')
+        .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
 }
 
 /// The launcher version in a `launcher-vX.Y.Z` tag, or None for any other tag.
 pub fn launcher_version(tag: &str) -> Option<&str> {
-    tag.strip_prefix(LAUNCHER_TAG_PREFIX).filter(|v| v.starts_with(|c: char| c.is_ascii_digit()))
+    tag.strip_prefix(LAUNCHER_TAG_PREFIX)
+        .filter(|v| v.starts_with(|c: char| c.is_ascii_digit()))
 }
 
 /// The numeric parts of a version or tag: `v2026.10.13` and `2026.10.13` give [2026, 10, 13].
 /// Anything after a `-` (a pre-release) is ignored.
 fn version_parts(v: &str) -> Vec<u64> {
-    let v = v.trim_start_matches(LAUNCHER_TAG_PREFIX).trim_start_matches('v');
-    v.split('-').next().unwrap_or("").split('.').map(|p| p.parse().unwrap_or(0)).collect()
+    let v = v
+        .trim_start_matches(LAUNCHER_TAG_PREFIX)
+        .trim_start_matches('v');
+    v.split('-')
+        .next()
+        .unwrap_or("")
+        .split('.')
+        .map(|p| p.parse().unwrap_or(0))
+        .collect()
 }
 
 /// Compares two versions part by part, missing parts counting as zero (1.2 == 1.2.0).
@@ -106,7 +128,11 @@ fn release_list() -> Result<serde_json::Value, String> {
 }
 
 /// The releases in `list` whose tag passes `keep`, newest first, with the asset named `asset`.
-fn parse_releases(list: &serde_json::Value, asset: Option<&str>, keep: fn(&str) -> bool) -> Vec<Release> {
+fn parse_releases(
+    list: &serde_json::Value,
+    asset: Option<&str>,
+    keep: fn(&str) -> bool,
+) -> Vec<Release> {
     let mut out = Vec::new();
     for r in list.as_array().into_iter().flatten() {
         let tag = r["tag_name"].as_str().unwrap_or_default();
@@ -114,14 +140,23 @@ fn parse_releases(list: &serde_json::Value, asset: Option<&str>, keep: fn(&str) 
             continue;
         }
         let found = r["assets"].as_array().into_iter().flatten().find_map(|a| {
-            (Some(a["name"].as_str()?) == asset)
-                .then(|| Some((a["browser_download_url"].as_str()?.to_string(), a["size"].as_u64()?)))?
+            (Some(a["name"].as_str()?) == asset).then(|| {
+                Some((
+                    a["browser_download_url"].as_str()?.to_string(),
+                    a["size"].as_u64()?,
+                ))
+            })?
         });
         out.push(Release {
             tag: tag.into(),
             name: r["name"].as_str().unwrap_or_default().into(),
             body: r["body"].as_str().unwrap_or_default().replace("\r\n", "\n"),
-            date: r["published_at"].as_str().unwrap_or_default().chars().take(10).collect(),
+            date: r["published_at"]
+                .as_str()
+                .unwrap_or_default()
+                .chars()
+                .take(10)
+                .collect(),
             asset: found,
         });
     }
@@ -141,7 +176,11 @@ pub fn releases() -> Result<Vec<Release>, String> {
 
 /// Published launcher releases (`launcher-v…`), newest first, with this platform's archive.
 pub fn launcher_releases() -> Result<Vec<Release>, String> {
-    Ok(parse_releases(&release_list()?, LAUNCHER_ASSET, is_launcher_tag))
+    Ok(parse_releases(
+        &release_list()?,
+        LAUNCHER_ASSET,
+        is_launcher_tag,
+    ))
 }
 
 /// The newest Horizon release that has a build for this platform.
@@ -156,7 +195,10 @@ pub fn roadmap() -> Result<String, String> {
     let level = |l: &str| l.chars().take_while(|c| *c == '#').count();
     for title in ["Roadmap", "Project status"] {
         let lines: Vec<&str> = readme.lines().collect();
-        if let Some(start) = lines.iter().position(|l| level(l) > 0 && l.trim_start_matches('#').trim() == title) {
+        if let Some(start) = lines
+            .iter()
+            .position(|l| level(l) > 0 && l.trim_start_matches('#').trim() == title)
+        {
             let depth = level(lines[start]);
             let section: Vec<&str> = lines[start + 1..]
                 .iter()
@@ -181,7 +223,11 @@ pub struct Links {
 impl Default for Links {
     /// What the launcher uses until (or unless) it can read links.json.
     fn default() -> Self {
-        Self { discord: "https://discord.gg/HcTeMZxe5E".into(), sponsor: "https://github.com/sponsors/ludovic111".into(), website: "https://playhorizon.dev".into() }
+        Self {
+            discord: "https://discord.gg/HcTeMZxe5E".into(),
+            sponsor: "https://github.com/sponsors/ludovic111".into(),
+            website: "https://playhorizon.dev".into(),
+        }
     }
 }
 
@@ -191,7 +237,11 @@ impl Links {
     pub fn parse(text: &str) -> Self {
         let mut links = Self::default();
         if let Ok(serde_json::Value::Object(map)) = serde_json::from_str(text) {
-            for (key, slot) in [("discord", &mut links.discord), ("sponsor", &mut links.sponsor), ("website", &mut links.website)] {
+            for (key, slot) in [
+                ("discord", &mut links.discord),
+                ("sponsor", &mut links.sponsor),
+                ("website", &mut links.website),
+            ] {
                 if let Some(url) = map.get(key).and_then(|v| v.as_str()) {
                     *slot = url.trim().to_string();
                 }
@@ -204,7 +254,10 @@ impl Links {
 /// The links from main, or the built-in ones when offline.
 pub fn links() -> Links {
     let url = format!("https://raw.githubusercontent.com/{REPO}/main/launcher/links.json");
-    get(&url).ok().and_then(|r| r.into_string().ok()).map_or_else(Links::default, |text| Links::parse(&text))
+    get(&url)
+        .ok()
+        .and_then(|r| r.into_string().ok())
+        .map_or_else(Links::default, |text| Links::parse(&text))
 }
 
 /// The launcher's data folder; `HORIZON_LAUNCHER_HOME` overrides it (for tests and scripts).
@@ -212,7 +265,9 @@ pub fn data_dir() -> PathBuf {
     if let Some(home) = std::env::var_os("HORIZON_LAUNCHER_HOME").filter(|h| !h.is_empty()) {
         return PathBuf::from(home);
     }
-    dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("horizon-launcher")
+    dirs::data_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("horizon-launcher")
 }
 
 fn versions_dir() -> PathBuf {
@@ -227,7 +282,11 @@ const COMPLETE: &str = ".installed";
 
 /// Installed versions, newest tag first.
 pub fn installed() -> Vec<String> {
-    let mut tags: Vec<String> = fs::read_dir(versions_dir())
+    installed_in(&versions_dir())
+}
+
+fn installed_in(versions: &Path) -> Vec<String> {
+    let mut tags: Vec<String> = fs::read_dir(versions)
         .into_iter()
         .flatten()
         .flatten()
@@ -243,7 +302,9 @@ fn download(url: &str, size: u64, to: &Path, progress: &impl Fn(f32)) -> Result<
     let mut file = fs::File::create(to).map_err(|e| e.to_string())?;
     let (mut done, mut buf) = (0u64, vec![0u8; 1 << 16]);
     loop {
-        let n = reader.read(&mut buf).map_err(|e| format!("Download interrupted: {e}"))?;
+        let n = reader
+            .read(&mut buf)
+            .map_err(|e| format!("Download interrupted: {e}"))?;
         if n == 0 {
             return Ok(());
         }
@@ -256,9 +317,13 @@ fn download(url: &str, size: u64, to: &Path, progress: &impl Fn(f32)) -> Result<
 fn unpack(archive: &Path, url: &str, to: &Path) -> Result<(), String> {
     let file = fs::File::open(archive).map_err(|e| e.to_string())?;
     if url.ends_with(".tar.gz") {
-        tar::Archive::new(flate2::read::GzDecoder::new(file)).unpack(to).map_err(|e| e.to_string())
+        tar::Archive::new(flate2::read::GzDecoder::new(file))
+            .unpack(to)
+            .map_err(|e| e.to_string())
     } else {
-        zip::ZipArchive::new(file).and_then(|mut z| z.extract(to)).map_err(|e| e.to_string())
+        zip::ZipArchive::new(file)
+            .and_then(|mut z| z.extract(to))
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -277,7 +342,10 @@ pub fn install(tag: &str, url: &str, size: u64, progress: impl Fn(f32)) -> Resul
     unpack(&archive, url, &unpacked)?;
     progress(0.97);
     // The archives hold one top folder (horizon-linux-x86_64/...); the version folder is its contents.
-    let entries: Vec<_> = fs::read_dir(&unpacked).map_err(|e| e.to_string())?.flatten().collect();
+    let entries: Vec<_> = fs::read_dir(&unpacked)
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .collect();
     let top = match entries.as_slice() {
         [only] if only.path().is_dir() => only.path(),
         _ => unpacked.clone(),
@@ -295,6 +363,7 @@ pub fn install(tag: &str, url: &str, size: u64, progress: impl Fn(f32)) -> Resul
     fs::rename(&top, &target).map_err(|e| e.to_string())?;
     fs::write(target.join(COMPLETE), "").map_err(|e| e.to_string())?;
     let _ = fs::remove_dir_all(&partial);
+    reuse_prepared(&root, tag);
     progress(1.0);
     Ok(())
 }
@@ -305,19 +374,153 @@ pub fn remove(tag: &str) -> Result<(), String> {
 
 /// The Minecraft version a Horizon build targets, from its research-lock.json.
 pub fn game_version(tag: &str) -> String {
-    fs::read_to_string(version_dir(tag).join("research-lock.json"))
-        .ok()
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+    game_version_at(&version_dir(tag))
+}
+
+fn read_json(path: &Path) -> Option<serde_json::Value> {
+    serde_json::from_str(&fs::read_to_string(path).ok()?).ok()
+}
+
+fn game_version_at(dir: &Path) -> String {
+    read_json(&dir.join("research-lock.json"))
         .and_then(|v| v["minecraft"]["version"].as_str().map(String::from))
         .unwrap_or_else(|| "26.3".into())
 }
 
 pub fn resources(tag: &str) -> PathBuf {
-    version_dir(tag).join(".local/horizon-client").join(game_version(tag))
+    resources_at(&version_dir(tag))
 }
 
+fn resources_at(dir: &Path) -> PathBuf {
+    dir.join(".local/horizon-client").join(game_version_at(dir))
+}
+
+const RESOURCES_MANIFEST: &str = "horizon-resources.json";
+
 pub fn is_prepared(tag: &str) -> bool {
-    resources(tag).join("horizon-resources.json").exists()
+    resources(tag).join(RESOURCES_MANIFEST).exists()
+}
+
+/// Whether the resources `from` prepared are the ones preparing `to` would make. The output
+/// depends on the Horizon version, not only on Minecraft's: the manifest records the hashes of
+/// the vanilla exporters it was made with (mods/horizon/src/test/java/.../parity), and
+/// prepare_native_client.py writes every file and the manifest's `schema`. So both need the
+/// same pinned Minecraft jars (research-lock.json), the same prepare_native_client.py and the
+/// same exporter sources. The helpers it imports (lab.py and the test_*_parity.py modules)
+/// change between releases in how they find and check the player's files, which the output
+/// does not depend on; they are not compared.
+fn resources_compatible(from: &Path, to: &Path, manifest: &serde_json::Value) -> bool {
+    let pins = |dir: &Path| {
+        read_json(&dir.join("research-lock.json")).map(|lock| {
+            ["version", "client_sha1", "server_sha1"].map(|k| lock["minecraft"][k].clone())
+        })
+    };
+    let (Some(a), Some(b)) = (pins(from), pins(to)) else {
+        return false;
+    };
+    if a != b || a.iter().any(|v| !v.is_string()) {
+        return false;
+    }
+    let Some(fields) = manifest.as_object() else {
+        return false;
+    };
+    let mut sources = vec![
+        "tools/prepare_native_client.py".to_string(),
+        "mods/horizon/src/test/java/dev/horizonlab/parity/VanillaHeightmapOracle.java".to_string(),
+    ];
+    for (_, value) in fields
+        .iter()
+        .filter(|(key, _)| key.ends_with("_exporters_sha256"))
+    {
+        let Some(files) = value.as_object() else {
+            return false;
+        };
+        sources.extend(files.keys().cloned());
+    }
+    let same = |source: &str| {
+        let path = Path::new(source);
+        path.is_relative()
+            && path
+                .components()
+                .all(|c| matches!(c, std::path::Component::Normal(_)))
+            && matches!((fs::read(from.join(path)), fs::read(to.join(path))), (Ok(a), Ok(b)) if a == b)
+    };
+    sources.iter().all(|s| same(s))
+}
+
+fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &target)?;
+        } else {
+            fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
+/// After an install: when `tag` is not prepared but another installed version made the same
+/// resources, copies them (not hard links: preparing again rewrites files in place, which would
+/// change both). The player then needs neither their Minecraft folder nor a new preparation to
+/// play a release that only changed Horizon. Returns the version they came from.
+fn reuse_prepared(versions: &Path, tag: &str) -> Option<String> {
+    let target = versions.join(tag);
+    let to = resources_at(&target);
+    if to.join(RESOURCES_MANIFEST).exists() {
+        return None;
+    }
+    let version = game_version_at(&target);
+    for other in installed_in(versions).into_iter().filter(|t| t != tag) {
+        let source = versions.join(&other);
+        if game_version_at(&source) != version {
+            continue;
+        }
+        let from = resources_at(&source);
+        let Some(manifest) = read_json(&from.join(RESOURCES_MANIFEST)) else {
+            continue;
+        };
+        if !resources_compatible(&source, &target, &manifest) {
+            continue;
+        }
+        // Copied beside it and renamed when complete: an interrupted copy is never "prepared".
+        // The name is this call's own, as the window's start and an install can both copy.
+        static COPIES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = COPIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let partial = to.with_file_name(format!(".{version}.partial-{}-{n}", std::process::id()));
+        let _ = fs::remove_dir_all(&partial);
+        let copied = copy_dir(&from, &partial).and_then(|_| {
+            if to.join(RESOURCES_MANIFEST).exists() {
+                return Ok(false); // Prepared meanwhile, by another copy or the player.
+            }
+            let _ = fs::remove_dir_all(&to);
+            fs::rename(&partial, &to).map(|_| true)
+        });
+        let _ = fs::remove_dir_all(&partial);
+        match copied {
+            Ok(true) => return Some(other),
+            Ok(false) => return None,
+            Err(_) => {}
+        }
+    }
+    None
+}
+
+/// `reuse_prepared` for every installed version that is not prepared, oldest first, so a
+/// version prepared this way can serve the next. Launchers before 0.1.4 installed new versions
+/// without it; this catches those up. Returns each (version, where its resources came from).
+pub fn reuse_prepared_everywhere() -> Vec<(String, String)> {
+    reuse_prepared_in(&versions_dir())
+}
+
+fn reuse_prepared_in(versions: &Path) -> Vec<(String, String)> {
+    let mut tags = installed_in(versions);
+    tags.reverse();
+    tags.into_iter()
+        .filter_map(|tag| reuse_prepared(versions, &tag).map(|from| (tag, from)))
+        .collect()
 }
 
 /// The official launcher's game directory, where prepare_native_client.py looks by default.
@@ -334,19 +537,35 @@ pub fn default_minecraft_dir() -> Option<PathBuf> {
 }
 
 fn found(program: &str, arg: &str) -> bool {
-    Command::new(program).arg(arg).stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok()
+    Command::new(program)
+        .arg(arg)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok()
 }
 
 fn python() -> Option<&'static str> {
-    let candidates: &[&'static str] = if cfg!(windows) { &["py", "python"] } else { &["python3", "python"] };
+    let candidates: &[&'static str] = if cfg!(windows) {
+        &["py", "python"]
+    } else {
+        &["python3", "python"]
+    };
     candidates.iter().copied().find(|p| found(p, "--version"))
 }
 
 /// Checks what the preparation needs and builds its command. PLAY.txt describes the same steps:
 /// the player's own launcher install, the server jar from that version's own json, Java and Python.
-pub fn prepare_command(tag: &str, minecraft: &Path, log: &dyn Fn(String)) -> Result<Command, String> {
+pub fn prepare_command(
+    tag: &str,
+    minecraft: &Path,
+    log: &dyn Fn(String),
+) -> Result<Command, String> {
     let version = game_version(tag);
-    let manifest = minecraft.join("versions").join(&version).join(format!("{version}.json"));
+    let manifest = minecraft
+        .join("versions")
+        .join(&version)
+        .join(format!("{version}.json"));
     if !manifest.exists() {
         return Err(format!(
             "Minecraft {version} is not in {}. Play {version} once from the official launcher, or choose another folder.",
@@ -355,25 +574,40 @@ pub fn prepare_command(tag: &str, minecraft: &Path, log: &dyn Fn(String)) -> Res
     }
     let python = python().ok_or("Python 3.10 or newer is needed. Install it and try again.")?;
     if !found("java", "-version") {
-        return Err("Java 25 is needed (a JDK, e.g. Eclipse Temurin 25). Install it and try again.".into());
+        return Err(
+            "Java 25 is needed (a JDK, e.g. Eclipse Temurin 25). Install it and try again.".into(),
+        );
     }
-    let jar = data_dir().join("server-jars").join(format!("{version}.jar"));
+    let jar = data_dir()
+        .join("server-jars")
+        .join(format!("{version}.jar"));
     if !jar.exists() {
-        let json: serde_json::Value = serde_json::from_str(&fs::read_to_string(&manifest).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&manifest).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
         let url = json["downloads"]["server"]["url"]
             .as_str()
             .ok_or_else(|| format!("{} has no server download", manifest.display()))?;
         log(format!("Downloading the {version} server jar from Mojang"));
         fs::create_dir_all(jar.parent().unwrap()).map_err(|e| e.to_string())?;
         let mut body = Vec::new();
-        get(url)?.into_reader().read_to_end(&mut body).map_err(|e| e.to_string())?;
+        get(url)?
+            .into_reader()
+            .read_to_end(&mut body)
+            .map_err(|e| e.to_string())?;
         let partial = jar.with_extension("partial");
-        fs::write(&partial, body).and_then(|_| fs::rename(&partial, &jar)).map_err(|e| e.to_string())?;
+        fs::write(&partial, body)
+            .and_then(|_| fs::rename(&partial, &jar))
+            .map_err(|e| e.to_string())?;
     }
     let mut cmd = Command::new(python);
     cmd.current_dir(version_dir(tag))
-        .args(["-u", "tools/prepare_native_client.py", "--prepare", "--server-jar"])
+        .args([
+            "-u",
+            "tools/prepare_native_client.py",
+            "--prepare",
+            "--server-jar",
+        ])
         .arg(&jar)
         .arg("--minecraft-dir")
         .arg(minecraft);
@@ -387,7 +621,9 @@ pub fn game_home() -> PathBuf {
     if let Some(home) = std::env::var_os("HORIZON_HOME").filter(|h| !h.is_empty()) {
         return PathBuf::from(home);
     }
-    dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("horizon")
+    dirs::data_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("horizon")
 }
 
 /// Which drawing the game's menus use. Classic is vanilla's own screens, which have no way to
@@ -426,7 +662,11 @@ impl MenuStyle {
 
     /// `text` with its `menuStyle:` line set to this style and every other line kept.
     fn into_file(self, text: &str) -> String {
-        let mut out: Vec<String> = text.lines().filter(|l| !l.trim().starts_with("menuStyle:")).map(String::from).collect();
+        let mut out: Vec<String> = text
+            .lines()
+            .filter(|l| !l.trim().starts_with("menuStyle:"))
+            .map(String::from)
+            .collect();
         out.insert(0, format!("menuStyle:{}", self.name()));
         out.join("\n") + "\n"
     }
@@ -454,19 +694,26 @@ pub fn client_command(tag: &str) -> Command {
     // "PipeWire ALSA [horizon-client]", shared with development and test runs, where
     // muting it once left every later game silent: played from here it is "Horizon".
     if std::env::var_os("PIPEWIRE_PROPS").is_none() {
-        cmd.env("PIPEWIRE_PROPS", "{ application.name = \"Horizon\" media.role = \"Game\" }");
+        cmd.env(
+            "PIPEWIRE_PROPS",
+            "{ application.name = \"Horizon\" media.role = \"Game\" }",
+        );
     }
     cmd
 }
 
 pub fn server_command(tag: &str, folder: &Path) -> Command {
     let mut cmd = Command::new(version_dir(tag).join(CLIENT));
-    cmd.current_dir(folder).arg("--resources").arg(resources(tag)).args(["--dedicated", "--nogui"]);
+    cmd.current_dir(folder)
+        .arg("--resources")
+        .arg(resources(tag))
+        .args(["--dedicated", "--nogui"]);
     cmd
 }
 
 pub fn eula_agreed(folder: &Path) -> bool {
-    fs::read_to_string(folder.join("eula.txt")).is_ok_and(|s| s.lines().any(|l| l.trim() == "eula=true"))
+    fs::read_to_string(folder.join("eula.txt"))
+        .is_ok_and(|s| s.lines().any(|l| l.trim() == "eula=true"))
 }
 
 /// Writes eula.txt as vanilla's server expects it, once the player agreed in the launcher.
@@ -482,10 +729,16 @@ pub fn agree_eula(folder: &Path) -> Result<(), String> {
 pub fn resolve_version(requested: Option<&str>) -> Result<String, String> {
     let installed = installed();
     if let Some(tag) = requested {
-        return installed.iter().find(|t| *t == tag).cloned().ok_or_else(|| format!("{tag} is not installed."));
+        return installed
+            .iter()
+            .find(|t| *t == tag)
+            .cloned()
+            .ok_or_else(|| format!("{tag} is not installed."));
     }
     let selected = Settings::load().selected.filter(|s| installed.contains(s));
-    selected.or_else(|| installed.first().cloned()).ok_or_else(|| "No version is installed yet.".into())
+    selected
+        .or_else(|| installed.first().cloned())
+        .ok_or_else(|| "No version is installed yet.".into())
 }
 
 /// Removes an installed version and moves the selection to the newest one left if needed.
@@ -508,19 +761,26 @@ pub fn minecraft_dir(requested: Option<PathBuf>) -> Result<PathBuf, String> {
     requested
         .or(Settings::load().minecraft_dir)
         .or_else(default_minecraft_dir)
-        .ok_or_else(|| "No Minecraft folder found. Pass the official launcher's game folder.".into())
+        .ok_or_else(|| {
+            "No Minecraft folder found. Pass the official launcher's game folder.".into()
+        })
 }
 
 /// The server folder: the one given, the one chosen in the launcher, or `server/` in the data folder.
 pub fn server_dir(requested: Option<PathBuf>) -> PathBuf {
-    requested.or(Settings::load().server_dir).unwrap_or_else(|| data_dir().join("server"))
+    requested
+        .or(Settings::load().server_dir)
+        .unwrap_or_else(|| data_dir().join("server"))
 }
 
 fn need_prepared(tag: &str) -> Result<(), String> {
     if is_prepared(tag) {
         Ok(())
     } else {
-        Err(format!("{tag} is not prepared yet. Prepare it first (it needs your own Minecraft {}).", game_version(tag)))
+        Err(format!(
+            "{tag} is not prepared yet. Prepare it first (it needs your own Minecraft {}).",
+            game_version(tag)
+        ))
     }
 }
 
@@ -547,8 +807,14 @@ pub fn server(tag: &str, folder: &Path, accept_eula: bool) -> Result<Command, St
 pub fn release_notes(tag: Option<&str>) -> Result<Release, String> {
     let releases = releases()?;
     match tag {
-        Some(tag) => releases.into_iter().find(|r| r.tag == tag).ok_or_else(|| format!("No Horizon release is tagged {tag}.")),
-        None => releases.into_iter().next().ok_or_else(|| "No release is published yet.".into()),
+        Some(tag) => releases
+            .into_iter()
+            .find(|r| r.tag == tag)
+            .ok_or_else(|| format!("No Horizon release is tagged {tag}.")),
+        None => releases
+            .into_iter()
+            .next()
+            .ok_or_else(|| "No release is published yet.".into()),
     }
 }
 
@@ -592,7 +858,10 @@ impl Logged {
 
     pub fn tail(&self, lines: usize) -> Vec<String> {
         let log = self.log.lock().unwrap();
-        log.iter().skip(log.len().saturating_sub(lines)).cloned().collect()
+        log.iter()
+            .skip(log.len().saturating_sub(lines))
+            .cloned()
+            .collect()
     }
 
     pub fn wait(&self) -> Result<(), String> {
@@ -629,7 +898,9 @@ pub struct Updates {
 /// The newest Horizon release with a build here, if it is newer than every installed version.
 pub fn horizon_update(releases: &[Release], installed: &[String]) -> Option<Release> {
     let newest = latest(releases)?;
-    let newer = installed.iter().all(|t| compare_versions(&newest.tag, t).is_gt());
+    let newer = installed
+        .iter()
+        .all(|t| compare_versions(&newest.tag, t).is_gt());
     newer.then(|| newest.clone())
 }
 
@@ -667,9 +938,15 @@ pub fn install_tag(tag: &str, as_update: bool, progress: impl Fn(f32)) -> Result
     let release = if tag == "latest" {
         latest(&releases).ok_or("No release has a build for this platform yet.")?
     } else {
-        releases.iter().find(|r| r.tag == tag).ok_or_else(|| format!("No Horizon release is tagged {tag}."))?
+        releases
+            .iter()
+            .find(|r| r.tag == tag)
+            .ok_or_else(|| format!("No Horizon release is tagged {tag}."))?
     };
-    let (url, size) = release.asset.clone().ok_or_else(|| format!("{} has no build for this platform.", release.tag))?;
+    let (url, size) = release
+        .asset
+        .clone()
+        .ok_or_else(|| format!("{} has no build for this platform.", release.tag))?;
     let before = installed();
     install(&release.tag, &url, size, progress)?;
     let mut settings = Settings::load();
@@ -694,7 +971,10 @@ pub fn self_update_allowed() -> bool {
 /// Downloads a launcher release and puts its binary in place of this one. The running process
 /// keeps working; `restart` starts the new one.
 pub fn self_update(release: &Release, progress: impl Fn(f32)) -> Result<(), String> {
-    let (url, size) = release.asset.clone().ok_or("This launcher release has no build for this platform.")?;
+    let (url, size) = release
+        .asset
+        .clone()
+        .ok_or("This launcher release has no build for this platform.")?;
     let work = data_dir().join(".launcher-update");
     let _ = fs::remove_dir_all(&work);
     fs::create_dir_all(&work).map_err(|e| e.to_string())?;
@@ -702,13 +982,15 @@ pub fn self_update(release: &Release, progress: impl Fn(f32)) -> Result<(), Stri
     download(&url, size, &archive, &progress)?;
     let unpacked = work.join("unpacked");
     unpack(&archive, &url, &unpacked)?;
-    let binary = find_file(&unpacked, LAUNCHER_BINARY).ok_or("The download has no launcher binary.")?;
+    let binary =
+        find_file(&unpacked, LAUNCHER_BINARY).ok_or("The download has no launcher binary.")?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = fs::set_permissions(&binary, fs::Permissions::from_mode(0o755));
     }
-    self_replace::self_replace(&binary).map_err(|e| format!("Could not replace the launcher: {e}"))?;
+    self_replace::self_replace(&binary)
+        .map_err(|e| format!("Could not replace the launcher: {e}"))?;
     let _ = fs::remove_dir_all(&work);
     progress(1.0);
     Ok(())
@@ -730,7 +1012,9 @@ fn find_file(dir: &Path, name: &str) -> Option<PathBuf> {
 
 /// Starts the launcher again (the updated binary) with the same arguments, and exits.
 pub fn restart() -> ! {
-    let _ = Command::new(exe_path()).args(std::env::args_os().skip(1)).spawn();
+    let _ = Command::new(exe_path())
+        .args(std::env::args_os().skip(1))
+        .spawn();
     std::process::exit(0)
 }
 
@@ -773,7 +1057,9 @@ pub fn markdown_to_text(md: &str) -> String {
                 }
             }
             Event::End(TagEnd::Heading(_)) => out.push_str("\n\n"),
-            Event::End(TagEnd::Paragraph) => out.push_str(if lists.is_empty() { "\n\n" } else { "\n" }),
+            Event::End(TagEnd::Paragraph) => {
+                out.push_str(if lists.is_empty() { "\n\n" } else { "\n" })
+            }
             Event::End(TagEnd::Item) if !out.ends_with('\n') => out.push('\n'),
             Event::End(TagEnd::CodeBlock) => out.push('\n'),
             Event::Text(t) | Event::Code(t) => out.push_str(&t),
@@ -788,7 +1074,10 @@ pub fn markdown_to_text(md: &str) -> String {
 /// The first sentence-like line of a release's notes, for a one-line summary.
 pub fn notes_summary(body: &str) -> Option<String> {
     let text = markdown_to_text(body);
-    let line = text.lines().map(str::trim).find(|l| l.len() > 24 && !l.starts_with("---"))?;
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|l| l.len() > 24 && !l.starts_with("---"))?;
     let line = line.trim_start_matches("- ");
     Some(match line.char_indices().nth(140) {
         Some((i, _)) => format!("{}…", line[..i].trim_end()),
@@ -814,6 +1103,8 @@ pub enum Msg {
     Updates(Result<Updates, String>),
     LauncherProgress(f32),
     LauncherUpdated(Result<(), String>),
+    /// `reuse_prepared_everywhere` prepared these versions.
+    Reused(Vec<(String, String)>),
 }
 
 /// A running process; its output arrives as `Msg::Line`, its end as `Msg::Exit`.
@@ -843,8 +1134,14 @@ pub fn spawn(job: Job, mut cmd: Command, tx: Sender<Msg>) -> Result<Running, Str
         .map_err(|e| format!("Could not start {:?}: {e}", cmd.get_program()))?;
     let stdin = child.stdin.take();
     let mut readers = Vec::new();
-    let out = child.stdout.take().map(|o| Box::new(o) as Box<dyn Read + Send>);
-    let err = child.stderr.take().map(|o| Box::new(o) as Box<dyn Read + Send>);
+    let out = child
+        .stdout
+        .take()
+        .map(|o| Box::new(o) as Box<dyn Read + Send>);
+    let err = child
+        .stderr
+        .take()
+        .map(|o| Box::new(o) as Box<dyn Read + Send>);
     for stream in [out, err].into_iter().flatten() {
         let tx = tx.clone();
         readers.push(std::thread::spawn(move || {
@@ -902,7 +1199,10 @@ impl Settings {
     }
     pub fn save(&self) {
         let _ = fs::create_dir_all(data_dir());
-        let _ = fs::write(data_dir().join("settings.json"), serde_json::to_string_pretty(self).unwrap());
+        let _ = fs::write(
+            data_dir().join("settings.json"),
+            serde_json::to_string_pretty(self).unwrap(),
+        );
     }
 }
 
@@ -917,8 +1217,13 @@ mod tests {
             return;
         }
         let cmd = client_command("v2026.10.13");
-        let props = cmd.get_envs().find(|(k, _)| *k == "PIPEWIRE_PROPS").and_then(|(_, v)| v);
-        assert!(props.is_some_and(|v| v.to_string_lossy().contains("application.name = \"Horizon\"")));
+        let props = cmd
+            .get_envs()
+            .find(|(k, _)| *k == "PIPEWIRE_PROPS")
+            .and_then(|(_, v)| v);
+        assert!(props.is_some_and(|v| v
+            .to_string_lossy()
+            .contains("application.name = \"Horizon\"")));
     }
 
     #[test]
@@ -935,9 +1240,15 @@ mod tests {
             {"tag_name": "v2026.10.13", "assets": []},
             {"tag_name": "launcher-v0.0.1", "draft": true, "assets": []},
         ]);
-        let game: Vec<_> = parse_releases(&list, ASSET, is_game_tag).into_iter().map(|r| r.tag).collect();
+        let game: Vec<_> = parse_releases(&list, ASSET, is_game_tag)
+            .into_iter()
+            .map(|r| r.tag)
+            .collect();
         assert_eq!(game, ["v2026.10.13", "v2026.10.12"]);
-        let launcher: Vec<_> = parse_releases(&list, LAUNCHER_ASSET, is_launcher_tag).into_iter().map(|r| r.tag).collect();
+        let launcher: Vec<_> = parse_releases(&list, LAUNCHER_ASSET, is_launcher_tag)
+            .into_iter()
+            .map(|r| r.tag)
+            .collect();
         assert_eq!(launcher, ["launcher-v9.0.0"]);
     }
 
@@ -953,9 +1264,18 @@ mod tests {
 
     #[test]
     fn updates() {
-        let r = |tag: &str| Release { tag: tag.into(), name: String::new(), body: String::new(), date: String::new(), asset: Some(("u".into(), 1)) };
+        let r = |tag: &str| Release {
+            tag: tag.into(),
+            name: String::new(),
+            body: String::new(),
+            date: String::new(),
+            asset: Some(("u".into(), 1)),
+        };
         let releases = [r("v2026.10.13"), r("v2026.10.12")];
-        assert_eq!(horizon_update(&releases, &["v2026.10.12".into()]).map(|r| r.tag), Some("v2026.10.13".into()));
+        assert_eq!(
+            horizon_update(&releases, &["v2026.10.12".into()]).map(|r| r.tag),
+            Some("v2026.10.13".into())
+        );
         assert!(horizon_update(&releases, &["v2026.10.13".into()]).is_none());
         assert!(launcher_update(&[r("launcher-v0.0.1")]).is_none());
         assert!(launcher_update(&[r("launcher-v99.0.0")]).is_some());
@@ -970,11 +1290,16 @@ mod tests {
         // No settings file, an old one that never mentioned it, and 0.1.1's default `false`.
         assert!(Settings::parse("").auto_install());
         assert!(Settings::parse("{}").auto_install());
-        assert!(Settings::parse(r#"{"selected": "v2026.10.13", "auto_install": false}"#).auto_install());
+        assert!(
+            Settings::parse(r#"{"selected": "v2026.10.13", "auto_install": false}"#).auto_install()
+        );
         assert!(Settings::parse(r#"{"install_new_versions": true}"#).auto_install());
         assert!(!Settings::parse(r#"{"install_new_versions": false}"#).auto_install());
         // Saving after the player turned it off keeps it off.
-        let off = Settings { install_new_versions: Some(false), ..Settings::default() };
+        let off = Settings {
+            install_new_versions: Some(false),
+            ..Settings::default()
+        };
         assert!(!Settings::parse(&serde_json::to_string(&off).unwrap()).auto_install());
         // The selection rule is unchanged: the new version is selected only from the newest.
         let installed = ["v2026.10.12".to_string(), "v2026.10.1".to_string()];
@@ -989,7 +1314,9 @@ mod tests {
         assert_eq!(defaults.sponsor, "https://github.com/sponsors/ludovic111");
         assert_eq!(defaults.website, "https://playhorizon.dev");
         // The file on main says the same thing as the defaults.
-        let file = Links::parse(r#"{"discord": "https://discord.gg/HcTeMZxe5E", "sponsor": "https://github.com/sponsors/ludovic111", "website": "https://playhorizon.dev"}"#);
+        let file = Links::parse(
+            r#"{"discord": "https://discord.gg/HcTeMZxe5E", "sponsor": "https://github.com/sponsors/ludovic111", "website": "https://playhorizon.dev"}"#,
+        );
         assert_eq!(file, defaults);
         // Unreadable or missing, offline included: the defaults.
         assert_eq!(Links::parse(""), defaults);
@@ -997,8 +1324,21 @@ mod tests {
         assert_eq!(Links::parse("[1]"), defaults);
         assert_eq!(Links::parse(r#"{"discord": 5}"#), defaults);
         // A key that is missing keeps its default; a new address replaces it; empty hides it.
-        assert_eq!(Links::parse(r#"{"discord": "https://x.y/z"}"#), Links { discord: "https://x.y/z".into(), ..defaults.clone() });
-        assert_eq!(Links::parse(r#"{"discord": "", "sponsor": " "}"#), Links { discord: String::new(), sponsor: String::new(), ..defaults.clone() });
+        assert_eq!(
+            Links::parse(r#"{"discord": "https://x.y/z"}"#),
+            Links {
+                discord: "https://x.y/z".into(),
+                ..defaults.clone()
+            }
+        );
+        assert_eq!(
+            Links::parse(r#"{"discord": "", "sponsor": " "}"#),
+            Links {
+                discord: String::new(),
+                sponsor: String::new(),
+                ..defaults.clone()
+            }
+        );
         // A key this launcher does not know is ignored.
         assert_eq!(Links::parse(r#"{"mastodon": "https://x.y/z"}"#), defaults);
     }
@@ -1006,18 +1346,125 @@ mod tests {
     #[test]
     fn menu_style_file_matches_the_games() {
         assert_eq!(MenuStyle::from_file(""), MenuStyle::Horizon);
-        assert_eq!(MenuStyle::from_file("menuStyle:horizon\n"), MenuStyle::Horizon);
-        assert_eq!(MenuStyle::from_file("menuStyle:classic\n"), MenuStyle::Classic);
-        assert_eq!(MenuStyle::from_file("other:1\nmenuStyle:classic\n"), MenuStyle::Classic);
+        assert_eq!(
+            MenuStyle::from_file("menuStyle:horizon\n"),
+            MenuStyle::Horizon
+        );
+        assert_eq!(
+            MenuStyle::from_file("menuStyle:classic\n"),
+            MenuStyle::Classic
+        );
+        assert_eq!(
+            MenuStyle::from_file("other:1\nmenuStyle:classic\n"),
+            MenuStyle::Classic
+        );
         assert_eq!(MenuStyle::Classic.into_file(""), "menuStyle:classic\n");
-        assert_eq!(MenuStyle::Horizon.into_file("menuStyle:classic\nother:1\n"), "menuStyle:horizon\nother:1\n");
+        assert_eq!(
+            MenuStyle::Horizon.into_file("menuStyle:classic\nother:1\n"),
+            "menuStyle:horizon\nother:1\n"
+        );
         assert_eq!(MenuStyle::parse("classic"), Some(MenuStyle::Classic));
         assert_eq!(MenuStyle::parse("vanilla"), None);
     }
 
     #[test]
+    fn a_new_version_reuses_resources_prepared_by_a_compatible_one() {
+        let versions =
+            std::env::temp_dir().join(format!("horizon-launcher-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&versions);
+        let oracle = "mods/horizon/src/test/java/dev/horizonlab/parity/VanillaHeightmapOracle.java";
+        let camera = "mods/horizon/src/test/java/dev/horizonlab/parity/VanillaCameraOracle.java";
+        let collision =
+            "mods/horizon/src/test/java/dev/horizonlab/parity/VanillaCollisionOracle.java";
+        let write = |tag: &str, path: &str, text: &str| {
+            let path = versions.join(tag).join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+        };
+        let release = |tag: &str, minecraft: &str| {
+            write(tag, COMPLETE, "");
+            let lock = serde_json::json!({"minecraft": {"version": minecraft, "client_sha1": "c", "server_sha1": "s"}});
+            write(tag, "research-lock.json", &lock.to_string());
+            write(tag, "tools/prepare_native_client.py", "schema 7");
+            write(tag, oracle, "heightmap");
+            write(tag, collision, "collision");
+            write(tag, camera, tag); // Not an exporter: it may change freely.
+        };
+        let prepared = |tag: &str, minecraft: &str| {
+            let manifest =
+                serde_json::json!({"schema": 7, "collision_exporters_sha256": {collision: "x"}});
+            write(
+                tag,
+                &format!(".local/horizon-client/{minecraft}/{RESOURCES_MANIFEST}"),
+                &manifest.to_string(),
+            );
+            write(
+                tag,
+                &format!(".local/horizon-client/{minecraft}/worldgen/biomes.json"),
+                "{}",
+            );
+        };
+        let is_prepared = |tag: &str| {
+            resources_at(&versions.join(tag))
+                .join(RESOURCES_MANIFEST)
+                .exists()
+        };
+
+        release("v2026.10.13", "26.3");
+        prepared("v2026.10.13", "26.3");
+        release("v2026.10.12", "26.2");
+        prepared("v2026.10.12", "26.2");
+        release("v2026.10.13.1", "26.3");
+        assert_eq!(
+            reuse_prepared(&versions, "v2026.10.13.1"),
+            Some("v2026.10.13".into())
+        );
+        assert!(is_prepared("v2026.10.13.1"));
+        assert!(resources_at(&versions.join("v2026.10.13.1"))
+            .join("worldgen/biomes.json")
+            .exists());
+        let left: Vec<_> = fs::read_dir(versions.join("v2026.10.13.1/.local/horizon-client"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(left, ["26.3"]);
+        // Already prepared: nothing to do.
+        assert_eq!(reuse_prepared(&versions, "v2026.10.13.1"), None);
+
+        // Another Minecraft version, a changed exporter or a changed prepare script: prepare again.
+        release("v2026.10.14", "26.4");
+        assert_eq!(reuse_prepared(&versions, "v2026.10.14"), None);
+        release("v2026.10.15", "26.3");
+        write("v2026.10.15", collision, "collision, fixed");
+        assert_eq!(reuse_prepared(&versions, "v2026.10.15"), None);
+        release("v2026.10.16", "26.3");
+        write("v2026.10.16", "tools/prepare_native_client.py", "schema 8");
+        assert_eq!(reuse_prepared(&versions, "v2026.10.16"), None);
+        assert!(!is_prepared("v2026.10.15") && !is_prepared("v2026.10.16"));
+
+        // A version an older launcher installed without preparing it is caught up by the sweep
+        // that starting the window, `versions` and `update` run; the incompatible ones stay as
+        // they are, and a second sweep has nothing to do.
+        release("v2026.10.17", "26.3");
+        assert_eq!(
+            reuse_prepared_in(&versions),
+            [("v2026.10.17".to_string(), "v2026.10.13.1".to_string())]
+        );
+        assert!(is_prepared("v2026.10.17"));
+        assert!(!is_prepared("v2026.10.15") && !is_prepared("v2026.10.16"));
+        assert!(reuse_prepared_in(&versions).is_empty());
+        let _ = fs::remove_dir_all(&versions);
+    }
+
+    #[test]
     fn plain_notes() {
-        let text = markdown_to_text("# Title\n\nSome *words* and [a link](https://x.y).\n\n- one\n- two\n");
-        assert_eq!(text, "Title\n\nSome words and a link (https://x.y).\n\n- one\n- two\n");
+        let text = markdown_to_text(
+            "# Title\n\nSome *words* and [a link](https://x.y).\n\n- one\n- two\n",
+        );
+        assert_eq!(
+            text,
+            "Title\n\nSome words and a link (https://x.y).\n\n- one\n- two\n"
+        );
     }
 }
