@@ -3289,10 +3289,8 @@ impl Game<'_> {
         batch
     }
     fn inventory_origin(&self, batch: &HudBatch) -> (f32, f32) {
-        (
-            (batch.width - 176.0) / 2.0 + self.recipe_book_shift(batch.width),
-            (batch.height - self.screen_height()) / 2.0,
-        )
+        let (x, y) = batch.centered_origin(176.0, self.screen_height());
+        (x + self.recipe_book_shift(batch.width), y)
     }
     /// Slot ids: 0..36 player inventory, 100..109 crafting grid, 200 result.
     fn container_kind(&self) -> Option<&BlockEntity> {
@@ -6826,10 +6824,7 @@ impl Game<'_> {
         }
     }
     fn creative_origin(batch: &HudBatch) -> (f32, f32) {
-        (
-            (batch.width - Creative::WIDTH) / 2.0,
-            (batch.height - Creative::HEIGHT) / 2.0,
-        )
+        batch.centered_origin(Creative::WIDTH, Creative::HEIGHT)
     }
     /// Vanilla tooltip: dark box with a purple gradient border.
     fn tooltip(&self, batch: &mut HudBatch, text: &str, x: f32, y: f32) {
