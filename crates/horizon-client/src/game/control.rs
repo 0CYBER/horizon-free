@@ -339,9 +339,13 @@ impl Game<'_> {
                     Screen::Inventory if self.recipe_search_focused() => {
                         self.recipe_text(Some(text), false)
                     }
+                    Screen::Creative if self.creative_screen.tab().search => {
+                        self.creative_screen.search.push_str(text);
+                        self.creative_screen.scroll = 0.0;
+                    }
                     _ => {
                         return Err(
-                            "type needs the chat screen (key t tap) or the language search".into(),
+                            "type needs the chat screen (key t tap), the language search or the creative search".into(),
                         );
                     }
                 }
