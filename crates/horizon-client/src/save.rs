@@ -121,10 +121,9 @@ pub fn upgrade_older_world(world: &Path) -> Result<()> {
     let Some(root) = read_dat(&world.join("level.dat")) else {
         return Ok(());
     };
-    let version = root
-        .get("Data")
-        .and_then(|d| number(d.get("DataVersion")))
-        .unwrap_or(i64::from(DATA_VERSION));
+    let version = root.get("Data").map_or(i64::from(DATA_VERSION), |d| {
+        number(d.get("DataVersion")).unwrap_or(-1) // saves of 1.8 and before have none
+    });
     if version >= i64::from(DATA_VERSION) {
         return Ok(());
     }

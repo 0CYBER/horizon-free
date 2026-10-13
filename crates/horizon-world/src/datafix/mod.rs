@@ -1,13 +1,13 @@
-//! Vanilla's DataFixers from the 1.19 schemas on (`net.minecraft.util.datafix`):
-//! the data of worlds saved by 1.18.2 to 26.2 brought to the 26.3 format exactly
+//! Vanilla's DataFixers (`net.minecraft.util.datafix`, DataVersion 99 on):
+//! the data of worlds saved by 1.8 to 26.2 brought to the 26.3 format exactly
 //! as 26.3 does when it reads them, and the file fixes it runs when it opens
 //! such a world (`net.minecraft.util.filefix`).
 //!
 //! DataFixerUpper reads the data once with the schema of its version (running
 //! the schema's read hooks), applies every fix with a key above that version
 //! in order, and writes it with the current schema. Each fix finds its values
-//! with the schema just below its own key ([`schema`]). Data older than
-//! [`OLDEST_SUPPORTED`] needs fixes that are not ported. The fixes of client
+//! with the schema just below its own key ([`schema`]). Every
+//! fix of the server data is ported ([`OLDEST_SUPPORTED`]). The fixes of client
 //! files (options, hotbars, debug profiles) are not ported either.
 mod block_state_data;
 mod chunk_flatten;
@@ -34,9 +34,9 @@ use schema::{Key, Ty, key, walk};
 
 /// The DataVersion of the game.
 pub const CURRENT: i32 = crate::DATA_VERSION;
-/// Data saved before this DataVersion (1.17 is 2724) needs fixes that are not
-/// ported (2717 and everything before).
-pub const OLDEST_SUPPORTED: i32 = 2571;
+/// Data saved before this DataVersion needs fixes that are not ported. Every
+/// server fix is, down to the saves of 1.8, which have no DataVersion (read as -1).
+pub const OLDEST_SUPPORTED: i32 = -1;
 
 /// `Identifier.tryParse` validity, as `NamespacedSchema.ensureNamespaced` uses it.
 pub fn identifier(id: &str) -> Option<(String, String)> {
