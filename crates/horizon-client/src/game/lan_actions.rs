@@ -35,6 +35,8 @@ pub(super) struct GuestPlay {
     last_progress: i32,
     /// Hand movements the client announced and the host animated.
     swung: bool,
+    /// The trading screen the guest has open.
+    pub(super) merchant: Option<super::lan_trading::GuestMerchant>,
 }
 
 struct ItemRules<'a>(&'a horizon_client::items::Items);
@@ -135,6 +137,7 @@ impl Game<'_> {
         self.left = play.digging.is_some();
         self.right = play.using.is_some() || self.using.is_some();
         let riding = self.riding.take();
+        let host_station = self.station.take();
         self.lan_acting = Some(conn);
 
         let result = f(self);
@@ -142,6 +145,7 @@ impl Game<'_> {
 
         // What the action opened: handed to the guest instead of the host.
         let opened = self.container.take();
+        let opened_station = std::mem::replace(&mut self.station, host_station);
         self.riding = riding;
         self.left = left;
         self.right = right;
@@ -198,6 +202,9 @@ impl Game<'_> {
         host.play.insert(conn, play);
         if let Some(pos) = opened {
             self.lan_open_container(host, conn, pos);
+        }
+        if let Some(station) = opened_station {
+            self.lan_station_opened(host, conn, station);
         }
         Some(result)
     }
@@ -384,6 +391,14 @@ impl Game<'_> {
                 let item = self.item_from_network(host, &p.item);
                 host.hub.guests[gi].set_menu_slot(p.slot as usize, item);
             }
+            S::ContainerClick(p) if self.lan_merchant_click(host, conn, &p) => {}
+            S::SelectTrade(p) => self.lan_select_trade(host, conn, p.item),
+            S::ContainerClose(p) if self.lan_merchant_closed(host, conn, Some(p.container)) => {
+                let g = &mut host.hub.guests[gi];
+                if let Some(c) = g.carried.take() {
+                    self.drop_guest_items(host, gi, vec![c]);
+                }
+            }
             S::ContainerClick(p) => {
                 let rules = ItemRules(&self.res.items);
                 let drops = host.hub.container_click(conn, p, &mut self.world, &rules);
@@ -445,7 +460,7 @@ impl Game<'_> {
         Some(out)
     }
 
-    fn drop_guest_items(&mut self, host: &LanHost, gi: usize, stacks: Vec<ItemStack>) {
+    pub(super) fn drop_guest_items(&mut self, host: &LanHost, gi: usize, stacks: Vec<ItemStack>) {
         let g = &host.hub.guests[gi];
         let eye = [
             g.position[0],
@@ -615,6 +630,7 @@ impl Game<'_> {
 
     /// Per tick, for every guest: dig, use items, pick up drops, die.
     pub(super) fn tick_guests(&mut self, host: &mut LanHost) {
+        self.lan_merchant_tick(host);
         let conns: Vec<u32> = host
             .hub
             .guests

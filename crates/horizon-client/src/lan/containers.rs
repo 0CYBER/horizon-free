@@ -155,6 +155,27 @@ impl Hub {
         self.send_menu_content(i, items);
     }
 
+    /// Open a trading window for a guest (`Merchant.openTradingScreen`):
+    /// its id, or None when the menu type is unknown.
+    pub fn open_merchant_window(&mut self, conn: u32, title: Tag) -> Option<i32> {
+        let kind = self
+            .sync
+            .builtin
+            .get("minecraft:menu")
+            .and_then(|m| m.id("minecraft:merchant"))?;
+        let i = self.guests.iter().position(|g| g.conn == conn)?;
+        self.close_container_at(i);
+        let g = &mut self.guests[i];
+        g.next_window = g.next_window % 100 + 1;
+        let window = g.next_window;
+        g.send(&C::OpenScreen(play::OpenScreen {
+            container: window,
+            menu: kind,
+            title,
+        }));
+        Some(window)
+    }
+
     fn send_menu_content(&mut self, i: usize, mut items: Vec<Option<ItemStack>>) {
         for j in 0..36 {
             items.push(self.guests[i].inventory[player_slot(j)].clone());

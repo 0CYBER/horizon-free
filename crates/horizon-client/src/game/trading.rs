@@ -356,6 +356,20 @@ impl Game<'_> {
             name: None,
         });
     }
+    /// A server's trading window (no mob here: the server keeps it).
+    pub(super) fn open_remote_merchant(
+        &mut self,
+        session: merchant::Session,
+        name: Option<String>,
+    ) {
+        self.open_merchant_state(MerchantState {
+            session: Box::new(session),
+            scroll: 0,
+            focused: None,
+            mob: None,
+            name,
+        });
+    }
     fn open_merchant_state(&mut self, state: MerchantState) {
         let mut s = Station::new_kind(Kind::Merchant, [0, 0, 0]);
         s.merchant = Some(Box::new(state));
@@ -380,6 +394,17 @@ impl Game<'_> {
             .as_ref()
             .and_then(|s| s.merchant.as_ref())
             .and_then(|m| m.mob);
+        let session = self.merchant_apply(session, mob);
+        if let Some(m) = self.station.as_mut().and_then(|s| s.merchant.as_mut()) {
+            m.session = session;
+        }
+    }
+    /// What a menu click's session did, applied to the world and its mob.
+    pub(super) fn merchant_apply(
+        &mut self,
+        session: Box<merchant::Session>,
+        mob: Option<u32>,
+    ) -> Box<merchant::Session> {
         let mut session = session;
         let events = std::mem::take(&mut session.events);
         let (villager, origin) = (session.villager, session.origin);
@@ -389,9 +414,6 @@ impl Game<'_> {
             if villager {
                 m.extra.variant3 = session.level.clamp(1, 5) as u8;
             }
-        }
-        if let Some(m) = self.station.as_mut().and_then(|s| s.merchant.as_mut()) {
-            m.session = session;
         }
         for e in events {
             match e {
@@ -416,6 +438,7 @@ impl Game<'_> {
                 merchant::Event::TradeSound => {}
             }
         }
+        session
     }
     /// `Villager.customServerAiStep`: the TRADE reputation event of the last
     /// trade, a tick later; the prices follow the new reputation.
@@ -440,6 +463,16 @@ impl Game<'_> {
     }
     /// `MerchantMenu.tryMoveItems` for the selected offer (the select trade packet).
     fn try_move_items(&mut self, index: usize) {
+        if self.remote.is_some() {
+            // ServerboundSelectTradePacket; the server moves the items.
+            if let Some(m) = self.station.as_mut().and_then(|s| s.merchant.as_mut()) {
+                m.session.selection_hint = index;
+            }
+            self.send(horizon_protocol::packets::play::Serverbound::SelectTrade(
+                horizon_protocol::packets::play::SelectTrade { item: index as i32 },
+            ));
+            return;
+        }
         self.menu_session(|menu, env, _| {
             menu.merchant_select(env, index);
             Some(true)

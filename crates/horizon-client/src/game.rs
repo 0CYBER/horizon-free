@@ -46,6 +46,7 @@ mod jukebox;
 mod lan;
 mod lan_actions;
 mod lan_screen;
+mod lan_trading;
 mod leads;
 mod lightning;
 mod llamas;

@@ -1035,6 +1035,10 @@ impl Game<'_> {
             if kind == Kind::Merchant && !right && self.merchant_click(local) {
                 return true;
             }
+            if kind == Kind::Merchant && self.remote.is_some() {
+                // A server's trading window: its slots are the server's.
+                return false;
+            }
             if kind == Kind::Loom && !right && self.loom_click(local) {
                 return true;
             }

@@ -336,9 +336,12 @@ impl Game<'_> {
     }
     /// `ReputationEventType.TRADE`: each trade earns a little trust.
     pub(super) fn villager_traded(&mut self, id: u32) {
-        let Some(uuid) = self.level.player_uuid else {
-            return;
-        };
+        if let Some(uuid) = self.level.player_uuid {
+            self.villager_traded_by(id, uuid);
+        }
+    }
+    /// The TRADE reputation event from the player `uuid` (a guest's too).
+    pub(super) fn villager_traded_by(&mut self, id: u32, uuid: [i32; 4]) {
         let Some(i) = self.villager_index(id) else {
             return;
         };
@@ -355,6 +358,10 @@ impl Game<'_> {
         let Some(uuid) = self.level.player_uuid else {
             return 0;
         };
+        self.villager_reputation_of(id, uuid)
+    }
+    /// `Villager.getPlayerReputation` of the player `uuid`.
+    pub(super) fn villager_reputation_of(&self, id: u32, uuid: [i32; 4]) -> i32 {
         self.villager_index(id)
             .and_then(|i| villager::ext(&self.mobs[i]))
             .map_or(0, |e| e.gossips.reputation(uuid))
