@@ -42,13 +42,12 @@ collectors these can include cycle duration and overlapping phases; it is not a
 direct stop-the-world pause measurement. The viewer calls it collection time.
 Use [JFR pause events](profiling.md) when investigating GC-induced stalls.
 
-The [three-pair heap experiment](heap-budget.md) compares 3 GiB and 1.5 GiB
-maximum heaps with the same core stack. It records variable RSS savings, nearly
-unchanged average FPS and increased GC accounting; playable defaults remain
+A three-pair heap experiment compared 3 GiB and 1.5 GiB
+maximum heaps with the same core stack. It recorded variable RSS savings, nearly
+unchanged average FPS and increased GC accounting; playable defaults stayed
 unchanged.
 
 The native-read test exercises the real library, overlapping recordings,
 background execution, idle cancellation and unavailable-reader behavior on
 the build platform. This validates measurement availability, not an FPS or
-RAM optimization result. Real game integration and platform results are
-recorded in the release validation document after they finish.
+RAM optimization result.

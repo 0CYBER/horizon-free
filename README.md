@@ -12,19 +12,36 @@
 </p>
 
 <p align="center">
-  <a href="#getting-it"><b>Get started</b></a> ·
+  <a href="#download"><b>Download</b></a> ·
   <a href="#screenshots"><b>Screenshots</b></a> ·
   <a href="#project-status"><b>Parity status</b></a> ·
-  <a href="docs/native-client.md"><b>Native client guide</b></a>
+  <a href="docs/README.md"><b>Documentation</b></a>
 </p>
 
 # Horizon
 
-A Rust rewrite of Minecraft: Java Edition 26.3 that aims for one-to-one vanilla parity, checked against the game itself with differential tests.
+A Rust rewrite of Minecraft: Java Edition 26.3 with one-to-one vanilla parity, checked against the game itself with differential tests.
 
-**Status:** in development. The native client is playable on Linux, macOS (Apple Silicon) and Windows; Java parity is 100% of what its harnesses compare, pending the final audit (see [Project status](#project-status)).
+Every subsystem matches vanilla in all 281 parity harnesses, on Linux and macOS: 100% of what the harnesses compare (see [Project status](#project-status)). The native client is playable on Linux, macOS (Apple Silicon) and Windows.
 
 > Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft. Horizon contains no Minecraft code, assets or data: you need your own legally obtained copy of Minecraft: Java Edition 26.3.
+
+## Download
+
+**[Download the Horizon launcher](https://github.com/ludovic111/horizon/releases?q=launcher-v&expanded=true)** for Linux x86-64, macOS Apple Silicon or Windows x64: take the newest `launcher-v*` release (currently [launcher-v0.1.1](https://github.com/ludovic111/horizon/releases/tag/launcher-v0.1.1)); the launcher then updates itself. The launcher is the way to get Horizon: it installs and updates the game, prepares its resources from your own copy of Minecraft, and starts the client or a dedicated server.
+
+**You need** Minecraft: Java Edition installed with the official launcher, with 26.3 played once; Python 3.10 or newer and Java 25 (a JDK, e.g. Eclipse Temurin 25) for the one-time resource preparation; and a GPU with Vulkan on Linux and Windows, or any Apple Silicon Mac.
+
+### The launcher
+
+<table>
+  <tr>
+    <td width="50%"><img src="launcher/docs/play.png" alt="The launcher's Play page"></td>
+    <td width="50%"><img src="launcher/docs/versions.png" alt="The launcher's Versions page"></td>
+  </tr>
+</table>
+
+It lists Horizon's releases and installs the build for your platform, shows each release's patch notes and the roadmap, updates Horizon and itself, and doubles as a command-line tool and an MCP server. See [the launcher's README](launcher/README.md).
 
 ## Screenshots
 
@@ -69,22 +86,14 @@ The [native client](docs/native-client.md) opens on a vanilla-style title screen
 - shields, maps, books, fireworks, beacons, advancements and statistics;
 - Anvil saves, joining vanilla servers, and opening a world to LAN.
 
-## Getting it
+## Build from source
 
-Builds for **Linux x86-64**, **macOS Apple Silicon** and **Windows x64** are attached to the [releases](https://github.com/ludovic111/horizon/releases). Each folder holds the game, the resource preparation tool and a `PLAY.txt`; the first start prepares the resources from your own copy of the game, as below. You can also build from source.
-
-**Platform.** A GPU with Vulkan on Linux and Windows, or any Apple Silicon Mac. Development and the vanilla harnesses run on Linux.
-
-**Requirements.** Python 3.10 or newer and JDK 25 (for resource preparation). To build from source: Rust 1.90 or newer, and on Linux the ALSA development headers (`libasound2-dev` on Debian and Ubuntu).
-
-### Bring your own copy
+For developers. Requirements: Rust 1.90 or newer, Python 3.10 or newer, JDK 25, and on Linux the ALSA development headers (`libasound2-dev` on Debian and Ubuntu). Development and the vanilla harnesses run on Linux.
 
 Horizon contains no game files and never downloads them. It builds its resources from **your own copy** of Minecraft: Java Edition 26.3, verified against the checksums in `research-lock.json`:
 
 1. **Client:** install Java Edition with the official launcher and play 26.3 once. Horizon reads `versions/26.3/`, `libraries/` and `assets/` from the launcher's game directory (`~/.minecraft` on Linux). If yours lives elsewhere, pass `--minecraft-dir` or set `HORIZON_MINECRAFT_DIR`.
-2. **Server jar:** download the 26.3 server jar yourself, from [minecraft.net/download/server](https://www.minecraft.net/en-us/download/server) while 26.3 is the current release, or otherwise from the `downloads.server.url` in your launcher's `versions/26.3/26.3.json`. Pass it with `--server-jar` or set `HORIZON_SERVER_JAR`. It is only needed the first time.
-
-### Build and run
+2. **Server jar:** the 26.3 server jar, from the `downloads.server.url` in your launcher's `versions/26.3/26.3.json` (or [minecraft.net/download/server](https://www.minecraft.net/en-us/download/server) while 26.3 is the current release). Pass it with `--server-jar` or set `HORIZON_SERVER_JAR`. It is only needed the first time.
 
 ```sh
 git clone https://github.com/ludovic111/horizon.git
@@ -96,22 +105,11 @@ cargo run --release -p horizon-client
 
 Everything prepared lands in the gitignored `.local/`. It is derived from the game: never commit it or share it.
 
-## Usage
-
-The client starts on the title screen. Command-line options (`--world`, `--seed`, `--creative`, `--render-distance`), controls, scripting through `horizon-ctl`, and packaging for another of your own Linux machines are described in [the native client guide](docs/native-client.md).
-
-## Documentation
-
-- [Native client](docs/native-client.md): running, options, controls, scripting and architecture.
-- [Rust rewrite status](docs/rust-parity.md): completion criteria and per-area scope.
-- Parity notes: [block behaviours and ticking](docs/parity/blocks.md), [section meshing](docs/parity/meshing.md).
-- [Decompilation and Rust research lab](docs/research-lab.md): the local game inspection workspace and the first research crates.
-- [Decompilation status](docs/decompilation-status.md).
-- [Java performance packs](docs/java-packs.md): the earlier, no longer developed Java track.
+The client starts on the title screen. Command-line options (`--world`, `--seed`, `--creative`, `--render-distance`, `--dedicated`), controls, scripting through `horizon-ctl`, and the architecture are described in [the native client guide](docs/native-client.md). The rest of the documentation is indexed in [docs/README.md](docs/README.md), including [the parity workflow](docs/parity-workflow.md).
 
 ## Project status
 
-The table below is the project's own audit of each subsystem. Every subsystem now matches vanilla in every harness that compares it. 100% means 100% of what the harnesses compare, not proof that nothing else differs. Parity is declared complete only after the from-scratch audit (`tools/parity.py --all` on Linux and macOS) and the launch checks on packaged builds pass; see the roadmap.
+The table below is the project's own audit of each subsystem. Every subsystem now matches vanilla in every harness that compares it. 100% means 100% of what the harnesses compare, not proof that nothing else differs. The remaining known differences and the final checks are listed in the roadmap.
 
 ### Java parity: 100%
 
@@ -140,28 +138,13 @@ them too (Rust uses Java's own float maths on each platform).
 | Audio | 1 | None: the sound engine, sound events, music, situational music, ambience and subtitles match vanilla |
 | Block behaviours and ticking | 1 | None: block updates, random ticks, redstone, dispensers (6,000 cases), crafters (4,000 crafts), block entity removal (containers spill, 4,000 cases), copper golem chest sorting and the sculk family (435 scenarios: shrieker warnings and warden summoning included) match vanilla |
 
-### What's new since the previous version
-
-- **Every subsystem matches vanilla** in its harnesses: Java parity goes from 88% to 100% of what the harnesses compare.
-- **Dedicated server:** `horizon-client --dedicated --nogui` runs a server that vanilla clients can join (offline mode), with vanilla's server.properties, status ping, chat, recipes, advancements and command tree; Horizon also joins vanilla servers, and LAN discovery matches vanilla.
-- **Worlds from 1.8 onwards** open and are upgraded as vanilla does, superflat worlds included, along with old options.txt and creative hotbars.
-- **Mob AI matches vanilla** tick by tick in 92 scenarios: villagers (breeding and gossip included), the warden and the sculk shrieker summoning it, ghastlings and copper golems sorting chests.
-- **Spawned mobs' gear and enchantments** match vanilla over 24,000 cases.
-- **Screens:** the resource pack screen, the open chat (input, history, command suggestions), the recipe book (drawing, search, ingredient placement), the loom's banner preview, End gateway beams, and player-list heads drawn from players' skins.
-- **Render distance 2** now loads (it used to stay on "Loading terrain…").
-- **macOS gives vanilla's results** in every harness: Rust now uses the float maths Java uses on each platform.
-
 ### Roadmap
 
-1. A from-scratch audit (`tools/parity.py --all`) on Linux and on macOS.
-2. Launch checks on the packaged Linux, macOS and Windows builds.
-3. Remaining known differences: online-mode servers (Mojang's session servers) are not supported; skins served over https show the default skin unless already cached; pack icons show the unknown-pack texture in game; the creative hotbar keys (C/X) aren't wired to the hotbar loader; item tooltips lack attribute lines.
+**Known differences.** Online-mode servers (Mojang's session servers) are not supported; skins served over https show the default skin unless already cached; pack icons show the unknown-pack texture in game; the creative hotbar keys (C/X) aren't wired to the hotbar loader; item tooltips lack attribute lines.
 
-The rewrite is complete when it reaches one-to-one parity and packaged native builds pass the launch checks in [Rust rewrite status](docs/rust-parity.md#completion-criteria-and-playable-builds).
+**Final checks.** A from-scratch audit (`tools/parity.py --all`) on Linux and on macOS, and the launch checks on the packaged Linux, macOS and Windows builds listed in [Rust rewrite status](docs/rust-parity.md#completion-criteria-and-playable-builds).
 
-### After the rewrite
-
-Once Horizon matches vanilla, the plan is to build on that exact base:
+**Next.** With vanilla parity as the base:
 
 - **Performance:** optimize the client and the server as far as they can go (rendering, chunk generation and meshing, memory, multithreaded ticking) while the differential harnesses keep gameplay identical to vanilla.
 - **Modding support:** a stable API for writing mods against Horizon.

@@ -3,38 +3,28 @@ Horizon: Minecraft Java Edition 26.3, rewritten in Rust
 
 Horizon is an unofficial fan project, not affiliated with, endorsed by or
 connected to Mojang Studios or Microsoft. Minecraft is a trademark of Mojang
-and Microsoft. This package contains none of Minecraft's code, textures or
-sounds: you need your own copy of Minecraft Java Edition, and Horizon uses the
-files from it.
+and Microsoft. This folder contains none of Minecraft's code, textures or
+sounds: Horizon prepares them from your own copy of Minecraft Java Edition.
 
-What you need
-  - Minecraft Java Edition, bought and installed with the official launcher,
-    with version 26.3 downloaded at least once (play it once from the launcher).
-  - The 26.3 server jar, downloaded yourself from
-    https://www.minecraft.net/en-us/download/server while 26.3 is the current
-    release (or from the downloads.server.url in your launcher's
-    versions/26.3/26.3.json). Only needed for the first start.
-  - Python 3.10 or newer.
-  - Java 25 (a JDK, e.g. Eclipse Temurin 25).
-  - A graphics driver with Vulkan (Linux, Windows) or any Apple Silicon Mac.
+Playing through the Horizon launcher
+  Nothing to do here: the launcher installed this folder, prepares the
+  resources the first time you press Play, and starts the game. Use the
+  launcher to update, play or run a server.
 
-First start (once, a few minutes)
-  1. Open a terminal in this folder.
-  2. Run:   python3 tools/prepare_native_client.py --prepare --server-jar PATH/TO/server.jar
-     (on Windows: py tools\prepare_native_client.py --prepare --server-jar PATH\TO\server.jar)
-     It reads the game files from your own Minecraft installation and writes
-     the resources Horizon needs into .local/ in this folder. If your launcher
-     keeps the game elsewhere, add --minecraft-dir PATH.
-  3. Optional, for sound: python3 tools/fetch_sounds.py
-     It copies the game's sounds from your launcher's install in the same way.
+Downloaded this archive directly?
+  Get the launcher instead; it installs, prepares and updates Horizon for you:
+  https://github.com/ludovic111/horizon/releases?q=launcher-v&expanded=true
 
-Play
-  Linux:    ./horizon-client
-  macOS:    ./horizon-client   (first time: right-click > Open, or
-            xattr -d com.apple.quarantine horizon-client)
-  Windows:  horizon-client.exe
-  Run it from this folder. horizon-client --help lists the options
-  (render distance, world, seed, joining a server...).
+  To prepare this folder by hand you need Minecraft Java Edition 26.3, played
+  once from the official launcher, Python 3.10+ and Java 25 (a JDK). Then,
+  in this folder:
+    python3 tools/prepare_native_client.py --prepare --server-jar PATH/TO/server.jar
+    python3 tools/fetch_sounds.py          (optional, for sound)
+  (Windows: py instead of python3.) The 26.3 server jar is the
+  downloads.server.url in your launcher's versions/26.3/26.3.json. Add
+  --minecraft-dir PATH if your launcher keeps the game elsewhere. Then run
+  ./horizon-client (horizon-client.exe on Windows; on macOS the first time:
+  right-click > Open). horizon-client --help lists the options.
 
 Controls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl
 sprint, left click break, right click place/use, 1-9 or scroll for the hotbar,

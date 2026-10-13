@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 pub const REPO: &str = "ludovic111/horizon";
 pub const SPONSOR_URL: &str = "https://github.com/sponsors/ludovic111";
-pub const README_URL: &str = "https://github.com/ludovic111/horizon/blob/launcher/launcher/README.md";
+pub const README_URL: &str = "https://github.com/ludovic111/horizon/blob/main/launcher/README.md";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Launcher releases are tagged `launcher-vX.Y.Z`; Horizon's own are `vYYYY.MM.DD`.
 pub const LAUNCHER_TAG_PREFIX: &str = "launcher-v";

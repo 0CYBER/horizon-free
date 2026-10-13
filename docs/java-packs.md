@@ -8,11 +8,9 @@ Build **horizon-mac-starter-0.21.0.zip** with `python3 tools/build_release.py` (
 
 Use native **Java 25 ARM64**, maximum heap **6144 MiB**, minimum **512 MiB** on a 16 GB M2 Pro Mac. Prism can download Java automatically. Start at 1280×800 or 1920×1200; full Retina resolution is a larger GPU workload. [START-HERE.txt](../packs/START-HERE.txt) has details. The same `.mrpack` files import into Prism on Windows and Linux.
 
-If Prism is already installed, follow the [Mac import and first comparison guide](mac-first-test.md).
-
-Core and balanced also pass [macOS title/demo-world rendering probes](client-graphics-smoke.md)
-on the hosted ARM64 software renderer, including readback, saves and clean exits.
-Physical M2 GPU performance and macOS 27 remain to be tested.
+Core and balanced passed macOS title and demo-world rendering probes on the hosted
+ARM64 software renderer, including readback, saves and clean exits. Physical M2
+GPU performance and macOS 27 were never tested.
 
 | Profile | Full-detail chunks | Distant LOD radius | Suggested maximum heap |
 | --- | ---: | ---: | ---: |
@@ -46,75 +44,23 @@ For the first comparison at the same view distance, use `baseline` versus
 The latter adds only the pinned core performance mods and leaves every original
 controller disabled. Then test balanced separately for its additional distant
 terrain. Matching captured settings does not prove pixel-identical rendering.
-[Core comparison protocol and selected observations](core-performance.md)
-include three repeated matched-view software-rendered pairs with 14–21% higher
-FPS in this workload; M2 performance remains unmeasured.
 
-[Heap budget experiment](heap-budget.md): three pairs with 3 GiB versus
-1.5 GiB maximum heap show variable RAM savings and GC/frame-time tradeoffs;
-playable defaults remain unchanged.
+The profiles marked *experiment* each isolate one change to Distant Horizons,
+EntityCulling or the JVM (adaptive terrain throttling, precise worker pacing,
+debounce-queue waits, rejected-dispatch retries, empty culling whitelists,
+culling ray scratch vectors, terrain quad reuse, terrain position arithmetic,
+tick membership storage, a smaller heap, compact object headers). Each kept the
+upstream behaviour it replaced and was measured only on Linux software rendering,
+where none showed a gain large enough to enable by default; balanced keeps them
+all off. Their write-ups were removed once the Rust rewrite replaced this track;
+they remain in Git history. Matched software-rendered pairs showed `core-performance`
+14–21% faster than `baseline`, and Vulkan about 1.5% more FPS for about 12% more
+CPU; neither is evidence for a Mac GPU.
 
-[Matched graphics API comparison](graphics-api-comparison.md): Vulkan adds
-about 1.5% average FPS but about 12% CPU in three Linux software-rendered pairs;
-backend defaults remain unchanged and physical Mac performance is unmeasured.
-
-The optional `queue-wait` pack yields during pending distant-terrain debounce retries; `adaptive-queue` combines it with the existing controllers. [Queue experiment and measurement limits](debounce-queue.md).
-
-Version 0.16 adds a separate [terrain position arithmetic experiment](terrain-position.md)
-for the sampled full-data lookup. It retains the pinned library’s unusual
-negative-coordinate rounding and invalid-level errors. Balanced keeps it off;
-whole-game and Mac performance still require measurement.
-
-Version 0.15 adds an isolated [culling ray scratch experiment](culling-rays.md)
-that reuses two numeric vectors within each culling instance while retaining
-upstream arithmetic and decisions. Balanced keeps it off; hardware gains remain
-unmeasured.
-
-Version 0.14 adds an isolated [empty culling whitelist experiment](culling-empty.md)
-that avoids allocating iterators while there are no dynamic handlers. Live
-registration and nonempty callbacks retain upstream behavior. Balanced keeps it
-off; whole-game gains still need hardware comparisons. DH profiles also request
-a scoped [interruptible blending-read wait](terrain-read-wait.md) to let
-background workers leave a pending metadata read during shutdown.
-
-Version 0.13 adds an isolated [tick membership experiment](tick-membership.md)
-that reuses compact storage for DH's private per-tick membership checks. The
-combined foreground profiles include it too; balanced keeps it off. The applied
-holder test verifies action semantics and removes repeated entry allocations;
-whole-game FPS and RAM gains still need hardware measurements.
-
-Version 0.12 captures effective distant-terrain quality, radius, worker budgets,
-Iris state and field of view. Start/end snapshots flag changed visual settings;
-[measurement details](terrain-measurements.md) explain their limits.
-
-Version 0.11 adds combined foreground-first OpenGL/Vulkan profiles with a 120 FPS
-adaptive goal, plus explicit collector experiments and GC measurement guidance.
-See [combined controls](foreground-first.md), [Vulkan on your Mac](vulkan.md)
-and [collector comparisons](collectors.md). The frame goal is not a rendering cap.
-
-Version 0.10 adds an isolated [rejected-dispatch retry experiment](dispatch-retry.md).
-It bounds retry passes when a DH worker rejects queued work, preserving original
-requeue handling and allowing other executors to progress. Balanced keeps it off.
-
-Version 0.9 also makes the queue's idle wait wakeable for incoming work, preserving
-its debounce rules and bounded cache-maintenance cadence. It remains part of the
-optional queue profiles, with separate wake-latency measurements.
-
-Version 0.8 fixes a fresh-instance graphics preset that could override the selected
-render distance. It also records actual GC/header settings and supports an optional
-[compact object headers experiment](compact-headers.md) for Java 25; packs
-do not enable that JVM flag automatically.
+To try the game's own Vulkan backend on a Mac, see [Vulkan on your Mac](vulkan.md);
+to compare garbage collectors, see [collector comparisons](collectors.md).
 
 ## Measure on your hardware
-
-The optional [adaptive terrain experiment](adaptive-terrain.md) throttles distant
-terrain background work when frames slow down or heap pressure rises, keeping the
-balanced profile's view distances and simulation settings. It remains opt-in until
-real hardware demonstrates a benefit.
-
-The additional [precise worker pacing experiment](worker-pacing.md) makes short
-terrain tasks respect their duty-cycle budget and avoids boxed worker timestamps.
-It changes generation speed and CPU use, so it stays separate from balanced.
 
 Press **F8** during gameplay to start a 120-second recording, or again to stop early. Rebind in Controls if needed. This also works with restricted chat accounts. Alternatively: `/horizon bench <label> 120`, `/horizon stop`, `/horizon status`.
 
@@ -128,22 +74,9 @@ python3 tools/compare_benchmarks.py baseline-frames.json optimized-frames.json -
 
 Open `Compare-Benchmarks.html` from the starter ZIP or [the source file](../tools/Compare-Benchmarks.html) in your browser to compare without Python. Select each JSON and optionally its matching CSV. It exports summary JSON, flags settings and duration differences, and charts frames by recorded active time or ticks by sample number. It is self-contained and makes no network requests.
 
-Version 0.18 adds an isolated [terrain quad reuse experiment](quad-reuse.md).
-It reuses a temporary quad discarded by successful premerge when the existing
-pool would otherwise allocate. Generated geometry and thread ownership checks
-pass; allocation results are not whole-game RAM or FPS evidence. It remains off
-in combined profiles.
-
-Version 0.17 also records loaded mod versions and the Java vendor, VM and runtime
-build in client and server reports. Both comparison tools flag software changes
-as explicit experiment variables; older reports remain usable with an unknown
-software warning. The viewer can expand the complete loaded mod list.
-[Live software identity check](../benchmarks/software-identity-2026-10-04/live-observations.json)
-records the metadata and file-count validation; its short capture is not a
-performance comparison.
 
 
-The comparison flags captured setting differences, but cannot verify route, world, shader state or cache warm-up. See [validation evidence](playable-validation.md). Software-renderer test FPS is not evidence of a Mac/GPU speedup.
+The comparison flags captured setting differences, but cannot verify route, world, shader state or cache warm-up. Software-renderer test FPS is not evidence of a Mac/GPU speedup.
 
 For CPU/allocation investigation, [capture and stream a private JFR summary](profiling.md).
 It distinguishes directly observed allocation counters from sampled hot methods;

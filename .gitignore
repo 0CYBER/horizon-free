@@ -16,3 +16,5 @@
 /dist/
 /mods/horizon/build/
 /saves/
+/tools/logs/
+.DS_Store
