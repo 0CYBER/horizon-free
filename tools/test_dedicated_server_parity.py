@@ -184,7 +184,7 @@ def settle(server, ticks=600, timeout=600):
         server.console('time query gametime')
         while time.time() < deadline:
             for line in server.lines[start:]:
-                if m := re.search(r'The time is (\d+)', line):
+                if m := re.search(r'The (?:game )?time is (\d+)', line):
                     return int(m.group(1))
             time.sleep(0.2)
         raise AssertionError(f'{server.log_path.name}: no game time in {timeout} s')
