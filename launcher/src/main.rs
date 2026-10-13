@@ -1,10 +1,10 @@
 //! Horizon launcher: installs Horizon builds, prepares them from the player's own Minecraft,
 //! and starts the client or a dedicated server.
-mod backend;
+
 mod markdown;
 mod theme;
 
-use backend::{Job, Msg, Release, Running, Settings};
+use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings};
 use gpui::{
     div, prelude::*, px, size, App, Application, Bounds, ClickEvent, Context, Div, FocusHandle, FontWeight,
     KeyDownEvent, PathPromptOptions, ScrollHandle, SharedString, Stateful, Subscription, TitlebarOptions, Window,

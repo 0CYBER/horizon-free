@@ -1,5 +1,6 @@
-//! Everything that is not UI: GitHub, installs, resource preparation and the game's processes.
-//! Functions here block; the UI runs them on threads and reads their messages.
+//! Everything that is not UI: GitHub, installs, resource preparation, the game's processes and
+//! updates. The GUI, the CLI and the MCP server all go through this module. Functions here
+//! block; the GUI runs them on threads and reads their messages.
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -9,9 +10,13 @@ use std::sync::{Arc, Mutex};
 
 pub const REPO: &str = "ludovic111/horizon";
 pub const SPONSOR_URL: &str = "https://github.com/sponsors/ludovic111";
+pub const README_URL: &str = "https://github.com/ludovic111/horizon/blob/launcher/launcher/README.md";
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Launcher releases are tagged `launcher-vX.Y.Z`; Horizon's own are `vYYYY.MM.DD`.
+pub const LAUNCHER_TAG_PREFIX: &str = "launcher-v";
 const AGENT: &str = concat!("horizon-launcher/", env!("CARGO_PKG_VERSION"));
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct Release {
     pub tag: String,
     pub name: String,
@@ -33,6 +38,21 @@ pub const ASSET: Option<&str> = Some("horizon-windows-x64.zip");
 )))]
 pub const ASSET: Option<&str> = None;
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub const LAUNCHER_ASSET: Option<&str> = Some("horizon-launcher-linux-x86_64.tar.gz");
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub const LAUNCHER_ASSET: Option<&str> = Some("horizon-launcher-macos-arm64.zip");
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+pub const LAUNCHER_ASSET: Option<&str> = Some("horizon-launcher-windows-x64.zip");
+#[cfg(not(any(
+    all(target_os = "linux", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64")
+)))]
+pub const LAUNCHER_ASSET: Option<&str> = None;
+
+const LAUNCHER_BINARY: &str = if cfg!(windows) { "horizon-launcher.exe" } else { "horizon-launcher" };
+
 const CLIENT: &str = if cfg!(windows) { "horizon-client.exe" } else { "horizon-client" };
 
 fn agent() -> ureq::Agent {
@@ -47,17 +67,43 @@ fn get(url: &str) -> Result<ureq::Response, String> {
     })
 }
 
-/// Published releases, newest first. Drafts never reach the anonymous API.
-pub fn releases() -> Result<Vec<Release>, String> {
-    let url = format!("https://api.github.com/repos/{REPO}/releases?per_page=50");
+/// A Horizon game tag: `v` then a digit (`v2026.10.13`). Launcher tags never match.
+pub fn is_game_tag(tag: &str) -> bool {
+    tag.strip_prefix('v').is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+}
+
+/// The launcher version in a `launcher-vX.Y.Z` tag, or None for any other tag.
+pub fn launcher_version(tag: &str) -> Option<&str> {
+    tag.strip_prefix(LAUNCHER_TAG_PREFIX).filter(|v| v.starts_with(|c: char| c.is_ascii_digit()))
+}
+
+/// The numeric parts of a version or tag: `v2026.10.13` and `2026.10.13` give [2026, 10, 13].
+/// Anything after a `-` (a pre-release) is ignored.
+fn version_parts(v: &str) -> Vec<u64> {
+    let v = v.trim_start_matches(LAUNCHER_TAG_PREFIX).trim_start_matches('v');
+    v.split('-').next().unwrap_or("").split('.').map(|p| p.parse().unwrap_or(0)).collect()
+}
+
+/// Compares two versions part by part, missing parts counting as zero (1.2 == 1.2.0).
+pub fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
+    let (a, b) = (version_parts(a), version_parts(b));
+    (0..a.len().max(b.len()))
+        .map(|i| a.get(i).unwrap_or(&0).cmp(b.get(i).unwrap_or(&0)))
+        .find(|o| o.is_ne())
+        .unwrap_or(std::cmp::Ordering::Equal)
+}
+
+/// Every published release of the repository, both kinds, with the asset named `asset`.
+fn all_releases(asset: Option<&str>) -> Result<Vec<Release>, String> {
+    let url = format!("https://api.github.com/repos/{REPO}/releases?per_page=100");
     let list: serde_json::Value = get(&url)?.into_json().map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     for r in list.as_array().into_iter().flatten() {
         if r["draft"].as_bool().unwrap_or(false) {
             continue;
         }
-        let asset = r["assets"].as_array().into_iter().flatten().find_map(|a| {
-            (Some(a["name"].as_str()?) == ASSET)
+        let found = r["assets"].as_array().into_iter().flatten().find_map(|a| {
+            (Some(a["name"].as_str()?) == asset)
                 .then(|| Some((a["browser_download_url"].as_str()?.to_string(), a["size"].as_u64()?)))?
         });
         out.push(Release {
@@ -65,10 +111,31 @@ pub fn releases() -> Result<Vec<Release>, String> {
             name: r["name"].as_str().unwrap_or_default().into(),
             body: r["body"].as_str().unwrap_or_default().replace("\r\n", "\n"),
             date: r["published_at"].as_str().unwrap_or_default().chars().take(10).collect(),
-            asset,
+            asset: found,
         });
     }
     Ok(out)
+}
+
+/// Published Horizon releases, newest first. Drafts never reach the anonymous API, and launcher
+/// releases are left out.
+pub fn releases() -> Result<Vec<Release>, String> {
+    let mut out: Vec<Release> = all_releases(ASSET)?.into_iter().filter(|r| is_game_tag(&r.tag)).collect();
+    out.sort_by(|a, b| compare_versions(&b.tag, &a.tag));
+    Ok(out)
+}
+
+/// Published launcher releases (`launcher-v…`), newest first, with this platform's archive.
+pub fn launcher_releases() -> Result<Vec<Release>, String> {
+    let mut out: Vec<Release> =
+        all_releases(LAUNCHER_ASSET)?.into_iter().filter(|r| launcher_version(&r.tag).is_some()).collect();
+    out.sort_by(|a, b| compare_versions(&b.tag, &a.tag));
+    Ok(out)
+}
+
+/// The newest Horizon release that has a build for this platform.
+pub fn latest(releases: &[Release]) -> Option<&Release> {
+    releases.iter().find(|r| r.asset.is_some())
 }
 
 /// The README's roadmap section from main (the project status section if it has none).
@@ -91,7 +158,11 @@ pub fn roadmap() -> Result<String, String> {
     Err("The README has no roadmap section yet.".into())
 }
 
+/// The launcher's data folder; `HORIZON_LAUNCHER_HOME` overrides it (for tests and scripts).
 pub fn data_dir() -> PathBuf {
+    if let Some(home) = std::env::var_os("HORIZON_LAUNCHER_HOME").filter(|h| !h.is_empty()) {
+        return PathBuf::from(home);
+    }
     dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("horizon-launcher")
 }
 
@@ -114,7 +185,7 @@ pub fn installed() -> Vec<String> {
         .filter(|e| e.path().join(COMPLETE).exists())
         .filter_map(|e| e.file_name().into_string().ok())
         .collect();
-    tags.sort_by(|a, b| b.cmp(a));
+    tags.sort_by(|a, b| compare_versions(b, a));
     tags
 }
 
