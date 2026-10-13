@@ -194,7 +194,7 @@ def scenario(d, out):
     if broke['picked_up'].get(log_id, 0) < 1:
         items = d('entities', radius=8, type='item')['entities']
         drop = next(e for e in items if e['item']['item'] == log_id)
-        d('goto', x=drop['pos'][0], y=drop['pos'][1], z=drop['pos'][2], near=0.4, timeout=20)
+        d('goto', x=drop['pos'][0], y=drop['pos'][1], z=drop['pos'][2], near=1.0, timeout=20)  # pickup reaches a block; the drop may lie under the trunk
         d('wait', ticks=10)
     inventory = d('inventory')
     assert inventory['counts'].get(log_id, 0) >= 1, inventory
