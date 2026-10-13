@@ -214,7 +214,7 @@ def main():
     WORLDS.parent.mkdir(parents=True, exist_ok=True)
     with open(WORLDS.parent / 'generate.lock', 'w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)  # another worktree may be generating them
-        missing = [v for v in datafix_worlds.VERSIONS if not (WORLDS / v / 'level.dat').exists()]
+        missing = [v for v in [*datafix_worlds.VERSIONS, *datafix_worlds.VARIANTS] if not (WORLDS / v / 'level.dat').exists()]
         if missing:
             print('generating sample worlds:', ' '.join(missing), flush=True)
             subprocess.run([sys.executable, str(ROOT / 'tools' / 'datafix_worlds.py'), *missing], cwd=ROOT, check=True)

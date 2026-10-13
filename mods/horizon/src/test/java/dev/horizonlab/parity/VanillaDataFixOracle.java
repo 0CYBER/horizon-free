@@ -266,7 +266,11 @@ public final class VanillaDataFixOracle {
             if (type == null) {
                 continue;
             }
-            CompoundTag tag = NbtIo.readCompressed(file, NbtAccounter.unlimitedHeap());
+            // SavedDataStorage.readTagFromDisk: a file that does not start with the gzip header is plain NBT.
+            byte[] bytes = Files.readAllBytes(file);
+            boolean gzip = bytes.length >= 2 && (bytes[0] & 255) == 0x1f && (bytes[1] & 255) == 0x8b;
+            CompoundTag tag = gzip ? NbtIo.readCompressed(file, NbtAccounter.unlimitedHeap())
+                : NbtIo.read(new java.io.DataInputStream(new java.io.ByteArrayInputStream(bytes)));
             int version = NbtUtils.getDataVersion(tag, 1343);
             tag = type.update(fixer, tag, version, current);
             NbtIo.writeCompressed(NbtUtils.addDataVersion(tag, current), file);

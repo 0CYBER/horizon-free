@@ -19,6 +19,7 @@ mod fixes_b;
 mod fixes_c;
 mod fixes_cliffs;
 mod fixes_flat;
+mod fixes_mid;
 mod fixes_old;
 mod flat_tables;
 mod items;
@@ -183,6 +184,7 @@ type FixFn = fn(&mut Cx);
 fn fixes() -> Vec<(Key, FixFn)> {
     let mut out = Vec::new();
     fixes_flat::register(&mut out);
+    fixes_mid::register(&mut out);
     fixes_cliffs::register(&mut out);
     fixes_old::register(&mut out);
     fixes_a::register(&mut out);

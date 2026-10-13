@@ -38,6 +38,23 @@ pub fn read_dat(path: &Path) -> io::Result<Option<Tag>> {
     Ok(Some(root.tag))
 }
 
+/// `SavedDataStorage.readTagFromDisk`: a file without the gzip header is plain NBT.
+pub fn read_saved_dat(path: &Path) -> io::Result<Option<Tag>> {
+    let bytes = match fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let limits = Limits::default();
+    let raw = if bytes.starts_with(&[0x1f, 0x8b]) {
+        Compression::Gzip.decode(&bytes, limits.max_bytes)?
+    } else {
+        bytes
+    };
+    let (root, _) = nbt::read_named(&raw, limits).map_err(|e| invalid(e.to_string()))?;
+    Ok(Some(root.tag))
+}
+
 /// `NbtIo.writeCompressed`, creating the parent folders.
 pub fn write_dat(path: &Path, tag: &Tag) -> io::Result<()> {
     if let Some(parent) = path.parent() {
@@ -707,7 +724,7 @@ fn upgrade_saved_data(data: &Path) -> io::Result<()> {
         let Some(ty) = super::saved_data_type(&relative) else {
             continue;
         };
-        if let Some(mut tag) = read_dat(&file)? {
+        if let Some(mut tag) = read_saved_dat(&file)? {
             super::update_saved_data(ty, &mut tag);
             set(&mut tag, "DataVersion", Tag::Int(CURRENT));
             write_dat(&file, &tag)?;

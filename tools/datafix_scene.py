@@ -138,6 +138,9 @@ def experiments(version):
 def items(e, version=None):
     """The sample stacks of an era, in the exact component formats `version` accepts."""
     stacks = ITEMS_A if e == A else ITEMS_B if e == B else ITEMS_C
+    if version is not None and version < 2586:  # 1.13.2 to 1.15
+        import datafix_scene_old
+        stacks = stacks + datafix_scene_old.items(version)
     if version is None:
         return stacks
     return [v for v in (versioned(s, version) for s in stacks) if available(v, version)]
@@ -237,6 +240,9 @@ def block_entities(e, version):
             out = [(b, '{SpawnData:{id:"minecraft:zombie",ArmorItems:[{},{},{},{id:"minecraft:iron_helmet",Count:1b}]},'
                        'SpawnPotentials:[{Weight:1,Entity:{id:"minecraft:skeleton"}}]}') if b == 'spawner' else (b, nbt)
                    for b, nbt in out]
+        if version < 2586:
+            import datafix_scene_old
+            out += datafix_scene_old.block_entities(version)
         if version >= 3682:
             out.append(('crafter', '{Items:[{Slot:0b,id:"minecraft:stone",Count:1b}],triggered:1,crafting_ticks_remaining:2}'))
         # Blocks the 1.20 experiment brought in 1.19.3 and 1.19.4.
@@ -312,6 +318,9 @@ def entities(e, version):
         ]
         since = {'allay': 3105, 'chest_boat': 3105, 'text_display': 3325, 'item_display': 3325, 'goat': 2700}
         out = [(k, x) for k, x in out if version >= since.get(k, 0)]
+        if version < 2514:  # 1.13.2 to 1.15: entities in the formats those versions write
+            import datafix_scene_old
+            out += datafix_scene_old.entities(version)
         if version < 3086:  # cats before 1.19 have a numeric CatType
             out = [(k, 'CatType:1' if k == 'cat' else x) for k, x in out]
         if 3105 <= version < 3322:  # darkness counts its factor from a timestamp before 1.19.4
@@ -361,6 +370,34 @@ def entities(e, version):
     if version >= 4543:
         out.append(('mannequin', ''))
     return out
+
+
+def world_commands(version):
+    """(command, seconds to wait) for the scoreboard, a boss bar and a trip through the other
+    dimensions, before 1.17: what makes level.dat, the scoreboard and the other dimension folders carry data."""
+    if version >= 2586:
+        return []
+    return [
+        ('bossbar add upgrade:boss {"text":"Boss"}', 0),
+        ('bossbar set upgrade:boss players @a', 0),
+        ('scoreboard objectives add kills dummy {"text":"Kills"}', 0),
+        ('scoreboard objectives add zombies minecraft.killed:minecraft.zombie', 0),
+        ('scoreboard players set Upgrader kills 3', 0),
+        ('team add red {"text":"Red"}', 0),
+        ('team modify red prefix {"text":"[R]"}', 0),
+        ('team join red Upgrader', 0),
+        ('advancement grant @a only minecraft:story/root', 0),
+        ('execute in minecraft:the_end run tp Upgrader 100 60 0', 20),
+        ('execute in minecraft:the_nether run tp Upgrader 0 80 0', 15),
+    ]
+
+
+def blocks(version):
+    """Plain blocks whose states changed over the versions."""
+    if version < 2586:
+        import datafix_scene_old
+        return datafix_scene_old.blocks(version)
+    return []
 
 
 def player_commands(e, name, version=None):
