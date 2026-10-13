@@ -106,7 +106,8 @@ def run_distance(args, ctl, env, cwd, distance):
                 f"  p99 {summary.get('p99_ms', 0):6.2f} ms"
                 f"  cpu {((summary.get('cpu') or {}).get('avg_ms') or 0):6.2f} ms"
                 f"  gpu {((summary.get('gpu') or {}).get('avg_ms') or 0):6.2f} ms"
-                + "  [" + " ".join(f"{k} {v:.2f}" for k, v in (summary.get("phases_avg_ms") or {}).items()) + "]",
+                + "  [" + " ".join(f"{k} {v:.2f}" for k, v in (summary.get("phases_avg_ms") or {}).items()) + "]"
+                + "  slow [" + " ".join(f"{k} {v:.1f}" for k, v in (summary.get("slow_phases_avg_ms") or {}).items()) + "]",
                 flush=True,
             )
     finally:
@@ -150,9 +151,11 @@ def main():
         "flight_seconds": args.seconds,
         "scenes": {n: {"from": a, "to": b, "pitch": c} for n, a, b, c in SCENES},
         "distances": {},
+        "load_before": os.getloadavg(),
     }
     for d in [int(x) for x in args.distances.split(",")]:
         report["distances"][str(d)] = run_distance(args, ctl, env, cwd, d)
+    report["load_after"] = os.getloadavg()
     out = Path(args.out) if args.out else ROOT / "benchmarks/graphics" / f"{args.label}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2) + "\n")

@@ -920,12 +920,24 @@ fn pois_in_range(
     let chunks = radius.div_euclid(16) + 1;
     let y0 = (c[1] - radius).max(crate::chunk::MIN_Y);
     let y1 = (c[1] + radius).min(crate::chunk::MIN_Y + crate::chunk::HEIGHT - 1);
+    let poi = poi_states(w.facts);
     for qz in cz - chunks..=cz + chunks {
         for qx in cx - chunks..=cx + chunks {
-            if !w.world.chunks.contains_key(&(qx, qz)) {
+            let Some(chunk) = w.world.chunks.get(&(qx, qz)) else {
                 continue;
+            };
+            // Sections whose palette holds no bell, bed or job site have no
+            // POI: skip them whole (PoiManager indexes POIs instead).
+            let mut may_hold = [false; crate::chunk::SECTIONS];
+            for (slot, section) in may_hold.iter_mut().zip(&chunk.sections) {
+                *slot = section
+                    .blocks
+                    .maybe_has(|id| poi.get(id as usize).copied().unwrap_or(true));
             }
             for y in y0..=y1 {
+                if !may_hold[((y - crate::chunk::MIN_Y) >> 4) as usize] {
+                    continue;
+                }
                 for z in qz * 16..qz * 16 + 16 {
                     for x in qx * 16..qx * 16 + 16 {
                         if (x - c[0]).abs() > radius || (z - c[2]).abs() > radius {
@@ -965,6 +977,28 @@ fn pois_in_range(
             + i64::from(p[2] - c[2]).pow(2)
     });
     found
+}
+/// Which block states `poi_at` can find a POI in, by state id.
+fn poi_states(facts: &crate::blocks::BlockFacts) -> std::sync::Arc<Vec<bool>> {
+    static TABLE: std::sync::Mutex<Option<std::sync::Arc<Vec<bool>>>> = std::sync::Mutex::new(None);
+    let mut table = TABLE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(t) = table.as_ref().filter(|t| t.len() == facts.states.len()) {
+        return t.clone();
+    }
+    let t: std::sync::Arc<Vec<bool>> = std::sync::Arc::new(
+        facts
+            .states
+            .iter()
+            .map(|f| {
+                let name = &*f.name;
+                name == "minecraft:bell"
+                    || name.ends_with("_bed")
+                    || super::villager::job_site_profession(name).is_some()
+            })
+            .collect(),
+    );
+    *table = Some(t.clone());
+    t
 }
 /// `PoiManager.exists(pos, predicate)`.
 fn poi_exists(m: &Mob, w: &MobWorld, p: [i32; 3], f: PoiFilter) -> bool {

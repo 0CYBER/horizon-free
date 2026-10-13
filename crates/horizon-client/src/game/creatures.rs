@@ -2280,10 +2280,26 @@ impl Game<'_> {
     pub(super) fn mob_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
         let atlas = &self.res.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
+        let scale = f64::from(self.settings.entity_distance);
         for mob in &self.mobs {
             let d = glam::DVec3::new(mob.position.x, mob.position.y, mob.position.z) - camera;
-            if d.length_squared() > 128.0 * 128.0 {
+            // Entity.shouldRenderAtSqrDistance: 64 times the bounding box's
+            // mean edge, scaled by the entity distance option.
+            let (w, h, _) = mob.dims();
+            let range = (w + h + w) / 3.0 * 64.0 * scale;
+            if d.length_squared() >= range * range {
                 continue;
+            }
+            // EntityRenderer.shouldRender: the culling box, grown by 0.5
+            // (GuardianRenderer also draws while its beam is out).
+            if let Some(view) = &self.view_frustum
+                && horizon_client::mobs::guardian::beam(mob, alpha as f32).is_none()
+            {
+                let lo = d.as_vec3() - glam::Vec3::new(w as f32 / 2.0 + 0.5, 0.5, w as f32 / 2.0 + 0.5);
+                let hi = d.as_vec3() + glam::Vec3::new(w as f32 / 2.0 + 0.5, h as f32 + 0.5, w as f32 / 2.0 + 0.5);
+                if !view.intersects(lo, hi) {
+                    continue;
+                }
             }
             let light = self.world.light(
                 mob.position.x.floor() as i32,

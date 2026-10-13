@@ -147,9 +147,8 @@ pub struct FrameStats {
     millis: Vec<f32>,
     cpu: Vec<f32>,
     gpu: Vec<f32>,
-    /// Summed milliseconds per frame phase (`PHASES`) and the frames counted.
-    phases: [f64; PHASES.len()],
-    phase_frames: u64,
+    /// Milliseconds per frame phase (`PHASES`), one entry per rendered frame.
+    phases: Vec<[f32; PHASES.len()]>,
 }
 
 /// The parts of a frame's CPU time: world streaming and uploads, game ticks,
@@ -189,10 +188,29 @@ impl FrameStats {
         }
     }
     pub fn record_phases(&mut self, millis: [f32; PHASES.len()]) {
-        for (sum, m) in self.phases.iter_mut().zip(millis) {
-            *sum += f64::from(m);
+        if self.phases.len() < Self::LIMIT {
+            self.phases.push(millis);
         }
-        self.phase_frames += 1;
+    }
+    /// Average milliseconds per phase over the frames whose CPU time is at
+    /// least `min_cpu` (all frames for 0): where the slow frames go.
+    fn phase_average(&self, min_cpu: f32) -> serde_json::Value {
+        let mut sums = [0.0f64; PHASES.len()];
+        let mut n = 0;
+        for (i, phases) in self.phases.iter().enumerate() {
+            if self.cpu.get(i).is_some_and(|&c| c >= min_cpu) {
+                for (sum, m) in sums.iter_mut().zip(phases) {
+                    *sum += f64::from(*m);
+                }
+                n += 1;
+            }
+        }
+        PHASES
+            .iter()
+            .zip(sums)
+            .map(|(name, sum)| (name.to_string(), (sum / f64::from(n.max(1))).into()))
+            .collect::<serde_json::Map<_, _>>()
+            .into()
     }
     pub fn record_gpu(&mut self, millis: &[f32]) {
         if self.gpu.len() < Self::LIMIT {
@@ -203,8 +221,7 @@ impl FrameStats {
         self.millis.clear();
         self.cpu.clear();
         self.gpu.clear();
-        self.phases = [0.0; PHASES.len()];
-        self.phase_frames = 0;
+        self.phases.clear();
     }
     pub fn summary(&self) -> serde_json::Value {
         let mut sorted = self.millis.clone();
@@ -222,6 +239,15 @@ impl FrameStats {
             .map(|&m| f64::from(m))
             .sum::<f64>()
             / slowest as f64;
+        // Where the slowest 1% of frames by CPU time go.
+        let slow_phases = {
+            let mut cpu = self.cpu.clone();
+            cpu.sort_by(f32::total_cmp);
+            let p99 = cpu
+                .get(cpu.len().saturating_sub(cpu.len().div_ceil(100)))
+                .copied();
+            p99.map_or(serde_json::Value::Null, |p| self.phase_average(p))
+        };
         serde_json::json!({
             "frames": n,
             "seconds": total / 1000.0,
@@ -233,11 +259,8 @@ impl FrameStats {
             "max_ms": sorted[n - 1],
             "cpu": percentiles(&self.cpu),
             "gpu": percentiles(&self.gpu),
-            "phases_avg_ms": PHASES
-                .iter()
-                .zip(self.phases)
-                .map(|(name, sum)| (name.to_string(), (sum / self.phase_frames.max(1) as f64).into()))
-                .collect::<serde_json::Map<_, _>>(),
+            "phases_avg_ms": self.phase_average(0.0),
+            "slow_phases_avg_ms": slow_phases,
         })
     }
 }

@@ -108,6 +108,7 @@ pub mod snbt;
 pub mod sound_engine;
 pub mod sound_events;
 pub mod sprint;
+pub mod spans;
 pub mod sprites;
 pub mod stations;
 pub mod stopwatches;

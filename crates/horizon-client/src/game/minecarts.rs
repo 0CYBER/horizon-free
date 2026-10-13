@@ -762,9 +762,14 @@ impl Game<'_> {
     /// Every cart but the ridden one (which ticks with its rider).
     pub(super) fn tick_carts(&mut self) {
         self.push_carts();
+        // ServerLevel.tick: only entities in entity-ticking chunks tick.
+        let ticking = self.entity_ticking_area();
         let mut i = 0;
         while i < self.carts.len() {
-            if Some(self.carts[i].id) == self.riding {
+            let p = self.carts[i].position;
+            if Some(self.carts[i].id) == self.riding
+                || !ticking(p.x.floor() as i32, p.z.floor() as i32)
+            {
                 i += 1;
                 continue;
             }

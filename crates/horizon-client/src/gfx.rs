@@ -1373,17 +1373,39 @@ impl Renderer {
         self.release_section(key);
     }
     pub fn view_projection(&self, frame: &Frame) -> Mat4 {
+        self.projection(
+            frame.fov_degrees,
+            frame.yaw,
+            frame.pitch,
+            frame.bob,
+            frame.distance,
+        )
+    }
+    /// The view frustum `render` will cull with, for culling geometry built
+    /// before the frame (entities, block entities) the same way.
+    pub fn camera_frustum(
+        &self,
+        fov_degrees: f32,
+        yaw: f32,
+        pitch: f32,
+        bob: Mat4,
+        distance: f32,
+    ) -> Frustum {
+        Frustum {
+            planes: frustum(self.projection(fov_degrees, yaw, pitch, bob, distance)),
+        }
+    }
+    fn projection(&self, fov_degrees: f32, yaw: f32, pitch: f32, bob: Mat4, distance: f32) -> Mat4 {
         let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
-        let (yaw, pitch) = (frame.yaw.to_radians(), frame.pitch.to_radians());
+        let (yaw, pitch) = (yaw.to_radians(), pitch.to_radians());
         // Minecraft yaw: 0 = +Z (south), 90 = -X (west); pitch positive looks down.
         let forward = Vec3::new(
             -yaw.sin() * pitch.cos(),
             -pitch.sin(),
             yaw.cos() * pitch.cos(),
         );
-        let far = (frame.distance * 4.0).max(1024.0);
-        let bob = frame.bob;
-        Mat4::perspective_rh(frame.fov_degrees.to_radians(), aspect, 0.05, far)
+        let far = (distance * 4.0).max(1024.0);
+        Mat4::perspective_rh(fov_degrees.to_radians(), aspect, 0.05, far)
             * bob
             * Mat4::look_to_rh(Vec3::ZERO, forward, Vec3::Y)
     }
@@ -1608,7 +1630,9 @@ impl Renderer {
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
         // Frustum culling and camera-relative origins.
-        let planes = frustum(view_proj);
+        let view = Frustum {
+            planes: frustum(view_proj),
+        };
         let camera = frame.camera;
         let camera_section = (
             (camera.x.floor() as i32) >> 4,
@@ -1640,14 +1664,7 @@ impl Renderer {
                 }
                 let min = origin.as_vec3();
                 let max = min + Vec3::splat(16.0);
-                if planes.iter().any(|p| {
-                    let v = Vec3::new(
-                        if p.x >= 0.0 { max.x } else { min.x },
-                        if p.y >= 0.0 { max.y } else { min.y },
-                        if p.z >= 0.0 { max.z } else { min.z },
-                    );
-                    p.truncate().dot(v) + p.w < 0.0
-                }) {
+                if !view.intersects(min, max) {
                     return None;
                 }
                 Some((
@@ -2118,6 +2135,24 @@ impl Renderer {
         encoder.set_depth(png::BitDepth::Eight);
         encoder.write_header()?.write_image_data(&pixels)?;
         Ok([width, height])
+    }
+}
+/// Camera-relative clip planes (`Frustum`).
+#[derive(Clone, Copy, Debug)]
+pub struct Frustum {
+    planes: [Vec4; 6],
+}
+impl Frustum {
+    /// Whether the camera-relative box `min..max` is at least partly inside.
+    pub fn intersects(&self, min: Vec3, max: Vec3) -> bool {
+        !self.planes.iter().any(|p| {
+            let v = Vec3::new(
+                if p.x >= 0.0 { max.x } else { min.x },
+                if p.y >= 0.0 { max.y } else { min.y },
+                if p.z >= 0.0 { max.z } else { min.z },
+            );
+            p.truncate().dot(v) + p.w < 0.0
+        })
     }
 }
 fn frustum(m: Mat4) -> [Vec4; 6] {
