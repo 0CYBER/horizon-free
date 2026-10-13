@@ -46,7 +46,7 @@ pub const VERSION_NAME: &str = "26.3";
 fn string(s: &str) -> Tag {
     Tag::String(s.into())
 }
-pub(crate) fn text(tag: Option<&Tag>) -> Option<String> {
+pub fn text(tag: Option<&Tag>) -> Option<String> {
     match tag {
         Some(Tag::String(s)) => Some(s.to_string_lossy()),
         _ => None,
@@ -1338,6 +1338,16 @@ fn read_saved_data(world: &Path, name: &str) -> Option<Tag> {
     read_dat(&saved_data_path(world, name))?
         .get("data")
         .cloned()
+}
+/// The world's generator settings: world_gen_settings.dat (26.3) or
+/// level.dat's Data.WorldGenSettings.
+pub fn world_gen_settings(world: &Path) -> Option<Tag> {
+    read_saved_data(world, "world_gen_settings").or_else(|| {
+        read_dat(&world.join("level.dat"))?
+            .get("Data")?
+            .get("WorldGenSettings")
+            .cloned()
+    })
 }
 fn write_saved_data(world: &Path, name: &str, data: Tag) -> Result<()> {
     write_dat(
