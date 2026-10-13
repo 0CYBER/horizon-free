@@ -19,7 +19,9 @@ use horizon_world::{
     living_air::{self, LivingAirWorld},
     living_fall::ImpulseContext,
     living_motion::{self, LivingMotionWorld},
-    movement_emission::MovementEmission,
+    movement_emission::{
+        self as emission, MovementDistances, MovementEmission, MovementEmissionWorld, MovementEvent,
+    },
     movement_properties::{
         BoundMovementProperties, MovementBlockProvider, MovementProperties, MovementTags,
         RegistryMovementWorld,
@@ -114,8 +116,8 @@ pub enum MotionEvent {
         state: BlockStateId,
         position: BlockPos,
     },
+    /// `Entity.walkingStepSound` on this block.
     Emission {
-        movement: Vec3,
         position: BlockPos,
         state: BlockStateId,
     },
@@ -173,6 +175,9 @@ pub struct PlayerMotion {
     /// `LocalPlayer.itemUseSpeedMultiplier` while using an item (not riding).
     pub item_use_speed: Option<f32>,
     pub last_climbable: Option<BlockPos>,
+    /// `Entity.moveDist`, `flyDist` and `nextStep`: footsteps come once per
+    /// metre walked, not once per move.
+    pub steps: MovementDistances,
     pub needs_sync: bool,
     pub sync_position: bool,
     pub events: Vec<MotionEvent>,
@@ -255,6 +260,10 @@ impl PlayerMotion {
             speed: 0.0,
             item_use_speed: None,
             last_climbable: None,
+            steps: MovementDistances {
+                next_step: 1.0,
+                ..MovementDistances::default()
+            },
             needs_sync: false,
             sync_position: false,
             events: Vec::new(),
@@ -983,24 +992,23 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
         Ok(false)
     }
     fn movement_emission(&mut self) -> Result<MovementEmission> {
-        Ok(MovementEmission::All)
+        <Self as MovementEmissionWorld>::movement_emission(self)
     }
     fn passenger(&mut self) -> Result<bool> {
         Ok(false)
     }
+    /// `Entity.applyMovementEmissionAndPlaySound`: a footstep (`Emission`)
+    /// only once the walked distance passes `nextStep`. Emitting on every
+    /// move played a step sound each tick, even standing still on the
+    /// ground (gravity moves the player every tick), as an endless loop.
     fn apply_movement_emission(
         &mut self,
-        _: MovementEmission,
+        kind: MovementEmission,
         movement: Vec3,
         position: BlockPos,
         state: BlockStateId,
     ) -> Result<()> {
-        self.player.events.push(MotionEvent::Emission {
-            movement,
-            position,
-            state,
-        });
-        Ok(())
+        emission::apply_movement_emission(self, kind, movement, position, state)
     }
     fn block_speed_factor(&mut self) -> Result<f32> {
         let efficiency = self.player.attribute("minecraft:movement_efficiency")? as f32;
@@ -1013,6 +1021,109 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
             location,
         )?;
         Ok(block + efficiency * (1.0 - block))
+    }
+}
+// The player's footsteps. Swimming, flapping and the step game event are
+// not bound here (the sculk listeners track the player's steps themselves).
+impl MovementEmissionWorld for MotionWorld<'_, '_, '_> {
+    type Error = Box<dyn std::error::Error>;
+    type State = BlockStateId;
+    fn distances(&self) -> MovementDistances {
+        self.player.steps
+    }
+    fn set_movement_distance(&mut self, value: f32) {
+        self.player.steps.movement = value;
+    }
+    fn set_flight_distance(&mut self, value: f32) {
+        self.player.steps.flight = value;
+    }
+    fn set_next_step(&mut self, value: f32) {
+        self.player.steps.next_step = value;
+    }
+    fn on_position(&mut self) -> Result<BlockPos> {
+        self.support(movement_support::ON_SUPPORT_OFFSET)
+    }
+    fn block_state(&mut self, p: BlockPos) -> Result<BlockStateId> {
+        Ok(self.block(p))
+    }
+    fn is_air(&mut self, s: BlockStateId) -> Result<bool> {
+        let name = &self
+            .assets
+            .registry
+            .state(s)
+            .ok_or("missing scene state")?
+            .name;
+        Ok(matches!(
+            name.as_str(),
+            "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
+        ))
+    }
+    fn climbable_tag(&mut self, s: BlockStateId) -> Result<bool> {
+        let name = &self
+            .assets
+            .registry
+            .state(s)
+            .ok_or("missing scene state")?
+            .name;
+        Ok(self.resources.climbable.contains(name))
+    }
+    fn is_powder_snow(&mut self, s: BlockStateId) -> Result<bool> {
+        let name = &self
+            .assets
+            .registry
+            .state(s)
+            .ok_or("missing scene state")?
+            .name;
+        Ok(name == "minecraft:powder_snow")
+    }
+    fn on_ground(&mut self) -> Result<bool> {
+        Ok(self.player.ground.on_ground)
+    }
+    fn crouching(&mut self) -> Result<bool> {
+        Ok(self.player.pose == crate::pose::Pose::Crouching)
+    }
+    fn on_rails(&mut self) -> Result<bool> {
+        Ok(false)
+    }
+    fn swimming(&mut self) -> Result<bool> {
+        Ok(false)
+    }
+    fn in_water(&mut self) -> Result<bool> {
+        Ok(false)
+    }
+    fn walking_step_sound(&mut self, position: BlockPos, state: BlockStateId) -> Result<()> {
+        self.player
+            .events
+            .push(MotionEvent::Emission { position, state });
+        Ok(())
+    }
+    fn step_event(&mut self, _: BlockStateId) -> Result<()> {
+        Ok(())
+    }
+    fn next_step(&mut self) -> Result<f32> {
+        Ok(self.player.steps.next_step())
+    }
+    fn water_swim_sound(&mut self) -> Result<()> {
+        Ok(())
+    }
+    fn entity_event(&mut self, _: MovementEvent) -> Result<()> {
+        Ok(())
+    }
+    fn flapping(&mut self) -> Result<bool> {
+        Ok(false)
+    }
+    fn on_flap(&mut self) -> Result<()> {
+        Ok(())
+    }
+    /// `Player.getMovementEmission`: nothing while flying or sneaking on
+    /// the ground.
+    fn movement_emission(&mut self) -> Result<MovementEmission> {
+        let discreet = self.player.ground.on_ground && self.player.shift_key_down;
+        Ok(if self.player.flying || discreet {
+            MovementEmission::None
+        } else {
+            MovementEmission::All
+        })
     }
 }
 impl RestitutionWorld for MotionWorld<'_, '_, '_> {
@@ -1246,5 +1357,61 @@ impl LivingMotionWorld for MotionWorld<'_, '_, '_> {
     }
     fn air_drag_modifier(&mut self) -> Result<f64> {
         self.player.attribute("minecraft:air_drag_modifier")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Footsteps on the prepared vanilla resources, when they are present:
+    /// none while standing (gravity still moves the player every tick), one
+    /// per `nextStep` metre while walking.
+    #[test]
+    fn footsteps_follow_the_walked_distance_not_the_tick() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let mut scene = World::test_scene(&assets, 3).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
+        let mut steps = |player: &mut PlayerMotion, keys: crate::sprint::Keys, ticks: usize| {
+            let mut count = 0;
+            for _ in 0..ticks {
+                MotionWorld {
+                    player: &mut *player,
+                    scene: &mut scene,
+                    assets: &assets,
+                    collision_binding: &binding,
+                    resources: &resources,
+                }
+                .controlled_simulation_tick(keys)
+                .unwrap();
+                count += std::mem::take(&mut player.events)
+                    .iter()
+                    .filter(|e| matches!(e, MotionEvent::Emission { .. }))
+                    .count();
+            }
+            count
+        };
+        // Settle onto the floor, then stand still.
+        steps(&mut player, Default::default(), 20);
+        assert!(player.ground.on_ground);
+        assert_eq!(steps(&mut player, Default::default(), 100), 0);
+        let start = player.position;
+        let forward = crate::sprint::Keys {
+            forward: true,
+            ..Default::default()
+        };
+        let walked = steps(&mut player, forward, 100);
+        let metres = player.position.subtract(start).length() * 0.6;
+        assert!(metres > 5.0, "walked {metres}");
+        assert!(
+            (walked as f64 - metres).abs() <= 1.5,
+            "{walked} steps over {metres} step-metres"
+        );
     }
 }
