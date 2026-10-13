@@ -339,7 +339,11 @@ pub mod fdlibm {
 /// (`MacroAssembler::generate_dsin_dcos`): fdlibm with fused multiply-adds.
 /// Exposed on every architecture so they can be tested anywhere.
 // HotSpot's tables, verbatim.
-#[allow(clippy::excessive_precision, clippy::approx_constant, clippy::unreadable_literal)]
+#[allow(
+    clippy::excessive_precision,
+    clippy::approx_constant,
+    clippy::unreadable_literal
+)]
 pub mod aarch64 {
     use super::hi;
 
