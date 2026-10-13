@@ -46,7 +46,9 @@ fn tools() -> Value {
 }
 
 fn arg_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
-    args.get(key).and_then(Value::as_str).filter(|s| !s.is_empty())
+    args.get(key)
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
 }
 
 impl Session {
@@ -58,7 +60,11 @@ impl Session {
                     "installed": installed.iter().map(|t| json!({ "tag": t, "prepared": backend::is_prepared(t) })).collect::<Vec<_>>(),
                     "selected": backend::resolve_version(None).ok(),
                 });
-                if !args.get("installed_only").and_then(Value::as_bool).unwrap_or(false) {
+                if !args
+                    .get("installed_only")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
                     out["releases"] = backend::releases()?
                         .iter()
                         .map(|r| json!({ "tag": r.tag, "name": r.name, "date": r.date, "available_here": r.asset.is_some() }))
@@ -67,8 +73,14 @@ impl Session {
                 Ok(serde_json::to_string_pretty(&out).unwrap())
             }
             "install_version" => {
-                let tag = backend::install_tag(arg_str(args, "tag").ok_or("tag is required")?, false, |_| {})?;
-                Ok(format!("Installed {tag}. It is now the selected version; prepare it before playing."))
+                let tag = backend::install_tag(
+                    arg_str(args, "tag").ok_or("tag is required")?,
+                    false,
+                    |_| {},
+                )?;
+                Ok(format!(
+                    "Installed {tag}. It is now the selected version; prepare it before playing."
+                ))
             }
             "remove_version" => {
                 let tag = arg_str(args, "tag").ok_or("tag is required")?;
@@ -77,12 +89,15 @@ impl Session {
             }
             "prepare_resources" => {
                 let tag = backend::resolve_version(arg_str(args, "version"))?;
-                let minecraft = backend::minecraft_dir(arg_str(args, "minecraft_dir").map(PathBuf::from))?;
+                let minecraft =
+                    backend::minecraft_dir(arg_str(args, "minecraft_dir").map(PathBuf::from))?;
                 let cmd = backend::prepare_command(&tag, &minecraft, &|_| {})?;
                 let run = Logged::start(Job::Prepare, cmd)?;
                 let result = run.wait();
                 let tail = run.tail(20).join("\n");
-                result.map(|_| format!("{tag} is prepared.\n{tail}")).map_err(|e| format!("{e}\n{tail}"))
+                result
+                    .map(|_| format!("{tag} is prepared.\n{tail}"))
+                    .map_err(|e| format!("{e}\n{tail}"))
             }
             "launch_client" => {
                 if self.client.as_ref().is_some_and(|c| c.finished().is_none()) {
@@ -103,15 +118,24 @@ impl Session {
                 }
                 let tag = backend::resolve_version(arg_str(args, "version"))?;
                 let dir = backend::server_dir(arg_str(args, "dir").map(PathBuf::from));
-                let accept = args.get("accept_eula").and_then(Value::as_bool).unwrap_or(false);
+                let accept = args
+                    .get("accept_eula")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
                 let server = Logged::start(Job::Server, backend::server(&tag, &dir, accept)?)?;
                 std::thread::sleep(Duration::from_secs(3));
                 let tail = server.tail(15).join("\n");
                 if let Some(result) = server.finished() {
-                    return Err(format!("The server stopped: {}\n{tail}", result.err().unwrap_or_default()));
+                    return Err(format!(
+                        "The server stopped: {}\n{tail}",
+                        result.err().unwrap_or_default()
+                    ));
                 }
                 self.server = Some(server);
-                Ok(format!("Started the {tag} server in {}.\n{tail}", dir.display()))
+                Ok(format!(
+                    "Started the {tag} server in {}.\n{tail}",
+                    dir.display()
+                ))
             }
             "server_command" => {
                 let server = self.running_server()?;
@@ -121,28 +145,55 @@ impl Session {
                 std::thread::sleep(Duration::from_millis(700));
                 let log = server.log.lock().unwrap();
                 let reply: Vec<_> = log.iter().skip(before.min(log.len())).cloned().collect();
-                Ok(if reply.is_empty() { "(no output yet)".into() } else { reply.join("\n") })
+                Ok(if reply.is_empty() {
+                    "(no output yet)".into()
+                } else {
+                    reply.join("\n")
+                })
             }
             "server_log" => {
-                let server = self.server.as_ref().ok_or("No server was started in this session.")?;
+                let server = self
+                    .server
+                    .as_ref()
+                    .ok_or("No server was started in this session.")?;
                 let lines = args.get("lines").and_then(Value::as_u64).unwrap_or(50) as usize;
-                let state = if server.finished().is_some() { "stopped" } else { "running" };
-                Ok(format!("[server {state}]\n{}", server.tail(lines).join("\n")))
+                let state = if server.finished().is_some() {
+                    "stopped"
+                } else {
+                    "running"
+                };
+                Ok(format!(
+                    "[server {state}]\n{}",
+                    server.tail(lines).join("\n")
+                ))
             }
             "stop_server" => {
-                let mut server = self.server.take().ok_or("No server was started in this session.")?;
+                let mut server = self
+                    .server
+                    .take()
+                    .ok_or("No server was started in this session.")?;
                 server.stop(Duration::from_secs(30));
-                Ok(format!("The server stopped.\n{}", server.tail(5).join("\n")))
+                Ok(format!(
+                    "The server stopped.\n{}",
+                    server.tail(5).join("\n")
+                ))
             }
             "patch_notes" => {
                 let r = backend::release_notes(arg_str(args, "tag"))?;
-                Ok(format!("# {} ({}, {})\n\n{}", if r.name.is_empty() { &r.tag } else { &r.name }, r.tag, r.date, r.body))
+                Ok(format!(
+                    "# {} ({}, {})\n\n{}",
+                    if r.name.is_empty() { &r.tag } else { &r.name },
+                    r.tag,
+                    r.date,
+                    r.body
+                ))
             }
             "roadmap" => backend::roadmap(),
             "links" => Ok(serde_json::to_string_pretty(&backend::links()).unwrap()),
             "menu_style" => {
                 if let Some(name) = arg_str(args, "style") {
-                    let style = backend::MenuStyle::parse(name).ok_or("style is \"horizon\" or \"classic\"")?;
+                    let style = backend::MenuStyle::parse(name)
+                        .ok_or("style is \"horizon\" or \"classic\"")?;
                     backend::set_menu_style(style)?;
                 }
                 Ok(format!("Menu style: {}", backend::menu_style().name()))
@@ -179,8 +230,16 @@ impl Session {
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({ "tools": tools() })),
             "tools/call" => {
-                let name = params.get("name").and_then(Value::as_str).ok_or((-32602, "name is required".to_string()))?;
-                if !tools().as_array().unwrap().iter().any(|t| t["name"] == name) {
+                let name = params
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or((-32602, "name is required".to_string()))?;
+                if !tools()
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|t| t["name"] == name)
+                {
                     return Err((-32602, format!("Unknown tool {name}")));
                 }
                 let args = params.get("arguments").cloned().unwrap_or(json!({}));
@@ -196,7 +255,10 @@ impl Session {
 }
 
 pub fn serve() -> Result<(), String> {
-    let mut session = Session { server: None, client: None };
+    let mut session = Session {
+        server: None,
+        client: None,
+    };
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     for line in stdin.lock().lines() {
@@ -205,9 +267,14 @@ pub fn serve() -> Result<(), String> {
             continue;
         }
         let reply = match serde_json::from_str::<Value>(&line) {
-            Err(e) => Some(json!({ "jsonrpc": "2.0", "id": null, "error": { "code": -32700, "message": e.to_string() } })),
+            Err(e) => Some(
+                json!({ "jsonrpc": "2.0", "id": null, "error": { "code": -32700, "message": e.to_string() } }),
+            ),
             Ok(msg) => {
-                let method = msg.get("method").and_then(Value::as_str).unwrap_or_default();
+                let method = msg
+                    .get("method")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 let params = msg.get("params").cloned().unwrap_or(json!({}));
                 // Notifications (no id) get no reply.
                 msg.get("id").cloned().map(|id| match session.handle(method, &params) {
@@ -217,7 +284,9 @@ pub fn serve() -> Result<(), String> {
             }
         };
         if let Some(reply) = reply {
-            writeln!(stdout, "{reply}").and_then(|_| stdout.flush()).map_err(|e| e.to_string())?;
+            writeln!(stdout, "{reply}")
+                .and_then(|_| stdout.flush())
+                .map_err(|e| e.to_string())?;
         }
     }
     // The session is over: the server it started goes with it.

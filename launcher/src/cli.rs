@@ -7,7 +7,11 @@ use std::path::PathBuf;
 use std::process::Command;
 
 #[derive(Parser)]
-#[command(name = "horizon-launcher", version, about = "Installs, prepares and starts Horizon. Without a subcommand, opens the window.")]
+#[command(
+    name = "horizon-launcher",
+    version,
+    about = "Installs, prepares and starts Horizon. Without a subcommand, opens the window."
+)]
 struct Cli {
     /// Print JSON instead of text, where a command has something to report
     #[arg(long, global = true)]
@@ -115,7 +119,9 @@ fn json(value: serde_json::Value) {
 
 /// Runs a game process in this terminal and reports how it ended.
 fn attached(mut cmd: Command) -> Result<(), String> {
-    let status = cmd.status().map_err(|e| format!("Could not start {:?}: {e}", cmd.get_program()))?;
+    let status = cmd
+        .status()
+        .map_err(|e| format!("Could not start {:?}: {e}", cmd.get_program()))?;
     if status.success() {
         Ok(())
     } else {
@@ -141,8 +147,16 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 println!("No version is installed.");
             }
             for tag in installed.iter().filter(|_| !as_json) {
-                let mark = if selected.as_ref() == Some(tag) { "*" } else { " " };
-                let state = if backend::is_prepared(tag) { "prepared" } else { "not prepared" };
+                let mark = if selected.as_ref() == Some(tag) {
+                    "*"
+                } else {
+                    " "
+                };
+                let state = if backend::is_prepared(tag) {
+                    "prepared"
+                } else {
+                    "not prepared"
+                };
                 println!("{mark} {tag}  {state}");
             }
         }
@@ -168,7 +182,9 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             if as_json {
                 json(serde_json::json!({ "installed": tag }));
             } else {
-                println!("Installed {tag}. Prepare it next: horizon-launcher prepare --version {tag}");
+                println!(
+                    "Installed {tag}. Prepare it next: horizon-launcher prepare --version {tag}"
+                );
             }
         }
         Cmd::Remove { tag } => {
@@ -182,8 +198,14 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             attached(cmd)?;
             println!("{tag} is prepared.");
         }
-        Cmd::Play { version } => attached(backend::client(&backend::resolve_version(version.as_deref())?)?)?,
-        Cmd::Server { dir, version, accept_eula } => {
+        Cmd::Play { version } => attached(backend::client(&backend::resolve_version(
+            version.as_deref(),
+        )?)?)?,
+        Cmd::Server {
+            dir,
+            version,
+            accept_eula,
+        } => {
             let tag = backend::resolve_version(version.as_deref())?;
             let dir = backend::server_dir(dir);
             // The server inherits this terminal, so typed lines reach its console.
@@ -192,10 +214,17 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
         Cmd::Notes { tag } => {
             let r = backend::release_notes(tag.as_deref())?;
             if as_json {
-                json(serde_json::json!({ "tag": r.tag, "name": r.name, "date": r.date, "notes": r.body }));
+                json(
+                    serde_json::json!({ "tag": r.tag, "name": r.name, "date": r.date, "notes": r.body }),
+                );
             } else {
                 let title = if r.name.is_empty() { &r.tag } else { &r.name };
-                println!("{title}\n{}  {}\n\n{}", r.tag, r.date, backend::markdown_to_text(&r.body));
+                println!(
+                    "{title}\n{}  {}\n\n{}",
+                    r.tag,
+                    r.date,
+                    backend::markdown_to_text(&r.body)
+                );
             }
         }
         Cmd::Next => {
@@ -211,7 +240,11 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             if as_json {
                 json(serde_json::to_value(&links).unwrap());
             } else {
-                for (name, url) in [("Discord", &links.discord), ("Sponsor", &links.sponsor), ("Website", &links.website)] {
+                for (name, url) in [
+                    ("Discord", &links.discord),
+                    ("Sponsor", &links.sponsor),
+                    ("Website", &links.website),
+                ] {
                     println!("{name:<8} {}", if url.is_empty() { "(none)" } else { url });
                 }
             }
@@ -247,7 +280,8 @@ fn update(check: bool, as_json: bool) -> Result<(), String> {
         None => println!("Horizon: up to date."),
         Some(r) if check => println!("Horizon: {} is available.", r.tag),
         Some(r) => {
-            let tag = backend::install_tag(&r.tag, true, progress(format!("Installing {}", r.tag)))?;
+            let tag =
+                backend::install_tag(&r.tag, true, progress(format!("Installing {}", r.tag)))?;
             println!("Horizon: installed {tag}.");
         }
     }
@@ -256,7 +290,10 @@ fn update(check: bool, as_json: bool) -> Result<(), String> {
         Some(r) => {
             let version = backend::launcher_version(&r.tag).unwrap_or_default();
             if check {
-                println!("Launcher: {version} is available (this is {}).", backend::VERSION);
+                println!(
+                    "Launcher: {version} is available (this is {}).",
+                    backend::VERSION
+                );
             } else if !backend::self_update_allowed() {
                 println!("Launcher: {version} is available; this build does not replace itself.");
             } else {
