@@ -2,6 +2,9 @@ name: launcher
 
 on:
   workflow_dispatch:
+  push:
+    branches: [launcher]
+    paths: ['launcher/**', '.github/workflows/launcher.yml']
 
 jobs:
   build:
