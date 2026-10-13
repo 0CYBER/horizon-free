@@ -27,7 +27,12 @@ jobs:
           - os: windows-latest
             asset: horizon-launcher-windows-x64.zip
             binary: horizon-launcher.exe
+            # The C runtime linked in: without it the launcher asks for VCRUNTIME140.dll,
+            # which only the Visual C++ redistributable installs.
+            rustflags: -C target-feature=+crt-static
     runs-on: ${{ matrix.os }}
+    env:
+      RUSTFLAGS: ${{ matrix.rustflags }}
     defaults:
       run:
         working-directory: launcher
@@ -48,6 +53,9 @@ jobs:
         run: grep -qx "version = \"${GITHUB_REF_NAME#launcher-v}\"" Cargo.toml
       - run: cargo test --release --locked --lib
       - run: cargo build --release --locked
+      - name: Only system libraries
+        if: runner.os == 'Windows'
+        run: python ../tools/check_imports.py target/release/${{ matrix.binary }}
       - name: Package
         run: |
           mkdir -p dist
