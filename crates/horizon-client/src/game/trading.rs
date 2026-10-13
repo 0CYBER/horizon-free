@@ -771,8 +771,27 @@ impl Game<'_> {
                 tooltip = self.slot_mut(slot).clone();
             }
         }
+        // An out-of-stock trade: "the villager needs to restock" over the
+        // result (isHovering(186, 35, 22, 21), canRestock).
+        let deprecated = progress
+            && offers.get(shop).is_some_and(MerchantOffer::out_of_stock)
+            && local.0 >= 186.0 + SHIFT - 1.0
+            && local.0 < 186.0 + SHIFT + 22.0 + 1.0
+            && local.1 >= 35.0 - 1.0
+            && local.1 < 35.0 + 21.0 + 1.0;
         if let Some(stack) = self.carried.clone() {
             self.draw_item(batch, &stack, self.cursor.0 - 8.0, self.cursor.1 - 8.0);
+        } else if deprecated {
+            let text = self
+                .res
+                .stations
+                .enchantments
+                .translate("merchant.deprecated")
+                .unwrap_or("Villagers restock up to two times per day.")
+                .to_owned();
+            let lines: Vec<(String, u32)> =
+                text.split('\n').map(|l| (l.to_owned(), u32::MAX)).collect();
+            self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
         } else if let Some(stack) = tooltip {
             let lines = self.stack_tooltip(&stack);
             self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
