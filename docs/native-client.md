@@ -64,35 +64,97 @@ mute a test run's stream in the mixer: PipeWire remembers the mute for every
 later `horizon-client`. The launcher starts the game as "Horizon" for that
 reason.
 
-### Drive the game from scripts (`horizon-ctl`)
+### Agent control (`horizon-ctl` and MCP)
 
-`--control` opens a local Unix socket (`$XDG_RUNTIME_DIR/horizon-control.sock`,
-or `--control-socket PATH`). `horizon-ctl` sends it one command per line and
-prints one JSON reply per command; the exit status is 1 when the reply holds an
-`error`. Under control, losing window focus does not pause the game or release
-held keys, so a script can play while you use other windows.
+AI agents and scripts play Horizon through `horizon-ctl`, a command line that
+reads the game as JSON and acts like a player, and `horizon-ctl mcp`, an MCP
+server with the same commands. `--control` makes the game accept them on a
+local socket; under control, losing window focus does not pause the game or
+release held keys, so a script can play while you use other windows.
 
 ```sh
 cargo build --release -p horizon-client --bins
 C=target/release/horizon-ctl
-$C launch --world Bench --seed 12345 --render-distance 32   # starts the game, waits for the socket
-$C wait-ready                     # player spawned, no chunks pending
-$C look 90 10; $C hold w 2        # face west, walk for two seconds
-$C screenshot /tmp/view.png       # PNG of the next presented frame
-$C bench 10                       # avg/1%-low FPS and p50/p95/p99/max frame times
-$C quit                           # save and exit
+$C launch --world Survival --seed 5 --wait   # start the game, open or create the world, wait for it
+$C state                                     # player, world, screen, crosshair target
+$C find-block birch_log                      # the 16 nearest loaded logs
+$C goto -0.5 65 -2.5 --near 2.5              # walk there along a path
+$C break -1 65 -3                            # mine it: {"drops": {"minecraft:birch_log": 1}, ...}
+$C inventory                                 # hotbar, inventory, armor, offhand, counts
+$C open-inventory                            # craft planks in the 2x2 grid:
+$C click-slot 0; $C click-slot 100 right; $C click-slot 0; $C click-slot 200 shift; $C close
+$C place 2 65 -2 --item birch_planks         # {"changed": true, "block": {...}}
+$C screenshot /tmp/view.png                  # PNG of the next presented frame
+$C quit                                      # save and exit
 ```
 
-`fly X1 Y1 Z1 X2 Y2 Z2 SECONDS [PITCH]` moves the camera along a line at
-constant speed and replies with the same summary as `bench`, plus CPU and GPU
-time per frame; [the graphics benchmark](graphics.md#benchmark) is built on it.
+`horizon-ctl help` lists the commands by group and `horizon-ctl COMMAND --help`
+explains one with examples; `horizon-ctl help --game` lists what the running
+game accepts, test hooks included.
 
-Other commands: `status`, `key KEY down|up|tap`, `mouse left|right|middle
-down|up|click`, `turn`, `tp X Y Z`, `hotbar N`, `give ITEM [COUNT]`,
-`render-distance N`, `time TICKS`, `resume`, `stats [reset]`, `open WORLD [SEED]
-[creative]` and `save`; `horizon-ctl help` lists them from the running game.
-`horizon-ctl -` reads a script from standard input, where `sleep S` waits locally.
-Frame times include waits for presentation, so `bench` reports what is on screen.
+- **Observe:** `state` (position, rotation, velocity, health, food, saturation,
+  XP, effects, game mode, dimension, time, weather, the screen and what the
+  crosshair points at), `looking-at`, `entities [RADIUS] [TYPE]` (mobs with
+  ids and health, dropped items, orbs), `block X Y Z`, `blocks X1 Y1 Z1 X2 Y2 Z2`,
+  `find-block BLOCK [RADIUS]`, `inventory` (stacks with their components as
+  SNBT), `screen` (the open screen or title menu, its buttons and slots) and
+  `messages` (chat, title, subtitle and action bar).
+- **Move and act:** `move DIR SECONDS`, `jump`, `goto X Y Z` (A* over standable
+  blocks: steps up one block, drops up to three, avoids lava), `look`,
+  `look-at` a point, block face or entity, `attack [ID]`, `break X Y Z`,
+  `place X Y Z [--item ITEM]`, `interact X Y Z` (doors, chests, crafting
+  tables), `use-item [--hold S]` (eat, drink, throw), `select SLOT|ITEM`, `drop`.
+- **Screens:** `open-inventory`, `click-slot SLOT [right] [shift]` (0-8 hotbar,
+  9-35 inventory, 100+ crafting grid, 200 result, 300+ containers, 500-503
+  armor, 504 offhand, 600+ stations), `close`, `click-button LABEL` (any
+  button of any screen or title menu, classic or Horizon style, by its label),
+  `click-at X Y`, `type TEXT` (on the create-world screen `--field name|seed
+  --replace`), `chat`, `command`, `respawn`, `pause`, `resume`.
+- **World:** `tp`, `give`, `time`, `setblock`, `summon`, `wait TICKS`, and the
+  benchmarking commands `bench`, `stats` and `fly` (below).
+
+Actions block until they finish or time out and reply with the outcome: `goto`
+says whether it arrived, `break` what dropped and what was picked up, `place`
+the block placed. `stop` cancels the running action. Every reply is one JSON
+line; errors are `{"error": "..."}` objects, and the exit status is 0 on
+success, 1 when the game replied with an error, 2 for a usage error and 3 when
+the game cannot be reached or started. `horizon-ctl script FILE` (or stdin)
+runs one command per line with shell-like quoting and stops at the first error
+(`--keep-going` doesn't); `sleep S` waits. `horizon-ctl -` is the older form
+that reads stdin and keeps going.
+
+`launch` finds the game to start: `--game PATH`, else a `horizon-client` next
+to `horizon-ctl` (a build folder or a release folder), else the newest version
+the launcher installed (`--version TAG` picks another), run with its prepared
+resources from the game home, where the saves are. So after installing with
+the launcher, `horizon-ctl launch --world X --wait` is all an agent needs.
+Other arguments go to the game; its output goes to a `.log` file beside the
+socket.
+
+**MCP.** `horizon-ctl mcp` serves the Model Context Protocol over stdin and
+stdout (JSON-RPC 2.0, one message per line), with one tool per command and a
+JSON schema for each; `screenshot` returns the frame as an image. Register it
+in an MCP client as a stdio server with the command `horizon-ctl` and the
+argument `mcp` (`--socket PATH` before `mcp` to pick a socket).
+
+**Transport.** On Linux and macOS the endpoint is a Unix socket:
+`$HORIZON_CONTROL`, else `$XDG_RUNTIME_DIR/horizon-control.sock`, or
+`--control-socket PATH` (`horizon-ctl --socket PATH`). Windows has no Unix
+sockets: there the game listens on a random `127.0.0.1` port and writes
+`{"transport":"tcp","port":N,"token":"..."}` to the endpoint path
+(`%TEMP%\horizon-control.json` by default), readable only by its user; the
+client's first line must be `auth TOKEN`. Any endpoint path ending in `.json`
+selects that transport on Linux and macOS too.
+
+`tools/agent_control_e2e.py` checks it all on a virtual screen: it creates a
+world through the title menus, walks to a tree, breaks a log, crafts planks in
+the inventory screen and places one, through the CLI and through MCP.
+
+`fly X1 Y1 Z1 X2 Y2 Z2 SECONDS [PITCH]` moves the camera along a line at
+constant speed and replies with the same summary as `bench` (avg/1%-low FPS and
+p50/p95/p99/max frame times), plus CPU and GPU time per frame; [the graphics
+benchmark](graphics.md#benchmark) is built on it. Frame times include waits for
+presentation, so `bench` reports what is on screen.
 
 ### Play on another of your machines
 

@@ -113,6 +113,21 @@ The [native client](docs/native-client.md) opens on a vanilla-style title screen
 - shields, maps, books, fireworks, beacons, advancements and statistics;
 - Anvil saves, joining vanilla servers, and opening a world to LAN.
 
+## Agent control
+
+AI agents and scripts can play Horizon. `horizon-ctl`, shipped beside the game in every release folder, is a command line that reads the game as JSON and acts like a player; `horizon-ctl mcp` serves the same commands as an MCP server (one tool per command, screenshots returned as images).
+
+```sh
+horizon-ctl launch --world Survival --seed 5 --wait   # finds the version the launcher installed
+horizon-ctl state                                       # position, health, food, target, screen...
+horizon-ctl find-block birch_log                        # the nearest logs
+horizon-ctl goto -0.5 65 -2.5 --near 2.5                # walks there along a path
+horizon-ctl break -1 65 -3                              # mines it; replies with the drops
+horizon-ctl open-inventory && horizon-ctl click-slot 0  # menus: slots, buttons by label, text fields
+```
+
+Commands block until the action is done and reply with what happened; errors are JSON with distinct exit codes, `horizon-ctl help` lists every command and `horizon-ctl COMMAND --help` explains one with examples. It talks to the game over a Unix socket on Linux and macOS and over a token-protected localhost port on Windows. See [Agent control in the native client guide](docs/native-client.md#agent-control-horizon-ctl-and-mcp).
+
 ## Build from source
 
 For developers. Requirements: Rust 1.90 or newer, Python 3.10 or newer, JDK 25, and on Linux the ALSA development headers (`libasound2-dev` on Debian and Ubuntu). Development and the vanilla harnesses run on Linux.
@@ -132,7 +147,7 @@ cargo run --release -p horizon-client
 
 Everything prepared lands in the gitignored `.local/`. It is derived from the game: never commit it or share it.
 
-The client starts on the title screen. Command-line options (`--world`, `--seed`, `--creative`, `--render-distance`, `--dedicated`), controls, scripting through `horizon-ctl`, and the architecture are described in [the native client guide](docs/native-client.md). The rest of the documentation is indexed in [docs/README.md](docs/README.md), including [the parity workflow](docs/parity-workflow.md).
+The client starts on the title screen. Command-line options (`--world`, `--seed`, `--creative`, `--render-distance`, `--dedicated`), controls, playing and scripting through `horizon-ctl` and its MCP server, and the architecture are described in [the native client guide](docs/native-client.md). The rest of the documentation is indexed in [docs/README.md](docs/README.md), including [the parity workflow](docs/parity-workflow.md).
 
 ## Project status
 
@@ -175,7 +190,6 @@ them too (Rust uses Java's own float maths on each platform).
 
 - **Performance optimisation:** take the client and the server as far as they can go (rendering, chunk generation and meshing, memory, multithreaded ticking), building on v2026.10.13.1's faster renderer, while the differential harnesses keep gameplay identical to vanilla.
 - **Mod support:** a stable API for writing and loading mods against Horizon.
-- **Agent control:** an MCP server and a CLI so AI agents and scripts can play and drive the game, growing out of today's `horizon-ctl` scripting socket (the launcher already works as a CLI and an MCP server for installing and starting Horizon).
 - **Built-in recording:** capture gameplay video in a keypress, without external tools.
 - **Automatic version updates:** a pipeline that ports each new Minecraft release on its own: compare the new version with the pinned one, regenerate the data, rewrite the changed parts and prove them with the same differential harnesses.
 
