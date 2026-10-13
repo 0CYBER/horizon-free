@@ -38,7 +38,7 @@ LOCAL = ROOT / '.local' / 'datafix'
 # Old server jars and their worlds are inputs, not outputs: keep them beside the
 # vanilla data, which parallel worktrees share (.local/minecraft links there).
 SHARED = (ROOT / '.local' / 'minecraft').resolve().parent / 'datafix'
-VERSIONS = ['1.12.2', '1.13.2', '1.14.4', '1.15.2', '1.16.1', '1.16.5', '1.17.1', '1.18.1', '1.18.2', '1.19', '1.19.2', '1.19.3', '1.19.4', '1.20.1', '1.20.2', '1.20.4', '1.20.5', '1.20.6', '1.21.1',
+VERSIONS = ['1.8.9', '1.9.4', '1.10.2', '1.11.2', '1.12.2', '1.13.2', '1.14.4', '1.15.2', '1.16.1', '1.16.5', '1.17.1', '1.18.1', '1.18.2', '1.19', '1.19.2', '1.19.3', '1.19.4', '1.20.1', '1.20.2', '1.20.4', '1.20.5', '1.20.6', '1.21.1',
             '1.21.3', '1.21.4', '1.21.5', '1.21.6', '1.21.8', '1.21.9', '1.21.10', '1.21.11', '26.1', '26.1.2', '26.2']
 # Extra worlds of one version with another world type, for the level.dat generator settings:
 # name -> (version, server.properties). They get no scene, only a joined player.
@@ -154,6 +154,7 @@ def install_runtime(pin, home):
 class Server:
     def __init__(self, directory, jar, port, packs=(), java='java', props_override=None):
         directory.mkdir(parents=True, exist_ok=True)
+        self.directory = directory
         (directory / 'eula.txt').write_text('eula=true\n')
         props = {'server-port': port, 'online-mode': 'false', 'level-name': 'world', 'level-seed': '4242',
                  'view-distance': '4', 'simulation-distance': '4', 'spawn-protection': '0', 'sync-chunk-writes': 'true',
@@ -405,6 +406,7 @@ def build_scene(server, run, Bot, port, protocol, props, era, data_version):
 def build(name, force=False):
     version, props = VARIANTS.get(name, (name, None))
     jar, data_version, protocol = server_jar(version)
+    data_version = data_version or 0   # 1.8 saves have no DataVersion
     target = SHARED / 'worlds' / name
     if target.exists() and not force:
         print(f'{version}: kept {target}')
