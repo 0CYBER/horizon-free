@@ -59,7 +59,14 @@ fn agent() -> ureq::Agent {
 }
 
 fn get(url: &str) -> Result<ureq::Response, String> {
-    agent().get(url).call().map_err(|e| match e {
+    let mut request = agent().get(url);
+    // CI runners share addresses and hit GitHub's anonymous rate limit; they pass their own token.
+    if let Some(token) = std::env::var("HORIZON_GITHUB_TOKEN").ok().filter(|t| !t.is_empty()) {
+        if url.starts_with("https://api.github.com/") {
+            request = request.set("Authorization", &format!("Bearer {token}"));
+        }
+    }
+    request.call().map_err(|e| match e {
         ureq::Error::Status(403, _) => "GitHub's rate limit was reached. Try again in a few minutes.".into(),
         ureq::Error::Status(code, _) => format!("{url} answered {code}"),
         ureq::Error::Transport(t) => format!("No connection: {t}"),
@@ -162,18 +169,19 @@ pub fn roadmap() -> Result<String, String> {
     Err("The README has no roadmap section yet.".into())
 }
 
-/// The community and sponsor links, from `launcher/links.json` on main, so they can change
+/// The community, sponsor and website links, from `launcher/links.json` on main, so they can change
 /// without a launcher release. An empty address hides its button.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Links {
     pub discord: String,
     pub sponsor: String,
+    pub website: String,
 }
 
 impl Default for Links {
     /// What the launcher uses until (or unless) it can read links.json.
     fn default() -> Self {
-        Self { discord: "https://discord.gg/HcTeMZxe5E".into(), sponsor: "https://github.com/sponsors/ludovic111".into() }
+        Self { discord: "https://discord.gg/HcTeMZxe5E".into(), sponsor: "https://github.com/sponsors/ludovic111".into(), website: "https://playhorizon.dev".into() }
     }
 }
 
@@ -183,7 +191,7 @@ impl Links {
     pub fn parse(text: &str) -> Self {
         let mut links = Self::default();
         if let Ok(serde_json::Value::Object(map)) = serde_json::from_str(text) {
-            for (key, slot) in [("discord", &mut links.discord), ("sponsor", &mut links.sponsor)] {
+            for (key, slot) in [("discord", &mut links.discord), ("sponsor", &mut links.sponsor), ("website", &mut links.website)] {
                 if let Some(url) = map.get(key).and_then(|v| v.as_str()) {
                     *slot = url.trim().to_string();
                 }
@@ -979,8 +987,9 @@ mod tests {
         let defaults = Links::default();
         assert_eq!(defaults.discord, "https://discord.gg/HcTeMZxe5E");
         assert_eq!(defaults.sponsor, "https://github.com/sponsors/ludovic111");
+        assert_eq!(defaults.website, "https://playhorizon.dev");
         // The file on main says the same thing as the defaults.
-        let file = Links::parse(r#"{"discord": "https://discord.gg/HcTeMZxe5E", "sponsor": "https://github.com/sponsors/ludovic111"}"#);
+        let file = Links::parse(r#"{"discord": "https://discord.gg/HcTeMZxe5E", "sponsor": "https://github.com/sponsors/ludovic111", "website": "https://playhorizon.dev"}"#);
         assert_eq!(file, defaults);
         // Unreadable or missing, offline included: the defaults.
         assert_eq!(Links::parse(""), defaults);
@@ -989,7 +998,9 @@ mod tests {
         assert_eq!(Links::parse(r#"{"discord": 5}"#), defaults);
         // A key that is missing keeps its default; a new address replaces it; empty hides it.
         assert_eq!(Links::parse(r#"{"discord": "https://x.y/z"}"#), Links { discord: "https://x.y/z".into(), ..defaults.clone() });
-        assert_eq!(Links::parse(r#"{"discord": "", "sponsor": " "}"#), Links { discord: String::new(), sponsor: String::new() });
+        assert_eq!(Links::parse(r#"{"discord": "", "sponsor": " "}"#), Links { discord: String::new(), sponsor: String::new(), ..defaults.clone() });
+        // A key this launcher does not know is ignored.
+        assert_eq!(Links::parse(r#"{"mastodon": "https://x.y/z"}"#), defaults);
     }
 
     #[test]

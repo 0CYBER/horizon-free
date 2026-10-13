@@ -38,7 +38,7 @@ fn tools() -> Value {
         { "name": "patch_notes", "description": "A release's patch notes as markdown.",
           "inputSchema": { "type": "object", "properties": { "tag": { "type": "string", "description": "Default: the newest release." } } } },
         { "name": "roadmap", "description": "What's planned next for Horizon, from the README's roadmap.", "inputSchema": none },
-        { "name": "links", "description": "The Horizon community links: the Discord invite and the GitHub Sponsors page (an empty one is not offered).", "inputSchema": none },
+        { "name": "links", "description": "The Horizon links: the Discord invite, the GitHub Sponsors page and the website (an empty one is not offered).", "inputSchema": none },
         { "name": "menu_style", "description": "Show or set the game's menu style. \"horizon\" is Horizon's own menus, \"classic\" is vanilla's screens, which have no way back inside the game. The game reads it when it starts.",
           "inputSchema": { "type": "object", "properties": { "style": { "type": "string", "enum": ["horizon", "classic"], "description": "Omit to show the current style." } } } },
         { "name": "check_updates", "description": "Check GitHub for a Horizon release newer than every installed version, and for a newer launcher.", "inputSchema": none },

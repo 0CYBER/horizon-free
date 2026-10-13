@@ -26,6 +26,8 @@ class TrialMergeTests(unittest.TestCase):
                 run("commit", "-q", "-m", f"{branch} {name}")
 
             run("init", "-q", "-b", "base")
+            run("config", "user.name", "t")  # supervise's own commits need an identity too (CI has none)
+            run("config", "user.email", "t@t")
             Path(temp, "shared.txt").write_text("one\n")
             run("add", "shared.txt")
             run("commit", "-q", "-m", "start")

@@ -57,7 +57,7 @@ enum Cmd {
     Notes { tag: Option<String> },
     /// Show the roadmap
     Next,
-    /// Show the Discord and sponsor links
+    /// Show the Discord, sponsor and website links
     Links,
     /// Show or set the game's menu style (classic is vanilla's own screens)
     MenuStyle {
@@ -211,7 +211,7 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             if as_json {
                 json(serde_json::to_value(&links).unwrap());
             } else {
-                for (name, url) in [("Discord", &links.discord), ("Sponsor", &links.sponsor)] {
+                for (name, url) in [("Discord", &links.discord), ("Sponsor", &links.sponsor), ("Website", &links.website)] {
                     println!("{name:<8} {}", if url.is_empty() { "(none)" } else { url });
                 }
             }
