@@ -4170,7 +4170,8 @@ impl Game<'_> {
             (Some(n), _) => self.menu_click(Some(slot), n as i32, Input::Swap),
             (None, KeyCode::KeyF) => self.menu_click(Some(slot), 40, Input::Swap),
             (None, KeyCode::KeyQ) => {
-                let all = self.keys.contains(&KeyCode::ControlLeft);
+                let all = self.physical_keys.contains(&KeyCode::ControlLeft)
+                    || self.physical_keys.contains(&KeyCode::ControlRight);
                 self.menu_click(Some(slot), i32::from(all), Input::Throw)
             }
             _ => false,
@@ -8001,7 +8002,8 @@ impl Game<'_> {
                 self.using = None;
             }
             KeyCode::KeyQ if self.screen == Screen::Playing => {
-                let all = self.keys.contains(&KeyCode::ControlLeft);
+                let all = self.physical_keys.contains(&KeyCode::ControlLeft)
+                    || self.physical_keys.contains(&KeyCode::ControlRight);
                 self.drop_held(all);
             }
             KeyCode::Digit1
