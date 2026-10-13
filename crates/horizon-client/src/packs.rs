@@ -4,6 +4,7 @@
 //! and an overlay resource root that layers the enabled packs over the
 //! vanilla resources (later packs win), so every loader sees one tree.
 pub mod pattern;
+use crate::text::Style;
 use crate::{text::Text, zip::Zip};
 use pattern::Pattern;
 use std::{
@@ -27,7 +28,13 @@ pub struct Pack {
     pub source: Source,
     pub title: Text,
     pub description: Text,
+    /// The description with its legacy codes, and its root style (the pack screen's).
+    pub raw_description: Text,
+    pub description_style: Style,
     pub compatible: bool,
+    pub compatibility: crate::pack_screen::Compat,
+    /// The pack has a `pack.png`.
+    pub icon: bool,
     /// Overlay directories active for this game version, in `pack.mcmeta` order.
     pub overlays: Vec<String>,
     /// `filter.block` entries (namespace and path patterns) hiding resources
@@ -53,47 +60,90 @@ impl Filter {
             && self.path.as_ref().is_none_or(|p| p.is_match(path))
     }
 }
-/// A minimal text component from JSON (strings, `text`, `translate`, arrays).
+/// A text component from JSON (strings, `text`, `translate`, arrays, `extra`
+/// and the style fields), legacy `§` codes resolved as the font does.
 pub fn component(v: &serde_json::Value) -> Text {
+    component_root(v).0.resolve_legacy()
+}
+/// The component, its legacy codes left in place (each span is a
+/// component's contents and style), and its root style (`Component.getStyle`).
+pub fn component_root(v: &serde_json::Value) -> (Text, Style) {
+    let mut out = Text::empty();
+    let root = build(v, &Style::default(), &mut out);
+    (out, root)
+}
+fn style_of(o: &serde_json::Map<String, serde_json::Value>) -> Style {
+    let flag = |k: &str| o.get(k).and_then(|b| b.as_bool());
+    Style {
+        color: o.get("color").and_then(|c| c.as_str()).and_then(|c| {
+            crate::text::named_color(c).or_else(|| {
+                c.strip_prefix('#')
+                    .and_then(|h| u32::from_str_radix(h, 16).ok())
+            })
+        }),
+        bold: flag("bold"),
+        italic: flag("italic"),
+        underlined: flag("underlined"),
+        strikethrough: flag("strikethrough"),
+        obfuscated: flag("obfuscated"),
+        ..Style::default()
+    }
+}
+/// Appends `v` under `parent`'s style; returns the component's own style.
+fn build(v: &serde_json::Value, parent: &Style, out: &mut Text) -> Style {
     match v {
-        serde_json::Value::String(s) => Text::legacy(s),
         serde_json::Value::Array(a) => {
-            let mut t = Text::empty();
-            for e in a {
-                t.push(component(e));
+            let Some(first) = a.first() else {
+                return Style::default();
+            };
+            let own = build(first, parent, out);
+            let mut style = own.clone();
+            style.inherit(parent);
+            for e in &a[1..] {
+                build(e, &style, out);
             }
-            t
+            own
         }
         serde_json::Value::Object(o) => {
-            let mut t = if let Some(s) = o.get("text").and_then(|s| s.as_str()) {
-                Text::legacy(s)
+            let own = style_of(o);
+            let mut style = own.clone();
+            style.inherit(parent);
+            if let Some(s) = o.get("text").and_then(|s| s.as_str()) {
+                out.push(Text::styled(s, style.clone()));
             } else if let Some(k) = o.get("translate").and_then(|s| s.as_str()) {
                 let args: Vec<Text> = o
                     .get("with")
                     .and_then(|w| w.as_array())
                     .map(|a| a.iter().map(component).collect())
                     .unwrap_or_default();
-                Text::translate(k, &args)
-            } else {
-                Text::empty()
-            };
-            if let Some(extra) = o.get("extra") {
-                t.push(component(extra));
+                out.push(Text::translate(k, &args).with_style(&style));
             }
-            if let Some(c) = o.get("color").and_then(|c| c.as_str()) {
-                let rgb = crate::text::named_color(c).or_else(|| {
-                    c.strip_prefix('#')
-                        .and_then(|h| u32::from_str_radix(h, 16).ok())
-                });
-                if let Some(rgb) = rgb {
-                    t = t.with_color(rgb);
+            match o.get("extra") {
+                Some(serde_json::Value::Array(extra)) => {
+                    for e in extra {
+                        build(e, &style, out);
+                    }
                 }
+                Some(e) => {
+                    build(e, &style, out);
+                }
+                None => {}
             }
-            t
+            own
         }
-        serde_json::Value::Number(n) => Text::literal(n.to_string()),
-        serde_json::Value::Bool(b) => Text::literal(b.to_string()),
-        serde_json::Value::Null => Text::empty(),
+        serde_json::Value::String(s) => {
+            out.push(Text::styled(s.as_str(), parent.clone()));
+            Style::default()
+        }
+        serde_json::Value::Number(n) => {
+            out.push(Text::styled(n.to_string(), parent.clone()));
+            Style::default()
+        }
+        serde_json::Value::Bool(b) => {
+            out.push(Text::styled(b.to_string(), parent.clone()));
+            Style::default()
+        }
+        serde_json::Value::Null => Style::default(),
     }
 }
 fn format_of(v: &serde_json::Value) -> Option<(i64, i64)> {
@@ -127,6 +177,34 @@ pub fn compatible(meta: &serde_json::Value) -> bool {
         return lo <= current.0 && current.0 <= hi;
     }
     format_of(&pack["pack_format"]).is_some_and(|f| f.0 == current.0)
+}
+/// `PackCompatibility.forVersion`: too old, too new, compatible, or unknown
+/// when the metadata names no format.
+pub fn compatibility(meta: &serde_json::Value) -> crate::pack_screen::Compat {
+    use crate::pack_screen::Compat;
+    let pack = &meta["pack"];
+    let current = RESOURCE_FORMAT;
+    let range = if let (Some(min), Some(max)) = (
+        format_of(&pack["min_format"]),
+        format_of(&pack["max_format"]),
+    ) {
+        Some((min, (max.0, if max.1 == 0 { i64::MAX } else { max.1 })))
+    } else if let Some(r) = pack["supported_formats"].as_array()
+        && let (Some(lo), Some(hi)) = (
+            r.first().and_then(|v| v.as_i64()),
+            r.get(1).and_then(|v| v.as_i64()),
+        )
+    {
+        Some(((lo, 0), (hi, i64::MAX)))
+    } else {
+        format_of(&pack["pack_format"]).map(|f| ((f.0, 0), (f.0, i64::MAX)))
+    };
+    match range {
+        None => Compat::Unknown,
+        Some((_, max)) if max < current => Compat::TooOld,
+        Some((min, _)) if current < min => Compat::TooNew,
+        _ => Compat::Compatible,
+    }
 }
 /// Whether an `overlays.entries[]` item applies to the current format
 /// (OverlayMetadataSection: `formats` as an int, `[min, max]` or
@@ -189,11 +267,20 @@ fn read_meta(source: &Source) -> Option<serde_json::Value> {
 }
 fn pack(id: String, title: Text, source: Source) -> Option<Pack> {
     let meta = read_meta(&source)?;
+    let (raw_description, description_style) = component_root(&meta["pack"]["description"]);
+    let icon = match &source {
+        Source::Dir(d) => d.join("pack.png").is_file(),
+        Source::Zip(z) => Zip::open(z).is_ok_and(|z| z.read("pack.png").is_ok()),
+    };
     Some(Pack {
         id,
         title,
-        description: component(&meta["pack"]["description"]),
+        description: raw_description.resolve_legacy(),
+        raw_description,
+        description_style,
         compatible: compatible(&meta),
+        compatibility: compatibility(&meta),
+        icon,
         overlays: overlays_of(&meta),
         filter: filter_of(&meta),
         source,

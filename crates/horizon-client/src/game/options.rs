@@ -77,12 +77,12 @@ impl Game<'_> {
     }
     pub(super) fn options_key(&mut self, key: KeyCode, text: Option<&str>) -> Result<()> {
         let mut ui = std::mem::take(&mut self.ui.options);
-        let events = ui.key(&mut self.settings, key, text);
+        let events = ui.key(&mut self.settings, &self.res.atlas, key, text);
         self.ui.options = ui;
         self.handle_option_events(events)
     }
     pub(super) fn options_scroll(&mut self, amount: f32) {
-        self.ui.options.scroll(amount);
+        self.ui.options.scroll_at(self.cursor, amount);
     }
     /// Mouse buttons pressed while a key is being bound.
     pub(super) fn options_waiting_for_key(&self) -> bool {

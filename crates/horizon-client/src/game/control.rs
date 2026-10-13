@@ -299,7 +299,7 @@ impl Game<'_> {
                 }
                 match self.screen {
                     Screen::Chat => self.chat_type(text),
-                    Screen::Options => self.ui.options.type_text(text),
+                    Screen::Options => self.ui.options.type_text(&self.res.atlas, text),
                     Screen::Inventory if self.recipe_search_focused() => {
                         self.recipe_text(Some(text), false)
                     }

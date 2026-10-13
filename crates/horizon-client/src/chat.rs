@@ -3,11 +3,13 @@
 //! (ChatScreen + EditBox + CommandSuggestions: history navigation, argument
 //! colouring, usage hints, parse errors and tab completion).
 use crate::{
-    command::{Dispatcher, ParseResults, Registries, Suggestion},
-    hud::{HudAtlas, HudBatch, rgba},
+    command::{
+        Dispatcher, ParseResults, Registries, Suggestion, SuggestionsBuilder, merge_suggestions,
+    },
+    hud::{HudAtlas, HudBatch},
     hud_layout::{self, GuiDraw, PoseOp},
+    screen_draw::{self as d, Draw, Measure, TextField},
     text::{self, Style, Text},
-    ui::{EditBox, char_len},
 };
 
 /// GuiMessageTag.systemSinglePlayer's indicator colour.
@@ -299,81 +301,151 @@ impl Chat {
     }
 }
 
-/// CommandSuggestions.SuggestionsList.
+/// `CommandSuggestions.SuggestionsList`.
 #[derive(Clone, Debug)]
 struct SuggestionList {
-    x: f32,
-    width: f32,
+    /// `rect`: x, y, width, height.
+    rect: [i32; 4],
+    original: String,
     list: Vec<Suggestion>,
     offset: usize,
     current: usize,
-    original: String,
+    last_mouse: (i32, i32),
     tab_cycles: bool,
-    last_mouse: (f32, f32),
+}
+impl SuggestionList {
+    fn contains(&self, x: i32, y: i32) -> bool {
+        let [rx, ry, w, h] = self.rect;
+        x >= rx && x <= rx + w && y >= ry && y <= ry + h
+    }
 }
 
-/// The open chat screen.
-pub struct ChatScreen {
-    pub input: EditBox,
-    history_pos: usize,
-    history_buffer: String,
-    parse: Option<ParseResults>,
-    usage: Vec<Text>,
-    usage_x: f32,
-    suggestions: Option<SuggestionList>,
-    pending: Vec<Suggestion>,
-    pending_start: usize,
-    keep_suggestions: bool,
-    allow_suggestions: bool,
-    pub auto_suggestions: bool,
-    dirty: bool,
+/// What a key did on the chat screen.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChatAction {
+    None,
+    /// Escape: the screen closes.
+    Close,
+    /// Enter: the message is sent and the screen closes.
+    Submit(String),
 }
-const FILL: u32 = 0xD000_0000;
-fn fill_color() -> u32 {
-    rgba(0, 0, 0, (FILL >> 24) as u8)
+
+/// The dispatcher and registries the suggestions come from.
+pub struct Commands<'a> {
+    pub dispatcher: &'a Dispatcher,
+    pub registries: &'a Registries,
+}
+
+/// The open chat screen: vanilla's `ChatScreen` with its `EditBox` and
+/// `CommandSuggestions` (argument colouring, usage lines, parse errors,
+/// the suggestion list, Tab completion, history).
+pub struct ChatScreen {
+    pub input: TextField,
+    width: i32,
+    height: i32,
+    history_buffer: String,
+    history_pos: usize,
+    parse: Option<ParseResults>,
+    /// The completions at the cursor (`pendingSuggestions`): range start (bytes) and list.
+    pending: Option<(usize, Vec<Suggestion>)>,
+    suggestions: Option<SuggestionList>,
+    usage: Vec<Text>,
+    usage_position: i32,
+    usage_width: i32,
+    allow_suggestions: bool,
+    keep_suggestions: bool,
+    pub auto_suggestions: bool,
+}
+/// `CommandSuggestions`' fill colour.
+const FILL: i32 = -805306368;
+fn byte_at(s: &str, chars: usize) -> usize {
+    s.char_indices().nth(chars).map_or(s.len(), |(i, _)| i)
+}
+fn chars_to(s: &str, byte: usize) -> usize {
+    s[..byte.min(s.len())].chars().count()
+}
+/// `Mth.clamp(int)`: the minimum wins over a smaller maximum.
+fn clamp(v: i32, lo: i32, hi: i32) -> i32 {
+    if v < lo { lo } else { v.min(hi) }
+}
+/// `CommandSuggestions.getLastWordIndex`: after the last whitespace run.
+fn last_word_index(s: &str) -> usize {
+    let mut out = 0;
+    let mut prev_space = false;
+    for (i, c) in s.char_indices() {
+        let space = matches!(c, ' ' | '\t' | '\n' | '\u{b}' | '\u{c}' | '\r');
+        if prev_space && !space {
+            out = i;
+        }
+        prev_space = space;
+    }
+    if prev_space { s.len() } else { out }
 }
 impl ChatScreen {
-    pub fn new(initial: &str, history_len: usize, width: f32, height: f32) -> Self {
-        let mut input = EditBox::new(4.0, height - 12.0, width - 4.0, 12.0);
-        input.bordered = false;
+    /// `ChatScreen.init`: the input at the bottom, focused, holding `initial`.
+    pub fn new(
+        m: &Measure,
+        c: &Commands,
+        initial: &str,
+        history_len: usize,
+        width: i32,
+        height: i32,
+    ) -> Self {
+        let mut input = TextField::new(4, height - 12, width - 4, 12);
         input.max_length = 256;
-        input.set_value(initial);
-        Self {
+        input.bordered = false;
+        input.focused = true;
+        input.set_value(m, initial);
+        let mut s = Self {
             input,
-            history_pos: history_len,
+            width,
+            height,
             history_buffer: String::new(),
+            history_pos: history_len,
             parse: None,
-            usage: Vec::new(),
-            usage_x: 0.0,
+            pending: None,
             suggestions: None,
-            pending: Vec::new(),
-            pending_start: 0,
-            keep_suggestions: false,
+            usage: Vec::new(),
+            usage_position: 0,
+            usage_width: 0,
             allow_suggestions: false,
+            keep_suggestions: false,
             auto_suggestions: true,
-            dirty: true,
-        }
-    }
-    /// Keep the input box at the bottom when the window resizes.
-    pub fn resize(&mut self, width: f32, height: f32) {
-        self.input.x = 4.0;
-        self.input.y = height - 12.0;
-        self.input.width = width - 4.0;
+        };
+        s.update_command_info(m, c);
+        s
     }
     pub fn value(&self) -> &str {
         &self.input.value
     }
-    /// ChatScreen.onEdited.
-    pub fn edited(&mut self) {
-        self.allow_suggestions = true;
-        self.dirty = true;
-    }
-    /// CommandSuggestions.updateCommandInfo (run lazily before drawing/keys).
-    pub fn update(&mut self, atlas: &HudAtlas, d: &Dispatcher, reg: &Registries) {
-        if !self.dirty {
-            return;
+    /// `ChatScreen.resize`: a new screen with the current text.
+    pub fn resize(&mut self, m: &Measure, c: &Commands, width: i32, height: i32) {
+        if (width, height) != (self.width, self.height) {
+            let value = self.input.value.clone();
+            let auto = self.auto_suggestions;
+            *self = Self::new(m, c, &value, self.history_pos, width, height);
+            self.auto_suggestions = auto;
         }
-        self.dirty = false;
+    }
+    /// `ChatScreen.onEdited`.
+    fn edited(&mut self, m: &Measure, c: &Commands) {
+        self.allow_suggestions = true;
+        self.update_command_info(m, c);
+    }
+    /// Typed text (`charTyped` per character).
+    pub fn type_text(&mut self, m: &Measure, c: &Commands, text: &str) {
+        for ch in text.chars() {
+            if ch >= ' '
+                && ch != '\u{7f}'
+                && ch != '§'
+                && self.input.insert_text(m, &ch.to_string())
+            {
+                self.edited(m, c);
+            }
+        }
+    }
+    /// `CommandSuggestions.updateCommandInfo`.
+    fn update_command_info(&mut self, m: &Measure, c: &Commands) {
         let command = self.input.value.clone();
         if self.parse.as_ref().is_some_and(|p| p.input != command) {
             self.parse = None;
@@ -383,221 +455,234 @@ impl ChatScreen {
             self.suggestions = None;
         }
         self.usage.clear();
-        self.pending.clear();
-        let cursor_chars = self.input.cursor;
-        let cursor = command
-            .char_indices()
-            .nth(cursor_chars)
-            .map_or(command.len(), |(i, _)| i);
-        if !command.starts_with('/') {
-            return;
-        }
-        if self.parse.is_none() {
-            self.parse = Some(d.parse_at(&command, 1, reg));
-        }
-        let Some(parse) = &self.parse else { return };
-        if cursor >= 1 && (self.suggestions.is_none() || !self.keep_suggestions) {
-            let (range, list) = d.suggestions(parse, cursor, reg);
-            self.pending = list;
-            self.pending_start = range.0;
-            // CommandSuggestions.updateUsageInfo.
-            let mut trailing = false;
-            if cursor == command.len() {
-                if self.pending.is_empty() && !parse.errors.is_empty() {
-                    let mut literals = 0;
-                    for (_, e) in &parse.errors {
-                        if e.literal_incorrect {
-                            literals += 1;
-                        } else {
-                            self.usage.push(e.with_context().with_color(text::RED));
-                        }
-                    }
-                    if literals > 0 {
-                        let reader = crate::command::Reader {
-                            string: &parse.input,
-                            cursor: parse.cursor,
-                        };
-                        self.usage.push(
-                            crate::command::CommandError::tr_at(
-                                "command.unknown.argument",
-                                &[],
-                                &reader,
-                            )
-                            .with_context()
-                            .with_color(text::RED),
-                        );
-                    }
-                } else if parse.can_read() {
-                    trailing = true;
-                }
+        let cursor = self.input.cursor;
+        let cursor_b = byte_at(&command, cursor);
+        if command.starts_with('/') {
+            if self.parse.is_none() {
+                self.parse = Some(c.dispatcher.parse_at(&command, 1, c.registries));
             }
-            let (node, start, _) = parse.context.suggestion_context(cursor);
-            if self.usage.is_empty() {
-                let mut lines: Vec<Text> = d
-                    .smart_usage(node, reg.permission)
-                    .into_iter()
-                    .filter(|(n, _)| {
-                        !matches!(d.nodes[*n].kind, crate::command::NodeKind::Literal(_))
-                    })
-                    .map(|(_, u)| Text::colored(u, text::GRAY))
-                    .collect();
-                if lines.is_empty()
-                    && trailing
-                    && let Some(e) = parse.error()
-                {
-                    lines.push(e.with_context().with_color(text::RED));
-                }
-                self.usage = lines;
+            if cursor >= 1 && (self.suggestions.is_none() || !self.keep_suggestions) {
+                let parse = self.parse.as_ref().expect("parsed above");
+                let (range, list) = c.dispatcher.suggestions(parse, cursor_b, c.registries);
+                self.pending = Some((range.0, list));
+                self.update_usage_info(m, c);
             }
-            let usage_width = self
-                .usage
-                .iter()
-                .map(|u| atlas.font.width_text(u))
-                .fold(0.0, f32::max);
-            let start_chars = char_len(&command[..start.min(command.len())]);
-            self.usage_x = if self.usage.is_empty() {
-                0.0
-            } else {
-                self.input.screen_x(atlas, start_chars).clamp(
-                    0.0,
-                    (self.input.screen_x(atlas, 0) + self.input.inner_width() - usage_width)
-                        .max(0.0),
-                )
-            };
-            self.suggestions = None;
-            if self.allow_suggestions && self.auto_suggestions {
-                self.show_suggestions(atlas);
-            }
+        } else if !command.chars().all(char::is_whitespace) {
+            let partial = &command[..cursor_b];
+            let mut builder = SuggestionsBuilder::new(partial, last_word_index(partial));
+            builder.suggest_matching(c.registries.players.iter().map(String::as_str));
+            let (range, list) = merge_suggestions(partial, builder.out);
+            self.pending = Some((range.0, list));
+            self.usage_width = 0;
+            self.usage_position = 0;
+        } else {
+            self.pending = None;
         }
     }
-    /// CommandSuggestions.showSuggestions.
-    fn show_suggestions(&mut self, atlas: &HudAtlas) {
-        if self.pending.is_empty() {
+    /// `CommandSuggestions.updateUsageInfo`.
+    fn update_usage_info(&mut self, m: &Measure, c: &Commands) {
+        let Some(parse) = &self.parse else { return };
+        let empty = self.pending.as_ref().is_none_or(|p| p.1.is_empty());
+        let mut trailing = false;
+        if self.input.cursor == self.input.value.chars().count() {
+            if empty && !parse.errors.is_empty() {
+                let mut literals = 0;
+                for (_, e) in &parse.errors {
+                    if e.literal_incorrect {
+                        literals += 1;
+                    } else {
+                        self.usage.push(e.with_context());
+                    }
+                }
+                if literals > 0 {
+                    let reader = crate::command::Reader {
+                        string: &parse.input,
+                        cursor: parse.cursor,
+                    };
+                    self.usage.push(
+                        crate::command::CommandError::tr_at(
+                            "command.unknown.argument",
+                            &[],
+                            &reader,
+                        )
+                        .with_context(),
+                    );
+                }
+            } else if parse.can_read() {
+                trailing = true;
+            }
+        }
+        let cursor_b = byte_at(&self.input.value, self.input.cursor);
+        let (node, start, _) = parse.context.suggestion_context(cursor_b);
+        if self.usage.is_empty() {
+            let entries: Vec<Text> = c
+                .dispatcher
+                .smart_usage(node, c.registries.permission)
+                .into_iter()
+                .filter(|(n, _)| {
+                    !matches!(
+                        c.dispatcher.nodes[*n].kind,
+                        crate::command::NodeKind::Literal(_)
+                    )
+                })
+                .map(|(_, u)| Text::colored(u, text::GRAY))
+                .collect();
+            if entries.is_empty()
+                && trailing
+                && let Some(e) = parse.error()
+            {
+                self.usage.push(e.with_context());
+            }
+            self.usage.extend(entries);
+        }
+        self.usage_width = self.usage.iter().map(|u| m.width(u)).max().unwrap_or(0);
+        self.usage_position = if self.usage.is_empty() {
+            0
+        } else {
+            let start = chars_to(&self.input.value, start);
+            clamp(
+                self.input.screen_x(m, start),
+                0,
+                self.input.screen_x(m, 0) + self.input.inner_width() - self.usage_width,
+            )
+        };
+        self.suggestions = None;
+        if self.allow_suggestions && self.auto_suggestions {
+            self.show_suggestions(m);
+        }
+    }
+    /// `CommandSuggestions.showSuggestions`.
+    fn show_suggestions(&mut self, m: &Measure) {
+        let Some((start, list)) = self.pending.clone() else {
+            return;
+        };
+        if list.is_empty() {
             return;
         }
+        let width = list.iter().map(|s| m.width_str(&s.text)).max().unwrap_or(0);
         let value = self.input.value.clone();
-        let width = self
-            .pending
-            .iter()
-            .map(|s| atlas.font.width(&s.text))
-            .fold(0.0, f32::max);
-        let start_chars = char_len(&value[..self.pending_start.min(value.len())]);
-        let x = self.input.screen_x(atlas, start_chars).clamp(
-            0.0,
-            (self.input.screen_x(atlas, 0) + self.input.inner_width() - width).max(0.0),
+        let x = clamp(
+            self.input.screen_x(m, chars_to(&value, start)),
+            0,
+            self.input.screen_x(m, 0) + self.input.inner_width() - width,
         );
-        // Sort: suggestions starting with the last word first.
-        let cursor = value
-            .char_indices()
-            .nth(self.input.cursor)
-            .map_or(value.len(), |(i, _)| i);
-        let partial = &value[..cursor];
-        let last_word = partial.rfind(char::is_whitespace).map_or(0, |i| i + 1);
-        let word = partial[last_word..].to_lowercase();
-        let (mut first, partial_matches): (Vec<Suggestion>, Vec<Suggestion>) =
-            self.pending.iter().cloned().partition(|s| {
+        let y = self.height - 12;
+        // sortSuggestions: those starting with the word at the cursor first.
+        let partial = &value[..byte_at(&value, self.input.cursor)];
+        let word = partial[last_word_index(partial)..].to_lowercase();
+        let (mut first, rest): (Vec<Suggestion>, Vec<Suggestion>) =
+            list.into_iter().partition(|s| {
                 s.text.starts_with(&word) || s.text.starts_with(&format!("minecraft:{word}"))
             });
-        first.extend(partial_matches);
-        let mut list = SuggestionList {
-            x: x - 1.0,
-            width: width + 1.0,
+        first.extend(rest);
+        let n = first.len().min(10) as i32;
+        let mut l = SuggestionList {
+            rect: [x - 1, y - 3 - n * 12, width + 1, n * 12],
+            original: value,
             list: first,
             offset: 0,
             current: 0,
-            original: value,
+            last_mouse: (0, 0),
             tab_cycles: false,
-            last_mouse: (-1.0, -1.0),
         };
-        self.select(&mut list, 0);
-        self.suggestions = Some(list);
+        self.select(&mut l, 0);
+        self.suggestions = Some(l);
     }
-    fn select(&mut self, list: &mut SuggestionList, index: isize) {
-        let n = list.list.len() as isize;
-        list.current = index.rem_euclid(n.max(1)) as usize;
-        let applied = list.list[list.current].apply(&list.original);
+    /// `SuggestionsList.select`: the grey completion after the text.
+    fn select(&mut self, l: &mut SuggestionList, index: isize) {
+        let n = l.list.len() as isize;
+        let mut i = index;
+        if i < 0 {
+            i += n;
+        }
+        if i >= n {
+            i -= n;
+        }
+        l.current = i as usize;
+        let applied = l.list[l.current].apply(&l.original);
         self.input.suggestion = applied
             .strip_prefix(self.input.value.as_str())
-            .filter(|s| !s.is_empty())
             .map(str::to_owned);
     }
-    fn cycle(&mut self, list: &mut SuggestionList, dir: isize) {
-        self.select(list, list.current as isize + dir);
-        let limit = 10;
-        let max_offset = list.list.len().saturating_sub(limit);
-        if list.current < list.offset {
-            list.offset = list.current.min(max_offset);
-        } else if list.current > list.offset + limit - 1 {
-            list.offset = (list.current + 1).saturating_sub(limit).min(max_offset);
+    fn cycle(&mut self, l: &mut SuggestionList, dir: isize) {
+        self.select(l, l.current as isize + dir);
+        let max = l.list.len().saturating_sub(10);
+        if l.current < l.offset {
+            l.offset = l.current.min(max);
+        } else if l.current > l.offset + 9 {
+            l.offset = (l.current as isize + 1 - 10).clamp(0, max as isize) as usize;
         }
     }
-    fn use_suggestion(&mut self, list: &mut SuggestionList) {
-        let s = list.list[list.current].clone();
+    /// `SuggestionsList.useSuggestion`.
+    fn use_suggestion(&mut self, m: &Measure, c: &Commands, l: &mut SuggestionList) {
+        let s = l.list[l.current].clone();
         self.keep_suggestions = true;
-        let applied = s.apply(&list.original);
-        self.input.set_value(&applied);
-        let end =
-            char_len(&list.original[..s.range.0.min(list.original.len())]) + char_len(&s.text);
-        self.input.set_cursor(end, false);
-        self.dirty = true;
-        self.select(list, list.current as isize);
+        let value = s.apply(&l.original);
+        self.suggestions = Some(l.clone());
+        self.input.set_value(m, &value);
+        self.edited(m, c);
+        let end = chars_to(&l.original, s.range.0) + s.text.chars().count();
+        self.input.set_cursor_and_highlight(m, end);
+        self.select(l, l.current as isize);
         self.keep_suggestions = false;
-        list.tab_cycles = true;
+        l.tab_cycles = true;
     }
-    /// Suggestion-list keys (CommandSuggestions.keyPressed). Returns true if handled.
-    pub fn suggestion_key(
+    /// `ChatScreen.keyPressed`.
+    pub fn key(
         &mut self,
-        atlas: &HudAtlas,
-        d: &Dispatcher,
-        reg: &Registries,
+        m: &Measure,
+        c: &Commands,
+        history: &[String],
         key: winit::keyboard::KeyCode,
         shift: bool,
-    ) -> bool {
+        ctrl: bool,
+    ) -> ChatAction {
         use winit::keyboard::KeyCode as K;
-        self.update(atlas, d, reg);
-        if let Some(mut list) = self.suggestions.take() {
+        // CommandSuggestions.keyPressed.
+        if let Some(mut l) = self.suggestions.take() {
             let handled = match key {
-                K::ArrowUp => {
-                    self.cycle(&mut list, -1);
-                    list.tab_cycles = false;
-                    true
-                }
-                K::ArrowDown => {
-                    self.cycle(&mut list, 1);
-                    list.tab_cycles = false;
+                K::ArrowUp | K::ArrowDown => {
+                    self.cycle(&mut l, if key == K::ArrowUp { -1 } else { 1 });
+                    l.tab_cycles = false;
                     true
                 }
                 K::Tab => {
-                    if list.tab_cycles {
-                        self.cycle(&mut list, if shift { -1 } else { 1 });
+                    if l.tab_cycles {
+                        self.cycle(&mut l, if shift { -1 } else { 1 });
                     }
-                    self.use_suggestion(&mut list);
-                    // Keep the list across the re-parse triggered by the edit.
-                    let keep = list.clone();
-                    self.keep_suggestions = true;
-                    self.update(atlas, d, reg);
-                    self.keep_suggestions = false;
-                    self.suggestions = Some(keep);
-                    return true;
+                    self.use_suggestion(m, c, &mut l);
+                    true
                 }
                 K::Escape => {
                     self.input.suggestion = None;
-                    return true;
+                    return ChatAction::None;
                 }
                 _ => false,
             };
-            self.suggestions = Some(list);
-            return handled;
+            self.suggestions = Some(l);
+            if handled {
+                return ChatAction::None;
+            }
+        } else if key == K::Tab {
+            self.show_suggestions(m);
+            return ChatAction::None;
         }
-        if key == K::Tab {
-            self.show_suggestions(atlas);
-            return true;
+        match key {
+            K::Escape => return ChatAction::Close,
+            K::Enter | K::NumpadEnter => return ChatAction::Submit(self.normalized()),
+            K::ArrowUp => self.move_in_history(m, c, history, -1),
+            K::ArrowDown => self.move_in_history(m, c, history, 1),
+            _ => {
+                if self.input.key(m, key, shift, ctrl) == Some(true) {
+                    self.edited(m, c);
+                }
+            }
         }
-        false
+        ChatAction::None
     }
-    /// ChatScreen.moveInHistory.
-    pub fn move_in_history(&mut self, recent: &[String], dir: isize) {
-        let max = recent.len();
+    /// `ChatScreen.moveInHistory`.
+    fn move_in_history(&mut self, m: &Measure, c: &Commands, history: &[String], dir: isize) {
+        let max = history.len();
         let new = (self.history_pos as isize + dir).clamp(0, max as isize) as usize;
         if new == self.history_pos {
             return;
@@ -605,55 +690,70 @@ impl ChatScreen {
         if new == max {
             self.history_pos = max;
             let b = self.history_buffer.clone();
-            self.input.set_value(&b);
+            self.input.set_value(m, &b);
+            self.edited(m, c);
         } else {
             if self.history_pos == max {
                 self.history_buffer = self.input.value.clone();
             }
-            self.input.set_value(&recent[new]);
-            self.suggestions = None;
+            self.input.set_value(m, &history[new]);
+            self.edited(m, c);
             self.allow_suggestions = false;
+            self.suggestions = None;
             self.history_pos = new;
         }
-        self.dirty = true;
     }
-    /// Mouse wheel over the suggestion list.
-    pub fn scroll_suggestions(&mut self, cursor: (f32, f32), height: f32, amount: f32) -> bool {
-        let Some(list) = &mut self.suggestions else {
-            return false;
-        };
-        let n = list.list.len().min(10);
-        let top = height - 12.0 - 3.0 - n as f32 * 12.0;
-        if crate::ui::hovered(cursor, list.x, top, list.width, n as f32 * 12.0) {
-            let max = list.list.len().saturating_sub(10) as isize;
-            list.offset = (list.offset as isize - amount.signum() as isize).clamp(0, max) as usize;
-            return true;
-        }
-        false
-    }
-    /// Click on a suggestion row.
-    pub fn click(&mut self, cursor: (f32, f32), height: f32) -> bool {
-        let Some(mut list) = self.suggestions.take() else {
-            return false;
-        };
-        let n = list.list.len().min(10);
-        let top = height - 12.0 - 3.0 - n as f32 * 12.0;
-        if crate::ui::hovered(cursor, list.x, top, list.width, n as f32 * 12.0) {
-            let row = ((cursor.1 - top) / 12.0) as usize + list.offset;
-            if row < list.list.len() {
-                self.select(&mut list, row as isize);
-                self.use_suggestion(&mut list);
+    /// A left click (`ChatScreen.mouseClicked`): a suggestion, else the input.
+    pub fn click(&mut self, m: &Measure, c: &Commands, x: f64, y: f64) -> bool {
+        if let Some(mut l) = self.suggestions.take() {
+            let (xi, yi) = (x as i32, y as i32);
+            if l.contains(xi, yi) {
+                let line = (yi - l.rect[1]) / 12 + l.offset as i32;
+                if line >= 0 && (line as usize) < l.list.len() {
+                    self.select(&mut l, line as isize);
+                    self.use_suggestion(m, c, &mut l);
+                }
+                self.suggestions = Some(l);
+                return true;
             }
-            self.suggestions = Some(list);
+            self.suggestions = Some(l);
+        }
+        if self.input.contains(x, y) {
+            self.input.click(m, x, false);
             return true;
         }
-        self.suggestions = Some(list);
         false
     }
-    /// CommandSuggestions.formatText: argument colours over the input.
-    fn formatted(&self) -> Option<Text> {
-        let parse = self.parse.as_ref()?;
-        let value = &self.input.value;
+    /// The mouse wheel over the suggestion list (`SuggestionsList.mouseScrolled`).
+    pub fn scroll(&mut self, mouse: (i32, i32), amount: f64) -> bool {
+        let Some(l) = &mut self.suggestions else {
+            return false;
+        };
+        if !l.contains(mouse.0, mouse.1) {
+            return false;
+        }
+        let max = l.list.len().saturating_sub(10) as i32;
+        l.offset = ((l.offset as f64 - amount.clamp(-1.0, 1.0)) as i32).clamp(0, max) as usize;
+        true
+    }
+    /// `CommandSuggestions.formatText`: argument colours over the input.
+    fn format(&self, value: &str, offset: usize) -> Text {
+        let gray = Style::color(text::GRAY);
+        let Some(parse) = &self.parse else {
+            return Text::literal(value);
+        };
+        let full = &self.input.value;
+        let chars = |b: usize| chars_to(full, b) as isize;
+        let len = value.chars().count() as isize;
+        let piece = |from: isize, to: isize| -> String {
+            value
+                .chars()
+                .skip(from as usize)
+                .take((to - from).max(0) as usize)
+                .collect()
+        };
+        let mut out = Text::empty();
+        let mut unformatted = 0isize;
         let styles = [
             text::AQUA,
             text::YELLOW,
@@ -661,128 +761,134 @@ impl ChatScreen {
             text::LIGHT_PURPLE,
             text::GOLD,
         ];
-        let mut colors = vec![text::GRAY; value.len()];
-        let ctx = parse.context.last_child();
-        for (i, arg) in ctx.args.iter().enumerate() {
-            let c = styles[i % styles.len()];
-            for b in arg.range.0.min(value.len())..arg.range.1.min(value.len()) {
-                colors[b] = c;
+        for (i, arg) in parse.context.last_child().args.iter().enumerate() {
+            let start = (chars(arg.range.0) - offset as isize).max(0);
+            if start >= len {
+                break;
+            }
+            let end = (chars(arg.range.1) - offset as isize).min(len);
+            if end > 0 {
+                out.push(Text::styled(piece(unformatted, start), gray.clone()));
+                out.push(Text::styled(
+                    piece(start, end),
+                    Style::color(styles[i % styles.len()]),
+                ));
+                unformatted = end;
             }
         }
         if parse.can_read() {
-            for c in colors.iter_mut().skip(parse.cursor) {
-                *c = text::RED;
+            let start = (chars(parse.cursor) - offset as isize).max(0);
+            if start < len {
+                let remaining = (full.len() - parse.cursor.min(full.len())) as isize;
+                let end = (start + full[parse.cursor.min(full.len())..].chars().count() as isize)
+                    .min(len);
+                let _ = remaining;
+                out.push(Text::styled(piece(unformatted, start), gray.clone()));
+                out.push(Text::styled(piece(start, end), Style::color(text::RED)));
+                unformatted = end;
             }
         }
-        let mut out = Text::empty();
-        for (i, ch) in value.char_indices() {
-            out.push(Text::styled(ch.to_string(), Style::color(colors[i])));
-        }
-        Some(out)
+        out.push(Text::styled(piece(unformatted, len), gray));
+        out
     }
-    /// ChatScreen.extractRenderState minus the chat lines.
+    /// `ChatScreen.extractRenderState` without the chat lines: the input's
+    /// background (`background`, `Options.getBackgroundColor`), the input,
+    /// then the suggestion list or the usage lines.
     pub fn draw(
         &mut self,
-        batch: &mut HudBatch,
-        atlas: &HudAtlas,
-        d: &Dispatcher,
-        reg: &Registries,
-        cursor: (f32, f32),
-        background_opacity: f32,
-    ) {
-        self.update(atlas, d, reg);
-        let (w, h) = (batch.width, batch.height);
-        batch.fill(
-            atlas,
-            2.0,
-            h - 14.0,
-            w - 4.0,
-            12.0,
-            rgba(0, 0, 0, (background_opacity * 255.0) as u8),
-        );
-        let formatted = self.formatted();
-        self.input.draw(batch, atlas, formatted.as_ref());
-        let fill = fill_color();
-        if let Some(mut list) = self.suggestions.take() {
-            let limit = list.list.len().min(10);
-            let top = h - 12.0 - 3.0 - limit as f32 * 12.0;
-            let has_prev = list.offset > 0;
-            let has_next = list.list.len() > list.offset + limit;
-            let moved = list.last_mouse != cursor;
-            list.last_mouse = cursor;
-            if has_prev || has_next {
-                batch.fill(atlas, list.x, top - 1.0, list.width, 1.0, fill);
-                batch.fill(
-                    atlas,
-                    list.x,
-                    top + limit as f32 * 12.0,
-                    list.width,
-                    1.0,
-                    fill,
-                );
-                for x in (0..list.width as i32).step_by(2) {
-                    if has_prev {
-                        batch.fill(atlas, list.x + x as f32, top - 1.0, 1.0, 1.0, u32::MAX);
-                    }
-                    if has_next {
-                        batch.fill(
-                            atlas,
-                            list.x + x as f32,
-                            top + limit as f32 * 12.0,
-                            1.0,
-                            1.0,
-                            u32::MAX,
-                        );
-                    }
-                }
-            }
-            let mut hovered_row = None;
-            for i in 0..limit {
-                let y = top + 12.0 * i as f32;
-                batch.fill(atlas, list.x, y, list.width, 12.0, fill);
-                if cursor.0 > list.x
-                    && cursor.0 < list.x + list.width
-                    && cursor.1 > y
-                    && cursor.1 < y + 12.0
-                {
-                    hovered_row = Some(i + list.offset);
-                }
-            }
-            if moved && let Some(r) = hovered_row {
-                self.select(&mut list, r as isize);
-            }
-            for i in 0..limit {
-                let s = &list.list[i + list.offset];
-                let color = if i + list.offset == list.current {
-                    rgba(255, 255, 0, 255)
-                } else {
-                    rgba(0xAA, 0xAA, 0xAA, 255)
-                };
-                batch.text(
-                    atlas,
-                    &s.text,
-                    list.x + 1.0,
-                    top + 2.0 + 12.0 * i as f32,
-                    color,
-                    true,
-                );
-            }
-            if hovered_row.is_some()
-                && let Some(tip) = &list.list[list.current].tooltip
-            {
-                crate::ui::tooltip(batch, atlas, &[Text::literal(tip.clone())], cursor);
-            }
-            self.suggestions = Some(list);
+        m: &Measure,
+        mouse: (i32, i32),
+        blink_ms: u64,
+        background: i32,
+    ) -> Vec<Draw> {
+        let (w, h) = (self.width, self.height);
+        let mut out = Vec::new();
+        d::fill(&mut out, 2, h - 14, w - 2, h - 2, background);
+        let format = |s: &str, o: usize| self.format(s, o);
+        self.input.draw(&mut out, m, blink_ms, Some(&format));
+        if let Some(mut l) = self.suggestions.take() {
+            self.draw_list(&mut out, m, &mut l, mouse);
+            self.suggestions = Some(l);
         } else {
             for (i, line) in self.usage.iter().enumerate() {
-                let y = h - 27.0 - 12.0 * i as f32;
-                let width = atlas.font.width_text(line);
-                batch.fill(atlas, self.usage_x - 1.0, y, width + 2.0, 12.0, fill);
-                batch.text_styled(atlas, line, self.usage_x, y + 2.0, u32::MAX, true);
+                let y = h - 27 - 12 * i as i32;
+                d::fill(
+                    &mut out,
+                    self.usage_position - 1,
+                    y,
+                    self.usage_position + self.usage_width + 1,
+                    y + 12,
+                    FILL,
+                );
+                d::text(&mut out, line.clone(), self.usage_position, y + 2, -1, true);
             }
         }
+        out
     }
-    /// ChatScreen.normalizeChatMessage.
+    fn draw_list(
+        &mut self,
+        out: &mut Vec<Draw>,
+        m: &Measure,
+        l: &mut SuggestionList,
+        mouse: (i32, i32),
+    ) {
+        let limit = l.list.len().min(10);
+        let [rx, ry, rw, rh] = l.rect;
+        let has_prev = l.offset > 0;
+        let has_next = l.list.len() > l.offset + limit;
+        let moved = l.last_mouse != mouse;
+        if moved {
+            l.last_mouse = mouse;
+        }
+        if has_prev || has_next {
+            d::fill(out, rx, ry - 1, rx + rw, ry, FILL);
+            d::fill(out, rx, ry + rh, rx + rw, ry + rh + 1, FILL);
+            if has_prev {
+                for x in (0..rw).step_by(2) {
+                    d::fill(out, rx + x, ry - 1, rx + x + 1, ry, -1);
+                }
+            }
+            if has_next {
+                for x in (0..rw).step_by(2) {
+                    d::fill(out, rx + x, ry + rh, rx + x + 1, ry + rh + 1, -1);
+                }
+            }
+        }
+        let mut hovered = false;
+        for i in 0..limit {
+            let y = ry + 12 * i as i32;
+            d::fill(out, rx, y, rx + rw, y + 12, FILL);
+            if mouse.0 > rx && mouse.0 < rx + rw && mouse.1 > y && mouse.1 < y + 12 {
+                if moved {
+                    self.select(l, (i + l.offset) as isize);
+                }
+                hovered = true;
+            }
+            let s = &l.list[i + l.offset];
+            let color = if i + l.offset == l.current {
+                -256
+            } else {
+                -5592406
+            };
+            d::text(
+                out,
+                Text::literal(s.text.clone()),
+                rx + 1,
+                ry + 2 + 12 * i as i32,
+                color,
+                true,
+            );
+        }
+        if hovered && let Some(tip) = &l.list[l.current].tooltip {
+            out.push(Draw::Tooltip {
+                lines: vec![Text::literal(tip.clone())],
+                x: mouse.0,
+                y: mouse.1,
+            });
+        }
+        let _ = m;
+    }
+    /// `ChatScreen.normalizeChatMessage`.
     pub fn normalized(&self) -> String {
         let collapsed = self
             .input
