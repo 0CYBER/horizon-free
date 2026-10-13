@@ -452,7 +452,9 @@ def compare_chunks(vanilla, horizon, report):
         out = []
         diff(va, ha, 'chunk', out)
         if va.get('Status') != 'minecraft:full' and ha.get('Status') == 'minecraft:full':
-            out = [(path.replace('chunk.', 'chunk.promoted.', 1), p, q) for path, p, q in out]
+            promoted = re.compile(r'^chunk\.(Status|Heightmaps\.\w+_WG|entities)$')
+            out = [(path.replace('chunk.', 'chunk.promoted.', 1) if promoted.match(path) else path, p, q)
+                   for path, p, q in out]
         for y in sorted(set(vs) | set(hs)):
             empty = {'blocks': ['minecraft:air'] * 4096, 'biomes': None, 'BlockLight': None, 'SkyLight': None}
             a, b = vs.get(y, empty), hs.get(y, empty)
