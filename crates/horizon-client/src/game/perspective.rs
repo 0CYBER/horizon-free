@@ -144,6 +144,7 @@ pub(super) fn player_type(root: &Path) -> Option<Arc<MobType>> {
             armor_toughness: 0.0,
             knockback_resistance: 0.0,
             jump_strength: 0.42,
+            attributes: Default::default(),
             gravity: 0.08,
             safe_fall_distance: 3.0,
             fall_damage_multiplier: 1.0,

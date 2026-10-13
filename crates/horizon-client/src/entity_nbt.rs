@@ -140,7 +140,7 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
     for (key, value) in [
         ("AbsorptionAmount", Tag::Float(0)),
         ("FallFlying", Tag::Byte(0)),
-        ("CanPickUpLoot", Tag::Byte(i8::from(m.extra.pick_up_loot))),
+        ("CanPickUpLoot", Tag::Byte(i8::from(m.can_pick_up_loot()))),
         ("LeftHanded", Tag::Byte(0)),
         (
             "Brain",

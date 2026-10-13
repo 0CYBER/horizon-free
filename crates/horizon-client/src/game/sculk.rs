@@ -638,54 +638,13 @@ impl Game<'_> {
     /// `Warden.VibrationUser`: accept a vibration for the warden at `index`.
     fn warden_listen(&mut self, index: usize, event: &'static str, pos: [f64; 3], ctx: &Context) {
         let now = self.world.game_time;
-        let (eye, busy) = {
-            let m = &self.mobs[index];
-            let Some(st) = m.extra.warden.as_ref() else {
-                return;
-            };
-            (
-                [m.position.x, m.position.y + m.kind.eye_height, m.position.z],
-                st.vibration.current.is_some(),
-            )
-        };
-        if busy {
-            return;
-        }
-        let source_block = block_of(pos);
-        let eye_block = block_of(eye);
-        let d = [
-            i64::from(source_block[0]) - i64::from(eye_block[0]),
-            i64::from(source_block[1]) - i64::from(eye_block[1]),
-            i64::from(source_block[2]) - i64::from(eye_block[2]),
-        ];
-        if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > 256 {
-            return;
-        }
-        if !sculk::valid_vibration(sculk::warden_can_listen(event), event, ctx) {
-            return;
-        }
-        if !warden::can_receive_vibration(&self.mobs[index], i64::from(self.mobs[index].age), ctx) {
-            return;
-        }
-        if self.occluded(pos, eye) {
-            return;
-        }
-        let distance = {
-            let d = [pos[0] - eye[0], pos[1] - eye[1], pos[2] - eye[2]];
-            (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() as f32
-        };
-        if let Some(st) = self.mobs[index].extra.warden.as_mut() {
-            st.vibration.schedule(
-                Info {
-                    event,
-                    distance,
-                    pos,
-                    source: ctx.source,
-                    owner: ctx.owner,
-                },
-                now,
-            );
-        }
+        let (occludes, world) = (&self.sculk.tables.occludes, &self.world);
+        warden::listen(&mut self.mobs[index], now, event, pos, ctx, |a, b| {
+            sculk::is_occluded(a, b, |p| {
+                let state = world.block(p.x, p.y, p.z);
+                occludes.get(state.0 as usize).copied().unwrap_or(false)
+            })
+        });
     }
 
     // ---- ticking ----
@@ -1627,10 +1586,6 @@ impl Game<'_> {
                 } else {
                     (move_dist as i32).wrapping_add(1) as f32
                 };
-                if warden {
-                    self.audio
-                        .play("minecraft:entity.warden.step", Some(at), 10.0, 1.0);
-                }
                 let ctx = self.who_context(Some(who), Some(state));
                 self.post_game_event("minecraft:step", at, ctx);
             } else if in_water {

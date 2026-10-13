@@ -28,7 +28,6 @@ pub fn register(m: &mut Mob) {
         hovers: false,
     };
     m.ai.nav.kind = NavKind::Flying;
-    m.persistent = true;
     let g = &mut m.ai.goals;
     g.add(0, DoNothing);
     g.add(
