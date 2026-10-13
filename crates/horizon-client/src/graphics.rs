@@ -130,6 +130,10 @@ pub struct Graphics {
     /// Chunk worker threads; 0 uses every core but one. Applies at the next start.
     pub workers: u32,
     pub overlay: Overlay,
+    /// World resolution as a percentage of the window's (50..=200).
+    pub resolution_scale: u32,
+    /// FXAA over the world.
+    pub fxaa: bool,
 }
 impl Default for Graphics {
     fn default() -> Self {
@@ -146,6 +150,8 @@ impl Default for Graphics {
             pacing: Pacing::Efficient,
             workers: 0,
             overlay: Overlay::Off,
+            resolution_scale: 100,
+            fxaa: false,
         }
     }
 }
@@ -189,6 +195,10 @@ impl Graphics {
                     }
                 }
                 "workers" => g.workers = number(g.workers).min(64),
+                "resolutionScale" => {
+                    g.resolution_scale = number(g.resolution_scale).clamp(50, 200)
+                }
+                "fxaa" => g.fxaa = flag(g.fxaa),
                 "overlay" => {
                     g.overlay = match value {
                         "fps" => Overlay::Fps,
@@ -203,7 +213,7 @@ impl Graphics {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "preset:{}\ncaveCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\n",
+            "preset:{}\ncaveCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\n",
             self.preset.name(),
             bool_text(self.cave_culling),
             self.chunk_updates,
@@ -223,6 +233,8 @@ impl Graphics {
                 Overlay::Fps => "fps",
                 Overlay::Graph => "graph",
             },
+            self.resolution_scale,
+            bool_text(self.fxaa),
         )
     }
     pub fn save(&self, dir: &Path) {
@@ -291,6 +303,8 @@ mod tests {
             pacing: Pacing::Precise,
             workers: 6,
             overlay: Overlay::Graph,
+            resolution_scale: 75,
+            fxaa: true,
         };
         assert_eq!(Graphics::parse(&g.serialize()), g);
         assert_eq!(Graphics::parse(""), Graphics::default());

@@ -32,6 +32,8 @@ pub enum H {
     Pacing,
     Workers,
     Overlay,
+    ResolutionScale,
+    Antialiasing,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -120,6 +122,11 @@ fn rows(level: Level) -> Vec<Row> {
                 "Soft shadows in corners. Costs chunk building time only.",
             ),
             v(
+                Opt::Mipmaps,
+                Low,
+                "Smaller copies of block textures for distant terrain: less shimmer.",
+            ),
+            v(
                 Opt::BiomeBlend,
                 Low,
                 "Blends grass and water colours across biomes when building chunks.",
@@ -158,6 +165,16 @@ fn rows(level: Level) -> Vec<Row> {
             fov,
             fps,
             vsync,
+            h(
+                H::ResolutionScale,
+                High,
+                "World pixels per screen pixel. Below 100% is faster on the GPU.",
+            ),
+            h(
+                H::Antialiasing,
+                Low,
+                "FXAA smooths jagged edges of the world; slightly softer image.",
+            ),
             h(
                 H::PresentMode,
                 None,
@@ -213,6 +230,7 @@ impl H {
                 Some(i as f32 / (UPLOAD_STEPS.len() - 1) as f32)
             }
             H::Workers => Some(g.workers as f32 / max_workers() as f32),
+            H::ResolutionScale => Some((g.resolution_scale as f32 - 50.0) / 150.0),
             _ => None,
         }
     }
@@ -246,6 +264,8 @@ impl H {
                 0 => labelled("Worker Threads", format!("Auto ({})", g.worker_threads())),
                 n => labelled("Worker Threads", n),
             },
+            H::ResolutionScale => labelled("Resolution Scale", format!("{}%", g.resolution_scale)),
+            H::Antialiasing => labelled("Anti-aliasing", if g.fxaa { "FXAA" } else { "Off" }),
             H::Overlay => labelled(
                 "Performance Overlay",
                 match g.overlay {
@@ -265,6 +285,7 @@ impl H {
                     UPLOAD_STEPS[(v * (UPLOAD_STEPS.len() - 1) as f32).round() as usize]
             }
             H::Workers => g.workers = (v * max_workers() as f32).round() as u32,
+            H::ResolutionScale => g.resolution_scale = (50.0 + (v * 30.0).round() * 5.0) as u32,
             _ => {}
         }
     }
@@ -288,6 +309,7 @@ impl H {
             H::Weather => g.weather = !g.weather,
             H::AnimatedTextures => g.animated_textures = !g.animated_textures,
             H::PresentMode => g.present_mode = step(&PresentMode::ALL, g.present_mode, back),
+            H::Antialiasing => g.fxaa = !g.fxaa,
             H::Pacing => {
                 g.pacing = match g.pacing {
                     Pacing::Efficient => Pacing::Precise,

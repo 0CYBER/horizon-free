@@ -15,6 +15,7 @@ use winit::window::Window;
 
 mod arena;
 mod occlusion;
+mod post;
 mod timing;
 
 #[repr(C)]
@@ -166,6 +167,12 @@ pub struct Renderer {
     lightmap: wgpu::Texture,
     sprite_texture: wgpu::Texture,
     mip_levels: u32,
+    /// The mipmap levels sampled (the Mipmap Levels option), at most `mip_levels - 1`.
+    mipmaps: u32,
+    terrain_layout: wgpu::BindGroupLayout,
+    sprite_sampler: wgpu::Sampler,
+    lightmap_view: wgpu::TextureView,
+    lightmap_sampler: wgpu::Sampler,
     animations: Vec<(SpriteAnimation, usize)>,
     indices: wgpu::Buffer,
     index_quads: u32,
@@ -190,6 +197,8 @@ pub struct Renderer {
     block_entities: HashMap<SectionKey, Vec<([i32; 3], u32)>>,
     /// VisGraph face connectivity per meshed section (cave culling).
     occlusion: occlusion::Occlusion,
+    /// Resolution scale and FXAA (Horizon settings).
+    post: post::Post,
     pub hud: HudRenderer,
     pub info: wgpu::AdapterInfo,
     pub suspended: bool,
@@ -1111,6 +1120,7 @@ impl Renderer {
         let multi_draw = device
             .features()
             .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE);
+        let post = post::Post::new(&device, config.format.remove_srgb_suffix());
         Ok(Self {
             instance,
             surface,
@@ -1148,6 +1158,11 @@ impl Renderer {
             lightmap,
             sprite_texture,
             mip_levels,
+            mipmaps: mip_levels - 1,
+            terrain_layout: bindings,
+            sprite_sampler,
+            lightmap_view,
+            lightmap_sampler,
             animations: animations.iter().map(|a| (a.clone(), usize::MAX)).collect(),
             indices,
             index_quads,
@@ -1165,6 +1180,7 @@ impl Renderer {
             draws: Vec::new(),
             block_entities: HashMap::new(),
             occlusion: occlusion::Occlusion::new(crate::chunk::HEIGHT / 16),
+            post,
             hud,
             info,
             suspended: size.width == 0 || size.height == 0,
@@ -1371,6 +1387,51 @@ impl Renderer {
         self.block_entities.remove(&key);
         self.occlusion.remove(key);
         self.release_section(key);
+    }
+    /// Horizon's resolution scale (world pixels per window pixel) and FXAA.
+    pub fn set_world_post(&mut self, scale: f32, antialias: bool) {
+        self.post.scale = scale.clamp(0.25, 2.0);
+        self.post.antialias = antialias;
+    }
+    /// The Mipmap Levels option: block textures sample at most `levels`
+    /// reduced copies (0: none).
+    pub fn set_mipmap_levels(&mut self, levels: u32) {
+        let levels = levels.min(self.mip_levels - 1);
+        if levels == self.mipmaps {
+            return;
+        }
+        self.mipmaps = levels;
+        let sprite_view = self.sprite_texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            mip_level_count: Some(levels + 1),
+            ..Default::default()
+        });
+        self.group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Horizon terrain resources"),
+            layout: &self.terrain_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.globals.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&sprite_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sprite_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&self.lightmap_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&self.lightmap_sampler),
+                },
+            ],
+        });
     }
     pub fn view_projection(&self, frame: &Frame) -> Mat4 {
         self.projection(
@@ -1830,9 +1891,17 @@ impl Renderer {
         if let Some(timer) = &mut self.gpu_timer {
             timer.begin(&mut encoder);
         }
+        // The world's targets: the screen, or the scaled target of `post`.
+        let scaled = self
+            .post
+            .prepare(&self.device, [self.config.width, self.config.height]);
+        let (world_view, world_depth) = match &scaled {
+            Some((color, depth)) => (color, depth),
+            None => (&view_target, &self.depth),
+        };
         {
             let attachments = [Some(wgpu::RenderPassColorAttachment {
-                view: &view_target,
+                view: world_view,
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
@@ -1855,7 +1924,7 @@ impl Renderer {
                 label: Some("Horizon world"),
                 color_attachments: &attachments,
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth,
+                    view: world_depth,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Discard,
@@ -1929,6 +1998,9 @@ impl Renderer {
                 }
                 pass.set_bind_group(0, &self.group, &[]);
             }
+        }
+        if scaled.is_some() {
+            self.post.finish(&mut encoder, &view_target);
         }
         if hand_quads > 0 {
             let attachments = [Some(wgpu::RenderPassColorAttachment {

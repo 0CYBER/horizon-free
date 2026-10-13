@@ -1,0 +1,187 @@
+//! Resolution scale and FXAA (Horizon settings): the world renders into its
+//! own target at the scaled size, then one full-screen pass copies or
+//! anti-aliases it onto the screen, under the hand and HUD. With neither
+//! setting on, the world renders straight to the screen as before.
+
+struct WorldTarget {
+    size: [u32; 2],
+    color: wgpu::TextureView,
+    depth: wgpu::TextureView,
+    group: wgpu::BindGroup,
+}
+
+pub struct Post {
+    layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+    copy: wgpu::RenderPipeline,
+    fxaa: wgpu::RenderPipeline,
+    format: wgpu::TextureFormat,
+    /// World resolution relative to the window (0.5..=2.0).
+    pub scale: f32,
+    pub antialias: bool,
+    target: Option<WorldTarget>,
+}
+
+impl Post {
+    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Horizon post"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../post.wgsl").into()),
+        });
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Horizon post bindings"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Horizon post"),
+            bind_group_layouts: &[Some(&layout)],
+            ..Default::default()
+        });
+        let pipeline = |entry: &str| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Horizon post"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_post"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Horizon post"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        Self {
+            copy: pipeline("fs_copy"),
+            fxaa: pipeline("fs_fxaa"),
+            layout,
+            sampler,
+            format,
+            scale: 1.0,
+            antialias: false,
+            target: None,
+        }
+    }
+    /// The world's colour and depth targets this frame, or `None` to draw
+    /// it straight to the screen.
+    pub fn prepare(
+        &mut self,
+        device: &wgpu::Device,
+        window: [u32; 2],
+    ) -> Option<(wgpu::TextureView, wgpu::TextureView)> {
+        if self.scale == 1.0 && !self.antialias {
+            self.target = None;
+            return None;
+        }
+        let size = window.map(|v| ((v as f32 * self.scale).round() as u32).clamp(1, 8192));
+        if self.target.as_ref().is_none_or(|t| t.size != size) {
+            let extent = wgpu::Extent3d {
+                width: size[0],
+                height: size[1],
+                depth_or_array_layers: 1,
+            };
+            let texture = |label, format, usage| {
+                device
+                    .create_texture(&wgpu::TextureDescriptor {
+                        label: Some(label),
+                        size: extent,
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format,
+                        usage,
+                        view_formats: &[],
+                    })
+                    .create_view(&Default::default())
+            };
+            let color = texture(
+                "Scaled world",
+                self.format,
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            );
+            let depth = texture(
+                "Scaled world depth",
+                wgpu::TextureFormat::Depth32Float,
+                wgpu::TextureUsages::RENDER_ATTACHMENT,
+            );
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Horizon post"),
+                layout: &self.layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&color),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                ],
+            });
+            self.target = Some(WorldTarget {
+                size,
+                color,
+                depth,
+                group,
+            });
+        }
+        self.target.as_ref().map(|t| (t.color.clone(), t.depth.clone()))
+    }
+    /// Draw the scaled world onto `screen`.
+    pub fn finish(&self, encoder: &mut wgpu::CommandEncoder, screen: &wgpu::TextureView) {
+        let Some(target) = &self.target else { return };
+        let attachments = [Some(wgpu::RenderPassColorAttachment {
+            view: screen,
+            resolve_target: None,
+            depth_slice: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                store: wgpu::StoreOp::Store,
+            },
+        })];
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Horizon post"),
+            color_attachments: &attachments,
+            ..Default::default()
+        });
+        pass.set_pipeline(if self.antialias { &self.fxaa } else { &self.copy });
+        pass.set_bind_group(0, &target.group, &[]);
+        pass.draw(0..3, 0..1);
+    }
+}

@@ -144,6 +144,8 @@ impl Game<'_> {
             r.gamma = s.gamma;
             r.set_present_mode(s.vsync, s.horizon.present_mode);
             r.animated_textures = s.horizon.animated_textures;
+            r.set_mipmap_levels(s.mipmap_levels.max(0) as u32);
+            r.set_world_post(s.horizon.resolution_scale as f32 / 100.0, s.horizon.fxaa);
         }
         if let Some(w) = &self.window {
             let want = s.fullscreen;
