@@ -197,6 +197,7 @@ impl Game<'_> {
             for (corner, uv) in corners.iter().zip(uvs) {
                 let p = t.transform_point3(glam::Vec3::from(*corner));
                 out.push(Vertex {
+                    normal: [0; 4],
                     pos: p.to_array(),
                     uv,
                     layer: overlay,

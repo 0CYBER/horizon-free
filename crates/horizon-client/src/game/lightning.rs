@@ -385,6 +385,7 @@ impl Game<'_> {
                             ];
                             for c in corners {
                                 out.push(Vertex {
+                                    normal: [0; 4],
                                     pos: (o + glam::Vec3::from_array(c)).to_array(),
                                     uv,
                                     layer: 2,

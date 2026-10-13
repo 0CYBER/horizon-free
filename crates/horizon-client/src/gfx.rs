@@ -93,7 +93,7 @@ struct Globals {
     fog_ends: [f32; 4],
     /// Atlas rects (u0, v0, width, height) of end_sky.png and end_portal.png.
     end_portal_sprites: [[f32; 4]; 2],
-    /// x: vanilla's `GameTime` uniform; yzw unused.
+    /// x: vanilla's `GameTime` uniform; y: nether cardinal lighting, zw unused.
     time: [f32; 4],
     /// Atlas rect of the current destroy stage (entity.wgsl).
     crumbling_sprite: [f32; 4],
@@ -143,6 +143,8 @@ pub struct Frame<'a> {
     /// The hit block outline as line segments (from, to) in world space.
     pub outline: Vec<[f64; 6]>,
     pub hud: &'a HudBatch,
+    /// CardinalLighting.Type.NETHER, otherwise DEFAULT.
+    pub nether_lighting: bool,
     /// Camera-relative entity geometry textured from the shared atlas.
     pub entities: &'a [Vertex],
     /// Additive translucent geometry after the entities (lightning, dragon rays).
@@ -871,10 +873,11 @@ impl Renderer {
             bind_group_layouts: &[Some(&entity_bindings)],
             ..Default::default()
         });
+        let entity_attributes = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x2,2=>Uint32,3=>Unorm8x4,4=>Uint8x4,5=>Snorm8x4];
         let entity_vertex = [Some(wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Vertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &vertex_attributes,
+            attributes: &entity_attributes,
         })];
         let entity_pipeline = |label, cull_mode, depth_write, bias, blend| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -1846,7 +1849,12 @@ impl Renderer {
             ],
             end_portal_sprites: frame.end_portal_sprites,
             crumbling_sprite: frame.crumbling_sprite,
-            time: [frame.shader_game_time, 0.0, 0.0, 0.0],
+            time: [
+                frame.shader_game_time,
+                f32::from(frame.nether_lighting),
+                0.0,
+                0.0,
+            ],
             outline_params: outline_params(self.config.width, self.config.height),
         };
         self.queue
@@ -2451,6 +2459,7 @@ mod tests {
                 layer,
                 color: 0xffff_ffff,
                 light: id,
+                normal: [0; 4],
             }; 4]
         };
         let entities: Vec<_> = [(0, 0), (4, 1), (11, 2), (7, 3), (4, 4), (12, 7)]

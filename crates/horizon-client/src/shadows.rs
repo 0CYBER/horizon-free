@@ -107,6 +107,7 @@ pub fn shadow(
                 for (wx, wz) in [(bx0, bz0), (bx0, bz1), (bx1, bz1), (bx1, bz0)] {
                     let p = DVec3::new(wx, top, wz) - camera;
                     out.push(Vertex {
+                        normal: [0; 4],
                         pos: p.as_vec3().to_array(),
                         uv: [
                             sprite.u0 + (sprite.u1 - sprite.u0) * u(wx),

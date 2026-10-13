@@ -14,6 +14,7 @@ struct Globals {
     // Atlas rects (u0, v0, width, height) of end_sky.png and end_portal.png.
     end_portal_sprites: array<vec4<f32>, 2>,
     // x: vanilla's GameTime ((game time % 24000 + partial tick) / 24000)
+    // y: Nether cardinal lighting.
     time: vec4<f32>,
     crumbling_sprite: vec4<f32>,
     // Selection outline parameters (read by terrain.wgsl).
@@ -36,9 +37,16 @@ struct Out {
     @location(6) @interpolate(flat) wrap: vec2<f32>,
     // Overlays 9 and 10: projection_from_position(gl_Position), the End portal's texProj0.
     @location(7) proj: vec4<f32>,
+    @location(8) back_color: vec4<f32>,
+}
+// Shipped light.glsl; normals are already transformed and RGBA8_SNORM packed.
+fn entity_light(normal: vec3<f32>, nether: bool) -> f32 {
+    let l0 = normalize(vec3(0.2, 1.0, -0.7));
+    let l1 = normalize(vec3(-0.2, select(1.0, -1.0, nether), 0.7));
+    return min(1.0, (max(0.0, dot(l0, normal)) + max(0.0, dot(l1, normal))) * 0.6 + 0.4);
 }
 @vertex fn vs_entity(@location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
-    @location(2) overlay: u32, @location(3) color: vec4<f32>, @location(4) light: vec4<u32>) -> Out {
+    @location(2) overlay: u32, @location(3) color: vec4<f32>, @location(4) light: vec4<u32>, @location(5) normal: vec4<f32>) -> Out {
     var out: Out;
     out.clip = globals.view_proj * vec4(position, 1.0);
     out.proj = vec4(out.clip.xy * 0.5 + out.clip.w * 0.5, out.clip.zw);
@@ -50,9 +58,18 @@ struct Out {
     var c = select(color * lm, color, overlay == 2u || overlay == 4u || overlay == 6u || overlay == 11u || overlay == 12u);
     // Overlay 6 (beacon beams): the light bytes carry the sprite's v range.
     out.wrap = vec2(f32(light.x | (light.y << 8u)), f32(light.z | (light.w << 8u))) / 65535.0;
+    var back = c;
+    if normal.w != 0.0 {
+        c = vec4(c.rgb * entity_light(normal.xyz, globals.time.y != 0.0), c.a);
+        back = select(c, vec4(back.rgb * entity_light(-normal.xyz, globals.time.y != 0.0), back.a), normal.w < 0.0);
+    }
     // Hurt overlay (OverlayTexture red tint).
-    if overlay == 1u || overlay == 8u { c = vec4(mix(c.rgb, vec3(1.0, 0.0, 0.0), 0.3), c.a); }
+    if overlay == 1u || overlay == 8u {
+        c = vec4(mix(c.rgb, vec3(1.0, 0.0, 0.0), 0.3), c.a);
+        back = vec4(mix(back.rgb, vec3(1.0, 0.0, 0.0), 0.3), back.a);
+    }
     out.color = c;
+    out.back_color = back;
     // Overlay 5: OverlayTexture white flash (primed TNT), applied after texturing.
     out.flash = select(0.0, 0.75, overlay == 5u);
     // Sky geometry (clouds, celestial bodies) is exempt from render-distance fog.
@@ -102,13 +119,13 @@ fn linear_fog(d: f32, start: f32, end: f32) -> f32 {
     if d >= end { return 1.0; }
     return (d - start) / (end - start);
 }
-@fragment fn fs_entity(in: Out) -> @location(0) vec4<f32> {
+@fragment fn fs_entity(in: Out, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     var uv = in.uv;
     if in.overlay == 6u { uv.y = in.wrap.x + fract(in.uv.y) * in.wrap.y; }
     if in.overlay == 11u || in.overlay == 12u {
         uv = globals.crumbling_sprite.xy + fract(in.uv) * globals.crumbling_sprite.zw;
     }
-    var color = textureSample(atlas, atlas_sampler, uv) * in.color;
+    var color = textureSample(atlas, atlas_sampler, uv) * select(in.back_color, in.color, front);
     if in.overlay == 9u || in.overlay == 10u {
         // rendertype_end_portal: end_sky and PORTAL_LAYERS (15 for portals, 16
         // for gateways) layers of end_portal.png projected from the screen.

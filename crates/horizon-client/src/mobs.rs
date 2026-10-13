@@ -82,8 +82,107 @@ use std::{collections::HashMap, fs, path::Path, sync::Arc};
 
 #[derive(Clone, Debug)]
 pub struct Polygon {
+    pub normal: [f32; 3],
     pub vertices: [[f32; 5]; 4],
 }
+impl Polygon {
+    fn vertex_normal(&self, pose: ModelNormals) -> [i8; 4] {
+        let n = pose.matrix * glam::Vec3::from_array(self.normal);
+        let n = if pose.trusted {
+            n
+        } else {
+            n.normalize_or_zero()
+        };
+        let packed = n.to_array().map(|v| (v.clamp(-1.0, 1.0) * 127.0) as i8);
+        [packed[0], packed[1], packed[2], -127]
+    }
+}
+
+/// ModelPart uses a separate normal stack: uniform scaling keeps normal lengths,
+/// while nonuniform scaling requires normalization after the complete part transform.
+#[derive(Clone, Copy)]
+struct ModelNormals {
+    matrix: glam::Mat3,
+    trusted: bool,
+}
+impl ModelNormals {
+    // shortcut: infer the root normal pose from its geometry matrix; pass an explicit
+    // root normal stack when root-transform rounding is ported as well.
+    fn new(base: glam::Mat4) -> Self {
+        let m = glam::Mat3::from_mat4(base);
+        let lengths = glam::Vec3::new(m.x_axis.length(), m.y_axis.length(), m.z_axis.length());
+        let uniform =
+            lengths.min_element() > 0.0 && lengths.max_element() - lengths.min_element() < 1.0e-6;
+        Self {
+            matrix: if uniform {
+                m / lengths.x
+            } else {
+                m.inverse().transpose()
+            },
+            trusted: uniform,
+        }
+    }
+    fn rotation(x: f32, y: f32, z: f32) -> glam::Mat3 {
+        // JOML derives cosine from the rounded sine, then retains quaternion length.
+        // Assuming an exactly unit quaternion changes a packed normal by one byte.
+        let sin_cos = |angle: f32| {
+            let angle = angle * 0.5;
+            let sin = f64::from(angle).sin() as f32;
+            let cos = (1.0 - sin * sin).sqrt();
+            let a = angle + std::f32::consts::FRAC_PI_2;
+            let tau = std::f32::consts::TAU;
+            let mut quadrant = a - (a / tau) as i32 as f32 * tau;
+            if quadrant < 0.0 {
+                quadrant += tau;
+            }
+            (
+                sin,
+                if quadrant >= std::f32::consts::PI {
+                    -cos
+                } else {
+                    cos
+                },
+            )
+        };
+        let (sx, cx) = sin_cos(x);
+        let (sy, cy) = sin_cos(y);
+        let (sz, cz) = sin_cos(z);
+        let (cycz, sysz, sycz, cysz) = (cy * cz, sy * sz, sy * cz, cy * sz);
+        let (w, x, y, z) = (
+            cx * cycz + sx * sysz,
+            sx * cycz - cx * sysz,
+            cx * sycz + sx * cysz,
+            cx * cysz - sx * sycz,
+        );
+        let (ww, xx, yy, zz) = (w * w, x * x, y * y, z * z);
+        let (xy, xz, xw, yz, yw, zw) = (x * y, x * z, x * w, y * z, y * w, z * w);
+        glam::Mat3::from_cols_array(&[
+            ww + xx - zz - yy,
+            (xy + xy) + (zw + zw),
+            (xz + xz) - (yw + yw),
+            (xy + xy) - (zw + zw),
+            yy - zz + ww - xx,
+            (yz + yz) + (xw + xw),
+            (yw + yw) + (xz + xz),
+            (yz + yz) - (xw + xw),
+            zz - yy - xx + ww,
+        ])
+    }
+    fn part(mut self, pose: [f32; 9]) -> Self {
+        self.matrix *= Self::rotation(pose[3], pose[4], pose[5]);
+        let scale = glam::Vec3::new(pose[6], pose[7], pose[8]);
+        if scale.x.abs() == scale.y.abs() && scale.x.abs() == scale.z.abs() {
+            if scale.min_element() < 0.0 {
+                self.matrix *= glam::Mat3::from_diagonal(scale.signum());
+            }
+        } else {
+            self.matrix *= glam::Mat3::from_diagonal(scale.recip());
+            self.trusted = false;
+        }
+        self
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Part {
     pub name: String,
@@ -108,7 +207,8 @@ impl Part {
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|poly| {
+            .enumerate()
+            .filter_map(|(index, poly)| {
                 let verts: Vec<[f32; 5]> = poly
                     .as_array()?
                     .iter()
@@ -123,6 +223,20 @@ impl Part {
                     })
                     .collect();
                 (verts.len() == 4).then(|| Polygon {
+                    normal: v["normals"][index].as_array().map_or_else(
+                        || {
+                            // shortcut: collapsed legacy faces have no recoverable normal; re-prepare resources.
+                            let p = verts
+                                .iter()
+                                .map(|v| glam::Vec3::new(v[0], v[1], v[2]))
+                                .collect::<Vec<_>>();
+                            (p[1] - p[0])
+                                .cross(p[2] - p[0])
+                                .normalize_or_zero()
+                                .to_array()
+                        },
+                        |n| std::array::from_fn(|i| n[i].as_f64().unwrap_or(0.0) as f32),
+                    ),
                     vertices: [verts[0], verts[1], verts[2], verts[3]],
                 })
             })
@@ -1584,10 +1698,20 @@ pub fn render_model(
     overlay: u32,
     out: &mut Vec<Vertex>,
 ) {
-    visit(part, base, pose_for, uv, light, overlay, out);
+    visit(
+        part,
+        base,
+        ModelNormals::new(base),
+        pose_for,
+        uv,
+        light,
+        overlay,
+        out,
+    );
     fn visit(
         part: &Part,
         parent: glam::Mat4,
+        normals: ModelNormals,
         pose_for: &dyn Fn(&Part) -> [f32; 9],
         uv: [f32; 4],
         light: u32,
@@ -1604,10 +1728,13 @@ pub fn render_model(
                 p[3],
             ))
             * glam::Mat4::from_scale(glam::Vec3::new(p[6], p[7], p[8]));
+        let normals = normals.part(p);
         for poly in &part.polygons {
+            let normal = poly.vertex_normal(normals);
             for v in poly.vertices {
                 let pos = m.transform_point3(glam::Vec3::new(v[0], v[1], v[2]) / 16.0);
                 out.push(Vertex {
+                    normal,
                     pos: pos.to_array(),
                     uv: [
                         uv[0] + (uv[2] - uv[0]) * v[3],
@@ -1620,7 +1747,7 @@ pub fn render_model(
             }
         }
         for c in &part.children {
-            visit(c, m, pose_for, uv, light, overlay, out);
+            visit(c, m, normals, pose_for, uv, light, overlay, out);
         }
     }
 }
@@ -1643,5 +1770,118 @@ impl Mob {
         self.extra.saddle_stack = saddle
             .map(|s| crate::items::ItemStack { count: 1, ..s })
             .filter(|s| s.damage != 0 || s.extra.is_some() || &*s.item != "minecraft:saddle");
+    }
+}
+
+#[cfg(test)]
+mod lighting_tests {
+    use super::*;
+    use glam::{Mat4, Vec3};
+    use serde_json::json;
+
+    fn plane(normal: [f32; 3]) -> Part {
+        Part::parse(
+            "root",
+            &json!({
+                "polygons": [[[0,0,0,0,0], [0,0,0,1,0], [0,0,0,1,1], [0,0,0,0,1]]],
+                "normals": [normal]
+            }),
+        )
+    }
+
+    #[test]
+    fn exported_normals_survive_collapsed_faces_and_mirroring() {
+        let part = plane([1.0, 0.0, 0.0]);
+        assert_eq!(
+            part.polygons[0].vertex_normal(ModelNormals::new(Mat4::IDENTITY)),
+            [127, 0, 0, -127]
+        );
+        assert_eq!(
+            part.polygons[0].vertex_normal(ModelNormals::new(Mat4::from_scale(Vec3::new(
+                -1.0, -1.0, 1.0
+            )))),
+            [-127, 0, 0, -127]
+        );
+    }
+
+    #[test]
+    fn normal_matrix_includes_parent_scale_and_child_rotation() {
+        let mut child = plane([1.0, 0.0, 0.0]);
+        child.pose[5] = std::f32::consts::FRAC_PI_4;
+        let parent = Part {
+            name: "parent".into(),
+            pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 1.0, 0.5],
+            polygons: Vec::new(),
+            children: vec![child],
+        };
+        let mut animated = Vec::new();
+        render::draw(
+            &parent,
+            Mat4::IDENTITY,
+            &anim::Poses::new(&parent),
+            [0.0, 0.0, 1.0, 1.0],
+            0x80402010,
+            240,
+            1,
+            &mut animated,
+        );
+        let mut direct = Vec::new();
+        render_model(
+            &parent,
+            Mat4::IDENTITY,
+            &|p| p.pose,
+            [0.0, 0.0, 1.0, 1.0],
+            240,
+            1,
+            &mut direct,
+        );
+        assert_eq!(animated.len(), 4);
+        for (a, b) in animated.iter().zip(&direct) {
+            assert_eq!(a.normal, [56, 113, 0, -127]);
+            assert_eq!(a.normal, b.normal);
+            assert_eq!(a.pos, b.pos);
+            assert_eq!(a.uv, b.uv);
+            assert_eq!((a.color, a.light, a.layer), (0x80402010, 240, 1));
+        }
+    }
+
+    #[test]
+    fn trusted_rotation_retains_native_quaternion_rounding() {
+        let mut part = plane([1.0, 0.0, 0.0]);
+        part.pose[3] = std::f32::consts::FRAC_PI_2;
+        let mut vertices = Vec::new();
+        render::draw(
+            &part,
+            Mat4::IDENTITY,
+            &anim::Poses::new(&part),
+            [0.0, 0.0, 1.0, 1.0],
+            0xffffffff,
+            240,
+            0,
+            &mut vertices,
+        );
+        assert_eq!(vertices[0].normal, [126, 0, 0, -127]);
+    }
+
+    #[test]
+    fn legacy_models_infer_non_degenerate_face_normals() {
+        let part = Part::parse(
+            "root",
+            &json!({"polygons": [
+                [[0,0,0,0,0], [1,0,0,1,0], [1,1,0,1,1], [0,1,0,0,1]]
+            ]}),
+        );
+        assert_eq!(part.polygons[0].normal, [0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn packed_normal_uses_native_snorm_bytes_without_changing_vertex_offsets() {
+        assert_eq!(std::mem::offset_of!(Vertex, normal), 32);
+        assert_eq!(std::mem::size_of::<Vertex>(), 36);
+        let part = plane([0.0, 1.0, 0.0]);
+        assert_eq!(
+            part.polygons[0].vertex_normal(ModelNormals::new(Mat4::from_scale(Vec3::ZERO))),
+            [0, 0, 0, -127]
+        );
     }
 }

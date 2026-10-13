@@ -333,6 +333,7 @@ impl Game<'_> {
                     for (c, uv) in corners.iter().zip(uv) {
                         let p = m.transform_point3(glam::DVec3::from_array(*c));
                         out.push(Vertex {
+                            normal: [0; 4],
                             pos: p.as_vec3().to_array(),
                             uv,
                             layer: 0,

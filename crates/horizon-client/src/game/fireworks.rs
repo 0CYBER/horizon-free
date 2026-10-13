@@ -272,6 +272,7 @@ impl Game<'_> {
                 .zip([[s.u0, s.v1], [s.u1, s.v1], [s.u1, s.v0], [s.u0, s.v0]])
             {
                 out.push(Vertex {
+                    normal: [0; 4],
                     pos: v.as_vec3().to_array(),
                     uv,
                     layer: 0,

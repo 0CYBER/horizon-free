@@ -724,6 +724,7 @@ impl ItemSink for WorldSink<'_> {
         let overlay = if q.foil == Foil::None { 0 } else { 7 };
         for (p, uv) in q.pos.iter().zip(q.uv) {
             self.out.push(Vertex {
+                normal: [0; 4],
                 pos: p.to_array(),
                 uv,
                 layer: overlay,
