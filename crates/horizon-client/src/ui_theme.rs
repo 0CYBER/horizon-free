@@ -845,6 +845,12 @@ impl<'a> Ui<'a> {
         kind: Kind,
         enabled: bool,
     ) -> f32 {
+        if self.real {
+            // The control socket's button list, in GUI pixels.
+            let k = self.density / self.scale;
+            let (ox, oy) = self.offset;
+            crate::widgets::record(label, [(x + ox) * k, (y + oy) * k, w * k, h * k], enabled);
+        }
         let hover = self.interact(id, x, y, w, h, enabled);
         let saved = self.opacity;
         if !enabled {

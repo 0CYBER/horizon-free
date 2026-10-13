@@ -128,6 +128,7 @@ pub mod title;
 pub mod ui;
 pub mod ui_theme;
 pub mod vanillagen;
+pub mod widgets;
 pub mod window;
 pub mod world;
 pub mod worldborder;

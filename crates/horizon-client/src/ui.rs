@@ -247,6 +247,7 @@ pub fn button(
     active: bool,
     hover: bool,
 ) {
+    crate::widgets::record(&label.plain(), [x, y, w, h], active);
     let sprite = if !active {
         "gui/sprites/widget/button_disabled"
     } else if hover {

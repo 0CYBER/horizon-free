@@ -2,6 +2,7 @@
 //! block interaction, inventory and HUD.
 mod advancements;
 mod advancements_screen;
+mod agent;
 mod allays;
 mod armor_stands;
 mod backdrop;
@@ -806,6 +807,8 @@ struct Game<'a> {
     view_frustum: Option<horizon_client::gfx::Frustum>,
     /// A scripted flight from the control socket (`fly`).
     flight: Option<control::Flight>,
+    /// The running agent action from the control socket (game/agent.rs).
+    agent: agent::Agent,
     /// The overworld's last `sky_darken` and its inputs (time, rain, thunder).
     sky_darken_memo: std::cell::Cell<Option<((i64, u32, u32), i32)>>,
     persist: persist::EntityMemory,
@@ -8655,6 +8658,7 @@ pub fn run() -> Result<()> {
         pending_screenshot: None,
         pending_bench: None,
         flight: None,
+        agent: agent::Agent::default(),
         view_frustum: None,
         pending_uploads: Vec::new(),
         frame_graph: Default::default(),

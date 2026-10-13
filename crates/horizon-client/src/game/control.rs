@@ -87,6 +87,8 @@ impl Game<'_> {
                 self.pending_bench = Some((deadline, reply));
             }
         }
+        horizon_client::widgets::end_frame(self.frames);
+        self.advance_agent();
         while let Some(request) = self.control.as_ref().and_then(|c| c.try_recv()) {
             let reply = match self.control_command(&request.line, &request.reply, event_loop) {
                 Ok(Some(value)) => value,
@@ -118,6 +120,11 @@ impl Game<'_> {
         if let Some(value) = self.lan_control(&words)? {
             return Ok(Some(value));
         }
+        match self.agent_command(&words, line, reply, event_loop)? {
+            super::agent::Handled::Reply(value) => return Ok(Some(value)),
+            super::agent::Handled::Deferred => return Ok(None),
+            super::agent::Handled::No => {}
+        }
         match words[0] {
             "help" => Ok(Some(json!({ "commands": HELP
                 .iter()
@@ -126,6 +133,7 @@ impl Game<'_> {
                 .chain(super::lan::HELP)
                 .chain(super::render_control::HELP)
                 .chain(super::sculk::HELP)
+                .chain(super::agent::HELP)
                 .collect::<Vec<_>>() }))),
             "setblock" | "fill" | "particle" | "signedit" => self.render_command(&words),
             "sculk" => Ok(Some(self.sculk_command(&words)?)),
