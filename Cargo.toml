@@ -1,4 +1,5 @@
 [workspace]
+exclude = ["launcher"]
 members = ["crates/horizon-core", "crates/horizon-world", "crates/voxel-kernels", "crates/horizon-client", "crates/horizon-assets", "crates/horizon-protocol"]
 resolver = "2"
 
