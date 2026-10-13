@@ -402,6 +402,8 @@ public final class VanillaProtocolClient {
         play();
     }
 
+    private static final String[] REPLIES = {"random value 7..7", "random value x", "trigger nope"};
+
     private void play() throws Exception {
         state = "play";
         GameProtocols.Context context = new GameProtocols.Context() {
@@ -511,7 +513,14 @@ public final class VanillaProtocolClient {
                 step = 2;
                 stepAt = now;
                 send(new ServerboundChatCommandPacket("list"));
-            } else if (step == 2 && now - stepAt > 1500) {
+            } else if (step >= 2 && step < 2 + REPLIES.length && now - stepAt > 1500) {
+                // Commands a player without operator rights may run, whose
+                // replies (a failure, a syntax error with its context, a
+                // failure with an argument) are compared component by component.
+                send(new ServerboundChatCommandPacket(REPLIES[step - 2]));
+                step++;
+                stepAt = now;
+            } else if (step == 2 + REPLIES.length && now - stepAt > 1500) {
                 record("play-counts", "chunks " + counts.getOrDefault("minecraft:level_chunk_with_light", 0));
                 return;
             }
@@ -622,23 +631,26 @@ public final class VanillaProtocolClient {
                 return input;
             }
         });
-        // Vanilla sends each node's children in registration order, which
-        // its commands report (sorted) does not keep: compared as sets.
-        var lines = new TreeMap<String, String>();
+        // Children in vanilla's registration order, but the game rules', which
+        // GameRuleCommand registers in an identity-hashed order: sorted.
+        var names = new java.util.ArrayList<String>();
         for (var child : root.getChildren()) {
-            var paths = new java.util.TreeSet<String>();
+            names.add(child.getName());
+            var paths = new java.util.ArrayList<String>();
             describe(child, "", paths, new java.util.IdentityHashMap<>());
-            lines.put(child.getName(), paths.size() + " " + sha(String.join("\n", paths).getBytes()));
+            record("play-command", child.getName() + " " + paths.size() + " " + sha(String.join("\n", paths).getBytes()));
         }
-        lines.forEach((k, v) -> record("play-command", k + " " + v));
+        record("play-command-order", String.join(" ", names));
     }
 
-    private static void describe(com.mojang.brigadier.tree.CommandNode<Object> node, String path, java.util.Set<String> out,
+    private static void describe(com.mojang.brigadier.tree.CommandNode<Object> node, String path, java.util.List<String> out,
         java.util.IdentityHashMap<Object, Boolean> seen) {
         String here = path + " " + node.getName() + (node.getCommand() != null ? "*" : "");
         out.add(here + (node.getRedirect() != null ? " -> " + node.getRedirect().getName() : ""));
         if (seen.put(node, true) != null) return;
-        for (var child : node.getChildren()) describe(child, here, out, seen);
+        var children = new java.util.ArrayList<>(node.getChildren());
+        if (here.equals(" gamerule")) children.sort(java.util.Comparator.comparing(com.mojang.brigadier.tree.CommandNode::getName));
+        for (var child : children) describe(child, here, out, seen);
     }
 
     /** The first play packets: entity ids, seeds and times aside. */
@@ -652,8 +664,42 @@ public final class VanillaProtocolClient {
             return text(r.packet).replaceAll("playerId=-?\\d+", "playerId=_").replaceAll("levels=\\[(ResourceKey\\[[^\\]]*\\](, )?)*\\]", "levels=" + levels);
         }
         if (t.equals("minecraft:set_time") || t.equals("minecraft:keep_alive") || t.equals("minecraft:ping")) return "";
-        // The tree is compared below, as sets: the children's order is vanilla's registration order.
+        // The tree is compared below: its node numbering follows the game rules' identity-hashed order.
         if (t.equals("minecraft:commands")) return "";
+        // Vanilla's hash maps and sets order these per run: compared sorted.
+        if (t.equals("minecraft:update_recipes")) {
+            var p = (net.minecraft.network.protocol.game.ClientboundUpdateRecipesPacket) r.packet;
+            var sets = new TreeMap<String, String>();
+            p.itemSets().forEach((k, v) -> {
+                var items = new java.util.TreeSet<String>();
+                ((java.util.Set<?>) field(v, "items")).forEach(h -> items.add(((net.minecraft.core.Holder<?>) h).getRegisteredName()));
+                sets.put(k.identifier().toString(), items.toString());
+            });
+            p.stonecutterRecipes().entries().forEach(e -> record("play-stonecutter", field(e.input(), "values") + " -> " + e.recipe().optionDisplay()));
+            sets.forEach((k, v) -> record("play-property-set", k + " " + v));
+            return "sets=" + sets.size() + " stonecutter=" + p.stonecutterRecipes().entries().size();
+        }
+        if (t.equals("minecraft:update_advancements")) {
+            var p = (net.minecraft.network.protocol.game.ClientboundUpdateAdvancementsPacket) r.packet;
+            var added = new TreeMap<String, String>();
+            for (var a : p.added()) {
+                var adv = a.advancement().value();
+                added.put(a.advancement().id().toString(), adv.parent() + " " + adv.display().map(d -> json(d.title()) + " " + json(d.description())
+                    + " " + d.icon() + " " + d.type() + " " + d.background() + " " + d.showToast() + " " + d.hidden()).orElse("-")
+                    + " " + a.x() + "," + a.y() + " " + adv.requirements().requirements() + " " + adv.sendsTelemetryEvent());
+            }
+            var progress = new TreeMap<String, String>();
+            p.progress().forEach((k, v) -> {
+                var criteria = new TreeMap<String, Boolean>();
+                ((Map<?, ?>) field(v, "criteria")).forEach((c, cp) -> criteria.put((String) c,
+                    ((net.minecraft.advancements.CriterionProgress) cp).isDone()));
+                progress.put(k.toString(), criteria.toString());
+            });
+            added.forEach((k, v) -> record("play-advancement", k + " " + v));
+            return "reset=" + p.shouldReset() + " show=" + p.showAdvancements() + " added=" + added.size()
+                + " removed=" + new java.util.TreeSet<>(p.removed()) + " progress=" + progress;
+        }
+        if (t.equals("minecraft:recipe_book_add")) return text(r.packet) + " sha=" + sha(r.payload);
         if (t.equals("minecraft:set_entity_data")) {
             return text(((net.minecraft.network.protocol.game.ClientboundSetEntityDataPacket) r.packet).packedItems());
         }
@@ -662,5 +708,15 @@ public final class VanillaProtocolClient {
             return "";
         }
         return r.payload.length > 200 ? "sha=" + sha(r.payload) : text(r.packet);
+    }
+
+    private static Object field(Object owner, String name) {
+        try {
+            var f = owner.getClass().getDeclaredField(name);
+            f.setAccessible(true);
+            return f.get(owner);
+        } catch (ReflectiveOperationException e) {
+            throw new RuntimeException(e);
+        }
     }
 }

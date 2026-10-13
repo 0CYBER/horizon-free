@@ -9,16 +9,19 @@ headless client made of vanilla's own codecs (any byte vanilla would not
 read is an error), pings each server, joins it in offline mode through
 login, configuration and play, accepts the spawn teleport, receives the
 chunks around the spawn (their bytes are compared: the world is loaded from
-the same files), chats, runs /list and leaves. The console then runs `list`
-and `say` and `stop`. Compared, all of them exactly:
+the same files), chats, runs /list and commands that fail (`/random value
+7..7`, `/random value x`, `/trigger nope`) and leaves. The console then
+runs `list` and `say` and `stop`. Compared, all of them exactly:
 
 - the status response (MOTD, players, version, favicon) and the ping;
 - the legacy (pre-1.7, 0xFE) ping reply;
 - the login and configuration packets in order (compression, profile,
   brand, features, known packs, every registry, tags);
 - the play packets up to the first chunk batch, in order, with entity ids,
-  keep-alive ids and times left out; the chunks sent and their bytes; the
-  replies to the chat message and to /list;
+  keep-alive ids and times left out (the recipe property sets and
+  advancements, which vanilla keeps in hash maps, sorted); the command tree
+  node by node; the chunks sent and their bytes; the replies to the chat
+  message, /list and the failing commands, as text components;
 - the console lines about the player, the chat, `list`, `say` and `stop`;
 - the files the servers leave: server.properties (but the date line),
   eula.txt, ops.json, whitelist.json, banned-players.json, banned-ips.json.
@@ -49,29 +52,6 @@ except ImportError:
 NAME = 'dedicated-server-parity'
 SEED = 12345
 PLAYER = 'Tester'
-# Packets Horizon's server does not send yet, listed rather than compared:
-# the recipe property sets and stonecutter recipes (ClientboundUpdateRecipes)
-# and a player's advancements (ClientboundUpdateAdvancements, and the recipe
-# unlocks their first tick grants). Each is reported on every run.
-KNOWN_GAPS = {
-    'minecraft:update_recipes': 'ClientboundUpdateRecipesPacket (recipe property sets, stonecutter recipes)',
-    'minecraft:update_advancements': 'ClientboundUpdateAdvancementsPacket (player advancements)',
-    'minecraft:recipe_book_add+': 'recipes unlocked by advancements on the first tick',
-}
-
-
-def gap(line):
-    """The known gap a vanilla play-start line belongs to, if any."""
-    parts = line.split(' ')
-    if len(parts) < 2 or parts[0] != 'play-start':
-        return None
-    if parts[1] in KNOWN_GAPS:
-        return parts[1]
-    if parts[1] == 'minecraft:recipe_book_add' and 'entries=[]' not in line:
-        return 'minecraft:recipe_book_add+'
-    return None
-
-
 PROPERTIES = {
     'online-mode': 'false',
     'white-list': 'false',
@@ -390,10 +370,6 @@ def main():
         (build / f'{label}.txt').write_text('\n'.join(results[label]) + '\n', encoding='utf-8')
     client_checks = horizon_client_joins(vanilla_server, binary, world, build, results['vanilla'])
     vanilla, horizon = results['vanilla'], results['horizon']
-    gaps = sorted({gap(l) for l in vanilla if gap(l)})
-    vanilla = [l for l in vanilla if not gap(l)]
-    for g in gaps:
-        print(f'known gap: {KNOWN_GAPS[g]}')
     errors = [l for l in vanilla + horizon if l.startswith('error')] + [l for l in client_checks if not l.endswith(': ok')]
     for line in client_checks:
         print(line)
@@ -414,9 +390,10 @@ def main():
     lab.write_json(report, dict(
         schema=1, minecraft=lock['minecraft']['version'], platform=platform.platform(),
         java=subprocess.check_output(['java', '--version'], text=True).splitlines()[0],
-        lines=len(vanilla), known_gaps=[KNOWN_GAPS[g] for g in gaps], output_sha256=lab.digest(build / 'horizon.txt', 'sha256'),
+        lines=len(vanilla), output_sha256=lab.digest(build / 'horizon.txt', 'sha256'),
         scope='Dedicated server seen by a vanilla-codec client: status, legacy ping, login, configuration, play '
-              'start, chunks, chat, /list, console list/say/stop, files written. Offline mode.'))
+              'start (recipes, advancements, command tree), chunks, chat, /list, failing commands\' replies, '
+              'console list/say/stop, files written. Offline mode.'))
     print(f'dedicated server: {len(vanilla)} transcript lines identical')
 
 

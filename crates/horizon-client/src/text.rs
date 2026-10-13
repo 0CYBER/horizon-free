@@ -2,6 +2,7 @@
 //! and decorations, translatable messages formatted like
 //! `TranslatableContents` (`%s`, `%1$s`, `%%`), and legacy `§` codes.
 use crate::lang;
+use serde_json::{Map, Value, json};
 
 /// ChatFormatting colours by legacy code index 0..=15.
 pub const COLORS: [(char, &str, u32); 16] = [
@@ -86,11 +87,20 @@ pub struct Span {
     pub text: String,
     pub style: Style,
 }
-/// A run of styled spans.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// A run of styled spans, and the `Component` they came from (its JSON form)
+/// when it was built through the constructors below, for sending to vanilla
+/// clients. Equality compares the spans only.
+#[derive(Clone, Debug, Default)]
 pub struct Text {
     pub spans: Vec<Span>,
+    source: Option<std::sync::Arc<Value>>,
 }
+impl PartialEq for Text {
+    fn eq(&self, other: &Self) -> bool {
+        self.spans == other.spans
+    }
+}
+impl Eq for Text {}
 impl From<&str> for Text {
     fn from(s: &str) -> Self {
         Text::literal(s)
@@ -111,6 +121,7 @@ impl Text {
             return Self::default();
         }
         Self {
+            source: Some(json!({ "text": text }).into()),
             spans: vec![Span {
                 text,
                 style: Style::default(),
@@ -118,18 +129,21 @@ impl Text {
         }
     }
     pub fn styled(s: impl Into<String>, style: Style) -> Self {
-        let mut t = Self::literal(s);
-        for span in &mut t.spans {
-            span.style = style.clone();
-        }
-        t
+        Self::literal(s).with_style(&style)
     }
     pub fn colored(s: impl Into<String>, color: u32) -> Self {
         Self::styled(s, Style::color(color))
     }
     /// Component.translatable(key, args) in the current language.
     pub fn translate(key: &str, args: &[Text]) -> Self {
-        format_translation(&lang::get(key), args)
+        let mut t = format_translation(&lang::get(key), args);
+        let mut c = Map::new();
+        c.insert("translate".into(), key.into());
+        if !args.is_empty() {
+            c.insert("with".into(), args.iter().map(Text::argument).collect());
+        }
+        t.source = Some(Value::Object(c).into());
+        t
     }
     /// A translatable message whose arguments are plain strings.
     pub fn tr(key: &str, args: &[&dyn std::fmt::Display]) -> Self {
@@ -137,18 +151,80 @@ impl Text {
         Self::translate(key, &args)
     }
     pub fn append(mut self, other: impl Into<Text>) -> Self {
-        self.spans.extend(other.into().spans);
+        self.push(other);
         self
     }
+    /// MutableComponent.append: `other` becomes a sibling. A styled text is
+    /// wrapped first, as its style doesn't reach what is appended here.
     pub fn push(&mut self, other: impl Into<Text>) {
-        self.spans.extend(other.into().spans);
+        let other = other.into();
+        let sibling = other.component();
+        let mut root = if self.spans.is_empty() && self.source.is_none() {
+            json!({ "text": "" })
+        } else {
+            let c = self.component();
+            if STYLE_KEYS.iter().any(|k| c.get(*k).is_some()) {
+                json!({ "text": "", "extra": [c] })
+            } else {
+                c
+            }
+        };
+        if let Value::Object(o) = &mut root {
+            match o.get_mut("extra") {
+                Some(Value::Array(a)) => a.push(sibling),
+                _ => {
+                    o.insert("extra".into(), Value::Array(vec![sibling]));
+                }
+            }
+        }
+        self.source = Some(root.into());
+        self.spans.extend(other.spans);
     }
     /// Apply `style` underneath every span (MutableComponent.withStyle on a parent).
     pub fn with_style(mut self, style: &Style) -> Self {
         for span in &mut self.spans {
             span.style.inherit(style);
         }
+        let mut c = self.component();
+        if let Value::Object(o) = &mut c {
+            for (k, v) in style_json(style) {
+                o.entry(k).or_insert(v);
+            }
+        }
+        self.source = Some(c.into());
         self
+    }
+    /// The `Component` as vanilla's JSON (ComponentSerialization): the one
+    /// built through the constructors, else the spans as literal siblings.
+    pub fn component(&self) -> Value {
+        if let Some(c) = &self.source {
+            return (**c).clone();
+        }
+        let span = |s: &Span| {
+            let mut o = Map::new();
+            o.insert("text".into(), s.text.clone().into());
+            o.extend(style_json(&s.style));
+            Value::Object(o)
+        };
+        match self.spans.as_slice() {
+            [] => json!({ "text": "" }),
+            [one] => span(one),
+            many => json!({ "text": "", "extra": many.iter().map(span).collect::<Vec<_>>() }),
+        }
+    }
+    /// A translation argument: vanilla passes numbers as numbers, which
+    /// Horizon formats into unstyled literals.
+    fn argument(&self) -> Value {
+        let c = self.component();
+        match c
+            .as_object()
+            .and_then(|o| o.get("text").filter(|_| o.len() == 1))
+        {
+            Some(Value::String(s)) if s.parse::<i64>().is_ok_and(|n| n.to_string() == *s) => {
+                s.parse::<i64>().map_or(c.clone(), Value::from)
+            }
+            _ => c,
+        }
     }
     pub fn with_color(self, color: u32) -> Self {
         self.with_style(&Style::color(color))
@@ -313,6 +389,53 @@ impl Text {
     pub fn char_count(&self) -> usize {
         self.spans.iter().map(|s| s.text.chars().count()).sum()
     }
+}
+
+/// The style fields of a component's JSON.
+const STYLE_KEYS: [&str; 8] = [
+    "color",
+    "bold",
+    "italic",
+    "underlined",
+    "strikethrough",
+    "obfuscated",
+    "click_event",
+    "hover_event",
+];
+/// Style.Serializer: the fields a style sets.
+fn style_json(style: &Style) -> Vec<(String, Value)> {
+    let mut out = Vec::new();
+    if let Some(c) = style.color {
+        let name = COLORS
+            .iter()
+            .find(|n| n.2 == c)
+            .map_or_else(|| format!("#{c:06X}"), |n| n.1.to_owned());
+        out.push(("color".to_owned(), name.into()));
+    }
+    for (key, flag) in [
+        ("bold", style.bold),
+        ("italic", style.italic),
+        ("underlined", style.underlined),
+        ("strikethrough", style.strikethrough),
+        ("obfuscated", style.obfuscated),
+    ] {
+        if let Some(f) = flag {
+            out.push((key.to_owned(), f.into()));
+        }
+    }
+    if let Some(command) = &style.suggest {
+        out.push((
+            "click_event".to_owned(),
+            json!({ "action": "suggest_command", "command": command }),
+        ));
+    }
+    if let Some(hover) = &style.hover {
+        out.push((
+            "hover_event".to_owned(),
+            json!({ "action": "show_text", "value": hover.component() }),
+        ));
+    }
+    out
 }
 
 /// TranslatableContents.decomposeTemplate: `%s` takes the next argument,

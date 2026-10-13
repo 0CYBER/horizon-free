@@ -104,8 +104,6 @@ pub struct Hub {
     last_rate: f32,
     ticking: (f32, bool),
     weather: (bool, f32, f32),
-    /// ClientboundUpdateRecipesPacket, when the game provides it.
-    pub recipes: Option<Vec<u8>>,
     /// Operators and their permission levels (dedicated servers).
     pub ops: std::collections::HashMap<u128, u8>,
     chat_type: i32,
@@ -193,7 +191,6 @@ impl Hub {
             last_clock: i64::MIN,
             last_rate: 0.0,
             ticking: (20.0, false),
-            recipes: None,
             ops: Default::default(),
             weather: (false, 0.0, 0.0),
             chat_type,
@@ -494,9 +491,8 @@ impl Hub {
         g.send(&C::SetHeldSlot(play::SetHeldSlot {
             slot: g.selected as i32,
         }));
-        if let Some(recipes) = &self.recipes {
-            g.sender.send(recipes.clone());
-        }
+        // PlayerList.placeNewPlayer: ClientboundUpdateRecipesPacket.
+        g.send(&raw(ids::UPDATE_RECIPES, self.sync.recipes.clone()));
         // PlayerList.sendPlayerPermissionLevel, then the recipe book.
         self.send_permission_level(i);
         let g = &self.guests[i];
@@ -1285,6 +1281,15 @@ impl Hub {
                 id: g.entity_id,
                 values: vec![(9, serializer::FLOAT, Value::Float(g.health))],
             }));
+            // ServerPlayer.tick's CriteriaTriggers.TICK, then flushDirty.
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis() as i64);
+            let first = self.sync.advancements.first_tick(&self.sync, now);
+            if let Some(add) = first.recipe_book_add {
+                g.send(&raw(ids::RECIPE_BOOK_ADD, add));
+            }
+            g.send(&raw(ids::UPDATE_ADVANCEMENTS, first.update_advancements));
         }
         let health = {
             let g = &self.guests[i];

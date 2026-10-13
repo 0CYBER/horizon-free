@@ -544,14 +544,14 @@ impl Game<'_> {
                 .take()
                 .unwrap_or_default()
                 .iter()
-                .map(horizon_client::text::Text::plain)
-                .collect::<Vec<String>>()
+                .map(|t| horizon_client::lan::data::component_nbt(&t.component()))
+                .collect::<Vec<_>>()
         });
-        for line in lines.unwrap_or_default() {
+        for content in lines.unwrap_or_default() {
             host.hub.send_to(
                 conn,
                 &C::SystemChat(play::SystemChat {
-                    content: literal(&line),
+                    content,
                     overlay: false,
                 }),
             );
