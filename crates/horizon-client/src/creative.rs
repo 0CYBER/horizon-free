@@ -67,6 +67,32 @@ impl Names {
 impl Creative {
     pub const WIDTH: f32 = 195.0;
     pub const HEIGHT: f32 = 136.0;
+    pub const TRASH_POSITION: (f32, f32) = (173.0, 112.0);
+
+    /// Visible player slots in the creative inventory tab (game slot ids).
+    pub fn inventory_slots() -> impl Iterator<Item = usize> {
+        (0..36).chain(500..505)
+    }
+
+    /// CreativeModeInventoryScreen.selectTab positions its InventoryMenu wrappers.
+    pub fn inventory_slot_position(slot: usize) -> Option<(f32, f32)> {
+        match slot {
+            0..9 => Some((9.0 + slot as f32 * 18.0, 112.0)),
+            9..36 => Some((
+                9.0 + ((slot - 9) % 9) as f32 * 18.0,
+                54.0 + ((slot - 9) / 9) as f32 * 18.0,
+            )),
+            500..504 => {
+                let position = slot - 500;
+                Some((
+                    54.0 + (position / 2) as f32 * 54.0,
+                    6.0 + (position % 2) as f32 * 27.0,
+                ))
+            }
+            504 => Some((35.0, 20.0)),
+            _ => None,
+        }
+    }
     /// The scrollbar track (insideScrollbar), relative to the screen origin.
     pub const SCROLL_X: f32 = 175.0;
     pub const SCROLL_Y: f32 = 18.0;
@@ -389,6 +415,32 @@ mod tests {
              "icon": "{count:1,id:\"minecraft:chest\"}", "visible": true, "items": []}
         ]});
         Creative::from_json(&raw).unwrap()
+    }
+
+    #[test]
+    fn inventory_tab_slot_layout_matches_vanilla() {
+        assert_eq!(Creative::inventory_slots().count(), 41);
+        for (slot, expected) in [
+            (0, (9.0, 112.0)),
+            (8, (153.0, 112.0)),
+            (9, (9.0, 54.0)),
+            (35, (153.0, 90.0)),
+            (500, (54.0, 6.0)),
+            (501, (54.0, 33.0)),
+            (502, (108.0, 6.0)),
+            (503, (108.0, 33.0)),
+            (504, (35.0, 20.0)),
+        ] {
+            assert_eq!(Creative::inventory_slot_position(slot), Some(expected));
+        }
+        assert_eq!(Creative::inventory_slot_position(100), None);
+        assert_eq!(Creative::TRASH_POSITION, (173.0, 112.0));
+        let mut c = creative(90);
+        c.select(2);
+        assert!(c.tab().inventory);
+        assert!(!c.can_scroll(&Names {
+            map: HashMap::new()
+        }));
     }
 
     #[test]

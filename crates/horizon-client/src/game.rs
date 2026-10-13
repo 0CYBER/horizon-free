@@ -3392,7 +3392,13 @@ impl Game<'_> {
         self.draw_book(&mut batch);
         batch
     }
+    fn creative_inventory_open(&self) -> bool {
+        self.screen == Screen::Creative && self.creative_screen.tab().inventory
+    }
     fn inventory_origin(&self, batch: &HudBatch) -> (f32, f32) {
+        if self.creative_inventory_open() {
+            return Self::creative_origin(batch);
+        }
         let (x, y) = batch.centered_origin(176.0, self.screen_height());
         (x + self.recipe_book_shift(batch.width), y)
     }
@@ -3403,6 +3409,9 @@ impl Game<'_> {
     }
     /// 300.. are the open container's slots.
     fn slots(&self) -> Vec<usize> {
+        if self.creative_inventory_open() {
+            return Creative::inventory_slots().collect();
+        }
         if let Some(v) = self.station_slots().or_else(|| self.mount_slots()) {
             return v;
         }
@@ -3433,6 +3442,11 @@ impl Game<'_> {
     }
     /// InventoryMenu / CraftingMenu slot layouts.
     fn slot_position(&self, i: usize) -> (f32, f32) {
+        if self.creative_inventory_open()
+            && let Some(position) = Creative::inventory_slot_position(i)
+        {
+            return position;
+        }
         if let Some(p) = self
             .station_slot_position(i)
             .or_else(|| self.machine_slot_position(i))
@@ -3541,6 +3555,32 @@ impl Game<'_> {
             .recipes
             .find_with(&grid, n, &scale)
             .map(|(name, result)| (name.to_owned(), result))
+    }
+    fn draw_inventory_slots(&mut self, batch: &mut HudBatch, ox: f32, oy: f32) {
+        for i in self.slots() {
+            let (sx, sy) = self.slot_position(i);
+            if i == 504 && self.offhand.is_none() {
+                batch.sprite(
+                    &self.res.atlas,
+                    "gui/sprites/container/slot/shield",
+                    ox + sx,
+                    oy + sy,
+                );
+            }
+            if (500..504).contains(&i) && self.armor[i - 500].is_none() {
+                let icon = ["helmet", "chestplate", "leggings", "boots"][i - 500];
+                batch.sprite(
+                    &self.res.atlas,
+                    &format!("gui/sprites/container/slot/{icon}"),
+                    ox + sx,
+                    oy + sy,
+                );
+            }
+            let stack = self.slot_view(i);
+            if let Some(stack) = stack {
+                self.draw_item(batch, &stack, ox + sx, oy + sy);
+            }
+        }
     }
     fn draw_inventory(&mut self, batch: &mut HudBatch) {
         if self.draw_station(batch) {
@@ -3668,30 +3708,7 @@ impl Game<'_> {
         if self.container.is_none() && self.craft_size != 3 && !self.mount_active() {
             self.draw_inventory_player(batch, ox, oy);
         }
-        for i in self.slots() {
-            let (sx, sy) = self.slot_position(i);
-            if i == 504 && self.offhand.is_none() {
-                batch.sprite(
-                    &self.res.atlas,
-                    "gui/sprites/container/slot/shield",
-                    ox + sx,
-                    oy + sy,
-                );
-            }
-            if (500..504).contains(&i) && self.armor[i - 500].is_none() {
-                let icon = ["helmet", "chestplate", "leggings", "boots"][i - 500];
-                batch.sprite(
-                    &self.res.atlas,
-                    &format!("gui/sprites/container/slot/{icon}"),
-                    ox + sx,
-                    oy + sy,
-                );
-            }
-            let stack = self.slot_view(i);
-            if let Some(stack) = stack {
-                self.draw_item(batch, &stack, ox + sx, oy + sy);
-            }
-        }
+        self.draw_inventory_slots(batch, ox, oy);
         self.draw_recipe_book(batch);
         if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
             let (sx, sy) = self.slot_position(slot);
@@ -7260,63 +7277,100 @@ impl Game<'_> {
             );
         }
         let atlas = &self.res.atlas;
-        batch.text(
-            atlas,
-            &tab.title,
-            ox + 8.0,
-            oy + 6.0,
-            rgba(64, 64, 64, 255),
-            false,
-        );
+        if !tab.inventory {
+            batch.text(
+                atlas,
+                &tab.title,
+                ox + 8.0,
+                oy + 6.0,
+                rgba(64, 64, 64, 255),
+                false,
+            );
+        }
         if tab.search {
             let shown = format!("{}_", self.creative_screen.search);
             batch.text(atlas, &shown, ox + 82.0, oy + 6.0, u32::MAX, true);
         }
-        let items = self.creative_screen.items(&self.res.names);
-        let first = self.creative_screen.first_row(&self.res.names);
         let mut hovered: Option<String> = None;
-        for r in 0..5 {
-            for c in 0..9 {
-                let Some(stack) = items.get((first + r) * 9 + c) else {
-                    continue;
-                };
-                let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 18.0 + r as f32 * 18.0);
-                self.draw_item(batch, stack, x, y);
-                if self.cursor.0 >= x
-                    && self.cursor.0 < x + 16.0
-                    && self.cursor.1 >= y
-                    && self.cursor.1 < y + 16.0
-                {
-                    batch.fill(&self.res.atlas, x, y, 16.0, 16.0, rgba(255, 255, 255, 128));
-                    hovered = Some(stack.item.to_string());
-                }
+        if tab.inventory {
+            self.draw_player_preview(
+                batch,
+                ox + 73.0,
+                oy + 6.0,
+                ox + 105.0,
+                oy + 49.0,
+                20.0,
+                0.0625,
+            );
+            self.draw_inventory_slots(batch, ox, oy);
+            if Self::creative_trash_hovered(batch, self.cursor) {
+                let (x, y) = Creative::TRASH_POSITION;
+                batch.fill(
+                    &self.res.atlas,
+                    ox + x,
+                    oy + y,
+                    16.0,
+                    16.0,
+                    rgba(255, 255, 255, 128),
+                );
             }
-        }
-        for c in 0..9 {
-            let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 112.0);
-            if let Some(stack) = self.inventory[c].clone() {
-                self.draw_item(batch, &stack, x, y);
-                if self.cursor.0 >= x
-                    && self.cursor.0 < x + 16.0
-                    && self.cursor.1 >= y
-                    && self.cursor.1 < y + 16.0
-                {
-                    hovered = Some(stack.item.to_string());
-                }
+            if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
+                let (x, y) = self.slot_position(slot);
+                batch.fill(
+                    &self.res.atlas,
+                    ox + x,
+                    oy + y,
+                    16.0,
+                    16.0,
+                    rgba(255, 255, 255, 128),
+                );
             }
-        }
-        let scrollable = self.creative_screen.rows(&self.res.names) > 5;
-        let scroller = if scrollable {
-            "gui/sprites/container/creative_inventory/scroller"
         } else {
-            "gui/sprites/container/creative_inventory/scroller_disabled"
-        };
-        batch.sprite(
-            &self.res.atlas,
-            scroller,
-            ox + Creative::SCROLL_X,
-            oy + Creative::SCROLL_Y + self.creative_screen.scroller_offset(),
-        );
+            let items = self.creative_screen.items(&self.res.names);
+            let first = self.creative_screen.first_row(&self.res.names);
+            for r in 0..5 {
+                for c in 0..9 {
+                    let Some(stack) = items.get((first + r) * 9 + c) else {
+                        continue;
+                    };
+                    let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 18.0 + r as f32 * 18.0);
+                    self.draw_item(batch, stack, x, y);
+                    if self.cursor.0 >= x
+                        && self.cursor.0 < x + 16.0
+                        && self.cursor.1 >= y
+                        && self.cursor.1 < y + 16.0
+                    {
+                        batch.fill(&self.res.atlas, x, y, 16.0, 16.0, rgba(255, 255, 255, 128));
+                        hovered = Some(stack.item.to_string());
+                    }
+                }
+            }
+            for c in 0..9 {
+                let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 112.0);
+                if let Some(stack) = self.inventory[c].clone() {
+                    self.draw_item(batch, &stack, x, y);
+                    if self.cursor.0 >= x
+                        && self.cursor.0 < x + 16.0
+                        && self.cursor.1 >= y
+                        && self.cursor.1 < y + 16.0
+                    {
+                        hovered = Some(stack.item.to_string());
+                    }
+                }
+            }
+            let scrollable = self.creative_screen.rows(&self.res.names) > 5;
+            let scroller = if scrollable {
+                "gui/sprites/container/creative_inventory/scroller"
+            } else {
+                "gui/sprites/container/creative_inventory/scroller_disabled"
+            };
+            batch.sprite(
+                &self.res.atlas,
+                scroller,
+                ox + Creative::SCROLL_X,
+                oy + Creative::SCROLL_Y + self.creative_screen.scroller_offset(),
+            );
+        }
         for t in &tabs {
             let (tx, ty) = Creative::tab_position(t);
             if self.cursor.0 >= ox + tx
@@ -7329,10 +7383,27 @@ impl Game<'_> {
         }
         if let Some(stack) = self.carried.clone() {
             self.draw_item(batch, &stack, self.cursor.0 - 8.0, self.cursor.1 - 8.0);
-        } else if let Some(item) = hovered {
+        }
+        if tab.inventory {
+            if Self::creative_trash_hovered(batch, self.cursor) {
+                self.tooltip(batch, "Destroy Item", self.cursor.0, self.cursor.1);
+            } else {
+                self.draw_slot_tooltip(batch);
+            }
+        } else if self.carried.is_none()
+            && let Some(item) = hovered
+        {
             let name = self.res.names.item(&item);
             self.tooltip(batch, &name, self.cursor.0, self.cursor.1);
         }
+    }
+    fn creative_trash_hovered(batch: &HudBatch, cursor: (f32, f32)) -> bool {
+        let (ox, oy) = Self::creative_origin(batch);
+        let (x, y) = Creative::TRASH_POSITION;
+        cursor.0 >= ox + x
+            && cursor.0 < ox + x + 16.0
+            && cursor.1 >= oy + y
+            && cursor.1 < oy + y + 16.0
     }
     fn click_creative(&mut self, right: bool) {
         let Some(size) = self
@@ -7349,13 +7420,35 @@ impl Game<'_> {
         for (i, t) in tabs.iter().enumerate() {
             let (tx, ty) = Creative::tab_position(t);
             if cx >= ox + tx && cx < ox + tx + 26.0 && cy >= oy + ty && cy < oy + ty + 32.0 {
-                if t.inventory {
-                    self.screen = Screen::Inventory;
-                    return;
-                }
                 self.creative_screen.select(i);
+                self.inv_drag = None;
+                self.last_inv_click = None;
                 return;
             }
+        }
+        if self.creative_inventory_open() {
+            if Self::creative_trash_hovered(&batch, self.cursor) {
+                if self.keys.contains(&KeyCode::ShiftLeft)
+                    || self.keys.contains(&KeyCode::ShiftRight)
+                {
+                    self.inventory.fill(None);
+                    self.armor.fill(None);
+                    self.offhand = None;
+                    self.craft_grid[..4].fill(None);
+                    self.apply_equipment();
+                } else {
+                    self.carried = None;
+                }
+                self.inv_drag = None;
+            } else if self.slot_at(&batch, cx, cy).is_some()
+                || !(cx >= ox
+                    && cx < ox + Creative::WIDTH
+                    && cy >= oy
+                    && cy < oy + Creative::HEIGHT)
+            {
+                self.inventory_press(right);
+            }
+            return;
         }
         // Holding the scrollbar scrolls as the mouse moves (mouseDragged).
         if !right
@@ -7670,7 +7763,7 @@ impl Game<'_> {
         } else {
             Vec::new()
         };
-        let hand = if title || self.screen == Screen::Inventory || self.scoping() {
+        let hand = if title || self.scoping() {
             Vec::new()
         } else {
             self.hand_geometry(alpha)
@@ -7861,7 +7954,8 @@ impl Game<'_> {
             | KeyCode::Digit9
             | KeyCode::KeyF
             | KeyCode::KeyQ
-                if self.screen == Screen::Inventory && self.inventory_hotkey(key) => {}
+                if (self.screen == Screen::Inventory || self.creative_inventory_open())
+                    && self.inventory_hotkey(key) => {}
             KeyCode::KeyT if self.screen == Screen::Inventory => self.recipe_focus_search(),
             KeyCode::KeyT if self.screen == Screen::Playing => self.open_chat(""),
             // key.advancements.
@@ -8199,6 +8293,8 @@ impl ApplicationHandler for Game<'_> {
                         }
                         if self.screen == Screen::Inventory {
                             self.loom_drag();
+                        }
+                        if self.screen == Screen::Inventory || self.creative_inventory_open() {
                             self.inventory_drag_move();
                         }
                         if self.dragging && self.screen == Screen::Options {
@@ -8353,6 +8449,9 @@ impl ApplicationHandler for Game<'_> {
                         Screen::Chat if pressed && button == MouseButton::Left => self.chat_click(),
                         Screen::Creative if pressed => {
                             self.click_creative(button == MouseButton::Right);
+                        }
+                        Screen::Creative if self.creative_screen.tab().inventory => {
+                            self.inventory_release();
                         }
                         Screen::Creative if button == MouseButton::Left => {
                             self.creative_screen.release();
