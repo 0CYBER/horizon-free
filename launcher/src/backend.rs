@@ -93,13 +93,18 @@ pub fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
         .unwrap_or(std::cmp::Ordering::Equal)
 }
 
-/// Every published release of the repository, both kinds, with the asset named `asset`.
-fn all_releases(asset: Option<&str>) -> Result<Vec<Release>, String> {
+/// Every published release of the repository, both kinds, as GitHub's JSON.
+fn release_list() -> Result<serde_json::Value, String> {
     let url = format!("https://api.github.com/repos/{REPO}/releases?per_page=100");
-    let list: serde_json::Value = get(&url)?.into_json().map_err(|e| e.to_string())?;
+    get(&url)?.into_json().map_err(|e| e.to_string())
+}
+
+/// The releases in `list` whose tag passes `keep`, newest first, with the asset named `asset`.
+fn parse_releases(list: &serde_json::Value, asset: Option<&str>, keep: fn(&str) -> bool) -> Vec<Release> {
     let mut out = Vec::new();
     for r in list.as_array().into_iter().flatten() {
-        if r["draft"].as_bool().unwrap_or(false) {
+        let tag = r["tag_name"].as_str().unwrap_or_default();
+        if r["draft"].as_bool().unwrap_or(false) || !keep(tag) {
             continue;
         }
         let found = r["assets"].as_array().into_iter().flatten().find_map(|a| {
@@ -107,30 +112,30 @@ fn all_releases(asset: Option<&str>) -> Result<Vec<Release>, String> {
                 .then(|| Some((a["browser_download_url"].as_str()?.to_string(), a["size"].as_u64()?)))?
         });
         out.push(Release {
-            tag: r["tag_name"].as_str().unwrap_or_default().into(),
+            tag: tag.into(),
             name: r["name"].as_str().unwrap_or_default().into(),
             body: r["body"].as_str().unwrap_or_default().replace("\r\n", "\n"),
             date: r["published_at"].as_str().unwrap_or_default().chars().take(10).collect(),
             asset: found,
         });
     }
-    Ok(out)
+    out.sort_by(|a, b| compare_versions(&b.tag, &a.tag));
+    out
+}
+
+fn is_launcher_tag(tag: &str) -> bool {
+    launcher_version(tag).is_some()
 }
 
 /// Published Horizon releases, newest first. Drafts never reach the anonymous API, and launcher
 /// releases are left out.
 pub fn releases() -> Result<Vec<Release>, String> {
-    let mut out: Vec<Release> = all_releases(ASSET)?.into_iter().filter(|r| is_game_tag(&r.tag)).collect();
-    out.sort_by(|a, b| compare_versions(&b.tag, &a.tag));
-    Ok(out)
+    Ok(parse_releases(&release_list()?, ASSET, is_game_tag))
 }
 
 /// Published launcher releases (`launcher-v…`), newest first, with this platform's archive.
 pub fn launcher_releases() -> Result<Vec<Release>, String> {
-    let mut out: Vec<Release> =
-        all_releases(LAUNCHER_ASSET)?.into_iter().filter(|r| launcher_version(&r.tag).is_some()).collect();
-    out.sort_by(|a, b| compare_versions(&b.tag, &a.tag));
-    Ok(out)
+    Ok(parse_releases(&release_list()?, LAUNCHER_ASSET, is_launcher_tag))
 }
 
 /// The newest Horizon release that has a build for this platform.
@@ -189,34 +194,43 @@ pub fn installed() -> Vec<String> {
     tags
 }
 
+fn download(url: &str, size: u64, to: &Path, progress: &impl Fn(f32)) -> Result<(), String> {
+    let mut reader = get(url)?.into_reader();
+    let mut file = fs::File::create(to).map_err(|e| e.to_string())?;
+    let (mut done, mut buf) = (0u64, vec![0u8; 1 << 16]);
+    loop {
+        let n = reader.read(&mut buf).map_err(|e| format!("Download interrupted: {e}"))?;
+        if n == 0 {
+            return Ok(());
+        }
+        file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+        done += n as u64;
+        progress((done as f32 / size.max(1) as f32).min(1.0) * 0.9);
+    }
+}
+
+fn unpack(archive: &Path, url: &str, to: &Path) -> Result<(), String> {
+    let file = fs::File::open(archive).map_err(|e| e.to_string())?;
+    if url.ends_with(".tar.gz") {
+        tar::Archive::new(flate2::read::GzDecoder::new(file)).unpack(to).map_err(|e| e.to_string())
+    } else {
+        zip::ZipArchive::new(file).and_then(|mut z| z.extract(to)).map_err(|e| e.to_string())
+    }
+}
+
 /// Downloads and unpacks one release; `progress` gets the fraction done.
 pub fn install(tag: &str, url: &str, size: u64, progress: impl Fn(f32)) -> Result<(), String> {
+    if !is_game_tag(tag) {
+        return Err(format!("{tag} is not a Horizon release."));
+    }
     let root = versions_dir();
     let partial = root.join(format!(".{tag}.partial"));
     let _ = fs::remove_dir_all(&partial);
     fs::create_dir_all(&partial).map_err(|e| e.to_string())?;
     let archive = partial.join("download");
-    {
-        let mut reader = get(url)?.into_reader();
-        let mut file = fs::File::create(&archive).map_err(|e| e.to_string())?;
-        let (mut done, mut buf) = (0u64, vec![0u8; 1 << 16]);
-        loop {
-            let n = reader.read(&mut buf).map_err(|e| format!("Download interrupted: {e}"))?;
-            if n == 0 {
-                break;
-            }
-            file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
-            done += n as u64;
-            progress((done as f32 / size.max(1) as f32).min(1.0) * 0.9);
-        }
-    }
+    download(url, size, &archive, &progress)?;
     let unpacked = partial.join("unpacked");
-    let file = fs::File::open(&archive).map_err(|e| e.to_string())?;
-    if url.ends_with(".tar.gz") {
-        tar::Archive::new(flate2::read::GzDecoder::new(file)).unpack(&unpacked).map_err(|e| e.to_string())?;
-    } else {
-        zip::ZipArchive::new(file).and_then(|mut z| z.extract(&unpacked)).map_err(|e| e.to_string())?;
-    }
+    unpack(&archive, url, &unpacked)?;
     progress(0.97);
     // The archives hold one top folder (horizon-linux-x86_64/...); the version folder is its contents.
     let entries: Vec<_> = fs::read_dir(&unpacked).map_err(|e| e.to_string())?.flatten().collect();
@@ -345,6 +359,185 @@ pub fn agree_eula(folder: &Path) -> Result<(), String> {
     fs::write(folder.join("eula.txt"), text).map_err(|e| e.to_string())
 }
 
+// ----- Updates -----------------------------------------------------------------------------------
+
+/// What a check found: a Horizon build newer than every installed one, and a newer launcher.
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct Updates {
+    pub horizon: Option<Release>,
+    pub launcher: Option<Release>,
+}
+
+/// The newest Horizon release with a build here, if it is newer than every installed version.
+pub fn horizon_update(releases: &[Release], installed: &[String]) -> Option<Release> {
+    let newest = latest(releases)?;
+    let newer = installed.iter().all(|t| compare_versions(&newest.tag, t).is_gt());
+    newer.then(|| newest.clone())
+}
+
+/// The newest launcher release with an archive for this platform, if newer than this launcher.
+pub fn launcher_update(releases: &[Release]) -> Option<Release> {
+    releases
+        .iter()
+        .find(|r| r.asset.is_some())
+        .filter(|r| compare_versions(launcher_version(&r.tag).unwrap_or("0"), VERSION).is_gt())
+        .cloned()
+}
+
+/// One request to GitHub, both kinds of update.
+pub fn check_updates() -> Result<Updates, String> {
+    let list = release_list()?;
+    Ok(Updates {
+        horizon: horizon_update(&parse_releases(&list, ASSET, is_game_tag), &installed()),
+        launcher: launcher_update(&parse_releases(&list, LAUNCHER_ASSET, is_launcher_tag)),
+    })
+}
+
+/// Whether a version installed as an update becomes the selected one: only when the player was
+/// on the newest installed version before (or had none).
+pub fn select_after_update(selected: Option<&str>, installed_before: &[String]) -> bool {
+    match selected {
+        None => true,
+        Some(s) => installed_before.first().is_none_or(|newest| newest == s),
+    }
+}
+
+/// Installs `tag` (or the newest release with "latest"), then updates the selection as
+/// `select_after_update` says when `as_update`, or always selects it otherwise.
+pub fn install_tag(tag: &str, as_update: bool, progress: impl Fn(f32)) -> Result<String, String> {
+    let releases = releases()?;
+    let release = if tag == "latest" {
+        latest(&releases).ok_or("No release has a build for this platform yet.")?
+    } else {
+        releases.iter().find(|r| r.tag == tag).ok_or_else(|| format!("No Horizon release is tagged {tag}."))?
+    };
+    let (url, size) = release.asset.clone().ok_or_else(|| format!("{} has no build for this platform.", release.tag))?;
+    let before = installed();
+    install(&release.tag, &url, size, progress)?;
+    let mut settings = Settings::load();
+    if !as_update || select_after_update(settings.selected.as_deref(), &before) {
+        settings.selected = Some(release.tag.clone());
+        settings.save();
+    }
+    Ok(release.tag.clone())
+}
+
+/// The launcher's own path, read once at start: after a self-update the running file is gone.
+pub fn exe_path() -> &'static Path {
+    static EXE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    EXE.get_or_init(|| std::env::current_exe().unwrap_or_else(|_| PathBuf::from(LAUNCHER_BINARY)))
+}
+
+/// Development builds and `HORIZON_LAUNCHER_NO_SELF_UPDATE` never replace themselves.
+pub fn self_update_allowed() -> bool {
+    !cfg!(debug_assertions) && std::env::var_os("HORIZON_LAUNCHER_NO_SELF_UPDATE").is_none()
+}
+
+/// Downloads a launcher release and puts its binary in place of this one. The running process
+/// keeps working; `restart` starts the new one.
+pub fn self_update(release: &Release, progress: impl Fn(f32)) -> Result<(), String> {
+    let (url, size) = release.asset.clone().ok_or("This launcher release has no build for this platform.")?;
+    let work = data_dir().join(".launcher-update");
+    let _ = fs::remove_dir_all(&work);
+    fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+    let archive = work.join("download");
+    download(&url, size, &archive, &progress)?;
+    let unpacked = work.join("unpacked");
+    unpack(&archive, &url, &unpacked)?;
+    let binary = find_file(&unpacked, LAUNCHER_BINARY).ok_or("The download has no launcher binary.")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&binary, fs::Permissions::from_mode(0o755));
+    }
+    self_replace::self_replace(&binary).map_err(|e| format!("Could not replace the launcher: {e}"))?;
+    let _ = fs::remove_dir_all(&work);
+    progress(1.0);
+    Ok(())
+}
+
+fn find_file(dir: &Path, name: &str) -> Option<PathBuf> {
+    for entry in fs::read_dir(dir).ok()?.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(found) = find_file(&path, name) {
+                return Some(found);
+            }
+        } else if entry.file_name() == name {
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// Starts the launcher again (the updated binary) with the same arguments, and exits.
+pub fn restart() -> ! {
+    let _ = Command::new(exe_path()).args(std::env::args_os().skip(1)).spawn();
+    std::process::exit(0)
+}
+
+/// Plain text from markdown, for terminals: headings on their own lines, bullets as "- ",
+/// links followed by their address.
+pub fn markdown_to_text(md: &str) -> String {
+    use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+    let mut out = String::new();
+    let mut links = Vec::new();
+    let mut lists: Vec<Option<u64>> = Vec::new();
+    for event in Parser::new(md) {
+        match event {
+            Event::Start(Tag::Item) => {
+                let depth = lists.len().saturating_sub(1);
+                out.push_str(&"  ".repeat(depth));
+                match lists.last_mut() {
+                    Some(Some(n)) => {
+                        out.push_str(&format!("{n}. "));
+                        *n += 1;
+                    }
+                    _ => out.push_str("- "),
+                }
+            }
+            Event::Start(Tag::List(start)) => {
+                if !out.ends_with('\n') && !out.is_empty() {
+                    out.push('\n');
+                }
+                lists.push(start)
+            }
+            Event::End(TagEnd::List(_)) => {
+                lists.pop();
+                if lists.is_empty() {
+                    out.push('\n');
+                }
+            }
+            Event::Start(Tag::Link { dest_url, .. }) => links.push(dest_url.to_string()),
+            Event::End(TagEnd::Link) => {
+                if let Some(url) = links.pop() {
+                    out.push_str(&format!(" ({url})"));
+                }
+            }
+            Event::End(TagEnd::Heading(_)) => out.push_str("\n\n"),
+            Event::End(TagEnd::Paragraph) => out.push_str(if lists.is_empty() { "\n\n" } else { "\n" }),
+            Event::End(TagEnd::Item) if !out.ends_with('\n') => out.push('\n'),
+            Event::End(TagEnd::CodeBlock) => out.push('\n'),
+            Event::Text(t) | Event::Code(t) => out.push_str(&t),
+            Event::SoftBreak | Event::HardBreak => out.push('\n'),
+            Event::Rule => out.push_str("---\n\n"),
+            _ => {}
+        }
+    }
+    out.trim_end().to_string() + "\n"
+}
+
+/// The first sentence-like line of a release's notes, for a one-line summary.
+pub fn notes_summary(body: &str) -> Option<String> {
+    let text = markdown_to_text(body);
+    let line = text.lines().map(str::trim).find(|l| l.len() > 24 && !l.starts_with("---"))?;
+    let line = line.trim_start_matches("- ");
+    Some(match line.char_indices().nth(140) {
+        Some((i, _)) => format!("{}…", line[..i].trim_end()),
+        None => line.to_string(),
+    })
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Job {
     Prepare,
@@ -425,6 +618,8 @@ pub struct Settings {
     pub selected: Option<String>,
     pub minecraft_dir: Option<PathBuf>,
     pub server_dir: Option<PathBuf>,
+    #[serde(default)]
+    pub auto_install: bool,
 }
 
 impl Settings {
@@ -437,5 +632,61 @@ impl Settings {
     pub fn save(&self) {
         let _ = fs::create_dir_all(data_dir());
         let _ = fs::write(data_dir().join("settings.json"), serde_json::to_string_pretty(self).unwrap());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cmp::Ordering::*;
+
+    #[test]
+    fn tags_never_mix() {
+        assert!(is_game_tag("v2026.10.13"));
+        assert!(!is_game_tag("launcher-v0.2.0"));
+        assert!(!is_game_tag("vnext"));
+        assert_eq!(launcher_version("launcher-v0.2.0"), Some("0.2.0"));
+        assert_eq!(launcher_version("v2026.10.13"), None);
+        assert_eq!(launcher_version("launcher-vx"), None);
+        let list = serde_json::json!([
+            {"tag_name": "v2026.10.12", "assets": [{"name": "horizon-linux-x86_64.tar.gz", "browser_download_url": "u", "size": 1}]},
+            {"tag_name": "launcher-v9.0.0", "assets": [{"name": "horizon-launcher-linux-x86_64.tar.gz", "browser_download_url": "u", "size": 1}]},
+            {"tag_name": "v2026.10.13", "assets": []},
+            {"tag_name": "launcher-v0.0.1", "draft": true, "assets": []},
+        ]);
+        let game: Vec<_> = parse_releases(&list, ASSET, is_game_tag).into_iter().map(|r| r.tag).collect();
+        assert_eq!(game, ["v2026.10.13", "v2026.10.12"]);
+        let launcher: Vec<_> = parse_releases(&list, LAUNCHER_ASSET, is_launcher_tag).into_iter().map(|r| r.tag).collect();
+        assert_eq!(launcher, ["launcher-v9.0.0"]);
+    }
+
+    #[test]
+    fn versions_compare_by_number() {
+        assert_eq!(compare_versions("v2026.10.13", "v2026.10.12"), Greater);
+        assert_eq!(compare_versions("v2026.9.30", "v2026.10.1"), Less);
+        assert_eq!(compare_versions("v2026.10.13.1", "v2026.10.13"), Greater);
+        assert_eq!(compare_versions("0.10.0", "0.9.9"), Greater);
+        assert_eq!(compare_versions("launcher-v1.2", "1.2.0"), Equal);
+        assert_eq!(compare_versions("1.0.0-rc1", "1.0.0"), Equal);
+    }
+
+    #[test]
+    fn updates() {
+        let r = |tag: &str| Release { tag: tag.into(), name: String::new(), body: String::new(), date: String::new(), asset: Some(("u".into(), 1)) };
+        let releases = [r("v2026.10.13"), r("v2026.10.12")];
+        assert_eq!(horizon_update(&releases, &["v2026.10.12".into()]).map(|r| r.tag), Some("v2026.10.13".into()));
+        assert!(horizon_update(&releases, &["v2026.10.13".into()]).is_none());
+        assert!(launcher_update(&[r("launcher-v0.0.1")]).is_none());
+        assert!(launcher_update(&[r("launcher-v99.0.0")]).is_some());
+        let installed = ["v2026.10.12".to_string(), "v2026.10.1".to_string()];
+        assert!(select_after_update(Some("v2026.10.12"), &installed));
+        assert!(!select_after_update(Some("v2026.10.1"), &installed));
+        assert!(select_after_update(None, &installed));
+    }
+
+    #[test]
+    fn plain_notes() {
+        let text = markdown_to_text("# Title\n\nSome *words* and [a link](https://x.y).\n\n- one\n- two\n");
+        assert_eq!(text, "Title\n\nSome words and a link (https://x.y).\n\n- one\n- two\n");
     }
 }
