@@ -49,6 +49,64 @@ impl RandomSequences {
     pub fn give_back(&mut self, id: String, random: XoroshiroRandom) {
         self.sequences.insert(id, random);
     }
+    /// `RandomSequences.CODEC` (`random_sequences.dat`'s data).
+    pub fn to_nbt(&self) -> horizon_world::nbt::Tag {
+        use horizon_world::nbt::Tag;
+        let sequences = self
+            .sequences
+            .iter()
+            .map(|(id, r)| {
+                let (lo, hi) = r.state_words();
+                (
+                    id.as_str(),
+                    Tag::compound([("source", Tag::LongArray(vec![lo as i64, hi as i64]))]),
+                )
+            })
+            .collect::<Vec<_>>();
+        Tag::compound([
+            ("salt", Tag::Int(self.salt)),
+            (
+                "include_world_seed",
+                Tag::Byte(i8::from(self.include_world_seed)),
+            ),
+            (
+                "include_sequence_id",
+                Tag::Byte(i8::from(self.include_sequence_id)),
+            ),
+            ("sequences", Tag::compound(sequences)),
+        ])
+    }
+    pub fn from_nbt(tag: &horizon_world::nbt::Tag) -> Self {
+        use horizon_world::nbt::Tag;
+        let int = |k: &str| match tag.get(k) {
+            Some(Tag::Int(v)) => Some(*v),
+            Some(Tag::Byte(v)) => Some(i32::from(*v)),
+            _ => None,
+        };
+        let mut out = Self {
+            salt: int("salt").unwrap_or(0),
+            include_world_seed: int("include_world_seed").unwrap_or(1) != 0,
+            include_sequence_id: int("include_sequence_id").unwrap_or(1) != 0,
+            sequences: BTreeMap::new(),
+        };
+        if let Some(Tag::Compound(c)) = tag.get("sequences") {
+            for (id, v) in c {
+                let words = match v.get("source") {
+                    Some(Tag::LongArray(a)) if a.len() == 2 => Some((a[0] as u64, a[1] as u64)),
+                    Some(Tag::List(l)) if l.len() == 2 => match (&l[0], &l[1]) {
+                        (Tag::Long(a), Tag::Long(b)) => Some((*a as u64, *b as u64)),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some((lo, hi)) = words {
+                    out.sequences
+                        .insert(id.to_string_lossy(), XoroshiroRandom::from_state(lo, hi));
+                }
+            }
+        }
+        out
+    }
     pub fn ids(&self) -> Vec<String> {
         self.sequences.keys().cloned().collect()
     }

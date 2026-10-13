@@ -16,23 +16,17 @@ use horizon_client::{
     items::ItemStack,
     merchant::{self, MerchantOffer, TradeContext},
 };
-use horizon_core::random::RandomSource;
 
 /// The merchant screen is 100 px wider than the 176-px menus it shares an origin with.
 const SHIFT: f32 = -50.0;
 const GREY: u32 = 0xFF40_4040;
 
 pub(super) struct MerchantState {
-    pub(super) profession: String,
-    pub(super) variant: String,
-    pub(super) level: i32,
-    pub(super) xp: i32,
-    pub(super) offers: Vec<MerchantOffer>,
-    /// `shopItem` / selection hint, scroll offset, and the active offer.
-    pub(super) shop_item: usize,
+    /// The merchant's side of the menu: offers, experience, level, the
+    /// selection hint and active offer (`horizon_client::merchant::Session`).
+    pub(super) session: Box<merchant::Session>,
+    /// The offer list's scroll offset.
     pub(super) scroll: usize,
-    pub(super) active: Option<usize>,
-    pub(super) future_xp: i32,
     /// The offer button that keeps focus after a click (drawn highlighted).
     pub(super) focused: Option<usize>,
     /// The trading mob (its offers and experience are written back on
@@ -43,7 +37,7 @@ pub(super) struct MerchantState {
 impl MerchantState {
     /// `Merchant.showProgressBar`: villagers only.
     pub(super) fn progress(&self) -> bool {
-        self.profession != "wandering_trader"
+        self.session.show_progress()
     }
 }
 /// Player inventory slot positions in `MerchantMenu` (x from 108).
@@ -56,72 +50,160 @@ pub(super) fn inventory_slot(i: usize) -> (f32, f32) {
         ),
     }
 }
-/// `MerchantContainer.updateSellItem`.
-pub(super) fn update(s: &mut Station, items: &horizon_client::items::Items) {
-    let Some(m) = s.merchant.as_mut() else { return };
-    let (active, result) = merchant::sell_item(
-        &m.offers,
-        items,
-        s.inputs[0].as_ref(),
-        s.inputs[1].as_ref(),
-        Some(m.shop_item),
-    );
-    m.active = active;
-    m.future_xp = if result.is_some() {
-        active.map_or(0, |i| m.offers[i].xp)
-    } else {
-        0
-    };
-    s.result = result;
+
+/// `ExplorationMapFunction` in the game world: the nearest structure of the
+/// tag through the generator's `/locate`, a new map centred on it with its
+/// target decoration.
+pub(super) struct GameMaps<'a> {
+    pub(super) terrain: Option<std::sync::Arc<horizon_client::vanillagen::VanillaTerrain>>,
+    /// Structure tag -> its structures.
+    pub(super) structure_tag: &'a dyn Fn(&str) -> Vec<String>,
+    /// Maps made, for the caller to register: (map id, centre x, z, scale, target).
+    pub(super) made: std::cell::RefCell<Vec<(i32, [i32; 3], u8, String)>>,
+    pub(super) next_id: std::cell::Cell<i32>,
+}
+impl merchant::MapMaker for GameMaps<'_> {
+    fn exploration_map(
+        &self,
+        stack: ItemStack,
+        map: &merchant::ExplorationMap,
+        origin: [f64; 3],
+    ) -> ItemStack {
+        let Some(terrain) = self.terrain.as_ref() else {
+            return stack;
+        };
+        let names = (self.structure_tag)(&map.destination);
+        if names.is_empty() {
+            return stack;
+        }
+        let from = [
+            origin[0].floor() as i32,
+            origin[1].floor() as i32,
+            origin[2].floor() as i32,
+        ];
+        let Some((_, at)) = terrain.locate(&names, from, map.search_radius) else {
+            return stack;
+        };
+        let id = self.next_id.get();
+        self.next_id.set(id + 1);
+        self.made
+            .borrow_mut()
+            .push((id, at, map.zoom, map.decoration.clone()));
+        let mut out = stack;
+        out.item = std::sync::Arc::from("minecraft:filled_map");
+        let d = out.data_mut();
+        d.map_id = Some(id);
+        d.other.push((
+            "minecraft:map_decorations".into(),
+            horizon_world::nbt::Tag::compound([(
+                "+",
+                horizon_world::nbt::Tag::compound([
+                    (
+                        "type",
+                        horizon_world::nbt::Tag::String(map.decoration.as_str().into()),
+                    ),
+                    (
+                        "x",
+                        horizon_world::nbt::Tag::Double(f64::from(at[0]).to_bits()),
+                    ),
+                    (
+                        "z",
+                        horizon_world::nbt::Tag::Double(f64::from(at[2]).to_bits()),
+                    ),
+                    (
+                        "rotation",
+                        horizon_world::nbt::Tag::Float(180.0f32.to_bits()),
+                    ),
+                ]),
+            )]),
+        ));
+        out
+    }
 }
 
 impl Game<'_> {
-    /// Offers a villager of `profession` gets on reaching `level`.
-    fn new_offers(&mut self, profession: &str, variant: &str, level: i32) -> Vec<MerchantOffer> {
-        let set = merchant::Trades::set_for(profession, level);
-        self.offers_from_set(&set, variant)
+    pub(super) fn random_sequences_path(&self) -> std::path::PathBuf {
+        self.world_root.join("data/minecraft/random_sequences.dat")
     }
-    /// `AbstractVillager.addOffersFromTradeSet`.
-    fn offers_from_set(&mut self, set: &str, variant: &str) -> Vec<MerchantOffer> {
-        let sequence = format!(
-            "minecraft:trade_set/{}",
-            set.trim_start_matches("minecraft:")
-        );
-        let random = self
-            .potions
-            .trade_randoms
-            .entry(sequence.clone())
-            .or_insert_with(|| merchant::sequence_random(self.level.seed, &sequence));
+    /// `RandomSequences` as `random_sequences.dat` (not on a server's guest).
+    pub(super) fn save_random_sequences(&mut self) {
+        if self.remote.is_some() || self.rand_sequences.ids().is_empty() {
+            return;
+        }
+        let tag = horizon_world::nbt::Tag::compound([
+            ("data", self.rand_sequences.to_nbt()),
+            (
+                "DataVersion",
+                horizon_world::nbt::Tag::Int(horizon_world::DATA_VERSION),
+            ),
+        ]);
+        let _ = horizon_client::save::write_dat(&self.random_sequences_path(), tag);
+    }
+    /// `AbstractVillager.addOffersFromTradeSet` with the world's random
+    /// sequence of the set, at the merchant's position.
+    fn offers_from_set(
+        &mut self,
+        set: &str,
+        variant: &str,
+        origin: [f64; 3],
+    ) -> Vec<MerchantOffer> {
+        let Some(sequence) = self.res.stations.trades.sequence(set) else {
+            return Vec::new();
+        };
+        let mut random = self.rand_sequences.lend(&sequence, self.level.seed);
+        let next_map = self.peek_map_id();
+        let tag = |t: &str| self.structure_tag(t);
+        let maps = GameMaps {
+            terrain: self.end.locator(),
+            structure_tag: &tag,
+            made: Default::default(),
+            next_id: std::cell::Cell::new(next_map),
+        };
         let ctx = TradeContext {
             items: &self.res.items,
             enchantments: &self.res.stations.enchantments,
             variant,
-            origin: [0.0; 3],
-            maps: None,
+            origin,
+            maps: Some(&maps),
         };
-        self.res.stations.trades.offers_from_set(&ctx, set, random)
+        let offers = self
+            .res
+            .stations
+            .trades
+            .offers_from_set(&ctx, set, &mut random);
+        let made = maps.made.into_inner();
+        self.rand_sequences.give_back(sequence, random);
+        self.register_exploration_maps(made);
+        offers
     }
     /// `AbstractVillager.getOffers`: generated on first use.
     pub(super) fn ensure_offers(&mut self, index: usize) {
         let species = self.mobs[index].species();
         if self.mobs[index].extra.trade.is_none() {
             let m = &self.mobs[index];
-            let variant = VILLAGER_TYPES[m.extra.variant as usize % VILLAGER_TYPES.len()];
+            let variant = format!(
+                "minecraft:{}",
+                VILLAGER_TYPES[m.extra.variant as usize % VILLAGER_TYPES.len()]
+            );
+            let origin = [m.position.x, m.position.y, m.position.z];
             let offers = if species == Species::WanderingTrader {
                 let mut v = Vec::new();
                 for set in ["buying", "uncommon", "common"] {
-                    v.extend(
-                        self.offers_from_set(&format!("minecraft:wandering_trader/{set}"), variant),
-                    );
+                    v.extend(self.offers_from_set(
+                        &format!("minecraft:wandering_trader/{set}"),
+                        &variant,
+                        origin,
+                    ));
                 }
                 v
             } else {
                 let profession = PROFESSIONS[m.extra.variant2 as usize % PROFESSIONS.len()];
                 let level = i32::from(m.extra.variant3.max(1));
-                if matches!(profession, "none" | "nitwit") {
-                    Vec::new()
+                let set = merchant::Trades::set_for(profession, level);
+                if self.res.stations.trades.sets.contains_key(&set) {
+                    self.offers_from_set(&set, &variant, origin)
                 } else {
-                    self.new_offers(profession, variant, level)
+                    Vec::new()
                 }
             };
             self.mobs[index].extra.trade = Some(Box::new(merchant::Trader {
@@ -143,91 +225,132 @@ impl Game<'_> {
             || !m.alive()
             || item == "minecraft:villager_spawn_egg"
             || self.station.is_some()
+            || m.extra.flag2
+            || villager::sleeping(m)
         {
             return Ok(false);
         }
         if m.is_baby() {
+            // A baby villager shakes its head; a baby wandering trader does
+            // nothing of its own.
+            if species == Species::WanderingTrader {
+                return Ok(false);
+            }
             let mut events = Vec::new();
             villager::set_unhappy(&mut self.mobs[index], &mut events);
             self.handle_mob_events(events)?;
             return Ok(true);
         }
+        self.stats.custom("talk_to_villager", 1);
         self.ensure_offers(index);
         let m = &self.mobs[index];
-        let mut trade = m.extra.trade.as_deref().cloned().unwrap_or_default();
-        // Villager.updateSpecialPrices: reputation and Hero of the Village.
-        if species == Species::Villager {
-            let reputation = self.villager_reputation(m.id);
-            merchant::update_special_prices(&mut trade.offers, reputation, self.hero_amplifier());
-        }
-        let m = &self.mobs[index];
+        let trade = m.extra.trade.as_deref().cloned().unwrap_or_default();
         if trade.offers.is_empty() {
-            let mut events = Vec::new();
-            villager::set_unhappy(&mut self.mobs[index], &mut events);
-            self.handle_mob_events(events)?;
+            if species == Species::Villager {
+                let mut events = Vec::new();
+                villager::set_unhappy(&mut self.mobs[index], &mut events);
+                self.handle_mob_events(events)?;
+            }
             return Ok(true);
         }
-        let profession = if species == Species::WanderingTrader {
-            "wandering_trader"
-        } else {
+        let villager = species == Species::Villager;
+        let profession = if villager {
             PROFESSIONS[m.extra.variant2 as usize % PROFESSIONS.len()]
+        } else {
+            "wandering_trader"
         };
-        let state = MerchantState {
-            profession: profession.to_owned(),
-            variant: VILLAGER_TYPES[m.extra.variant as usize % VILLAGER_TYPES.len()].to_owned(),
-            level: i32::from(m.extra.variant3.max(1)).min(5),
-            xp: trade.xp,
-            offers: trade.offers,
-            shop_item: 0,
-            scroll: 0,
-            active: None,
-            future_xp: 0,
-            focused: None,
-            mob: Some(m.id),
-            name: m.custom_name.clone(),
+        let level = if villager {
+            i32::from(m.extra.variant3.max(1)).min(5)
+        } else {
+            1
         };
+        let mut session = merchant::Session::new(trade.offers, villager);
+        session.xp = trade.xp;
+        session.level = level;
+        session.profession = format!("minecraft:{profession}");
+        session.variant = format!(
+            "minecraft:{}",
+            VILLAGER_TYPES[m.extra.variant as usize % VILLAGER_TYPES.len()]
+        );
+        session.random = m.random.clone();
+        session.origin = [m.position.x, m.position.y, m.position.z];
+        session.ambient_sound_time = m.ambient_timer;
+        let (id, name) = (m.id, m.custom_name.clone());
+        if villager {
+            session.reputation = self.villager_reputation(id);
+            session.hero = self.hero_amplifier();
+            for seq in merchant::Session::sequences_needed(
+                &self.res.stations.trades,
+                &session.profession,
+                level,
+            ) {
+                let r = self.rand_sequences.lend(&seq, self.level.seed);
+                session.sequences.insert(seq, r);
+            }
+        }
+        // startTrading: updateSpecialPrices, then the screen opens.
+        session.update_special_prices();
         // setTradingPlayer: a wandering trader stands still while trading, a
         // villager's brain follows and looks at the player
         // (LookAndFollowTradingPlayerSink).
         self.mobs[index].extra.flag2 = true;
-        self.open_merchant_state(state);
+        self.open_merchant_state(MerchantState {
+            session: Box::new(session),
+            scroll: 0,
+            focused: None,
+            mob: Some(id),
+            name,
+        });
         Ok(true)
     }
-    /// `Villager.setTradingPlayer(null)`: the menu's offers and experience
-    /// go back to the mob.
-    pub(super) fn merchant_closed(&mut self, state: &MerchantState) {
+    /// `Villager.setTradingPlayer(null)`: the session goes back to the mob
+    /// (special prices stay as they were), the borrowed sequences to the world.
+    pub(super) fn merchant_closed(&mut self, state: &mut MerchantState) {
+        let session = &mut state.session;
+        for (id, r) in std::mem::take(&mut session.sequences) {
+            self.rand_sequences.give_back(id, r);
+        }
+        let traded = std::mem::take(&mut session.last_traded);
         let Some(id) = state.mob else { return };
         let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) else {
             return;
         };
-        if state.progress() {
-            m.extra.variant3 = state.level.clamp(1, 5) as u8;
+        if session.villager {
+            m.extra.variant3 = session.level.clamp(1, 5) as u8;
         }
         m.extra.flag2 = false;
+        m.random = session.random.clone();
+        m.ambient_timer = session.ambient_sound_time;
         let trade = m.extra.trade.get_or_insert_default();
-        trade.xp = state.xp;
-        trade.offers = state.offers.clone();
-        // setTradingPlayer(null) resets the special prices.
-        for offer in &mut trade.offers {
-            offer.special_price_diff = 0;
+        trade.xp = session.xp;
+        trade.offers = session.offers.clone();
+        if traded && session.villager {
+            self.villager_traded(id);
         }
     }
-    /// Opens a merchant menu for a villager (or a generated one for tests).
+    /// Opens a merchant menu without a mob (horizon-ctl `trade`).
     pub(super) fn open_merchant(&mut self, profession: &str, variant: &str, level: i32) {
+        let profession = format!("minecraft:{}", profession.trim_start_matches("minecraft:"));
+        let variant = format!("minecraft:{}", variant.trim_start_matches("minecraft:"));
+        let level = level.clamp(1, 5);
+        let origin = self
+            .player
+            .as_ref()
+            .map_or([0.0; 3], |p| [p.position.x, p.position.y, p.position.z]);
         let mut offers = Vec::new();
-        for l in 1..=level.clamp(1, 5) {
-            offers.extend(self.new_offers(profession, variant, l));
+        for l in 1..=level {
+            let set = merchant::Trades::set_for(&profession, l);
+            offers.extend(self.offers_from_set(&set, &variant, origin));
         }
+        let mut session = merchant::Session::new(offers, true);
+        session.profession = profession;
+        session.variant = variant;
+        session.level = level;
+        session.xp = merchant::min_xp(level);
+        session.origin = origin;
         self.open_merchant_state(MerchantState {
-            profession: profession.trim_start_matches("minecraft:").to_owned(),
-            variant: variant.to_owned(),
-            level: level.clamp(1, 5),
-            xp: merchant::min_xp(level.clamp(1, 5)),
-            offers,
-            shop_item: 0,
+            session: Box::new(session),
             scroll: 0,
-            active: None,
-            future_xp: 0,
             focused: None,
             mob: None,
             name: None,
@@ -241,123 +364,86 @@ impl Game<'_> {
         self.capture(false);
         self.right = false;
     }
-    /// `MerchantResultSlot.onTake` and `Villager.notifyTrade` / `rewardTradeXp`.
-    pub(super) fn merchant_take(&mut self, s: &mut Station) {
-        let items = &self.res.items;
-        let Some(m) = s.merchant.as_mut() else { return };
-        let Some(i) = m.active else { return };
-        let offer = m.offers[i].clone();
-        let (mut a, mut b) = (s.inputs[0].take(), s.inputs[1].take());
-        let took = offer.take(items, &mut a, &mut b) || offer.take(items, &mut b, &mut a);
-        s.inputs[0] = a;
-        s.inputs[1] = b;
-        if !took {
-            return;
-        }
-        m.offers[i].uses += 1;
-        let mut pop = 3 + self.world.random.next_int_bound(4).unwrap_or(0);
-        m.xp += offer.xp;
-        let level_up =
-            m.progress() && merchant::can_level_up(m.level) && m.xp >= merchant::max_xp(m.level);
-        let at = self
-            .player
-            .as_ref()
-            .map(|p| [p.position.x, p.position.y + 0.5, p.position.z]);
-        self.audio
-            .play("minecraft:entity.villager.yes", at, 1.0, 1.0);
-        // Villager.notifyTrade: the villager remembers the trade.
-        let villager = s
-            .merchant
-            .as_ref()
-            .filter(|m| m.progress())
-            .and_then(|m| m.mob);
-        if let Some(mob) = villager {
-            self.villager_traded(mob);
-        }
-        let Some(m) = s.merchant.as_mut() else { return };
-        if level_up {
-            let (profession, variant, level) =
-                (m.profession.clone(), m.variant.clone(), m.level + 1);
-            m.level = level;
-            let more = self.new_offers(&profession, &variant, level);
-            if let Some(m) = s.merchant.as_mut() {
-                m.offers.extend(more);
-            }
-            pop += 5;
-        }
-        // The prices follow the villager's new reputation.
-        if let Some(mob) = villager {
-            let reputation = self.villager_reputation(mob);
-            let hero = self.hero_amplifier();
-            if let Some(m) = s.merchant.as_mut() {
-                merchant::update_special_prices(&mut m.offers, reputation, hero);
-            }
-        }
-        if offer.reward_exp
-            && let Some(at) = at
-        {
-            self.spawn_orbs(at, pop as u32);
+    /// The trading mob's random before a menu click (it ticks meanwhile).
+    pub(super) fn merchant_sync_in(&self, session: &mut merchant::Session, mob: Option<u32>) {
+        if let Some(m) = mob.and_then(|id| self.mobs.iter().find(|m| m.id == id)) {
+            session.random = m.random.clone();
+            session.ambient_sound_time = m.ambient_timer;
+            session.origin = [m.position.x, m.position.y, m.position.z];
         }
     }
-    /// `MerchantMenu.tryMoveItems`: return payment, then fill it for the selected offer.
-    fn try_move_items(&mut self, index: usize) {
-        let Some(s) = self.station.as_mut() else {
-            return;
-        };
-        let returned: Vec<ItemStack> = s.inputs.iter_mut().filter_map(Option::take).collect();
-        for stack in returned {
-            if let Some(rest) = self.give(stack)
-                && let Some(eye) = self.eye_position()
-            {
-                self.spawn_item(rest, eye, [0.0, 0.1, 0.0], 40);
-            }
-        }
-        let Some(offer) = self
+    /// After a menu click: the session back to the station, its random to
+    /// the mob, and what it did (orbs, level-ups, the yes/no voice).
+    pub(super) fn merchant_sync_out(&mut self, session: Box<merchant::Session>) {
+        let mob = self
             .station
             .as_ref()
             .and_then(|s| s.merchant.as_ref())
-            .and_then(|m| m.offers.get(index))
-            .cloned()
-        else {
-            return;
-        };
-        let wants = [Some(offer.cost_a(&self.res.items)), offer.cost_b()];
-        for (slot, want) in wants.into_iter().enumerate() {
-            let Some(want) = want else { continue };
-            let max = self.res.items.get(&want.item).map_or(64, |i| i.max_stack);
-            let mut gathered: Option<ItemStack> = None;
-            for i in (9..36).chain(0..9) {
-                let Some(s) = self.inventory[i].as_mut() else {
-                    continue;
-                };
-                if !s.same_item_same_components(&ItemStack {
-                    count: s.count,
-                    ..want.clone()
-                }) {
-                    continue;
-                }
-                let have = gathered.as_ref().map_or(0, |g| g.count);
-                let n = s.count.min(max - have);
-                if n == 0 {
-                    break;
-                }
-                s.count -= n;
-                let taken = ItemStack {
-                    count: n,
-                    ..s.clone()
-                };
-                if s.count == 0 {
-                    self.inventory[i] = None;
-                }
-                match gathered.as_mut() {
-                    Some(g) => g.count += n,
-                    None => gathered = Some(taken),
-                }
-            }
-            if let Some(st) = self.station.as_mut() {
-                st.inputs[slot] = gathered;
+            .and_then(|m| m.mob);
+        let mut session = session;
+        let events = std::mem::take(&mut session.events);
+        let (villager, origin) = (session.villager, session.origin);
+        if let Some(m) = mob.and_then(|id| self.mobs.iter_mut().find(|m| m.id == id)) {
+            m.random = session.random.clone();
+            m.ambient_timer = session.ambient_sound_time;
+            if villager {
+                m.extra.variant3 = session.level.clamp(1, 5) as u8;
             }
         }
+        if let Some(m) = self.station.as_mut().and_then(|s| s.merchant.as_mut()) {
+            m.session = session;
+        }
+        for e in events {
+            match e {
+                merchant::Event::Orb(v) => {
+                    self.add_orb([origin[0], origin[1] + 0.5, origin[2]], v as u32)
+                }
+                merchant::Event::LevelUp(_) => {
+                    if let Some(m) = mob.and_then(|id| self.mobs.iter_mut().find(|m| m.id == id)) {
+                        m.add_effect("minecraft:regeneration", 200, 0);
+                    }
+                }
+                merchant::Event::TradeUpdated(yes, pitch) => {
+                    let sound = match (villager, yes) {
+                        (true, true) => "minecraft:entity.villager.yes",
+                        (true, false) => "minecraft:entity.villager.no",
+                        (false, true) => "minecraft:entity.wandering_trader.yes",
+                        (false, false) => "minecraft:entity.wandering_trader.no",
+                    };
+                    self.audio.play(sound, Some(origin), 1.0, pitch);
+                }
+                merchant::Event::Traded(_) => self.stats.custom("traded_with_villager", 1),
+                merchant::Event::TradeSound => {}
+            }
+        }
+    }
+    /// `Villager.customServerAiStep`: the TRADE reputation event of the last
+    /// trade, a tick later; the prices follow the new reputation.
+    pub(super) fn merchant_tick(&mut self) {
+        let Some(m) = self.station.as_mut().and_then(|s| s.merchant.as_mut()) else {
+            return;
+        };
+        if !m.session.villager || !m.session.last_traded {
+            return;
+        }
+        m.session.last_traded = false;
+        let Some(id) = m.mob else { return };
+        self.villager_traded(id);
+        let reputation = self.villager_reputation(id);
+        self.menu_session(|menu, env, _| {
+            let s = menu.merchant.as_mut()?;
+            s.reputation = reputation;
+            s.update_special_prices();
+            menu.merchant_update(env);
+            Some(true)
+        });
+    }
+    /// `MerchantMenu.tryMoveItems` for the selected offer (the select trade packet).
+    fn try_move_items(&mut self, index: usize) {
+        self.menu_session(|menu, env, _| {
+            menu.merchant_select(env, index);
+            Some(true)
+        });
     }
     /// Clicks on the offer list; true when one was hit.
     pub(super) fn merchant_click(&mut self, local: (f32, f32)) -> bool {
@@ -370,17 +456,15 @@ impl Game<'_> {
                 && local.0 < x + 88.0
                 && local.1 >= y
                 && local.1 < y + 20.0
-                && i + m.scroll < m.offers.len()
+                && i + m.scroll < m.session.offers.len()
             {
                 let index = i + m.scroll;
                 if let Some(m) = self.station.as_mut().and_then(|s| s.merchant.as_mut()) {
-                    m.shop_item = index;
                     m.focused = Some(i);
                 }
                 self.audio
                     .play("minecraft:ui.button.click", None, 0.25, 1.0);
                 self.try_move_items(index);
-                self.station_changed();
                 return true;
             }
         }
@@ -390,8 +474,8 @@ impl Game<'_> {
         let Some(m) = self.station.as_mut().and_then(|s| s.merchant.as_mut()) else {
             return;
         };
-        if m.offers.len() > 7 {
-            let max = m.offers.len() - 7;
+        if m.session.offers.len() > 7 {
+            let max = m.session.offers.len() - 7;
             m.scroll = (m.scroll as i32 - d.signum() as i32).clamp(0, max as i32) as usize;
         }
     }
@@ -404,15 +488,18 @@ impl Game<'_> {
         };
         let (progress, custom) = (m.progress(), m.name.clone());
         let (profession, level, xp, scroll, shop, future, focused) = (
-            m.profession.clone(),
-            m.level,
-            m.xp,
+            m.session
+                .profession
+                .trim_start_matches("minecraft:")
+                .to_owned(),
+            m.session.level,
+            m.session.xp,
             m.scroll,
-            m.shop_item,
-            m.future_xp,
+            m.session.selection_hint,
+            m.session.future_xp,
             m.focused,
         );
-        let offers = m.offers.clone();
+        let offers = m.session.offers.clone();
         let costs: Vec<ItemStack> = offers.iter().map(|o| o.cost_a(&self.res.items)).collect();
         let atlas = &self.res.atlas;
         batch.fill(

@@ -183,6 +183,24 @@ impl Game<'_> {
         self.maps.last_id = Some(last + 1);
         last + 1
     }
+    /// The id the next new map gets, without taking it.
+    pub(super) fn peek_map_id(&mut self) -> i32 {
+        let id = self.next_map_id();
+        self.maps.last_id = Some(id - 1);
+        id
+    }
+    /// Maps made by exploration map trades: (id, target, zoom, decoration).
+    pub(super) fn register_exploration_maps(&mut self, made: Vec<(i32, [i32; 3], u8, String)>) {
+        let dimension = self.dimension_id().to_owned();
+        for (id, at, zoom, _) in made {
+            // MapItem.applyNewSavedData: tracking, unlimited tracking.
+            let mut data = MapData::fresh(f64::from(at[0]), f64::from(at[2]), zoom, &dimension);
+            data.unlimited = true;
+            self.maps.data.insert(id, data);
+            let last = self.maps.last_id.unwrap_or(-1).max(id);
+            self.maps.last_id = Some(last);
+        }
+    }
     /// Registers `data` under a free map id.
     pub(super) fn new_map_id(&mut self, data: MapData) -> i32 {
         let id = self.next_map_id();

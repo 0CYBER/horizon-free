@@ -306,10 +306,21 @@ impl Game<'_> {
     }
     /// `AbstractContainerMenu.clearContainer`: inputs go back to the player.
     pub(super) fn close_station(&mut self) {
-        let Some(station) = self.station.take() else {
+        if self
+            .station
+            .as_ref()
+            .is_some_and(|s| s.kind == Kind::Merchant)
+        {
+            // MerchantMenu.removed: the carried stack and the payment go back.
+            self.menu_session(|menu, env, _| {
+                menu.merchant_close(env);
+                Some(true)
+            });
+        }
+        let Some(mut station) = self.station.take() else {
             return;
         };
-        if let Some(m) = &station.merchant {
+        if let Some(m) = station.merchant.as_mut() {
             self.merchant_closed(m);
         }
         for stack in station.inputs.into_iter().flatten() {
@@ -444,7 +455,8 @@ impl Game<'_> {
                     s.inputs[2].as_ref(),
                 );
             }
-            Kind::Merchant => super::trading::update(&mut s, items),
+            // The menu engine keeps the merchant's result (Game::menu_session).
+            Kind::Merchant => {}
             Kind::Beacon => {}
             Kind::Cartography => s.result = self.cartography_result(&s),
             // The menu engine keeps the loom's state (Game::menu_session).
@@ -875,7 +887,7 @@ impl Game<'_> {
                     self.play_at("minecraft:ui.stonecutter.take_result", pos, 1.0, 1.0);
                 }
             }
-            Kind::Merchant => self.merchant_take(&mut s),
+            Kind::Merchant => {}
             Kind::Beacon => {}
             Kind::Cartography => {
                 for slot in &mut s.inputs {
@@ -1066,8 +1078,12 @@ impl Game<'_> {
         let Some(slot) = self.slot_at(&batch, self.cursor.0, self.cursor.1) else {
             return true;
         };
-        if self.station.as_ref().is_some_and(|s| s.kind == Kind::Loom) {
-            // LoomMenu clicks run on the verified menu engine.
+        if self
+            .station
+            .as_ref()
+            .is_some_and(|s| matches!(s.kind, Kind::Loom | Kind::Merchant))
+        {
+            // LoomMenu and MerchantMenu clicks run on the verified menu engine.
             let input = if shift {
                 horizon_client::menu::Input::QuickMove
             } else {
