@@ -1,12 +1,12 @@
 // Full-page screenshots of the built site at every width that matters, plus the social
 // preview image. Run `npm run build` first; `npm run shots` serves dist/ and writes
-// docs/widths/*.png (and 390-menu.png, the open menu) and public/og.png (rebuild after).
-// It also checks each width for horizontal scroll and small tap targets.
+// shots/*.png (gitignored: full-page PNGs are too heavy for the repo), 390-menu.png (the open
+// menu) and 1440-hero.png, and public/og.png (rebuild after). It also checks each width for
+// horizontal scroll, small tap targets and line lengths. `SHOTS=dir` writes them elsewhere.
 import { chromium } from "playwright";
 import { spawn } from "node:child_process";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import sharp from "sharp";
-import { join, dirname } from "node:path";
+import { mkdir } from "node:fs/promises";
+import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const site = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -18,8 +18,9 @@ await new Promise((r) => setTimeout(r, 400));
 const widths = [360, 390, 430, 768, 1024, 1180, 1250, 1280, 1366, 1440, 1680, 1920];
 const sizes = [...widths.map((w) => [w, w < 900 ? 800 : 900]), [1250, 700]];
 const only = process.argv.slice(2);
+const out = process.env.SHOTS ? resolve(process.env.SHOTS) : join(site, "shots");
 
-await mkdir(join(site, "docs/widths"), { recursive: true });
+await mkdir(out, { recursive: true });
 const browser = await chromium.launch();
 let problems = 0;
 
@@ -38,30 +39,28 @@ for (const [width, height] of sizes) {
     scrollTo({ top: 0, behavior: "instant" });
   });
   await page.waitForTimeout(800);
-  // A full-page capture draws fixed elements once, at the top; pin the sidebar to the whole
-  // page so the picture shows what a reader sees at every scroll position.
-  if (height !== 700 && !touch) {
-    await page.addStyleTag({ content: `.sidebar { position: absolute; bottom: auto; height: ${await page.evaluate(() => document.documentElement.scrollHeight)}px; }` });
-  }
+  // A full-page capture draws the fixed bar once, at the top, over the hero: show it as the
+  // hero sees it, not in its scrolled state.
+  await page.evaluate(() => document.querySelector(".nav").classList.remove("is-scrolled"));
   const report = await page.evaluate((touch) => {
     const out = [];
     const doc = document.documentElement;
     if (doc.scrollWidth > innerWidth) out.push(`horizontal scroll: ${doc.scrollWidth} > ${innerWidth}`);
     for (const el of document.querySelectorAll("body *")) {
       const r = el.getBoundingClientRect();
-      if (r.width && r.right > innerWidth + 1 && !el.closest(".table-scroll, .lightbox, .sidebar:not(.is-open)")) {
+      if (r.width && r.right > innerWidth + 1 && !el.closest(".lightbox, .menu, .hero-media, .footer-word")) {
         out.push(`overflows: ${el.tagName.toLowerCase()}.${el.className} right ${Math.round(r.right)}`);
       }
     }
     if (touch) {
       for (const el of document.querySelectorAll("a, button, summary")) {
-        if (el.closest(".sidebar:not(.is-open), .lightbox, .skip") || el.closest(".prose, .footer p:not(.footer-links), .row dd:not(.row-action), .table-meta, .parity")) continue;
+        if (el.closest(".menu, .lightbox, .skip") || el.closest(".prose, .footer-cols, .fact p, .system-detail, .download-meta, .meta")) continue;
         const r = el.getBoundingClientRect();
         if (r.width && r.height < 44) out.push(`small target: ${el.textContent.trim().slice(0, 30)} (${Math.round(r.height)}px)`);
       }
     }
     // Characters per line of the longest running-text paragraphs.
-    const lengths = [...document.querySelectorAll(".prose p, .lede, .section-lede, .footer p")]
+    const lengths = [...document.querySelectorAll(".prose p, .lede, .hero-line, .fact p, .features p, .system-detail, .count-label, .footer-cols p")]
       .filter((p) => p.textContent.length > 160)
       .map((p) => {
         const lh = parseFloat(getComputedStyle(p).lineHeight);
@@ -76,11 +75,12 @@ for (const [width, height] of sizes) {
   const issues = report.filter((l) => !l.startsWith("chars"));
   problems += issues.length;
   console.log(`${name}: ${issues.length ? issues.join("; ") : "ok"} · ${report.find((l) => l.startsWith("chars"))}`);
-  await page.screenshot({ path: join(site, `docs/widths/${name}.png`), fullPage: height !== 700 });
+  await page.screenshot({ path: join(out, `${name}.png`), fullPage: height !== 700 });
+  if (width === 1440) await page.screenshot({ path: join(out, "1440-hero.png") });
   if (width === 390) {
     await page.click(".menu-button");
-    await page.waitForTimeout(700);
-    await page.screenshot({ path: join(site, "docs/widths/390-menu.png") });
+    await page.waitForTimeout(800);
+    await page.screenshot({ path: join(out, "390-menu.png") });
   }
   await page.close();
 }
@@ -96,13 +96,6 @@ if (!only.length || only.includes("og")) {
 await browser.close();
 server.kill();
 
-// Keep the committed screenshots small: losslessly recompressed (a palette loses the 1px dividers).
-for (const dir of ["docs/widths"]) {
-  for (const file of (await readdir(join(site, dir))).filter((f) => f.endsWith(".png"))) {
-    const path = join(site, dir, file);
-    await writeFile(path, await sharp(await readFile(path)).png({ compressionLevel: 9, adaptiveFiltering: true }).toBuffer());
-  }
-}
 if (problems) {
   console.log(`${problems} problems`);
   process.exitCode = 1;

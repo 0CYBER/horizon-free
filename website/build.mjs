@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { markdown, inline, section, escape } from "./src/markdown.js";
+import { releasesHtml } from "./src/releases.js";
 
 const site = dirname(fileURLToPath(import.meta.url));
 const dist = join(site, "dist");
@@ -74,20 +75,23 @@ const audited = (parityBody.match(/Last audited\s+(\d{4}-\d{2}-\d{2})/) || [])[1
 const intro = status.split(/^###/m)[0].trim();
 
 const scoreLabel = (s) => ({ 0: "Absent", 0.25: "Started", 0.5: "Playable", 0.75: "Mostly complete", 1: "Complete" })[Number(s)] ?? s;
-const parityRows = body
-  .map(([name, score, gaps]) => {
+const check = `<svg class="check" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"/></svg>`;
+const parityCells = body
+  .map(([name, score, gaps], i) => {
     // "None: what matches" reads as the evidence; anything else is a gap and says so.
     const none = gaps.match(/^None:\s*(.*)$/);
-    const detail = none
-      ? `<span class="gap-none">No known gaps.</span> ${inline(none[1].charAt(0).toUpperCase() + none[1].slice(1))}`
-      : inline(gaps);
-    return `<tr>
-          <th scope="row">${inline(name)}</th>
-          <td class="score"><span class="pill${Number(score) === 1 ? " is-full" : ""}">${escape(score)}</span><span class="score-label">${escape(scoreLabel(score))}</span></td>
-          <td>${detail}</td>
-        </tr>`;
+    const full = Number(score) === 1;
+    const detail = none ? inline(none[1].charAt(0).toUpperCase() + none[1].slice(1)) : `<span class="gap">Gaps:</span> ${inline(gaps)}`;
+    const state = full ? `${check}Matches vanilla` : `${escape(score)} · ${escape(scoreLabel(score))}`;
+    return `<li class="system${full ? " is-full" : ""}">
+            <p class="system-head"><span class="system-index">${String(i + 1).padStart(2, "0")}</span><span class="system-state">${state}</span></p>
+            <h3>${inline(name)}</h3>
+            <p class="system-detail">${detail}</p>
+          </li>`;
   })
   .join("\n");
+const matching = body.filter(([, score]) => Number(score) === 1).length;
+const parityHeadline = matching === body.length ? "Every subsystem matches vanilla." : `${matching} of ${body.length} subsystems match vanilla.`;
 
 // --- The roadmap and the latest notes -------------------------------------------------
 
@@ -108,12 +112,15 @@ await mkdir(join(dist, "assets"), { recursive: true });
 await cp(join(site, "public"), dist, { recursive: true });
 await cp(join(site, "LEGAL.md"), join(dist, "LEGAL.md"));
 
-const md = await readFile(join(site, "src/markdown.js"), "utf8");
-const mdName = `markdown.${fingerprint(md)}.js`;
-await writeFile(join(dist, "assets", mdName), md);
-const js = (await readFile(join(site, "src/main.js"), "utf8")).replace("./markdown.js", `./${mdName}`);
-const jsName = `main.${fingerprint(js)}.js`;
-await writeFile(join(dist, "assets", jsName), js);
+// The page's modules, fingerprinted; each import of a shared module is rewritten to its name.
+const names = {};
+const rewrite = (code) => code.replace(/"\.\/(\w+\.js)"/g, (all, file) => (names[file] ? `"./${names[file]}"` : all));
+for (const file of ["markdown.js", "releases.js", "main.js"]) {
+  const code = rewrite(await readFile(join(site, "src", file), "utf8"));
+  names[file] = `${file.replace(".js", "")}.${fingerprint(code)}.js`;
+  await writeFile(join(dist, "assets", names[file]), code);
+}
+const jsName = names["main.js"];
 const css = await readFile(join(site, "src/style.css"), "utf8");
 // The stylesheet is inlined into the page, so the first paint needs no second request.
 const cssName = `style.${fingerprint(css)}.css`;
@@ -133,17 +140,9 @@ const baked = {
   })),
 };
 
-const notesHtml = game.length
-  ? game.map((r, i) => releaseHtml(r, i === 0)).join("\n")
-  : `<p class="section-lede">The release notes could not be loaded here.</p><a class="button secondary" href="https://github.com/${REPO}/releases">Read them on GitHub</a>`;
-
-function releaseHtml(r, open) {
-  const date = (r.published_at || "").slice(0, 10);
-  return `<details class="release"${open ? " open" : ""}>
-          <summary><span class="release-title">${escape(r.name || r.tag_name)}</span><time datetime="${date}">${date}</time></summary>
-          <div class="prose">${markdown(r.body || "")}<p><a href="${escape(r.html_url)}">Downloads and full notes on GitHub</a></p></div>
-        </details>`;
-}
+const notesHtml =
+  releasesHtml(game) ||
+  `<p class="lede">The release notes could not be loaded here.</p><a class="button secondary" href="https://github.com/${REPO}/releases">Read them on GitHub</a>`;
 
 const values = {
   CSS: `/assets/${cssName}`,
@@ -152,11 +151,13 @@ const values = {
   PERCENT: percent,
   HARNESSES: harnesses,
   AUDITED: audited,
-  PARITY_INTRO: markdown(intro),
-  PARITY_ROWS: parityRows,
+  PARITY_INTRO: markdown(intro.replace("The table below is the project's own audit", "Below is the project's own audit")),
+  PARITY_CELLS: parityCells,
+  PARITY_HEADLINE: parityHeadline,
+  SUBSYSTEMS: String(body.length),
   ROADMAP: markdown(roadmap, { shift: 1 }),
   NOTES: notesHtml,
-  LAUNCHER_VERSION: launcher ? escape(launcher.tag_name.replace("launcher-v", "")) : "",
+  LAUNCHER_META: `${launcher ? `Launcher ${escape(launcher.tag_name.replace("launcher-v", ""))} for` : "For"} Linux x86-64, macOS on Apple Silicon and Windows x64.`,
   DISCORD: escape(links.discord || DEFAULT_LINKS.discord),
   SPONSOR: escape(links.sponsor || DEFAULT_LINKS.sponsor),
   BAKED: JSON.stringify(baked).replace(/</g, "\\u003c"),

@@ -1,4 +1,4 @@
-// Copies the launcher's fonts, background and the repo's screenshots into public/,
+// Copies the launcher's fonts and the repo's screenshots into public/,
 // converted for the web (woff2, webp in two widths). Run it after any of them change:
 // `npm run assets`. Its output is committed, because Railway builds only website/.
 import { mkdir, readFile, writeFile, copyFile } from "node:fs/promises";
@@ -32,6 +32,7 @@ export const images = [
   ["docs/media/menu-worlds.png", "menu-worlds"],
   ["docs/media/menu-options.png", "menu-options"],
   ["docs/media/menu-pause.png", "menu-pause"],
+  ["docs/media/settings-simple.png", "settings"],
 ];
 
 await mkdir(join(pub, "fonts"), { recursive: true });
@@ -51,15 +52,12 @@ for (const [source, name] of images) {
   await sharp(input).resize({ width: 800 }).webp({ quality: 78 }).toFile(join(pub, "media", `${name}-800.webp`));
 }
 
-// The atmosphere: the frozen landscape Horizon renders behind its own title screen, cut from
-// the part of docs/media/menu-title.png that has no interface on it and blurred further.
-// One file, so it can be replaced.
-await sharp(join(repo, "docs/media/menu-title.png"))
-  .extract({ left: 600, top: 545, width: 1000, height: 400 })
-  .resize(1600, 900, { fit: "cover" })
-  .blur(10)
-  .webp({ quality: 78 })
-  .toFile(join(pub, "background.webp"));
+// The hero: Horizon's sunset over a savanna river valley, darkened and cooled a little so the
+// wordmark and the violet accent sit on it, in a landscape and a portrait crop.
+const hero = () => sharp(join(repo, "docs/media/sunset.jpg")).modulate({ brightness: 0.82, saturation: 0.86 }).linear(1.04, -6);
+await hero().webp({ quality: 74 }).toFile(join(pub, "media/hero.webp"));
+await hero().resize({ width: 1200 }).webp({ quality: 72 }).toFile(join(pub, "media/hero-1200.webp"));
+await hero().extract({ left: 470, top: 0, width: 840, height: 1080 }).resize({ width: 720 }).webp({ quality: 72 }).toFile(join(pub, "media/hero-portrait.webp"));
 
 // Icons from the project's logo.
 await copyFile(join(repo, "docs/media/logo.svg"), join(pub, "favicon.svg"));

@@ -6,17 +6,28 @@
     <title>Not found · Horizon</title>
     <meta name="robots" content="noindex">
     <meta name="theme-color" content="#111113">
+    <meta name="color-scheme" content="dark">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="{{CSS}}">
   </head>
   <body class="lost">
-    <div class="atmosphere" aria-hidden="true"></div>
-    <main id="main" class="lost-main">
-      <p class="eyebrow">404</p>
-      <h1>Not here</h1>
-      <p class="lede">This page doesn't exist. The rest of Horizon is one page away.</p>
-      <div class="actions"><a class="button primary large" href="/">Back to Horizon</a></div>
-      <p class="disclaimer-strong">Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft.</p>
+    <main id="main" class="hero">
+      <div class="hero-media" aria-hidden="true">
+        <div class="hero-parallax">
+          <picture>
+            <source media="(orientation: portrait)" srcset="/media/hero-portrait.webp">
+            <img src="/media/hero-1200.webp" width="1200" height="675" alt="">
+          </picture>
+        </div>
+        <div class="hero-veil"></div>
+      </div>
+      <div class="hero-content">
+        <p class="eyebrow hero-eyebrow">404</p>
+        <h1 class="hero-title">Not here</h1>
+        <p class="hero-line">This page doesn't exist. The rest of Horizon is one page away.</p>
+        <div class="hero-actions"><a class="button primary large" href="/">Back to Horizon</a></div>
+        <p class="disclaimer">Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft.</p>
+      </div>
     </main>
   </body>
 </html>

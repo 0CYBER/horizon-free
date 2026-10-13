@@ -1,12 +1,14 @@
-// The page's behaviour: the download button for this platform, the latest releases, the
-// roadmap and links from main, the sidebar's selection, the screenshot tabs and lightbox.
+// The page's behaviour: the download buttons for this platform, the latest releases, the
+// roadmap and links from main, the navigation, the menus' tabs, the lightbox and the motion.
 // Everything degrades to the baked-in content when GitHub can't be reached.
 import { markdown, escape, section } from "./markdown.js";
+import { releasesHtml } from "./releases.js";
 
 const REPO = "ludovic111/horizon";
 const RELEASES_PAGE = `https://github.com/${REPO}/releases?q=launcher-v&expanded=true`;
 const baked = JSON.parse(document.getElementById("baked").textContent);
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const finePointer = matchMedia("(hover: hover) and (pointer: fine)").matches;
 
 // --- GitHub --------------------------------------------------------------------------
 
@@ -57,52 +59,29 @@ function platform() {
 }
 
 async function setUpDownload() {
-  const button = document.getElementById("download");
-  const meta = document.getElementById("download-meta");
   const os = platform();
   const list = await releases;
   const launcher = list.find((r) => r.tag_name.startsWith("launcher-v") && !r.prerelease);
   if (!launcher) return;
   const version = launcher.tag_name.replace("launcher-v", "");
-  document.querySelectorAll("[data-launcher-version]").forEach((el) => (el.textContent = `Launcher ${version}`));
   const asset = os && launcher.assets.find((a) => a.name.includes(os.key));
   const others = `<a href="${escape(launcher.html_url)}">Other platforms</a>`;
-  if (asset) {
-    button.href = asset.browser_download_url;
-    button.textContent = "Download the launcher";
-    const mb = asset.size ? ` · ${(asset.size / 1e6).toFixed(0)} MB` : "";
-    meta.innerHTML = `For ${escape(os.label)} · version ${escape(version)}${mb} · ${others}`;
-  } else {
-    button.href = launcher.html_url || RELEASES_PAGE;
-    meta.innerHTML = `Launcher ${escape(version)} for Linux x86-64, macOS on Apple Silicon and Windows x64. It runs on a computer, not on phones or tablets.`;
-  }
+  document.querySelectorAll("[data-download]").forEach((a) => (a.href = asset ? asset.browser_download_url : launcher.html_url || RELEASES_PAGE));
+  const mb = asset && asset.size ? ` · ${(asset.size / 1e6).toFixed(0)} MB` : "";
+  const meta = asset
+    ? `For ${escape(os.label)} · launcher ${escape(version)}${mb} · ${others}`
+    : `Launcher ${escape(version)} for Linux x86-64, macOS on Apple Silicon and Windows x64. It runs on a computer, not on phones or tablets.`;
+  document.querySelectorAll("[data-download-meta]").forEach((p) => (p.innerHTML = meta));
 }
 
-// --- Patch notes ---------------------------------------------------------------------
+// --- Patch notes, the roadmap and the links from main ---------------------------------
 
 const isGame = (tag) => /^v\d{4}\.\d{1,2}\.\d{1,2}/.test(tag);
 
 async function setUpNotes() {
   const list = (await releases).filter((r) => isGame(r.tag_name));
-  if (!list.length) return;
-  const box = document.getElementById("releases");
-  const shown = list.slice(0, 3);
-  box.innerHTML =
-    shown
-      .map((r, i) => {
-        const date = (r.published_at || "").slice(0, 10);
-        return `<details class="release"${i === 0 ? " open" : ""}>
-          <summary><span class="release-title">${escape(r.name || r.tag_name)}</span><time datetime="${date}">${date}</time></summary>
-          <div class="prose">${markdown(r.body)}<p><a href="${escape(r.html_url)}">Downloads and full notes on GitHub</a></p></div>
-        </details>`;
-      })
-      .join("") +
-    (list.length > shown.length
-      ? `<p class="release-more"><a href="https://github.com/${REPO}/releases">Older releases on GitHub</a></p>`
-      : "");
+  if (list.length) document.getElementById("releases").innerHTML = releasesHtml(list.slice(0, 3));
 }
-
-// --- The roadmap and the links from main ---------------------------------------------
 
 async function setUpRoadmap() {
   try {
@@ -121,81 +100,101 @@ async function setUpLinks() {
   } catch {}
   document.querySelectorAll("[data-link]").forEach((a) => {
     const url = links[a.dataset.link];
-    // An empty address hides its row, as in the launcher.
-    if (!url) a.closest(".row").hidden = true;
+    // An empty address hides its card, as the launcher hides its button.
+    if (!url) a.hidden = true;
     else if (/^https:\/\//.test(url)) a.href = url;
   });
 }
 
-// --- The sidebar ---------------------------------------------------------------------
+// --- Navigation ----------------------------------------------------------------------
 
 function setUpNav() {
-  const nav = document.getElementById("nav");
-  const sidebar = document.querySelector(".sidebar");
-  const menu = document.querySelector(".menu-button");
-  const selection = nav.querySelector(".nav-selection");
-  const links = [...nav.querySelectorAll("a")];
+  const bar = document.querySelector(".nav");
+  const links = [...document.querySelectorAll(".nav-links a")];
   const sections = links.map((a) => document.querySelector(a.getAttribute("href")));
 
-  const select = (index) => {
-    links.forEach((a, i) => (i === index ? a.setAttribute("aria-current", "true") : a.removeAttribute("aria-current")));
-    const a = links[index];
-    selection.style.height = `${a.offsetHeight}px`;
-    selection.style.transform = `translateY(${a.offsetTop}px)`;
-    nav.classList.add("has-selection");
-  };
-
-  let current = -1;
+  let current = null;
   const update = () => {
-    const line = innerHeight * 0.35;
-    let index = 0;
+    bar.classList.toggle("is-scrolled", scrollY > 24);
+    const line = innerHeight * 0.4;
+    let index = -1;
     sections.forEach((s, i) => {
       if (s.getBoundingClientRect().top <= line) index = i;
     });
-    if (innerHeight + scrollY >= document.documentElement.scrollHeight - 2) index = sections.length - 1;
-    if (index !== current) select((current = index));
+    if (index !== current) {
+      current = index;
+      links.forEach((a, i) => (i === index ? a.setAttribute("aria-current", "true") : a.removeAttribute("aria-current")));
+    }
   };
-  let queued = false;
-  addEventListener("scroll", () => {
-    if (!queued) requestAnimationFrame(() => ((queued = false), update()));
-    queued = true;
-  }, { passive: true });
-  addEventListener("resize", () => select(Math.max(current, 0)));
+  onScroll(update);
   update();
 
+  // The phone menu: a full-screen sheet; the page behind it is inert while it is open.
+  const button = document.querySelector(".menu-button");
+  const menu = document.getElementById("menu");
+  const main = document.getElementById("main");
+  const label = button.querySelector(".menu-label");
+  const items = [...menu.querySelectorAll("nav a")];
+  items.forEach((a, i) => a.style.setProperty("transition-delay", `${60 + i * 35}ms`));
+  let closing;
   const setOpen = (open) => {
-    sidebar.classList.toggle("is-open", open);
-    menu.setAttribute("aria-expanded", String(open));
-    menu.textContent = open ? "Close" : "Menu";
-    if (open) select(Math.max(current, 0));
+    clearTimeout(closing);
+    button.setAttribute("aria-expanded", String(open));
+    label.textContent = open ? "Close" : "Menu";
+    bar.classList.toggle("is-menu", open);
+    main.inert = open;
+    document.body.style.overflow = open ? "hidden" : "";
+    if (open) {
+      menu.hidden = false;
+      requestAnimationFrame(() => requestAnimationFrame(() => menu.classList.add("is-open")));
+      items[0].focus({ preventScroll: true });
+    } else {
+      menu.classList.remove("is-open");
+      closing = setTimeout(() => (menu.hidden = true), reducedMotion ? 0 : 320);
+    }
   };
-  menu.addEventListener("click", () => setOpen(!sidebar.classList.contains("is-open")));
-  links.forEach((a) => a.addEventListener("click", () => setOpen(false)));
+  button.addEventListener("click", () => setOpen(button.getAttribute("aria-expanded") !== "true"));
+  items.forEach((a) => a.addEventListener("click", () => setOpen(false)));
   addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && sidebar.classList.contains("is-open")) {
+    if (e.key === "Escape" && button.getAttribute("aria-expanded") === "true") {
       setOpen(false);
-      menu.focus();
+      button.focus();
     }
   });
+  matchMedia("(min-width: 1120px)").addEventListener("change", (e) => e.matches && setOpen(false));
 }
 
-// --- Screenshots ---------------------------------------------------------------------
+// One rAF-throttled scroll listener for everything that follows the scroll.
+const scrollers = [];
+function onScroll(fn) {
+  scrollers.push(fn);
+}
+let queued = false;
+const run = () => ((queued = false), scrollers.forEach((fn) => fn()));
+addEventListener("scroll", () => !queued && ((queued = true), requestAnimationFrame(run)), { passive: true });
+addEventListener("resize", () => requestAnimationFrame(run));
+
+// --- The menus' tabs ------------------------------------------------------------------
 
 function setUpTabs() {
-  const list = document.querySelector(".segmented");
+  const list = document.querySelector(".tabs");
   const tabs = [...list.querySelectorAll('[role="tab"]')];
-  const selection = list.querySelector(".segment-selection");
+  const pill = list.querySelector(".tab-pill");
+  const selected = () => tabs.find((t) => t.getAttribute("aria-selected") === "true");
   const place = (tab) => {
-    selection.style.width = `${tab.offsetWidth}px`;
-    selection.style.height = `${tab.offsetHeight}px`;
-    selection.style.transform = `translate(${tab.offsetLeft}px, ${tab.offsetTop - 2}px)`;
+    pill.style.width = `${tab.offsetWidth}px`;
+    pill.style.height = `${tab.offsetHeight}px`;
+    pill.style.transform = `translate(${tab.offsetLeft}px, ${tab.offsetTop}px)`;
   };
   const choose = (tab, focus) => {
     tabs.forEach((t) => {
       const on = t === tab;
       t.setAttribute("aria-selected", String(on));
       t.tabIndex = on ? 0 : -1;
-      document.getElementById(t.getAttribute("aria-controls")).hidden = !on;
+      const panel = document.getElementById(t.getAttribute("aria-controls"));
+      panel.classList.toggle("is-active", on);
+      panel.inert = !on;
+      panel.setAttribute("aria-hidden", String(!on));
     });
     place(tab);
     if (focus) tab.focus();
@@ -205,11 +204,13 @@ function setUpTabs() {
     tab.addEventListener("keydown", (e) => {
       const step = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
       if (step) choose(tabs[(i + step + tabs.length) % tabs.length], true);
+      if (e.key === "Home") choose(tabs[0], true);
+      if (e.key === "End") choose(tabs[tabs.length - 1], true);
     });
   });
-  place(tabs.find((t) => t.getAttribute("aria-selected") === "true"));
-  addEventListener("resize", () => place(tabs.find((t) => t.getAttribute("aria-selected") === "true")));
-  document.fonts?.ready.then(() => place(tabs.find((t) => t.getAttribute("aria-selected") === "true")));
+  choose(selected());
+  addEventListener("resize", () => place(selected()));
+  document.fonts?.ready.then(() => place(selected()));
 }
 
 function setUpLightbox() {
@@ -230,8 +231,19 @@ function setUpLightbox() {
   });
 }
 
+// --- Motion ---------------------------------------------------------------------------
+
 function setUpReveal() {
-  const items = document.querySelectorAll(".reveal");
+  // Siblings that enter together come in one after another.
+  const stagger = (els, step) => els.forEach((el, i) => el.style.setProperty("--d", `${i * step}ms`));
+  document.querySelectorAll(".facts, .features, .cards, .mosaic").forEach((group) => stagger([...group.children], 90));
+  document.querySelectorAll(".section-head, .parity-count, .parity-copy, .next-head, .launcher-copy").forEach((group) => stagger([...group.querySelectorAll(":scope > .reveal")], 70));
+  stagger([...document.querySelectorAll(".system")], 45);
+
+  const count = document.querySelector("[data-digits]");
+  count.innerHTML = [...count.textContent].map((c) => `<span>${escape(c)}</span>`).join("");
+
+  const items = document.querySelectorAll(".reveal, .reveal-media, .systems");
   if (reducedMotion || !("IntersectionObserver" in window)) {
     items.forEach((el) => el.classList.add("is-visible"));
     return;
@@ -244,12 +256,59 @@ function setUpReveal() {
           observer.unobserve(e.target);
         }
       }),
-    { rootMargin: "0px 0px -8% 0px" },
+    { rootMargin: "0px 0px -10% 0px" },
   );
   items.forEach((el) => observer.observe(el));
 }
 
+// The statement lights up in reading order as it scrolls through the view.
+function setUpStatement() {
+  const fill = document.querySelector(".fill");
+  if (reducedMotion) return;
+  const block = fill.parentElement;
+  const update = () => {
+    const r = block.getBoundingClientRect();
+    if (r.bottom < -200 || r.top > innerHeight + 200) return;
+    const p = Math.min(1, Math.max(0, (innerHeight * 0.85 - r.top) / (innerHeight * 0.4 + r.height)));
+    fill.style.setProperty("--p", (p * 104).toFixed(1));
+  };
+  onScroll(update);
+  update();
+}
+
+// The hero's landscape moves slower than the page, and its text drifts up as it leaves.
+function setUpParallax() {
+  if (reducedMotion) return;
+  const hero = document.querySelector(".hero");
+  const layer = hero.querySelector(".hero-parallax");
+  const content = hero.querySelector(".hero-content");
+  onScroll(() => {
+    const y = scrollY;
+    if (y > hero.offsetHeight) return;
+    layer.style.transform = `translate3d(0, ${(y * 0.3).toFixed(1)}px, 0)`;
+    content.style.transform = `translate3d(0, ${(y * -0.08).toFixed(1)}px, 0)`;
+    content.style.opacity = String(Math.max(0, 1 - y / (hero.offsetHeight * 0.7)).toFixed(3));
+  });
+}
+
+// Buttons lean a little towards the pointer.
+function setUpMagnetic() {
+  if (reducedMotion || !finePointer) return;
+  document.querySelectorAll(".magnetic").forEach((el) => {
+    el.addEventListener("pointermove", (e) => {
+      const r = el.getBoundingClientRect();
+      const x = (e.clientX - r.left - r.width / 2) * 0.18;
+      const y = (e.clientY - r.top - r.height / 2) * 0.3;
+      el.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0)`;
+    });
+    el.addEventListener("pointerleave", () => (el.style.transform = ""));
+  });
+}
+
 setUpReveal();
+setUpStatement();
+setUpParallax();
+setUpMagnetic();
 setUpNav();
 setUpTabs();
 setUpLightbox();
