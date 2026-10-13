@@ -408,6 +408,7 @@ impl Title {
             ),
         }
         for b in self.buttons(w, h) {
+            crate::widgets::record(&b.label, [b.x, b.y, b.w, 20.0], b.enabled);
             let hover = b.enabled
                 && cursor.0 >= b.x
                 && cursor.0 < b.x + b.w
