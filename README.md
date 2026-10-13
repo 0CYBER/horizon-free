@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/media/banner.jpg" alt="Horizon: Minecraft Java Edition 26.3, rewritten from scratch in Rust" width="100%">
+  <img src="docs/media/banner.webp" alt="Horizon: Minecraft: Java Edition 26.3, rewritten in Rust and checked against vanilla by 281 differential harnesses" width="100%">
 </p>
 
 <p align="center">
@@ -14,6 +14,7 @@
 <p align="center">
   <a href="https://playhorizon.dev"><b>Website</b></a> ·
   <a href="#download"><b>Download</b></a> ·
+  <a href="#what-changed-in-v202610131"><b>What changed</b></a> ·
   <a href="#screenshots"><b>Screenshots</b></a> ·
   <a href="#project-status"><b>Parity status</b></a> ·
   <a href="docs/README.md"><b>Documentation</b></a>
@@ -27,9 +28,18 @@ Every subsystem matches vanilla in all 281 parity harnesses, on Linux and macOS:
 
 > Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft. Horizon contains no Minecraft code, assets or data: you need your own legally obtained copy of Minecraft: Java Edition 26.3.
 
+## What changed in v2026.10.13.1
+
+The latest release ([notes](https://github.com/ludovic111/horizon/releases/tag/v2026.10.13.1)):
+
+- **Horizon's own menus:** a new title screen, world list, options and pause menu in the launcher's style, over a live frozen landscape. The vanilla look is still available: Options → Interface → Menu style → Classic.
+- **Graphics settings, Simple and Advanced:** presets (Performance, Balanced, Quality, Ultra), or every rendering, quality, display and performance setting, each with a short description and its cost, plus a performance overlay.
+- **Much faster rendering:** for example, at render distance 8 over a village, 363 → 2,409 FPS on an RTX 4080. Render distance 32 still stutters in places.
+- **Fixed:** no sound on Linux; Linux builds that only ran on the machine they were built on; a missing DLL on Windows (the launcher no longer needs the Visual C++ runtime); memory growing and the frame rate dropping near villages (mobs were duplicated when chunks reloaded); resource preparation failing on Linux with "Missing … java-objc-bridge" ([#41](https://github.com/ludovic111/horizon/issues/41)); the hand and held item at high FOV; missing swing animations.
+
 ## Download
 
-**[Download the Horizon launcher](https://github.com/ludovic111/horizon/releases?q=launcher-v&expanded=true)** (or see [playhorizon.dev](https://playhorizon.dev)) for Linux x86-64, macOS Apple Silicon or Windows x64: take the newest `launcher-v*` release (currently [launcher-v0.1.1](https://github.com/ludovic111/horizon/releases/tag/launcher-v0.1.1)); the launcher then updates itself. The launcher is the way to get Horizon: it installs and updates the game, prepares its resources from your own copy of Minecraft, and starts the client or a dedicated server.
+Horizon is downloaded only through **the Horizon launcher**: get it from [playhorizon.dev](https://playhorizon.dev) or from [the launcher's releases](https://github.com/ludovic111/horizon/releases?q=launcher-v&expanded=true) (the newest `launcher-v*` release, currently [launcher-v0.1.3](https://github.com/ludovic111/horizon/releases/tag/launcher-v0.1.3)), for Linux x86-64, macOS Apple Silicon or Windows x64. The launcher installs and updates the game, prepares its resources from your own copy of Minecraft, starts the client or a dedicated server, and updates itself.
 
 **You need** Minecraft: Java Edition installed with the official launcher, with 26.3 played once; Python 3.10 or newer and Java 25 (a JDK, e.g. Eclipse Temurin 25) for the one-time resource preparation; and a GPU with Vulkan on Linux and Windows, or any Apple Silicon Mac.
 
@@ -37,8 +47,8 @@ Every subsystem matches vanilla in all 281 parity harnesses, on Linux and macOS:
 
 <table>
   <tr>
-    <td width="50%"><img src="launcher/docs/play.png" alt="The launcher's Play page"></td>
-    <td width="50%"><img src="launcher/docs/versions.png" alt="The launcher's Versions page"></td>
+    <td width="50%"><img src="docs/media/launcher-play.webp" alt="The launcher's Play page: version v2026.10.13.1, Client and Server, the Play button, and the resources and Minecraft folder rows"></td>
+    <td width="50%"><img src="docs/media/launcher-patch-notes.webp" alt="The launcher's Patch notes page, showing the notes of Horizon 2026.10.13.1"></td>
   </tr>
 </table>
 
@@ -48,20 +58,36 @@ It lists Horizon's releases and installs the build for your platform, shows each
 
 Captured in the Rust client itself, with vanilla assets and no mods or shaders.
 
+### Menus and settings
+
 <table>
   <tr>
-    <td colspan="2"><img src="docs/media/sunset.jpg" alt="Sunset over a savanna river valley and a plains village"></td>
+    <td colspan="2"><img src="docs/media/menu-title.webp" alt="Horizon's title screen: a sidebar, the Horizon title, Singleplayer and Multiplayer buttons and the last world played, over a blurred frozen landscape"></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/media/village.jpg" alt="A plains village with farms, an iron golem and animals"></td>
-    <td width="50%"><img src="docs/media/survival.jpg" alt="Survival at dusk: a zombie attacks near the village"></td>
+    <td width="50%"><img src="docs/media/menu-worlds.webp" alt="The Singleplayer page: three worlds with their dates and game modes, and Create world and Play buttons"></td>
+    <td width="50%"><img src="docs/media/settings.webp" alt="The Video settings in their Simple view: a preset, render distance, field of view, framerate, VSync and GUI scale, each with what it costs"></td>
+  </tr>
+</table>
+
+The vanilla menus are one setting away: Options → Interface → Menu style → Classic. See [Graphics settings](docs/graphics.md).
+
+### In game
+
+<table>
+  <tr>
+    <td colspan="2"><img src="docs/media/sunset.webp" alt="Sunset over a savanna river valley and a plains village"></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/media/nether.jpg" alt="A crimson forest in the Nether with a zombified piglin"></td>
-    <td width="50%"><img src="docs/media/night.jpg" alt="Moonrise over a torch-lit village and river"></td>
+    <td width="50%"><img src="docs/media/village.webp" alt="A plains village with farms, an iron golem and animals"></td>
+    <td width="50%"><img src="docs/media/survival.webp" alt="Survival at dusk: a zombie attacks near the village"></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/media/underwater.jpg" alt="Salmon swimming in a river"></td>
+    <td width="50%"><img src="docs/media/nether.webp" alt="A crimson forest in the Nether with a zombified piglin"></td>
+    <td width="50%"><img src="docs/media/night.webp" alt="Moonrise over a torch-lit village and river"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/media/underwater.webp" alt="Salmon swimming in a river"></td>
     <td width="50%" valign="middle">
       Vanilla world generation ported to Rust (terrain, aquifers, carvers, features, villages and the Nether), every block model with smooth lighting and biome tints, the vanilla sky and fog, mobs, the HUD, chat and advancements: everything in these frames is drawn by Horizon.
     </td>
@@ -147,9 +173,9 @@ them too (Rust uses Java's own float maths on each platform).
 
 **Next.** With vanilla parity as the base:
 
-- **Performance:** optimize the client and the server as far as they can go (rendering, chunk generation and meshing, memory, multithreaded ticking) while the differential harnesses keep gameplay identical to vanilla.
-- **Modding support:** a stable API for writing mods against Horizon.
-- **Agent control:** an MCP server and a CLI so AI agents and scripts can play and drive the game, growing out of today's `horizon-ctl` scripting socket.
+- **Performance optimisation:** take the client and the server as far as they can go (rendering, chunk generation and meshing, memory, multithreaded ticking), building on v2026.10.13.1's faster renderer, while the differential harnesses keep gameplay identical to vanilla.
+- **Mod support:** a stable API for writing and loading mods against Horizon.
+- **Agent control:** an MCP server and a CLI so AI agents and scripts can play and drive the game, growing out of today's `horizon-ctl` scripting socket (the launcher already works as a CLI and an MCP server for installing and starting Horizon).
 - **Built-in recording:** capture gameplay video in a keypress, without external tools.
 - **Automatic version updates:** a pipeline that ports each new Minecraft release on its own: compare the new version with the pinned one, regenerate the data, rewrite the changed parts and prove them with the same differential harnesses.
 
