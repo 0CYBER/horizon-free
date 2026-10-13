@@ -725,6 +725,55 @@ impl PotWobble {
     }
 }
 
+/// `TheEndGatewayBlockEntity` fields the beam reads.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EndGateway {
+    pub age: i64,
+    pub teleport_cooldown: i32,
+}
+impl EndGateway {
+    /// `beamAnimationTick` (the client ticker).
+    pub fn tick(&mut self) {
+        self.age = self.age.wrapping_add(1);
+        if self.teleport_cooldown > 0 {
+            self.teleport_cooldown -= 1;
+        }
+    }
+    /// `portalTick` on the server copy: whether it called `triggerCooldown`,
+    /// whose block event 1 reaches the client copy.
+    pub fn portal_tick(&mut self) -> bool {
+        let cooling = self.teleport_cooldown > 0;
+        self.age = self.age.wrapping_add(1);
+        if cooling {
+            self.teleport_cooldown -= 1;
+            false
+        } else if self.age % 2400 == 0 {
+            self.teleport_cooldown = 40;
+            true
+        } else {
+            false
+        }
+    }
+    /// `EndGatewayBlock.entityInside` on the server copy: an entity that can
+    /// use the portal starts the cooldown unless it is already running.
+    pub fn enter(&mut self) -> bool {
+        if self.teleport_cooldown > 0 {
+            return false;
+        }
+        self.teleport_cooldown = 40;
+        true
+    }
+    /// `triggerEvent`: event 1 starts the 40 tick cooldown.
+    pub fn trigger_event(&mut self, event: i32, _data: i32) -> bool {
+        if event == 1 {
+            self.teleport_cooldown = 40;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// The client ticker a block entity runs (`getTicker` on a client level),
 /// or [`Ticker::Pot`] for decorated pots, which keep wobble state unticked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -746,6 +795,8 @@ pub enum Ticker {
         powered: bool,
     },
     Pot,
+    /// `TheEndGatewayBlockEntity.beamAnimationTick`.
+    Gateway,
 }
 
 /// The [`Ticker`] of a block state, by block name and property lookup.
@@ -764,6 +815,7 @@ pub fn ticker(name: &str, prop: impl Fn(&str) -> Option<String>) -> Option<Ticke
         "bell" => Ticker::Bell,
         "conduit" => Ticker::Conduit,
         "decorated_pot" => Ticker::Pot,
+        "end_gateway" => Ticker::Gateway,
         "dragon_head" | "dragon_wall_head" | "piglin_head" | "piglin_wall_head" => Ticker::Skull {
             powered: prop("powered").as_deref() == Some("true"),
         },
@@ -789,6 +841,9 @@ pub struct BlockEntityAnims {
     pub conduits: HashMap<[i32; 3], Conduit>,
     pub skulls: HashMap<[i32; 3], Skull>,
     pub pots: HashMap<[i32; 3], PotWobble>,
+    pub gateways: HashMap<[i32; 3], EndGateway>,
+    /// The integrated server's copies of the gateways (`portalTick`).
+    pub gateway_servers: HashMap<[i32; 3], EndGateway>,
     /// The client level's random (conduit particles).
     pub random: LegacyRandom,
     /// [`Ticker`] by block state id (see [`BlockEntityAnims::classify`]).
@@ -805,6 +860,8 @@ impl Default for BlockEntityAnims {
             conduits: HashMap::new(),
             skulls: HashMap::new(),
             pots: HashMap::new(),
+            gateways: HashMap::new(),
+            gateway_servers: HashMap::new(),
             random: LegacyRandom::new(0x6c6576656c),
             kinds: Vec::new(),
         }
@@ -839,6 +896,8 @@ impl BlockEntityAnims {
         self.skulls
             .retain(|p, _| is(p, |t| matches!(t, Ticker::Skull { .. })));
         self.pots.retain(|p, _| is(p, |t| *t == Ticker::Pot));
+        self.gateways
+            .retain(|p, _| is(p, |t| *t == Ticker::Gateway));
     }
     /// Drops the state of positions whose block entity is gone.
     pub fn retain(&mut self, keep: impl Fn([i32; 3]) -> bool) {
@@ -849,6 +908,8 @@ impl BlockEntityAnims {
         self.conduits.retain(|p, _| keep(*p));
         self.skulls.retain(|p, _| keep(*p));
         self.pots.retain(|p, _| keep(*p));
+        self.gateways.retain(|p, _| keep(*p));
+        self.gateway_servers.retain(|p, _| keep(*p));
     }
     /// `getOpenNess(partial)` of the chest or ender chest at `pos`.
     pub fn lid(&self, pos: [i32; 3], partial: f32) -> f32 {
@@ -867,9 +928,11 @@ impl BlockEntityAnims {
     ) -> BlockAnim {
         let mut anim = BlockAnim {
             sherds,
-            // End gateway ages and cooldowns are not tracked on the client yet:
-            // gateways render settled (no beam).
-            gateway: (i64::MAX, 0),
+            // Gateways not ticked yet render settled (no beam).
+            gateway: self
+                .gateways
+                .get(&pos)
+                .map_or((i64::MAX, 0), |g| (g.age, g.teleport_cooldown)),
             ..BlockAnim::default()
         };
         if let Some(b) = self.books.get(&pos) {

@@ -405,11 +405,10 @@ impl Book {
     pub fn entry(&self, id: &str) -> Option<&Entry> {
         self.entries.iter().find(|e| e.id == id)
     }
-    /// `ingredient`'s items in registry order (the cycling order of ghost slots).
+    /// `ingredient`'s items as its display resolves them (the cycling order
+    /// of ghost slots and the overlay).
     pub fn items_of(&self, ingredient: &Ingredient) -> Vec<String> {
-        let mut items: Vec<String> = ingredient.0.iter().cloned().collect();
-        items.sort_by_key(|i| (self.order.get(i).copied().unwrap_or(usize::MAX), i.clone()));
-        items
+        ingredient.1.clone()
     }
     /// The recipe-book search tree (`SessionSearchTrees.updateRecipes`, a
     /// `FullTextSearchTree`): without a colon the text must occur in a
@@ -714,7 +713,7 @@ mod tests {
     use super::*;
 
     fn ing(items: &[&str]) -> Ingredient {
-        Ingredient(items.iter().map(|s| (*s).to_owned()).collect())
+        Ingredient::of(items.iter().map(|s| (*s).to_owned()).collect())
     }
     #[test]
     fn small_recipes_are_centred_in_the_grid() {
