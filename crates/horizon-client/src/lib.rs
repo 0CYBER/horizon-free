@@ -95,6 +95,7 @@ pub mod server;
 pub mod settings;
 pub mod shadows;
 pub mod signs;
+pub mod skins;
 pub mod snbt;
 pub mod sound_engine;
 pub mod sound_events;

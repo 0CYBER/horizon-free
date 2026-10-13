@@ -743,6 +743,10 @@ struct Game<'a> {
     dragon_model: Option<horizon_client::mobs::Part>,
     /// Map textures waiting for the next HUD batch to upload them.
     map_patches: Vec<horizon_client::font::Patch>,
+    /// Player skin downloads, and which skin each atlas skin slot holds
+    /// (least recently shown first).
+    skin_downloads: horizon_client::skins::Downloader,
+    skin_slots: Vec<(String, usize)>,
     cart_models: minecarts::CartModels,
     /// The boat the player rides.
     riding: Option<u32>,
@@ -8375,6 +8379,12 @@ pub fn run() -> Result<()> {
         breath_clouds: Vec::new(),
         dragon_model: horizon_client::mobs::load_model(&root, "minecraft:ender_dragon#main"),
         map_patches: Vec::new(),
+        skin_downloads: horizon_client::skins::Downloader::new(
+            std::env::current_dir()
+                .unwrap_or_default()
+                .join("assets/skins"),
+        ),
+        skin_slots: Vec::new(),
         cart_models: minecarts::CartModels::load(&root),
         riding: None,
         ender_items: vec![None; 27],
