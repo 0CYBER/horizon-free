@@ -17,6 +17,7 @@ use horizon_core::{
     geometry::Vec3,
     random::{LegacyRandom, RandomSource},
 };
+use std::collections::HashMap;
 
 /// `MemorySlot.NEVER_EXPIRE`.
 pub(super) const NEVER: i64 = i64::MAX;
@@ -843,12 +844,20 @@ impl Poi {
 }
 /// The POI a block state is (`PoiTypes`): job site blocks, bed heads, bells.
 pub fn poi_at(w: &MobWorld, x: i32, y: i32, z: i32) -> Option<Poi> {
-    let name = w.block_name(x, y, z);
+    poi_of_state(w, w.world.block(x, y, z))
+}
+/// The POI a block state is, if any (`PoiTypes.forState`).
+fn poi_of_state(w: &MobWorld, state: horizon_world::registry::BlockStateId) -> Option<Poi> {
+    let name = &*w.facts.get(state).name;
     if name == "minecraft:bell" {
         return Some(Poi::Meeting);
     }
     if name.ends_with("_bed") {
-        return (w.prop(x, y, z, "part") == Some("head")).then_some(Poi::Home);
+        let part = w
+            .registry
+            .state(state)
+            .and_then(|s| s.properties.get("part"));
+        return (part.map(String::as_str) == Some("head")).then_some(Poi::Home);
     }
     super::villager::job_site_profession(name).map(Poi::Job)
 }
@@ -920,12 +929,30 @@ fn pois_in_range(
     let chunks = radius.div_euclid(16) + 1;
     let y0 = (c[1] - radius).max(crate::chunk::MIN_Y);
     let y1 = (c[1] + radius).min(crate::chunk::MIN_Y + crate::chunk::HEIGHT - 1);
+    // The POI each block state is, worked out once per search, and the
+    // sections whose palette holds none skipped whole, as PoiManager only
+    // visits sections with records: the same positions in the same order,
+    // without reading and naming every block of the sphere.
+    let mut kinds: HashMap<u32, Option<Poi>> = HashMap::new();
+    let mut kind = |state: u32| {
+        *kinds
+            .entry(state)
+            .or_insert_with(|| poi_of_state(w, horizon_world::registry::BlockStateId(state)))
+    };
     for qz in cz - chunks..=cz + chunks {
         for qx in cx - chunks..=cx + chunks {
-            if !w.world.chunks.contains_key(&(qx, qz)) {
+            let Some(chunk) = w.world.chunks.get(&(qx, qz)) else {
                 continue;
-            }
+            };
+            let holds: Vec<bool> = chunk
+                .sections
+                .iter()
+                .map(|s| s.blocks.maybe_has(|v| kind(v).is_some()))
+                .collect();
             for y in y0..=y1 {
+                if !holds[((y - crate::chunk::MIN_Y) >> 4) as usize] {
+                    continue;
+                }
                 for z in qz * 16..qz * 16 + 16 {
                     for x in qx * 16..qx * 16 + 16 {
                         if (x - c[0]).abs() > radius || (z - c[2]).abs() > radius {
@@ -937,11 +964,11 @@ fn pois_in_range(
                         if d > r2 {
                             continue;
                         }
-                        let state = w.world.block(x, y, z);
+                        let state = chunk.block(x & 15, y, z & 15);
                         if w.facts.is_air(state) {
                             continue;
                         }
-                        let Some(poi) = poi_at(w, x, y, z) else {
+                        let Some(poi) = kind(state.0) else {
                             continue;
                         };
                         if !poi_matches(m, f, poi) {
