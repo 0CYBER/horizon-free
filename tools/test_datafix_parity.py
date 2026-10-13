@@ -54,7 +54,7 @@ IGNORED = {
 
 
 def world_path(name):
-    return (LOCAL / 'worlds' if (LOCAL / 'worlds' / name).is_dir() else WORLDS) / name
+    return (LOCAL / 'worlds-pre-1.17' if (LOCAL / 'worlds-pre-1.17' / name).is_dir() else WORLDS) / name
 
 
 def java_classpath():
@@ -222,7 +222,7 @@ def main():
         if missing:
             print('generating sample worlds:', ' '.join(missing), flush=True)
             subprocess.run([sys.executable, str(ROOT / 'tools' / 'datafix_worlds.py'), *missing], cwd=ROOT, check=True)
-    worlds = sorted(p.name for d in (WORLDS, LOCAL / 'worlds') if d.is_dir() for p in d.iterdir() if p.is_dir())
+    worlds = sorted(p.name for d in (WORLDS, LOCAL / 'worlds-pre-1.17') if d.is_dir() for p in d.iterdir() if p.is_dir())
     band = args.band
     if band and not args.versions:  # worlds in the layout of before 1.16, saved before the target
         worlds = [w for w in worlds if json.loads((world_path(w) / 'datafix-source.json').read_text())['data_version'] < band]
