@@ -8,6 +8,7 @@ from collections import Counter
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path, PurePosixPath
 import re
 import shutil
@@ -99,23 +100,37 @@ def import_copy(source, destination, checksum, algorithm="sha1", hint=""):
     return destination
 
 
+def manifest_accepted(lock, checksum):
+    """Mojang republishes a version JSON for asset-index changes; every known one is accepted."""
+    game = lock["minecraft"]
+    return checksum == game["manifest_sha1"] or checksum in game.get("accepted_manifest_sha1", [])
+
+
 def import_manifest(lock, directory, minecraft=None):
-    """The pinned version JSON, from the launcher's versions/ directory."""
+    """The pinned version JSON, from the launcher's versions/ directory.
+
+    The launcher's copy wins over the cached one so the manifest matches the asset index the
+    launcher installed alongside it."""
     game = lock["minecraft"]
     version = game["version"]
     destination = directory / "manifest.json"
     source = minecraft_dir(minecraft) / "versions" / version / f"{version}.json"
-    if not (destination.exists() and digest(destination, "sha1") == game["manifest_sha1"]):
-        if not source.is_file():
-            raise FileNotFoundError(f"Missing {source}. {LAUNCHER_HINT.format(version=version)}")
+    if source.is_file():
         manifest = json.loads(source.read_text(encoding="utf-8"))
         downloads = manifest.get("downloads", {})
         if (manifest.get("id") != version
                 or downloads.get("client", {}).get("sha1") != game["client_sha1"]
                 or downloads.get("server", {}).get("sha1") != game["server_sha1"]):
             raise ValueError(f"{source} does not describe the pinned {version} release")
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, destination)
+        checksum = digest(source, "sha1")
+        if not manifest_accepted(lock, checksum):
+            raise ValueError(f"{source} is a {version} version file Horizon does not know yet (sha1 {checksum}); "
+                             f"Mojang may have republished it. Update Horizon, or report it if this is the latest release.")
+        if not (destination.exists() and digest(destination, "sha1") == checksum):
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, destination)
+    elif not (destination.exists() and manifest_accepted(lock, digest(destination, "sha1"))):
+        raise FileNotFoundError(f"Missing {source}. {LAUNCHER_HINT.format(version=version)}")
     manifest = json.loads(destination.read_text(encoding="utf-8"))
     if manifest["javaVersion"]["majorVersion"] != game["java_major"]:
         raise ValueError("Manifest Java version does not match lock file")
@@ -144,6 +159,71 @@ def import_server(lock, directory, server_jar=None):
             return destination
         raise FileNotFoundError(f"No {version} server jar. {hint}")
     return import_copy(Path(source).expanduser(), destination, checksum, hint=hint)
+
+
+def rule_system(system=None):
+    """The launcher's os.name for this machine: linux, osx or windows."""
+    return system or {"Darwin": "osx", "Linux": "linux", "Windows": "windows"}[platform.system()]
+
+
+ARCHITECTURE_ALIASES = [{"x86_64", "amd64", "x64"}, {"arm64", "aarch64"}]
+
+
+def rule_architectures(architecture=None):
+    """platform.machine() and its aliases: Windows reports AMD64/ARM64, Linux aarch64, macOS arm64."""
+    architecture = (architecture or platform.machine()).lower()
+    return next((names for names in ARCHITECTURE_ALIASES if architecture in names), {architecture})
+
+
+def library_allowed(library, system=None, architecture=None):
+    """The official launcher's rules: the last matching rule decides, no rules means allowed."""
+    system, architectures = rule_system(system), rule_architectures(architecture)
+    rules = library.get("rules", [])
+    allowed = not rules
+    for rule in rules:
+        operating_system = rule.get("os", {})
+        if operating_system.get("name", system) != system:
+            continue
+        if "arch" in operating_system and not any(re.fullmatch(operating_system["arch"], name)
+                                                  for name in architectures):
+            continue
+        if "version" in operating_system and not re.search(operating_system["version"], platform.release()):
+            continue
+        if rule.get("features"):
+            continue
+        allowed = rule["action"] == "allow"
+    return allowed
+
+
+ARM_CLASSIFIER = re.compile(r"(?:^|-)(?:arm64|aarch64|aarch_64)$")
+X86_CLASSIFIER = re.compile(r"(?:^|-)(?:x86_64|x64)$")
+
+
+def native_library_matches(library, architecture=None, names=None):
+    """Modern manifests list x64 and ARM natives with OS-only rules; keep this machine's.
+
+    A plain natives-<os> jar is the x64 build when the manifest's library names also hold
+    an ARM variant of it (assumed when names is None), and the only build otherwise."""
+    arm = "arm64" in rule_architectures(architecture)
+    parts = library["name"].split(":")
+    classifier = parts[3] if len(parts) > 3 else ""
+    if ARM_CLASSIFIER.search(classifier):
+        return arm
+    if X86_CLASSIFIER.search(classifier):
+        return not arm
+    if arm and classifier.startswith("natives-"):
+        return names is not None and not any(f"{library['name']}-{suffix}" in names
+                                             for suffix in ("arm64", "aarch64"))
+    return True
+
+
+def client_library_artifacts(manifest, system=None, architecture=None):
+    """The client libraries the official launcher installs on this OS and architecture."""
+    names = {library["name"] for library in manifest["libraries"]}
+    return [library["downloads"]["artifact"] for library in manifest["libraries"]
+            if "artifact" in library.get("downloads", {})
+            and library_allowed(library, system, architecture)
+            and native_library_matches(library, architecture, names)]
 
 
 def import_library(artifact, destination_root, minecraft=None):
@@ -307,10 +387,8 @@ def prepare(minecraft=None, server_jar=None):
     print(f"Imported client {manifest['id']} from {minecraft_dir(minecraft)}", flush=True)
     jars = {"client": client, "server": import_server(lock, directory, server_jar)}
     jars["server"], server_libraries = unpack_server(jars["server"], directory, manifest["id"])
-    client_artifacts = [library["downloads"]["artifact"] for library in manifest["libraries"]
-                        if "artifact" in library.get("downloads", {})]
     client_libraries = [import_library(artifact, directory / "libraries" / "client", minecraft)
-                        for artifact in client_artifacts]
+                        for artifact in client_library_artifacts(manifest)]
     vf = lock["vineflower"]
     download(vf["url"], LOCAL / "tools" / f"vineflower-{vf['version']}.jar", vf["sha256"], "sha256")
     for side, jar in jars.items():

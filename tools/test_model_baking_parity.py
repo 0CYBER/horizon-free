@@ -59,14 +59,12 @@ def client_libraries():
     _, directory=lab.config()
     manifest=json.loads((directory/'manifest.json').read_text())
     libraries=[]
-    for library in manifest['libraries']:
-        artifact=library.get('downloads',{}).get('artifact')
-        if artifact:
-            relative=Path(artifact['path'])
-            if relative.is_absolute() or '..' in relative.parts: raise ValueError('Unsafe client library path')
-            path=directory/'libraries/client'/relative
-            if lab.digest(path,'sha1')!=artifact['sha1']: raise ValueError('Client dependency checksum changed: '+str(relative))
-            libraries.append(path)
+    for artifact in lab.client_library_artifacts(manifest):
+        relative=Path(artifact['path'])
+        if relative.is_absolute() or '..' in relative.parts: raise ValueError('Unsafe client library path')
+        path=directory/'libraries/client'/relative
+        if lab.digest(path,'sha1')!=artifact['sha1']: raise ValueError('Client dependency checksum changed: '+str(relative))
+        libraries.append(path)
     return libraries
 
 
