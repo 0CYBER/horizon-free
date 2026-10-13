@@ -844,6 +844,13 @@ def make_player(Bot, varint, parse_varint, mcstring):
                 p, eid = parse_varint(data, 0)
                 self.entities[eid] = data[p + 16]   # skip the uuid, the type byte
 
+        def use_map_18(self, slot):
+            """1.8 only: select a hotbar slot and right click in the air (an empty map there becomes a map)."""
+            self.send(0x09, struct.pack('>h', slot))
+            time.sleep(0.3)
+            self.send(0x08, struct.pack('>qBhBBB', -1, 255, -1, 0, 0, 0))
+            time.sleep(1.0)
+
         def move(self, x, y, z):
             self.pos = (x, y, z)
             self.send(0x0D, struct.pack('>dddB', x, y, z, 1))
@@ -1455,7 +1462,7 @@ def inventory_commands(stacks):
     # a hand-picked start of the hotbar, then the sweep
     hot = [item('map'), item('map'), item('map'), item('iron_hoe', 1, 249), item('stone', 64), item('flint_and_steel', 1, 63),
            item('wool', 64, 14), item('cobblestone', 32), item('torch', 20)]
-    if ERA < 12:        # nobody uses the maps here: the server makes the map files of filled maps in a player's inventory
+    if 8 < ERA < 12:    # nobody uses the maps here: the server makes the map files of filled maps in a player's inventory
         hot[:3] = [item('filled_map', 1, i) for i in range(3)]
     for i, st in enumerate(hot):
         cmds.append(f'replaceitem entity {PLAYER} slot.hotbar.{i} {st.command_args()}')
@@ -1489,9 +1496,16 @@ OBJECTIVES = [('dummy1', 'dummy', 'Dummy "quoted" objective'), ('kills', 'player
               ('mine_log', 'stat.mineBlock.minecraft.log', None), ('killed_pig', 'stat.killEntity.Pig', None)]
 
 
+def objectives():
+    """The objectives this version has (1.8 lacks the food, air, armor, xp and level criteria and the pickup and drop statistics)."""
+    if ERA >= 9:
+        return OBJECTIVES
+    return [o for o in OBJECTIVES if o[1] not in ('food', 'air', 'armor', 'xp', 'level') and not o[1].startswith(('stat.pickup', 'stat.drop'))]
+
+
 def scoreboard_commands():
     cmds = []
-    for name, crit, disp in OBJECTIVES:
+    for name, crit, disp in objectives():
         cmds.append(f'scoreboard objectives add {name} {crit}' + (f' {disp}' if disp else ''))
     cmds += ['scoreboard objectives setdisplay sidebar kills', 'scoreboard objectives setdisplay list hp',
              'scoreboard objectives setdisplay belowName deaths', 'scoreboard objectives setdisplay sidebar.team.red mined',
@@ -1509,7 +1523,7 @@ def scoreboard_commands():
             cmds.append(f'scoreboard teams option t_{c} collisionRule {["always", "never", "pushOtherTeams", "pushOwnTeam"][i % 4]}')
     cmds += ['scoreboard teams join t_red ' + PLAYER, 'scoreboard teams join t_blue Fakeplayer1 Fakeplayer2',
              'scoreboard teams join t_gold Zombie']
-    for i, (name, crit, disp) in enumerate(OBJECTIVES):
+    for i, (name, crit, disp) in enumerate(objectives()):
         if crit in ('health', 'food', 'air', 'armor', 'xp', 'level'):
             continue                      # read-only criteria
         cmds.append(f'scoreboard players set {PLAYER} {name} {i * 7 - 3}')
@@ -1765,6 +1779,10 @@ def populate(server, Bot, port, protocol, name, problems):
             problems.append(('lab_actions', ['the bot lost its connection: %s' % error]))
     else:
         say(achievement_commands())
+        if ERA == 8:                  # 1.8 makes a map only when an empty map is used
+            for slot in range(3):
+                bot.use_map_18(slot)
+            bot.send(0x09, struct.pack('>h', 8))
         time.sleep(3)                 # the inventory ticks once: the server creates the maps
     time.sleep(2)
     say(['save-all flush'])
