@@ -13,6 +13,7 @@ use horizon_client::{
     },
     chunk::{Chunk, Light},
     hud::{HudAtlas, Rect},
+    item_render::{ItemRenderer, gui},
     signs::{DYE_TEXT, SignData, SignText},
     world::World,
 };
@@ -119,6 +120,7 @@ fn main() -> Result<()> {
     let renderer = BlockEntityRenderer::load(root, registry)?;
     let atlas = HudAtlas::build(root)?;
     let banners = Banners::load(root);
+    let items = ItemRenderer::load(root)?;
     let (sprites, names, grid) = fake_sprites(textures)?;
     let air = registry.default_state("minecraft:air").ok_or("no air")?;
     let mut out = BufWriter::new(fs::File::create(output)?);
@@ -128,6 +130,43 @@ fn main() -> Result<()> {
     {
         let case: Value = serde_json::from_str(line)?;
         let block = case["block"].as_str().unwrap_or_default();
+        if let Some(loom) = case.get("loom") {
+            // The loom's result preview, as LoomScreen draws it at (0, 0).
+            let layers: Vec<(String, String)> = loom["patterns"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|p| {
+                    (
+                        banners.banner_texture(p[0].as_str().unwrap_or_default()),
+                        p[1].as_str().unwrap_or_default().to_owned(),
+                    )
+                })
+                .collect();
+            let base = loom["base"].as_str().unwrap_or_default();
+            let flat = gui::items_flat_lights();
+            let quads: Vec<Value> =
+                gui::banner_result_quads(&items, &sprites, 0.0, 0.0, base, &layers)
+                    .iter()
+                    .map(|q| {
+                        let (cu, cv) = ((q.uv[0][0] / 2.0).floor(), (q.uv[0][1] / 2.0).floor());
+                        let texture = names
+                            .get(cu as usize + cv as usize * grid)
+                            .cloned()
+                            .unwrap_or_default();
+                        let v: Vec<Value> = (0..4)
+                            .map(|k| {
+                                let p = q.pos[k];
+                                json!([p.x, p.y, p.z, q.uv[k][0] - cu * 2.0, q.uv[k][1] - cv * 2.0])
+                            })
+                            .collect();
+                        // Full bright (15728880).
+                        json!({"texture": texture, "v": v, "color": gui::lit_color(q, flat), "light": 0xF0F0})
+                    })
+                    .collect();
+            writeln!(out, "{}", json!({"quads": quads, "texts": []}))?;
+            continue;
+        }
         if block == "minecraft:beacon" {
             // BeaconRenderer: the beam sections from the case, as Horizon's beacon keeps them.
             let int = |v: &Value| v.as_i64().unwrap_or(0);

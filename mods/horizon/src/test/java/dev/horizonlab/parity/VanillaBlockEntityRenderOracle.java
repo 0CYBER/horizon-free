@@ -11,6 +11,9 @@ import net.minecraft.client.gui.Font;
 import net.minecraft.client.model.Model;
 import net.minecraft.client.model.geom.EntityModelSet;
 import net.minecraft.client.model.geom.LayerDefinitions;
+import net.minecraft.client.model.object.banner.BannerFlagModel;
+import net.minecraft.client.renderer.Sheets;
+import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.client.renderer.SubmitNodeCollector;
 import net.minecraft.client.renderer.blockentity.*;
 import net.minecraft.client.renderer.blockentity.state.*;
@@ -333,15 +336,37 @@ public final class VanillaBlockEntityRenderOracle {
             }
             be.setLevel(level);
         } else if (be instanceof BannerBlockEntity && c.has("patterns")) {
-            var builder = new net.minecraft.world.level.block.entity.BannerPatternLayers.Builder();
-            var registry = ParityData.access.lookupOrThrow(Registries.BANNER_PATTERN);
-            for (var e : c.getAsJsonArray("patterns")) {
-                var p = e.getAsJsonArray();
-                var holder = registry.getOrThrow(ResourceKey.create(Registries.BANNER_PATTERN, Identifier.parse(p.get(0).getAsString())));
-                builder.add(holder, dye(p.get(1).getAsString()));
-            }
-            field(BannerBlockEntity.class, "patterns").set(be, builder.build());
+            field(BannerBlockEntity.class, "patterns").set(be, patterns(c.getAsJsonArray("patterns")));
         }
+    }
+
+    /** [[pattern id, dye], ...] as BannerPatternLayers. */
+    static BannerPatternLayers patterns(JsonArray list) {
+        var builder = new BannerPatternLayers.Builder();
+        var registry = ParityData.access.lookupOrThrow(Registries.BANNER_PATTERN);
+        for (var e : list) {
+            var p = e.getAsJsonArray();
+            var holder = registry.getOrThrow(ResourceKey.create(Registries.BANNER_PATTERN, Identifier.parse(p.get(0).getAsString())));
+            builder.add(holder, dye(p.get(1).getAsString()));
+        }
+        return builder.build();
+    }
+
+    /**
+     * LoomScreen's result preview (GuiGraphicsExtractor.bannerPattern): the
+     * picture-in-picture pose of PictureInPictureRenderer.prepare for its 20x40
+     * rectangle at GUI scale 1 (translate(w / 2, h), scale(16, 16, -16)), then
+     * GuiBannerResultRenderer.renderToTexture without its lighting setup
+     * (Lighting.Entry.ITEMS_FLAT, applied by the harness).
+     */
+    static void loomResult(JsonObject loom, BannerFlagModel flag, SpriteGetter sprites, SubmitNodeCollector collector) {
+        var pose = new PoseStack();
+        pose.translate(20 / 2.0F, 40.0F, 0.0F);
+        pose.scale(16.0F, 16.0F, -16.0F);
+        pose.translate(0.0F, 0.25F, 0.0F);
+        collector.submitModel(flag, 0.0F, pose, 15728880, OverlayTexture.NO_OVERLAY, -1, Sheets.BANNER_BASE, sprites, 0);
+        BannerRenderer.submitPatterns(sprites, pose, collector, 15728880, OverlayTexture.NO_OVERLAY, flag, 0.0F, true,
+            dye(loom.get("base").getAsString()), patterns(loom.getAsJsonArray("patterns")));
     }
 
     /** Render-state values vanilla reads from the level (absent here). */
@@ -381,6 +406,7 @@ public final class VanillaBlockEntityRenderOracle {
         var items = new net.minecraft.client.renderer.item.ItemModelResolver(null);
         var context = new BlockEntityRendererProvider.Context(null, null, items, null, models, font, sprites, null);
         Map<Object, BlockEntityRenderer> renderers = (Map) BlockEntityRenderers.createEntityRenderers(context);
+        var loomFlag = new BannerFlagModel(models.bakeLayer(net.minecraft.client.model.geom.ModelLayers.STANDING_BANNER_FLAG));
         var gson = new Gson();
         var out = new StringBuilder();
         for (String line : Files.readAllLines(Path.of(args[0]))) {
@@ -389,6 +415,13 @@ public final class VanillaBlockEntityRenderOracle {
             var result = new JsonObject();
             result.add("case", c);
             try {
+                if (c.has("loom")) {
+                    var submits = new JsonArray();
+                    loomResult(c.getAsJsonObject("loom"), loomFlag, sprites, collector(submits));
+                    result.add("submits", submits);
+                    out.append(gson.toJson(result)).append('\n');
+                    continue;
+                }
                 BlockState state = parseState(c.get("block").getAsString());
                 var p = c.getAsJsonArray("pos");
                 var pos = new BlockPos(p.get(0).getAsInt(), p.get(1).getAsInt(), p.get(2).getAsInt());

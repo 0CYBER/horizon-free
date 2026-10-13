@@ -11,6 +11,11 @@ use horizon_client::{
     items::ItemStack,
     menu::place::{PostPlace, Stacked},
     recipe_book::{Book, BookType, ClientBook, Collection, Display, Entry, Tab},
+    recipe_book_screen::{
+        self as screen, ButtonView, Call, Drawn, GhostView, ItemCall, OverlayRecipe, OverlayView,
+        Screen as Layout, Search, TabView,
+    },
+    text::{Style, Text},
     ui::EditBox,
 };
 use std::{
@@ -444,9 +449,12 @@ impl Game<'_> {
 
     // ---- geometry ----
 
+    /// `RecipeBookComponent.getXOrigin` / `getYOrigin` (`widthTooNarrow`
+    /// centres the book over the menu).
     fn book_origin(&self, batch: &HudBatch) -> (f32, f32) {
+        let offset = if batch.width < NARROW { 0.0 } else { 86.0 };
         (
-            ((batch.width - WIDTH) / 2.0).floor() - 86.0,
+            ((batch.width - WIDTH) / 2.0).floor() - offset,
             ((batch.height - HEIGHT) / 2.0).floor(),
         )
     }
@@ -623,25 +631,9 @@ impl Game<'_> {
         let mut entries: Vec<(usize, bool)> =
             button.entries.iter().copied().filter(|e| e.1).collect();
         entries.extend(button.entries.iter().copied().filter(|e| !e.1));
-        let total = entries.len();
-        let maxrow = if total <= 16 { 4 } else { 5 };
-        let rows = total.div_ceil(maxrow);
-        let (mut x, mut y) = (bx, by);
-        let (center_x, center_y) = (xo + WIDTH / 2.0, yo + 13.0 + HEIGHT / 2.0);
-        let right = x + (total.min(maxrow) * 25) as f32;
-        let max_left = center_x + 50.0;
-        if right > max_left {
-            x -= 25.0 * ((right - max_left) / 25.0).floor();
-        }
-        let bottom = y + rows as f32 * 25.0;
-        let max_bottom = center_y + 50.0;
-        if bottom > max_bottom {
-            y -= 25.0 * ((bottom - max_bottom) / 25.0).ceil();
-        }
-        let max_top = center_y - 100.0;
-        if y < max_top {
-            y -= 25.0 * ((y - max_top) / 25.0).ceil();
-        }
+        let (x, y) =
+            screen::overlay_origin(bx as i32, by as i32, entries.len(), xo as i32, yo as i32);
+        let (x, y) = (x as f32, y as f32);
         self.recipe_ui.overlay = Some(Overlay { x, y, entries });
     }
 
@@ -821,357 +813,291 @@ impl Game<'_> {
         use winit::keyboard::KeyCode;
         self.keys.contains(&KeyCode::ControlLeft) || self.keys.contains(&KeyCode::ControlRight)
     }
+    /// `GhostSlots.extractRenderState`, among the container's slots.
     fn draw_ghost(&mut self, batch: &mut HudBatch, book_type: BookType) {
         if self.recipe_ui.ghost.is_empty() {
             return;
         }
-        // Ghosts show only while their slots are empty.
         let (ox, oy) = self.inventory_origin(batch);
-        let step = self.swap_index();
         let big_result = book_type != BookType::Crafting || self.craft_size == 3;
-        let ghosts: Vec<(usize, ItemStack, bool)> = self
+        let ghosts: Vec<GhostView> = self
             .recipe_ui
             .ghost
             .iter()
-            .filter(|g| !g.items.is_empty())
-            .map(|g| (g.slot, g.items[step % g.items.len()].clone(), g.result))
+            .map(|g| {
+                let (sx, sy) = self.slot_position(g.slot);
+                GhostView {
+                    x: sx as i32,
+                    y: sy as i32,
+                    items: g.items.clone(),
+                    result: g.result,
+                }
+            })
             .collect();
-        for (slot, stack, result) in ghosts {
-            let (sx, sy) = self.slot_position(slot);
-            let (x, y) = (ox + sx, oy + sy);
-            let atlas = &self.res.atlas;
-            let red = rgba(255, 0, 0, 0x30);
-            if result && big_result {
-                batch.fill(atlas, x - 4.0, y - 4.0, 24.0, 24.0, red);
-            } else {
-                batch.fill(atlas, x, y, 16.0, 16.0, red);
-            }
-            self.draw_item(batch, &stack, x, y);
-            batch.fill(&self.res.atlas, x, y, 16.0, 16.0, rgba(255, 255, 255, 0x30));
-        }
+        let calls = screen::ghost(self.swap_index(), ox as i32, oy as i32, big_result, &ghosts);
+        self.paint_book(batch, &calls);
     }
+    /// `RecipeBookComponent.extractRenderState` and `extractTooltip`, laid
+    /// out by `horizon_client::recipe_book_screen`.
     fn draw_book_panel(&mut self, batch: &mut HudBatch, book_type: BookType) {
         let (xo, yo) = self.book_origin(batch);
         let cursor = self.cursor;
-        let atlas_name = "gui/recipe_book";
-        // Background: the 147x166 page at (1, 1) of the texture.
-        if let Some(r) = self.res.atlas.sprites.get(atlas_name).copied() {
-            batch.rect_uv(
-                xo,
-                yo,
-                WIDTH,
-                HEIGHT,
-                sub_rect(r, [1.0, 1.0, WIDTH, HEIGHT]),
-                u32::MAX,
-            );
-        }
-        // Search box.
-        if let Some(search) = self.recipe_ui.search.as_mut() {
-            search.x = xo + 25.0;
-            search.y = yo + 13.0;
-            search.draw(batch, &self.res.atlas, None);
-            if search.value.is_empty() && !search.focused {
-                let hint = self
-                    .res
-                    .stations
-                    .enchantments
-                    .translate("gui.recipebook.search_hint")
-                    .unwrap_or("Search...")
-                    .to_owned();
-                batch.text(
-                    &self.res.atlas,
-                    &hint,
-                    search.text_x(),
-                    search.text_y(),
-                    rgba(170, 170, 170, 255),
-                    true,
-                );
-            }
-        }
-        // Tabs.
-        let tabs = self.recipe_ui.view.tabs.clone();
-        let current = self
-            .recipe_ui
-            .tab
-            .filter(|t| tabs.contains(t))
-            .unwrap_or(Tab::Search);
-        let frame = self.frame_ticks;
-        for (n, tab) in tabs.iter().enumerate() {
-            let (x, y) = self.tab_pos(xo, yo, n);
-            let selected = *tab == current;
-            let name = if selected { "tab_selected" } else { "tab" };
-            let sx = if selected { x - 2.0 } else { x };
-            let start = batch.vertices.len();
-            batch.sprite(&self.res.atlas, &sprite(name), sx, y);
-            let (a, b) = tab.icons();
-            let shift = if selected { -2.0 } else { 0.0 };
-            match b {
-                Some(b) => {
-                    self.draw_item(batch, &ItemStack::new(a, 1), x + 3.0 + shift, y + 5.0);
-                    self.draw_item(batch, &ItemStack::new(b, 1), x + 14.0 + shift, y + 5.0);
+        let atlas = &self.res.atlas;
+        let search = match self.recipe_ui.search.as_mut() {
+            Some(edit) => {
+                // The box's place, for clicks and typing.
+                edit.x = xo + 25.0;
+                edit.y = yo + 13.0;
+                let (display, blink_ms) = edit.view_state(atlas);
+                Search {
+                    value: edit.value.clone(),
+                    cursor: edit.cursor,
+                    highlight: edit.highlight,
+                    display,
+                    focused: edit.focused,
+                    blink_ms,
                 }
-                None => self.draw_item(batch, &ItemStack::new(a, 1), x + 9.0 + shift, y + 5.0),
             }
-            if let Some(entry) = self.recipe_ui.tab_anim.iter_mut().find(|e| e.0 == *tab) {
-                let squeeze = 1.0 + 0.1 * (entry.1 / 15.0 * std::f32::consts::PI).sin();
-                batch.scale_since(start, x + 8.0, y + 12.0, 1.0, squeeze);
-                entry.1 -= frame;
+            None => Search::default(),
+        };
+        let ui = &self.recipe_ui;
+        let current = ui
+            .tab
+            .filter(|t| ui.view.tabs.contains(t))
+            .unwrap_or(Tab::Search);
+        let tabs: Vec<TabView> = ui
+            .view
+            .tabs
+            .iter()
+            .map(|tab| {
+                let (a, b) = tab.icons();
+                TabView {
+                    icons: (a.to_owned(), b.map(str::to_owned)),
+                    selected: *tab == current,
+                    anim: ui
+                        .tab_anim
+                        .iter()
+                        .find(|e| e.0 == *tab)
+                        .map_or(0.0, |e| e.1),
+                }
+            })
+            .collect();
+        let pages = ui.view.buttons.len().div_ceil(20);
+        let first = ui.page * 20;
+        let (buttons, overlay) = match ui.book.as_ref() {
+            Some(book) => {
+                let buttons: Vec<ButtonView> = ui
+                    .view
+                    .buttons
+                    .iter()
+                    .enumerate()
+                    .skip(first)
+                    .take(20)
+                    .map(|(n, b)| ButtonView {
+                        has_craftable: b.craftable(),
+                        entries: b
+                            .entries
+                            .iter()
+                            .map(|e| vec![book.entries[e.0].result.clone()])
+                            .collect(),
+                        anim: ui
+                            .button_anim
+                            .iter()
+                            .find(|e| e.0 == n)
+                            .map_or(0.0, |e| e.1),
+                    })
+                    .collect();
+                let overlay = ui.overlay.as_ref().map(|o| OverlayView {
+                    x: o.x as i32,
+                    y: o.y as i32,
+                    recipes: o
+                        .entries
+                        .iter()
+                        .map(|&(i, craftable)| OverlayRecipe {
+                            craftable,
+                            cells: screen::overlay_cells(book, &book.entries[i]),
+                        })
+                        .collect(),
+                });
+                (buttons, overlay)
             }
+            None => (Vec::new(), None),
+        };
+        let translate = |key: &str| self.translate(key, key);
+        let text_width = |s: &str| HudBatch::text_width(atlas, s) as i32;
+        let layout = Layout {
+            book: book_type,
+            width: batch.width as i32,
+            height: batch.height as i32,
+            narrow: batch.width < NARROW,
+            mouse: (cursor.0.floor() as i32, cursor.1.floor() as i32),
+            index: self.swap_index(),
+            filtering: self.book_filtering(book_type),
+            search: &search,
+            tabs: &tabs,
+            buttons: &buttons,
+            page: ui.page,
+            pages,
+            overlay: overlay.as_ref(),
+            ghost: None,
+            translate: &translate,
+            text_width: &text_width,
+        };
+        let calls = screen::draw(&layout);
+        let tooltip = self.paint_book(batch, &calls);
+        // The squeeze animations run down with the frames.
+        let frame = self.frame_ticks;
+        for e in &mut self.recipe_ui.tab_anim {
+            e.1 -= frame;
+        }
+        for e in &mut self.recipe_ui.button_anim {
+            e.1 -= frame;
         }
         self.recipe_ui.tab_anim.retain(|e| e.1 > 0.0);
-        // Craftable filter.
-        let filtering = self.book_filtering(book_type);
-        let hover = inside(cursor, xo + 110.0, yo + 12.0, 26.0, 16.0);
-        let prefix = if book_type == BookType::Crafting {
-            ""
-        } else {
-            "furnace_"
-        };
-        let state = if filtering {
-            "filter_enabled"
-        } else {
-            "filter_disabled"
-        };
-        let name = format!("{prefix}{state}{}", if hover { "_highlighted" } else { "" });
-        batch.sprite(&self.res.atlas, &sprite(&name), xo + 110.0, yo + 12.0);
-        // Recipe buttons.
-        let buttons = self.recipe_ui.view.buttons.clone();
-        let pages = buttons.len().div_ceil(20);
-        let step = self.swap_index();
-        let first = self.recipe_ui.page * 20;
-        let mut tooltip: Option<Vec<(String, u32)>> = None;
-        let overlay_open = self.recipe_ui.overlay.is_some();
-        for n in 0..20 {
-            let Some(button) = buttons.get(first + n) else {
-                break;
-            };
-            let (x, y) = Self::button_pos(xo, yo, n);
-            let anim_start = batch.vertices.len();
-            let many = button.entries.len() > 1;
-            let name = match (button.craftable(), many) {
-                (true, true) => "slot_many_craftable",
-                (true, false) => "slot_craftable",
-                (false, true) => "slot_many_uncraftable",
-                (false, false) => "slot_uncraftable",
-            };
-            batch.sprite(&self.res.atlas, &sprite(name), x, y);
-            let shown = button.entries[step % button.entries.len()].0;
-            let Some(stack) = self
-                .recipe_ui
-                .book
-                .as_ref()
-                .map(|b| ItemStack::new(&b.entries[shown].result.item, 1))
-            else {
-                continue;
-            };
-            let same_result = button.entries.iter().all(|e| {
-                self.recipe_ui
-                    .book
-                    .as_ref()
-                    .is_some_and(|b| b.entries[e.0].result.item == b.entries[shown].result.item)
-            });
-            let mut offset = 4.0;
-            if many && same_result {
-                self.draw_item_plain(batch, &stack, x + offset + 1.0, y + offset + 1.0);
-                offset -= 1.0;
-            }
-            self.draw_item_plain(batch, &stack, x + offset, y + offset);
-            if let Some(entry) = self
-                .recipe_ui
-                .button_anim
-                .iter_mut()
-                .find(|e| e.0 == first + n)
-            {
-                let squeeze = 1.0 + 0.1 * (entry.1 / 15.0 * std::f32::consts::PI).sin();
-                batch.scale_since(anim_start, x + 8.0, y + 12.0, squeeze, squeeze);
-                entry.1 -= self.frame_ticks;
-            }
-            if inside(cursor, x, y, 25.0, 25.0) && !overlay_open {
-                let mut lines = self.stack_tooltip(&stack);
-                if many {
-                    lines.push((
-                        self.translate("gui.recipebook.moreRecipes", "Right Click for More"),
-                        u32::MAX,
-                    ));
-                }
-                tooltip = Some(lines);
-            }
-        }
         self.recipe_ui.button_anim.retain(|e| e.1 > 0.0);
-        // Page arrows and number.
-        if pages > 1 {
-            let page_text = self
-                .translate("gui.recipebook.page", "%s/%s")
-                .replacen("%s", &(self.recipe_ui.page + 1).to_string(), 1)
-                .replacen("%s", &pages.to_string(), 1);
-            let w = HudBatch::text_width(&self.res.atlas, &page_text);
-            batch.text(
-                &self.res.atlas,
-                &page_text,
-                xo - (w / 2.0).floor() + 73.0,
-                yo + 141.0,
-                u32::MAX,
-                true,
-            );
-            if self.recipe_ui.page + 1 < pages {
-                let hover = inside(cursor, xo + 93.0, yo + 137.0, 12.0, 17.0);
-                let name = if hover {
-                    "page_forward_highlighted"
-                } else {
-                    "page_forward"
-                };
-                batch.sprite(&self.res.atlas, &sprite(name), xo + 93.0, yo + 137.0);
-                if hover {
-                    tooltip = Some(vec![(
-                        self.translate("gui.recipebook.next_page", "Next Page"),
-                        u32::MAX,
-                    )]);
-                }
-            }
-            if self.recipe_ui.page > 0 {
-                let hover = inside(cursor, xo + 38.0, yo + 137.0, 12.0, 17.0);
-                let name = if hover {
-                    "page_backward_highlighted"
-                } else {
-                    "page_backward"
-                };
-                batch.sprite(&self.res.atlas, &sprite(name), xo + 38.0, yo + 137.0);
-                if hover {
-                    tooltip = Some(vec![(
-                        self.translate("gui.recipebook.previous_page", "Previous Page"),
-                        u32::MAX,
-                    )]);
-                }
-            }
-        }
-        if inside(cursor, xo + 110.0, yo + 12.0, 26.0, 16.0) {
-            let key = if !filtering {
-                "gui.recipebook.toggleRecipes.all"
-            } else {
-                match book_type {
-                    BookType::Crafting => "gui.recipebook.toggleRecipes.craftable",
-                    BookType::Furnace => "gui.recipebook.toggleRecipes.smeltable",
-                    BookType::BlastFurnace => "gui.recipebook.toggleRecipes.blastable",
-                    BookType::Smoker => "gui.recipebook.toggleRecipes.smokable",
-                }
-            };
-            tooltip = Some(vec![(self.translate(key, key), u32::MAX)]);
-        }
-        self.draw_overlay(batch, book_type);
         if let Some(lines) = tooltip {
             self.draw_tooltip_lines(batch, &lines, cursor.0, cursor.1);
         }
     }
-    /// An item without count or bars (`GuiGraphics.fakeItem`).
-    fn draw_item_plain(&mut self, batch: &mut HudBatch, stack: &ItemStack, x: f32, y: f32) {
-        let one = ItemStack {
-            count: 1,
-            damage: 0,
-            ..stack.clone()
-        };
-        self.draw_item(batch, &one, x, y);
-    }
-    fn draw_overlay(&mut self, batch: &mut HudBatch, book_type: BookType) {
-        let Some(overlay) = self.recipe_ui.overlay.as_ref() else {
-            return;
-        };
-        let (ox, oy, entries) = (overlay.x, overlay.y, overlay.entries.clone());
-        let maxrow = if entries.len() <= 16 { 4 } else { 5 };
-        let width = entries.len().min(maxrow) as f32 * 25.0 + 8.0;
-        let height = entries.len().div_ceil(maxrow) as f32 * 25.0 + 8.0;
-        horizon_client::ui::nine_slice(
-            batch,
-            &self.res.atlas,
-            &sprite("overlay_recipe"),
-            ox,
-            oy,
-            width,
-            height,
-            u32::MAX,
-        );
-        let cursor = self.cursor;
-        let step = self.swap_index();
-        let (gw, gh) = if book_type == BookType::Crafting {
-            (3, 3)
-        } else {
-            (1, 1)
-        };
-        for (n, (index, craftable)) in entries.into_iter().enumerate() {
-            let x = ox + 4.0 + 25.0 * (n % maxrow) as f32;
-            let y = oy + 5.0 + 25.0 * (n / maxrow) as f32;
-            let hover = inside(cursor, x, y, 24.0, 24.0);
-            let family = if book_type == BookType::Crafting {
-                "crafting"
-            } else {
-                "furnace"
-            };
-            let state = if craftable { "" } else { "_disabled" };
-            let name = format!(
-                "{family}_overlay{state}{}",
-                if hover { "_highlighted" } else { "" }
-            );
-            batch.sprite(&self.res.atlas, &sprite(&name), x, y);
-            let Some(entry) = self
-                .recipe_ui
-                .book
-                .as_ref()
-                .map(|b| b.entries[index].clone())
-            else {
-                continue;
-            };
-            // The recipe's layout in miniature, ingredients at 3/8 scale.
-            let mut cells: Vec<(f32, f32, ItemStack)> = Vec::new();
-            if let Some(book) = self.recipe_ui.book.as_ref() {
-                let requirements = entry.requirements();
-                match &entry.display {
-                    Display::Furnace(ingredient) => {
-                        let items = book.items_of(ingredient);
-                        if !items.is_empty() {
-                            let item = &items[step % items.len()];
-                            cells.push((3.0 + 7.0, 3.0 + 7.0, ItemStack::new(item, 1)));
-                        }
-                    }
-                    Display::Shaped { .. } => {
-                        for (ingredient, grid_index) in entry.grid_cells(gw, gh) {
-                            if let Some(i) = ingredient {
-                                let items = book.items_of(requirements[i]);
-                                if !items.is_empty() {
-                                    let item = &items[step % items.len()];
-                                    cells.push((
-                                        3.0 + (grid_index % 3) as f32 * 7.0,
-                                        3.0 + (grid_index / 3) as f32 * 7.0,
-                                        ItemStack::new(item, 1),
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                    Display::Shapeless(list) => {
-                        for (i, ingredient) in list.iter().enumerate() {
-                            let items = book.items_of(ingredient);
-                            if !items.is_empty() {
-                                let item = &items[step % items.len()];
-                                cells.push((
-                                    3.0 + (i % 3) as f32 * 7.0,
-                                    3.0 + (i / 3) as f32 * 7.0,
-                                    ItemStack::new(item, 1),
-                                ));
-                            }
-                        }
+    /// Paints recipe book calls; returns the first tooltip set (vanilla keeps
+    /// the first one a frame asks for).
+    fn paint_book(&mut self, batch: &mut HudBatch, calls: &[Drawn]) -> Option<Vec<(String, u32)>> {
+        let mut tooltip: Option<Vec<(String, u32)>> = None;
+        for d in calls {
+            let start = batch.vertices.len();
+            let atlas = &self.res.atlas;
+            match &d.call {
+                Call::Blit {
+                    x, y, w, h, u, v, ..
+                } => {
+                    if let Some(r) = atlas.sprites.get("gui/recipe_book").copied() {
+                        let (w, h) = (*w as f32, *h as f32);
+                        batch.rect_uv(
+                            *x as f32,
+                            *y as f32,
+                            w,
+                            h,
+                            sub_rect(r, [*u, *v, w, h]),
+                            u32::MAX,
+                        );
                     }
                 }
+                Call::Sprite { id, x, y, w, h } => {
+                    let name = format!("gui/sprites/{id}");
+                    let native = atlas
+                        .sprites
+                        .get(&name)
+                        .is_some_and(|r| r.w as i32 == *w && r.h as i32 == *h);
+                    if native {
+                        batch.sprite(atlas, &name, *x as f32, *y as f32);
+                    } else {
+                        horizon_client::ui::nine_slice(
+                            batch,
+                            atlas,
+                            &name,
+                            *x as f32,
+                            *y as f32,
+                            *w as f32,
+                            *h as f32,
+                            u32::MAX,
+                        );
+                    }
+                }
+                Call::Fill {
+                    x0,
+                    y0,
+                    x1,
+                    y1,
+                    color,
+                } => batch.fill(
+                    atlas,
+                    *x0 as f32,
+                    *y0 as f32,
+                    (x1 - x0) as f32,
+                    (y1 - y0) as f32,
+                    argb(*color),
+                ),
+                Call::Highlight { x0, y0, x1, y1 } => {
+                    let (a, b) = (*x0.min(x1), *x0.max(x1));
+                    batch.fill(
+                        atlas,
+                        a as f32,
+                        *y0 as f32,
+                        (b - a) as f32,
+                        (y1 - y0) as f32,
+                        rgba(0, 0, 255, 128),
+                    );
+                }
+                Call::Text {
+                    runs,
+                    x,
+                    y,
+                    color,
+                    shadow,
+                } => {
+                    let mut x = *x as f32;
+                    for r in runs {
+                        let style = Style {
+                            color: (r.color >= 0).then_some(r.color as u32),
+                            italic: r.italic.then_some(true),
+                            ..Style::default()
+                        };
+                        let t = Text::styled(r.text.clone(), style);
+                        batch.text_styled(atlas, &t, x, *y as f32, argb(*color), *shadow);
+                        x += atlas.font.width_text(&t);
+                    }
+                }
+                Call::Item { call, stack, x, y } => match call {
+                    ItemCall::Item | ItemCall::Fake => {
+                        self.draw_item_model(batch, stack, *x as f32, *y as f32)
+                    }
+                    ItemCall::Decorations => {
+                        self.draw_item_decorations(batch, stack, *x as f32, *y as f32)
+                    }
+                },
+                Call::Tooltip(lines) => {
+                    if tooltip.is_none() {
+                        tooltip = Some(
+                            lines
+                                .iter()
+                                .map(|l| (l.iter().map(|r| r.text.as_str()).collect(), u32::MAX))
+                                .collect(),
+                        );
+                    }
+                }
+                Call::ItemTooltip { stack, more } => {
+                    if tooltip.is_none() {
+                        let mut lines = self.stack_tooltip(stack);
+                        if *more {
+                            lines.push((
+                                self.translate(
+                                    "gui.recipebook.moreRecipes",
+                                    "Right Click for More",
+                                ),
+                                u32::MAX,
+                            ));
+                        }
+                        tooltip = Some(lines);
+                    }
+                }
+                Call::Stratum => {}
             }
-            for (cx, cy, stack) in cells {
-                // Draw at the origin, then shrink around the cell centre.
-                let start = batch.vertices.len();
-                self.draw_item_plain(batch, &stack, 0.0, 0.0);
-                let (px, py) = (x + 2.0 + cx, y + 2.0 + cy);
+            if d.pose != screen::IDENTITY {
+                let m = d.pose;
                 for v in &mut batch.vertices[start..] {
-                    v.pos = [px + (v.pos[0] - 8.0) * 0.375, py + (v.pos[1] - 8.0) * 0.375];
+                    let [x, y] = v.pos;
+                    v.pos = [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
                 }
             }
         }
+        tooltip
     }
+}
+
+/// An ARGB colour as a HUD vertex colour.
+fn argb(c: i32) -> u32 {
+    let c = c as u32;
+    rgba((c >> 16) as u8, (c >> 8) as u8, c as u8, (c >> 24) as u8)
 }
 
 /// A sub-rectangle of a sprite given in texels.

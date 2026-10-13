@@ -639,7 +639,7 @@ mod tests {
     use super::*;
 
     fn ing(items: &[&str]) -> Ingredient {
-        Ingredient(items.iter().map(|s| (*s).to_owned()).collect())
+        Ingredient::of(items.iter().map(|s| (*s).to_owned()).collect())
     }
     fn have(items: &[(&str, i32)]) -> Stacked {
         let mut s = Stacked::default();

@@ -85,6 +85,7 @@ pub mod projectiles;
 pub mod raid;
 pub mod random_sequences;
 pub mod recipe_book;
+pub mod recipe_book_screen;
 pub mod save;
 pub mod scoreboard;
 pub mod scoreboard_cmd;
