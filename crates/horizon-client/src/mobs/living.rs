@@ -132,6 +132,38 @@ impl MobWorld<'_> {
             .map(|shape| shape.boxes().iter().map(|b| b.move_by(offset)).collect())
             .unwrap_or_default()
     }
+    /// `Level.findSupportingBlock`: of the blocks whose collision shape
+    /// meets `area`, the one whose centre is nearest `from` (ties: the
+    /// greatest by `Vec3i.compareTo`, y then z then x).
+    pub fn supporting_block(&self, area: Aabb, from: Vec3) -> Option<[i32; 3]> {
+        use horizon_core::geometry::Axis;
+        let range = |axis| {
+            (area.min(axis) - 1.0e-7).floor() as i32 - 1
+                ..=(area.max(axis) + 1.0e-7).floor() as i32 + 1
+        };
+        let mut best: Option<(f64, [i32; 3])> = None;
+        for y in range(Axis::Y) {
+            for z in range(Axis::Z) {
+                for x in range(Axis::X) {
+                    if !self
+                        .block_collision_boxes(x, y, z)
+                        .iter()
+                        .any(|b| b.intersects(area))
+                    {
+                        continue;
+                    }
+                    let d = (f64::from(x) + 0.5 - from.x).powi(2)
+                        + (f64::from(y) + 0.5 - from.y).powi(2)
+                        + (f64::from(z) + 0.5 - from.z).powi(2);
+                    let greater = |b: [i32; 3]| (y, z, x) > (b[1], b[2], b[0]);
+                    if best.is_none_or(|(bd, b)| d < bd || d == bd && greater(b)) {
+                        best = Some((d, [x, y, z]));
+                    }
+                }
+            }
+        }
+        best.map(|(_, p)| p)
+    }
     pub fn no_collision(&self, b: Aabb) -> bool {
         let mut scene = SceneCollisions {
             world: self.world,
@@ -346,7 +378,8 @@ impl Mob {
         let full = (moved.length() * f64::from(0.6_f32)) as f32;
         let horizontal =
             ((moved.x * moved.x + moved.z * moved.z).sqrt() * f64::from(0.6_f32)) as f32;
-        let on = self.on_pos(1.0e-5);
+        let supporting = self.supporting_block(w, moved);
+        let on = self.supported_on_pos(w, supporting, 1.0e-5);
         let state = w.world.block(on[0], on[1], on[2]);
         let climbable = w.facts.get(state).name.as_ref() == "minecraft:powder_snow"
             || w.has_tag("minecraft:climbable", &w.facts.get(state).name);
@@ -354,7 +387,7 @@ impl Mob {
         steps.move_dist += if climbable { full } else { horizontal };
         steps.fly_dist += full;
         if steps.move_dist > steps.next_step && !w.facts.is_air(state) {
-            let legacy = self.on_pos(0.2);
+            let legacy = self.supported_on_pos(w, supporting, 0.2);
             let legacy_state = w.world.block(legacy[0], legacy[1], legacy[2]);
             let produced = !w.facts.is_air(legacy_state)
                 && (self.on_ground || climbable)
@@ -396,6 +429,68 @@ impl Mob {
     /// Entity.isSwimming (mobs never swim in the player sense).
     fn fluids_swimming(&self) -> bool {
         false
+    }
+    /// `Entity.checkSupportingBlock` after a move: on the ground, the block
+    /// under the feet (`mainSupportingBlockPos`), looked for again where
+    /// the mob came from if none is under it now.
+    fn supporting_block(&self, w: &MobWorld, moved: Vec3) -> Option<[i32; 3]> {
+        if !self.on_ground {
+            return None;
+        }
+        let b = self.bounds();
+        use horizon_core::geometry::Axis;
+        let area = Aabb::new(
+            Vec3::new(b.min(Axis::X), b.min(Axis::Y) - 1.0e-6, b.min(Axis::Z)),
+            Vec3::new(b.max(Axis::X), b.min(Axis::Y), b.max(Axis::Z)),
+        );
+        w.supporting_block(area, self.position).or_else(|| {
+            let back = Vec3::new(-moved.x, 0.0, -moved.z);
+            let shifted = Aabb::new(
+                Vec3::new(
+                    area.min(Axis::X) + back.x,
+                    area.min(Axis::Y),
+                    area.min(Axis::Z) + back.z,
+                ),
+                Vec3::new(
+                    area.max(Axis::X) + back.x,
+                    area.max(Axis::Y),
+                    area.max(Axis::Z) + back.z,
+                ),
+            );
+            w.supporting_block(shifted, self.position)
+        })
+    }
+    /// `Entity.getOnPos(offset)` with a supporting block: its column (its
+    /// own position for fences, walls and gates up to half a block down).
+    fn supported_on_pos(
+        &self,
+        w: &MobWorld,
+        supporting: Option<[i32; 3]>,
+        offset: f32,
+    ) -> [i32; 3] {
+        let Some(p) = supporting else {
+            return self.on_pos(offset);
+        };
+        if offset <= 1.0e-5 {
+            return p;
+        }
+        let name = &w.facts.get(w.world.block(p[0], p[1], p[2])).name;
+        let tall = [
+            "minecraft:fences",
+            "minecraft:walls",
+            "minecraft:fence_gates",
+        ]
+        .iter()
+        .any(|t| w.has_tag(t, name));
+        if offset <= 0.5 && tall {
+            p
+        } else {
+            [
+                p[0],
+                (self.position.y - f64::from(offset)).floor() as i32,
+                p[2],
+            ]
+        }
     }
     /// Entity.getOnPos(offset) without a supporting block record.
     pub fn on_pos(&self, offset: f32) -> [i32; 3] {

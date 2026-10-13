@@ -77,6 +77,36 @@ def scenarios():
         'player 12.5 -60 0.5',
         'mob minecraft:villager 0.5 -60 0.5 0 51 persistent',
     ])
+    # Two villagers gossip (TradeWithVillager): what one heard of the player
+    # passes to the other, weakened, once in 1200 ticks; idle and at the bell.
+    gossips = ('gossip=player:minor_negative:100 gossip=player:major_positive:15 '
+               'gossip=player:trading:20 gossip=player:minor_positive:3')
+    for name, opts, extra in [('villager_gossip_idle', 'time=100', []),
+                              ('villager_gossip_bell', 'time=9500', ['block 0 -60 -6 minecraft:bell'])]:
+        add(name, 400, extra + [
+            'player 14.5 -60 0.5',
+            f'mob minecraft:villager 0.5 -60 0.5 0 61 persistent {gossips}',
+            'mob minecraft:villager 2.5 -60 0.5 180 62 persistent gossip=player:minor_positive:50',
+        ], opts)
+    # Two villagers with bread breed (VillagerMakeLove): they eat, a baby is
+    # born and takes a free bed, the parents rest for 6000 ticks.
+    # PoiManager.take hands out the free beds of a section in hash order:
+    # the parents claim the two near them, the child gets the only one left.
+    beds = []
+    for x in (-6, 3, 6):
+        beds += [f'block {x} -60 6 minecraft:red_bed[facing=north,part=foot]',
+                 f'block {x} -60 5 minecraft:red_bed[facing=north,part=head]']
+    for name, seeds in [('villager_breed', (71, 72)), ('villager_breed_2', (73, 74))]:
+        add(name, 900, beds + [
+            'player 14.5 -60 0.5',
+            f'mob minecraft:villager 0.5 -60 0.5 0 {seeds[0]} persistent inv=bread*3',
+            f'mob minecraft:villager 2.5 -60 0.5 180 {seeds[1]} persistent inv=bread*3 food=4',
+        ], 'time=100')
+    # Too little food: no breeding.
+    add('villager_breed_hungry', 400, beds[:2] + [
+        'mob minecraft:villager 0.5 -60 0.5 0 75 persistent inv=bread*2',
+        'mob minecraft:villager 2.5 -60 0.5 180 76 persistent inv=bread*3',
+    ], 'time=100')
     # Breezes: idle, and fighting a player near, in, and beyond the inner jump circle.
     add('breeze_alone', 200, ['mob minecraft:breeze 0.5 -60 0.5 90 61 persistent'])
     add('breeze_player', 200, ['player 8.5 -60 0.5', 'mob minecraft:breeze 0.5 -60 0.5 0 62 persistent'])
@@ -155,6 +185,8 @@ def write_scenarios(path, chosen):
         lines.append(f'origin {ox} {oz}')
         for line in body:
             f = line.split()
+            # `at TICK block ...` changes blocks before that tick; `watch` boxes stay relative.
+            head, f = (f[:2], f[2:]) if f[0] == 'at' else ([], f)
             if f[0] == 'player':
                 f[1] = repr(float(f[1]) + ox)
                 f[3] = repr(float(f[3]) + oz)
@@ -169,7 +201,7 @@ def write_scenarios(path, chosen):
                     f[k] = str(int(f[k]) + ox)
                 for k in (3, 6):
                     f[k] = str(int(f[k]) + oz)
-            lines.append(' '.join(f))
+            lines.append(' '.join(head + f))
         lines.append('end')
     path.write_text('\n'.join(lines) + '\n')
 
@@ -186,6 +218,9 @@ def parse(path):
         t = int(parts[0])
         if parts[1] == 'sound':
             cur['sounds'].setdefault(t, []).append(parts[2])
+            continue
+        if parts[1] == 'block':
+            cur.setdefault('blocks', {}).setdefault(t, []).append(parts[2])
             continue
         if parts[1] == 'trace':
             cur.setdefault('trace', {}).setdefault(t, []).append(parts[2])
@@ -286,11 +321,14 @@ def compare(vanilla, rust, fields=None):
                 report.append(f'{name}: hearts differ at tick {t}: vanilla {v.get("hearts", {}).get(t)} | horizon {r.get("hearts", {}).get(t)}')
                 clean = False
                 break
-        for t in sorted(set(v['sounds']) | set(r['sounds'])):
-            if v['sounds'].get(t, []) != r['sounds'].get(t, []):
-                report.append(f'{name}: sounds differ at tick {t}: vanilla {v["sounds"].get(t, [])} | horizon {r["sounds"].get(t, [])}')
-                clean = False
-                break
+        # Sounds and watched block changes: first differing tick.
+        for kind in ('sounds', 'blocks'):
+            va, ra = v.get(kind, {}), r.get(kind, {})
+            for t in sorted(set(va) | set(ra)):
+                if va.get(t, []) != ra.get(t, []):
+                    report.append(f'{name}: {kind} differ at tick {t}: vanilla {va.get(t, [])} | horizon {ra.get(t, [])}')
+                    clean = False
+                    break
         totals['clean'] += clean
         if clean:
             report.append(f'{name}: all {len(v["ticks"])} ticks match')

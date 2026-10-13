@@ -110,6 +110,15 @@ impl Gossips {
     pub fn clear(&mut self) {
         self.map.clear();
     }
+    /// Every (target, type, value) held.
+    pub fn entries(&self) -> impl Iterator<Item = (Target, GossipType, i32)> + '_ {
+        self.map.iter().flat_map(|(t, e)| {
+            GossipType::ALL
+                .into_iter()
+                .filter(move |k| e[k.index()] != 0)
+                .map(move |k| (*t, k, e[k.index()]))
+        })
+    }
     pub fn get(&self, target: Target, kind: GossipType) -> i32 {
         self.map.get(&target).map_or(0, |e| e[kind.index()])
     }
