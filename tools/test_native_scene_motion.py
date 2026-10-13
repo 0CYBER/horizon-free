@@ -334,6 +334,31 @@ def sprint_corpus():
     for gap in range(12):
         seq=[0,1,0]+[0]*gap+[1]*12+[0]*3+[65]*20+[1]*12+[0]
         yield dict(position=vec((12,4,0)),ops=[op('controlled_tick',k) for k in seq])
+    # Sprint-jumping: Player.jumpFromGround's forward impulse while sprinting,
+    # with sprint held (65) or started by double-tapping forward, and jump
+    # pressed with it, tapped, held through landings (bunny hops) or held
+    # before sprinting; at several headings, with too little food to sprint,
+    # under a two-block ceiling and up onto a slab.
+    runs={
+        'held':[65]*12+[81]+[65]*14+[81]*2+[65]*14+[0]*10,
+        'together':[0,81]+[81]*30+[0]*10,
+        'hop':[65]*8+[81]*40+[0]*10,
+        'jump_first':[16]*3+[17]*3+[81]*30+[0]*10,
+        'double_tap':[1,0,1]+[1]*12+[17]+[1]*14+[17]*25+[0]*10,
+        'release_sprint':[65]*10+[81]*6+[17]*20+[1]*10+[0]*5,
+    }
+    for name,seq in runs.items():
+        for yaw in [0,45,90,180,300]:
+            for food in [20,6]:
+                for scene in ['open','ceiling','slab']:
+                    ops=[op('food',food=food,saturation=single(5),exhaustion=single(0),timer=0),op('yaw',single(yaw))]
+                    blocks=[]
+                    if scene=='ceiling':blocks=[([8,6,8+i],'stone',{}) for i in range(14)]
+                    elif scene=='slab':blocks=[([8,4,12],'stone_slab',{'type':'bottom'}),([8,4,13],'stone',{})]
+                    ops += [op('block',name='minecraft:'+b,position=pos,properties=props) for pos,b,props in blocks]
+                    ops += [op('controlled_tick',k) for k in seq]
+                    ops += [op('block',name='minecraft:air',position=pos) for pos,_,_ in blocks]
+                    yield dict(position=vec((8.5,4,8.5)),ops=ops)
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--sprint-input',action='store_true');args=parser.parse_args()

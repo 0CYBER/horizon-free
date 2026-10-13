@@ -299,6 +299,11 @@ public final class VanillaCameraOracle {
                         + " " + fb(up.x()) + " " + fb(up.y()) + " " + fb(up.z())
                         + " " + fb(left.x()) + " " + fb(left.y()) + " " + fb(left.z())
                         + " " + camera.isDetached() + " " + fb(fv) + " " + fb(hv));
+                    // Camera.setupPerspective and GameRenderer.render3dHud's hudProjection:
+                    // Projection.getMatrix's setPerspective (planes reversed, zero-to-one depth).
+                    float w = f(op.get(4)), h = f(op.get(5)), far = f(op.get(6));
+                    out.println("projection" + matrix(new Matrix4f().setPerspective(fv * (float) (Math.PI / 180.0), w / h, far, 0.05F, true))
+                        + matrix(new Matrix4f().setPerspective(hv * (float) (Math.PI / 180.0), w / h, far, 0.05F, true)));
                 }
                 default -> throw new IllegalArgumentException(op.toString());
             }
@@ -386,6 +391,16 @@ public final class VanillaCameraOracle {
         }
         sb.append(' ').append(m.properties());
         out.println(sb);
+    }
+
+    static String matrix(Matrix4f m) {
+        var sb = new StringBuilder();
+        for (int col = 0; col < 4; col++) {
+            for (int row = 0; row < 4; row++) {
+                sb.append(' ').append(fb(m.get(col, row)));
+            }
+        }
+        return sb.toString();
     }
 
     static void avatar(JsonObject c, PrintWriter out) throws Exception {

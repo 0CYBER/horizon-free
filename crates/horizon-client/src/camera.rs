@@ -583,6 +583,44 @@ impl Camera {
         modify_fov_based_on_death_or_fluid(partial, 70.0, effect_scale, dead, fluid)
     }
 }
+/// `Projection.getMatrix` for a perspective set up by `setupPerspective`:
+/// JOML's `Matrix4f.setPerspective(fov * DEG_TO_RAD, width / height, near,
+/// far, zZeroToOne)`, column-major. Vanilla passes its planes reversed
+/// (`near` is `zFar`); the hand pass here keeps them in order.
+pub fn perspective(
+    fov_degrees: f32,
+    width: f32,
+    height: f32,
+    near: f32,
+    far: f32,
+    zero_to_one: bool,
+) -> [f32; 16] {
+    let h = horizon_core::jmath::tan(f64::from(fov_degrees * DEG_TO_RAD * 0.5)) as f32;
+    let aspect = width / height;
+    let mut m = [0.0f32; 16];
+    m[0] = 1.0 / (h * aspect);
+    m[5] = 1.0 / h;
+    let e = 1.0e-6f32;
+    if far > 0.0 && far.is_infinite() {
+        m[10] = e - 1.0;
+        m[14] = (e - if zero_to_one { 1.0 } else { 2.0 }) * near;
+    } else if near > 0.0 && near.is_infinite() {
+        m[10] = (if zero_to_one { 0.0 } else { 1.0 }) - e;
+        m[14] = ((if zero_to_one { 1.0 } else { 2.0 }) - e) * far;
+    } else {
+        m[10] = (if zero_to_one { far } else { far + near }) / (near - far);
+        m[14] = (if zero_to_one { far } else { far + far }) * near / (near - far);
+    }
+    m[11] = -1.0;
+    m
+}
+/// `GameRenderer.render3dHud`: the first-person hand and held items are
+/// drawn with their own projection at `hudFov` (70 degrees, changed only by
+/// death and fluids), never the FOV option or the sprint, speed and bow
+/// modifier.
+pub fn hand_projection(hud_fov: f32, width: f32, height: f32, far: f32) -> [f32; 16] {
+    perspective(hud_fov, width, height, 0.05, far, true)
+}
 /// `Camera.modifyFovBasedOnDeathOrFluid`. `dead` is the camera entity's
 /// `deathTime` while it is a living entity that is dead or dying.
 pub fn modify_fov_based_on_death_or_fluid(

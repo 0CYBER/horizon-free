@@ -297,8 +297,8 @@ impl Game<'_> {
         }
         let crouching = p.pose == Pose::Crouching;
         let (position, flying) = (p.position, p.flying || p.fall_flying);
-        let attack = self.swing_anim;
-        let swinging = self.swing.is_some();
+        let attack = (self.swing.old_animation, self.swing.animation);
+        let swinging = self.swing.swinging();
         let (yaw, pitch) = (self.yaw, self.pitch);
         let main = self.inventory[self.selected]
             .as_ref()

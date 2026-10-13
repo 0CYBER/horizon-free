@@ -86,6 +86,15 @@ impl Game<'_> {
             false,
         )
     }
+    /// `Camera.calculateHudFov`: the first-person hand's field of view.
+    pub(super) fn hud_fov_degrees(&self, partial: f32, camera: [f64; 3]) -> f32 {
+        self.view.calculate_hud_fov(
+            partial,
+            self.fov_effect_scale(),
+            self.death_time(),
+            self.camera_fluid(camera),
+        )
+    }
     /// The pose `GameRenderer.renderLevel` multiplies into the projection:
     /// `bobHurt`, then `bobView` with the View Bobbing option.
     pub(super) fn bob_matrix(&self, partial: f32) -> glam::Mat4 {

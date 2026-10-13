@@ -39,6 +39,7 @@ mod game_mode;
 mod ghasts;
 mod golems;
 mod growth;
+mod hand;
 mod item_draw;
 mod jukebox;
 mod lan;
@@ -685,12 +686,18 @@ struct Game<'a> {
     orbs: Vec<ExperienceOrb>,
     xp_delay: u32,
     last_level_up: u64,
-    /// Arm swing: ticks into the 6-tick swing (None when idle), previous/current progress.
-    swing: Option<u32>,
-    swing_anim: (f32, f32),
-    /// Main-hand equip height (previous, current) and the item it shows.
-    hand_height: (f32, f32),
-    hand_item: Option<ItemStack>,
+    /// The arm swing (`LivingEntity.SwingState`) and how many swings started.
+    swing: horizon_client::first_person::SwingState,
+    swings_started: u32,
+    /// The first-person equip heights and the items the hands show (with
+    /// the slot each came from).
+    heights: horizon_client::first_person::HandHeights,
+    visible_hands: [(usize, Option<ItemStack>); 2],
+    /// `Minecraft`'s attack handling, attack clicks since the last tick and
+    /// the attack strength tickers the hand reads.
+    clicks: horizon_client::first_person::Clicks,
+    attack_clicks: u32,
+    hand_strength: horizon_client::attack_strength::AttackStrength,
     settings: Settings,
     /// Where the options screen returns: true = title, false = pause menu.
     options_from_title: bool,
@@ -2789,7 +2796,7 @@ impl Game<'_> {
         // ticks; ServerLevel.tick then runs the scheduled and random block
         // ticks before any entity, so what they drop or spawn (dispensed
         // items, popped crops) moves on the tick it appears, as in vanilla.
-        self.tick_mining()?;
+        self.tick_local_hand()?;
         self.postprocess_chunks()?;
         if running {
             self.tick_blocks()?;
@@ -2841,7 +2848,7 @@ impl Game<'_> {
             self.tick_particles();
         }
         if self.right && self.use_delay == 0 && self.screen == Screen::Playing {
-            self.use_item()?;
+            self.use_with_hand()?;
             self.use_delay = 4;
         }
         Ok(())
@@ -6374,38 +6381,6 @@ impl Game<'_> {
         }
         self.damage_held(1);
     }
-    /// LivingEntity.swing: restart the 6-tick arm swing.
-    fn swing_arm(&mut self) {
-        if self.swing.is_none_or(|t| t >= 3) {
-            self.swing = Some(0);
-        }
-    }
-    /// LivingEntity.updateSwingTime and ItemInHandRenderer.tick (equip height).
-    fn tick_hand(&mut self) {
-        self.swing_anim.0 = self.swing_anim.1;
-        if let Some(t) = self.swing {
-            let t = t + 1;
-            if t >= 6 {
-                self.swing = None;
-                self.swing_anim.1 = 0.0;
-            } else {
-                self.swing = Some(t);
-                self.swing_anim.1 = t as f32 / 6.0;
-            }
-        }
-        self.hand_height.0 = self.hand_height.1;
-        let held = self.inventory[self.selected].clone();
-        let same = match (&held, &self.hand_item) {
-            (Some(a), Some(b)) => a.item == b.item,
-            (None, None) => true,
-            _ => false,
-        };
-        let target = if same { 1.0 } else { 0.0 };
-        self.hand_height.1 += (target - self.hand_height.1).clamp(-0.4, 0.4);
-        if self.hand_height.1 < 0.1 {
-            self.hand_item = held;
-        }
-    }
     /// FirstPersonHandsAndItemsRenderer: the right arm or held item in view
     /// space, converted to camera-relative world space.
     fn hand_geometry(&mut self, alpha: f64) -> Vec<Vertex> {
@@ -6423,14 +6398,15 @@ impl Game<'_> {
             return out;
         }
         let a = alpha as f32;
-        let attack = self.swing_anim.0 + (self.swing_anim.1 - self.swing_anim.0) * a;
-        let attack = if self.swing.is_none() && self.swing_anim.1 == 0.0 {
-            0.0
+        // FirstPersonHandsAndItemsRenderer: the swing of the hand that
+        // swings, and its inverse arm height (the swap scale is 1 for every
+        // item but spears).
+        let attack = if self.swing.attack_hand() == horizon_client::first_person::Hand::Main {
+            self.swing.animation(a)
         } else {
-            attack
+            0.0
         };
-        let height = self.hand_height.0 + (self.hand_height.1 - self.hand_height.0) * a;
-        let inverse_height = 1.0 - height;
+        let inverse_height = 1.0 - self.heights.interpolated(a)[0];
         let (yaw, pitch) = (self.yaw.to_radians(), self.pitch.to_radians());
         let forward = glam::Vec3::new(
             -yaw.sin() * pitch.cos(),
@@ -6451,7 +6427,8 @@ impl Game<'_> {
         if self.held_map_geometry(to_world, attack, inverse_height, packed, &mut out) {
             return out;
         }
-        match self.hand_item.clone() {
+        let [main_item, _] = self.visible_hand_items();
+        match main_item {
             None => {
                 let Some(arm) = self.res.player_arm.clone() else {
                     return out;
@@ -7319,6 +7296,7 @@ impl Game<'_> {
             additive: &additive,
             celestial: &celestial,
             hand: &hand,
+            hand_fov_degrees: self.hud_fov_degrees(alpha as f32, camera.to_array()),
             screen: &screen,
             border,
             game_time: self.world.game_time as f32,
@@ -7491,22 +7469,20 @@ impl Game<'_> {
         }
         match button {
             MouseButton::Left => {
-                if pressed && self.attack() {
-                    return Ok(());
+                // KeyMapping.click: Minecraft.tick starts the attack.
+                if pressed {
+                    self.attack_clicks += 1;
                 }
                 self.toggles
                     .button(2, pressed, false, self.settings.toggle_attack);
                 self.left = self.toggles.is_down(2);
-                if pressed {
-                    self.destroy_delay = 0;
-                }
             }
             MouseButton::Right => {
                 self.toggles
                     .button(3, pressed, false, self.settings.toggle_use);
                 self.right = self.toggles.is_down(3);
                 if pressed {
-                    self.use_item()?;
+                    self.use_with_hand()?;
                     self.use_delay = 4;
                 }
             }
@@ -8357,10 +8333,13 @@ pub fn run() -> Result<()> {
         orbs: Vec::new(),
         xp_delay: 0,
         last_level_up: 0,
-        swing: None,
-        swing_anim: (0.0, 0.0),
-        hand_height: (1.0, 1.0),
-        hand_item: None,
+        swing: Default::default(),
+        swings_started: 0,
+        heights: Default::default(),
+        visible_hands: [(0, None), (0, None)],
+        clicks: Default::default(),
+        attack_clicks: 0,
+        hand_strength: Default::default(),
         settings,
         options_from_title: false,
         dragging: false,

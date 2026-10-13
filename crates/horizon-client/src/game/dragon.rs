@@ -722,10 +722,9 @@ impl Game<'_> {
             .play("minecraft:entity.ender_dragon.hurt", Some(at), 5.0, pitch);
     }
     /// Player melee on the dragon's parts or a crystal under the crosshair.
-    pub(super) fn attack_dragon(&mut self) -> bool {
-        let Some(eye) = self.eye_position() else {
-            return false;
-        };
+    /// The dragon part under the crosshair within reach: its id and distance.
+    pub(super) fn dragon_hit(&self) -> Option<(u32, f64)> {
+        let eye = self.eye_position()?;
         let dir = super::view_vector(self.yaw, self.pitch);
         let reach: f64 = if self.creative { 5.0 } else { 3.0 };
         let mut best: Option<(u32, f64)> = None;
@@ -750,7 +749,12 @@ impl Game<'_> {
                 best = Some((id, t0));
             }
         }
-        let Some((id, d)) = best else { return false };
+        best
+    }
+    pub(super) fn attack_dragon(&mut self) -> bool {
+        let Some((id, d)) = self.dragon_hit() else {
+            return false;
+        };
         if !self.before_block(d) || self.mob_hit().is_some_and(|m| m.1 < d) {
             return false;
         }
