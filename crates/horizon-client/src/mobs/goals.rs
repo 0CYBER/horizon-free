@@ -346,12 +346,13 @@ impl Mob {
         let water = w.fluid(p[0], p[1], p[2]) == crate::blocks::Fluid::Water;
         (!water && self.malus(w.path_type_static(p[0], p[1], p[2])) == 0.0).then_some(p)
     }
-    /// `Entity.getViewVector(0)`: `calculateViewVector(xRotO, yRotO)`.
+    /// `Entity.getViewVector(0)`: `calculateViewVector(xRotO, yHeadRotO)`.
     pub fn view_vector(&self) -> [f64; 3] {
         use horizon_core::geometry::trig::Mth;
         let to_rad = std::f32::consts::PI / 180.0;
         let x = self.previous_head_pitch * to_rad;
-        let y = -self.previous_yaw * to_rad;
+        // LivingEntity.getViewYRot(0): the head's yaw of the last tick.
+        let y = -self.previous_head_yaw * to_rad;
         let (y_cos, y_sin, x_cos, x_sin) = (y.mcos(), y.msin(), x.mcos(), x.msin());
         [
             f64::from(y_sin * x_cos),
@@ -378,7 +379,8 @@ impl Mob {
                 fly_height,
                 xd,
                 zd,
-                std::f64::consts::FRAC_PI_2,
+                // Every caller passes `(float) (Math.PI / 2)`.
+                f64::from(std::f32::consts::FRAC_PI_2),
             )?;
             let mut p = m.toward(f64::from(h), d);
             if p[1] < crate::chunk::MIN_Y || p[1] >= 320 || m.restricted(f64::from(h), p) {

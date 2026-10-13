@@ -659,7 +659,10 @@ fn block_pos_format(cx: &mut Cx) {
 
 // ------------------------------------------------------------------ 3814
 
-fn attributes_rename_legacy(cx: &mut Cx, rename_fn: &dyn Fn(&str) -> Option<&'static str>) {
+pub(super) fn attributes_rename_legacy(
+    cx: &mut Cx,
+    rename_fn: &dyn Fn(&str) -> Option<&'static str>,
+) {
     let fix_name = |v: &mut Tag, field: &str| {
         if let Some(name) = as_str(v.get(field))
             && let Some(new) = rename_fn(&name)

@@ -269,6 +269,32 @@ public final class VanillaSculkOracle {
 
     static Object get(Object o, String name) throws Exception { return field(o.getClass(), name).get(o); }
 
+    /**
+     * A mob's own random, its sensors' first delays and its gates' shuffles (RunOne's ShufflingList)
+     * are unseeded: seed what appeared, as Horizon does.
+     */
+    static void seedFresh(Mob mob, long seed) throws Exception {
+        mob.getRandom().setSeed(seed);
+        @SuppressWarnings("unchecked")
+        Map<Object, net.minecraft.world.entity.ai.sensing.Sensor<?>> sensors =
+            (Map<Object, net.minecraft.world.entity.ai.sensing.Sensor<?>>) get(mob.getBrain(), "sensors");
+        for (var sensor : sensors.values()) sensor.randomlyDelayStart(mob.getRandom());
+        @SuppressWarnings("unchecked")
+        Map<Integer, Map<?, Set<net.minecraft.world.entity.ai.behavior.BehaviorControl<?>>>> byPriority =
+            (Map<Integer, Map<?, Set<net.minecraft.world.entity.ai.behavior.BehaviorControl<?>>>>) get(mob.getBrain(), "availableBehaviorsByPriority");
+        for (var byActivity : byPriority.values())
+            for (var behaviors : byActivity.values())
+                for (var behavior : behaviors) seedGate(behavior, seed);
+    }
+
+    static void seedGate(Object behavior, long seed) throws Exception {
+        if (!(behavior instanceof net.minecraft.world.entity.ai.behavior.GateBehavior<?>)) return;
+        var list = (net.minecraft.world.entity.ai.behavior.ShufflingList<?>)
+            field(net.minecraft.world.entity.ai.behavior.GateBehavior.class, "behaviors").get(behavior);
+        field(net.minecraft.world.entity.ai.behavior.ShufflingList.class, "random").set(list, new LegacyRandomSource(seed));
+        for (Object child : list) seedGate(child, seed);
+    }
+
     static long seedOf(Object random) throws Exception {
         return ((java.util.concurrent.atomic.AtomicLong) field(LegacyRandomSource.class, "seed").get(random)).get();
     }
@@ -538,6 +564,7 @@ public final class VanillaSculkOracle {
             Method managerTick = method(manager.getClass(), "tick");
             managerTick.invoke(manager);
             Set<Entity> known = new HashSet<>();
+            Set<Entity> seeded = new HashSet<>();
             for (Entity e : allEntities(level)) known.add(e);
             if (System.getenv("SCULK_TRACE") != null) field(Level.class, "random").set(level, new TracingRandom(0L));
             level.getRandom().setSeed(s.levelSeed);
@@ -563,6 +590,13 @@ public final class VanillaSculkOracle {
                     });
                     runBlockEvents.invoke(level);
                     for (Action a : s.actions) if (a.tick == t) act(level, a.words, mobs);
+                    // Mobs that appeared during the block ticks (a summoned warden) tick in this
+                    // tick's entity phase: seed them now, as they are seeded below.
+                    List<Entity> born = new ArrayList<>();
+                    for (Entity e : allEntities(level)) if (!known.contains(e)) born.add(e);
+                    born.sort(Comparator.comparingInt(Entity::getId));
+                    for (int i = 0; i < born.size(); i++)
+                        if (born.get(i) instanceof Mob mob && seeded.add(mob)) seedFresh(mob, 0x5eedL + names.size() + i + 1);
                     // The player first (it joined first): only its warden spawn tracker.
                     player.getWardenSpawnTracker().tick();
                     tickList.forEach(e -> {
@@ -611,13 +645,7 @@ public final class VanillaSculkOracle {
                     known.add(e);
                     names.put(e, "n" + names.size());
                     // An entity's own random is unseeded: seed what appeared, as Horizon does.
-                    if (e instanceof Mob mob) {
-                        mob.getRandom().setSeed(0x5eedL + names.size());
-                        @SuppressWarnings("unchecked")
-                        Map<Object, net.minecraft.world.entity.ai.sensing.Sensor<?>> sensors =
-                            (Map<Object, net.minecraft.world.entity.ai.sensing.Sensor<?>>) get(mob.getBrain(), "sensors");
-                        for (var sensor : sensors.values()) sensor.randomlyDelayStart(mob.getRandom());
-                    }
+                    if (e instanceof Mob mob && seeded.add(mob)) seedFresh(mob, 0x5eedL + names.size());
                     if (e instanceof net.minecraft.world.entity.ExperienceOrb orb) {
                         // Where an orb flies comes from its own unseeded random: its value only.
                         lines.add("new minecraft:experience_orb value=" + orb.getValue());

@@ -1,21 +1,28 @@
-//! Vanilla's DataFixers from the 1.19 schemas on (`net.minecraft.util.datafix`):
-//! the data of worlds saved by 1.18.2 to 26.2 brought to the 26.3 format exactly
+//! Vanilla's DataFixers (`net.minecraft.util.datafix`, DataVersion 99 on):
+//! the data of worlds saved by 1.8 to 26.2 brought to the 26.3 format exactly
 //! as 26.3 does when it reads them, and the file fixes it runs when it opens
 //! such a world (`net.minecraft.util.filefix`).
 //!
 //! DataFixerUpper reads the data once with the schema of its version (running
 //! the schema's read hooks), applies every fix with a key above that version
 //! in order, and writes it with the current schema. Each fix finds its values
-//! with the schema just below its own key ([`schema`]). Data older than
-//! [`OLDEST_SUPPORTED`] needs fixes that are not ported. The fixes of client
+//! with the schema just below its own key ([`schema`]). Every
+//! fix of the server data is ported ([`OLDEST_SUPPORTED`]). The fixes of client
 //! files (options, hotbars, debug profiles) are not ported either.
+mod block_state_data;
+mod chunk_flatten;
+mod chunk_leaves;
 pub mod dynamic;
 pub mod files;
 mod fixes_a;
 mod fixes_b;
 mod fixes_c;
 mod fixes_cliffs;
+mod fixes_flat;
+mod fixes_legacy;
+mod fixes_mid;
 mod fixes_old;
+mod flat_tables;
 mod items;
 pub mod json;
 pub mod schema;
@@ -27,9 +34,9 @@ use schema::{Key, Ty, key, walk};
 
 /// The DataVersion of the game.
 pub const CURRENT: i32 = crate::DATA_VERSION;
-/// Data saved before this DataVersion (1.17 is 2724) needs fixes that are not
-/// ported (2717 and everything before).
-pub const OLDEST_SUPPORTED: i32 = 2724;
+/// Data saved before this DataVersion needs fixes that are not ported. Every
+/// server fix is, down to the saves of 1.8, which have no DataVersion (read as -1).
+pub const OLDEST_SUPPORTED: i32 = -1;
 
 /// `Identifier.tryParse` validity, as `NamespacedSchema.ensureNamespaced` uses it.
 pub fn identifier(id: &str) -> Option<(String, String)> {
@@ -126,6 +133,9 @@ pub fn reread(k: Key, e: &mut Tag) {
 
 /// [`reread`] for a value of another type (a block entity).
 pub fn reread_as(ty: Ty, k: Key, v: &mut Tag) {
+    // What was untyped is read again with the new schema.
+    schema::flat::strip_untyped(v);
+    schema::flat::mark_untyped(ty, v, k);
     walk(ty, v, k, Ty::BlockEntity, &mut mark_read);
     walk(ty, v, k, Ty::Entity, &mut mark_read);
 }
@@ -145,6 +155,7 @@ fn strip_last_read(v: &mut Tag) {
     match v {
         Tag::Compound(c) => {
             c.remove(&dynamic::key(LAST_READ));
+            c.remove(&dynamic::key(schema::flat::UNTYPED));
             for value in c.values_mut() {
                 strip_last_read(value);
             }
@@ -177,11 +188,16 @@ type FixFn = fn(&mut Cx);
 /// Every ported fix (from the 1.19 schemas on), in DataFixers order.
 fn fixes() -> Vec<(Key, FixFn)> {
     let mut out = Vec::new();
+    fixes_legacy::register(&mut out);
+    fixes_flat::register(&mut out);
+    fixes_mid::register(&mut out);
     fixes_cliffs::register(&mut out);
     fixes_old::register(&mut out);
     fixes_a::register(&mut out);
     fixes_b::register(&mut out);
     fixes_c::register(&mut out);
+    // DataFixerBuilder sorts the fixes of equal keys by registration, the rest by key.
+    out.sort_by_key(|(k, _)| *k);
     out
 }
 
@@ -195,10 +211,30 @@ pub fn update(root: Ty, data: &mut Tag, from: i32, to: i32) {
     // The data is read once with the schema of its version (its read hooks)...
     walk(root, data, from_key, Ty::BlockEntity, &mut mark_read);
     walk(root, data, from_key, Ty::Entity, &mut mark_read);
+    schema::flat::mark_untyped(root, data, from_key);
     read_hooks(root, data, from_key);
     // ...then every fix above that key, up to the target version...
+    let mut refreshed = from_key >= schema::flat::END;
     for (k, fix) in fixes() {
         if k > from_key && k / 10 <= to_version {
+            if !refreshed && k >= schema::flat::END {
+                // The data of before 1.14 is read again once its own fixes are done.
+                refreshed = true;
+                walk(
+                    root,
+                    data,
+                    schema::flat::END - 1,
+                    Ty::BlockEntity,
+                    &mut mark_read,
+                );
+                walk(
+                    root,
+                    data,
+                    schema::flat::END - 1,
+                    Ty::Entity,
+                    &mut mark_read,
+                );
+            }
             fix(&mut Cx { root, data, k });
         }
     }
@@ -211,13 +247,34 @@ pub fn update(root: Ty, data: &mut Tag, from: i32, to: i32) {
 fn read_hooks(root: Ty, data: &mut Tag, k: Key) {
     walk(root, data, k, Ty::ItemStack, &mut |stack| {
         if k < key(3818, 5) {
-            items::add_names(stack);
+            items::add_names_at(stack, k);
         } else if let Tag::String(_) = stack {
             // V3818_5 UNPACK_PLAIN_ID: a bare item id is a stack of one.
             *stack = Tag::compound([("id", stack.clone()), ("count", Tag::Int(1))]);
         }
     });
-    walk(root, data, k, Ty::Objective, &mut fixes_a::unpack_objective);
+    if k >= key(1451, 6) {
+        walk(root, data, k, Ty::Objective, &mut fixes_a::unpack_objective);
+    }
+    // Block names are numbers or namespaced strings until V1451_4: a number is read as an
+    // int and written as one.
+    walk(root, data, k, Ty::BlockName, &mut |name| {
+        if let Some(n) = as_str(Some(name)) {
+            *name = string(&dynamic::namespaced(&n));
+        } else if k < key(1451, 4)
+            && let Some(n) = dynamic::as_number(name)
+        {
+            *name = Tag::Int(n.int_value());
+        }
+    });
+    // Namespaced name types read their strings with `ensureNamespaced`.
+    for ty in [Ty::Biome, Ty::EntityName, Ty::ItemName] {
+        walk(root, data, k, ty, &mut |name| {
+            if let Some(n) = as_str(Some(name)) {
+                *name = string(&dynamic::namespaced(&n));
+            }
+        });
+    }
 }
 
 fn write_hooks(root: Ty, data: &mut Tag, k: Key) {
@@ -227,8 +284,14 @@ fn write_hooks(root: Ty, data: &mut Tag, k: Key) {
 /// `SimpleRegionStorage.upgradeChunkTag` for a region chunk (`ChunkMap`):
 /// the dimension and generator are passed to the fixes as `__context`.
 pub fn update_chunk(tag: &mut Tag, dimension: &str, generator: Option<&str>) {
+    update_chunk_to(tag, dimension, generator, CURRENT);
+}
+
+/// [`update_chunk`] up to an older DataVersion than the current one (the
+/// harness checks the fixes of a range of versions on their own).
+pub fn update_chunk_to(tag: &mut Tag, dimension: &str, generator: Option<&str>, to: i32) {
     let version = dynamic::as_int(tag.get("DataVersion"), -1);
-    if version >= CURRENT {
+    if version >= to {
         return;
     }
     let mut context = Tag::compound([("dimension", string(dimension))]);
@@ -236,27 +299,39 @@ pub fn update_chunk(tag: &mut Tag, dimension: &str, generator: Option<&str>) {
         dynamic::set(&mut context, "generator", string(g));
     }
     dynamic::set(tag, "__context", context);
-    update(Ty::Chunk, tag, version, CURRENT);
+    update(Ty::Chunk, tag, version, to);
     dynamic::remove(tag, "__context");
-    dynamic::set(tag, "DataVersion", Tag::Int(CURRENT));
+    dynamic::set(tag, "DataVersion", Tag::Int(to));
 }
 
 /// `SimpleRegionStorage.upgradeChunkTag` for entity chunks (default version -1)
 /// and POI chunks (default 1945).
 pub fn update_region_tag(root: Ty, tag: &mut Tag) {
+    update_region_tag_to(root, tag, CURRENT);
+}
+
+/// [`update_region_tag`] up to an older DataVersion.
+pub fn update_region_tag_to(root: Ty, tag: &mut Tag, to: i32) {
     let default = if root == Ty::PoiChunk { 1945 } else { -1 };
     let version = dynamic::as_int(tag.get("DataVersion"), default);
-    if version >= CURRENT {
+    if version >= to {
         return;
     }
-    update(root, tag, version, CURRENT);
-    dynamic::set(tag, "DataVersion", Tag::Int(CURRENT));
+    update(root, tag, version, to);
+    dynamic::set(tag, "DataVersion", Tag::Int(to));
 }
 
 /// `PlayerDataStorage.load`: the DataVersion field stays as loaded.
 pub fn update_player(tag: &mut Tag) {
     let version = dynamic::as_int(tag.get("DataVersion"), -1);
     update(Ty::Player, tag, version, CURRENT);
+}
+
+/// [`update_player`] up to an older DataVersion.
+pub fn update_player_to(tag: &mut Tag, to: i32) {
+    let version = dynamic::as_int(tag.get("DataVersion"), -1);
+    update(Ty::Player, tag, version, to);
+    dynamic::set(tag, "DataVersion", Tag::Int(to));
 }
 
 /// The saved data type of a file below a `data` folder (`namespace/path.dat`).

@@ -21,6 +21,8 @@ import net.minecraft.server.Bootstrap;
 import net.minecraft.server.level.ChunkMap;
 import net.minecraft.util.datafix.DataFixTypes;
 import net.minecraft.util.datafix.DataFixers;
+import net.minecraft.util.filefix.FileFix;
+import net.minecraft.util.filefix.FileFixerUpper;
 import net.minecraft.util.worldupdate.UpgradeProgress;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
@@ -55,6 +57,10 @@ public final class VanillaDataFixOracle {
         Path out = Path.of(args[1]);
         delete(out);
         copy(in, out);
+        if (args.length > 2) {
+            band(out, Integer.parseInt(args[2]));
+            System.exit(0);
+        }
         int current = SharedConstants.getCurrentVersion().dataVersion().version();
         var fixer = DataFixers.getDataFixer();
         // FileFixerUpper.fix through a real level storage access, as the game opens a
@@ -110,6 +116,74 @@ public final class VanillaDataFixOracle {
             Files.writeString(file, GSON.toJson(fixed.getValue()), StandardCharsets.UTF_8);
         }
         System.exit(0);
+    }
+
+    /**
+     * The data fixes up to a target DataVersion on a world in the layout of before
+     * 1.16, without the file fixes: lets the fixes of a range of versions be checked
+     * on their own, whatever the later fixes do to the same data.
+     */
+    private static void band(Path out, int target) throws Exception {
+        var fixer = DataFixers.getDataFixer();
+        // The file fixes of the range (1493, LegacyStructureFileFix), as FileFixerUpper runs them
+        // (in place; the copy-on-write view and the level.dat rewrite are not what is checked).
+        var fileFixes = FileFixerUpper.class.getDeclaredField("fileFixes");
+        fileFixes.setAccessible(true);
+        for (Object o : (List<?>) fileFixes.get(DataFixers.getFileFixer())) {
+            FileFix fileFix = (FileFix) o;
+            if (fileFix.getVersion() <= target) {
+                fileFix.runFixOperations(out, new UpgradeProgress());
+            }
+        }
+        Path levelFile = out.resolve("level.dat");
+        if (Files.exists(levelFile)) {
+            CompoundTag root = NbtIo.readCompressed(levelFile, NbtAccounter.unlimitedHeap());
+            CompoundTag data = root.getCompoundOrEmpty("Data");
+            int from = NbtUtils.getDataVersion(data, -1);
+            data = DataFixTypes.LEVEL.update(fixer, data, from, target);
+            root.put("Data", NbtUtils.addDataVersion(data, target));
+            NbtIo.writeCompressed(root, levelFile);
+        }
+        String[][] dims = {{"", "minecraft:overworld"}, {"DIM-1", "minecraft:the_nether"}, {"DIM1", "minecraft:the_end"}};
+        for (String[] d : dims) {
+            Path dim = d[0].isEmpty() ? out : out.resolve(d[0]);
+            ResourceKey<Level> key = ResourceKey.create(Registries.DIMENSION, Identifier.parse(d[1]));
+            CompoundTag context = ChunkMap.getChunkDataFixContextTag(key, Optional.empty());
+            upgradeRegions(dim.resolve("region"), key, "chunk", DataFixTypes.CHUNK, -1, context, target);
+            upgradeRegions(dim.resolve("entities"), key, "entities", DataFixTypes.ENTITY_CHUNK, -1, null, target);
+            upgradeRegions(dim.resolve("poi"), key, "poi", DataFixTypes.POI_CHUNK, 1945, null, target);
+        }
+        for (Path file : list(out.resolve("playerdata"), ".dat")) {
+            CompoundTag tag = NbtIo.readCompressed(file, NbtAccounter.unlimitedHeap());
+            tag = DataFixTypes.PLAYER.update(fixer, tag, NbtUtils.getDataVersion(tag), target);
+            NbtIo.writeCompressed(NbtUtils.addDataVersion(tag, target), file);
+        }
+        upgradeJson(out.resolve("advancements"), DataFixTypes.ADVANCEMENTS, true, target);
+        upgradeJson(out.resolve("stats"), DataFixTypes.STATS, false, target);
+        // The saved data of the old layout (data/scoreboard.dat, data/map_N.dat).
+        for (Path file : list(out.resolve("data"), ".dat")) {
+            String name = file.getFileName().toString().replace(".dat", "");
+            DataFixTypes type = name.equals("scoreboard") ? DataFixTypes.SAVED_DATA_SCOREBOARD
+                : name.matches("map_\\d+") ? DataFixTypes.SAVED_DATA_MAP_DATA : null;
+            if (type != null) {
+                CompoundTag tag = NbtIo.readCompressed(file, NbtAccounter.unlimitedHeap());
+                tag = type.update(fixer, tag, NbtUtils.getDataVersion(tag, 1343), target);
+                NbtIo.writeCompressed(NbtUtils.addDataVersion(tag, target), file);
+            }
+        }
+    }
+
+    private static void upgradeJson(Path folder, DataFixTypes type, boolean removeVersion, int target) throws Exception {
+        var fixer = DataFixers.getDataFixer();
+        for (Path file : list(folder, ".json")) {
+            JsonElement json = JsonParser.parseString(Files.readString(file, StandardCharsets.UTF_8));
+            var dynamic = new Dynamic<>(JsonOps.INSTANCE, json);
+            int from = NbtUtils.getDataVersion(dynamic, 1343);
+            var input = removeVersion ? dynamic.remove("DataVersion") : dynamic;
+            var fixed = type.update(fixer, input, from, target);
+            fixed = fixed.set("DataVersion", fixed.createInt(target));
+            Files.writeString(file, GSON.toJson(fixed.getValue()), StandardCharsets.UTF_8);
+        }
     }
 
     /** Chunk generator type per dimension, from the saved world generation settings. */
@@ -192,7 +266,11 @@ public final class VanillaDataFixOracle {
             if (type == null) {
                 continue;
             }
-            CompoundTag tag = NbtIo.readCompressed(file, NbtAccounter.unlimitedHeap());
+            // SavedDataStorage.readTagFromDisk: a file that does not start with the gzip header is plain NBT.
+            byte[] bytes = Files.readAllBytes(file);
+            boolean gzip = bytes.length >= 2 && (bytes[0] & 255) == 0x1f && (bytes[1] & 255) == 0x8b;
+            CompoundTag tag = gzip ? NbtIo.readCompressed(file, NbtAccounter.unlimitedHeap())
+                : NbtIo.read(new java.io.DataInputStream(new java.io.ByteArrayInputStream(bytes)));
             int version = NbtUtils.getDataVersion(tag, 1343);
             tag = type.update(fixer, tag, version, current);
             NbtIo.writeCompressed(NbtUtils.addDataVersion(tag, current), file);

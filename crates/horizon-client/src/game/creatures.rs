@@ -646,7 +646,10 @@ impl Game<'_> {
                     volume,
                     spread,
                 } => {
-                    let r = &mut self.world.random;
+                    // The client's own level random: nothing drawn from the server's.
+                    let mut r = horizon_core::random::LegacyRandom::new(
+                        self.world.game_time.wrapping_mul(341_873_128_712),
+                    );
                     let pitch = (r.next_float() - r.next_float()) * spread + 1.0;
                     self.audio
                         .play(&format!("minecraft:{sound}"), Some(at), volume, pitch)
@@ -654,6 +657,9 @@ impl Game<'_> {
                 MobEvent::SoundId(name, at, volume, pitch) => {
                     self.audio.play(&name, Some(at), volume, pitch)
                 }
+                // The sculk layer tracks the game's steps itself
+                // (`entity_motion_events`).
+                MobEvent::GameEvent { .. } => {}
                 MobEvent::AttackPlayer(amount, from) => {
                     self.mob_hits_player(amount, from, "minecraft:mob_attack")
                 }
