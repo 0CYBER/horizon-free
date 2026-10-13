@@ -44,24 +44,6 @@ const BUTTON: f32 = 14.0;
 fn inside(p: (f32, f32), x: f32, y: f32, w: f32, h: f32) -> bool {
     p.0 >= x && p.1 >= y && p.0 < x + w && p.1 < y + h
 }
-/// A sub-rectangle of a sprite given in texels.
-fn sub_rect(r: Rect, [x, y, w, h]: [f32; 4]) -> Rect {
-    let (du, dv) = ((r.u1 - r.u0) / r.w as f32, (r.v1 - r.v0) / r.h as f32);
-    Rect {
-        u0: r.u0 + x * du,
-        v0: r.v0 + y * dv,
-        u1: r.u0 + (x + w) * du,
-        v1: r.v0 + (y + h) * dv,
-        w: w as u32,
-        h: h as u32,
-    }
-}
-/// A dye's tint as a HUD vertex colour.
-pub(super) fn dye_color(name: &str) -> u32 {
-    let c = banner::dye_rgb(name);
-    rgba((c >> 16) as u8, (c >> 8) as u8, c as u8, 255)
-}
-
 impl Game<'_> {
     /// `LoomScreen.containerChanged`: the error flag, whether the pattern
     /// buttons show (only when an input changed), and the scroller reset.
@@ -182,30 +164,30 @@ impl Game<'_> {
             l.start_row = l.row_for(l.scroll);
         }
     }
-    /// A banner flag's front face (`BannerFlagModel`, 20x40 texels at (1, 1))
-    /// drawn flat: the cloth, the base colour and every layer.
-    pub(super) fn draw_flag(
+    /// `GuiGraphicsExtractor.bannerPattern`: the banner flag model with its
+    /// layers in a 20x40 picture in picture at `(x, y)`.
+    fn draw_banner_result(
         &self,
         batch: &mut HudBatch,
-        rect: [f32; 4],
+        x: f32,
+        y: f32,
         base: &str,
         layers: &[BannerLayer],
     ) {
         let banners = &self.res.stations.banners;
-        let mut paint = |name: &str, color: u32| {
-            if let Some(r) = self.res.atlas.sprites.get(name).copied() {
-                let uv = sub_rect(r, [1.0, 1.0, 20.0, 40.0]);
-                batch.rect_uv(rect[0], rect[1], rect[2], rect[3], uv, color);
-            }
-        };
-        paint("entity/banner/banner_base", u32::MAX);
-        paint("entity/banner/base", dye_color(base));
-        for layer in layers.iter().take(16) {
-            paint(
-                &banners.banner_texture(&layer.pattern),
-                dye_color(&layer.color),
-            );
-        }
+        let layers: Vec<(String, String)> = layers
+            .iter()
+            .map(|l| (banners.banner_texture(&l.pattern), l.color.to_string()))
+            .collect();
+        horizon_client::item_render::gui::draw_banner_result(
+            &self.res.item_renderer,
+            &self.res.atlas.sprites,
+            batch,
+            x,
+            y,
+            base,
+            &layers,
+        );
     }
     /// Paints `screen_layout` calls at the menu origin (ox, oy): the container
     /// background and the dimmed world are drawn by the caller.
@@ -256,19 +238,8 @@ impl Game<'_> {
                     layers,
                     x0,
                     y0,
-                    x1,
-                    y1,
-                } => self.draw_flag(
-                    batch,
-                    [
-                        ox + *x0 as f32,
-                        oy + *y0 as f32,
-                        (x1 - x0) as f32,
-                        (y1 - y0) as f32,
-                    ],
-                    base,
-                    layers,
-                ),
+                    ..
+                } => self.draw_banner_result(batch, ox + *x0 as f32, oy + *y0 as f32, base, layers),
                 ScreenDraw::Tooltip { key } => {
                     tooltip = Some(vec![(self.translate(key, key), u32::MAX)]);
                 }

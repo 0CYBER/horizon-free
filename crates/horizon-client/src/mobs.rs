@@ -25,6 +25,7 @@ pub mod drops;
 pub mod enderman;
 pub mod equine;
 pub mod farm;
+pub mod finalize;
 pub mod gear;
 pub mod goals;
 pub mod golem;
@@ -206,6 +207,8 @@ pub struct MobType {
     pub armor_toughness: f32,
     pub knockback_resistance: f64,
     pub jump_strength: f64,
+    /// Every default attribute value of the type (`entity-types.json`).
+    pub attributes: Arc<HashMap<String, f64>>,
     pub gravity: f64,
     pub safe_fall_distance: f64,
     pub fall_damage_multiplier: f64,
@@ -239,12 +242,35 @@ impl MobType {
         self.layers.get(key)
     }
 }
+/// Each type's default attribute values, parsed exactly (serde_json's
+/// default float parsing can miss the nearest double by one ulp).
+fn exact_attributes(bytes: &[u8]) -> HashMap<String, HashMap<String, f64>> {
+    use serde_json::value::RawValue;
+    type Raw = HashMap<String, Box<RawValue>>;
+    let Ok(types) = serde_json::from_slice::<Raw>(bytes) else {
+        return HashMap::new();
+    };
+    types
+        .into_iter()
+        .filter_map(|(id, t)| {
+            let t: Raw = serde_json::from_str(t.get()).ok()?;
+            let attrs: Raw = serde_json::from_str(t.get("attributes")?.get()).ok()?;
+            let values = attrs
+                .into_iter()
+                .filter_map(|(k, v)| v.get().trim().parse::<f64>().ok().map(|v| (k, v)))
+                .collect();
+            Some((id, values))
+        })
+        .collect()
+}
 pub struct MobTypes {
     pub types: HashMap<String, MobType>,
 }
 impl MobTypes {
     pub fn load(root: &Path) -> crate::Result<Self> {
-        let types: Value = serde_json::from_slice(&fs::read(root.join("entity-types.json"))?)?;
+        let bytes = fs::read(root.join("entity-types.json"))?;
+        let types: Value = serde_json::from_slice(&bytes)?;
+        let exact = exact_attributes(&bytes);
         let models: Value = serde_json::from_slice(&fs::read(root.join("entity-models.json"))?)?;
         let item_tags = crate::items::load_tags(root, "item").unwrap_or_default();
         sulfur_cube::load_archetype_items(&item_tags);
@@ -269,7 +295,8 @@ impl MobTypes {
             let Some(model) = models.get(&model_key) else {
                 continue;
             };
-            let attr = |k: &str| t["attributes"][format!("minecraft:{k}")].as_f64();
+            let defaults = exact.get(&id).cloned().unwrap_or_default();
+            let attr = |k: &str| defaults.get(&format!("minecraft:{k}")).copied();
             let mut layers = HashMap::new();
             if let Some(all) = models.as_object() {
                 for prefix in def.layer_prefixes() {
@@ -303,6 +330,7 @@ impl MobTypes {
                     armor_toughness: attr("armor_toughness").unwrap_or(0.0) as f32,
                     knockback_resistance: attr("knockback_resistance").unwrap_or(0.0),
                     jump_strength: attr("jump_strength").unwrap_or(0.42),
+                    attributes: Arc::new(defaults.clone()),
                     gravity: attr("gravity").unwrap_or(0.08),
                     safe_fall_distance: attr("safe_fall_distance").unwrap_or(3.0),
                     fall_damage_multiplier: attr("fall_damage_multiplier").unwrap_or(1.0),
@@ -462,6 +490,9 @@ pub struct Attrs {
     pub attack_damage: f32,
     pub max_health: f32,
     pub follow_range: f64,
+    pub knockback_resistance: f64,
+    pub spawn_reinforcements: f64,
+    pub jump_strength: f64,
 }
 /// Species-specific persistent state (variants, colours, taming, ageing...).
 #[derive(Clone, Debug, Default)]
@@ -562,6 +593,24 @@ pub struct Extra {
     /// `Mob.dropChances` by `EquipmentSlot` (`drops::SLOTS` order) when set
     /// explicitly; None uses the defaults of `drops::drop_chance`.
     pub drop_chances: Option<Box<[f32; 8]>>,
+    /// `Mob.leftHanded`.
+    pub left_handed: bool,
+    /// The sound variant: index in the species' `*_sound_variant` registry.
+    pub sound_variant: u8,
+    /// `Zombie.canBreakDoors`.
+    pub can_break_doors: bool,
+    /// A goat's `IsScreamingGoat` and the horns it lost (left, right).
+    pub screaming: bool,
+    pub lost_horns: [bool; 2],
+    /// Attribute bases and permanent modifiers set by `finalizeSpawn`.
+    pub attributes: Option<Box<finalize::Attributes>>,
+    /// Brain memories `finalizeSpawn` sets: (memory, value, ticks to expiry).
+    pub memories: Vec<(&'static str, i64, i64)>,
+    /// A camel's `LAST_POSE_CHANGE_TICK`.
+    pub pose_change_tick: i64,
+    /// The school leader a fish follows, and a tropical fish that swims alone.
+    pub leader: Option<u32>,
+    pub lone: bool,
     /// A breeze's or creaking's brain (`monster_brain`).
     pub brain: Option<Box<monster_brain::Brain>>,
 }
@@ -808,10 +857,14 @@ pub enum MobEvent {
         mob: u32,
         other: u32,
     },
-    /// Two villagers make a baby.
+    /// Two villagers make a baby (`VillagerMakeLove.tryToGiveBirth`): the
+    /// parent has eaten and, with a bed for the child, rests; the partner
+    /// eats, and rests too if `child` holds the child's bed and type
+    /// (`None`: the biome's).
     VillagerBirth {
         parent: u32,
         partner: u32,
+        child: Option<([i32; 3], Option<u8>)>,
     },
     /// A villager asks whether enough neighbours want an iron golem.
     GolemCheck {
@@ -946,11 +999,65 @@ pub struct Seen {
     /// `render::PROFESSIONS`), a llama's strength. And a villager's experience.
     pub profession: u8,
     pub xp: i32,
+    /// What other villagers read of a villager's state and brain.
+    pub villager: Option<Arc<villager::Seen>>,
     /// `MAX_HEALTH`, `JUMP_STRENGTH` and `MOVEMENT_SPEED` base values (a
     /// horse's breeding stock).
     pub stats: [f64; 3],
 }
 impl Mob {
+    /// What other mobs see of this one this tick (`player`: the player's
+    /// UUID, which villagers' reputation is keyed by).
+    pub fn seen(&self, player: Option<[i32; 4]>) -> Seen {
+        let m = self;
+        let villager = m.species() == Species::Villager;
+        Seen {
+            id: m.id,
+            species: m.species(),
+            position: m.position,
+            bounds: m.bounds(),
+            eye_y: m.eye_y(),
+            alive: m.alive(),
+            baby: m.is_baby(),
+            // A villager is "in love" when it is willing to breed (`canBreed`).
+            in_love: if villager {
+                villager::can_breed(m)
+            } else {
+                m.extra.in_love > 0
+            },
+            tame: m.extra.tame,
+            hostile: m.hostile(),
+            target: m.ai.target,
+            health: m.health,
+            variant: m.extra.variant,
+            color: m.extra.color,
+            job: villager.then_some(m.extra.home).flatten(),
+            bed: villager.then_some(m.extra.bed).flatten(),
+            yaw: m.yaw,
+            velocity: m.velocity,
+            leash: m.extra.leash,
+            caravan: caravan::head_of(m),
+            delay: m.extra.ints[5],
+            hurt_by: m.ai.last_hurt_by.map(|w| (w, m.ai.last_hurt_by_time)),
+            active_raid: raider::has_active_raid(m),
+            player_rep: match (villager, player) {
+                (true, Some(uuid)) => villager::ext(m).map_or(0, |e| e.gossips.reputation(uuid)),
+                _ => 0,
+            },
+            pushable: m.pushable(),
+            category: m.category(),
+            potential_job: villager_brain::potential_job_site(m),
+            meeting: villager.then_some(m.extra.meeting).flatten(),
+            profession: m.extra.variant2,
+            xp: villager::xp(m),
+            villager: villager.then(|| Arc::new(villager::seen(m))),
+            stats: [
+                f64::from(m.attrs.max_health),
+                m.extra.vector[0],
+                m.attrs.speed,
+            ],
+        }
+    }
     /// `EntityType.getCategory`'s name.
     pub fn category(&self) -> &'static str {
         match self.kind.category.as_str() {
@@ -1010,6 +1117,7 @@ pub fn apply_brain_events(mobs: &mut [Mob], events: &mut Vec<MobEvent>, from: us
             MobEvent::LockGaze { mob, partner } => {
                 if let Some(m) = mobs.iter_mut().find(|m| m.id == mob) {
                     animal_brain::lock_gaze(m, partner);
+                    villager_brain::lock_gaze_half(m, Who::Mob(partner));
                 }
                 events.remove(i);
             }
@@ -1166,23 +1274,39 @@ impl Mob {
                 attack_damage: kind.attack_damage,
                 max_health: kind.max_health,
                 follow_range: kind.follow_range,
+                knockback_resistance: kind.knockback_resistance,
+                spawn_reinforcements: kind
+                    .attributes
+                    .get("minecraft:spawn_reinforcements")
+                    .copied()
+                    .unwrap_or(0.0),
+                jump_strength: kind.jump_strength,
             },
             kind,
         };
-        // setCanPickUpLoot(true) in the Villager, AbstractPiglin, Allay,
-        // Dolphin, Fox and Panda constructors.
+        // setCanPickUpLoot(true) in the Villager, AbstractPiglin, Dolphin,
+        // Fox and Panda constructors (an allay's is false until it holds
+        // something: it overrides canPickUpLoot).
         mob.extra.pick_up_loot = matches!(
             mob.species(),
             Species::Villager
                 | Species::Piglin
                 | Species::PiglinBrute
-                | Species::Allay
                 | Species::Dolphin
                 | Species::Fox
                 | Species::Panda
         );
         ai::register(&mut mob);
         mob
+    }
+    /// `Mob.canPickUpLoot`, with the overrides: an allay that holds
+    /// something off its pickup cooldown, a sulfur cube with no block.
+    pub fn can_pick_up_loot(&self) -> bool {
+        match self.species() {
+            Species::Allay => self.extra.main_hand.is_some() && self.extra.ints[3] <= 0,
+            Species::SulfurCube => !sulfur_cube::has_body(self),
+            _ => self.extra.pick_up_loot,
+        }
     }
     pub fn bounds(&self) -> Aabb {
         let w = f64::from(self.width()) / 2.0;

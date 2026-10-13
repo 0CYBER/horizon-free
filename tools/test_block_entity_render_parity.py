@@ -72,6 +72,11 @@ def cases():
             add(f'minecraft:{color}_wall_banner[facing={f}]',
                 patterns=[[rng.choice(patterns), rng.choice(DYES)] for _ in range(rng.randint(0, 2))])
     add('minecraft:blue_banner[rotation=2]', patterns=[[rng.choice(patterns), rng.choice(DYES)] for _ in range(17)])
+    # The loom's result preview (GuiBannerResultRenderer in a 20x40 picture in
+    # picture, lit with Lighting.Entry.ITEMS_FLAT): up to the loom's six layers, and 17.
+    for n in [0, 1, 2, 3, 6, 6, 17]:
+        out.append({'block': 'loom_result', 'loom': {'base': rng.choice(DYES),
+                    'patterns': [[rng.choice(patterns), rng.choice(DYES)] for _ in range(n)]}})
     for skull in ['skeleton_skull', 'wither_skeleton_skull', 'zombie_head', 'creeper_head', 'dragon_head',
                   'piglin_head', 'player_head']:
         wall = skull.replace('_skull', '_wall_skull').replace('_head', '_wall_head')
@@ -147,15 +152,26 @@ def lights():
     return norm([0.2, 1.0, -0.7]), norm([-0.2, 1.0, 0.7])
 
 
+def items_flat_lights():
+    """Lighting.Entry.ITEMS_FLAT: rotationY(-PI/8).rotateX(3PI/4) of the diffuse lights."""
+    def rotate(v):
+        a, b = -math.pi / 8, math.pi * 3 / 4
+        x, y, z = v
+        y, z = y * math.cos(b) - z * math.sin(b), y * math.sin(b) + z * math.cos(b)
+        return [x * math.cos(a) + z * math.sin(a), y, -x * math.sin(a) + z * math.cos(a)]
+    return tuple(rotate(l) for l in lights())
+
+
 L0, L1 = lights()
+FLAT = items_flat_lights()
 
 
-def mix(normal):
+def mix(normal, lit=(L0, L1)):
     d = lambda l: max(0.0, sum(a * b for a, b in zip(l, normal)))
-    return min(1.0, (d(L0) + d(L1)) * 0.6 + 0.4)
+    return min(1.0, (d(lit[0]) + d(lit[1])) * 0.6 + 0.4)
 
 
-def vanilla_quads(submits):
+def vanilla_quads(submits, lit=(L0, L1)):
     quads, other = [], []
     for s in submits:
         custom = s['type'] == 'submitCustomGeometry'
@@ -167,7 +183,7 @@ def vanilla_quads(submits):
             q = verts[i:i + 4]
             tint = q[0][3] & 0xFFFFFFFF
             # Custom geometry (beacon beams) is unlit; models get the entity shader's mix light.
-            b = 1.0 if custom else mix(q[0][8:11])
+            b = 1.0 if custom else mix(q[0][8:11], lit)
             ch = lambda shift: int(((tint >> shift) & 255) * b)
             quads.append({'texture': s['texture'], 'v': [v[:3] + v[4:6] for v in q],
                           'rgb': [ch(16), ch(8), ch(0)], 'alpha': tint >> 24, 'light': q[0][7],
@@ -206,7 +222,7 @@ def pair(vq, rq):
 
 def compare_case(v, r, tol):
     problems = []
-    vq, other = vanilla_quads(v['submits'])
+    vq, other = vanilla_quads(v['submits'], FLAT if 'loom' in v['case'] else (L0, L1))
     for s in other:
         if s['type'] == 'submitText':
             continue

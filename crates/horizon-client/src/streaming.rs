@@ -341,7 +341,7 @@ impl Streaming {
             match done {
                 Done::Proto(x, z, proto) => {
                     self.generating.remove(&(x, z));
-                    if self.in_range(x, z, 4) {
+                    if self.in_range(x, z, 4) || self.near_finished(x, z, 2) {
                         self.protos.insert((x, z), Some(proto));
                         if !self.decorates {
                             self.decorated.insert((x, z));
@@ -371,7 +371,7 @@ impl Streaming {
                     self.generating.remove(&key);
                     self.finishing.remove(&key);
                     self.decorated.insert(key);
-                    if self.in_range(key.0, key.1, 2) {
+                    if self.in_range(key.0, key.1, 2) || self.near_finished(key.0, key.1, 1) {
                         self.generated_total += 1;
                         // A chunk saved with its light needs no light job; its
                         // unlit neighbours still light themselves from it.
@@ -435,7 +435,9 @@ impl Streaming {
             .chunks
             .keys()
             .copied()
-            .filter(|&(x, z)| !self.remote && !self.in_range(x, z, 3))
+            .filter(|&(x, z)| {
+                !self.remote && !self.in_range(x, z, 3) && !self.near_finished(x, z, 1)
+            })
             .collect();
         for key in &far {
             self.decorated.remove(key);
@@ -499,7 +501,9 @@ impl Streaming {
                 .protos
                 .iter()
                 .filter(|(k, p)| {
-                    p.is_some() && !self.decorated.contains(k) && self.in_range(k.0, k.1, 2)
+                    p.is_some()
+                        && !self.decorated.contains(k)
+                        && (self.in_range(k.0, k.1, 2) || self.near_finished(k.0, k.1, 1))
                 })
                 .map(|(k, _)| (self.distance(k.0, k.1), k.0, k.1))
                 .collect();
@@ -540,17 +544,19 @@ impl Streaming {
         }
         // Generation (load or proto), closest first, bounded in flight.
         let margin = if self.decorates { 3 } else { 1 };
+        // Neighbours a finished chunk needs generated: decorated ones need theirs.
+        let reach = if self.decorates { 2 } else { 1 };
         if !self.remote && self.generating.len() < workers * 3 {
             let mut wanted = Vec::new();
             let areas: Vec<((i32, i32), i32)> = std::iter::once((self.center, self.radius))
                 .chain(self.extra.iter().copied())
                 .collect();
             for (center, radius) in areas {
-                let r = radius + margin;
+                let r = radius + margin.max(reach + 1);
                 for dz in -r..=r {
                     for dx in -r..=r {
                         let (x, z) = (center.0 + dx, center.1 + dz);
-                        if !self.in_range(x, z, margin)
+                        if !(self.in_range(x, z, margin) || self.near_finished(x, z, reach))
                             || world.chunks.contains_key(&(x, z))
                             || self.generating.contains(&(x, z))
                             || self.protos.contains_key(&(x, z))
@@ -728,6 +734,46 @@ impl Streaming {
             }
         }
     }
+    fn ranges(&self) -> Ranges<'_> {
+        Ranges {
+            center: self.center,
+            radius: self.radius,
+            extra: &self.extra,
+            forced: &self.forced,
+        }
+    }
+    fn near_finished(&self, x: i32, z: i32, reach: i32) -> bool {
+        self.ranges().near_finished(x, z, reach)
+    }
+    fn in_range(&self, x: i32, z: i32, margin: i32) -> bool {
+        self.ranges().in_range(x, z, margin)
+    }
+    fn in_main_range(&self, x: i32, z: i32, margin: i32) -> bool {
+        self.ranges().in_main_range(x, z, margin)
+    }
+}
+/// The areas kept loaded: circles around the player and `extra`, and forced chunks.
+struct Ranges<'a> {
+    center: (i32, i32),
+    radius: i32,
+    extra: &'a [((i32, i32), i32)],
+    forced: &'a HashSet<(i32, i32)>,
+}
+impl Ranges<'_> {
+    /// Whether a chunk finished here (`in_range(_, _, 1)`) lies within `reach`
+    /// chunks of (x, z) on both axes: its decoration needs its 3x3 neighbours
+    /// decorated, which need their own 3x3 neighbours generated. The ranges are
+    /// circles, so a fixed margin alone misses the corners of those squares
+    /// (render distance 2 never finished the chunks next to the player).
+    fn near_finished(&self, x: i32, z: i32, reach: i32) -> bool {
+        let near = |c: (i32, i32), radius: i32| {
+            let gap = |d: i32| i64::from((d.abs() - reach).max(0));
+            let (dx, dz) = (gap(x - c.0), gap(z - c.1));
+            let r = i64::from(radius + 1);
+            dx * dx + dz * dz <= r * r
+        };
+        near(self.center, self.radius) || self.extra.iter().any(|&(c, r)| near(c, r))
+    }
     fn in_range(&self, x: i32, z: i32, margin: i32) -> bool {
         self.in_main_range(x, z, margin)
             || self.extra.iter().any(|&(c, radius)| {
@@ -754,6 +800,66 @@ impl Drop for Streaming {
         self.shared.ready.notify_all();
         for t in self.threads.drain(..) {
             let _ = t.join();
+        }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The ranges `Streaming::update` checks at each step, from generation to
+    /// light, must let every chunk the player spawns on finish and light: the
+    /// 3x3 columns around the player need their own 3x3 neighbours finished,
+    /// each of those its 3x3 neighbours decorated, and each of those its 3x3
+    /// neighbours generated and kept. Render distance 2 once stopped short.
+    #[test]
+    fn spawn_neighbourhood_completes_at_every_distance() {
+        let forced = HashSet::new();
+        for decorates in [true, false] {
+            let (margin, reach) = if decorates { (3, 2) } else { (1, 1) };
+            for radius in 2..=32 {
+                let r = Ranges {
+                    center: (5, -7),
+                    radius,
+                    extra: &[],
+                    forced: &forced,
+                };
+                let square = |x: i32, z: i32, n: i32| {
+                    (-n..=n).flat_map(move |dz| (-n..=n).map(move |dx| (x + dx, z + dz)))
+                };
+                let generated = |x, z| {
+                    (r.in_range(x, z, margin) || r.near_finished(x, z, reach))
+                        && (x - r.center.0).abs() <= radius + margin.max(reach + 1)
+                        && (z - r.center.1).abs() <= radius + margin.max(reach + 1)
+                };
+                let proto_kept = |x, z| r.in_range(x, z, 4) || r.near_finished(x, z, 2);
+                let decorated =
+                    |x, z| !decorates || r.in_range(x, z, 2) || r.near_finished(x, z, 1);
+                let chunk_kept = |x, z| r.in_range(x, z, 2) || r.near_finished(x, z, 1);
+                let unloaded = |x, z| !r.in_range(x, z, 3) && !r.near_finished(x, z, 1);
+                let finishes = |x: i32, z: i32| {
+                    r.in_range(x, z, 1)
+                        && chunk_kept(x, z)
+                        && !unloaded(x, z)
+                        && square(x, z, 1).all(|(nx, nz)| {
+                            decorated(nx, nz)
+                                && (!decorates
+                                    || square(nx, nz, 1)
+                                        .all(|(gx, gz)| generated(gx, gz) && proto_kept(gx, gz)))
+                                && generated(nx, nz)
+                                && proto_kept(nx, nz)
+                        })
+                };
+                let (cx, cz) = r.center;
+                for (x, z) in square(cx, cz, 1) {
+                    for (nx, nz) in square(x, z, 1) {
+                        assert!(
+                            finishes(nx, nz),
+                            "radius {radius} (decorates: {decorates}): ({nx}, {nz}) never finishes"
+                        );
+                    }
+                }
+            }
         }
     }
 }

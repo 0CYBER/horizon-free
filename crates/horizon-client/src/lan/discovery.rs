@@ -10,34 +10,61 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread::JoinHandle,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 pub const GROUP: Ipv4Addr = Ipv4Addr::new(224, 0, 2, 60);
 pub const PORT: u16 = 4445;
 /// LanServerPinger sleeps 1500 ms between announcements.
 const INTERVAL: Duration = Duration::from_millis(1500);
-/// LanServerDetection.LanServerList drops entries not refreshed for 5 s.
-const EXPIRY: Duration = Duration::from_secs(5);
 
 /// LanServerPinger.createPingString.
 pub fn ping_string(motd: &str, port: u16) -> String {
-    format!("[MOTD]{motd}[/MOTD][AD]{port}[/AD]")
+    ping_string_text(motd, &port.to_string())
 }
-fn between<'a>(s: &'a str, open: &str, close: &str) -> Option<&'a str> {
-    let start = s.find(open)? + open.len();
-    let end = s[start..].find(close)? + start;
-    Some(&s[start..end])
+/// LanServerPinger.createPingString with the address as text.
+pub fn ping_string_text(motd: &str, address: &str) -> String {
+    format!("[MOTD]{motd}[/MOTD][AD]{address}[/AD]")
 }
-/// LanServerPinger.parseMotd; vanilla shows "missing no" when absent.
+/// String.indexOf(needle, from) on a Rust string (byte offsets).
+fn index_of(s: &str, needle: &str, from: usize) -> Option<usize> {
+    s.get(from..)?.find(needle).map(|i| i + from)
+}
+/// LanServerPinger.parseMotd; "missing no" when there is none.
 pub fn parse_motd(s: &str) -> String {
-    between(s, "[MOTD]", "[/MOTD]")
-        .unwrap_or("missing no")
-        .to_owned()
+    let Some(start) = s.find("[MOTD]") else {
+        return "missing no".to_owned();
+    };
+    match index_of(s, "[/MOTD]", start + "[MOTD]".len()) {
+        Some(end) => s[start + "[MOTD]".len()..end].to_owned(),
+        None => "missing no".to_owned(),
+    }
 }
-/// LanServerPinger.parseAddress: the announced port, if present and valid.
-pub fn parse_port(s: &str) -> Option<u16> {
-    between(s, "[AD]", "[/AD]")?.parse().ok().filter(|p| *p > 0)
+/// LanServerPinger.parseAddress: the text between [AD] and [/AD] after the
+/// only [/MOTD], as announced (vanilla does not check it is a port).
+pub fn parse_address(s: &str) -> Option<String> {
+    let end_motd = s.find("[/MOTD]")?;
+    if index_of(s, "[/MOTD]", end_motd + "[/MOTD]".len()).is_some() {
+        return None;
+    }
+    let start = index_of(s, "[AD]", end_motd + "[/MOTD]".len())?;
+    let end = index_of(s, "[/AD]", start + "[AD]".len())?;
+    Some(s[start + "[AD]".len()..end].to_owned())
+}
+/// LanServerDetection.LanServerList.addServer: an announcement from `ip`.
+/// A new address joins the list; a known one keeps its first MOTD. True
+/// when the list changed.
+pub fn add_server(games: &mut Vec<LanGame>, ping: &str, ip: &str) -> bool {
+    let motd = parse_motd(ping);
+    let Some(address) = parse_address(ping) else {
+        return false;
+    };
+    let address = format!("{ip}:{address}");
+    if games.iter().any(|g| g.address == address) {
+        return false;
+    }
+    games.push(LanGame { motd, address });
+    true
 }
 
 /// Announces one hosted world until dropped.
@@ -48,7 +75,6 @@ pub struct Pinger {
 impl Pinger {
     pub fn start(motd: String, port: u16) -> io::Result<Self> {
         let socket = UdpSocket::bind(("0.0.0.0", 0))?;
-        let _ = socket.set_multicast_ttl_v4(4);
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         let message = ping_string(&motd, port);
@@ -86,7 +112,7 @@ pub struct LanGame {
     pub motd: String,
     pub address: String,
 }
-type Games = Arc<Mutex<Vec<(LanGame, Instant)>>>;
+type Games = Arc<Mutex<Vec<LanGame>>>;
 
 /// Listens for announcements until the last clone is dropped.
 #[derive(Clone, Debug)]
@@ -118,11 +144,10 @@ impl Scanner {
             inner: Arc::new(ScanInner { games, stop }),
         }
     }
-    /// The live announcements, oldest first.
+    /// The worlds announced since the scan started, in order (vanilla's
+    /// list keeps them while the multiplayer screen is open).
     pub fn games(&self) -> Vec<LanGame> {
-        let mut games = self.inner.games.lock().unwrap();
-        games.retain(|(_, seen)| seen.elapsed() < EXPIRY);
-        games.iter().map(|(g, _)| g.clone()).collect()
+        self.inner.games.lock().unwrap().clone()
     }
 }
 fn bind_listener() -> io::Result<UdpSocket> {
@@ -138,18 +163,7 @@ fn listen(socket: UdpSocket, games: Games, stop: Arc<AtomicBool>) {
             continue;
         };
         let text = String::from_utf8_lossy(&buf[..n]);
-        let Some(port) = parse_port(&text) else {
-            continue;
-        };
-        let game = LanGame {
-            motd: parse_motd(&text),
-            address: format!("{}:{port}", from.ip()),
-        };
-        let mut games = games.lock().unwrap();
-        match games.iter_mut().find(|(g, _)| g.address == game.address) {
-            Some(entry) => *entry = (game, Instant::now()),
-            None => games.push((game, Instant::now())),
-        }
+        add_server(&mut games.lock().unwrap(), &text, &from.ip().to_string());
     }
 }
 
@@ -162,8 +176,17 @@ mod tests {
         let s = ping_string("Steve - World", 25565);
         assert_eq!(s, "[MOTD]Steve - World[/MOTD][AD]25565[/AD]");
         assert_eq!(parse_motd(&s), "Steve - World");
-        assert_eq!(parse_port(&s), Some(25565));
-        assert_eq!(parse_port("[AD]0[/AD]"), None);
+        assert_eq!(parse_address(&s).as_deref(), Some("25565"));
+        assert_eq!(parse_address("[AD]1[/AD]"), None);
+        assert_eq!(parse_address("[/MOTD][AD]x[/AD][/MOTD]"), None);
         assert_eq!(parse_motd("junk"), "missing no");
+        let mut games = Vec::new();
+        assert!(add_server(&mut games, &s, "10.0.0.2"));
+        assert!(!add_server(
+            &mut games,
+            &ping_string("Other", 25565),
+            "10.0.0.2"
+        ));
+        assert_eq!(games[0].motd, "Steve - World");
     }
 }

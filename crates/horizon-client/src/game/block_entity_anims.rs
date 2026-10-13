@@ -5,10 +5,11 @@
 //! [`Game::block_anim`] and [`Game::chest_lid`].
 use super::Game;
 use horizon_client::{
-    block_entity_anim::{BellEntity, Shulker, ShulkerStatus, Ticker},
+    block_entity_anim::{BellEntity, EndGateway, Shulker, ShulkerStatus, Ticker},
     block_entity_render::BlockAnim,
     collisions::{SceneCollisions, no_collision_empty},
     particles::{ParticleOptions, ParticleType},
+    save::number,
 };
 use horizon_core::geometry::{Aabb, Vec3};
 use std::collections::HashMap;
@@ -43,6 +44,14 @@ impl Game<'_> {
                     .entry(pos)
                     .or_default()
                     .trigger_event(a, b, time, || gathered);
+            }
+            Some(Ticker::Gateway) => {
+                let initial = self.gateway_loaded(pos);
+                self.be_anims
+                    .gateways
+                    .entry(pos)
+                    .or_insert(initial)
+                    .trigger_event(a, b);
             }
             Some(Ticker::Pot) => {
                 self.be_anims
@@ -276,7 +285,56 @@ impl Game<'_> {
                     }
                 }
                 Ticker::Pot => {}
+                Ticker::Gateway => {
+                    // The server copy's portalTick runs first; its block event
+                    // reaches the client copy before the client ticks it.
+                    let initial = self.gateway_loaded(pos);
+                    let anims = &mut self.be_anims;
+                    let server = anims.gateway_servers.entry(pos).or_insert(initial);
+                    let triggered = server.portal_tick();
+                    let client = anims.gateways.entry(pos).or_insert(initial);
+                    if triggered {
+                        client.trigger_event(1, 0);
+                    }
+                    client.tick();
+                }
             }
+        }
+    }
+    /// `EndGatewayBlock.entityInside` on the server: whether the gateway at
+    /// `pos` let the entity in (`triggerCooldown`, with its block event).
+    pub(super) fn gateway_enter(&mut self, pos: [i32; 3]) -> bool {
+        let initial = self.gateway_loaded(pos);
+        let entered = self
+            .be_anims
+            .gateway_servers
+            .entry(pos)
+            .or_insert(initial)
+            .enter();
+        if entered {
+            self.block_entity_event(pos, 1, 0);
+        }
+        entered
+    }
+    /// The End gateway at `pos` as its chunk was loaded: `Age` from the saved
+    /// block entity (`getUpdateTag`), or a new gateway.
+    fn gateway_loaded(&self, pos: [i32; 3]) -> EndGateway {
+        let age = self
+            .world
+            .chunks
+            .get(&(pos[0] >> 4, pos[2] >> 4))
+            .and_then(|c| c.saved.as_deref())
+            .and_then(|saved| {
+                saved.block_entities.iter().find(|t| {
+                    [t.get("x"), t.get("y"), t.get("z")]
+                        .map(number)
+                        .eq(&pos.map(|v| Some(i64::from(v))))
+                })
+            })
+            .and_then(|t| number(t.get("Age")));
+        EndGateway {
+            age: age.unwrap_or(0),
+            teleport_cooldown: 0,
         }
     }
     /// The renderer's view of the block entity at `pos`.

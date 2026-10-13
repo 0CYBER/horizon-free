@@ -223,54 +223,131 @@ fn goals(m: &Mob, names: Vec<&'static str>) -> String {
         .join("|")
 }
 
-fn seen(m: &Mob) -> Seen {
-    Seen {
-        id: m.id,
-        species: m.species(),
-        position: m.position,
-        bounds: m.bounds(),
-        eye_y: m.eye_y(),
-        alive: m.alive(),
-        baby: m.is_baby(),
-        in_love: if m.species() == Species::Villager {
-            horizon_client::mobs::villager::can_breed(m)
-        } else {
-            m.extra.in_love > 0
-        },
-        tame: m.extra.tame,
-        hostile: m.hostile(),
-        target: m.ai.target,
-        health: m.health,
-        variant: m.extra.variant,
-        color: m.extra.color,
-        job: (m.species() == Species::Villager)
-            .then_some(m.extra.home)
-            .flatten(),
-        bed: (m.species() == Species::Villager)
-            .then_some(m.extra.bed)
-            .flatten(),
-        yaw: m.yaw,
-        velocity: m.velocity,
-        leash: m.extra.leash,
-        caravan: horizon_client::mobs::caravan::head_of(m),
-        delay: m.extra.ints[5],
-        hurt_by: m.ai.last_hurt_by.map(|w| (w, m.ai.last_hurt_by_time)),
-        active_raid: horizon_client::mobs::raider::has_active_raid(m),
-        player_rep: 0,
-        pushable: m.pushable(),
-        category: m.category(),
-        potential_job: horizon_client::mobs::villager_brain::potential_job_site(m),
-        meeting: (m.species() == Species::Villager)
-            .then_some(m.extra.meeting)
-            .flatten(),
-        profession: m.extra.variant2,
-        xp: horizon_client::mobs::villager::xp(m),
-        stats: [
-            f64::from(m.attrs.max_health),
-            m.extra.vector[0],
-            m.attrs.speed,
-        ],
+/// The oracle's villager flags: profession, level, xp, food, inventory,
+/// gossip about the player and the last sleep.
+fn villager_flag(m: &mut Mob, flag: &str) {
+    use horizon_client::mobs::villager;
+    let (k, v) = flag
+        .split_once('=')
+        .unwrap_or_else(|| panic!("unknown mob flag {flag}"));
+    match k {
+        "profession" => {
+            let p = horizon_client::mobs::render::PROFESSIONS
+                .iter()
+                .position(|p| *p == v)
+                .expect("profession");
+            villager::set_profession(m, p as u8);
+        }
+        "level" => m.extra.variant3 = v.parse().unwrap(),
+        "xp" => {
+            m.extra.trade.get_or_insert_with(Default::default).xp = v.parse().unwrap();
+        }
+        "food" => villager::ext_mut(m).food_level = v.parse().unwrap(),
+        "inv" => {
+            for item in v.split(',') {
+                let (name, count) = item.split_once('*').unwrap_or((item, "1"));
+                villager::ext_mut(m)
+                    .inventory
+                    .push(horizon_client::items::ItemStack::new(
+                        &if name.contains(':') {
+                            name.to_owned()
+                        } else {
+                            format!("minecraft:{name}")
+                        },
+                        count.parse().unwrap(),
+                    ));
+            }
+        }
+        "gossip" => {
+            let g: Vec<&str> = v.split(':').collect();
+            assert_eq!(g[0], "player", "gossip about the player only");
+            let kind = horizon_client::gossip::GossipType::from_id(g[1]).expect("gossip type");
+            villager::ext_mut(m)
+                .gossips
+                .add(PLAYER_UUID, kind, g[2].parse().unwrap());
+        }
+        "slept" => villager::ext_mut(m).last_slept = Some(v.parse().unwrap()),
+        _ => panic!("unknown mob flag {flag}"),
     }
+}
+
+/// The random seed of the entity a scenario spawns at this index (the
+/// oracle's `spawnSeed`).
+fn spawn_seed(index: usize) -> i64 {
+    1000 + 7919 * index as i64
+}
+
+/// Villager events that act at once in vanilla (`TradeWithVillager` and
+/// `VillagerMakeLove` write the other villager directly).
+fn villager_events(
+    mobs: &mut [Mob],
+    events: &mut Vec<MobEvent>,
+    from: usize,
+    w: &MobWorld,
+    types: &MobTypes,
+    items: &Items,
+    born: &mut Vec<Mob>,
+    day_time: i64,
+) {
+    use horizon_client::mobs::villager;
+    let index = |mobs: &[Mob], id: u32| {
+        mobs.iter()
+            .position(|m| m.id == id && m.species() == Species::Villager)
+    };
+    let mut i = from;
+    while i < events.len() {
+        match events[i] {
+            MobEvent::VillagerMeet { mob, other } => {
+                if let (Some(a), Some(b)) = (index(mobs, mob), index(mobs, other)) {
+                    let meeting = villager::meet(mobs, a, b, w.game_time, |item| {
+                        items.get(item).map_or(64, |i| i.max_stack)
+                    });
+                    assert!(
+                        meeting.thrown.is_empty(),
+                        "villagers toss items: not modelled here"
+                    );
+                }
+                events.remove(i);
+            }
+            MobEvent::VillagerBirth {
+                parent,
+                partner,
+                child,
+            } => {
+                events.remove(i);
+                let (Some(a), Some(b)) = (index(mobs, parent), index(mobs, partner)) else {
+                    continue;
+                };
+                villager::ext_mut(&mut mobs[b]).eat_and_digest();
+                let Some((bed, variant)) = child else {
+                    continue;
+                };
+                mobs[b].extra.age = 6000;
+                let index = mobs.len() + born.len();
+                let kind = types.types.get("minecraft:villager").expect("villager");
+                let p = mobs[a].position;
+                let mut child = Mob::new(100_000 + index as u32, Arc::new(kind.clone()), p, 0.0);
+                child.persistent = true;
+                // The flat world is all plains (type 0).
+                child.extra.variant = variant.unwrap_or(0);
+                child.extra.variant2 = villager::NONE;
+                child.extra.age = -24000;
+                child.extra.bed = Some(bed);
+                let seed = spawn_seed(index);
+                child.random = LegacyRandom::new(seed);
+                horizon_client::mobs::villager_brain::init(&mut child, w.game_time, day_time, seed);
+                born.push(child);
+            }
+            _ => i += 1,
+        }
+    }
+}
+
+/// The player's UUID (the oracle's `PLAYER_UUID`).
+const PLAYER_UUID: [i32; 4] = [0, 0x1234, 0, 0x5678];
+
+fn seen(m: &Mob) -> Seen {
+    m.seen(Some(PLAYER_UUID))
 }
 
 /// The probe's mobs as a creaking heart sees them: creakings it creates take
@@ -495,7 +572,93 @@ fn print(out: &mut String, t: i32, i: usize, m: &Mob, player_down: bool) {
     if let Some((acts, mem)) = brain {
         let _ = write!(out, "\tact {acts}\tmem {mem}");
     }
+    if m.species() == Species::Villager {
+        let _ = write!(out, "\tvx {}", villager(m));
+    }
     out.push('\n');
+}
+
+fn stack(s: &horizon_client::items::ItemStack) -> String {
+    if s.count == 0 {
+        return "-".into();
+    }
+    format!("{}*{}", s.item.trim_start_matches("minecraft:"), s.count)
+}
+
+/// The oracle's `villager`: data, food, inventory, gossip, sleep and offers.
+fn villager(m: &Mob) -> String {
+    use horizon_client::mobs::villager;
+    let e = villager::ext(m);
+    let mut slots: Vec<String> = (0..8)
+        .map(|k| {
+            e.and_then(|e| e.inventory.get(k))
+                .map_or_else(|| "-".to_owned(), stack)
+        })
+        .collect();
+    while slots.last().is_some_and(|s| s == "-") {
+        slots.pop();
+    }
+    // Villagers gossip about players only.
+    let label = |t: [i32; 4]| {
+        if t == PLAYER_UUID {
+            "player".to_owned()
+        } else {
+            format!("{t:?}")
+        }
+    };
+    let mut gossips: Vec<String> = e
+        .map(|e| {
+            e.gossips
+                .entries()
+                .map(|(t, k, v)| format!("{}:{}={v}", label(t), k.id()))
+                .collect()
+        })
+        .unwrap_or_default();
+    gossips.sort();
+    let join = |v: &[String]| {
+        if v.is_empty() {
+            "-".to_owned()
+        } else {
+            v.join(",")
+        }
+    };
+    let mut s = format!(
+        "prof {} lvl {} xp {} food {} age {} inv {} gossip {} rep {} sleep {}",
+        horizon_client::mobs::render::PROFESSIONS[m.extra.variant2 as usize % 15],
+        m.extra.variant3.max(1),
+        villager::xp(m),
+        e.map_or(0, |e| e.food_level),
+        m.extra.age,
+        join(&slots),
+        join(&gossips),
+        e.map_or(0, |e| e.gossips.reputation(PLAYER_UUID)),
+        match (villager::sleeping(m), m.extra.bed) {
+            (true, Some(b)) => format!("{},{},{}", b[0], b[1], b[2]),
+            _ => "-".into(),
+        }
+    );
+    if let Some(t) = m.extra.trade.as_ref().filter(|t| !t.offers.is_empty()) {
+        let offers: Vec<String> = t
+            .offers
+            .iter()
+            .map(|o| {
+                format!(
+                    "{}+{}>{}/{}/{}/{}/{}",
+                    stack(&o.base_cost_a.stack),
+                    o.cost_b
+                        .as_ref()
+                        .map_or_else(|| "-".to_owned(), |c| stack(&c.stack)),
+                    stack(&o.result),
+                    o.uses,
+                    o.max_uses,
+                    o.demand,
+                    o.special_price_diff
+                )
+            })
+            .collect();
+        s.push_str(&format!(" offers {}", join(&offers)));
+    }
+    s
 }
 
 fn main() -> horizon_client::Result<()> {
@@ -630,7 +793,7 @@ fn main() -> horizon_client::Result<()> {
                         let n: u32 = x[8..].parse().unwrap();
                         m.extra.leash = Some(horizon_client::mobs::leash::Holder::Mob(100_000 + n));
                     }
-                    other => panic!("unknown mob flag {other}"),
+                    other => villager_flag(&mut m, other),
                 }
             }
             m.random = LegacyRandom::new(spec.seed);
@@ -686,7 +849,7 @@ fn main() -> horizon_client::Result<()> {
                 velocity: Vec3::ZERO,
                 yaw: 0.0,
                 hero: false,
-                uuid: [0, 0x1234, 0, 0x5678],
+                uuid: PLAYER_UUID,
                 allies: Default::default(),
             }
         });
@@ -796,6 +959,7 @@ fn main() -> horizon_client::Result<()> {
             #[allow(unused_mut)] // filled only with the rng-trace feature
             let mut traces: Vec<String> = Vec::new();
             let mut pushes = Vec::new();
+            let mut born = Vec::new();
             for i in 0..mobs.len() {
                 if mobs[i].removed {
                     continue;
@@ -819,6 +983,16 @@ fn main() -> horizon_client::Result<()> {
                     m.removed = true;
                 }
                 horizon_client::mobs::apply_brain_events(&mut mobs, &mut events, from);
+                villager_events(
+                    &mut mobs,
+                    &mut events,
+                    from,
+                    &w,
+                    &types,
+                    &items,
+                    &mut born,
+                    s.time,
+                );
                 horizon_client::mobs::warden::hear_mob_events(&mut mobs, &events, from, &w);
                 // Melee hits on other mobs land during the attacker's tick
                 // (LivingEntity.hurtServer), with the sounds they raise.
@@ -871,6 +1045,7 @@ fn main() -> horizon_client::Result<()> {
                 added.append(&mut host.added);
             }
             drop(w);
+            mobs.append(&mut born);
             mobs.append(&mut added);
             for e in &heart_events {
                 match e {

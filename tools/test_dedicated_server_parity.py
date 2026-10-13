@@ -1,0 +1,392 @@
+#!/usr/bin/env python3
+"""The dedicated server against vanilla's, seen from a vanilla client.
+
+The pinned server JAR first generates a world (offline mode, a fixed seed,
+respawn_radius 0) and stops; a vanilla dedicated server and Horizon's
+(`horizon-client --dedicated --nogui`) then serve copies of it with the same
+server.properties, server-icon.png and lists. VanillaProtocolClient, a
+headless client made of vanilla's own codecs (any byte vanilla would not
+read is an error), pings each server, joins it in offline mode through
+login, configuration and play, accepts the spawn teleport, receives the
+chunks around the spawn (their bytes are compared: the world is loaded from
+the same files), chats, runs /list and leaves. The console then runs `list`
+and `say` and `stop`. Compared, all of them exactly:
+
+- the status response (MOTD, players, version, favicon) and the ping;
+- the legacy (pre-1.7, 0xFE) ping reply;
+- the login and configuration packets in order (compression, profile,
+  brand, features, known packs, every registry, tags);
+- the play packets up to the first chunk batch, in order, with entity ids,
+  keep-alive ids and times left out; the chunks sent and their bytes; the
+  replies to the chat message and to /list;
+- the console lines about the player, the chat, `list`, `say` and `stop`;
+- the files the servers leave: server.properties (but the date line),
+  eula.txt, ops.json, whitelist.json, banned-players.json, banned-ips.json.
+
+Online mode needs Mojang's session servers and is not tested.
+"""
+import json
+import os
+from pathlib import Path
+import platform
+import re
+import shutil
+import socket
+import struct
+import subprocess
+import sys
+import threading
+import time
+import zlib
+
+try:
+    from . import lab, oracle_harness as oh, test_rust_parity as base
+except ImportError:
+    import lab
+    import oracle_harness as oh
+    import test_rust_parity as base
+
+NAME = 'dedicated-server-parity'
+SEED = 12345
+PLAYER = 'Tester'
+# Packets Horizon's server does not send yet, listed rather than compared:
+# the recipe property sets and stonecutter recipes (ClientboundUpdateRecipes)
+# and a player's advancements (ClientboundUpdateAdvancements, and the recipe
+# unlocks their first tick grants). Each is reported on every run.
+KNOWN_GAPS = {
+    'minecraft:update_recipes': 'ClientboundUpdateRecipesPacket (recipe property sets, stonecutter recipes)',
+    'minecraft:update_advancements': 'ClientboundUpdateAdvancementsPacket (player advancements)',
+    'minecraft:recipe_book_add+': 'recipes unlocked by advancements on the first tick',
+}
+
+
+def gap(line):
+    """The known gap a vanilla play-start line belongs to, if any."""
+    parts = line.split(' ')
+    if len(parts) < 2 or parts[0] != 'play-start':
+        return None
+    if parts[1] in KNOWN_GAPS:
+        return parts[1]
+    if parts[1] == 'minecraft:recipe_book_add' and 'entries=[]' not in line:
+        return 'minecraft:recipe_book_add+'
+    return None
+
+
+PROPERTIES = {
+    'online-mode': 'false',
+    'white-list': 'false',
+    'level-seed': str(SEED),
+    'view-distance': '4',
+    'simulation-distance': '4',
+    'spawn-protection': '0',
+    'max-players': '5',
+    'motd': '\\u00a7aHorizon \\u00a7rparity \\u00e9t\\u00e9',
+    'pause-when-empty-seconds': '-1',
+}
+
+
+def free_port():
+    with socket.socket() as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
+
+
+def icon_png():
+    """A 64x64 RGBA PNG (server-icon.png)."""
+    rows = b''.join(b'\0' + b''.join(bytes((x * 4, y * 4, (x ^ y) * 4, 255)) for x in range(64)) for y in range(64))
+
+    def chunk(kind, data):
+        return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data))
+    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', 64, 64, 8, 6, 0, 0, 0))
+            + chunk(b'IDAT', zlib.compress(rows)) + chunk(b'IEND', b''))
+
+
+def write_server_dir(directory, port, world=None):
+    if directory.exists():
+        shutil.rmtree(directory)
+    directory.mkdir(parents=True)
+    props = dict(PROPERTIES, **{'server-port': str(port)})
+    (directory / 'server.properties').write_text(''.join(f'{k}={v}\n' for k, v in props.items()), encoding='iso-8859-1')
+    (directory / 'eula.txt').write_text('eula=true\n')
+    (directory / 'server-icon.png').write_bytes(icon_png())
+    if world is not None:
+        shutil.copytree(world, directory / 'world')
+        for lock in (directory / 'world').glob('session.lock'):
+            lock.unlink()
+
+
+class Server:
+    """A server process with its console on stdin and its log collected."""
+
+    def __init__(self, command, directory, log_name):
+        self.log_path = directory.parent / f'{log_name}.log'
+        self.log = self.log_path.open('w', encoding='utf-8')
+        self.lines = []
+        self.process = subprocess.Popen(list(map(str, command)), cwd=directory, stdin=subprocess.PIPE,
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                        encoding='utf-8', errors='replace')
+        self.reader = threading.Thread(target=self._read, daemon=True)
+        self.reader.start()
+
+    def _read(self):
+        for line in self.process.stdout:
+            self.lines.append(line.rstrip('\n'))
+            self.log.write(line)
+            self.log.flush()
+
+    def wait_for(self, pattern, timeout=300):
+        deadline = time.time() + timeout
+        regex = re.compile(pattern)
+        while time.time() < deadline:
+            if any(regex.search(l) for l in self.lines):
+                return
+            if self.process.poll() is not None:
+                time.sleep(0.5)
+                raise AssertionError(f'{self.log_path.name}: server exited ({self.process.returncode}):\n'
+                                     + '\n'.join(self.lines[-30:]))
+            time.sleep(0.2)
+        raise AssertionError(f'{self.log_path.name}: no line matching {pattern!r} in {timeout} s:\n' + '\n'.join(self.lines[-30:]))
+
+    def console(self, command):
+        self.process.stdin.write(command + '\n')
+        self.process.stdin.flush()
+
+    def stop(self, timeout=120):
+        if self.process.poll() is None:
+            try:
+                self.console('stop')
+                self.process.wait(timeout=timeout)
+            except (BrokenPipeError, subprocess.TimeoutExpired):
+                self.process.kill()
+                self.process.wait()
+        self.reader.join(timeout=10)
+        self.log.close()
+
+
+def legacy_ping(port):
+    """The reply to a 1.6 client's 0xFE 0x01 0xFA MC|PingHost query (LegacyQueryHandler)."""
+    host = 'localhost'
+    data = (b'\xfe\x01\xfa' + struct.pack('>H', 11) + 'MC|PingHost'.encode('utf-16-be')
+            + struct.pack('>H', 7 + 2 * len(host)) + bytes([78]) + struct.pack('>H', len(host))
+            + host.encode('utf-16-be') + struct.pack('>I', port))
+    with socket.create_connection(('127.0.0.1', port), timeout=10) as s:
+        s.sendall(data)
+        reply = b''
+        while True:
+            try:
+                chunk = s.recv(4096)
+            except TimeoutError:
+                return reply.hex() + ' <no close>'
+            if not chunk:
+                break
+            reply += chunk
+    return reply.hex()
+
+
+CONSOLE_LINE = re.compile(r'^\[\d\d:\d\d:\d\d\] \[([^\]]+)\]: (.*)$')
+KEPT = re.compile(r'Tester|\[Server\]|\[Not Secure\]|There are|Stopping|Saving|ThreadedAnvilChunkStorage|All dimensions|Unknown or incomplete')
+
+
+def console_lines(lines):
+    """The console lines the comparison covers, timestamps and ports aside."""
+    out = []
+    for line in lines:
+        m = CONSOLE_LINE.match(line)
+        if not m or not KEPT.search(m.group(2)):
+            continue
+        text = re.sub(r'/127\.0\.0\.1:\d+', '/127.0.0.1:_', m.group(2))
+        text = re.sub(r'entity id \d+', 'entity id _', text)
+        out.append(f'[{m.group(1)}] {text}')
+    # Vanilla saves its levels in the order of an identity-hashed map, which
+    # changes between runs: each block of saves is compared sorted.
+    i = 0
+    while i < len(out):
+        j = i
+        while j < len(out) and 'Saving chunks for level' in out[j]:
+            j += 1
+        out[i:j] = sorted(out[i:j])
+        i = j + 1 if j == i else j
+    return out
+
+
+def server_files(directory):
+    out = []
+    for name in ['server.properties', 'eula.txt', 'ops.json', 'whitelist.json', 'banned-players.json', 'banned-ips.json']:
+        path = directory / name
+        if not path.exists():
+            out.append(f'{name}: missing')
+            continue
+        text = path.read_bytes().decode('iso-8859-1')
+        if name in ('server.properties', 'eula.txt'):
+            # The second comment line is the date Properties.store wrote.
+            text = re.sub(r'^(#[^\n]*\n)#[^\n]*\n', r'\1#<date>\n', text)
+            # Random per server, and each side has its own port.
+            text = re.sub(r'\n(management-server-secret|server-port)=[^\n]*', r'\n\1=<varies>', text)
+        out.append(f'{name}: {text!r}')
+    return out
+
+
+def run_side(label, command, directory, client):
+    server = Server(command, directory, label)
+    try:
+        server.wait_for(r'Done \(')
+        port = int(PROPERTIES_PORTS[label])
+        legacy = legacy_ping(port)
+        client(port, directory.parent / f'{label}-client.txt')
+        time.sleep(1)
+        server.console('list')
+        server.console('say console says hi')
+        server.wait_for(r'\[Server\] console says hi', timeout=30)
+    finally:
+        server.stop()
+    transcript = (directory.parent / f'{label}-client.txt').read_text(encoding='utf-8').splitlines()
+    return (['legacy-ping ' + legacy] + transcript + ['console ' + l for l in console_lines(server.lines)]
+            + ['file ' + l for l in server_files(directory)])
+
+
+PROPERTIES_PORTS = {}
+
+
+def horizon_client_joins(vanilla_server, binary, world, build, reference):
+    """Horizon's client joins a vanilla dedicated server headless: it must
+    land where the vanilla client did, receive as many chunks, see its chat
+    and /list reply, and leave as a vanilla client does (the server's log)."""
+    label = 'vanilla-for-horizon-client'
+    PROPERTIES_PORTS[label] = port = free_port()
+    directory = build / label
+    write_server_dir(directory, port, world)
+    client_dir = build / 'horizon-client'
+    shutil.rmtree(client_dir, ignore_errors=True)
+    client_dir.mkdir()
+    report = build / 'horizon-client-report.json'
+    report.unlink(missing_ok=True)
+    server = Server(vanilla_server, directory, label)
+    try:
+        server.wait_for(r'Done \(')
+        env = dict(os.environ, HORIZON_NO_AUDIO='1', HORIZON_NET_REPORT=str(report))
+        with (build / 'horizon-client-run.log').open('w') as log:
+            subprocess.run([str(c) for c in [binary, '--resources', lab.LOCAL / 'horizon-client/26.3', '--render-distance', 2,
+                                             '--server', f'127.0.0.1:{port}', '--name', PLAYER]],
+                           cwd=client_dir, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=300, check=True)
+        server.wait_for(r'left the game', timeout=30)
+    finally:
+        server.stop()
+    got = json.loads(report.read_text())
+    move = next(l for l in reference if l.startswith('play-move'))
+    want_position = [float(v) for v in re.match(r'play-move \(([^,]+), ([^,]+), ([^)]+)\)', move).groups()]
+    want_chunks = int(next(l for l in reference if l.startswith('play-counts')).split()[-1])
+    expected = {
+        'connected throughout': None,
+        'spawn position': want_position,
+        'chunks received': want_chunks,
+        'own chat shown': True,
+        '/list reply shown': True,
+        'server log': ['logged in', 'Tester joined the game', '[Not Secure] <Tester> hello from the horizon client',
+                       'Tester lost connection: Disconnected', 'Tester left the game'],
+    }
+    log = '\n'.join(server.lines)
+    actual = {
+        'connected throughout': got['error'],
+        'spawn position': got['position'],
+        'chunks received': got['chunks'],
+        'own chat shown': any('<Tester> hello from the horizon client' in c for c in got['chat']),
+        '/list reply shown': any('There are 1 of a max of 5 players online: Tester' in c for c in got['chat']),
+        'server log': [k for k in expected['server log'] if k in log],
+    }
+    return [f'horizon-client {k}: {"ok" if actual[k] == v else f"expected {v!r}, got {actual[k]!r}"}'
+            for k, v in expected.items()]
+
+
+def main():
+    lock, jars, libraries = base.verify_artifacts()
+    build = lab.LOCAL / NAME
+    build.mkdir(parents=True, exist_ok=True)
+    report = build / 'report.json'
+    report.unlink(missing_ok=True)
+    oracle = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaProtocolClient.java'
+    classes = build / 'classes'
+    shutil.rmtree(classes, ignore_errors=True)
+    classes.mkdir()
+    dependencies = os.pathsep.join(map(str, [jars['server'], *libraries]))
+    oh.run_logged(['javac', '--release', lock['minecraft']['java_major'], '-proc:none', '-nowarn', '-sourcepath',
+                   lab.ROOT / 'mods/horizon/src/test/java', '-cp', dependencies, '-d', classes, oracle],
+                  build, 'compile-java')
+    oh.run_logged(['cargo', 'build', '--release', '-p', 'horizon-client', '--bin', 'horizon-client'], build,
+                  'compile-rust')
+    metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],
+                                                  cwd=lab.ROOT, text=True))
+    binary = Path(metadata['target_directory']) / 'release' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
+    vanilla_server = ['java', '-Xmx2g', '-Duser.timezone=UTC', '-cp', dependencies, 'net.minecraft.server.Main', 'nogui']
+    horizon_server = [binary, '--resources', lab.LOCAL / 'horizon-client/26.3', '--dedicated', '--nogui']
+
+    # The world, generated once by vanilla.
+    generate = build / 'generate'
+    write_server_dir(generate, free_port())
+    server = Server(vanilla_server, generate, 'generate')
+    try:
+        server.wait_for(r'Done \(')
+        server.console('gamerule respawn_radius 0')
+        server.wait_for(r'respawn_radius', timeout=30)
+        # Vanilla keeps no spawn chunks: force-load the area the client is
+        # sent and its neighbours (the console stands at the world spawn) so
+        # both servers load full chunks instead of finishing proto-chunks.
+        server.console('forceload add ~-80 ~-80 ~80 ~80')
+        server.wait_for(r'chunks in the Overworld are now force loaded|forceloaded|force loaded', timeout=60)
+        time.sleep(20)
+        server.console('forceload remove all')
+        server.console('save-all flush')
+        server.wait_for(r'Saved the game', timeout=120)
+    finally:
+        server.stop()
+    world = generate / 'world'
+    (world / 'playerdata').mkdir(exist_ok=True)
+
+    def client(port, out):
+        oh.run_logged(['java', '-Xmx1g', '-Duser.timezone=UTC', '-cp', str(classes) + os.pathsep + dependencies,
+                       'dev.horizonlab.parity.VanillaProtocolClient', '127.0.0.1', port, PLAYER, out], build,
+                      out.stem, timeout=300)
+
+    results = {}
+    for label, command in [('vanilla', vanilla_server), ('horizon', horizon_server)]:
+        PROPERTIES_PORTS[label] = free_port()
+        directory = build / label
+        write_server_dir(directory, PROPERTIES_PORTS[label], world)
+        results[label] = run_side(label, command, directory, client)
+        (build / f'{label}.txt').write_text('\n'.join(results[label]) + '\n', encoding='utf-8')
+    client_checks = horizon_client_joins(vanilla_server, binary, world, build, results['vanilla'])
+    vanilla, horizon = results['vanilla'], results['horizon']
+    gaps = sorted({gap(l) for l in vanilla if gap(l)})
+    vanilla = [l for l in vanilla if not gap(l)]
+    for g in gaps:
+        print(f'known gap: {KNOWN_GAPS[g]}')
+    errors = [l for l in vanilla + horizon if l.startswith('error')] + [l for l in client_checks if not l.endswith(': ok')]
+    for line in client_checks:
+        print(line)
+    differences = []
+    import difflib
+    for line in difflib.unified_diff(vanilla, horizon, 'vanilla', 'horizon', n=0, lineterm=''):
+        differences.append(line[:400])
+    # Name the chunks that differ instead of the whole line.
+    chunk_lines = [dict(re.findall(r'(-?\d+,-?\d+)=(\w+)', next((l for l in side if l.startswith('play-chunks')), '')))
+                   for side in (vanilla, horizon)]
+    for key in sorted(set(chunk_lines[0]) | set(chunk_lines[1])):
+        a, b = chunk_lines[0].get(key), chunk_lines[1].get(key)
+        if a != b:
+            differences.append(f'chunk {key}: vanilla {a} horizon {b}')
+    if differences or errors:
+        raise AssertionError(f'{len([d for d in differences if d[:1] in "+-" and d[:3] not in ("+++", "---")])} differing lines '
+                             f'(see {build}/vanilla.txt and horizon.txt):\n' + '\n'.join(differences[:80]))
+    lab.write_json(report, dict(
+        schema=1, minecraft=lock['minecraft']['version'], platform=platform.platform(),
+        java=subprocess.check_output(['java', '--version'], text=True).splitlines()[0],
+        lines=len(vanilla), known_gaps=[KNOWN_GAPS[g] for g in gaps], output_sha256=lab.digest(build / 'horizon.txt', 'sha256'),
+        scope='Dedicated server seen by a vanilla-codec client: status, legacy ping, login, configuration, play '
+              'start, chunks, chat, /list, console list/say/stop, files written. Offline mode.'))
+    print(f'dedicated server: {len(vanilla)} transcript lines identical')
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except AssertionError as error:
+        sys.exit(f'{NAME}: {error}')

@@ -1292,44 +1292,24 @@ impl BlockEntityRenderer {
             }
             Kind::EndGateway { state } => {
                 let anim = (scene.anim)(pos);
-                let (age, cooldown) = anim.gateway;
-                // TheEndGatewayRenderer.extractRenderState.
-                let spawning = age < 200;
-                if spawning || cooldown > 0 {
-                    let a = scene.partial;
-                    let percent = if spawning {
-                        ((age as f32 + a) / 200.0).clamp(0.0, 1.0)
-                    } else {
-                        1.0 - ((cooldown as f32 - a) / 40.0).clamp(0.0, 1.0)
-                    };
-                    let distance = if spawning {
-                        f64::from(scene.max_y)
-                    } else {
-                        50.0
-                    };
-                    let scale = trig::sin(f64::from(percent * PI));
-                    let height = (f64::from(scale) * distance).floor() as i32;
-                    // DyeColor.MAGENTA / PURPLE getTextureDiffuseColor.
-                    let color = if spawning { 0xC7_4EBD } else { 0x89_32B8 };
-                    let time = scene.game_time.rem_euclid(40) as f32 + a;
-                    if height > 0
-                        && let Some(s) = sprite("entity/end_portal/end_gateway_beam")
-                    {
-                        beam(
-                            base,
-                            BeamShape {
-                                scale,
-                                time,
-                                start: -height,
-                                height: height * 2,
-                                color,
-                                solid_radius: 0.15,
-                                glow_radius: 0.175,
-                            },
-                            s,
-                            out,
-                        );
-                    }
+                let b = gateway_beam(anim.gateway, scene.partial, scene.max_y, scene.game_time);
+                if b.height > 0
+                    && let Some(s) = sprite("entity/end_portal/end_gateway_beam")
+                {
+                    beam(
+                        base,
+                        BeamShape {
+                            scale: b.scale,
+                            time: b.animation_time,
+                            start: -b.height,
+                            height: b.height * 2,
+                            color: b.color,
+                            solid_radius: 0.15,
+                            glow_radius: 0.175,
+                        },
+                        s,
+                        out,
+                    );
                 }
                 // AbstractEndPortalRenderer.extractRenderState: TheEndGatewayBlockEntity.shouldRenderFace.
                 let faces: Vec<Direction> = Direction::ALL
@@ -1615,6 +1595,43 @@ impl BeamPart {
                 });
             }
         }
+    }
+}
+
+/// `EndGatewayRenderState`'s beam fields (zero when there is no beam).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GatewayBeam {
+    pub height: i32,
+    pub scale: f32,
+    pub color: u32,
+    pub animation_time: f32,
+}
+
+/// `TheEndGatewayRenderer.extractRenderState` from the block entity's age and
+/// teleport cooldown, at `partial`, for a level whose top is `max_y`.
+pub fn gateway_beam(
+    (age, cooldown): (i64, i32),
+    partial: f32,
+    max_y: i32,
+    game_time: i64,
+) -> GatewayBeam {
+    let spawning = age < 200;
+    if !spawning && cooldown <= 0 {
+        return GatewayBeam::default();
+    }
+    let percent = if spawning {
+        ((age as f32 + partial) / 200.0).clamp(0.0, 1.0)
+    } else {
+        1.0 - ((cooldown as f32 - partial) / 40.0).clamp(0.0, 1.0)
+    };
+    let distance = if spawning { f64::from(max_y) } else { 50.0 };
+    let scale = trig::sin(f64::from(percent * PI));
+    GatewayBeam {
+        height: (f64::from(scale) * distance).floor() as i32,
+        scale,
+        // DyeColor.MAGENTA / PURPLE getTextureDiffuseColor.
+        color: if spawning { 0xFFC7_4EBD } else { 0xFF89_32B8 },
+        animation_time: game_time.rem_euclid(40) as f32 + partial,
     }
 }
 

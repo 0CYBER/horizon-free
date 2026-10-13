@@ -166,6 +166,9 @@ pub struct Items {
     /// Block tag name (without '#') -> member block names.
     pub block_tags: HashMap<String, HashSet<String>>,
     pub item_tags: HashMap<String, HashSet<String>>,
+    /// Item tags in vanilla's order (`TagLoader`: file order, nested tags in
+    /// place, first occurrence kept), the order `TagSlotDisplay` resolves.
+    pub item_tag_order: HashMap<String, Vec<String>>,
     loot: HashMap<String, Value>,
     /// The `jukebox_song` registry.
     pub songs: HashMap<String, Song>,
@@ -216,6 +219,13 @@ fn load_songs(root: &Path) -> HashMap<String, Song> {
     songs
 }
 pub(crate) fn load_tags(root: &Path, kind: &str) -> Result<HashMap<String, HashSet<String>>> {
+    Ok(load_tag_lists(root, kind)?
+        .into_iter()
+        .map(|(k, v)| (k, v.into_iter().collect()))
+        .collect())
+}
+/// Every tag's contents in `TagLoader.tryBuildTag` order (a `LinkedHashSet`).
+pub(crate) fn load_tag_lists(root: &Path, kind: &str) -> Result<HashMap<String, Vec<String>>> {
     let dir = root.join(format!("data/minecraft/tags/{kind}"));
     let mut raw: HashMap<String, Vec<String>> = HashMap::new();
     fn walk(dir: &Path, base: &Path, raw: &mut HashMap<String, Vec<String>>) -> Result<()> {
@@ -246,29 +256,24 @@ pub(crate) fn load_tags(root: &Path, kind: &str) -> Result<HashMap<String, HashS
     if dir.exists() {
         walk(&dir, &dir, &mut raw)?;
     }
-    fn resolve(
-        name: &str,
-        raw: &HashMap<String, Vec<String>>,
-        out: &mut HashSet<String>,
-        depth: u32,
-    ) {
+    fn resolve(name: &str, raw: &HashMap<String, Vec<String>>, out: &mut Vec<String>, depth: u32) {
         if depth > 32 {
             return;
         }
         for v in raw.get(name).into_iter().flatten() {
             if let Some(tag) = v.strip_prefix('#') {
                 resolve(tag, raw, out, depth + 1);
-            } else {
-                out.insert(v.clone());
+            } else if !out.contains(v) {
+                out.push(v.clone());
             }
         }
     }
     Ok(raw
         .keys()
         .map(|k| {
-            let mut set = HashSet::new();
-            resolve(k, &raw, &mut set, 0);
-            (k.clone(), set)
+            let mut list = Vec::new();
+            resolve(k, &raw, &mut list, 0);
+            (k.clone(), list)
         })
         .collect())
 }
@@ -456,6 +461,7 @@ impl Items {
             order,
             block_tags: load_tags(root, "block")?,
             item_tags: load_tags(root, "item")?,
+            item_tag_order: load_tag_lists(root, "item")?,
             loot,
             songs: load_songs(root),
         })
@@ -470,6 +476,7 @@ impl Items {
             order: Vec::new(),
             block_tags: load_tags(root, "block")?,
             item_tags: load_tags(root, "item")?,
+            item_tag_order: load_tag_lists(root, "item")?,
             loot: HashMap::new(),
             songs: HashMap::new(),
         })
@@ -481,6 +488,10 @@ impl Items {
             items: HashMap::new(),
             order: Vec::new(),
             block_tags: HashMap::new(),
+            item_tag_order: item_tags
+                .iter()
+                .map(|(k, v)| (k.clone(), v.iter().cloned().collect()))
+                .collect(),
             item_tags,
             loot: HashMap::new(),
             songs: HashMap::new(),
