@@ -336,9 +336,21 @@ pub fn prepare_command(tag: &str, minecraft: &Path, log: &dyn Fn(String)) -> Res
     Ok(cmd)
 }
 
+/// Where the game keeps saves and options.txt: `HORIZON_HOME`, else `horizon` in the platform's
+/// data folder (~/.local/share/horizon on Linux, as the release folders' horizon.sh uses). It is
+/// never inside a version folder, so installing, updating or removing a version keeps the saves.
+pub fn game_home() -> PathBuf {
+    if let Some(home) = std::env::var_os("HORIZON_HOME").filter(|h| !h.is_empty()) {
+        return PathBuf::from(home);
+    }
+    dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("horizon")
+}
+
 pub fn client_command(tag: &str) -> Command {
+    let home = game_home();
+    let _ = fs::create_dir_all(&home);
     let mut cmd = Command::new(version_dir(tag).join(CLIENT));
-    cmd.current_dir(version_dir(tag));
+    cmd.current_dir(home).arg("--resources").arg(resources(tag));
     cmd
 }
 
