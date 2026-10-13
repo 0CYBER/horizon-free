@@ -117,6 +117,20 @@ pub fn quick() -> f32 {
 pub fn move_() -> f32 {
     horizon_theme::MOVE.as_secs_f32()
 }
+/// How visible the live title backdrop is (0..1), set by the game each frame.
+static BACKDROP: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+pub fn set_backdrop(fade: f32) {
+    BACKDROP.store(fade.to_bits(), Ordering::Relaxed);
+}
+pub fn backdrop() -> f32 {
+    f32::from_bits(BACKDROP.load(Ordering::Relaxed))
+}
+/// The window size of the last drawn frame, for hit-testing passes.
+static WINDOW: std::sync::Mutex<[u32; 2]> = std::sync::Mutex::new([1280, 800]);
+/// An empty batch at the last frame's window size (for [`Ui::dry`]).
+pub fn scratch_batch() -> HudBatch {
+    HudBatch::new(*WINDOW.lock().unwrap_or_else(|e| e.into_inner()))
+}
 /// Whether the left mouse button is held (the primary button's press state).
 static PRESSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 pub fn set_pressed(down: bool) {
@@ -398,6 +412,9 @@ impl<'a> Ui<'a> {
         let scale = batch.scale;
         let (pw, ph) = (batch.width * scale, batch.height * scale);
         let density = (pw / 1040.0).min(ph / 700.0).clamp(1.0, 4.0);
+        if let Ok(mut w) = WINDOW.lock() {
+            *w = [pw.round() as u32, ph.round() as u32];
+        }
         with_cache(atlas, |c| {
             let now = Instant::now();
             c.dt = c

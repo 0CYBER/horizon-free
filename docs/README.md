@@ -7,6 +7,7 @@ To play, use [the launcher](../launcher/README.md). These pages are for develope
 - [Build from source](../README.md#build-from-source): your own copy of the game, resource preparation, `cargo run`.
 - [Native client](native-client.md): options, controls, the dedicated server, `horizon-ctl` scripting, packaging, architecture.
 - [Launcher](../launcher/README.md): installs, updates and starts builds; its CLI and MCP server; releasing it.
+- Menus: the title, world list, create world, multiplayer, options and pause screens share the launcher's design tokens and fonts (`crates/horizon-theme`), drawn by `ui_theme` over a live frozen backdrop (`game/backdrop.rs`, blurred and graded by `post.rs`). Options → Interface → Menu style switches to vanilla's screens (Classic, kept in `horizon.txt`; `HORIZON_MENU_STYLE=horizon|classic` overrides it, and scripted runs default to Classic). [Title](media/menu-title.png) ([webm](media/menu-title.webm)), [worlds](media/menu-worlds.png), [options](media/menu-options.png), [pause](media/menu-pause.png).
 
 ## Parity
 

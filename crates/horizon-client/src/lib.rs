@@ -80,6 +80,7 @@ pub mod nbt_path;
 pub mod net;
 pub mod options_file;
 pub mod options_fixes;
+pub mod options_horizon;
 pub mod options_ui;
 pub mod pack_screen;
 pub mod packs;

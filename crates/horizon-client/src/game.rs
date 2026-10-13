@@ -3007,7 +3007,8 @@ impl Game<'_> {
         // the sleep overlay, debug screen and open screens still draw.
         let spectator = self.spectator();
         let (wi, hi) = (w as i32, h as i32);
-        if !self.ui.hide_gui {
+        // Horizon's pause menu sits over the blurred world alone.
+        if !self.ui.hide_gui && !self.horizon_pause() {
             self.draw_spyglass(&mut batch);
             // Hud.extractCrosshair / extractItemHotbar / extractPlayerHealth /
             // extractVehicleHealth and the experience bar, laid out by hud_layout.
@@ -8047,6 +8048,7 @@ impl ApplicationHandler for Game<'_> {
                         + (turn(KeyCode::ArrowDown) - turn(KeyCode::ArrowUp)) * 90.0 * secs)
                         .clamp(-90.0, 90.0);
                     self.update_backdrop()?;
+                    horizon_client::ui_theme::set_backdrop(self.backdrop_fade());
                     if self.screen != Screen::Paused {
                         self.pause_since = None;
                     }
@@ -8298,6 +8300,13 @@ pub fn run() -> Result<()> {
     let game_root = options.resources.clone();
     let mut settings = Settings::load(&std::env::current_dir()?.join("options.txt"));
     horizon_client::ui_theme::load_preferences(&std::env::current_dir()?);
+    // Scripted and frame-limited runs (the parity harnesses) see vanilla's
+    // screens unless HORIZON_MENU_STYLE asks otherwise.
+    if (options.frames.is_some() || options.control.is_some())
+        && std::env::var_os("HORIZON_MENU_STYLE").is_none()
+    {
+        horizon_client::ui_theme::set_style(horizon_client::ui_theme::MenuStyle::Classic);
+    }
     if let Some(d) = options.distance_override {
         settings.render_distance = d;
     }
