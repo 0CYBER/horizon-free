@@ -2806,6 +2806,7 @@ impl ParticleEngine {
                 ] {
                     let v = center + rotation * FVec3::new(n.0, n.1, 0.0) * size;
                     out.push(Vertex {
+                        normal: [0; 4],
                         pos: v.to_array(),
                         uv,
                         layer: 0,

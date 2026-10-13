@@ -26,6 +26,7 @@ public final class VanillaEntityModelExporter {
             pose.add(f);
         o.add("pose", pose);
         var polygons = new JsonArray();
+        var normals = new JsonArray();
         for (ModelPart.Cube cube : (List<ModelPart.Cube>) cubes.get(part)) {
             for (ModelPart.Polygon polygon : cube.polygons) {
                 var p = new JsonArray();
@@ -37,9 +38,15 @@ public final class VanillaEntityModelExporter {
                     p.add(vertex);
                 }
                 polygons.add(p);
+                var normal = new JsonArray();
+                normal.add(polygon.normal().x());
+                normal.add(polygon.normal().y());
+                normal.add(polygon.normal().z());
+                normals.add(normal);
             }
         }
         o.add("polygons", polygons);
+        o.add("normals", normals);
         var kids = new JsonObject();
         for (var entry : ((Map<String, ModelPart>) children.get(part)).entrySet())
             kids.add(entry.getKey(), part(entry.getValue()));

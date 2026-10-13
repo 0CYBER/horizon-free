@@ -485,6 +485,7 @@ impl Game<'_> {
         let mut quad = |c: [glam::DVec3; 4], uv: [[f32; 2]; 4], color: u32| {
             for (v, uv) in c.iter().zip(uv) {
                 out.push(Vertex {
+                    normal: [0; 4],
                     pos: (*v - camera).as_vec3().to_array(),
                     uv,
                     layer: 0,

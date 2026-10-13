@@ -4333,6 +4333,7 @@ impl Game<'_> {
                         .zip([[r.u0, v1], [u1, v1], [u1, r.v0], [r.u0, r.v0]])
                     {
                         out.push(Vertex {
+                            normal: [0; 4],
                             pos: v.to_array(),
                             uv,
                             layer: 0,
@@ -4494,6 +4495,7 @@ impl Game<'_> {
                 {
                     let v = c + right * (k.0 * s) + up * (k.1 * s);
                     out.push(Vertex {
+                        normal: [0; 4],
                         pos: v.to_array(),
                         uv,
                         layer: 0,
@@ -4559,6 +4561,7 @@ impl Game<'_> {
                         .zip([[r.u0, r.v1], [r.u1, r.v1], [r.u1, r.v0], [r.u0, r.v0]])
                 {
                     out.push(Vertex {
+                        normal: [0; 4],
                         pos: p.to_array(),
                         uv,
                         layer: 0,
@@ -4658,6 +4661,7 @@ impl Game<'_> {
                             .zip([[r.u0, r.v1], [r.u1, r.v1], [r.u1, r.v0], [r.u0, r.v0]])
                     {
                         out.push(Vertex {
+                            normal: [0; 4],
                             pos: v.to_array(),
                             uv,
                             layer: 0,
@@ -4981,6 +4985,7 @@ impl Game<'_> {
             for ((x, z), uv) in corners.iter().zip(uv) {
                 let p = m.transform_point3(glam::Vec3::new(*x, 100.0, *z));
                 out.push(Vertex {
+                    normal: [0; 4],
                     pos: p.to_array(),
                     uv,
                     layer: 2,
@@ -5040,6 +5045,7 @@ impl Game<'_> {
                     for (a, b) in [(size, -size), (size, size), (-size, size), (-size, -size)] {
                         let p = m.transform_point3(center + r2 * a + u2 * b);
                         out.push(Vertex {
+                            normal: [0; 4],
                             pos: p.to_array(),
                             uv: [cu, cv],
                             layer: 2,
@@ -5102,6 +5108,7 @@ impl Game<'_> {
                     for v in p {
                         // Overlay 4: clouds (unlit, faded by the cloud fog end).
                         out.push(Vertex {
+                            normal: [0; 4],
                             pos: v,
                             uv,
                             layer: 4,
@@ -5780,6 +5787,7 @@ impl Game<'_> {
             let uv = [[r.u0, r.v0], [r.u1, r.v0], [r.u1, r.v1], [r.u0, r.v1]];
             for (p, uv) in corners.iter().zip(uv) {
                 out.push(Vertex {
+                    normal: [0; 4],
                     pos: p.to_array(),
                     uv,
                     layer: 2,
@@ -6754,6 +6762,7 @@ impl Game<'_> {
                 let uvs = [[r.u0, uv1], [r.u1, uv1], [r.u1, uv0], [r.u0, uv0]];
                 for (p, uv) in corners.iter().zip(uvs) {
                     out.push(Vertex {
+                        normal: [0; 4],
                         pos: p.to_array(),
                         uv,
                         layer: 0,
@@ -7370,6 +7379,7 @@ impl Game<'_> {
             .then(|| self.border_draw(camera.to_array(), alpha as f32))
             .flatten();
         let frame = Frame {
+            nether_lighting: self.dim == Dim::Nether,
             camera,
             yaw,
             pitch,

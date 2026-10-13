@@ -2407,6 +2407,7 @@ impl Game<'_> {
                         .zip([[r.u0, v1], [u1, v1], [u1, r.v0], [r.u0, r.v0]])
                     {
                         out.push(Vertex {
+                            normal: [0; 4],
                             pos: v.to_array(),
                             uv,
                             layer: 0,
@@ -2472,6 +2473,7 @@ impl Game<'_> {
             {
                 let v = c + right * k.0 * s + up * k.1 * s;
                 out.push(Vertex {
+                    normal: [0; 4],
                     pos: v.to_array(),
                     uv,
                     layer: 0,

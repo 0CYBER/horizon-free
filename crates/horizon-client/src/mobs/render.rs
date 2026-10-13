@@ -3,7 +3,7 @@
 //! scale, and extra layers (sheep wool, spider eyes, drowned/stray outer
 //! layers, villager overlays, collars...).
 use super::{
-    Mob, MobData, Part, Species,
+    Mob, MobData, ModelNormals, Part, Species,
     anim::{self, Poses},
     living::wrap,
 };
@@ -811,6 +811,30 @@ pub fn draw(
     overlay: u32,
     out: &mut Vec<Vertex>,
 ) {
+    draw_normals(
+        part,
+        base,
+        ModelNormals::new(base),
+        poses,
+        uv,
+        color,
+        light,
+        overlay,
+        out,
+    );
+}
+#[allow(clippy::too_many_arguments)]
+fn draw_normals(
+    part: &Part,
+    base: glam::Mat4,
+    normals: ModelNormals,
+    poses: &Poses,
+    uv: [f32; 4],
+    color: u32,
+    light: u32,
+    overlay: u32,
+    out: &mut Vec<Vertex>,
+) {
     let p = poses.pose(part);
     let m = base
         * glam::Mat4::from_translation(glam::Vec3::new(p[0], p[1], p[2]) / 16.0)
@@ -824,10 +848,13 @@ pub fn draw(
     if poses.is_hidden(part) || p[6] == 0.0 && p[7] == 0.0 && p[8] == 0.0 {
         return;
     }
+    let normals = normals.part(p);
     for poly in part.polygons.iter().filter(|_| !poses.skips(part)) {
+        let normal = poly.vertex_normal(normals);
         for v in poly.vertices {
             let pos = m.transform_point3(glam::Vec3::new(v[0], v[1], v[2]) / 16.0);
             out.push(Vertex {
+                normal,
                 pos: pos.to_array(),
                 uv: [
                     uv[0] + (uv[2] - uv[0]) * v[3],
@@ -840,7 +867,7 @@ pub fn draw(
         }
     }
     for c in &part.children {
-        draw(c, m, poses, uv, color, light, overlay, out);
+        draw_normals(c, m, normals, poses, uv, color, light, overlay, out);
     }
 }
 /// Render a mob with its variant model, texture and layers.
@@ -955,7 +982,13 @@ fn render_visible(
         } else {
             overlay
         };
+        let start = out.len();
         draw(&part, base, &poses, uv, layer.color, light, overlay, out);
+        if layer.full_bright && m.species() != Species::Warden {
+            for vertex in &mut out[start..] {
+                vertex.normal = [0; 4];
+            }
+        }
     }
 }
 /// The equipment slot of a `HumanoidArmorLayer` model (`zombie#helmet`).

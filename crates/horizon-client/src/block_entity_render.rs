@@ -143,6 +143,7 @@ pub fn draw_part(
         let color = pack_color(tint, 255, diffuse(normal, lights));
         for (v, position) in poly.iter().zip(pos) {
             out.push(Vertex {
+                normal: [0; 4],
                 pos: position.to_array(),
                 uv: [r.u0 + (r.u1 - r.u0) * v[3], r.v0 + (r.v1 - r.v0) * v[4]],
                 layer: 0,
@@ -637,6 +638,7 @@ fn draw_text(scene: &Scene, call: &TextCall, out: &mut Vec<Vertex>) {
                     0xFF00_0000 | (argb & 255) << 16 | (argb >> 8 & 255) << 8 | (argb >> 16 & 255);
                 for ((cx, cy), uv) in corners.into_iter().zip(uvs) {
                     out.push(Vertex {
+                        normal: [0; 4],
                         pos: call
                             .matrix
                             .transform_point3(Vec3::new(cx, cy, 0.0))
@@ -1587,6 +1589,7 @@ impl BeamPart {
                 (at(b, self.end), [s.u0, v1]),
             ] {
                 out.push(Vertex {
+                    normal: [0; 4],
                     pos: p.to_array(),
                     uv,
                     layer: 6,
@@ -1656,6 +1659,7 @@ fn portal_cube(m: Mat4, faces: &[Direction], layer: u32, out: &mut Vec<Vertex>) 
     for &d in faces {
         for c in PORTAL_FACES[d as usize] {
             out.push(Vertex {
+                normal: [0; 4],
                 pos: m.transform_point3(Vec3::from(c)).to_array(),
                 uv: [0.0; 2],
                 layer,

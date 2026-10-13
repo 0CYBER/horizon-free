@@ -373,6 +373,7 @@ impl Game<'_> {
                     for quad in [[a0, b0, b1, a1], [a1, b1, b0, a0]] {
                         for (v, uv) in quad.iter().zip(uv) {
                             out.push(Vertex {
+                                normal: [0; 4],
                                 pos: (*v - camera).as_vec3().to_array(),
                                 uv,
                                 layer: 0,

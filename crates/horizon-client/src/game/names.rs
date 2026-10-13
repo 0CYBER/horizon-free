@@ -154,6 +154,7 @@ impl Game<'_> {
                     ];
                     for ((x, y), uv) in corners.into_iter().zip(uvs) {
                         out.push(Vertex {
+                            normal: [0; 4],
                             pos: (at(x, y) + if background { away } else { glam::Vec3::ZERO })
                                 .to_array(),
                             uv,

@@ -33,6 +33,8 @@ pub struct Vertex {
     pub color: u32,
     /// Smooth light, 16x fixed point: sky in bits 0..8, block in bits 8..16.
     pub light: u32,
+    /// RGBA8_SNORM face normal; w = -127 for two-sided lighting, 0 to keep baked/unlit colour.
+    pub normal: [i8; 4],
 }
 pub struct SectionMesh {
     pub solid: Vec<Vertex>,
@@ -722,6 +724,7 @@ impl Mesher<'_> {
             };
             let p = q.positions[i];
             target.push(Vertex {
+                normal: [0; 4],
                 pos: [p[0] + origin[0], p[1] + origin[1], p[2] + origin[2]],
                 uv: q.uv[i],
                 // Opaque leaves (forceOpaque) draw in the solid layer: no alpha cutout.

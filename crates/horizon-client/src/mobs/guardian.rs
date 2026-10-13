@@ -382,6 +382,7 @@ pub fn beam_geometry(
     let atlas = |u: f32, v: f32| [uv[0] + (uv[2] - uv[0]) * u, uv[1] + (uv[3] - uv[1]) * v];
     let mut push = |p: [f32; 3], t: [f32; 2]| {
         out.push(crate::mesher::Vertex {
+            normal: [0; 4],
             pos: pose.transform_point3(glam::Vec3::from(p)).to_array(),
             uv: t,
             layer: 0,
