@@ -87,7 +87,7 @@ workflow builds all three platforms on every push to the `launcher` branch.
 
     cargo test --lib    # tag separation, version order, update selection, notes as text
 
-Geist, Geist Mono and Instrument Serif (SIL Open Font License, `assets/fonts/OFL-*.txt`) are
+Geist, Geist Mono and Instrument Serif (SIL Open Font License, `crates/horizon-theme/fonts/OFL-*.txt`, shared with the game's menus) are
 bundled so the type is the same on every platform.
 
 Background image (`assets/background.jpg`): backgrounds.supply (free preview), licence to confirm before release.

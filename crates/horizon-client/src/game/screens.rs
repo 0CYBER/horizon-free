@@ -52,7 +52,32 @@ fn death_buttons(w: f32, h: f32) -> [(f32, f32, &'static str, u8); 2] {
     ]
 }
 impl Game<'_> {
+    /// Whether the pause menu is drawn in Horizon's style (over a blurred world).
+    pub(super) fn horizon_pause(&self) -> bool {
+        self.screen == Screen::Paused && self.title.is_none() && horizon_client::ui_theme::horizon()
+    }
+    fn pause_labels(&self) -> (String, &'static str) {
+        let world = if self.remote.is_some() {
+            "Multiplayer".to_owned()
+        } else {
+            self.level.name.clone()
+        };
+        let quit = if self.remote.is_some() {
+            "Disconnect"
+        } else {
+            "Save and quit"
+        };
+        (world, quit)
+    }
     pub(super) fn draw_pause_menu(&mut self, batch: &mut HudBatch) {
+        if horizon_client::ui_theme::horizon() {
+            let opened = *self.pause_since.get_or_insert_with(std::time::Instant::now);
+            let (world, quit) = self.pause_labels();
+            let mut ui = horizon_client::ui_theme::Ui::new(&self.res.atlas, batch, self.cursor);
+            horizon_client::front::pause::draw(&mut ui, &world, quit, opened);
+            ui.finish();
+            return;
+        }
         let atlas = &self.res.atlas;
         let (w, h) = (batch.width, batch.height);
         ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
@@ -102,10 +127,27 @@ impl Game<'_> {
             let b = HudBatch::new(size);
             (b.width, b.height)
         };
-        let hit = pause_buttons(w, h)
-            .into_iter()
-            .find(|b| b.5 && ui::hovered(self.cursor, b.0, b.1, b.2, 20.0))
-            .map(|b| b.4);
+        let hit = if horizon_client::ui_theme::horizon() {
+            let size = self
+                .renderer
+                .as_ref()
+                .map_or([1, 1], |r| [r.config.width, r.config.height]);
+            let mut b = HudBatch::new(size);
+            let (world, quit) = self.pause_labels();
+            horizon_client::front::pause::click(
+                &self.res.atlas,
+                &mut b,
+                self.cursor.0,
+                self.cursor.1,
+                &world,
+                quit,
+            )
+        } else {
+            pause_buttons(w, h)
+                .into_iter()
+                .find(|b| b.5 && ui::hovered(self.cursor, b.0, b.1, b.2, 20.0))
+                .map(|b| b.4)
+        };
         match hit {
             Some(0) => {
                 self.screen = Screen::Playing;

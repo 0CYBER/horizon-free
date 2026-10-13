@@ -108,6 +108,13 @@ fn entry_address(servers: &[ServerEntry], lan: &Scanner, index: usize) -> Option
 }
 
 impl Screen {
+    /// The address of list row `row` (saved servers, then LAN games).
+    pub fn address_of(&self, row: usize) -> Option<String> {
+        match self {
+            Self::List { servers, lan, .. } => entry_address(servers, lan, row),
+            _ => None,
+        }
+    }
     pub fn list(saves: &Path) -> Self {
         let servers = servers::load(&servers_file(saves));
         let pings: Pings = Arc::default();

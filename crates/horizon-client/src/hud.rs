@@ -204,6 +204,13 @@ impl HudAtlas {
         for i in 0..SKIN_SLOTS {
             images.push((format!("horizon/skin{i}"), 64, 64, vec![0; 64 * 64 * 4]));
         }
+        // Horizon-style menu text and corner masks (ui_theme), rasterized at run time.
+        images.push((
+            "horizon/ui-text".into(),
+            2048,
+            1024,
+            vec![0; 2048 * 1024 * 4],
+        ));
         images.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
         let width = 4096u32;
         let mut placements = Vec::with_capacity(images.len());
