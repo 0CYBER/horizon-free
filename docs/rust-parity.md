@@ -1478,6 +1478,31 @@ bit for bit** (8,513 with the wall drawn). The game draws the wall with
 texture, and follows the server's border packets. One border is kept for all
 dimensions.
 
+## Resource pack screen and chat input
+
+`horizon_client::pack_screen` is `PackSelectionScreen` as a state machine: the
+header, the two `TransferableSelectionList`s (rows, header entries, scroll,
+selection outline, focus, the hover overlay and its arrows, incompatible packs'
+tint and text), the search box filtering both lists, the footer buttons and
+their tooltip, and the `ConfirmScreen` an incompatible pack opens, all as GUI
+calls (`screen_draw`, which also ports `StringWidget`, `MultiLineTextWidget`,
+`Button`, `EditBox` with its scrolling, and `StringSplitter`'s line splitting
+with legacy formatting codes, whose split remainder takes the style found at
+the break). `tools/test_pack_screen_parity.py` drives a real
+`PackSelectionScreen` (`VanillaPackScreenOracle`) through 1,500 random sessions
+of clicks, typing and the mouse wheel and compares every call.
+
+`horizon_client::chat::ChatScreen` ports `ChatScreen`, its `EditBox` and
+`CommandSuggestions`: argument colouring, usage lines and parse errors, the
+suggestion list (sorting, hover, Tab and Shift+Tab, clicks), history and the
+input's editing keys. `tools/test_chat_screen_parity.py` runs a real
+`ChatScreen` (`VanillaChatScreenOracle`) on the client command tree an operator
+receives (`Commands.sendCommands`, `ClientboundCommandsPacket`), whose custom
+suggestions the server's dispatcher answers as
+`handleCustomCommandSuggestions` does, over 3,000 sessions, and compares the
+input's state and every call. Not compared: the mouse wheel over the
+suggestion list and clipboard keys.
+
 ## Pillager patrols and raids
 
 `horizon_client::patrol` ports `PatrolSpawner` and `horizon_client::raid` ports
