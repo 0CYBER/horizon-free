@@ -227,6 +227,12 @@ const NO_GPU_DRIVER: &str = "No Metal graphics device found";
 const NO_GPU_DRIVER: &str = "No Vulkan graphics driver found: Horizon needs the Vulkan loader \
      (libvulkan.so.1) and a Vulkan driver for your GPU (Mesa's, or NVIDIA's)";
 impl Renderer {
+    /// Sections with GPU buffers, for soak tests watching residency.
+    pub fn resident_sections(&self) -> usize {
+        self.sections.len()
+    }
+}
+impl Renderer {
     pub async fn new(
         window: Arc<Window>,
         sprite_pixels: &[u8],

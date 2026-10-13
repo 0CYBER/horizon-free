@@ -358,20 +358,24 @@ impl Streaming {
                 }
                 Done::Generated(mut chunk) => {
                     let key = (chunk.x, chunk.z);
-                    world
-                        .block_entities
-                        .extend(std::mem::take(&mut chunk.block_entities));
-                    world
-                        .block_names
-                        .extend(std::mem::take(&mut chunk.block_names));
-                    let entities = std::mem::take(&mut chunk.entities);
-                    if !entities.is_empty() {
-                        world.loaded_entities.push(((chunk.x, chunk.z), entities));
-                    }
                     self.generating.remove(&key);
                     self.finishing.remove(&key);
                     self.decorated.insert(key);
+                    // A column that finished after the player moved away is
+                    // dropped whole: its block entities and saved entities
+                    // too, or they would stay in the world (and the entities
+                    // spawn again, duplicated, when the column loads later).
                     if self.in_range(key.0, key.1, 2) || self.near_finished(key.0, key.1, 1) {
+                        world
+                            .block_entities
+                            .extend(std::mem::take(&mut chunk.block_entities));
+                        world
+                            .block_names
+                            .extend(std::mem::take(&mut chunk.block_names));
+                        let entities = std::mem::take(&mut chunk.entities);
+                        if !entities.is_empty() {
+                            world.loaded_entities.push(((chunk.x, chunk.z), entities));
+                        }
                         self.generated_total += 1;
                         // A chunk saved with its light needs no light job; its
                         // unlit neighbours still light themselves from it.
@@ -424,6 +428,12 @@ impl Streaming {
                     if self.meshing.get(&(x, sy, z)) != Some(&seq) {
                         continue;
                     }
+                    // Its column unloaded while it was meshed: nothing would
+                    // ever remove the uploaded section.
+                    if !world.chunks.contains_key(&(x, z)) {
+                        self.meshing.remove(&(x, sy, z));
+                        continue;
+                    }
                     self.meshing.remove(&(x, sy, z));
                     self.meshed_total += 1;
                     uploads.push(((x, sy, z), mesh));
@@ -449,6 +459,13 @@ impl Streaming {
             }
             self.lit.remove(key);
             self.meshed.remove(key);
+            self.lighting.remove(key);
+            self.light_snapshots.remove(key);
+        }
+        if !far.is_empty() {
+            let far: HashSet<(i32, i32)> = far.iter().copied().collect();
+            self.meshing.retain(|k, _| !far.contains(&(k.0, k.2)));
+            world.dirty_sections.retain(|k| !far.contains(&(k.0, k.2)));
         }
         // Drop far proto chunks that are not checked out.
         let areas: Vec<((i32, i32), i64)> =

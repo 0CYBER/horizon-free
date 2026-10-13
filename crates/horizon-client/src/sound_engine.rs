@@ -445,6 +445,17 @@ impl SoundEngine {
             self.instances.remove(&id);
         }
     }
+    /// Table sizes, for soak tests watching what the engine holds.
+    pub fn census(&self) -> serde_json::Value {
+        serde_json::json!({
+            "instances": self.instances.len(),
+            "playing": self.instance_to_channel.len(),
+            "handles": self.handles.len(),
+            "ticking": self.ticking.len(),
+            "queued": self.queued.len(),
+            "used": self.used,
+        })
+    }
     pub fn instance(&self, id: InstanceId) -> Option<&SoundInstance> {
         self.instances.get(&id)
     }
