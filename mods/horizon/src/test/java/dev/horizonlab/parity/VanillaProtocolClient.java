@@ -402,6 +402,8 @@ public final class VanillaProtocolClient {
         play();
     }
 
+    private static final String[] REPLIES = {"random value 7..7", "random value x", "trigger nope"};
+
     private void play() throws Exception {
         state = "play";
         GameProtocols.Context context = new GameProtocols.Context() {
@@ -476,7 +478,9 @@ public final class VanillaProtocolClient {
                     record("play", r.type + " " + json(p.reason()));
                     break;
                 }
-                if (ordered) {
+                // The clock goes out every second: after the first, where it
+                // falls among the joining packets is timing.
+                if (ordered && !(r.type.equals("minecraft:set_time") && counts.get(r.type) > 1)) {
                     record("play-start", r.type + " " + summary(r));
                 }
                 if (packet instanceof net.minecraft.network.protocol.game.ClientboundCommandsPacket p && counts.get(r.type) == 1) {
@@ -506,7 +510,14 @@ public final class VanillaProtocolClient {
                 step = 2;
                 stepAt = now;
                 send(new ServerboundChatCommandPacket("list"));
-            } else if (step == 2 && now - stepAt > 1500) {
+            } else if (step >= 2 && step < 2 + REPLIES.length && now - stepAt > 1500) {
+                // Commands a player without operator rights may run, whose
+                // replies (a failure, a syntax error with its context, a
+                // failure with an argument) are compared component by component.
+                send(new ServerboundChatCommandPacket(REPLIES[step - 2]));
+                step++;
+                stepAt = now;
+            } else if (step == 2 + REPLIES.length && now - stepAt > 1500) {
                 record("play-counts", "chunks " + counts.getOrDefault("minecraft:level_chunk_with_light", 0));
                 return;
             }
@@ -652,6 +663,40 @@ public final class VanillaProtocolClient {
         if (t.equals("minecraft:set_time") || t.equals("minecraft:keep_alive") || t.equals("minecraft:ping")) return "";
         // The tree is compared below: its node numbering follows the game rules' identity-hashed order.
         if (t.equals("minecraft:commands")) return "";
+        // Vanilla's hash maps and sets order these per run: compared sorted.
+        if (t.equals("minecraft:update_recipes")) {
+            var p = (net.minecraft.network.protocol.game.ClientboundUpdateRecipesPacket) r.packet;
+            var sets = new TreeMap<String, String>();
+            p.itemSets().forEach((k, v) -> {
+                var items = new java.util.TreeSet<String>();
+                ((java.util.Set<?>) field(v, "items")).forEach(h -> items.add(((net.minecraft.core.Holder<?>) h).getRegisteredName()));
+                sets.put(k.identifier().toString(), items.toString());
+            });
+            p.stonecutterRecipes().entries().forEach(e -> record("play-stonecutter", field(e.input(), "values") + " -> " + e.recipe().optionDisplay()));
+            sets.forEach((k, v) -> record("play-property-set", k + " " + v));
+            return "sets=" + sets.size() + " stonecutter=" + p.stonecutterRecipes().entries().size();
+        }
+        if (t.equals("minecraft:update_advancements")) {
+            var p = (net.minecraft.network.protocol.game.ClientboundUpdateAdvancementsPacket) r.packet;
+            var added = new TreeMap<String, String>();
+            for (var a : p.added()) {
+                var adv = a.advancement().value();
+                added.put(a.advancement().id().toString(), adv.parent() + " " + adv.display().map(d -> json(d.title()) + " " + json(d.description())
+                    + " " + d.icon() + " " + d.type() + " " + d.background() + " " + d.showToast() + " " + d.hidden()).orElse("-")
+                    + " " + a.x() + "," + a.y() + " " + adv.requirements().requirements() + " " + adv.sendsTelemetryEvent());
+            }
+            var progress = new TreeMap<String, String>();
+            p.progress().forEach((k, v) -> {
+                var criteria = new TreeMap<String, Boolean>();
+                ((Map<?, ?>) field(v, "criteria")).forEach((c, cp) -> criteria.put((String) c,
+                    ((net.minecraft.advancements.CriterionProgress) cp).isDone()));
+                progress.put(k.toString(), criteria.toString());
+            });
+            added.forEach((k, v) -> record("play-advancement", k + " " + v));
+            return "reset=" + p.shouldReset() + " show=" + p.showAdvancements() + " added=" + added.size()
+                + " removed=" + new java.util.TreeSet<>(p.removed()) + " progress=" + progress;
+        }
+        if (t.equals("minecraft:recipe_book_add")) return text(r.packet) + " sha=" + sha(r.payload);
         if (t.equals("minecraft:set_entity_data")) {
             return text(((net.minecraft.network.protocol.game.ClientboundSetEntityDataPacket) r.packet).packedItems());
         }
@@ -660,5 +705,15 @@ public final class VanillaProtocolClient {
             return "";
         }
         return r.payload.length > 200 ? "sha=" + sha(r.payload) : text(r.packet);
+    }
+
+    private static Object field(Object owner, String name) {
+        try {
+            var f = owner.getClass().getDeclaredField(name);
+            f.setAccessible(true);
+            return f.get(owner);
+        } catch (ReflectiveOperationException e) {
+            throw new RuntimeException(e);
+        }
     }
 }

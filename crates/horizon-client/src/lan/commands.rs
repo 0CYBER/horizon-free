@@ -358,10 +358,11 @@ mod tests {
         assert_eq!(guest.nodes[2].redirect, Some(1));
         let op = tree.packet(2, true, &builtin);
         let names: Vec<_> = op.nodes.iter().map(|n| n.name.as_str()).collect();
+        // The root's children in vanilla's registration order.
         assert_eq!(
             names,
-            ["", "me", "say", "stop", "tell", "action", "message"]
+            ["", "me", "tell", "say", "stop", "action", "message"]
         );
-        assert!(op.nodes[2].restricted);
+        assert!(op.nodes[3].restricted);
     }
 }

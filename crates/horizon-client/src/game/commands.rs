@@ -140,7 +140,7 @@ impl Game<'_> {
         if self.command_source.is_some_and(|s| s.silent) {
             return;
         }
-        self.system_message(message.with_color(text::RED));
+        self.system_message(Text::empty().append(message).with_color(text::RED));
     }
     /// sendSuccess honouring `send_command_feedback`.
     pub(super) fn feedback(&mut self, message: Text) {

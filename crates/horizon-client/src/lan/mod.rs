@@ -4,6 +4,7 @@
 //! (`data`). The play state is driven by the game thread (`hub`), which only
 //! ever exchanges decoded packets with these threads through channels, so a
 //! world that is not open to the network pays nothing.
+mod advancements;
 pub mod chunks;
 mod command_order;
 pub mod command_suggestions;
@@ -17,6 +18,7 @@ pub mod guest;
 pub mod hub;
 pub mod menu;
 pub mod playerdata;
+mod recipes;
 pub mod tracking;
 
 pub use conn::PlayerSender;

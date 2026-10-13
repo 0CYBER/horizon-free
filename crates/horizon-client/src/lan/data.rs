@@ -66,6 +66,9 @@ pub struct SyncData {
     pub features: Vec<String>,
     /// Vanilla's command tree (the commands report), when found.
     pub commands: Option<super::commands::CommandTree>,
+    /// ClientboundUpdateRecipesPacket's payload.
+    pub recipes: Vec<u8>,
+    pub advancements: super::advancements::ServerAdvancements,
 }
 
 /// Every `*.json` under `dir`, as (path without extension relative to dir, value), sorted.
@@ -106,6 +109,29 @@ pub fn json_to_nbt(v: &Value) -> Tag {
     }
 }
 
+/// A component's JSON as NbtOps writes it: a list whose elements differ in
+/// type (translation arguments mixing numbers and components) holds each
+/// element that isn't a compound wrapped in one under the empty key.
+pub fn component_nbt(v: &Value) -> Tag {
+    match v {
+        Value::Array(a) => {
+            let kind = |v: &Value| std::mem::discriminant(&json_to_nbt(v));
+            let mixed = a.windows(2).any(|w| kind(&w[0]) != kind(&w[1]));
+            Tag::List(
+                a.iter()
+                    .map(|e| match component_nbt(e) {
+                        t @ Tag::Compound(_) => t,
+                        t if mixed => Tag::compound([("", t)]),
+                        t => t,
+                    })
+                    .collect(),
+            )
+        }
+        Value::Object(o) => Tag::compound(o.iter().map(|(k, v)| (k.as_str(), component_nbt(v)))),
+        other => json_to_nbt(other),
+    }
+}
+
 impl SyncData {
     pub fn load(resources: &Path) -> Result<Self, String> {
         let builtin = Builtin::find(resources)
@@ -129,14 +155,18 @@ impl SyncData {
             registries.push(((*key).to_owned(), Entries { names, json }));
         }
         let tags = Self::load_tags(&root, &builtin, &dynamic);
-        Ok(Self {
+        let mut sync = Self {
             builtin,
             dynamic,
             registries,
             tags,
             features: vec!["minecraft:vanilla".to_owned()],
             commands: super::commands::CommandTree::load(resources),
-        })
+            recipes: Vec::new(),
+            advancements: super::advancements::ServerAdvancements::load(resources),
+        };
+        sync.recipes = super::recipes::update_recipes(resources, &sync);
+        Ok(sync)
     }
 
     /// The id of a name in a built-in or synchronized registry.
