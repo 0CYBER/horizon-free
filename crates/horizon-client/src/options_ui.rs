@@ -519,17 +519,6 @@ pub fn apply_preset(s: &mut Settings) {
     }
 }
 
-/// A resource pack entry for the pack screen.
-#[derive(Clone, Debug, PartialEq)]
-pub struct PackEntry {
-    pub id: String,
-    pub title: Text,
-    pub description: Text,
-    pub compatible: bool,
-    /// Built-in packs that cannot be removed (vanilla).
-    pub required: bool,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
     Main,
@@ -553,7 +542,6 @@ enum Act {
     Key(&'static str),
     ResetKey(&'static str),
     ResetKeys,
-    OpenPackFolder,
 }
 enum WKind {
     Button {
@@ -575,12 +563,6 @@ enum WKind {
         label: Text,
         selected: bool,
         code: String,
-    },
-    PackRow {
-        pack: PackEntry,
-        selected: bool,
-        index: usize,
-        count: usize,
     },
 }
 struct Widget {
@@ -614,12 +596,13 @@ pub struct OptionsUi {
     pub languages: Vec<LanguageInfo>,
     language_choice: Option<String>,
     language_search: ui::EditBox,
-    /// Packs: (available, selected top-first).
-    pub available: Vec<PackEntry>,
-    pub selected: Vec<PackEntry>,
-    /// The selection logic behind the two lists (`PackSelectionModel`).
-    pub pack_model: crate::packs::SelectionModel,
-    packs_changed: bool,
+    /// Packs: the packs found and the selection the screen opens with.
+    pub pack_infos: Vec<crate::pack_screen::PackInfo>,
+    pub pack_selection: Vec<String>,
+    /// The open pack screen, made at its first frame.
+    pub pack_screen: Option<crate::pack_screen::PackScreen>,
+    /// When the pack screen's search box took the focus (its cursor blink).
+    pack_focus: std::time::Instant,
     pub in_world: bool,
     /// Scroll the selected language into the middle on the next layout.
     center_language: bool,
@@ -636,10 +619,10 @@ impl Default for OptionsUi {
             languages: Vec::new(),
             language_choice: None,
             language_search: search,
-            available: Vec::new(),
-            selected: Vec::new(),
-            pack_model: Default::default(),
-            packs_changed: false,
+            pack_infos: Vec::new(),
+            pack_selection: Vec::new(),
+            pack_screen: None,
+            pack_focus: std::time::Instant::now(),
             in_world: false,
             center_language: false,
         }
@@ -719,7 +702,7 @@ impl OptionsUi {
             self.center_language = true;
         }
         if page == Page::Packs {
-            self.packs_changed = false;
+            self.pack_screen = None;
         }
     }
     fn title(page: Page) -> &'static str {
@@ -1104,92 +1087,8 @@ impl OptionsUi {
                 ));
                 out.push(button(cx + 4.0, h - 28.0, 150.0, tr("gui.done"), Act::Done));
             }
-            Page::Packs => {
-                top = 47.0;
-                bottom = h - 33.0;
-                out.push(Widget {
-                    x: 0.0,
-                    y: 8.0,
-                    w,
-                    h: 9.0,
-                    kind: WKind::Text {
-                        text: tr("resourcePack.title"),
-                        color: u32::MAX,
-                        centered: true,
-                    },
-                    list: false,
-                });
-                out.push(Widget {
-                    x: 0.0,
-                    y: 20.0,
-                    w,
-                    h: 9.0,
-                    kind: WKind::Text {
-                        text: tr("pack.dropInfo").with_color(text::GRAY),
-                        color: u32::MAX,
-                        centered: true,
-                    },
-                    list: false,
-                });
-                let lists = [(false, cx - 4.0 - 200.0), (true, cx + 4.0)];
-                let list_start = out.len();
-                for (selected, lx) in lists {
-                    let entries = if selected {
-                        &self.selected
-                    } else {
-                        &self.available
-                    };
-                    let header = tr(if selected {
-                        "pack.selected.title"
-                    } else {
-                        "pack.available.title"
-                    })
-                    .with_style(&Style {
-                        bold: Some(true),
-                        underlined: Some(true),
-                        ..Style::default()
-                    });
-                    out.push(Widget {
-                        x: lx,
-                        y: top + 4.0,
-                        w: 200.0,
-                        h: 9.0,
-                        kind: WKind::Text {
-                            text: header,
-                            color: u32::MAX,
-                            centered: true,
-                        },
-                        list: false,
-                    });
-                    let mut y = top + 17.0 - self.scroll;
-                    for (i, p) in entries.iter().enumerate() {
-                        out.push(Widget {
-                            x: lx,
-                            y,
-                            w: 200.0,
-                            h: 36.0,
-                            kind: WKind::PackRow {
-                                pack: p.clone(),
-                                selected,
-                                index: i,
-                                count: entries.len(),
-                            },
-                            list: false,
-                        });
-                        y += 36.0;
-                    }
-                    content = f32::max(content, y + self.scroll - top + 4.0);
-                }
-                out[list_start..].iter_mut().for_each(|w| w.list = true);
-                out.push(button(
-                    cx - 154.0,
-                    h - 27.0,
-                    150.0,
-                    tr("pack.openFolder"),
-                    Act::OpenPackFolder,
-                ));
-                out.push(button(cx + 4.0, h - 27.0, 150.0, tr("gui.done"), Act::Done));
-            }
+            // Drawn by `pack_screen`.
+            Page::Packs => {}
             _ => {
                 out.push(Widget {
                     x: 0.0,
@@ -1276,6 +1175,15 @@ impl OptionsUi {
         cursor: (f32, f32),
     ) {
         let (w, h) = (batch.width, batch.height);
+        if self.page() == Page::Packs {
+            ui::menu_background(batch, atlas, 0.0, 0.0, w, h, self.in_world);
+            let blink = self.pack_focus.elapsed().as_millis() as u64;
+            let m = crate::screen_draw::Measure(&atlas.font);
+            let mouse = (cursor.0.floor() as i32, cursor.1.floor() as i32);
+            let draws = self.packs(atlas, (w, h)).draw(&m, mouse, blink);
+            crate::screen_draw::paint(batch, atlas, &draws);
+            return;
+        }
         let (widgets, top, bottom, content) = self.layout(s, atlas, w, h);
         self.clamp_scroll(top, bottom, content);
         let in_world = self.in_world;
@@ -1375,102 +1283,6 @@ impl OptionsUi {
                         true,
                     );
                 }
-                WKind::PackRow {
-                    pack,
-                    selected,
-                    index,
-                    count,
-                } => {
-                    if hover {
-                        batch.fill(atlas, wd.x, wd.y, wd.w, wd.h, rgba(255, 255, 255, 255));
-                        batch.fill(
-                            atlas,
-                            wd.x + 1.0,
-                            wd.y + 1.0,
-                            wd.w - 2.0,
-                            wd.h - 2.0,
-                            rgba(0, 0, 0, 255),
-                        );
-                    }
-                    batch.sprite_scaled(
-                        atlas,
-                        "misc/unknown_pack",
-                        wd.x + 2.0,
-                        wd.y + 2.0,
-                        32.0,
-                        32.0,
-                        u32::MAX,
-                    );
-                    let title_color = if pack.compatible {
-                        u32::MAX
-                    } else {
-                        rgba(255, 85, 85, 255)
-                    };
-                    batch.text_styled(
-                        atlas,
-                        &pack.title,
-                        wd.x + 36.0,
-                        wd.y + 3.0,
-                        title_color,
-                        true,
-                    );
-                    for (i, line) in atlas
-                        .font
-                        .split(&pack.description, 157.0)
-                        .iter()
-                        .take(2)
-                        .enumerate()
-                    {
-                        batch.text_styled(
-                            atlas,
-                            line,
-                            wd.x + 36.0,
-                            wd.y + 14.0 + i as f32 * 9.0,
-                            rgba(128, 128, 128, 255),
-                            true,
-                        );
-                    }
-                    if hover && cursor.0 < wd.x + 34.0 {
-                        // TransferableSelectionList arrows over the icon.
-                        batch.fill(
-                            atlas,
-                            wd.x + 2.0,
-                            wd.y + 2.0,
-                            32.0,
-                            32.0,
-                            rgba(160, 160, 160, 136),
-                        );
-                        let sprite_dir = if *selected { "unselect" } else { "select" };
-                        let left = cursor.0 < wd.x + 18.0;
-                        let name = format!(
-                            "gui/sprites/transferable_list/{sprite_dir}{}",
-                            if left || !*selected {
-                                "_highlighted"
-                            } else {
-                                ""
-                            }
-                        );
-                        batch.sprite(atlas, &name, wd.x + 2.0, wd.y + 2.0);
-                        if *selected {
-                            if *index > 0 {
-                                batch.sprite(
-                                    atlas,
-                                    "gui/sprites/transferable_list/move_up",
-                                    wd.x + 2.0,
-                                    wd.y + 2.0,
-                                );
-                            }
-                            if index + 1 < *count {
-                                batch.sprite(
-                                    atlas,
-                                    "gui/sprites/transferable_list/move_down",
-                                    wd.x + 2.0,
-                                    wd.y + 2.0,
-                                );
-                            }
-                        }
-                    }
-                }
             }
         }
         if list {
@@ -1512,6 +1324,25 @@ impl OptionsUi {
         drag: bool,
         right: bool,
     ) -> Vec<Event> {
+        if self.page() == Page::Packs {
+            let mut events = Vec::new();
+            if drag || right {
+                return events;
+            }
+            let m = crate::screen_draw::Measure(&atlas.font);
+            let p = self.packs(atlas, size);
+            let before = p.search_focused();
+            let action = p.click(&m, x as f64, y as f64);
+            if !before && p.search_focused() {
+                self.pack_focus = std::time::Instant::now();
+            }
+            match action {
+                crate::pack_screen::Action::OpenFolder => events.push(Event::OpenPackFolder),
+                crate::pack_screen::Action::Done => events.extend(self.back(s)),
+                crate::pack_screen::Action::None => {}
+            }
+            return events;
+        }
         let (widgets, top, bottom, _) = self.layout(s, atlas, size.0, size.1);
         let mut events = Vec::new();
         if drag {
@@ -1565,7 +1396,6 @@ impl OptionsUi {
                         s.keys.reset_all();
                         events.push(Event::Changed);
                     }
-                    Act::OpenPackFolder => events.push(Event::OpenPackFolder),
                     Act::None => {}
                 },
                 WKind::Slider { opt, .. } => {
@@ -1583,56 +1413,50 @@ impl OptionsUi {
                         self.language_choice = Some(code);
                     }
                 }
-                WKind::PackRow {
-                    pack,
-                    selected,
-                    index,
-                    ..
-                } => {
-                    let _ = pack;
-                    // TransferableSelectionList.PackEntry.mouseClicked: the
-                    // right quarters of a selected pack's icon move it, the
-                    // icon otherwise selects or unselects it.
-                    let on_icon = x < wd.x + 34.0;
-                    let m = &mut self.pack_model;
-                    let changed = if selected && on_icon && x >= wd.x + 18.0 {
-                        m.move_by(true, index, y < wd.y + 18.0)
-                    } else {
-                        // No confirmation screen yet: an incompatible pack
-                        // is selected as if its warning were accepted.
-                        m.activate(selected, index, true)
-                    };
-                    if changed {
-                        self.sync_pack_lists();
-                        self.packs_changed = true;
-                    }
-                }
                 _ => {}
             }
             break;
         }
         events
     }
-    /// Orders the two entry lists as the selection model has them.
-    pub fn sync_pack_lists(&mut self) {
-        let all: Vec<PackEntry> = self
-            .available
-            .drain(..)
-            .chain(self.selected.drain(..))
-            .collect();
-        let pick = |ids: &[crate::packs::Selectable]| -> Vec<PackEntry> {
-            ids.iter()
-                .filter_map(|s| all.iter().find(|e| e.id == s.id).cloned())
-                .collect()
-        };
-        self.available = pick(&self.pack_model.unselected);
-        self.selected = pick(&self.pack_model.selected);
-    }
     pub fn release(&mut self) {
         self.dragging = None;
     }
     pub fn scroll(&mut self, amount: f32) {
         self.scroll -= amount * 18.0;
+    }
+    /// The mouse wheel at the cursor.
+    pub fn scroll_at(&mut self, cursor: (f32, f32), amount: f32) {
+        match &mut self.pack_screen {
+            Some(p) if self.stack.last() == Some(&Page::Packs) => {
+                p.scroll(cursor.0 as f64, cursor.1 as f64, amount as f64)
+            }
+            _ => self.scroll(amount),
+        }
+    }
+    /// The pack screen at this GUI size, made on first use.
+    fn packs(&mut self, atlas: &HudAtlas, size: (f32, f32)) -> &mut crate::pack_screen::PackScreen {
+        let m = crate::screen_draw::Measure(&atlas.font);
+        let (w, h) = (size.0 as i32, size.1 as i32);
+        match &mut self.pack_screen {
+            Some(p) => {
+                if p.width != w || p.height != h {
+                    p.resize(&m, w, h);
+                }
+            }
+            None => {
+                self.pack_focus = std::time::Instant::now();
+                self.pack_screen = Some(crate::pack_screen::PackScreen::new(
+                    &m,
+                    w,
+                    h,
+                    self.in_world,
+                    self.pack_infos.clone(),
+                    &self.pack_selection,
+                ));
+            }
+        }
+        self.pack_screen.as_mut().expect("made above")
     }
     /// Escape or Done: leave the current page, applying page results.
     pub fn back(&mut self, s: &mut Settings) -> Vec<Event> {
@@ -1650,11 +1474,15 @@ impl OptionsUi {
                     events.push(Event::Language(code));
                 }
             }
-            Page::Packs if self.packs_changed => {
-                // PackSelectionModel.commit: bottom first, required packs kept.
-                let ids = self.pack_model.commit();
-                s.resource_packs = ids.clone();
-                events.push(Event::Packs(ids));
+            Page::Packs => {
+                // PackSelectionScreen.onClose: PackSelectionModel.commit.
+                if let Some(p) = self.pack_screen.take()
+                    && p.changed
+                {
+                    let ids = p.commit();
+                    s.resource_packs = ids.clone();
+                    events.push(Event::Packs(ids));
+                }
             }
             _ => {}
         }
@@ -1665,7 +1493,13 @@ impl OptionsUi {
         events
     }
     /// Typed text (the language search box).
-    pub fn type_text(&mut self, text: &str) {
+    pub fn type_text(&mut self, atlas: &HudAtlas, text: &str) {
+        if self.page() == Page::Packs
+            && let Some(p) = &mut self.pack_screen
+        {
+            p.type_text(&crate::screen_draw::Measure(&atlas.font), text);
+            return;
+        }
         if self.page() == Page::Language {
             self.language_search.insert_text(text);
             self.scroll = 0.0;
@@ -1676,10 +1510,28 @@ impl OptionsUi {
     pub fn key(
         &mut self,
         s: &mut Settings,
+        atlas: &HudAtlas,
         key: winit::keyboard::KeyCode,
         text: Option<&str>,
     ) -> Vec<Event> {
         use winit::keyboard::KeyCode as K;
+        if self.page() == Page::Packs
+            && let Some(p) = &mut self.pack_screen
+        {
+            let m = crate::screen_draw::Measure(&atlas.font);
+            match key {
+                // ConfirmScreen.keyPressed: Escape answers no.
+                K::Escape if p.confirming() => {
+                    p.cancel_confirm(&m);
+                    return Vec::new();
+                }
+                K::Backspace => {
+                    p.erase(&m, 1);
+                    return Vec::new();
+                }
+                _ => {}
+            }
+        }
         if let Some(name) = self.selected_key.take() {
             // KeyBindsScreen.keyPressed: Escape unbinds.
             let value = if key == K::Escape {

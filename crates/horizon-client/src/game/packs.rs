@@ -5,9 +5,9 @@ use super::Game;
 use horizon_client::{
     hud::HudAtlas,
     lang,
-    options_ui::PackEntry,
-    packs::{self, Pack},
-    text::Text,
+    pack_screen::{Compat, PackInfo, Source as PackSource},
+    packs::{self, Pack, Position},
+    text::{Style, Text},
 };
 use std::path::{Path, PathBuf};
 
@@ -28,22 +28,38 @@ pub fn startup_root(vanilla: &Path, selected: &[String]) -> PathBuf {
     let enabled = packs::enabled(&all, selected);
     packs::resource_root(vanilla, &enabled, &cache_dir())
 }
-fn entry(p: &Pack) -> PackEntry {
-    PackEntry {
+fn info(p: &Pack) -> PackInfo {
+    let built_in = !p.id.starts_with("file/");
+    PackInfo {
         id: p.id.clone(),
         title: p.title.clone(),
-        description: p.description.clone(),
-        compatible: p.compatible,
+        description: p.raw_description.clone(),
+        description_style: p.description_style.clone(),
+        source: if built_in {
+            PackSource::BuiltIn
+        } else {
+            PackSource::Default
+        },
+        compat: p.compatibility,
+        icon: p.icon,
         required: false,
+        position: Position::Top,
+        fixed: false,
     }
 }
-fn vanilla_entry() -> PackEntry {
-    PackEntry {
+/// The vanilla pack: required, at the bottom (`BuiltInPackSource`).
+fn vanilla_info() -> PackInfo {
+    PackInfo {
         id: "vanilla".into(),
         title: Text::translate("resourcePack.vanilla.name", &[]),
         description: Text::translate("resourcePack.vanilla.description", &[]),
-        compatible: true,
+        description_style: Style::default(),
+        source: PackSource::BuiltIn,
+        compat: Compat::Compatible,
+        icon: true,
         required: true,
+        position: Position::Bottom,
+        fixed: false,
     }
 }
 impl Game<'_> {
@@ -54,22 +70,16 @@ impl Game<'_> {
             self.ui.vanilla_root.clone()
         }
     }
-    /// PackSelectionModel: available (unselected) and selected (top first).
+    /// The packs the pack screen offers and the current selection
+    /// (`PackSelectionScreen` makes its `PackSelectionModel` from them).
     pub(super) fn refresh_pack_lists(&mut self) {
         let all = packs::discover(&self.vanilla_root(), &packs_dir());
-        let mut choices = vec![packs::Selectable::vanilla()];
-        choices.extend(
-            all.iter()
-                .map(|p| packs::Selectable::optional(&p.id, p.compatible)),
-        );
-        let model = packs::SelectionModel::new(choices, &self.settings.resource_packs);
-        let mut entries: Vec<PackEntry> = all.iter().map(entry).collect();
-        entries.push(vanilla_entry());
+        let mut infos: Vec<PackInfo> = all.iter().map(info).collect();
+        infos.push(vanilla_info());
         let o = &mut self.ui.options;
-        o.available = entries;
-        o.selected = Vec::new();
-        o.pack_model = model;
-        o.sync_pack_lists();
+        o.pack_infos = infos;
+        o.pack_selection = self.settings.resource_packs.clone();
+        o.pack_screen = None;
     }
     /// Rebuild the overlay and reload what can change while running.
     pub(super) fn reload_packs(&mut self) {

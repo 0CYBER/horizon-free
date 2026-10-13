@@ -28,7 +28,13 @@ pub struct Pack {
     pub source: Source,
     pub title: Text,
     pub description: Text,
+    /// The description with its legacy codes, and its root style (the pack screen's).
+    pub raw_description: Text,
+    pub description_style: Style,
     pub compatible: bool,
+    pub compatibility: crate::pack_screen::Compat,
+    /// The pack has a `pack.png`.
+    pub icon: bool,
     /// Overlay directories active for this game version, in `pack.mcmeta` order.
     pub overlays: Vec<String>,
     /// `filter.block` entries (namespace and path patterns) hiding resources
@@ -172,6 +178,34 @@ pub fn compatible(meta: &serde_json::Value) -> bool {
     }
     format_of(&pack["pack_format"]).is_some_and(|f| f.0 == current.0)
 }
+/// `PackCompatibility.forVersion`: too old, too new, compatible, or unknown
+/// when the metadata names no format.
+pub fn compatibility(meta: &serde_json::Value) -> crate::pack_screen::Compat {
+    use crate::pack_screen::Compat;
+    let pack = &meta["pack"];
+    let current = RESOURCE_FORMAT;
+    let range = if let (Some(min), Some(max)) = (
+        format_of(&pack["min_format"]),
+        format_of(&pack["max_format"]),
+    ) {
+        Some((min, (max.0, if max.1 == 0 { i64::MAX } else { max.1 })))
+    } else if let Some(r) = pack["supported_formats"].as_array()
+        && let (Some(lo), Some(hi)) = (
+            r.first().and_then(|v| v.as_i64()),
+            r.get(1).and_then(|v| v.as_i64()),
+        )
+    {
+        Some(((lo, 0), (hi, i64::MAX)))
+    } else {
+        format_of(&pack["pack_format"]).map(|f| ((f.0, 0), (f.0, i64::MAX)))
+    };
+    match range {
+        None => Compat::Unknown,
+        Some((_, max)) if max < current => Compat::TooOld,
+        Some((min, _)) if current < min => Compat::TooNew,
+        _ => Compat::Compatible,
+    }
+}
 /// Whether an `overlays.entries[]` item applies to the current format
 /// (OverlayMetadataSection: `formats` as an int, `[min, max]` or
 /// `{min_inclusive, max_inclusive}`, or `min_format`/`max_format`).
@@ -233,11 +267,20 @@ fn read_meta(source: &Source) -> Option<serde_json::Value> {
 }
 fn pack(id: String, title: Text, source: Source) -> Option<Pack> {
     let meta = read_meta(&source)?;
+    let (raw_description, description_style) = component_root(&meta["pack"]["description"]);
+    let icon = match &source {
+        Source::Dir(d) => d.join("pack.png").is_file(),
+        Source::Zip(z) => Zip::open(z).is_ok_and(|z| z.read("pack.png").is_ok()),
+    };
     Some(Pack {
         id,
         title,
-        description: component(&meta["pack"]["description"]),
+        description: raw_description.resolve_legacy(),
+        raw_description,
+        description_style,
         compatible: compatible(&meta),
+        compatibility: compatibility(&meta),
+        icon,
         overlays: overlays_of(&meta),
         filter: filter_of(&meta),
         source,
