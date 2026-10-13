@@ -60,7 +60,7 @@ impl Game<'_> {
             // cracking particles.
             let d = &self.clicks.destroying;
             if d.active && d.ticks > ticks {
-                let (pos, first) = (d.pos, (d.ticks as u32 - 1) % 4 == 0);
+                let (pos, first) = (d.pos, (d.ticks as u32 - 1).is_multiple_of(4));
                 let state = self.world.block(pos[0], pos[1], pos[2]);
                 if first {
                     let sounds = self.res.facts.get(state).sounds.clone();
@@ -80,7 +80,7 @@ impl Game<'_> {
             self.clicks.miss_time = 10000;
         }
         let d = &self.clicks.destroying;
-        self.mining = d.active.then(|| Mining {
+        self.mining = d.active.then_some(Mining {
             pos: d.pos,
             progress: d.progress,
             ticks: d.ticks as u32,
