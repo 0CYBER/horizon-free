@@ -13,6 +13,29 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Instant};
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
+/// Window.getAppropriateLineWidth, in framebuffer pixels.
+pub fn outline_width(width: u32) -> f32 {
+    2.5f32.max(width as f32 / 1920.0 * 2.5)
+}
+
+/// ScreenSize, stroke width and ProjectionType.PERSPECTIVE layering.
+pub fn outline_params(width: u32, height: u32) -> [f32; 4] {
+    [
+        width as f32,
+        height.max(1) as f32,
+        outline_width(width),
+        1.0 - 1.0 / 4096.0,
+    ]
+}
+
+/// Camera-relative segment endpoints; no shape expansion in vanilla 26.3.
+pub fn outline_vertices(edges: &[[f64; 6]], camera: glam::DVec3) -> Vec<[f32; 6]> {
+    edges
+        .iter()
+        .map(|e| std::array::from_fn(|i| (e[i] - camera.to_array()[i % 3]) as f32))
+        .collect()
+}
+
 mod arena;
 mod occlusion;
 mod timing;
@@ -35,6 +58,8 @@ struct Globals {
     end_portal_sprites: [[f32; 4]; 2],
     /// x: vanilla's `GameTime` uniform; yzw unused.
     time: [f32; 4],
+    /// Framebuffer size, selection stroke width, perspective layering scale.
+    outline_params: [f32; 4],
 }
 pub type SectionKey = (i32, i32, i32);
 struct SectionGpu {
@@ -453,10 +478,10 @@ impl Renderer {
                 attributes: &instance_attributes,
             }),
         ];
-        let line_attributes = wgpu::vertex_attr_array![0=>Float32x3];
+        let line_attributes = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3];
         let line_buffers = [Some(wgpu::VertexBufferLayout {
-            array_stride: 12,
-            step_mode: wgpu::VertexStepMode::Vertex,
+            array_stride: 24,
+            step_mode: wgpu::VertexStepMode::Instance,
             attributes: &line_attributes,
         })];
         let alpha_blend = wgpu::BlendState::ALPHA_BLENDING;
@@ -559,7 +584,7 @@ impl Renderer {
             "vs_line",
             "fs_line",
             &line_buffers,
-            wgpu::PrimitiveTopology::LineList,
+            wgpu::PrimitiveTopology::TriangleStrip,
             None,
             false,
             true,
@@ -1767,6 +1792,7 @@ impl Renderer {
             ],
             end_portal_sprites: frame.end_portal_sprites,
             time: [frame.shader_game_time, 0.0, 0.0, 0.0],
+            outline_params: outline_params(self.config.width, self.config.height),
         };
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
@@ -1891,31 +1917,7 @@ impl Renderer {
         }
         let outline_edges = frame.outline.len().min(MAX_OUTLINE_EDGES as usize);
         if outline_edges > 0 {
-            // A hair outside the block, like vanilla's line depth offset.
-            let lines: Vec<[f32; 3]> = frame.outline[..outline_edges]
-                .iter()
-                .flat_map(|e| {
-                    let center = [
-                        (e[0] + e[3]) / 2.0,
-                        (e[1] + e[4]) / 2.0,
-                        (e[2] + e[5]) / 2.0,
-                    ];
-                    let point = |i: usize| -> [f32; 3] {
-                        std::array::from_fn(|a| {
-                            let v = e[i + a];
-                            let grow = if v < center[a] {
-                                -0.002
-                            } else if v > center[a] {
-                                0.002
-                            } else {
-                                0.0
-                            };
-                            (v - [camera.x, camera.y, camera.z][a]) as f32 + grow
-                        })
-                    };
-                    [point(0), point(3)]
-                })
-                .collect();
+            let lines = outline_vertices(&frame.outline[..outline_edges], camera);
             self.queue
                 .write_buffer(&self.outline, 0, bytemuck::cast_slice(&lines));
         }
@@ -2079,7 +2081,7 @@ impl Renderer {
             if outline_edges > 0 {
                 pass.set_pipeline(&self.lines);
                 pass.set_vertex_buffer(0, self.outline.slice(..));
-                pass.draw(0..outline_edges as u32 * 2, 0..1);
+                pass.draw(0..4, 0..outline_edges as u32);
             }
             pass.set_pipeline(&self.translucent);
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -2354,4 +2356,43 @@ fn frustum(m: Mat4) -> [Vec4; 6] {
         r(3) - r(2),
     ];
     planes.map(|p| p / p.truncate().length())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn selection_outline_uses_vanilla_pixel_width() {
+        for width in [640, 1280, 1920] {
+            assert_eq!(super::outline_width(width), 2.5);
+        }
+        assert_eq!(super::outline_width(2560), 2560.0 / 1920.0 * 2.5);
+        assert_eq!(super::outline_width(3840), 5.0);
+    }
+    #[test]
+    fn selection_outline_has_vanilla_perspective_layering() {
+        assert_eq!(
+            super::outline_params(1280, 720),
+            [1280.0, 720.0, 2.5, 0.99975586]
+        );
+        assert_eq!(
+            super::outline_params(3840, 0),
+            [3840.0, 1.0, 5.0, 0.99975586]
+        );
+    }
+    #[test]
+    fn selection_outline_preserves_shape_edges_without_inflation() {
+        let edges = [[2.0, 97.5, 3.0, 3.0, 97.5, 3.0]];
+        assert_eq!(
+            super::outline_vertices(&edges, glam::DVec3::new(0.5, 98.62, 0.5)),
+            vec![[
+                1.5,
+                (97.5 - 98.62) as f32,
+                2.5,
+                2.5,
+                (97.5 - 98.62) as f32,
+                2.5
+            ]]
+        );
+        assert!(super::outline_vertices(&[], glam::DVec3::ZERO).is_empty());
+    }
 }
