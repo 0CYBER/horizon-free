@@ -895,7 +895,7 @@ impl Game<'_> {
         self.swing_arm();
         true
     }
-    fn cart_hit(&self) -> Option<(usize, f64)> {
+    pub(super) fn cart_hit(&self) -> Option<(usize, f64)> {
         let eye = self.eye_position()?;
         let dir = view_vector(self.yaw, self.pitch);
         let reach: f64 = if self.creative { 5.0 } else { 3.0 };

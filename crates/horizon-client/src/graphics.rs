@@ -134,6 +134,8 @@ pub struct Graphics {
     pub resolution_scale: u32,
     /// FXAA over the world.
     pub fxaa: bool,
+    /// The settings level last shown: Advanced, or Simple.
+    pub advanced: bool,
 }
 impl Default for Graphics {
     fn default() -> Self {
@@ -152,6 +154,7 @@ impl Default for Graphics {
             overlay: Overlay::Off,
             resolution_scale: 100,
             fxaa: false,
+            advanced: false,
         }
     }
 }
@@ -197,6 +200,7 @@ impl Graphics {
                 "workers" => g.workers = number(g.workers).min(64),
                 "resolutionScale" => g.resolution_scale = number(g.resolution_scale).clamp(50, 200),
                 "fxaa" => g.fxaa = flag(g.fxaa),
+                "level" => g.advanced = value == "advanced",
                 "overlay" => {
                     g.overlay = match value {
                         "fps" => Overlay::Fps,
@@ -211,7 +215,7 @@ impl Graphics {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "preset:{}\ncaveCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\n",
+            "preset:{}\ncaveCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nlevel:{}\n",
             self.preset.name(),
             bool_text(self.cave_culling),
             self.chunk_updates,
@@ -233,6 +237,7 @@ impl Graphics {
             },
             self.resolution_scale,
             bool_text(self.fxaa),
+            if self.advanced { "advanced" } else { "simple" },
         )
     }
     pub fn save(&self, dir: &Path) {
@@ -303,6 +308,7 @@ mod tests {
             overlay: Overlay::Graph,
             resolution_scale: 75,
             fxaa: true,
+            advanced: true,
         };
         assert_eq!(Graphics::parse(&g.serialize()), g);
         assert_eq!(Graphics::parse(""), Graphics::default());

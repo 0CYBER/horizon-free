@@ -2571,6 +2571,7 @@ dependencies = [
  "dirs 5.0.1",
  "flate2",
  "gpui",
+ "horizon-theme",
  "image",
  "pulldown-cmark",
  "self-replace",
@@ -2580,6 +2581,10 @@ dependencies = [
  "ureq",
  "zip",
 ]
+
+[[package]]
+name = "horizon-theme"
+version = "0.1.0"
 
 [[package]]
 name = "http"

@@ -365,12 +365,7 @@ impl PlayerEffects {
             f *= 1.0 + (a + 1) as f32 * 0.2;
         }
         if let Some(a) = self.amplifier("mining_fatigue") {
-            f *= match a {
-                0 => 0.3,
-                1 => 0.09,
-                2 => 0.0027,
-                _ => 8.1e-4,
-            };
+            f *= horizon_core::jmath::pow(0.3, f64::from(a + 1)) as f32;
         }
         f
     }

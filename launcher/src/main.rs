@@ -53,9 +53,9 @@ enum SelfUpdate {
 
 /// The opening: the wordmark over the image holds at least `OPENING_HOLD` (until the release
 /// list is in, at most `OPENING_MAX`), then the launcher appears over `OPENING_REVEAL`.
-const OPENING_HOLD: Duration = Duration::from_millis(1400);
-const OPENING_MAX: Duration = Duration::from_millis(2500);
-const OPENING_REVEAL: Duration = Duration::from_millis(800);
+const OPENING_HOLD: Duration = horizon_theme::OPENING_HOLD;
+const OPENING_MAX: Duration = horizon_theme::OPENING_MAX;
+const OPENING_REVEAL: Duration = horizon_theme::OPENING_REVEAL;
 
 /// The phase of the opening at one moment: how far the reveal has gone, 0 to 1.
 struct Opening {
@@ -78,7 +78,7 @@ fn background_image() -> Arc<RenderImage> {
 }
 
 fn ease_out_cubic(x: f32) -> f32 {
-    1. - (1. - x.clamp(0., 1.)).powi(3)
+    horizon_theme::ease_out_cubic(x)
 }
 
 /// How often the launcher looks for new releases while it is open.
@@ -560,7 +560,7 @@ fn button(id: impl Into<SharedString>, label: impl Into<SharedString>, kind: Kin
     let id: SharedString = id.into();
     let t = *t;
     let hover = match kind {
-        Kind::Primary => gpui::white().opacity(0.10),
+        Kind::Primary => gpui::white().opacity(theme::PRIMARY_HOVER),
         _ => t.hover,
     };
     let base = div()
@@ -570,19 +570,19 @@ fn button(id: impl Into<SharedString>, label: impl Into<SharedString>, kind: Kin
         .flex_none()
         .items_center()
         .justify_center()
-        .h(px(30.))
+        .h(px(theme::CONTROL))
         .px(px(12.))
-        .rounded(px(6.))
+        .rounded(px(theme::RADIUS))
         .text_size(px(theme::BODY))
         .font_weight(FontWeight::MEDIUM)
         .cursor_pointer()
-        .child(hover_layer(&id, hover, 6.))
+        .child(hover_layer(&id, hover, theme::RADIUS))
         .child(div().relative().child(label.into()));
     let base = track_hover(base, id);
     match kind {
-        Kind::Primary => base.bg(t.accent).text_color(t.on_accent).active(|s| s.opacity(0.82)),
-        Kind::Secondary => base.border_1().border_color(t.border).bg(t.raised).text_color(t.text).active(|s| s.opacity(0.8)),
-        Kind::Ghost => base.text_color(t.muted).hover(move |s| s.text_color(t.text)).active(|s| s.opacity(0.8)),
+        Kind::Primary => base.bg(t.accent).text_color(t.on_accent).active(|s| s.opacity(theme::PRESSED)),
+        Kind::Secondary => base.border_1().border_color(t.border).bg(t.raised).text_color(t.text).active(|s| s.opacity(theme::PRESSED_SOFT)),
+        Kind::Ghost => base.text_color(t.muted).hover(move |s| s.text_color(t.text)).active(|s| s.opacity(theme::PRESSED_SOFT)),
     }
 }
 
@@ -607,7 +607,7 @@ fn switch(id: &'static str, on: bool, t: &Theme) -> Stateful<Div> {
 }
 
 fn disabled(b: Stateful<Div>) -> Stateful<Div> {
-    b.opacity(0.4).cursor_default()
+    b.opacity(theme::DISABLED).cursor_default()
 }
 
 fn page_header(title: &str, description: &str, t: &Theme) -> Div {
@@ -637,7 +637,7 @@ fn row(label: &str, value: impl IntoElement, action: Option<Stateful<Div>>, t: &
         .items_center()
         .gap(px(16.))
         .py(px(12.))
-        .child(div().w(px(150.)).flex_none().text_size(px(13.)).text_color(t.muted).child(label.to_string()))
+        .child(div().w(px(theme::ROW_LABEL)).flex_none().text_size(px(13.)).text_color(t.muted).child(label.to_string()))
         .child(div().flex_1().min_w_0().text_size(px(13.)).text_color(t.text).child(value))
         .children(action)
 }
@@ -687,7 +687,7 @@ fn megabytes(bytes: u64) -> String {
 impl Launcher {
     fn sidebar(&self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        const STEP: f32 = 32.;
+        const STEP: f32 = theme::CONTROL + 2.;
         let mut nav = div().relative().flex().flex_col().gap(px(2.));
         // The selection is one pill that slides to the chosen item.
         let (from, to) = (self.previous_page.index() as f32 * STEP, self.page.index() as f32 * STEP);
@@ -696,8 +696,8 @@ impl Launcher {
                 .absolute()
                 .left_0()
                 .w_full()
-                .h(px(30.))
-                .rounded(px(6.))
+                .h(px(theme::CONTROL))
+                .rounded(px(theme::RADIUS))
                 .bg(t.raised)
                 .border_1()
                 .border_color(t.border)
@@ -715,12 +715,12 @@ impl Launcher {
                 .relative()
                 .flex()
                 .items_center()
-                .h(px(30.))
+                .h(px(theme::CONTROL))
                 .px(px(10.))
-                .rounded(px(6.))
+                .rounded(px(theme::RADIUS))
                 .text_size(px(theme::BODY))
                 .cursor_pointer()
-                .when(!active, |d| d.child(hover_layer(&id, t.hover.opacity(0.7), 6.)))
+                .when(!active, |d| d.child(hover_layer(&id, t.hover.opacity(0.7), theme::RADIUS)))
                 .child(
                     div()
                         .relative()
@@ -756,7 +756,7 @@ impl Launcher {
             .flex()
             .flex_col()
             .flex_none()
-            .w(px(200.))
+            .w(px(theme::SIDEBAR))
             .h_full()
             .bg(t.sidebar.opacity(0.8))
             .border_r_1()
@@ -785,9 +785,9 @@ impl Launcher {
                 .id(label)
                 .flex()
                 .items_center()
-                .h(px(26.))
+                .h(px(theme::SEGMENT))
                 .px(px(14.))
-                .rounded(px(5.))
+                .rounded(px(theme::RADIUS_SEGMENT))
                 .text_size(px(13.))
                 .cursor_pointer()
                 .when(active, |d| {
@@ -804,7 +804,7 @@ impl Launcher {
             .flex()
             .p(px(2.))
             .gap(px(2.))
-            .rounded(px(7.))
+            .rounded(px(theme::RADIUS_GROUP))
             .bg(t.raised)
             .border_1()
             .border_color(t.border)
@@ -1769,11 +1769,11 @@ fn main() {
     Application::new().run(|cx: &mut App| {
         cx.text_system()
             .add_fonts(vec![
-                Cow::Borrowed(include_bytes!("../assets/fonts/Geist-Regular.ttf").as_slice()),
-                Cow::Borrowed(include_bytes!("../assets/fonts/Geist-Medium.ttf").as_slice()),
-                Cow::Borrowed(include_bytes!("../assets/fonts/Geist-SemiBold.ttf").as_slice()),
-                Cow::Borrowed(include_bytes!("../assets/fonts/GeistMono-Regular.ttf").as_slice()),
-                Cow::Borrowed(include_bytes!("../assets/fonts/InstrumentSerif-Regular.ttf").as_slice()),
+                Cow::Borrowed(horizon_theme::fonts::GEIST_REGULAR),
+                Cow::Borrowed(horizon_theme::fonts::GEIST_MEDIUM),
+                Cow::Borrowed(horizon_theme::fonts::GEIST_SEMIBOLD),
+                Cow::Borrowed(horizon_theme::fonts::GEIST_MONO),
+                Cow::Borrowed(horizon_theme::fonts::INSTRUMENT_SERIF),
             ])
             .expect("bundled fonts");
         let bounds = Bounds::centered(None, size(px(1040.), px(700.)), cx);

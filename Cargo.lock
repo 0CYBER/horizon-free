@@ -681,12 +681,14 @@ dependencies = [
 name = "horizon-client"
 version = "0.1.0"
 dependencies = [
+ "ab_glyph",
  "bytemuck",
  "cpal",
  "glam",
  "horizon-assets",
  "horizon-core",
  "horizon-protocol",
+ "horizon-theme",
  "horizon-world",
  "miniz_oxide 0.8.9",
  "png",
@@ -712,6 +714,10 @@ dependencies = [
  "horizon-world",
  "serde_json",
 ]
+
+[[package]]
+name = "horizon-theme"
+version = "0.1.0"
 
 [[package]]
 name = "horizon-world"

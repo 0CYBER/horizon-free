@@ -22,6 +22,8 @@ serde_json = { version = "1.0.151", features = ["raw_value"] }
 cpal = "0.16"
 symphonia = { version = "0.5", default-features = false, features = ["ogg", "vorbis"] }
 miniz_oxide = "0.8"
+ab_glyph = "0.2.32"
+horizon-theme = { path = "../horizon-theme" }
 
 [features]
 # Records the call sites of mob random draws (`mob_ai_probe` traces).

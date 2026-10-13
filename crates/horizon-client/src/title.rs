@@ -50,6 +50,12 @@ pub struct Title {
     pub mode: Mode,
     pub saves: PathBuf,
     pub started: std::time::Instant,
+    /// The mode last drawn and when it appeared (Horizon's screen fades).
+    shown: std::cell::Cell<(std::mem::Discriminant<Mode>, std::time::Instant)>,
+    /// The launcher-style opening (Horizon style, first title of the session).
+    pub opening: std::cell::Cell<Option<crate::front::Opening>>,
+    /// The saves listed for Home, re-read every couple of seconds.
+    recent: std::cell::RefCell<Option<(std::time::Instant, Vec<WorldEntry>)>>,
 }
 struct Button {
     x: f32,
@@ -96,10 +102,78 @@ pub fn list_worlds(saves: &Path) -> Vec<WorldEntry> {
 }
 impl Title {
     pub fn new(saves: PathBuf) -> Self {
+        let mode = Mode::Main;
+        let now = std::time::Instant::now();
         Self {
-            mode: Mode::Main,
+            shown: std::cell::Cell::new((std::mem::discriminant(&mode), now)),
+            mode,
             saves,
-            started: std::time::Instant::now(),
+            started: now,
+            opening: std::cell::Cell::new(None),
+            recent: std::cell::RefCell::new(None),
+        }
+    }
+    /// The worlds, newest first, cached for two seconds (drawn every frame).
+    pub fn recent_worlds(&self) -> Vec<WorldEntry> {
+        let mut recent = self.recent.borrow_mut();
+        match &*recent {
+            Some((at, worlds)) if at.elapsed().as_secs() < 2 => worlds.clone(),
+            _ => {
+                let worlds = list_worlds(&self.saves);
+                *recent = Some((std::time::Instant::now(), worlds.clone()));
+                worlds
+            }
+        }
+    }
+    /// When the current mode first appeared.
+    pub fn entered(&self) -> std::time::Instant {
+        let now = std::mem::discriminant(&self.mode);
+        let (mode, at) = self.shown.get();
+        if mode == now {
+            return at;
+        }
+        let at = std::time::Instant::now();
+        self.shown.set((now, at));
+        at
+    }
+    /// Create New World: the folder name and options (FileUtil.findAvailableName).
+    pub fn create_action(&self) -> Action {
+        let Mode::Create {
+            name,
+            seed,
+            creative,
+            ..
+        } = &self.mode
+        else {
+            return Action::None;
+        };
+        let base: String = name
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let base = if base.trim().is_empty() {
+            "World".to_owned()
+        } else {
+            base.trim().to_owned()
+        };
+        // FileUtil.findAvailableName: append (n) until unused.
+        let mut folder = base.clone();
+        let mut n = 1;
+        while self.saves.join(&folder).exists() {
+            folder = format!("{base} ({n})");
+            n += 1;
+        }
+        Action::Create {
+            folder,
+            name: name.clone(),
+            seed: parse_seed(seed),
+            creative: *creative,
         }
     }
     fn buttons(&self, w: f32, h: f32) -> Vec<Button> {
@@ -446,44 +520,7 @@ impl Title {
                 *creative = !*creative;
                 Action::None
             }
-            (
-                Mode::Create {
-                    name,
-                    seed,
-                    creative,
-                    ..
-                },
-                Some(21),
-            ) => {
-                let base: String = name
-                    .chars()
-                    .map(|c| {
-                        if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' {
-                            c
-                        } else {
-                            '_'
-                        }
-                    })
-                    .collect();
-                let base = if base.trim().is_empty() {
-                    "World".to_owned()
-                } else {
-                    base.trim().to_owned()
-                };
-                // FileUtil.findAvailableName: append (n) until unused.
-                let mut folder = base.clone();
-                let mut n = 1;
-                while self.saves.join(&folder).exists() {
-                    folder = format!("{base} ({n})");
-                    n += 1;
-                }
-                Action::Create {
-                    folder,
-                    name: name.clone(),
-                    seed: parse_seed(seed),
-                    creative: *creative,
-                }
-            }
+            (Mode::Create { .. }, Some(21)) => self.create_action(),
             (Mode::Create { .. }, Some(22)) => {
                 self.mode = Mode::Select {
                     worlds: list_worlds(&self.saves),
@@ -510,6 +547,7 @@ impl Title {
         if let Mode::Create {
             name, seed, focus, ..
         } = &mut self.mode
+            && *focus < 2
         {
             let field = if *focus == 0 { name } else { seed };
             for c in text.chars().filter(|c| !c.is_control()) {
@@ -526,6 +564,7 @@ impl Title {
         if let Mode::Create {
             name, seed, focus, ..
         } = &mut self.mode
+            && *focus < 2
         {
             let field = if *focus == 0 { name } else { seed };
             field.pop();
@@ -553,6 +592,10 @@ impl Title {
             _ => Mode::Main,
         };
     }
+}
+/// `yyyy/MM/dd HH:mm` (UTC) for a modification time in Unix seconds.
+pub fn date_label(secs: u64) -> String {
+    date_string(secs)
 }
 fn date_string(secs: u64) -> String {
     // Civil date from Unix time (days-from-civil inverse), UTC.

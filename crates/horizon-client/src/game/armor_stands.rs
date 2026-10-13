@@ -183,7 +183,7 @@ impl Game<'_> {
         true
     }
     /// The armor stand under the crosshair, its distance and the hit point.
-    fn armor_stand_hit(&self) -> Option<(usize, f64, [f64; 3])> {
+    pub(super) fn armor_stand_hit(&self) -> Option<(usize, f64, [f64; 3])> {
         let eye = self.eye_position()?;
         let dir = view_vector(self.yaw, self.pitch);
         let reach: f64 = if self.creative { 5.0 } else { 3.0 };

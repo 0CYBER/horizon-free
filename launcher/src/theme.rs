@@ -1,22 +1,29 @@
-//! One neutral palette in two appearances and one accent. Spacing follows 4/8/12/16/24/32.
-//! Type: Geist for the interface, Instrument Serif for titles, Geist Mono for consoles and
-//! commands, all bundled (SIL Open Font License). Five sizes: 12, 13, 15, 28 and 56.
+//! The launcher's view of Horizon's design tokens (`crates/horizon-theme`), which the game's
+//! menus share: one neutral palette in two appearances and one accent, spacing 4/8/12/16/24/32,
+//! Geist / Instrument Serif / Geist Mono (bundled, SIL Open Font License), five sizes.
 use gpui::{rgb, Hsla, WindowAppearance};
+use horizon_theme as tokens;
 use std::time::Duration;
 
-pub const FONT: &str = "Geist";
-pub const DISPLAY: &str = "Instrument Serif";
-pub const MONO: &str = "Geist Mono";
+pub const FONT: &str = tokens::FONT;
+pub const DISPLAY: &str = tokens::DISPLAY;
+pub const MONO: &str = tokens::MONO;
 
-pub const SMALL: f32 = 12.;
-pub const BODY: f32 = 13.;
-pub const LARGE: f32 = 15.;
-pub const TITLE: f32 = 28.;
-pub const HERO: f32 = 56.;
+pub const SMALL: f32 = tokens::SMALL;
+pub const BODY: f32 = tokens::BODY;
+pub const LARGE: f32 = tokens::LARGE;
+pub const TITLE: f32 = tokens::TITLE;
+pub const HERO: f32 = tokens::HERO;
+
+/// Shapes and controls, shared with the game's menus.
+pub use tokens::{
+    CONTROL, CONTROL_LARGE, DISABLED, PRESSED, PRESSED_SOFT, PRIMARY_HOVER, RADIUS, RADIUS_CARD, RADIUS_GROUP,
+    RADIUS_SEGMENT, ROW_LABEL, SEGMENT, SIDEBAR,
+};
 
 /// Motion: short and eased out, never bouncy.
-pub const QUICK: Duration = Duration::from_millis(160);
-pub const MOVE: Duration = Duration::from_millis(240);
+pub const QUICK: Duration = tokens::QUICK;
+pub const MOVE: Duration = tokens::MOVE;
 
 #[derive(Clone, Copy)]
 pub struct Theme {
@@ -47,36 +54,27 @@ impl Theme {
     }
 
     pub fn dark() -> Self {
-        Self {
-            bg: c(0x111113),
-            sidebar: c(0x0c0c0d),
-            raised: c(0x1a1a1d),
-            hover: c(0x202024),
-            border: c(0x26262a),
-            text: c(0xe8e8ea),
-            muted: c(0x9a9aa1),
-            faint: c(0x626269),
-            accent: c(0x7c5cc4),
-            on_accent: c(0xffffff),
-            danger: c(0xd9705f),
-            dark: true,
-        }
+        Self::from(tokens::DARK)
     }
 
     pub fn light() -> Self {
+        Self::from(tokens::LIGHT)
+    }
+
+    fn from(p: tokens::Palette) -> Self {
         Self {
-            bg: c(0xfcfcfb),
-            sidebar: c(0xf4f4f2),
-            raised: c(0xf2f2f0),
-            hover: c(0xebebe8),
-            border: c(0xe3e3df),
-            text: c(0x19191b),
-            muted: c(0x63636a),
-            faint: c(0x9a9a9f),
-            accent: c(0x6a4bb3),
-            on_accent: c(0xffffff),
-            danger: c(0xb84a3a),
-            dark: false,
+            bg: c(p.bg),
+            sidebar: c(p.sidebar),
+            raised: c(p.raised),
+            hover: c(p.hover),
+            border: c(p.border),
+            text: c(p.text),
+            muted: c(p.muted),
+            faint: c(p.faint),
+            accent: c(p.accent),
+            on_accent: c(p.on_accent),
+            danger: c(p.danger),
+            dark: p.dark,
         }
     }
 }

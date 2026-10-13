@@ -42,12 +42,12 @@ pub enum Item {
     Horizon(H),
 }
 
-struct Setting {
-    item: Item,
-    cost: Cost,
-    text: &'static str,
+pub struct Setting {
+    pub item: Item,
+    pub cost: Cost,
+    pub text: &'static str,
 }
-enum Row {
+pub enum Row {
     Header(&'static str),
     Setting(Setting),
 }
@@ -66,7 +66,8 @@ fn h(opt: H, cost: Cost, text: &'static str) -> Row {
     })
 }
 
-fn rows(level: Level) -> Vec<Row> {
+/// The settings of a level, grouped under headers (Simple has no headers).
+pub fn rows(level: Level) -> Vec<Row> {
     use Cost::*;
     let render = v(
         Opt::RenderDistance,
@@ -164,6 +165,16 @@ fn rows(level: Level) -> Vec<Row> {
                 Medium,
                 "Leaves with see-through gaps. Off draws them solid.",
             ),
+            v(
+                Opt::ImprovedTransparency,
+                Medium,
+                "Sorts water and glass more exactly behind each other.",
+            ),
+            v(
+                Opt::ChunkBuilder,
+                Low,
+                "Which chunk rebuilds wait for the frame: none, nearby or yours.",
+            ),
             h(
                 H::AnimatedTextures,
                 Low,
@@ -195,6 +206,18 @@ fn rows(level: Level) -> Vec<Row> {
             ),
             v(Opt::Fullscreen, None, "Fills the screen (borderless)."),
             gui,
+            v(Opt::Gamma, None, "Brightens dark places."),
+            v(
+                Opt::InactivityFps,
+                None,
+                "Lowers the frame rate when minimised, or idle too.",
+            ),
+            Row::Header("Preferences"),
+            v(Opt::ViewBobbing, None, "Sways the view while walking."),
+            v(Opt::ChunkFade, None, "Fades newly loaded chunks in."),
+            v(Opt::Vignette, None, "Darkens the screen's edges."),
+            v(Opt::Autosave, None, "Shows when the world saves."),
+            v(Opt::AttackIndicator, None, "Shows attack cooldown."),
             Row::Header("Performance"),
             h(
                 H::Workers,
@@ -340,13 +363,43 @@ fn max_workers() -> u32 {
 }
 
 impl Item {
-    fn slider(self, s: &Settings) -> Option<f32> {
+    /// On/off settings, drawn as switches by the Horizon menus.
+    pub fn switch(self, s: &Settings) -> Option<bool> {
+        let g = &s.horizon;
+        Some(match self {
+            Item::Horizon(H::CaveCulling) => g.cave_culling,
+            Item::Horizon(H::Sky) => g.sky,
+            Item::Horizon(H::Fog) => g.fog,
+            Item::Horizon(H::Weather) => g.weather,
+            Item::Horizon(H::AnimatedTextures) => g.animated_textures,
+            Item::Horizon(H::Antialiasing) => g.fxaa,
+            Item::Vanilla(Opt::ViewBobbing) => s.view_bobbing,
+            Item::Vanilla(Opt::Vsync) => s.vsync,
+            Item::Vanilla(Opt::Fullscreen) => s.fullscreen,
+            Item::Vanilla(Opt::SmoothLighting) => s.smooth_lighting,
+            Item::Vanilla(Opt::EntityShadows) => s.entity_shadows,
+            Item::Vanilla(Opt::Vignette) => s.vignette,
+            Item::Vanilla(Opt::Autosave) => s.autosave_indicator,
+            Item::Vanilla(Opt::CutoutLeaves) => s.cutout_leaves,
+            Item::Vanilla(Opt::ImprovedTransparency) => s.improved_transparency,
+            _ => return None,
+        })
+    }
+    /// Caption and value text, split from the label ("Caption: Value").
+    pub fn caption_value(self, s: &Settings) -> (String, String) {
+        let label = self.label(s).plain();
+        match label.split_once(": ") {
+            Some((c, v)) => (c.to_owned(), v.to_owned()),
+            None => (label, String::new()),
+        }
+    }
+    pub fn slider(self, s: &Settings) -> Option<f32> {
         match self {
             Item::Vanilla(o) => o.slider_position(s),
             Item::Horizon(h) => h.slider(s),
         }
     }
-    fn label(self, s: &Settings) -> Text {
+    pub fn label(self, s: &Settings) -> Text {
         match self {
             // The vanilla button shows the scale alone, under its own caption.
             Item::Vanilla(Opt::GuiScale) => Text::translate(
@@ -360,14 +413,14 @@ impl Item {
             Item::Horizon(h) => h.label(s),
         }
     }
-    fn set_slider(self, s: &mut Settings, v: f32) {
+    pub fn set_slider(self, s: &mut Settings, v: f32) {
         match self {
             Item::Vanilla(o) => o.set_slider(s, v),
             Item::Horizon(h) => h.set_slider(s, v),
         }
         self.touched(s);
     }
-    fn cycle(self, s: &mut Settings, back: bool) {
+    pub fn cycle(self, s: &mut Settings, back: bool) {
         match self {
             Item::Vanilla(o) => o.cycle(s, back),
             Item::Horizon(h) => h.cycle(s, back),
@@ -380,7 +433,18 @@ impl Item {
             self,
             Item::Horizon(H::Preset | H::Overlay | H::Pacing | H::PresentMode | H::Workers)
                 | Item::Vanilla(
-                    Opt::GuiScale | Opt::Fullscreen | Opt::Vsync | Opt::MaxFps | Opt::Fov
+                    Opt::GuiScale
+                        | Opt::Fullscreen
+                        | Opt::Vsync
+                        | Opt::MaxFps
+                        | Opt::Fov
+                        | Opt::Gamma
+                        | Opt::InactivityFps
+                        | Opt::ViewBobbing
+                        | Opt::ChunkFade
+                        | Opt::Vignette
+                        | Opt::Autosave
+                        | Opt::AttackIndicator
                 )
         );
         if !presetless {

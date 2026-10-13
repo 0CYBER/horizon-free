@@ -15,8 +15,8 @@ use winit::window::Window;
 
 mod arena;
 mod occlusion;
-mod post;
 mod timing;
+mod world_post;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -87,6 +87,9 @@ pub struct Frame<'a> {
     pub celestial: &'a [Vertex],
     /// First-person hand and held item, drawn after clearing depth.
     pub hand: &'a [Vertex],
+    /// `CameraRenderState.hudFov`: the hand's own field of view
+    /// (`GameRenderer.render3dHud`).
+    pub hand_fov_degrees: f32,
     /// Full-screen camera effects drawn over the world and hand, under the HUD.
     pub screen: &'a [crate::screen_effects::ScreenQuad],
     /// The world border wall, when near enough to be drawn.
@@ -105,6 +108,8 @@ pub struct Frame<'a> {
     pub night_vision: f32,
     /// Torch flicker added to the block light factor of 1.4.
     pub block_flicker: f32,
+    /// Blur and grade the frame under a Horizon-style menu (`post`).
+    pub post: Option<crate::post::PostGrade>,
 }
 /// One frame of the world border wall (`WorldBorderRenderer.render`).
 #[derive(Clone, Debug)]
@@ -161,6 +166,9 @@ pub struct Renderer {
     screen_buffer: wgpu::Buffer,
     screen_capacity: u64,
     entity_group: wgpu::BindGroup,
+    /// The entity resources with the hand's projection (`hand_globals`).
+    hand_group: wgpu::BindGroup,
+    hand_globals: wgpu::Buffer,
     entity_buffer: wgpu::Buffer,
     entity_capacity: u64,
     group: wgpu::BindGroup,
@@ -201,8 +209,10 @@ pub struct Renderer {
     /// VisGraph face connectivity per meshed section (cave culling).
     occlusion: occlusion::Occlusion,
     /// Resolution scale and FXAA (Horizon settings).
-    post: post::Post,
+    world_post: world_post::Post,
     pub hud: HudRenderer,
+    /// The menus' backdrop blur, made on first use.
+    post: Option<crate::post::Post>,
     pub info: wgpu::AdapterInfo,
     pub suspended: bool,
     pub drawn_sections: usize,
@@ -542,6 +552,12 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let hand_globals = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("First-person hand globals"),
+            size: std::mem::size_of::<Globals>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let (mips, mip_levels) = mip_chain(sprite_pixels, sprite_size, layers);
         let sprite_texture = device.create_texture_with_data(
             &queue,
@@ -718,6 +734,32 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: globals.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&atlas_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&atlas_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&lightmap_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&lightmap_sampler),
+                },
+            ],
+        });
+        let hand_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("First-person hand resources"),
+            layout: &entity_bindings,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: hand_globals.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -1123,7 +1165,7 @@ impl Renderer {
         let multi_draw = device
             .features()
             .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE);
-        let post = post::Post::new(&device, config.format.remove_srgb_suffix());
+        let world_post = world_post::Post::new(&device, config.format.remove_srgb_suffix());
         Ok(Self {
             instance,
             surface,
@@ -1154,6 +1196,8 @@ impl Renderer {
             screen_buffer,
             screen_capacity,
             entity_group,
+            hand_group,
+            hand_globals,
             entity_buffer,
             entity_capacity,
             group,
@@ -1184,8 +1228,9 @@ impl Renderer {
             draw_pages: Vec::new(),
             block_entities: HashMap::new(),
             occlusion: occlusion::Occlusion::new(crate::chunk::HEIGHT / 16),
-            post,
+            world_post,
             hud,
+            post: None,
             info,
             suspended: size.width == 0 || size.height == 0,
             drawn_sections: 0,
@@ -1404,8 +1449,8 @@ impl Renderer {
     }
     /// Horizon's resolution scale (world pixels per window pixel) and FXAA.
     pub fn set_world_post(&mut self, scale: f32, antialias: bool) {
-        self.post.scale = scale.clamp(0.25, 2.0);
-        self.post.antialias = antialias;
+        self.world_post.scale = scale.clamp(0.25, 2.0);
+        self.world_post.antialias = antialias;
     }
     /// The Mipmap Levels option: block textures sample at most `levels`
     /// reduced copies (0: none).
@@ -1706,6 +1751,20 @@ impl Renderer {
         };
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
+        // GameRenderer.render3dHud: the hand's projection at hudFov, with the
+        // bob in its pose rather than the projection (same product).
+        let hand_projection = Mat4::from_cols_array(&crate::camera::hand_projection(
+            frame.hand_fov_degrees,
+            self.config.width as f32,
+            self.config.height.max(1) as f32,
+            (frame.distance * 4.0).max(1024.0),
+        ));
+        let hand_globals = Globals {
+            view_proj: (hand_projection * frame.bob * view).to_cols_array_2d(),
+            ..globals
+        };
+        self.queue
+            .write_buffer(&self.hand_globals, 0, bytemuck::bytes_of(&hand_globals));
         // Frustum culling and camera-relative origins.
         let view = Frustum {
             planes: frustum(view_proj),
@@ -1916,7 +1975,7 @@ impl Renderer {
         }
         // The world's targets: the screen, or the scaled target of `post`.
         let scaled = self
-            .post
+            .world_post
             .prepare(&self.device, [self.config.width, self.config.height]);
         let (world_view, world_depth) = match &scaled {
             Some((color, depth)) => (color, depth),
@@ -2021,7 +2080,7 @@ impl Renderer {
             }
         }
         if scaled.is_some() {
-            self.post.finish(&mut encoder, &view_target);
+            self.world_post.finish(&mut encoder, &view_target);
         }
         if hand_quads > 0 {
             let attachments = [Some(wgpu::RenderPassColorAttachment {
@@ -2047,7 +2106,7 @@ impl Renderer {
                 ..Default::default()
             });
             pass.set_pipeline(&self.entity_pipeline);
-            pass.set_bind_group(0, &self.entity_group, &[]);
+            pass.set_bind_group(0, &self.hand_group, &[]);
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
             pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
             pass.draw_indexed(
@@ -2096,6 +2155,23 @@ impl Renderer {
                 pass.set_pipeline(pipeline);
                 pass.draw_indexed(0..6, (i * 4) as i32, 0..1);
             }
+        }
+        if let Some(grade) = &frame.post
+            && self.config.usage.contains(wgpu::TextureUsages::COPY_SRC)
+        {
+            let format = self.config.format;
+            let device = &self.device;
+            self.post
+                .get_or_insert_with(|| crate::post::Post::new(device, format))
+                .apply(
+                    &self.device,
+                    &self.queue,
+                    &mut encoder,
+                    &target_texture,
+                    &view_target,
+                    [self.config.width, self.config.height],
+                    grade,
+                );
         }
         self.hud.draw(
             &self.device,
