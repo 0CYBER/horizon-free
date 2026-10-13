@@ -435,6 +435,13 @@ fn print_heart(
     );
 }
 
+/// The damage of a mob's direct hit on the player (others count as none).
+fn player_damage(e: &MobEvent) -> f32 {
+    match e {
+        MobEvent::AttackPlayer(amount, _) | MobEvent::DamagePlayer { amount, .. } => *amount,
+        _ => 0.0,
+    }
+}
 /// Whether an event hurts the scenario's player (survival, normal difficulty,
 /// no armour, made hurtable again every tick by the oracle).
 fn player_hurt(player: Option<&PlayerView>, e: &MobEvent) -> bool {
@@ -455,7 +462,9 @@ fn player_hurt(player: Option<&PlayerView>, e: &MobEvent) -> bool {
     }
 }
 
-fn print(out: &mut String, t: i32, i: usize, m: &Mob) {
+/// `player_down`: the scenario's player is no valid target (creative, or
+/// killed this tick).
+fn print(out: &mut String, t: i32, i: usize, m: &Mob, player_down: bool) {
     let _ = write!(out, "{t} {i}");
     if m.removed {
         // Entity.RemovalReason: the end of the death animation, else a discard.
@@ -495,7 +504,13 @@ fn print(out: &mut String, t: i32, i: usize, m: &Mob) {
         "\tgoals {}\ttargets {}\ttarget {}",
         goals(m, m.ai.goals.running_names()),
         goals(m, m.ai.targets.running_names()),
-        who(m.ai.target)
+        // Warden.getTarget: the brain's attack target, if still valid.
+        who(match horizon_client::mobs::warden::brain_target(m) {
+            Some(Who::Player) if player_down => None,
+            Some(target) => Some(target),
+            None if m.species() == Species::Warden => None,
+            None => m.ai.target,
+        })
     );
     let _ = write!(out, "\tnav ");
     match &m.ai.nav.path {
@@ -551,6 +566,7 @@ fn print(out: &mut String, t: i32, i: usize, m: &Mob) {
     );
     let _ = write!(out, "\trng {:x}", m.random.state());
     let brain = horizon_client::mobs::villager_brain::describe(m)
+        .or_else(|| horizon_client::mobs::warden_brain::describe(m))
         .or_else(|| horizon_client::mobs::monster_brain::describe(m))
         .or_else(|| horizon_client::mobs::animal_brain::describe(m));
     if let Some((acts, mem)) = brain {
@@ -762,6 +778,12 @@ fn main() -> horizon_client::Result<()> {
                 match flag.as_str() {
                     "persistent" => m.persistent = true,
                     "noai" => m.no_ai = true,
+                    // Warden.finalizeSpawn's own part.
+                    "digcooldown" | "emerge" => horizon_client::mobs::warden::finalize(
+                        &mut m,
+                        flag == "emerge",
+                        &mut Vec::new(),
+                    ),
                     "inlove" => m.extra.in_love = 600,
                     "tame" => m.extra.tame = true,
                     x if x.starts_with("age=") => m.extra.age = x[4..].parse().unwrap(),
@@ -790,13 +812,20 @@ fn main() -> horizon_client::Result<()> {
                     spec.seed,
                 );
             }
+            if m.species() == Species::Warden {
+                // As for villagers: the sensors delayed again, the RunOne seeded.
+                horizon_client::mobs::warden::init_brain(&mut m, spec.seed);
+            }
             // The same for the sniffer's and the happy ghast's brains.
             if horizon_client::mobs::animal_brain::kind_of(&m).is_some() {
                 horizon_client::mobs::animal_brain::init(&mut m, spec.seed);
             }
             mobs.push(m);
         }
-        let mut player = s.player.map(|p| {
+        // Without a player of its own a scenario still has the oracle's,
+        // 5000 blocks east (Mob.checkDespawn draws for it).
+        let far = [f64::from(s.origin[0] + 5000), -60.0, f64::from(s.origin[1])];
+        let mut player = Some(s.player.unwrap_or(far)).map(|p| {
             let position = Vec3::new(p[0], p[1], p[2]);
             PlayerView {
                 position,
@@ -826,7 +855,7 @@ fn main() -> horizon_client::Result<()> {
         });
         let mut scratch = LegacyRandom::new(0);
         for (i, m) in mobs.iter().enumerate() {
-            print(&mut out, 0, i, m);
+            print(&mut out, 0, i, m, s.creative);
         }
         // The MobWorld every step sees, over a snapshot of the mobs.
         macro_rules! mob_world {
@@ -964,6 +993,26 @@ fn main() -> horizon_client::Result<()> {
                     &mut born,
                     s.time,
                 );
+                horizon_client::mobs::warden::hear_mob_events(&mut mobs, &events, from, &w);
+                // Melee hits on other mobs land during the attacker's tick
+                // (LivingEntity.hurtServer), with the sounds they raise.
+                let mut k = from;
+                while k < events.len() {
+                    if let MobEvent::AttackMob {
+                        target,
+                        amount,
+                        source,
+                    } = events[k]
+                        && let Some(t) = mobs.iter_mut().find(|m| m.id == target)
+                        && t.damage(amount, source)
+                    {
+                        let raised = std::mem::take(&mut t.outbox);
+                        let n = raised.len();
+                        events.splice(k + 1..k + 1, raised);
+                        k += n;
+                    }
+                    k += 1;
+                }
                 // ServerLevel ticks entities one after another: the ones
                 // after this mob see it as it is now.
                 if let Some(e) = snapshot.iter_mut().find(|e| e.id == mobs[i].id) {
@@ -1008,8 +1057,13 @@ fn main() -> horizon_client::Result<()> {
                     _ => {}
                 }
             }
+            // A hit for the player's whole health kills it until the oracle
+            // heals it next tick.
+            let player_killed = events
+                .iter()
+                .any(|e| player_hurt(player.as_ref(), e) && player_damage(e) >= 20.0);
             for (i, m) in mobs.iter().enumerate() {
-                print(&mut out, t, i, m);
+                print(&mut out, t, i, m, s.creative || player_killed);
             }
             for e in &events {
                 if let MobEvent::Sound(name, _, volume, pitch) = e {
@@ -1024,9 +1078,14 @@ fn main() -> horizon_client::Result<()> {
                 } else if player_hurt(player.as_ref(), e) {
                     // The oracle's survival player, healed and made hurtable every tick,
                     // takes the damage (LivingEntity.playHurtSound).
+                    let sound = if player_damage(e) >= 20.0 {
+                        "death"
+                    } else {
+                        "hurt"
+                    };
                     let _ = writeln!(
                         out,
-                        "{t} sound minecraft:entity.player.hurt 3f800000 3f800000"
+                        "{t} sound minecraft:entity.player.{sound} 3f800000 3f800000"
                     );
                 }
             }

@@ -248,6 +248,45 @@ const SPAWN_EGG_MOBS: &[&str] = &[
     "zombified_piglin",
 ];
 
+/// The read hook of item stacks in the schema at `k` (before 1.20.5): V99's tables below V704,
+/// V704's block entities with V99's entities up to V705, V705's from then on.
+pub(super) fn add_names_at(stack: &mut Tag, k: super::schema::Key) {
+    use super::schema::key;
+    if k >= key(705, 0) {
+        return add_names(stack);
+    }
+    let item = namespaced(&as_str(stack.get("id")).unwrap_or_else(|| "minecraft:air".into()));
+    let Some(tag) = stack.get_mut("tag") else {
+        return;
+    };
+    if let Some(be) = tag.get_mut("BlockEntityTag")
+        && item != "minecraft:air"
+    {
+        let found = if k >= key(704, 0) {
+            ITEM_TO_BLOCK_ENTITY.iter().find(|(i, _)| *i == item)
+        } else {
+            super::flat_tables::ITEM_TO_BLOCK_ENTITY_V99
+                .iter()
+                .find(|(i, _)| *i == item)
+        };
+        if let Some((_, id)) = found {
+            set(be, "id", string(id));
+        }
+    }
+    if let Some(e) = tag.get_mut("EntityTag")
+        && e.get("id").is_none()
+    {
+        let id = match item.as_str() {
+            "minecraft:armor_stand" => Some("ArmorStand"),
+            "minecraft:painting" => Some("Painting"),
+            _ => None,
+        };
+        if let Some(id) = id {
+            set(e, "id", string(id));
+        }
+    }
+}
+
 /// `V99.addNames` with V704/V705's tables: the read hook of item stacks before 1.20.5.
 pub(super) fn add_names(stack: &mut Tag) {
     let item = namespaced(&as_str(stack.get("id")).unwrap_or_else(|| "minecraft:air".into()));

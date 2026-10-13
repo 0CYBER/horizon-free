@@ -121,10 +121,9 @@ pub fn upgrade_older_world(world: &Path) -> Result<()> {
     let Some(root) = read_dat(&world.join("level.dat")) else {
         return Ok(());
     };
-    let version = root
-        .get("Data")
-        .and_then(|d| number(d.get("DataVersion")))
-        .unwrap_or(i64::from(DATA_VERSION));
+    let version = root.get("Data").map_or(i64::from(DATA_VERSION), |d| {
+        number(d.get("DataVersion")).unwrap_or(-1) // saves of 1.8 and before have none
+    });
     if version >= i64::from(DATA_VERSION) {
         return Ok(());
     }
@@ -2253,10 +2252,12 @@ mod tests {
             super::read_dat(&dir.join("level.dat"))
                 .and_then(|r| super::number(r.get("Data")?.get("DataVersion")))
         };
-        // 1.16.5, older than the ported fixes: refused, left as it is.
-        super::write_dat(&dir.join("level.dat"), level(2586)).unwrap();
-        assert!(super::upgrade_older_world(&dir).is_err());
-        assert_eq!(version(&dir), Some(2586));
+        // 1.12.2 and 1.16.5: upgraded too, every server fix is ported.
+        for old in [1343, 2586] {
+            super::write_dat(&dir.join("level.dat"), level(old)).unwrap();
+            super::upgrade_older_world(&dir).unwrap();
+            assert_eq!(version(&dir), Some(i64::from(super::DATA_VERSION)));
+        }
         // 1.21.1: upgraded to the current version.
         super::write_dat(&dir.join("level.dat"), level(3955)).unwrap();
         super::upgrade_older_world(&dir).unwrap();

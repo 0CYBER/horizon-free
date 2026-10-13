@@ -558,6 +558,16 @@ public final class VanillaMobAiOracle {
                             long at = Long.parseLong(v);
                             afterAdd.add(() -> mob.getBrain().setMemory(MemoryModuleType.LAST_SLEPT, at));
                         }
+                        // Warden.finalizeSpawn's own part (Mob.finalizeSpawn draws the level random,
+                        // which is not seeded yet): a minute before digging, or climbing out first.
+                        case "digcooldown", "emerge" -> {
+                            mob.getBrain().setMemoryWithExpiry(MemoryModuleType.DIG_COOLDOWN, net.minecraft.util.Unit.INSTANCE, 1200L);
+                            if (kv[0].equals("emerge")) {
+                                mob.setPose(net.minecraft.world.entity.Pose.EMERGING);
+                                mob.getBrain().setMemoryWithExpiry(MemoryModuleType.IS_EMERGING, net.minecraft.util.Unit.INSTANCE,
+                                    net.minecraft.world.entity.monster.warden.WardenAi.EMERGE_DURATION);
+                            }
+                        }
                         case "inlove" -> ((net.minecraft.world.entity.animal.Animal) mob).setInLoveTime(600);
                         case "tame" -> { if (mob instanceof net.minecraft.world.entity.animal.equine.AbstractHorse horse) horse.setTamed(true); }
                         case "strength" -> method(net.minecraft.world.entity.animal.equine.Llama.class, "setStrength", int.class)
