@@ -16,6 +16,8 @@ struct Globals {
     // x: vanilla's GameTime ((game time % 24000 + partial tick) / 24000)
     time: vec4<f32>,
     crumbling_sprite: vec4<f32>,
+    // Selection outline parameters (read by terrain.wgsl).
+    outline_params: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var atlas: texture_2d<f32>;

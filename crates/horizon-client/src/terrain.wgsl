@@ -18,6 +18,9 @@ struct Globals {
     end_portal_sprites: array<vec4<f32>, 2>,
     // x: vanilla's GameTime ((game time % 24000 + partial tick) / 24000)
     time: vec4<f32>,
+    // Atlas rect of the current destroy stage (read by entity.wgsl).
+    crumbling_sprite: vec4<f32>,
+    outline_params: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var sprites: texture_2d_array<f32>;
@@ -173,10 +176,36 @@ fn sunrise_weight(d: vec3<f32>) -> f32 {
     return vec4(sky_fog(vec3(0.0), dist), 1.0);
 }
 
-struct LineOut { @builtin(position) clip: vec4<f32> }
-@vertex fn vs_line(@location(0) position: vec3<f32>) -> LineOut {
+// rendertype_lines.vsh: screen-space stroke and camera-space depth separation.
+fn outline_clip(vertex: u32, start: vec3<f32>, end: vec3<f32>) -> vec4<f32> {
+    let position = select(start, end, vertex >= 2u);
+    let normal = normalize(end - start);
+    let view_shrink = 1.0 - 1.0 / 256.0;
+    let line_start = globals.view_proj * vec4((position * globals.outline_params.w) * view_shrink, 1.0);
+    let line_end = globals.view_proj * vec4(((position + normal) * globals.outline_params.w) * view_shrink, 1.0);
+    let ndc1 = line_start.xyz / line_start.w;
+    let ndc2 = line_end.xyz / line_end.w;
+    let screen = globals.outline_params.xy;
+    let direction = normalize((ndc2.xy - ndc1.xy) * screen);
+    var offset = vec2(-direction.y, direction.x) * globals.outline_params.z / screen;
+    if offset.x < 0.0 { offset = -offset; }
+    if vertex % 2u != 0u { offset = -offset; }
+    return vec4((ndc1 + vec3(offset, 0.0)) * line_start.w, line_start.w);
+}
+struct LineOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) spherical: f32,
+    @location(1) cylindrical: f32,
+}
+@vertex fn vs_line(@builtin(vertex_index) vertex: u32,
+    @location(0) start: vec3<f32>, @location(1) end: vec3<f32>) -> LineOut {
+    let position = select(start, end, vertex >= 2u);
     var out: LineOut;
-    out.clip = globals.view_proj * vec4(position, 1.0);
+    out.clip = outline_clip(vertex, start, end);
+    out.spherical = length(position);
+    out.cylindrical = max(length(position.xz), abs(position.y));
     return out;
 }
-@fragment fn fs_line() -> @location(0) vec4<f32> { return vec4(0.0, 0.0, 0.0, 0.4); }
+@fragment fn fs_line(in: LineOut) -> @location(0) vec4<f32> {
+    return apply_fog(vec4(0.0, 0.0, 0.0, 0.4), in.spherical, in.cylindrical);
+}
