@@ -247,12 +247,6 @@ pub fn banner_result_quads(
         sprites,
         &mut quads,
     );
-    // The winding normal flips with the pose's mirrored axis; PoseStack's
-    // normal matrix only takes the scale's signs, so the lit normal is the
-    // opposite one.
-    for q in &mut quads {
-        q.normal = -q.normal;
-    }
     quads
 }
 

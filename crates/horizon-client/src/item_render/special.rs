@@ -101,6 +101,12 @@ fn draw(
         } else {
             normal
         };
+        // A reflection reverses winding, not PoseStack normal directions.
+        let normal = if m.determinant() < 0.0 {
+            -normal
+        } else {
+            normal
+        };
         sink.quad(ItemQuad {
             pos,
             uv: poly.map(|v| {
@@ -620,5 +626,50 @@ mod tests {
             mapped("chest", "minecraft:christmas"),
             "entity/chest/christmas"
         );
+    }
+
+    #[test]
+    fn model_normals_follow_the_pose_not_the_mirrored_winding() {
+        let part = ModelPart::parse(&serde_json::json!({
+            "pose": [0, 0, 0, 0, 0, 0, 1, 1, 1],
+            "polygons": [[[0, 0, 0, 0, 0], [1, 0, -1, 1, 0],
+                          [0, 1, -1, 1, 1], [-1, 1, 0, 0, 1]]],
+            "children": {}
+        }));
+        let sprite = Rect {
+            u0: 0.0,
+            v0: 0.0,
+            u1: 1.0,
+            v1: 1.0,
+            w: 16,
+            h: 16,
+        };
+        let local = Vec3::ONE.normalize();
+        for scale in [
+            Vec3::ONE,
+            Vec3::new(16.0, -16.0, 16.0),
+            Vec3::new(2.0, 3.0, -4.0),
+            Vec3::new(-2.0, -3.0, 4.0),
+        ] {
+            let pose = Mat4::from_rotation_y(0.7) * Mat4::from_scale(scale);
+            let mut quads = Vec::new();
+            draw(
+                &part,
+                "root",
+                pose,
+                &none,
+                sprite,
+                argb(-1),
+                Foil::None,
+                &mut quads,
+            );
+            assert_eq!(quads.len(), 1);
+            let expected = super::super::transform_normal(pose, local);
+            assert!(
+                (quads[0].normal - expected).length() < 1e-6,
+                "scale {scale:?}: {:?} != {expected:?}",
+                quads[0].normal
+            );
+        }
     }
 }

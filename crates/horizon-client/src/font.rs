@@ -163,6 +163,17 @@ fn providers(root: &Path, id: &str, depth: u32, out: &mut Vec<serde_json::Value>
         }
     }
 }
+// FontTexture.add nudges UVs inside the glyph to avoid neighboring texels.
+fn glyph_rect(x: u32, y: u32, w: u32, h: u32, atlas: (u32, u32)) -> Rect {
+    Rect {
+        u0: (x as f32 + 0.01) / atlas.0 as f32,
+        v0: (y as f32 + 0.01) / atlas.1 as f32,
+        u1: ((x + w) as f32 - 0.01) / atlas.0 as f32,
+        v1: ((y + h) as f32 - 0.01) / atlas.1 as f32,
+        w,
+        h,
+    }
+}
 impl Font {
     /// Build from the atlas holding the bitmap font sheets. `pixels` is the
     /// RGBA atlas (for glyph widths) and `region` the reserved rows.
@@ -237,14 +248,7 @@ impl Font {
                             bitmap.insert(
                                 *ch,
                                 Glyph {
-                                    rect: Some(Rect {
-                                        u0: cx as f32 / atlas.0 as f32,
-                                        v0: cy as f32 / atlas.1 as f32,
-                                        u1: (cx + cell_w) as f32 / atlas.0 as f32,
-                                        v1: (cy + cell_h) as f32 / atlas.1 as f32,
-                                        w: cell_w,
-                                        h: cell_h,
-                                    }),
+                                    rect: Some(glyph_rect(cx, cy, cell_w, cell_h, atlas)),
                                     left: 0.0,
                                     top,
                                     right: cell_w as f32 * scale,
@@ -414,14 +418,7 @@ impl Font {
         });
         cache.cursor = (x + width + 1, y);
         Some(Glyph {
-            rect: Some(Rect {
-                u0: ax as f32 / self.atlas.0 as f32,
-                v0: ay as f32 / self.atlas.1 as f32,
-                u1: (ax + width) as f32 / self.atlas.0 as f32,
-                v1: (ay + 16) as f32 / self.atlas.1 as f32,
-                w: width,
-                h: 16,
-            }),
+            rect: Some(glyph_rect(ax, ay, width, 16, self.atlas)),
             left: 0.0,
             top: 0.0,
             right: width as f32 / 2.0,
@@ -608,5 +605,17 @@ mod tests {
         // Unparseable lines are skipped.
         parse_hex(b"zz:00\n", &mut out);
         assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn glyph_uvs_have_the_native_texel_inset() {
+        for (x, y, w, h) in [(120, 48, 8, 8), (0, 0, 1, 16), (4000, 2000, 32, 16)] {
+            let r = glyph_rect(x, y, w, h, (4096, 4096));
+            assert_eq!((r.w, r.h), (w, h));
+            assert!(r.u0 > x as f32 / 4096.0 && r.v0 > y as f32 / 4096.0);
+            assert!(r.u1 < (x + w) as f32 / 4096.0 && r.v1 < (y + h) as f32 / 4096.0);
+            assert_eq!(r.u0, (x as f32 + 0.01) / 4096.0);
+            assert_eq!(r.v1, ((y + h) as f32 - 0.01) / 4096.0);
+        }
     }
 }

@@ -307,6 +307,13 @@ impl HudBatch {
             patches: Vec::new(),
         }
     }
+    /// `AbstractContainerScreen.init`: center in integer GUI coordinates.
+    pub fn centered_origin(&self, width: f32, height: f32) -> (f32, f32) {
+        (
+            ((self.width - width) / 2.0).trunc(),
+            ((self.height - height) / 2.0).trunc(),
+        )
+    }
     pub fn quad(&mut self, p: [[f32; 2]; 4], uv: [[f32; 2]; 4], color: u32) {
         for i in [0, 1, 2, 0, 2, 3] {
             self.vertices.push(HudVertex {
@@ -788,5 +795,33 @@ impl HudRenderer {
         pass.set_bind_group(0, &self.group, &[]);
         pass.set_vertex_buffer(0, self.buffer.slice(..));
         pass.draw(0..count as u32, 0..1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn container_origins_use_java_integer_division() {
+        // Odd scaled dimensions, odd image sizes and an oversized panel.
+        for (width, height) in [(640, 360), (641, 361), (456, 256), (534, 300), (100, 100)] {
+            let batch = HudBatch {
+                vertices: Vec::new(),
+                scale: 3.0,
+                width: width as f32,
+                height: height as f32,
+                patches: Vec::new(),
+            };
+            for (image_width, image_height) in [(195, 136), (176, 166), (176, 222)] {
+                assert_eq!(
+                    batch.centered_origin(image_width as f32, image_height as f32),
+                    (
+                        ((width - image_width) / 2) as f32,
+                        ((height - image_height) / 2) as f32
+                    )
+                );
+            }
+        }
     }
 }
