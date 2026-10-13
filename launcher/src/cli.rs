@@ -137,6 +137,13 @@ fn release_json(r: &Release) -> serde_json::Value {
 }
 
 fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
+    if matches!(command, Cmd::Versions { .. } | Cmd::Update { .. }) {
+        for (tag, from) in backend::reuse_prepared_everywhere() {
+            if !as_json {
+                eprintln!("Prepared {tag} with the resources of {from}.");
+            }
+        }
+    }
     match command {
         Cmd::Versions { installed: true } => {
             let installed = backend::installed();

@@ -227,6 +227,13 @@ impl Launcher {
             rx,
             _appearance: appearance,
         };
+        let tx = this.tx.clone();
+        std::thread::spawn(move || {
+            let reused = backend::reuse_prepared_everywhere();
+            if !reused.is_empty() {
+                let _ = tx.send(Msg::Reused(reused));
+            }
+        });
         this.fetch_releases();
         this.fetch_roadmap();
         this.fetch_links();
@@ -321,6 +328,8 @@ impl Launcher {
                 Msg::Releases(r) => self.releases = r.map_or_else(Load::Failed, Load::Ready),
                 Msg::Roadmap(r) => self.roadmap = r.map_or_else(Load::Failed, Load::Ready),
                 Msg::Links(links) => self.links = links,
+                // The page reads is_prepared when drawn; `changed` redraws it.
+                Msg::Reused(_) => self.installed = backend::installed(),
                 Msg::Progress(tag, p) => {
                     self.bar = (self.bar.1, p);
                     self.installing = Some((tag, p));

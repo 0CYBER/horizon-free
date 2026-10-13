@@ -53,6 +53,9 @@ fn arg_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
 
 impl Session {
     fn call(&mut self, name: &str, args: &Value) -> Result<String, String> {
+        if matches!(name, "list_versions" | "check_updates") {
+            backend::reuse_prepared_everywhere();
+        }
         match name {
             "list_versions" => {
                 let installed = backend::installed();

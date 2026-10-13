@@ -486,18 +486,41 @@ fn reuse_prepared(versions: &Path, tag: &str) -> Option<String> {
             continue;
         }
         // Copied beside it and renamed when complete: an interrupted copy is never "prepared".
-        let partial = to.with_file_name(format!(".{version}.partial"));
+        // The name is this call's own, as the window's start and an install can both copy.
+        static COPIES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = COPIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let partial = to.with_file_name(format!(".{version}.partial-{}-{n}", std::process::id()));
         let _ = fs::remove_dir_all(&partial);
         let copied = copy_dir(&from, &partial).and_then(|_| {
+            if to.join(RESOURCES_MANIFEST).exists() {
+                return Ok(false); // Prepared meanwhile, by another copy or the player.
+            }
             let _ = fs::remove_dir_all(&to);
-            fs::rename(&partial, &to)
+            fs::rename(&partial, &to).map(|_| true)
         });
-        if copied.is_ok() {
-            return Some(other);
-        }
         let _ = fs::remove_dir_all(&partial);
+        match copied {
+            Ok(true) => return Some(other),
+            Ok(false) => return None,
+            Err(_) => {}
+        }
     }
     None
+}
+
+/// `reuse_prepared` for every installed version that is not prepared, oldest first, so a
+/// version prepared this way can serve the next. Launchers before 0.1.4 installed new versions
+/// without it; this catches those up. Returns each (version, where its resources came from).
+pub fn reuse_prepared_everywhere() -> Vec<(String, String)> {
+    reuse_prepared_in(&versions_dir())
+}
+
+fn reuse_prepared_in(versions: &Path) -> Vec<(String, String)> {
+    let mut tags = installed_in(versions);
+    tags.reverse();
+    tags.into_iter()
+        .filter_map(|tag| reuse_prepared(versions, &tag).map(|from| (tag, from)))
+        .collect()
 }
 
 /// The official launcher's game directory, where prepare_native_client.py looks by default.
@@ -1080,6 +1103,8 @@ pub enum Msg {
     Updates(Result<Updates, String>),
     LauncherProgress(f32),
     LauncherUpdated(Result<(), String>),
+    /// `reuse_prepared_everywhere` prepared these versions.
+    Reused(Vec<(String, String)>),
 }
 
 /// A running process; its output arrives as `Msg::Line`, its end as `Msg::Exit`.
@@ -1398,9 +1423,12 @@ mod tests {
         assert!(resources_at(&versions.join("v2026.10.13.1"))
             .join("worldgen/biomes.json")
             .exists());
-        assert!(!versions
-            .join("v2026.10.13.1/.local/horizon-client/.26.3.partial")
-            .exists());
+        let left: Vec<_> = fs::read_dir(versions.join("v2026.10.13.1/.local/horizon-client"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(left, ["26.3"]);
         // Already prepared: nothing to do.
         assert_eq!(reuse_prepared(&versions, "v2026.10.13.1"), None);
 
@@ -1414,6 +1442,18 @@ mod tests {
         write("v2026.10.16", "tools/prepare_native_client.py", "schema 8");
         assert_eq!(reuse_prepared(&versions, "v2026.10.16"), None);
         assert!(!is_prepared("v2026.10.15") && !is_prepared("v2026.10.16"));
+
+        // A version an older launcher installed without preparing it is caught up by the sweep
+        // that starting the window, `versions` and `update` run; the incompatible ones stay as
+        // they are, and a second sweep has nothing to do.
+        release("v2026.10.17", "26.3");
+        assert_eq!(
+            reuse_prepared_in(&versions),
+            [("v2026.10.17".to_string(), "v2026.10.13.1".to_string())]
+        );
+        assert!(is_prepared("v2026.10.17"));
+        assert!(!is_prepared("v2026.10.15") && !is_prepared("v2026.10.16"));
+        assert!(reuse_prepared_in(&versions).is_empty());
         let _ = fs::remove_dir_all(&versions);
     }
 
