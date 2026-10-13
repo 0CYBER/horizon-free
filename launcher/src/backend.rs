@@ -764,6 +764,9 @@ pub struct Settings {
     pub server_dir: Option<PathBuf>,
     #[serde(default)]
     pub auto_install: bool,
+    /// Off by default, so the opening animation shows unless the player turns it off.
+    #[serde(default)]
+    pub skip_opening: bool,
 }
 
 impl Settings {

@@ -8,8 +8,8 @@ mod theme;
 
 use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Updates};
 use gpui::{
-    div, ease_out_quint, img, prelude::*, px, relative, size, Animation, AnimationExt, AnyElement, App, Application, Bounds,
-    ClickEvent, Context, Div, ElementId, FocusHandle, FontWeight, Hsla, Image, ImageFormat, KeyDownEvent,
+    div, ease_out_quint, img, linear_color_stop, linear_gradient, prelude::*, px, relative, size, Animation, AnimationExt, AnyElement, App, Application, Bounds,
+    ClickEvent, Context, Div, ElementId, FocusHandle, FontWeight, Hsla, KeyDownEvent, RenderImage,
     ObjectFit, PathPromptOptions, ScrollHandle, SharedString, Stateful, Subscription, TitlebarOptions, Window,
     WindowBounds, WindowOptions,
 };
@@ -51,6 +51,36 @@ enum SelfUpdate {
     Failed(String),
 }
 
+/// The opening: the wordmark over the image holds at least `OPENING_HOLD` (until the release
+/// list is in, at most `OPENING_MAX`), then the launcher appears over `OPENING_REVEAL`.
+const OPENING_HOLD: Duration = Duration::from_millis(1400);
+const OPENING_MAX: Duration = Duration::from_millis(2500);
+const OPENING_REVEAL: Duration = Duration::from_millis(800);
+
+/// The phase of the opening at one moment: how far the reveal has gone, 0 to 1.
+struct Opening {
+    /// Set on the first frame, so a slow start does not eat into the hold.
+    started: Option<Instant>,
+    reveal: Option<Instant>,
+    focus: FocusHandle,
+}
+
+/// The background, decoded before the first frame so the opening never shows without it.
+fn background_image() -> Arc<RenderImage> {
+    let mut rgba = image::load_from_memory_with_format(include_bytes!("../assets/background.jpg"), image::ImageFormat::Jpeg)
+        .expect("bundled background")
+        .into_rgba8();
+    // GPUI draws BGRA.
+    for px in rgba.pixels_mut() {
+        px.0.swap(0, 2);
+    }
+    Arc::new(RenderImage::new([image::Frame::new(rgba)]))
+}
+
+fn ease_out_cubic(x: f32) -> f32 {
+    1. - (1. - x.clamp(0., 1.)).powi(3)
+}
+
 /// How often the launcher looks for new releases while it is open.
 const CHECK_EVERY: Duration = Duration::from_secs(4 * 3600);
 
@@ -74,7 +104,9 @@ struct Launcher {
     /// The page before the last switch and a counter, for the page and sidebar transitions.
     previous_page: Page,
     switches: usize,
-    backgrounds: (Arc<Image>, Arc<Image>),
+    /// The dark appearance's atmosphere, drawn darkened behind everything (assets/background.jpg).
+    background: Arc<RenderImage>,
+    opening: Option<Opening>,
     updates: Updates,
     checked: Option<Instant>,
     update_error: Option<String>,
@@ -134,16 +166,17 @@ impl Launcher {
         if settings.selected.as_ref().is_none_or(|s| !installed.contains(s)) {
             settings.selected = installed.first().cloned();
         }
-        let background = |bytes: &[u8]| Arc::new(Image::from_bytes(ImageFormat::Jpeg, bytes.to_vec()));
         let mut this = Self {
             theme: Theme::for_appearance(window.appearance()),
             page: Page::Play,
             previous_page: Page::Play,
             switches: 0,
-            backgrounds: (
-                background(include_bytes!("../assets/bg-dark.jpg")),
-                background(include_bytes!("../assets/bg-light.jpg")),
-            ),
+            opening: (!settings.skip_opening).then(|| {
+                let focus = cx.focus_handle();
+                window.focus(&focus);
+                Opening { started: None, reveal: None, focus }
+            }),
+            background: background_image(),
             updates: Updates::default(),
             checked: None,
             update_error: None,
@@ -553,6 +586,26 @@ fn button(id: impl Into<SharedString>, label: impl Into<SharedString>, kind: Kin
     }
 }
 
+/// An on/off switch whose knob slides.
+fn switch(id: &'static str, on: bool, t: &Theme) -> Stateful<Div> {
+    div()
+        .id(id)
+        .relative()
+        .flex_none()
+        .w(px(34.))
+        .h(px(20.))
+        .rounded_full()
+        .cursor_pointer()
+        .bg(if on { t.accent } else { t.border })
+        .child(
+            div().absolute().top(px(2.)).size(px(16.)).rounded_full().bg(gpui::white()).with_animation(
+                ElementId::named_usize(id, on as usize),
+                Animation::new(theme::QUICK).with_easing(ease_out_quint()),
+                move |d, p| d.left(px(if on { 2. + 14. * p } else { 16. - 14. * p })),
+            ),
+        )
+}
+
 fn disabled(b: Stateful<Div>) -> Stateful<Div> {
     b.opacity(0.4).cursor_default()
 }
@@ -705,7 +758,7 @@ impl Launcher {
             .flex_none()
             .w(px(200.))
             .h_full()
-            .bg(t.sidebar.opacity(0.72))
+            .bg(t.sidebar.opacity(0.8))
             .border_r_1()
             .border_color(t.border)
             .p(px(12.))
@@ -1081,31 +1134,23 @@ impl Launcher {
 
     fn settings_page(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let on = self.settings.auto_install;
-        let toggle = div()
-            .id("auto-install")
-            .relative()
-            .flex_none()
-            .w(px(34.))
-            .h(px(20.))
-            .rounded_full()
-            .cursor_pointer()
-            .bg(if on { t.accent } else { t.border })
-            .child(
-                div().absolute().top(px(2.)).size(px(16.)).rounded_full().bg(gpui::white()).with_animation(
-                    ElementId::named_usize("knob", on as usize),
-                    Animation::new(theme::QUICK).with_easing(ease_out_quint()),
-                    move |d, p| d.left(px(if on { 2. + 14. * p } else { 16. - 14. * p })),
-                ),
-            )
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+        let toggle = switch("auto-install", self.settings.auto_install, &t).on_click(cx.listener(
+            |this, _: &ClickEvent, _, cx| {
                 this.settings.auto_install = !this.settings.auto_install;
                 this.settings.save();
                 if this.settings.auto_install {
                     this.install_update();
                 }
                 cx.notify();
-            }));
+            },
+        ));
+        let opening = switch("opening", !self.settings.skip_opening, &t).on_click(cx.listener(
+            |this, _: &ClickEvent, _, cx| {
+                this.settings.skip_opening = !this.settings.skip_opening;
+                this.settings.save();
+                cx.notify();
+            },
+        ));
         let auto = div()
             .flex()
             .flex_col()
@@ -1187,6 +1232,8 @@ impl Launcher {
                     .flex_col()
                     .child(divider(&t))
                     .child(row("Updates", auto, Some(toggle), &t))
+                    .child(divider(&t))
+                    .child(row("Opening", div().child("Show opening animation"), Some(opening), &t))
                     .child(divider(&t))
                     .child(row("Horizon", horizon, horizon_action, &t))
                     .child(divider(&t))
@@ -1578,25 +1625,139 @@ impl Render for Launcher {
             Animation::new(theme::MOVE).with_easing(ease_out_quint()),
             |d, p| d.opacity(p).top(px(8. * (1. - p))),
         );
-        let background = if t.dark { self.backgrounds.0.clone() } else { self.backgrounds.1.clone() };
-        div()
+        // The opening: the image at full strength under the wordmark, then the launcher.
+        let (reveal, hold) = self.opening_phase(window);
+        let side = ease_out_cubic((reveal - 0.2) / 0.7);
+        let main = ease_out_cubic((reveal - 0.35) / 0.65);
+        // The image shows through most at the top right, behind Play's title, and fades toward
+        // the sidebar and the text below. Other pages keep it quieter.
+        let veil = if self.page == Page::Play { 0.80 } else { 0.88 } * ease_out_cubic(reveal);
+        let shade = ease_out_cubic(reveal);
+        // A slow drift while the opening holds, settling back as the launcher appears.
+        let scale = 1. + 0.04 * hold * (1. - shade);
+        let atmosphere = div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .overflow_hidden()
+            .when(t.dark || reveal < 1., |d| {
+                d.child(
+                    img(self.background.clone())
+                        .absolute()
+                        .left(relative((1. - scale) / 2.))
+                        .top(relative((1. - scale) / 2.))
+                        .w(relative(scale))
+                        .h(relative(scale))
+                        .object_fit(ObjectFit::Cover)
+                        .when(!t.dark, |i| i.opacity(1. - shade)),
+                )
+                .when(t.dark, |d| {
+                    d.child(div().absolute().size_full().bg(t.bg.opacity(veil)))
+                        .child(div().absolute().size_full().opacity(shade).bg(linear_gradient(
+                            90.,
+                            linear_color_stop(t.bg.opacity(0.9), 0.),
+                            linear_color_stop(t.bg.opacity(0.), 0.7),
+                        )))
+                        .child(div().absolute().size_full().opacity(shade).bg(linear_gradient(
+                            180.,
+                            linear_color_stop(t.bg.opacity(0.), 0.25),
+                            linear_color_stop(t.bg.opacity(0.75), 1.),
+                        )))
+                })
+            });
+        let mut root = div()
             .relative()
             .flex()
             .size_full()
             .bg(t.bg)
             .font_family(theme::FONT)
             .text_color(t.text)
-            .child(img(background).absolute().top_0().left_0().size_full().object_fit(ObjectFit::Cover))
-            .child(self.sidebar(cx))
+            .child(atmosphere)
+            .child(
+                div()
+                    .relative()
+                    .flex()
+                    .h_full()
+                    .opacity(side)
+                    .left(px(-16. * (1. - side)))
+                    .child(self.sidebar(cx)),
+            )
             .child(
                 div()
                     .id("content")
                     .relative()
                     .flex_1()
                     .h_full()
+                    .opacity(main)
+                    .top(px(16. * (1. - main)))
                     .overflow_y_scroll()
                     .child(div().flex().px(px(48.)).py(px(36.)).child(content)),
-            )
+            );
+        if let Some(opening) = &self.opening {
+            // The wordmark rises and fades as the launcher comes in; a click or a key skips ahead.
+            let word = 1. - ease_out_cubic(reveal / 0.6);
+            root = root.child(
+                div()
+                    .id("opening")
+                    .track_focus(&opening.focus)
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(reveal == 0., |d| d.cursor_pointer())
+                    .child(
+                        div()
+                            .relative()
+                            .top(px(-28. * (1. - word)))
+                            .opacity(word)
+                            .font_family(theme::DISPLAY)
+                            .text_size(px(96.))
+                            .text_color(gpui::white())
+                            .child("Horizon"),
+                    )
+                    .when(reveal == 0., |d| {
+                        d.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.skip_opening();
+                            cx.notify();
+                        }))
+                        .on_key_down(cx.listener(|this, _: &KeyDownEvent, _, cx| {
+                            this.skip_opening();
+                            cx.notify();
+                        }))
+                    }),
+            );
+        }
+        root
+    }
+}
+
+impl Launcher {
+    /// Where the opening is: the reveal's progress (1 when there is no opening) and the hold's.
+    fn opening_phase(&mut self, window: &mut Window) -> (f32, f32) {
+        let loaded = !matches!(self.releases, Load::Loading);
+        let Some(opening) = &mut self.opening else { return (1., 0.) };
+        let held = opening.started.get_or_insert_with(Instant::now).elapsed();
+        if opening.reveal.is_none() && ((held >= OPENING_HOLD && loaded) || held >= OPENING_MAX) {
+            opening.reveal = Some(Instant::now());
+        }
+        let hold = held.as_secs_f32() / OPENING_MAX.as_secs_f32();
+        let reveal = opening.reveal.map_or(0., |at| at.elapsed().as_secs_f32() / OPENING_REVEAL.as_secs_f32());
+        if reveal >= 1. {
+            self.opening = None;
+            return (1., 0.);
+        }
+        window.request_animation_frame();
+        (reveal, ease_out_cubic(hold))
+    }
+
+    fn skip_opening(&mut self) {
+        if let Some(opening) = &mut self.opening {
+            opening.reveal.get_or_insert_with(Instant::now);
+        }
     }
 }
 

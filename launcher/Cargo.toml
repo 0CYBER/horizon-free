@@ -18,6 +18,7 @@ tar = { version = "0.4", default-features = false }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 dirs = "5"
 self-replace = "1"
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 clap = { version = "4", features = ["derive"] }
 
 [profile.release]

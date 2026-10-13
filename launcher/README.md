@@ -28,8 +28,10 @@ On NixOS, `nix-shell` in this folder provides the libraries GPUI links to (Wayla
 xkbcommon, Vulkan, fontconfig). macOS needs Xcode's command line tools. The `launcher`
 workflow builds macOS and Windows binaries as artifacts.
 
-Inter (SIL Open Font License, `assets/fonts/LICENSE.txt`) is bundled so the type is the same
-on every platform.
+Geist, Geist Mono and Instrument Serif (SIL Open Font License, `assets/fonts/OFL-*.txt`) are
+bundled so the type is the same on every platform.
+
+Background image (`assets/background.jpg`): backgrounds.supply (free preview), licence to confirm before release.
 
 ## Screenshots
 
