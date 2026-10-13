@@ -359,6 +359,147 @@ pub fn agree_eula(folder: &Path) -> Result<(), String> {
     fs::write(folder.join("eula.txt"), text).map_err(|e| e.to_string())
 }
 
+// ----- Shared steps for the front ends -----------------------------------------------------------
+
+/// The installed version to use: the one asked for, else the selected one, else the newest.
+pub fn resolve_version(requested: Option<&str>) -> Result<String, String> {
+    let installed = installed();
+    if let Some(tag) = requested {
+        return installed.iter().find(|t| *t == tag).cloned().ok_or_else(|| format!("{tag} is not installed."));
+    }
+    let selected = Settings::load().selected.filter(|s| installed.contains(s));
+    selected.or_else(|| installed.first().cloned()).ok_or_else(|| "No version is installed yet.".into())
+}
+
+/// Removes an installed version and moves the selection to the newest one left if needed.
+pub fn remove_version(tag: &str) -> Result<(), String> {
+    if !installed().iter().any(|t| t == tag) {
+        return Err(format!("{tag} is not installed."));
+    }
+    remove(tag)?;
+    let mut settings = Settings::load();
+    if settings.selected.as_deref() == Some(tag) {
+        settings.selected = installed().first().cloned();
+        settings.save();
+    }
+    Ok(())
+}
+
+/// The Minecraft folder to prepare from: the one given, the one chosen in the launcher, or the
+/// official launcher's default.
+pub fn minecraft_dir(requested: Option<PathBuf>) -> Result<PathBuf, String> {
+    requested
+        .or(Settings::load().minecraft_dir)
+        .or_else(default_minecraft_dir)
+        .ok_or_else(|| "No Minecraft folder found. Pass the official launcher's game folder.".into())
+}
+
+/// The server folder: the one given, the one chosen in the launcher, or `server/` in the data folder.
+pub fn server_dir(requested: Option<PathBuf>) -> PathBuf {
+    requested.or(Settings::load().server_dir).unwrap_or_else(|| data_dir().join("server"))
+}
+
+fn need_prepared(tag: &str) -> Result<(), String> {
+    if is_prepared(tag) {
+        Ok(())
+    } else {
+        Err(format!("{tag} is not prepared yet. Prepare it first (it needs your own Minecraft {}).", game_version(tag)))
+    }
+}
+
+/// The client's command, once its resources are prepared.
+pub fn client(tag: &str) -> Result<Command, String> {
+    need_prepared(tag)?;
+    Ok(client_command(tag))
+}
+
+/// The dedicated server's command in `folder`, once prepared and the EULA is agreed to.
+pub fn server(tag: &str, folder: &Path, accept_eula: bool) -> Result<Command, String> {
+    need_prepared(tag)?;
+    if accept_eula {
+        agree_eula(folder)?;
+    }
+    if !eula_agreed(folder) {
+        return Err("Running a server needs your agreement to the Minecraft EULA (https://aka.ms/MinecraftEULA). Accept it to continue.".into());
+    }
+    fs::create_dir_all(folder).map_err(|e| e.to_string())?;
+    Ok(server_command(tag, folder))
+}
+
+/// One release's notes: the tag given, or the newest.
+pub fn release_notes(tag: Option<&str>) -> Result<Release, String> {
+    let releases = releases()?;
+    match tag {
+        Some(tag) => releases.into_iter().find(|r| r.tag == tag).ok_or_else(|| format!("No Horizon release is tagged {tag}.")),
+        None => releases.into_iter().next().ok_or_else(|| "No release is published yet.".into()),
+    }
+}
+
+/// A process whose output is kept: the last `LOG_KEEP` lines, and its result once it ends.
+pub struct Logged {
+    pub running: Running,
+    pub log: Arc<Mutex<std::collections::VecDeque<String>>>,
+    pub exit: Arc<Mutex<Option<Result<(), String>>>>,
+}
+
+pub const LOG_KEEP: usize = 2000;
+
+impl Logged {
+    pub fn start(job: Job, cmd: Command) -> Result<Self, String> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let running = spawn(job, cmd, tx)?;
+        let log = Arc::new(Mutex::new(std::collections::VecDeque::new()));
+        let exit = Arc::new(Mutex::new(None));
+        let (l, e) = (log.clone(), exit.clone());
+        std::thread::spawn(move || {
+            for msg in rx {
+                match msg {
+                    Msg::Line(_, line) => {
+                        let mut log = l.lock().unwrap();
+                        log.push_back(line);
+                        if log.len() > LOG_KEEP {
+                            log.pop_front();
+                        }
+                    }
+                    Msg::Exit(_, result) => *e.lock().unwrap() = Some(result),
+                    _ => {}
+                }
+            }
+        });
+        Ok(Self { running, log, exit })
+    }
+
+    pub fn finished(&self) -> Option<Result<(), String>> {
+        self.exit.lock().unwrap().clone()
+    }
+
+    pub fn tail(&self, lines: usize) -> Vec<String> {
+        let log = self.log.lock().unwrap();
+        log.iter().skip(log.len().saturating_sub(lines)).cloned().collect()
+    }
+
+    pub fn wait(&self) -> Result<(), String> {
+        loop {
+            if let Some(result) = self.finished() {
+                return result;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+
+    /// Asks a server to stop, and kills it if it has not after `grace`.
+    pub fn stop(&mut self, grace: std::time::Duration) {
+        self.running.send("stop");
+        let start = std::time::Instant::now();
+        while self.finished().is_none() && start.elapsed() < grace {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        if self.finished().is_none() {
+            self.running.kill();
+        }
+    }
+}
+
 // ----- Updates -----------------------------------------------------------------------------------
 
 /// What a check found: a Horizon build newer than every installed one, and a newer launcher.

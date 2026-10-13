@@ -1,7 +1,9 @@
 //! Horizon launcher: installs Horizon builds, prepares them from the player's own Minecraft,
 //! and starts the client or a dedicated server.
 
+mod cli;
 mod markdown;
+mod mcp;
 mod theme;
 
 use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Updates};
@@ -359,15 +361,12 @@ impl Launcher {
     }
 
     fn remove(&mut self, tag: &str) {
-        if let Err(e) = backend::remove(tag) {
+        if let Err(e) = backend::remove_version(tag) {
             self.install_error = Some((tag.to_string(), e));
         }
         self.confirm_remove = None;
         self.installed = backend::installed();
-        if self.settings.selected.as_deref() == Some(tag) {
-            self.settings.selected = self.installed.first().cloned();
-        }
-        self.settings.save();
+        self.settings.selected = Settings::load().selected.or_else(|| self.installed.first().cloned());
     }
 
     fn prepare(&mut self) {
@@ -1602,6 +1601,10 @@ impl Render for Launcher {
 }
 
 fn main() {
+    backend::exe_path();
+    if let Some(code) = cli::run() {
+        std::process::exit(code);
+    }
     Application::new().run(|cx: &mut App| {
         cx.text_system()
             .add_fonts(vec![
