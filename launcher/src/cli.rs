@@ -180,7 +180,13 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             let label = format!("Installing {tag}");
             let tag = backend::install_tag(&tag, false, progress(label))?;
             if as_json {
-                json(serde_json::json!({ "installed": tag }));
+                json(
+                    serde_json::json!({ "installed": tag, "prepared": backend::is_prepared(&tag) }),
+                );
+            } else if backend::is_prepared(&tag) {
+                println!(
+                    "Installed {tag}. It is prepared already, from another installed version."
+                );
             } else {
                 println!(
                     "Installed {tag}. Prepare it next: horizon-launcher prepare --version {tag}"

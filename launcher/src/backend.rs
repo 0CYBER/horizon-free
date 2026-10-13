@@ -282,7 +282,11 @@ const COMPLETE: &str = ".installed";
 
 /// Installed versions, newest tag first.
 pub fn installed() -> Vec<String> {
-    let mut tags: Vec<String> = fs::read_dir(versions_dir())
+    installed_in(&versions_dir())
+}
+
+fn installed_in(versions: &Path) -> Vec<String> {
+    let mut tags: Vec<String> = fs::read_dir(versions)
         .into_iter()
         .flatten()
         .flatten()
@@ -359,6 +363,7 @@ pub fn install(tag: &str, url: &str, size: u64, progress: impl Fn(f32)) -> Resul
     fs::rename(&top, &target).map_err(|e| e.to_string())?;
     fs::write(target.join(COMPLETE), "").map_err(|e| e.to_string())?;
     let _ = fs::remove_dir_all(&partial);
+    reuse_prepared(&root, tag);
     progress(1.0);
     Ok(())
 }
@@ -369,21 +374,130 @@ pub fn remove(tag: &str) -> Result<(), String> {
 
 /// The Minecraft version a Horizon build targets, from its research-lock.json.
 pub fn game_version(tag: &str) -> String {
-    fs::read_to_string(version_dir(tag).join("research-lock.json"))
-        .ok()
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+    game_version_at(&version_dir(tag))
+}
+
+fn read_json(path: &Path) -> Option<serde_json::Value> {
+    serde_json::from_str(&fs::read_to_string(path).ok()?).ok()
+}
+
+fn game_version_at(dir: &Path) -> String {
+    read_json(&dir.join("research-lock.json"))
         .and_then(|v| v["minecraft"]["version"].as_str().map(String::from))
         .unwrap_or_else(|| "26.3".into())
 }
 
 pub fn resources(tag: &str) -> PathBuf {
-    version_dir(tag)
-        .join(".local/horizon-client")
-        .join(game_version(tag))
+    resources_at(&version_dir(tag))
 }
 
+fn resources_at(dir: &Path) -> PathBuf {
+    dir.join(".local/horizon-client").join(game_version_at(dir))
+}
+
+const RESOURCES_MANIFEST: &str = "horizon-resources.json";
+
 pub fn is_prepared(tag: &str) -> bool {
-    resources(tag).join("horizon-resources.json").exists()
+    resources(tag).join(RESOURCES_MANIFEST).exists()
+}
+
+/// Whether the resources `from` prepared are the ones preparing `to` would make. The output
+/// depends on the Horizon version, not only on Minecraft's: the manifest records the hashes of
+/// the vanilla exporters it was made with (mods/horizon/src/test/java/.../parity), and
+/// prepare_native_client.py writes every file and the manifest's `schema`. So both need the
+/// same pinned Minecraft jars (research-lock.json), the same prepare_native_client.py and the
+/// same exporter sources. The helpers it imports (lab.py and the test_*_parity.py modules)
+/// change between releases in how they find and check the player's files, which the output
+/// does not depend on; they are not compared.
+fn resources_compatible(from: &Path, to: &Path, manifest: &serde_json::Value) -> bool {
+    let pins = |dir: &Path| {
+        read_json(&dir.join("research-lock.json")).map(|lock| {
+            ["version", "client_sha1", "server_sha1"].map(|k| lock["minecraft"][k].clone())
+        })
+    };
+    let (Some(a), Some(b)) = (pins(from), pins(to)) else {
+        return false;
+    };
+    if a != b || a.iter().any(|v| !v.is_string()) {
+        return false;
+    }
+    let Some(fields) = manifest.as_object() else {
+        return false;
+    };
+    let mut sources = vec![
+        "tools/prepare_native_client.py".to_string(),
+        "mods/horizon/src/test/java/dev/horizonlab/parity/VanillaHeightmapOracle.java".to_string(),
+    ];
+    for (_, value) in fields
+        .iter()
+        .filter(|(key, _)| key.ends_with("_exporters_sha256"))
+    {
+        let Some(files) = value.as_object() else {
+            return false;
+        };
+        sources.extend(files.keys().cloned());
+    }
+    let same = |source: &str| {
+        let path = Path::new(source);
+        path.is_relative()
+            && path
+                .components()
+                .all(|c| matches!(c, std::path::Component::Normal(_)))
+            && matches!((fs::read(from.join(path)), fs::read(to.join(path))), (Ok(a), Ok(b)) if a == b)
+    };
+    sources.iter().all(|s| same(s))
+}
+
+fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &target)?;
+        } else {
+            fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
+/// After an install: when `tag` is not prepared but another installed version made the same
+/// resources, copies them (not hard links: preparing again rewrites files in place, which would
+/// change both). The player then needs neither their Minecraft folder nor a new preparation to
+/// play a release that only changed Horizon. Returns the version they came from.
+fn reuse_prepared(versions: &Path, tag: &str) -> Option<String> {
+    let target = versions.join(tag);
+    let to = resources_at(&target);
+    if to.join(RESOURCES_MANIFEST).exists() {
+        return None;
+    }
+    let version = game_version_at(&target);
+    for other in installed_in(versions).into_iter().filter(|t| t != tag) {
+        let source = versions.join(&other);
+        if game_version_at(&source) != version {
+            continue;
+        }
+        let from = resources_at(&source);
+        let Some(manifest) = read_json(&from.join(RESOURCES_MANIFEST)) else {
+            continue;
+        };
+        if !resources_compatible(&source, &target, &manifest) {
+            continue;
+        }
+        // Copied beside it and renamed when complete: an interrupted copy is never "prepared".
+        let partial = to.with_file_name(format!(".{version}.partial"));
+        let _ = fs::remove_dir_all(&partial);
+        let copied = copy_dir(&from, &partial).and_then(|_| {
+            let _ = fs::remove_dir_all(&to);
+            fs::rename(&partial, &to)
+        });
+        if copied.is_ok() {
+            return Some(other);
+        }
+        let _ = fs::remove_dir_all(&partial);
+    }
+    None
 }
 
 /// The official launcher's game directory, where prepare_native_client.py looks by default.
@@ -1226,6 +1340,81 @@ mod tests {
         );
         assert_eq!(MenuStyle::parse("classic"), Some(MenuStyle::Classic));
         assert_eq!(MenuStyle::parse("vanilla"), None);
+    }
+
+    #[test]
+    fn a_new_version_reuses_resources_prepared_by_a_compatible_one() {
+        let versions =
+            std::env::temp_dir().join(format!("horizon-launcher-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&versions);
+        let oracle = "mods/horizon/src/test/java/dev/horizonlab/parity/VanillaHeightmapOracle.java";
+        let camera = "mods/horizon/src/test/java/dev/horizonlab/parity/VanillaCameraOracle.java";
+        let collision =
+            "mods/horizon/src/test/java/dev/horizonlab/parity/VanillaCollisionOracle.java";
+        let write = |tag: &str, path: &str, text: &str| {
+            let path = versions.join(tag).join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+        };
+        let release = |tag: &str, minecraft: &str| {
+            write(tag, COMPLETE, "");
+            let lock = serde_json::json!({"minecraft": {"version": minecraft, "client_sha1": "c", "server_sha1": "s"}});
+            write(tag, "research-lock.json", &lock.to_string());
+            write(tag, "tools/prepare_native_client.py", "schema 7");
+            write(tag, oracle, "heightmap");
+            write(tag, collision, "collision");
+            write(tag, camera, tag); // Not an exporter: it may change freely.
+        };
+        let prepared = |tag: &str, minecraft: &str| {
+            let manifest =
+                serde_json::json!({"schema": 7, "collision_exporters_sha256": {collision: "x"}});
+            write(
+                tag,
+                &format!(".local/horizon-client/{minecraft}/{RESOURCES_MANIFEST}"),
+                &manifest.to_string(),
+            );
+            write(
+                tag,
+                &format!(".local/horizon-client/{minecraft}/worldgen/biomes.json"),
+                "{}",
+            );
+        };
+        let is_prepared = |tag: &str| {
+            resources_at(&versions.join(tag))
+                .join(RESOURCES_MANIFEST)
+                .exists()
+        };
+
+        release("v2026.10.13", "26.3");
+        prepared("v2026.10.13", "26.3");
+        release("v2026.10.12", "26.2");
+        prepared("v2026.10.12", "26.2");
+        release("v2026.10.13.1", "26.3");
+        assert_eq!(
+            reuse_prepared(&versions, "v2026.10.13.1"),
+            Some("v2026.10.13".into())
+        );
+        assert!(is_prepared("v2026.10.13.1"));
+        assert!(resources_at(&versions.join("v2026.10.13.1"))
+            .join("worldgen/biomes.json")
+            .exists());
+        assert!(!versions
+            .join("v2026.10.13.1/.local/horizon-client/.26.3.partial")
+            .exists());
+        // Already prepared: nothing to do.
+        assert_eq!(reuse_prepared(&versions, "v2026.10.13.1"), None);
+
+        // Another Minecraft version, a changed exporter or a changed prepare script: prepare again.
+        release("v2026.10.14", "26.4");
+        assert_eq!(reuse_prepared(&versions, "v2026.10.14"), None);
+        release("v2026.10.15", "26.3");
+        write("v2026.10.15", collision, "collision, fixed");
+        assert_eq!(reuse_prepared(&versions, "v2026.10.15"), None);
+        release("v2026.10.16", "26.3");
+        write("v2026.10.16", "tools/prepare_native_client.py", "schema 8");
+        assert_eq!(reuse_prepared(&versions, "v2026.10.16"), None);
+        assert!(!is_prepared("v2026.10.15") && !is_prepared("v2026.10.16"));
+        let _ = fs::remove_dir_all(&versions);
     }
 
     #[test]

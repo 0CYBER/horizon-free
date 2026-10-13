@@ -78,9 +78,11 @@ impl Session {
                     false,
                     |_| {},
                 )?;
-                Ok(format!(
-                    "Installed {tag}. It is now the selected version; prepare it before playing."
-                ))
+                Ok(if backend::is_prepared(&tag) {
+                    format!("Installed {tag}. It is now the selected version, prepared already from another installed version.")
+                } else {
+                    format!("Installed {tag}. It is now the selected version; prepare it before playing.")
+                })
             }
             "remove_version" => {
                 let tag = arg_str(args, "tag").ok_or("tag is required")?;
