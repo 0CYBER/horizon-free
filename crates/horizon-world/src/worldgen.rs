@@ -23,6 +23,7 @@ pub mod cave;
 pub mod chorus_plant;
 pub mod climate;
 pub mod decoration;
+pub mod decoration_order;
 pub mod delta;
 pub mod density;
 pub mod disk;

@@ -382,7 +382,19 @@ public final class VanillaChunkGenerationOracle {
                 Heightmap.primeHeightmaps(chunk, EnumSet.of(Heightmap.Types.MOTION_BLOCKING, Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, Heightmap.Types.OCEAN_FLOOR, Heightmap.Types.WORLD_SURFACE));
                 chunk.setPersistedStatus(ChunkStatus.TERRAIN);
             }
-            for (int z = fz0; z <= fz1 && !phase.equals("terrain"); z++) for (int x = fx0; x <= fx1; x++) {
+            // HORIZON_ORDER: a file of "x z" lines, the chunks to decorate in that order (default: row-major).
+            List<int[]> order = new ArrayList<>();
+            if (System.getenv("HORIZON_ORDER") != null) {
+                for (String line : java.nio.file.Files.readAllLines(java.nio.file.Path.of(System.getenv("HORIZON_ORDER")))) {
+                    String[] t = line.trim().split("\\s+");
+                    if (t.length == 2) order.add(new int[]{Integer.parseInt(t[0]), Integer.parseInt(t[1])});
+                }
+            } else {
+                for (int z = fz0; z <= fz1; z++) for (int x = fx0; x <= fx1; x++) order.add(new int[]{x, z});
+            }
+            for (int[] at : order) {
+                if (phase.equals("terrain")) break;
+                int x = at[0], z = at[1];
                 var chunk = chunkAt.apply(x, z);
                 var region = regionFor.apply(ChunkStatus.FEATURES, chunk);
                 generator.applyBiomeDecoration(region, chunk, OracleLevel.structures.forWorldGenRegion(region));
@@ -422,6 +434,13 @@ public final class VanillaChunkGenerationOracle {
                     // A DUMMY pending entry becomes a fresh block entity, not a loaded one.
                     if ("DUMMY".equals(tag.getStringOr("id", ""))) tag = absent = fresh;
                     w.println("be " + pos.getX() + " " + pos.getY() + " " + pos.getZ() + "\t" + canonicalOf(tag) + "\t" + canonicalOf(absent));
+                }
+                // Scheduled ticks, in scheduling order (the order they run in).
+                if (target instanceof net.minecraft.world.level.chunk.ProtoChunk proto) {
+                    for (var t : ((net.minecraft.world.ticks.ProtoChunkTicks<net.minecraft.world.level.block.Block>) proto.getBlockTicks()).scheduledTicks())
+                        w.println("t block " + net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(t.type()) + " " + t.pos().getX() + " " + t.pos().getY() + " " + t.pos().getZ() + " " + t.priority().getValue());
+                    for (var t : ((net.minecraft.world.ticks.ProtoChunkTicks<net.minecraft.world.level.material.Fluid>) proto.getFluidTicks()).scheduledTicks())
+                        w.println("t fluid " + net.minecraft.core.registries.BuiltInRegistries.FLUID.getKey(t.type()) + " " + t.pos().getX() + " " + t.pos().getY() + " " + t.pos().getZ() + " " + t.priority().getValue());
                 }
             }
             }

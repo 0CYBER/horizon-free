@@ -4,11 +4,13 @@
 //! With HORIZON_SCAN set, one rectangle lists the structure starts in it.
 //!
 //! Chunks are generated through biomes, terrain and carvers, then decorated in
-//! row-major order over the target rectangle grown by one chunk, each with its
-//! eight neighbours so feature spill persists, exactly as the oracle does.
+//! row-major order over the target rectangle grown by one chunk (or in the
+//! order HORIZON_ORDER lists), each with its eight neighbours so feature spill
+//! persists, exactly as the oracle does.
 //! For every target chunk this prints `chunk X Z`, one `q QY NAME...` line per
 //! quart layer (16 columns, z-major), one `y Y ID...` line per block row and
-//! one `be X Y Z CANONICAL_NBT` line per block entity.
+//! one `be X Y Z CANONICAL_NBT` line per block entity and one `t block|fluid
+//! NAME X Y Z PRIORITY` line per scheduled tick.
 use horizon_core::position::ChunkPos;
 use horizon_world::{
     DATA_VERSION,
@@ -116,7 +118,22 @@ fn main() -> Result<(), Error> {
             Ok(v)
         })
         .collect::<Result<Vec<_>, Error>>()?;
-    let data = GeneratorData::load(&resources.join("worldgen"), registry(&resources)?)?;
+    let blocks = registry(&resources)?;
+    // HORIZON_LIST_ORDER=x,z,view: print the chunks vanilla decorates around a
+    // player standing in chunk x,z (`decoration_order::vanilla_order`) and exit.
+    if let Some(at) = std::env::var_os("HORIZON_LIST_ORDER") {
+        let v: Vec<i32> = at
+            .to_string_lossy()
+            .split(',')
+            .map(str::parse)
+            .collect::<Result<_, _>>()?;
+        let [x, z, view]: [i32; 3] = v.try_into().map_err(|_| "HORIZON_LIST_ORDER=x,z,view")?;
+        for (x, z) in horizon_world::worldgen::decoration_order::vanilla_order((x, z), view) {
+            println!("{x} {z}");
+        }
+        return Ok(());
+    }
+    let data = GeneratorData::load(&resources.join("worldgen"), blocks)?;
     let generator = OverworldGenerator::for_dimension(data, seed, "minecraft:normal", &dimension)?;
     let mut worker = generator.worker();
     // HORIZON_PHASE: terrain (no decoration), structures (pieces only) or full.
@@ -171,30 +188,42 @@ fn main() -> Result<(), Error> {
         }
         let mut failed = 0;
         let margin = i32::from(std::env::var_os("HORIZON_ISOLATED").is_none());
-        for z in z0 - margin..=z1 + margin {
-            for x in x0 - margin..=x1 + margin {
-                let mut region = Vec::with_capacity(9);
-                for dz in -1..=1 {
-                    for dx in -1..=1 {
-                        region.push(chunks.remove(&(x + dx, z + dz)).ok_or("missing chunk")?);
-                    }
+        // HORIZON_ORDER: a file of `x z` lines, the chunks to decorate in that
+        // order (the oracle reads the same file); row-major by default.
+        let order: Vec<(i32, i32)> = match std::env::var_os("HORIZON_ORDER") {
+            Some(path) => fs::read_to_string(path)?
+                .lines()
+                .filter_map(|l| {
+                    let mut t = l.split_whitespace().map(str::parse::<i32>);
+                    Some((t.next()?.ok()?, t.next()?.ok()?))
+                })
+                .collect(),
+            None => (z0 - margin..=z1 + margin)
+                .flat_map(|z| (x0 - margin..=x1 + margin).map(move |x| (x, z)))
+                .collect(),
+        };
+        for (x, z) in order {
+            let mut region = Vec::with_capacity(9);
+            for dz in -1..=1 {
+                for dx in -1..=1 {
+                    region.push(chunks.remove(&(x + dx, z + dz)).ok_or("missing chunk")?);
                 }
-                let mut region: [ProtoChunk; 9] = region.try_into().map_err(|_| "region size")?;
-                let stats = if phase == "terrain" {
-                    Default::default()
-                } else {
-                    worker.decorate(&mut region)?
-                };
-                if stats.failed > 0 || stats.unsupported > 0 {
-                    failed += 1;
-                    eprintln!(
-                        "chunk {x} {z}: {} failed, {} unsupported {:?}",
-                        stats.failed, stats.unsupported, stats.skipped
-                    );
-                }
-                for (i, chunk) in region.into_iter().enumerate() {
-                    chunks.insert((x + i as i32 % 3 - 1, z + i as i32 / 3 - 1), chunk);
-                }
+            }
+            let mut region: [ProtoChunk; 9] = region.try_into().map_err(|_| "region size")?;
+            let stats = if phase == "terrain" {
+                Default::default()
+            } else {
+                worker.decorate(&mut region)?
+            };
+            if stats.failed > 0 || stats.unsupported > 0 {
+                failed += 1;
+                eprintln!(
+                    "chunk {x} {z}: {} failed, {} unsupported {:?}",
+                    stats.failed, stats.unsupported, stats.skipped
+                );
+            }
+            for (i, chunk) in region.into_iter().enumerate() {
+                chunks.insert((x + i as i32 % 3 - 1, z + i as i32 / 3 - 1), chunk);
             }
         }
         if failed > 0 {
@@ -232,6 +261,36 @@ fn main() -> Result<(), Error> {
                     let mut text = String::new();
                     canonical(&Tag::Compound(nbt.clone()), &mut text);
                     writeln!(w, "be {bx} {by} {bz}\t{text}")?;
+                }
+                // Scheduled ticks, in scheduling order (the order they run in).
+                for t in chunk.terrain.block_ticks().pack(0) {
+                    let name = blocks
+                        .state(horizon_world::registry::BlockStateId(t.kind.0))
+                        .map_or("?", |s| s.name.as_str());
+                    let p = t.pos;
+                    writeln!(
+                        w,
+                        "t block {name} {} {} {} {}",
+                        p.x, p.y, p.z, t.priority as i32
+                    )?;
+                }
+                for t in chunk.terrain.fluid_ticks().pack(0) {
+                    let name = [
+                        "minecraft:empty",
+                        "minecraft:flowing_water",
+                        "minecraft:water",
+                        "minecraft:flowing_lava",
+                        "minecraft:lava",
+                    ]
+                    .get(t.kind.0 as usize)
+                    .copied()
+                    .unwrap_or("?");
+                    let p = t.pos;
+                    writeln!(
+                        w,
+                        "t fluid {name} {} {} {} {}",
+                        p.x, p.y, p.z, t.priority as i32
+                    )?;
                 }
             }
         }

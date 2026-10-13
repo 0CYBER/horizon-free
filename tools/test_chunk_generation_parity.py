@@ -88,13 +88,15 @@ def parse(path):
         if line.startswith('chunk '):
             _, x, z = line.split()
             current = (int(x), int(z))
-            chunks[current] = {'q': {}, 'y': {}, 'be': {}}
+            chunks[current] = {'q': {}, 'y': {}, 'be': {}, 't': []}
         elif line.startswith('q '):
             _, q, row = line.split(' ', 2)
             chunks[current]['q'][int(q)] = row
         elif line.startswith('y '):
             _, y, row = line.split(' ', 2)
             chunks[current]['y'][int(y)] = row
+        elif line.startswith('t '):
+            chunks[current]['t'].append(line[2:])
         elif line.startswith('be '):
             head, *forms = line.split('\t')
             parts = head.split(' ')
@@ -228,6 +230,12 @@ def compare(vanilla, rust, names, label, limit=6, quiet=False):
         for key in sorted(set(a['be']) | set(b['be'])):
             if not entity_matches(a['be'].get(key), b['be'].get(key)):
                 entity_diffs.append((key, a['be'].get(key, [None])[0], (b['be'].get(key) or [None])[0]))
+        # Scheduled ticks run once the chunk is live (leaves at a tree's edge, lake fluids).
+        if a.get('t', []) != b.get('t', []):
+            ta, tb = a.get('t', []), b.get('t', [])
+            first = next((i for i, (u, v) in enumerate(zip(ta, tb)) if u != v), min(len(ta), len(tb)))
+            block_diffs.append((pos[0] * 16, 0, pos[1] * 16, f'{len(ta)} ticks, #{first}: {ta[first] if first < len(ta) else "-"}',
+                                f'{len(tb)} ticks, #{first}: {tb[first] if first < len(tb) else "-"}'))
         if block_diffs or biome_diffs or entity_diffs:
             chunks += 1
             blocks += len(block_diffs)

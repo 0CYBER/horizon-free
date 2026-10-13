@@ -196,8 +196,28 @@ above remains a record of its narrower tested source snapshot.
 `tools/test_chunk_generation_parity.py` generates chunks in actual vanilla classes (`VanillaChunkGenerationOracle`: structure starts and
 references, biomes, noise, surface, carvers, then biome decoration and structure pieces through real `WorldGenRegion`s) and with
 `crates/horizon-world/examples/chunk_dump.rs`, and compares every block state, quart biome and block entity (canonical NBT) of each target
-chunk. Cases are terrain sites for several seeds across the overworld, Nether and End, plus rectangles around every structure kind found
-by scanning the seed. `--phase structures` isolates terrain plus structure pieces, `--phase terrain` stops before features.
+chunk, and the scheduled block and fluid ticks each proto chunk carries into the live world. Cases are terrain sites for several seeds
+across the overworld, Nether and End, plus rectangles around every structure kind found by scanning the seed. `--phase structures`
+isolates terrain plus structure pieces, `--phase terrain` stops before features. `HORIZON_ORDER` (a file of `x z` lines) makes both sides
+decorate in that order instead of row-major.
+
+### Decoration order
+
+Biome decoration is order dependent: a chunk's features write into its eight neighbours, so a tree, ore blob, sculk patch or geode placed
+first changes where the next chunk's features fit (and how many random draws they take), and a neighbour's geode can cut through a
+stronghold room or leave it whole. Vanilla decorates on one `worldgen` executor in the order its chunk scheduler produces around a player:
+loading tickets ring by ring in fastutil hash order, four in flight, FULL tasks decorating their 3x3 squares x-outer, z-inner by ticket
+level. Two vanilla servers decorating around a player teleported to the same spot agree on all but about 6% of the overlapping chunk pairs
+(measured from JFR `minecraft.ChunkGeneration` events) and a few hundred blocks.
+
+`worldgen::decoration_order` replays that scheduler for a standing player and the game's streamer decorates in its order (a chunk waits
+only for lower-ranked chunks within two of it, so distant chunks still decorate in parallel). Fed vanilla's recorded order, the oracle
+reproduces a vanilla server's world exactly; the model itself swaps as many pairs as a second vanilla run does.
+
+`tools/test_decorated_region_parity.py` decorates a 13x13-chunk area around each site in that order on both sides and compares everything
+the whole-chunk harness compares: the two reported sites on seed 1891623539983467248 (an old-growth taiga at 204 -239, a stronghold with
+sculk and a geode at 4870 401), eleven tree-heavy biomes (taigas, dark forest, birch, jungles, savanna, cherry grove, mangrove swamp, pale
+garden) and the nearest mineshaft, village, ancient city and trial chambers of two seeds: 21 sites, 3,549 chunks, 0 differences.
 
 Result on seed 12345 (overworld 42 sites / 372 chunks, Nether, End): structure pieces 0 differences on all 35 overworld structure sites; full
 generation 4 differing chunks (3 blocks, 1 block entity) out of 372; Nether and End terrain sites 0 differences.
