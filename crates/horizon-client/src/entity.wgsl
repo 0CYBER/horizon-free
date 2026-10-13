@@ -15,6 +15,7 @@ struct Globals {
     end_portal_sprites: array<vec4<f32>, 2>,
     // x: vanilla's GameTime ((game time % 24000 + partial tick) / 24000)
     time: vec4<f32>,
+    crumbling_sprite: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var atlas: texture_2d<f32>;
@@ -43,8 +44,8 @@ struct Out {
     let l = vec2(f32(light.y), f32(light.x));
     let lm = textureSampleLevel(lightmap, lightmap_sampler,
         clamp(l / 256.0 + 0.5 / 16.0, vec2(0.5 / 16.0), vec2(15.5 / 16.0)), 0.0);
-    // overlay 2: celestial bodies, 4: clouds; both use their vertex colour unlit.
-    var c = select(color * lm, color, overlay == 2u || overlay == 4u || overlay == 6u);
+    // Celestial bodies, clouds, beacon beams and breaking cracks are unlit.
+    var c = select(color * lm, color, overlay == 2u || overlay == 4u || overlay == 6u || overlay == 11u || overlay == 12u);
     // Overlay 6 (beacon beams): the light bytes carry the sprite's v range.
     out.wrap = vec2(f32(light.x | (light.y << 8u)), f32(light.z | (light.w << 8u))) / 65535.0;
     // Hurt overlay (OverlayTexture red tint).
@@ -102,6 +103,9 @@ fn linear_fog(d: f32, start: f32, end: f32) -> f32 {
 @fragment fn fs_entity(in: Out) -> @location(0) vec4<f32> {
     var uv = in.uv;
     if in.overlay == 6u { uv.y = in.wrap.x + fract(in.uv.y) * in.wrap.y; }
+    if in.overlay == 11u || in.overlay == 12u {
+        uv = globals.crumbling_sprite.xy + fract(in.uv) * globals.crumbling_sprite.zw;
+    }
     var color = textureSample(atlas, atlas_sampler, uv) * in.color;
     if in.overlay == 9u || in.overlay == 10u {
         // rendertype_end_portal: end_sky and PORTAL_LAYERS (15 for portals, 16
