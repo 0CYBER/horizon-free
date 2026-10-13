@@ -406,15 +406,8 @@ fn main() -> ExitCode {
                 UNREACHABLE
             }
         },
-        Some("-") => {
-            // The original form: stdin, keep going, status 1 if anything failed.
-            let status = script(&mut session, std::io::stdin().lock(), true, pretty);
-            if status == 0 {
-                0
-            } else {
-                status.min(GAME_ERROR).max(1)
-            }
-        }
+        // The original form: stdin, keep going after errors.
+        Some("-") => script(&mut session, std::io::stdin().lock(), true, pretty),
         Some("script") => {
             let keep_going = args.iter().any(|a| a == "--keep-going");
             match args.iter().skip(1).find(|a| !a.starts_with("--")) {
