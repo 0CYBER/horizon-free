@@ -38,6 +38,9 @@ fn tools() -> Value {
         { "name": "patch_notes", "description": "A release's patch notes as markdown.",
           "inputSchema": { "type": "object", "properties": { "tag": { "type": "string", "description": "Default: the newest release." } } } },
         { "name": "roadmap", "description": "What's planned next for Horizon, from the README's roadmap.", "inputSchema": none },
+        { "name": "links", "description": "The Horizon community links: the Discord invite and the GitHub Sponsors page (an empty one is not offered).", "inputSchema": none },
+        { "name": "menu_style", "description": "Show or set the game's menu style. \"horizon\" is Horizon's own menus, \"classic\" is vanilla's screens, which have no way back inside the game. The game reads it when it starts.",
+          "inputSchema": { "type": "object", "properties": { "style": { "type": "string", "enum": ["horizon", "classic"], "description": "Omit to show the current style." } } } },
         { "name": "check_updates", "description": "Check GitHub for a Horizon release newer than every installed version, and for a newer launcher.", "inputSchema": none },
     ])
 }
@@ -136,6 +139,14 @@ impl Session {
                 Ok(format!("# {} ({}, {})\n\n{}", if r.name.is_empty() { &r.tag } else { &r.name }, r.tag, r.date, r.body))
             }
             "roadmap" => backend::roadmap(),
+            "links" => Ok(serde_json::to_string_pretty(&backend::links()).unwrap()),
+            "menu_style" => {
+                if let Some(name) = arg_str(args, "style") {
+                    let style = backend::MenuStyle::parse(name).ok_or("style is \"horizon\" or \"classic\"")?;
+                    backend::set_menu_style(style)?;
+                }
+                Ok(format!("Menu style: {}", backend::menu_style().name()))
+            }
             "check_updates" => {
                 let u = backend::check_updates()?;
                 Ok(serde_json::to_string_pretty(&json!({

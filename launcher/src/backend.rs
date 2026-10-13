@@ -9,7 +9,6 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
 pub const REPO: &str = "ludovic111/horizon";
-pub const SPONSOR_URL: &str = "https://github.com/sponsors/ludovic111";
 pub const README_URL: &str = "https://github.com/ludovic111/horizon/blob/main/launcher/README.md";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Launcher releases are tagged `launcher-vX.Y.Z`; Horizon's own are `vYYYY.MM.DD`.
@@ -161,6 +160,43 @@ pub fn roadmap() -> Result<String, String> {
         }
     }
     Err("The README has no roadmap section yet.".into())
+}
+
+/// The community and sponsor links, from `launcher/links.json` on main, so they can change
+/// without a launcher release. An empty address hides its button.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct Links {
+    pub discord: String,
+    pub sponsor: String,
+}
+
+impl Default for Links {
+    /// What the launcher uses until (or unless) it can read links.json.
+    fn default() -> Self {
+        Self { discord: "https://discord.gg/HcTeMZxe5E".into(), sponsor: "https://github.com/sponsors/ludovic111".into() }
+    }
+}
+
+impl Links {
+    /// Reads links.json. A key that is missing keeps its default, an empty one hides the link,
+    /// and text that is not a JSON object gives the defaults.
+    pub fn parse(text: &str) -> Self {
+        let mut links = Self::default();
+        if let Ok(serde_json::Value::Object(map)) = serde_json::from_str(text) {
+            for (key, slot) in [("discord", &mut links.discord), ("sponsor", &mut links.sponsor)] {
+                if let Some(url) = map.get(key).and_then(|v| v.as_str()) {
+                    *slot = url.trim().to_string();
+                }
+            }
+        }
+        links
+    }
+}
+
+/// The links from main, or the built-in ones when offline.
+pub fn links() -> Links {
+    let url = format!("https://raw.githubusercontent.com/{REPO}/main/launcher/links.json");
+    get(&url).ok().and_then(|r| r.into_string().ok()).map_or_else(Links::default, |text| Links::parse(&text))
 }
 
 /// The launcher's data folder; `HORIZON_LAUNCHER_HOME` overrides it (for tests and scripts).
@@ -346,11 +382,72 @@ pub fn game_home() -> PathBuf {
     dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("horizon")
 }
 
+/// Which drawing the game's menus use. Classic is vanilla's own screens, which have no way to
+/// switch back, so the launcher is where the player returns to Horizon's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MenuStyle {
+    Horizon,
+    Classic,
+}
+
+impl MenuStyle {
+    pub fn name(self) -> &'static str {
+        match self {
+            MenuStyle::Horizon => "horizon",
+            MenuStyle::Classic => "classic",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "horizon" => Some(MenuStyle::Horizon),
+            "classic" => Some(MenuStyle::Classic),
+            _ => None,
+        }
+    }
+
+    /// The style `horizon.txt` holds: Horizon unless it has the line `menuStyle:classic`, as the
+    /// game reads it (crates/horizon-client/src/ui_theme.rs).
+    fn from_file(text: &str) -> Self {
+        if text.lines().any(|l| l.trim() == "menuStyle:classic") {
+            MenuStyle::Classic
+        } else {
+            MenuStyle::Horizon
+        }
+    }
+
+    /// `text` with its `menuStyle:` line set to this style and every other line kept.
+    fn into_file(self, text: &str) -> String {
+        let mut out: Vec<String> = text.lines().filter(|l| !l.trim().starts_with("menuStyle:")).map(String::from).collect();
+        out.insert(0, format!("menuStyle:{}", self.name()));
+        out.join("\n") + "\n"
+    }
+}
+
+/// The menu style saved in the game home's `horizon.txt` (Horizon when there is none).
+pub fn menu_style() -> MenuStyle {
+    MenuStyle::from_file(&fs::read_to_string(game_home().join("horizon.txt")).unwrap_or_default())
+}
+
+pub fn set_menu_style(style: MenuStyle) -> Result<(), String> {
+    let home = game_home();
+    fs::create_dir_all(&home).map_err(|e| e.to_string())?;
+    let file = home.join("horizon.txt");
+    let text = style.into_file(&fs::read_to_string(&file).unwrap_or_default());
+    fs::write(file, text).map_err(|e| e.to_string())
+}
+
 pub fn client_command(tag: &str) -> Command {
     let home = game_home();
     let _ = fs::create_dir_all(&home);
     let mut cmd = Command::new(version_dir(tag).join(CLIENT));
     cmd.current_dir(home).arg("--resources").arg(resources(tag));
+    // PipeWire remembers volume and mute per application name. The game's own name is
+    // "PipeWire ALSA [horizon-client]", shared with development and test runs, where
+    // muting it once left every later game silent: played from here it is "Horizon".
+    if std::env::var_os("PIPEWIRE_PROPS").is_none() {
+        cmd.env("PIPEWIRE_PROPS", "{ application.name = \"Horizon\" media.role = \"Game\" }");
+    }
     cmd
 }
 
@@ -701,6 +798,7 @@ pub enum Job {
 pub enum Msg {
     Releases(Result<Vec<Release>, String>),
     Roadmap(Result<String, String>),
+    Links(Links),
     Progress(String, f32),
     Installed(String, Result<(), String>),
     Line(Job, String),
@@ -774,8 +872,10 @@ pub struct Settings {
     pub selected: Option<String>,
     pub minecraft_dir: Option<PathBuf>,
     pub server_dir: Option<PathBuf>,
+    /// Unset means on: only a player who turned it off has `false` here. 0.1.1 wrote its
+    /// `auto_install` (off by default) for everyone, so this is a new key and that one is ignored.
     #[serde(default)]
-    pub auto_install: bool,
+    pub install_new_versions: Option<bool>,
     /// Off by default, so the opening animation shows unless the player turns it off.
     #[serde(default)]
     pub skip_opening: bool,
@@ -783,10 +883,14 @@ pub struct Settings {
 
 impl Settings {
     pub fn load() -> Self {
-        fs::read_to_string(data_dir().join("settings.json"))
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+        Self::parse(&fs::read_to_string(data_dir().join("settings.json")).unwrap_or_default())
+    }
+    pub fn parse(text: &str) -> Self {
+        serde_json::from_str(text).unwrap_or_default()
+    }
+    /// Whether new Horizon versions are installed automatically.
+    pub fn auto_install(&self) -> bool {
+        self.install_new_versions.unwrap_or(true)
     }
     pub fn save(&self) {
         let _ = fs::create_dir_all(data_dir());
@@ -798,6 +902,16 @@ impl Settings {
 mod tests {
     use super::*;
     use std::cmp::Ordering::*;
+
+    #[test]
+    fn the_game_plays_under_its_own_audio_stream_name() {
+        if std::env::var_os("PIPEWIRE_PROPS").is_some() {
+            return;
+        }
+        let cmd = client_command("v2026.10.13");
+        let props = cmd.get_envs().find(|(k, _)| *k == "PIPEWIRE_PROPS").and_then(|(_, v)| v);
+        assert!(props.is_some_and(|v| v.to_string_lossy().contains("application.name = \"Horizon\"")));
+    }
 
     #[test]
     fn tags_never_mix() {
@@ -841,6 +955,53 @@ mod tests {
         assert!(select_after_update(Some("v2026.10.12"), &installed));
         assert!(!select_after_update(Some("v2026.10.1"), &installed));
         assert!(select_after_update(None, &installed));
+    }
+
+    #[test]
+    fn new_versions_install_automatically_unless_turned_off() {
+        // No settings file, an old one that never mentioned it, and 0.1.1's default `false`.
+        assert!(Settings::parse("").auto_install());
+        assert!(Settings::parse("{}").auto_install());
+        assert!(Settings::parse(r#"{"selected": "v2026.10.13", "auto_install": false}"#).auto_install());
+        assert!(Settings::parse(r#"{"install_new_versions": true}"#).auto_install());
+        assert!(!Settings::parse(r#"{"install_new_versions": false}"#).auto_install());
+        // Saving after the player turned it off keeps it off.
+        let off = Settings { install_new_versions: Some(false), ..Settings::default() };
+        assert!(!Settings::parse(&serde_json::to_string(&off).unwrap()).auto_install());
+        // The selection rule is unchanged: the new version is selected only from the newest.
+        let installed = ["v2026.10.12".to_string(), "v2026.10.1".to_string()];
+        assert!(select_after_update(Some("v2026.10.12"), &installed));
+        assert!(!select_after_update(Some("v2026.10.1"), &installed));
+    }
+
+    #[test]
+    fn links_fall_back_to_the_built_in_ones() {
+        let defaults = Links::default();
+        assert_eq!(defaults.discord, "https://discord.gg/HcTeMZxe5E");
+        assert_eq!(defaults.sponsor, "https://github.com/sponsors/ludovic111");
+        // The file on main says the same thing as the defaults.
+        let file = Links::parse(r#"{"discord": "https://discord.gg/HcTeMZxe5E", "sponsor": "https://github.com/sponsors/ludovic111"}"#);
+        assert_eq!(file, defaults);
+        // Unreadable or missing, offline included: the defaults.
+        assert_eq!(Links::parse(""), defaults);
+        assert_eq!(Links::parse("<html>404</html>"), defaults);
+        assert_eq!(Links::parse("[1]"), defaults);
+        assert_eq!(Links::parse(r#"{"discord": 5}"#), defaults);
+        // A key that is missing keeps its default; a new address replaces it; empty hides it.
+        assert_eq!(Links::parse(r#"{"discord": "https://x.y/z"}"#), Links { discord: "https://x.y/z".into(), ..defaults.clone() });
+        assert_eq!(Links::parse(r#"{"discord": "", "sponsor": " "}"#), Links { discord: String::new(), sponsor: String::new() });
+    }
+
+    #[test]
+    fn menu_style_file_matches_the_games() {
+        assert_eq!(MenuStyle::from_file(""), MenuStyle::Horizon);
+        assert_eq!(MenuStyle::from_file("menuStyle:horizon\n"), MenuStyle::Horizon);
+        assert_eq!(MenuStyle::from_file("menuStyle:classic\n"), MenuStyle::Classic);
+        assert_eq!(MenuStyle::from_file("other:1\nmenuStyle:classic\n"), MenuStyle::Classic);
+        assert_eq!(MenuStyle::Classic.into_file(""), "menuStyle:classic\n");
+        assert_eq!(MenuStyle::Horizon.into_file("menuStyle:classic\nother:1\n"), "menuStyle:horizon\nother:1\n");
+        assert_eq!(MenuStyle::parse("classic"), Some(MenuStyle::Classic));
+        assert_eq!(MenuStyle::parse("vanilla"), None);
     }
 
     #[test]

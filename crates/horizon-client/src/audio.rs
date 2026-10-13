@@ -61,9 +61,77 @@ pub struct Heard {
 pub struct MixerBackend {
     mixer: Arc<Mutex<Mixer>>,
     root: PathBuf,
-    cache: HashMap<String, Option<(Arc<Vec<f32>>, u32)>>,
+    cache: Arc<Mutex<SoundCache>>,
+    /// The decoder thread for static sounds, started with the first one.
+    decoder: Option<std::sync::mpsc::Sender<Decode>>,
     next: ChannelId,
     live: bool,
+}
+/// Decoded samples and their rate (`None`: the file did not load).
+type Samples = Option<(Arc<Vec<f32>>, u32)>;
+/// Decoded static sounds (`SoundBufferLibrary`'s buffers), dropped least
+/// recently used first past `CACHE_BYTES`: kept forever, every sound heard in
+/// a session stayed (up to 1.4 GiB of samples, villages playing hundreds).
+#[derive(Default)]
+struct SoundCache {
+    entries: HashMap<String, (Samples, u64)>,
+    bytes: usize,
+    clock: u64,
+}
+const CACHE_BYTES: usize = 64 << 20;
+impl SoundCache {
+    fn get(&mut self, key: &str) -> Option<Samples> {
+        self.clock += 1;
+        let entry = self.entries.get_mut(key)?;
+        entry.1 = self.clock;
+        Some(entry.0.clone())
+    }
+    fn insert(&mut self, key: String, samples: Samples) {
+        self.clock += 1;
+        self.bytes += Self::size(&samples);
+        if let Some((old, _)) = self.entries.insert(key, (samples, self.clock)) {
+            self.bytes -= Self::size(&old);
+        }
+        while self.bytes > CACHE_BYTES && self.entries.len() > 1 {
+            let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, (_, used))| *used)
+                .map(|(k, _)| k.clone())
+            else {
+                break;
+            };
+            if let Some((gone, _)) = self.entries.remove(&oldest) {
+                self.bytes -= Self::size(&gone);
+            }
+        }
+    }
+    fn size(samples: &Samples) -> usize {
+        samples
+            .as_ref()
+            .map_or(0, |(s, _)| s.len() * std::mem::size_of::<f32>())
+    }
+}
+/// A static sound to decode for a channel waiting on it.
+struct Decode {
+    key: String,
+    file: PathBuf,
+    channel: ChannelId,
+}
+/// Give a channel waiting on its sound the decoded samples and start it, as
+/// the buffer future attaching and playing the source. A source stopped or
+/// released meanwhile stays so.
+fn attach(mixer: &Mutex<Mixer>, channel: ChannelId, samples: Samples, looping: bool) {
+    if let Some(samples) = samples
+        && let Ok(mut m) = mixer.lock()
+        && let Some(c) = m.channels.get_mut(&channel)
+        && c.state == State::Initial
+    {
+        c.samples = Some(samples);
+        c.position = 0.0;
+        c.state = State::Playing;
+        c.looping |= looping;
+    }
 }
 pub struct Audio {
     _stream: Option<cpal::Stream>,
@@ -176,53 +244,59 @@ impl Backend for MixerBackend {
     fn set_relative(&mut self, channel: ChannelId, relative: bool) {
         self.with(channel, |c| c.relative = relative);
     }
-    /// `getCompleteBuffer` (decoded now, cached) or `getStream` (decoded on a
-    /// worker), then attach and `alSourcePlay`. A sound that cannot load
-    /// leaves its source initial, as a failed buffer future does in vanilla.
+    /// `getCompleteBuffer` (cached, else decoded on the decoder thread) or
+    /// `getStream` (decoded on a thread of its own), then attach and
+    /// `alSourcePlay`. A sound that cannot load leaves its source initial,
+    /// as a failed buffer future does in vanilla.
     fn start(&mut self, channel: ChannelId, sound: &Sound, looping: bool) {
         if !self.live {
             return;
         }
         let (namespace, path) = sound.path();
         let file = self.root.join("assets").join(namespace).join(&path);
-        let attach = move |mixer: &Mutex<Mixer>, samples: Option<(Arc<Vec<f32>>, u32)>| {
-            if let Some(samples) = samples
-                && let Ok(mut m) = mixer.lock()
-                && let Some(c) = m.channels.get_mut(&channel)
-            {
-                c.samples = Some(samples);
-                c.position = 0.0;
-                c.state = State::Playing;
-            }
-        };
         if sound.stream {
             // A streamed sound loops by restarting its stream.
             let mixer = self.mixer.clone();
             std::thread::spawn(move || {
                 let samples = decode(&file).map(|(s, r)| (Arc::new(s), r));
-                if looping
-                    && let Ok(mut m) = mixer.lock()
-                    && let Some(c) = m.channels.get_mut(&channel)
-                {
-                    c.looping = true;
-                }
-                attach(&mixer, samples);
+                attach(&mixer, channel, samples, looping);
             });
-        } else {
-            let samples = self
-                .cache
-                .entry(format!("{namespace}:{path}"))
-                .or_insert_with(|| decode(&file).map(|(s, r)| (Arc::new(s), r)))
-                .clone();
-            attach(&self.mixer, samples);
+            return;
         }
-    }
-    fn stop(&mut self, channel: ChannelId) {
-        self.with(channel, |c| {
-            if c.state != State::Initial {
-                c.state = State::Stopped;
-            }
+        let key = format!("{namespace}:{path}");
+        let cached = self.cache.lock().ok().and_then(|mut c| c.get(&key));
+        if let Some(samples) = cached {
+            attach(&self.mixer, channel, samples, false);
+            return;
+        }
+        let decoder = self.decoder.get_or_insert_with(|| {
+            let (send, receive) = std::sync::mpsc::channel::<Decode>();
+            let (mixer, cache) = (self.mixer.clone(), self.cache.clone());
+            std::thread::Builder::new()
+                .name("sound decoder".into())
+                .spawn(move || {
+                    for job in receive {
+                        // Queued twice before the first decode finished.
+                        let cached = cache.lock().ok().and_then(|mut c| c.get(&job.key));
+                        let samples = cached.unwrap_or_else(|| {
+                            let samples = decode(&job.file).map(|(s, r)| (Arc::new(s), r));
+                            if let Ok(mut c) = cache.lock() {
+                                c.insert(job.key, samples.clone());
+                            }
+                            samples
+                        });
+                        attach(&mixer, job.channel, samples, false);
+                    }
+                })
+                .expect("sound decoder thread");
+            send
         });
+        let _ = decoder.send(Decode { key, file, channel });
+    }
+    /// `alSourceStop`: any state becomes stopped, an initial source too (a
+    /// sound still decoding then never starts).
+    fn stop(&mut self, channel: ChannelId) {
+        self.with(channel, |c| c.state = State::Stopped);
     }
     fn pause(&mut self, channel: ChannelId) {
         self.with(channel, |c| {
@@ -327,6 +401,71 @@ fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
         *s = s.clamp(-1.0, 1.0);
     }
 }
+/// Why the game should not open an output, if it should not:
+/// `HORIZON_NO_AUDIO`, or a virtual screen (`vscreen`), where agents and
+/// harnesses run the game and must stay off the user's speakers.
+/// `HORIZON_AUDIO=1` opens the output anyway (testing into a null sink).
+fn output_disabled(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<String> {
+    if var("HORIZON_NO_AUDIO").is_some() {
+        return Some("audio off: HORIZON_NO_AUDIO is set".into());
+    }
+    if var("HORIZON_AUDIO").is_some_and(|v| v == "1") {
+        return None;
+    }
+    let display = var("WAYLAND_DISPLAY")?;
+    Path::new(&display)
+        .components()
+        .any(|c| c.as_os_str() == "vscreen")
+        .then(|| "audio off on a virtual screen (vscreen); HORIZON_AUDIO=1 opens it".into())
+}
+/// An output stream on `device` in its default configuration, whatever its
+/// sample format: the mixer works in f32 and converts.
+fn open_device(
+    device: &cpal::Device,
+    mixer: Arc<Mutex<Mixer>>,
+) -> Result<(cpal::Stream, cpal::SupportedStreamConfig)> {
+    use cpal::SampleFormat as F;
+    let config = device.default_output_config()?;
+    let stream = match config.sample_format() {
+        F::F32 => build_stream::<f32>(device, &config, mixer),
+        F::F64 => build_stream::<f64>(device, &config, mixer),
+        F::I16 => build_stream::<i16>(device, &config, mixer),
+        F::I32 => build_stream::<i32>(device, &config, mixer),
+        F::I8 => build_stream::<i8>(device, &config, mixer),
+        F::U16 => build_stream::<u16>(device, &config, mixer),
+        F::U32 => build_stream::<u32>(device, &config, mixer),
+        F::U8 => build_stream::<u8>(device, &config, mixer),
+        other => Err(format!("unsupported sample format {other}").into()),
+    }?;
+    stream.play()?;
+    Ok((stream, config))
+}
+fn build_stream<T: cpal::SizedSample + cpal::FromSample<f32>>(
+    device: &cpal::Device,
+    config: &cpal::SupportedStreamConfig,
+    mixer: Arc<Mutex<Mixer>>,
+) -> Result<cpal::Stream> {
+    let rate = config.sample_rate().0;
+    let channels = config.channels() as usize;
+    let mut scratch = Vec::new();
+    let stream = device.build_output_stream(
+        &config.config(),
+        move |data: &mut [T], _| {
+            scratch.resize(data.len(), 0.0f32);
+            if let Ok(mut m) = mixer.lock() {
+                mix(&mut m, &mut scratch, channels, rate);
+            } else {
+                scratch.fill(0.0);
+            }
+            for (out, s) in data.iter_mut().zip(&scratch) {
+                *out = T::from_sample(*s);
+            }
+        },
+        |e| eprintln!("Horizon: audio stream error: {e}"),
+        None,
+    )?;
+    Ok(stream)
+}
 impl Audio {
     pub fn new(root: &Path) -> Self {
         Self::with_output(root, true)
@@ -347,7 +486,7 @@ impl Audio {
             Ok(v) => (Some(v), true),
             Err(e) => {
                 if output {
-                    eprintln!("Horizon: audio unavailable: {e}");
+                    eprintln!("Horizon: no sound: {e}");
                 }
                 (None, false)
             }
@@ -360,7 +499,8 @@ impl Audio {
             backend: MixerBackend {
                 mixer,
                 root: root.to_owned(),
-                cache: HashMap::new(),
+                cache: Arc::default(),
+                decoder: None,
                 next: 0,
                 live,
             },
@@ -374,32 +514,40 @@ impl Audio {
         }
     }
     fn open(mixer: Arc<Mutex<Mixer>>) -> Result<cpal::Stream> {
-        // Test runs (harnesses, agents) launch the game on a virtual screen;
-        // keep them off the user's speakers.
-        if std::env::var_os("HORIZON_NO_AUDIO").is_some() {
-            return Err("audio output disabled by HORIZON_NO_AUDIO".into());
+        if let Some(reason) = output_disabled(|name| std::env::var_os(name)) {
+            return Err(reason.into());
         }
         let host = cpal::default_host();
-        let device = host
-            .default_output_device()
-            .ok_or("no audio output device")?;
-        let config = device.default_output_config()?;
-        let rate = config.sample_rate().0;
-        let channels = config.channels() as usize;
-        let stream = device.build_output_stream(
-            &config.into(),
-            move |data: &mut [f32], _| {
-                if let Ok(mut m) = mixer.lock() {
-                    mix(&mut m, data, channels, rate);
-                } else {
-                    data.fill(0.0);
+        let mut errors = Vec::new();
+        // The default device first, then any other output a host lists:
+        // a default that cannot open (busy, or a stale ALSA default) should
+        // not leave the game silent when another device works.
+        let default = host.default_output_device();
+        let others = host.output_devices().into_iter().flatten();
+        let mut tried = Vec::new();
+        for device in default.into_iter().chain(others) {
+            let name = device.name().unwrap_or_else(|_| "unnamed device".into());
+            if tried.contains(&name) {
+                continue;
+            }
+            tried.push(name.clone());
+            match open_device(&device, mixer.clone()) {
+                Ok((stream, config)) => {
+                    eprintln!(
+                        "Horizon: audio output {name} ({} Hz, {} channels, {})",
+                        config.sample_rate().0,
+                        config.channels(),
+                        config.sample_format()
+                    );
+                    return Ok(stream);
                 }
-            },
-            |e| eprintln!("Horizon: audio stream error: {e}"),
-            None,
-        )?;
-        stream.play()?;
-        Ok(stream)
+                Err(e) => errors.push(format!("{name}: {e}")),
+            }
+        }
+        if errors.is_empty() {
+            return Err(format!("no audio output device on the {} host", host.id().name()).into());
+        }
+        Err(format!("no audio output device opened ({})", errors.join("; ")).into())
     }
     fn bound(&mut self) -> Bound<'_, MixerBackend> {
         Bound {
@@ -525,6 +673,21 @@ impl Audio {
         self.release(id);
     }
     /// Every sound event id (for command completion).
+    /// The engine's table sizes and the mixer's channels (`status`).
+    pub fn census(&self) -> serde_json::Value {
+        let mut census = self.engine.census();
+        census["channels"] = self
+            .backend
+            .mixer
+            .lock()
+            .map_or(0, |m| m.channels.len())
+            .into();
+        if let Ok(cache) = self.backend.cache.lock() {
+            census["decoded"] = cache.entries.len().into();
+            census["decoded_mib"] = (cache.bytes >> 20).into();
+        }
+        census
+    }
     pub fn event_names(&self) -> Vec<String> {
         let mut v: Vec<String> = self.engine.registry.names().cloned().collect();
         v.sort();
@@ -590,6 +753,47 @@ mod tests {
         }
     }
 
+    #[test]
+    fn decoded_sounds_stay_within_the_budget_least_recently_used_out() {
+        let mut cache = SoundCache::default();
+        let quarter = CACHE_BYTES / 4 / std::mem::size_of::<f32>();
+        let sound = || Some((Arc::new(vec![0.0f32; quarter]), 44100));
+        for key in ["a", "b", "c", "d"] {
+            cache.insert(key.into(), sound());
+        }
+        assert!(cache.get("a").is_some());
+        cache.insert("e".into(), sound());
+        assert!(cache.bytes <= CACHE_BYTES);
+        assert!(
+            cache.get("b").is_none(),
+            "the least recently used goes first"
+        );
+        assert!(cache.get("a").is_some() && cache.get("e").is_some());
+        // A failed load is remembered without counting.
+        cache.insert("missing".into(), None);
+        assert_eq!(cache.get("missing"), Some(None));
+    }
+    #[test]
+    fn output_stays_off_on_a_virtual_screen_unless_asked() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(k, _)| *k == name)
+                    .map(|(_, v)| std::ffi::OsString::from(*v))
+            }
+        };
+        assert!(output_disabled(env(&[("WAYLAND_DISPLAY", "wayland-1")])).is_none());
+        assert!(output_disabled(env(&[])).is_none());
+        const VSCREEN: &str = "/run/user/1000/vscreen/main/wayland-1";
+        assert!(output_disabled(env(&[("WAYLAND_DISPLAY", VSCREEN)])).is_some());
+        assert!(
+            output_disabled(env(&[("WAYLAND_DISPLAY", VSCREEN), ("HORIZON_AUDIO", "1")])).is_none()
+        );
+        assert!(
+            output_disabled(env(&[("HORIZON_NO_AUDIO", "1"), ("HORIZON_AUDIO", "1")])).is_some()
+        );
+    }
     #[test]
     fn linear_attenuation_reaches_zero_at_the_max_distance() {
         assert_eq!(distance_gain(None, 100.0), 1.0);

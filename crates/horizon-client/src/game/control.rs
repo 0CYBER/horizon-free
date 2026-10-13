@@ -547,6 +547,7 @@ impl Game<'_> {
                 "present_mode": format!("{:?}", r.config.present_mode),
                 "drawn_sections": r.drawn_sections,
                 "uploaded_bytes": r.uploaded_bytes,
+                "resident_sections": r.resident_sections(),
             })
         });
         json!({
@@ -566,6 +567,7 @@ impl Game<'_> {
             "ticks": self.ticks,
             "day_time": self.world.day_time,
             "music": self.music.current(&self.audio.engine),
+            "sounds": self.audio.census(),
             "fishing": self.hook_status(),
             "tridents": self.tridents.len(),
             "rockets": self.rockets.len(),
@@ -575,6 +577,8 @@ impl Game<'_> {
             "using": self.using,
             "render_distance": self.streaming.radius,
             "chunks": self.world.chunks.len(),
+            "mobs": self.mobs.len(),
+            "block_entities": self.world.block_entities.len(),
             "pending_chunks": self.streaming.pending() + self.pending_uploads.len(),
             "generated_chunks": self.streaming.generated_total,
             "meshed_sections": self.streaming.meshed_total,

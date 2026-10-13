@@ -124,6 +124,9 @@ struct Launcher {
     confirm_remove: Option<String>,
     picker_open: bool,
     settings: Settings,
+    /// The Discord and sponsor links: built in until links.json on main has been read.
+    links: backend::Links,
+    menu_style: backend::MenuStyle,
     preparing: bool,
     prepare_log: VecDeque<String>,
     prepare_error: Option<String>,
@@ -192,6 +195,8 @@ impl Launcher {
             confirm_remove: None,
             picker_open: false,
             settings,
+            links: backend::Links::default(),
+            menu_style: backend::menu_style(),
             preparing: false,
             prepare_log: VecDeque::new(),
             prepare_error: None,
@@ -210,6 +215,7 @@ impl Launcher {
         };
         this.fetch_releases();
         this.fetch_roadmap();
+        this.fetch_links();
         this.check_updates();
         this
     }
@@ -262,6 +268,11 @@ impl Launcher {
         std::thread::spawn(move || tx.send(Msg::Releases(backend::releases())));
     }
 
+    fn fetch_links(&self) {
+        let tx = self.tx.clone();
+        std::thread::spawn(move || tx.send(Msg::Links(backend::links())));
+    }
+
     fn fetch_roadmap(&mut self) {
         self.roadmap = Load::Loading;
         let tx = self.tx.clone();
@@ -275,6 +286,7 @@ impl Launcher {
             match msg {
                 Msg::Releases(r) => self.releases = r.map_or_else(Load::Failed, Load::Ready),
                 Msg::Roadmap(r) => self.roadmap = r.map_or_else(Load::Failed, Load::Ready),
+                Msg::Links(links) => self.links = links,
                 Msg::Progress(tag, p) => {
                     self.bar = (self.bar.1, p);
                     self.installing = Some((tag, p));
@@ -300,7 +312,7 @@ impl Launcher {
                 Msg::Updates(Ok(updates)) => {
                     self.update_error = None;
                     self.updates = updates;
-                    if self.settings.auto_install {
+                    if self.settings.auto_install() {
                         self.install_update();
                     }
                     if let Some(release) = self.updates.launcher.clone() {
@@ -752,6 +764,17 @@ impl Launcher {
                 ),
             _ => div().child(format!("Launcher {}", backend::VERSION)),
         };
+        let discord = (!self.links.discord.is_empty()).then(|| {
+            let url = self.links.discord.clone();
+            div()
+                .id("discord")
+                .mb(px(4.))
+                .text_color(t.muted)
+                .cursor_pointer()
+                .hover(move |s| s.text_color(t.text))
+                .child("Join Discord")
+                .on_click(move |_, _, cx| cx.open_url(&url))
+        });
         div()
             .flex()
             .flex_col()
@@ -774,7 +797,7 @@ impl Launcher {
             )
             .child(nav)
             .child(div().flex_1())
-            .child(div().px(px(10.)).text_size(px(theme::SMALL)).text_color(t.faint).child(footer))
+            .child(div().px(px(10.)).text_size(px(theme::SMALL)).text_color(t.faint).children(discord).child(footer))
     }
 
     fn segmented(&self, cx: &mut Context<Self>) -> Div {
@@ -1134,11 +1157,11 @@ impl Launcher {
 
     fn settings_page(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let toggle = switch("auto-install", self.settings.auto_install, &t).on_click(cx.listener(
+        let toggle = switch("auto-install", self.settings.auto_install(), &t).on_click(cx.listener(
             |this, _: &ClickEvent, _, cx| {
-                this.settings.auto_install = !this.settings.auto_install;
+                this.settings.install_new_versions = Some(!this.settings.auto_install());
                 this.settings.save();
-                if this.settings.auto_install {
+                if this.settings.auto_install() {
                     this.install_update();
                 }
                 cx.notify();
@@ -1151,6 +1174,46 @@ impl Launcher {
                 cx.notify();
             },
         ));
+        let menus = div()
+            .id("menu-style")
+            .flex()
+            .flex_none()
+            .p(px(2.))
+            .gap(px(2.))
+            .rounded(px(theme::RADIUS_GROUP))
+            .bg(t.raised)
+            .border_1()
+            .border_color(t.border)
+            .children([(backend::MenuStyle::Horizon, "Horizon"), (backend::MenuStyle::Classic, "Classic")].map(
+                |(style, label)| {
+                    let active = self.menu_style == style;
+                    div()
+                        .id(label)
+                        .flex()
+                        .items_center()
+                        .h(px(theme::SEGMENT))
+                        .px(px(14.))
+                        .rounded(px(theme::RADIUS_SEGMENT))
+                        .text_size(px(13.))
+                        .cursor_pointer()
+                        .when(active, |d| {
+                            d.bg(t.bg).border_1().border_color(t.border).text_color(t.text).font_weight(FontWeight::MEDIUM)
+                        })
+                        .when(!active, |d| d.text_color(t.muted).hover(move |s| s.text_color(t.text)))
+                        .child(label)
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            if backend::set_menu_style(style).is_ok() {
+                                this.menu_style = style;
+                            }
+                            cx.notify();
+                        }))
+                },
+            ));
+        let menu_note = div().flex().flex_col().gap(px(2.)).child("Menu style").child(
+            div().text_size(px(theme::SMALL)).text_color(t.muted).child(
+                "Classic is vanilla's own screens, with no way back inside the game: switch back here. Applies the next time the game starts.",
+            ),
+        );
         let auto = div()
             .flex()
             .flex_col()
@@ -1225,7 +1288,7 @@ impl Launcher {
             .flex()
             .flex_col()
             .gap(px(24.))
-            .child(page_header("Settings", "Updates, and the launcher itself.", &t))
+            .child(page_header("Settings", "Updates, menus, and the launcher itself.", &t))
             .child(
                 div()
                     .flex()
@@ -1234,6 +1297,8 @@ impl Launcher {
                     .child(row("Updates", auto, Some(toggle), &t))
                     .child(divider(&t))
                     .child(row("Opening", div().child("Show opening animation"), Some(opening), &t))
+                    .child(divider(&t))
+                    .child(row("Game menus", menu_note, Some(menus), &t))
                     .child(divider(&t))
                     .child(row("Horizon", horizon, horizon_action, &t))
                     .child(divider(&t))
@@ -1484,7 +1549,7 @@ impl Launcher {
 
     fn notes_page(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let sponsor = div()
+        let sponsor = (!self.links.sponsor.is_empty()).then(|| div()
             .flex()
             .items_center()
             .justify_between()
@@ -1506,15 +1571,16 @@ impl Launcher {
                             .child("Horizon is built in the open. Sponsors fund the next release."),
                     ),
             )
-            .child(button("sponsor", "Sponsor on GitHub", Kind::Secondary, &t).on_click(cx.listener(
-                |_, _: &ClickEvent, _, cx| cx.open_url(backend::SPONSOR_URL),
-            )));
+            .child(button("sponsor", "Sponsor on GitHub", Kind::Secondary, &t).on_click({
+                let url = self.links.sponsor.clone();
+                move |_: &ClickEvent, _, cx| cx.open_url(&url)
+            })));
         let page = div()
             .flex()
             .flex_col()
             .gap(px(24.))
             .child(page_header("Patch notes", "What changed in each release, newest first.", &t))
-            .child(sponsor);
+            .children(sponsor);
         let releases = match &self.releases {
             Load::Loading => return page.child(centered("Loading patch notes…", &t)),
             Load::Failed(e) => {

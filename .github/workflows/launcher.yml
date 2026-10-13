@@ -6,7 +6,7 @@ name: launcher
 on:
   workflow_dispatch:
   push:
-    branches: [launcher]
+    branches: [launcher, 'launcher-*']
     tags: ['launcher-v*']
 
 permissions:
@@ -27,7 +27,12 @@ jobs:
           - os: windows-latest
             asset: horizon-launcher-windows-x64.zip
             binary: horizon-launcher.exe
+            # The C runtime linked in: without it the launcher asks for VCRUNTIME140.dll,
+            # which only the Visual C++ redistributable installs.
+            rustflags: -C target-feature=+crt-static
     runs-on: ${{ matrix.os }}
+    env:
+      RUSTFLAGS: ${{ matrix.rustflags }}
     defaults:
       run:
         working-directory: launcher
@@ -48,6 +53,42 @@ jobs:
         run: grep -qx "version = \"${GITHUB_REF_NAME#launcher-v}\"" Cargo.toml
       - run: cargo test --release --locked --lib
       - run: cargo build --release --locked
+      - name: Only system libraries
+        if: runner.os == 'Windows'
+        run: python ../tools/check_imports.py target/release/${{ matrix.binary }}
+      - name: Smoke test
+        env:
+          HORIZON_LAUNCHER_NO_SELF_UPDATE: '1'
+        run: |
+          set -euo pipefail
+          export HORIZON_LAUNCHER_HOME="${RUNNER_TEMP//\\//}/horizon-launcher-smoke"
+          export HORIZON_HOME="$HORIZON_LAUNCHER_HOME/game"
+          launcher="$PWD/target/release/${{ matrix.binary }}"
+          # GitHub's API rate-limits shared runner addresses now and then: try a few times.
+          retry() { for i in 1 2 3 4; do "$@" && return 0; sleep $((i * 15)); done; return 1; }
+          "$launcher" --version
+          retry "$launcher" versions
+          retry "$launcher" install latest
+          "$launcher" versions --installed
+          "$launcher" links --json
+          "$launcher" menu-style classic
+          grep -qx 'menuStyle:classic' "$HORIZON_HOME/horizon.txt"
+          "$launcher" menu-style horizon
+          clients=("$HORIZON_LAUNCHER_HOME"/versions/v*/horizon-client*)
+          client="${clients[0]}"
+          echo "installed client: $client"
+          # The game's Linux build is the game's to keep portable (release.yml checks it): a
+          # release linked to a Nix store is a warning here, not a broken launcher.
+          soft() { if [[ "$RUNNER_OS" == "Linux" ]]; then "$@" || echo "::warning::$* failed"; else "$@"; fi; }
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            python ../tools/check_imports.py "$client"
+            python ../tools/check_imports.py "$launcher"
+          elif [[ "$RUNNER_OS" == "Linux" ]]; then
+            soft python3 ../tools/check_imports.py "$client"
+          fi
+          # The client starts: --help prints before any window or GPU is needed.
+          help() { "$client" --help > "$RUNNER_TEMP/help.txt" 2>&1 && head -3 "$RUNNER_TEMP/help.txt" && grep -q -- '--resources' "$RUNNER_TEMP/help.txt"; }
+          soft help
       - name: Package
         run: |
           mkdir -p dist

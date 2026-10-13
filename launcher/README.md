@@ -17,16 +17,23 @@ The opening, then Play ([clip](docs/opening.webm)):
 - **Play**: prepares resources as `PLAY.txt` describes (your launcher's 26.3 install, the
   26.3 server jar from that version's own json, Python 3.10+ and Java 25), then starts the
   client, or a server (`--dedicated --nogui`) in a folder you choose, with a live console.
-- **Patch notes**: each release's notes, newest first, with a link to GitHub Sponsors.
+- **Patch notes**: each release's notes, newest first, with a link to GitHub Sponsors. A quiet "Join Discord" link sits in the sidebar footer.
 - **What's next**: the README's roadmap, from main.
 
 Data lives in the platform's data directory (`~/.local/share/horizon-launcher` on Linux,
 `~/Library/Application Support/horizon-launcher` on macOS, `%APPDATA%\horizon-launcher` on
 Windows): `versions/<tag>/`, `server-jars/`, `server/` and `settings.json`.
 
-- **Settings**: install new Horizon versions automatically (off by default; the selected
-  version only moves to the new one if you were on the newest), the opening animation, and the
-  launcher's own version and update state.
+- **Settings**: install new Horizon versions automatically (on unless you turn it off; the
+  selected version only moves to the new one if you were on the newest), the opening animation,
+  the game's menu style, and the launcher's own version and update state.
+- **Menu style**: Horizon's own menus or Classic (vanilla's screens). Classic has no way back
+  inside the game, so the launcher is where you return to Horizon's. It is the `menuStyle:` line
+  of `horizon.txt` in the game's home folder (`HORIZON_HOME`, else `horizon` in the data
+  directory), which the game reads when it starts.
+- **Links**: the Discord invite and the Sponsors page come from `launcher/links.json` on main
+  (`{"discord": "...", "sponsor": "..."}`), so they change without a launcher release. Offline,
+  the launcher uses the same values built in; an empty address hides its button.
 
 ## Updates
 
@@ -56,10 +63,12 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher server [--dir <dir>] [--version <tag>] [--accept-eula]
     horizon-launcher notes [<tag>]                  patch notes as plain text
     horizon-launcher next                           the roadmap
+    horizon-launcher links                          the Discord and sponsor links
+    horizon-launcher menu-style [horizon|classic]   show or set the game's menu style
     horizon-launcher update [--check]               Horizon and the launcher
 
 `--json` prints JSON where there is something to report (`versions`, `install`, `notes`,
-`next`, `update --check`). Errors go to stderr with exit code 1. `server` runs in the terminal,
+`next`, `links`, `menu-style`, `update --check`). Errors go to stderr with exit code 1. `server` runs in the terminal,
 so lines you type reach its console. `HORIZON_LAUNCHER_HOME` replaces the data folder (for
 scripts and tests).
 
@@ -71,7 +80,7 @@ scripts and tests).
 
 (with the full path to the binary if it is not on your `PATH`). Its tools: `list_versions`,
 `install_version`, `remove_version`, `prepare_resources`, `launch_client`, `start_server`,
-`server_command`, `server_log`, `stop_server`, `patch_notes`, `roadmap` and `check_updates`.
+`server_command`, `server_log`, `stop_server`, `patch_notes`, `roadmap`, `links`, `menu_style` and `check_updates`.
 A server started through MCP stops (cleanly, with `stop`) when the session ends. Starting one
 needs `accept_eula`, which an agent should only pass with the player's consent.
 
@@ -83,9 +92,12 @@ The window, the command line and the MCP server all call the same core, `src/bac
 
 On NixOS, `nix-shell` in this folder provides the libraries GPUI links to (Wayland, X11,
 xkbcommon, Vulkan, fontconfig). macOS needs Xcode's command line tools. The `launcher`
-workflow builds all three platforms on every push to the `launcher` branch.
+workflow builds all three platforms on every push to the `launcher` branch (or a
+`launcher-*` one), then installs the latest Horizon into a temporary folder and checks that the
+client starts (`--help`) and that the binaries import only system libraries (Windows).
 
-    cargo test --lib    # tag separation, version order, update selection, notes as text
+    cargo test --lib    # tag separation, version order, update selection, notes as text,
+                        # the auto-install default, the links fallback, the menu style file
 
 Geist, Geist Mono and Instrument Serif (SIL Open Font License, `crates/horizon-theme/fonts/OFL-*.txt`, shared with the game's menus) are
 bundled so the type is the same on every platform.

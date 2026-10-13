@@ -17,6 +17,7 @@ use horizon_core::{
     geometry::Vec3,
     random::{LegacyRandom, RandomSource},
 };
+use std::collections::HashMap;
 
 /// `MemorySlot.NEVER_EXPIRE`.
 pub(super) const NEVER: i64 = i64::MAX;
@@ -843,12 +844,20 @@ impl Poi {
 }
 /// The POI a block state is (`PoiTypes`): job site blocks, bed heads, bells.
 pub fn poi_at(w: &MobWorld, x: i32, y: i32, z: i32) -> Option<Poi> {
-    let name = w.block_name(x, y, z);
+    poi_of_state(w, w.world.block(x, y, z))
+}
+/// The POI a block state is, if any (`PoiTypes.forState`).
+fn poi_of_state(w: &MobWorld, state: horizon_world::registry::BlockStateId) -> Option<Poi> {
+    let name = &*w.facts.get(state).name;
     if name == "minecraft:bell" {
         return Some(Poi::Meeting);
     }
     if name.ends_with("_bed") {
-        return (w.prop(x, y, z, "part") == Some("head")).then_some(Poi::Home);
+        let part = w
+            .registry
+            .state(state)
+            .and_then(|s| s.properties.get("part"));
+        return (part.map(String::as_str) == Some("head")).then_some(Poi::Home);
     }
     super::villager::job_site_profession(name).map(Poi::Job)
 }
@@ -920,22 +929,28 @@ fn pois_in_range(
     let chunks = radius.div_euclid(16) + 1;
     let y0 = (c[1] - radius).max(crate::chunk::MIN_Y);
     let y1 = (c[1] + radius).min(crate::chunk::MIN_Y + crate::chunk::HEIGHT - 1);
-    let poi = poi_states(w.facts);
+    // The POI each block state is, worked out once per search, and the
+    // sections whose palette holds none skipped whole, as PoiManager only
+    // visits sections with records: the same positions in the same order,
+    // without reading and naming every block of the sphere.
+    let mut kinds: HashMap<u32, Option<Poi>> = HashMap::new();
+    let mut kind = |state: u32| {
+        *kinds
+            .entry(state)
+            .or_insert_with(|| poi_of_state(w, horizon_world::registry::BlockStateId(state)))
+    };
     for qz in cz - chunks..=cz + chunks {
         for qx in cx - chunks..=cx + chunks {
             let Some(chunk) = w.world.chunks.get(&(qx, qz)) else {
                 continue;
             };
-            // Sections whose palette holds no bell, bed or job site have no
-            // POI: skip them whole (PoiManager indexes POIs instead).
-            let mut may_hold = [false; crate::chunk::SECTIONS];
-            for (slot, section) in may_hold.iter_mut().zip(&chunk.sections) {
-                *slot = section
-                    .blocks
-                    .maybe_has(|id| poi.get(id as usize).copied().unwrap_or(true));
-            }
+            let holds: Vec<bool> = chunk
+                .sections
+                .iter()
+                .map(|s| s.blocks.maybe_has(|v| kind(v).is_some()))
+                .collect();
             for y in y0..=y1 {
-                if !may_hold[((y - crate::chunk::MIN_Y) >> 4) as usize] {
+                if !holds[((y - crate::chunk::MIN_Y) >> 4) as usize] {
                     continue;
                 }
                 for z in qz * 16..qz * 16 + 16 {
@@ -949,11 +964,11 @@ fn pois_in_range(
                         if d > r2 {
                             continue;
                         }
-                        let state = w.world.block(x, y, z);
+                        let state = chunk.block(x & 15, y, z & 15);
                         if w.facts.is_air(state) {
                             continue;
                         }
-                        let Some(poi) = poi_at(w, x, y, z) else {
+                        let Some(poi) = kind(state.0) else {
                             continue;
                         };
                         if !poi_matches(m, f, poi) {
@@ -977,28 +992,6 @@ fn pois_in_range(
             + i64::from(p[2] - c[2]).pow(2)
     });
     found
-}
-/// Which block states `poi_at` can find a POI in, by state id.
-fn poi_states(facts: &crate::blocks::BlockFacts) -> std::sync::Arc<Vec<bool>> {
-    static TABLE: std::sync::Mutex<Option<std::sync::Arc<Vec<bool>>>> = std::sync::Mutex::new(None);
-    let mut table = TABLE.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(t) = table.as_ref().filter(|t| t.len() == facts.states.len()) {
-        return t.clone();
-    }
-    let t: std::sync::Arc<Vec<bool>> = std::sync::Arc::new(
-        facts
-            .states
-            .iter()
-            .map(|f| {
-                let name = &*f.name;
-                name == "minecraft:bell"
-                    || name.ends_with("_bed")
-                    || super::villager::job_site_profession(name).is_some()
-            })
-            .collect(),
-    );
-    *table = Some(t.clone());
-    t
 }
 /// `PoiManager.exists(pos, predicate)`.
 fn poi_exists(m: &Mob, w: &MobWorld, p: [i32; 3], f: PoiFilter) -> bool {
