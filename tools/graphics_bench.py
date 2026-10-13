@@ -116,7 +116,31 @@ def run_distance(args, ctl, env, cwd, distance):
             if not socket.exists():
                 break
             time.sleep(0.2)
+        # Keep each game's log (a crash or a slow-frame report) per run.
+        log = socket.with_suffix(".log")
+        if log.exists():
+            shutil.copy(log, cwd / f"{args.label}-rd{distance}.log")
     return results
+
+
+def compare(before, after):
+    """A markdown table of two saved runs (labels under benchmarks/graphics)."""
+    load = lambda label: json.loads((ROOT / "benchmarks/graphics" / f"{label}.json").read_text())
+    a, b = load(before), load(after)
+    print(f"| RD | scene | avg FPS | 1% low FPS | p99 ms | CPU ms/frame | GPU ms/frame |")
+    print("| --- | --- | --- | --- | --- | --- | --- |")
+    cell = lambda x, y, f: f"{f(x)} → {f(y)}"
+    for rd, scenes in a["distances"].items():
+        for name, old in scenes.items():
+            new = b["distances"].get(rd, {}).get(name)
+            if name == "renderer" or not new:
+                continue
+            ms = lambda v, k: (v.get(k) or {}).get("avg_ms") or 0
+            print(f"| {rd} | {name} | {cell(old['avg_fps'], new['avg_fps'], lambda v: f'{v:.0f}')} "
+                  f"| {cell(old['low_1pct_fps'], new['low_1pct_fps'], lambda v: f'{v:.1f}')} "
+                  f"| {cell(old['p99_ms'], new['p99_ms'], lambda v: f'{v:.0f}')} "
+                  f"| {cell(ms(old, 'cpu'), ms(new, 'cpu'), lambda v: f'{v:.1f}')} "
+                  f"| {cell(ms(old, 'gpu'), ms(new, 'gpu'), lambda v: f'{v:.2f}')} |")
 
 
 def main():
@@ -130,7 +154,12 @@ def main():
     p.add_argument("--resources", default=str(ROOT / ".local/horizon-client/26.3"))
     p.add_argument("--build", default=str(ROOT / "target/release"))
     p.add_argument("--out", help="JSON file (default benchmarks/graphics/<label>.json)")
+    p.add_argument("--compare", nargs=2, metavar=("BEFORE", "AFTER"),
+                   help="print a markdown table comparing two saved runs, and exit")
     args = p.parse_args()
+    if args.compare:
+        compare(*args.compare)
+        return
     ctl = Path(args.build).resolve() / "horizon-ctl"
     if not ctl.exists():
         sys.exit(f"{ctl} missing: cargo build --release -p horizon-client --bins")

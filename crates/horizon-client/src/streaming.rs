@@ -2,6 +2,7 @@
 //! around the player, closest first. The game thread owns the world and only
 //! hands immutable `Arc` snapshots to workers; results carry a sequence number
 //! so stale work is dropped.
+use crate::fast_hash::{FxHashMap, FxHashSet};
 use crate::{
     chunk::{Chunk, SECTIONS},
     light::{LightTables, light_chunk},
@@ -9,7 +10,6 @@ use crate::{
     world::World,
 };
 use horizon_core::biome::BiomeZoom;
-use crate::fast_hash::{FxHashMap, FxHashSet};
 use std::{
     collections::{BinaryHeap, HashSet},
     sync::{

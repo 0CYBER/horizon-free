@@ -53,7 +53,11 @@ impl FrameGraph {
             rgba(0, 0, 0, 144),
         );
         for (i, line) in lines.iter().enumerate() {
-            let color = if i == 0 { rgba(255, 255, 255, 255) } else { rgba(200, 200, 200, 255) };
+            let color = if i == 0 {
+                rgba(255, 255, 255, 255)
+            } else {
+                rgba(200, 200, 200, 255)
+            };
             batch.text_styled(
                 atlas,
                 &Text::literal(line.clone()),
@@ -93,7 +97,14 @@ impl FrameGraph {
         }
         for target in [16.7, 33.3] {
             let ly = gy + gh - target * scale;
-            batch.fill(atlas, x + 3.0, ly, width - 6.0, 1.0, rgba(255, 255, 255, 90));
+            batch.fill(
+                atlas,
+                x + 3.0,
+                ly,
+                width - 6.0,
+                1.0,
+                rgba(255, 255, 255, 90),
+            );
         }
     }
 }

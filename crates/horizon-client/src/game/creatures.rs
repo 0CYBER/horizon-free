@@ -2295,8 +2295,10 @@ impl Game<'_> {
             if let Some(view) = &self.view_frustum
                 && horizon_client::mobs::guardian::beam(mob, alpha as f32).is_none()
             {
-                let lo = d.as_vec3() - glam::Vec3::new(w as f32 / 2.0 + 0.5, 0.5, w as f32 / 2.0 + 0.5);
-                let hi = d.as_vec3() + glam::Vec3::new(w as f32 / 2.0 + 0.5, h as f32 + 0.5, w as f32 / 2.0 + 0.5);
+                let lo =
+                    d.as_vec3() - glam::Vec3::new(w as f32 / 2.0 + 0.5, 0.5, w as f32 / 2.0 + 0.5);
+                let hi = d.as_vec3()
+                    + glam::Vec3::new(w as f32 / 2.0 + 0.5, h as f32 + 0.5, w as f32 / 2.0 + 0.5);
                 if !view.intersects(lo, hi) {
                     continue;
                 }

@@ -38,22 +38,36 @@ impl FreeList {
     }
 }
 
-pub struct Arena {
-    pub buffer: wgpu::Buffer,
+/// One vertex buffer of the arena; only the newest page grows.
+struct Page {
+    buffer: wgpu::Buffer,
     /// Capacity in vertices.
     capacity: u64,
-    stride: u64,
     free: FreeList,
+}
+
+/// Terrain vertices in pages of at most `page_limit` vertices (devices cap
+/// buffer sizes): a section's vertices sit in one page.
+pub struct Arena {
+    pages: Vec<Page>,
+    stride: u64,
+    page_limit: u64,
 }
 
 impl Arena {
     pub fn new(device: &wgpu::Device, stride: u64, capacity: u64) -> Self {
-        let capacity = capacity.next_multiple_of(GRAIN);
+        // 256 MiB pages, or less where the device's buffers are smaller.
+        let bytes = device.limits().max_buffer_size.min(256 << 20);
+        let page_limit = (bytes / stride) / GRAIN * GRAIN;
+        let capacity = capacity.next_multiple_of(GRAIN).min(page_limit);
         Self {
-            buffer: Self::create(device, stride, capacity),
-            capacity,
+            pages: vec![Page {
+                buffer: Self::create(device, stride, capacity),
+                capacity,
+                free: FreeList::new(capacity),
+            }],
             stride,
-            free: FreeList::new(capacity),
+            page_limit,
         }
     }
     fn create(device: &wgpu::Device, stride: u64, capacity: u64) -> wgpu::Buffer {
@@ -70,35 +84,68 @@ impl Arena {
     fn span(vertices: u64) -> u64 {
         vertices.max(1).next_multiple_of(GRAIN)
     }
-    /// A range of `vertices`, growing the buffer (copying its contents on the
-    /// GPU) when no free range is large enough. Returns the first vertex.
-    pub fn alloc(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, vertices: u64) -> u64 {
-        let len = Self::span(vertices);
-        if let Some(start) = self.free.take(len) {
-            return start;
+    pub fn buffer(&self, page: u32) -> &wgpu::Buffer {
+        &self.pages[page as usize].buffer
+    }
+    /// A range of `vertices`: (page, first vertex). Grows the newest page
+    /// (copying its contents on the GPU) or starts a new one when nothing
+    /// free is large enough.
+    pub fn alloc(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        vertices: u64,
+    ) -> (u32, u64) {
+        let len = Self::span(vertices).min(self.page_limit);
+        for (i, page) in self.pages.iter_mut().enumerate() {
+            if let Some(start) = page.free.take(len) {
+                return (i as u32, start);
+            }
         }
-        self.grow(device, queue, (self.capacity * 2).max(self.capacity + len));
-        self.free.take(len).expect("grown arena has room")
+        let last = self.pages.len() - 1;
+        let current = self.pages[last].capacity;
+        if current < self.page_limit {
+            let grown = (current * 2).max(current + len).min(self.page_limit);
+            if grown - current >= len || grown == self.page_limit {
+                self.grow(device, queue, last, grown);
+                if let Some(start) = self.pages[last].free.take(len) {
+                    return (last as u32, start);
+                }
+            }
+        }
+        let capacity = (1 << 20u64).max(len).min(self.page_limit);
+        let mut free = FreeList::new(capacity);
+        let start = free.take(len).expect("a new page fits one section");
+        self.pages.push(Page {
+            buffer: Self::create(device, self.stride, capacity),
+            capacity,
+            free,
+        });
+        ((self.pages.len() - 1) as u32, start)
     }
-    pub fn release(&mut self, start: u64, vertices: u64) {
-        self.free.give(start, Self::span(vertices));
+    pub fn release(&mut self, page: u32, start: u64, vertices: u64) {
+        let len = Self::span(vertices).min(self.page_limit);
+        self.pages[page as usize].free.give(start, len);
     }
-    fn grow(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, capacity: u64) {
-        let capacity = capacity.next_multiple_of(GRAIN);
+    fn grow(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, page: usize, capacity: u64) {
+        let capacity = capacity.next_multiple_of(GRAIN).min(self.page_limit);
         let buffer = Self::create(device, self.stride, capacity);
+        let old = &mut self.pages[page];
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Grow section arena"),
         });
-        encoder.copy_buffer_to_buffer(&self.buffer, 0, &buffer, 0, self.capacity * self.stride);
+        encoder.copy_buffer_to_buffer(&old.buffer, 0, &buffer, 0, old.capacity * self.stride);
         // Writes queued for the old buffer run before this copy.
         queue.submit([encoder.finish()]);
-        let old = self.capacity;
-        self.buffer = buffer;
-        self.capacity = capacity;
-        self.free.give(old, capacity - old);
+        let previous = old.capacity;
+        old.buffer = buffer;
+        old.capacity = capacity;
+        old.free.give(previous, capacity - previous);
     }
     pub fn clear(&mut self) {
-        self.free = FreeList::new(self.capacity);
+        for page in &mut self.pages {
+            page.free = FreeList::new(page.capacity);
+        }
     }
 }
 

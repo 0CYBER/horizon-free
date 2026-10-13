@@ -161,7 +161,9 @@ impl Post {
                 group,
             });
         }
-        self.target.as_ref().map(|t| (t.color.clone(), t.depth.clone()))
+        self.target
+            .as_ref()
+            .map(|t| (t.color.clone(), t.depth.clone()))
     }
     /// Draw the scaled world onto `screen`.
     pub fn finish(&self, encoder: &mut wgpu::CommandEncoder, screen: &wgpu::TextureView) {
@@ -180,7 +182,11 @@ impl Post {
             color_attachments: &attachments,
             ..Default::default()
         });
-        pass.set_pipeline(if self.antialias { &self.fxaa } else { &self.copy });
+        pass.set_pipeline(if self.antialias {
+            &self.fxaa
+        } else {
+            &self.copy
+        });
         pass.set_bind_group(0, &target.group, &[]);
         pass.draw(0..3, 0..1);
     }

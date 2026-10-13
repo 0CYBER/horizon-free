@@ -195,9 +195,7 @@ impl Graphics {
                     }
                 }
                 "workers" => g.workers = number(g.workers).min(64),
-                "resolutionScale" => {
-                    g.resolution_scale = number(g.resolution_scale).clamp(50, 200)
-                }
+                "resolutionScale" => g.resolution_scale = number(g.resolution_scale).clamp(50, 200),
                 "fxaa" => g.fxaa = flag(g.fxaa),
                 "overlay" => {
                     g.overlay = match value {
@@ -308,6 +306,9 @@ mod tests {
         };
         assert_eq!(Graphics::parse(&g.serialize()), g);
         assert_eq!(Graphics::parse(""), Graphics::default());
-        assert_eq!(Graphics::parse("workers:abc\nsky:maybe\n"), Graphics::default());
+        assert_eq!(
+            Graphics::parse("workers:abc\nsky:maybe\n"),
+            Graphics::default()
+        );
     }
 }

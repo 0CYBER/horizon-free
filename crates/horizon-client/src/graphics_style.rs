@@ -78,12 +78,26 @@ impl Style {
         let total = self.control_width + self.gap + self.text_width(screen_width);
         ((screen_width - total) / 2.0).floor()
     }
-    pub fn background(&self, batch: &mut HudBatch, atlas: &HudAtlas, top: f32, bottom: f32, in_world: bool) {
+    pub fn background(
+        &self,
+        batch: &mut HudBatch,
+        atlas: &HudAtlas,
+        top: f32,
+        bottom: f32,
+        in_world: bool,
+    ) {
         let (w, h) = (batch.width, batch.height);
         ui::menu_background(batch, atlas, 0.0, 0.0, w, h, in_world);
         ui::list_background(batch, atlas, top, bottom, in_world);
     }
-    pub fn frame(&self, batch: &mut HudBatch, atlas: &HudAtlas, top: f32, bottom: f32, in_world: bool) {
+    pub fn frame(
+        &self,
+        batch: &mut HudBatch,
+        atlas: &HudAtlas,
+        top: f32,
+        bottom: f32,
+        in_world: bool,
+    ) {
         ui::separators(batch, atlas, top, bottom, in_world);
     }
     pub fn title(&self, batch: &mut HudBatch, atlas: &HudAtlas, text: &Text) {
@@ -146,7 +160,11 @@ impl Style {
 fn wrap(atlas: &HudAtlas, text: &str, width: f32, indent: f32) -> Vec<String> {
     let mut lines = vec![String::new()];
     for word in text.split_whitespace() {
-        let room = if lines.len() == 1 { width - indent } else { width };
+        let room = if lines.len() == 1 {
+            width - indent
+        } else {
+            width
+        };
         let line = lines.last().expect("one line");
         let candidate = if line.is_empty() {
             word.to_owned()

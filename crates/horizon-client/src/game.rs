@@ -224,7 +224,9 @@ impl Options {
             no_pause: false,
             control: None,
             offscreen: false,
-            spikes: std::env::var("HORIZON_SPIKES").ok().and_then(|v| v.parse().ok()),
+            spikes: std::env::var("HORIZON_SPIKES")
+                .ok()
+                .and_then(|v| v.parse().ok()),
             server: None,
             player_name: std::env::var("HORIZON_PLAYER_NAME").unwrap_or_else(|_| "Player".into()),
             dedicated: None,
@@ -1239,8 +1241,10 @@ impl Game<'_> {
         // ServerLevel.tick: only entities in entity-ticking chunks tick.
         let ticking = self.entity_ticking_area();
         items.retain_mut(|item| {
-            !ticking(item.position.x.floor() as i32, item.position.z.floor() as i32)
-                || item.tick(&self.world, &self.res.facts, self.collision)
+            !ticking(
+                item.position.x.floor() as i32,
+                item.position.z.floor() as i32,
+            ) || item.tick(&self.world, &self.res.facts, self.collision)
         });
         let Some(p) = self.player.as_ref() else {
             self.dropped = items;
@@ -2860,7 +2864,9 @@ impl Game<'_> {
         if running {
             // ClientLevel.tickBlockEntities (not while paused or frozen):
             // chest lids, books, shulker boxes, bells, conduits, heads.
-            horizon_client::spans::time("tick_block_entity_anims", || self.tick_block_entity_anims());
+            horizon_client::spans::time("tick_block_entity_anims", || {
+                self.tick_block_entity_anims()
+            });
             horizon_client::spans::time("tick_particles", || self.tick_particles());
         }
         if self.right && self.use_delay == 0 && self.screen == Screen::Playing {
@@ -4410,12 +4416,14 @@ impl Game<'_> {
                 )
             };
             let visible = r.block_entities().filter(|(p, state)| {
-                off_screen(*state) || view.is_none_or(|v| {
-                    let o = (glam::DVec3::new(f64::from(p[0]), f64::from(p[1]), f64::from(p[2]))
-                        - camera)
-                        .as_vec3();
-                    v.intersects(o - glam::Vec3::ONE, o + glam::Vec3::splat(2.0))
-                })
+                off_screen(*state)
+                    || view.is_none_or(|v| {
+                        let o =
+                            (glam::DVec3::new(f64::from(p[0]), f64::from(p[1]), f64::from(p[2]))
+                                - camera)
+                                .as_vec3();
+                        v.intersects(o - glam::Vec3::ONE, o + glam::Vec3::splat(2.0))
+                    })
             });
             self.res
                 .block_entity_render
@@ -7679,14 +7687,19 @@ impl Game<'_> {
                 let far = |k: &(i32, i32, i32)| (k.0 - centre.0).pow(2) + (k.2 - centre.1).pow(2);
                 pending.sort_unstable_by_key(|(k, _)| std::cmp::Reverse(far(k)));
                 let (limit, budget) = if budgeted {
-                    (g.chunk_updates as usize, u64::from(g.upload_budget_kib) * 1024)
+                    (
+                        g.chunk_updates as usize,
+                        u64::from(g.upload_budget_kib) * 1024,
+                    )
                 } else {
                     (0, 0)
                 };
                 let (mut count, mut bytes) = (0, 0u64);
                 while let Some((_, mesh)) = pending.last() {
                     let size = ((mesh.solid.len() + mesh.translucent.len()) * 32) as u64;
-                    if (limit > 0 && count >= limit) || (budget > 0 && bytes > 0 && bytes + size > budget) {
+                    if (limit > 0 && count >= limit)
+                        || (budget > 0 && bytes > 0 && bytes + size > budget)
+                    {
                         break;
                     }
                     let (key, mesh) = pending.pop().expect("checked above");

@@ -2,7 +2,7 @@
 //! they show, in what groups, with what description and cost, and their
 //! input. How they look comes from `graphics_style`.
 use crate::{
-    graphics::{Overlay, Pacing, Preset, PresentMode},
+    graphics::{Overlay, Pacing, PresentMode, Preset},
     graphics_style::{Cost, STYLE},
     hud::{HudAtlas, HudBatch},
     options_ui::Opt,
@@ -73,7 +73,11 @@ fn rows(level: Level) -> Vec<Row> {
         High,
         "How far terrain is drawn, in chunks. The biggest lever on frame time.",
     );
-    let fov = v(Opt::Fov, Low, "Field of view. Wider shows more terrain at once.");
+    let fov = v(
+        Opt::Fov,
+        Low,
+        "Field of view. Wider shows more terrain at once.",
+    );
     let fps = v(
         Opt::MaxFps,
         None,
@@ -144,13 +148,17 @@ fn rows(level: Level) -> Vec<Row> {
                 "Distance fog. Off shows the edge of the loaded world.",
             ),
             h(H::Weather, Low, "Draws rain and snow."),
-            v(Opt::WeatherRadius, Low, "How far rain and snow fall around you."),
             v(
-                Opt::Particles,
-                Medium,
-                "How many particles effects spawn.",
+                Opt::WeatherRadius,
+                Low,
+                "How far rain and snow fall around you.",
             ),
-            v(Opt::EntityShadows, Low, "Round shadows under mobs and items."),
+            v(Opt::Particles, Medium, "How many particles effects spawn."),
+            v(
+                Opt::EntityShadows,
+                Low,
+                "Round shadows under mobs and items.",
+            ),
             v(
                 Opt::CutoutLeaves,
                 Medium,
@@ -317,7 +325,11 @@ impl H {
                 }
             }
             H::Overlay => {
-                g.overlay = step(&[Overlay::Off, Overlay::Fps, Overlay::Graph], g.overlay, back)
+                g.overlay = step(
+                    &[Overlay::Off, Overlay::Fps, Overlay::Graph],
+                    g.overlay,
+                    back,
+                )
             }
             _ => {}
         }
@@ -339,7 +351,10 @@ impl Item {
             // The vanilla button shows the scale alone, under its own caption.
             Item::Vanilla(Opt::GuiScale) => Text::translate(
                 "options.generic_value",
-                &[Text::translate("options.guiScale", &[]), Opt::GuiScale.label(s)],
+                &[
+                    Text::translate("options.guiScale", &[]),
+                    Opt::GuiScale.label(s),
+                ],
             ),
             Item::Vanilla(o) => o.label(s),
             Item::Horizon(h) => h.label(s),
@@ -364,7 +379,9 @@ impl Item {
         let presetless = matches!(
             self,
             Item::Horizon(H::Preset | H::Overlay | H::Pacing | H::PresentMode | H::Workers)
-                | Item::Vanilla(Opt::GuiScale | Opt::Fullscreen | Opt::Vsync | Opt::MaxFps | Opt::Fov)
+                | Item::Vanilla(
+                    Opt::GuiScale | Opt::Fullscreen | Opt::Vsync | Opt::MaxFps | Opt::Fov
+                )
         );
         if !presetless {
             s.horizon.preset = Preset::Custom;
@@ -529,7 +546,13 @@ impl GraphicsUi {
                         Action::OpenSimple => "Simple...",
                         _ => "Done",
                     };
-                    STYLE.button(batch, atlas, (wd.x, wd.y, wd.w), &Text::literal(label), hover);
+                    STYLE.button(
+                        batch,
+                        atlas,
+                        (wd.x, wd.y, wd.w),
+                        &Text::literal(label),
+                        hover,
+                    );
                 }
             }
         }

@@ -98,7 +98,10 @@ impl GpuTimer {
             .buffer
             .slice(..)
             .map_async(wgpu::MapMode::Read, move |result| {
-                state.store(if result.is_ok() { MAPPED } else { FREE }, Ordering::Release);
+                state.store(
+                    if result.is_ok() { MAPPED } else { FREE },
+                    Ordering::Release,
+                );
             });
         self.next = (slot + 1) % SLOTS;
     }

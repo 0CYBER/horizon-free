@@ -17,10 +17,7 @@ use horizon_core::{
     random::{LegacyRandom, RandomSource},
 };
 use horizon_world::registry::BlockStateId;
-use std::{
-    collections::HashMap,
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 type Pos = (i32, i32, i32);
 

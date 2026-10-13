@@ -36,13 +36,13 @@ use horizon_world::{
 };
 use std::{
     collections::{BTreeMap, HashMap},
-    sync::{
-        Condvar, mpsc,
-        atomic::{AtomicU64, Ordering},
-    },
     fs,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, OnceLock},
+    sync::{
+        Arc, Condvar, Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    },
 };
 
 pub const VERSION_NAME: &str = "26.3";
@@ -1361,7 +1361,11 @@ impl SaveDir {
                     batch.push((key, record, seq));
                 }
             }
-            *self.outstanding.count.lock().map_err(|_| "writer poisoned")? += 1;
+            *self
+                .outstanding
+                .count
+                .lock()
+                .map_err(|_| "writer poisoned")? += 1;
             let mut writer = self.writer.lock().map_err(|_| "writer poisoned")?;
             let writer = writer.get_or_insert_with(|| self.start_writer());
             if writer.send.send((entities, batch)).is_err() {
@@ -1395,7 +1399,10 @@ impl SaveDir {
                     // Readers find the files (and a fresh region cache) from here on.
                     if let Ok(mut pending) = pending.lock() {
                         for (k, _, seq) in &batch {
-                            if pending.get(&(entities, k.0, k.1)).is_some_and(|p| p.0 == *seq) {
+                            if pending
+                                .get(&(entities, k.0, k.1))
+                                .is_some_and(|p| p.0 == *seq)
+                            {
                                 pending.remove(&(entities, k.0, k.1));
                             }
                         }

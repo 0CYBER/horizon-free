@@ -38,7 +38,8 @@ struct Globals {
 }
 pub type SectionKey = (i32, i32, i32);
 struct SectionGpu {
-    /// First vertex in the section arena: solid quads, then translucent ones.
+    /// Arena page and first vertex in it: solid quads, then translucent ones.
+    page: u32,
     start: u64,
     solid: u32,
     translucent: u32,
@@ -193,6 +194,8 @@ pub struct Renderer {
     /// `DrawIndexedIndirectArgs` words: index count, instance count, first
     /// index, base vertex, first instance.
     draws: Vec<[u32; 5]>,
+    /// The arena page of each of `draws`.
+    draw_pages: Vec<u32>,
     /// Block-entity blocks per meshed section (world position, state id).
     block_entities: HashMap<SectionKey, Vec<([i32; 3], u32)>>,
     /// VisGraph face connectivity per meshed section (cave culling).
@@ -1178,6 +1181,7 @@ impl Renderer {
             visible: Vec::new(),
             origins: Vec::new(),
             draws: Vec::new(),
+            draw_pages: Vec::new(),
             block_entities: HashMap::new(),
             occlusion: occlusion::Occlusion::new(crate::chunk::HEIGHT / 16),
             post,
@@ -1331,14 +1335,14 @@ impl Renderer {
             self.indices = Self::quad_indices(&self.device, self.index_quads);
         }
         let vertices = (mesh.solid.len() + mesh.translucent.len()) as u64;
-        let start = self.arena.alloc(&self.device, &self.queue, vertices);
+        let (page, start) = self.arena.alloc(&self.device, &self.queue, vertices);
         let stride = std::mem::size_of::<Vertex>() as u64;
         for (offset, part) in [(0, &mesh.solid), (mesh.solid.len(), &mesh.translucent)] {
             if !part.is_empty() {
                 let bytes: &[u8] = bytemuck::cast_slice(part);
                 self.uploaded_bytes += bytes.len() as u64;
                 self.queue.write_buffer(
-                    &self.arena.buffer,
+                    self.arena.buffer(page),
                     (start + offset as u64) * stride,
                     bytes,
                 );
@@ -1347,6 +1351,7 @@ impl Renderer {
         self.sections.insert(
             key,
             SectionGpu {
+                page,
                 start,
                 solid,
                 translucent,
@@ -1355,22 +1360,31 @@ impl Renderer {
     }
     /// Draws `count` section draws from `first` with the arena and section
     /// origins bound: one indirect multi-draw, or a loop without it.
+    /// Consecutive draws in one arena page share a vertex buffer binding,
+    /// keeping the list's order (translucent sections go back to front).
     fn draw_sections(&self, pass: &mut wgpu::RenderPass<'_>, first: u32, count: u32) {
-        if count == 0 {
-            return;
-        }
-        if self.multi_draw {
-            pass.multi_draw_indexed_indirect(&self.indirect, u64::from(first) * 20, count);
-        } else {
-            for d in &self.draws[first as usize..(first + count) as usize] {
-                pass.draw_indexed(0..d[0], d[3] as i32, d[4]..d[4] + 1);
+        let (mut i, end) = (first as usize, (first + count) as usize);
+        while i < end {
+            let page = self.draw_pages[i];
+            let run = self.draw_pages[i..end]
+                .iter()
+                .take_while(|&&p| p == page)
+                .count();
+            pass.set_vertex_buffer(0, self.arena.buffer(page).slice(..));
+            if self.multi_draw {
+                pass.multi_draw_indexed_indirect(&self.indirect, i as u64 * 20, run as u32);
+            } else {
+                for d in &self.draws[i..i + run] {
+                    pass.draw_indexed(0..d[0], d[3] as i32, d[4]..d[4] + 1);
+                }
             }
+            i += run;
         }
     }
     fn release_section(&mut self, key: SectionKey) {
         if let Some(s) = self.sections.remove(&key) {
             self.arena
-                .release(s.start, u64::from(s.solid + s.translucent) * 4);
+                .release(s.page, s.start, u64::from(s.solid + s.translucent) * 4);
         }
     }
     /// Block-entity blocks of every meshed section (see `SectionMesh::block_entities`).
@@ -1401,11 +1415,13 @@ impl Renderer {
             return;
         }
         self.mipmaps = levels;
-        let sprite_view = self.sprite_texture.create_view(&wgpu::TextureViewDescriptor {
-            dimension: Some(wgpu::TextureViewDimension::D2Array),
-            mip_level_count: Some(levels + 1),
-            ..Default::default()
-        });
+        let sprite_view = self
+            .sprite_texture
+            .create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(wgpu::TextureViewDimension::D2Array),
+                mip_level_count: Some(levels + 1),
+                ..Default::default()
+            });
         self.group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Horizon terrain resources"),
             layout: &self.terrain_layout,
@@ -1710,30 +1726,30 @@ impl Renderer {
         visible.clear();
         visible.extend(
             self.sections
-            .keys()
-            .filter(|&&k| !culling || reachable.contains(k))
-            .filter_map(|&(sx, sy, sz)| {
-                let origin = DVec3::new(
-                    f64::from(sx * 16),
-                    f64::from(crate::chunk::MIN_Y + sy * 16),
-                    f64::from(sz * 16),
-                ) - camera;
-                let center = origin + DVec3::splat(8.0);
-                let horizontal = (center.x * center.x + center.z * center.z).sqrt();
-                if horizontal > f64::from(frame.distance) + 24.0 {
-                    return None;
-                }
-                let min = origin.as_vec3();
-                let max = min + Vec3::splat(16.0);
-                if !view.intersects(min, max) {
-                    return None;
-                }
-                Some((
-                    (sx, sy, sz),
-                    center.length_squared(),
-                    origin.as_vec3().to_array(),
-                ))
-            }),
+                .keys()
+                .filter(|&&k| !culling || reachable.contains(k))
+                .filter_map(|&(sx, sy, sz)| {
+                    let origin = DVec3::new(
+                        f64::from(sx * 16),
+                        f64::from(crate::chunk::MIN_Y + sy * 16),
+                        f64::from(sz * 16),
+                    ) - camera;
+                    let center = origin + DVec3::splat(8.0);
+                    let horizontal = (center.x * center.x + center.z * center.z).sqrt();
+                    if horizontal > f64::from(frame.distance) + 24.0 {
+                        return None;
+                    }
+                    let min = origin.as_vec3();
+                    let max = min + Vec3::splat(16.0);
+                    if !view.intersects(min, max) {
+                        return None;
+                    }
+                    Some((
+                        (sx, sy, sz),
+                        center.length_squared(),
+                        origin.as_vec3().to_array(),
+                    ))
+                }),
         );
         visible.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
         self.drawn_sections = visible.len();
@@ -1759,20 +1775,27 @@ impl Renderer {
         // Solid sections front to back, then translucent ones back to front,
         // as one list of indirect draws over the section arena.
         self.draws.clear();
+        self.draw_pages.clear();
         let draw = |s: &SectionGpu, i: usize, translucent: bool| {
             let (quads, first) = if translucent {
                 (s.translucent, s.start + u64::from(s.solid) * 4)
             } else {
                 (s.solid, s.start)
             };
-            (quads > 0).then_some([quads * 6, 1, 0, first as u32, i as u32])
+            (quads > 0).then_some(([quads * 6, 1, 0, first as u32, i as u32], s.page))
         };
         for (i, (key, _, _)) in visible.iter().enumerate() {
-            self.draws.extend(draw(&self.sections[key], i, false));
+            if let Some((d, page)) = draw(&self.sections[key], i, false) {
+                self.draws.push(d);
+                self.draw_pages.push(page);
+            }
         }
         let solid_draws = self.draws.len() as u32;
         for (i, (key, _, _)) in visible.iter().enumerate().rev() {
-            self.draws.extend(draw(&self.sections[key], i, true));
+            if let Some((d, page)) = draw(&self.sections[key], i, true) {
+                self.draws.push(d);
+                self.draw_pages.push(page);
+            }
         }
         let translucent_draws = self.draws.len() as u32 - solid_draws;
         if self.multi_draw && !self.draws.is_empty() {
@@ -1880,9 +1903,9 @@ impl Renderer {
                 .write_buffer(&self.border_uniform, 0, bytemuck::bytes_of(&uniform));
         }
         let view_target = target_texture.create_view(&wgpu::TextureViewDescriptor {
-                format: Some(self.config.format.remove_srgb_suffix()),
-                ..Default::default()
-            });
+            format: Some(self.config.format.remove_srgb_suffix()),
+            ..Default::default()
+        });
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1959,7 +1982,6 @@ impl Renderer {
             }
             pass.set_pipeline(&self.solid);
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
-            pass.set_vertex_buffer(0, self.arena.buffer.slice(..));
             pass.set_vertex_buffer(1, self.instances.slice(..));
             self.draw_sections(&mut pass, 0, solid_draws);
             if entity_quads > 0 {
@@ -1983,7 +2005,6 @@ impl Renderer {
             }
             pass.set_pipeline(&self.translucent);
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
-            pass.set_vertex_buffer(0, self.arena.buffer.slice(..));
             pass.set_vertex_buffer(1, self.instances.slice(..));
             self.draw_sections(&mut pass, solid_draws, translucent_draws);
             // LevelRenderer: the world border after translucent terrain and weather.

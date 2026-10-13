@@ -6,6 +6,7 @@ To play, use [the launcher](../launcher/README.md). These pages are for develope
 
 - [Build from source](../README.md#build-from-source): your own copy of the game, resource preparation, `cargo run`.
 - [Native client](native-client.md): options, controls, the dedicated server, `horizon-ctl` scripting, packaging, architecture.
+- [Graphics](graphics.md): the Simple and Advanced graphics settings, the graphics benchmark and what it measured.
 - [Launcher](../launcher/README.md): installs, updates and starts builds; its CLI and MCP server; releasing it.
 
 ## Parity
