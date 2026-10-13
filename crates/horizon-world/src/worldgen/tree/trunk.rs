@@ -690,8 +690,9 @@ impl TrunkPlacer {
         let height = tree_height + 2;
         let trunk_height = (f64::from(height) * 0.618).floor() as i32;
         Self::place_below_trunk(run, tree, tb::offset(origin, 0, -1, 0))?;
-        let clusters_per_y =
-            1.min((1.382 + (1.0 * f64::from(height) / 13.0).powf(2.0)).floor() as i32);
+        let clusters_per_y = 1.min(
+            (1.382 + horizon_core::jmath::pow(1.0 * f64::from(height) / 13.0, 2.0)).floor() as i32,
+        );
         let trunk_top = origin[1].wrapping_add(trunk_height);
         let mut relative_y = height - 5;
         // (attachment position, branch base y)
@@ -704,8 +705,8 @@ impl TrunkPlacer {
                     let radius =
                         1.0 * f64::from(shape) * (f64::from(run.random.next_float()) + 0.328);
                     let angle = f64::from(run.random.next_float() * 2.0f32) * std::f64::consts::PI;
-                    let x = radius * angle.sin() + 0.5;
-                    let z = radius * angle.cos() + 0.5;
+                    let x = radius * horizon_core::jmath::sin(angle) + 0.5;
+                    let z = radius * horizon_core::jmath::cos(angle) + 0.5;
                     let check_start =
                         tb::offset(origin, x.floor() as i32, relative_y - 1, z.floor() as i32);
                     let check_end = tb::offset(check_start, 0, 5, 0);

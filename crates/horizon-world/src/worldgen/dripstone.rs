@@ -545,9 +545,9 @@ fn speleothem_height(distance: f64, radius: f64, scale: f64, bluntness: f64) -> 
         distance
     };
     let r = distance / radius * 0.384;
-    let part1 = 0.75 * r.powf(1.3333333333333333);
-    let part2 = r.powf(0.6666666666666666);
-    let part3 = 0.3333333333333333 * r.ln();
+    let part1 = 0.75 * horizon_core::jmath::pow(r, 1.3333333333333333);
+    let part2 = horizon_core::jmath::pow(r, 0.6666666666666666);
+    let part3 = 0.3333333333333333 * horizon_core::jmath::log(r);
     let height = (scale * (part1 - part2 - part3)).max(0.0);
     height / 0.384 * radius
 }

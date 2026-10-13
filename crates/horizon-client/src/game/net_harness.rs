@@ -21,6 +21,7 @@ impl Game<'_> {
         let mut quiet_since = Instant::now();
         let mut step = 0;
         let mut step_at = Instant::now();
+        let mut chat_at = 0;
         let mut position = None;
         let mut chunks = 0;
         let mut error = None;
@@ -44,6 +45,10 @@ impl Game<'_> {
                 last_chunks = count;
                 quiet_since = now;
             }
+            // Each step waits for what it sent to be answered (its chat line,
+            // the /list reply), however busy the machine, up to 15 s.
+            let shown = self.remote.as_ref().map_or(0, |r| r.chat.len());
+            let answered = shown > chat_at || now - step_at > Duration::from_secs(15);
             match step {
                 0 if spawned_at.is_some()
                     && count > 0
@@ -53,13 +58,15 @@ impl Game<'_> {
                     self.send_chat("hello from the horizon client");
                     step = 1;
                     step_at = now;
+                    chat_at = shown;
                 }
-                1 if now - step_at > Duration::from_millis(1500) => {
+                1 if answered => {
                     self.send_chat("/list");
                     step = 2;
                     step_at = now;
+                    chat_at = shown;
                 }
-                2 if now - step_at > Duration::from_millis(1500) => {
+                2 if answered => {
                     step = 3;
                     break;
                 }
