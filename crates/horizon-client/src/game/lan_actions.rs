@@ -29,8 +29,7 @@ pub(super) struct GuestPlay {
     using: Option<(usize, u32)>,
     use_delay: u32,
     attack_ticks: u32,
-    swing: Option<u32>,
-    swing_anim: (f32, f32),
+    swing: horizon_client::first_person::SwingState,
     /// The block being dug and the face the client aimed at.
     digging: Option<([i32; 3], [i32; 3])>,
     last_progress: i32,
@@ -131,8 +130,7 @@ impl Game<'_> {
         let using = std::mem::replace(&mut self.using, play.using.take());
         let use_delay = std::mem::replace(&mut self.use_delay, play.use_delay);
         let attack_ticks = std::mem::replace(&mut self.attack_ticks, play.attack_ticks);
-        let swing = std::mem::replace(&mut self.swing, play.swing.take());
-        let swing_anim = std::mem::replace(&mut self.swing_anim, play.swing_anim);
+        let swing = std::mem::replace(&mut self.swing, play.swing);
         let (left, right) = (self.left, self.right);
         self.left = play.digging.is_some();
         self.right = play.using.is_some() || self.using.is_some();
@@ -153,7 +151,6 @@ impl Game<'_> {
         play.use_delay = std::mem::replace(&mut self.use_delay, use_delay);
         play.attack_ticks = std::mem::replace(&mut self.attack_ticks, attack_ticks);
         play.swing = std::mem::replace(&mut self.swing, swing);
-        play.swing_anim = std::mem::replace(&mut self.swing_anim, swing_anim);
         self.container = container;
         self.screen = screen;
         if sneak {
@@ -689,7 +686,7 @@ impl Game<'_> {
             .mining
             .as_ref()
             .map_or(-1, |m| (m.progress.clamp(0.0, 1.0) * 10.0) as i32 - 1);
-        let swinging = play.swing.is_some();
+        let swinging = play.swing.swinging();
         if progress != play.last_progress && progress >= 0 {
             play.last_progress = progress;
             host.hub.broadcast_near(
@@ -779,7 +776,7 @@ impl Game<'_> {
             };
             let (id, at) = (g.entity_id, g.position);
             let play = host.play.get_mut(&conn).expect("play");
-            let swinging = play.swing == Some(0);
+            let swinging = play.swing.swinging() && play.swing.ticks == 0;
             if swinging && !play.swung {
                 host.hub.swing(id, 0, at, Some(conn));
             }
