@@ -511,13 +511,16 @@ impl World<'_> {
         direction: Direction,
         neighbor_pos: [i32; 3],
         neighbor: BlockStateId,
-    ) -> BlockStateId {
+    ) -> (BlockStateId, Vec<crate::level::ticks::CapturedTick>) {
         let mut level = ShapeLevel {
             world: self,
             random: horizon_core::random::LegacyRandom::new(0),
         };
+        // The ticks updateShape schedules (LeavesBlock re-measuring its
+        // distance, waterlogged blocks' fluid) go to the proto chunks.
         let mut ticks = crate::level::Ticks::new(0);
-        behaviours.update_shape(
+        ticks.capture = Some(Vec::new());
+        let updated = behaviours.update_shape(
             &mut level,
             &mut ticks,
             state,
@@ -525,7 +528,28 @@ impl World<'_> {
             direction,
             BlockPos::new(neighbor_pos[0], neighbor_pos[1], neighbor_pos[2]),
             neighbor,
-        )
+        );
+        (updated, ticks.capture.take().unwrap_or_default())
+    }
+    /// Schedule ticks a shape update requested in the region's proto chunks.
+    fn schedule_captured(
+        &mut self,
+        behaviours: &crate::level::Behaviours,
+        ticks: Vec<crate::level::ticks::CapturedTick>,
+    ) -> Result<(), PlacementQueryError> {
+        for t in ticks {
+            let at = [t.pos.x, t.pos.y, t.pos.z];
+            if t.fluid {
+                let fluid = crate::fluid::FluidKind::ALL[t.kind as usize];
+                self.schedule_fluid_tick(at, fluid, t.delay)?;
+            } else {
+                let state = behaviours
+                    .table
+                    .default_state(crate::level::BlockId(t.kind as u16));
+                self.schedule_block_tick(at, state, t.delay)?;
+            }
+        }
+        Ok(())
     }
 }
 impl DecorationWorld for World<'_> {
@@ -879,7 +903,7 @@ impl PlacementContext for World<'_> {
         let neighbor_pos = [position[0] + n[0], position[1] + n[1], position[2] + n[2]];
         let state = self.region.block(position).map_err(query)?;
         let neighbor = self.region.block(neighbor_pos).map_err(query)?;
-        let new_state = self.shape_update(
+        let (new_state, ticks) = self.shape_update(
             behaviours,
             state,
             position,
@@ -887,11 +911,12 @@ impl PlacementContext for World<'_> {
             neighbor_pos,
             neighbor,
         );
+        self.schedule_captured(behaviours, ticks)?;
         if new_state != state {
             self.set_block(position, new_state, flags & !1)
                 .map_err(query)?;
         }
-        let new_neighbor = self.shape_update(
+        let (new_neighbor, ticks) = self.shape_update(
             behaviours,
             neighbor,
             neighbor_pos,
@@ -899,6 +924,7 @@ impl PlacementContext for World<'_> {
             position,
             new_state,
         );
+        self.schedule_captured(behaviours, ticks)?;
         if new_neighbor != neighbor {
             self.set_block(neighbor_pos, new_neighbor, flags & !1)
                 .map_err(query)?;
@@ -927,7 +953,7 @@ impl PlacementContext for World<'_> {
             let n = direction.normal();
             let neighbor_pos = [position[0] + n[0], position[1] + n[1], position[2] + n[2]];
             let neighbor = self.region.block(neighbor_pos).map_err(query)?;
-            new_state = self.shape_update(
+            let (updated, ticks) = self.shape_update(
                 behaviours,
                 new_state,
                 position,
@@ -935,6 +961,8 @@ impl PlacementContext for World<'_> {
                 neighbor_pos,
                 neighbor,
             );
+            self.schedule_captured(behaviours, ticks)?;
+            new_state = updated;
         }
         if new_state != state {
             self.set_block(position, new_state, flags).map_err(query)?;

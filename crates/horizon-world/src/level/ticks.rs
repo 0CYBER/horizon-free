@@ -34,6 +34,18 @@ pub struct Ticks {
     pub block_events: Vec<super::pistons::BlockEventData>,
     /// `ServerLevel.isHandlingTick` (true while scheduled ticks run).
     pub(crate) handling_tick: bool,
+    /// Worldgen shape updates collect the ticks they schedule here, for the
+    /// proto chunks of their region, instead of scheduling them.
+    pub(crate) capture: Option<Vec<CapturedTick>>,
+}
+/// A tick scheduled while `Ticks::capture` is set.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CapturedTick {
+    pub fluid: bool,
+    /// `BlockId` for block ticks, `FluidKind` for fluid ticks.
+    pub kind: u32,
+    pub pos: BlockPos,
+    pub delay: i32,
 }
 impl Default for Ticks {
     fn default() -> Self {
@@ -56,6 +68,7 @@ impl Ticks {
             next_block_entity_id: 0,
             block_events: Vec::new(),
             handling_tick: false,
+            capture: None,
         }
     }
     /// Register a loaded chunk's saved block and fluid ticks.
@@ -89,6 +102,15 @@ impl Ticks {
         delay: i32,
         priority: TickPriority,
     ) -> ScheduleResult {
+        if let Some(captured) = &mut self.capture {
+            captured.push(CapturedTick {
+                fluid: false,
+                kind: u32::from(block.0),
+                pos,
+                delay,
+            });
+            return ScheduleResult::Added;
+        }
         let tick = ScheduledTick {
             kind: TickTypeId(u32::from(block.0)),
             pos,
@@ -105,6 +127,15 @@ impl Ticks {
         fluid: FluidKind,
         delay: i32,
     ) -> ScheduleResult {
+        if let Some(captured) = &mut self.capture {
+            captured.push(CapturedTick {
+                fluid: true,
+                kind: fluid as u32,
+                pos,
+                delay,
+            });
+            return ScheduleResult::Added;
+        }
         let tick = ScheduledTick {
             kind: TickTypeId(fluid as u32),
             pos,
