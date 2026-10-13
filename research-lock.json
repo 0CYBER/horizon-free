@@ -1,7 +1,12 @@
 {
   "minecraft": {
     "version": "26.3",
-    "manifest_sha1": "4fe1aa1ef8da1cb95c5bad1fb98890ca56dd8ca3",
+    "manifest_sha1": "11f1aefe473eefba0af62e3286c33b692807b2eb",
+    "accepted_manifest_sha1": [
+      "4fe1aa1ef8da1cb95c5bad1fb98890ca56dd8ca3",
+      "702fe59163c6ee6578607daa85811d9bc9c7cc40"
+    ],
+    "accepted_manifest_note": "Earlier 26.3 version JSONs Mojang republished: only assetIndex differs (non-English translations), jars and libraries are identical. A launcher may still hold any of them.",
     "client_sha1": "e877b6a07acd633fb3bb475002175cec036e7b87",
     "server_sha1": "33680f5f2ac32864d6d7cf5e56a705fdb3e05f4c",
     "java_major": 25
