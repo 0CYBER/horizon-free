@@ -351,6 +351,12 @@ pub fn client_command(tag: &str) -> Command {
     let _ = fs::create_dir_all(&home);
     let mut cmd = Command::new(version_dir(tag).join(CLIENT));
     cmd.current_dir(home).arg("--resources").arg(resources(tag));
+    // PipeWire remembers volume and mute per application name. The game's own name is
+    // "PipeWire ALSA [horizon-client]", shared with development and test runs, where
+    // muting it once left every later game silent: played from here it is "Horizon".
+    if std::env::var_os("PIPEWIRE_PROPS").is_none() {
+        cmd.env("PIPEWIRE_PROPS", "{ application.name = \"Horizon\" media.role = \"Game\" }");
+    }
     cmd
 }
 
@@ -798,6 +804,16 @@ impl Settings {
 mod tests {
     use super::*;
     use std::cmp::Ordering::*;
+
+    #[test]
+    fn the_game_plays_under_its_own_audio_stream_name() {
+        if std::env::var_os("PIPEWIRE_PROPS").is_some() {
+            return;
+        }
+        let cmd = client_command("v2026.10.13");
+        let props = cmd.get_envs().find(|(k, _)| *k == "PIPEWIRE_PROPS").and_then(|(_, v)| v);
+        assert!(props.is_some_and(|v| v.to_string_lossy().contains("application.name = \"Horizon\"")));
+    }
 
     #[test]
     fn tags_never_mix() {

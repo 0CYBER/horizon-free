@@ -55,6 +55,15 @@ Worlds autosave every 6000 ticks (5 minutes), when chunks unload and on quit.
 On headless Linux use `vscreen start ./target/release/horizon-client` and
 `vscreen shot`.
 
+Sound: the game prints the output it opened (`Horizon: audio output ...`) or
+why it has none (`Horizon: no sound: ...`). It opens none with
+`HORIZON_NO_AUDIO` set, nor on a `vscreen`, where tests run beside someone
+listening; `HORIZON_AUDIO=1` opens it there anyway, so send it to a null sink
+(`PIPEWIRE_PROPS='{ target.object=<sink> node.dont-fallback=true }'`). Don't
+mute a test run's stream in the mixer: PipeWire remembers the mute for every
+later `horizon-client`. The launcher starts the game as "Horizon" for that
+reason.
+
 ### Drive the game from scripts (`horizon-ctl`)
 
 `--control` opens a local Unix socket (`$XDG_RUNTIME_DIR/horizon-control.sock`,

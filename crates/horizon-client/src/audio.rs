@@ -327,6 +327,71 @@ fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
         *s = s.clamp(-1.0, 1.0);
     }
 }
+/// Why the game should not open an output, if it should not:
+/// `HORIZON_NO_AUDIO`, or a virtual screen (`vscreen`), where agents and
+/// harnesses run the game and must stay off the user's speakers.
+/// `HORIZON_AUDIO=1` opens the output anyway (testing into a null sink).
+fn output_disabled(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<String> {
+    if var("HORIZON_NO_AUDIO").is_some() {
+        return Some("audio off: HORIZON_NO_AUDIO is set".into());
+    }
+    if var("HORIZON_AUDIO").is_some_and(|v| v == "1") {
+        return None;
+    }
+    let display = var("WAYLAND_DISPLAY")?;
+    Path::new(&display)
+        .components()
+        .any(|c| c.as_os_str() == "vscreen")
+        .then(|| "audio off on a virtual screen (vscreen); HORIZON_AUDIO=1 opens it".into())
+}
+/// An output stream on `device` in its default configuration, whatever its
+/// sample format: the mixer works in f32 and converts.
+fn open_device(
+    device: &cpal::Device,
+    mixer: Arc<Mutex<Mixer>>,
+) -> Result<(cpal::Stream, cpal::SupportedStreamConfig)> {
+    use cpal::SampleFormat as F;
+    let config = device.default_output_config()?;
+    let stream = match config.sample_format() {
+        F::F32 => build_stream::<f32>(device, &config, mixer),
+        F::F64 => build_stream::<f64>(device, &config, mixer),
+        F::I16 => build_stream::<i16>(device, &config, mixer),
+        F::I32 => build_stream::<i32>(device, &config, mixer),
+        F::I8 => build_stream::<i8>(device, &config, mixer),
+        F::U16 => build_stream::<u16>(device, &config, mixer),
+        F::U32 => build_stream::<u32>(device, &config, mixer),
+        F::U8 => build_stream::<u8>(device, &config, mixer),
+        other => Err(format!("unsupported sample format {other}").into()),
+    }?;
+    stream.play()?;
+    Ok((stream, config))
+}
+fn build_stream<T: cpal::SizedSample + cpal::FromSample<f32>>(
+    device: &cpal::Device,
+    config: &cpal::SupportedStreamConfig,
+    mixer: Arc<Mutex<Mixer>>,
+) -> Result<cpal::Stream> {
+    let rate = config.sample_rate().0;
+    let channels = config.channels() as usize;
+    let mut scratch = Vec::new();
+    let stream = device.build_output_stream(
+        &config.config(),
+        move |data: &mut [T], _| {
+            scratch.resize(data.len(), 0.0f32);
+            if let Ok(mut m) = mixer.lock() {
+                mix(&mut m, &mut scratch, channels, rate);
+            } else {
+                scratch.fill(0.0);
+            }
+            for (out, s) in data.iter_mut().zip(&scratch) {
+                *out = T::from_sample(*s);
+            }
+        },
+        |e| eprintln!("Horizon: audio stream error: {e}"),
+        None,
+    )?;
+    Ok(stream)
+}
 impl Audio {
     pub fn new(root: &Path) -> Self {
         Self::with_output(root, true)
@@ -347,7 +412,7 @@ impl Audio {
             Ok(v) => (Some(v), true),
             Err(e) => {
                 if output {
-                    eprintln!("Horizon: audio unavailable: {e}");
+                    eprintln!("Horizon: no sound: {e}");
                 }
                 (None, false)
             }
@@ -374,32 +439,40 @@ impl Audio {
         }
     }
     fn open(mixer: Arc<Mutex<Mixer>>) -> Result<cpal::Stream> {
-        // Test runs (harnesses, agents) launch the game on a virtual screen;
-        // keep them off the user's speakers.
-        if std::env::var_os("HORIZON_NO_AUDIO").is_some() {
-            return Err("audio output disabled by HORIZON_NO_AUDIO".into());
+        if let Some(reason) = output_disabled(|name| std::env::var_os(name)) {
+            return Err(reason.into());
         }
         let host = cpal::default_host();
-        let device = host
-            .default_output_device()
-            .ok_or("no audio output device")?;
-        let config = device.default_output_config()?;
-        let rate = config.sample_rate().0;
-        let channels = config.channels() as usize;
-        let stream = device.build_output_stream(
-            &config.into(),
-            move |data: &mut [f32], _| {
-                if let Ok(mut m) = mixer.lock() {
-                    mix(&mut m, data, channels, rate);
-                } else {
-                    data.fill(0.0);
+        let mut errors = Vec::new();
+        // The default device first, then any other output a host lists:
+        // a default that cannot open (busy, or a stale ALSA default) should
+        // not leave the game silent when another device works.
+        let default = host.default_output_device();
+        let others = host.output_devices().into_iter().flatten();
+        let mut tried = Vec::new();
+        for device in default.into_iter().chain(others) {
+            let name = device.name().unwrap_or_else(|_| "unnamed device".into());
+            if tried.contains(&name) {
+                continue;
+            }
+            tried.push(name.clone());
+            match open_device(&device, mixer.clone()) {
+                Ok((stream, config)) => {
+                    eprintln!(
+                        "Horizon: audio output {name} ({} Hz, {} channels, {})",
+                        config.sample_rate().0,
+                        config.channels(),
+                        config.sample_format()
+                    );
+                    return Ok(stream);
                 }
-            },
-            |e| eprintln!("Horizon: audio stream error: {e}"),
-            None,
-        )?;
-        stream.play()?;
-        Ok(stream)
+                Err(e) => errors.push(format!("{name}: {e}")),
+            }
+        }
+        if errors.is_empty() {
+            return Err(format!("no audio output device on the {} host", host.id().name()).into());
+        }
+        Err(format!("no audio output device opened ({})", errors.join("; ")).into())
     }
     fn bound(&mut self) -> Bound<'_, MixerBackend> {
         Bound {
@@ -590,6 +663,27 @@ mod tests {
         }
     }
 
+    #[test]
+    fn output_stays_off_on_a_virtual_screen_unless_asked() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(k, _)| *k == name)
+                    .map(|(_, v)| std::ffi::OsString::from(*v))
+            }
+        };
+        assert!(output_disabled(env(&[("WAYLAND_DISPLAY", "wayland-1")])).is_none());
+        assert!(output_disabled(env(&[])).is_none());
+        const VSCREEN: &str = "/run/user/1000/vscreen/main/wayland-1";
+        assert!(output_disabled(env(&[("WAYLAND_DISPLAY", VSCREEN)])).is_some());
+        assert!(
+            output_disabled(env(&[("WAYLAND_DISPLAY", VSCREEN), ("HORIZON_AUDIO", "1")])).is_none()
+        );
+        assert!(
+            output_disabled(env(&[("HORIZON_NO_AUDIO", "1"), ("HORIZON_AUDIO", "1")])).is_some()
+        );
+    }
     #[test]
     fn linear_attenuation_reaches_zero_at_the_max_distance() {
         assert_eq!(distance_gain(None, 100.0), 1.0);
