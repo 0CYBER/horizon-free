@@ -552,6 +552,8 @@ enum Act {
     Key(&'static str),
     ResetKey(&'static str),
     ResetKeys,
+    /// Back to Horizon's own menus (Horizon only, see `list_rows`).
+    HorizonMenus,
 }
 enum WKind {
     Button {
@@ -779,6 +781,22 @@ impl OptionsUi {
                         Act::Push(Page::GraphicsAdvanced),
                     )),
                 )];
+                // The way back from Classic menus. Horizon-only like the row
+                // above, here rather than on the main Options screen so that
+                // one keeps vanilla's exact layout; vanilla's interface
+                // settings (GUI Scale) are on this page too.
+                if !crate::ui_theme::horizon() {
+                    rows.push(Row::Buttons(
+                        button(
+                            0.0,
+                            0.0,
+                            310.0,
+                            Text::literal("Menu Style: Classic"),
+                            Act::HorizonMenus,
+                        ),
+                        None,
+                    ));
+                }
                 rows.push(Row::Header("options.video.display.header"));
                 rows.extend(pairs(&[
                     Opt::MaxFps,
@@ -1486,6 +1504,12 @@ impl OptionsUi {
                         s.keys.reset_all();
                         events.push(Event::Changed);
                     }
+                    Act::HorizonMenus => {
+                        self.horizon_menus();
+                        if let Ok(dir) = std::env::current_dir() {
+                            crate::ui_theme::save_preferences(&dir);
+                        }
+                    }
                     Act::None => {}
                 },
                 WKind::Slider { opt, .. } => {
@@ -1508,6 +1532,19 @@ impl OptionsUi {
             break;
         }
         events
+    }
+    /// Switch to Horizon's menus and show where the choice lives there
+    /// (Options, Interface, Menu style).
+    fn horizon_menus(&mut self) {
+        crate::ui_theme::set_style(crate::ui_theme::MenuStyle::Horizon);
+        self.stack.truncate(1);
+        self.scroll = 0.0;
+        self.section = crate::options_horizon::SECTIONS
+            .iter()
+            .position(|section| section.name == "Interface")
+            .unwrap_or(0);
+        self.section_shown = None;
+        self.hscroll = 0.0;
     }
     pub fn release(&mut self) {
         self.dragging = None;
@@ -1659,5 +1696,36 @@ impl OptionsUi {
             self.scroll = 0.0;
         }
         Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui_theme::{MenuStyle, set_style, style};
+
+    #[test]
+    fn classic_video_settings_lead_back_to_horizon_menus() {
+        let s = Settings::default();
+        let mut ui = OptionsUi::default();
+        ui.push(Page::Video);
+        let way_back = |ui: &OptionsUi| {
+            ui.list_rows(&s).iter().any(|row| {
+                matches!(row, Row::Buttons(w, _)
+                    if matches!(&w.kind, WKind::Button { act: Act::HorizonMenus, .. }))
+            })
+        };
+        // Horizon's own menus have the choice on their Interface page.
+        assert!(!way_back(&ui));
+        set_style(MenuStyle::Classic);
+        let classic = way_back(&ui);
+        ui.horizon_menus();
+        assert!(classic, "Classic Video Settings offer Menu Style");
+        assert_eq!(style(), MenuStyle::Horizon);
+        assert_eq!(ui.stack, vec![Page::Main]);
+        assert_eq!(
+            crate::options_horizon::SECTIONS[ui.section].name,
+            "Interface"
+        );
     }
 }

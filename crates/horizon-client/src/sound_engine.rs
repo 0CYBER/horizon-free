@@ -447,7 +447,18 @@ impl SoundEngine {
     }
     /// Table sizes, for soak tests watching what the engine holds.
     pub fn census(&self) -> serde_json::Value {
+        // The sounds holding channels, most first: what a soak test hears.
+        let mut events: HashMap<&str, usize> = HashMap::new();
+        for (id, _) in &self.instance_to_channel {
+            if let Some(i) = self.instances.get(id) {
+                *events.entry(i.identifier.as_str()).or_default() += 1;
+            }
+        }
+        let mut events: Vec<(&str, usize)> = events.into_iter().collect();
+        events.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+        events.truncate(12);
         serde_json::json!({
+            "events": events,
             "instances": self.instances.len(),
             "playing": self.instance_to_channel.len(),
             "handles": self.handles.len(),
