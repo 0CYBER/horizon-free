@@ -847,10 +847,14 @@ pub enum MobEvent {
         mob: u32,
         other: u32,
     },
-    /// Two villagers make a baby.
+    /// Two villagers make a baby (`VillagerMakeLove.tryToGiveBirth`): the
+    /// parent has eaten and, with a bed for the child, rests; the partner
+    /// eats, and rests too if `child` holds the child's bed and type
+    /// (`None`: the biome's).
     VillagerBirth {
         parent: u32,
         partner: u32,
+        child: Option<([i32; 3], Option<u8>)>,
     },
     /// A villager asks whether enough neighbours want an iron golem.
     GolemCheck {
@@ -985,11 +989,65 @@ pub struct Seen {
     /// `render::PROFESSIONS`), a llama's strength. And a villager's experience.
     pub profession: u8,
     pub xp: i32,
+    /// What other villagers read of a villager's state and brain.
+    pub villager: Option<Arc<villager::Seen>>,
     /// `MAX_HEALTH`, `JUMP_STRENGTH` and `MOVEMENT_SPEED` base values (a
     /// horse's breeding stock).
     pub stats: [f64; 3],
 }
 impl Mob {
+    /// What other mobs see of this one this tick (`player`: the player's
+    /// UUID, which villagers' reputation is keyed by).
+    pub fn seen(&self, player: Option<[i32; 4]>) -> Seen {
+        let m = self;
+        let villager = m.species() == Species::Villager;
+        Seen {
+            id: m.id,
+            species: m.species(),
+            position: m.position,
+            bounds: m.bounds(),
+            eye_y: m.eye_y(),
+            alive: m.alive(),
+            baby: m.is_baby(),
+            // A villager is "in love" when it is willing to breed (`canBreed`).
+            in_love: if villager {
+                villager::can_breed(m)
+            } else {
+                m.extra.in_love > 0
+            },
+            tame: m.extra.tame,
+            hostile: m.hostile(),
+            target: m.ai.target,
+            health: m.health,
+            variant: m.extra.variant,
+            color: m.extra.color,
+            job: villager.then_some(m.extra.home).flatten(),
+            bed: villager.then_some(m.extra.bed).flatten(),
+            yaw: m.yaw,
+            velocity: m.velocity,
+            leash: m.extra.leash,
+            caravan: caravan::head_of(m),
+            delay: m.extra.ints[5],
+            hurt_by: m.ai.last_hurt_by.map(|w| (w, m.ai.last_hurt_by_time)),
+            active_raid: raider::has_active_raid(m),
+            player_rep: match (villager, player) {
+                (true, Some(uuid)) => villager::ext(m).map_or(0, |e| e.gossips.reputation(uuid)),
+                _ => 0,
+            },
+            pushable: m.pushable(),
+            category: m.category(),
+            potential_job: villager_brain::potential_job_site(m),
+            meeting: villager.then_some(m.extra.meeting).flatten(),
+            profession: m.extra.variant2,
+            xp: villager::xp(m),
+            villager: villager.then(|| Arc::new(villager::seen(m))),
+            stats: [
+                f64::from(m.attrs.max_health),
+                m.extra.vector[0],
+                m.attrs.speed,
+            ],
+        }
+    }
     /// `EntityType.getCategory`'s name.
     pub fn category(&self) -> &'static str {
         match self.kind.category.as_str() {
@@ -1049,6 +1107,7 @@ pub fn apply_brain_events(mobs: &mut [Mob], events: &mut Vec<MobEvent>, from: us
             MobEvent::LockGaze { mob, partner } => {
                 if let Some(m) = mobs.iter_mut().find(|m| m.id == mob) {
                     animal_brain::lock_gaze(m, partner);
+                    villager_brain::lock_gaze_half(m, Who::Mob(partner));
                 }
                 events.remove(i);
             }

@@ -151,17 +151,12 @@ from vanilla in places: `mob_ai` (71 of 72 scenarios; a tempted ghastling) and
 - **Worlds from 1.17 onwards** open and are upgraded as vanilla does; server.properties, eula.txt and the server user lists are read and written as vanilla does.
 - **Builds for Linux, macOS (Apple Silicon) and Windows.**
 
-### Known issues
-
-- **Render distance 2 never finishes loading:** a world opened with the render distance at 2 chunks stays on "Loading terrain…". Use a render distance of 3 or more (in Options > Video, or `--render-distance 12` on the command line).
-
 ### Roadmap
 
-1. Fix loading at render distance 2; finish the warden's brain and the sculk shrieker summoning it, and the tempted ghastling.
-2. Villager breeding and gossip (started on its branch).
-3. A dedicated server mode, and LAN hosting tested with a vanilla client.
-4. Save upgrades from before 1.17, and the resource pack screen.
-5. Platform-independent float math, so every harness also gives vanilla's results on macOS.
+1. Finish the warden's brain and the sculk shrieker summoning it, and the tempted ghastling.
+2. A dedicated server mode, and LAN hosting tested with a vanilla client.
+3. Save upgrades from before 1.17, and the resource pack screen.
+4. Platform-independent float math, so every harness also gives vanilla's results on macOS.
 
 The rewrite is complete when it reaches one-to-one parity and packaged native builds pass the launch checks in [Rust rewrite status](docs/rust-parity.md#completion-criteria-and-playable-builds).
 

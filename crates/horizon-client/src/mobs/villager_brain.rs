@@ -663,7 +663,7 @@ fn sense_bed(m: &mut Mob, w: &MobWorld, lr: &mut LegacyRandom) {
     let mut cache = std::mem::take(&mut brain_mut(m).bed_cache);
     let mut tried = 0;
     let mut targets = Vec::new();
-    for p in homes {
+    for &p in &homes {
         if cache.iter().any(|(q, _)| *q == p) {
             continue;
         }
@@ -679,8 +679,12 @@ fn sense_bed(m: &mut Mob, w: &MobWorld, lr: &mut LegacyRandom) {
     } else {
         m.create_path_to_any(w, &targets, 1)
     };
+    // createPath hands back the current path when it still heads for a
+    // target position it was asked: only a bed (a POI) counts.
     if let Some(path) = path.filter(|p| p.reached) {
-        mem(m).nearest_bed.set(path.target);
+        if homes.contains(&path.target) {
+            mem(m).nearest_bed.set(path.target);
+        }
     } else if tried < 5 {
         cache.retain(|(_, until)| *until >= last_update);
     }
@@ -1609,13 +1613,7 @@ impl B {
                 }
                 t.begin(cx);
                 let target = mem(m).interaction_target.value().unwrap();
-                let mm = mem(m);
-                mm.look_target.set(Tracker::Entity(target, true));
-                mm.walk_target.set(WalkTarget {
-                    target: Tracker::Entity(target, true),
-                    speed: 0.5,
-                    close: 2,
-                });
+                lock_gaze(m, target, cx);
                 true
             }
             B::MakeLove { t, birth } => {
@@ -1628,7 +1626,7 @@ impl B {
                 }
                 t.begin(cx);
                 let target = mem(m).breed_target.value().unwrap();
-                lock_gaze(m, target);
+                lock_gaze(m, target, cx);
                 *birth = now + 275 + i64::from(m.random.next_int_bound(50).unwrap_or(0));
                 true
             }
@@ -2853,6 +2851,7 @@ impl B {
                     && i.position.distance_squared(m.position) <= 5.0
                 {
                     let Who::Mob(other) = target else { return };
+                    lock_gaze(m, target, cx);
                     cx.events.push(MobEvent::VillagerMeet { mob: m.id, other });
                 }
             }
@@ -2870,11 +2869,29 @@ impl B {
                     .target_info(target)
                     .is_some_and(|t| t.position.distance_squared(m.position) <= 5.0)
                 {
-                    lock_gaze(m, target);
+                    lock_gaze(m, target, cx);
                     if now >= *birth {
+                        // The parent's half happens in its own tick: it eats,
+                        // takes a bed for the child, picks its type and rests.
+                        super::villager::ext_mut(m).eat_and_digest();
+                        let child = take_bed_for_child(m, cx.w).map(|bed| {
+                            // Villager.getBreedOffspring: half the biome's type,
+                            // a quarter each parent's.
+                            let roll = m.random.next_double();
+                            let variant = if roll < 0.5 {
+                                None
+                            } else if roll < 0.75 {
+                                Some(m.extra.variant)
+                            } else {
+                                Some(cx.w.seen(partner).map_or(m.extra.variant, |s| s.variant))
+                            };
+                            m.extra.age = 6000;
+                            (bed, variant)
+                        });
                         cx.events.push(MobEvent::VillagerBirth {
                             parent: m.id,
                             partner,
+                            child,
                         });
                     } else if m.random.next_int_bound(35).unwrap_or(1) == 0 {
                         let mut p = vec![m.position];
@@ -3366,8 +3383,38 @@ fn breeding_possible(m: &mut Mob, w: &MobWorld) -> bool {
         && super::villager::can_breed(m)
         && w.seen(id).is_some_and(|s| s.in_love)
 }
-/// `BehaviorUtils.lockGazeAndWalkToEachOther`, this villager's half.
-fn lock_gaze(m: &mut Mob, target: Who) {
+/// `VillagerMakeLove.takeVacantBed`: a bed head no villager has claimed.
+fn take_bed_for_child(m: &Mob, w: &MobWorld) -> Option<[i32; 3]> {
+    let claimed: Vec<[i32; 3]> = w
+        .others
+        .iter()
+        .filter(|s| s.species == Species::Villager && s.id != m.id)
+        .filter_map(|s| s.bed)
+        .chain(m.extra.bed)
+        .collect();
+    let p = m.position;
+    let from = [p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32];
+    super::villager::take_vacant_bed(&claimed, from, |x, y, z| {
+        w.prop(x, y, z, "part") == Some("head") && w.prop(x, y, z, "occupied") != Some("true")
+    })
+}
+/// `BehaviorUtils.lockGazeAndWalkToEachOther`: this villager's half, and
+/// the other villager's through a `LockGaze` event.
+fn lock_gaze(m: &mut Mob, target: Who, cx: &mut Bx) {
+    lock_gaze_half(m, target);
+    if let Who::Mob(other) = target {
+        cx.events.push(MobEvent::LockGaze {
+            mob: other,
+            partner: m.id,
+        });
+    }
+}
+/// One villager's half of `lockGazeAndWalkToEachOther`: look at the other
+/// and walk to it.
+pub fn lock_gaze_half(m: &mut Mob, target: Who) {
+    if super::villager::ext(m).is_none_or(|e| e.brain.is_none()) {
+        return;
+    }
     let mm = mem(m);
     mm.look_target.set(Tracker::Entity(target, true));
     mm.walk_target.set(WalkTarget {
@@ -4079,4 +4126,35 @@ pub fn potential_job_site(m: &Mob) -> Option<[i32; 3]> {
 /// Whether a seen mob is a villager wanting to breed (`AgeableMob::canBreed`).
 pub fn seen_can_breed(s: &Seen) -> bool {
     s.species == Species::Villager && s.in_love
+}
+/// The memories other villagers read: the interaction target, the path's
+/// nodes (while it is not done), whether a golem was seen lately and the
+/// last sleep.
+#[allow(clippy::type_complexity)]
+pub fn seen_memories(
+    m: &Mob,
+) -> (
+    Option<Who>,
+    Option<(Option<[i32; 3]>, [i32; 3])>,
+    bool,
+    Option<i64>,
+) {
+    let Some(mm) = mem_ref(m) else {
+        return (None, None, false, None);
+    };
+    let path = mm
+        .path
+        .present()
+        .then_some(m.ai.nav.path.as_ref())
+        .flatten();
+    let nodes = path.filter(|p| !p.is_done()).map(|p| {
+        let n = |i: usize| [p.nodes[i].x, p.nodes[i].y, p.nodes[i].z];
+        ((p.next > 0).then(|| n(p.next - 1)), n(p.next))
+    });
+    (
+        mm.interaction_target.value(),
+        nodes,
+        mm.golem_detected_recently.present(),
+        mm.last_slept.value(),
+    )
 }

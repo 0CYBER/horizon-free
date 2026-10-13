@@ -87,60 +87,7 @@ impl ProjectileWorld for ProjWorld<'_, '_> {
     }
 }
 pub(super) fn seen(m: &Mob, player: Option<[i32; 4]>) -> Seen {
-    let villager = m.species() == Species::Villager;
-    Seen {
-        id: m.id,
-        species: m.species(),
-        position: m.position,
-        bounds: m.bounds(),
-        eye_y: m.eye_y(),
-        alive: m.alive(),
-        baby: m.is_baby(),
-        // A villager is "in love" when it is willing to breed (`canBreed`).
-        in_love: if villager {
-            horizon_client::mobs::villager::can_breed(m)
-        } else {
-            m.extra.in_love > 0
-        },
-        tame: m.extra.tame,
-        hostile: m.hostile(),
-        target: m.ai.target,
-        health: m.health,
-        variant: m.extra.variant,
-        color: m.extra.color,
-        job: (m.species() == Species::Villager)
-            .then_some(m.extra.home)
-            .flatten(),
-        bed: (m.species() == Species::Villager)
-            .then_some(m.extra.bed)
-            .flatten(),
-        yaw: m.yaw,
-        velocity: m.velocity,
-        leash: m.extra.leash,
-        caravan: horizon_client::mobs::caravan::head_of(m),
-        delay: m.extra.ints[5],
-        hurt_by: m.ai.last_hurt_by.map(|w| (w, m.ai.last_hurt_by_time)),
-        active_raid: horizon_client::mobs::raider::has_active_raid(m),
-        player_rep: match (villager, player) {
-            (true, Some(uuid)) => {
-                horizon_client::mobs::villager::ext(m).map_or(0, |e| e.gossips.reputation(uuid))
-            }
-            _ => 0,
-        },
-        pushable: m.pushable(),
-        category: m.category(),
-        potential_job: horizon_client::mobs::villager_brain::potential_job_site(m),
-        meeting: (m.species() == Species::Villager)
-            .then_some(m.extra.meeting)
-            .flatten(),
-        profession: m.extra.variant2,
-        xp: horizon_client::mobs::villager::xp(m),
-        stats: [
-            f64::from(m.attrs.max_health),
-            m.extra.vector[0],
-            m.attrs.speed,
-        ],
-    }
+    m.seen(player)
 }
 impl Game<'_> {
     pub(super) fn player_view(&self) -> Option<PlayerView> {
@@ -967,7 +914,11 @@ impl Game<'_> {
                 }
                 MobEvent::CureZombieVillager { mob } => self.cure_zombie_villager(mob),
                 MobEvent::VillagerMeet { mob, other } => self.villager_meet(mob, other),
-                MobEvent::VillagerBirth { parent, partner } => self.villager_birth(parent, partner),
+                MobEvent::VillagerBirth {
+                    parent,
+                    partner,
+                    child,
+                } => self.villager_birth(parent, partner, child),
                 MobEvent::GolemCheck { mob, needed } => self.villager_golem_check(mob, needed),
                 MobEvent::Firework { at, color, flight } => {
                     self.villager_firework(at, color, flight)
