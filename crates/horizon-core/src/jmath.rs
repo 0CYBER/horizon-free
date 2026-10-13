@@ -124,7 +124,7 @@ fn with_hi(x: f64, high: i32) -> f64 {
 
 /// `java.lang.FdLibm` ports (`StrictMath`) of what the `libm` crate computes
 /// differently.
-#[allow(clippy::excessive_precision)] // fdlibm's constants, verbatim.
+#[allow(clippy::excessive_precision, clippy::approx_constant, clippy::eq_op)] // fdlibm's constants and NaN, verbatim.
 pub mod fdlibm {
     use super::{hi, with_hi};
 
@@ -337,7 +337,7 @@ pub mod fdlibm {
 /// HotSpot's AArch64 `Math.sin` / `Math.cos` stubs
 /// (`MacroAssembler::generate_dsin_dcos`): fdlibm with fused multiply-adds.
 /// Exposed on every architecture so they can be tested anywhere.
-#[allow(clippy::excessive_precision, clippy::unreadable_literal)] // HotSpot's tables, verbatim.
+#[allow(clippy::excessive_precision, clippy::approx_constant, clippy::unreadable_literal)] // HotSpot's tables, verbatim.
 pub mod aarch64 {
     use super::hi;
 
@@ -474,7 +474,7 @@ pub mod aarch64 {
     }
 
     fn sin_cos(x: f64, is_cos: bool) -> f64 {
-        let ix = (hi(x) & 0x7fff_ffff) as i32;
+        let ix = hi(x) & 0x7fff_ffff;
         if ix < 0x3e400000 {
             return if is_cos { 1.0 } else { x };
         }
