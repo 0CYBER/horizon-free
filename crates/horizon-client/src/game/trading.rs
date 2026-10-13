@@ -179,7 +179,12 @@ impl Game<'_> {
     /// `AbstractVillager.getOffers`: generated on first use.
     pub(super) fn ensure_offers(&mut self, index: usize) {
         let species = self.mobs[index].species();
-        if self.mobs[index].extra.trade.is_none() {
+        let unset = self.mobs[index]
+            .extra
+            .trade
+            .as_ref()
+            .is_none_or(|t| t.unset);
+        if unset {
             let m = &self.mobs[index];
             let variant = format!(
                 "minecraft:{}",
@@ -206,10 +211,9 @@ impl Game<'_> {
                     Vec::new()
                 }
             };
-            self.mobs[index].extra.trade = Some(Box::new(merchant::Trader {
-                offers,
-                ..Default::default()
-            }));
+            let trade = self.mobs[index].extra.trade.get_or_insert_default();
+            trade.offers = offers;
+            trade.unset = false;
         }
     }
     /// `Villager.mobInteract` / `WanderingTrader.mobInteract`: shake the

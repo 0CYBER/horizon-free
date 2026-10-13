@@ -57,6 +57,9 @@ pub struct Trader {
     pub last_restock: i64,
     pub restocks_today: i32,
     pub check_day: i64,
+    /// The offers are not made yet (vanilla's `offers` is null): they are
+    /// generated when first asked for, keeping the experience.
+    pub unset: bool,
 }
 impl Trader {
     fn update_demand(&mut self) {

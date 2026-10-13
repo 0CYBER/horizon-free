@@ -240,6 +240,10 @@ def run_side(label, command, directory, client):
     server = Server(command, directory, label)
     try:
         server.wait_for(r'Done \(')
+        # A librarian beside the spawn for the client to trade with (no AI:
+        # it stays put; experience keeps its profession).
+        server.console('summon minecraft:villager ~1 ~ ~ {NoAI:1b,Xp:1,VillagerData:'
+                       '{profession:"minecraft:librarian",level:2,type:"minecraft:plains"}}')
         port = int(PROPERTIES_PORTS[label])
         legacy = legacy_ping(port)
         client(port, directory.parent / f'{label}-client.txt')

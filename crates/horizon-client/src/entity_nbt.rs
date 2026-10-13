@@ -1256,7 +1256,9 @@ fn villager_data(m: &Mob) -> Tag {
 }
 /// `AbstractVillager` "Offers" (`MerchantOffers.CODEC`).
 fn put_offers(map: &mut Compound, m: &Mob) {
-    let Some(t) = &m.extra.trade else { return };
+    let Some(t) = m.extra.trade.as_ref().filter(|t| !t.unset) else {
+        return;
+    };
     map.insert("Offers".into(), offers_to_nbt(&t.offers));
 }
 /// `ItemCost.CODEC`: id, count (always written) and the exact components.
@@ -1395,11 +1397,14 @@ fn read_villager(m: &mut Mob, tag: &Tag) {
     if m.species() == crate::mobs::Species::Villager {
         crate::mobs::villager::read_nbt(m, tag);
     }
-    let Some(offers_tag) = tag.get("Offers") else {
+    let offers_tag = tag.get("Offers");
+    let xp = number(tag.get("Xp")).unwrap_or(0) as i32;
+    if offers_tag.is_none() && xp == 0 && tag.get("LastRestock").is_none() {
         return;
-    };
-    let offers = offers_from_nbt(offers_tag);
+    }
+    let offers = offers_tag.map(offers_from_nbt).unwrap_or_default();
     m.extra.trade = Some(Box::new(Trader {
+        unset: offers_tag.is_none(),
         xp: number(tag.get("Xp")).unwrap_or(0) as i32,
         offers,
         last_restock: number(tag.get("LastRestock")).unwrap_or(0),
