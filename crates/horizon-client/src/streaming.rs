@@ -10,6 +10,7 @@ use crate::{
     world::World,
 };
 use horizon_core::biome::BiomeZoom;
+use horizon_world::worldgen::decoration_order::DecorationOrder;
 use std::{
     collections::{BinaryHeap, HashSet},
     sync::{
@@ -104,6 +105,10 @@ pub struct Streaming {
     protos: FxHashMap<(i32, i32), Option<Proto>>,
     decorated: FxHashSet<(i32, i32)>,
     decorating: usize,
+    /// Vanilla's decoration order around the player, and the centre and
+    /// radius it was last ranked for.
+    decoration_order: DecorationOrder,
+    order_area: Option<((i32, i32), i32)>,
     finishing: FxHashSet<(i32, i32)>,
     decorates: bool,
     lighting: FxHashMap<(i32, i32), u64>,
@@ -239,6 +244,8 @@ impl Streaming {
             protos: Default::default(),
             decorated: Default::default(),
             decorating: 0,
+            decoration_order: DecorationOrder::default(),
+            order_area: None,
             finishing: Default::default(),
             decorates: generator.decorates(),
             lighting: Default::default(),
@@ -512,23 +519,63 @@ impl Streaming {
                 self.submit(self.distance(x, z) * 4, Job::Finish(proto));
             }
         }
-        // Decorate chunks whose 3x3 proto neighbourhood is available.
+        // Decorate chunks whose 3x3 proto neighbourhood is available, in
+        // vanilla's order: decoration is order dependent where write regions
+        // overlap (see `DecorationOrder`).
         let workers = self.threads.len();
+        if self.decorates && self.order_area != Some((self.center, self.radius)) {
+            let (decorated, chunks) = (&self.decorated, &world.chunks);
+            // The render distance is the server view distance in singleplayer.
+            self.decoration_order
+                .reassign(self.center, self.radius, |x, z| {
+                    decorated.contains(&(x, z)) || chunks.contains_key(&(x, z))
+                });
+            self.order_area = Some((self.center, self.radius));
+            let ranges = Ranges {
+                center: self.center,
+                radius: self.radius,
+                extra: &self.extra,
+                forced: &self.forced,
+            };
+            let (protos, generating) = (&self.protos, &self.generating);
+            self.decoration_order.retain(|x, z| {
+                ranges.in_range(x, z, 4)
+                    || ranges.near_finished(x, z, 2)
+                    || protos.contains_key(&(x, z))
+                    || generating.contains(&(x, z))
+            });
+        }
         if self.decorates && self.decorating < workers * 2 {
-            let mut wanted: Vec<(i64, i32, i32)> = self
+            let wants = |s: &Self, x: i32, z: i32| {
+                !s.decorated.contains(&(x, z))
+                    && !world.chunks.contains_key(&(x, z))
+                    && (s.in_range(x, z, 2) || s.near_finished(x, z, 1))
+            };
+            let keys: Vec<(i32, i32)> = self
                 .protos
                 .iter()
-                .filter(|(k, p)| {
-                    p.is_some()
-                        && !self.decorated.contains(k)
-                        && (self.in_range(k.0, k.1, 2) || self.near_finished(k.0, k.1, 1))
-                })
-                .map(|(k, _)| (self.distance(k.0, k.1), k.0, k.1))
+                .filter(|(k, p)| p.is_some() && wants(self, k.0, k.1))
+                .map(|(k, _)| *k)
                 .collect();
+            let mut wanted: Vec<(u64, i64, i32, i32)> = keys
+                .into_iter()
+                .map(|(x, z)| (0, self.distance(x, z), x, z))
+                .collect();
+            // Chunks no ticket reached (forced and extra areas) go last, nearest first.
+            wanted.sort_unstable_by_key(|w| w.1);
+            for w in &mut wanted {
+                w.0 = self.decoration_order.rank_or_append(w.2, w.3);
+            }
             wanted.sort_unstable();
-            for (d, x, z) in wanted {
+            for (_, d, x, z) in wanted {
                 if self.decorating >= workers * 2 {
                     break;
+                }
+                if self
+                    .decoration_order
+                    .blocked(x, z, |nx, nz| wants(self, nx, nz))
+                {
+                    continue;
                 }
                 let keys: Vec<(i32, i32)> =
                     (0..9).map(|i| (x + (i % 3) - 1, z + (i / 3) - 1)).collect();
