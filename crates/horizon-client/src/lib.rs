@@ -41,6 +41,7 @@ pub mod entities;
 pub mod entity_nbt;
 pub mod environment;
 pub mod fastutil_order;
+pub mod flatgen;
 pub mod fog;
 pub mod font;
 pub mod gamerules;

@@ -5238,7 +5238,28 @@ impl Game<'_> {
             dim.id(),
         )));
         let res = &*self.res;
-        let mut streaming = if self.options.test_terrain && dim == Dim::Overworld {
+        let flat = (dim == Dim::Overworld)
+            .then(|| horizon_client::save::world_gen_settings(world_root))
+            .flatten()
+            .and_then(|s| {
+                horizon_client::flatgen::FlatTerrain::from_settings(
+                    &s,
+                    res.assets.registry,
+                    &res.biomes,
+                )
+            });
+        let mut streaming = if let Some(inner) = flat {
+            Streaming::new(
+                Arc::new(Persistent {
+                    inner: Arc::new(inner),
+                    save: save.clone(),
+                    registry: res.assets.clone(),
+                    biomes: res.biomes.clone(),
+                }),
+                res.context.clone(),
+                res.threads,
+            )
+        } else if self.options.test_terrain && dim == Dim::Overworld {
             let inner = Arc::new(TestTerrain::new(res.assets.registry, &res.biomes)?);
             Streaming::new(
                 Arc::new(Persistent {

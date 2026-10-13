@@ -52,6 +52,12 @@ IGNORED = {
     r'^chunk\.LastUpdate$': 'game time of the save (Horizon saves at its own time)',
     r'^chunk\.InhabitedTime$': 'ticks the chunk was loaded; differs by the time Horizon ran',
     r'^chunk\.isLightOn$': 'light is recomputed by vanilla when absent',
+    # Vanilla's server (view distance 4) leaves a border of proto chunks; Horizon's
+    # render distance 6 may finish some, as vanilla does when it loads the world at
+    # that distance. Their blocks are still compared; only what a full chunk saves
+    # differently (no worldgen heightmaps, entities in entities/) is accepted.
+    r'^chunk\.promoted\.(Status|Heightmaps\.(OCEAN_FLOOR_WG|WORLD_SURFACE_WG)|entities)$':
+        'a proto chunk vanilla left at its view distance, finished by Horizon',
     # Horizon keeps simulating between loading and saving (it needs a few seconds of
     # chunk generation first), so counters and positions of live things move on.
     r'^chunk\.block_entities\.\(2, -60, 5\)\.(cooking_time_spent|lit_time_remaining|Items\[\]\.count)$':
@@ -445,6 +451,10 @@ def compare_chunks(vanilla, horizon, report):
         ha, hs = normalize_chunk(horizon[key])
         out = []
         diff(va, ha, 'chunk', out)
+        if va.get('Status') != 'minecraft:full' and ha.get('Status') == 'minecraft:full':
+            promoted = re.compile(r'^chunk\.(Status|Heightmaps\.\w+_WG|entities)$')
+            out = [(path.replace('chunk.', 'chunk.promoted.', 1) if promoted.match(path) else path, p, q)
+                   for path, p, q in out]
         for y in sorted(set(vs) | set(hs)):
             empty = {'blocks': ['minecraft:air'] * 4096, 'biomes': None, 'BlockLight': None, 'SkyLight': None}
             a, b = vs.get(y, empty), hs.get(y, empty)
