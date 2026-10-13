@@ -418,6 +418,187 @@ pub fn resource_root(vanilla: &Path, packs: &[Pack], cache: &Path) -> PathBuf {
     }
 }
 
+/// `Pack.Position`: where a pack goes when it is added to a list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Position {
+    Top,
+    Bottom,
+}
+/// A pack as the selection sees it (`PackSelectionConfig` and its
+/// compatibility).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Selectable {
+    pub id: String,
+    pub required: bool,
+    pub position: Position,
+    pub fixed: bool,
+    pub compatible: bool,
+}
+impl Selectable {
+    /// A pack from `resourcepacks/` or a built-in optional one: not
+    /// required, added on top, free to move (`FolderRepositorySource`).
+    pub fn optional(id: &str, compatible: bool) -> Self {
+        Self {
+            id: id.to_owned(),
+            required: false,
+            position: Position::Top,
+            fixed: false,
+            compatible,
+        }
+    }
+    /// The vanilla pack: required, at the bottom (`BuiltInPackSource`).
+    pub fn vanilla() -> Self {
+        Self {
+            id: "vanilla".into(),
+            required: true,
+            position: Position::Bottom,
+            fixed: false,
+            compatible: true,
+        }
+    }
+}
+
+/// `Pack.Position.insert`: below or above the packs fixed at that end.
+fn insert(list: &mut Vec<Selectable>, pack: Selectable, reverse: bool) {
+    let own = pack.position;
+    let side = match (own, reverse) {
+        (Position::Top, false) | (Position::Bottom, true) => Position::Top,
+        _ => Position::Bottom,
+    };
+    let pinned = |p: &Selectable| p.fixed && p.position == own;
+    if side == Position::Bottom {
+        let i = list.iter().take_while(|p| pinned(p)).count();
+        list.insert(i, pack);
+    } else {
+        let i = list.len() - list.iter().rev().take_while(|p| pinned(p)).count();
+        list.insert(i, pack);
+    }
+}
+
+/// `PackSelectionModel` over a `PackRepository`: the packs not selected
+/// (in id order) and the selected ones, top first, as the pack screen's two
+/// lists show them.
+#[derive(Clone, Debug, Default)]
+pub struct SelectionModel {
+    available: Vec<Selectable>,
+    pub unselected: Vec<Selectable>,
+    pub selected: Vec<Selectable>,
+}
+impl SelectionModel {
+    /// `available` in any order; `selected` as options.txt lists them,
+    /// bottom first.
+    pub fn new(mut available: Vec<Selectable>, selected: &[String]) -> Self {
+        // PackRepository.available is a TreeMap by id (String.compareTo).
+        available.sort_by(|a, b| a.id.encode_utf16().cmp(b.id.encode_utf16()));
+        available.dedup_by(|a, b| a.id == b.id);
+        let mut m = Self {
+            available,
+            ..Self::default()
+        };
+        let mut chosen = m.rebuild(selected);
+        chosen.reverse();
+        m.unselected = m
+            .available
+            .iter()
+            .filter(|p| !chosen.iter().any(|c| c.id == p.id))
+            .cloned()
+            .collect();
+        m.selected = chosen;
+        m
+    }
+    /// `PackRepository.rebuildSelected`: the named packs that exist, and
+    /// every required one.
+    fn rebuild(&self, ids: &[String]) -> Vec<Selectable> {
+        let mut out: Vec<Selectable> = ids
+            .iter()
+            .filter_map(|id| self.available.iter().find(|p| p.id == *id).cloned())
+            .collect();
+        for p in &self.available {
+            if p.required && !out.iter().any(|o| o.id == p.id) {
+                insert(&mut out, p.clone(), false);
+            }
+        }
+        out
+    }
+    fn list(&self, selected: bool) -> &Vec<Selectable> {
+        if selected {
+            &self.selected
+        } else {
+            &self.unselected
+        }
+    }
+    pub fn can_select(&self, selected: bool, _: usize) -> bool {
+        !selected
+    }
+    pub fn can_unselect(&self, selected: bool, i: usize) -> bool {
+        selected && !self.selected[i].required
+    }
+    pub fn can_move_up(&self, selected: bool, i: usize) -> bool {
+        i > 0 && !self.list(selected)[i - 1].fixed
+    }
+    pub fn can_move_down(&self, selected: bool, i: usize) -> bool {
+        let list = self.list(selected);
+        i + 1 < list.len() && !list[i + 1].fixed
+    }
+    /// `EntryBase.toggleSelection`: to the other list, at its default
+    /// position (from the other end).
+    fn toggle(&mut self, selected: bool, i: usize) {
+        let (from, to) = if selected {
+            (&mut self.selected, &mut self.unselected)
+        } else {
+            (&mut self.unselected, &mut self.selected)
+        };
+        let p = from.remove(i);
+        insert(to, p, true);
+    }
+    /// `PackEntry`'s activation (a click on the icon, or the select key):
+    /// select, an incompatible pack only once its confirmation was
+    /// accepted, or else unselect. True when the lists changed.
+    pub fn activate(&mut self, selected: bool, i: usize, confirmed: bool) -> bool {
+        if self.can_select(selected, i) {
+            if self.unselected[i].compatible || confirmed {
+                self.toggle(false, i);
+                return true;
+            }
+            false
+        } else if self.can_unselect(selected, i) {
+            self.toggle(true, i);
+            true
+        } else {
+            false
+        }
+    }
+    /// Whether activating the entry asks first (`handlePackSelection`'s
+    /// ConfirmScreen for an incompatible pack).
+    pub fn needs_confirmation(&self, selected: bool, i: usize) -> bool {
+        self.can_select(selected, i) && !self.unselected[i].compatible
+    }
+    /// `moveUp` / `moveDown` when allowed.
+    pub fn move_by(&mut self, selected: bool, i: usize, up: bool) -> bool {
+        let ok = if up {
+            self.can_move_up(selected, i)
+        } else {
+            self.can_move_down(selected, i)
+        };
+        if ok {
+            let list = if selected {
+                &mut self.selected
+            } else {
+                &mut self.unselected
+            };
+            let p = list.remove(i);
+            list.insert(if up { i - 1 } else { i + 1 }, p);
+        }
+        ok
+    }
+    /// `commit`: the repository's selection, bottom first, as options.txt
+    /// stores it.
+    pub fn commit(&self) -> Vec<String> {
+        let ids: Vec<String> = self.selected.iter().rev().map(|p| p.id.clone()).collect();
+        self.rebuild(&ids).into_iter().map(|p| p.id).collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

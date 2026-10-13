@@ -105,6 +105,8 @@ pub(super) struct Remote {
     /// `ClientPacketListener.playerInfoMap` as player-list entries, and
     /// which of them are listed.
     tab_players: HashMap<u128, horizon_client::tab_list::TabPlayer>,
+    /// Each listed profile's unpacked `textures` property.
+    skin_textures: HashMap<u128, horizon_client::skins::Textures>,
     listed: std::collections::HashSet<u128>,
     /// `ClientboundLoginPacket.onlineMode`: the player list shows heads.
     online_mode: bool,
@@ -234,6 +236,7 @@ impl Game<'_> {
             action_bar: None,
             players: HashMap::new(),
             tab_players: HashMap::new(),
+            skin_textures: HashMap::new(),
             listed: Default::default(),
             online_mode: false,
             level_players: HashMap::new(),
@@ -1120,6 +1123,21 @@ impl Game<'_> {
                                 r.tab_players.entry(e.uuid).or_insert_with(|| {
                                     horizon_client::tab_list::TabPlayer::new(e.uuid, name.clone())
                                 });
+                                if let Some(t) = e.properties.iter().find(|p| p.name == "textures")
+                                {
+                                    // Without the services' profile property keys a
+                                    // signature can't be checked; a signed property
+                                    // counts as genuine.
+                                    use horizon_client::skins::{self, Signature};
+                                    let signature = if t.signature.is_some() {
+                                        Signature::Signed
+                                    } else {
+                                        Signature::Unsigned
+                                    };
+                                    let textures =
+                                        skins::unpack(&t.value, signature, &skins::TEXTURE_URIS);
+                                    r.skin_textures.entry(e.uuid).or_insert(textures);
+                                }
                             }
                         }
                     }
@@ -1162,6 +1180,7 @@ impl Game<'_> {
                     for u in p.uuids {
                         r.players.remove(&u);
                         r.tab_players.remove(&u);
+                        r.skin_textures.remove(&u);
                         r.listed.remove(&u);
                     }
                 }
@@ -1327,17 +1346,41 @@ impl Game<'_> {
             _ => {}
         }
     }
-    /// The player list's view of the connection: the listed players, online
-    /// mode, and which players are in the level with an upside-down name.
+    /// The player list's view of the connection: the listed players (with
+    /// their downloaded skins once ready), online mode, and which players
+    /// are in the level with an upside-down name.
     pub(super) fn remote_tab_players(
-        &self,
+        &mut self,
     ) -> Option<(Vec<horizon_client::tab_list::TabPlayer>, bool, Vec<u128>)> {
         let r = self.remote.as_ref()?;
-        let players: Vec<_> = r
+        let mut players: Vec<_> = r
             .listed
             .iter()
             .filter_map(|u| r.tab_players.get(u).cloned())
             .collect();
+        for p in &mut players {
+            let Some(textures) = r.skin_textures.get(&p.uuid) else {
+                continue;
+            };
+            // PlayerInfo.createSkinLookup: only the local player's own skin
+            // may be unsigned.
+            let downloads = &mut self.skin_downloads;
+            let skin = horizon_client::skins::lookup(textures, p.uuid != r.profile, |kind, url| {
+                downloads.state(kind, url)
+            });
+            if let Some(skin) = skin {
+                p.skin = skin;
+            }
+        }
+        for (location, rgba) in self.skin_downloads.take_ready() {
+            self.store_skin(location, rgba);
+        }
+        for p in &mut players {
+            if p.skin.starts_with("skins/") && !self.show_skin(&p.skin) {
+                p.skin = horizon_client::tab_list::default_skin(p.uuid).to_owned();
+            }
+        }
+        let r = self.remote.as_ref()?;
         let upside_down = players
             .iter()
             .filter(|p| {
@@ -1347,6 +1390,46 @@ impl Game<'_> {
             .map(|p| p.uuid)
             .collect();
         Some((players, r.online_mode, upside_down))
+    }
+    /// Puts a downloaded skin in an atlas skin slot: a free one, else the
+    /// least recently shown.
+    fn store_skin(&mut self, location: String, rgba: Vec<u8>) {
+        use horizon_client::hud::SKIN_SLOTS;
+        let slot = if self.skin_slots.len() < SKIN_SLOTS {
+            self.skin_slots.len()
+        } else {
+            let (old, slot) = self.skin_slots.remove(0);
+            self.res.atlas.sprites.remove(&old);
+            slot
+        };
+        let Some(rect) = self
+            .res
+            .atlas
+            .sprites
+            .get(&format!("horizon/skin{slot}"))
+            .copied()
+        else {
+            return;
+        };
+        let (w, h) = (self.res.atlas.width as f32, self.res.atlas.height as f32);
+        self.map_patches.push(horizon_client::font::Patch {
+            x: (rect.u0 * w).round() as u32,
+            y: (rect.v0 * h).round() as u32,
+            width: 64,
+            height: 64,
+            rgba,
+        });
+        self.res.atlas.sprites.insert(location.clone(), rect);
+        self.skin_slots.push((location, slot));
+    }
+    /// Whether a downloaded skin is in the atlas, marking it recently shown.
+    fn show_skin(&mut self, location: &str) -> bool {
+        let Some(i) = self.skin_slots.iter().position(|e| e.0 == location) else {
+            return false;
+        };
+        let e = self.skin_slots.remove(i);
+        self.skin_slots.push(e);
+        true
     }
     /// ChatType decoration: `chat.translation_key` with sender/content parameters.
     fn format_chat(&self, bound: &play::ChatTypeBound, content: &str) -> String {

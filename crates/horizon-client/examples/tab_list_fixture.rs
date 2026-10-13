@@ -2,7 +2,8 @@
 //! scoreboard (teams, `list` objective, scores), listed players, header and
 //! footer, replays its frames through `horizon_client::tab_list` and writes
 //! the draw calls in vanilla's GuiGraphicsExtractor terms (text as styled
-//! runs, faces as skin blits).
+//! runs, faces as skin blits), each face's skin chosen by
+//! `horizon_client::skins` from the profile's `textures` property.
 #![forbid(unsafe_code)]
 use horizon_client::{
     component,
@@ -10,6 +11,7 @@ use horizon_client::{
     hud_layout::GuiDraw,
     lang,
     scoreboard::{NumberFormat, RenderType, Scoreboard},
+    skins,
     tab_list::{self, TabInputs, TabList, TabPlayer},
     text::Text,
 };
@@ -92,6 +94,12 @@ fn main() -> Result<()> {
                 format(&c["objective"]["numberFormat"]),
             );
         }
+        let uris: Vec<&str> = c["validUris"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
         let mut players = Vec::new();
         let mut upside = Vec::new();
         for p in c["players"].as_array().into_iter().flatten() {
@@ -108,6 +116,26 @@ fn main() -> Result<()> {
             player.display_name = (!p["displayName"].is_null()).then(|| p["displayName"].clone());
             player.list_order = p["listOrder"].as_i64().unwrap_or(0) as i32;
             player.show_hat = p["showHat"].as_bool().unwrap_or(true);
+            if let Some(t) = p.get("textures").filter(|t| !t.is_null()) {
+                let signature = match t["signature"].as_str() {
+                    None => skins::Signature::Unsigned,
+                    Some("valid") => skins::Signature::Signed,
+                    Some(_) => skins::Signature::Invalid,
+                };
+                let textures = skins::unpack(t["value"].as_str().unwrap_or(""), signature, &uris);
+                let local = c["local"].as_str() == p["uuid"].as_str();
+                let download = |_, url: &str| {
+                    let hash = skins::texture_hash(url).unwrap_or_default();
+                    match c["downloads"][&hash].as_str() {
+                        Some("pending") => skins::Download::Pending,
+                        Some("fail") => skins::Download::Failed,
+                        _ => skins::Download::Ready,
+                    }
+                };
+                if let Some(skin) = skins::lookup(&textures, !local, download) {
+                    player.skin = skin;
+                }
+            }
             players.push(player);
         }
         let mut list = TabList::default();

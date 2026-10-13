@@ -371,6 +371,10 @@ pub fn tick(
     m.update_walk_animation();
     m.anim.end_tick(m.ai.swinging);
     tick_swing(m);
+    if m.species() == Species::CopperGolem {
+        // CopperGolem.tick: updateWeathering after the living tick.
+        super::copper_golem::update_weathering(m, w, level_random, events);
+    }
     true
 }
 /// LivingEntity.updateSwingTime (6-tick swing duration).
@@ -806,7 +810,10 @@ fn server_ai_step(
     }
     // Sniffer and HappyGhast.customServerAiStep: the brain (a happy ghast's
     // only while it is a ghastling), then updateActivity.
-    if m.species() == Species::Sniffer || m.species() == Species::HappyGhast && m.is_baby() {
+    if m.species() == Species::Sniffer
+        || m.species() == Species::HappyGhast && m.is_baby()
+        || m.species() == Species::CopperGolem
+    {
         super::animal_brain::tick(m, w, level_random, events);
     }
     {
@@ -1287,6 +1294,8 @@ pub fn step_sound(
         S::CamelHusk => Some(("entity.camel_husk.step", 0.4, 1.0)),
         S::Camel => Some(("entity.camel.step", 1.0, 1.0)),
         S::IronGolem => Some(("entity.iron_golem.step", 1.0, 1.0)),
+        // CopperGolem.playStepSound: its oxidation level's step.
+        S::CopperGolem => Some((super::copper_golem::sound(m, "step"), 1.0, 1.0)),
         S::Strider if m.fluids.in_lava => Some(("entity.strider.step_lava", 1.0, 1.0)),
         S::Strider => Some(("entity.strider.step", 1.0, 1.0)),
         S::Warden => Some(("entity.warden.step", 10.0, 1.0)),

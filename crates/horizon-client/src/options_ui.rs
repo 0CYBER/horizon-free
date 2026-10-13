@@ -617,6 +617,8 @@ pub struct OptionsUi {
     /// Packs: (available, selected top-first).
     pub available: Vec<PackEntry>,
     pub selected: Vec<PackEntry>,
+    /// The selection logic behind the two lists (`PackSelectionModel`).
+    pub pack_model: crate::packs::SelectionModel,
     packs_changed: bool,
     pub in_world: bool,
     /// Scroll the selected language into the middle on the next layout.
@@ -636,6 +638,7 @@ impl Default for OptionsUi {
             language_search: search,
             available: Vec::new(),
             selected: Vec::new(),
+            pack_model: Default::default(),
             packs_changed: false,
             in_world: false,
             center_language: false,
@@ -1586,31 +1589,21 @@ impl OptionsUi {
                     index,
                     ..
                 } => {
-                    if pack.required {
-                        continue;
-                    }
+                    let _ = pack;
+                    // TransferableSelectionList.PackEntry.mouseClicked: the
+                    // right quarters of a selected pack's icon move it, the
+                    // icon otherwise selects or unselects it.
                     let on_icon = x < wd.x + 34.0;
-                    if selected && on_icon && x >= wd.x + 18.0 {
-                        // Right half of the icon: move up (top) or down (bottom).
-                        let up = y < wd.y + 18.0;
-                        let target = if up {
-                            index.checked_sub(1)
-                        } else {
-                            Some(index + 1)
-                        };
-                        if let Some(t) = target
-                            .filter(|t| *t < self.selected.len() && !self.selected[*t].required)
-                        {
-                            self.selected.swap(index, t);
-                            self.packs_changed = true;
-                        }
-                    } else if selected {
-                        let p = self.selected.remove(index);
-                        self.available.insert(0, p);
-                        self.packs_changed = true;
+                    let m = &mut self.pack_model;
+                    let changed = if selected && on_icon && x >= wd.x + 18.0 {
+                        m.move_by(true, index, y < wd.y + 18.0)
                     } else {
-                        let p = self.available.remove(index);
-                        self.selected.insert(0, p);
+                        // No confirmation screen yet: an incompatible pack
+                        // is selected as if its warning were accepted.
+                        m.activate(selected, index, true)
+                    };
+                    if changed {
+                        self.sync_pack_lists();
                         self.packs_changed = true;
                     }
                 }
@@ -1619,6 +1612,21 @@ impl OptionsUi {
             break;
         }
         events
+    }
+    /// Orders the two entry lists as the selection model has them.
+    pub fn sync_pack_lists(&mut self) {
+        let all: Vec<PackEntry> = self
+            .available
+            .drain(..)
+            .chain(self.selected.drain(..))
+            .collect();
+        let pick = |ids: &[crate::packs::Selectable]| -> Vec<PackEntry> {
+            ids.iter()
+                .filter_map(|s| all.iter().find(|e| e.id == s.id).cloned())
+                .collect()
+        };
+        self.available = pick(&self.pack_model.unselected);
+        self.selected = pick(&self.pack_model.selected);
     }
     pub fn release(&mut self) {
         self.dragging = None;
@@ -1643,11 +1651,8 @@ impl OptionsUi {
                 }
             }
             Page::Packs if self.packs_changed => {
-                let mut ids: Vec<String> =
-                    self.selected.iter().rev().map(|p| p.id.clone()).collect();
-                if !ids.contains(&"vanilla".to_owned()) {
-                    ids.insert(0, "vanilla".into());
-                }
+                // PackSelectionModel.commit: bottom first, required packs kept.
+                let ids = self.pack_model.commit();
                 s.resource_packs = ids.clone();
                 events.push(Event::Packs(ids));
             }

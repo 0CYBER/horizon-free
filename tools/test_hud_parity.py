@@ -23,7 +23,8 @@ Case kinds (`tools/hud_parity_cases.py`), drawn round-robin:
   overlays     extractCameraOverlays (vignette, spyglass and scopeScale,
                pumpkin, powder snow, portal, nausea) and extractSleepOverlay
   chat         ChatComponent: wrapping (StringSplitter, indents), fades,
-               tags, scale, width, height and spacing options
+               tags, scale, width, height and spacing options, focused
+               (the chat screen open: foreground, scrolled, scroll bar)
 
   test_hud_parity.py [--count N] [--detail N] [--kind K]
 """

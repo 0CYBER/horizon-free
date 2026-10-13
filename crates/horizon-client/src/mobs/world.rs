@@ -131,6 +131,38 @@ impl MobWorld<'_> {
         });
         result.ok().flatten()
     }
+    /// Level.clip with COLLIDER shapes and no fluids: the block the segment
+    /// first hits, if it does.
+    pub fn clip_block_at(&self, from: Vec3, to: Vec3) -> Option<[i32; 3]> {
+        let mut scene = SceneCollisions {
+            world: self.world,
+            binding: self.collision,
+        };
+        let result = traverse_blocks(from, to, 512, |p: BlockPos| {
+            let state = self.world.block(p.x, p.y, p.z);
+            if self.facts.is_air(state) {
+                return None;
+            }
+            let shape = self
+                .collision
+                .collision_shape(&mut scene, state, [p.x, p.y, p.z])
+                .ok()?;
+            shape.clip(from, to, p).map(|_| [p.x, p.y, p.z])
+        });
+        result.ok().flatten()
+    }
+    /// The bounds of the block's collision shape, relative to the block.
+    pub fn collision_bounds(&self, p: [i32; 3]) -> Option<horizon_core::geometry::Aabb> {
+        let mut scene = SceneCollisions {
+            world: self.world,
+            binding: self.collision,
+        };
+        let state = self.world.block(p[0], p[1], p[2]);
+        self.collision
+            .collision_shape(&mut scene, state, p)
+            .ok()?
+            .bounds()
+    }
     /// LivingEntity.hasLineOfSight: eye to eye within 128 blocks.
     pub fn line_of_sight(&self, from_eye: Vec3, to: Vec3) -> bool {
         let d =

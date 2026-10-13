@@ -743,6 +743,10 @@ struct Game<'a> {
     dragon_model: Option<horizon_client::mobs::Part>,
     /// Map textures waiting for the next HUD batch to upload them.
     map_patches: Vec<horizon_client::font::Patch>,
+    /// Player skin downloads, and which skin each atlas skin slot holds
+    /// (least recently shown first).
+    skin_downloads: horizon_client::skins::Downloader,
+    skin_slots: Vec<(String, usize)>,
     cart_models: minecarts::CartModels,
     /// The boat the player rides.
     riding: Option<u32>,
@@ -751,8 +755,6 @@ struct Game<'a> {
     ender_open: Option<(i32, i32, i32)>,
     /// Block entity data of broken blocks waiting for their dropped item.
     pending: spill::Pending,
-    /// The chest each copper golem has open (`CopperGolem.openedChestPos`).
-    golem_openers: HashMap<u32, (i32, i32, i32)>,
     /// Item entities spawned and block entities removed while the block
     /// behaviour ran (spilled contents, popped resources).
     spill: spill::Spill,
@@ -2812,7 +2814,7 @@ impl Game<'_> {
         self.spawn_loaded_entities();
         if running {
             self.tick_mobs()?;
-            self.tick_copper_golems();
+            self.recheck_golem_openers();
             self.tick_experience();
         }
         self.tick_lan();
@@ -8400,12 +8402,17 @@ pub fn run() -> Result<()> {
         breath_clouds: Vec::new(),
         dragon_model: horizon_client::mobs::load_model(&root, "minecraft:ender_dragon#main"),
         map_patches: Vec::new(),
+        skin_downloads: horizon_client::skins::Downloader::new(
+            std::env::current_dir()
+                .unwrap_or_default()
+                .join("assets/skins"),
+        ),
+        skin_slots: Vec::new(),
         cart_models: minecarts::CartModels::load(&root),
         riding: None,
         ender_items: vec![None; 27],
         ender_open: None,
         pending: Default::default(),
-        golem_openers: HashMap::new(),
         spill: Default::default(),
         recipe_ui: Default::default(),
         mount_menu: Default::default(),

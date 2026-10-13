@@ -593,7 +593,15 @@ public final class VanillaHudOracle {
                                 default -> chat.addPlayerMessage(text, null, null);
                             }
                         }
-                        chat.extractRenderState(capture, font, i("now", 0), 0, 0, net.minecraft.client.gui.components.ChatComponent.DisplayMode.BACKGROUND, false);
+                        // Focused: the chat screen is open (isChatFocused), the chat is drawn in the
+                        // foreground and may be scrolled.
+                        boolean focused = c.has("focused") && b("focused");
+                        if (focused) put(gui, net.minecraft.client.gui.Gui.class, "screen", alloc(net.minecraft.client.gui.screens.ChatScreen.class));
+                        if (c.has("scroll")) chat.scrollChat(i("scroll", 0));
+                        chat.extractRenderState(capture, font, i("now", 0), 0, 0, focused
+                            ? net.minecraft.client.gui.components.ChatComponent.DisplayMode.FOREGROUND
+                            : net.minecraft.client.gui.components.ChatComponent.DisplayMode.BACKGROUND, false);
+                        put(gui, net.minecraft.client.gui.Gui.class, "screen", null);
                     }
                     default -> throw new IllegalArgumentException(c.get("kind").getAsString());
                 }

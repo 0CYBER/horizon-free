@@ -31,8 +31,14 @@ pub struct HudAtlas {
 pub const GLYPH_ROWS: u32 = 512;
 /// 128x128 atlas slots for map textures.
 pub const MAP_SLOTS: usize = 16;
+/// Atlas slots for downloaded player skins (`skins/<sha1>`), 64x64 each.
+pub const SKIN_SLOTS: usize = 32;
 pub fn decode(path: &Path) -> Result<(u32, u32, Vec<u8>)> {
-    let mut decoder = png::Decoder::new(std::io::BufReader::new(fs::File::open(path)?));
+    decode_bytes(&fs::read(path)?)
+}
+/// A PNG in memory as RGBA pixels.
+pub fn decode_bytes(data: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(data));
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = decoder.read_info()?;
     let mut bytes = vec![0; reader.output_buffer_size().ok_or("image too large")?];
@@ -193,6 +199,10 @@ impl HudAtlas {
         // Map textures (game/maps.rs) are written into these slots at run time.
         for i in 0..MAP_SLOTS {
             images.push((format!("horizon/map{i}"), 128, 128, vec![0; 128 * 128 * 4]));
+        }
+        // Downloaded skins (game/scoreboard.rs) likewise.
+        for i in 0..SKIN_SLOTS {
+            images.push((format!("horizon/skin{i}"), 64, 64, vec![0; 64 * 64 * 4]));
         }
         images.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
         let width = 4096u32;
