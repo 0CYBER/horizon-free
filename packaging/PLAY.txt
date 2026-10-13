@@ -30,3 +30,12 @@ Downloaded this archive directly?
 Controls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl
 sprint, left click break, right click place/use, 1-9 or scroll for the hotbar,
 E inventory, Q drop, F1 hide the HUD, F3 debug, Esc pause.
+
+Scripts and AI agents
+  horizon-ctl, in this folder, plays the game from a terminal or a script:
+    ./horizon-ctl launch --world Test --wait     (horizon-ctl.exe on Windows)
+    ./horizon-ctl state
+    ./horizon-ctl help                           lists every command
+  horizon-ctl mcp is an MCP server for AI agents (stdio; add it to your MCP
+  client as the command horizon-ctl with the argument mcp). It finds the game
+  beside it or the version the launcher installed.

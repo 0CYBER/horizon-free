@@ -3,7 +3,7 @@
 tarball for one of your own Linux or macOS machines. The resources are Mojang
 assets: keep the archive in ignored .local/ and never publish or commit it.
 
-    cargo build --release -p horizon-client
+    cargo build --release -p horizon-client --bins
     python3 tools/package_native_client.py
 """
 import argparse
@@ -102,6 +102,9 @@ def main():
     archive = args.out / f'{name}.tar.gz'
     with tarfile.open(archive, 'w:gz', compresslevel=1) as tar:
         tar.add(args.binary, 'horizon/horizon-client')
+        ctl = args.binary.with_name('horizon-ctl')  # built with --bins: scripts and agents play through it
+        if ctl.is_file():
+            tar.add(ctl, 'horizon/horizon-ctl')
         add_bytes(tar, 'horizon/horizon.sh', LAUNCHER.encode(), 0o755)
         tar.add(ROOT / 'docs/media/icon-256.png', 'horizon/horizon.png')
         add_bytes(tar, 'horizon/README.txt', README.format(version=version, commit=commit, platform=plat).encode())
