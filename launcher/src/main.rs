@@ -124,7 +124,7 @@ struct Launcher {
     confirm_remove: Option<String>,
     picker_open: bool,
     settings: Settings,
-    /// The Discord and sponsor links: built in until links.json on main has been read.
+    /// The Discord, sponsor and website links: built in until links.json on main has been read.
     links: backend::Links,
     menu_style: backend::MenuStyle,
     preparing: bool,
@@ -775,6 +775,17 @@ impl Launcher {
                 .child("Join Discord")
                 .on_click(move |_, _, cx| cx.open_url(&url))
         });
+        let website = (!self.links.website.is_empty()).then(|| {
+            let url = self.links.website.clone();
+            div()
+                .id("website")
+                .mb(px(4.))
+                .text_color(t.muted)
+                .cursor_pointer()
+                .hover(move |s| s.text_color(t.text))
+                .child("Website")
+                .on_click(move |_, _, cx| cx.open_url(&url))
+        });
         div()
             .flex()
             .flex_col()
@@ -797,7 +808,7 @@ impl Launcher {
             )
             .child(nav)
             .child(div().flex_1())
-            .child(div().px(px(10.)).text_size(px(theme::SMALL)).text_color(t.faint).children(discord).child(footer))
+            .child(div().px(px(10.)).text_size(px(theme::SMALL)).text_color(t.faint).children(discord).children(website).child(footer))
     }
 
     fn segmented(&self, cx: &mut Context<Self>) -> Div {
