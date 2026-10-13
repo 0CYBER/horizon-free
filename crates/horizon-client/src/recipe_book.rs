@@ -157,8 +157,23 @@ pub struct Entry {
     pub group: Option<String>,
     pub display: Display,
     pub result: ItemStack,
+    /// Every stack its display can show as the result when that is more than
+    /// `result` (a map copy of any map, an arrow of any potion): the search
+    /// tree reads them all, the button shows the first.
+    pub variants: Vec<ItemStack>,
+    /// Ingredients shown as other stacks than their items (by index in
+    /// `requirements`): the potions an imbued arrow's lingering potion is.
+    pub stacks: Vec<(usize, Vec<ItemStack>)>,
 }
 impl Entry {
+    /// Every stack the result display cycles through.
+    pub fn results(&self) -> &[ItemStack] {
+        if self.variants.is_empty() {
+            std::slice::from_ref(&self.result)
+        } else {
+            &self.variants
+        }
+    }
     /// The ingredients that must be matched to craft it, in order.
     pub fn requirements(&self) -> Vec<&Ingredient> {
         match &self.display {
@@ -306,14 +321,16 @@ impl Book {
                 // Custom recipes are never learnable; the others show one
                 // display per material count (TransmuteRecipe.display).
                 Recipe::Special(special) => {
-                    for (display, result) in special.book_displays() {
+                    for shown in special.book_displays() {
                         entries.push(Entry {
                             id: format!("minecraft:{name}"),
                             display_id: -1,
                             category: crafting_category(&category),
                             group: group(&grp),
-                            display,
-                            result,
+                            display: shown.display,
+                            result: shown.result,
+                            variants: shown.variants,
+                            stacks: shown.stacks,
                         });
                     }
                     continue;
@@ -326,6 +343,8 @@ impl Book {
                 group: group(&grp),
                 display,
                 result: result.create(),
+                variants: Vec::new(),
+                stacks: Vec::new(),
             });
         }
         for c in &recipes.cooking {
@@ -345,6 +364,8 @@ impl Book {
                 group: group(&c.group),
                 display: Display::Furnace(c.ingredient.clone()),
                 result: c.result.clone(),
+                variants: Vec::new(),
+                stacks: Vec::new(),
             });
         }
         let order = items
@@ -410,6 +431,85 @@ impl Book {
     pub fn items_of(&self, ingredient: &Ingredient) -> Vec<String> {
         ingredient.1.clone()
     }
+    /// `RecipeBookComponent.fillGhostRecipe` of a book type: the result and the
+    /// ingredients faded into the menu's slots, in the order the component
+    /// sets them. `grid` is the side of the crafting grid, `fuel_empty`
+    /// whether the furnace's fuel slot is empty.
+    pub fn ghost(
+        &self,
+        entry: &Entry,
+        book_type: BookType,
+        grid: usize,
+        fuel_empty: bool,
+        items: &crate::items::Items,
+    ) -> Vec<GhostSlot> {
+        let stacks = |ingredient: &Ingredient| -> Vec<ItemStack> {
+            self.items_of(ingredient)
+                .iter()
+                .map(|i| ItemStack::new(i, 1))
+                .collect()
+        };
+        let mut out = Vec::new();
+        match book_type {
+            BookType::Crafting => {
+                out.push(GhostSlot {
+                    target: GhostTarget::Result,
+                    items: entry.results().to_vec(),
+                });
+                let requirements = entry.requirements();
+                for (ingredient, index) in entry.grid_cells(grid, grid) {
+                    let Some(i) = ingredient else { continue };
+                    let list = match entry.stacks.iter().find(|s| s.0 == i) {
+                        Some(shown) => shown.1.clone(),
+                        None => stacks(requirements[i]),
+                    };
+                    if !list.is_empty() {
+                        out.push(GhostSlot {
+                            target: GhostTarget::Grid(index),
+                            items: list,
+                        });
+                    }
+                }
+            }
+            _ => {
+                out.push(GhostSlot {
+                    target: GhostTarget::Result,
+                    items: entry.results().to_vec(),
+                });
+                if let Display::Furnace(ingredient) = &entry.display {
+                    out.push(GhostSlot {
+                        target: GhostTarget::Input,
+                        items: stacks(ingredient),
+                    });
+                    if fuel_empty {
+                        // `SlotDisplay.AnyFuel`: every item with a cooking fuel
+                        // component, the registry's component lookup listing the
+                        // items of one component value together, the values in
+                        // the order of their first item.
+                        let mut groups: Vec<(String, Vec<ItemStack>)> = Vec::new();
+                        for item in &items.registry_order {
+                            let Some(fuel) = items.get(item).and_then(|i| i.fuel.as_ref()) else {
+                                continue;
+                            };
+                            let key = format!("{fuel:?}");
+                            match groups.iter_mut().find(|g| g.0 == key) {
+                                Some(group) => group.1.push(ItemStack::new(item, 1)),
+                                None => groups.push((key, vec![ItemStack::new(item, 1)])),
+                            }
+                        }
+                        let fuels = groups.into_iter().flat_map(|g| g.1).collect();
+                        out.push(GhostSlot {
+                            target: GhostTarget::Fuel,
+                            items: fuels,
+                        });
+                    }
+                }
+            }
+        }
+        // `GhostSlots.setSlot` keeps only slots with something to show.
+        out.retain(|g| !g.items.is_empty());
+        out
+    }
     /// The recipe-book search tree (`SessionSearchTrees.updateRecipes`, a
     /// `FullTextSearchTree`): without a colon the text must occur in a
     /// tooltip line of a result item of the collection; `namespace:path`
@@ -421,7 +521,10 @@ impl Book {
         tooltip: &dyn Fn(&ItemStack) -> Vec<String>,
     ) -> bool {
         let query = query.to_lowercase();
-        let results: Vec<&ItemStack> = entries.iter().map(|&i| &self.entries[i].result).collect();
+        let results: Vec<&ItemStack> = entries
+            .iter()
+            .flat_map(|&i| self.entries[i].results())
+            .collect();
         let in_lines = |text: &str| {
             results
                 .iter()
@@ -438,6 +541,23 @@ impl Book {
         results.iter().any(|r| id(r).0.contains(namespace))
             && (results.iter().any(|r| id(r).1.contains(path)) || in_lines(path))
     }
+}
+
+/// Where a ghost recipe's stacks are drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GhostTarget {
+    Result,
+    /// A crafting grid slot, row by row.
+    Grid(usize),
+    /// A furnace's input and fuel slots.
+    Input,
+    Fuel,
+}
+/// One slot of a ghost recipe and the stacks it cycles through.
+#[derive(Clone, Debug)]
+pub struct GhostSlot {
+    pub target: GhostTarget,
+    pub items: Vec<ItemStack>,
 }
 
 /// A `RecipeDisplayId` as a `HashMap` key: a record of one int hashes as it.
@@ -747,6 +867,8 @@ mod tests {
             group: group.map(str::to_owned),
             display: Display::Shapeless(vec![ing(&["minecraft:stick"])]),
             result: ItemStack::new("minecraft:stick", 1),
+            variants: Vec::new(),
+            stacks: Vec::new(),
         };
         let book = Book {
             entries: vec![
@@ -793,6 +915,8 @@ mod tests {
                 group: None,
                 display: Display::Shapeless(Vec::new()),
                 result: ItemStack::new("minecraft:stick", 4),
+                variants: Vec::new(),
+                stacks: Vec::new(),
             }],
             placements: HashMap::new(),
             order: HashMap::new(),

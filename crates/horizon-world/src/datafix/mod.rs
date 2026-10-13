@@ -334,6 +334,13 @@ pub fn update_player_to(tag: &mut Tag, to: i32) {
     dynamic::set(tag, "DataVersion", Tag::Int(to));
 }
 
+/// `HotbarManager.load`: a creative toolbar file (`hotbar.nbt`, its DataVersion
+/// 1343 when missing) brought to the current version.
+pub fn update_hotbar(tag: &mut Tag) {
+    let version = dynamic::as_int(tag.get("DataVersion"), 1343);
+    update(Ty::Hotbar, tag, version, CURRENT);
+}
+
 /// The saved data type of a file below a `data` folder (`namespace/path.dat`).
 pub fn saved_data_type(relative: &str) -> Option<Ty> {
     let name = relative.strip_suffix(".dat").unwrap_or(relative);

@@ -56,6 +56,7 @@ pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
         })
     }));
     out.push((key(3818, 0), beehive_fields));
+    out.push((key(3818, 0), empty_item_in_hotbar));
     out.push((key(3818, 1), banner_patterns));
     out.push((key(3818, 2), tipped_arrow_potion));
     out.push((key(3818, 4), particle_unflattening));
@@ -710,6 +711,21 @@ fn beehive_fields(cx: &mut Cx) {
                 })
                 .collect();
             set(be, "bees", Tag::List(bees));
+        }
+    });
+}
+
+/// `EmptyItemInHotbarFix`: a saved toolbar's air or zero-count stacks become
+/// the empty compound.
+fn empty_item_in_hotbar(cx: &mut Cx) {
+    if !matches!(cx.root, Ty::Hotbar) {
+        return;
+    }
+    cx.each(Ty::ItemStack, |stack| {
+        let air = as_str(stack.get("id")).is_none_or(|id| id == "minecraft:air");
+        let empty = as_int(stack.get("Count"), 0) <= 0;
+        if air || empty {
+            *stack = empty_map();
         }
     });
 }

@@ -10,7 +10,7 @@ use horizon_client::{
     hud::{HudBatch, Rect, rgba},
     items::ItemStack,
     menu::place::{PostPlace, Stacked},
-    recipe_book::{Book, BookType, ClientBook, Collection, Display, Entry, Tab},
+    recipe_book::{Book, BookType, ClientBook, Collection, Entry, GhostTarget, Tab},
     recipe_book_screen::{
         self as screen, ButtonView, Call, Drawn, GhostView, ItemCall, OverlayRecipe, OverlayView,
         Screen as Layout, Search, TabView,
@@ -423,7 +423,11 @@ impl Game<'_> {
             }
             if !query.is_empty()
                 && !book.collection_matches(&c.entries, &query, &|stack| {
-                    self.stack_tooltip(stack).into_iter().map(|l| l.0).collect()
+                    horizon_client::item_tooltip::lines(
+                        stack,
+                        self.res.items.get(&stack.item),
+                        &|k| self.res.names.get(k).map(str::to_owned),
+                    )
                 })
             {
                 continue;
@@ -712,68 +716,26 @@ impl Game<'_> {
 
     /// `fillGhostRecipe`: the recipe's ingredients faded into the slots.
     fn fill_ghost(&mut self, book_type: BookType, entry: &Entry) {
+        let grid = self.craft_size;
+        let fuel_empty = self.slot_mut(301).is_none();
         let Some(book) = self.recipe_ui.book.as_ref() else {
             return;
         };
-        let stacks = |ingredient: &horizon_client::crafting::Ingredient| -> Vec<ItemStack> {
-            book.items_of(ingredient)
-                .iter()
-                .map(|i| ItemStack::new(i, 1))
-                .collect()
-        };
-        let mut ghost = Vec::new();
-        match book_type {
-            BookType::Crafting => {
-                let (gw, gh) = (self.craft_size, self.craft_size);
-                ghost.push(Ghost {
-                    slot: 200,
-                    items: vec![entry.result.clone()],
-                    result: true,
-                });
-                let requirements = entry.requirements();
-                for (ingredient, grid_index) in entry.grid_cells(gw, gh) {
-                    if let Some(i) = ingredient {
-                        let items = stacks(requirements[i]);
-                        if !items.is_empty() {
-                            ghost.push(Ghost {
-                                slot: 100 + grid_index,
-                                items,
-                                result: false,
-                            });
-                        }
-                    }
-                }
-            }
-            _ => {
-                ghost.push(Ghost {
-                    slot: 302,
-                    items: vec![entry.result.clone()],
-                    result: true,
-                });
-                if let Display::Furnace(ingredient) = &entry.display {
-                    ghost.push(Ghost {
-                        slot: 300,
-                        items: stacks(ingredient),
-                        result: false,
-                    });
-                    if self.slot_mut(301).is_none() {
-                        let mut fuels: Vec<&std::sync::Arc<str>> = self
-                            .res
-                            .items
-                            .order
-                            .iter()
-                            .filter(|i| self.res.items.get(i).is_some_and(|i| i.fuel.is_some()))
-                            .collect();
-                        fuels.dedup();
-                        ghost.push(Ghost {
-                            slot: 301,
-                            items: fuels.iter().map(|i| ItemStack::new(i, 1)).collect(),
-                            result: false,
-                        });
-                    }
-                }
-            }
-        }
+        let ghost = book
+            .ghost(entry, book_type, grid, fuel_empty, &self.res.items)
+            .into_iter()
+            .map(|g| Ghost {
+                slot: match (g.target, book_type) {
+                    (GhostTarget::Result, BookType::Crafting) => 200,
+                    (GhostTarget::Result, _) => 302,
+                    (GhostTarget::Grid(i), _) => 100 + i,
+                    (GhostTarget::Input, _) => 300,
+                    (GhostTarget::Fuel, _) => 301,
+                },
+                result: g.target == GhostTarget::Result,
+                items: g.items,
+            })
+            .collect();
         self.recipe_ui.ghost = ghost;
     }
 

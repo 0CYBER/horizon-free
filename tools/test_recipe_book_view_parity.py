@@ -11,7 +11,10 @@ RecipeCollection.selectRecipes and the tab and page logic of
 RecipeBookComponent; examples/recipe_book_view_fixture runs
 horizon_client::recipe_book::ClientBook. Per tab: visibility, pages and
 every button's displays with their selected and craftable flags, in order
-(the client's HashMap of display ids decides it).
+(the client's HashMap of display ids decides it). Most cases also carry a
+search text (names, parts of them, ids with a colon, odd ones); the oracle
+searches the collections with the FullTextSearchTree of SessionSearchTrees
+over the tooltip lines and ids of every result a display can show.
 """
 import argparse
 import json
@@ -29,6 +32,51 @@ except ImportError:
     import test_model_baking_parity as baking
     import test_crafter_parity as crafter
     import test_rust_parity as base
+
+
+def queries(rng, items):
+    """Search texts: a name or part of one, with case and spacing changes, ids with a colon, and odd ones."""
+    lang = json.loads((lib.RESOURCES / 'assets/minecraft/lang/en_us.json').read_text())
+    names = []
+    for i in items:
+        path = i.split(':')[-1]
+        names.append((path, lang.get('item.minecraft.' + path) or lang.get('block.minecraft.' + path) or path))
+
+    def make():
+        path, name = rng.choice(names)
+        a = rng.randrange(len(name))
+        part = name[a:a + rng.randint(1, 8)]
+        kind = rng.randrange(14)
+        if kind == 0:
+            return name
+        if kind == 1:
+            return name.upper()
+        if kind == 2:
+            return part
+        if kind == 3:
+            return part.lower()
+        if kind == 4:
+            return 'minecraft:' + path[a % max(1, len(path)):][:rng.randint(0, 6)]
+        if kind == 5:
+            return 'minecraft:' + part
+        if kind == 6:
+            return ' ' + rng.choice(['minecraft', 'mine', 'craft', 'x', '']) + ' : ' + path.split('_')[0] + ' '
+        if kind == 7:
+            return ':' + part
+        if kind == 8:
+            return rng.choice(['minecraft:', ':', 'a:b:c', 'minecraft:oak', 'minecraft:stone', 'oak', 'plank', 'ingot', 'Block of', ' ',
+                               'İ', 'ΣΑΣ', 'ß', 'tool', 'enchant', 'dye'])
+        if kind == 9:
+            return path
+        if kind == 10:
+            return path.replace('_', ' ')
+        if kind == 11:
+            return 'minecraft:' + path
+        if kind == 12:
+            return rng.choice(['Wooden', 'Iron', 'Golden', 'Diamond', 'Stone', 'Netherite', 'Copper', 'Smooth', 'Cut', 'Chiseled']) \
+                + rng.choice(['', ' ', ' Pickaxe', ' Slab', ' Stairs'])
+        return ''
+    return make
 
 
 def main():
@@ -54,6 +102,7 @@ def main():
     rng = gen.rng
     ids = sorted('minecraft:' + n for n in recipes.recipes)
     cases = []
+    query = queries(rng, items)
     for n in range(args.cases):
         kind = ['crafting', 'crafting', 'furnace', 'blast_furnace', 'smoker'][n % 5]
         # Few to most recipes known: the table grows and display ids collide.
@@ -72,7 +121,7 @@ def main():
         inventory = [s for _, s in case['inventory']]
         slots = [s for _, s in case['grid']]
         cases.append({'type': kind, 'grid': 2 if menu == 'inventory' else 3, 'history': history, 'inventory': inventory,
-                      'slots': slots, 'filtering': rng.random() < 0.5})
+                      'slots': slots, 'filtering': rng.random() < 0.5, 'search': query() if rng.random() < 0.7 else ''})
     (work / 'cases.jsonl').write_text(''.join(json.dumps(c) + '\n' for c in cases))
     run = subprocess.run(['java', '-Xmx2G', '-cp', str(classes) + os.pathsep + deps, 'dev.horizonlab.parity.VanillaRecipeBookViewOracle',
                           str(work / 'cases.jsonl'), str(work / 'native.txt')], capture_output=True, text=True)

@@ -6,7 +6,16 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
 import java.util.function.Predicate;
+import java.util.stream.Stream;
+import net.minecraft.ChatFormatting;
 import net.minecraft.client.ClientRecipeBook;
+import net.minecraft.client.searchtree.FullTextSearchTree;
+import net.minecraft.client.searchtree.SearchTree;
+import net.minecraft.core.Registry;
+import net.minecraft.util.context.ContextMap;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.TooltipFlag;
+import net.minecraft.world.item.crafting.display.SlotDisplayContext;
 import net.minecraft.client.gui.screens.recipebook.RecipeCollection;
 import net.minecraft.client.gui.screens.recipebook.SearchRecipeBookCategory;
 import net.minecraft.core.registries.Registries;
@@ -34,7 +43,10 @@ import net.minecraft.world.item.crafting.display.ShapelessCraftingRecipeDisplay;
  * every tab of the book RecipeBookTabButton.updateVisibility and
  * RecipeBookComponent.updateCollections (without a search) decide the
  * buttons. Printed per tab: visibility, the page count, and each button's
- * displays with their selected and craftable flags.
+ * displays with their selected and craftable flags. A case may carry a search
+ * text: the collections are searched as SessionSearchTrees.updateRecipes builds
+ * the tree (a FullTextSearchTree over the tooltip lines and ids of the results)
+ * and RecipeBookComponent.updateCollections applies it.
  */
 public final class VanillaRecipeBookViewOracle {
     record Tab(ExtendedRecipeBookCategory category, String name) {}
@@ -109,12 +121,38 @@ public final class VanillaRecipeBookViewOracle {
                         for (RecipeCollection c : book.getCollection(tab.category())) c.selectRecipes(contents, canDisplay);
                     }
                     boolean filtering = f.get("filtering").getAsBoolean();
+                    String query = f.has("search") ? f.get("search").getAsString() : "";
+                    Set<RecipeCollection> found = null;
+                    if (!query.isEmpty()) {
+                        // SessionSearchTrees.updateRecipes.
+                        List<RecipeCollection> all = book.getCollections();
+                        Registry<Item> itemRegistry = ParityData.access.lookupOrThrow(net.minecraft.core.registries.Registries.ITEM);
+                        Item.TooltipContext tooltipContext = Item.TooltipContext.of(ParityData.access);
+                        ContextMap recipeContext = SlotDisplayContext.fromLevel(ParityData.level);
+                        SearchTree<RecipeCollection> tree = new FullTextSearchTree<>(
+                            collection -> collection.getRecipes().stream().flatMap(e -> e.resultItems(recipeContext).stream())
+                                .flatMap(item -> item.getTooltipLines(tooltipContext, null, TooltipFlag.Default.NORMAL).stream())
+                                .map(l -> ChatFormatting.stripFormatting(l.getString()).trim()).filter(x -> !x.isEmpty()),
+                            collection -> collection.getRecipes().stream().flatMap(e -> e.resultItems(recipeContext).stream())
+                                .map(stack -> itemRegistry.getKey(stack.getItem())),
+                            all);
+                        if (System.getenv("DUMP_TOOLTIPS") != null) {
+                            for (RecipeCollection c : all) for (var e : c.getRecipes()) for (var stack : e.resultItems(recipeContext)) {
+                                System.err.println("TT " + e.id().index() + " " + itemRegistry.getKey(stack.getItem()) + " " + stack.getTooltipLines(tooltipContext, null, TooltipFlag.Default.NORMAL).stream().map(l -> l.getString()).toList());
+                            }
+                        }
+                        found = new java.util.LinkedHashSet<>(tree.search(query.toLowerCase(Locale.ROOT)));
+                    }
                     StringBuilder result = new StringBuilder();
                     for (Tab tab : tabs) {
                         List<RecipeCollection> collections = new ArrayList<>(book.getCollection(tab.category()));
                         boolean visible = tab.category() instanceof SearchRecipeBookCategory || collections.stream().anyMatch(RecipeCollection::hasAnySelected);
                         result.append(tab.name()).append(visible ? " shown" : " hidden");
                         collections.removeIf(c -> !c.hasAnySelected());
+                        if (found != null) {
+                            Set<RecipeCollection> set = found;
+                            collections.removeIf(c -> !set.contains(c));
+                        }
                         if (filtering) collections.removeIf(c -> !c.hasCraftable());
                         result.append(" pages=").append((int) Math.ceil(collections.size() / 20.0));
                         for (RecipeCollection c : collections) {
