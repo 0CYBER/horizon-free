@@ -3,11 +3,60 @@
 //! shape differs from the general code of [`super`]; the other types fall through.
 use super::{Key, Ty, Walker, as_str, key, namespaced};
 use crate::nbt::Tag;
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
+/// DataFixerUpper reads the data once, with the schema of its version: an entity tree
+/// of an id that schema does not register stays untyped for good, even when a later
+/// schema registers the id. Such a tree carries this key until the data is written.
+pub(in crate::datafix) const UNTYPED: &str = "\u{0}untyped";
+
+thread_local! {
+    /// Set while the data is read with its own schema: the walkers mark what is untyped.
+    static MARKING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Mark the untyped entity trees of data read with the schema at `k`.
+pub(in crate::datafix) fn mark_untyped(root: Ty, data: &mut Tag, k: Key) {
+    if k >= END {
+        return;
+    }
+    MARKING.with(|m| m.set(true));
+    super::walk(root, data, k, Ty::BlockEntity, &mut |_| {});
+    MARKING.with(|m| m.set(false));
+}
+
+/// Remove the untyped marks of `v` (it is read again).
+pub(in crate::datafix) fn strip_untyped(v: &mut Tag) {
+    match v {
+        Tag::Compound(c) => {
+            c.remove(&crate::datafix::dynamic::key(UNTYPED));
+            c.values_mut().for_each(strip_untyped);
+        }
+        Tag::List(items) => items.iter_mut().for_each(strip_untyped),
+        _ => {}
+    }
+}
+
+fn mark(tree: &mut Tag) {
+    if let Tag::Compound(_) = tree {
+        crate::datafix::dynamic::set(tree, UNTYPED, Tag::Byte(1));
+    }
+}
+
+/// Whether every tree of a list reads as typed (a list reads only if all its elements do);
+/// while the data is read, the trees of a list that does not are marked.
+pub(in crate::datafix) fn all_trees_typed(trees: &mut [Tag], k: Key) -> bool {
+    let ok = trees.iter().all(|t| entity_tree_known(t, k));
+    if !ok && MARKING.with(Cell::get) {
+        trees.iter_mut().for_each(mark);
+    }
+    ok
+}
+
 /// The schemas below this key are described here.
-pub(super) const END: Key = key(1800, 0);
+pub(in crate::datafix) const END: Key = key(1800, 0);
 
 impl Walker<'_> {
     /// `children` for a schema below [`END`]; false when the general code applies.
@@ -27,20 +76,28 @@ impl Walker<'_> {
                 if entity_tree_known(v, k) {
                     if k < key(135, 0) {
                         // The vehicle this entity rides is a tree of its own.
-                        if let Some(vehicle) = v.get_mut("Riding")
-                            && entity_tree_known(vehicle, k)
-                        {
-                            self.walk(Ty::EntityTree, vehicle);
+                        if let Some(vehicle) = v.get_mut("Riding") {
+                            if entity_tree_known(vehicle, k) {
+                                self.walk(Ty::EntityTree, vehicle);
+                            } else if MARKING.with(Cell::get) {
+                                mark(vehicle);
+                            }
                         }
                     } else if let Some(Tag::List(trees)) = v.get_mut("Passengers")
-                        && trees.iter().all(|t| entity_tree_known(t, k))
+                        && all_trees_typed(trees, k)
                     {
                         for tree in trees {
                             self.walk(Ty::EntityTree, tree);
                         }
                     }
                     self.walk(Ty::Entity, v);
+                } else if MARKING.with(Cell::get) {
+                    mark(v);
                 }
+                true
+            }
+            Ty::UntaggedSpawner if k >= key(106, 0) => {
+                self.legacy_untagged_spawner(v);
                 true
             }
             Ty::BlockEntity if k < key(704, 0) => {
@@ -68,9 +125,7 @@ impl Walker<'_> {
         let k = self.k;
         // A list of entity trees reads only if every entity of it is known.
         if let Some(Tag::List(trees)) = v.get_mut("Entities")
-            && trees.iter().all(|t| {
-                legacy_entity_known(&namespaced(&as_str(t.get("id")).unwrap_or_default()), k)
-            })
+            && all_trees_typed(trees, k)
         {
             for tree in trees {
                 self.walk(Ty::EntityTree, tree);
@@ -96,6 +151,27 @@ impl Walker<'_> {
         {
             self.values(Ty::StructureFeature, s, "Starts");
         }
+    }
+
+    /// `UNTAGGED_SPAWNER` of V106 to V2830: the potential entities are a list that
+    /// reads only if all of them do.
+    fn legacy_untagged_spawner(&mut self, v: &mut Tag) {
+        let k = self.k;
+        if let Some(Tag::List(potentials)) = v.get_mut("SpawnPotentials") {
+            let mut trees: Vec<Option<&mut Tag>> =
+                potentials.iter_mut().map(|p| p.get_mut("Entity")).collect();
+            let ok = trees
+                .iter()
+                .all(|t| t.as_deref().is_some_and(|t| entity_tree_known(t, k)));
+            if ok {
+                for tree in trees.iter_mut().flatten() {
+                    self.walk(Ty::EntityTree, tree);
+                }
+            } else if MARKING.with(Cell::get) {
+                trees.iter_mut().flatten().for_each(|t| mark(t));
+            }
+        }
+        self.field(Ty::EntityTree, v, "SpawnData");
     }
 
     /// `ENTITY` of the schemas V99 to V703 (CamelCase ids).
@@ -412,7 +488,8 @@ pub(in crate::datafix) fn legacy_entity_known(id: &str, k: Key) -> bool {
 
 /// Whether the entity tree's own entity reads as a typed value at `k`.
 pub(in crate::datafix) fn entity_tree_known(tree: &Tag, k: Key) -> bool {
-    legacy_entity_known(&namespaced(&as_str(tree.get("id")).unwrap_or_default()), k)
+    tree.get(UNTYPED).is_none()
+        && legacy_entity_known(&namespaced(&as_str(tree.get("id")).unwrap_or_default()), k)
 }
 
 /// Whether `id` is an entity registered by the schemas V99 to V703 (CamelCase ids).

@@ -133,6 +133,9 @@ pub fn reread(k: Key, e: &mut Tag) {
 
 /// [`reread`] for a value of another type (a block entity).
 pub fn reread_as(ty: Ty, k: Key, v: &mut Tag) {
+    // What was untyped is read again with the new schema.
+    schema::flat::strip_untyped(v);
+    schema::flat::mark_untyped(ty, v, k);
     walk(ty, v, k, Ty::BlockEntity, &mut mark_read);
     walk(ty, v, k, Ty::Entity, &mut mark_read);
 }
@@ -152,6 +155,7 @@ fn strip_last_read(v: &mut Tag) {
     match v {
         Tag::Compound(c) => {
             c.remove(&dynamic::key(LAST_READ));
+            c.remove(&dynamic::key(schema::flat::UNTYPED));
             for value in c.values_mut() {
                 strip_last_read(value);
             }
@@ -207,10 +211,30 @@ pub fn update(root: Ty, data: &mut Tag, from: i32, to: i32) {
     // The data is read once with the schema of its version (its read hooks)...
     walk(root, data, from_key, Ty::BlockEntity, &mut mark_read);
     walk(root, data, from_key, Ty::Entity, &mut mark_read);
+    schema::flat::mark_untyped(root, data, from_key);
     read_hooks(root, data, from_key);
     // ...then every fix above that key, up to the target version...
+    let mut refreshed = from_key >= schema::flat::END;
     for (k, fix) in fixes() {
         if k > from_key && k / 10 <= to_version {
+            if !refreshed && k >= schema::flat::END {
+                // The data of before 1.14 is read again once its own fixes are done.
+                refreshed = true;
+                walk(
+                    root,
+                    data,
+                    schema::flat::END - 1,
+                    Ty::BlockEntity,
+                    &mut mark_read,
+                );
+                walk(
+                    root,
+                    data,
+                    schema::flat::END - 1,
+                    Ty::Entity,
+                    &mut mark_read,
+                );
+            }
             fix(&mut Cx { root, data, k });
         }
     }

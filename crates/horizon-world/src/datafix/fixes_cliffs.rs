@@ -736,11 +736,20 @@ pub(super) fn add_flag(cx: &mut Cx, flag: &str, value: bool) {
 
 /// `SpawnerDataFix`: spawn data and potentials wrapped as weighted entries.
 fn spawner_data(cx: &mut Cx) {
+    use super::schema::flat::UNTYPED;
     cx.each(Ty::UntaggedSpawner, |v| {
-        if let Some(data) = remove(v, "SpawnData") {
+        // Only what read as typed is wrapped.
+        if v.get("SpawnData").is_some_and(|d| d.get(UNTYPED).is_none())
+            && let Some(data) = remove(v, "SpawnData")
+        {
             set(v, "SpawnData", Tag::compound([("entity", data)]));
         }
-        if let Some(potentials) = v.get("SpawnPotentials").cloned() {
+        let untyped = |entries: &Tag| {
+            stream(Some(entries))
+                .iter()
+                .any(|e| e.get("Entity").is_some_and(|t| t.get(UNTYPED).is_some()))
+        };
+        if let Some(potentials) = v.get("SpawnPotentials").filter(|p| !untyped(p)).cloned() {
             let entries = stream(Some(&potentials))
                 .into_iter()
                 .map(|mut entry| {

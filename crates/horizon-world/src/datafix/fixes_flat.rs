@@ -499,9 +499,9 @@ fn spawn_eggs(cx: &mut Cx) {
             let entity_id = s
                 .get("tag")
                 .and_then(|t| t.get("EntityTag"))
+                .filter(|e| super::schema::flat::entity_tree_known(e, input))
                 .and_then(|e| as_str(e.get("id")))
                 .map(|id| namespaced(&id))
-                .filter(|id| super::schema::flat::legacy_entity_known(id, input))
                 .unwrap_or_else(|| "minecraft:wither".to_owned());
             let egg = lookup(t::SPAWN_EGGS, &entity_id).unwrap_or("minecraft:pig_spawn_egg");
             set(s, "id", string(egg));

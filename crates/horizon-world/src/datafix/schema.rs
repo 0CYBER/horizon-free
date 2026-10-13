@@ -224,6 +224,8 @@ impl Walker<'_> {
                 }
             }
             Ty::EntityChunk => self.list(Ty::EntityTree, v, "Entities"),
+            // What the schema it was read with did not know stays untyped (see `flat::UNTYPED`).
+            Ty::EntityTree if v.get(flat::UNTYPED).is_some() => {}
             Ty::EntityTree => {
                 self.list(Ty::EntityTree, v, "Passengers");
                 self.walk(Ty::Entity, v);

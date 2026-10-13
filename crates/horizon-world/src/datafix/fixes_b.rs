@@ -1135,8 +1135,13 @@ pub(super) fn equipment_to_slots(e: &mut Tag) {
     };
     let body = remove(e, "body_armor_item");
     let saddle = remove(e, "saddle");
-    // A stack without an id is a placeholder for an empty slot.
-    let pick = |list: &Vec<Tag>, i: usize| list.get(i).filter(|s| s.get("id").is_some()).cloned();
+    // A stack without an id (an id that does not read as an item name is none) is a
+    // placeholder for an empty slot.
+    let pick = |list: &Vec<Tag>, i: usize| {
+        list.get(i)
+            .filter(|s| matches!(s.get("id"), Some(Tag::String(_))))
+            .cloned()
+    };
     let slots = [
         ("mainhand", pick(&hands, 0)),
         ("offhand", pick(&hands, 1)),
