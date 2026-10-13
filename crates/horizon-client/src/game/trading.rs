@@ -230,7 +230,7 @@ impl Game<'_> {
             || item == "minecraft:villager_spawn_egg"
             || self.station.is_some()
             || m.extra.flag2
-            || villager::sleeping(m)
+            || (species == Species::Villager && villager::sleeping(m))
         {
             return Ok(false);
         }
