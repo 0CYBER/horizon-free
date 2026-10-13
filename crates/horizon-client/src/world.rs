@@ -26,6 +26,9 @@ pub struct World {
     /// Chunks changed since the last save.
     pub modified: HashSet<(i32, i32)>,
     pub block_entities: HashMap<(i32, i32, i32), crate::containers::BlockEntity>,
+    /// Each chest's `ContainerOpenersCounter`: opener count and largest
+    /// interaction range.
+    pub chest_openers: HashMap<(i32, i32, i32), (i32, f64)>,
     /// `BaseContainerBlockEntity.name`: custom names of container block entities.
     pub block_names: HashMap<(i32, i32, i32), String>,
     /// States (by id) whose writes are recorded in `watched_writes` (sculk
@@ -116,6 +119,7 @@ impl World {
             loaded_entities: Vec::new(),
             modified: HashSet::new(),
             block_entities: HashMap::new(),
+            chest_openers: HashMap::new(),
             block_names: HashMap::new(),
             watched: Vec::new(),
             watched_writes: Vec::new(),

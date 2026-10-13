@@ -57,6 +57,7 @@ pub mod species;
 pub mod sulfur_cube;
 pub mod tame;
 pub mod trader;
+pub mod transport_items;
 pub mod undead;
 pub mod vex;
 pub mod villager;
@@ -520,6 +521,8 @@ pub struct Extra {
     pub counter: i32,
     pub counter2: i32,
     pub home: Option<[i32; 3]>,
+    /// A copper golem's `openedChestPos`.
+    pub opened_chest: Option<[i32; 3]>,
     pub point: Option<[f64; 3]>,
     pub vector: [f64; 3],
     /// Active status effects: (effect id, ticks left, amplifier).
@@ -636,6 +639,22 @@ pub struct Mob {
 #[derive(Clone, Debug)]
 pub enum MobEvent {
     Sound(&'static str, [f64; 3], f32, f32),
+    /// `ChestBlockEntity.startOpen` / `stopOpen` by a copper golem: the
+    /// chest's opener count goes up or down (interaction range 3).
+    ChestOpen {
+        chest: [i32; 3],
+        open: bool,
+    },
+    /// `CopperGolem.turnToStatue`.
+    BecomeStatue {
+        mob: u32,
+    },
+    /// A copper golem took from or filled a chest slot.
+    ChestSlot {
+        chest: [i32; 3],
+        slot: usize,
+        stack: Option<crate::items::ItemStack>,
+    },
     /// `OfferFlowerGoal.stop`: the item goes to the target's antenna (saddle)
     /// slot if it is empty, as a guaranteed drop.
     Gift {
@@ -927,6 +946,8 @@ pub struct Seen {
     pub hurt_by: Option<(Who, i32)>,
     /// A raider in an active raid.
     pub active_raid: bool,
+    /// A copper golem's `openedChestPos` (`ContainerUser.hasContainerOpen`).
+    pub opened_chest: Option<[i32; 3]>,
     /// A villager's reputation of the player (`getPlayerReputation`).
     pub player_rep: i32,
     /// `isPushable` and pushed by others (`Entity.push(Entity)` moves it).
@@ -981,6 +1002,7 @@ impl Mob {
             delay: m.extra.ints[5],
             hurt_by: m.ai.last_hurt_by.map(|w| (w, m.ai.last_hurt_by_time)),
             active_raid: raider::has_active_raid(m),
+            opened_chest: m.extra.opened_chest,
             player_rep: match (villager, player) {
                 (true, Some(uuid)) => villager::ext(m).map_or(0, |e| e.gossips.reputation(uuid)),
                 _ => 0,
@@ -1137,6 +1159,8 @@ pub struct MobWorld<'a> {
     pub sea_level: i32,
     /// The scoreboard teams of the player and the mobs (collision rules).
     pub teams: Teams,
+    /// Item data (max stack sizes), when the host has it.
+    pub items: Option<&'a crate::items::Items>,
 }
 /// `Entity.getTeam` of the player and of the mobs on a team.
 #[derive(Clone, Debug, Default)]

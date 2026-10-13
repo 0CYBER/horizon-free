@@ -211,7 +211,7 @@ public final class VanillaMobAiOracle {
                     }
                 }
                 case "origin" -> { s.originX = Integer.parseInt(f[1]); s.originZ = Integer.parseInt(f[2]); }
-                case "fill", "block" -> s.blocks.add(f);
+                case "fill", "block", "chest" -> s.blocks.add(f);
                 case "at" -> s.timed.add(new Object[] {Integer.parseInt(f[1]), java.util.Arrays.copyOfRange(f, 2, f.length)});
                 case "watch" -> {
                     int[] box = new int[6];
@@ -450,9 +450,21 @@ public final class VanillaMobAiOracle {
         static void place(String[] b, ServerLevel level) throws Exception {
             var blocks = level.holderLookup(Registries.BLOCK);
             {
-                if (b[0].equals("block")) {
+                if (b[0].equals("block") || b[0].equals("chest")) {
                     BlockState state = BlockStateParser.parseForBlock(blocks, b[4], false).blockState();
-                    level.setBlock(new BlockPos(Integer.parseInt(b[1]), Integer.parseInt(b[2]), Integer.parseInt(b[3])), state, 2 | 16);
+                    BlockPos at = new BlockPos(Integer.parseInt(b[1]), Integer.parseInt(b[2]), Integer.parseInt(b[3]));
+                    level.setBlock(at, state, 2 | 16);
+                    // chest X Y Z STATE SLOTS: the slots' contents (item*count, - for empty).
+                    if (b[0].equals("chest") && b.length > 5) {
+                        var chest = (net.minecraft.world.level.block.entity.ChestBlockEntity) level.getBlockEntity(at);
+                        String[] slots = b[5].split(",");
+                        for (int k = 0; k < slots.length; k++) {
+                            if (slots[k].equals("-")) continue;
+                            String[] ic = slots[k].split("\\*");
+                            chest.setItem(k, new net.minecraft.world.item.ItemStack(
+                                BuiltInRegistries.ITEM.getValue(net.minecraft.resources.Identifier.parse(ic[0])), Integer.parseInt(ic[1])));
+                        }
+                    }
                 } else {
                     BlockState state = BlockStateParser.parseForBlock(blocks, b[7], false).blockState();
                     int x0 = Integer.parseInt(b[1]), y0 = Integer.parseInt(b[2]), z0 = Integer.parseInt(b[3]);
@@ -565,6 +577,14 @@ public final class VanillaMobAiOracle {
                         case "leashed", "leashto" -> {
                             // Leashed once every mob exists (below).
                         }
+                        case "hand" -> {
+                            String[] ic = v.split("\\*");
+                            mob.setItemSlot(net.minecraft.world.entity.EquipmentSlot.MAINHAND, new net.minecraft.world.item.ItemStack(
+                                BuiltInRegistries.ITEM.getValue(net.minecraft.resources.Identifier.parse(ic[0])), Integer.parseInt(ic[1])));
+                        }
+                        case "cooldown" -> {
+                            // Set after the seeded constructor draw (below).
+                        }
                         default -> throw new IllegalArgumentException(flag);
                     }
                 }
@@ -572,6 +592,15 @@ public final class VanillaMobAiOracle {
                 for (Runnable r : afterAdd) r.run();
                 mob.getRandom().setSeed(spec.seed);
                 Brain<?> brain = mob.getBrain();
+                if (mob instanceof net.minecraft.world.entity.animal.golem.CopperGolem) {
+                    // The constructor's TRANSPORT_ITEMS_COOLDOWN_TICKS draw, made with the seeded
+                    // random; "cooldown=N" then sets it (0: none, transporting at once).
+                    int cooldown = mob.getRandom().nextInt(60, 100);
+                    for (String flag : spec.flags)
+                        if (flag.startsWith("cooldown=")) cooldown = Integer.parseInt(flag.substring(9));
+                    if (cooldown > 0) brain.setMemory(MemoryModuleType.TRANSPORT_ITEMS_COOLDOWN_TICKS, cooldown);
+                    else brain.eraseMemory(MemoryModuleType.TRANSPORT_ITEMS_COOLDOWN_TICKS);
+                }
                 @SuppressWarnings("unchecked")
                 Map<Object, Sensor<?>> sensors = (Map<Object, Sensor<?>>) get(brain, "sensors");
                 for (Sensor<?> sensor : sensors.values()) sensor.randomlyDelayStart(mob.getRandom());
@@ -722,6 +751,7 @@ public final class VanillaMobAiOracle {
                 }
                 for (int i = 0; i < ENTS.size(); i++) print(t, i, ENTS.get(i));
                 for (BlockPos h : heartPositions) printHeart(t, level, h);
+                for (String[] b : s.blocks) if (b[0].equals("chest")) printChest(t, s, level, b);
                 for (String sound : SOUNDS) out.println(t + " sound " + sound);
                 for (var w : watched.entrySet()) {
                     BlockState now = level.getBlockState(w.getKey());
@@ -753,6 +783,19 @@ public final class VanillaMobAiOracle {
             props.sort(null);
             if (!props.isEmpty()) sb.append('[').append(String.join(",", props)).append(']');
             return sb.toString();
+        }
+
+        /** A chest's slots (trailing empties dropped) and opener count. */
+        static void printChest(int t, Scenario s, ServerLevel level, String[] b) throws Exception {
+            BlockPos at = new BlockPos(Integer.parseInt(b[1]), Integer.parseInt(b[2]), Integer.parseInt(b[3]));
+            if (!(level.getBlockEntity(at) instanceof net.minecraft.world.level.block.entity.ChestBlockEntity chest)) return;
+            List<String> slots = new ArrayList<>();
+            for (int k = 0; k < chest.getContainerSize(); k++) slots.add(stack(chest.getItem(k)));
+            while (!slots.isEmpty() && slots.getLast().equals("-")) slots.removeLast();
+            Object counter = get(chest, "openersCounter");
+            out.println(t + " chest " + (at.getX() - s.originX) + "," + at.getY() + "," + (at.getZ() - s.originZ) + " "
+                + (slots.isEmpty() ? "-" : String.join(",", slots)) + " "
+                + ((net.minecraft.world.level.block.entity.ContainerOpenersCounter) counter).getOpenerCount());
         }
 
         /** A heart's block state and block entity, and the level random. */
@@ -913,6 +956,11 @@ public final class VanillaMobAiOracle {
                 sb.append("\tmem ").append(String.join(" ", mem));
             }
             if (m instanceof Villager villager) sb.append("\tvx ").append(villager(villager));
+            if (m instanceof net.minecraft.world.entity.animal.golem.CopperGolem golem) {
+                Object opened = get(golem, "openedChestPos");
+                sb.append("\tcg ").append(golem.getState().ordinal()).append(' ').append(stack(golem.getMainHandItem())).append(' ')
+                    .append(opened == null ? "-" : pos((BlockPos) opened));
+            }
             out.println(sb);
         }
 

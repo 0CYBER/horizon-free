@@ -755,8 +755,6 @@ struct Game<'a> {
     ender_open: Option<(i32, i32, i32)>,
     /// Block entity data of broken blocks waiting for their dropped item.
     pending: spill::Pending,
-    /// The chest each copper golem has open (`CopperGolem.openedChestPos`).
-    golem_openers: HashMap<u32, (i32, i32, i32)>,
     /// Item entities spawned and block entities removed while the block
     /// behaviour ran (spilled contents, popped resources).
     spill: spill::Spill,
@@ -2816,7 +2814,7 @@ impl Game<'_> {
         self.spawn_loaded_entities();
         if running {
             self.tick_mobs()?;
-            self.tick_copper_golems();
+            self.recheck_golem_openers();
             self.tick_experience();
         }
         self.tick_lan();
@@ -8390,7 +8388,6 @@ pub fn run() -> Result<()> {
         ender_items: vec![None; 27],
         ender_open: None,
         pending: Default::default(),
-        golem_openers: HashMap::new(),
         spill: Default::default(),
         recipe_ui: Default::default(),
         mount_menu: Default::default(),

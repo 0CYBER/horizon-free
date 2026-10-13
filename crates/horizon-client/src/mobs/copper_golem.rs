@@ -1,12 +1,10 @@
-//! Copper golems (`CopperGolem`, `CopperGolemAi`): they carry items from
-//! copper chests to chests (see `game::copper_golems` for the container side
-//! of `TransportItemsBetweenContainers`), play the chest interaction
-//! animations, spin their heads when idle, oxidise over time and finally turn
-//! into statues.
+//! Copper golems (`CopperGolem`): their brain (`CopperGolemAi`, in
+//! `animal_brain`) carries items from copper chests to chests
+//! (`transport_items`); here the chest interaction animations, the idle head
+//! spin, and weathering until they turn into statues.
 use super::{
     Mob, MobEvent, MobWorld,
     anim::{Poses, State},
-    goals::{Cx, Goal, JUMP, LOOK, MOVE, Panic, goal_clone},
     keyframes::Animation,
 };
 use horizon_core::random::RandomSource;
@@ -15,11 +13,10 @@ use std::collections::HashMap;
 // Copper golem state: `variant` the weathering (0 unaffected .. 3 oxidized),
 // `variant3` the `CopperGolemState`, `main_hand` with `ints[1]` the carried
 // stack, the saddle slot the antenna (`EQUIPMENT_SLOT_ANTENNA`), `vector[0]`
-// the next weathering tick (-1 unset, -2 waxed), `ints[0]` the idle animation start tick, `home` the chest
-// being served with `positions` the visited chests, `point` where it walks,
-// `scratch` = [transport phase, ticks since reaching the target, interaction
-// state, transport cooldown ticks]. AnimationState slots: idle (0), getting an
-// item (1), getting nothing (2), dropping an item (3), dropping nothing (4).
+// the next weathering tick (-1 unset, -2 waxed), `ints[0]` the idle animation
+// start tick, `opened_chest` the `openedChestPos`. AnimationState slots: idle
+// (0), getting an item (1), getting nothing (2), dropping an item (3),
+// dropping nothing (4).
 pub const IDLE: u8 = 0;
 pub const GETTING_ITEM: u8 = 1;
 pub const GETTING_NO_ITEM: u8 = 2;
@@ -34,12 +31,6 @@ pub fn register(m: &mut Mob) {
     m.persistent = true;
     // nextWeatheringTick starts unset (-1); waxed is -2.
     m.extra.vector[0] = -1.0;
-    m.extra.scratch[3] = 60 + m.random.next_int_bound(40).unwrap_or(0);
-    let g = &mut m.ai.goals;
-    g.add(0, Panic::new(1.5));
-    g.add(1, Serve);
-    g.add(2, super::goals::LookAtPlayer::new(6.0).probability(0.02));
-    g.add(3, Idle::default());
 }
 /// `CopperGolemOxidationLevels`: the body and eye textures.
 pub fn texture(m: &Mob) -> String {
@@ -77,101 +68,6 @@ pub fn sound(m: &Mob, what: &str) -> &'static str {
         _ => "entity.copper_golem.step",
     }
 }
-/// `CopperGolemAi`'s transport behaviour is running a target.
-fn serving(m: &Mob) -> bool {
-    m.extra.home.is_some()
-}
-/// `TransportItemsBetweenContainers` walking and looking at its chest, and
-/// standing still while interacting with it.
-#[derive(Clone, Debug)]
-struct Serve;
-impl Goal for Serve {
-    goal_clone!();
-    fn flags(&self) -> u8 {
-        MOVE | LOOK
-    }
-    fn can_use(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
-        serving(m) && !m.ai.panicking
-    }
-    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        self.can_use(m, cx)
-    }
-    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
-        let Some(h) = m.extra.home else { return };
-        m.look_at([
-            f64::from(h[0]) + 0.5,
-            f64::from(h[1]) + 0.5,
-            f64::from(h[2]) + 0.5,
-        ]);
-        match m.extra.point {
-            Some(p) => {
-                if m.ai.nav.is_done() || m.age.is_multiple_of(10) {
-                    let block = [
-                        p[0].floor() as i32,
-                        p[1].floor() as i32,
-                        p[2].floor() as i32,
-                    ];
-                    let path = m.create_path_to(cx.w, block, 0);
-                    m.nav_move_to_path(path, 1.0);
-                }
-            }
-            None => {
-                // stopInPlace.
-                m.ai.nav.stop();
-                m.velocity.x = 0.0;
-                m.velocity.z = 0.0;
-            }
-        }
-    }
-    fn stop(&mut self, m: &mut Mob, _: &mut Cx) {
-        m.ai.nav.stop();
-    }
-}
-/// The idle `RunOne`: `RandomStroll.stroll(1.0, 2, 2)` or `DoNothing(30, 60)`,
-/// only while the transport cooldown runs.
-#[derive(Clone, Debug, Default)]
-struct Idle {
-    wait: i32,
-    stroll: bool,
-}
-impl Goal for Idle {
-    goal_clone!();
-    fn flags(&self) -> u8 {
-        MOVE | JUMP
-    }
-    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        if serving(m) || m.extra.scratch[3] <= 0 || !m.ai.nav.is_done() {
-            return false;
-        }
-        if m.random.next_int_bound(2).unwrap_or(0) == 0 {
-            let Some(p) = m.land_random_pos(cx.w, 2, 2) else {
-                return false;
-            };
-            self.stroll = true;
-            m.nav_move_to(cx.w, p, 1.0);
-        } else {
-            self.stroll = false;
-            self.wait = 30 + m.random.next_int_bound(30).unwrap_or(0);
-        }
-        true
-    }
-    fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
-        if serving(m) {
-            return false;
-        }
-        if self.stroll {
-            !m.ai.nav.is_done()
-        } else {
-            self.wait > 0
-        }
-    }
-    fn tick(&mut self, _: &mut Mob, _: &mut Cx) {
-        self.wait -= 1;
-    }
-    fn stop(&mut self, m: &mut Mob, _: &mut Cx) {
-        m.ai.nav.stop();
-    }
-}
 /// `CopperGolem.setupAnimationStates` (client) and the sound of the head spin.
 pub fn ai_step(m: &mut Mob, _w: &MobWorld, events: &mut Vec<MobEvent>) {
     let age = m.age as f32;
@@ -191,11 +87,14 @@ pub fn ai_step(m: &mut Mob, _w: &MobWorld, events: &mut Vec<MobEvent>) {
             if m.extra.ints[0] == tick {
                 st[0].start(age);
             } else if m.extra.ints[0] == 0 {
-                m.extra.ints[0] = tick + 200 + m.random.next_int_bound(40).unwrap_or(0);
+                // The client entity's own random, not the server's.
+                let mut r =
+                    horizon_core::random::LegacyRandom::new(i64::from(m.id) ^ i64::from(tick));
+                m.extra.ints[0] = tick + 200 + r.next_int_bound(40).unwrap_or(0);
             }
             if tick == m.extra.ints[0] + 10 {
                 let at = [m.position.x, m.position.y, m.position.z];
-                events.push(MobEvent::Sound(sound(m, "spin"), at, 1.0, 1.0));
+                events.push(MobEvent::LocalSound(sound(m, "spin"), at, 1.0, 1.0));
                 m.extra.ints[0] = 0;
             }
         }
@@ -206,6 +105,51 @@ pub fn ai_step(m: &mut Mob, _w: &MobWorld, events: &mut Vec<MobEvent>) {
             st[s as usize].start_if_stopped(age);
         }
         _ => {}
+    }
+}
+/// `CopperGolem.updateWeathering` on the level random: the first tick sets
+/// the next weathering tick, which advances the weather state; once
+/// oxidized, a golem on an air block may turn into a statue
+/// (`MobEvent::BecomeStatue`, done by the host).
+pub fn update_weathering(
+    m: &mut Mob,
+    w: &MobWorld,
+    lr: &mut impl RandomSource,
+    events: &mut Vec<MobEvent>,
+) {
+    if !m.alive() || m.removed {
+        return;
+    }
+    let now = w.game_time;
+    let next = m.extra.vector[0] as i64;
+    if next == -2 {
+        return;
+    }
+    let interval = |r: &mut dyn FnMut() -> i32| 504_000 + i64::from(r());
+    let mut draw = || lr.next_int_bound(48_001).unwrap_or(0);
+    if next == -1 {
+        m.extra.vector[0] = (now + interval(&mut draw)) as f64;
+        return;
+    }
+    let fully = m.extra.variant >= 3;
+    if now >= next && !fully {
+        let new = weather_next(m.extra.variant);
+        m.extra.variant = new;
+        m.extra.vector[0] = if new >= 3 {
+            0.0
+        } else {
+            (next + interval(&mut draw)) as f64
+        };
+    }
+    if fully {
+        let p = [
+            m.position.x.floor() as i32,
+            m.position.y.floor() as i32,
+            m.position.z.floor() as i32,
+        ];
+        if w.facts.is_air(w.world.block(p[0], p[1], p[2])) && lr.next_float() <= 0.0058 {
+            events.push(MobEvent::BecomeStatue { mob: m.id });
+        }
     }
 }
 /// `CopperGolemModel.setupAnim`.
