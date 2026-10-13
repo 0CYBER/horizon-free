@@ -185,7 +185,15 @@ impl Launcher {
                         }
                         Job::Server => {
                             self.server = None;
-                            self.server_error = error;
+                            let old = self.server_log.iter().any(|l| l.contains("unknown option --dedicated"));
+                            self.server_error = error.map(|e| {
+                                if old {
+                                    "This version has no dedicated server. Pick a newer one.".to_string()
+                                } else {
+                                    let tail = self.server_log.iter().rev().find(|l| !l.trim().is_empty());
+                                    tail.map_or(e.clone(), |t| format!("{e}: {t}"))
+                                }
+                            });
                         }
                     }
                 }
@@ -646,8 +654,10 @@ impl Launcher {
             (Mode::Server, false) => "Start server",
             (Mode::Server, true) => "Stop server",
         };
-        let mut play = button("play", play_label, Kind::Primary, &t).min_w(px(96.));
-        if !prepared || self.preparing || (self.mode == Mode::Client && running) {
+        let kind = if self.mode == Mode::Server && running { Kind::Secondary } else { Kind::Primary };
+        let mut play = button("play", play_label, kind, &t).min_w(px(96.));
+        let eula = self.settings.server_dir.as_ref().is_some_and(|d| backend::eula_agreed(d));
+        if !prepared || self.preparing || (self.mode == Mode::Client && running) || (self.mode == Mode::Server && !eula) {
             play = disabled(play);
         } else {
             play = play.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -684,7 +694,7 @@ impl Launcher {
             .settings
             .minecraft_dir
             .as_deref()
-            .map_or_else(|| div().text_color(t.muted).child("Not found"), |p| div().child(short(p)));
+            .map_or_else(|| div().text_color(t.muted).child("Not found. Choose the official launcher's game folder."), |p| div().child(short(p)));
         let mut rows = div()
             .flex()
             .flex_col()
@@ -709,6 +719,37 @@ impl Launcher {
                 ))),
                 &t,
             ));
+            let value = if eula {
+                div().child("Agreed")
+            } else {
+                div().text_color(t.muted).child("Running a server needs your agreement to the Minecraft EULA.")
+            };
+            let mut actions = div().flex().gap(px(4.)).child(
+                button("eula-read", "Read", Kind::Ghost, &t)
+                    .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.open_url("https://aka.ms/MinecraftEULA"))),
+            );
+            if !eula {
+                actions = actions.child(button("eula-agree", "Agree", Kind::Secondary, &t).on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
+                        if let Some(dir) = &this.settings.server_dir {
+                            if let Err(e) = backend::agree_eula(dir) {
+                                this.server_error = Some(e);
+                            }
+                        }
+                        cx.notify();
+                    },
+                )));
+            }
+            rows = rows.child(divider(&t)).child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(16.))
+                    .py(px(12.))
+                    .child(div().w(px(150.)).flex_none().text_size(px(13.)).text_color(t.muted).child("Minecraft EULA"))
+                    .child(div().flex_1().min_w_0().text_size(px(13.)).text_color(t.text).child(value))
+                    .child(actions),
+            );
         }
         rows = rows.child(divider(&t));
 
@@ -1126,7 +1167,7 @@ impl Render for Launcher {
                     .flex_1()
                     .h_full()
                     .overflow_y_scroll()
-                    .child(div().flex().justify_center().px(px(40.)).py(px(36.)).child(div().w_full().max_w(px(760.)).child(content))),
+                    .child(div().flex().px(px(48.)).py(px(36.)).child(div().w_full().max_w(px(760.)).child(content))),
             )
     }
 }

@@ -75,10 +75,16 @@ pub fn releases() -> Result<Vec<Release>, String> {
 pub fn roadmap() -> Result<String, String> {
     let url = format!("https://raw.githubusercontent.com/{REPO}/main/README.md");
     let readme = get(&url)?.into_string().map_err(|e| e.to_string())?;
-    for title in ["## Roadmap", "## Project status"] {
-        if let Some(start) = readme.lines().position(|l| l.trim() == title) {
-            let section: Vec<&str> =
-                readme.lines().skip(start + 1).take_while(|l| !l.starts_with("## ")).collect();
+    let level = |l: &str| l.chars().take_while(|c| *c == '#').count();
+    for title in ["Roadmap", "Project status"] {
+        let lines: Vec<&str> = readme.lines().collect();
+        if let Some(start) = lines.iter().position(|l| level(l) > 0 && l.trim_start_matches('#').trim() == title) {
+            let depth = level(lines[start]);
+            let section: Vec<&str> = lines[start + 1..]
+                .iter()
+                .take_while(|l| !(level(l) > 0 && level(l) <= depth))
+                .copied()
+                .collect();
             return Ok(section.join("\n").trim().to_string());
         }
     }
@@ -255,6 +261,17 @@ pub fn server_command(tag: &str, folder: &Path) -> Command {
     let mut cmd = Command::new(version_dir(tag).join(CLIENT));
     cmd.current_dir(folder).arg("--resources").arg(resources(tag)).args(["--dedicated", "--nogui"]);
     cmd
+}
+
+pub fn eula_agreed(folder: &Path) -> bool {
+    fs::read_to_string(folder.join("eula.txt")).is_ok_and(|s| s.lines().any(|l| l.trim() == "eula=true"))
+}
+
+/// Writes eula.txt as vanilla's server expects it, once the player agreed in the launcher.
+pub fn agree_eula(folder: &Path) -> Result<(), String> {
+    fs::create_dir_all(folder).map_err(|e| e.to_string())?;
+    let text = "#By changing the setting below to TRUE you are indicating your agreement to our EULA (https://aka.ms/MinecraftEULA).\neula=true\n";
+    fs::write(folder.join("eula.txt"), text).map_err(|e| e.to_string())
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]

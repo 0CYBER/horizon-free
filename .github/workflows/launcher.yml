@@ -1,0 +1,32 @@
+name: launcher
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            artifact: horizon-launcher-macos-arm64
+            binary: horizon-launcher
+          - os: windows-latest
+            artifact: horizon-launcher-windows-x64
+            binary: horizon-launcher.exe
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: launcher
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: launcher
+      - run: cargo build --release --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: launcher/target/release/${{ matrix.binary }}

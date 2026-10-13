@@ -10,6 +10,7 @@ enum Block {
     Item(usize, Option<u64>, String, Vec<(Range<usize>, Span)>),
     Code(String),
     Rule,
+    Table(Vec<Vec<(String, Vec<(Range<usize>, Span)>)>>),
 }
 
 #[derive(Clone, Copy)]
@@ -28,6 +29,7 @@ pub fn render(source: &str, t: &Theme) -> AnyElement {
     let mut item: Option<(usize, Option<u64>)> = None;
     let mut heading = None;
     let mut code: Option<String> = None;
+    let mut table: Option<Vec<Vec<(String, Vec<(Range<usize>, Span)>)>>> = None;
     let flush = |blocks: &mut Vec<Block>, text: &mut String, spans: &mut Vec<_>, item: &mut Option<(usize, Option<u64>)>, heading: Option<u8>| {
         if text.trim().is_empty() {
             text.clear();
@@ -41,7 +43,7 @@ pub fn render(source: &str, t: &Theme) -> AnyElement {
             _ => Block::Paragraph(t, s),
         });
     };
-    for event in Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH) {
+    for event in Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES) {
         match event {
             Event::Start(Tag::Heading { level, .. }) => {
                 heading = Some(match level {
@@ -94,6 +96,21 @@ pub fn render(source: &str, t: &Theme) -> AnyElement {
             Event::SoftBreak => text.push(' '),
             Event::HardBreak => text.push('\n'),
             Event::Rule => blocks.push(Block::Rule),
+            Event::Start(Tag::Table(_)) => {
+                flush(&mut blocks, &mut text, &mut spans, &mut item, None);
+                table = Some(Vec::new())
+            }
+            Event::Start(Tag::TableHead | Tag::TableRow) => {
+                if let Some(t) = &mut table {
+                    t.push(Vec::new())
+                }
+            }
+            Event::End(TagEnd::TableCell) => {
+                if let Some(row) = table.as_mut().and_then(|t| t.last_mut()) {
+                    row.push((std::mem::take(&mut text), std::mem::take(&mut spans)));
+                }
+            }
+            Event::End(TagEnd::Table) => blocks.push(Block::Table(table.take().unwrap_or_default())),
             _ => {}
         }
     }
@@ -148,6 +165,20 @@ pub fn render(source: &str, t: &Theme) -> AnyElement {
                 .child(code.trim_end().to_string())
                 .into_any_element(),
             Block::Rule => div().h(px(1.)).bg(t.border).my(px(8.)).into_any_element(),
+            Block::Table(rows) => {
+                let mut grid = div().flex().flex_col().my(px(4.)).border_t_1().border_color(t.border);
+                for (i, row) in rows.into_iter().enumerate() {
+                    let mut line = div().flex().gap(px(16.)).py(px(8.)).border_b_1().border_color(t.border);
+                    let columns = row.len();
+                    for (j, (text, spans)) in row.into_iter().enumerate() {
+                        // Two-column tables keep a narrow first column; wider ones share the width.
+                        let cell = if j == 0 && columns > 1 { div().w(px(180.)).flex_none() } else if j + 1 < columns && columns > 2 { div().w(px(56.)).flex_none() } else { div().flex_1().min_w_0() };
+                        line = line.child(cell.when(i == 0, |d| d.text_color(t.text).font_weight(FontWeight::MEDIUM).text_size(px(12.5))).child(styled(text, spans)));
+                    }
+                    grid = grid.child(line);
+                }
+                grid.into_any_element()
+            }
         });
     }
     column.into_any_element()
