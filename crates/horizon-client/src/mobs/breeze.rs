@@ -6,7 +6,7 @@ use super::{
     anim::{Poses, State},
     keyframes::Animation,
 };
-use horizon_core::{geometry::Vec3, random::RandomSource};
+use horizon_core::{geometry::Vec3, jmath, random::RandomSource};
 use std::collections::HashMap;
 
 // `variant3` is the pose, `variant` the pose the animations last saw,
@@ -96,9 +96,9 @@ fn jump_vector(m: &Mob, target: Vec3, max_velocity: f32, angle: i32) -> Option<V
     let r = r2.sqrt();
     let y = d.y;
     let g = m.gravity();
-    let sin2 = f64::from(2.0 * angrad).sin();
-    let cos_sq = f64::from(angrad).cos().powf(2.0);
-    let (sin, cos) = (f64::from(angrad).sin(), f64::from(angrad).cos());
+    let sin2 = jmath::sin(f64::from(2.0 * angrad));
+    let cos_sq = jmath::pow(jmath::cos(f64::from(angrad)), 2.0);
+    let (sin, cos) = (jmath::sin(f64::from(angrad)), jmath::cos(f64::from(angrad)));
     let v0sq = r2 * g / (r * sin2 - 2.0 * y * cos_sq);
     if v0sq < 0.0 {
         return None;
@@ -108,7 +108,7 @@ fn jump_vector(m: &Mob, target: Vec3, max_velocity: f32, angle: i32) -> Option<V
         return None;
     }
     let (v0r, v0y) = (v0 * cos, v0 * sin);
-    Some(Vec3::new(v0r * xz.cos(), v0y, v0r * xz.sin()).scale(f64::from(0.95_f32)))
+    Some(Vec3::new(v0r * jmath::cos(xz), v0y, v0r * jmath::sin(xz)).scale(f64::from(0.95_f32)))
 }
 /// `LongJump.calculateOptimalJumpVector`: the allowed angles shuffled, the
 /// first that reaches the target.
