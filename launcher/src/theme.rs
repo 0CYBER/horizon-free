@@ -1,13 +1,22 @@
 //! One neutral palette in two appearances and one accent. Spacing follows 4/8/12/16/24/32.
+//! Type: Geist for the interface, Instrument Serif for titles, Geist Mono for consoles and
+//! commands, all bundled (SIL Open Font License). Five sizes: 12, 13, 15, 28 and 56.
 use gpui::{rgb, Hsla, WindowAppearance};
+use std::time::Duration;
 
-pub const FONT: &str = "Inter";
-#[cfg(target_os = "macos")]
-pub const MONO: &str = "Menlo";
-#[cfg(windows)]
-pub const MONO: &str = "Consolas";
-#[cfg(not(any(target_os = "macos", windows)))]
-pub const MONO: &str = "DejaVu Sans Mono";
+pub const FONT: &str = "Geist";
+pub const DISPLAY: &str = "Instrument Serif";
+pub const MONO: &str = "Geist Mono";
+
+pub const SMALL: f32 = 12.;
+pub const BODY: f32 = 13.;
+pub const LARGE: f32 = 15.;
+pub const TITLE: f32 = 28.;
+pub const HERO: f32 = 56.;
+
+/// Motion: short and eased out, never bouncy.
+pub const QUICK: Duration = Duration::from_millis(160);
+pub const MOVE: Duration = Duration::from_millis(240);
 
 #[derive(Clone, Copy)]
 pub struct Theme {
@@ -22,6 +31,7 @@ pub struct Theme {
     pub accent: Hsla,
     pub on_accent: Hsla,
     pub danger: Hsla,
+    pub dark: bool,
 }
 
 fn c(hex: u32) -> Hsla {
@@ -49,6 +59,7 @@ impl Theme {
             accent: c(0x4c9a64),
             on_accent: c(0xffffff),
             danger: c(0xd9705f),
+            dark: true,
         }
     }
 
@@ -65,6 +76,7 @@ impl Theme {
             accent: c(0x3b8753),
             on_accent: c(0xffffff),
             danger: c(0xb84a3a),
+            dark: false,
         }
     }
 }

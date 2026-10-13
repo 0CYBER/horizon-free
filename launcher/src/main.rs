@@ -4,16 +4,18 @@
 mod markdown;
 mod theme;
 
-use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings};
+use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Updates};
 use gpui::{
-    div, prelude::*, px, size, App, Application, Bounds, ClickEvent, Context, Div, FocusHandle, FontWeight,
-    KeyDownEvent, PathPromptOptions, ScrollHandle, SharedString, Stateful, Subscription, TitlebarOptions, Window,
+    div, ease_out_quint, img, prelude::*, px, relative, size, Animation, AnimationExt, AnyElement, App, Application, Bounds,
+    ClickEvent, Context, Div, ElementId, FocusHandle, FontWeight, Hsla, Image, ImageFormat, KeyDownEvent,
+    ObjectFit, PathPromptOptions, ScrollHandle, SharedString, Stateful, Subscription, TitlebarOptions, Window,
     WindowBounds, WindowOptions,
 };
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use theme::Theme;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -22,7 +24,33 @@ enum Page {
     Versions,
     Notes,
     Next,
+    Settings,
 }
+
+impl Page {
+    const ALL: [(Page, &'static str); 5] = [
+        (Page::Play, "Play"),
+        (Page::Versions, "Versions"),
+        (Page::Notes, "Patch notes"),
+        (Page::Next, "What's next"),
+        (Page::Settings, "Settings"),
+    ];
+    fn index(self) -> usize {
+        Self::ALL.iter().position(|(p, _)| *p == self).unwrap_or(0)
+    }
+}
+
+/// The launcher's own update, as the sidebar and Settings show it.
+#[derive(Clone, PartialEq)]
+enum SelfUpdate {
+    Idle,
+    Downloading(String, f32),
+    Ready(String),
+    Failed(String),
+}
+
+/// How often the launcher looks for new releases while it is open.
+const CHECK_EVERY: Duration = Duration::from_secs(4 * 3600);
 
 #[derive(Clone, Copy, PartialEq)]
 enum Mode {
@@ -41,6 +69,18 @@ const LOG_LINES: usize = 2000;
 struct Launcher {
     theme: Theme,
     page: Page,
+    /// The page before the last switch and a counter, for the page and sidebar transitions.
+    previous_page: Page,
+    switches: usize,
+    backgrounds: (Arc<Image>, Arc<Image>),
+    updates: Updates,
+    checked: Option<Instant>,
+    update_error: Option<String>,
+    self_update: SelfUpdate,
+    /// The Horizon version being installed as an update, and whether it becomes the selected one.
+    update_install: Option<(String, bool)>,
+    /// The install bar's previous and current fraction, so it moves rather than jumps.
+    bar: (f32, f32),
     mode: Mode,
     releases: Load<Vec<Release>>,
     roadmap: Load<String>,
@@ -92,9 +132,22 @@ impl Launcher {
         if settings.selected.as_ref().is_none_or(|s| !installed.contains(s)) {
             settings.selected = installed.first().cloned();
         }
+        let background = |bytes: &[u8]| Arc::new(Image::from_bytes(ImageFormat::Jpeg, bytes.to_vec()));
         let mut this = Self {
             theme: Theme::for_appearance(window.appearance()),
             page: Page::Play,
+            previous_page: Page::Play,
+            switches: 0,
+            backgrounds: (
+                background(include_bytes!("../assets/bg-dark.jpg")),
+                background(include_bytes!("../assets/bg-light.jpg")),
+            ),
+            updates: Updates::default(),
+            checked: None,
+            update_error: None,
+            self_update: SelfUpdate::Idle,
+            update_install: None,
+            bar: (0., 0.),
             mode: Mode::Client,
             releases: Load::Loading,
             roadmap: Load::Loading,
@@ -122,7 +175,50 @@ impl Launcher {
         };
         this.fetch_releases();
         this.fetch_roadmap();
+        this.check_updates();
         this
+    }
+
+    fn go(&mut self, page: Page) {
+        if page != self.page {
+            self.previous_page = self.page;
+            self.page = page;
+            self.switches += 1;
+        }
+        self.picker_open = false;
+    }
+
+    fn check_updates(&mut self) {
+        self.checked = Some(Instant::now());
+        let tx = self.tx.clone();
+        std::thread::spawn(move || tx.send(Msg::Updates(backend::check_updates())));
+    }
+
+    fn update_launcher(&mut self, release: Release) {
+        if !backend::self_update_allowed() || matches!(self.self_update, SelfUpdate::Downloading(..) | SelfUpdate::Ready(_)) {
+            return;
+        }
+        let version = backend::launcher_version(&release.tag).unwrap_or_default().to_string();
+        self.self_update = SelfUpdate::Downloading(version, 0.);
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let progress = |p| {
+                let _ = tx.send(Msg::LauncherProgress(p));
+            };
+            let _ = tx.send(Msg::LauncherUpdated(backend::self_update(&release, progress)));
+        });
+    }
+
+    /// Installs the Horizon version the last check found, keeping the player's choice of
+    /// version unless they were on the newest one.
+    fn install_update(&mut self) {
+        let Some(release) = self.updates.horizon.clone() else { return };
+        if self.installing.is_some() {
+            return;
+        }
+        let select = backend::select_after_update(self.settings.selected.as_deref(), &self.installed);
+        self.update_install = Some((release.tag.clone(), select));
+        self.install(&release);
     }
 
     fn fetch_releases(&mut self) {
@@ -144,17 +240,53 @@ impl Launcher {
             match msg {
                 Msg::Releases(r) => self.releases = r.map_or_else(Load::Failed, Load::Ready),
                 Msg::Roadmap(r) => self.roadmap = r.map_or_else(Load::Failed, Load::Ready),
-                Msg::Progress(tag, p) => self.installing = Some((tag, p)),
+                Msg::Progress(tag, p) => {
+                    self.bar = (self.bar.1, p);
+                    self.installing = Some((tag, p));
+                }
                 Msg::Installed(tag, result) => {
                     self.installing = None;
+                    self.bar = (0., 0.);
                     self.installed = backend::installed();
+                    let as_update = self.update_install.take().filter(|(t, _)| *t == tag);
                     match result {
                         Ok(()) => {
-                            self.settings.selected = Some(tag);
+                            if self.updates.horizon.as_ref().is_some_and(|r| r.tag == tag) {
+                                self.updates.horizon = None;
+                            }
+                            if as_update.is_none_or(|(_, select)| select) {
+                                self.settings.selected = Some(tag);
+                            }
                             self.settings.save();
                         }
                         Err(e) => self.install_error = Some((tag, e)),
                     }
+                }
+                Msg::Updates(Ok(updates)) => {
+                    self.update_error = None;
+                    self.updates = updates;
+                    if self.settings.auto_install {
+                        self.install_update();
+                    }
+                    if let Some(release) = self.updates.launcher.clone() {
+                        self.update_launcher(release);
+                    }
+                }
+                Msg::Updates(Err(e)) => self.update_error = Some(e),
+                Msg::LauncherProgress(p) => {
+                    if let SelfUpdate::Downloading(_, f) = &mut self.self_update {
+                        *f = p;
+                    }
+                }
+                Msg::LauncherUpdated(result) => {
+                    let version = match &self.self_update {
+                        SelfUpdate::Downloading(v, _) => v.clone(),
+                        _ => String::new(),
+                    };
+                    self.self_update = match result {
+                        Ok(()) => SelfUpdate::Ready(version),
+                        Err(e) => SelfUpdate::Failed(e),
+                    };
                 }
                 Msg::Line(job, line) => {
                     let log = if job == Job::Server { &mut self.server_log } else { &mut self.prepare_log };
@@ -199,6 +331,9 @@ impl Launcher {
                 }
             }
         }
+        if self.checked.is_some_and(|at| at.elapsed() > CHECK_EVERY) {
+            self.check_updates();
+        }
         if changed {
             cx.notify();
         }
@@ -212,6 +347,7 @@ impl Launcher {
         let Some((url, size)) = release.asset.clone() else { return };
         let (tag, tx) = (release.tag.clone(), self.tx.clone());
         self.installing = Some((tag.clone(), 0.0));
+        self.bar = (0., 0.);
         self.install_error = None;
         std::thread::spawn(move || {
             let progress = |p| {
@@ -342,9 +478,62 @@ enum Kind {
     Ghost,
 }
 
+/// The element under the pointer and the one it just left, with when that happened. Hover
+/// backgrounds ease in and out from these rather than snapping.
+struct HoverState {
+    on: Option<(SharedString, Instant)>,
+    off: Option<(SharedString, Instant)>,
+}
+
+static HOVER: Mutex<HoverState> = Mutex::new(HoverState { on: None, off: None });
+
+fn track_hover(el: Stateful<Div>, id: SharedString) -> Stateful<Div> {
+    el.on_hover(move |hovered, window, _| {
+        let mut state = HOVER.lock().unwrap();
+        let is_on = state.on.as_ref().is_some_and(|(h, _)| *h == id);
+        if *hovered && !is_on {
+            state.off = state.on.take();
+            state.on = Some((id.clone(), Instant::now()));
+        } else if !*hovered && is_on {
+            state.off = Some((id.clone(), Instant::now()));
+            state.on = None;
+        }
+        window.refresh();
+    })
+}
+
+/// A layer under an element's content that fades `color` in while it is hovered.
+fn hover_layer(id: &SharedString, color: Hsla, radius: f32) -> AnyElement {
+    let layer = div().absolute().top_0().left_0().size_full().rounded(px(radius));
+    let state = HOVER.lock().unwrap();
+    // Each transition gets its own animation id, from when it started, so it plays once.
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    let start = *START.get_or_init(Instant::now);
+    let key = |dir: &str, at: Instant| ElementId::named_usize(format!("{id}-{dir}"), (at - start).as_micros() as usize);
+    let ease = || Animation::new(theme::QUICK).with_easing(ease_out_quint());
+    if let Some((_, at)) = state.on.as_ref().filter(|(h, _)| h == id) {
+        return layer
+            .with_animation(key("in", *at), ease(), move |d, t| d.bg(color.opacity(color.a * t)))
+            .into_any_element();
+    }
+    if let Some((_, at)) = state.off.as_ref().filter(|(h, at)| h == id && at.elapsed() < theme::QUICK) {
+        return layer
+            .with_animation(key("out", *at), ease(), move |d, t| d.bg(color.opacity(color.a * (1. - t))))
+            .into_any_element();
+    }
+    layer.into_any_element()
+}
+
 fn button(id: impl Into<SharedString>, label: impl Into<SharedString>, kind: Kind, t: &Theme) -> Stateful<Div> {
+    let id: SharedString = id.into();
+    let t = *t;
+    let hover = match kind {
+        Kind::Primary => gpui::white().opacity(0.10),
+        _ => t.hover,
+    };
     let base = div()
-        .id(id.into())
+        .id(id.clone())
+        .relative()
         .flex()
         .flex_none()
         .items_center()
@@ -352,20 +541,16 @@ fn button(id: impl Into<SharedString>, label: impl Into<SharedString>, kind: Kin
         .h(px(30.))
         .px(px(12.))
         .rounded(px(6.))
-        .text_size(px(13.))
+        .text_size(px(theme::BODY))
         .font_weight(FontWeight::MEDIUM)
         .cursor_pointer()
-        .child(label.into());
-    let t = *t;
+        .child(hover_layer(&id, hover, 6.))
+        .child(div().relative().child(label.into()));
+    let base = track_hover(base, id);
     match kind {
-        Kind::Primary => base.bg(t.accent).text_color(t.on_accent).hover(move |s| s.opacity(0.9)),
-        Kind::Secondary => base
-            .border_1()
-            .border_color(t.border)
-            .bg(t.raised)
-            .text_color(t.text)
-            .hover(move |s| s.bg(t.hover)),
-        Kind::Ghost => base.text_color(t.muted).hover(move |s| s.bg(t.hover).text_color(t.text)),
+        Kind::Primary => base.bg(t.accent).text_color(t.on_accent).active(|s| s.opacity(0.82)),
+        Kind::Secondary => base.border_1().border_color(t.border).bg(t.raised).text_color(t.text).active(|s| s.opacity(0.8)),
+        Kind::Ghost => base.text_color(t.muted).hover(move |s| s.text_color(t.text)).active(|s| s.opacity(0.8)),
     }
 }
 
@@ -377,9 +562,16 @@ fn page_header(title: &str, description: &str, t: &Theme) -> Div {
     div()
         .flex()
         .flex_col()
-        .gap(px(4.))
-        .child(div().text_size(px(20.)).font_weight(FontWeight::SEMIBOLD).text_color(t.text).child(title.to_string()))
-        .child(div().text_size(px(13.)).text_color(t.muted).child(description.to_string()))
+        .gap(px(6.))
+        .child(
+            div()
+                .font_family(theme::DISPLAY)
+                .text_size(px(theme::TITLE))
+                .line_height(px(32.))
+                .text_color(t.text)
+                .child(title.to_string()),
+        )
+        .child(div().text_size(px(theme::BODY)).text_color(t.muted).child(description.to_string()))
 }
 
 fn divider(t: &Theme) -> Div {
@@ -443,25 +635,70 @@ fn megabytes(bytes: u64) -> String {
 impl Launcher {
     fn sidebar(&self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let item = |page: Page, label: &'static str, cx: &mut Context<Self>| {
-            let active = self.page == page;
+        const STEP: f32 = 32.;
+        let mut nav = div().relative().flex().flex_col().gap(px(2.));
+        // The selection is one pill that slides to the chosen item.
+        let (from, to) = (self.previous_page.index() as f32 * STEP, self.page.index() as f32 * STEP);
+        nav = nav.child(
             div()
-                .id(label)
+                .absolute()
+                .left_0()
+                .w_full()
+                .h(px(30.))
+                .rounded(px(6.))
+                .bg(t.raised)
+                .border_1()
+                .border_color(t.border)
+                .with_animation(
+                    ElementId::named_usize("pill", self.switches),
+                    Animation::new(theme::MOVE).with_easing(ease_out_quint()),
+                    move |d, p| d.top(px(from + (to - from) * p)),
+                ),
+        );
+        for (page, label) in Page::ALL {
+            let active = self.page == page;
+            let id = SharedString::from(format!("nav-{label}"));
+            let item = div()
+                .id(id.clone())
+                .relative()
                 .flex()
                 .items_center()
                 .h(px(30.))
                 .px(px(10.))
                 .rounded(px(6.))
-                .text_size(px(13.))
+                .text_size(px(theme::BODY))
                 .cursor_pointer()
-                .when(active, |d| d.bg(t.raised).text_color(t.text).font_weight(FontWeight::MEDIUM))
-                .when(!active, |d| d.text_color(t.muted).hover(move |s| s.bg(t.hover).text_color(t.text)))
-                .child(label)
+                .when(!active, |d| d.child(hover_layer(&id, t.hover.opacity(0.7), 6.)))
+                .child(
+                    div()
+                        .relative()
+                        .when(active, |d| d.text_color(t.text).font_weight(FontWeight::MEDIUM))
+                        .when(!active, |d| d.text_color(t.muted))
+                        .child(label),
+                )
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.page = page;
-                    this.picker_open = false;
+                    this.go(page);
                     cx.notify();
-                }))
+                }));
+            nav = nav.child(track_hover(item, id));
+        }
+        let footer = match &self.self_update {
+            SelfUpdate::Ready(version) => div()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(div().child(format!("Launcher {} → {version}", backend::VERSION)))
+                .child(
+                    div()
+                        .id("restart")
+                        .text_color(t.accent)
+                        .font_weight(FontWeight::MEDIUM)
+                        .cursor_pointer()
+                        .hover(|s| s.opacity(0.8))
+                        .child("Restart to update")
+                        .on_click(|_, _, _| backend::restart()),
+                ),
+            _ => div().child(format!("Launcher {}", backend::VERSION)),
         };
         div()
             .flex()
@@ -469,38 +706,23 @@ impl Launcher {
             .flex_none()
             .w(px(200.))
             .h_full()
-            .bg(t.sidebar)
+            .bg(t.sidebar.opacity(0.72))
             .border_r_1()
             .border_color(t.border)
             .p(px(12.))
             .child(
                 div()
                     .px(px(10.))
-                    .pt(px(8.))
+                    .pt(px(4.))
                     .pb(px(20.))
-                    .text_size(px(14.))
-                    .font_weight(FontWeight::SEMIBOLD)
+                    .font_family(theme::DISPLAY)
+                    .text_size(px(22.))
                     .text_color(t.text)
                     .child("Horizon"),
             )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.))
-                    .child(item(Page::Play, "Play", cx))
-                    .child(item(Page::Versions, "Versions", cx))
-                    .child(item(Page::Notes, "Patch notes", cx))
-                    .child(item(Page::Next, "What's next", cx)),
-            )
+            .child(nav)
             .child(div().flex_1())
-            .child(
-                div()
-                    .px(px(10.))
-                    .text_size(px(12.))
-                    .text_color(t.faint)
-                    .child(concat!("Launcher ", env!("CARGO_PKG_VERSION"))),
-            )
+            .child(div().px(px(10.)).text_size(px(theme::SMALL)).text_color(t.faint).child(footer))
     }
 
     fn segmented(&self, cx: &mut Context<Self>) -> Div {
@@ -617,7 +839,7 @@ impl Launcher {
                     .hover(move |s| s.bg(t.hover).text_color(t.text))
                     .child("Manage versions")
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.page = Page::Versions;
+                        this.go(Page::Versions);
                         this.picker_open = false;
                         cx.notify();
                     })),
@@ -635,7 +857,7 @@ impl Launcher {
                 centered("No version installed yet.", &t).child(
                     button("go-versions", "Choose a version", Kind::Secondary, &t).on_click(cx.listener(
                         |this, _: &ClickEvent, _, cx| {
-                            this.page = Page::Versions;
+                            this.go(Page::Versions);
                             cx.notify();
                         },
                     )),
@@ -644,6 +866,7 @@ impl Launcher {
         };
         let prepared = backend::is_prepared(&tag);
         let version = backend::game_version(&tag);
+        let hero = self.hero(&tag, &version, prepared, cx);
         let running = match self.mode {
             Mode::Client => self.client.is_some(),
             Mode::Server => self.server.is_some(),
@@ -655,7 +878,8 @@ impl Launcher {
             (Mode::Server, true) => "Stop server",
         };
         let kind = if self.mode == Mode::Server && running { Kind::Secondary } else { Kind::Primary };
-        let mut play = button("play", play_label, kind, &t).min_w(px(96.));
+        let mut play =
+            button("play", play_label, kind, &t).min_w(px(120.)).h(px(40.)).px(px(24.)).text_size(px(theme::LARGE));
         let eula = self.settings.server_dir.as_ref().is_some_and(|d| backend::eula_agreed(d));
         if !prepared || self.preparing || (self.mode == Mode::Client && running) || (self.mode == Mode::Server && !eula) {
             play = disabled(play);
@@ -753,7 +977,8 @@ impl Launcher {
         }
         rows = rows.child(divider(&t));
 
-        let mut page = div().flex().flex_col().gap(px(24.)).child(header).child(actions).child(rows);
+        let _ = header;
+        let mut page = div().flex().flex_col().gap(px(24.)).child(hero).child(actions).child(rows);
         if self.preparing {
             let last = self.prepare_log.back().cloned().unwrap_or_default();
             page = page.child(
@@ -785,6 +1010,193 @@ impl Launcher {
             page = page.child(self.console(cx));
         }
         page
+    }
+
+    /// The Play page's focal point: what will start, and a line from its notes.
+    fn hero(&self, tag: &str, version: &str, prepared: bool, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let summary = match &self.releases {
+            Load::Ready(list) => list.iter().find(|r| r.tag == tag).and_then(|r| backend::notes_summary(&r.body)),
+            _ => None,
+        };
+        let status = format!(
+            "Minecraft {version}  ·  {}",
+            if prepared { "Ready" } else { "Needs preparing" }
+        );
+        let title = if self.mode == Mode::Server { "Horizon server" } else { "Horizon" };
+        let mut hero = div()
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .pt(px(28.))
+            .pb(px(4.))
+            .child(div().text_size(px(theme::SMALL)).font_weight(FontWeight::MEDIUM).text_color(t.faint).child(status))
+            .child(
+                div()
+                    .font_family(theme::DISPLAY)
+                    .text_size(px(theme::HERO))
+                    .line_height(px(58.))
+                    .text_color(t.text)
+                    .child(title),
+            )
+            .child(
+                div()
+                    .max_w(px(600.))
+                    .text_size(px(theme::LARGE))
+                    .line_height(px(23.))
+                    .text_color(t.muted)
+                    .child(match summary {
+                        Some(line) => format!("{tag}  ·  {line}"),
+                        None => tag.to_string(),
+                    }),
+            );
+        if let Some(release) = &self.updates.horizon {
+            let installing = self.installing.as_ref().filter(|(t, _)| *t == release.tag);
+            let line = div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .text_size(px(theme::SMALL))
+                .text_color(t.muted)
+                .child(div().size(px(6.)).rounded_full().bg(t.accent))
+                .child(format!("{} available", release.tag));
+            hero = hero.child(match installing {
+                Some((_, p)) => line.child(div().w(px(120.)).flex().child(progress_bar(Some(self.bar), &t))).child(format!("{:.0}%", p * 100.)),
+                None => line.child(
+                    div()
+                        .id("install-update")
+                        .text_color(t.accent)
+                        .font_weight(FontWeight::MEDIUM)
+                        .cursor_pointer()
+                        .hover(|s| s.opacity(0.8))
+                        .child("Install")
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.install_update();
+                            cx.notify();
+                        })),
+                ),
+            });
+        }
+        hero
+    }
+
+    fn settings_page(&mut self, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let on = self.settings.auto_install;
+        let toggle = div()
+            .id("auto-install")
+            .relative()
+            .flex_none()
+            .w(px(34.))
+            .h(px(20.))
+            .rounded_full()
+            .cursor_pointer()
+            .bg(if on { t.accent } else { t.border })
+            .child(
+                div().absolute().top(px(2.)).size(px(16.)).rounded_full().bg(gpui::white()).with_animation(
+                    ElementId::named_usize("knob", on as usize),
+                    Animation::new(theme::QUICK).with_easing(ease_out_quint()),
+                    move |d, p| d.left(px(if on { 2. + 14. * p } else { 16. - 14. * p })),
+                ),
+            )
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.settings.auto_install = !this.settings.auto_install;
+                this.settings.save();
+                if this.settings.auto_install {
+                    this.install_update();
+                }
+                cx.notify();
+            }));
+        let auto = div()
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .child("Install new versions automatically")
+            .child(div().text_size(px(theme::SMALL)).text_color(t.muted).child(
+                "Your selected version only changes if you were playing the newest one.",
+            ));
+        let horizon = match (&self.updates.horizon, &self.update_error) {
+            (Some(r), _) => div().child(format!("{} available", r.tag)),
+            (None, Some(e)) => div().text_color(t.muted).child(e.clone()),
+            (None, None) if self.checked.is_some() => div().child("Up to date"),
+            _ => div().text_color(t.muted).child("Checking…"),
+        };
+        let horizon_action = self.updates.horizon.as_ref().filter(|_| self.installing.is_none()).map(|_| {
+            button("settings-install", "Install", Kind::Secondary, &t).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.install_update();
+                cx.notify();
+            }))
+        });
+        let launcher = match &self.self_update {
+            SelfUpdate::Downloading(v, p) => format!("{}  ·  downloading {v}, {:.0}%", backend::VERSION, p * 100.),
+            SelfUpdate::Ready(v) => format!("{}  ·  {v} is ready, restart to use it", backend::VERSION),
+            SelfUpdate::Failed(e) => format!("{}  ·  the update failed: {e}", backend::VERSION),
+            SelfUpdate::Idle => match &self.updates.launcher {
+                Some(r) => format!("{}  ·  {} available", backend::VERSION, backend::launcher_version(&r.tag).unwrap_or_default()),
+                None if self.checked.is_some() && self.update_error.is_none() => format!("{}  ·  up to date", backend::VERSION),
+                None => backend::VERSION.to_string(),
+            },
+        };
+        let launcher_action = match &self.self_update {
+            SelfUpdate::Ready(_) => Some(
+                button("restart-settings", "Restart", Kind::Secondary, &t).on_click(|_, _, _| backend::restart()),
+            ),
+            SelfUpdate::Downloading(..) => None,
+            _ => Some(button("check", "Check now", Kind::Ghost, &t).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.check_updates();
+                cx.notify();
+            }))),
+        };
+        let agents = div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .p(px(16.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(t.border)
+            .bg(t.raised.opacity(0.6))
+            .text_size(px(theme::BODY))
+            .child(div().font_weight(FontWeight::MEDIUM).child("Use from the command line or AI agents"))
+            .child(div().text_color(t.muted).child(
+                "The launcher is also a command-line tool and an MCP server. Everything here works from a terminal, or from an agent such as Claude Code:",
+            ))
+            .child(
+                div()
+                    .font_family(theme::MONO)
+                    .text_size(px(theme::SMALL))
+                    .text_color(t.text)
+                    .child("claude mcp add horizon -- horizon-launcher mcp"),
+            )
+            .child(
+                div()
+                    .id("readme")
+                    .text_color(t.accent)
+                    .cursor_pointer()
+                    .hover(|s| s.opacity(0.8))
+                    .child("Commands and tools, in the README")
+                    .on_click(|_, _, cx| cx.open_url(backend::README_URL)),
+            );
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(24.))
+            .child(page_header("Settings", "Updates, and the launcher itself.", &t))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(divider(&t))
+                    .child(row("Updates", auto, Some(toggle), &t))
+                    .child(divider(&t))
+                    .child(row("Horizon", horizon, horizon_action, &t))
+                    .child(divider(&t))
+                    .child(row("Launcher", div().child(launcher), launcher_action, &t))
+                    .child(divider(&t))
+                    .child(row("Data folder", div().child(short(&backend::data_dir())), None, &t))
+                    .child(divider(&t)),
+            )
+            .child(agents)
     }
 
     fn console(&self, cx: &mut Context<Self>) -> Div {
@@ -920,7 +1332,7 @@ impl Launcher {
                     .items_center()
                     .gap(px(10.))
                     .w(px(180.))
-                    .child(progress_bar(Some(*p), &t))
+                    .child(progress_bar(Some(self.bar), &t))
                     .child(div().w(px(36.)).text_size(px(12.)).text_color(t.muted).child(format!("{:.0}%", p * 100.)))
                     .into_any_element()
             } else if installed {
@@ -1129,19 +1541,25 @@ impl Launcher {
     }
 }
 
-fn progress_bar(fraction: Option<f32>, t: &Theme) -> Div {
-    let bar = div().h(px(4.)).rounded_full().bg(t.accent);
-    div()
-        .flex_1()
-        .h(px(4.))
-        .rounded_full()
-        .bg(t.border)
-        .overflow_hidden()
-        .child(match fraction {
-            Some(f) => bar.w(gpui::relative(f.clamp(0.02, 1.0))),
-            // Unknown length: a short steady segment, rather than an animation that implies a rate.
-            None => bar.w(gpui::relative(0.25)),
-        })
+/// A thin bar. A known fraction eases from its previous value; an unknown one shuttles slowly.
+fn progress_bar(fraction: Option<(f32, f32)>, t: &Theme) -> Div {
+    let bar = div().absolute().top_0().h(px(4.)).rounded_full().bg(t.accent);
+    let track = div().relative().flex_1().h(px(4.)).rounded_full().bg(t.border).overflow_hidden();
+    match fraction {
+        Some((from, to)) => {
+            let (from, to) = (from.clamp(0.02, 1.), to.clamp(0.02, 1.));
+            track.child(bar.left_0().with_animation(
+                ElementId::named_usize("bar", (to * 1000.) as usize),
+                Animation::new(theme::MOVE).with_easing(ease_out_quint()),
+                move |d, p| d.w(relative(from + (to - from) * p)),
+            ))
+        }
+        None => track.child(bar.w(relative(0.3)).with_animation(
+            "shuttle",
+            Animation::new(Duration::from_millis(1600)).repeat().with_easing(gpui::ease_in_out),
+            |d, p| d.left(relative(-0.3 + 1.3 * p)),
+        )),
+    }
 }
 
 impl Render for Launcher {
@@ -1153,21 +1571,32 @@ impl Render for Launcher {
             Page::Versions => self.versions_page(cx),
             Page::Notes => self.notes_page(cx),
             Page::Next => self.next_page(cx),
+            Page::Settings => self.settings_page(cx),
         };
+        // The new page fades in and rises a few pixels.
+        let content = div().relative().w_full().max_w(px(760.)).child(content).with_animation(
+            ElementId::named_usize("page", self.switches),
+            Animation::new(theme::MOVE).with_easing(ease_out_quint()),
+            |d, p| d.opacity(p).top(px(8. * (1. - p))),
+        );
+        let background = if t.dark { self.backgrounds.0.clone() } else { self.backgrounds.1.clone() };
         div()
+            .relative()
             .flex()
             .size_full()
             .bg(t.bg)
             .font_family(theme::FONT)
             .text_color(t.text)
+            .child(img(background).absolute().top_0().left_0().size_full().object_fit(ObjectFit::Cover))
             .child(self.sidebar(cx))
             .child(
                 div()
                     .id("content")
+                    .relative()
                     .flex_1()
                     .h_full()
                     .overflow_y_scroll()
-                    .child(div().flex().px(px(48.)).py(px(36.)).child(div().w_full().max_w(px(760.)).child(content))),
+                    .child(div().flex().px(px(48.)).py(px(36.)).child(content)),
             )
     }
 }
@@ -1176,9 +1605,11 @@ fn main() {
     Application::new().run(|cx: &mut App| {
         cx.text_system()
             .add_fonts(vec![
-                Cow::Borrowed(include_bytes!("../assets/fonts/Inter-Regular.ttf").as_slice()),
-                Cow::Borrowed(include_bytes!("../assets/fonts/Inter-Medium.ttf").as_slice()),
-                Cow::Borrowed(include_bytes!("../assets/fonts/Inter-SemiBold.ttf").as_slice()),
+                Cow::Borrowed(include_bytes!("../assets/fonts/Geist-Regular.ttf").as_slice()),
+                Cow::Borrowed(include_bytes!("../assets/fonts/Geist-Medium.ttf").as_slice()),
+                Cow::Borrowed(include_bytes!("../assets/fonts/Geist-SemiBold.ttf").as_slice()),
+                Cow::Borrowed(include_bytes!("../assets/fonts/GeistMono-Regular.ttf").as_slice()),
+                Cow::Borrowed(include_bytes!("../assets/fonts/InstrumentSerif-Regular.ttf").as_slice()),
             ])
             .expect("bundled fonts");
         let bounds = Bounds::centered(None, size(px(1040.), px(700.)), cx);

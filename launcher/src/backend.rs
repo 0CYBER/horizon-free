@@ -552,6 +552,9 @@ pub enum Msg {
     Installed(String, Result<(), String>),
     Line(Job, String),
     Exit(Job, Result<(), String>),
+    Updates(Result<Updates, String>),
+    LauncherProgress(f32),
+    LauncherUpdated(Result<(), String>),
 }
 
 /// A running process; its output arrives as `Msg::Line`, its end as `Msg::Exit`.
