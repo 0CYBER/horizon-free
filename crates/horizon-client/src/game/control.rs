@@ -29,7 +29,7 @@ const HELP: &[&str] = &[
     "chat TEXT                      send a chat line or /command as if typed",
     "type TEXT                      type into the open chat box (key enter tap sends)",
     "chat-log [N]                   the newest N chat messages (default 10)",
-    "options [PAGE]                 open the options (video sound controls keybinds mouse chat accessibility language font packs)",
+    "options [PAGE]                 open the options (video sound controls keybinds mouse chat accessibility language font packs graphics graphics-advanced)",
     "stats [reset]                  frame-time summary since the last reset",
     "bench SECONDS                  reset stats, wait, then reply with the summary",
     "fly X1 Y1 Z1 X2 Y2 Z2 SECONDS [PITCH]  fly the camera along a line at constant speed, then reply with the frame summary",
@@ -361,6 +361,8 @@ impl Game<'_> {
                     "language" => Page::Language,
                     "font" => Page::Font,
                     "packs" => Page::Packs,
+                    "graphics" => Page::Graphics,
+                    "graphics-advanced" => Page::GraphicsAdvanced,
                     other => return Err(format!("unknown options page {other}").into()),
                 };
                 if self.screen == Screen::Playing && self.title.is_none() {
@@ -573,7 +575,7 @@ impl Game<'_> {
             "using": self.using,
             "render_distance": self.streaming.radius,
             "chunks": self.world.chunks.len(),
-            "pending_chunks": self.streaming.pending(),
+            "pending_chunks": self.streaming.pending() + self.pending_uploads.len(),
             "generated_chunks": self.streaming.generated_total,
             "meshed_sections": self.streaming.meshed_total,
             "renderer": renderer,

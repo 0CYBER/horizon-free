@@ -190,6 +190,13 @@ impl Opt {
             _ => Kind::Cycle,
         }
     }
+    /// A slider's position (0..1), or `None` for a cycle button.
+    pub fn slider_position(self, s: &Settings) -> Option<f32> {
+        match self.kind(s) {
+            Kind::Slider(v) => Some(v),
+            Kind::Cycle => None,
+        }
+    }
     /// The widget message (OptionInstance.toString / CycleButton full name).
     pub fn label(self, s: &Settings) -> Text {
         let c = self.caption();
@@ -532,6 +539,9 @@ pub enum Page {
     Language,
     Font,
     Packs,
+    /// Horizon's graphics settings (`graphics_ui`).
+    Graphics,
+    GraphicsAdvanced,
 }
 #[derive(Clone, Debug, PartialEq)]
 enum Act {
@@ -606,6 +616,7 @@ pub struct OptionsUi {
     pub in_world: bool,
     /// Scroll the selected language into the middle on the next layout.
     center_language: bool,
+    pub graphics: crate::graphics_ui::GraphicsUi,
 }
 impl Default for OptionsUi {
     fn default() -> Self {
@@ -625,6 +636,7 @@ impl Default for OptionsUi {
             pack_focus: std::time::Instant::now(),
             in_world: false,
             center_language: false,
+            graphics: Default::default(),
         }
     }
 }
@@ -704,6 +716,17 @@ impl OptionsUi {
         if page == Page::Packs {
             self.pack_screen = None;
         }
+        if matches!(page, Page::Graphics | Page::GraphicsAdvanced) {
+            self.graphics.reset();
+        }
+    }
+    /// The graphics screen level of `page`, if it is one.
+    fn graphics_level(page: Page) -> Option<crate::graphics_ui::Level> {
+        match page {
+            Page::Graphics => Some(crate::graphics_ui::Level::Simple),
+            Page::GraphicsAdvanced => Some(crate::graphics_ui::Level::Advanced),
+            _ => None,
+        }
     }
     fn title(page: Page) -> &'static str {
         match page {
@@ -718,12 +741,30 @@ impl OptionsUi {
             Page::Language => "options.language.title",
             Page::Font => "options.font.title",
             Page::Packs => "resourcePack.title",
+            Page::Graphics | Page::GraphicsAdvanced => "options.videoTitle",
         }
     }
     fn list_rows(&self, s: &Settings) -> Vec<Row> {
         match self.page() {
             Page::Video => {
-                let mut rows = vec![Row::Header("options.video.display.header")];
+                // Horizon's graphics screens, Simple and Advanced.
+                let mut rows = vec![Row::Buttons(
+                    button(
+                        0.0,
+                        0.0,
+                        150.0,
+                        Text::literal("Horizon Graphics..."),
+                        Act::Push(Page::Graphics),
+                    ),
+                    Some(button(
+                        0.0,
+                        0.0,
+                        150.0,
+                        Text::literal("Advanced Graphics..."),
+                        Act::Push(Page::GraphicsAdvanced),
+                    )),
+                )];
+                rows.push(Row::Header("options.video.display.header"));
                 rows.extend(pairs(&[
                     Opt::MaxFps,
                     Opt::Vsync,
@@ -1175,6 +1216,11 @@ impl OptionsUi {
         cursor: (f32, f32),
     ) {
         let (w, h) = (batch.width, batch.height);
+        if let Some(level) = Self::graphics_level(self.page()) {
+            self.graphics
+                .draw(level, s, batch, atlas, cursor, self.in_world);
+            return;
+        }
         if self.page() == Page::Packs {
             ui::menu_background(batch, atlas, 0.0, 0.0, w, h, self.in_world);
             let blink = self.pack_focus.elapsed().as_millis() as u64;
@@ -1324,6 +1370,28 @@ impl OptionsUi {
         drag: bool,
         right: bool,
     ) -> Vec<Event> {
+        if let Some(level) = Self::graphics_level(self.page()) {
+            use crate::graphics_ui::Action;
+            let mut events = Vec::new();
+            for action in self.graphics.click(level, s, (x, y), size, drag, right) {
+                match action {
+                    Action::Changed => events.push(Event::Changed),
+                    Action::OpenAdvanced => self.push(Page::GraphicsAdvanced),
+                    Action::OpenSimple => {
+                        if self.stack.len() >= 2
+                            && self.stack[self.stack.len() - 2] == Page::Graphics
+                        {
+                            events.extend(self.back(s));
+                        } else {
+                            self.stack.pop();
+                            self.push(Page::Graphics);
+                        }
+                    }
+                    Action::Done => events.extend(self.back(s)),
+                }
+            }
+            return events;
+        }
         if self.page() == Page::Packs {
             let mut events = Vec::new();
             if drag || right {
@@ -1421,12 +1489,17 @@ impl OptionsUi {
     }
     pub fn release(&mut self) {
         self.dragging = None;
+        self.graphics.release();
     }
     pub fn scroll(&mut self, amount: f32) {
         self.scroll -= amount * 18.0;
     }
     /// The mouse wheel at the cursor.
     pub fn scroll_at(&mut self, cursor: (f32, f32), amount: f32) {
+        if Self::graphics_level(self.page()).is_some() {
+            self.graphics.scroll(amount);
+            return;
+        }
         match &mut self.pack_screen {
             Some(p) if self.stack.last() == Some(&Page::Packs) => {
                 p.scroll(cursor.0 as f64, cursor.1 as f64, amount as f64)

@@ -784,6 +784,10 @@ struct Game<'a> {
     /// Control replies waiting for a rendered frame or a benchmark deadline.
     pending_screenshot: Option<std::sync::mpsc::Sender<String>>,
     pending_bench: Option<(Instant, std::sync::mpsc::Sender<String>)>,
+    /// Recent frame times for the performance overlay.
+    frame_graph: horizon_client::perf_overlay::FrameGraph,
+    /// Meshed sections waiting for an upload budget (Horizon settings).
+    pending_uploads: Vec<((i32, i32, i32), horizon_client::mesher::SectionMesh)>,
     /// This frame's view frustum, for culling entities and block entities.
     view_frustum: Option<horizon_client::gfx::Frustum>,
     /// A scripted flight from the control socket (`fly`).
@@ -2981,6 +2985,12 @@ impl Game<'_> {
         hud_layout::paint(batch, &self.res.atlas, &draws);
     }
     fn hud(&mut self, size: [u32; 2]) -> HudBatch {
+        let mut batch = self.hud_layers(size);
+        self.frame_graph
+            .draw(self.settings.horizon.overlay, &mut batch, &self.res.atlas);
+        batch
+    }
+    fn hud_layers(&mut self, size: [u32; 2]) -> HudBatch {
         let mut batch = HudBatch::new(size);
         let (w, h) = (batch.width, batch.height);
         if self.screen == Screen::Options {
@@ -7338,9 +7348,11 @@ impl Game<'_> {
             horizon_client::spans::time("clouds", || {
                 self.cloud_geometry(&sky, camera, alpha, &mut entities)
             });
-            horizon_client::spans::time("weather", || {
-                self.weather_geometry(camera, alpha, &mut entities)
-            });
+            if self.settings.horizon.weather {
+                horizon_client::spans::time("weather", || {
+                    self.weather_geometry(camera, alpha, &mut entities)
+                });
+            }
         }
         let water_fog = {
             let c = info.water_fog;
@@ -7363,23 +7375,36 @@ impl Game<'_> {
             distance,
             underwater,
             title,
-            skybox: self.dim == Dim::Overworld,
-            end_sky: self.dim == Dim::End,
+            skybox: self.dim == Dim::Overworld && self.settings.horizon.sky,
+            end_sky: self.dim == Dim::End && self.settings.horizon.sky,
             environment_fog: (self.dim == Dim::Nether).then_some((sky.fog_start, sky.fog_end)),
             // The camera inside an opaque block sees nothing through it: disable.
-            cave_culling: !self
-                .res
-                .facts
-                .get(self.world.block(block[0], block[1], block[2]))
-                .solid_render,
+            cave_culling: self.settings.horizon.cave_culling
+                && !self
+                    .res
+                    .facts
+                    .get(self.world.block(block[0], block[1], block[2]))
+                    .solid_render,
             water_fog,
-            fog: Some(self.frame_fog(camera, &sky, biome)),
+            fog: Some({
+                let mut fog = self.frame_fog(camera, &sky, biome);
+                // Horizon's fog setting: no distance fog (fluids keep theirs).
+                if !self.settings.horizon.fog && !underwater && fog.environmental_end >= distance {
+                    (fog.render_distance_start, fog.render_distance_end) = (1e9, 2e9);
+                    (fog.environmental_start, fog.environmental_end) = (1e9, 2e9);
+                }
+                fog
+            }),
             dark_disc: self.dark_disc(camera),
             outline,
             hud: &hud,
             entities: &entities,
             additive: &additive,
-            celestial: &celestial,
+            celestial: if self.settings.horizon.sky || title {
+                &celestial
+            } else {
+                &[]
+            },
             hand: &hand,
             screen: &screen,
             border,
@@ -7631,11 +7656,45 @@ impl Game<'_> {
             eprintln!("Horizon: failed to save unloaded chunks: {e}");
         }
         if let Some(renderer) = self.renderer.as_mut() {
-            horizon_client::spans::time("upload", || {
-                for (key, mesh) in uploads {
+            let g = &self.settings.horizon;
+            let budgeted = g.chunk_updates > 0 || g.upload_budget_kib > 0;
+            if !budgeted && self.pending_uploads.is_empty() {
+                horizon_client::spans::time("upload", || {
+                    for (key, mesh) in uploads {
+                        renderer.upload(key, &mesh);
+                    }
+                });
+            } else {
+                // Horizon's chunk-update and upload budgets: the nearest
+                // sections go first, the rest wait for later frames; a newer
+                // mesh of a waiting section replaces it.
+                let pending = &mut self.pending_uploads;
+                let fresh: horizon_client::fast_hash::FxHashSet<(i32, i32, i32)> =
+                    uploads.iter().map(|(k, _)| *k).collect();
+                let gone: horizon_client::fast_hash::FxHashSet<(i32, i32)> =
+                    unloaded.iter().map(|c| (c.x, c.z)).collect();
+                pending.retain(|(k, _)| !fresh.contains(k) && !gone.contains(&(k.0, k.2)));
+                pending.extend(uploads);
+                let centre = self.streaming.center;
+                let far = |k: &(i32, i32, i32)| (k.0 - centre.0).pow(2) + (k.2 - centre.1).pow(2);
+                pending.sort_unstable_by_key(|(k, _)| std::cmp::Reverse(far(k)));
+                let (limit, budget) = if budgeted {
+                    (g.chunk_updates as usize, u64::from(g.upload_budget_kib) * 1024)
+                } else {
+                    (0, 0)
+                };
+                let (mut count, mut bytes) = (0, 0u64);
+                while let Some((_, mesh)) = pending.last() {
+                    let size = ((mesh.solid.len() + mesh.translucent.len()) * 32) as u64;
+                    if (limit > 0 && count >= limit) || (budget > 0 && bytes > 0 && bytes + size > budget) {
+                        break;
+                    }
+                    let (key, mesh) = pending.pop().expect("checked above");
                     renderer.upload(key, &mesh);
+                    count += 1;
+                    bytes += size;
                 }
-            });
+            }
             for c in unloaded {
                 for sy in 0..(HEIGHT / 16) {
                     renderer.remove((c.x, sy, c.z));
@@ -8120,6 +8179,11 @@ impl ApplicationHandler for Game<'_> {
                         let cpu = now.elapsed().saturating_sub(r.last_wait);
                         if rendered {
                             let ms = |d: Duration| d.as_secs_f32() * 1000.0;
+                            self.frame_graph.record(
+                                ms(elapsed),
+                                ms(cpu),
+                                r.gpu_times.last().copied(),
+                            );
                             self.frame_stats.record_cpu(ms(cpu));
                             let render = r.last_encode;
                             self.frame_stats.record_phases([
@@ -8537,6 +8601,8 @@ pub fn run() -> Result<()> {
         pending_bench: None,
         flight: None,
         view_frustum: None,
+        pending_uploads: Vec::new(),
+        frame_graph: Default::default(),
         sky_darken_memo: Default::default(),
         persist: Default::default(),
         remote: None,
