@@ -62,7 +62,7 @@ import net.minecraft.world.phys.Vec3;
  * cursor), the parsed nodes and the completion suggestions at the end of the
  * input. Also exports the registry contents the Rust side needs.
  *
- * usage: registries|run OUT_DIR [CORPUS PERMISSION_LEVEL]
+ * usage: registries|tree|run OUT_DIR [CORPUS PERMISSION_LEVEL | SELECTION]
  */
 public final class VanillaCommandParseOracle {
     static sun.misc.Unsafe unsafe;
@@ -141,7 +141,9 @@ public final class VanillaCommandParseOracle {
         }
         FeatureFlagSet features = FeatureFlags.VANILLA_SET;
         CommandBuildContext buildContext = CommandBuildContext.simple(lookup, features);
-        Commands commands = new Commands(Commands.CommandSelection.INTEGRATED, buildContext);
+        // `tree OUT_DIR ALL` exports the tree of every command (dedicated and integrated).
+        var selection = args[0].equals("tree") && args.length > 2 ? Commands.CommandSelection.valueOf(args[2]) : Commands.CommandSelection.INTEGRATED;
+        Commands commands = new Commands(selection, buildContext);
         CommandDispatcher<CommandSourceStack> dispatcher = commands.getDispatcher();
 
         if (args[0].equals("tree")) {

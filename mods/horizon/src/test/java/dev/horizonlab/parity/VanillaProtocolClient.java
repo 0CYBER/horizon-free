@@ -617,23 +617,26 @@ public final class VanillaProtocolClient {
                 return input;
             }
         });
-        // Vanilla sends each node's children in registration order, which
-        // its commands report (sorted) does not keep: compared as sets.
-        var lines = new TreeMap<String, String>();
+        // Children in vanilla's registration order, but the game rules', which
+        // GameRuleCommand registers in an identity-hashed order: sorted.
+        var names = new java.util.ArrayList<String>();
         for (var child : root.getChildren()) {
-            var paths = new java.util.TreeSet<String>();
+            names.add(child.getName());
+            var paths = new java.util.ArrayList<String>();
             describe(child, "", paths, new java.util.IdentityHashMap<>());
-            lines.put(child.getName(), paths.size() + " " + sha(String.join("\n", paths).getBytes()));
+            record("play-command", child.getName() + " " + paths.size() + " " + sha(String.join("\n", paths).getBytes()));
         }
-        lines.forEach((k, v) -> record("play-command", k + " " + v));
+        record("play-command-order", String.join(" ", names));
     }
 
-    private static void describe(com.mojang.brigadier.tree.CommandNode<Object> node, String path, java.util.Set<String> out,
+    private static void describe(com.mojang.brigadier.tree.CommandNode<Object> node, String path, java.util.List<String> out,
         java.util.IdentityHashMap<Object, Boolean> seen) {
         String here = path + " " + node.getName() + (node.getCommand() != null ? "*" : "");
         out.add(here + (node.getRedirect() != null ? " -> " + node.getRedirect().getName() : ""));
         if (seen.put(node, true) != null) return;
-        for (var child : node.getChildren()) describe(child, here, out, seen);
+        var children = new java.util.ArrayList<>(node.getChildren());
+        if (here.equals(" gamerule")) children.sort(java.util.Comparator.comparing(com.mojang.brigadier.tree.CommandNode::getName));
+        for (var child : children) describe(child, here, out, seen);
     }
 
     /** The first play packets: entity ids, seeds and times aside. */
@@ -647,7 +650,7 @@ public final class VanillaProtocolClient {
             return text(r.packet).replaceAll("playerId=-?\\d+", "playerId=_").replaceAll("levels=\\[(ResourceKey\\[[^\\]]*\\](, )?)*\\]", "levels=" + levels);
         }
         if (t.equals("minecraft:set_time") || t.equals("minecraft:keep_alive") || t.equals("minecraft:ping")) return "";
-        // The tree is compared below, as sets: the children's order is vanilla's registration order.
+        // The tree is compared below: its node numbering follows the game rules' identity-hashed order.
         if (t.equals("minecraft:commands")) return "";
         if (t.equals("minecraft:set_entity_data")) {
             return text(((net.minecraft.network.protocol.game.ClientboundSetEntityDataPacket) r.packet).packedItems());

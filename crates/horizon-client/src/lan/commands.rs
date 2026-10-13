@@ -4,8 +4,10 @@
 //! use and the commands of the server kind (dedicated servers have `op`,
 //! `ban`, `stop` ...; an integrated server `publish`), numbered breadth first
 //! as vanilla does, with the argument parsers' network properties and the
-//! custom suggestion providers (`command_suggestions`).
-use super::command_suggestions::SUGGESTIONS;
+//! custom suggestion providers (`command_suggestions`). The report sorts each
+//! node's children; the tree keeps vanilla's registration order
+//! (`command_order`).
+use super::{command_order::ORDER, command_suggestions::SUGGESTIONS};
 use horizon_protocol::{
     buf::Writer,
     packets::play::{CommandNode, Commands},
@@ -15,6 +17,7 @@ use serde_json::Value;
 use std::{
     collections::{HashMap, VecDeque},
     path::Path,
+    sync::OnceLock,
 };
 
 /// Commands.CommandSelection: registered only on dedicated servers.
@@ -107,7 +110,7 @@ impl CommandTree {
             &mut paths,
         );
         // enumerateNodes: breadth first from the root, each node's children
-        // (in name order) then its redirect target.
+        // (in registration order) then its redirect target.
         let mut ids = vec![None; nodes.len()];
         let mut order = Vec::new();
         let mut queue = VecDeque::from([0usize]);
@@ -170,6 +173,18 @@ fn fill(
     };
     let mut names: Vec<&String> = children.keys().collect();
     names.sort();
+    // Vanilla's registration order; names it doesn't list (the game rules,
+    // registered in an identity-hashed order) keep the report's.
+    static ORDERS: OnceLock<HashMap<&str, Vec<&str>>> = OnceLock::new();
+    let orders = ORDERS.get_or_init(|| {
+        ORDER
+            .iter()
+            .map(|(path, names)| (*path, names.split(' ').collect()))
+            .collect()
+    });
+    if let Some(order) = orders.get(path.join(" ").as_str()) {
+        names.sort_by_key(|n| order.iter().position(|o| o == n).unwrap_or(order.len()));
+    }
     for name in names {
         let child = &children[name];
         let required =
