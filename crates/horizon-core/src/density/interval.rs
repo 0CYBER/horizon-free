@@ -189,7 +189,7 @@ impl Interval {
             Ok(Self::NAI)
         } else {
             self.maximum(Self::exact(0.0)?)
-                .map_monotonic(|v| (v as f64).ln() as f32)
+                .map_monotonic(|v| crate::jmath::log(v as f64) as f32)
         }
     }
     pub fn power(self, exponent: Self) -> Self {

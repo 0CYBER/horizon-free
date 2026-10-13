@@ -29,7 +29,7 @@ fn ceil(v: f32) -> i32 {
     f64::from(v).ceil() as i32
 }
 fn pow2(v: i32) -> f64 {
-    f64::from(v).powf(2.0)
+    horizon_core::jmath::pow(f64::from(v), 2.0)
 }
 impl IcebergFeature {
     pub(crate) fn decode(
@@ -380,7 +380,11 @@ impl IcebergFeature {
 fn signed_ellipse(xo: i32, zo: i32, origin: [i32; 3], a: i32, c: i32, angle: f64) -> f64 {
     let dx = f64::from(xo - origin[0]);
     let dz = f64::from(zo - origin[2]);
-    ((dx * angle.cos() - dz * angle.sin()) / f64::from(a)).powf(2.0)
-        + ((dx * angle.sin() + dz * angle.cos()) / f64::from(c)).powf(2.0)
+    let (sin, cos) = (
+        horizon_core::jmath::sin(angle),
+        horizon_core::jmath::cos(angle),
+    );
+    horizon_core::jmath::pow((dx * cos - dz * sin) / f64::from(a), 2.0)
+        + horizon_core::jmath::pow((dx * sin + dz * cos) / f64::from(c), 2.0)
         - 1.0
 }

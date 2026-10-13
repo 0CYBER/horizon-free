@@ -9,12 +9,7 @@
    "python": "/opt/homebrew/bin/python3.13",
    "rsync": "/opt/homebrew/bin/rsync",
    "jobs": 14,
-   "exclude": {
-    "options": "Rust's f64::powf uses the platform libm, which rounds differently on macOS",
-    "chunk_generation": "one ocean ruined portal differs on macOS (platform float math)",
-    "world_border_render": "the wall's alpha differs by one ulp on macOS (platform float math)",
-    "mob_ai": "mob movement differs on macOS (platform float math in random positions)"
-   }
+   "exclude": {}
   },
   "thinkpad": {
    "ssh": "thinkpad",

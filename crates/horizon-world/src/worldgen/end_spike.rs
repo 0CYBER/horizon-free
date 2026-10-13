@@ -38,8 +38,8 @@ pub fn spikes_for_seed(seed: i64) -> Vec<EndSpike> {
                 2.0 * (-std::f64::consts::PI + (std::f64::consts::PI / 10.0) * f64::from(i));
             let size = sizes[i as usize];
             EndSpike {
-                center_x: (42.0 * angle.cos()).floor() as i32,
-                center_z: (42.0 * angle.sin()).floor() as i32,
+                center_x: (42.0 * horizon_core::jmath::cos(angle)).floor() as i32,
+                center_z: (42.0 * horizon_core::jmath::sin(angle)).floor() as i32,
                 radius: 2 + size / 3,
                 height: 76 + size * 3,
                 guarded: size == 1 || size == 2,

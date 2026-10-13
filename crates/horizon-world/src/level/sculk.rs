@@ -315,7 +315,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             if charge > 0
                 && let Some(faces) = faces
             {
-                let particles = ((f64::from(charge) + 1.0).ln() as f32 / 2.3) as i32 + 1;
+                let particles =
+                    (horizon_core::jmath::log(f64::from(charge) + 1.0) as f32 / 2.3) as i32 + 1;
                 let data = (particles << 6) + pack_faces(&faces);
                 self.level_event(3006, pos, data);
             }
