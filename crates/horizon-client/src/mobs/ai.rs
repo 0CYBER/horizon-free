@@ -350,6 +350,7 @@ pub fn tick(
     if m.removed {
         return false;
     }
+    super::warden::pre_tick(m, w, events);
     base_tick(m, w, events);
     if m.death_time >= super::creaking::death_limit(m) {
         // Creaking.tickDeath: a heart's creaking crumbles away.
@@ -710,6 +711,10 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         let _ = m.random.next_int_bound(4);
     }
     for (who, at) in targets {
+        // Warden.doPush: touching it angers it, then the push itself.
+        if m.species() == Species::Warden {
+            super::warden::do_push(m, w, who, events);
+        }
         // Entity.push(Entity) with `this` the other entity.
         let (mut xa, mut za) = (m.position.x - at.x, m.position.z - at.z);
         let mut dd = xa.abs().max(za.abs());
@@ -795,6 +800,10 @@ fn server_ai_step(
         super::villager_brain::tick(m, w, level_random, events);
         let _ = m.random.next_int_bound(100);
     }
+    if m.species() == Species::Warden {
+        // Warden.customServerAiStep: the brain and its bookkeeping.
+        super::warden::server_ai_step(m, w, level_random, events);
+    }
     // Sniffer and HappyGhast.customServerAiStep: the brain (a happy ghast's
     // only while it is a ghastling), then updateActivity.
     if m.species() == Species::Sniffer || m.species() == Species::HappyGhast && m.is_baby() {
@@ -828,7 +837,6 @@ fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
         Species::Enderman => super::enderman::custom_server_ai_step(m, cx),
         Species::Blaze => super::nether::blaze_server_ai_step(m, cx),
         Species::ElderGuardian => super::guardian::elder_server_ai_step(m, cx),
-        Species::Warden => super::warden::server_ai_step(m, cx),
         Species::Wither if m.alive() => super::wither::custom_server_ai_step(m, cx.w, cx.events),
         // SpellcasterIllager.customServerAiStep.
         Species::Evoker if m.extra.counter > 0 => m.extra.counter -= 1,
@@ -895,11 +903,14 @@ fn check_despawn(m: &mut Mob, w: &MobWorld) -> bool {
         || super::nautilus::is_nautilus(m.species()) && m.extra.tame
         || m.species() == Species::SulfurCube
             && (super::sulfur_cube::has_body(m) || m.extra.scratch[3] != 0);
-    // removeWhenFarAway: animals, wardens, patrols and raiders, zombie
-    // villagers being cured and ridden mobs stay.
+    // removeWhenFarAway: animals, wardens, allays, patrols and raiders,
+    // zombie villagers being cured and ridden mobs stay; the wither's
+    // checkDespawn never removes it for distance.
     let creature = m.kind.category == "creature";
-    let removable = !(m.species() == Species::Warden
-        || creature && m.kind.flags.animal && !m.extra.jockey
+    let removable = !(matches!(
+        m.species(),
+        Species::Warden | Species::Allay | Species::Wither
+    ) || creature && m.kind.flags.animal && !m.extra.jockey
         || super::raider::keeps_alive(m, d)
         || super::zombie_villager::keeps_alive(m)
         || super::riders::keeps_alive(m));

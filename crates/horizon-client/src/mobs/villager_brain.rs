@@ -36,7 +36,7 @@ impl<T> Default for Slot<T> {
     }
 }
 impl<T> Slot<T> {
-    /// `MemorySlot.tick`.
+    /// `MemorySlot.tick` (`Brain.forgetOutdatedMemories`).
     pub(super) fn tick(&mut self) {
         if self.v.is_some() && self.ttl != NEVER {
             if self.ttl <= 0 {
@@ -72,6 +72,10 @@ impl<T> Slot<T> {
     }
     pub fn present(&self) -> bool {
         self.v.is_some()
+    }
+    /// The time to live (`i64::MAX`: never expires).
+    pub fn ttl(&self) -> i64 {
+        self.ttl
     }
 }
 impl<T: Clone> Slot<T> {

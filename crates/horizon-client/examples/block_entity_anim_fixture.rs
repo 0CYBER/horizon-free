@@ -8,9 +8,10 @@ use horizon_client::{
     assets::Assets,
     block_entity_anim::{
         Bell, BellEntity, BlockEntityAnims, ChestLid, Conduit, ConduitTarget, DIRECTIONS,
-        PotWobble, Shulker, ShulkerStatus, Skull, WobbleStyle, chest_lid_x_rot, direction_index,
+        EndGateway, PotWobble, Shulker, ShulkerStatus, Skull, WobbleStyle, chest_lid_x_rot,
+        direction_index,
     },
-    block_entity_render::BlockEntityRenderer,
+    block_entity_render::{BlockEntityRenderer, gateway_beam},
     blocks::{BlockFacts, Fluid},
     items::Items,
 };
@@ -188,6 +189,14 @@ fn main() -> Result<()> {
         let facing = prop(&block, "facing")
             .and_then(direction_index)
             .unwrap_or(1);
+        // End gateways: the saved age, the level's height range and the
+        // integrated server's copy.
+        let initial = EndGateway {
+            age: case["age"].as_i64().unwrap_or(0),
+            teleport_cooldown: 0,
+        };
+        let max_y = int(&case["level"][0]) + int(&case["level"][1]) - 1;
+        let mut server = initial;
         let mut text = String::new();
         for step in case["steps"].as_array().into_iter().flatten() {
             let time = step["time"].as_i64().unwrap_or(0);
@@ -444,6 +453,36 @@ fn main() -> Result<()> {
                     },
                     f(progress),
                     style
+                );
+            } else if name == "minecraft:end_gateway" {
+                let client = anims.gateways.entry(pos).or_insert(initial);
+                if step["enter"].as_bool() == Some(true) && server.enter() {
+                    log.push_str(" blockEvent 1 0");
+                    client.trigger_event(1, 0);
+                }
+                if server.portal_tick() {
+                    log.push_str(" blockEvent 1 0");
+                    client.trigger_event(1, 0);
+                }
+                if let Some((e0, e1)) = event {
+                    let handled = client.trigger_event(e0, e1);
+                    let _ = write!(log, " event {handled}");
+                }
+                client.tick();
+                let g = *client;
+                let a = anims.block_anim(pos, time, partial, Default::default());
+                let b = gateway_beam(a.gateway, partial, max_y, time);
+                let _ = write!(
+                    text,
+                    "{} {} server {} {} render {} {} {:x} {}",
+                    g.age,
+                    g.teleport_cooldown,
+                    server.age,
+                    server.teleport_cooldown,
+                    b.height,
+                    f(b.scale),
+                    b.color,
+                    f(b.animation_time)
                 );
             } else {
                 text = format!("unsupported {block}");

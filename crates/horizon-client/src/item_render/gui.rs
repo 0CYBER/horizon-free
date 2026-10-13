@@ -89,7 +89,7 @@ fn clip_triangle(tri: [Point; 3], rect: [f32; 4]) -> Vec<Point> {
 }
 
 /// RGBA vertex colour of a lit quad: `minecraft_mix_light` on the tint.
-fn lit_color(q: &ItemQuad, lights: (Vec3, Vec3)) -> u32 {
+pub fn lit_color(q: &ItemQuad, lights: (Vec3, Vec3)) -> u32 {
     let light = crate::block_entity_render::diffuse(q.normal, lights);
     let [a, r, g, b] = q.color.to_be_bytes();
     let c = |v: u8| (f32::from(v) * light) as u8;
@@ -155,6 +155,28 @@ pub fn draw(
     } else {
         items_flat_lights()
     };
+    let rect = if state.oversized_in_gui {
+        [
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+            f32::INFINITY,
+        ]
+    } else {
+        [x, y, x + 16.0, y + 16.0]
+    };
+    draw_quads(&quads, lights, batch, rect, time);
+}
+
+/// Lights, culls, sorts far to near and clips `quads` (GUI positions) to
+/// `rect`.
+fn draw_quads(
+    quads: &[ItemQuad],
+    lights: (Vec3, Vec3),
+    batch: &mut HudBatch,
+    rect: [f32; 4],
+    time: f32,
+) {
     // Back-face culling: front faces wind counter-clockwise on screen with y up.
     let mut visible: Vec<(f32, usize)> = quads
         .iter()
@@ -173,16 +195,6 @@ pub fn draw(
         .collect();
     // Far to near; the depth buffer of the item atlas, approximated per quad.
     visible.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let rect = if state.oversized_in_gui {
-        [
-            f32::NEG_INFINITY,
-            f32::NEG_INFINITY,
-            f32::INFINITY,
-            f32::INFINITY,
-        ]
-    } else {
-        [x, y, x + 16.0, y + 16.0]
-    };
     for (_, i) in visible {
         let q = &quads[i];
         let points: [Point; 4] = std::array::from_fn(|k| Point {
@@ -204,6 +216,65 @@ pub fn draw(
             }
         }
     }
+}
+
+/// `PictureInPictureRenderer.prepare` for the loom's 20x40 result rectangle
+/// at `(x0, y0)` (`translate(w / 2, h)`, `scale(16, 16, -16)`, one texel per
+/// GUI pixel), then `GuiBannerResultRenderer.renderToTexture`'s
+/// `translate(0, 0.25, 0)`.
+pub fn banner_result_pose(x0: f32, y0: f32) -> Mat4 {
+    Mat4::from_translation(Vec3::new(x0 + 10.0, y0 + 40.0, 0.0))
+        * Mat4::from_scale(Vec3::new(16.0, 16.0, -16.0))
+        * Mat4::from_translation(Vec3::new(0.0, 0.25, 0.0))
+}
+
+/// The quads of `GuiGraphicsExtractor.bannerPattern` (the loom's result
+/// preview) at `(x0, y0)`: base dye and `(texture, dye)` layers.
+pub fn banner_result_quads(
+    renderer: &ItemRenderer,
+    sprites: &HashMap<String, Rect>,
+    x0: f32,
+    y0: f32,
+    base: &str,
+    layers: &[(String, String)],
+) -> Vec<ItemQuad> {
+    let mut quads = Vec::new();
+    super::special::submit_banner_result(
+        renderer,
+        banner_result_pose(x0, y0),
+        base,
+        layers,
+        sprites,
+        &mut quads,
+    );
+    // The winding normal flips with the pose's mirrored axis; PoseStack's
+    // normal matrix only takes the scale's signs, so the lit normal is the
+    // opposite one.
+    for q in &mut quads {
+        q.normal = -q.normal;
+    }
+    quads
+}
+
+/// Draws the loom's result preview: the picture in picture is lit with
+/// `Lighting.Entry.ITEMS_FLAT` and holds only its 20x40 rectangle.
+pub fn draw_banner_result(
+    renderer: &ItemRenderer,
+    sprites: &HashMap<String, Rect>,
+    batch: &mut HudBatch,
+    x0: f32,
+    y0: f32,
+    base: &str,
+    layers: &[(String, String)],
+) {
+    let quads = banner_result_quads(renderer, sprites, x0, y0, base, layers);
+    draw_quads(
+        &quads,
+        items_flat_lights(),
+        batch,
+        [x0, y0, x0 + 20.0, y0 + 40.0],
+        0.0,
+    );
 }
 
 #[cfg(test)]

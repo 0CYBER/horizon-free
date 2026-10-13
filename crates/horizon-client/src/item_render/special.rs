@@ -379,6 +379,33 @@ fn pot_sides(v: &Value) -> [Option<String>; 4] {
     }
 }
 
+/// `GuiBannerResultRenderer.renderToTexture` under `pose`: the standing
+/// banner flag (`BannerFlagModel.setupAnim(0)`) in the banner base texture,
+/// then `BannerRenderer.submitPatterns` (the base colour and up to 16 layers
+/// of `(texture, dye)`).
+pub(super) fn submit_banner_result(
+    renderer: &ItemRenderer,
+    pose: Mat4,
+    base: &str,
+    layers: &[(String, String)],
+    sprites: &HashMap<String, Rect>,
+    sink: &mut dyn ItemSink,
+) {
+    let Some(flag) = renderer.part("standing_banner_flag") else {
+        return;
+    };
+    let mut part = |texture: &str, color: u32| {
+        if let Some(r) = sprites.get(texture).copied() {
+            draw(flag, "root", pose, &flag_pose, r, color, Foil::None, sink);
+        }
+    };
+    part("entity/banner/banner_base", argb(-1));
+    part("entity/banner/base", dye(base));
+    for (texture, color) in layers.iter().take(16) {
+        part(texture, dye(color));
+    }
+}
+
 /// `SpecialModelRenderer.submit`.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn submit(

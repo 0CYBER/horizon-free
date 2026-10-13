@@ -10,7 +10,7 @@ use crate::{
 };
 use horizon_core::random::{LegacyRandom, RandomSource};
 use serde_json::Value;
-use std::{collections::HashSet, fs, path::Path, sync::Arc};
+use std::{fs, path::Path, sync::Arc};
 
 /// Everything the workstation menus read, loaded once with the resources.
 pub struct StationData {
@@ -457,7 +457,7 @@ pub struct StationRecipes {
     pub trim_materials: Vec<(String, String)>,
 }
 fn ingredient(v: &Value, items: &Items) -> Ingredient {
-    let mut set = HashSet::new();
+    let mut list: Vec<String> = Vec::new();
     for s in match v {
         Value::String(s) => vec![s.clone()],
         Value::Array(a) => a
@@ -466,14 +466,17 @@ fn ingredient(v: &Value, items: &Items) -> Ingredient {
             .collect(),
         _ => vec![],
     } {
-        match s.strip_prefix('#') {
-            Some(tag) => set.extend(items.item_tags.get(tag).into_iter().flatten().cloned()),
-            None => {
-                set.insert(s);
+        let more = match s.strip_prefix('#') {
+            Some(tag) => items.item_tag_order.get(tag).cloned().unwrap_or_default(),
+            None => vec![s],
+        };
+        for i in more {
+            if !list.contains(&i) {
+                list.push(i);
             }
         }
     }
-    Ingredient(set)
+    Ingredient::of(list)
 }
 impl StationRecipes {
     pub fn load(root: &Path, items: &Items) -> Self {

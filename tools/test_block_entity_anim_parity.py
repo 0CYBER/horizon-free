@@ -4,7 +4,7 @@
 The Java oracle (VanillaBlockEntityAnimOracle) builds each case's real vanilla
 block entity (chest, trapped/copper chest and the other half of a double chest,
 ender chest, enchanting table, shulker box, bell, conduit, dragon/piglin head,
-decorated pot)
+decorated pot, End gateway with the integrated server's copy ticking beside it)
 on a stand-in client level, then per scripted step applies the block event
 (triggerEvent), runs the entity's own client ticker and the renderer's
 extractRenderState, printing the fields, the level calls the tick made
@@ -162,6 +162,21 @@ def cases():
                 step['event'] = [rng.choice([1, 1, 1, 2]), rng.choice([0, 1, 0, 1, 2, -1])]
             steps.append(step)
         add('pot', f'minecraft:decorated_pot[facing={rng.choice(HORIZONTAL)}]', steps)
+    # End gateways: the server copy's portalTick (triggerCooldown every 2400
+    # ticks, entities entering) sends block event 1 to the client copy, whose
+    # beamAnimationTick and TheEndGatewayRenderer draw the beam; saved ages
+    # from new to long settled, both level heights.
+    for i in range(40):
+        age = rng.choice([0, 0, 150, 2390, 4790, rng.randint(200, 10 ** 6), 2399 + 2400 * rng.randint(1, 50)])
+        steps = []
+        for t in times(rng.randint(20, 90), gaps=(1, 1, 1, 2)):
+            step = {'time': t, 'partial': round(rng.random(), 4)}
+            if rng.random() < 0.06:
+                step['enter'] = True
+            if rng.random() < 0.04:
+                step['event'] = [rng.choice([1, 2, 0]), rng.choice([0, 3])]
+            steps.append(step)
+        add('gateway', 'minecraft:end_gateway', steps, age=age, level=rng.choice([[0, 256], [-64, 384]]))
     # Chests and ender chests: open counts from block event 1 (both halves of
     # a double chest), other events ignored; the neighbour a double half
     # connects to may be its other half or not (wrong block, type, facing).

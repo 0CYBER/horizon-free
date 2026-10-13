@@ -33,13 +33,15 @@ import net.minecraft.world.phys.*;
 /**
  * Original oracle for the client-ticked animation state of chests and ender
  * chests (ChestLidController), enchanting table books, shulker boxes, bells,
- * conduits, skulls and decorated pots. Each case builds the real
+ * conduits, skulls, decorated pots and End gateways. Each case builds the real
  * vanilla block entity on a stand-in client level (scripted blocks, entities,
  * game time and a seeded LegacyRandomSource), then per step applies the
  * scripted block event (triggerEvent), runs the block entity's own client
  * ticker (lidAnimateTick, bookAnimationTick with the class's static RANDOM
  * reseeded, ShulkerBoxBlockEntity.tick, BellBlockEntity.clientTick,
- * ConduitBlockEntity.clientTick, SkullBlockEntity.animation; pots have none)
+ * ConduitBlockEntity.clientTick, SkullBlockEntity.animation,
+ * TheEndGatewayBlockEntity.beamAnimationTick after the server copy's portalTick
+ * on a server-side stand-in; pots have none)
  * and runs the real renderer's extractRenderState at the step's partial tick.
  * It prints the block entity's fields, the level calls the tick made
  * (neighbour updates, entity queries, sounds, particles) and the render state.
@@ -100,6 +102,9 @@ public final class VanillaBlockEntityAnimOracle {
     static final class World extends Level {
         World() { super(null, null, null, null, false, false, 0L, 0); }
         long time;
+        boolean server;
+        int minY, height;
+        BlockEntity serverCopyOf;
         Map<BlockPos, BlockState> blocks = new HashMap<>();
         List<Mob> mobs = new ArrayList<>();
         List<Player> gamers = new ArrayList<>();
@@ -108,7 +113,16 @@ public final class VanillaBlockEntityAnimOracle {
         StringBuilder log = new StringBuilder();
 
         @Override public long getGameTime() { return time; }
-        @Override public boolean isClientSide() { return true; }
+        @Override public boolean isClientSide() { return !server; }
+        @Override public int getMinY() { return minY; }
+        @Override public int getHeight() { return height; }
+        @Override public void blockEvent(BlockPos p, Block block, int b0, int b1) {
+            // The integrated server's block event reaching the client copy.
+            log.append(" blockEvent ").append(b0).append(' ').append(b1);
+            serverCopyOf.triggerEvent(b0, b1);
+        }
+        @Override public void blockEntityChanged(BlockPos p) {}
+        @Override public void updateNeighbourForOutputSignal(BlockPos p, Block block) {}
         @Override public BlockState getBlockState(BlockPos p) { return blocks.getOrDefault(p.immutable(), Blocks.AIR.defaultBlockState()); }
         @Override public FluidState getFluidState(BlockPos p) { return getBlockState(p).getFluidState(); }
         @Override public int getBrightness(LightLayer layer, BlockPos p) { return 0; }
@@ -236,6 +250,22 @@ public final class VanillaBlockEntityAnimOracle {
         if (c.has("target") && be instanceof ConduitBlockEntity) {
             put(be, ConduitBlockEntity.class, "destroyTarget", EntityReference.of(mob(c.getAsJsonObject("target"), world)));
         }
+        World serverWorld = null;
+        TheEndGatewayBlockEntity serverGateway = null;
+        if (be instanceof TheEndGatewayBlockEntity g) {
+            var level = c.getAsJsonArray("level");
+            world.minY = level.get(0).getAsInt();
+            world.height = level.get(1).getAsInt();
+            field(TheEndGatewayBlockEntity.class, "age").setLong(g, c.get("age").getAsLong());
+            serverWorld = make(World.class);
+            serverWorld.server = true;
+            serverWorld.blocks = world.blocks;
+            serverWorld.log = world.log;
+            serverWorld.serverCopyOf = g;
+            serverGateway = (TheEndGatewayBlockEntity) ((EntityBlock) state.getBlock()).newBlockEntity(pos, state);
+            serverGateway.setLevel(serverWorld);
+            field(TheEndGatewayBlockEntity.class, "age").setLong(serverGateway, c.get("age").getAsLong());
+        }
         StringBuilder out = new StringBuilder();
         for (var stepElement : c.getAsJsonArray("steps")) {
             var step = stepElement.getAsJsonObject();
@@ -250,6 +280,14 @@ public final class VanillaBlockEntityAnimOracle {
             if (step.has("players")) {
                 world.gamers.clear();
                 for (var e : step.getAsJsonArray("players")) world.gamers.add(gamer(e.getAsJsonObject()));
+            }
+            if (serverGateway != null) {
+                serverWorld.time = world.time;
+                // ServerLevel.tick: entities (EndGatewayBlock.entityInside), then block entities.
+                if (step.has("enter") && !serverGateway.isCoolingDown()) {
+                    TheEndGatewayBlockEntity.triggerCooldown(serverWorld, pos, state, serverGateway);
+                }
+                TheEndGatewayBlockEntity.portalTick(serverWorld, pos, state, serverGateway);
             }
             if (step.has("event")) {
                 var ev = step.getAsJsonArray("event");
@@ -327,6 +365,15 @@ public final class VanillaBlockEntityAnimOracle {
                 make(DecoratedPotRenderer.class).extractRenderState(p, r, partial, Vec3.ZERO, null);
                 fields = p.wobbleStartedAtTick + " " + p.lastWobbleStyle
                     + " render " + f(r.wobbleProgress) + " " + r.wobbleStyle;
+            } else if (be instanceof TheEndGatewayBlockEntity g) {
+                TheEndGatewayBlockEntity.beamAnimationTick(world, pos, state, g);
+                var r = make(TheEndGatewayRenderer.class).createRenderState();
+                make(TheEndGatewayRenderer.class).extractRenderState(g, r, partial, Vec3.ZERO, null);
+                fields = field(TheEndGatewayBlockEntity.class, "age").getLong(g)
+                    + " " + field(TheEndGatewayBlockEntity.class, "teleportCooldown").getInt(g)
+                    + " server " + field(TheEndGatewayBlockEntity.class, "age").getLong(serverGateway)
+                    + " " + field(TheEndGatewayBlockEntity.class, "teleportCooldown").getInt(serverGateway)
+                    + " render " + r.height + " " + f(r.scale) + " " + Integer.toHexString(r.color) + " " + f(r.animationTime);
             } else {
                 throw new IllegalArgumentException("no animation for " + be);
             }

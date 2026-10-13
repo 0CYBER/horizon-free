@@ -701,6 +701,12 @@ impl EditBox {
         }
         true
     }
+    /// The first shown character after scrolling to the cursor, and the
+    /// milliseconds since the field was focused (the cursor's blink).
+    pub fn view_state(&mut self, atlas: &HudAtlas) -> (usize, u64) {
+        self.layout(atlas);
+        (self.display, self.focused_at.elapsed().as_millis() as u64)
+    }
     /// Draw the field; `format` styles the visible text (command colouring).
     pub fn draw(&mut self, batch: &mut HudBatch, atlas: &HudAtlas, format: Option<&Text>) {
         self.layout(atlas);

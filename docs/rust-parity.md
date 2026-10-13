@@ -1418,11 +1418,22 @@ vanilla's own classes, and the game uses that code:
   `CrafterScreen`'s decorations as draw calls the game paints;
   `tools/test_screen_layout_parity.py` runs vanilla's screens on stand-in
   menus and compares 1,600 call lists.
+- **The book's drawing.** `recipe_book_screen` lays out
+  `RecipeBookComponent`'s background, search `EditBox`, tab buttons, filter
+  `CycleButton`, the page of `RecipeButton`s with its number and arrows, the
+  `OverlayRecipeComponent`, the tooltips and `GhostSlots` as GUI calls with
+  their poses (squeeze animations, the overlay's 3/8 scale items); the game
+  paints them. `tools/test_recipe_book_render_parity.py` builds vanilla's
+  widgets for 600 states (`VanillaRecipeBookScreenOracle`) and compares every
+  call. Ingredients cycle in their `HolderSet` order (tags in `TagLoader` order).
+- **The loom's banner preview.** `item_render::gui::draw_banner_result` draws
+  `GuiBannerResultRenderer`'s flag model and layers in the 20x40 picture in
+  picture, lit with `ITEMS_FLAT`; the block entity render harness compares its
+  quads under the picture-in-picture pose.
 
-Not compared yet: the recipe book's own drawing (tabs, buttons, the overlay
-and ghost slots) and its text search, the banner preview's 3D flag (drawn as
-the flat front face), furnaces awarding their recipes and experience when
-their output is taken, and the limited crafting game rule.
+Not compared yet: the recipe book's text search, furnaces awarding their
+recipes and experience when their output is taken, and the limited crafting
+game rule.
 
 ## Player list and world border rendering
 

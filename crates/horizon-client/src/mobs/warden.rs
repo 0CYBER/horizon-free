@@ -1,34 +1,23 @@
-//! The warden (`Warden`, `WardenAi`, `AngerManagement`): a brain with the
-//! emerge, dig, roar, fight, investigate, sniff and idle activities, anger
-//! kept per entity, vibration listening, the sonic boom, the heartbeat and
-//! tendril animations, and digging back into the ground when nothing has
-//! disturbed it for a minute.
+//! The warden (`Warden`, `AngerManagement`): anger kept per entity,
+//! vibration listening, the sonic boom and melee attack, the heartbeat and
+//! tendril animations, the model and its emissive layers. Its brain
+//! (`WardenAi`) is in `warden_brain`.
 use super::{
     Damage, DamageKind, Mob, MobEvent, MobWorld, Species, Who,
     anim::{Poses, State},
-    goals::{Cx, Float},
     keyframes::Animation,
-    path::{Path, PathType},
+    path::PathType,
+    warden_brain::{self, Brain},
 };
 use crate::sculk::{self, Context, Info};
 use horizon_core::{
     geometry::{Vec3, trig::Mth},
-    random::RandomSource,
+    random::{LegacyRandom, RandomSource},
 };
 use std::{collections::HashMap, f32::consts::PI};
 
-pub const EMERGE_DURATION: i64 = 134;
-pub const ROAR_DURATION: i64 = 84;
-const ROAR_SOUND_DELAY: i64 = 25;
-const SNIFFING_DURATION: i64 = 84;
-const DIGGING_DURATION: i64 = 100;
-pub const DIGGING_COOLDOWN: i64 = 1200;
-const MELEE_ATTACK_COOLDOWN: i64 = 18;
-const SONIC_DURATION: i64 = 60;
-const SONIC_SOUND_DELAY: i64 = 34;
-const SPEED_IDLING: f64 = 0.5;
-const SPEED_INVESTIGATING: f64 = 0.7;
-const SPEED_FIGHTING: f64 = 1.2;
+pub const EMERGE_DURATION: i64 = warden_brain::EMERGE_DURATION as i64;
+pub const DIGGING_COOLDOWN: i64 = warden_brain::DIGGING_COOLDOWN;
 const DEFAULT_ANGER: i32 = 35;
 const PROJECTILE_ANGER: i32 = 10;
 const ON_HURT_ANGER_BOOST: i32 = 20;
@@ -87,7 +76,7 @@ pub fn digging_or_emerging(m: &Mob) -> bool {
     matches!(pose(m), Pose::Digging | Pose::Emerging)
 }
 /// `Entity.setPose`, with `onSyncedDataUpdated` starting the keyframes.
-fn set_pose(m: &mut Mob, new: Pose) {
+pub(super) fn set_pose(m: &mut Mob, new: Pose) {
     if pose(m) == new {
         return;
     }
@@ -236,142 +225,20 @@ impl AngerManagement {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Activity {
-    Emerge,
-    Dig,
-    Roar,
-    Fight,
-    Investigate,
-    Sniff,
-    Idle,
-}
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Track {
-    Block([i32; 3]),
-    /// An entity, tracked at its eyes when the flag is set.
-    Entity(Who, bool),
-}
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Walk {
-    target: Track,
-    speed: f32,
-    close_enough: i32,
-}
-/// `MoveToTargetSink`'s running state.
+/// The warden's state: anger, its vibration listener and its brain.
 #[derive(Clone, Debug, Default)]
-struct MoveSink {
-    end: i64,
-    last_target: [i32; 3],
-    speed: f32,
-    path: Option<Path>,
-}
-/// `RunOne` over the idle stroll and `DoNothing`.
-#[derive(Clone, Copy, Debug, Default)]
-struct Pause {
-    end: i64,
-}
-
-/// The warden's brain and sensors.
-#[derive(Clone, Debug)]
 pub struct Warden {
     pub anger: AngerManagement,
     pub vibration: sculk::Data,
-    activity: Activity,
-    in_brain: bool,
-    // Memories: the game time they stop being present (None: absent).
-    dig_cooldown: Option<i64>,
-    is_emerging: Option<i64>,
-    sniffing: bool,
-    sniff_cooldown: Option<i64>,
-    roar_target: Option<Who>,
-    attack_target: Option<Who>,
-    disturbance: Option<([i32; 3], i64)>,
-    look: Option<(Track, i64)>,
-    walk: Option<Walk>,
-    cant_reach_since: Option<i64>,
-    vibration_cooldown: Option<i64>,
-    touch_cooldown: Option<i64>,
-    recent_projectile: Option<i64>,
-    roar_sound_delay: Option<i64>,
-    roar_sound_cooldown: Option<i64>,
-    sonic_cooldown: Option<i64>,
-    sonic_sound_delay: Option<i64>,
-    sonic_sound_cooldown: Option<i64>,
-    attack_cooling_down: Option<i64>,
-    nearest_living: Vec<Who>,
-    nearest_attackable: Option<Who>,
-    sensor_timer: i32,
-    // Running behaviours (the game time they time out).
-    emerging: Option<i64>,
-    digging: Option<i64>,
-    roaring: Option<i64>,
-    sniffing_run: Option<i64>,
-    sonic: Option<i64>,
-    look_sink: Option<i64>,
-    move_sink: Option<MoveSink>,
-    move_cooldown: i32,
-    pause: Option<Pause>,
+    pub brain: Brain,
     /// `getClientAngerLevel`, synchronised once a second.
     pub client_anger: i32,
-    /// Attackers noted by `hurtServer` and not yet handled by the brain.
+    /// Attackers noted by `hurtServer` and not yet reacted to.
     hurt_by: Vec<(Option<Who>, bool)>,
 }
-const NEVER: i64 = i64::MAX;
-impl Default for Warden {
-    fn default() -> Self {
-        Self {
-            anger: AngerManagement::default(),
-            vibration: sculk::Data::default(),
-            activity: Activity::Idle,
-            in_brain: false,
-            dig_cooldown: None,
-            is_emerging: None,
-            sniffing: false,
-            sniff_cooldown: None,
-            roar_target: None,
-            attack_target: None,
-            disturbance: None,
-            look: None,
-            walk: None,
-            cant_reach_since: None,
-            vibration_cooldown: None,
-            touch_cooldown: None,
-            recent_projectile: None,
-            roar_sound_delay: None,
-            roar_sound_cooldown: None,
-            sonic_cooldown: None,
-            sonic_sound_delay: None,
-            sonic_sound_cooldown: None,
-            attack_cooling_down: None,
-            nearest_living: Vec::new(),
-            nearest_attackable: None,
-            sensor_timer: 0,
-            emerging: None,
-            digging: None,
-            roaring: None,
-            sniffing_run: None,
-            sonic: None,
-            look_sink: None,
-            move_sink: None,
-            move_cooldown: 0,
-            pause: None,
-            client_anger: 0,
-            hurt_by: Vec::new(),
-        }
-    }
-}
-fn present(memory: Option<i64>, now: i64) -> bool {
-    memory.is_some_and(|until| now < until)
-}
 impl Warden {
-    /// `Brain.setMemoryWithExpiry`: present for `ttl` brain ticks; set
-    /// outside the brain's tick it loses the one it ticks at once.
-    fn expiry(&self, now: i64, ttl: i64) -> Option<i64> {
-        Some(now + ttl - i64::from(!self.in_brain))
-    }
     pub fn target(&self) -> Option<Who> {
-        self.attack_target
+        self.brain.mem.attack_target.value()
     }
 }
 
@@ -384,38 +251,40 @@ pub fn register(m: &mut Mob) {
     m.set_malus(PathType::Lava, 8.0);
     m.set_malus(PathType::Fire, 0.0);
     m.set_malus(PathType::FireInNeighbor, 0.0);
-    // Swim(0.8) is part of the brain's core activity.
-    m.ai.goals.add(0, Float);
-    // The sensors scan on a random phase.
-    let phase = m.random.next_int_bound(20).unwrap_or(0);
-    if let Some(w) = m.extra.warden.as_mut() {
-        w.sensor_timer = phase;
+    // Brain.Provider.makeBrain: the sensors start on a random phase.
+    delay_sensors(m);
+}
+/// `Sensor.randomlyDelayStart` for the warden's two sensors, from its random.
+pub fn delay_sensors(m: &mut Mob) {
+    if let Some(mut st) = m.extra.warden.take() {
+        st.brain.delay_sensors(&mut m.random);
+        m.extra.warden = Some(st);
     }
 }
-/// `Sensor.randomlyDelayStart` for the warden's sensors, in brain order
-/// (`NEAREST_PLAYERS`, then `WARDEN_ENTITY_SENSOR`, which sets the phase of
-/// the combined scan here).
-pub fn delay_sensors(m: &mut Mob) {
-    if m.species() != Species::Warden {
-        return;
+/// A brain whose `RunOne` shuffles with `seed` (vanilla seeds it from the
+/// clock; harnesses seed both sides alike), its sensors delayed again.
+pub fn init_brain(m: &mut Mob, seed: i64) {
+    if let Some(st) = m.extra.warden.as_mut() {
+        let mem = std::mem::take(&mut st.brain.mem);
+        st.brain = Brain::new(seed);
+        st.brain.mem = mem;
     }
-    let _players = m.random.next_int_bound(20).unwrap_or(0);
-    let entities = m.random.next_int_bound(20).unwrap_or(0);
-    if let Some(w) = m.extra.warden.as_mut() {
-        w.sensor_timer = entities;
-    }
+    delay_sensors(m);
 }
 /// `Warden.finalizeSpawn`: a minute until it digs back down; a summoned
 /// warden climbs out of the ground first.
 pub fn finalize(m: &mut Mob, triggered: bool, events: &mut Vec<MobEvent>) {
-    let now = i64::from(m.age);
-    let Some(st) = m.extra.warden.as_mut() else {
+    if m.extra.warden.is_none() {
         return;
-    };
-    st.dig_cooldown = Some(now + DIGGING_COOLDOWN);
+    }
+    warden_brain::mem(m)
+        .dig_cooldown
+        .set_ttl((), DIGGING_COOLDOWN);
     if triggered {
-        st.is_emerging = Some(now + EMERGE_DURATION);
         set_pose(m, Pose::Emerging);
+        warden_brain::mem(m)
+            .is_emerging
+            .set_ttl((), EMERGE_DURATION);
         sound(m, "entity.warden.agitated", 5.0, 1.0, events);
     }
 }
@@ -431,15 +300,19 @@ fn voice_pitch(m: &mut Mob) -> f32 {
 }
 fn closer_than(m: &Mob, p: Vec3, horizontal: f64, vertical: f64) -> bool {
     let (dx, dy, dz) = (p.x - m.position.x, p.y - m.position.y, p.z - m.position.z);
-    dx * dx + dz * dz < horizontal * horizontal && dy.abs() < vertical
+    dx * dx + dz * dz < horizontal * horizontal && dy * dy < vertical * vertical
 }
 
 // ---- entity facts ----
 
-/// `Warden.canTargetEntity`.
+/// `Warden.canTargetEntity`: living, neither creative nor spectator, not a
+/// warden, alive.
 pub fn can_target(w: &MobWorld, who: Who) -> bool {
     match who {
-        Who::Player => w.player.as_ref().is_some_and(|p| p.alive && !p.creative),
+        Who::Player => w
+            .player
+            .as_ref()
+            .is_some_and(|p| p.alive && !p.creative && !p.spectator),
         Who::Mob(id) => w
             .seen(id)
             .is_some_and(|s| s.alive && s.species != Species::Warden),
@@ -448,54 +321,12 @@ pub fn can_target(w: &MobWorld, who: Who) -> bool {
 fn position_of(w: &MobWorld, who: Who) -> Option<Vec3> {
     w.target_info(who).map(|t| t.position)
 }
-fn track_position(w: &MobWorld, track: Track) -> Option<[f64; 3]> {
-    match track {
-        Track::Block(p) => Some([
-            f64::from(p[0]) + 0.5,
-            f64::from(p[1]) + 0.5,
-            f64::from(p[2]) + 0.5,
-        ]),
-        Track::Entity(who, eyes) => w.target_info(who).map(|t| {
-            [
-                t.position.x,
-                if eyes { t.eye_y } else { t.position.y },
-                t.position.z,
-            ]
-        }),
-    }
-}
-fn track_block(w: &MobWorld, track: Track) -> Option<[i32; 3]> {
-    match track {
-        Track::Block(p) => Some(p),
-        Track::Entity(who, _) => w.target_info(who).map(|t| {
-            [
-                t.position.x.floor() as i32,
-                t.position.y.floor() as i32,
-                t.position.z.floor() as i32,
-            ]
-        }),
-    }
-}
-fn block_pos(m: &Mob) -> [i32; 3] {
-    [
-        m.position.x.floor() as i32,
-        m.position.y.floor() as i32,
-        m.position.z.floor() as i32,
-    ]
-}
-fn manhattan(a: [i32; 3], b: [i32; 3]) -> i32 {
-    (a[0] - b[0]).abs() + (a[1] - b[1]).abs() + (a[2] - b[2]).abs()
-}
-fn dist_sqr(a: [i32; 3], b: [i32; 3]) -> f64 {
-    (0..3).map(|i| f64::from(a[i] - b[i]).powi(2)).sum()
-}
 
 // ---- anger ----
 
 /// `Warden.increaseAngerAt`.
-fn increase_anger(
+pub(super) fn increase_anger(
     m: &mut Mob,
-    st: &mut Warden,
     w: &MobWorld,
     who: Option<Who>,
     amount: i32,
@@ -503,61 +334,38 @@ fn increase_anger(
     events: &mut Vec<MobEvent>,
 ) {
     let Some(who) = who else { return };
-    if !can_target(w, who) {
+    if m.no_ai || !can_target(w, who) {
         return;
     }
-    set_dig_cooldown(st, i64::from(m.age));
-    let maybe_switch = st.attack_target != Some(Who::Player);
+    warden_brain::set_dig_cooldown(m);
+    let Some(st) = m.extra.warden.as_mut() else {
+        return;
+    };
+    let maybe_switch = st.target() != Some(Who::Player);
     let new = st.anger.increase(who, amount);
     if who == Who::Player && maybe_switch && AngerLevel::by_anger(new).is_angry() {
-        st.attack_target = None;
+        st.brain.mem.attack_target.clear();
     }
     if play_sound && pose(m) != Pose::Roaring {
-        let level = angry_level(st);
+        let level = anger_level(m);
         let pitch = voice_pitch(m);
         sound(m, level.listening_sound(), 10.0, pitch, events);
     }
 }
-fn angry_level(st: &Warden) -> AngerLevel {
-    AngerLevel::by_anger(st.anger.active_anger(st.attack_target))
-}
 /// `Warden.getEntityAngryAt`.
-fn entity_angry_at(st: &Warden, w: &MobWorld) -> Option<Who> {
-    if angry_level(st).is_angry() {
+pub(super) fn entity_angry_at(m: &Mob, w: &MobWorld) -> Option<Who> {
+    let st = m.extra.warden.as_ref()?;
+    if anger_level(m).is_angry() {
         st.anger.active_entity(|e| can_target(w, e))
     } else {
         None
     }
 }
-/// `Warden.getAngerLevel` of a warden (for its ambient sound).
+/// `Warden.getAngerLevel`.
 pub fn anger_level(m: &Mob) -> AngerLevel {
     m.extra.warden.as_ref().map_or(AngerLevel::Calm, |s| {
-        AngerLevel::by_anger(s.anger.active_anger(s.attack_target))
+        AngerLevel::by_anger(s.anger.active_anger(s.target()))
     })
-}
-/// `WardenAi.setDigCooldown`.
-fn set_dig_cooldown(st: &mut Warden, now: i64) {
-    if present(st.dig_cooldown, now) {
-        st.dig_cooldown = st.expiry(now, DIGGING_COOLDOWN);
-    }
-}
-/// `WardenAi.setDisturbanceLocation`.
-fn set_disturbance(st: &mut Warden, w: &MobWorld, now: i64, position: [i32; 3]) {
-    if entity_angry_at(st, w).is_none() && st.attack_target.is_none() {
-        set_dig_cooldown(st, now);
-        st.sniff_cooldown = st.expiry(now, 100);
-        let until = st.expiry(now, 100).unwrap_or(now);
-        st.look = Some((Track::Block(position), until));
-        st.disturbance = Some((position, until));
-        st.walk = None;
-    }
-}
-/// `Warden.setAttackTarget`.
-fn set_attack_target(st: &mut Warden, target: Who, now: i64) {
-    st.roar_target = None;
-    st.attack_target = Some(target);
-    st.cant_reach_since = None;
-    st.sonic_cooldown = st.expiry(now, 200);
 }
 
 // ---- damage ----
@@ -566,9 +374,9 @@ fn set_attack_target(st: &mut Warden, target: Who, now: i64) {
 pub fn accepts_damage(m: &Mob, source: &Damage) -> bool {
     !(digging_or_emerging(m) && source.kind != DamageKind::Generic)
 }
-/// `Warden.hurtServer`'s reaction, handled by the brain's next tick.
+/// `Warden.hurtServer`'s reaction, handled at the warden's next tick.
 pub fn hurt(m: &mut Mob, source: &Damage) {
-    if digging_or_emerging(m) {
+    if m.no_ai || digging_or_emerging(m) {
         return;
     }
     let direct = !matches!(
@@ -579,32 +387,163 @@ pub fn hurt(m: &mut Mob, source: &Damage) {
         st.hurt_by.push((source.attacker, direct));
     }
 }
+/// The rest of `Warden.hurtServer`.
+fn handle_hurt(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    let hurt = m
+        .extra
+        .warden
+        .as_mut()
+        .map(|st| std::mem::take(&mut st.hurt_by))
+        .unwrap_or_default();
+    for (attacker, direct) in hurt {
+        increase_anger(
+            m,
+            w,
+            attacker,
+            AngerLevel::Angry.minimum() + ON_HURT_ANGER_BOOST,
+            false,
+            events,
+        );
+        if !warden_brain::mem(m).attack_target.present()
+            && let Some(who) = attacker
+            && let Some(p) = position_of(w, who)
+            && (direct || m.distance_sqr(p) < 25.0)
+        {
+            warden_brain::set_attack_target(m, who);
+        }
+    }
+}
+/// `Warden.doPush`: touching something angers it (once a second).
+pub fn do_push(m: &mut Mob, w: &MobWorld, who: Who, events: &mut Vec<MobEvent>) {
+    if m.no_ai || m.extra.warden.is_none() || warden_brain::mem(m).touch_cooldown.present() {
+        return;
+    }
+    warden_brain::mem(m).touch_cooldown.set_ttl((), 20);
+    increase_anger(m, w, Some(who), DEFAULT_ANGER, true, events);
+    if let Some(t) = w.target_info(who) {
+        let block = [
+            t.position.x.floor() as i32,
+            t.position.y.floor() as i32,
+            t.position.z.floor() as i32,
+        ];
+        warden_brain::set_disturbance(m, w, block);
+    }
+}
+/// `Warden.doHurtTarget`: the attack keyframes (entity event 4), the impact
+/// sound, a sonic boom cooldown, then `Mob.doHurtTarget`.
+pub(super) fn do_hurt_target(m: &mut Mob, target: Who, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    m.anim.states[ROAR].stop();
+    m.anim.states[ATTACK].start(m.age as f32);
+    let pitch = voice_pitch(m);
+    sound(m, "entity.warden.attack_impact", 10.0, pitch, events);
+    warden_brain::mem(m).sonic_boom_cooldown.set_ttl((), 40);
+    let mut cx = warden_brain::cx(w, events);
+    super::ai::do_hurt_target(m, target, &mut cx);
+}
+
+/// The brain's attack target (`Warden.getTarget` before `asValidTarget`).
+pub fn brain_target(m: &Mob) -> Option<Who> {
+    warden_brain::mem_ref(m).and_then(|mem| mem.attack_target.value())
+}
 
 // ---- vibrations ----
 
 /// `Warden.VibrationUser.canReceiveVibration`.
-pub fn can_receive_vibration(m: &Mob, now: i64, ctx: &Context) -> bool {
+pub fn can_receive_vibration(m: &Mob, _now: i64, ctx: &Context) -> bool {
     let Some(st) = m.extra.warden.as_ref() else {
         return false;
     };
-    m.alive()
-        && !present(st.vibration_cooldown, now)
+    !m.no_ai
+        && m.alive()
+        && !st.brain.mem.vibration_cooldown.present()
         && !digging_or_emerging(m)
         && !(ctx.living && !ctx.targetable)
 }
-/// `Warden.VibrationUser.onReceiveVibration`.
-fn receive_vibration(
+/// `VibrationSystem.Listener.handleGameEvent` for the warden: a free
+/// listener within 16 blocks of its eyes schedules what it can hear.
+/// `occluded` is `VibrationSystem.Listener.isOccluded`.
+pub fn listen(
     m: &mut Mob,
-    st: &mut Warden,
-    w: &MobWorld,
-    info: Info,
-    events: &mut Vec<MobEvent>,
+    now: i64,
+    event: &'static str,
+    pos: [f64; 3],
+    ctx: &Context,
+    occluded: impl Fn([f64; 3], [f64; 3]) -> bool,
 ) {
+    let eye = [m.position.x, m.position.y + m.kind.eye_height, m.position.z];
+    let Some(st) = m.extra.warden.as_ref() else {
+        return;
+    };
+    if st.vibration.current.is_some() {
+        return;
+    }
+    let block = |p: [f64; 3]| p.map(|v| i64::from(v.floor() as i32));
+    let (source, listener) = (block(pos), block(eye));
+    let d = [0, 1, 2].map(|i| source[i] - listener[i]);
+    if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > 256
+        || !sculk::valid_vibration(sculk::warden_can_listen(event), event, ctx)
+        || !can_receive_vibration(m, i64::from(m.age), ctx)
+        || occluded(pos, eye)
+    {
+        return;
+    }
+    let d = [pos[0] - eye[0], pos[1] - eye[1], pos[2] - eye[2]];
+    let distance = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() as f32;
+    if let Some(st) = m.extra.warden.as_mut() {
+        st.vibration.schedule(
+            Info {
+                event,
+                distance,
+                pos,
+                source: ctx.source,
+                owner: ctx.owner,
+            },
+            now,
+        );
+    }
+}
+/// `Level.gameEvent` for the mobs' own movement events from `from` on, as
+/// the mob AI probe has no sculk layer: every warden's listener hears them.
+pub fn hear_mob_events(mobs: &mut [Mob], events: &[MobEvent], from: usize, w: &MobWorld) {
+    for e in &events[from..] {
+        let MobEvent::GameEvent {
+            event,
+            at,
+            source,
+            state,
+        } = *e
+        else {
+            continue;
+        };
+        let who = mobs.iter().find(|m| m.id == source);
+        let name = &w.facts.get(state).name;
+        let ctx = Context {
+            source: Some(Who::Mob(source)),
+            dampening_state: w.has_tag("minecraft:dampens_vibrations", name),
+            dampens: who.is_some_and(|m| m.species() == Species::Warden),
+            targetable: who.is_some_and(|m| m.alive() && m.species() != Species::Warden),
+            living: true,
+            ..Context::default()
+        };
+        for m in mobs.iter_mut().filter(|m| m.extra.warden.is_some()) {
+            listen(m, w.game_time, event, at, &ctx, |a, b| {
+                sculk::is_occluded(a, b, |p| {
+                    let block = w.world.block(p.x, p.y, p.z);
+                    w.has_tag(
+                        "minecraft:occludes_vibration_signals",
+                        &w.facts.get(block).name,
+                    )
+                })
+            });
+        }
+    }
+}
+/// `Warden.VibrationUser.onReceiveVibration`.
+fn receive_vibration(m: &mut Mob, w: &MobWorld, info: Info, events: &mut Vec<MobEvent>) {
     if !m.alive() {
         return;
     }
-    let now = i64::from(m.age);
-    st.vibration_cooldown = st.expiry(now, 40);
+    warden_brain::mem(m).vibration_cooldown.set_ttl((), 40);
     // Entity event 61: the tendrils twitch.
     m.anim.v[TENDRIL] = 10.0;
     let pitch = voice_pitch(m);
@@ -617,9 +556,9 @@ fn receive_vibration(
     let mut suspicious = origin;
     if let Some(owner) = info.owner {
         if let Some(p) = position_of(w, owner)
-            && closer_than_distance(m, p, 30.0)
+            && m.distance_sqr(p) < 900.0
         {
-            if present(st.recent_projectile, now) {
+            if warden_brain::mem(m).recent_projectile.present() {
                 if can_target(w, owner)
                     && let Some(t) = w.target_info(owner)
                 {
@@ -629,585 +568,106 @@ fn receive_vibration(
                         t.position.z.floor() as i32,
                     ];
                 }
-                increase_anger(m, st, w, Some(owner), DEFAULT_ANGER, true, events);
+                increase_anger(m, w, Some(owner), DEFAULT_ANGER, true, events);
             } else {
-                increase_anger(m, st, w, Some(owner), PROJECTILE_ANGER, true, events);
+                increase_anger(m, w, Some(owner), PROJECTILE_ANGER, true, events);
             }
         }
-        st.recent_projectile = st.expiry(now, 100);
+        warden_brain::mem(m).recent_projectile.set_ttl((), 100);
     } else {
-        increase_anger(m, st, w, info.source, DEFAULT_ANGER, true, events);
+        increase_anger(m, w, info.source, DEFAULT_ANGER, true, events);
     }
-    if !angry_level(st).is_angry() {
-        let active = st.anger.active_entity(|e| can_target(w, e));
+    if !anger_level(m).is_angry() {
+        let active = m
+            .extra
+            .warden
+            .as_ref()
+            .and_then(|st| st.anger.active_entity(|e| can_target(w, e)));
         if info.owner.is_some() || active.is_none() || active == info.source {
-            set_disturbance(st, w, now, suspicious);
+            warden_brain::set_disturbance(m, w, suspicious);
         }
     }
 }
-fn closer_than_distance(m: &Mob, p: Vec3, distance: f64) -> bool {
-    m.distance_sqr(p) < distance * distance
-}
 
-// ---- the brain ----
+// ---- the server tick ----
 
-/// `Warden.customServerAiStep`: the vibration ticker, the brain, darkness,
-/// anger and the activity.
-pub fn server_ai_step(m: &mut Mob, cx: &mut Cx) {
-    let Some(mut st) = m.extra.warden.take() else {
+/// `Warden.tick` before `super.tick()`: the vibration ticker, and
+/// persistence keeping the dig cooldown.
+pub fn pre_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    if m.extra.warden.is_none() {
         return;
-    };
-    let now = i64::from(m.age);
-    // Warden.tick: vibrations arrive before the brain thinks.
-    st.in_brain = false;
-    if st.dig_cooldown.is_some() && m.custom_name.is_some() {
-        set_dig_cooldown(&mut st, now);
     }
-    let tick = st
-        .vibration
-        .tick(cx.w.game_time, true, false, |d| d.floor() as i32);
+    let tick = m
+        .extra
+        .warden
+        .as_mut()
+        .map(|st| {
+            st.vibration
+                .tick(w.game_time, true, false, |d| d.floor() as i32)
+        })
+        .unwrap_or_default();
     if let Some((info, travel)) = tick.started {
         let eye = [m.position.x, m.position.y + m.kind.eye_height, m.position.z];
-        cx.events.push(MobEvent::Vibration {
+        events.push(MobEvent::Vibration {
             from: info.pos,
             to: eye,
             ticks: travel,
         });
     }
     if let Some(info) = tick.received {
-        receive_vibration(m, &mut st, cx.w, info, cx.events);
+        receive_vibration(m, w, info, events);
     }
-    touch_entities(m, &mut st, cx);
-    handle_hurt(m, &mut st, cx);
-    st.in_brain = true;
-    brain_tick(m, &mut st, cx);
-    st.in_brain = false;
-    // Warden.customServerAiStep after the brain.
+    if m.persistent || m.custom_name.is_some() {
+        warden_brain::set_dig_cooldown(m);
+    }
+}
+/// `Warden.customServerAiStep`: the brain, the darkness pulse, anger and
+/// the activity.
+pub fn server_ai_step(
+    m: &mut Mob,
+    w: &MobWorld,
+    level_random: &mut LegacyRandom,
+    events: &mut Vec<MobEvent>,
+) {
+    if m.extra.warden.is_none() {
+        return;
+    }
+    handle_hurt(m, w, events);
+    warden_brain::tick(m, w, level_random, events);
     if (i64::from(m.age) + i64::from(m.id)) % 120 == 0 {
-        cx.events.push(MobEvent::Darkness {
-            at: [m.position.x, m.position.y, m.position.z],
+        events.push(MobEvent::Darkness {
+            at: at(m),
             radius: DARKNESS_RADIUS,
         });
     }
-    if m.age.is_multiple_of(20) {
-        let w = cx.w;
+    if m.age.is_multiple_of(20)
+        && let Some(st) = m.extra.warden.as_mut()
+    {
         st.anger.tick(|who| can_target(w, who));
-        st.client_anger = st.anger.active_anger(st.attack_target);
+        st.client_anger = st.anger.active_anger(st.target());
     }
-    update_activity(m, &mut st, now);
-    m.extra.warden = Some(st);
-}
-/// `Warden.doPush`: touching something angers it (every second).
-fn touch_entities(m: &mut Mob, st: &mut Warden, cx: &mut Cx) {
-    if digging_or_emerging(m) || !m.alive() {
-        return;
-    }
-    let now = i64::from(m.age);
-    if present(st.touch_cooldown, now) {
-        return;
-    }
-    let bounds = m.bounds();
-    let mut touched = None;
-    if let Some(p) = cx.w.player.as_ref()
-        && p.alive
-        && !p.spectator
-        && bounds.intersects(p.bounds)
-    {
-        touched = Some(Who::Player);
-    }
-    if touched.is_none() {
-        touched =
-            cx.w.others
-                .iter()
-                .find(|s| s.id != m.id && s.alive && bounds.intersects(s.bounds))
-                .map(|s| Who::Mob(s.id));
-    }
-    if let Some(who) = touched {
-        st.touch_cooldown = st.expiry(now, 20);
-        increase_anger(m, st, cx.w, Some(who), DEFAULT_ANGER, true, cx.events);
-        if let Some(t) = cx.w.target_info(who) {
-            let block = [
-                t.position.x.floor() as i32,
-                t.position.y.floor() as i32,
-                t.position.z.floor() as i32,
-            ];
-            set_disturbance(st, cx.w, now, block);
-        }
+    if let Some(st) = m.extra.warden.as_mut() {
+        st.brain.update_activity();
     }
 }
-/// The rest of `Warden.hurtServer`.
-fn handle_hurt(m: &mut Mob, st: &mut Warden, cx: &mut Cx) {
-    for (attacker, direct) in std::mem::take(&mut st.hurt_by) {
-        increase_anger(
-            m,
-            st,
-            cx.w,
-            attacker,
-            AngerLevel::Angry.minimum() + ON_HURT_ANGER_BOOST,
-            false,
-            cx.events,
-        );
-        if st.attack_target.is_none()
-            && let Some(who) = attacker
-            && let Some(p) = position_of(cx.w, who)
-            && (direct || closer_than_distance(m, p, 5.0))
-        {
-            set_attack_target(st, who, i64::from(m.age));
-        }
-    }
-}
-/// `Brain.setActiveActivityToFirstValid`, erasing the memories of the
-/// activity being left.
-fn update_activity(m: &mut Mob, st: &mut Warden, now: i64) {
-    let _ = m;
-    let next = if present(st.is_emerging, now) {
-        Activity::Emerge
-    } else if st.roar_target.is_none() && !present(st.dig_cooldown, now) {
-        Activity::Dig
-    } else if st.roar_target.is_some() {
-        Activity::Roar
-    } else if st.attack_target.is_some() {
-        Activity::Fight
-    } else if st.disturbance.is_some_and(|(_, until)| now < until) {
-        Activity::Investigate
-    } else if st.sniffing {
-        Activity::Sniff
-    } else {
-        Activity::Idle
-    };
-    if next != st.activity {
-        match st.activity {
-            Activity::Emerge => st.is_emerging = None,
-            Activity::Roar => st.roar_target = None,
-            Activity::Fight => st.attack_target = None,
-            Activity::Investigate => st.disturbance = None,
-            Activity::Sniff => st.sniffing = false,
-            Activity::Dig | Activity::Idle => {}
-        }
-        st.activity = next;
-    }
-}
-fn active(st: &Warden, activity: Activity) -> bool {
-    st.activity == activity
-}
-fn brain_tick(m: &mut Mob, st: &mut Warden, cx: &mut Cx) {
-    let now = i64::from(m.age);
-    // Memories that timed out are forgotten.
-    if st.disturbance.is_some_and(|(_, until)| now >= until) {
-        st.disturbance = None;
-    }
-    if st.look.is_some_and(|(_, until)| now >= until) {
-        st.look = None;
-    }
-    sense(m, st, cx.w);
-    start_behaviours(m, st, cx);
-    tick_behaviours(m, st, cx);
-}
-/// `WardenEntitySensor` (and `NearestLivingEntitySensor`) every 20 ticks.
-fn sense(m: &mut Mob, st: &mut Warden, w: &MobWorld) {
-    st.sensor_timer -= 1;
-    if st.sensor_timer > 0 {
-        return;
-    }
-    st.sensor_timer = 20;
-    let range = m.attrs.follow_range;
-    let area = m
-        .bounds()
-        .inflate(horizon_core::geometry::Vec3::new(range, range, range));
-    let mut found: Vec<(Who, f64)> = Vec::new();
-    if let Some(p) = w.player.as_ref()
-        && p.alive
-        && area.intersects(p.bounds)
-    {
-        found.push((Who::Player, m.distance_sqr(p.position)));
-    }
-    for s in w.others {
-        if s.id != m.id && s.alive && area.intersects(s.bounds) {
-            found.push((Who::Mob(s.id), m.distance_sqr(s.position)));
-        }
-    }
-    found.sort_by(|a, b| a.1.total_cmp(&b.1));
-    st.nearest_living = found.into_iter().map(|(who, _)| who).collect();
-    let closest = |players: bool| {
-        st.nearest_living
-            .iter()
-            .copied()
-            .find(|who| can_target(w, *who) && (*who == Who::Player) == players)
-    };
-    let attackable = closest(true).or_else(|| closest(false));
-    st.nearest_attackable = attackable;
-}
-/// `NearestVisibleLivingEntities.contains`.
-fn visible(m: &mut Mob, st: &Warden, w: &MobWorld, who: Who) -> bool {
-    st.nearest_living.contains(&who) && m.sees(w, who)
-}
-
-fn start_behaviours(m: &mut Mob, st: &mut Warden, cx: &mut Cx) {
-    let now = i64::from(m.age);
-    // Core: SetWardenLookTarget.
-    if st.attack_target.is_none() {
-        let target = st
-            .roar_target
-            .and_then(|who| track_block(cx.w, Track::Entity(who, true)))
-            .or(st.disturbance.map(|(p, _)| p));
-        if let Some(p) = target {
-            st.look = Some((Track::Block(p), NEVER));
-        }
-    }
-    // Dig: Digging.
-    if active(st, Activity::Dig)
-        && st.digging.is_none()
-        && st.attack_target.is_none()
-        && st.walk.is_none()
-        && (m.on_ground || m.is_in_liquid())
-    {
-        st.digging = Some(now + DIGGING_DURATION);
-        if m.on_ground {
-            set_pose(m, Pose::Digging);
-            sound(m, "entity.warden.dig", 5.0, 1.0, cx.events);
-        } else {
-            sound(m, "entity.warden.agitated", 5.0, 1.0, cx.events);
-            stop_digging(m, st);
-        }
-    }
-    // Core: LookAtTargetSink.
-    if st.look_sink.is_none() && st.look.is_some() {
-        let duration = 45 + i64::from(m.random.next_int_bound(46).unwrap_or(0));
-        st.look_sink = Some(now + duration);
-    }
-    // Core: MoveToTargetSink.
-    if st.move_sink.is_none() && st.walk.is_some() {
-        start_move_sink(m, st, cx);
-    }
-    // Emerge: Emerging.
-    if active(st, Activity::Emerge)
-        && st.emerging.is_none()
-        && present(st.is_emerging, now)
-        && st.walk.is_none()
-    {
-        st.emerging = Some(now + EMERGE_DURATION);
-        set_pose(m, Pose::Emerging);
-        sound(m, "entity.warden.emerge", 5.0, 1.0, cx.events);
-    }
-    // SetRoarTarget (investigate, sniff and idle).
-    if matches!(
-        st.activity,
-        Activity::Investigate | Activity::Sniff | Activity::Idle
-    ) && st.roar_target.is_none()
-        && st.attack_target.is_none()
-        && let Some(target) = entity_angry_at(st, cx.w).filter(|t| can_target(cx.w, *t))
-    {
-        st.roar_target = Some(target);
-        st.cant_reach_since = None;
-    }
-    // Investigate: GoToTargetLocation.
-    if active(st, Activity::Investigate)
-        && st.attack_target.is_none()
-        && st.walk.is_none()
-        && let Some((location, until)) = st.disturbance
-        && now < until
-        && dist_sqr(location, block_pos(m)) >= 4.0
-    {
-        let ox = m.random.next_int_bound(3).unwrap_or(1) - 1;
-        let oz = m.random.next_int_bound(3).unwrap_or(1) - 1;
-        let target = [location[0] + ox, location[1], location[2] + oz];
-        st.look = Some((Track::Block(target), NEVER));
-        st.walk = Some(Walk {
-            target: Track::Block(target),
-            speed: SPEED_INVESTIGATING as f32,
-            close_enough: 2,
-        });
-    }
-    // Sniff: Sniffing.
-    if active(st, Activity::Sniff)
-        && st.sniffing_run.is_none()
-        && st.sniffing
-        && st.attack_target.is_none()
-        && st.walk.is_none()
-    {
-        st.sniffing_run = Some(now + SNIFFING_DURATION);
-        sound(m, "entity.warden.sniff", 5.0, 1.0, cx.events);
-    }
-    // Roar.
-    if active(st, Activity::Roar)
-        && st.roaring.is_none()
-        && let Some(target) = st.roar_target
-        && st.attack_target.is_none()
-    {
-        st.roaring = Some(now + ROAR_DURATION);
-        st.roar_sound_delay = st.expiry(now, ROAR_SOUND_DELAY);
-        st.walk = None;
-        st.look = Some((Track::Entity(target, true), NEVER));
-        set_pose(m, Pose::Roaring);
-        increase_anger(m, st, cx.w, Some(target), 20, false, cx.events);
-    }
-    // Fight: the dig cooldown setter.
-    if active(st, Activity::Fight) {
-        set_dig_cooldown(st, now);
-    }
-    // Idle: TryToSniff.
-    if active(st, Activity::Idle)
-        && !present(st.sniff_cooldown, now)
-        && st.nearest_attackable.is_some()
-        && st.disturbance.is_none()
-    {
-        st.sniffing = true;
-        let cooldown = 100 + i64::from(m.random.next_int_bound(101).unwrap_or(0));
-        st.sniff_cooldown = st.expiry(now, cooldown);
-        st.walk = None;
-        set_pose(m, Pose::Sniffing);
-    }
-    // Fight: StopAttackingIfTargetInvalid.
-    if active(st, Activity::Fight)
-        && let Some(target) = st.attack_target
-    {
-        let tired = st.cant_reach_since.is_some_and(|since| now - since > 200);
-        let valid = can_target(cx.w, target)
-            && !tired
-            && cx.w.target_info(target).is_some_and(|t| t.alive)
-            && angry_level(st).is_angry();
-        if !valid {
-            if !can_target(cx.w, target) {
-                st.anger.clear(target);
-            }
-            set_dig_cooldown(st, now);
-            st.attack_target = None;
-        }
-    }
-    // Idle: RunOne over the stroll and DoNothing.
-    if active(st, Activity::Idle) && st.pause.is_none() && !st.sniffing {
-        run_one(m, st, cx);
-    }
-    // Fight: SetEntityLookTarget.
-    if active(st, Activity::Fight)
-        && st.look.is_none()
-        && let Some(target) = st.attack_target
-        && visible(m, st, cx.w, target)
-        && position_of(cx.w, target)
-            .is_some_and(|p| m.distance_sqr(p) <= m.attrs.follow_range * m.attrs.follow_range)
-    {
-        st.look = Some((Track::Entity(target, true), NEVER));
-    }
-    // Fight: SetWalkTargetFromAttackTargetIfTargetOutOfReach.
-    if active(st, Activity::Fight)
-        && let Some(target) = st.attack_target
-    {
-        let in_reach = visible(m, st, cx.w, target)
-            && cx
-                .w
-                .target_info(target)
-                .is_some_and(|t| m.within_melee_range(&t));
-        if in_reach {
-            st.walk = None;
-        } else {
-            st.look = Some((Track::Entity(target, true), NEVER));
-            st.walk = Some(Walk {
-                target: Track::Entity(target, false),
-                speed: SPEED_FIGHTING as f32,
-                close_enough: 0,
-            });
-        }
-    }
-    // Fight: SonicBoom.
-    if active(st, Activity::Fight)
-        && st.sonic.is_none()
-        && !present(st.sonic_cooldown, now)
-        && let Some(target) = st.attack_target
-        && position_of(cx.w, target).is_some_and(|p| closer_than(m, p, 15.0, 20.0))
-    {
-        st.sonic = Some(now + SONIC_DURATION);
-        st.attack_cooling_down = st.expiry(now, SONIC_DURATION);
-        st.sonic_sound_delay = st.expiry(now, SONIC_SOUND_DELAY);
-        m.anim.states[SONIC_BOOM].start(m.age as f32);
-        sound(m, "entity.warden.sonic_charge", 3.0, 1.0, cx.events);
-    }
-    // Fight: MeleeAttack.
-    if active(st, Activity::Fight)
-        && !present(st.attack_cooling_down, now)
-        && let Some(target) = st.attack_target
-        && visible(m, st, cx.w, target)
-        && let Some(info) = cx.w.target_info(target)
-        && m.within_melee_range(&info)
-    {
-        st.look = Some((Track::Entity(target, true), NEVER));
-        m.swing();
-        attack(m, target, cx);
-        st.attack_cooling_down = st.expiry(now, MELEE_ATTACK_COOLDOWN);
-        // SonicBoom.setCooldown(this, 40) from doHurtTarget.
-        st.sonic_cooldown = st.expiry(now, 40);
-        m.anim.states[ROAR].stop();
-        m.anim.states[ATTACK].start(m.age as f32);
-    }
-}
-/// `Warden.doHurtTarget`: the hit, its impact sound and the knockback.
-fn attack(m: &mut Mob, target: Who, cx: &mut Cx) {
-    let pitch = voice_pitch(m);
-    sound(m, "entity.warden.attack_impact", 10.0, pitch, cx.events);
-    super::ai::do_hurt_target(m, target, cx);
-    // ATTACK_KNOCKBACK 1.5: half of it, along the warden's facing.
-    let yaw = m.yaw.to_radians();
-    cx.events.push(MobEvent::Push {
-        target,
-        velocity: [
-            -f64::from(yaw.sin()) * 0.75,
-            0.0,
-            f64::from(yaw.cos()) * 0.75,
-        ],
-    });
-    m.velocity.x *= 0.6;
-    m.velocity.z *= 0.6;
-}
-/// `RunOne`: a stroll (weight 2) or a pause (weight 1), picked by shuffling.
-fn run_one(m: &mut Mob, st: &mut Warden, cx: &mut Cx) {
-    let now = i64::from(m.age);
-    // ShufflingList.shuffle: each entry sorts by -ln(random) / weight.
-    let stroll_key = -horizon_core::jmath::log(f64::from(m.random.next_float())) / 2.0;
-    let pause_key = -horizon_core::jmath::log(f64::from(m.random.next_float()));
-    let pause_first = pause_key < stroll_key;
-    let order = if pause_first {
-        [false, true]
-    } else {
-        [true, false]
-    };
-    for stroll in order {
-        if stroll {
-            // RandomStroll.stroll(0.5): only when there is no walk target.
-            if st.walk.is_none() {
-                st.walk = m.land_random_pos(cx.w, 10, 7).map(|p| Walk {
-                    target: Track::Block([
-                        p[0].floor() as i32,
-                        p[1].floor() as i32,
-                        p[2].floor() as i32,
-                    ]),
-                    speed: SPEED_IDLING as f32,
-                    close_enough: 0,
-                });
-                return;
-            }
-        } else {
-            let duration = 30 + i64::from(m.random.next_int_bound(31).unwrap_or(0));
-            st.pause = Some(Pause {
-                end: now + duration,
-            });
-            return;
-        }
-    }
-}
-fn stop_digging(m: &mut Mob, st: &mut Warden) {
-    st.digging = None;
-    // Digging.stop: the warden is removed.
-    m.removed = true;
-}
-
-fn tick_behaviours(m: &mut Mob, st: &mut Warden, cx: &mut Cx) {
-    let now = i64::from(m.age);
-    // LookAtTargetSink.
-    if let Some(end) = st.look_sink {
-        let keep = now <= end
-            && st.look.is_some_and(|(track, _)| match track {
-                Track::Block(_) => true,
-                Track::Entity(who, _) => visible(m, st, cx.w, who),
-            });
-        if keep {
-            if let Some((track, _)) = st.look
-                && let Some(p) = track_position(cx.w, track)
-            {
-                m.look_at(p);
-            }
-        } else {
-            st.look_sink = None;
-            st.look = None;
-        }
-    }
-    // MoveToTargetSink.
-    tick_move_sink(m, st, cx);
-    // Emerging.
-    if let Some(end) = st.emerging
-        && now > end
-    {
-        st.emerging = None;
-        if pose(m) == Pose::Emerging {
-            set_pose(m, Pose::Standing);
-        }
-    }
-    // Digging: removed when the time is up.
-    if let Some(end) = st.digging
-        && now > end
-    {
-        stop_digging(m, st);
-    }
-    // Sniffing.
-    if let Some(end) = st.sniffing_run
-        && now > end
-    {
-        st.sniffing_run = None;
-        if pose(m) == Pose::Sniffing {
-            set_pose(m, Pose::Standing);
-        }
-        st.sniffing = false;
-        if let Some(entity) = st.nearest_attackable.filter(|e| can_target(cx.w, *e))
-            && let Some(p) = position_of(cx.w, entity)
-        {
-            if sniff_close(m, p) {
-                increase_anger(m, st, cx.w, Some(entity), DEFAULT_ANGER, true, cx.events);
-            }
-            if st.disturbance.is_none() {
-                let block = [p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32];
-                set_disturbance(st, cx.w, now, block);
-            }
-        }
-    }
-    // Roar.
-    if let Some(end) = st.roaring {
-        if now > end {
-            st.roaring = None;
-            if pose(m) == Pose::Roaring {
-                set_pose(m, Pose::Standing);
-            }
-            if let Some(target) = st.roar_target.take() {
-                set_attack_target(st, target, now);
-            }
-        } else if !present(st.roar_sound_delay, now) && !present(st.roar_sound_cooldown, now) {
-            st.roar_sound_cooldown = st.expiry(now, ROAR_DURATION - ROAR_SOUND_DELAY);
-            sound(m, "entity.warden.roar", 3.0, 1.0, cx.events);
-        }
-    }
-    // Sonic boom.
-    if let Some(end) = st.sonic {
-        if now > end {
-            st.sonic = None;
-            st.sonic_cooldown = st.expiry(now, 40);
-        } else {
-            tick_sonic_boom(m, st, cx);
-        }
-    }
-    // The idle pause.
-    if let Some(pause) = st.pause
-        && now > pause.end
-    {
-        st.pause = None;
-    }
-}
-/// `Warden.closerThan(entity, 6, 20)` for the sniff.
-fn sniff_close(m: &Mob, p: Vec3) -> bool {
-    closer_than(m, p, 6.0, 20.0)
-}
-fn tick_sonic_boom(m: &mut Mob, st: &mut Warden, cx: &mut Cx) {
-    let now = i64::from(m.age);
-    let Some(target) = st.attack_target else {
+/// `SonicBoom.tick`: face the target; once the sound delay is over, the
+/// beam, the sound, the damage and the knockback.
+pub(super) fn tick_sonic_boom(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    let Some(target) = warden_brain::mem(m).attack_target.value() else {
         return;
     };
-    if let Some(t) = cx.w.target_info(target) {
+    if let Some(t) = w.target_info(target) {
         m.look_at([t.position.x, t.position.y, t.position.z]);
     }
-    if present(st.sonic_sound_delay, now) || present(st.sonic_sound_cooldown, now) {
+    let mm = warden_brain::mem(m);
+    if mm.sonic_boom_sound_delay.present() || mm.sonic_boom_sound_cooldown.present() {
         return;
     }
-    st.sonic_sound_cooldown = st.expiry(now, SONIC_DURATION - SONIC_SOUND_DELAY);
-    if !can_target(cx.w, target) {
+    mm.sonic_boom_sound_cooldown.set_ttl((), 60 - 34);
+    if !can_target(w, target) {
         return;
     }
-    let Some(t) = cx.w.target_info(target) else {
+    let Some(t) = w.target_info(target) else {
         return;
     };
     if !closer_than(m, t.position, 15.0, 20.0) {
@@ -1218,14 +678,15 @@ fn tick_sonic_boom(m: &mut Mob, st: &mut Warden, cx: &mut Cx) {
     let eye = [t.position.x, t.eye_y, t.position.z];
     let delta = [eye[0] - source[0], eye[1] - source[1], eye[2] - source[2]];
     let length = (delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]).sqrt();
-    if length < 1.0e-9 {
-        return;
-    }
-    let normal = [delta[0] / length, delta[1] / length, delta[2] / length];
+    let normal = if length < 1.0e-5 {
+        [0.0; 3]
+    } else {
+        [delta[0] / length, delta[1] / length, delta[2] / length]
+    };
     let steps = length.floor() as i32 + 7;
     for i in 1..steps {
         let d = f64::from(i);
-        cx.events.push(MobEvent::Particles {
+        events.push(MobEvent::Particles {
             kind: "sonic_boom",
             at: [
                 source[0] + normal[0] * d,
@@ -1235,17 +696,17 @@ fn tick_sonic_boom(m: &mut Mob, st: &mut Warden, cx: &mut Cx) {
             count: 0,
         });
     }
-    sound(m, "entity.warden.sonic_boom", 3.0, 1.0, cx.events);
+    sound(m, "entity.warden.sonic_boom", 3.0, 1.0, events);
     let from = at(m);
     // Players and the mobs hit here have no knockback resistance.
     let resistance = 0.0;
     match target {
-        Who::Player => cx.events.push(MobEvent::DamagePlayer {
+        Who::Player => events.push(MobEvent::DamagePlayer {
             amount: 10.0,
             from,
             kind: "minecraft:sonic_boom",
         }),
-        Who::Mob(id) => cx.events.push(MobEvent::AttackMob {
+        Who::Mob(id) => events.push(MobEvent::AttackMob {
             target: id,
             amount: 10.0,
             source: Damage {
@@ -1257,7 +718,7 @@ fn tick_sonic_boom(m: &mut Mob, st: &mut Warden, cx: &mut Cx) {
     }
     let horizontal = 2.5 * (1.0 - resistance);
     let vertical = 0.5 * (1.0 - resistance);
-    cx.events.push(MobEvent::Push {
+    events.push(MobEvent::Push {
         target,
         velocity: [
             normal[0] * horizontal,
@@ -1266,109 +727,9 @@ fn tick_sonic_boom(m: &mut Mob, st: &mut Warden, cx: &mut Cx) {
         ],
     });
 }
-
-// ---- walking: MoveToTargetSink ----
-
-fn reached_target(m: &Mob, w: &MobWorld, walk: &Walk) -> bool {
-    track_block(w, walk.target).is_some_and(|p| manhattan(p, block_pos(m)) <= walk.close_enough)
-}
-/// `MoveToTargetSink.tryComputePath`.
-fn try_compute_path(m: &mut Mob, st: &mut Warden, w: &MobWorld, walk: &Walk) -> Option<Path> {
-    let target = track_block(w, walk.target)?;
-    let now = i64::from(m.age);
-    let mut path = m.create_path_to(w, target, 0);
-    if reached_target(m, w, walk) {
-        st.cant_reach_since = None;
-        return None;
-    }
-    let can_reach = path.as_ref().is_some_and(|p| p.reached);
-    if can_reach {
-        st.cant_reach_since = None;
-    } else if st.cant_reach_since.is_none() {
-        st.cant_reach_since = Some(now);
-    }
-    if path.is_some() {
-        return path;
-    }
-    let bottom_center = [
-        f64::from(target[0]) + 0.5,
-        f64::from(target[1]),
-        f64::from(target[2]) + 0.5,
-    ];
-    if let Some(p) = m.land_random_pos_towards(w, 10, 7, bottom_center) {
-        path = m.create_path_to_entity(w, p, 0);
-    }
-    path
-}
-fn start_move_sink(m: &mut Mob, st: &mut Warden, cx: &mut Cx) {
-    let now = i64::from(m.age);
-    let Some(walk) = st.walk else { return };
-    if st.move_sink.is_some() {
-        return;
-    }
-    if st.move_cooldown > 0 {
-        st.move_cooldown -= 1;
-        return;
-    }
-    let reached = reached_target(m, cx.w, &walk);
-    if !reached && let Some(path) = try_compute_path(m, st, cx.w, &walk) {
-        let duration = 150 + i64::from(m.random.next_int_bound(101).unwrap_or(0));
-        let last = track_block(cx.w, walk.target).unwrap_or_default();
-        m.nav_move_to_path(Some(path.clone()), f64::from(walk.speed));
-        st.move_sink = Some(MoveSink {
-            end: now + duration,
-            last_target: last,
-            speed: walk.speed,
-            path: Some(path),
-        });
-        return;
-    }
-    st.walk = None;
-    if reached {
-        st.cant_reach_since = None;
-    }
-}
-fn tick_move_sink(m: &mut Mob, st: &mut Warden, cx: &mut Cx) {
-    let now = i64::from(m.age);
-    let Some(mut sink) = st.move_sink.take() else {
-        return;
-    };
-    let walk = st.walk;
-    let still = now <= sink.end
-        && walk.is_some_and(|walk| {
-            let spectator = matches!(walk.target, Track::Entity(Who::Player, _))
-                && cx.w.player.as_ref().is_some_and(|p| p.spectator);
-            !m.ai.nav.is_done() && !reached_target(m, cx.w, &walk) && !spectator
-        });
-    if !still {
-        // MoveToTargetSink.stop.
-        if let Some(walk) = walk
-            && !reached_target(m, cx.w, &walk)
-            && m.ai.nav.stuck
-        {
-            st.move_cooldown = m.random.next_int_bound(40).unwrap_or(0);
-        }
-        m.nav_stop();
-        st.walk = None;
-        return;
-    }
-    if let Some(walk) = walk
-        && let Some(target) = track_block(cx.w, walk.target)
-        && dist_sqr(target, sink.last_target) > 4.0
-        && let Some(path) = try_compute_path(m, st, cx.w, &walk)
-    {
-        sink.last_target = target;
-        sink.speed = walk.speed;
-        m.nav_move_to_path(Some(path.clone()), f64::from(walk.speed));
-        sink.path = Some(path);
-    }
-    st.move_sink = Some(sink);
-}
-
-// ---- per-tick client behaviour ----
-
-/// `Warden.tick` on the client: the heartbeat, the tendrils and the digging
-/// crumbs; the keyframe states follow the pose.
+/// `Warden.tick` on the client: the heartbeat (pitched by the client's copy
+/// of the warden: a level event sound here), the tendril and heart
+/// animations, digging crumbs, and keyframes that ended.
 pub fn ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
     let Some(st) = m.extra.warden.as_ref() else {
         return;
@@ -1377,8 +738,12 @@ pub fn ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
     let delay = heart_beat_delay(client_anger);
     if i64::from(m.age) % i64::from(delay) == 0 {
         m.anim.v[HEART] = 10.0;
-        let pitch = voice_pitch(m);
-        sound(m, "entity.warden.heartbeat", 5.0, pitch, events);
+        events.push(MobEvent::LevelEventSound {
+            sound: "entity.warden.heartbeat",
+            at: at(m),
+            volume: 5.0,
+            spread: 0.2,
+        });
     }
     // The animation values count down after the sync of the last tick.
     for slot in [TENDRIL, HEART] {
@@ -1429,10 +794,11 @@ pub fn ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
 }
 /// Test aid: the minute of calm ran out.
 pub fn expire_dig_cooldown(m: &mut Mob) {
-    if let Some(st) = m.extra.warden.as_mut() {
-        st.dig_cooldown = None;
-        st.attack_target = None;
-        st.roar_target = None;
+    if m.extra.warden.is_some() {
+        let mm = warden_brain::mem(m);
+        mm.dig_cooldown.clear();
+        mm.attack_target.clear();
+        mm.roar_target.clear();
     }
 }
 /// The warden's state for the control socket.
@@ -1444,17 +810,13 @@ pub fn describe(m: &Mob) -> Option<serde_json::Value> {
         .iter()
         .map(|w| format!("{w:?}={}", st.anger.anger_of(*w)))
         .collect();
+    let (activities, memories) = warden_brain::describe(m).unwrap_or_default();
     Some(serde_json::json!({
         "pose": format!("{:?}", pose(m)),
-        "activity": format!("{:?}", st.activity),
+        "activities": activities,
+        "memories": memories,
         "anger_level": format!("{:?}", anger_level(m)),
         "anger": anger,
-        "attack_target": st.attack_target.map(|t| format!("{t:?}")),
-        "roar_target": st.roar_target.map(|t| format!("{t:?}")),
-        "disturbance": st.disturbance.map(|(p, _)| p),
-        "walk": st.walk.is_some(),
-        "dig_cooldown": st.dig_cooldown.map(|t| t - i64::from(m.age)),
-        "sniff_cooldown": st.sniff_cooldown.map(|t| t - i64::from(m.age)),
         "vibration": st.vibration.current.map(|i| i.event),
     }))
 }
@@ -1648,23 +1010,6 @@ mod tests {
         assert_eq!(heart_beat_delay(40), 25);
         assert_eq!(heart_beat_delay(80), 10);
         assert_eq!(heart_beat_delay(150), 10);
-    }
-
-    #[test]
-    fn memories_expire_with_their_ttl() {
-        let mut st = Warden {
-            in_brain: true,
-            ..Warden::default()
-        };
-        // Set during the brain: present for exactly the ttl.
-        let until = st.expiry(100, 5);
-        assert!(present(until, 104));
-        assert!(!present(until, 105));
-        // Set before the brain's tick: that tick already counts.
-        st.in_brain = false;
-        let until = st.expiry(100, 5);
-        assert!(present(until, 103));
-        assert!(!present(until, 104));
     }
 
     #[test]

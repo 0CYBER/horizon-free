@@ -400,9 +400,18 @@ impl Mob {
                     let at = [self.position.x, self.position.y, self.position.z];
                     events.push(MobEvent::Sound(sound, at, volume, pitch));
                 }
-                self.ai.steps.next_step = (self.ai.steps.move_dist as i32).wrapping_add(1) as f32;
+                // Entity.vibrationAndSoundEffectsFromBlock: the step's game
+                // event, with the supporting block's state when the effect
+                // block is another.
+                events.push(MobEvent::GameEvent {
+                    event: "minecraft:step",
+                    at: [self.position.x, self.position.y, self.position.z],
+                    source: self.id,
+                    state: if legacy == on { legacy_state } else { state },
+                });
+                self.ai.steps.next_step = self.next_step();
             } else if self.fluids.in_water {
-                self.ai.steps.next_step = (self.ai.steps.move_dist as i32).wrapping_add(1) as f32;
+                self.ai.steps.next_step = self.next_step();
                 // Entity.waterSwimSound
                 let v = self.velocity;
                 let volume = 1.0_f32.min(
@@ -424,6 +433,16 @@ impl Mob {
                     ));
                 }
             }
+        }
+    }
+    /// `Entity.nextStep`: the next whole metre walked; a warden's steps come
+    /// every 0.55.
+    fn next_step(&self) -> f32 {
+        let walked = self.ai.steps.move_dist;
+        if self.kind.species == super::Species::Warden {
+            walked + 0.55
+        } else {
+            (walked as i32).wrapping_add(1) as f32
         }
     }
     /// Entity.isSwimming (mobs never swim in the player sense).
