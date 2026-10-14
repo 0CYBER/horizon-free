@@ -482,31 +482,12 @@ impl Game<'_> {
             * glam::Mat4::from_translation(glam::Vec3::new(0.0, height / 2.0 + offset_y, 0.0))
             * glam::Mat4::from_rotation_z(std::f32::consts::PI)
             * glam::Mat4::from_rotation_x((y_angle * 20.0).to_radians());
-        let mut quads: Vec<(f32, [[f32; 2]; 4], [[f32; 2]; 4], u32)> = Vec::new();
-        for q in verts.as_chunks::<4>().0 {
-            let p: [glam::Vec3; 4] =
-                std::array::from_fn(|i| gui.transform_point3(glam::Vec3::from_array(q[i].pos)));
-            let n = (p[1] - p[0]).cross(p[2] - p[0]);
-            // The winding gives inward normals: faces with n.z >= 0 point away.
-            if n.z >= 0.0 {
-                continue;
-            }
-            let n = n.normalize_or_zero();
-            // Lighting.Entry.ENTITY_IN_UI, roughly: lit from the front and above.
-            let shade = (0.55 + 0.45 * -n.z - 0.15 * n.y).clamp(0.4, 1.0);
-            let c = q[0].color;
-            let ch = |s: u32| ((((c >> s) & 255) as f32 * shade) as u32) << s;
-            let color = (c & 0xFF00_0000) | ch(0) | ch(8) | ch(16);
-            let depth = p.iter().map(|v| v.z).sum::<f32>() / 4.0;
-            quads.push((
-                depth,
-                p.map(|v| [v.x, v.y]),
-                std::array::from_fn(|i| q[i].uv),
-                color,
-            ));
-        }
-        // Far (low z) first: the viewer is on the +z side.
-        quads.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let fire = self
+            .player
+            .as_ref()
+            .filter(|p| p.fire_ticks > 0 && !p.spectator)
+            .map(|p| (p.dimensions.width, p.dimensions.height));
+        let quads = player_preview_quads(verts, gui, fire, &atlas.sprites);
         let start = batch.vertices.len();
         for (_, p, uv, color) in quads {
             batch.quad(p, uv, color);
@@ -577,5 +558,91 @@ impl Game<'_> {
             0,
             out,
         );
+    }
+}
+
+fn player_preview_quads(
+    mut verts: Vec<horizon_client::mesher::Vertex>,
+    gui: glam::Mat4,
+    fire: Option<(f32, f32)>,
+    sprites: &std::collections::HashMap<String, horizon_client::hud::Rect>,
+) -> Vec<(f32, [[f32; 2]; 4], [[f32; 2]; 4], u32)> {
+    let flame_start = verts.len();
+    if let Some((width, height)) = fire {
+        horizon_client::fire_render::flames(
+            [0.0; 3],
+            width,
+            height,
+            glam::DVec3::ZERO,
+            0.0,
+            sprites,
+            0xff,
+            &mut verts,
+        );
+    }
+    let mut quads: Vec<(f32, [[f32; 2]; 4], [[f32; 2]; 4], u32)> = Vec::new();
+    for (index, q) in verts.as_chunks::<4>().0.iter().enumerate() {
+        let p: [glam::Vec3; 4] =
+            std::array::from_fn(|i| gui.transform_point3(glam::Vec3::from_array(q[i].pos)));
+        let n = (p[1] - p[0]).cross(p[2] - p[0]);
+        // The winding gives inward normals: faces with n.z >= 0 point away.
+        if n.z >= 0.0 {
+            continue;
+        }
+        let n = n.normalize_or_zero();
+        // Lighting.Entry.ENTITY_IN_UI, roughly: lit from the front and above.
+        let shade = if index * 4 >= flame_start {
+            1.0
+        } else {
+            (0.55 + 0.45 * -n.z - 0.15 * n.y).clamp(0.4, 1.0)
+        };
+        let c = q[0].color;
+        let ch = |s: u32| ((((c >> s) & 255) as f32 * shade) as u32) << s;
+        let color = (c & 0xFF00_0000) | ch(0) | ch(8) | ch(16);
+        let depth = p.iter().map(|v| v.z).sum::<f32>() / 4.0;
+        quads.push((
+            depth,
+            p.map(|v| [v.x, v.y]),
+            std::array::from_fn(|i| q[i].uv),
+            color,
+        ));
+    }
+    // Far (low z) first: the viewer is on the +z side.
+    quads.sort_by(|a, b| a.0.total_cmp(&b.0));
+    quads
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+    #[test]
+    fn burning_inventory_preview_keeps_visible_fullbright_flames() {
+        let rect = |u0| horizon_client::hud::Rect {
+            u0,
+            v0: 0.0,
+            u1: u0 + 0.1,
+            v1: 0.1,
+            w: 16,
+            h: 16,
+        };
+        let sprites = std::collections::HashMap::from([
+            ("block/fire_0".into(), rect(0.0)),
+            ("block/fire_1".into(), rect(0.5)),
+        ]);
+        for pitch in [-30.0f32, 0.0, 30.0] {
+            let gui = glam::Mat4::from_scale(glam::Vec3::new(30.0, 30.0, -30.0))
+                * glam::Mat4::from_rotation_z(std::f32::consts::PI)
+                * glam::Mat4::from_rotation_x(pitch.to_radians());
+            assert!(player_preview_quads(Vec::new(), gui, None, &sprites).is_empty());
+            let quads = player_preview_quads(Vec::new(), gui, Some((0.6, 1.8)), &sprites);
+            assert!(
+                !quads.is_empty(),
+                "inventory projection must not cull all flames"
+            );
+            assert!(quads.iter().all(|q| q.3 == 0xffff_ffff));
+            assert!(quads.iter().any(|q| q.2[0][0] <= 0.1));
+            assert!(quads.iter().any(|q| q.2[0][0] >= 0.5));
+            assert!(quads.windows(2).all(|q| q[0].0 <= q[1].0));
+        }
     }
 }
