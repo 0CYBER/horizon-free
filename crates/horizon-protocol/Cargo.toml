@@ -10,6 +10,9 @@ description = "Horizon's Minecraft Java Edition 26.3 network protocol (version 7
 horizon-world = { path = "../horizon-world" }
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
 serde_json = "1.0.151"
+# The shared secret and RSA padding (OS randomness) and the server hash.
+getrandom = "0.3"
+sha1 = "0.10"
 
 [lints]
 workspace = true

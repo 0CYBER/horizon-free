@@ -17,7 +17,7 @@ pub mod pyjson;
 mod sounds;
 mod survival;
 
-pub use sounds::sounds;
+pub use sounds::{panorama, sounds};
 
 use pyjson::Value;
 use sha2::Digest;
@@ -402,7 +402,7 @@ pub fn prepare(options: &Options, log: Log) -> Result<PathBuf, String> {
     let lock = artifacts::Lock::read(root)?;
     // Java first: nothing below can finish without it, and the player should hear it at once.
     let jdk = java::find(lock.java_major)?;
-    if options.import {
+    if options.import && !artifacts::reuse_imported(root, log)? {
         artifacts::import(
             root,
             &lock,
@@ -452,7 +452,7 @@ pub fn prepare(options: &Options, log: Log) -> Result<PathBuf, String> {
         origin,
         log,
     };
-    steps(&run, &lock, &oracle)?;
+    steps(&run, &lock, &oracle, options.minecraft_dir.as_deref())?;
     log(&format!(
         "Prepared Horizon native-client resources: {}",
         resources.display()
@@ -464,7 +464,12 @@ fn arg(path: &Path) -> String {
     path.display().to_string()
 }
 
-fn steps(run: &Run, lock: &artifacts::Lock, oracle: &Path) -> Result<(), String> {
+fn steps(
+    run: &Run,
+    lock: &artifacts::Lock,
+    oracle: &Path,
+    minecraft: Option<&Path>,
+) -> Result<(), String> {
     let root = &run.resources;
     let repo = &run.root;
     let server_cp = run.server_classpath.as_str();
@@ -677,6 +682,11 @@ fn steps(run: &Run, lock: &artifacts::Lock, oracle: &Path) -> Result<(), String>
         write_if_changed(&root.join(relative), &data)?;
         count += 1;
     }
+
+    // The JAR holds only gray 1x1 panorama placeholders. Import the indexed
+    // textures afterwards, including on reruns that just extracted the JAR again.
+    // Cosmetic assets are optional when preparing from already-imported JARs.
+    sounds::optional_panorama(repo, minecraft, run.log);
 
     // One file each, exported again when the exporter or the jar it reads changed.
     let single = |what: &str,

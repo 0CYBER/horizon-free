@@ -31,21 +31,34 @@ async function get(url, as = "json") {
   return as === "json" ? res.json() : res.text();
 }
 
-const releases = cached("horizon:releases", () =>
-  get(`https://api.github.com/repos/${REPO}/releases?per_page=30`).then((list) =>
-    list
-      .filter((r) => !r.draft)
-      .map((r) => ({
-        tag_name: r.tag_name,
-        name: r.name,
-        published_at: r.published_at,
-        html_url: r.html_url,
-        prerelease: r.prerelease,
-        body: r.body || "",
-        assets: r.assets.map((a) => ({ name: a.name, browser_download_url: a.browser_download_url, size: a.size })),
-      })),
-  ),
-).catch(() => baked.releases);
+const slim = (r) => ({
+  tag_name: r.tag_name,
+  name: r.name,
+  published_at: r.published_at,
+  html_url: r.html_url,
+  prerelease: r.prerelease,
+  body: r.body || "",
+  assets: r.assets.map((a) => ({ name: a.name, browser_download_url: a.browser_download_url, size: a.size })),
+});
+const isLauncher = (r) => r.tag_name.startsWith("launcher-v") && !r.prerelease;
+const versionKey = (tag) => tag.replace("launcher-v", "").split(".").map(Number);
+const newer = (a, b) => versionKey(b).reduce((d, n, i) => d || n - (versionKey(a)[i] || 0), 0);
+
+// The newest 30 releases. Game releases come out several times a day, so the newest launcher release can be
+// older than all of them: then it is looked up by its tag (the newest launcher-v tag with a published release).
+async function loadReleases() {
+  const list = (await get(`https://api.github.com/repos/${REPO}/releases?per_page=30`)).filter((r) => !r.draft).map(slim);
+  if (list.some(isLauncher)) return list;
+  const refs = await get(`https://api.github.com/repos/${REPO}/git/matching-refs/tags/launcher-v`).catch(() => []);
+  const tags = refs.map((r) => r.ref.replace("refs/tags/", "")).filter((t) => /^launcher-v\d+\.\d+\.\d+$/.test(t)).sort(newer);
+  for (const tag of tags.slice(0, 3)) {
+    const release = await get(`https://api.github.com/repos/${REPO}/releases/tags/${tag}`).catch(() => null);
+    if (release && !release.draft) return [...list, slim(release)];
+  }
+  return list;
+}
+
+const releases = cached("horizon:releases", loadReleases).catch(() => baked.releases);
 
 async function setUpContributors() {
   let list = baked.contributors || [];

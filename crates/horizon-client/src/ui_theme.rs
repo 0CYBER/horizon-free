@@ -1070,7 +1070,12 @@ impl<'a> Ui<'a> {
         let tint = [0.0, 0.2, 0.55, 1.0][usize::from(cost.0.min(3))];
         let cost_color = color::mix(color::FAINT, color::DANGER, tint);
         self.text(Face::Medium, SMALL, x, dy, cost_color, cost.1);
-        let used = self.measure(Face::Medium, SMALL, cost.1);
+        // No cost label: the description starts at the row's edge.
+        let used = if cost.1.is_empty() {
+            -8.0
+        } else {
+            self.measure(Face::Medium, SMALL, cost.1)
+        };
         let rest = self.fit(
             Face::Regular,
             SMALL,

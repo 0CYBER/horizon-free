@@ -10,10 +10,18 @@ use std::sync::{Arc, Mutex};
 
 pub const REPO: &str = "ludovic111/horizon";
 pub const README_URL: &str = "https://github.com/ludovic111/horizon/blob/main/launcher/README.md";
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// This launcher's version: the release workflow sets `HORIZON_LAUNCHER_VERSION` from the
+/// `launcher-vX.Y.Z` tag it builds (no version-bump commits); other builds say Cargo.toml's.
+pub const VERSION: &str = version_or(option_env!("HORIZON_LAUNCHER_VERSION"));
 /// Launcher releases are tagged `launcher-vX.Y.Z`; Horizon's own are `vYYYY.MM.DD`.
 pub const LAUNCHER_TAG_PREFIX: &str = "launcher-v";
-const AGENT: &str = concat!("horizon-launcher/", env!("CARGO_PKG_VERSION"));
+
+const fn version_or(injected: Option<&'static str>) -> &'static str {
+    match injected {
+        Some(v) if !v.is_empty() => v,
+        _ => env!("CARGO_PKG_VERSION"),
+    }
+}
 
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct Release {
@@ -63,7 +71,9 @@ const CLIENT: &str = if cfg!(windows) {
 };
 
 fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new().user_agent(AGENT).build()
+    ureq::AgentBuilder::new()
+        .user_agent(&format!("horizon-launcher/{VERSION}"))
+        .build()
 }
 
 fn get(url: &str) -> Result<ureq::Response, String> {
@@ -176,11 +186,53 @@ pub fn releases() -> Result<Vec<Release>, String> {
 
 /// Published launcher releases (`launcher-v…`), newest first, with this platform's archive.
 pub fn launcher_releases() -> Result<Vec<Release>, String> {
-    Ok(parse_releases(
-        &release_list()?,
-        LAUNCHER_ASSET,
-        is_launcher_tag,
-    ))
+    Ok(launcher_releases_in(&release_list()?))
+}
+
+/// The launcher releases in `list` (the newest 100 releases). Game releases come out several times
+/// a day, so the newest launcher release can be older than all of those: then the newest
+/// `launcher-v` tags are looked up one by one (a draft's tag is skipped: it has no public release).
+fn launcher_releases_in(list: &serde_json::Value) -> Vec<Release> {
+    let found = parse_releases(list, LAUNCHER_ASSET, is_launcher_tag);
+    if found.iter().any(|r| r.asset.is_some()) {
+        return found;
+    }
+    let json = |url: String| -> Result<serde_json::Value, String> {
+        get(&url)?.into_json().map_err(|e| e.to_string())
+    };
+    let api = format!("https://api.github.com/repos/{REPO}");
+    let Ok(refs) = json(format!(
+        "{api}/git/matching-refs/tags/{LAUNCHER_TAG_PREFIX}"
+    )) else {
+        return found;
+    };
+    for tag in newest_launcher_tags(&refs).into_iter().take(3) {
+        if let Ok(release) = json(format!("{api}/releases/tags/{tag}")) {
+            let one = parse_releases(
+                &serde_json::json!([release]),
+                LAUNCHER_ASSET,
+                is_launcher_tag,
+            );
+            if one.iter().any(|r| r.asset.is_some()) {
+                return one;
+            }
+        }
+    }
+    found
+}
+
+/// The `launcher-vX.Y.Z` tags in GitHub's matching-refs answer, newest first.
+fn newest_launcher_tags(refs: &serde_json::Value) -> Vec<String> {
+    let mut tags: Vec<String> = refs
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| r["ref"].as_str()?.strip_prefix("refs/tags/"))
+        .filter(|t| is_launcher_tag(t))
+        .map(String::from)
+        .collect();
+    tags.sort_by(|a, b| compare_versions(b, a));
+    tags
 }
 
 /// The newest Horizon release that has a build for this platform.
@@ -591,17 +643,18 @@ fn preparer_binary(dir: &Path) -> Option<PathBuf> {
 /// Java (and Python, for versions before horizon-prepare).
 pub fn preparer(tag: &str, minecraft: &Path, log: &dyn Fn(String)) -> Result<Preparer, String> {
     let version = game_version(tag);
+    let dir = version_dir(tag);
+    let reused = horizon_prepare::artifacts::reuse_imported(&dir, &|line| log(line.to_string()))?;
     let manifest = minecraft
         .join("versions")
         .join(&version)
         .join(format!("{version}.json"));
-    if !manifest.exists() {
+    if !reused && !manifest.exists() {
         return Err(format!(
             "Minecraft {version} is not in {}. Play {version} once from the official launcher, or choose another folder.",
             minecraft.display()
         ));
     }
-    let dir = version_dir(tag);
     let binary = preparer_binary(&dir);
     let python = if binary.is_some() {
         // The JDK the version pins, found as horizon-prepare finds it, so a missing one is
@@ -625,7 +678,7 @@ pub fn preparer(tag: &str, minecraft: &Path, log: &dyn Fn(String)) -> Result<Pre
     let jar = data_dir()
         .join("server-jars")
         .join(format!("{version}.jar"));
-    if !jar.exists() {
+    if !reused && !jar.exists() {
         let json: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&manifest).map_err(|e| e.to_string())?)
                 .map_err(|e| e.to_string())?;
@@ -650,32 +703,26 @@ pub fn preparer(tag: &str, minecraft: &Path, log: &dyn Fn(String)) -> Result<Pre
         {
             return Ok(Preparer::InProcess(horizon_prepare::Options {
                 root: dir,
-                import: true,
+                import: !reused,
                 minecraft_dir: Some(minecraft.to_path_buf()),
-                server_jar: Some(jar),
+                server_jar: (!reused).then_some(jar),
             }));
         }
         let mut cmd = Command::new(binary);
-        cmd.current_dir(&dir)
-            .arg("--root")
-            .arg(&dir)
-            .args(["--prepare", "--server-jar"])
-            .arg(&jar)
-            .arg("--minecraft-dir")
-            .arg(minecraft);
+        cmd.current_dir(&dir).arg("--root").arg(&dir);
+        if !reused {
+            cmd.args(["--prepare", "--server-jar"]).arg(&jar);
+        }
+        cmd.arg("--minecraft-dir").arg(minecraft);
         return Ok(Preparer::Process(cmd));
     }
     let mut cmd = Command::new(python.unwrap());
     cmd.current_dir(&dir)
-        .args([
-            "-u",
-            "tools/prepare_native_client.py",
-            "--prepare",
-            "--server-jar",
-        ])
-        .arg(&jar)
-        .arg("--minecraft-dir")
-        .arg(minecraft);
+        .args(["-u", "tools/prepare_native_client.py"]);
+    if !reused {
+        cmd.args(["--prepare", "--server-jar"]).arg(&jar);
+    }
+    cmd.arg("--minecraft-dir").arg(minecraft);
     Ok(Preparer::Process(cmd))
 }
 
@@ -965,14 +1012,12 @@ pub fn remove_version(tag: &str) -> Result<(), String> {
 }
 
 /// The Minecraft folder to prepare from: the one given, the one chosen in the launcher, or the
-/// official launcher's default.
+/// official launcher's default. It may be absent when imported files can be reused.
 pub fn minecraft_dir(requested: Option<PathBuf>) -> Result<PathBuf, String> {
-    requested
+    Ok(requested
         .or(Settings::load().minecraft_dir)
         .or_else(default_minecraft_dir)
-        .ok_or_else(|| {
-            "No Minecraft folder found. Pass the official launcher's game folder.".into()
-        })
+        .unwrap_or_else(|| horizon_prepare::artifacts::minecraft_dir(None)))
 }
 
 /// The server folder: the one given, the one chosen in the launcher, or `server/` in the data folder.
@@ -996,7 +1041,12 @@ fn need_prepared(tag: &str) -> Result<(), String> {
 /// The client's command, once its resources are prepared.
 pub fn client(tag: &str) -> Result<Command, String> {
     need_prepared(tag)?;
-    Ok(client_command(tag))
+    let mut cmd = client_command(tag);
+    // A sign-in that can't be renewed (no network, expired) still lets the game start, offline.
+    if let Err(e) = crate::account::attach_session(&mut cmd, &game_home()) {
+        eprintln!("Playing offline: {e}");
+    }
+    Ok(cmd)
 }
 
 /// The dedicated server's command in `folder`, once prepared and the EULA is agreed to.
@@ -1127,7 +1177,7 @@ pub fn check_updates() -> Result<Updates, String> {
     let list = release_list()?;
     Ok(Updates {
         horizon: horizon_update(&parse_releases(&list, ASSET, is_game_tag), &installed()),
-        launcher: launcher_update(&parse_releases(&list, LAUNCHER_ASSET, is_launcher_tag)),
+        launcher: launcher_update(&launcher_releases_in(&list)),
     })
 }
 
@@ -1387,6 +1437,11 @@ pub enum Msg {
     LauncherUpdated(Result<(), String>),
     /// `reuse_prepared_everywhere` prepared these versions.
     Reused(Vec<(String, String)>),
+    /// Whether secrets are kept in the OS keychain (else only until the launcher closes).
+    Keychain(bool),
+    /// The selected account's session file for the game about to start (none = offline), or
+    /// why it could not be renewed.
+    Session(Result<Option<PathBuf>, String>),
 }
 
 /// A running process; its output arrives as `Msg::Line`, its end as `Msg::Exit`.
@@ -1532,6 +1587,73 @@ mod tests {
             .map(|r| r.tag)
             .collect();
         assert_eq!(launcher, ["launcher-v9.0.0"]);
+    }
+
+    /// Rolling a release back (`gh release edit <tag> --draft`, docs/release-flow.md) makes the
+    /// previous one the newest again: it is what `install latest` and the update check offer.
+    #[test]
+    fn withdrawn_release_is_never_offered() {
+        let asset = ASSET.unwrap_or("horizon-linux-x86_64.tar.gz");
+        let list = serde_json::json!([
+            {"tag_name": "v2026.10.15.1", "draft": true, "assets": [{"name": asset, "browser_download_url": "bad", "size": 1}]},
+            {"tag_name": "v2026.10.15", "assets": [{"name": asset, "browser_download_url": "good", "size": 1}]},
+            {"tag_name": "v2026.10.14", "assets": [{"name": asset, "browser_download_url": "old", "size": 1}]},
+        ]);
+        let releases = parse_releases(&list, Some(asset), is_game_tag);
+        assert!(releases.iter().all(|r| r.tag != "v2026.10.15.1"));
+        assert_eq!(
+            latest(&releases).map(|r| r.tag.as_str()),
+            Some("v2026.10.15")
+        );
+        let offered = |installed: &[&str]| {
+            let installed: Vec<String> = installed.iter().map(|t| t.to_string()).collect();
+            horizon_update(&releases, &installed).map(|r| r.tag)
+        };
+        assert_eq!(offered(&["v2026.10.14"]), Some("v2026.10.15".into()));
+        assert_eq!(offered(&[]), Some("v2026.10.15".into()));
+        // Who installed the withdrawn one is not told to "update" to an older version.
+        assert_eq!(offered(&["v2026.10.15.1", "v2026.10.14"]), None);
+    }
+
+    #[test]
+    fn the_version_is_the_one_the_release_workflow_injects() {
+        assert_eq!(version_or(Some("0.4.2")), "0.4.2");
+        assert_eq!(version_or(Some("")), env!("CARGO_PKG_VERSION"));
+        assert_eq!(version_or(None), env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            VERSION,
+            option_env!("HORIZON_LAUNCHER_VERSION")
+                .filter(|v| !v.is_empty())
+                .unwrap_or(env!("CARGO_PKG_VERSION"))
+        );
+        // Self-update compares releases with that version: this launcher's own release is no update.
+        let r = |tag: String| Release {
+            tag,
+            name: String::new(),
+            body: String::new(),
+            date: String::new(),
+            asset: Some(("u".into(), 1)),
+        };
+        assert!(launcher_update(&[r(format!("{LAUNCHER_TAG_PREFIX}{VERSION}"))]).is_none());
+        assert_eq!(
+            parse_version_output(&format!("horizon-launcher {VERSION}\n")),
+            Some(VERSION)
+        );
+    }
+
+    #[test]
+    fn launcher_tags_from_matching_refs_newest_first() {
+        let refs = serde_json::json!([
+            {"ref": "refs/tags/launcher-v0.1.9"},
+            {"ref": "refs/tags/launcher-v0.1.10"},
+            {"ref": "refs/tags/launcher-vnext"},
+            {"ref": "refs/tags/v2026.10.15"},
+            {"ref": "refs/tags/launcher-v0.2.0"},
+        ]);
+        assert_eq!(
+            newest_launcher_tags(&refs),
+            ["launcher-v0.2.0", "launcher-v0.1.10", "launcher-v0.1.9"]
+        );
     }
 
     #[test]

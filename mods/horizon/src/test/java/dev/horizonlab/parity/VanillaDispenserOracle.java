@@ -218,6 +218,19 @@ public final class VanillaDispenserOracle {
         }
         if (e.has("chest") && ent instanceof net.minecraft.world.entity.animal.equine.AbstractChestedHorse chested) chested.setChest(true);
         if (e.has("loot") && ent instanceof Mob mob) mob.setCanPickUpLoot(true);
+        if (e.has("ground")) ent.setOnGround(true);
+        if (e.has("health") && ent instanceof LivingEntity living) {
+            living.getAttribute(net.minecraft.world.entity.ai.attributes.Attributes.MAX_HEALTH).setBaseValue(e.get("health").getAsDouble());
+            living.setHealth(e.get("health").getAsFloat());
+        }
+        if (e.has("knockback_resistance") && ent instanceof LivingEntity living) {
+            living.getAttribute(net.minecraft.world.entity.ai.attributes.Attributes.KNOCKBACK_RESISTANCE).setBaseValue(e.get("knockback_resistance").getAsDouble());
+        }
+        if (e.has("marker") && ent instanceof net.minecraft.world.entity.decoration.ArmorStand stand) {
+            Method marker = net.minecraft.world.entity.decoration.ArmorStand.class.getDeclaredMethod("setMarker", boolean.class);
+            marker.setAccessible(true);
+            marker.invoke(stand, true);
+        }
         if (e.has("brown") && ent instanceof net.minecraft.world.entity.animal.cow.MushroomCow cow) {
             Method variant = net.minecraft.world.entity.animal.cow.MushroomCow.class.getDeclaredMethod("setVariant", net.minecraft.world.entity.animal.cow.MushroomCow.Variant.class);
             variant.setAccessible(true);
@@ -247,10 +260,24 @@ public final class VanillaDispenserOracle {
         w.registries = ParityData.access;
         w.server.loot.delegate = ParityData.loot;
         VanillaBlockUpdateOracle.set(Level.class, w, "damageSources", new net.minecraft.world.damagesource.DamageSources(ParityData.access));
+        if (f.has("dim") && f.get("dim").getAsString().equals("nether")) {
+            // The Nether's dimension type and attributes (respawn anchors work, beds explode).
+            if (NETHER == null) NETHER = VanillaBlockUpdateOracle.loadDimensionType(net.minecraft.world.level.dimension.BuiltinDimensionTypes.NETHER);
+            w.type = NETHER;
+            w.dimensionKey = Level.NETHER;
+            w.attributes = net.minecraft.world.attribute.EnvironmentAttributeSystem.builder().addConstantLayer(NETHER.attributes()).build();
+        } else if (f.has("dim") && f.get("dim").getAsString().equals("end")) {
+            // The End's (beds explode, anchors do too).
+            if (END == null) END = VanillaBlockUpdateOracle.loadDimensionType(net.minecraft.world.level.dimension.BuiltinDimensionTypes.END);
+            w.type = END;
+            w.dimensionKey = Level.END;
+            w.attributes = net.minecraft.world.attribute.EnvironmentAttributeSystem.builder().addConstantLayer(END.attributes()).build();
+        }
         if (f.has("rules")) {
             for (var rule : f.getAsJsonObject("rules").entrySet()) {
                 if (rule.getKey().equals("tnt_explodes")) w.rules.set(GameRules.TNT_EXPLODES, rule.getValue().getAsBoolean(), null);
                 if (rule.getKey().equals("spawner_blocks_work")) w.rules.set(GameRules.SPAWNER_BLOCKS_WORK, rule.getValue().getAsBoolean(), null);
+                if (rule.getKey().equals("block_explosion_drop_decay")) w.rules.set(GameRules.BLOCK_EXPLOSION_DROP_DECAY, rule.getValue().getAsBoolean(), null);
             }
         }
         if (f.has("items")) {
@@ -302,6 +329,10 @@ public final class VanillaDispenserOracle {
             used = use(w, origin, f.getAsJsonObject("use"));
         } else if (f.has("use_item")) {
             used = useItem(w, origin, f.getAsJsonObject("use_item"));
+        } else if (f.has("respawn_at")) {
+            used = respawnAt(w, origin, f.getAsJsonObject("respawn_at"));
+        } else if (f.has("attack")) {
+            used = attack(w, f.getAsJsonObject("attack"), targets);
         } else if (f.has("hopper")) {
             // HopperBlockEntity.pushItemsTick, once.
             var hopper = (net.minecraft.world.level.block.entity.HopperBlockEntity) w.getBlockEntity(origin);
@@ -378,6 +409,8 @@ public final class VanillaDispenserOracle {
         result.addAll(used);
         result.add("rng " + w.rng.nextLong());
     }
+
+    static net.minecraft.world.level.dimension.DimensionType NETHER, END;
 
     /** The player of a "use" case: its main hand, game mode and the statistics it is awarded. */
     static final class User extends net.minecraft.server.level.ServerPlayer {
@@ -506,8 +539,15 @@ public final class VanillaDispenserOracle {
         var advancements = (net.minecraft.server.PlayerAdvancements) VanillaBlockUpdateOracle.allocate.invoke(VanillaBlockUpdateOracle.unsafe, net.minecraft.server.PlayerAdvancements.class);
         VanillaBlockUpdateOracle.set(net.minecraft.server.PlayerAdvancements.class, advancements, "activeTriggers", new HashMap<>());
         VanillaBlockUpdateOracle.set(net.minecraft.server.level.ServerPlayer.class, player, "advancements", advancements);
-        // Standing three blocks south of the clicked block, looking down at it.
-        var at = net.minecraft.world.phys.Vec3.atBottomCenterOf(pos).add(0, 1, 3);
+        // Standing three blocks (or `distance`) south of the clicked block, looking down at it.
+        double distance = use.has("distance") ? use.get("distance").getAsDouble() : 3;
+        var at = net.minecraft.world.phys.Vec3.atBottomCenterOf(pos).add(0, 1, distance);
+        if (use.has("respawn")) {
+            var r = use.getAsJsonArray("respawn");
+            BlockPos point = new BlockPos(r.get(0).getAsInt(), r.get(1).getAsInt(), r.get(2).getAsInt());
+            player.setRespawnPosition(new net.minecraft.server.level.ServerPlayer.RespawnConfig(
+                net.minecraft.world.level.storage.LevelData.RespawnData.of(w.dimension(), point, 0.0F, 0.0F), false), false);
+        }
         VanillaBlockUpdateOracle.set(Entity.class, player, "position", at);
         VanillaBlockUpdateOracle.set(Entity.class, player, "blockPosition", BlockPos.containing(at));
         VanillaBlockUpdateOracle.set(Entity.class, player, "xRot", 90f);
@@ -526,6 +566,172 @@ public final class VanillaDispenserOracle {
         }
         List<String> out = new ArrayList<>(player.stats);
         out.add("held " + ParityData.canon(player.hand) + " using " + (player.using == null ? "-" : player.using));
+        var respawn = player.getRespawnConfig();
+        out.add("respawn " + (respawn == null ? "-" : respawn.respawnData().dimension().identifier() + " " + VanillaBlockUpdateOracle.pos(respawn.respawnData().pos())));
+        return out;
+    }
+
+    /**
+     * ServerPlayer.findRespawnAndUseSpawnBlock for a respawn point at `pos`
+     * (a respawn anchor, in the Nether or not): the position, the yaw that
+     * looks at the block, and the charge used (a block change).
+     */
+    static List<String> respawnAt(VanillaBlockUpdateOracle.World w, BlockPos pos, JsonObject op) throws Exception {
+        var config = new net.minecraft.server.level.ServerPlayer.RespawnConfig(
+            net.minecraft.world.level.storage.LevelData.RespawnData.of(w.dimension(), pos, 0.0F, 0.0F), op.get("forced").getAsBoolean());
+        Method find = net.minecraft.server.level.ServerPlayer.class.getDeclaredMethod("findRespawnAndUseSpawnBlock",
+            ServerLevel.class, net.minecraft.server.level.ServerPlayer.RespawnConfig.class, boolean.class);
+        find.setAccessible(true);
+        var found = (Optional<?>) find.invoke(null, w, config, op.get("consume").getAsBoolean());
+        if (found.isEmpty()) return List.of("respawn none");
+        Object angle = found.get();
+        Method position = angle.getClass().getDeclaredMethod("position");
+        Method yaw = angle.getClass().getDeclaredMethod("yaw");
+        position.setAccessible(true);
+        yaw.setAccessible(true);
+        var p = (net.minecraft.world.phys.Vec3) position.invoke(angle);
+        return List.of("respawn " + num(p.x) + " " + num(p.y) + " " + num(p.z) + " " + Float.floatToRawIntBits((float) yaw.invoke(angle)));
+    }
+
+    /**
+     * The player of an "attack" case: a `ServerPlayer` with a place, a fall
+     * and a velocity, a stand-in connection and abilities.
+     */
+    static final class Attacker extends net.minecraft.server.level.ServerPlayer {
+        VanillaBlockUpdateOracle.World world;
+        boolean creative, fallFlying;
+        ItemStack hand;
+        List<String> stats;
+        Attacker() {
+            super(null, null, null, null);
+        }
+        @Override public ServerLevel level() { return world; }
+        @Override public boolean hasInfiniteMaterials() { return creative; }
+        @Override public boolean isCreative() { return creative; }
+        @Override public boolean isSpectator() { return false; }
+        @Override public boolean isFallFlying() { return fallFlying; }
+        @Override public net.minecraft.world.phys.Vec3 getKnownMovement() { return getDeltaMovement(); }
+        @Override public EntityType<?> getType() { return EntityTypes.PLAYER; }
+        @Override public net.minecraft.core.Holder<EntityType<?>> typeHolder() { return EntityTypes.PLAYER.builtInRegistryHolder(); }
+        @Override public ItemStack getItemBySlot(EquipmentSlot slot) { return slot == EquipmentSlot.MAINHAND ? hand : ItemStack.EMPTY; }
+        @Override public ItemStack getItemInHand(net.minecraft.world.InteractionHand h) {
+            return h == net.minecraft.world.InteractionHand.MAIN_HAND ? hand : ItemStack.EMPTY;
+        }
+        @Override public void setItemInHand(net.minecraft.world.InteractionHand h, ItemStack stack) {
+            if (h == net.minecraft.world.InteractionHand.MAIN_HAND) hand = stack;
+        }
+        @Override public void awardStat(net.minecraft.stats.Stat<?> stat, int count) {
+            stats.add("stat " + User.key(stat) + " " + BuiltInRegistries.STAT_TYPE.getKey(stat.getType()) + " " + count);
+        }
+    }
+
+    /** The synched data `Entity`'s constructor defines (a player's air supply is 300). */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    static void defineData(Entity e) throws Exception {
+        var builder = new net.minecraft.network.syncher.SynchedEntityData.Builder(e);
+        Object[][] base = {{"DATA_SHARED_FLAGS_ID", (byte) 0}, {"DATA_AIR_SUPPLY_ID", 300}, {"DATA_CUSTOM_NAME_VISIBLE", false},
+            {"DATA_CUSTOM_NAME", Optional.empty()}, {"DATA_SILENT", false}, {"DATA_NO_GRAVITY", false}, {"DATA_POSE", Pose.STANDING},
+            {"DATA_TICKS_FROZEN", 0}};
+        for (Object[] d : base) {
+            Field f = Entity.class.getDeclaredField((String) d[0]);
+            f.setAccessible(true);
+            builder.define((net.minecraft.network.syncher.EntityDataAccessor) f.get(null), d[1]);
+        }
+        Method define = Entity.class.getDeclaredMethod("defineSynchedData", net.minecraft.network.syncher.SynchedEntityData.Builder.class);
+        define.setAccessible(true);
+        define.invoke(e, builder);
+        VanillaBlockUpdateOracle.set(Entity.class, e, "entityData", builder.build());
+    }
+
+    /** A connection to no client: the motion packets a smash sends go nowhere. */
+    static final class Silent extends net.minecraft.server.network.ServerGamePacketListenerImpl {
+        Silent() { super(null, null, null, null); }
+        @Override public void send(net.minecraft.network.protocol.Packet<?> packet) { }
+    }
+
+    /**
+     * A player hit on the first target with the case's item, as
+     * `Player.attack` and `itemAttackInteraction` run it after the attack
+     * strength scaled the base damage to `base`: the item's damage bonus
+     * (`MaceItem.getAttackDamageBonus`) and damage source, the target's real
+     * `hurtServer` (armor with the weapon's Breach), then `hurtEnemy` (the
+     * mace's smash), the post-attack enchantments (Wind Burst) and
+     * `postHurtEnemy` (the fall reset and the weapon's wear). Every target's
+     * health and velocity, the player's velocity, fall, impulse and the
+     * statistics follow.
+     */
+    static List<String> attack(VanillaBlockUpdateOracle.World w, JsonObject op, List<Entity> targets) throws Exception {
+        if (VanillaBlockUpdateOracle.Server.players == null) {
+            VanillaBlockUpdateOracle.Server.players = (Ops) VanillaBlockUpdateOracle.allocate.invoke(VanillaBlockUpdateOracle.unsafe, Ops.class);
+        }
+        Attacker player = (Attacker) VanillaBlockUpdateOracle.allocate.invoke(VanillaBlockUpdateOracle.unsafe, Attacker.class);
+        player.world = w;
+        player.creative = op.get("creative").getAsBoolean();
+        player.fallFlying = op.get("fall_flying").getAsBoolean();
+        player.hand = stack(op.get("item").getAsString());
+        player.stats = new ArrayList<>();
+        var abilities = new net.minecraft.world.entity.player.Abilities();
+        abilities.invulnerable = abilities.instabuild = abilities.mayfly = player.creative;
+        abilities.flying = op.get("flying").getAsBoolean();
+        VanillaBlockUpdateOracle.set(net.minecraft.world.entity.player.Player.class, player, "abilities", abilities);
+        var advancements = (net.minecraft.server.PlayerAdvancements) VanillaBlockUpdateOracle.allocate.invoke(VanillaBlockUpdateOracle.unsafe, net.minecraft.server.PlayerAdvancements.class);
+        VanillaBlockUpdateOracle.set(net.minecraft.server.PlayerAdvancements.class, advancements, "activeTriggers", new HashMap<>());
+        VanillaBlockUpdateOracle.set(net.minecraft.server.level.ServerPlayer.class, player, "advancements", advancements);
+        player.connection = (Silent) VanillaBlockUpdateOracle.allocate.invoke(VanillaBlockUpdateOracle.unsafe, Silent.class);
+        defineData(player);
+        player.setId(w.getNextEntityId());
+        VanillaBlockUpdateOracle.set(LivingEntity.class, player, "attributes",
+            new net.minecraft.world.entity.ai.attributes.AttributeMap(net.minecraft.world.entity.player.Player.createAttributes().build()));
+        player.setUUID(new UUID(0L, 1L));
+        VanillaBlockUpdateOracle.set(net.minecraft.world.entity.player.Player.class, player, "gameProfile",
+            new com.mojang.authlib.GameProfile(new UUID(0L, 1L), "Player"));
+        var p = op.getAsJsonArray("player");
+        var at = new net.minecraft.world.phys.Vec3(p.get(0).getAsDouble(), p.get(1).getAsDouble(), p.get(2).getAsDouble());
+        VanillaBlockUpdateOracle.set(Entity.class, player, "position", at);
+        VanillaBlockUpdateOracle.set(Entity.class, player, "blockPosition", BlockPos.containing(at));
+        var standing = EntityTypes.PLAYER.getDimensions();
+        VanillaBlockUpdateOracle.set(Entity.class, player, "dimensions", standing);
+        VanillaBlockUpdateOracle.set(Entity.class, player, "eyeHeight", standing.eyeHeight());
+        player.setBoundingBox(standing.makeBoundingBox(at));
+        var m = op.getAsJsonArray("motion");
+        player.setDeltaMovement(m.get(0).getAsDouble(), m.get(1).getAsDouble(), m.get(2).getAsDouble());
+        player.fallDistance = op.get("fall").getAsDouble();
+        if (op.has("impact")) {
+            var i = op.getAsJsonArray("impact");
+            player.currentImpulseImpactPos = new net.minecraft.world.phys.Vec3(i.get(0).getAsDouble(), i.get(1).getAsDouble(), i.get(2).getAsDouble());
+        }
+        // The player stands in the level, for the bursts that push it.
+        w.entities.add(player);
+        LivingEntity target = (LivingEntity) targets.get(0);
+        ItemStack weapon = player.hand;
+        var source = weapon.getDamageSource(player);
+        float base = op.get("base").getAsFloat();
+        float bonus = weapon.getItem().getAttackDamageBonus(target, base, source);
+        boolean hurt = target.hurtServer(w, source, base + bonus);
+        if (hurt) {
+            boolean weaponHit = weapon.hurtEnemy(target, player);
+            net.minecraft.world.item.enchantment.EnchantmentHelper.doPostAttackEffectsWithItemSource(w, target, source, weapon);
+            if (weaponHit) weapon.postHurtEnemy(target, player);
+        }
+        w.entities.remove(player);
+        List<String> out = new ArrayList<>(player.stats);
+        out.add("attack bonus=" + num(bonus) + " source=" + source.typeHolder().getRegisteredName() + " hurt=" + hurt);
+        for (int i = 0; i < targets.size(); i++) {
+            Entity e = targets.get(i);
+            var v = e.getDeltaMovement();
+            String health = e instanceof LivingEntity living && !(e instanceof net.minecraft.world.entity.decoration.ArmorStand) ? num(living.getHealth()) : "-";
+            out.add("V " + i + " " + health + " " + num(v.x) + " " + num(v.y) + " " + num(v.z));
+        }
+        var v = player.getDeltaMovement();
+        var impact = player.currentImpulseImpactPos;
+        Field grace = LivingEntity.class.getDeclaredField("currentImpulseContextResetGraceTime");
+        grace.setAccessible(true);
+        Field extra = net.minecraft.server.level.ServerPlayer.class.getDeclaredField("spawnExtraParticlesOnFall");
+        extra.setAccessible(true);
+        out.add("P " + num(v.x) + " " + num(v.y) + " " + num(v.z) + " fall=" + num(player.fallDistance)
+            + " impact=" + (impact == null ? "-" : num(impact.x) + "," + num(impact.y) + "," + num(impact.z))
+            + " grace=" + grace.getInt(player) + " extra=" + extra.getBoolean(player));
+        out.add("held " + ParityData.canon(player.hand));
         return out;
     }
 

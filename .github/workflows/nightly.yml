@@ -1,0 +1,79 @@
+name: nightly audit
+# Every vanilla harness, from scratch, on main, at 03:00 Paris time on the Mac mini's runner (it holds the
+# maintainer's own Minecraft files). The resources are prepared again first when the preparer or its exporters
+# changed (tools/ci/vanilla-data.sh). A harness that passed in the previous audit and fails now gets an issue
+# labelled parity-regression (one per harness); its issue closes when it passes again
+# (tools/ci/parity_issues.py). The bugs session picks those up. See docs/release-flow.md.
+#   gh workflow run "nightly audit"                    # now
+#   gh workflow run "nightly audit" -f dry_run=true    # the audit, without touching issues
+on:
+  schedule:
+    # GitHub's schedules are in UTC: both, and the first step keeps the one that is 03:00 in Paris.
+    - cron: '7 1 * * *'
+    - cron: '7 2 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Run the audit, but only print what it would do with issues
+        type: boolean
+        default: false
+permissions:
+  contents: read
+  issues: write
+concurrency:
+  group: nightly-audit
+  cancel-in-progress: false
+jobs:
+  audit:
+    runs-on: [self-hosted, horizon-game]
+    timeout-minutes: 150
+    steps:
+      - name: 03:00 in Paris
+        id: when
+        run: |
+          hour=$(TZ=Europe/Paris date +%H)
+          if [[ "${{ github.event_name }}" == schedule && "$hour" != 03 ]]; then
+            echo "It is ${hour}:00 in Paris: the other schedule runs the audit."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.when.outputs.run == 'true'
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          # Keeps .local/ (parity state, probe builds, the previous audit) and target/.
+          clean: false
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.when.outputs.run == 'true'
+      - name: Tools from the runner
+        if: steps.when.outputs.run == 'true'
+        run: bash tools/ci/runner-env.sh
+      - name: Vanilla data, prepared again if the preparer changed
+        if: steps.when.outputs.run == 'true'
+        run: bash tools/ci/vanilla-data.sh
+      - name: Every harness
+        id: audit
+        if: steps.when.outputs.run == 'true'
+        env:
+          PARITY_HOSTS: ''
+        run: |
+          echo "since=$(date +%Y-%m-%dT%H:%M:%S)" >> "$GITHUB_OUTPUT"
+          set +e
+          python3 tools/parity.py --all --timeout 1800 2>&1 | tee "$RUNNER_TEMP/audit.log"
+          echo "exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          { echo '```'; tail -40 "$RUNNER_TEMP/audit.log"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Issues for the harnesses that regressed
+        if: steps.when.outputs.run == 'true' && always() && steps.audit.outputs.since
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/ci/parity_issues.py --since "${{ steps.audit.outputs.since }}" ${{ inputs.dry_run && '--dry-run' || '' }} | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Logs of the failed harnesses
+        if: steps.when.outputs.run == 'true' && steps.audit.outputs.exit != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-parity-logs
+          path: .local/parity-runner/logs/
+          if-no-files-found: ignore
+          retention-days: 14

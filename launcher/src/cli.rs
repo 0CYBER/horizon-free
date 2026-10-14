@@ -1,6 +1,7 @@
 //! `horizon-launcher <subcommand>`: the same steps as the window, from a terminal. Every
 //! command goes through `backend`; this file only parses arguments and prints.
 use clap::{Parser, Subcommand};
+use horizon_launcher::account::{self, Accounts};
 use horizon_launcher::backend::{self, Release};
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
@@ -9,7 +10,7 @@ use std::process::Command;
 #[derive(Parser)]
 #[command(
     name = "horizon-launcher",
-    version,
+    version = backend::VERSION,
     about = "Installs, prepares and starts Horizon. Without a subcommand, opens the window."
 )]
 struct Cli {
@@ -18,6 +19,23 @@ struct Cli {
     json: bool,
     #[command(subcommand)]
     command: Option<Cmd>,
+}
+
+#[derive(Subcommand)]
+enum AccountCmd {
+    /// The signed-in accounts and which one plays
+    List,
+    /// Sign in with a Microsoft account in your browser (device code)
+    SignIn,
+    /// Sign out: the account's tokens leave the keychain
+    SignOut {
+        /// Its name or UUID
+        who: String,
+    },
+    /// Play as this account
+    Select { who: String },
+    /// Play offline, without an account
+    Offline,
 }
 
 #[derive(Subcommand)]
@@ -61,6 +79,11 @@ enum Cmd {
     Notes { tag: Option<String> },
     /// Show the Discord, sponsor and website links
     Links,
+    /// Microsoft accounts: list them (the default), sign in, sign out, or pick the one that plays
+    Account {
+        #[command(subcommand)]
+        action: Option<AccountCmd>,
+    },
     /// Show or set the game's menu style (classic is vanilla's own screens)
     MenuStyle {
         /// Omit to show the current style
@@ -254,6 +277,7 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 );
             }
         }
+        Cmd::Account { action } => account_command(action.unwrap_or(AccountCmd::List), as_json)?,
         Cmd::Links => {
             let links = backend::links();
             if as_json {
@@ -327,6 +351,79 @@ fn update(check: bool, as_json: bool) -> Result<(), String> {
                 backend::self_update(r, progress(format!("Updating the launcher to {version}")))?;
                 println!("Launcher: updated to {version}. Restart the launcher to use it.");
             }
+        }
+    }
+    Ok(())
+}
+
+/// `account …`: names and UUIDs only; tokens are never printed.
+fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
+    let mut accounts = Accounts::load();
+    let find = |accounts: &Accounts, who: &str| {
+        accounts
+            .find(who)
+            .cloned()
+            .ok_or_else(|| format!("No signed-in account {who}. See `horizon-launcher account`."))
+    };
+    match action {
+        AccountCmd::List => {
+            if as_json {
+                json(serde_json::json!({
+                    "accounts": accounts.accounts.iter().map(|a| serde_json::json!({
+                        "name": a.name, "uuid": a.uuid,
+                        "selected": accounts.selected.as_ref() == Some(&a.uuid),
+                    })).collect::<Vec<_>>(),
+                    "sign_in_configured": account::client_id().is_some(),
+                }));
+            } else if accounts.accounts.is_empty() {
+                println!("No Microsoft account signed in: the game plays offline.");
+            } else {
+                for a in &accounts.accounts {
+                    let mark = if accounts.selected.as_ref() == Some(&a.uuid) {
+                        "*"
+                    } else {
+                        " "
+                    };
+                    println!("{mark} {}  {}", a.name, a.uuid);
+                }
+                if accounts.selected().is_none() {
+                    println!("Playing offline (`account select NAME` to play as one).");
+                }
+            }
+        }
+        AccountCmd::SignIn => {
+            let client_id = account::client_id().ok_or(account::NOT_CONFIGURED)?;
+            let ep = account::Endpoints::live();
+            let code = account::device_code(&ep, &client_id)?;
+            eprintln!(
+                "To sign in, open {} in a browser and enter the code {}",
+                code.verification_uri, code.user_code
+            );
+            let ms = account::wait_for_sign_in(&ep, &client_id, &code, &|| false)?;
+            let (signed_in, secrets) = account::finish_sign_in(&ep, ms)?;
+            accounts.add(account::store(), signed_in.clone(), &secrets)?;
+            accounts.save()?;
+            println!("Signed in as {}.", signed_in.name);
+            if !account::store().persistent() {
+                eprintln!("{}", account::NO_KEYCHAIN);
+            }
+        }
+        AccountCmd::SignOut { who } => {
+            let a = find(&accounts, &who)?;
+            accounts.remove(account::store(), &a.uuid)?;
+            accounts.save()?;
+            println!("Signed out {}.", a.name);
+        }
+        AccountCmd::Select { who } => {
+            let a = find(&accounts, &who)?;
+            accounts.selected = Some(a.uuid);
+            accounts.save()?;
+            println!("The game plays as {}.", a.name);
+        }
+        AccountCmd::Offline => {
+            accounts.selected = None;
+            accounts.save()?;
+            println!("The game plays offline.");
         }
     }
     Ok(())

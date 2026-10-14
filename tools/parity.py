@@ -6,6 +6,7 @@
     python3 tools/parity.py --fresh ...     # don't reuse vanilla oracle results
     python3 tools/parity.py food light      # these harnesses (names without test_/_parity.py)
     python3 tools/parity.py --failed        # the ones that failed last time
+    python3 tools/parity.py --changed origin/main   # those a branch's changes can affect (pull requests)
     python3 tools/parity.py --list          # what would run, without running it
     python3 tools/parity.py --status        # last result of every harness
 
@@ -1059,18 +1060,29 @@ def trace_main(output, script, arguments):
     runpy.run_path(script, run_name="__main__")
 
 
-def changed_harnesses(found, records, ref):
-    """Harnesses new or changed since the merge base of HEAD and ref: their script, or a dependency of theirs that is
-    an oracle (Java under mods/horizon/src/test) or a probe (a crate's example or binary), changed or was added."""
+# Files every harness's result depends on (part of environment_key): a change to one affects them all.
+SHARED_INPUTS = {"research-lock.json", "Cargo.lock"}
+
+
+def changed_files(ref):
+    """Files changed between the merge base of HEAD and ref and HEAD (committed or not), or None without a merge base."""
     def git(*arguments):
         result = subprocess.run(["git", *arguments], cwd=ROOT, capture_output=True, text=True)
         return result.stdout.split("\n") if result.returncode == 0 else None
     base = git("merge-base", "HEAD", ref)
     if not base or not base[0]:
+        return None
+    return set(filter(None, git("diff", "--name-only", base[0]) or [])) | \
+        set(filter(None, git("ls-files", "--others", "--exclude-standard") or []))
+
+
+def changed_harnesses(found, records, ref):
+    """Harnesses new or changed since the merge base of HEAD and ref: their script, or a dependency of theirs that is
+    an oracle (Java under mods/horizon/src/test) or a probe (a crate's example or binary), changed or was added."""
+    changed = changed_files(ref)
+    if changed is None:
         print(f"note: no merge base with {ref}; the flake check repeats nothing", flush=True)
         return set()
-    changed = set(filter(None, git("diff", "--name-only", base[0]) or [])) | \
-        set(filter(None, git("ls-files", "--others", "--exclude-standard") or []))
     found_changed = set()
     for name, script in found.items():
         specific = [path for path in records.get(name, {}).get("dependencies", [])
@@ -1078,6 +1090,30 @@ def changed_harnesses(found, records, ref):
         if str(Path(script).relative_to(ROOT)) in changed or any(path in changed for path in specific):
             found_changed.add(name)
     return found_changed
+
+
+def affected_harnesses(found, records, changed):
+    """Harnesses the changed files can affect: their script or a recorded dependency (here, or in the shared
+    dependency lists) changed, a file every harness depends on changed, or nothing is recorded about them yet."""
+    if changed & SHARED_INPUTS:
+        return set(found)
+    affected = set()
+    for name, script in found.items():
+        dependencies = records.get(name, {}).get("dependencies")
+        template = SHARED / "dependencies" / f"{name}.json"
+        if dependencies is None and template.exists():
+            dependencies = json.loads(template.read_text()).get("dependencies")
+        if dependencies is None or str(Path(script).relative_to(ROOT)) in changed or \
+                any(path.split(KEEP)[0] in changed for path in dependencies):
+            affected.add(name)
+    return affected
+
+
+def platform_skips(config):
+    """Harnesses tools/parity_hosts.json marks as giving different results on this platform: {name: reason}."""
+    if sys.platform == "linux":
+        return {}
+    return dict(config.get("linux_only", {}))
 
 
 def finished_run(failed):
@@ -1110,6 +1146,8 @@ def main():
     parser.add_argument("--flake-check", metavar="REF", help="harnesses new or changed since the merge base with REF "
                         "must pass --flake-rounds times in a row (tools/gate.py)")
     parser.add_argument("--flake-rounds", type=int, default=3, help="runs required by --flake-check (default 3)")
+    parser.add_argument("--changed", metavar="REF", help="only harnesses the changes since the merge base with REF can "
+                        "affect (and that have not passed with their current inputs): the pull-request check")
     args = parser.parse_args()
 
     found = harnesses()
@@ -1137,8 +1175,20 @@ def main():
         chosen = list(found)
     elif args.failed:
         chosen = [name for name in found if records.get(name, {}).get("status") == "fail"]
+    elif args.changed:
+        changed = changed_files(args.changed)
+        if changed is None:
+            parser.error(f"no merge base with {args.changed}")
+        affected = affected_harnesses(found, records, changed)
+        chosen = [name for name in found if name in affected and stale(name, state, hasher, environment)]
+        print(f"{len(changed)} files changed since the merge base with {args.changed}: {len(affected)} harnesses "
+              f"depend on them, {len(chosen)} without a pass for their current inputs.", flush=True)
     else:
         chosen = [name for name in found if stale(name, state, hasher, environment)]
+    skips = platform_skips(host_config())
+    for name in [name for name in chosen if base_name(name) in skips and not args.names]:
+        print(f"skipped on {sys.platform}: {name}: {skips[base_name(name)]}", flush=True)
+        chosen.remove(name)
     rounds = {name: args.repeat for name in chosen} if args.repeat > 1 else {}
     if args.flake_check:
         changed = changed_harnesses(found, records, args.flake_check)

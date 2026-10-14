@@ -101,13 +101,7 @@ impl Game<'_> {
             ],
             Hit::None => return Ok(()),
         };
-        self.wind_burst(
-            center,
-            radius,
-            knockback,
-            breeze,
-            p.owner == Some(Who::Player),
-        )
+        self.wind_burst(center, radius, knockback, breeze, !breeze)
     }
     /// `AbstractWindCharge.onHitEntity`: one point of damage.
     fn wind_charge_damage(&mut self, p: &Projectile, who: Who) {
@@ -208,7 +202,8 @@ impl Game<'_> {
         center: [f64; 3],
         radius: f32,
         multiplier: f32,
-        player_charge: bool,
+        wind_charge: bool,
+        blocklike: bool,
     ) {
         let diameter = f64::from(radius * 2.0);
         let distance = |p: [f64; 3]| {
@@ -257,11 +252,10 @@ impl Game<'_> {
                         p.velocity.y + dir[1] * power,
                         p.velocity.z + dir[2] * power,
                     );
-                    // ServerPlayer.onExplosionHit: a player's own charge cancels the fall.
-                    if player_charge {
-                        let at = p.position;
-                        p.impulse.set_ignore_fall_damage(true, Some(at));
-                    }
+                    // ServerPlayer.onExplosionHit: a wind charge's burst cancels the
+                    // fall; any other burst ends the grace of the last impulse.
+                    let at = p.position;
+                    p.impulse.set_ignore_fall_damage(wind_charge, Some(at));
                 }
             }
         }
@@ -288,6 +282,39 @@ impl Game<'_> {
             );
         }
         self.mobs = mobs;
+        // ArmorStand.ignoreExplosion: a visible stand feels only a burst that
+        // affects block-like entities (never a wind charge's).
+        if blocklike {
+            let mut stands = std::mem::take(&mut self.armor_stands);
+            for s in stands.iter_mut().filter(|s| !s.invisible) {
+                let feet = [s.position.x, s.position.y, s.position.z];
+                let dist = distance(feet) / diameter;
+                if dist > 1.0 {
+                    continue;
+                }
+                // EntityType.ARMOR_STAND's size, halved when small; a marker has none.
+                let (w, h, eye) = if s.marker {
+                    (0.0, 0.0, 0.0)
+                } else if s.small {
+                    (0.125, f64::from(0.9875f32), f64::from(0.9875f32))
+                } else {
+                    (0.25, f64::from(1.975f32), f64::from(1.7775f32))
+                };
+                let exposure = self.seen_percent(
+                    center,
+                    [feet[0] - w, feet[1], feet[2] - w],
+                    [feet[0] + w, feet[1] + h, feet[2] + w],
+                );
+                let power = (1.0 - dist) * f64::from(exposure) * multiplier;
+                let dir = direction([feet[0], feet[1] + eye, feet[2]]);
+                s.velocity = Vec3::new(
+                    s.velocity.x + dir[0] * power,
+                    s.velocity.y + dir[1] * power,
+                    s.velocity.z + dir[2] * power,
+                );
+            }
+            self.armor_stands = stands;
+        }
         // Arrows and other projectiles (the charges themselves ignore it).
         let push = |position: Vec3, velocity: &mut Vec3, game: &Game<'_>| {
             let feet = [position.x, position.y, position.z];
@@ -331,16 +358,21 @@ impl Game<'_> {
         self.tnts = tnts;
     }
     /// The burst: knockback, the blocks that react, the gust and the sound.
-    fn wind_burst(
+    pub(super) fn wind_burst(
         &mut self,
         center: [f64; 3],
         radius: f32,
         multiplier: f32,
         breeze: bool,
-        player_charge: bool,
+        wind_charge: bool,
     ) -> Result<()> {
+        // ServerExplosion.explode: the blast is heard first.
+        let ctx = horizon_client::sculk::Context::default();
+        self.post_game_event("minecraft:explode", center, ctx);
         let mut targets = self.wind_positions(center, radius);
-        self.wind_knockback(center, radius, multiplier, player_charge);
+        // ServerExplosion.shouldAffectBlocklikeEntities
+        let blocklike = !breeze && !wind_charge && self.ui.rules.bool("mob_griefing");
+        self.wind_knockback(center, radius, multiplier, wind_charge, blocklike);
         // Explosion.canTriggerBlocks: a breeze's charge needs mob griefing.
         if !breeze || self.ui.rules.bool("mob_griefing") {
             // Util.shuffle(list, level.random)

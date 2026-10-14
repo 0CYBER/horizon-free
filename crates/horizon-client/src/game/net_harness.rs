@@ -28,7 +28,12 @@ impl Game<'_> {
         while Instant::now() < deadline {
             self.update_world();
             if self.remote.is_none() {
-                error = Some("disconnected".to_owned());
+                error = Some(match self.title.as_ref().map(|t| &t.mode) {
+                    Some(horizon_client::title::Mode::Multiplayer(
+                        horizon_client::multiplayer::Screen::Disconnected { reason },
+                    )) => format!("disconnected: {reason}"),
+                    _ => "disconnected".to_owned(),
+                });
                 break;
             }
             if Instant::now() >= next {

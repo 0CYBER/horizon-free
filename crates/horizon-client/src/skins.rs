@@ -246,9 +246,8 @@ pub fn process_legacy_skin(width: u32, height: u32, rgba: &[u8]) -> Option<Vec<u
 
 /// `SkinTextureDownloader`: fetches textures on background threads, from
 /// the local cache (`<root>/<2 hex>/<sha1>`) or over HTTP, keeping each one
-/// by kind and hash as vanilla's `TextureCache`s do. Plain HTTP only: an
-/// `https` texture that isn't cached fails, and the player keeps their
-/// default skin.
+/// by kind and hash as vanilla's `TextureCache`s do. A texture that can't
+/// be fetched fails, and the player keeps their default skin.
 pub struct Downloader {
     root: std::path::PathBuf,
     states: std::collections::HashMap<(Kind, String), Download>,
@@ -318,53 +317,23 @@ impl Downloader {
     }
 }
 
-/// A plain HTTP/1.1 GET; the body of a 2xx answer.
+/// A GET over HTTP or HTTPS (textures.minecraft.net serves both; vanilla
+/// uses https): the body of a 2xx answer, 16 MiB at most, after redirects.
 fn http_get(url: &str) -> Option<Vec<u8>> {
-    use std::io::{Read, Write};
-    let rest = url.strip_prefix("http://")?;
-    let (authority, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
-    let path = if path.is_empty() { "/" } else { path };
-    let path = &path[..path.find('#').unwrap_or(path.len())];
-    let host = authority.split(':').next()?;
-    let address = if authority.contains(':') {
-        authority.to_owned()
-    } else {
-        format!("{authority}:80")
-    };
-    let timeout = std::time::Duration::from_secs(15);
-    let addr = std::net::ToSocketAddrs::to_socket_addrs(&address)
-        .ok()?
-        .next()?;
-    let mut stream = std::net::TcpStream::connect_timeout(&addr, timeout).ok()?;
-    stream.set_read_timeout(Some(timeout)).ok()?;
-    write!(
-        stream,
-        "GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: Java\r\n\r\n"
-    )
-    .ok()?;
-    let mut response = Vec::new();
-    stream.take(16 << 20).read_to_end(&mut response).ok()?;
-    let split = response.windows(4).position(|w| w == b"\r\n\r\n")?;
-    let head = String::from_utf8_lossy(&response[..split]).to_ascii_lowercase();
-    let mut body = response[split + 4..].to_vec();
-    let status: u32 = head.split_whitespace().nth(1)?.parse().ok()?;
-    if status / 100 != 2 {
-        return None;
-    }
-    if head.contains("transfer-encoding: chunked") {
-        let (mut out, mut at) = (Vec::new(), 0);
-        loop {
-            let end = at + body[at..].windows(2).position(|w| w == b"\r\n")?;
-            let line = String::from_utf8_lossy(&body[at..end]);
-            let size = usize::from_str_radix(line.split(';').next()?.trim(), 16).ok()?;
-            if size == 0 {
-                break;
-            }
-            out.extend_from_slice(body.get(end + 2..end + 2 + size)?);
-            at = end + 4 + size;
-        }
-        body = out;
-    }
+    use std::io::Read;
+    let response = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(15))
+        .user_agent("Java")
+        .build()
+        .get(url)
+        .call()
+        .ok()?;
+    let mut body = Vec::new();
+    response
+        .into_reader()
+        .take(16 << 20)
+        .read_to_end(&mut body)
+        .ok()?;
     Some(body)
 }
 
@@ -424,6 +393,35 @@ pub fn sha1(data: &[u8]) -> [u8; 20] {
 
 #[cfg(test)]
 mod tests {
+    /// Textures come over plain HTTP too (a local server here; https is the
+    /// same request through rustls), and only 2xx answers count.
+    #[test]
+    fn http_get_reads_2xx_bodies() {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for stream in listener.incoming().take(2) {
+                let mut stream = stream.unwrap();
+                let mut line = String::new();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                reader.read_line(&mut line).unwrap();
+                while reader.read_line(&mut String::new()).unwrap() > 2 {}
+                let reply: &[u8] = if line.contains("/texture/abc") {
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nPNG!"
+                } else {
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                };
+                stream.write_all(reply).unwrap();
+            }
+        });
+        assert_eq!(
+            http_get(&format!("{base}/texture/abc")),
+            Some(b"PNG!".to_vec())
+        );
+        assert_eq!(http_get(&format!("{base}/texture/missing")), None);
+    }
+
     use super::*;
 
     #[test]
