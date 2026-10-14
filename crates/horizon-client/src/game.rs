@@ -3101,7 +3101,11 @@ impl Game<'_> {
             && self.title.is_none()
             && (matches!(
                 self.screen,
-                Screen::Paused | Screen::Options | Screen::Stats | Screen::Advancements
+                Screen::Paused
+                    | Screen::Options
+                    | Screen::Stats
+                    | Screen::Advancements
+                    | Screen::WorldOptions
             ) || self.book.is_some())
     }
     fn capture(&mut self, capture: bool) {
@@ -8471,7 +8475,10 @@ impl ApplicationHandler for Game<'_> {
                 WindowEvent::KeyboardInput { event, .. } if self.remote_chat_open() => {
                     self.remote_chat_key(&event)
                 }
-                WindowEvent::KeyboardInput { event, .. } if self.screen == Screen::WorldOptions => {
+                WindowEvent::KeyboardInput { event, .. }
+                    if self.screen == Screen::WorldOptions
+                        && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape)) =>
+                {
                     self.world_options_key(&event)
                 }
                 // Options consumes presses; releases still reach the bound
