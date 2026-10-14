@@ -18,3 +18,12 @@
 /saves/
 /tools/logs/
 .DS_Store
+# What the client writes to its working directory when run from the repo root.
+/options.txt
+/horizon.txt
+/horizon-graphics.txt
+/horizon-controller.txt
+/servers.dat
+/screenshots/
+/crash-reports/
+/debug/
