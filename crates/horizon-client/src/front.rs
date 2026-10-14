@@ -1023,12 +1023,15 @@ pub fn wrap(ui: &Ui, text: &str, width: f32) -> Vec<String> {
 pub struct FriendsView {
     /// A singleplayer world (not a server): the button is offered.
     pub shown: bool,
-    /// A relay is configured in this build.
-    pub available: bool,
     pub sharing: bool,
     pub code: Option<String>,
-    /// While there is no code: getting one, or why not.
+    /// Who can join and what to do when friends on the internet can't (or,
+    /// before the code, what the game is doing).
     pub status: String,
+    /// Friends on the internet can reach the host.
+    pub reachable: bool,
+    /// Where the troubleshooting is, when they can't.
+    pub help: Option<String>,
     /// The players in the world besides the host.
     pub guests: Vec<String>,
     pub notice: Option<String>,
@@ -1096,21 +1099,11 @@ pub mod pause {
                 [x + bw + lw + 16.0, y, iw, CONTROL_LARGE],
                 "Invite friends",
                 Kind::Secondary,
-                friends.available && !friends.sharing,
+                !friends.sharing,
             );
         }
         y += CONTROL_LARGE + 32.0;
         ui.row_index = 0;
-        if friends.shown && !friends.available {
-            ui.text(
-                Face::Regular,
-                SMALL,
-                x,
-                y - 18.0,
-                color::FAINT,
-                "Inviting friends isn't available yet in this build.",
-            );
-        }
         if friends.sharing {
             y = invite(ui, x, y, cw, friends);
         }
@@ -1137,6 +1130,20 @@ pub mod pause {
     }
     /// The invite section while sharing: the code with Copy and Stop
     /// sharing, who is here, and what changed. Returns the y below it.
+    /// The code's groups packed into lines of at most `width`.
+    fn code_lines(ui: &Ui, code: &str, width: f32) -> Vec<String> {
+        let mut lines: Vec<String> = Vec::new();
+        for group in code.split('-') {
+            match lines.last_mut() {
+                Some(l) if ui.measure(Face::Mono, BODY, &format!("{l}-{group}")) <= width => {
+                    l.push('-');
+                    l.push_str(group);
+                }
+                _ => lines.push(group.to_owned()),
+            }
+        }
+        lines
+    }
     fn invite(ui: &mut Ui, x: f32, mut y: f32, cw: f32, f: &FriendsView) -> f32 {
         ui.divider(x, y, cw);
         let top = y + 12.0;
@@ -1149,15 +1156,6 @@ pub mod pause {
             "Invite code",
         );
         let vx = x + t::ROW_LABEL + 16.0;
-        match &f.code {
-            Some(code) => {
-                ui.text_line(Face::Display, 22.0, CONTROL, vx, top, color::TEXT, code);
-            }
-            None => {
-                let status = ui.fit(Face::Regular, BODY, &f.status, cw - t::ROW_LABEL - 220.0);
-                ui.text_line(Face::Regular, BODY, CONTROL, vx, top, color::MUTED, &status);
-            }
-        }
         let stop = "Stop sharing";
         let sw = ui.button_width(stop, false);
         ui.button(
@@ -1169,14 +1167,51 @@ pub mod pause {
         );
         let copy = if f.copied { "Copied" } else { "Copy" };
         let copy_w = ui.button_width("Copied", false);
+        let buttons = sw + 8.0 + copy_w;
         ui.button(
             act(11),
-            [x + cw - sw - 8.0 - copy_w, top, copy_w, CONTROL],
+            [x + cw - buttons, top, copy_w, CONTROL],
             copy,
             Kind::Secondary,
             f.code.is_some(),
         );
-        y = top + CONTROL + 10.0;
+        let line = (BODY * 1.45).round();
+        let value_w = (cw - t::ROW_LABEL - 16.0 - buttons - 16.0).max(120.0);
+        y = top + 6.0;
+        match &f.code {
+            Some(code) => {
+                for l in code_lines(ui, code, value_w) {
+                    ui.text(Face::Mono, BODY, vx, y, color::TEXT, &l);
+                    y += line;
+                }
+            }
+            None => {
+                for l in wrap(ui, &f.status, value_w) {
+                    ui.text(Face::Regular, BODY, vx, y, color::MUTED, &l);
+                    y += line;
+                }
+            }
+        }
+        y = y.max(top + CONTROL) + 10.0;
+        let small = (SMALL * 1.45).round();
+        if f.code.is_some() {
+            // Who can join: plain when friends anywhere can, in the text
+            // colour (it asks for something) when only the LAN and VPNs can.
+            let tint = if f.reachable {
+                color::MUTED
+            } else {
+                color::TEXT
+            };
+            for l in wrap(ui, &f.status, cw) {
+                ui.text(Face::Regular, SMALL, x, y, tint, &l);
+                y += small;
+            }
+            if let Some(help) = &f.help {
+                let l = ui.fit(Face::Regular, SMALL, &format!("Help: {help}"), cw);
+                ui.text(Face::Regular, SMALL, x, y, color::FAINT, &l);
+                y += small;
+            }
+        }
         let here = if f.guests.is_empty() {
             "No friends here yet.".to_owned()
         } else {
@@ -1192,7 +1227,7 @@ pub mod pause {
         for (line, tint) in lines.into_iter().flatten() {
             let line = ui.fit(Face::Regular, SMALL, &line, cw);
             ui.text(Face::Regular, SMALL, x, y, tint, &line);
-            y += (SMALL * 1.45).round();
+            y += small;
         }
         y + 12.0
     }
