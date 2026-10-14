@@ -1,0 +1,109 @@
+//! `horizon-prepare`: prepares Horizon's resources from your own Minecraft Java Edition.
+//! Its flags are the ones tools/prepare_native_client.py took.
+
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+
+const HELP: &str = "\
+horizon-prepare: prepare Horizon's resources from your own Minecraft Java Edition
+
+Usage: horizon-prepare [--prepare] [--server-jar PATH] [--minecraft-dir PATH] [--root PATH]
+
+  --prepare             Import the pinned game files from your own copy first
+  --server-jar PATH     The pinned server jar you downloaded yourself
+                        (default: HORIZON_SERVER_JAR, or the copy imported before)
+  --minecraft-dir PATH  The official launcher's game directory with your installed copy
+                        (default: HORIZON_MINECRAFT_DIR, or the launcher's own)
+  --root PATH           The Horizon folder to prepare (default: the folder this program is
+                        in, else the nearest folder above the current one with research-lock.json)
+
+Needs Minecraft played once from the official launcher, and Java (a JDK) of the version
+research-lock.json pins: JAVA_HOME, else javac and java on the PATH.
+The resources go to <root>/.local/horizon-client/<version>; pass that to horizon-client --resources.
+";
+
+/// The folder with research-lock.json: beside the executable in a release folder, else the
+/// current folder or one above it (a checkout, with the binary in target/).
+fn default_root() -> Option<PathBuf> {
+    let beside = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf));
+    if let Some(dir) = beside.filter(|d| d.join("research-lock.json").is_file()) {
+        return Some(dir);
+    }
+    let cwd = std::env::current_dir().ok()?;
+    cwd.ancestors()
+        .find(|d| d.join("research-lock.json").is_file())
+        .map(Path::to_path_buf)
+}
+
+fn main() -> ExitCode {
+    let mut options = horizon_prepare::Options {
+        root: PathBuf::new(),
+        import: false,
+        minecraft_dir: None,
+        server_jar: None,
+    };
+    let mut root = None;
+    let mut args = std::env::args_os().skip(1);
+    while let Some(arg) = args.next() {
+        let text = arg.to_string_lossy().into_owned();
+        let (flag, inline) = match text.split_once('=') {
+            Some((flag, value)) if flag.starts_with("--") => {
+                (flag.to_string(), Some(value.to_string()))
+            }
+            _ => (text.clone(), None),
+        };
+        let mut value = |name: &str| -> Result<PathBuf, String> {
+            match &inline {
+                Some(v) => Ok(PathBuf::from(v)),
+                None => args
+                    .next()
+                    .map(PathBuf::from)
+                    .ok_or_else(|| format!("{name} needs a path")),
+            }
+        };
+        let parsed = match flag.as_str() {
+            "--prepare" if inline.is_none() => {
+                options.import = true;
+                Ok(())
+            }
+            "--server-jar" => value("--server-jar").map(|v| options.server_jar = Some(v)),
+            "--minecraft-dir" => value("--minecraft-dir").map(|v| options.minecraft_dir = Some(v)),
+            "--root" => value("--root").map(|v| root = Some(v)),
+            "-h" | "--help" => {
+                print!("{HELP}");
+                return ExitCode::SUCCESS;
+            }
+            "-V" | "--version" => {
+                println!("horizon-prepare {}", env!("CARGO_PKG_VERSION"));
+                return ExitCode::SUCCESS;
+            }
+            _ => Err(format!("unrecognized argument: {text}")),
+        };
+        if let Err(e) = parsed {
+            eprintln!("horizon-prepare: error: {e}\n\n{HELP}");
+            return ExitCode::from(2);
+        }
+    }
+    let Some(root) = root.or_else(default_root) else {
+        eprintln!(
+            "horizon-prepare: error: no research-lock.json beside this program or above the current folder; pass --root"
+        );
+        return ExitCode::from(2);
+    };
+    options.root = root;
+    let log = |line: &str| {
+        let mut out = std::io::stdout().lock();
+        let _ = writeln!(out, "{line}");
+        let _ = out.flush();
+    };
+    match horizon_prepare::prepare(&options, &log) {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
