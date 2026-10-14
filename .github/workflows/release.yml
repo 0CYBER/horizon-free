@@ -146,19 +146,22 @@ jobs:
         if: runner.environment == 'self-hosted'
         run: |
           set -euo pipefail
+          # From a scratch folder: the game keeps its saves and options in the folder it starts in.
           home="$RUNNER_TEMP/horizon-smoke"
           rm -rf "$home" && mkdir -p "$home"
           version=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' research-lock.json | head -1)
-          HORIZON_HOME="$home" HORIZON_NO_AUDIO=1 target/release/horizon-client \
-            --resources ".local/horizon-client/$version" --offscreen --render-distance 4 --seed 1 \
-            --frames 300 --timeout-seconds 180 --smoke-report "$home/smoke.json" > "$home/client.log" 2>&1 \
-            || { tail -40 "$home/client.log"; exit 1; }
+          client="$PWD/target/release/horizon-client"
+          resources="$PWD/.local/horizon-client/$version"
+          (cd "$home" && HORIZON_HOME="$home" HORIZON_NO_AUDIO=1 "$client" --resources "$resources" --offscreen \
+            --world smoke --seed 1 --render-distance 4 --frames 300 --timeout-seconds 180 \
+            --smoke-report "$home/smoke.json" > "$home/client.log" 2>&1) || { tail -40 "$home/client.log"; exit 1; }
           python3 - "$home/smoke.json" <<'EOF'
           import json, sys
           report = json.load(open(sys.argv[1]))
-          print({key: report.get(key) for key in ("adapter", "presented_frames", "resident_chunks", "error")})
-          if report.get("error") is not None or report.get("presented_frames") != 300 or not report.get("resident_chunks"):
-              sys.exit("the smoke run did not draw a world: " + json.dumps(report)[:2000])
+          print(json.dumps(report))
+          if report.get("error") is not None or report.get("frames") != 300 or not report.get("chunks") \
+                  or not report.get("meshed_sections") or not report.get("player"):
+              sys.exit("the smoke run did not draw a world")
           EOF
       - name: Package
         run: |

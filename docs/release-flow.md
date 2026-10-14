@@ -130,7 +130,7 @@ the notes.
 | --- | --- | --- |
 | `horizon-linux-x86_64.tar.gz` | GitHub `ubuntu-22.04` (an older glibc, so it runs on any recent distribution) | the standard loader and libraries only (`tools/check_imports.py`) |
 | `horizon-windows-x64.zip` | GitHub `windows-latest`, C runtime linked in | system DLLs only (`tools/check_imports.py`) |
-| `horizon-macos-arm64.zip` | The Mac mini's runner (`vars.MAC_RUNNER=macos-latest` sends it to GitHub) | system libraries only (`otool -L`); a 300-frame offscreen run of a new world with resources prepared from the runner's own Minecraft (`--offscreen --frames 300 --smoke-report`) |
+| `horizon-macos-arm64.zip` | The Mac mini's runner (`vars.MAC_RUNNER=macos-latest` sends it to GitHub) | system libraries only (`otool -L`); a 300-frame offscreen run of a new world with resources prepared from the runner's own Minecraft (`--offscreen --world smoke --frames 300 --smoke-report`: frames drawn, chunks generated and meshed, a player, no error) |
 
 Each builds `horizon-client`, `horizon-ctl` and `horizon-prepare` in release mode, checks all three exist, starts
 each one (`--help`, `--version`), packages the folder with `cargo run -p xtask -- package` and archives it. The
