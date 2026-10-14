@@ -31,6 +31,8 @@ pub struct HudAtlas {
 pub const GLYPH_ROWS: u32 = 512;
 /// 128x128 atlas slots for map textures.
 pub const MAP_SLOTS: usize = 16;
+/// The atlas slot the minimap extra draws into.
+pub const MINIMAP_SPRITE: &str = "horizon/minimap";
 /// Atlas slots for downloaded player skins (`skins/<sha1>`), 64x64 each.
 pub const SKIN_SLOTS: usize = 32;
 pub fn decode(path: &Path) -> Result<(u32, u32, Vec<u8>)> {
@@ -200,6 +202,13 @@ impl HudAtlas {
         for i in 0..MAP_SLOTS {
             images.push((format!("horizon/map{i}"), 128, 128, vec![0; 128 * 128 * 4]));
         }
+        // The minimap extra's image (game/extras.rs).
+        images.push((
+            MINIMAP_SPRITE.into(),
+            crate::minimap::SIZE as u32,
+            crate::minimap::SIZE as u32,
+            vec![0; crate::minimap::SIZE * crate::minimap::SIZE * 4],
+        ));
         // Downloaded skins (game/scoreboard.rs) likewise.
         for i in 0..SKIN_SLOTS {
             images.push((format!("horizon/skin{i}"), 64, 64, vec![0; 64 * 64 * 4]));

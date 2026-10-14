@@ -15,6 +15,10 @@ pub const ZOOM_MAX: f32 = 10.0;
 /// Each wheel step multiplies the zoom by this.
 const ZOOM_STEP: f32 = 1.25;
 
+/// The minimap's sizes in GUI pixels, and its zooms in blocks per pixel.
+pub const MINIMAP_SIZES: [(u8, &str); 3] = [(64, "Small"), (96, "Medium"), (128, "Large")];
+pub const MINIMAP_ZOOMS: [f32; 4] = [0.5, 1.0, 2.0, 4.0];
+
 /// A screen corner for an overlay.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Corner {
@@ -79,6 +83,15 @@ pub struct Extras {
     pub keystrokes_corner: Corner,
     /// Clicks per second under the mouse buttons.
     pub keystrokes_cps: bool,
+    pub minimap: bool,
+    pub minimap_corner: Corner,
+    /// Side in GUI pixels (`MINIMAP_SIZES`).
+    pub minimap_size: u8,
+    pub minimap_round: bool,
+    /// Blocks per pixel (`MINIMAP_ZOOMS`).
+    pub minimap_zoom: f32,
+    /// Turn with the player (forward up) instead of north up.
+    pub minimap_rotate: bool,
 }
 impl Default for Extras {
     fn default() -> Self {
@@ -94,6 +107,12 @@ impl Default for Extras {
             keystrokes: false,
             keystrokes_corner: Corner::TopLeft,
             keystrokes_cps: true,
+            minimap: false,
+            minimap_corner: Corner::TopRight,
+            minimap_size: 96,
+            minimap_round: false,
+            minimap_zoom: 1.0,
+            minimap_rotate: false,
         }
     }
 }
@@ -136,6 +155,20 @@ impl Extras {
                     e.keystrokes_corner = Corner::parse(value, e.keystrokes_corner)
                 }
                 "keystrokesCps" => e.keystrokes_cps = flag(e.keystrokes_cps),
+                "minimap" => e.minimap = flag(e.minimap),
+                "minimapCorner" => e.minimap_corner = Corner::parse(value, e.minimap_corner),
+                "minimapSize" => {
+                    if let Some(&(v, _)) = MINIMAP_SIZES.iter().find(|s| s.0.to_string() == value) {
+                        e.minimap_size = v;
+                    }
+                }
+                "minimapShape" => e.minimap_round = value == "round",
+                "minimapZoom" => {
+                    if let Some(&z) = MINIMAP_ZOOMS.iter().find(|z| z.to_string() == value) {
+                        e.minimap_zoom = z;
+                    }
+                }
+                "minimapRotate" => e.minimap_rotate = flag(e.minimap_rotate),
                 _ => {}
             }
         }
@@ -143,7 +176,7 @@ impl Extras {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "zoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\n",
+            "zoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\n",
             bool_text(self.zoom),
             self.zoom_key,
             self.zoom_level,
@@ -155,6 +188,16 @@ impl Extras {
             bool_text(self.keystrokes),
             self.keystrokes_corner.name(),
             bool_text(self.keystrokes_cps),
+            bool_text(self.minimap),
+            self.minimap_corner.name(),
+            self.minimap_size,
+            if self.minimap_round {
+                "round"
+            } else {
+                "square"
+            },
+            self.minimap_zoom,
+            bool_text(self.minimap_rotate),
         )
     }
     /// Written only once something differs from the defaults, so a vanilla
@@ -349,6 +392,12 @@ pub enum Item {
     Keystrokes,
     KeystrokesCorner,
     KeystrokesCps,
+    Minimap,
+    MinimapCorner,
+    MinimapSize,
+    MinimapShape,
+    MinimapZoom,
+    MinimapRotate,
 }
 /// The Extras page: headers and items.
 pub fn rows() -> Vec<Result<Item, &'static str>> {
@@ -360,6 +409,13 @@ pub fn rows() -> Vec<Result<Item, &'static str>> {
         Ok(ZoomLevel),
         Ok(ZoomSmooth),
         Ok(ZoomSensitivity),
+        Err("Minimap"),
+        Ok(Minimap),
+        Ok(MinimapCorner),
+        Ok(MinimapSize),
+        Ok(MinimapShape),
+        Ok(MinimapZoom),
+        Ok(MinimapRotate),
         Err("FPS counter"),
         Ok(Fps),
         Ok(FpsCorner),
@@ -369,6 +425,16 @@ pub fn rows() -> Vec<Result<Item, &'static str>> {
         Ok(KeystrokesCorner),
         Ok(KeystrokesCps),
     ]
+}
+/// "1 block", "2 blocks", "½ block".
+fn block_count(n: f32) -> String {
+    if n < 1.0 {
+        "½ block".into()
+    } else if n == 1.0 {
+        "1 block".into()
+    } else {
+        format!("{n} blocks")
+    }
 }
 fn next<T: Copy + PartialEq>(all: &[T], current: T, back: bool) -> T {
     let i = all.iter().position(|v| *v == current).unwrap_or(0);
@@ -384,7 +450,12 @@ impl Item {
             Item::ZoomSmooth => "Smooth zoom",
             Item::ZoomSensitivity => "Lower sensitivity while zoomed",
             Item::Fps => "FPS counter",
-            Item::FpsCorner | Item::KeystrokesCorner => "Corner",
+            Item::FpsCorner | Item::KeystrokesCorner | Item::MinimapCorner => "Corner",
+            Item::Minimap => "Minimap",
+            Item::MinimapSize => "Size",
+            Item::MinimapShape => "Shape",
+            Item::MinimapZoom => "Zoom",
+            Item::MinimapRotate => "Turn with the player",
             Item::FpsLows => "Minimum and 1% low",
             Item::Keystrokes => "Keystrokes",
             Item::KeystrokesCps => "Clicks per second",
@@ -399,7 +470,14 @@ impl Item {
             Item::ZoomSmooth => "Eases in and out like the spyglass.",
             Item::ZoomSensitivity => "Turns slower the more you zoom in.",
             Item::Fps => "Frames per second in a corner of the screen.",
-            Item::FpsCorner | Item::KeystrokesCorner => "Overlays in one corner stack.",
+            Item::FpsCorner | Item::KeystrokesCorner | Item::MinimapCorner => {
+                "Overlays in one corner stack."
+            }
+            Item::Minimap => "A map of the loaded terrain around you, in map colours.",
+            Item::MinimapSize => "How big the map is on screen.",
+            Item::MinimapShape => "Square or round.",
+            Item::MinimapZoom => "Blocks per pixel: smaller shows more detail, larger more land.",
+            Item::MinimapRotate => "Forward is up; off keeps north up.",
             Item::FpsLows => "The slowest frame and the 1% low of the last 5 seconds.",
             Item::Keystrokes => "Movement keys, jump and mouse buttons as you press them.",
             Item::KeystrokesCps => "Clicks in the last second under each mouse button.",
@@ -410,6 +488,7 @@ impl Item {
         use crate::graphics_style::Cost;
         match self {
             Item::Zoom | Item::Fps | Item::Keystrokes => Some(Cost::None),
+            Item::Minimap => Some(Cost::Low),
             _ => None,
         }
     }
@@ -423,6 +502,8 @@ impl Item {
             Item::FpsLows => e.fps_lows,
             Item::Keystrokes => e.keystrokes,
             Item::KeystrokesCps => e.keystrokes_cps,
+            Item::Minimap => e.minimap,
+            Item::MinimapRotate => e.minimap_rotate,
             _ => return None,
         })
     }
@@ -433,6 +514,14 @@ impl Item {
             Item::ZoomLevel => format!("{}x", e.zoom_level),
             Item::FpsCorner => e.fps_corner.label().into(),
             Item::KeystrokesCorner => e.keystrokes_corner.label().into(),
+            Item::MinimapCorner => e.minimap_corner.label().into(),
+            Item::MinimapSize => MINIMAP_SIZES
+                .iter()
+                .find(|s| s.0 == e.minimap_size)
+                .map_or("Medium", |s| s.1)
+                .into(),
+            Item::MinimapShape => if e.minimap_round { "Round" } else { "Square" }.into(),
+            Item::MinimapZoom => format!("{} per pixel", block_count(e.minimap_zoom)),
             other => match other.switch(e) {
                 Some(true) => "On".into(),
                 _ => "Off".into(),
@@ -454,6 +543,15 @@ impl Item {
             Item::KeystrokesCorner => {
                 e.keystrokes_corner = next(&Corner::ALL, e.keystrokes_corner, back)
             }
+            Item::Minimap => e.minimap = !e.minimap,
+            Item::MinimapRotate => e.minimap_rotate = !e.minimap_rotate,
+            Item::MinimapCorner => e.minimap_corner = next(&Corner::ALL, e.minimap_corner, back),
+            Item::MinimapSize => {
+                let sizes: Vec<u8> = MINIMAP_SIZES.iter().map(|s| s.0).collect();
+                e.minimap_size = next(&sizes, e.minimap_size, back);
+            }
+            Item::MinimapShape => e.minimap_round = !e.minimap_round,
+            Item::MinimapZoom => e.minimap_zoom = next(&MINIMAP_ZOOMS, e.minimap_zoom, back),
             Item::ZoomKey => {}
         }
     }
@@ -466,7 +564,7 @@ mod tests {
     #[test]
     fn everything_is_off_by_default_and_round_trips() {
         let d = Extras::default();
-        assert!(!d.zoom && !d.fps && !d.keystrokes);
+        assert!(!d.zoom && !d.fps && !d.keystrokes && !d.minimap);
         assert_eq!(Extras::parse(""), d);
         assert_eq!(Extras::parse(&d.serialize()), d);
         let mut e = d.clone();
@@ -476,6 +574,12 @@ mod tests {
         e.fps_corner = Corner::BottomRight;
         e.keystrokes = true;
         e.keystrokes_cps = false;
+        e.minimap = true;
+        e.minimap_size = 128;
+        e.minimap_round = true;
+        e.minimap_zoom = 0.5;
+        e.minimap_rotate = true;
+        e.minimap_corner = Corner::BottomLeft;
         assert_eq!(Extras::parse(&e.serialize()), e);
     }
 
@@ -661,6 +765,14 @@ mod tests {
         Item::Zoom.cycle(&mut e, false);
         assert_eq!(Item::Zoom.switch(&e), Some(true));
         assert_eq!(Item::ZoomKey.value(&e), "Z");
+        Item::MinimapZoom.cycle(&mut e, true);
+        assert_eq!(Item::MinimapZoom.value(&e), "½ block per pixel");
+        Item::MinimapSize.cycle(&mut e, false);
+        assert_eq!(Item::MinimapSize.value(&e), "Large");
+        assert_eq!(
+            Extras::parse("minimapSize:7\nminimapZoom:3").minimap_zoom,
+            1.0
+        );
         for item in rows().into_iter().flatten() {
             assert!(!item.caption().is_empty() && !item.description().is_empty());
         }

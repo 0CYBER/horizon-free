@@ -1,12 +1,14 @@
 //! Horizon's extras in the game (`docs/extras.md`): the zoom key and wheel,
-//! clicks for the keystroke overlay, frame times for the FPS counter, and
-//! their HUD. Each hook does nothing while its extra is off.
-use super::{Game, Screen};
+//! clicks for the keystroke overlay, frame times for the FPS counter, the
+//! minimap's tiles and image, and their HUD. Each hook does nothing while its
+//! extra is off.
+use super::{Dim, Game, Screen};
 use horizon_client::{
-    extras::{Cps, FpsCounter, Zoom, fov_target, turn_scale},
+    extras::{Corner, Cps, FpsCounter, Zoom, fov_target, turn_scale},
     extras_hud::{self, Corners, Keystrokes},
-    hud::HudBatch,
+    hud::{HudBatch, MINIMAP_SPRITE},
     keybinds,
+    minimap::{self, Layer, Minimap, View},
 };
 use std::time::Duration;
 use winit::{event::MouseButton, keyboard::KeyCode};
@@ -18,7 +20,12 @@ pub(super) struct ExtrasState {
     /// Left and right mouse buttons: held, and their clicks.
     mouse: [bool; 2],
     cps: [Cps; 2],
+    minimap: Minimap,
+    /// The dimension the minimap's tiles belong to.
+    minimap_dim: Option<Dim>,
 }
+/// CPU time the minimap's tiles may take per frame.
+const MINIMAP_BUDGET: Duration = Duration::from_micros(300);
 
 impl Game<'_> {
     fn extras_now(&self) -> f64 {
@@ -70,12 +77,79 @@ impl Game<'_> {
         if !playing {
             self.extras.mouse = [false; 2];
         }
+        self.update_minimap();
         if self.settings.extras.fps {
             let now = self.extras_now();
             self.extras.fps.record(now, elapsed.as_secs_f32() * 1000.0);
         } else {
             self.extras.fps.clear();
         }
+    }
+    /// The minimap's view of the player, if it shows.
+    fn minimap_view(&self) -> Option<View> {
+        let e = &self.settings.extras;
+        let p = self.player.as_ref()?;
+        let shown = e.minimap && self.title.is_none() && !self.ui.hide_gui;
+        shown.then_some(View {
+            x: p.position.x,
+            z: p.position.z,
+            yaw: self.yaw,
+            rotate: e.minimap_rotate,
+            blocks_per_pixel: e.minimap_zoom,
+            round: e.minimap_round,
+        })
+    }
+    /// Refresh the minimap's tiles within the frame budget, recompose its
+    /// image when the view or a tile changed, and queue the upload.
+    fn update_minimap(&mut self) {
+        let Some(view) = self.minimap_view() else {
+            if !self.settings.extras.minimap || self.player.is_none() {
+                self.extras.minimap.clear();
+                self.extras.minimap_dim = None;
+            }
+            return;
+        };
+        if self.extras.minimap_dim != Some(self.dim) {
+            self.extras.minimap.clear();
+            self.extras.minimap_dim = Some(self.dim);
+        }
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        let head = (p.position.y + f64::from(p.dimensions.eye_height)).floor() as i32;
+        let (bx, bz) = (view.x.floor() as i32, view.z.floor() as i32);
+        // Underground, under a roof or in the Nether: the floor around the player.
+        let covered = self.world.light(bx, head, bz) >> 4 == 0;
+        let layer = if self.dim == Dim::Nether || covered {
+            Layer::Below(head)
+        } else {
+            Layer::Surface
+        };
+        // The chunks the image can reach (its corners when it turns).
+        let reach = minimap::SIZE as f32 / 2.0 * view.blocks_per_pixel * std::f32::consts::SQRT_2;
+        let radius = ((reach / 16.0).ceil() as i32 + 1).min(self.settings.render_distance.max(2));
+        self.extras.minimap.update(
+            &self.world,
+            &self.res.facts,
+            (bx >> 4, bz >> 4),
+            radius,
+            layer,
+            MINIMAP_BUDGET,
+        );
+        if !self.extras.minimap.compose(view) {
+            return;
+        }
+        let Some(rect) = self.res.atlas.sprites.get(MINIMAP_SPRITE).copied() else {
+            return;
+        };
+        let (w, h) = (self.res.atlas.width as f32, self.res.atlas.height as f32);
+        self.map_patches.push(horizon_client::font::Patch {
+            x: (rect.u0 * w).round() as u32,
+            y: (rect.v0 * h).round() as u32,
+            width: minimap::SIZE as u32,
+            height: minimap::SIZE as u32,
+            rgba: self.extras.minimap.image.clone(),
+        });
     }
     /// The zoom in effect (1 unless the key is held).
     fn zoom_factor(&self) -> f32 {
@@ -105,14 +179,34 @@ impl Game<'_> {
     /// the caller). The top left corner gives way to the debug screen.
     pub(super) fn draw_extras(&mut self, batch: &mut HudBatch) {
         let e = &self.settings.extras;
-        if !e.fps && !e.keystrokes {
+        if !e.fps && !e.keystrokes && !e.minimap {
             return;
         }
         let (fps_on, fps_corner, lows) = (e.fps, e.fps_corner, e.fps_lows);
         let (keys_on, keys_corner, cps_on) = (e.keystrokes, e.keystrokes_corner, e.keystrokes_cps);
-        let visible = |corner| !(self.debug && corner == horizon_client::extras::Corner::TopLeft);
+        let (map_corner, map_size) = (e.minimap_corner, f32::from(e.minimap_size));
+        let visible = |corner| !(self.debug && corner == Corner::TopLeft);
         let mut corners = Corners::new(batch.width, batch.height, self.effect_rows_height());
         let atlas = &self.res.atlas;
+        if let Some(view) = self.minimap_view()
+            && visible(map_corner)
+            && !self.extras.minimap.image.is_empty()
+            && let Some(image) = atlas.sprites.get(MINIMAP_SPRITE).copied()
+        {
+            let (arrow, north) = if view.rotate {
+                (0.0, Some(view.north()))
+            } else {
+                (180.0 + view.yaw, None)
+            };
+            let look = extras_hud::MinimapLook {
+                corner: map_corner,
+                size: map_size,
+                image,
+                arrow,
+                north,
+            };
+            extras_hud::draw_minimap(batch, atlas, &mut corners, &look);
+        }
         if fps_on && visible(fps_corner) {
             let reading = self.extras.fps.reading();
             extras_hud::draw_fps(batch, atlas, &mut corners, fps_corner, reading, lows);
