@@ -193,13 +193,19 @@ pub fn launcher_releases() -> Result<Vec<Release>, String> {
 /// a day, so the newest launcher release can be older than all of those: then the newest
 /// `launcher-v` tags are looked up one by one (a draft's tag is skipped: it has no public release).
 fn launcher_releases_in(list: &serde_json::Value) -> Vec<Release> {
+    launcher_releases_in_with(list, |url| {
+        get(&url)?.into_json().map_err(|e| e.to_string())
+    })
+}
+
+fn launcher_releases_in_with(
+    list: &serde_json::Value,
+    json: impl Fn(String) -> Result<serde_json::Value, String>,
+) -> Vec<Release> {
     let found = parse_releases(list, LAUNCHER_ASSET, is_launcher_tag);
     if found.iter().any(|r| r.asset.is_some()) {
         return found;
     }
-    let json = |url: String| -> Result<serde_json::Value, String> {
-        get(&url)?.into_json().map_err(|e| e.to_string())
-    };
     let api = format!("https://api.github.com/repos/{REPO}");
     let Ok(refs) = json(format!(
         "{api}/git/matching-refs/tags/{LAUNCHER_TAG_PREFIX}"
@@ -1172,13 +1178,40 @@ pub fn launcher_update(releases: &[Release]) -> Option<Release> {
         .cloned()
 }
 
-/// One request to GitHub, both kinds of update.
-pub fn check_updates() -> Result<Updates, String> {
-    let list = release_list()?;
+/// Load the game's release list and both update kinds from the same GitHub response.
+/// Publish the game releases before any fallback lookups for older launcher tags, so those
+/// lookups cannot hold up the release pages or opening animation. A list error reaches both.
+pub fn releases_and_updates(
+    on_releases: impl FnOnce(Result<Vec<Release>, String>),
+) -> Result<Updates, String> {
+    releases_and_updates_with(release_list, installed, launcher_releases_in, on_releases)
+}
+
+fn releases_and_updates_with(
+    load: impl FnOnce() -> Result<serde_json::Value, String>,
+    installed: impl FnOnce() -> Vec<String>,
+    launchers: impl FnOnce(&serde_json::Value) -> Vec<Release>,
+    on_releases: impl FnOnce(Result<Vec<Release>, String>),
+) -> Result<Updates, String> {
+    let list = match load() {
+        Ok(list) => list,
+        Err(e) => {
+            on_releases(Err(e.clone()));
+            return Err(e);
+        }
+    };
+    let releases = parse_releases(&list, ASSET, is_game_tag);
+    let horizon = horizon_update(&releases, &installed());
+    on_releases(Ok(releases));
     Ok(Updates {
-        horizon: horizon_update(&parse_releases(&list, ASSET, is_game_tag), &installed()),
-        launcher: launcher_update(&launcher_releases_in(&list)),
+        horizon,
+        launcher: launcher_update(&launchers(&list)),
     })
+}
+
+/// A fresh release-list request for both kinds of update (plus older-launcher fallback if needed).
+pub fn check_updates() -> Result<Updates, String> {
+    releases_and_updates(|_| {})
 }
 
 /// Whether a version installed as an update becomes the selected one: only when the player was
@@ -1542,6 +1575,10 @@ impl Settings {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "backend/release_loading_tests.rs"]
+mod release_loading_tests;
 
 #[cfg(test)]
 mod tests {

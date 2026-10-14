@@ -263,9 +263,8 @@ impl Launcher {
                 let _ = tx.send(Msg::Reused(reused));
             }
         });
-        this.fetch_releases();
+        this.fetch_startup_releases();
         this.fetch_links();
-        this.check_updates();
         this
     }
 
@@ -330,6 +329,17 @@ impl Launcher {
         let tx = self.tx.clone();
         std::thread::spawn(move || {
             let _ = tx.send(Msg::Releases(backend::releases()));
+        });
+    }
+
+    fn fetch_startup_releases(&mut self) {
+        self.checked = Some(Instant::now());
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let updates = backend::releases_and_updates(|releases| {
+                let _ = tx.send(Msg::Releases(releases));
+            });
+            let _ = tx.send(Msg::Updates(updates));
         });
     }
 
