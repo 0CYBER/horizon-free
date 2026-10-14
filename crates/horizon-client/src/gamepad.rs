@@ -589,6 +589,69 @@ pub fn nearest(at: (f32, f32), targets: &[(f32, f32)], radius: f32) -> Option<us
         .map(|(i, _)| i)
 }
 
+/// What makes the pad vibrate (Bedrock-like: short, light pulses).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Rumble {
+    /// The player lost this much health.
+    Hurt(f32),
+    BlockBroken,
+    /// An explosion this far away (blocks) with this power.
+    Explosion {
+        distance: f64,
+        radius: f32,
+    },
+    Totem,
+}
+/// A vibration: the heavy (low-frequency) and light motors, 0..1, and how
+/// long it lasts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Pulse {
+    pub strong: f32,
+    pub weak: f32,
+    pub millis: u32,
+}
+impl Rumble {
+    pub fn name(self) -> &'static str {
+        match self {
+            Rumble::Hurt(_) => "hurt",
+            Rumble::BlockBroken => "block",
+            Rumble::Explosion { .. } => "explosion",
+            Rumble::Totem => "totem",
+        }
+    }
+    /// The pulse, or `None` when it is too faint to feel.
+    pub fn pulse(self) -> Option<Pulse> {
+        match self {
+            Rumble::Hurt(amount) if amount > 0.0 => Some(Pulse {
+                strong: (0.2 + 0.06 * amount).min(0.8),
+                weak: 0.3,
+                millis: (150.0 + 20.0 * amount).min(400.0) as u32,
+            }),
+            Rumble::Hurt(_) => None,
+            Rumble::BlockBroken => Some(Pulse {
+                strong: 0.0,
+                weak: 0.25,
+                millis: 60,
+            }),
+            Rumble::Explosion { distance, radius } => {
+                // Felt up to four times the blast radius, fading with distance.
+                let reach = f64::from(radius.max(1.0)) * 4.0;
+                let near = (1.0 - distance / reach) as f32;
+                (near > 0.05).then_some(Pulse {
+                    strong: 0.9 * near,
+                    weak: 0.6 * near,
+                    millis: 350,
+                })
+            }
+            Rumble::Totem => Some(Pulse {
+                strong: 0.7,
+                weak: 0.7,
+                millis: 500,
+            }),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -756,6 +819,37 @@ mod tests {
         assert!(!s.is_default("key.drop") && s.is_default("key.jump"));
         assert_eq!(action_caption(HOTBAR_NEXT), "Hotbar: Next Slot");
         assert_eq!(action_caption("key.jump"), "key.jump");
+    }
+
+    #[test]
+    fn rumble_pulses() {
+        let small = Rumble::Hurt(1.0).pulse().unwrap();
+        let big = Rumble::Hurt(10.0).pulse().unwrap();
+        assert!(big.strong > small.strong && big.millis > small.millis);
+        assert!(Rumble::Hurt(100.0).pulse().unwrap().strong <= 0.8);
+        assert_eq!(Rumble::Hurt(0.0).pulse(), None);
+        let near = Rumble::Explosion {
+            distance: 2.0,
+            radius: 4.0,
+        }
+        .pulse()
+        .unwrap();
+        let far = Rumble::Explosion {
+            distance: 12.0,
+            radius: 4.0,
+        }
+        .pulse()
+        .unwrap();
+        assert!(near.strong > far.strong);
+        assert_eq!(
+            Rumble::Explosion {
+                distance: 20.0,
+                radius: 4.0
+            }
+            .pulse(),
+            None
+        );
+        assert_eq!(Rumble::BlockBroken.pulse().unwrap().strong, 0.0);
     }
 
     #[test]
