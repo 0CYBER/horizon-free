@@ -70,6 +70,7 @@ mod names;
 mod natural_spawning;
 mod nautili;
 mod net_harness;
+mod nether_portal;
 mod options;
 mod packs;
 mod paintings;
@@ -765,8 +766,8 @@ struct Game<'a> {
     world_root: PathBuf,
     /// A player carried through a portal, re-placed once the destination loads.
     travelling: Option<(PlayerMotion, Vec3)>,
-    portal_ticks: u32,
-    portal_cooldown: u32,
+    /// Nether portals: the player's, items' and mobs' (game/nether_portal.rs).
+    portals: nether_portal::Portals,
     /// The pending travel goes through an End portal (EndPortalBlock destinations).
     end_travel: bool,
     /// The next enter_dimension call comes from an End portal.
@@ -2836,6 +2837,7 @@ impl Game<'_> {
                 }
                 MotionEvent::Snowflake { position, velocity } => self.snowflake(position, velocity),
                 MotionEvent::EnterBlock { state } => self.trigger_enter_block(state),
+                MotionEvent::InsidePortal { pos } => self.player_inside_nether_portal(pos),
                 _ => {}
             }
         }
@@ -2923,6 +2925,7 @@ impl Game<'_> {
             horizon_client::spans::time("tick_rockets", || self.tick_rockets());
         }
         if running {
+            horizon_client::spans::time("entity_portals", || self.handle_entity_portals());
             horizon_client::spans::time("tick_items", || self.tick_items());
         }
         horizon_client::spans::time("spawn_loaded_entities", || self.spawn_loaded_entities());
@@ -2930,11 +2933,15 @@ impl Game<'_> {
             horizon_client::spans::time("tick_mobs", || self.tick_mobs())?;
             horizon_client::spans::time("recheck_golem_openers", || self.recheck_golem_openers());
             horizon_client::spans::time("tick_experience", || self.tick_experience());
+            horizon_client::spans::time("entity_portals", || {
+                self.find_entity_portals();
+                self.resolve_arrivals();
+            });
         }
         horizon_client::spans::time("tick_lan", || self.tick_lan());
         horizon_client::spans::time("tick_hand", || self.tick_hand());
         horizon_client::spans::time("tick_sleep", || self.tick_sleep());
-        horizon_client::spans::time("tick_portal", || self.tick_portal())?;
+        horizon_client::spans::time("tick_portal", || self.tick_nether_portal())?;
         if running {
             horizon_client::spans::time("tick_end", || self.tick_end())?;
         }
@@ -5546,6 +5553,7 @@ impl Game<'_> {
         self.player_spawn = None;
         self.mobs.clear();
         self.creatures.reset_trader();
+        self.portals = Default::default();
         self.arrows.clear();
         self.dropped.clear();
         self.particles.clear();
@@ -5703,7 +5711,6 @@ impl Game<'_> {
         self.orbs.clear();
         self.mining = None;
         self.travelling = Some((player, destination));
-        self.portal_cooldown = 300;
         self.end_travel = (target == Dim::End || from_end) && self.end_portal_travel;
         if let Some(r) = self.renderer.as_mut() {
             r.clear_sections();
@@ -5812,138 +5819,9 @@ impl Game<'_> {
         }
         Ok(false)
     }
-    /// PortalForcer: reuse a nearby portal, else build a 2x3 obsidian portal.
-    fn place_after_travel(&mut self, mut player: PlayerMotion, target: Vec3) -> Result<()> {
-        let (tx, tz) = (target.x.floor() as i32, target.z.floor() as i32);
-        let radius = if self.dim == Dim::Nether { 16 } else { 32 };
-        let (min_y, max_y) = if self.dim == Dim::Nether {
-            (1, 126)
-        } else {
-            (MIN_Y + 1, MIN_Y + HEIGHT - 3)
-        };
-        let portal_name = "minecraft:nether_portal";
-        let mut best: Option<(i64, [i32; 3])> = None;
-        for z in tz - radius..=tz + radius {
-            for x in tx - radius..=tx + radius {
-                if !self.world.loaded(x, z) {
-                    continue;
-                }
-                for y in min_y..max_y {
-                    if &*self.res.facts.get(self.world.block(x, y, z)).name == portal_name
-                        && &*self.res.facts.get(self.world.block(x, y - 1, z)).name != portal_name
-                    {
-                        let d = i64::from(x - tx).pow(2)
-                            + i64::from(z - tz).pow(2)
-                            + i64::from(y - target.y as i32).pow(2);
-                        if best.is_none_or(|b| d < b.0) {
-                            best = Some((d, [x, y, z]));
-                        }
-                    }
-                }
-            }
-        }
-        let spot = match best {
-            Some((_, p)) => p,
-            None => {
-                // Build: obsidian frame 4 wide, 5 tall, with a floor, carved into the terrain.
-                let y = (target.y.floor() as i32).clamp(min_y + 1, max_y - 5);
-                let set = |g: &mut Self, p: [i32; 3], name: &str| -> Result<()> {
-                    if let Some(id) = g.res.assets.registry.default_state(name) {
-                        g.world.set(p[0], p[1], p[2], id)?;
-                    }
-                    Ok(())
-                };
-                for dz in -1..=1 {
-                    for dx in -1..=2 {
-                        set(self, [tx + dx, y - 1, tz + dz], "minecraft:obsidian")?;
-                        for dy in 0..4 {
-                            set(self, [tx + dx, y + dy, tz + dz], "minecraft:air")?;
-                        }
-                    }
-                }
-                for w in -1..=2 {
-                    for h in -1..=3 {
-                        if w == -1 || w == 2 || h == -1 || h == 3 {
-                            set(self, [tx + w, y + h, tz], "minecraft:obsidian")?;
-                        }
-                    }
-                }
-                self.try_light_portal([tx, y, tz])?;
-                [tx, y, tz]
-            }
-        };
-        player.position = Vec3::new(
-            f64::from(spot[0]) + 0.5,
-            f64::from(spot[1]),
-            f64::from(spot[2]) + 0.5,
-        );
-        player.velocity = Vec3::ZERO;
-        self.previous_position = player.position;
-        self.player = Some(player);
-        self.sway = Default::default();
-        self.apply_equipment();
-        let at = [f64::from(spot[0]), f64::from(spot[1]), f64::from(spot[2])];
-        self.audio
-            .play("minecraft:block.portal.travel", Some(at), 0.25, 1.0);
-        Ok(())
-    }
-    fn tick_portal(&mut self) -> Result<()> {
-        let Some(p) = self.player.as_ref() else {
-            return Ok(());
-        };
-        let w = f64::from(p.dimensions.width) / 2.0;
-        let (lo, hi) = (
-            [p.position.x - w, p.position.y, p.position.z - w],
-            [
-                p.position.x + w,
-                p.position.y + f64::from(p.dimensions.height),
-                p.position.z + w,
-            ],
-        );
-        let mut inside = false;
-        for x in lo[0].floor() as i32..=hi[0].floor() as i32 {
-            for y in lo[1].floor() as i32..=hi[1].floor() as i32 {
-                for z in lo[2].floor() as i32..=hi[2].floor() as i32 {
-                    if &*self.res.facts.get(self.world.block(x, y, z)).name
-                        == "minecraft:nether_portal"
-                    {
-                        inside = true;
-                    }
-                }
-            }
-        }
-        if !inside {
-            self.portal_ticks = 0;
-            self.portal_cooldown = self.portal_cooldown.saturating_sub(1);
-            return Ok(());
-        }
-        if self.portal_cooldown > 0 {
-            return Ok(());
-        }
-        if self.portal_ticks == 0 {
-            let at = self.eye_position();
-            self.audio.play(
-                "minecraft:block.portal.trigger",
-                at,
-                0.25,
-                self.world.random.next_float() * 0.4 + 0.8,
-            );
-        }
-        self.portal_ticks += 1;
-        // Player.getPortalWaitTime: 80 ticks, or 1 when invulnerable (creative).
-        let wait = if self.creative { 1 } else { 80 };
-        if self.portal_ticks >= wait {
-            self.portal_ticks = 0;
-            // NetherPortalBlock: the Nether leads to the Overworld, anywhere else to the Nether.
-            let target = if self.dim == Dim::Nether {
-                Dim::Overworld
-            } else {
-                Dim::Nether
-            };
-            self.end_portal_travel = false;
-            self.enter_dimension(target)?;
-        }
-        Ok(())
+    /// Arrival through a nether portal, once the destination is loaded.
+    fn place_after_travel(&mut self, player: PlayerMotion, target: Vec3) -> Result<()> {
+        self.arrive_through_nether_portal(player, target)
     }
     /// Leaving the game with a world open (window closed, Quit, `quit`):
     /// menu items go back (Player.closeContainer), then the world is saved,
@@ -7505,6 +7383,7 @@ impl Game<'_> {
         self.save_raids();
         self.save_fight();
         self.save_wandering_trader();
+        self.save_portal_arrivals();
         self.save_stats();
         self.save_advancements();
         self.save_scoreboard();
@@ -9007,8 +8886,7 @@ pub fn run() -> Result<()> {
         dim: Dim::Overworld,
         world_root: PathBuf::new(),
         travelling: None,
-        portal_ticks: 0,
-        portal_cooldown: 0,
+        portals: Default::default(),
         end_travel: false,
         end_portal_travel: false,
         end: Default::default(),

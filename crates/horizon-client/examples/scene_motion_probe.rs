@@ -245,6 +245,10 @@ fn main() -> Result<()> {
         )?;
         // The oracle runs block-inside effects only in "snow_tick".
         player.block_effects = false;
+        // Entity.portalCooldown and portalProcess, and the entry of the last
+        // portal_tick that went through.
+        let mut portal = horizon_client::nether_portal::PortalState::default();
+        let mut travel: Option<horizon_core::position::BlockPos> = None;
         for op in f["ops"].as_array().unwrap() {
             let mut world = MotionWorld {
                 player: &mut player,
@@ -442,6 +446,14 @@ fn main() -> Result<()> {
                     world.player.freeze_immune = boots;
                 }
                 "frozen" => world.player.ticks_frozen = op["value"].as_i64().unwrap() as i32,
+                "portal_tick" => {
+                    // Entity.handlePortal without the destination: players wait
+                    // the creative delay (0) when invulnerable, else 80 ticks.
+                    let creative = op["creative"].as_bool().unwrap();
+                    let transition = if creative { 0 } else { 80 };
+                    let alive = !world.player.health.dead_or_dying();
+                    travel = portal.handle(alive, transition, 10);
+                }
                 "weaving" => world.player.status.weaving = op["value"].as_bool().unwrap(),
                 "flying" => {
                     let flying = op["value"].as_bool().unwrap();
@@ -515,6 +527,14 @@ fn main() -> Result<()> {
                 }
                 _ => return Err("unknown motion operation".into()),
             }
+            // NetherPortalBlock.entityInside: canUsePortal, setAsInsidePortal.
+            for e in &player.events {
+                if let MotionEvent::InsidePortal { pos } = e
+                    && !player.health.dead_or_dying()
+                {
+                    portal.set_inside(*pos, 10);
+                }
+            }
             let check_block = scene.block(25, 3, 25);
             snapshot(&mut out, &player)?;
             let stuck = player.stuck_multiplier;
@@ -528,6 +548,18 @@ fn main() -> Result<()> {
                 stuck.x.to_bits(),
                 stuck.y.to_bits(),
                 stuck.z.to_bits()
+            )?;
+            writeln!(
+                out,
+                "portal {} {} {}",
+                portal.cooldown,
+                portal.process.map_or("none".into(), |p| format!(
+                    "{},{},{} {} {}",
+                    p.entry.x, p.entry.y, p.entry.z, p.time, p.inside
+                )),
+                travel
+                    .take()
+                    .map_or("-".into(), |t| format!("{},{},{}", t.x, t.y, t.z))
             )?;
             let h = &player.health;
             let canonical = |v: f32| {

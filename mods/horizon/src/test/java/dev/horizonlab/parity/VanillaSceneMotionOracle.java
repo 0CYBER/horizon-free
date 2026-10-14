@@ -227,6 +227,21 @@ public final class VanillaSceneMotionOracle {
         @Override public Vec3 getKnownMovement(){return tickStart==null?Vec3.ZERO:position().subtract(tickStart);}
         @Override protected void applyInput(){if(!preparedInput)super.applyInput();}
         void peaceful(){tickRegeneration();}
+        // Entity.handlePortal without the destination (none: one level here),
+        // remembering the entry of a portal it would go through.
+        String travel;
+        // The creative delay applies with invulnerable abilities, set only for
+        // the transition time (the scene's food code runs without abilities).
+        void portalTick(boolean creative){
+            processPortalCooldown();
+            if(portalProcess!=null){
+                var entry=portalProcess.getEntryPosition();
+                boolean was=getAbilities().invulnerable;getAbilities().invulnerable=creative;
+                boolean through;try{through=portalProcess.processPortalTeleportation((net.minecraft.server.level.ServerLevel)sceneLevel,this,canUsePortal(false));}finally{getAbilities().invulnerable=was;}
+                if(through){travel=entry.getX()+","+entry.getY()+","+entry.getZ();setPortalCooldown();}
+                else if(portalProcess.hasExpired())portalProcess=null;
+            }
+        }
         void clock()throws Exception{sceneLevel.time++;tickCount++;if(cooldown.getInt(this)>0)cooldown.setInt(this,cooldown.getInt(this)-1);if(hurtTime>0)hurtTime--;}
         void playerMovementTick(Vec3 input,boolean jumping){
             preparedInput=true;xxa=(float)input.x;yya=0;zza=(float)input.z;setJumping(jumping);
@@ -257,6 +272,8 @@ public final class VanillaSceneMotionOracle {
             p.onGround(),noBlocks.getBoolean(p),pos(support.get(p)),Double.doubleToLongBits(p.fallDistance),pos(last.get(p)),p.needsSync,p.syncPosition,Float.floatToIntBits(storedSpeed.getFloat(p)),delay.getInt(p),Float.floatToIntBits(p.yHeadRot),trigger.getInt(p),grace.getInt(p),impact.get(p)==null?"none":vectorBits((Vec3)impact.get(p)),String.join(";",attributes));
         out.println("events "+String.join(" | ",p.events));p.events.clear();
         out.println("block "+Block.getId(p.level().getBlockState(new BlockPos(25,3,25)))+" frozen "+p.frozen+" "+p.isInPowderSnow+" "+p.wasInPowderSnow+" "+vectorBits((Vec3)stuck.get(p)));
+        var pp=p.portalProcess;
+        out.println("portal "+p.getPortalCooldown()+" "+(pp==null?"none":pp.getEntryPosition().getX()+","+pp.getEntryPosition().getY()+","+pp.getEntryPosition().getZ()+" "+pp.getPortalTime()+" "+pp.isInsidePortalThisTick())+" "+(p.travel==null?"-":p.travel));p.travel=null;
         out.printf("health %08x %08x %08x %d %d %08x %d %d %s %d %s %s %s %s %s %d%n",
             Float.floatToIntBits(p.getHealth()),Float.floatToIntBits(p.getAbsorptionAmount()),Float.floatToIntBits(foodExhaustion.getFloat(p.getFoodData())),
             noAction.getInt(p),cooldown.getInt(p),Float.floatToIntBits(lastHurt.getFloat(p)),p.hurtDuration,p.hurtTime,sourceName((DamageSource)lastDamage.get(p)),lastStamp.getLong(p),healthDead.getBoolean(p),p.syncVelocity,
@@ -373,6 +390,7 @@ public final class VanillaSceneMotionOracle {
                             ((EntityEquipment)field(LivingEntity.class,"equipment").get(p)).set(net.minecraft.world.entity.EquipmentSlot.FEET,stack);
                         }
                         case "frozen"->p.frozen=op.get("value").getAsInt();
+                        case "portal_tick"->p.portalTick(op.get("creative").getAsBoolean());
                         case "weaving"->p.weaving=op.get("value").getAsBoolean();
                         case "flying"->{var a=p.getAbilities();a.mayfly=a.flying=op.get("value").getAsBoolean();}
                         case "trigger"->trigger.setInt(p,op.get("value").getAsInt());

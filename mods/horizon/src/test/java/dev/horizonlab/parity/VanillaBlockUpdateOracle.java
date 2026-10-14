@@ -71,6 +71,7 @@ public final class VanillaBlockUpdateOracle {
             if (old == state) {
                 return null;
             }
+            world.columns = null;
             if (state == AIR) {
                 world.cells.remove(pos);
             } else {
@@ -189,8 +190,29 @@ public final class VanillaBlockUpdateOracle {
         @Override public boolean hasChunk(int x, int z) { return true; }
         @Override public boolean isClientSide() { return false; }
         @Override public RandomSource getRandom() { return rng; }
-        @Override public int getMinY() { return -64; }
-        @Override public int getHeight() { return 384; }
+        // Another dimension, border and points of interest (the portal oracle);
+        // the overworld and an unbounded border when unset.
+        net.minecraft.world.level.dimension.DimensionType type;
+        net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimensionKey;
+        net.minecraft.world.level.border.WorldBorder border;
+        net.minecraft.world.entity.ai.village.poi.PoiManager poi;
+        @Override public int getMinY() { return type == null ? -64 : type.minY(); }
+        @Override public int getHeight() { return type == null ? 384 : type.height(); }
+        @Override public net.minecraft.world.entity.ai.village.poi.PoiManager getPoiManager() { return poi != null ? poi : super.getPoiManager(); }
+        /** Level.getHeight from the cells (only for another dimension's level). */
+        Map<Long, List<BlockPos>> columns;
+        @Override public int getHeight(net.minecraft.world.level.levelgen.Heightmap.Types kind, int x, int z) {
+            if (type == null) return super.getHeight(kind, x, z);
+            if (columns == null) {
+                columns = new HashMap<>();
+                for (BlockPos c : cells.keySet()) columns.computeIfAbsent(BlockPos.asLong(c.getX(), 0, c.getZ()), k -> new ArrayList<>()).add(c);
+            }
+            int top = getMinY() - 1;
+            for (BlockPos c : columns.getOrDefault(BlockPos.asLong(x, 0, z), List.of())) {
+                if (c.getY() > top && kind.isOpaque().test(getBlockState(c))) top = c.getY();
+            }
+            return top + 1;
+        }
         @Override public long getGameTime() { return time; }
         @Override public long nextSubTickCount() { return subTick++; }
         @Override public LevelTicks<Block> getBlockTicks() { return blockTicks; }
@@ -202,7 +224,7 @@ public final class VanillaBlockUpdateOracle {
         @Override public GameRules getGameRules() { return rules; }
         @Override public net.minecraft.server.MinecraftServer getServer() { return server; }
         @Override public net.minecraft.world.item.crafting.RecipeManager recipeAccess() { return Server.recipes; }
-        @Override public net.minecraft.world.level.border.WorldBorder getWorldBorder() { return new net.minecraft.world.level.border.WorldBorder(); }
+        @Override public net.minecraft.world.level.border.WorldBorder getWorldBorder() { return border != null ? border : new net.minecraft.world.level.border.WorldBorder(); }
         @Override public int getSeaLevel() { return 63; }
         @Override public int getBrightness(net.minecraft.world.level.LightLayer layer, BlockPos p) { return layer == net.minecraft.world.level.LightLayer.SKY ? skyLight : blockLight; }
         @Override public int getRawBrightness(BlockPos p, int darkening) { return Math.max(skyLight - darkening, blockLight); }
@@ -328,9 +350,9 @@ public final class VanillaBlockUpdateOracle {
             }
             return attributes;
         }
-        @Override public net.minecraft.world.level.dimension.DimensionType dimensionType() { return OVERWORLD_TYPE; }
+        @Override public net.minecraft.world.level.dimension.DimensionType dimensionType() { return type != null ? type : OVERWORLD_TYPE; }
         /** The overworld (fire in an obsidian frame lights a portal here). */
-        @Override public net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension() { return net.minecraft.world.level.Level.OVERWORLD; }
+        @Override public net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension() { return dimensionKey != null ? dimensionKey : net.minecraft.world.level.Level.OVERWORLD; }
         @Override public long getOverworldClockTime() { return DAY.totalTicks(); }
         @Override public float getMoonBrightness(BlockPos p) {
             return net.minecraft.world.level.dimension.DimensionType.MOON_BRIGHTNESS_PER_PHASE[environmentAttributes().getValue(net.minecraft.world.attribute.EnvironmentAttributes.MOON_PHASE, p).index()];
@@ -408,6 +430,10 @@ public final class VanillaBlockUpdateOracle {
 
     /** The overworld dimension type from the vanilla data pack (its infiniburn tag, attributes and timelines). */
     static net.minecraft.world.level.dimension.DimensionType loadOverworld() {
+        return loadDimensionType(net.minecraft.world.level.dimension.BuiltinDimensionTypes.OVERWORLD);
+    }
+
+    static net.minecraft.world.level.dimension.DimensionType loadDimensionType(net.minecraft.resources.ResourceKey<net.minecraft.world.level.dimension.DimensionType> key) {
         var repo = net.minecraft.server.packs.repository.ServerPacksSource.createVanillaTrustedRepository();
         repo.reload();
         repo.setSelected(List.of("vanilla"));
@@ -417,7 +443,7 @@ public final class VanillaBlockUpdateOracle {
         var context = net.minecraft.tags.TagLoader.buildUpdatedLookups(layers.getAccessForLoading(net.minecraft.server.RegistryLayer.WORLD), staticTags);
         var world = net.minecraft.resources.RegistryDataLoader.load(resources, context, net.minecraft.resources.RegistryDataLoader.WORLD_REGISTRIES, Runnable::run).join();
         staticTags.forEach(net.minecraft.core.Registry.PendingTags::apply);
-        return world.lookupOrThrow(net.minecraft.core.registries.Registries.DIMENSION_TYPE).getOrThrow(net.minecraft.world.level.dimension.BuiltinDimensionTypes.OVERWORLD).value();
+        return world.lookupOrThrow(net.minecraft.core.registries.Registries.DIMENSION_TYPE).getOrThrow(key).value();
     }
 
     static final class Loot extends net.minecraft.server.ReloadableServerRegistries.Holder {
@@ -449,6 +475,9 @@ public final class VanillaBlockUpdateOracle {
         @Override public net.minecraft.world.item.crafting.RecipeManager getRecipeManager() { return recipes; }
         @Override public net.minecraft.server.ReloadableServerRegistries.Holder reloadableRegistries() { return loot; }
         @Override protected boolean initServer() { return false; }
+        /** The levels by dimension (the portal oracle's two). */
+        Map<net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level>, net.minecraft.server.level.ServerLevel> levels;
+        @Override public net.minecraft.server.level.ServerLevel getLevel(net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> key) { return levels == null ? null : levels.get(key); }
         @Override public int getMaxPlayers() { return 0; }
         @Override public net.minecraft.server.permissions.LevelBasedPermissionSet operatorUserPermissions() { return null; }
         @Override public net.minecraft.server.permissions.PermissionSet getFunctionCompilationPermissions() { return null; }
