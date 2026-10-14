@@ -297,6 +297,14 @@ impl Game<'_> {
         }
         let crouching = p.pose == Pose::Crouching;
         let (position, flying) = (p.position, p.flying || p.fall_flying);
+        let (fall_flying, fly_ticks, velocity) = (p.fall_flying, p.fall_fly_ticks, p.velocity);
+        let using = self.using.map(|(_, ticks)| ticks as i32 + 1).unwrap_or(0);
+        let charged = self.inventory[self.selected]
+            .as_ref()
+            .is_some_and(|s| s.data().is_some_and(|d| !d.charged.is_empty()));
+        let charge_duration = self.inventory[self.selected]
+            .as_ref()
+            .map_or(25, |s| Self::charge_ticks(s).max(1)) as i32;
         let attack = (self.swing.old_animation, self.swing.animation);
         let swinging = self.swing.swinging();
         let (yaw, pitch) = (self.yaw, self.pitch);
@@ -356,6 +364,14 @@ impl Game<'_> {
         m.extra.off_hand = off;
         m.extra.crouching = crouching;
         m.extra.passenger = riding;
+        m.velocity = velocity;
+        m.extra.fall_flying = fall_flying;
+        m.extra.fall_fly_ticks = fly_ticks;
+        m.extra.main_hand_left = self.settings.main_hand_left;
+        m.extra.using_item = using;
+        m.extra.charged = charged;
+        m.extra.ints[5] = charge_duration;
+        m.extra.elytra.tick(fall_flying, crouching, velocity);
         m.hurt_time = hurt;
     }
     /// Whether the player's own model shows in the world view.
@@ -400,6 +416,7 @@ impl Game<'_> {
             &self.player_armor_layers(),
             out,
         );
+        self.player_elytra_geometry(m, camera, alpha as f32, packed, out);
         self.held_item_geometry(m, camera, alpha, packed, true, out);
     }
     /// `extractEntityInInventoryFollowsMouse`: the player in the box
@@ -454,6 +471,7 @@ impl Game<'_> {
             &self.player_armor_layers(),
             &mut verts,
         );
+        self.player_elytra_geometry(&m, camera, 1.0, 240 | 240 << 8, &mut verts);
         self.held_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
         let height = if m.extra.crouching { 1.5 } else { 1.8 };
         // PictureInPictureRenderer: the box centre, (size, size, -size);
@@ -507,5 +525,56 @@ impl Game<'_> {
                 0.0625,
             );
         }
+    }
+}
+
+impl Game<'_> {
+    fn player_elytra_geometry(
+        &self,
+        m: &Mob,
+        camera: glam::DVec3,
+        partial: f32,
+        light: u32,
+        out: &mut Vec<horizon_client::mesher::Vertex>,
+    ) {
+        let Some(asset) = self.armor[1]
+            .as_ref()
+            .and_then(|s| self.res.items.get(&s.item))
+            .and_then(|i| i.equip_asset.as_ref())
+        else {
+            return;
+        };
+        let assets = &self.armor_stand_assets;
+        let Some((texture, _)) = assets.equipment.get(asset).and_then(|k| k.get("wings")) else {
+            return;
+        };
+        let (Some(model), Some(rect)) = (
+            assets.player.get("elytra"),
+            self.res.atlas.sprites.get(texture),
+        ) else {
+            return;
+        };
+        let base = horizon_client::mobs::render::base_transform(m, partial, camera)
+            * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, 0.125));
+        let angles = m.extra.elytra.angles(partial);
+        horizon_client::mobs::render_model(
+            model,
+            base,
+            &|part| {
+                let mut p = part.pose;
+                if part.name == "left_wing" || part.name == "right_wing" {
+                    let invert = if part.name == "left_wing" { 1.0 } else { -1.0 };
+                    p[1] = if m.extra.crouching { 3.0 } else { 0.0 };
+                    p[3] = angles[0];
+                    p[4] = invert * angles[1];
+                    p[5] = invert * angles[2];
+                }
+                p
+            },
+            [rect.u0, rect.v0, rect.u1, rect.v1],
+            light,
+            0,
+            out,
+        );
     }
 }

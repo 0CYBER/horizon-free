@@ -792,6 +792,7 @@ struct Game<'a> {
     rockets: Vec<fireworks::Rocket>,
     creaking: creaking::CreakingState,
     trident_model: Option<horizon_client::mobs::Part>,
+    arrow_model: Option<horizon_client::mobs::Part>,
     tnts: Vec<tnt::PrimedTnt>,
     hoppers: HashMap<(i32, i32, i32), machines::HopperState>,
     creative_screen: Creative,
@@ -1225,6 +1226,7 @@ impl Game<'_> {
             self.inventory[self.selected] = None;
         }
         self.player_drop(thrown);
+        self.swing_arm();
     }
     /// `Player.drop`: the statistics and a thrown item entity in front of the player.
     fn player_drop(&mut self, thrown: ItemStack) {
@@ -2066,6 +2068,21 @@ impl Game<'_> {
         let Some(info) = self.res.items.get(&stack.item).cloned() else {
             return Ok(());
         };
+        if self.use_bone_meal(&stack)? || self.ignite_tnt(&stack)? {
+            return Ok(());
+        }
+        use horizon_client::first_person::UseResult;
+        let swings = self.swings_started;
+        match self.use_tool(&stack)? {
+            UseResult::Success { swing } => {
+                if swing && self.swings_started == swings {
+                    self.swing_arm();
+                }
+                return Ok(());
+            }
+            UseResult::Fail => return Ok(()),
+            UseResult::Pass => {}
+        }
         if self.use_potion_item(&stack)? || self.throw_item(&stack)? {
             return Ok(());
         }
@@ -2087,12 +2104,13 @@ impl Game<'_> {
             return Ok(());
         }
         if &*stack.item == "minecraft:bow" {
-            if self.using.is_none() {
+            if self.using.is_none() && (self.creative || self.arrow_slot().is_some()) {
                 self.using = Some((self.selected, 0));
             }
             return Ok(());
         }
-        if info.food.is_some()
+        if info.consumable
+            && info.food.is_some()
             && let Some(p) = self.player.as_ref()
             && (p.health.food.food < 20 || self.creative)
         {
@@ -2100,12 +2118,6 @@ impl Game<'_> {
             if self.using.is_none() {
                 self.using = Some((self.selected, 0));
             }
-            return Ok(());
-        }
-        if self.use_bone_meal(&stack)? || self.ignite_tnt(&stack)? {
-            return Ok(());
-        }
-        if self.use_tool(&stack)? {
             return Ok(());
         }
         if self.place_boat(&stack) {
@@ -6129,8 +6141,9 @@ impl Game<'_> {
             }
         }
     }
-    /// Item use on blocks for tools, buckets and fire starters; returns true if handled.
-    fn use_tool(&mut self, stack: &ItemStack) -> Result<bool> {
+    /// Block tool use: distinguish success, failure and fall-through for hand feedback.
+    fn use_tool(&mut self, stack: &ItemStack) -> Result<horizon_client::first_person::UseResult> {
+        use horizon_client::first_person::UseResult;
         let item = stack.item.trim_start_matches("minecraft:").to_owned();
         let at = |p: [i32; 3]| {
             [
@@ -6142,16 +6155,16 @@ impl Game<'_> {
         if let Some(hit) = self.pick()
             && self.use_on_cauldron(hit.pos)?
         {
-            return Ok(true);
+            return Ok(UseResult::Success { swing: true });
         }
         if item == "bucket" {
             let Some(hit) = self.pick_fluid() else {
-                return Ok(false);
+                return Ok(UseResult::Pass);
             };
             let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
             let f = self.res.facts.get(state).clone();
             if f.fluid == Fluid::None || f.fluid_level != 8 || f.fluid_falling {
-                return Ok(false);
+                return Ok(UseResult::Pass);
             }
             let (filled, sound) = match f.fluid {
                 Fluid::Water => ("minecraft:water_bucket", "minecraft:item.bucket.fill"),
@@ -6177,13 +6190,16 @@ impl Game<'_> {
                     self.spawn_item(rest, eye, [0.0, 0.1, 0.0], 40);
                 }
             }
-            return Ok(true);
+            return Ok(UseResult::Success { swing: true });
         }
         let Some(hit) = self.pick() else {
-            return Ok(false);
+            return Ok(UseResult::Pass);
         };
         let clicked = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-        if item == "water_bucket" || item == "lava_bucket" {
+        if let Some((content, sound, mob)) = horizon_client::items::bucket_contents(&stack.item) {
+            if !self.may_build() {
+                return Ok(UseResult::Fail);
+            }
             let target = if self.res.facts.get(clicked).replaceable {
                 hit.pos
             } else {
@@ -6193,34 +6209,32 @@ impl Game<'_> {
                     hit.pos[2] + hit.face[2],
                 ]
             };
-            let existing = self.world.block(target[0], target[1], target[2]);
-            if !self.res.facts.get(existing).replaceable && !self.res.facts.is_air(existing) {
-                return Ok(true);
+            let pos = BlockPos::new(target[0], target[1], target[2]);
+            let emptied = self
+                .with_level(|b, level, ticks| b.bucket_empty(level, ticks, pos, content, sound));
+            self.process_level_events()?;
+            if !emptied {
+                return Ok(UseResult::Fail);
             }
-            let fluid = if item == "water_bucket" {
-                "minecraft:water"
-            } else {
-                "minecraft:lava"
-            };
-            self.set_state_named(target, fluid, &[])?;
-            let sound = if item == "water_bucket" {
-                "minecraft:item.bucket.empty"
-            } else {
-                "minecraft:item.bucket.empty_lava"
-            };
-            self.audio.play(sound, Some(at(target)), 1.0, 1.0);
+            if let Some(kind) = mob {
+                if let Some(id) = self.spawn_mob_at(kind, (target[0], target[1], target[2]), true) {
+                    self.mob_placed(id)?;
+                }
+                self.post_block_game_event(
+                    "minecraft:entity_place",
+                    target,
+                    self.sculk_actor(),
+                    None,
+                );
+            }
+            self.trigger_item("minecraft:placed_block", stack);
             if !self.creative {
-                self.inventory[self.selected] = Some(ItemStack {
-                    item: Arc::from("minecraft:bucket"),
-                    count: 1,
-                    damage: 0,
-                    extra: None,
-                });
+                self.inventory[self.selected] = Some(ItemStack::new("minecraft:bucket", 1));
             }
-            return Ok(true);
+            return Ok(UseResult::Success { swing: true });
         }
         if self.use_block_transformer(stack, hit.pos, hit.face)? {
-            return Ok(true);
+            return Ok(UseResult::Success { swing: true });
         }
         if item == "honeycomb" {
             let registry = self.res.assets.registry;
@@ -6238,22 +6252,47 @@ impl Game<'_> {
                 if !self.creative {
                     self.consume_held();
                 }
-                return Ok(true);
+                return Ok(UseResult::Success { swing: true });
             }
         }
         if item == "flint_and_steel" || item == "fire_charge" {
+            if !self.may_build() {
+                return Ok(UseResult::Fail);
+            }
+            let name = self.res.facts.get(clicked).name.clone();
+            if self.can_light(clicked, &name) {
+                let registry = self.res.assets.registry;
+                let mut state = registry
+                    .state(clicked)
+                    .cloned()
+                    .ok_or("missing lit block state")?;
+                state.properties.insert("lit".into(), "true".into());
+                self.level_set(hit.pos, registry.resolve(&state)?)?;
+                self.audio.play(
+                    if item == "fire_charge" {
+                        "minecraft:item.firecharge.use"
+                    } else {
+                        "minecraft:item.flintandsteel.use"
+                    },
+                    Some(at(hit.pos)),
+                    1.0,
+                    self.world.random.next_float() * 0.4 + 0.8,
+                );
+                if item == "fire_charge" {
+                    self.consume_held();
+                } else {
+                    self.damage_held(1);
+                }
+                return Ok(UseResult::Success { swing: true });
+            }
             let target = [
                 hit.pos[0] + hit.face[0],
                 hit.pos[1] + hit.face[1],
                 hit.pos[2] + hit.face[2],
             ];
-            if self
-                .res
-                .facts
-                .is_air(self.world.block(target[0], target[1], target[2]))
-            {
+            if self.can_place_used_fire(target) {
                 if !self.try_light_portal(target)? {
-                    self.set_state_named(target, "minecraft:fire", &[])?;
+                    self.place_used_fire(target)?;
                 }
                 let sound = if item == "fire_charge" {
                     "minecraft:item.firecharge.use"
@@ -6271,36 +6310,11 @@ impl Game<'_> {
                 } else {
                     self.damage_held(1);
                 }
-                return Ok(true);
+                return Ok(UseResult::Success { swing: true });
             }
+            return Ok(UseResult::Fail);
         }
-        // Equippable items swap into their armor slot (Equippable.swapWithEquipmentSlot);
-        // block items aimed at a block are placed instead.
-        if let Some(slot) = self
-            .res
-            .items
-            .get(&stack.item)
-            .filter(|i| i.block.is_none())
-            .and_then(|i| i.equip_slot.clone())
-        {
-            let index = match slot.as_str() {
-                "head" => 0,
-                "chest" => 1,
-                "legs" => 2,
-                "feet" => 3,
-                _ => return Ok(false),
-            };
-            let held = self.inventory[self.selected].take();
-            self.inventory[self.selected] = self.armor[index].take();
-            self.armor[index] = held;
-            if let Some(eye) = self.eye_position() {
-                self.audio
-                    .play("minecraft:item.armor.equip_generic", Some(eye), 1.0, 1.0);
-            }
-            self.apply_equipment();
-            return Ok(true);
-        }
-        Ok(false)
+        Ok(UseResult::Pass)
     }
     /// `ExperienceOrb.award`: orbs of the largest sizes; each draws the id
     /// `tryMergeToExisting` compares from the level random, then moves with
@@ -6331,6 +6345,21 @@ impl Game<'_> {
             age: 0,
             on_ground: false,
         });
+    }
+    fn can_place_used_fire(&mut self, target: [i32; 3]) -> bool {
+        let pos = BlockPos::new(target[0], target[1], target[2]);
+        let direction = match ((self.yaw / 90.0 + 0.5).floor() as i32).rem_euclid(4) {
+            0 => Direction::South,
+            1 => Direction::West,
+            2 => Direction::North,
+            _ => Direction::East,
+        };
+        self.with_level(|b, level, ticks| b.fire_can_be_placed_at(level, ticks, pos, direction))
+    }
+    fn place_used_fire(&mut self, target: [i32; 3]) -> Result<()> {
+        let pos = BlockPos::new(target[0], target[1], target[2]);
+        let state = self.with_level(|b, level, ticks| b.fire_state_for(level, ticks, pos));
+        self.level_set(target, state)
     }
     /// DropExperienceBlock / RedStoneOreBlock / SculkBlock experience ranges.
     fn block_experience(&mut self, name: &str) -> u32 {
@@ -6580,27 +6609,48 @@ impl Game<'_> {
                 );
             }
             Some(stack) => {
-                // applyItemArmTransform + swingArm (applyItemArmAttackTransform)
-                let x = -0.4 * (sqrt_attack * std::f32::consts::PI).sin();
-                let y = 0.2 * (sqrt_attack * std::f32::consts::TAU).sin();
-                let z = -0.2 * (attack * std::f32::consts::PI).sin();
-                let y_swing_rot = (attack * attack * std::f32::consts::PI).sin();
-                let xz_swing_rot = (sqrt_attack * std::f32::consts::PI).sin();
-                let m = to_world
-                    * glam::Mat4::from_translation(glam::Vec3::new(
-                        0.56,
-                        -0.52 + inverse_height * -0.6,
-                        -0.72,
-                    ))
-                    * glam::Mat4::from_translation(glam::Vec3::new(x, y, z))
-                    * glam::Mat4::from_rotation_y(deg(45.0 + y_swing_rot * -20.0))
-                    * glam::Mat4::from_rotation_z(deg(xz_swing_rot * -20.0))
-                    * glam::Mat4::from_rotation_x(deg(xz_swing_rot * -80.0))
-                    * glam::Mat4::from_rotation_y(deg(-45.0));
-                // `ItemInHandRenderer.renderItem`: the player as owner, seeded by
-                // its id plus the display context ordinal.
                 let owner = self.player_owner(Some(&stack));
-                let context = horizon_assets::item_model::DisplayContext::FirstPersonRightHand;
+                let using = owner.using_this_item && owner.use_item_remaining_ticks > 0;
+                let ticks_used =
+                    owner.use_duration as f32 - (owner.use_item_remaining_ticks as f32 - a + 1.0);
+                use horizon_client::first_person::ItemPose;
+                let pose = match &*stack.item {
+                    "minecraft:bow" if using => ItemPose::Bow { ticks_used },
+                    "minecraft:crossbow" => {
+                        let charged = stack.data().is_some_and(|d| !d.charged.is_empty());
+                        ItemPose::Crossbow {
+                            ticks_used: (using && !charged).then_some(ticks_used),
+                            charge_duration: owner.crossbow_charge_duration as f32,
+                            charged,
+                        }
+                    }
+                    "minecraft:trident" if using => ItemPose::Trident { ticks_used },
+                    _ if using => {
+                        let components = self
+                            .res
+                            .item_renderer
+                            .models
+                            .components(&horizon_client::item_render::stack_view(&stack));
+                        if components.contains_key("minecraft:consumable") {
+                            ItemPose::Eat {
+                                remaining: owner.use_item_remaining_ticks as f32,
+                                duration: owner.use_duration as f32,
+                                partial: a,
+                            }
+                        } else {
+                            ItemPose::Using
+                        }
+                    }
+                    _ => ItemPose::Swing,
+                };
+                let left = self.settings.main_hand_left;
+                let m = to_world
+                    * horizon_client::first_person::item_pose(left, inverse_height, attack, pose);
+                let context = if left {
+                    horizon_assets::item_model::DisplayContext::FirstPersonLeftHand
+                } else {
+                    horizon_assets::item_model::DisplayContext::FirstPersonRightHand
+                };
                 let state = self.resolve_item(&stack, context, Some(&owner), 4);
                 let light = self.world.light(
                     eye[0].floor() as i32,
@@ -8670,6 +8720,7 @@ pub fn run() -> Result<()> {
         rockets: Vec::new(),
         creaking: Default::default(),
         trident_model: horizon_client::mobs::load_model(&root, "minecraft:trident#main"),
+        arrow_model: horizon_client::mobs::load_model(&root, "minecraft:arrow#main"),
         tnts: Vec::new(),
         hoppers: HashMap::new(),
         creative_screen: Creative::load(&game_root)?,

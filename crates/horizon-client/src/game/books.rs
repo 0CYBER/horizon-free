@@ -77,6 +77,7 @@ impl Game<'_> {
             _ => return false,
         };
         self.open_book(screen);
+        self.swing_arm();
         true
     }
     fn open_book(&mut self, screen: BookScreen) {

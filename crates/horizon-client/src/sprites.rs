@@ -34,7 +34,9 @@ pub struct Sprites {
     pub translucent: Vec<bool>,
 }
 /// Edge length of every sprite array layer.
-pub const SPRITE_SIZE: u32 = 16;
+// Flow sprites are 32 square: each fluid face samples a 16-texel subregion.
+// shortcut: HD frames above 32 are resampled; use variable-resolution storage for HD-pack parity.
+pub const SPRITE_SIZE: u32 = 32;
 impl Sprites {
     pub fn insert(&mut self, root: &Path, name: &str) -> Result<u32> {
         if let Some(layer) = self.layers.get(name) {
@@ -140,6 +142,48 @@ impl Sprites {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_32_pixel_animation_frames_keep_every_texel() {
+        let root = std::env::temp_dir().join(format!(
+            "horizon-sprite-detail-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let directory = root.join("assets/test/textures");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("flow.png");
+        let mut pixels = Vec::new();
+        for y in 0..64u8 {
+            for x in 0..32u8 {
+                pixels.extend([x, y, 0, 255]);
+            }
+        }
+        let mut encoder = png::Encoder::new(File::create(&path).unwrap(), 32, 64);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder
+            .write_header()
+            .unwrap()
+            .write_image_data(&pixels)
+            .unwrap();
+        fs::write(path.with_extension("png.mcmeta"), r#"{"animation":{}}"#).unwrap();
+        let mut sprites = Sprites::default();
+        sprites.insert(&root, "test:flow").unwrap();
+        let size = sprites.size;
+        let initial = sprites.pixels.clone();
+        let animation = sprites.animations[0].clone();
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            size, 32,
+            "half a flowing-water frame must retain 16 texels, not 8"
+        );
+        assert_eq!(initial, pixels[..32 * 32 * 4]);
+        assert_eq!(animation.pixels(animation.frame(1)), &pixels[32 * 32 * 4..]);
+    }
+
     #[test]
     fn animation_boundaries_and_repeated_frames_do_not_depend_on_render_rate() {
         let animation = SpriteAnimation {

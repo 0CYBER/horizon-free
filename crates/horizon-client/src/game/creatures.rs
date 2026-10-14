@@ -1327,6 +1327,7 @@ impl Game<'_> {
     fn tick_projectiles(&mut self) -> Result<()> {
         let mut projectiles = std::mem::take(&mut self.creatures.projectiles);
         let mut hits = Vec::new();
+        let mut trails = Vec::new();
         let mut deflections: Vec<[f64; 3]> = Vec::new();
         {
             let mut targets: Vec<(Who, Aabb)> = self
@@ -1362,6 +1363,7 @@ impl Game<'_> {
             let w = self.mob_world_base(&[]);
             let pw = ProjWorld { w: &w, targets };
             projectiles.retain_mut(|p| {
+                trails.extend(p.arrow_trail(pw.in_water(p.position)));
                 let (keep, hit) = p.tick(&pw);
                 let wind = matches!(
                     p.kind,
@@ -1396,6 +1398,13 @@ impl Game<'_> {
                 }
                 keep
             });
+        }
+        for (ty, at, velocity) in trails {
+            self.particles.add(
+                &horizon_client::particles::ParticleOptions::simple(ty),
+                at,
+                velocity,
+            );
         }
         for at in deflections {
             self.audio
@@ -2345,7 +2354,7 @@ impl Game<'_> {
             }
         }
         self.elder_apparition_geometry(alpha, out);
-        // Projectiles: arrows as crossed quads, the rest as item billboards.
+        // Projectiles: the baked vanilla arrow model, the rest as item billboards.
         let (yaw, pitch) = (self.yaw.to_radians(), self.pitch.to_radians());
         let forward = glam::Vec3::new(
             -yaw.sin() * pitch.cos(),
@@ -2371,52 +2380,24 @@ impl Game<'_> {
                 packed = (15 * 16) | ((15 * 16) << 8);
             }
             if a.is_arrow() {
+                let Some(model) = self.arrow_model.as_ref() else {
+                    continue;
+                };
                 let Some(r) = atlas.sprites.get("entity/projectiles/arrow").copied() else {
                     continue;
                 };
-                let dir = glam::Vec3::new(
-                    a.velocity.x as f32,
-                    a.velocity.y as f32,
-                    a.velocity.z as f32,
-                )
-                .normalize_or(glam::Vec3::X);
-                let dir = if a.stuck {
-                    glam::Vec3::new(
-                        -a.yaw.to_radians().sin() * a.pitch.to_radians().cos(),
-                        a.pitch.to_radians().sin(),
-                        a.yaw.to_radians().cos() * a.pitch.to_radians().cos(),
-                    )
-                    .normalize_or(dir)
-                } else {
-                    dir
-                };
-                let side = dir.cross(glam::Vec3::Y).normalize_or(glam::Vec3::Z) * 0.08;
-                let upv = dir.cross(side).normalize_or(glam::Vec3::Y) * 0.08;
-                let (u1, v1) = (
-                    r.u0 + (r.u1 - r.u0) * 0.5,
-                    r.v0 + (r.v1 - r.v0) * (5.0 / 32.0),
+                let m = glam::Mat4::from_translation(c)
+                    * glam::Mat4::from_rotation_y((a.yaw - 90.0).to_radians())
+                    * glam::Mat4::from_rotation_z(a.pitch.to_radians());
+                horizon_client::mobs::render_model(
+                    model,
+                    m,
+                    &|part| part.pose,
+                    [r.u0, r.v0, r.u1, r.v1],
+                    packed,
+                    0,
+                    out,
                 );
-                for off in [side, upv] {
-                    let q = [
-                        c - dir * 0.25 - off,
-                        c + dir * 0.25 - off,
-                        c + dir * 0.25 + off,
-                        c - dir * 0.25 + off,
-                    ];
-                    for (v, uv) in q
-                        .iter()
-                        .zip([[r.u0, v1], [u1, v1], [u1, r.v0], [r.u0, r.v0]])
-                    {
-                        out.push(Vertex {
-                            normal: [0; 4],
-                            pos: v.to_array(),
-                            uv,
-                            layer: 0,
-                            color: 0xFFFF_FFFF,
-                            light: packed,
-                        });
-                    }
-                }
                 continue;
             }
             // WindChargeRenderer.

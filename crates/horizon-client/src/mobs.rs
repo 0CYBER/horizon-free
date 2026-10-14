@@ -660,6 +660,10 @@ pub struct Extra {
     pub legs: Option<Arc<str>>,
     pub feet: Option<Arc<str>>,
     pub using_item: i32,
+    pub fall_flying: bool,
+    pub fall_fly_ticks: i32,
+    pub main_hand_left: bool,
+    pub elytra: ElytraAnimation,
     pub flag: bool,
     pub flag2: bool,
     /// Species scratch values (the wither's head targets and clocks).
@@ -1883,5 +1887,64 @@ mod lighting_tests {
             part.polygons[0].vertex_normal(ModelNormals::new(Mat4::from_scale(Vec3::ZERO))),
             [0, 0, 0, -127]
         );
+    }
+}
+
+/// `LivingEntity.elytraAnimationState`: eased wing angles and render interpolation.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ElytraAnimation {
+    pub old: [f32; 3],
+    pub angles: [f32; 3],
+}
+impl ElytraAnimation {
+    pub fn tick(&mut self, flying: bool, crouching: bool, velocity: horizon_core::geometry::Vec3) {
+        use std::f32::consts::PI;
+        self.old = self.angles;
+        let target = if flying {
+            let length =
+                (velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z)
+                    .sqrt();
+            let ratio = if velocity.y < 0.0 && length > 0.0 {
+                1.0 - horizon_core::jmath::pow(-velocity.y / length, 1.5) as f32
+            } else {
+                1.0
+            };
+            [
+                PI / 12.0 + (PI / 9.0 - PI / 12.0) * ratio,
+                0.0,
+                -PI / 12.0 + (-PI / 2.0 + PI / 12.0) * ratio,
+            ]
+        } else if crouching {
+            [PI * 2.0 / 9.0, 0.08726646, -PI / 4.0]
+        } else {
+            [PI / 12.0, 0.0, -PI / 12.0]
+        };
+        for (angle, target) in self.angles.iter_mut().zip(target) {
+            *angle += (target - *angle) * 0.3;
+        }
+    }
+    pub fn angles(&self, partial: f32) -> [f32; 3] {
+        std::array::from_fn(|i| self.old[i] + (self.angles[i] - self.old[i]) * partial)
+    }
+}
+
+#[cfg(test)]
+mod elytra_tests {
+    use super::*;
+    #[test]
+    fn wings_ease_between_ground_flight_and_crouch() {
+        let mut wings = ElytraAnimation::default();
+        wings.tick(false, false, Vec3::ZERO);
+        assert!((wings.angles[0] - std::f32::consts::PI / 12.0 * 0.3).abs() < 0.000001);
+        assert_eq!(wings.angles(0.0), wings.old);
+        assert_eq!(wings.angles(1.0), wings.angles);
+        for _ in 0..40 {
+            wings.tick(true, false, Vec3::new(1.0, 0.0, 0.0));
+        }
+        assert!((wings.angles[2] + std::f32::consts::FRAC_PI_2).abs() < 0.00001);
+        for _ in 0..40 {
+            wings.tick(false, true, Vec3::ZERO);
+        }
+        assert!((wings.angles[1] - 0.08726646).abs() < 0.00001);
     }
 }

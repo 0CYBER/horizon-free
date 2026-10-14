@@ -41,6 +41,9 @@ impl ArmorStandAssets {
                 }
             }
         }
+        if let Some(part) = load("minecraft:elytra#main") {
+            player.insert("elytra", part);
+        }
         let mut equipment = HashMap::new();
         if let Ok(entries) = std::fs::read_dir(root.join("assets/minecraft/equipment")) {
             for e in entries.flatten() {
@@ -55,7 +58,7 @@ impl ArmorStandAssets {
                 };
                 let Ok(v) = v else { continue };
                 let mut kinds = HashMap::new();
-                for kind in ["humanoid", "humanoid_leggings"] {
+                for kind in ["humanoid", "humanoid_leggings", "wings"] {
                     if let Some(layer) = v["layers"][kind].get(0) {
                         let tex = layer["texture"]
                             .as_str()

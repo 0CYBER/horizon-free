@@ -102,6 +102,7 @@ impl Game<'_> {
         if !self.creative {
             self.consume_held();
         }
+        self.swing_arm();
         true
     }
     pub(super) fn tick_rockets(&mut self) {

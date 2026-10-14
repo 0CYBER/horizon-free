@@ -222,7 +222,7 @@ impl Game<'_> {
             owner.using_this_item = true;
             owner.use_duration = duration;
             owner.use_item_remaining_ticks = duration - ticks as i32;
-            owner.crossbow_charge_duration = 25;
+            owner.crossbow_charge_duration = Self::charge_ticks(stack).max(1) as i32;
         }
         owner.is_selected =
             stack.is_some() && self.inventory.get(self.selected).and_then(Option::as_ref) == stack;

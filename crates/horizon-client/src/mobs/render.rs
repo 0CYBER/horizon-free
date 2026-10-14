@@ -738,6 +738,28 @@ pub fn base_transform(m: &Mob, alpha: f32, camera: glam::DVec3) -> glam::Mat4 {
             .unwrap_or_else(|| glam::Mat4::from_rotation_y((180.0 - body).to_radians())),
     };
     let mut base = glam::Mat4::from_translation(p.as_vec3()) * rotation;
+    if m.extra.fall_flying {
+        let ticks = m.extra.fall_fly_ticks as f32 + alpha;
+        let scale = (ticks * ticks / 100.0).min(1.0);
+        let pitch = m.previous_head_pitch + (m.head_pitch - m.previous_head_pitch) * alpha;
+        base *= glam::Mat4::from_rotation_x((scale * (-90.0 - pitch)).to_radians());
+        let yaw = m.previous_head_yaw + wrap(m.head_yaw - m.previous_head_yaw) * alpha;
+        let (look_x, look_z) = (-(yaw.to_radians()).msin(), (yaw.to_radians()).mcos());
+        let v = m.velocity;
+        let view_scale = (pitch.to_radians()).mcos();
+        let (look_x, look_z) = (look_x * view_scale, look_z * view_scale);
+        let view_length = f64::from(look_x * look_x + look_z * look_z);
+        let speed = v.x * v.x + v.z * v.z;
+        if speed > f64::from(1.0e-5f32) && view_length > f64::from(1.0e-5f32) {
+            let dot =
+                (v.x * f64::from(look_x) + v.z * f64::from(look_z)) / (speed * view_length).sqrt();
+            let sign = (v.x * f64::from(look_z) - v.z * f64::from(look_x)).signum();
+            base *= glam::Mat4::from_rotation_y(
+                (sign * horizon_core::jmath::acos(dot.abs().min(1.0))) as f32,
+            );
+        }
+    }
+
     if m.death_time > 0 && !super::creaking::tearing_down(m) {
         let f = ((m.death_time as f32 + alpha - 1.0) / 20.0 * 1.6)
             .sqrt()
