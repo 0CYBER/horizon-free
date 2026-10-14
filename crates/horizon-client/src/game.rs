@@ -9200,6 +9200,15 @@ pub fn run() -> Result<()> {
         player_arm: horizon_client::mobs::load_model(&root, "minecraft:player#main")
             .and_then(|m| m.children.into_iter().find(|c| c.name == "right_arm")),
     };
+    // These batches share the exported document instead of reparsing it per layer.
+    let (armor_stand_assets, boat_models, cart_models) = {
+        let document = horizon_client::mobs::EntityModelDocument::load(&root).ok();
+        (
+            armor_stands::ArmorStandAssets::load(&root, document.as_ref()),
+            boats::BoatModels::load(document.as_ref()),
+            minecarts::CartModels::load(document.as_ref()),
+        )
+    };
     let inventory = vec![None; 36];
     let now = Instant::now();
     let game_root = options.resources.clone();
@@ -9371,9 +9380,9 @@ pub fn run() -> Result<()> {
         glow_map_frame_model: frames::bake_frame(&root, "glow_item_frame_map"),
         armor_stands: Vec::new(),
         others: Vec::new(),
-        armor_stand_assets: armor_stands::ArmorStandAssets::load(&root),
+        armor_stand_assets,
         boats: Vec::new(),
-        boat_models: boats::BoatModels::load(&root),
+        boat_models,
         crystal_model: horizon_client::mobs::load_model(&root, "minecraft:end_crystal#main"),
         carts: Vec::new(),
         jukebox_sounds: HashMap::new(),
@@ -9392,7 +9401,7 @@ pub fn run() -> Result<()> {
                 .join("assets/skins"),
         ),
         skin_slots: Vec::new(),
-        cart_models: minecarts::CartModels::load(&root),
+        cart_models,
         riding: None,
         ender_items: vec![None; 27],
         ender_open: None,
@@ -9555,6 +9564,9 @@ mod runtime_reset_tests {
         assert!(stats.values.is_empty());
     }
 }
+
+#[cfg(test)]
+mod entity_model_loading_tests;
 
 #[cfg(test)]
 mod tests {
