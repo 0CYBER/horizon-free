@@ -116,9 +116,17 @@ Vanilla's `ClientHandshakePacketListenerImpl.handleHello`, `Crypt` and authlib's
    `multiplayer.access.banned` / `FORCED_USERNAME_CHANGE` → "You are banned from playing online",
    5xx or no network → "The authentication servers are currently not reachable…". Without a session
    the game says "This server is in online mode. Sign in with your Microsoft account in the Horizon
-   launcher to join it." On a LAN server a failure is only logged (vanilla does the same).
+   launcher to join it." (Vanilla goes on after a failed join on LAN-discovered servers, which then
+   refuse the player anyway; Horizon stops at once.)
 5. Send `ServerboundKeyPacket` (the secret and the challenge, each RSA PKCS#1 v1.5 encrypted with
    the server key), then AES/CFB8 (key = IV = the secret) both ways.
+
+The connecting screen follows vanilla's states: "Connecting to the server..." until the encryption
+request, "Logging in..." while joining the session service, "Encrypting...", then "Joining world...".
+Code: `horizon-protocol` (`rsa.rs`, `crypto::server_hash`), `horizon-client` (`auth.rs`, `net.rs`).
+
+Horizon's own dedicated and LAN servers stay offline-mode (they don't verify players with the
+session service); that is separate work.
 
 `HORIZON_API_DISCOVERY` overrides the discovery URL, the counterpart of authlib's
 `-Dminecraft.api.discovery.host`; it is how the harness points both the vanilla server and Horizon at
@@ -153,8 +161,10 @@ Until part d lands, Horizon joins online servers but chat works only where
 ## Harnesses
 
 `tools/test_online_mode_parity.py` (dev only, needs no account): a local mock of the Minecraft
-services (discovery document, `join`, `hasJoined`/`verify`, empty public keys) and a vanilla 26.3
-dedicated server in online mode started with `-Dminecraft.api.discovery.host=<mock>`. Horizon's
+services (discovery document, `join`, `hasJoined`/`verify`, no public keys) and a vanilla 26.3
+dedicated server in online mode started with `-Dminecraft.api.discovery.host=<mock>` (authlib
+10.0.77's only override: it replaces the whole discovery URL; the old `minecraft.api.session.host`
+style properties are gone). Horizon's
 headless client (`HORIZON_NET_REPORT`) joins with a session file holding a mock token: the server
 verifies the join through the mock with the hash it computed itself (so the RSA wrapping, the hash
 and AES/CFB8 are all checked against vanilla's code), the player spawns, chats and runs `/list`.
@@ -168,7 +178,8 @@ Microsoft, Xbox and Minecraft endpoints, and the keychain abstraction with an in
 
 ## PR plan
 
-- (a) Game: online-mode handshake, encryption, session join, session file, harness. *(this PR)*
+- (a) Game: online-mode handshake, encryption, session join, session file, harness (15/15 checks
+  against vanilla 26.3 on macOS).
 - (c) Launcher: device-code sign-in, token chain, keychain, accounts UI, CLI/MCP (`account list`,
   `account sign-in`, `account sign-out`, never tokens), session file handoff.
 - (b) Game: skins and capes over HTTPS, the real names and skins in game.
