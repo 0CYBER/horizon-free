@@ -1930,7 +1930,11 @@ impl OptionsUi {
                     .unwrap_or("key.keyboard.unknown")
                     .to_owned()
             };
-            s.keys.set(name, &value);
+            if name == crate::extras::ZOOM_KEY {
+                s.extras.zoom_key = value;
+            } else {
+                s.keys.set(name, &value);
+            }
             return vec![Event::Changed];
         }
         if key == K::Escape {

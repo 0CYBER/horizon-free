@@ -34,6 +34,7 @@ mod dragon;
 mod enchant_effects;
 mod end;
 mod explosion;
+mod extras;
 mod fangs;
 mod fireworks;
 mod fishing;
@@ -883,6 +884,8 @@ struct Game<'a> {
     pending_bench: Option<(Instant, std::sync::mpsc::Sender<String>)>,
     /// Recent frame times for the performance overlay.
     frame_graph: horizon_client::perf_overlay::FrameGraph,
+    /// Horizon's extras (zoom, FPS counter, keystrokes): `game/extras.rs`.
+    extras: extras::ExtrasState,
     /// Meshed sections waiting for an upload budget (Horizon settings).
     pending_uploads: Vec<((i32, i32, i32), horizon_client::mesher::SectionMesh)>,
     /// This frame's view frustum, for culling entities and block entities.
@@ -3167,7 +3170,8 @@ impl Game<'_> {
                 x_rot_o: self.pitch,
                 y_rot_o: self.yaw,
             };
-            rotation.turn(xo, yo);
+            let zoom = self.zoom_turn_scale();
+            rotation.turn(xo * zoom, yo * zoom);
             self.yaw = rotation.y_rot;
             self.pitch = rotation.x_rot;
         }
@@ -3322,6 +3326,7 @@ impl Game<'_> {
             self.draw_effect_icons(&mut batch);
             // Hud: the action bar and titles draw over the hotbar (nextStratum).
             self.draw_boss_bars(&mut batch);
+            self.draw_extras(&mut batch);
         }
         // Hud.extractSleepOverlay, under the sidebar, titles and chat.
         if let Some((_, ticks)) = self.sleeping {
@@ -8358,6 +8363,7 @@ impl ApplicationHandler for Game<'_> {
                     let d = scaled(raw_y) as f32;
                     if self.screen == Screen::Playing
                         && self.player.is_some()
+                        && !self.extras_scroll(d)
                         && let Some((wheel, _)) =
                             self.mouse
                                 .on_scroll(raw_x, raw_y, discrete, wheel_sensitivity)
@@ -8461,6 +8467,7 @@ impl ApplicationHandler for Game<'_> {
                                 self.capture(true);
                                 return Ok(());
                             }
+                            self.extras_mouse(button, pressed);
                             match self.settings.keys.translate_mouse(button) {
                                 Some(Err(b)) => self.play_mouse(b, pressed)?,
                                 Some(Ok(k)) if pressed => {
@@ -8618,6 +8625,7 @@ impl ApplicationHandler for Game<'_> {
                     let PhysicalKey::Code(key) = event.physical_key else {
                         return Ok(());
                     };
+                    self.extras_key(key, event.state == ElementState::Pressed, event.repeat);
                     // key.smoothCamera toggles the cinematic camera.
                     if self.screen == Screen::Playing
                         && event.state == ElementState::Pressed
@@ -8682,6 +8690,7 @@ impl ApplicationHandler for Game<'_> {
                             self.sprint_report(&report);
                         }
                     }
+                    self.extras_frame(elapsed);
                     self.apply_mouse_look();
                     self.pad_look(elapsed.as_secs_f32());
                     self.advance_flight();
@@ -9187,6 +9196,7 @@ pub fn run() -> Result<()> {
         view_frustum: None,
         pending_uploads: Vec::new(),
         frame_graph: Default::default(),
+        extras: Default::default(),
         sky_darken_memo: Default::default(),
         persist: Default::default(),
         remote: None,

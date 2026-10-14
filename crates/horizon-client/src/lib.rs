@@ -47,6 +47,8 @@ pub mod enchant;
 pub mod entities;
 pub mod entity_nbt;
 pub mod environment;
+pub mod extras;
+pub mod extras_hud;
 pub mod fast_hash;
 pub mod fastutil_order;
 pub mod first_person;
