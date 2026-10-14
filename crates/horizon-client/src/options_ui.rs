@@ -809,7 +809,11 @@ impl OptionsUi {
         }
     }
     pub fn open(&mut self, in_world: bool) {
-        self.stack = vec![Page::Main];
+        self.open_at(in_world, Page::Main);
+    }
+    /// Open a page whose Done/Escape returns directly to the calling screen.
+    pub fn open_at(&mut self, in_world: bool, page: Page) {
+        self.stack = vec![page];
         self.scroll = 0.0;
         self.scrollbar_drag_y = None;
         self.in_world = in_world;
@@ -2454,6 +2458,20 @@ mod tests {
         let (widgets, top, _, _) = ui.layout(&s, 480.0, 240.0);
         assert_eq!(ui.scroll, 0.0);
         assert_eq!(widgets.iter().find(|w| w.list).unwrap().y, top + 2.0);
+    }
+
+    #[test]
+    fn title_accessibility_done_returns_directly_to_the_title() {
+        let mut ui = OptionsUi::default();
+        let mut s = Settings::default();
+        ui.open_at(false, Page::Accessibility);
+        assert_eq!(ui.page(), Page::Accessibility);
+        assert!(!ui.in_world);
+        assert!(ui.back(&mut s).contains(&Event::Close));
+        ui.open(false);
+        ui.show(Page::Accessibility);
+        assert!(!ui.back(&mut s).contains(&Event::Close));
+        assert_eq!(ui.page(), Page::Main);
     }
 
     #[test]

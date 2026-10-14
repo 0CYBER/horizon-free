@@ -103,6 +103,7 @@ pub enum Action {
     None,
     Quit,
     Options,
+    Accessibility,
     Play {
         folder: String,
     },
@@ -129,6 +130,7 @@ pub struct Title {
     backup_shown: Cell<bool>,
     toast: Option<(std::time::Instant, BackupToast)>,
     icons: RefCell<std::collections::HashMap<PathBuf, (std::time::SystemTime, Option<Vec<u8>>)>>,
+    splash: String,
     /// The mode last drawn and when it appeared (Horizon's screen fades).
     shown: std::cell::Cell<(std::mem::Discriminant<Mode>, std::time::Instant)>,
     /// The launcher-style opening (Horizon style, first title of the session).
@@ -143,6 +145,7 @@ struct Button {
     label: String,
     enabled: bool,
     id: u8,
+    icon: Option<(&'static str, f32)>,
 }
 /// Java String.hashCode for text seeds (WorldOptions.parseSeed).
 pub fn parse_seed(text: &str) -> Option<i64> {
@@ -189,8 +192,20 @@ pub fn list_worlds(saves: &Path) -> Vec<WorldEntry> {
     worlds.sort_by_key(|w| std::cmp::Reverse(w.modified));
     worlds
 }
+fn choose_splash(text: &str, index: usize) -> String {
+    let splashes: Vec<_> = text
+        .lines()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    splashes
+        .get(index % splashes.len().max(1))
+        .copied()
+        .unwrap_or("Made in Rust!")
+        .to_owned()
+}
 impl Title {
-    pub fn new(saves: PathBuf) -> Self {
+    pub fn new(saves: PathBuf, resources: &Path) -> Self {
         let mode = Mode::Main;
         let now = std::time::Instant::now();
         Self {
@@ -207,6 +222,14 @@ impl Title {
             backup_shown: Cell::new(false),
             toast: None,
             icons: RefCell::new(std::collections::HashMap::new()),
+            splash: choose_splash(
+                &std::fs::read_to_string(resources.join("assets/minecraft/texts/splashes.txt"))
+                    .unwrap_or_default(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .subsec_nanos() as usize,
+            ),
             opening: std::cell::Cell::new(None),
             recent: std::cell::RefCell::new(None),
         }
@@ -459,45 +482,45 @@ impl Title {
             label: label.into(),
             enabled,
             id,
+            icon: None,
         };
         match &self.mode {
             Mode::Main => {
-                let y = h / 4.0 + 48.0;
-                vec![
-                    b((w / 2.0).floor() - 100.0, y, 200.0, "Singleplayer", true, 1),
-                    b(
-                        (w / 2.0).floor() - 100.0,
-                        y + 24.0,
-                        200.0,
-                        "Multiplayer",
+                let cx = (w / 2.0).floor();
+                let y = (h / 4.0).floor() + 48.0;
+                let mut buttons = vec![
+                    b(cx - 100.0, y, 200.0, "Singleplayer", true, 1),
+                    b(cx - 100.0, y + 24.0, 200.0, "Multiplayer", true, 4),
+                    b(cx - 100.0, y + 48.0, 200.0, "Minecraft Realms", false, 0),
+                    b(cx - 100.0, y + 96.0, 98.0, "Options...", true, 3),
+                    b(cx + 2.0, y + 96.0, 98.0, "Quit Game", true, 2),
+                ];
+                for (i, (label, enabled, id, icon, size)) in [
+                    ("Friends", false, 5, "friends/friends", 15.0),
+                    ("Language", false, 6, "icon/language", 15.0),
+                    (
+                        "Accessibility Settings",
                         true,
-                        4,
-                    ),
-                    b(
-                        (w / 2.0).floor() - 100.0,
-                        y + 48.0,
-                        200.0,
-                        "Minecraft Realms",
-                        false,
-                        0,
-                    ),
-                    b(
-                        (w / 2.0).floor() - 100.0,
-                        y + 84.0,
-                        98.0,
-                        "Options...",
-                        true,
-                        3,
-                    ),
-                    b(
-                        (w / 2.0).floor() + 2.0,
-                        y + 84.0,
-                        98.0,
-                        "Quit Game",
-                        true,
-                        2,
+                        7,
+                        "icon/accessibility",
+                        15.0,
                     ),
                 ]
+                .into_iter()
+                .enumerate()
+                {
+                    let mut button = b(
+                        cx - 34.0 + i as f32 * 24.0,
+                        y + 72.0,
+                        20.0,
+                        label,
+                        enabled,
+                        id,
+                    );
+                    button.icon = Some((icon, size));
+                    buttons.push(button);
+                }
+                buttons
             }
             Mode::Select { selected, .. } => vec![
                 b(
@@ -688,6 +711,31 @@ impl Title {
                     128.0,
                     16.0,
                 );
+                let tw = HudBatch::text_width(atlas, &self.splash);
+                let start = batch.vertices.len();
+                batch.text(
+                    atlas,
+                    &self.splash,
+                    -(tw / 2.0).floor(),
+                    -8.0,
+                    rgba(255, 255, 0, 255),
+                    true,
+                );
+                let scale = (1.8
+                    - (self.started.elapsed().as_secs_f32() * std::f32::consts::TAU)
+                        .sin()
+                        .abs()
+                        * 0.1)
+                    * 100.0
+                    / (tw + 32.0);
+                let (sin, cos) = (-20.0f32).to_radians().sin_cos();
+                for v in &mut batch.vertices[start..] {
+                    let [x, y] = v.pos;
+                    v.pos = [
+                        w / 2.0 + 123.0 + scale * (x * cos - y * sin),
+                        69.0 + scale * (x * sin + y * cos),
+                    ];
+                }
                 let version = "Horizon 26.3 (Rust)";
                 batch.text(atlas, version, 2.0, h - 10.0, u32::MAX, true);
                 let notice = "Not affiliated with Mojang or Microsoft";
@@ -1019,6 +1067,22 @@ impl Title {
             } else {
                 rgba(160, 160, 160, 255)
             };
+            if let Some((icon, size)) = b.icon {
+                batch.sprite_scaled(
+                    atlas,
+                    &format!("gui/sprites/{icon}"),
+                    b.x + ((b.w - size) / 2.0).floor(),
+                    b.y + ((20.0 - size) / 2.0).floor(),
+                    size,
+                    size,
+                    if b.enabled {
+                        u32::MAX
+                    } else {
+                        rgba(255, 255, 255, 128)
+                    },
+                );
+                continue;
+            }
             let tw = HudBatch::text_width(atlas, &b.label);
             batch.text(
                 atlas,
@@ -1086,6 +1150,7 @@ impl Title {
                 }
             }
             (Mode::Main, Some(3)) => Action::Options,
+            (Mode::Main, Some(7)) => Action::Accessibility,
             (Mode::Select { worlds, selected }, Some(10)) => {
                 match selected.and_then(|i| worlds.get(i)) {
                     Some(world) => Action::Play {
@@ -1445,4 +1510,154 @@ fn date_string(secs: u64) -> String {
     let mo = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if mo <= 2 { y + 1 } else { y };
     format!("{y}-{mo:02}-{d:02} {h:02}:{m:02}")
+}
+
+#[cfg(test)]
+mod classic_tests {
+    use super::*;
+
+    fn click_button(title: &mut Title, id: u8) -> (Action, bool) {
+        let b = title
+            .buttons(480.0, 320.0)
+            .into_iter()
+            .find(|b| b.id == id)
+            .unwrap();
+        title.click(b.x + 1.0, b.y + 1.0, (480.0, 320.0))
+    }
+
+    #[test]
+    fn classic_navigation_buttons_sound_even_without_a_game_action() {
+        let mut title = Title::new(
+            PathBuf::from("/nonexistent/horizon-test-saves"),
+            Path::new("/nonexistent/horizon-test-resources"),
+        );
+        assert_eq!(title.click(0.0, 0.0, (480.0, 320.0)), (Action::None, false));
+        assert_eq!(click_button(&mut title, 0), (Action::None, false)); // Disabled Realms.
+        assert_eq!(click_button(&mut title, 1), (Action::None, true)); // Singleplayer.
+        assert_eq!(click_button(&mut title, 10), (Action::None, false)); // No selected world.
+        assert_eq!(click_button(&mut title, 11), (Action::None, true)); // Create screen.
+        assert_eq!(
+            title.click(240.0, 55.0, (480.0, 320.0)),
+            (Action::None, false)
+        );
+        assert_eq!(click_button(&mut title, 20), (Action::None, true)); // Game mode.
+        assert_eq!(click_button(&mut title, 22), (Action::None, true)); // Cancel.
+        assert_eq!(click_button(&mut title, 12), (Action::None, true)); // Back.
+        assert_eq!(click_button(&mut title, 3), (Action::Options, true));
+    }
+
+    #[test]
+    fn classic_main_menu_icon_row_matches_reference_and_routes_accessibility() {
+        let mut title = Title::new(
+            PathBuf::new(),
+            Path::new("/nonexistent/horizon-test-resources"),
+        );
+        for (w, h) in [(960.0, 523.0), (480.0, 320.0), (427.0, 240.0)] {
+            let buttons = title.buttons(w, h);
+            let cx = (w / 2.0).floor();
+            let y = (h / 4.0).floor() + 48.0;
+            for (id, x, enabled, icon) in [
+                (5, cx - 34.0, false, "friends/friends"),
+                (6, cx - 10.0, false, "icon/language"),
+                (7, cx + 14.0, true, "icon/accessibility"),
+            ] {
+                let b = buttons.iter().find(|b| b.id == id).unwrap();
+                assert_eq!(
+                    (b.x, b.y, b.w, b.enabled, b.icon),
+                    (x, y + 72.0, 20.0, enabled, Some((icon, 15.0)))
+                );
+                assert_eq!(
+                    title.click(x + 10.0, y + 82.0, (w, h)),
+                    if enabled {
+                        (Action::Accessibility, true)
+                    } else {
+                        (Action::None, false)
+                    }
+                );
+            }
+            for id in [2, 3] {
+                assert_eq!(buttons.iter().find(|b| b.id == id).unwrap().y, y + 96.0);
+            }
+            // The four-pixel gaps around icons must not activate a button.
+            assert_eq!(
+                title.click(cx + 12.0, y + 82.0, (w, h)),
+                (Action::None, false)
+            );
+            assert_eq!(
+                title.click(cx + 24.0, y + 92.0, (w, h)),
+                (Action::None, false)
+            );
+        }
+    }
+
+    #[test]
+    fn splash_selection_uses_resource_lines_and_survives_missing_resources() {
+        assert_eq!(choose_splash("\n First! \r\n\r\nSecond!\n", 0), "First!");
+        assert_eq!(choose_splash("First!\nSecond!", 3), "Second!");
+        assert_eq!(choose_splash(" \r\n", 42), "Made in Rust!");
+    }
+
+    #[test]
+    fn classic_logo_crops_transparent_padding_and_overlaps_edition() {
+        let root = Path::new("/nonexistent/horizon-test-resources");
+        let mut atlas = HudAtlas::build(root).unwrap();
+        let r = crate::hud::Rect {
+            u0: 0.0,
+            v0: 0.0,
+            u1: 1.0,
+            v1: 1.0,
+            w: 1024,
+            h: 256,
+        };
+        atlas.sprites.insert("gui/title/minecraft".into(), r);
+        atlas.sprites.insert(
+            "gui/title/edition".into(),
+            crate::hud::Rect { w: 128, h: 16, ..r },
+        );
+        let title = Title::new(PathBuf::new(), root);
+        let mut batch = HudBatch::new([1920, 1080]);
+        title.draw(&atlas, &mut batch, (0.0, 0.0));
+        let cx = (batch.width / 2.0).floor();
+        assert_eq!(batch.vertices[0].pos, [cx - 128.0, 30.0]);
+        assert_eq!(batch.vertices[2].pos, [cx + 128.0, 74.0]);
+        assert_eq!(batch.vertices[2].uv, [1.0, 44.0 / 64.0]);
+        assert_eq!(batch.vertices[6].pos, [cx - 64.0, 67.0]);
+        assert_eq!(batch.vertices[8].pos, [cx + 64.0, 81.0]);
+        assert_eq!(batch.vertices[8].uv, [1.0, 14.0 / 16.0]);
+        assert!(
+            batch.vertices[12..]
+                .iter()
+                .any(|v| v.color == rgba(255, 255, 0, 255))
+        );
+    }
+
+    #[test]
+    fn classic_world_selection_is_silent_until_the_entry_launches() {
+        let mut title = Title::new(
+            PathBuf::from("/nonexistent/horizon-test-saves"),
+            Path::new("/nonexistent/horizon-test-resources"),
+        );
+        title.mode = Mode::Select {
+            worlds: vec![WorldEntry {
+                folder: "world".into(),
+                name: "World".into(),
+                creative: false,
+                modified: std::time::SystemTime::UNIX_EPOCH,
+            }],
+            selected: None,
+        };
+        assert_eq!(
+            title.click(240.0, 40.0, (480.0, 320.0)),
+            (Action::None, false)
+        );
+        assert_eq!(
+            title.click(240.0, 40.0, (480.0, 320.0)),
+            (
+                Action::Play {
+                    folder: "world".into()
+                },
+                true
+            )
+        );
+    }
 }
