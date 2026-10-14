@@ -1,17 +1,20 @@
-//! Multiplayer session: a network thread that connects to a server, logs in
-//! (offline mode only), runs the configuration phase and then forwards decoded
-//! play packets to the game thread. Keep-alives and pings are answered on the
-//! network thread like vanilla's connection handlers so a busy frame never
-//! times the client out. Online-mode (authenticated) servers are refused:
-//! Horizon never handles Microsoft credentials.
+//! Multiplayer session: a network thread that connects to a server, logs in,
+//! runs the configuration phase and then forwards decoded play packets to the
+//! game thread. Keep-alives and pings are answered on the network thread like
+//! vanilla's connection handlers so a busy frame never times the client out.
+//! Online-mode servers need the Microsoft account the launcher signed in
+//! (crate::auth): the login joins the server through the session service and
+//! encrypts the connection (ClientHandshakePacketListenerImpl.handleHello).
+use crate::auth::AuthSession;
 use horizon_protocol::{
     PROTOCOL_VERSION,
     connection::{ConnReader, ConnWriter, Connection, Counters},
-    crypto::offline_uuid,
+    crypto::{generate_secret, offline_uuid, server_hash},
     packets::{Empty, configuration as cfg, handshake, login, play},
     registry::Dynamic,
+    rsa::RsaPublicKey,
     servers::parse_address,
-    text::{Language, plain},
+    text::{Language, plain, translatable},
 };
 use std::{
     sync::{
@@ -37,7 +40,13 @@ pub enum Event {
     DecodeError(String),
     /// The server sent us back to configuration and finished it again.
     Reconfigured(Arc<Dynamic>),
-    Disconnected(String),
+    /// The connection ended. `from_server`: the server gave the reason (or
+    /// the connection was refused for good), rather than the connection
+    /// failing (auto-reconnect retries only failures and shutdowns).
+    Disconnected {
+        reason: String,
+        from_server: bool,
+    },
 }
 
 pub struct Session {
@@ -51,8 +60,14 @@ pub struct Session {
     debug: bool,
 }
 impl Session {
-    /// Start connecting in the background.
-    pub fn connect(address: &str, name: &str, view_distance: i8, lang: Arc<Language>) -> Self {
+    /// Start connecting in the background, as `auth`'s account when there is one.
+    pub fn connect(
+        address: &str,
+        name: &str,
+        auth: Option<Arc<AuthSession>>,
+        view_distance: i8,
+        lang: Arc<Language>,
+    ) -> Self {
         let (send, events) = channel();
         let writer = Arc::new(Mutex::new(None));
         let counters = Arc::new(Mutex::new(None));
@@ -61,22 +76,25 @@ impl Session {
         let thread = std::thread::Builder::new()
             .name("horizon-net".into())
             .spawn(move || {
-                let reason = match run(
+                let result = run(
                     &address_owned,
                     &name_owned,
+                    auth.as_deref(),
                     view_distance,
                     &lang,
                     &send,
                     &thread_writer,
                     &thread_counters,
-                ) {
-                    Ok(reason) => reason,
-                    Err(e) => e,
-                };
+                );
+                let from_server = result.is_ok();
+                let reason = result.unwrap_or_else(|e| e);
                 if let Some(w) = thread_writer.lock().unwrap().take() {
                     w.shutdown();
                 }
-                let _ = send.send(Event::Disconnected(reason));
+                let _ = send.send(Event::Disconnected {
+                    reason,
+                    from_server,
+                });
             })
             .ok();
         let debug = std::env::var_os("HORIZON_NET_DEBUG").is_some();
@@ -131,18 +149,29 @@ fn status(send: &Sender<Event>, text: &str) {
     let _ = send.send(Event::Status(text.to_owned()));
 }
 
-/// The whole connection; returns the disconnect reason.
+/// Shown when an online-mode server asks a client without an account to authenticate.
+pub const NOT_SIGNED_IN: &str = "This server is in online mode. Sign in with your Microsoft account in the Horizon launcher to join it.";
+
+/// A translation, or the key itself (Language.getOrDefault).
+fn tr(lang: &Language, key: &str) -> String {
+    lang.get(key).cloned().unwrap_or_else(|| key.to_owned())
+}
+
+/// The whole connection. Ok: why it ended for good (the server's reason, or
+/// a refusal no retry fixes); Err: the connection failed.
 fn run(
     address: &str,
     name: &str,
+    auth: Option<&AuthSession>,
     view_distance: i8,
     lang: &Language,
     send: &Sender<Event>,
     shared_writer: &Mutex<Option<ConnWriter>>,
     shared_counters: &Mutex<Option<Arc<Counters>>>,
 ) -> Result<String, String> {
-    let (host, port) =
-        parse_address(address).ok_or_else(|| format!("Invalid server address: {address}"))?;
+    let Some((host, port)) = parse_address(address) else {
+        return Ok(format!("Invalid server address: {address}"));
+    };
     status(send, "Connecting to the server...");
     let mut c =
         Connection::connect(&host, port, Duration::from_secs(10)).map_err(|e| e.to_string())?;
@@ -158,8 +187,8 @@ fn run(
         .encode(),
     )
     .map_err(e)?;
-    status(send, "Logging in...");
-    let uuid = offline_uuid(name);
+    // Vanilla's login sends the account's profile id, or the offline one.
+    let uuid = auth.map_or_else(|| offline_uuid(name), |a| a.uuid);
     c.send(
         &login::Serverbound::Hello(login::ServerHello {
             name: name.to_owned(),
@@ -181,10 +210,37 @@ fn run(
                 let reason = serde_json::from_str::<serde_json::Value>(&p.reason_json)
                     .map(|v| json_text(&v, lang))
                     .unwrap_or(p.reason_json);
-                return Err(reason);
+                return Ok(reason);
             }
-            login::Clientbound::Hello(_) => {
-                return Err("This server is in online mode. Horizon only joins offline-mode servers (online-mode=false).".into());
+            login::Clientbound::Hello(hello) => {
+                status(send, &tr(lang, "connect.authorizing"));
+                let key = RsaPublicKey::from_der(&hello.public_key)
+                    .map_err(|err| format!("Protocol error: {err}"))?;
+                let secret = generate_secret().map_err(e)?;
+                if hello.should_authenticate {
+                    let account = auth.ok_or_else(|| NOT_SIGNED_IN.to_owned())?;
+                    let hash = server_hash(&hello.server_id, &secret, &hello.public_key);
+                    if let Err(err) = crate::auth::join_server(account, &hash) {
+                        let reason = match err.reason() {
+                            Ok(key) => tr(lang, key),
+                            Err(message) => message.to_owned(),
+                        };
+                        return Err(plain(
+                            &translatable("disconnect.loginFailedInfo", &[&reason]),
+                            lang,
+                        ));
+                    }
+                }
+                status(send, &tr(lang, "connect.encrypting"));
+                c.send(
+                    &login::Serverbound::Key(login::Key {
+                        key: key.encrypt(&secret).map_err(e)?,
+                        challenge: key.encrypt(&hello.challenge).map_err(e)?,
+                    })
+                    .encode(),
+                )
+                .map_err(e)?;
+                c.enable_encryption(&secret);
             }
             login::Clientbound::CustomQuery(q) => {
                 c.send(

@@ -47,7 +47,7 @@ impl Game<'_> {
             return;
         };
         if let Some((id, value, max)) = title.focused_field() {
-            Self::append_shortcut(
+            let changed = Self::append_shortcut(
                 &mut self.text_selection,
                 &mut self.clipboard,
                 id,
@@ -55,6 +55,9 @@ impl Game<'_> {
                 shortcut,
                 max,
             );
+            if changed {
+                title.search_changed();
+            }
         }
     }
     /// Typing or a backspace in an append-only field of the title screens:
@@ -66,6 +69,9 @@ impl Game<'_> {
         let cleared = title
             .focused_field()
             .is_some_and(|(id, value, _)| self.text_selection.take(id, value));
+        if cleared {
+            title.search_changed();
+        }
         if backspace {
             if !cleared {
                 title.backspace();

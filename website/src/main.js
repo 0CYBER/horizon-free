@@ -9,7 +9,6 @@ const REPO = "ludovic111/horizon";
 const RELEASES_PAGE = `https://github.com/${REPO}/releases?q=launcher-v&expanded=true`;
 const baked = JSON.parse(document.getElementById("baked").textContent);
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
-const finePointer = matchMedia("(hover: hover) and (pointer: fine)").matches;
 
 // --- GitHub --------------------------------------------------------------------------
 
@@ -31,21 +30,34 @@ async function get(url, as = "json") {
   return as === "json" ? res.json() : res.text();
 }
 
-const releases = cached("horizon:releases", () =>
-  get(`https://api.github.com/repos/${REPO}/releases?per_page=30`).then((list) =>
-    list
-      .filter((r) => !r.draft)
-      .map((r) => ({
-        tag_name: r.tag_name,
-        name: r.name,
-        published_at: r.published_at,
-        html_url: r.html_url,
-        prerelease: r.prerelease,
-        body: r.body || "",
-        assets: r.assets.map((a) => ({ name: a.name, browser_download_url: a.browser_download_url, size: a.size })),
-      })),
-  ),
-).catch(() => baked.releases);
+const slim = (r) => ({
+  tag_name: r.tag_name,
+  name: r.name,
+  published_at: r.published_at,
+  html_url: r.html_url,
+  prerelease: r.prerelease,
+  body: r.body || "",
+  assets: r.assets.map((a) => ({ name: a.name, browser_download_url: a.browser_download_url, size: a.size })),
+});
+const isLauncher = (r) => r.tag_name.startsWith("launcher-v") && !r.prerelease;
+const versionKey = (tag) => tag.replace("launcher-v", "").split(".").map(Number);
+const newer = (a, b) => versionKey(b).reduce((d, n, i) => d || n - (versionKey(a)[i] || 0), 0);
+
+// The newest 30 releases. Game releases come out several times a day, so the newest launcher release can be
+// older than all of them: then it is looked up by its tag (the newest launcher-v tag with a published release).
+async function loadReleases() {
+  const list = (await get(`https://api.github.com/repos/${REPO}/releases?per_page=30`)).filter((r) => !r.draft).map(slim);
+  if (list.some(isLauncher)) return list;
+  const refs = await get(`https://api.github.com/repos/${REPO}/git/matching-refs/tags/launcher-v`).catch(() => []);
+  const tags = refs.map((r) => r.ref.replace("refs/tags/", "")).filter((t) => /^launcher-v\d+\.\d+\.\d+$/.test(t)).sort(newer);
+  for (const tag of tags.slice(0, 3)) {
+    const release = await get(`https://api.github.com/repos/${REPO}/releases/tags/${tag}`).catch(() => null);
+    if (release && !release.draft) return [...list, slim(release)];
+  }
+  return list;
+}
+
+const releases = cached("horizon:releases", loadReleases).catch(() => baked.releases);
 
 async function setUpContributors() {
   let list = baked.contributors || [];
@@ -234,14 +246,35 @@ function setUpLightbox() {
   });
 }
 
+// --- Light and dark ------------------------------------------------------------------
+
+// The page follows the system; the toggle picks the other appearance and remembers it.
+function setUpTheme() {
+  const root = document.documentElement;
+  const button = document.querySelector(".theme-toggle");
+  const label = button.querySelector("[data-theme-label]");
+  const system = matchMedia("(prefers-color-scheme: dark)");
+  const dark = () => (root.dataset.theme ? root.dataset.theme === "dark" : system.matches);
+  const show = () => (label.textContent = dark() ? "Light" : "Dark");
+  button.addEventListener("click", () => {
+    root.dataset.theme = dark() ? "light" : "dark";
+    try {
+      localStorage.setItem("theme", root.dataset.theme);
+    } catch {}
+    show();
+  });
+  system.addEventListener("change", show);
+  show();
+}
+
 // --- Motion ---------------------------------------------------------------------------
 
 function setUpReveal() {
   // Siblings that enter together come in one after another.
   const stagger = (els, step) => els.forEach((el, i) => el.style.setProperty("--d", `${i * step}ms`));
-  document.querySelectorAll(".facts, .features, .cards, .mosaic").forEach((group) => stagger([...group.children], 90));
-  document.querySelectorAll(".section-head, .parity-count, .parity-copy, .launcher-copy").forEach((group) => stagger([...group.querySelectorAll(":scope > .reveal")], 70));
-  stagger([...document.querySelectorAll(".system")], 45);
+  document.querySelectorAll(".facts, .features, .cards, .mosaic, .hero-index").forEach((group) => stagger([...group.children], 40));
+  document.querySelectorAll(".hero .container, .section-head, .parity-count, .parity-copy, .launcher-copy").forEach((group) => stagger([...group.querySelectorAll(":scope > .reveal")], 60));
+  stagger([...document.querySelectorAll(".system")], 40);
 
   const count = document.querySelector("[data-digits]");
   count.innerHTML = [...count.textContent].map((c) => `<span>${escape(c)}</span>`).join("");
@@ -264,54 +297,8 @@ function setUpReveal() {
   items.forEach((el) => observer.observe(el));
 }
 
-// The statement lights up in reading order as it scrolls through the view.
-function setUpStatement() {
-  const fill = document.querySelector(".fill");
-  if (reducedMotion) return;
-  const block = fill.parentElement;
-  const update = () => {
-    const r = block.getBoundingClientRect();
-    if (r.bottom < -200 || r.top > innerHeight + 200) return;
-    const p = Math.min(1, Math.max(0, (innerHeight * 0.85 - r.top) / (innerHeight * 0.4 + r.height)));
-    fill.style.setProperty("--p", (p * 104).toFixed(1));
-  };
-  onScroll(update);
-  update();
-}
-
-// The hero's landscape moves slower than the page, and its text drifts up as it leaves.
-function setUpParallax() {
-  if (reducedMotion) return;
-  const hero = document.querySelector(".hero");
-  const layer = hero.querySelector(".hero-parallax");
-  const content = hero.querySelector(".hero-content");
-  onScroll(() => {
-    const y = scrollY;
-    if (y > hero.offsetHeight) return;
-    layer.style.transform = `translate3d(0, ${(y * 0.3).toFixed(1)}px, 0)`;
-    content.style.transform = `translate3d(0, ${(y * -0.08).toFixed(1)}px, 0)`;
-    content.style.opacity = String(Math.max(0, 1 - y / (hero.offsetHeight * 0.7)).toFixed(3));
-  });
-}
-
-// Buttons lean a little towards the pointer.
-function setUpMagnetic() {
-  if (reducedMotion || !finePointer) return;
-  document.querySelectorAll(".magnetic").forEach((el) => {
-    el.addEventListener("pointermove", (e) => {
-      const r = el.getBoundingClientRect();
-      const x = (e.clientX - r.left - r.width / 2) * 0.18;
-      const y = (e.clientY - r.top - r.height / 2) * 0.3;
-      el.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0)`;
-    });
-    el.addEventListener("pointerleave", () => (el.style.transform = ""));
-  });
-}
-
 setUpReveal();
-setUpStatement();
-setUpParallax();
-setUpMagnetic();
+setUpTheme();
 setUpNav();
 setUpTabs();
 setUpLightbox();

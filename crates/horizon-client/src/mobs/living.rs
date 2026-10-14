@@ -723,7 +723,7 @@ impl Mob {
         }
     }
     /// The jump part of LivingEntity.aiStep.
-    pub fn handle_jumping(&mut self) {
+    pub fn handle_jumping(&mut self, w: &MobWorld) {
         if self.ai.jumping && self.affected_by_fluids() {
             let (fluid_height, in_water_with_height) = if self.fluids.in_lava {
                 (self.fluids.lava, false)
@@ -739,7 +739,7 @@ impl Mob {
                     if (self.on_ground || in_water_with_height && fluid_height <= threshold)
                         && self.ai.no_jump_delay == 0
                     {
-                        self.jump_from_ground();
+                        self.jump_from_ground(w);
                         self.ai.no_jump_delay = 10;
                     }
                 } else {
@@ -756,7 +756,11 @@ impl Mob {
     fn jump_in_liquid(&mut self) {
         self.velocity.y += if self.ai.nav.can_float { 0.04 } else { 0.3 };
     }
-    pub fn jump_from_ground(&mut self) {
+    pub fn jump_from_ground(&mut self, w: &MobWorld) {
+        if self.species() == super::Species::Rabbit {
+            super::rabbit::jump(self, w);
+            return;
+        }
         if matches!(
             self.species(),
             super::Species::Slime | super::Species::MagmaCube | super::Species::SulfurCube

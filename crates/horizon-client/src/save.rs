@@ -233,6 +233,9 @@ pub struct ChunkExtras {
     /// The NBT of the modelled block entities as loaded, to restore the fields and
     /// detail Horizon does not model when it saves them (`block_entity_nbt::overlay`).
     pub block_entity_sources: Vec<((i32, i32, i32), Tag)>,
+    /// Every saved block entity's position in the order of the save's list,
+    /// the order `SerializableChunkData` puts them in the chunk's maps.
+    pub block_entity_order: Vec<(i32, i32, i32)>,
     /// Scheduled ticks (`block_ticks`/`fluid_ticks`): delays relative to the
     /// save time. Registered with the level's tick scheduler on arrival and
     /// replaced with the scheduler's pending ticks when saving.
@@ -532,7 +535,12 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
         };
         return Some((pos, BlockEntity::Beacon(Box::new(beacon))));
     }
-    let mut entity = BlockEntity::for_block(&id)?;
+    // A spawner's block entity id is not its block's name.
+    let block = match id.as_str() {
+        "minecraft:mob_spawner" => "minecraft:spawner",
+        other => other,
+    };
+    let mut entity = BlockEntity::for_block(block)?;
     match &mut entity {
         BlockEntity::Chest(items) => *items = decode_items(tag.get("Items"), items.len()),
         BlockEntity::Furnace(f) => {
@@ -1030,6 +1038,10 @@ pub fn decode_with(
     };
     if let Some(Tag::List(entities)) = tag.get("block_entities") {
         for e in entities {
+            let int = |k: &str| number(e.get(k)).map(|v| v as i32);
+            if let (Some(x), Some(y), Some(z)) = (int("x"), int("y"), int("z")) {
+                extras.block_entity_order.push((x, y, z));
+            }
             match decode_block_entity(e) {
                 Some(be) => {
                     if let Some(name) = text(e.get("CustomName")) {
@@ -1732,6 +1744,9 @@ pub struct Level {
     pub day_time: i64,
     /// The player's respawn point (bed, or the world spawn).
     pub spawn: Option<[f64; 3]>,
+    /// A respawn point in another dimension than the Overworld (a respawn
+    /// anchor): dimension, block, yaw and `forced`.
+    pub respawn_elsewhere: Option<(String, [i32; 3], f32, bool)>,
     pub position: Option<[f64; 3]>,
     pub rotation: [f32; 2],
     pub health: f32,
@@ -1924,7 +1939,18 @@ impl Level {
             && let Some(Tag::IntArray(pos)) = respawn.get("pos")
             && pos.len() == 3
         {
-            self.spawn = Some([f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])]);
+            let dimension =
+                text(respawn.get("dimension")).unwrap_or_else(|| "minecraft:overworld".into());
+            if dimension == "minecraft:overworld" {
+                self.spawn = Some([f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])]);
+            } else {
+                let yaw = match respawn.get("yaw") {
+                    Some(Tag::Float(b)) => f32::from_bits(*b),
+                    _ => 0.0,
+                };
+                let forced = number(respawn.get("forced")).is_some_and(|v| v != 0);
+                self.respawn_elsewhere = Some((dimension, [pos[0], pos[1], pos[2]], yaw, forced));
+            }
         }
         let mut inventory = Vec::new();
         let mut inventory_components = HashMap::new();
@@ -2116,8 +2142,19 @@ impl Level {
         if let Some(pos) = self.position {
             entries.push(("Pos", doubles(&pos)));
         }
-        // A respawn point other than the world spawn (a bed).
-        if let Some(s) = self.spawn {
+        // A respawn point other than the world spawn: an anchor elsewhere, or a bed.
+        if let Some((dimension, block, yaw, forced)) = &self.respawn_elsewhere {
+            let mut respawn = vec![
+                ("dimension", string(dimension)),
+                ("pos", Tag::IntArray(block.to_vec())),
+                ("yaw", Tag::Float(yaw.to_bits())),
+                ("pitch", Tag::Float(0f32.to_bits())),
+            ];
+            if *forced {
+                respawn.push(("forced", Tag::Byte(1)));
+            }
+            entries.push(("respawn", Tag::compound(respawn)));
+        } else if let Some(s) = self.spawn {
             let block = [
                 s[0].floor() as i32,
                 s[1].floor() as i32,
@@ -2519,6 +2556,28 @@ mod tests {
         assert!(back.triggered);
         assert_eq!(back.crafting_ticks, 3);
         assert_eq!(back.redstone_signal(), 2);
+    }
+    #[test]
+    fn spawner_block_entity_round_trips() {
+        // A dungeon spawner as vanilla saves it (`id` is mob_spawner, not the block).
+        let saved = horizon_world::nbt::parse_snbt(
+            r#"{id:"minecraft:mob_spawner",x:67,y:-52,z:-64,Delay:20s,SpawnData:{entity:{id:"minecraft:zombie"}},SpawnPotentials:[]}"#,
+        )
+        .unwrap()
+        .0;
+        let (pos, back) = decode_block_entity(&saved).expect("spawner");
+        assert_eq!(pos, (67, -52, -64));
+        let crate::containers::BlockEntity::Spawner(spawner) = &back else {
+            panic!("not a spawner");
+        };
+        let next = spawner.next_data().and_then(|d| d.id());
+        assert_eq!(next.as_deref(), Some("minecraft:zombie"));
+        let tag = encode_block_entity(pos, &back, "minecraft:spawner");
+        let (_, again) = decode_block_entity(&tag).expect("spawner again");
+        let crate::containers::BlockEntity::Spawner(again) = again else {
+            panic!("not a spawner");
+        };
+        assert_eq!(again.update_tag(), spawner.update_tag());
     }
     #[test]
     fn banner_block_entity_round_trips() {

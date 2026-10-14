@@ -165,6 +165,69 @@ impl Game<'_> {
             self.potions.burning.retain(|(m, _)| *m != id);
             self.potions.burning.push((id, (ignite * 20.0) as i32));
         }
+        self.post_attack_bursts(&held, &kind);
+    }
+    /// `minecraft:post_attack` explode effects on the attacker (wind burst):
+    /// a burst at the player's feet that only knocks back and triggers
+    /// blocks (`ExplodeEffect` with `block_interaction: trigger`).
+    fn post_attack_bursts(&mut self, held: &ItemStack, victim: &str) {
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        // EntityFlagsPredicate.isFlying: gliding or flying.
+        let motion = (p.fall_distance, p.fall_flying || p.flying);
+        let feet = [p.position.x, p.position.y, p.position.z];
+        let ctx = EffectContext {
+            this: Some(victim),
+            attacker: Some("minecraft:player"),
+            direct_attacker: Some("minecraft:player"),
+            is_direct: true,
+            items: Some(&self.res.items),
+            direct_motion: Some(motion),
+            ..Default::default()
+        };
+        let mut bursts = Vec::new();
+        for (id, level) in held.enchantments() {
+            let Some(def) = self.res.stations.enchantments.get(id) else {
+                continue;
+            };
+            for effect in def.effects["minecraft:post_attack"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                let e = &effect["effect"];
+                if effect["enchanted"] != "attacker"
+                    || effect["affected"] != "attacker"
+                    || e["type"] != "minecraft:explode"
+                    || e["block_interaction"] != "trigger"
+                {
+                    continue;
+                }
+                let ok = effect.get("requirements").is_none_or(|r| {
+                    self.res.stations.enchantments.condition(
+                        r,
+                        *level,
+                        &ctx,
+                        &mut self.world.random,
+                    )
+                });
+                if !ok {
+                    continue;
+                }
+                let radius = horizon_client::enchant::level_value(&e["radius"], *level).max(0.0);
+                // ExplosionDamageCalculator.getKnockbackMultiplier: 1 unless given.
+                let knockback = if e["knockback_multiplier"].is_null() {
+                    1.0
+                } else {
+                    horizon_client::enchant::level_value(&e["knockback_multiplier"], *level)
+                };
+                bursts.push((radius, knockback));
+            }
+        }
+        for (radius, knockback) in bursts {
+            let _ = self.wind_burst(feet, radius, knockback, false, false);
+        }
     }
     /// Burning mobs (fire aspect): one damage every 20 ticks, flame particles.
     pub(super) fn tick_burning(&mut self) {
@@ -348,6 +411,45 @@ impl Game<'_> {
                 1.0,
             ) == 0.0;
         (f64::from(power), infinity)
+    }
+    /// `EnchantmentHelper.onProjectileSpawned` ignite effects of the held bow
+    /// (flame): the seconds the new arrow burns for.
+    pub(super) fn bow_projectile_ignite(&mut self) -> Option<f32> {
+        let bow = self.inventory[self.selected].clone()?;
+        let ctx = EffectContext {
+            this: Some("minecraft:arrow"),
+            items: Some(&self.res.items),
+            ..Default::default()
+        };
+        let mut ignite: Option<f32> = None;
+        for (id, level) in bow.enchantments() {
+            let Some(def) = self.res.stations.enchantments.get(id) else {
+                continue;
+            };
+            for effect in def.effects["minecraft:projectile_spawned"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                if effect["effect"]["type"] != "minecraft:ignite" {
+                    continue;
+                }
+                let ok = effect.get("requirements").is_none_or(|r| {
+                    self.res.stations.enchantments.condition(
+                        r,
+                        *level,
+                        &ctx,
+                        &mut self.world.random,
+                    )
+                });
+                if ok {
+                    let seconds =
+                        horizon_client::enchant::level_value(&effect["effect"]["duration"], *level);
+                    ignite = Some(ignite.map_or(seconds, |s: f32| s.max(seconds)));
+                }
+            }
+        }
+        ignite
     }
     /// Enchantment attribute modifiers of worn armor (respiration, depth strider...).
     pub(super) fn apply_enchantment_attributes(&mut self) {

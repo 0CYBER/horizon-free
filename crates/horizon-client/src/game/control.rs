@@ -163,6 +163,12 @@ impl Game<'_> {
                         self.debug_key(key, KeyAction::Release);
                     }
                 }
+                // The zoom extra sees the key as the keyboard hook does.
+                let action = arg(2)?;
+                self.extras_key(physical, action != "up", false);
+                if action == "tap" {
+                    self.extras_key(physical, false, false);
+                }
                 // Text screens consume raw presses; releases follow key binds.
                 let typing = matches!(self.screen, Screen::Chat | Screen::Options);
                 let key = if typing && arg(2)? != "up" {
@@ -228,9 +234,17 @@ impl Game<'_> {
                     .into());
                 }
                 match arg(2)? {
-                    "down" => self.play_mouse(button, true)?,
-                    "up" => self.play_mouse(button, false)?,
+                    "down" => {
+                        self.extras_mouse(button, true);
+                        self.play_mouse(button, true)?
+                    }
+                    "up" => {
+                        self.extras_mouse(button, false);
+                        self.play_mouse(button, false)?
+                    }
                     "click" => {
+                        self.extras_mouse(button, true);
+                        self.extras_mouse(button, false);
                         self.play_mouse(button, true)?;
                         self.play_mouse(button, false)?;
                     }

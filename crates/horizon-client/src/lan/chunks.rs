@@ -263,6 +263,22 @@ impl ChunkEncoder {
             }
             sections.push(encoded);
         }
+        // A loaded chunk's block entities enter its maps in the save's order
+        // (ChunkAccess.pendingBlockEntities, then LevelChunk.blockEntities):
+        // keys that share a bucket keep that order. Others follow in scan order.
+        if let Some(order) = chunk.saved.as_ref().map(|s| &s.block_entity_order)
+            && !order.is_empty()
+        {
+            let at = |e: &BlockEntityInfo| {
+                let pos = (
+                    chunk.x * 16 + i32::from(e.packed_xz as u8 >> 4),
+                    i32::from(e.y),
+                    chunk.z * 16 + i32::from(e.packed_xz as u8 & 15),
+                );
+                order.iter().position(|p| *p == pos).unwrap_or(usize::MAX)
+            };
+            entity_infos.sort_by_key(at);
+        }
         java_hash_order(&mut entity_infos, |e| {
             (
                 chunk.x * 16 + i32::from(e.packed_xz as u8 >> 4),

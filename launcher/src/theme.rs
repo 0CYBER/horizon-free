@@ -1,43 +1,40 @@
-//! The launcher's view of Horizon's design tokens (`crates/horizon-theme`), which the game's
-//! menus share: one neutral palette in two appearances and one accent, spacing 4/8/12/16/24/32,
-//! Geist / Instrument Serif / Geist Mono (bundled, SIL Open Font License), five sizes.
+//! The launcher's view of Horizon's design tokens (`crates/horizon-theme`, described in
+//! `docs/design-system.md`), which the game's menus and the website share: cool neutrals in two
+//! appearances and one violet accent, Geist and Geist Mono (bundled, SIL Open Font License).
 use gpui::{rgb, Hsla, WindowAppearance};
 use horizon_theme as tokens;
 use std::time::Duration;
 
+pub use tokens::{Step, BODY, CAPTION, DISPLAY, HEADING, LABEL, MICRO, TITLE, UI, WORDMARK};
 pub const FONT: &str = tokens::FONT;
-pub const DISPLAY: &str = tokens::DISPLAY;
 pub const MONO: &str = tokens::MONO;
 
-pub const SMALL: f32 = tokens::SMALL;
-pub const BODY: f32 = tokens::BODY;
-pub const LARGE: f32 = tokens::LARGE;
-pub const TITLE: f32 = tokens::TITLE;
-pub const HERO: f32 = tokens::HERO;
-
-/// Shapes and controls, shared with the game's menus.
+/// Shapes and controls, shared with the game's menus and the website.
 pub use tokens::{
-    CONTROL, DISABLED, PRESSED, PRESSED_SOFT, PRIMARY_HOVER, RADIUS, RADIUS_GROUP, RADIUS_SEGMENT,
-    ROW_LABEL, SEGMENT, SIDEBAR,
+    CONTROL, CONTROL_LARGE, DISABLED, FIELD, GUTTER, INDEX, PLATE_BLEED, PRESSED, RADIUS,
+    RADIUS_PILL, RADIUS_PLATE, RISE, ROW, SEGMENT,
 };
 
 /// Motion: short and eased out, never bouncy.
-pub const QUICK: Duration = tokens::QUICK;
-pub const MOVE: Duration = tokens::MOVE;
+pub const QUICK: Duration = tokens::QUICK.duration();
+pub const MOVE: Duration = tokens::MOVE.duration();
+pub const ENTER: Duration = tokens::ENTER.duration();
+pub const STAGGER: Duration = tokens::STAGGER;
 
 #[derive(Clone, Copy)]
 pub struct Theme {
-    pub bg: Hsla,
-    pub sidebar: Hsla,
-    pub raised: Hsla,
-    pub hover: Hsla,
-    pub border: Hsla,
-    pub text: Hsla,
+    pub page: Hsla,
+    pub plate_soft: Hsla,
+    pub plate: Hsla,
+    pub surface: Hsla,
+    pub rule: Hsla,
+    pub ink: Hsla,
+    pub ink_soft: Hsla,
     pub muted: Hsla,
-    pub faint: Hsla,
     pub accent: Hsla,
     pub on_accent: Hsla,
     pub danger: Hsla,
+    pub success: Hsla,
     pub dark: bool,
 }
 
@@ -46,7 +43,14 @@ fn c(hex: u32) -> Hsla {
 }
 
 impl Theme {
+    /// The system's appearance; `HORIZON_LAUNCHER_APPEARANCE=light` or `dark` overrides it (for
+    /// screenshots and tests).
     pub fn for_appearance(appearance: WindowAppearance) -> Self {
+        match std::env::var("HORIZON_LAUNCHER_APPEARANCE").as_deref() {
+            Ok("light") => return Self::light(),
+            Ok("dark") => return Self::dark(),
+            _ => {}
+        }
         match appearance {
             WindowAppearance::Light | WindowAppearance::VibrantLight => Self::light(),
             _ => Self::dark(),
@@ -63,17 +67,18 @@ impl Theme {
 
     fn from(p: tokens::Palette) -> Self {
         Self {
-            bg: c(p.bg),
-            sidebar: c(p.sidebar),
-            raised: c(p.raised),
-            hover: c(p.hover),
-            border: c(p.border),
-            text: c(p.text),
+            page: c(p.page),
+            plate_soft: c(p.plate_soft),
+            plate: c(p.plate),
+            surface: c(p.surface),
+            rule: c(p.rule),
+            ink: c(p.ink),
+            ink_soft: c(p.ink_soft),
             muted: c(p.muted),
-            faint: c(p.faint),
             accent: c(p.accent),
             on_accent: c(p.on_accent),
             danger: c(p.danger),
+            success: c(p.success),
             dark: p.dark,
         }
     }

@@ -44,6 +44,8 @@ pub enum Blend {
     Vignette,
     /// `GUI_NAUSEA_OVERLAY`: additive.
     Nausea,
+    /// `CROSSHAIR`: `BlendFunction.INVERT`, the colour under it inverted.
+    Crosshair,
 }
 impl Blend {
     pub fn pipeline(self) -> &'static str {
@@ -51,6 +53,7 @@ impl Blend {
             Blend::Textured => "pipeline/gui_textured",
             Blend::Vignette => "pipeline/vignette",
             Blend::Nausea => "pipeline/gui_nausea_overlay",
+            Blend::Crosshair => "pipeline/crosshair",
         }
     }
 }
@@ -58,8 +61,8 @@ impl Blend {
 /// One `GuiGraphicsExtractor` call.
 #[derive(Clone, Debug, PartialEq)]
 pub enum GuiDraw {
-    /// `blitSprite(sprite, x, y, w, h, color)`; `region` = (spriteW,
-    /// spriteH, u, v) for the partial overload.
+    /// `blitSprite(pipeline, sprite, x, y, w, h, color)`; `region` =
+    /// (spriteW, spriteH, u, v) for the partial overload.
     Sprite {
         sprite: Cow<'static, str>,
         x: i32,
@@ -68,6 +71,7 @@ pub enum GuiDraw {
         h: i32,
         region: Option<[i32; 4]>,
         color: u32,
+        blend: Blend,
     },
     /// `blitSprite(pipeline, TextureAtlasSprite, ...)` with a block atlas
     /// sprite (the nether portal overlay).
@@ -136,6 +140,7 @@ fn sprite(sprite: &'static str, x: i32, y: i32, w: i32, h: i32) -> GuiDraw {
         h,
         region: None,
         color: WHITE,
+        blend: Blend::Textured,
     }
 }
 fn region(
@@ -154,7 +159,15 @@ fn region(
         h,
         region: Some([size[0], size[1], uv[0], uv[1]]),
         color: WHITE,
+        blend: Blend::Textured,
     }
+}
+/// A draw through `RenderPipelines.CROSSHAIR`.
+fn crosshair_blend(mut d: GuiDraw) -> GuiDraw {
+    if let GuiDraw::Sprite { blend, .. } = &mut d {
+        *blend = Blend::Crosshair;
+    }
+    d
 }
 /// `graphics.fill`: the corners are sorted.
 pub fn fill(x0: i32, y0: i32, x1: i32, y1: i32, color: u32) -> GuiDraw {
@@ -365,10 +378,25 @@ pub fn hotbar(w: i32, h: i32, i: &HotbarInputs) -> Vec<GuiDraw> {
     out
 }
 
-/// `Hud.extractCrosshair` (first person, not hidden for spectators):
-/// `attack` is `getAttackStrengthScale(0)` in CROSSHAIR indicator mode and
-/// `full` whether the full indicator shows for a target in reach.
+/// `Hud.extractCrosshair`'s full attack indicator: at full strength on a
+/// living, alive `crosshairPickEntity` (`target`) with a weapon slower than
+/// `MIN_CROSSHAIR_ATTACK_SPEED` (`delay` is
+/// `getCurrentItemAttackStrengthDelay`).
+pub fn full_attack_indicator(scale: f32, delay: f32, target: Option<bool>) -> bool {
+    scale >= 1.0 && delay > 5.0 && target == Some(true)
+}
+
+/// `Hud.extractCrosshair` (first person, not hidden for spectators), every
+/// sprite through the inverting `CROSSHAIR` pipeline: `attack` is
+/// `getAttackStrengthScale(0)` in CROSSHAIR indicator mode and `full`
+/// whether the full indicator shows ([`full_attack_indicator`]).
 pub fn crosshair(w: i32, h: i32, attack: Option<f32>, full: bool) -> Vec<GuiDraw> {
+    crosshair_draws(w, h, attack, full)
+        .into_iter()
+        .map(crosshair_blend)
+        .collect()
+}
+fn crosshair_draws(w: i32, h: i32, attack: Option<f32>, full: bool) -> Vec<GuiDraw> {
     let mut out = vec![sprite("hud/crosshair", (w - 15) / 2, (h - 15) / 2, 15, 15)];
     if let Some(scale) = attack {
         let (x, y) = (w / 2 - 8, h / 2 - 7 + 16);
@@ -760,6 +788,7 @@ pub fn paint(batch: &mut crate::hud::HudBatch, atlas: &crate::hud::HudAtlas, dra
                 h,
                 region,
                 color,
+                blend,
             } => {
                 // Effect sprites belong to the mob_effect atlas directory;
                 // the other blitSprite ids refer to GUI sprites.
@@ -781,6 +810,9 @@ pub fn paint(batch: &mut crate::hud::HudBatch, atlas: &crate::hud::HudAtlas, dra
                     r.v0 = v0;
                 }
                 batch.rect_uv(*x as f32, *y as f32, *w as f32, *h as f32, r, abgr(*color));
+                if *blend == Blend::Crosshair {
+                    batch.invert_since(start);
+                }
             }
             GuiDraw::AtlasSprite {
                 sprite,

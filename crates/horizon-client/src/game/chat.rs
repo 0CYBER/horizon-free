@@ -7,7 +7,7 @@ use horizon_client::{
     gamerules::GameRules,
     hud::{HudBatch, rgba},
     screen_draw::Measure,
-    text::Text,
+    text::{ClickEvent, Style, Text},
 };
 use std::collections::BTreeMap;
 use winit::{
@@ -78,8 +78,8 @@ pub struct UiState {
     pub hide_gui: bool,
     /// Death message key set by the cause of death (e.g. /kill).
     pub death_cause: Option<String>,
-    /// File name of an F2 screenshot waiting for its frame.
-    pub screenshot_message: Option<String>,
+    /// Path of an F2 screenshot waiting for its frame.
+    pub screenshot_message: Option<std::path::PathBuf>,
     /// The options screens.
     pub options: horizon_client::options_ui::OptionsUi,
     /// The prepared resources before resource packs are layered on.
@@ -538,14 +538,37 @@ impl Game<'_> {
         let height = self.renderer.as_ref().map_or(720.0, |r| {
             HudBatch::new([r.config.width, r.config.height]).height
         });
-        let _ = height;
         let m = Measure(&self.res.atlas.font);
         let c = Commands {
             dispatcher: vanilla::game_dispatcher(),
             registries: &self.ui.registries,
         };
         if let Some(screen) = self.ui.chat_screen.as_mut() {
-            screen.click(&m, &c, cursor.0 as f64, cursor.1 as f64);
+            if screen.click(&m, &c, cursor.0 as f64, cursor.1 as f64) {
+                return;
+            }
+        } else {
+            return;
+        }
+        match self.ui.chat.click_at(
+            &self.res.atlas.font,
+            height as i32,
+            cursor.0 as f64,
+            cursor.1 as f64,
+        ) {
+            Some(ClickEvent::CopyToClipboard(value)) => {
+                use horizon_client::clipboard::Clipboard;
+                self.clipboard.set(&value);
+            }
+            Some(ClickEvent::OpenFile(path)) => {
+                super::packs::open_folder(std::path::Path::new(&path));
+            }
+            Some(ClickEvent::SuggestCommand(command)) => {
+                if let Some(screen) = self.ui.chat_screen.as_mut() {
+                    screen.suggest_command(&m, &c, &command);
+                }
+            }
+            None => {}
         }
     }
     /// Chat lines over the HUD (focused while the chat screen is open).
@@ -745,16 +768,28 @@ impl Game<'_> {
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
-        renderer.screenshot = Some(dir.join(&name));
-        self.ui.screenshot_message = Some(name);
+        let path = dir.join(name);
+        renderer.screenshot = Some(path.clone());
+        self.ui.screenshot_message = Some(path);
     }
     /// After a frame: report a finished F2 screenshot in chat.
     pub(super) fn finish_screenshot(&mut self, result: &std::result::Result<[u32; 2], String>) {
-        let Some(name) = self.ui.screenshot_message.take() else {
+        let Some(path) = self.ui.screenshot_message.take() else {
             return;
         };
         let message = match result {
-            Ok(_) => Text::translate("screenshot.success", &[Text::literal(name).underlined()]),
+            Ok(_) => {
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                let link = Text::styled(
+                    name,
+                    Style {
+                        underlined: Some(true),
+                        click: Some(ClickEvent::OpenFile(path.to_string_lossy().into_owned())),
+                        ..Style::default()
+                    },
+                );
+                Text::translate("screenshot.success", &[link])
+            }
             Err(e) => Text::translate("screenshot.failure", &[Text::literal(e.clone())]),
         };
         let focused = self.screen == Screen::Chat;

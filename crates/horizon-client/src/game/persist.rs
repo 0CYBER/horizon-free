@@ -6,6 +6,7 @@ use horizon_client::{
     Result,
     chunk::Chunk,
     entity_nbt,
+    mobs::Who,
     save::{ChunkExtras, random_uuid},
 };
 use horizon_core::{geometry::Vec3, position::ChunkPos, random::RandomSource, ticks::ChunkTicks};
@@ -186,8 +187,15 @@ impl Game<'_> {
                     }
                     "minecraft:experience_orb" => self.orbs.extend(entity_nbt::orbs_from_nbt(&tag)),
                     "minecraft:arrow" => {
-                        if let Some(a) = entity_nbt::arrow_from_nbt(&tag, player_uuid) {
-                            self.arrows.push(a);
+                        if let Some((mut p, in_block)) = entity_nbt::arrow_from_nbt(
+                            &tag,
+                            player_uuid,
+                            super::dispenser::tipped_effect,
+                        ) {
+                            if let Some(a) = p.arrow.as_mut() {
+                                a.last_state = in_block.and_then(|t| self.state_from_nbt(&t));
+                            }
+                            self.creatures.projectiles.push(p);
                         }
                     }
                     "minecraft:falling_block" => {
@@ -198,6 +206,8 @@ impl Game<'_> {
                             let (no_gravity, drop_item) = entity_nbt::falling_block_flags(&tag);
                             self.falling.push(FallingBlock {
                                 state,
+                                // DATA_START_POS is not persisted by vanilla.
+                                start_pos: horizon_core::position::BlockPos::default(),
                                 position,
                                 previous: position,
                                 velocity,
@@ -517,7 +527,7 @@ impl Game<'_> {
             .id(&state)
             .or_else(|| registry.default_state(&state.name))
     }
-    fn state_to_nbt(&self, state: BlockStateId) -> Tag {
+    pub(in crate::game) fn state_to_nbt(&self, state: BlockStateId) -> Tag {
         let registry = self.res.assets.registry;
         match registry.state(state) {
             Some(s) if registry.default_state(&s.name) == Some(state) => {
@@ -579,14 +589,23 @@ impl Game<'_> {
                     .push(with_raw(entity_nbt::orb_to_nbt(o, uuid), raw.as_ref()));
             }
         }
-        for a in &self.arrows {
-            if keys.contains(&chunk_of(a.position)) {
-                let owner = if a.from_player { player_uuid } else { None };
-                let (uuid, raw) = anon(&self.persist, "minecraft:arrow", a.position);
-                out.entry(chunk_of(a.position)).or_default().push(with_raw(
-                    entity_nbt::arrow_to_nbt(a, uuid, owner),
-                    raw.as_ref(),
-                ));
+        for p in &self.creatures.projectiles {
+            if !keys.contains(&chunk_of(p.position)) {
+                continue;
+            }
+            let owner = if p.owner == Some(Who::Player) {
+                player_uuid
+            } else {
+                None
+            };
+            let (uuid, raw) = anon(&self.persist, "minecraft:arrow", p.position);
+            let in_block = p
+                .arrow
+                .as_ref()
+                .and_then(|a| a.last_state)
+                .map(|s| self.state_to_nbt(s));
+            if let Some(tag) = entity_nbt::arrow_to_nbt(p, uuid, owner, in_block, raw.as_ref()) {
+                out.entry(chunk_of(p.position)).or_default().push(tag);
             }
         }
         for f in &self.falling {
@@ -796,7 +815,9 @@ impl Game<'_> {
                 keep
             });
             self.orbs.retain(|o| !gone(o.position));
-            self.arrows.retain(|a| !gone(a.position));
+            self.creatures
+                .projectiles
+                .retain(|p| p.arrow.is_none() || !gone(p.position));
             self.falling.retain(|f| !gone(f.position));
             self.persist
                 .anon

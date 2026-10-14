@@ -494,14 +494,16 @@ impl Game<'_> {
         Ok(())
     }
 
-    /// Dying in the End respawns in the Overworld.
+    /// Dying away from the Overworld respawns at the world spawn there.
     pub(super) fn respawn_out_of_end(&mut self) -> Result<()> {
-        if self.dim != Dim::End || self.player.is_none() {
+        if self.dim == Dim::Overworld || self.player.is_none() {
             return Ok(());
         }
         self.end_portal_travel = true;
         let result = self.enter_dimension(Dim::Overworld);
         self.end_portal_travel = false;
+        // The arrival places a fresh player at the spawn.
+        self.end_travel = true;
         result
     }
 
@@ -879,130 +881,67 @@ impl Game<'_> {
         Ok(())
     }
 
-    /// The End crystals on the spikes and thrown eyes of ender, as
-    /// camera-relative entity geometry (End portals and gateways are block
-    /// entities).
+    /// End crystals (on the spikes, or placed in any dimension) and thrown
+    /// eyes of ender, as camera-relative entity geometry (End portals and
+    /// gateways are block entities).
     pub(super) fn end_geometry(&self, camera: glam::DVec3, out: &mut Vec<Vertex>) {
-        if self.dim == Dim::End {
-            self.end_crystal_geometry(camera, out);
-        }
+        self.end_crystal_geometry(camera, out);
         self.eye_geometry(camera, out);
     }
 
-    /// EndCrystalRenderer and EndCrystalModel for the end crystals.
+    /// EndCrystalRenderer and EndCrystalModel for the end crystals, and the
+    /// beam to a crystal's target (the spikes being summoned back).
     fn end_crystal_geometry(&self, camera: glam::DVec3, out: &mut Vec<Vertex>) {
-        let Some(r) = self
-            .res
-            .atlas
-            .sprites
-            .get("entity/end_crystal/end_crystal")
-            .copied()
-        else {
+        let (Some(model), Some(r)) = (
+            self.crystal_model.as_ref(),
+            self.res
+                .atlas
+                .sprites
+                .get("entity/end_crystal/end_crystal")
+                .copied(),
+        ) else {
             return;
         };
-        let sin45 = std::f32::consts::FRAC_PI_4.sin();
-        let axis = glam::Vec3::new(sin45, 0.0, sin45).normalize();
-        let tilt = glam::Quat::from_axis_angle(axis, std::f32::consts::FRAC_PI_3);
-        // A 8×8×8 model box at texture offset (u, v) of the 64×32 texture.
-        let uv = |u: f32, v: f32, w: f32, h: f32| {
-            let su = |x: f32| r.u0 + (r.u1 - r.u0) * x / 64.0;
-            let sv = |y: f32| r.v0 + (r.v1 - r.v0) * y / 32.0;
-            (su(u), su(u + w), sv(v), sv(v + h))
-        };
+        let uv = [r.u0, r.v0, r.u1, r.v1];
+        let partial = self.clock.fraction() as f32;
         for crystal in &self.crystals {
             let feet = glam::DVec3::new(crystal.position.x, crystal.position.y, crystal.position.z);
-            let age = crystal.time as f32 + self.clock.fraction() as f32;
-            let spin = glam::Quat::from_rotation_y((age * 3.0).to_radians());
-            let hh = (age * 0.2).sin() / 2.0 + 0.5;
-            let bob = (hh * hh + hh) * 0.4 - 1.4;
             let rel = feet - camera;
             if rel.length_squared() > 256.0 * 256.0 {
                 continue;
             }
+            let age = crystal.time as f32 + partial;
             let light = self.world.light(
                 feet.x.floor() as i32,
                 feet.y.floor() as i32,
                 feet.z.floor() as i32,
             );
             let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
-            // poseStack.scale(2) then translate(0, -0.5, 0); outer_glass at y 24 px + bob.
-            let center = rel.as_vec3() + glam::Vec3::new(0.0, 2.0 * (24.0 / 16.0 - 0.5) + bob, 0.0);
-            let outer = spin * tilt;
-            let inner = tilt * spin;
-            let parts = [
-                (outer, 1.0, 0.0),
-                (outer * inner, 0.875, 0.0),
-                (outer * inner * inner, 0.875 * 0.765_625, 32.0),
-            ];
-            for (rotation, scale, u) in parts {
-                // Half extent: 4 px, times the renderer's scale of 2.
-                let h = 0.25 * 2.0 * scale;
-                let corner = |x: f32, y: f32, z: f32| {
-                    center + rotation * glam::Vec3::new(x * h, y * h, z * h)
-                };
-                let faces: [([f32; 3], [f32; 3], [f32; 3], (f32, f32, f32, f32)); 6] = [
-                    (
-                        [-1.0, 1.0, -1.0],
-                        [1.0, 0.0, 0.0],
-                        [0.0, 0.0, 1.0],
-                        uv(u + 8.0, 0.0, 8.0, 8.0),
-                    ),
-                    (
-                        [-1.0, -1.0, -1.0],
-                        [1.0, 0.0, 0.0],
-                        [0.0, 0.0, 1.0],
-                        uv(u + 16.0, 0.0, 8.0, 8.0),
-                    ),
-                    (
-                        [-1.0, -1.0, -1.0],
-                        [0.0, 0.0, 1.0],
-                        [0.0, 1.0, 0.0],
-                        uv(u, 8.0, 8.0, 8.0),
-                    ),
-                    (
-                        [-1.0, -1.0, -1.0],
-                        [1.0, 0.0, 0.0],
-                        [0.0, 1.0, 0.0],
-                        uv(u + 8.0, 8.0, 8.0, 8.0),
-                    ),
-                    (
-                        [1.0, -1.0, -1.0],
-                        [0.0, 0.0, 1.0],
-                        [0.0, 1.0, 0.0],
-                        uv(u + 16.0, 8.0, 8.0, 8.0),
-                    ),
-                    (
-                        [-1.0, -1.0, 1.0],
-                        [1.0, 0.0, 0.0],
-                        [0.0, 1.0, 0.0],
-                        uv(u + 24.0, 8.0, 8.0, 8.0),
-                    ),
-                ];
-                for (o, a, b, (u0, u1, v0, v1)) in faces {
-                    let p = |s: f32, t: f32| {
-                        corner(
-                            o[0] + 2.0 * (a[0] * s + b[0] * t),
-                            o[1] + 2.0 * (a[1] * s + b[1] * t),
-                            o[2] + 2.0 * (a[2] * s + b[2] * t),
-                        )
-                    };
-                    let quad = [
-                        (p(0.0, 0.0), [u0, v1]),
-                        (p(1.0, 0.0), [u1, v1]),
-                        (p(1.0, 1.0), [u1, v0]),
-                        (p(0.0, 1.0), [u0, v0]),
-                    ];
-                    for (pos, uv) in quad {
-                        out.push(Vertex {
-                            normal: [0; 4],
-                            pos: pos.to_array(),
-                            uv,
-                            layer: 0,
-                            color: 0xFFFF_FFFF,
-                            light: packed,
-                        });
-                    }
-                }
+            let poses = horizon_client::end_crystal::poses(model, age, crystal.show_bottom);
+            // poseStack.scale(2) then translate(0, -0.5, 0), not flipped.
+            let base = glam::Mat4::from_translation(rel.as_vec3())
+                * glam::Mat4::from_scale(glam::Vec3::splat(2.0))
+                * glam::Mat4::from_translation(glam::Vec3::new(0.0, -0.5, 0.0));
+            horizon_client::mobs::render::draw(
+                model,
+                base,
+                &poses,
+                uv,
+                0xFFFF_FFFF,
+                packed,
+                0,
+                out,
+            );
+            if let Some(target) = crystal.beam {
+                // The beam from the target's centre up to the bobbing crystal.
+                let from = glam::DVec3::new(
+                    f64::from(target[0]) + 0.5,
+                    f64::from(target[1]) + 0.5,
+                    f64::from(target[2]) + 0.5,
+                );
+                let delta = feet - from
+                    + glam::DVec3::new(0.0, f64::from(horizon_client::end_crystal::y(age)), 0.0);
+                self.crystal_beam(from, delta, age, camera, out);
             }
         }
     }

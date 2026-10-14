@@ -21,8 +21,11 @@ The opening, then Play ([clip](docs/opening.webm)):
   server (`--dedicated --nogui`) in a folder you choose, with a live console. Preparing is
   horizon-prepare: linked into the launcher, used in-process when a version ships the same
   preparer sources, else that version's own `horizon-prepare`; versions released before it
-  still prepare with their Python script and need Python 3.10+.
-- **Patch notes**: each release's notes, newest first, with a link to GitHub Sponsors. Quiet "Join Discord" and "Website" links sit in the sidebar footer.
+  still prepare with their Python script and need Python 3.10+. Before importing,
+  preparation reuses checksum-verified game jars and libraries from the current
+  or another installed Horizon version, so the original Minecraft install is
+  only required when no valid imported copy exists.
+- **Patch notes**: each release's notes, newest first, with a link to GitHub Sponsors. Quiet "Discord" and "Website" links sit in the footer.
 
 Data lives in the platform's data directory (`~/.local/share/horizon-launcher` on Linux,
 `~/Library/Application Support/horizon-launcher` on macOS, `%APPDATA%\horizon-launcher` on
@@ -46,14 +49,15 @@ is open, and shows a small "available, Install" line on Play.
 
 It also updates itself from GitHub releases tagged `launcher-vX.Y.Z` (Horizon's own are
 `vYYYY.MM.DD`; neither is ever taken for the other). It downloads the new build, replaces its
-own binary, and offers "Restart to update" in the sidebar. Development builds and
+own binary, and offers "Restart" in the footer. Development builds and
 `HORIZON_LAUNCHER_NO_SELF_UPDATE=1` never replace themselves.
 
-To release the launcher: set `version` in `Cargo.toml`, then push a tag `launcher-vX.Y.Z`. The
-`launcher` workflow builds Linux, macOS and Windows and attaches
-`horizon-launcher-linux-x86_64.tar.gz`, `horizon-launcher-macos-arm64.zip` and
-`horizon-launcher-windows-x64.zip` to a draft release of that tag, never marked latest. Publish
-it by hand.
+Launcher releases are automatic (docs/release-flow.md in the repository): when main changes the
+launcher, `horizon-prepare` or `horizon-theme`, the `launcher` workflow builds Linux, macOS and
+Windows and publishes `launcher-vX.Y.Z` (the next patch, or the next minor after a pull request
+labelled `feature`) with `horizon-launcher-linux-x86_64.tar.gz`, `horizon-launcher-macos-arm64.zip`
+and `horizon-launcher-windows-x64.zip`, never marked latest. The version is built in from the tag
+(`HORIZON_LAUNCHER_VERSION`); `Cargo.toml`'s version is only what local builds report.
 
 ## Command line
 
@@ -70,9 +74,14 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher menu-style [horizon|classic]   show or set the game's menu style
     horizon-launcher update [--check]               Horizon and the launcher
     horizon-launcher logs [--lines N] [--crash]     the end of the game's log, or its newest crash report
+    horizon-launcher account [list]                 the Microsoft accounts signed in (* = plays)
+    horizon-launcher account sign-in                sign in in your browser with a code
+    horizon-launcher account sign-out <name>
+    horizon-launcher account select <name>          play as this account
+    horizon-launcher account offline                play without an account
 
 `--json` prints JSON where there is something to report (`versions`, `install`, `notes`,
-`next`, `links`, `menu-style`, `update --check`, `logs`). Errors go to stderr with exit code 1. `server` runs in the terminal,
+`next`, `links`, `menu-style`, `update --check`, `logs`, `account`). Errors go to stderr with exit code 1. `server` runs in the terminal,
 so lines you type reach its console. `HORIZON_LAUNCHER_HOME` replaces the data folder (for
 scripts and tests).
 
@@ -84,12 +93,28 @@ scripts and tests).
 
 (with the full path to the binary if it is not on your `PATH`). Its tools: `list_versions`,
 `install_version`, `remove_version`, `prepare_resources`, `launch_client`, `start_server`,
-`server_command`, `server_log`, `stop_server`, `patch_notes`, `links`, `menu_style`, `logs` and
-`check_updates`.
+`server_command`, `server_log`, `stop_server`, `patch_notes`, `links`, `menu_style`, `logs`,
+`check_updates`, `accounts`, `sign_in` (returns the link and code for the player; the sign-in
+finishes in the background), `sign_out` and `select_account`.
 A server started through MCP stops (cleanly, with `stop`) when the session ends. Starting one
 needs `accept_eula`, which an agent should only pass with the player's consent.
 
 The window, the command line and the MCP server all call the same core, `src/backend.rs`.
+
+## Microsoft accounts
+
+Settings → Accounts signs in a Microsoft account to play on online-mode servers under your own
+name and skin: the launcher shows a code, you enter it at microsoft.com/link, and the launcher
+checks that the account owns Minecraft: Java Edition. The Play page says who plays ("Playing as");
+without an account the game plays offline, as before. Tokens live in the system keychain (Keychain,
+Credential Manager, or the Secret Service on Linux), never in a file, a log or the command line;
+`accounts.json` in the data folder keeps only names and UUIDs. Without a keychain you stay signed
+in until the launcher closes. When the game starts, it gets the session in a private file it
+deletes as soon as it has read it. Sign out removes the tokens.
+
+Sign-in needs Horizon's own Azure app registration: its client ID is built in from
+`HORIZON_MSA_CLIENT_ID` (and `HORIZON_MSA_CLIENT_ID` at run time overrides it; empty = not
+configured). How it works: [docs/microsoft-account.md](../docs/microsoft-account.md).
 
 ## Logs and crash reports
 
@@ -114,10 +139,9 @@ client starts (`--help`) and that the binaries import only system libraries (Win
     cargo test --lib    # tag separation, version order, update selection, notes as text,
                         # the auto-install default, the links fallback, the menu style file
 
-Geist, Geist Mono and Instrument Serif (SIL Open Font License, `crates/horizon-theme/fonts/OFL-*.txt`, shared with the game's menus) are
+Geist and Geist Mono (SIL Open Font License, `crates/horizon-theme/fonts/OFL-*.txt`, shared with the game's menus) are
 bundled so the type is the same on every platform.
 
-Background image (`assets/background.jpg`): backgrounds.supply (free preview), licence to confirm before release.
 
 ## Screenshots
 

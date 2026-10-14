@@ -128,6 +128,9 @@ fn mob_meta(m: &Mob, hub: &Hub) -> Vec<(u8, i32, Value)> {
     if m.health < m.kind.max_health {
         meta.push((9, serializer::FLOAT, Value::Float(m.health.max(0.0))));
     }
+    if kind == "minecraft:rabbit" && m.no_ai {
+        meta.push((15, serializer::BYTE, Value::Byte(1)));
+    }
     if m.is_baby()
         && let Some(index) = baby_index(kind)
     {
@@ -222,9 +225,17 @@ fn mob_meta(m: &Mob, hub: &Hub) -> Vec<(u8, i32, Value)> {
                 meta.push((18, serializer::INT, Value::Int(e.size)));
             }
         }
-        // Creeper.DATA_IS_POWERED.
-        "minecraft:creeper" if e.charged => {
-            meta.push((17, serializer::BOOLEAN, Value::Bool(true)));
+        // Creeper.DATA_SWELL_DIR, DATA_IS_POWERED and DATA_IS_IGNITED: the
+        // guest swells the creeper from them. The direction always goes in,
+        // as only changed entries are sent and it drops back to -1.
+        "minecraft:creeper" => {
+            meta.push((16, serializer::INT, Value::Int(e.counter)));
+            if e.charged {
+                meta.push((17, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            if e.flag {
+                meta.push((18, serializer::BOOLEAN, Value::Bool(true)));
+            }
         }
         // Enderman.DATA_CARRY_STATE.
         "minecraft:enderman" => {
@@ -701,8 +712,10 @@ impl Game<'_> {
         }
         for e in events {
             if let horizon_world::level::LevelEvent::LevelEvent { id, pos, data } = e {
+                // The acting guest does not predict the egg's teleport particles.
+                let except = if *id == 2015 { None } else { self.lan_acting };
                 self.lan_events
-                    .push((*id, [pos.x, pos.y, pos.z], *data, self.lan_acting));
+                    .push((*id, [pos.x, pos.y, pos.z], *data, except));
             }
         }
     }

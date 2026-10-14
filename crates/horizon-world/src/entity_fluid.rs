@@ -157,7 +157,7 @@ pub fn has_fluid_and_loaded<W: FluidInteractionWorld>(
     }
     Ok(present)
 }
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct EntityFluidInteraction {
     trackers: Vec<FluidTracker>,
     currents: Vec<(FluidTagId, CurrentAccumulator)>,

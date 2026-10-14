@@ -151,6 +151,9 @@ impl Game<'_> {
                 .find(|b| b.5 && ui::hovered(self.cursor, b.0, b.1, b.2, 20.0))
                 .map(|b| b.4)
         };
+        if hit.is_some() && !horizon_client::ui_theme::horizon() {
+            self.audio.play_button_click();
+        }
         match hit {
             Some(0) => {
                 self.screen = Screen::Playing;
@@ -255,11 +258,24 @@ impl Game<'_> {
             .into_iter()
             .find(|d| ui::hovered(self.cursor, d.0, d.1, 200.0, 20.0))
             .map(|d| d.3);
+        if hit.is_some() {
+            self.audio.play_button_click();
+        }
         match hit {
             Some(0) if self.remote.is_some() => {
                 self.ui.death_text = None;
                 self.toggles.respawn();
                 self.remote_respawn();
+            }
+            Some(0) if self.respawn_config.is_some() => {
+                // LocalPlayer.respawn: KeyMapping.resetToggleKeys.
+                self.toggles.respawn();
+                // PlayerList.respawn at the respawn anchor, once it is loaded.
+                self.begin_anchor_respawn()?;
+                self.screen = Screen::Playing;
+                self.ui.death_text = None;
+                self.spawn_player()?;
+                self.capture(true);
             }
             Some(0) => {
                 // LocalPlayer.respawn: KeyMapping.resetToggleKeys.

@@ -4,7 +4,10 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 publish = false
-description = "Repository tasks: cargo run -p xtask -- package BINARY OUTDIR"
+description = "Repository tasks: cargo run -p xtask -- package BINARY OUTDIR | tokens"
+
+[dependencies]
+horizon-theme = { path = "../crates/horizon-theme" }
 
 [lints]
 workspace = true

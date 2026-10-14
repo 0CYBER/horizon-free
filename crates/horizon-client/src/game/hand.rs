@@ -212,8 +212,26 @@ impl Game<'_> {
             }
         }
     }
+    /// `Minecraft.crosshairPickEntity` when it is a `LivingEntity`: whether
+    /// it is alive (the nearest entity under the crosshair, before any block).
+    pub(super) fn crosshair_living(&self) -> Option<bool> {
+        let nearest = |hits: &[Option<f64>]| hits.iter().flatten().copied().reduce(f64::min);
+        let living = nearest(&[
+            self.mob_hit().map(|h| h.1),
+            self.armor_stand_hit().map(|h| h.1),
+            self.dragon_hit().map(|h| h.1),
+        ])?;
+        let other = nearest(&[
+            self.painting_hit().map(|h| h.1),
+            self.frame_hit().map(|h| h.1),
+            self.boat_hit().map(|h| h.1),
+            self.cart_hit().map(|h| h.1),
+        ]);
+        // Only alive mobs are hit, so a picked living entity is alive.
+        (self.before_block(living) && other.is_none_or(|o| living <= o)).then_some(true)
+    }
     /// `Attributes.ATTACK_SPEED` with the main-hand item's modifier.
-    fn main_hand_attack_speed(&self) -> f64 {
+    pub(super) fn main_hand_attack_speed(&self) -> f64 {
         horizon_client::attack_strength::BASE_ATTACK_SPEED
             + self
                 .held()

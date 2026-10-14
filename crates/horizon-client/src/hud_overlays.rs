@@ -175,6 +175,7 @@ pub fn effects(w: i32, demo: bool, effects: &[EffectIcon]) -> Vec<GuiDraw> {
             h: 24,
             region: None,
             color: crate::hud_layout::WHITE,
+            blend: crate::hud_layout::Blend::Textured,
         });
         out.push(GuiDraw::Sprite {
             sprite: Cow::Owned(format!("mob_effect/{}", e.id)),
@@ -184,6 +185,7 @@ pub fn effects(w: i32, demo: bool, effects: &[EffectIcon]) -> Vec<GuiDraw> {
             h: 18,
             region: None,
             color: white(alpha),
+            blend: crate::hud_layout::Blend::Textured,
         });
     }
     out
@@ -492,6 +494,7 @@ pub fn boss_overlay(w: i32, h: i32, bars: &[BossBar], font: &Font) -> Vec<GuiDra
                 h: 5,
                 region: Some([182, 5, 0, 0]),
                 color: crate::hud_layout::WHITE,
+                blend: crate::hud_layout::Blend::Textured,
             };
             out.push(sprite(BOSS_COLORS[bar.color].to_owned()));
             if bar.overlay != 0 {
@@ -532,6 +535,7 @@ pub fn jump_bar(w: i32, h: i32, cooldown: i32, scale: f32) -> Vec<GuiDraw> {
         h: 5,
         region,
         color: crate::hud_layout::WHITE,
+        blend: crate::hud_layout::Blend::Textured,
     };
     let mut out = vec![sprite("hud/jump_bar_background", 182, None)];
     if cooldown > 0 {

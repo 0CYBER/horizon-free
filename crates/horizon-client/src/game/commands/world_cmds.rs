@@ -89,6 +89,7 @@ impl Game<'_> {
     fn damage_kind(ty: &str) -> DamageKind {
         match ty.trim_start_matches("minecraft:") {
             "player_attack" => DamageKind::PlayerAttack,
+            "mace_smash" => DamageKind::MaceSmash,
             "mob_attack" | "mob_attack_no_aggro" => DamageKind::MobAttack,
             "arrow" => DamageKind::Arrow,
             "thrown" | "trident" | "mob_projectile" => DamageKind::Thrown,

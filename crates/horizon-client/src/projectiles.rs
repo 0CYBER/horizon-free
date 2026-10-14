@@ -76,6 +76,8 @@ pub struct Projectile {
     pub left_owner: bool,
     /// The shooter's bow enchantments (Power, Punch, Flame, Piercing).
     pub bonus: crate::mobs::gear::ArrowBonus,
+    /// Arrows' `AbstractArrow` state (ticked by `arrows::tick`).
+    pub arrow: Option<Box<crate::arrows::ArrowState>>,
 }
 /// What a projectile struck this tick.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -124,6 +126,7 @@ fn axis_of(d: u8) -> u8 {
 }
 impl Projectile {
     pub fn new(kind: ProjectileKind, position: Vec3, owner: Option<Who>) -> Self {
+        let kind_is_arrow = matches!(kind, ProjectileKind::Arrow { .. });
         Self {
             kind,
             owner,
@@ -136,6 +139,40 @@ impl Projectile {
             stuck: false,
             left_owner: false,
             bonus: Default::default(),
+            arrow: kind_is_arrow.then(|| {
+                // Entity.random: seeded unpredictably, the position stands in.
+                Box::new(crate::arrows::ArrowState::new(
+                    horizon_core::random::LegacyRandom::new(
+                        position.x.to_bits() as i64 ^ position.z.to_bits().rotate_left(17) as i64,
+                    ),
+                ))
+            }),
+        }
+    }
+    /// The arrow's own random from now on (`Entity.random`).
+    pub fn with_arrow_random(mut self, random: horizon_core::random::LegacyRandom) -> Self {
+        if let Some(a) = self.arrow.as_mut() {
+            a.random = random;
+        }
+        self
+    }
+    /// The shooter's bow enchantments; Flame spawns the arrow burning for 100
+    /// seconds (`projectile_spawned` ignite).
+    pub fn set_bonus(&mut self, bonus: crate::mobs::gear::ArrowBonus) {
+        if bonus.flame
+            && let Some(a) = self.arrow.as_mut()
+        {
+            a.ignite_for_seconds(100.0);
+        }
+        self.bonus = bonus;
+    }
+    /// `AbstractArrow.isCritArrow`.
+    pub fn critical(&self) -> bool {
+        matches!(self.kind, ProjectileKind::Arrow { critical: true, .. })
+    }
+    pub fn set_critical(&mut self, value: bool) {
+        if let ProjectileKind::Arrow { critical, .. } = &mut self.kind {
+            *critical = value;
         }
     }
     pub fn is_arrow(&self) -> bool {
@@ -478,10 +515,6 @@ impl Projectile {
         if matches!(self.kind, ProjectileKind::ShulkerBullet { .. }) {
             return self.tick_bullet(w);
         }
-        if self.stuck {
-            // AbstractArrow despawns 1200 ticks after sticking.
-            return (self.age < 1200, Hit::None);
-        }
         let water = w.in_water(self.position);
         match self.kind {
             ProjectileKind::SmallFireball
@@ -501,6 +534,7 @@ impl Projectile {
                     (v.z + v.z / len * 0.1) * inertia,
                 );
             }
+            // Arrows tick with `arrows::tick`.
             ProjectileKind::Arrow { .. } => {}
             ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge => {}
             // LlamaSpit.tick: gone in water; drag and gravity follow the move.
@@ -558,19 +592,6 @@ impl Projectile {
         }
         if let Some((at, pos, face)) = block {
             self.position = at;
-            if self.is_arrow() {
-                // AbstractArrow.onHitBlock: stick, nudged back out of the face.
-                let v = self.velocity;
-                let len = (v.x * v.x + v.y * v.y + v.z * v.z).sqrt().max(1.0e-9);
-                self.position = Vec3::new(
-                    at.x - v.x / len * 0.05,
-                    at.y - v.y / len * 0.05,
-                    at.z - v.z / len * 0.05,
-                );
-                self.stuck = true;
-                self.age = 0;
-                return (true, Hit::Block { pos, at, face });
-            }
             return (false, Hit::Block { pos, at, face });
         }
         if self.kind == ProjectileKind::LlamaSpit {
@@ -600,16 +621,7 @@ impl Projectile {
             return (self.position.y > -128.0 && self.age < 6000, Hit::None);
         }
         self.position = to;
-        if self.is_arrow() {
-            // AbstractArrow.tick: inertia 0.99 (0.6 in water) after moving, then gravity.
-            let inertia = if water { 0.6 } else { 0.99 };
-            self.velocity = Vec3::new(
-                self.velocity.x * inertia,
-                self.velocity.y * inertia - self.gravity(),
-                self.velocity.z * inertia,
-            );
-            self.update_rotation();
-        } else if !self.is_fireball() {
+        if !self.is_fireball() {
             self.update_rotation();
         }
         let alive =
@@ -702,7 +714,7 @@ mod tests {
         assert!((p.velocity.y + 0.06).abs() < 1e-9);
     }
     #[test]
-    fn arrow_applies_drag_then_gravity_after_moving() {
+    fn arrow_damage_is_speed_times_base() {
         let mut p = Projectile::new(
             ProjectileKind::Arrow {
                 base_damage: 2.0,
@@ -713,35 +725,6 @@ mod tests {
             None,
         );
         p.velocity = Vec3::new(3.0, 0.0, 0.0);
-        let w = Empty(vec![]);
-        p.tick(&w);
-        assert!((p.position.x - 3.0).abs() < 1e-9);
-        assert!((p.velocity.x - 2.97).abs() < 1e-9);
-        assert!((p.velocity.y + 0.05).abs() < 1e-9);
-    }
-    #[test]
-    fn arrow_hits_entity_box_inflated_by_margin() {
-        let target = Aabb::new(Vec3::new(2.0, 99.0, -0.3), Vec3::new(2.6, 100.8, 0.3));
-        let mut p = Projectile::new(
-            ProjectileKind::Arrow {
-                base_damage: 2.0,
-                critical: false,
-                effect: None,
-            },
-            Vec3::new(0.0, 100.0, 0.0),
-            None,
-        );
-        p.velocity = Vec3::new(3.0, 0.0, 0.0);
-        let w = Empty(vec![(Who::Mob(7), target)]);
-        let (keep, hit) = p.tick(&w);
-        assert!(!keep);
-        assert!(matches!(
-            hit,
-            Hit::Entity {
-                who: Who::Mob(7),
-                ..
-            }
-        ));
         let mut r = LegacyRandom::new(1);
         // ceil(3 * 2) = 6 for a non-critical arrow.
         assert_eq!(p.arrow_damage(&mut r), 6.0);

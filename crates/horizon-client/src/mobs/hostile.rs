@@ -142,6 +142,19 @@ impl Goal for Swell {
         m.extra.counter = dir;
     }
 }
+/// Creeper.tick on a client of a server: the synced fuse direction
+/// (DATA_SWELL_DIR, DATA_IS_IGNITED) swells the creeper the renderer draws;
+/// the server explodes it.
+pub fn creeper_client_tick(m: &mut Mob) {
+    if !m.alive() {
+        return;
+    }
+    m.previous_swell = m.swell;
+    if m.extra.flag {
+        m.extra.counter = 1;
+    }
+    m.swell = (m.swell + m.extra.counter).clamp(0, 30);
+}
 /// Creeper.tick: advance the fuse and explode at 30.
 pub fn creeper_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
     if !m.alive() {
