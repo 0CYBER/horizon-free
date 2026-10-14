@@ -5,12 +5,15 @@
 //! horizon-prepare), the exporters horizon-prepare compiles, its sources (the launcher compares
 //! them to its own), and PLAY.txt. It holds none of Minecraft's files: players prepare those
 //! from their own copy. .github/workflows/release.yml makes the release folders with it.
+//!
+//! `tokens`: writes `website/src/tokens.css`, the design tokens of `crates/horizon-theme` as CSS
+//! custom properties (a horizon-theme test fails when the file is out of date).
 
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-const USAGE: &str = "usage: cargo run -p xtask -- package BINARY OUTDIR";
+const USAGE: &str = "usage: cargo run -p xtask -- package BINARY OUTDIR | tokens";
 
 /// What the release folder takes from the repository at HEAD, as `git archive` writes it.
 const ARCHIVED: [&str; 5] = [
@@ -30,6 +33,7 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.as_slice() {
         [task, binary, out] if task == "package" => package(Path::new(binary), Path::new(out)),
+        [task] if task == "tokens" => tokens(),
         _ => Err(USAGE.to_string()),
     };
     match result {
@@ -56,6 +60,13 @@ fn git(repo: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
         ));
     }
     Ok(output.stdout)
+}
+
+fn tokens() -> Result<(), String> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../website/src/tokens.css");
+    fs::write(&path, horizon_theme::css()).map_err(|e| format!("{}: {e}", path.display()))?;
+    println!("wrote website/src/tokens.css");
+    Ok(())
 }
 
 fn package(binary: &Path, out: &Path) -> Result<(), String> {
