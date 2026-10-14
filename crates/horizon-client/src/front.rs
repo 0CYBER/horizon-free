@@ -1182,14 +1182,16 @@ pub mod pause {
         } else {
             format!("Here now: {}", f.guests.join(", "))
         };
+        let hint =
+            "Friends paste the code in Multiplayer, Join a friend, or on the launcher's Play page.";
         let lines = [
-            Some("Friends paste the code in Multiplayer, Join a friend, or on the launcher's Play page.".to_owned()),
-            Some(here),
-            f.notice.clone(),
+            Some((here, color::MUTED)),
+            f.notice.clone().map(|n| (n, color::MUTED)),
+            Some((hint.to_owned(), color::FAINT)),
         ];
-        for line in lines.into_iter().flatten() {
+        for (line, tint) in lines.into_iter().flatten() {
             let line = ui.fit(Face::Regular, SMALL, &line, cw);
-            ui.text(Face::Regular, SMALL, x, y, color::FAINT, &line);
+            ui.text(Face::Regular, SMALL, x, y, tint, &line);
             y += (SMALL * 1.45).round();
         }
         y + 12.0
