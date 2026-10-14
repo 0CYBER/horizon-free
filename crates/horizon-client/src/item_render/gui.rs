@@ -10,6 +10,8 @@ use crate::hud::{HudBatch, Rect};
 use glam::{EulerRot, Mat4, Vec2, Vec3};
 use std::{collections::HashMap, f32::consts::PI};
 
+mod depth;
+
 /// `Lighting.DIFFUSE_LIGHT_0` and `DIFFUSE_LIGHT_1`.
 fn diffuse_lights() -> (Vec3, Vec3) {
     (
@@ -177,35 +179,19 @@ fn draw_quads(
     rect: [f32; 4],
     time: f32,
 ) {
-    // Back-face culling: front faces wind counter-clockwise on screen with y up.
-    let mut visible: Vec<(f32, usize)> = quads
-        .iter()
-        .enumerate()
-        .filter(|(_, q)| {
-            let p = q.pos.map(|v| Vec2::new(v.x, -v.y));
-            let area: f32 = (0..4)
-                .map(|i| {
-                    let (a, b) = (p[i], p[(i + 1) % 4]);
-                    a.x * b.y - b.x * a.y
-                })
-                .sum();
-            area > 0.0
-        })
-        .map(|(i, q)| (q.pos.iter().map(|v| v.z).sum::<f32>() / 4.0, i))
-        .collect();
-    // Far to near; the depth buffer of the item atlas, approximated per quad.
-    visible.sort_by(|a, b| a.0.total_cmp(&b.0));
-    for (_, i) in visible {
-        let q = &quads[i];
-        let points: [Point; 4] = std::array::from_fn(|k| Point {
-            p: Vec2::new(q.pos[k].x, q.pos[k].y),
-            uv: q.uv[k],
-        });
+    for face in depth::sort(quads) {
+        let q = &quads[face.quad];
+        let points: Vec<_> = face
+            .corners
+            .iter()
+            .map(|v| Point {
+                p: v.pos.truncate(),
+                uv: v.uv,
+            })
+            .collect();
         let color = lit_color(q, lights);
-        for tri in [
-            [points[0], points[1], points[2]],
-            [points[0], points[2], points[3]],
-        ] {
+        for i in 1..points.len().saturating_sub(1) {
+            let tri = [points[0], points[i], points[i + 1]];
             let fan = clip_triangle(tri, rect);
             if fan.len() < 3 {
                 continue;
@@ -274,6 +260,102 @@ pub fn draw_banner_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn face(y0: f32, y1: f32, z: impl Fn(f32) -> f32, color: u32) -> ItemQuad {
+        ItemQuad {
+            pos: [(0.0, y0), (0.0, y1), (8.0, y1), (8.0, y0)].map(|(x, y)| Vec3::new(x, y, z(y))),
+            uv: [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]],
+            normal: Vec3::Z,
+            color,
+            foil: Foil::None,
+            light_emission: 0,
+        }
+    }
+
+    // Sample the emitted triangles in draw order, using opaque test faces.
+    fn color_at(batch: &HudBatch, p: Vec2) -> Option<u32> {
+        batch.vertices.chunks_exact(3).rev().find_map(|tri| {
+            let [a, b, c] = std::array::from_fn(|i| Vec2::from(tri[i].pos));
+            let area = (b - a).perp_dot(c - a);
+            if area.abs() < 1e-6 {
+                return None;
+            }
+            let u = (b - p).perp_dot(c - p) / area;
+            let v = (c - p).perp_dot(a - p) / area;
+            let w = 1.0 - u - v;
+            (u >= 0.0 && v >= 0.0 && w >= 0.0).then_some(tri[0].color)
+        })
+    }
+
+    #[test]
+    fn banner_cloth_occludes_the_support_at_the_top_edge() {
+        // The cloth is nearer where it overlaps the bar, although its
+        // average depth is farther away because it slopes along its height.
+        let bar = face(0.0, 1.0, |_| 0.0, 0xFF80_4000);
+        let cloth = face(0.0, 8.0, |y| 2.0 - y, 0xFFFF_FFFF);
+        let mut batch = HudBatch::new([320, 240]);
+        draw_quads(
+            &[bar, cloth],
+            (Vec3::Z, Vec3::Z),
+            &mut batch,
+            [0.0, 0.0, 16.0, 16.0],
+            0.0,
+        );
+        assert_eq!(color_at(&batch, Vec2::new(4.0, 0.5)), Some(u32::MAX));
+    }
+
+    #[test]
+    fn intersecting_faces_change_draw_order_at_their_intersection() {
+        let flat = face(0.0, 8.0, |_| 0.0, 0xFFFF_0000);
+        let tilted = face(0.0, 8.0, |y| y - 4.0, 0xFF00_00FF);
+        for quads in [[flat, tilted], [tilted, flat]] {
+            let mut batch = HudBatch::new([320, 240]);
+            draw_quads(
+                &quads,
+                (Vec3::Z, Vec3::Z),
+                &mut batch,
+                [0.0, 0.0, 16.0, 16.0],
+                0.0,
+            );
+            assert_eq!(
+                color_at(&batch, Vec2::new(4.0, 2.0)),
+                Some(lit_color(&flat, (Vec3::Z, Vec3::Z)))
+            );
+            assert_eq!(
+                color_at(&batch, Vec2::new(4.0, 6.0)),
+                Some(lit_color(&tilted, (Vec3::Z, Vec3::Z)))
+            );
+            // The cut must interpolate the texture along with the position.
+            for v in &batch.vertices {
+                assert!((v.uv[0] - v.pos[0] / 8.0).abs() < 1e-6);
+                assert!((v.uv[1] - v.pos[1] / 8.0).abs() < 1e-6);
+            }
+        }
+    }
+
+    #[test]
+    fn coplanar_pattern_layers_keep_submission_order() {
+        let base = face(0.0, 8.0, |y| 2.0 - y, 0xFFFF_FFFF);
+        let pattern = ItemQuad {
+            color: 0xFF00_00FF,
+            ..base
+        };
+        let quads = [face(0.0, 1.0, |_| 0.0, 0xFF80_4000), base, pattern];
+        let mut batch = HudBatch::new([320, 240]);
+        draw_quads(
+            &quads,
+            (Vec3::Z, Vec3::Z),
+            &mut batch,
+            [0.0, 0.0, 16.0, 16.0],
+            0.0,
+        );
+        for y in [0.5, 6.0] {
+            assert_eq!(
+                color_at(&batch, Vec2::new(4.0, y)),
+                Some(lit_color(&quads[2], (Vec3::Z, Vec3::Z)))
+            );
+        }
+    }
 
     #[test]
     fn flat_lights_match_joml() {
