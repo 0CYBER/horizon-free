@@ -47,8 +47,8 @@ Horizon is downloaded only through **the Horizon launcher**: get it from [playho
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/media/launcher-play.webp" alt="The launcher's Play page: v2026.10.13.1 ready to play, its summary, Client and Server, the Play button and prepared resources"></td>
-    <td width="50%"><img src="docs/media/launcher-patch-notes.webp" alt="The launcher's Patch notes page, showing the notes of Horizon 2026.10.13.1"></td>
+    <td width="50%"><img src="docs/media/launcher-play.webp" alt="The launcher's Play page: v2026.10.14.1 ready to play, its summary, Client and Server, the version picker and Play, the resources and the Minecraft folder as a numbered list"></td>
+    <td width="50%"><img src="docs/media/launcher-patch-notes.webp" alt="The launcher's Patch notes page, showing the notes of Horizon 2026.10.14.1"></td>
   </tr>
 </table>
 
@@ -62,7 +62,7 @@ Captured in the Rust client itself, with vanilla assets and no mods or shaders.
 
 <table>
   <tr>
-    <td colspan="2"><img src="docs/media/menu-title.webp" alt="Horizon's title screen: a sidebar, the Horizon title, Singleplayer and Multiplayer buttons and the last world played, over a blurred frozen landscape"></td>
+    <td colspan="2"><img src="docs/media/menu-title.webp" alt="Horizon's title screen: the mark and the pages on the left, the Horizon title, Singleplayer and Multiplayer, and the last world played, over a veiled snowy landscape"></td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/media/menu-worlds.webp" alt="The Singleplayer page: three worlds with their dates and game modes, and Create world and Play buttons"></td>

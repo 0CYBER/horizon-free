@@ -1,21 +1,21 @@
 <!doctype html>
-<!-- The README banner. From the repository root: npx -y playwright screenshot --viewport-size=1600,480 "file://$PWD/docs/media/banner.html" banner.png, then convert it to WebP (e.g. ffmpeg -i banner.png -c:v libwebp -quality 88 docs/media/banner.webp). -->
-<html><head><meta charset="utf-8"><style>
-@font-face { font-family: "Instrument Serif"; src: url("../../website/public/fonts/InstrumentSerif-Regular.woff2"); }
-@font-face { font-family: "Geist"; src: url("../../website/public/fonts/Geist-Regular.woff2"); }
-html, body { margin: 0; width: 1600px; height: 480px; overflow: hidden; background: #111113; }
-.card { position: absolute; inset: 0; overflow: hidden; background: #111113; color: #e8e8ea; font-family: "Geist"; }
-.bg { position: absolute; inset: 0; background:
-  linear-gradient(90deg, #111113 0%, rgba(17,17,19,.92) 30%, rgba(17,17,19,.35) 62%, rgba(17,17,19,.15) 100%),
-  linear-gradient(180deg, rgba(17,17,19,0) 55%, rgba(17,17,19,.85) 100%),
-  linear-gradient(180deg, rgba(62,40,120,.30), rgba(62,40,120,0) 60%), radial-gradient(ellipse 60% 90% at 18% 110%, rgba(124,92,214,.42), rgba(124,92,214,0) 70%),
-  url("../../website/public/media/hero.webp") 60% 38% / 1600px auto no-repeat; }
-.glow { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: linear-gradient(90deg, rgba(139,108,232,0), #8b6ce8 25%, rgba(139,108,232,0) 70%); }
-main { position: absolute; left: 88px; top: 86px; }
-.eyebrow { margin: 0 0 6px; font-size: 24px; color: rgba(232,232,234,.62); letter-spacing: .01em; }
-.eyebrow b { color: #a993f5; font-weight: 400; }
-h1 { margin: 0; font: 400 188px/0.95 "Instrument Serif"; letter-spacing: -0.035em; color: #f5f5f6; }
-.line { margin: 22px 0 0; font-size: 28px; line-height: 1.4; color: rgba(232,232,234,.86); max-width: 720px; }
-</style></head><body><div class="card"><div class="bg"></div><div class="glow"></div>
-<main><p class="eyebrow">Minecraft: Java Edition 26.3 <b>·</b> rewritten in Rust</p><h1>Horizon</h1>
-<p class="line">Checked against vanilla by 281 differential harnesses.</p></main></div></body></html>
+<!-- README banner (docs/media/banner.webp), 1600x480, in the design of docs/design-system.md.
+     Rendered with Playwright from website/ (see docs/media/brand/README.md). -->
+<meta charset="utf-8"><style>
+@font-face{font-family:Geist;src:url(../../website/public/fonts/Geist-Regular.woff2);font-weight:400}
+@font-face{font-family:Geist;src:url(../../website/public/fonts/Geist-Medium.woff2);font-weight:500}
+@font-face{font-family:"Geist Mono";src:url(../../website/public/fonts/GeistMono-Regular.woff2)}
+html,body{margin:0;width:1600px;height:480px;overflow:hidden;background:#0d0e13;color:#ecedf3;font-family:Geist}
+main{position:relative;height:100%;padding:56px 72px;box-sizing:border-box}
+.top{display:flex;align-items:center;gap:12px;font-size:20px;font-weight:500}
+.top img{width:30px}
+.top span{margin-left:auto;font:15px "Geist Mono";color:#8b8f9c;letter-spacing:.04em}
+h1{margin:56px 0 0;font-weight:500;font-size:64px;line-height:1.05;letter-spacing:-.025em}
+p{margin:20px 0 0;color:#8b8f9c;font-size:22px;line-height:1.5;max-width:52ch}
+.word{position:absolute;right:56px;bottom:-70px;font-weight:500;font-size:330px;letter-spacing:-.04em;line-height:.8;color:#181a22}
+</style><main>
+<div class="word" aria-hidden="true">horizon</div>
+<div class="top"><img src="brand/icon.svg" alt="">Horizon<span>MINECRAFT: JAVA EDITION 26.3 · RUST</span></div>
+<h1>The game you know, rebuilt in Rust.</h1>
+<p>The 26.3 client and its game logic, checked against vanilla by 281 differential harnesses.</p>
+</main>

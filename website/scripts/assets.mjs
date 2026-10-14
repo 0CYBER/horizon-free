@@ -31,6 +31,7 @@ export const images = [
   ["docs/media/menu-options.png", "menu-options"],
   ["docs/media/menu-pause.png", "menu-pause"],
   ["docs/media/settings-simple.png", "settings"],
+  ["docs/media/launcher-play.png", "launcher"],
 ];
 
 await mkdir(join(pub, "fonts"), { recursive: true });

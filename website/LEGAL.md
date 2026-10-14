@@ -52,6 +52,7 @@ and 800 pixels wide by `scripts/assets.mjs`.
 | `menu-worlds*.webp` | `docs/media/menu-worlds.png` | Horizon's own world list |
 | `menu-options*.webp` | `docs/media/menu-options.png` | Horizon's own options screen |
 | `menu-pause*.webp` | `docs/media/menu-pause.png` | Horizon's own pause screen |
+| `launcher*.webp` | `docs/media/launcher-play.png` | The Horizon launcher's Play page (no background image) |
 | `settings*.webp` | `docs/media/settings-simple.png` | Horizon's own Video settings, Simple view |
 | `hero*.webp`, `sunset*.webp`, `village*.webp`, `survival*.webp`, `nether*.webp`, `night*.webp`, `underwater*.webp` | `docs/media/*.jpg` | In-game views; none shows a Mojang logo or splash text |
 
