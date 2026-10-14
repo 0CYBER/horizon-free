@@ -23,6 +23,11 @@ const CRUMBLING_BLEND: wgpu::BlendState = wgpu::BlendState {
     alpha: wgpu::BlendComponent::REPLACE,
 };
 
+/// entity.wgsl after the OverlayTexture constants it reads.
+fn entity_shader() -> String {
+    crate::overlay::wgsl_constants() + include_str!("entity.wgsl")
+}
+
 // Separate special materials without changing entity order or their overlays.
 fn batch_entities(
     entities: &[Vertex],
@@ -826,7 +831,7 @@ impl Renderer {
         hud.atlas_texture = Some(atlas.clone());
         let entity_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Horizon entities"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("entity.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(entity_shader().into()),
         });
         let entity_bindings = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Entity bindings"),
@@ -2571,6 +2576,16 @@ mod tests {
                 .collect::<Vec<_>>(),
             [0, 3, 2, 7, 1, 4, 5, 6]
         );
+    }
+    #[test]
+    fn entity_shader_validates_with_its_overlay_constants() {
+        let module = naga::front::wgsl::parse_str(&super::entity_shader()).unwrap();
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap();
     }
     #[test]
     fn cracks_multiply_instead_of_covering_the_block() {

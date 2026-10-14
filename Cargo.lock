@@ -848,6 +848,7 @@ dependencies = [
  "horizon-world",
  "log",
  "miniz_oxide 0.8.9",
+ "naga",
  "png",
  "pollster",
  "serde_json",
