@@ -120,7 +120,7 @@ fn click_targets_match_rendered_spans_when_scaled_wrapped_and_scrolled() {
 }
 
 #[test]
-fn suggest_command_replaces_input_and_keeps_chat_open() {
+fn locate_coordinates_fill_chat_with_teleport_without_submitting() {
     let font = font();
     let m = Measure(&font);
     let registries = Registries::default();
@@ -128,10 +128,37 @@ fn suggest_command_replaces_input_and_keeps_chat_open() {
         dispatcher: crate::command::vanilla::game_dispatcher(),
         registries: &registries,
     };
-    let mut screen = ChatScreen::new(&m, &commands, "draft", 0, 640, 360);
-    screen.suggest_command(&m, &commands, "/seed");
-    assert_eq!(screen.value(), "/seed");
-    assert_eq!(screen.input.cursor, 5);
-    assert_eq!(screen.input.highlight, 5);
-    assert_eq!(screen.normalized(), "/seed");
+    // Structures and POIs use relative Y; biome results include absolute Y.
+    for (y, expected) in [
+        (None, "/tp @s -1136 ~ 848"),
+        (Some(73), "/tp @s -1136 73 848"),
+    ] {
+        let link = Text::teleport_link(-1136, y, 848);
+        assert_eq!(link.component()["click_event"]["action"], "suggest_command");
+        assert_eq!(link.component()["click_event"]["command"], expected);
+        let mut chat = Chat::default();
+        add(&mut chat, &font, Text::literal("Found at ").append(link));
+        let mut screen = ChatScreen::new(&m, &commands, "draft", 0, 640, 360);
+        let x = 4.0 + f64::from(font.width("Found at "));
+        assert!(!screen.click(&m, &commands, x, 315.0));
+        let Some(ClickEvent::SuggestCommand(command)) = chat.click_at(&font, 360, x, 315.0) else {
+            panic!("locate coordinates must suggest a command");
+        };
+        screen.suggest_command(&m, &commands, &command);
+        assert_eq!(screen.value(), expected);
+        assert_eq!(screen.input.cursor, expected.chars().count());
+        assert_eq!(screen.input.highlight, screen.input.cursor);
+        // Submission is a separate, explicit Enter press.
+        assert_eq!(
+            screen.key(
+                &m,
+                &commands,
+                &[],
+                winit::keyboard::KeyCode::Enter,
+                false,
+                false
+            ),
+            ChatAction::Submit(expected.to_owned())
+        );
+    }
 }

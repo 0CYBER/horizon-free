@@ -151,6 +151,20 @@ impl Text {
             ..Style::color(GREEN)
         })
     }
+    /// LocateCommand's coordinate link: suggest a teleport without executing it.
+    /// Structure and POI results preserve the player's current height (`~`).
+    pub fn teleport_link(x: i32, y: Option<i32>, z: i32) -> Self {
+        let y = y.map_or_else(|| "~".to_owned(), |y| y.to_string());
+        let coords = Self::tr("chat.coordinates", &[&x, &y, &z]);
+        Self::literal("[")
+            .append(coords)
+            .append("]")
+            .with_style(&Style {
+                click: Some(ClickEvent::SuggestCommand(format!("/tp @s {x} {y} {z}"))),
+                hover: Some(Box::new(Self::translate("chat.coordinates.tooltip", &[]))),
+                ..Style::color(GREEN)
+            })
+    }
     /// Component.translatable(key, args) in the current language.
     pub fn translate(key: &str, args: &[Text]) -> Self {
         let mut t = format_translation(&lang::get(key), args);

@@ -2334,25 +2334,7 @@ impl Game<'_> {
                 &[&poi],
             )));
         };
-        let coords = Text::translate(
-            "chat.coordinates",
-            &[
-                Text::literal(p[0].to_string()),
-                Text::literal("~"),
-                Text::literal(p[2].to_string()),
-            ],
-        );
-        let link = Text::literal("[")
-            .append(coords)
-            .append("]")
-            .with_style(&Style {
-                color: Some(text::GREEN),
-                click: Some(text::ClickEvent::SuggestCommand(format!(
-                    "/tp @s {} ~ {}",
-                    p[0], p[2]
-                ))),
-                ..Style::default()
-            });
+        let link = Text::teleport_link(p[0], None, p[2]);
         let (dx, dz) = (p[0] - from[0], p[2] - from[2]);
         let distance = ((dx * dx + dz * dz) as f32).sqrt().floor() as i32;
         let shown = if poi.starts_with('#') {
@@ -2408,18 +2390,7 @@ impl Game<'_> {
             } else {
                 biome.clone()
             };
-            let coords = Text::tr("chat.coordinates", &[&p[0], &p[1], &p[2]]);
-            let link = Text::literal("[")
-                .append(coords)
-                .append("]")
-                .with_style(&Style {
-                    color: Some(text::GREEN),
-                    click: Some(text::ClickEvent::SuggestCommand(format!(
-                        "/tp @s {} {} {}",
-                        p[0], p[1], p[2]
-                    ))),
-                    ..Style::default()
-                });
+            let link = Text::teleport_link(p[0], Some(p[1]), p[2]);
             let distance = (d2 as f32).sqrt().floor() as i32;
             self.feedback(Text::translate(
                 "commands.locate.biome.success",
@@ -2447,25 +2418,7 @@ impl Game<'_> {
                 &[&s],
             )));
         };
-        let coords = Text::translate(
-            "chat.coordinates",
-            &[
-                Text::literal(p[0].to_string()),
-                Text::literal("~"),
-                Text::literal(p[2].to_string()),
-            ],
-        );
-        let link = Text::literal("[")
-            .append(coords)
-            .append("]")
-            .with_style(&Style {
-                color: Some(text::GREEN),
-                click: Some(text::ClickEvent::SuggestCommand(format!(
-                    "/tp @s {} ~ {}",
-                    p[0], p[2]
-                ))),
-                ..Style::default()
-            });
+        let link = Text::teleport_link(p[0], None, p[2]);
         let (dx, dz) = (f64::from(p[0] - from[0]), f64::from(p[2] - from[2]));
         let distance = (dx * dx + dz * dz).sqrt().floor() as i32;
         let shown = if s.starts_with('#') {
