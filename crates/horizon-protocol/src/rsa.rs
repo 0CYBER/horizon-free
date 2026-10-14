@@ -1,0 +1,278 @@
+//! RSA for the online-mode login: the server's X.509 public key
+//! (Crypt.byteToPublicKey) and PKCS#1 v1.5 encryption of the shared secret
+//! and challenge (Crypt.encryptUsingKey, Java's "RSA" cipher =
+//! RSA/ECB/PKCS1Padding). Modular exponentiation uses Montgomery
+//! multiplication on 32-bit limbs; RSA moduli are always odd.
+use crate::{Error, Result};
+
+/// A non-negative integer, little-endian 32-bit limbs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Big(Vec<u32>);
+
+impl Big {
+    fn from_be_bytes(bytes: &[u8], limbs: usize) -> Self {
+        let mut v = vec![0u32; limbs];
+        for (i, b) in bytes.iter().rev().enumerate() {
+            if *b != 0 {
+                v[i / 4] |= u32::from(*b) << (8 * (i % 4));
+            }
+        }
+        Self(v)
+    }
+    fn to_be_bytes(&self, len: usize) -> Vec<u8> {
+        let mut out = vec![0u8; len];
+        for i in 0..len.min(self.0.len() * 4) {
+            out[len - 1 - i] = (self.0[i / 4] >> (8 * (i % 4))) as u8;
+        }
+        out
+    }
+    fn bits(&self) -> usize {
+        self.0
+            .iter()
+            .rposition(|&l| l != 0)
+            .map_or(0, |i| i * 32 + 32 - self.0[i].leading_zeros() as usize)
+    }
+    fn bit(&self, i: usize) -> bool {
+        self.0[i / 32] >> (i % 32) & 1 == 1
+    }
+    fn ge(&self, other: &Self) -> bool {
+        for (a, b) in self.0.iter().rev().zip(other.0.iter().rev()) {
+            if a != b {
+                return a > b;
+            }
+        }
+        true
+    }
+    fn sub_assign(&mut self, other: &Self) {
+        let mut borrow = 0i64;
+        for (a, b) in self.0.iter_mut().zip(&other.0) {
+            let d = i64::from(*a) - i64::from(*b) - borrow;
+            borrow = i64::from(d < 0);
+            *a = d.rem_euclid(1 << 32) as u32;
+        }
+    }
+}
+
+/// Montgomery arithmetic modulo an odd `n`.
+struct Mont {
+    n: Big,
+    /// -n⁻¹ mod 2³².
+    n0: u32,
+    /// R² mod n, R = 2^(32·limbs).
+    r2: Big,
+}
+
+impl Mont {
+    fn new(n: Big) -> Self {
+        let k = n.0.len();
+        // Newton's iteration for n⁻¹ mod 2³².
+        let mut inv = 1u32;
+        for _ in 0..5 {
+            inv = inv.wrapping_mul(2u32.wrapping_sub(n.0[0].wrapping_mul(inv)));
+        }
+        // R² mod n by doubling 1 2·32·k times.
+        let mut r2 = Big(vec![0; k]);
+        r2.0[0] = 1;
+        for _ in 0..64 * k {
+            let carry = r2.0[k - 1] >> 31;
+            for i in (1..k).rev() {
+                r2.0[i] = r2.0[i] << 1 | r2.0[i - 1] >> 31;
+            }
+            r2.0[0] <<= 1;
+            if carry == 1 || r2.ge(&n) {
+                r2.sub_assign(&n);
+            }
+        }
+        Self {
+            n0: inv.wrapping_neg(),
+            n,
+            r2,
+        }
+    }
+    /// a·b·R⁻¹ mod n (CIOS).
+    fn mul(&self, a: &Big, b: &Big) -> Big {
+        let k = self.n.0.len();
+        let mut t = vec![0u32; k + 2];
+        for i in 0..k {
+            let mut carry = 0u64;
+            for j in 0..k {
+                let s = u64::from(t[j]) + u64::from(a.0[j]) * u64::from(b.0[i]) + carry;
+                t[j] = s as u32;
+                carry = s >> 32;
+            }
+            let s = u64::from(t[k]) + carry;
+            t[k] = s as u32;
+            t[k + 1] = (s >> 32) as u32;
+            let m = t[0].wrapping_mul(self.n0);
+            let mut carry = (u64::from(t[0]) + u64::from(m) * u64::from(self.n.0[0])) >> 32;
+            for j in 1..k {
+                let s = u64::from(t[j]) + u64::from(m) * u64::from(self.n.0[j]) + carry;
+                t[j - 1] = s as u32;
+                carry = s >> 32;
+            }
+            let s = u64::from(t[k]) + carry;
+            t[k - 1] = s as u32;
+            t[k] = t[k + 1] + (s >> 32) as u32;
+        }
+        let overflow = t[k] != 0;
+        let mut r = Big(t[..k].to_vec());
+        if overflow || r.ge(&self.n) {
+            r.sub_assign(&self.n);
+        }
+        r
+    }
+    /// base^exp mod n, base < n.
+    fn pow(&self, base: &Big, exp: &Big) -> Big {
+        let k = self.n.0.len();
+        let mut one = Big(vec![0; k]);
+        one.0[0] = 1;
+        let b = self.mul(base, &self.r2);
+        let mut x = self.mul(&one, &self.r2);
+        for i in (0..exp.bits()).rev() {
+            x = self.mul(&x, &x);
+            if exp.bit(i) {
+                x = self.mul(&x, &b);
+            }
+        }
+        self.mul(&x, &one)
+    }
+}
+
+/// A minimal DER reader: (tag, contents) of the element at the front.
+fn der(input: &[u8]) -> Result<(u8, &[u8], &[u8])> {
+    let bad = || Error::new("Malformed public key");
+    let (&tag, rest) = input.split_first().ok_or_else(bad)?;
+    let (&first, mut rest) = rest.split_first().ok_or_else(bad)?;
+    let len = if first < 0x80 {
+        usize::from(first)
+    } else {
+        let n = usize::from(first & 0x7f);
+        if n == 0 || n > 4 || rest.len() < n {
+            return Err(bad());
+        }
+        let len = rest[..n].iter().fold(0usize, |l, b| l << 8 | usize::from(*b));
+        rest = &rest[n..];
+        len
+    };
+    if rest.len() < len {
+        return Err(bad());
+    }
+    Ok((tag, &rest[..len], &rest[len..]))
+}
+
+/// The DER of OID 1.2.840.113549.1.1.1 (rsaEncryption).
+const RSA_ENCRYPTION: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01];
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RsaPublicKey {
+    /// Modulus and exponent, big-endian without leading zeros.
+    pub modulus: Vec<u8>,
+    pub exponent: Vec<u8>,
+}
+
+fn strip(int: &[u8]) -> Vec<u8> {
+    let start = int.iter().position(|&b| b != 0).unwrap_or(int.len());
+    int[start..].to_vec()
+}
+
+impl RsaPublicKey {
+    /// X509EncodedKeySpec: SubjectPublicKeyInfo { AlgorithmIdentifier, BIT STRING RSAPublicKey }.
+    pub fn from_der(spki: &[u8]) -> Result<Self> {
+        let bad = || Error::new("Malformed public key");
+        let (tag, body, _) = der(spki)?;
+        if tag != 0x30 {
+            return Err(bad());
+        }
+        let (tag, algorithm, rest) = der(body)?;
+        let (oid_tag, oid, _) = der(algorithm)?;
+        if tag != 0x30 || oid_tag != 0x06 || oid != RSA_ENCRYPTION {
+            return Err(Error::new("Not an RSA public key"));
+        }
+        let (tag, bits, _) = der(rest)?;
+        if tag != 0x03 || bits.first() != Some(&0) {
+            return Err(bad());
+        }
+        let (tag, key, _) = der(&bits[1..])?;
+        if tag != 0x30 {
+            return Err(bad());
+        }
+        let (n_tag, n, rest) = der(key)?;
+        let (e_tag, e, _) = der(rest)?;
+        if n_tag != 0x02 || e_tag != 0x02 {
+            return Err(bad());
+        }
+        let key = Self {
+            modulus: strip(n),
+            exponent: strip(e),
+        };
+        if key.modulus.len() < 64 || key.modulus.last().is_none_or(|b| b & 1 == 0) {
+            return Err(bad());
+        }
+        Ok(key)
+    }
+    /// Length of the modulus in bytes (and of every ciphertext).
+    pub fn size(&self) -> usize {
+        self.modulus.len()
+    }
+    /// The raw RSA operation m^e mod n on a `size()`-byte block.
+    fn apply(&self, block: &[u8], exponent: &[u8]) -> Vec<u8> {
+        let limbs = self.size().div_ceil(4);
+        let mont = Mont::new(Big::from_be_bytes(&self.modulus, limbs));
+        let m = Big::from_be_bytes(block, limbs);
+        mont.pow(&m, &Big::from_be_bytes(exponent, limbs.max(exponent.len().div_ceil(4))))
+            .to_be_bytes(self.size())
+    }
+    /// RSAES-PKCS1-v1_5 (RFC 8017 7.2.1) with random non-zero padding.
+    pub fn encrypt(&self, message: &[u8]) -> Result<Vec<u8>> {
+        let k = self.size();
+        if message.len() + 11 > k {
+            return Err(Error::new("Message too long for the RSA key"));
+        }
+        let mut block = vec![0u8; k];
+        block[1] = 2;
+        let padding = &mut block[2..k - message.len() - 1];
+        crate::crypto::random_bytes(padding)?;
+        for b in padding.iter_mut() {
+            while *b == 0 {
+                let mut one = [0u8];
+                crate::crypto::random_bytes(&mut one)?;
+                *b = one[0];
+            }
+        }
+        block[k - message.len()..].copy_from_slice(message);
+        Ok(self.apply(&block, &self.exponent))
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+
+    pub fn hex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// A 1024-bit test key made with `openssl genrsa 1024`.
+    pub const TEST_SPKI: &str = "30819f300d06092a864886f70d010101050003818d0030818902818100ab026074f92450a8f726f3895bb11176ca8f065f3100cd4143bac4f7d3674edcff95b41a0525d2365a549c106ec6685881b392177420fd31ff5c144ff11ba24311e751cd2c6b5d1817b6af6686a43c95d61243613005e6945b6093cd95223cec5e8856826da9d2ee1b323362ac1cebeab3659cbc45319a9b540dda816a4798ff0203010001";
+    pub const TEST_N: &str = "ab026074f92450a8f726f3895bb11176ca8f065f3100cd4143bac4f7d3674edcff95b41a0525d2365a549c106ec6685881b392177420fd31ff5c144ff11ba24311e751cd2c6b5d1817b6af6686a43c95d61243613005e6945b6093cd95223cec5e8856826da9d2ee1b323362ac1cebeab3659cbc45319a9b540dda816a4798ff";
+    pub const TEST_D: &str = "172bcb460e3c0d71d78b3f946d082105a78c99a06c535f7c6860f62f5e45b139e0a7b82f8e630188bbd49b10def1a351dac12a1a6371d4dce16ce893ac67c2247b9ee13e3a840abaf9ea685304558f1a93c4f354193f5713c3e53bd10dd275300db36e764fc081549afbd30cd00c31e6eb726720337a963913d96b50e4d8fd1";
+    /// SHA256withRSA signature of "hello" with the test key (openssl pkeyutl), for chat signing.
+    pub const TEST_SIG_HELLO: &str = "0bc8716622e44f9bf72432045e91bf1b40a96aae3c402fa86262b83758db1c90d2ed16b9fa86f29af175f2e6eedb864bf8da2667a7ada2bf5433fba36c1951af0c356e45bd5f90fb905b9a08f33a0666c4968ccffbf32fda643d736deec66f82c75fe4a8075c7f2b8a6c0ca630e0ffe4805a1f1d672506b82fc188510fb4ef80";
+
+    #[test]
+    fn montgomery_matches_small_numbers() {
+        // 4^13 mod 497 = 445 (the classic example), on one limb.
+        let mont = Mont::new(Big(vec![497]));
+        assert_eq!(mont.pow(&Big(vec![4]), &Big(vec![13])), Big(vec![445]));
+        // Two limbs: (2^40 + 5)^3 mod (2^61 - 1).
+        let n = (1u128 << 61) - 1;
+        let m = Mont::new(Big(vec![n as u32, (n >> 32) as u32]));
+        let b = (1u128 << 40) + 5;
+        let expected = b * b % n * b % n;
+        let r = m.pow(&Big(vec![b as u32, (b >> 32) as u32]), &Big(vec![3, 0]));
+        assert_eq!(u128::from(r.0[0]) | u128::from(r.0[1]) << 32, expected);
+    }
+}
