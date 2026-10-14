@@ -501,10 +501,11 @@ impl Launcher {
         let Some(tag) = self.selected().cloned() else {
             return;
         };
-        let Some(minecraft) = self.settings.minecraft_dir.clone() else {
-            self.prepare_error = Some("Choose your Minecraft folder first.".into());
-            return;
-        };
+        let minecraft = self
+            .settings
+            .minecraft_dir
+            .clone()
+            .unwrap_or_else(|| horizon_prepare::artifacts::minecraft_dir(None));
         self.prepare_log.clear();
         self.prepare_error = None;
         self.prepare_log
