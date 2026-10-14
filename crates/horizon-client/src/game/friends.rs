@@ -16,6 +16,8 @@ pub(super) struct Sharing {
     code: Option<Code>,
     /// Wrong codes tried against the current code.
     wrong: u32,
+    /// Sessions carried directly and through the relay so far.
+    paths: (u32, u32),
     notice: Option<String>,
     copied: Option<Instant>,
 }
@@ -67,6 +69,7 @@ impl Game<'_> {
             opened_lan,
             code: None,
             wrong: 0,
+            paths: (0, 0),
             notice: None,
             copied: None,
         });
@@ -120,7 +123,9 @@ impl Game<'_> {
                     sharing.wrong = count;
                     sharing.notice = Some(format!("Someone tried a wrong code ({count} of 5)."));
                 }
-                HostEvent::Connected { .. } | HostEvent::Disconnected { .. } => {}
+                HostEvent::Connected { direct: true, .. } => sharing.paths.0 += 1,
+                HostEvent::Connected { direct: false, .. } => sharing.paths.1 += 1,
+                HostEvent::Disconnected { .. } => {}
             }
         }
         if let HostState::Retrying(_) = sharing.host.state() {
@@ -205,6 +210,8 @@ impl Game<'_> {
                     "code": view.code,
                     "state": state,
                     "sessions": self.friends.as_ref().map_or(0, |s| s.host.sessions()),
+                    "direct": self.friends.as_ref().map_or(0, |s| s.paths.0),
+                    "relayed": self.friends.as_ref().map_or(0, |s| s.paths.1),
                     "guests": view.guests,
                     "lan_port": self.lan_port(),
                 })))
