@@ -211,3 +211,19 @@ see the previous one as the newest; launchers that already updated keep running.
 With several game releases a day, the newest launcher release soon falls out of the newest 100 releases the
 launcher and the website read: both then look the newest `launcher-v` tags up one by one
 (`git/matching-refs/tags/launcher-v`, then `releases/tags/<tag>`).
+
+## Nightly audit
+
+`.github/workflows/nightly.yml` runs every harness from scratch (`tools/parity.py --all`) on main at 03:00 Paris
+time, on the Mac mini's runner, after preparing the resources again if the preparer or its exporters changed.
+`tools/ci/parity_issues.py` then compares the results with the previous audit
+(`.local/parity-runner/audit.json` in the runner's checkout):
+
+- a harness that passed last night and fails now gets an issue labelled `parity-regression`, titled
+  `Parity regression: <harness>`, with the commit, the run and the end of its log (one issue per harness: an open
+  one gets a comment instead);
+- a harness with an open issue that passes again gets its issue closed.
+
+The bugs session picks the issues up. The audit's logs are the run's `nightly-parity-logs` artifact; harnesses
+listed `linux_only` are skipped there (see above). By hand: `gh workflow run "nightly audit"` (add
+`-f dry_run=true` to leave issues alone).
