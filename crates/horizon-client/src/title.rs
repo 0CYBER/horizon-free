@@ -541,6 +541,20 @@ impl Title {
             _ => Action::None,
         }
     }
+    /// The focused text field, its id and maximum length (copy and paste).
+    pub fn focused_field(&mut self) -> Option<(crate::clipboard::FieldId, &mut String, usize)> {
+        match &mut self.mode {
+            Mode::Multiplayer(screen) => screen.focused_text(),
+            Mode::Create {
+                name, seed, focus, ..
+            } => match focus {
+                0 => Some((("world.name", 0), name, 32)),
+                1 => Some((("world.seed", 0), seed, 32)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
     pub fn type_text(&mut self, text: &str) {
         if let Mode::Multiplayer(screen) = &mut self.mode {
             screen.type_text(text);

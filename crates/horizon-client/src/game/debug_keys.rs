@@ -409,16 +409,8 @@ impl Game<'_> {
     }
     /// `KeyboardHandler.setClipboard`.
     fn set_clipboard(&mut self, text: &str) {
-        if text.is_empty() {
-            return;
-        }
-        if self.clipboard.is_none() {
-            self.clipboard = arboard::Clipboard::new().ok();
-        }
-        if let Some(c) = self.clipboard.as_mut() {
-            let _ = c.set_text(text.to_owned());
-        }
-        self.copied = Some(text.to_owned());
+        use horizon_client::clipboard::Clipboard;
+        self.clipboard.set(text);
     }
     /// The debug renderers' gizmos for a frame (`DebugRenderer.emitGizmos`).
     pub(super) fn debug_gizmos(&self, alpha: f32) -> Gizmos {

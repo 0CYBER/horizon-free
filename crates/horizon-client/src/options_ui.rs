@@ -1642,6 +1642,31 @@ impl OptionsUi {
             self.scroll = 0.0;
         }
     }
+    /// Ctrl+A/C/V/X in the language or pack search box; false when neither
+    /// is shown with the focus.
+    pub fn shortcut(
+        &mut self,
+        atlas: &HudAtlas,
+        shortcut: crate::clipboard::EditShortcut,
+        clipboard: &mut dyn crate::clipboard::Clipboard,
+    ) -> bool {
+        if self.selected_key.is_some() {
+            return false;
+        }
+        if self.page() == Page::Packs
+            && let Some(p) = &mut self.pack_screen
+        {
+            let m = crate::screen_draw::Measure(&atlas.font);
+            return p.shortcut(&m, shortcut, clipboard);
+        }
+        if self.page() == Page::Language {
+            if self.language_search.shortcut(shortcut, clipboard) {
+                self.scroll = 0.0;
+            }
+            return true;
+        }
+        false
+    }
     /// Keys while the options are open. Returns events; `handled` false lets
     /// Escape fall through.
     pub fn key(

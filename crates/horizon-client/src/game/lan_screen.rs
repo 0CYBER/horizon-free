@@ -321,10 +321,15 @@ impl Game<'_> {
             return;
         };
         let ctrl = self.keys.contains(&winit::keyboard::KeyCode::ControlLeft);
+        let shortcut = self.edit_shortcut(event);
         let Some(o) = self.world_options.as_mut() else {
             return;
         };
         if !o.port.focused {
+            return;
+        }
+        if let Some(shortcut) = shortcut {
+            o.port.shortcut(shortcut, &mut self.clipboard);
             return;
         }
         if !o.port.key(key, ctrl, false)

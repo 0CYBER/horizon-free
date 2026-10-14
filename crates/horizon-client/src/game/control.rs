@@ -589,7 +589,7 @@ impl Game<'_> {
                 "pause_menu": self.pause_menu,
                 "advanced_tooltips": self.settings.file.bool("advancedItemTooltips"),
                 "pause_on_lost_focus": self.settings.file.bool("pauseOnLostFocus"),
-                "clipboard": self.copied,
+                "clipboard": self.clipboard.copied(),
             },
             "dimension": self.dim.id(),
             "creative": self.creative,

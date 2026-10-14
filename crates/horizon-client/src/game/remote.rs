@@ -2206,12 +2206,26 @@ impl Game<'_> {
         if event.state != winit::event::ElementState::Pressed {
             return;
         }
+        let shortcut = self.edit_shortcut(event);
         let Some(r) = self.remote.as_mut() else {
             return;
         };
         let Some(input) = r.chat_input.as_mut() else {
             return;
         };
+        // ChatScreen's input: an EditBox of 256.
+        const INPUT: horizon_client::clipboard::FieldId = ("remote.chat", 0);
+        if let Some(shortcut) = shortcut {
+            Self::append_shortcut(
+                &mut self.text_selection,
+                &mut self.clipboard,
+                INPUT,
+                input,
+                shortcut,
+                256,
+            );
+            return;
+        }
         // Logical keys: the text, not the scancode, decides (layouts, virtual keyboards).
         match &event.logical_key {
             Key::Named(NamedKey::Escape) => {
@@ -2219,7 +2233,9 @@ impl Game<'_> {
                 self.capture(true);
             }
             Key::Named(NamedKey::Backspace) => {
-                input.pop();
+                if !self.text_selection.take(INPUT, input) {
+                    input.pop();
+                }
             }
             Key::Named(NamedKey::Enter) => {
                 let message = r.chat_input.take().unwrap_or_default();
@@ -2228,6 +2244,7 @@ impl Game<'_> {
             }
             _ => {
                 if let Some(text) = &event.text {
+                    self.text_selection.take(INPUT, input);
                     for c in text.chars().filter(|c| !c.is_control()) {
                         if input.chars().count() < 256 {
                             input.push(c);

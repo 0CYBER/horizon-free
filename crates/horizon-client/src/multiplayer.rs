@@ -578,6 +578,16 @@ impl Screen {
             _ => None,
         }
     }
+    /// The focused text field, its id and maximum length (copy and paste).
+    pub fn focused_text(&mut self) -> Option<(crate::clipboard::FieldId, &mut String, usize)> {
+        let id = match self {
+            Self::Edit { focus: 0, .. } => ("server.name", 0),
+            Self::Edit { .. } => ("server.address", 0),
+            Self::Direct { .. } => ("server.direct", 0),
+            _ => return None,
+        };
+        self.focused_field().map(|f| (id, f, 128))
+    }
     pub fn type_text(&mut self, text: &str) {
         if let Some(field) = self.focused_field() {
             for c in text.chars().filter(|c| !c.is_control()) {
