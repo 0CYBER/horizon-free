@@ -10,11 +10,13 @@ use super::{
 use horizon_client::{
     Result,
     chunk::Chunk,
+    command::args::GameMode,
     containers::BlockEntity,
     gamerules::Value as RuleValue,
     item_data::{canon_stack, parse_stack},
     items::ItemStack,
     mobs::{Mob, Species},
+    motion::PlayerMotion,
     projectiles::ProjectileKind,
     world::World,
 };
@@ -25,6 +27,7 @@ use horizon_core::{
 use horizon_world::{level::Ticks, registry::BlockStateId};
 use serde_json::Value;
 use std::{cell::RefCell, collections::HashMap, fmt::Write as _, io::Write as _, sync::Arc};
+use winit::keyboard::KeyCode;
 
 thread_local! {
     /// Level and game events recorded while a fixture case runs.
@@ -267,6 +270,8 @@ impl Game<'_> {
             self.fixture_remove(origin, op)?;
         } else if let Some(op) = case.get("use") {
             used = self.fixture_use(origin, op)?;
+        } else if let Some(op) = case.get("use_item") {
+            used = self.fixture_use_item(origin, op)?;
         } else if case.get("hopper").is_some() {
             // HopperBlockEntity.pushItemsTick, once.
             self.hopper_try_move_items((origin.x, origin.y, origin.z));
@@ -399,6 +404,72 @@ impl Game<'_> {
             if consumed { "consumed" } else { "pass" },
             canon_stack(self.inventory[self.selected].as_ref())
         ));
+        Ok(out)
+    }
+
+    /// A player three blocks south of `pos` right-clicks its top face holding
+    /// the case's item (`use_item_as_player` on that hit): the statistics,
+    /// the held stack and the item it started using, as
+    /// `VanillaDispenserOracle.useItem` prints them.
+    fn fixture_use_item(&mut self, pos: BlockPos, op: &Value) -> Result<Vec<String>> {
+        let stack = parse_stack(op["item"].as_str().unwrap_or("-"))?;
+        self.mode = if op["creative"].as_bool().unwrap_or(false) {
+            GameMode::Creative
+        } else {
+            GameMode::Survival
+        };
+        self.creative = self.mode == GameMode::Creative;
+        let mut player = PlayerMotion::new(
+            self.motion,
+            horizon_core::geometry::Vec3::new(
+                f64::from(pos.x) + 0.5,
+                f64::from(pos.y) + 1.0,
+                f64::from(pos.z) + 3.5,
+            ),
+        )?;
+        player.health.food.food = op["food"].as_i64().unwrap_or(20) as i32;
+        self.player = Some(player);
+        self.yaw = 0.0;
+        self.pitch = 90.0;
+        self.keys.clear();
+        if op["sneaking"].as_bool().unwrap_or(false) {
+            self.keys.insert(KeyCode::ShiftLeft);
+        }
+        self.using = None;
+        self.inventory[self.selected] = stack.clone();
+        let used_before = stack
+            .as_ref()
+            .map_or(0, |s| self.stats.get("used", &s.item));
+        self.forced_hit = Some(super::Hit {
+            pos: [pos.x, pos.y, pos.z],
+            face: [0, 1, 0],
+            point: [
+                f64::from(pos.x) + 0.5,
+                f64::from(pos.y) + 1.0,
+                f64::from(pos.z) + 0.5,
+            ],
+        });
+        let used = self.use_item_as_player();
+        self.forced_hit = None;
+        used?;
+        self.process_level_events()?;
+        let mut out = Vec::new();
+        if let Some(s) = &stack {
+            let used = self.stats.get("used", &s.item) - used_before;
+            if used != 0 {
+                out.push(format!("stat {} minecraft:used {used}", s.item));
+            }
+        }
+        let using = self
+            .using
+            .and_then(|(slot, _)| self.stack_in(slot))
+            .map_or("-".to_owned(), |s| s.item.to_string());
+        out.push(format!(
+            "held {} using {using}",
+            canon_stack(self.inventory[self.selected].as_ref())
+        ));
+        self.player = None;
+        self.using = None;
         Ok(out)
     }
 

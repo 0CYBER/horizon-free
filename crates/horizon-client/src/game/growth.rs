@@ -47,9 +47,20 @@ impl Game<'_> {
         };
         let pos = BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]);
         let used = self.with_level(|b, level, ticks| b.use_bone_meal(level, ticks, pos, face));
+        // ItemStack.causeUseVibration at the player, after the meal is used
+        // up (shrunk even in creative): an emptied stack has no use effects.
+        if used
+            && stack.count > 1
+            && let Some(p) = self.player.as_ref().map(|p| p.position)
+        {
+            let ctx = self.player_context(None);
+            self.post_game_event("minecraft:item_interact_finish", [p.x, p.y, p.z], ctx);
+        }
         self.process_level_events()?;
         if used {
             self.swing_arm();
+            // ItemStack.useOn: an item interaction counts as a use.
+            self.stats.add("used", &stack.item, 1);
             self.consume_held();
         }
         Ok(used)
