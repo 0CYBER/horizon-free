@@ -64,6 +64,11 @@ pub enum ArrowEvent {
     BubbleColumnParticles {
         pos: BlockPos,
     },
+    /// The block hit reacts (before the arrow sticks).
+    Block {
+        pos: BlockPos,
+        reaction: BlockReaction,
+    },
     /// The SPLASH and PROJECTILE_SHOOT game events.
     SplashEvent,
     ShootEvent,
@@ -82,6 +87,15 @@ pub enum ArrowSound {
     HitGround,
     /// `entity.generic.extinguish_fire`.
     Extinguish,
+}
+/// What a burning arrow does to the block it hits (`onProjectileHit`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlockReaction {
+    /// `TntBlock.prime` (primed TNT, its sound and PRIME_FUSE), then
+    /// `removeBlock(pos, false)`.
+    PrimeTnt,
+    /// `setBlock(pos, lit=true, 11)`: campfires and candles.
+    Light(BlockStateId),
 }
 /// The arrow part of `AbstractArrow` and its `Entity` state.
 #[derive(Clone)]
@@ -157,6 +171,25 @@ impl ArrowState {
     pub fn clear_fire(&mut self) {
         self.fire_ticks = self.fire_ticks.min(0);
     }
+    /// `Entity.igniteForTicks` (an arrow never freezes).
+    pub fn ignite_for_ticks(&mut self, ticks: i32) {
+        if self.fire_ticks < ticks {
+            self.fire_ticks = ticks;
+        }
+    }
+    /// `Entity.igniteForSeconds`: Flame's `projectile_spawned` ignite.
+    pub fn ignite_for_seconds(&mut self, seconds: f32) {
+        self.ignite_for_ticks((seconds * 20.0).floor() as i32);
+    }
+    /// `BaseFireBlock.fireIgnite` for an entity that is not a player.
+    fn fire_ignite(&mut self) {
+        if self.fire_ticks < 0 {
+            self.fire_ticks += 1;
+        }
+        if self.fire_ticks >= 0 {
+            self.ignite_for_ticks(160);
+        }
+    }
 }
 /// The blocks, fluids and weather an arrow flies through.
 pub struct ArrowScene<'a, 'r> {
@@ -167,6 +200,9 @@ pub struct ArrowScene<'a, 'r> {
     pub fluids: &'a FluidResources,
     /// `Level.isRainingAt`.
     pub raining: &'a dyn Fn(BlockPos) -> bool,
+    /// The `mob_griefing` and `tnt_explodes` game rules.
+    pub mob_griefing: bool,
+    pub tnt_explodes: bool,
 }
 impl ArrowScene<'_, '_> {
     fn block(&self, p: BlockPos) -> BlockStateId {
@@ -520,8 +556,14 @@ impl Ticker<'_, '_, '_, '_> {
     }
     /// `AbstractArrow.onHitBlock`: back off the face by 0.05 along each axis
     /// it moved on, stop, and stick.
-    fn on_hit_block(&mut self, _pos: BlockPos, state: BlockStateId) {
+    fn on_hit_block(&mut self, pos: BlockPos, state: BlockStateId) {
         self.st.last_state = Some(state);
+        // Projectile.onHitBlock: BlockState.onProjectileHit.
+        if self.st.on_fire()
+            && let Some(reaction) = self.block_reaction(state)
+        {
+            self.st.events.push(ArrowEvent::Block { pos, reaction });
+        }
         let v = self.p.velocity;
         let offset = f64::from(0.05f32);
         self.p.position = Vec3::new(
@@ -541,6 +583,36 @@ impl Ticker<'_, '_, '_, '_> {
         self.p.set_critical(false);
         self.st.pierce = 0;
     }
+    /// `Projectile.mayInteract`: a mob's arrows need `mob_griefing`.
+    fn may_interact(&self) -> bool {
+        !matches!(self.p.owner, Some(Who::Mob(_))) || self.scene.mob_griefing
+    }
+    /// `onProjectileHit` of the blocks a burning projectile lights.
+    fn block_reaction(&self, state: BlockStateId) -> Option<BlockReaction> {
+        let name = self.scene.registry.state(state)?.name.as_str();
+        let flag = |key: &str| self.scene.property(state, key) == Some("true");
+        let lit = || {
+            let mut definition = self.scene.registry.state(state)?.clone();
+            definition.properties.insert("lit".into(), "true".into());
+            self.scene.registry.id(&definition)
+        };
+        match name {
+            "minecraft:tnt" if self.may_interact() && self.scene.tnt_explodes => {
+                Some(BlockReaction::PrimeTnt)
+            }
+            "minecraft:campfire" | "minecraft:soul_campfire"
+                if self.may_interact() && !flag("lit") && !flag("waterlogged") =>
+            {
+                lit().map(BlockReaction::Light)
+            }
+            // AbstractCandleBlock: candles also must be dry (CandleBlock.canBeLit).
+            _ if name.ends_with("candle_cake") && !flag("lit") => lit().map(BlockReaction::Light),
+            _ if name.ends_with("candle") && !flag("lit") && !flag("waterlogged") => {
+                lit().map(BlockReaction::Light)
+            }
+            _ => None,
+        }
+    }
     /// `Entity.applyEffectsFromBlocks(from, to)` for an arrow: the blocks and
     /// fluids its box passes through (bubble columns push, water puts the fire
     /// out), then rain.
@@ -552,14 +624,22 @@ impl Ticker<'_, '_, '_, '_> {
         let was_on_fire = self.st.on_fire();
         let previous_fire = self.st.fire_ticks;
         let mut visited = HashSet::new();
-        let mut extinguish = false;
-        let used = self.check_inside_blocks(from, to, &mut visited, &mut extinguish, 16);
+        let mut effects = Collector::default();
+        let used = self.check_inside_blocks(from, to, &mut visited, &mut effects, 16);
         if 16 - used <= 0 {
-            self.check_inside_blocks(to, to, &mut visited, &mut extinguish, 1);
+            self.check_inside_blocks(to, to, &mut visited, &mut effects, 1);
         }
-        // StepBasedCollector.applyAndClear: EXTINGUISH.
-        if extinguish && !self.st.removed {
-            self.st.clear_fire();
+        // StepBasedCollector.applyAndClear.
+        for effect in effects.finish() {
+            if self.st.removed {
+                break;
+            }
+            match effect {
+                Effect::ClearFreeze => {}
+                Effect::FireIgnite => self.st.fire_ignite(),
+                Effect::LavaIgnite => self.st.ignite_for_ticks(300),
+                Effect::Extinguish => self.st.clear_fire(),
+            }
         }
         if self.in_rain() {
             self.st.clear_fire();
@@ -585,7 +665,7 @@ impl Ticker<'_, '_, '_, '_> {
         from: Vec3,
         to: Vec3,
         visited: &mut HashSet<BlockPos>,
-        extinguish: &mut bool,
+        effects: &mut Collector,
         max_iterations: i32,
     ) -> i32 {
         let deflated = bounds(to).deflate(Vec3::new(
@@ -605,7 +685,7 @@ impl Ticker<'_, '_, '_, '_> {
             hits.push((p, iteration));
             true
         });
-        for (p, _) in hits {
+        for (p, step) in hits {
             let state = self.scene.block(p);
             if self.scene.is_air(state) {
                 continue;
@@ -617,7 +697,14 @@ impl Ticker<'_, '_, '_, '_> {
             if !(inside_block || inside_fluid) || !visited.insert(p) {
                 continue;
             }
-            if &*self.scene.facts.get(state).name == "minecraft:bubble_column" {
+            effects.advance(step);
+            let name = &*self.scene.facts.get(state).name;
+            if matches!(name, "minecraft:fire" | "minecraft:soul_fire") {
+                // BaseFireBlock.entityInside (its inFire hurt does nothing to arrows).
+                effects.apply(Effect::ClearFreeze);
+                effects.apply(Effect::FireIgnite);
+            }
+            if name == "minecraft:bubble_column" {
                 let precise = far
                     || deflated.intersects(Aabb::new(
                         Vec3::new(f64::from(p.x), f64::from(p.y), f64::from(p.z)),
@@ -627,8 +714,18 @@ impl Ticker<'_, '_, '_, '_> {
                     self.bubble_column(state, p);
                 }
             }
-            if inside_fluid && matches!(fluid.kind(), FluidKind::Water | FluidKind::FlowingWater) {
-                *extinguish = true;
+            if inside_fluid {
+                effects.advance(step);
+                match fluid.kind() {
+                    // WaterFluid.entityInside.
+                    FluidKind::Water | FluidKind::FlowingWater => effects.apply(Effect::Extinguish),
+                    // LavaFluid.entityInside (lavaHurt does nothing to arrows).
+                    FluidKind::Lava | FluidKind::FlowingLava => {
+                        effects.apply(Effect::ClearFreeze);
+                        effects.apply(Effect::LavaIgnite);
+                    }
+                    FluidKind::Empty => {}
+                }
             }
         }
         iterations + 1
@@ -676,6 +773,59 @@ impl Ticker<'_, '_, '_, '_> {
             self.add_velocity(if drag { -0.03 } else { 0.06 });
             self.st.fall_distance = 0.0;
         }
+    }
+}
+/// `InsideBlockEffectType`s an arrow meets, in their apply order (FREEZE
+/// needs powder snow, which an arrow's collision context passes through).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Effect {
+    ClearFreeze,
+    FireIgnite,
+    LavaIgnite,
+    Extinguish,
+}
+const EFFECT_ORDER: [Effect; 4] = [
+    Effect::ClearFreeze,
+    Effect::FireIgnite,
+    Effect::LavaIgnite,
+    Effect::Extinguish,
+];
+/// `InsideBlockEffectApplier.StepBasedCollector`: each step's effects once,
+/// in type order, steps in the order they were reached.
+struct Collector {
+    last_step: i32,
+    step: [bool; 4],
+    effects: Vec<Effect>,
+}
+impl Default for Collector {
+    fn default() -> Self {
+        Self {
+            last_step: -1,
+            step: [false; 4],
+            effects: Vec::new(),
+        }
+    }
+}
+impl Collector {
+    fn advance(&mut self, step: i32) {
+        if self.last_step != step {
+            self.last_step = step;
+            self.flush();
+        }
+    }
+    fn apply(&mut self, effect: Effect) {
+        self.step[effect as usize] = true;
+    }
+    fn flush(&mut self) {
+        for effect in EFFECT_ORDER {
+            if std::mem::take(&mut self.step[effect as usize]) {
+                self.effects.push(effect);
+            }
+        }
+    }
+    fn finish(mut self) -> Vec<Effect> {
+        self.flush();
+        self.effects
     }
 }
 struct Tags;

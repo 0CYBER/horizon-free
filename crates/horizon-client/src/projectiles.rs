@@ -156,6 +156,16 @@ impl Projectile {
         }
         self
     }
+    /// The shooter's bow enchantments; Flame spawns the arrow burning for 100
+    /// seconds (`projectile_spawned` ignite).
+    pub fn set_bonus(&mut self, bonus: crate::mobs::gear::ArrowBonus) {
+        if bonus.flame
+            && let Some(a) = self.arrow.as_mut()
+        {
+            a.ignite_for_seconds(100.0);
+        }
+        self.bonus = bonus;
+    }
     /// `AbstractArrow.isCritArrow`.
     pub fn critical(&self) -> bool {
         matches!(self.kind, ProjectileKind::Arrow { critical: true, .. })
