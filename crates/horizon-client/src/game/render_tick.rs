@@ -331,6 +331,7 @@ impl Game<'_> {
                 .map(|p| ([p.position.x, p.position.y, p.position.z], p.velocity.y)),
         };
         self.particles.tick(&level);
+        self.tick_pickups();
         for (name, at, volume, pitch) in std::mem::take(&mut self.particles.sounds) {
             self.audio.play(name, Some(at), volume, pitch);
         }

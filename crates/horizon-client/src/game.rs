@@ -81,6 +81,7 @@ mod paintings;
 mod passengers;
 mod persist;
 mod perspective;
+mod pickups;
 mod piglins;
 mod postprocess;
 mod potions;
@@ -720,6 +721,8 @@ struct Game<'a> {
     dropped: Vec<ItemEntity>,
     next_entity: u32,
     particles: horizon_client::particles::ParticleEngine,
+    /// `ItemPickupParticle`s: taken items, orbs and arrows flying to their collector.
+    pickups: pickups::Pickups,
     /// Sign text being edited (`SignEditScreen`).
     sign_edit: Option<sign_edit::SignEditor>,
     /// An open book, book and quill or lectern screen.
@@ -1401,6 +1404,10 @@ impl Game<'_> {
                 match self.give(item.stack.clone()) {
                     None => {
                         self.stats.add("picked_up", &kind, before as i32);
+                        self.add_pickup(
+                            pickups::Taken::Item(Box::new(item)),
+                            pickups::Collector::Player,
+                        );
                         let pitch = ((self.world.random.next_float()
                             - self.world.random.next_float())
                             * 0.7
@@ -1414,6 +1421,10 @@ impl Game<'_> {
                         if rest.count < before {
                             self.stats
                                 .add("picked_up", &kind, (before - rest.count) as i32);
+                            self.add_pickup(
+                                pickups::Taken::Item(Box::new(item.clone())),
+                                pickups::Collector::Player,
+                            );
                             self.audio
                                 .play("minecraft:entity.item.pickup", Some(feet), 0.2, 1.0);
                         }
@@ -4924,16 +4935,25 @@ impl Game<'_> {
             );
             let right = forward.cross(glam::Vec3::Y).normalize_or_zero();
             let up = right.cross(forward).normalize_or_zero();
-            for o in &self.orbs {
-                let p = glam::DVec3::new(
+            let live = self.orbs.iter().map(|o| {
+                let at = [
                     o.previous.x + (o.position.x - o.previous.x) * alpha,
-                    o.previous.y + (o.position.y - o.previous.y) * alpha + 0.1,
+                    o.previous.y + (o.position.y - o.previous.y) * alpha,
                     o.previous.z + (o.position.z - o.previous.z) * alpha,
-                ) - camera;
+                ];
+                (o, at, alpha as f32)
+            });
+            // ItemPickupParticle: the render state extracted at partial tick 1.
+            let taken = self.pickups.live.iter().filter_map(|p| match &p.taken {
+                pickups::Taken::Orb(o) => Some((&**o, pickups::position(p, alpha), 1.0)),
+                _ => None,
+            });
+            for (o, at, partial) in live.chain(taken) {
+                let p = glam::DVec3::new(at[0], at[1] + 0.1, at[2]) - camera;
                 let icon = o.icon();
                 let (du, dv) = ((r.u1 - r.u0) / 4.0, (r.v1 - r.v0) / 4.0);
                 let (u0, v0) = (r.u0 + (icon % 4) as f32 * du, r.v0 + (icon / 4) as f32 * dv);
-                let t = (o.age as f32 + alpha as f32) / 2.0;
+                let t = (o.age as f32 + partial) / 2.0;
                 let red = ((t.sin() + 1.0) * 0.5 * 255.0) as u32;
                 let blue = (((t + 4.188_79).sin() + 1.0) * 0.1 * 255.0) as u32;
                 let color = 0x8000_0000 | blue << 16 | 255 << 8 | red;
@@ -5693,6 +5713,7 @@ impl Game<'_> {
         self.creatures.projectiles.clear();
         self.dropped.clear();
         self.particles.clear();
+        self.pickups.clear();
         self.orbs.clear();
         self.experience = Experience {
             level: self.level.xp_level,
@@ -5844,6 +5865,7 @@ impl Game<'_> {
         self.creatures.projectiles.clear();
         self.dropped.clear();
         self.particles.clear();
+        self.pickups.clear();
         self.orbs.clear();
         self.mining = None;
         self.travelling = Some((player, destination));
@@ -5994,6 +6016,7 @@ impl Game<'_> {
         self.creatures.projectiles.clear();
         self.dropped.clear();
         self.particles.clear();
+        self.pickups.clear();
         self.screen = Screen::Playing;
         if let Some(r) = self.renderer.as_mut() {
             r.clear_sections();
@@ -6689,6 +6712,7 @@ impl Game<'_> {
         let mut orbs = std::mem::take(&mut self.orbs);
         orbs.retain_mut(|o| o.tick(&self.world, &self.res.facts, self.collision, target));
         let mut gained = 0;
+        let mut taken = Vec::new();
         if let Some((min, max)) = bounds {
             orbs.retain(|o| {
                 let touching = o.position.x + 0.25 > min[0]
@@ -6701,12 +6725,16 @@ impl Game<'_> {
                     // ExperienceOrb.playerTouch: one orb every 2 ticks.
                     self.xp_delay = 2;
                     gained += o.value;
+                    taken.push(o.clone());
                     return false;
                 }
                 true
             });
         }
         self.orbs = orbs;
+        for o in taken {
+            self.add_pickup(pickups::Taken::Orb(Box::new(o)), pickups::Collector::Player);
+        }
         if gained > 0 {
             gained = self.mending(gained);
         }
@@ -9097,6 +9125,7 @@ pub fn run() -> Result<()> {
         dropped: Vec::new(),
         next_entity: 0,
         particles,
+        pickups: Default::default(),
         sign_edit: None,
         book: None,
         lectern_pulses: Vec::new(),

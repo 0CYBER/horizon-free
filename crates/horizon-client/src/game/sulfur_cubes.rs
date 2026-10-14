@@ -126,6 +126,11 @@ impl Game<'_> {
                 continue;
             }
             let item = e.stack.item.clone();
+            let (taken_item, id) = (e.clone(), self.mobs[i].id);
+            self.add_pickup(
+                super::pickups::Taken::Item(Box::new(taken_item)),
+                super::pickups::Collector::Mob(id),
+            );
             let e = &mut self.dropped[j];
             e.stack.count -= 1;
             if e.stack.count == 0 {

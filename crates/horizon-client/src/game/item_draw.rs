@@ -310,13 +310,25 @@ impl Game<'_> {
         alpha: f64,
         out: &mut Vec<Vertex>,
     ) {
-        for item in &self.dropped {
+        let live = self.dropped.iter().map(|item| {
             let (p, q) = (item.previous, item.position);
-            let pos = glam::DVec3::new(
+            let at = [
                 p.x + (q.x - p.x) * alpha,
                 p.y + (q.y - p.y) * alpha,
                 p.z + (q.z - p.z) * alpha,
-            ) - camera;
+            ];
+            (item, at, alpha as f32)
+        });
+        // ItemPickupParticle: the render state extracted at partial tick 1.
+        let taken = self.pickups.live.iter().filter_map(|p| match &p.taken {
+            super::pickups::Taken::Item(item) => {
+                Some((&**item, super::pickups::position(p, alpha), 1.0))
+            }
+            _ => None,
+        });
+        for (item, at, partial) in live.chain(taken) {
+            let q = item.position;
+            let pos = glam::DVec3::from_array(at) - camera;
             if pos.length_squared() > 64.0 * 64.0 {
                 continue;
             }
@@ -331,7 +343,7 @@ impl Game<'_> {
             if state.is_empty() {
                 continue;
             }
-            let age = item.age as f32 + alpha as f32;
+            let age = item.age as f32 + partial;
             let (lo, _) = state.bounding_box();
             let min_offset_y = -lo.y + 0.0625;
             let bob = (age / 10.0 + item.bob_offset).sin() * 0.1 + 0.1;
