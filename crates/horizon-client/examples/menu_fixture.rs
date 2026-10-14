@@ -1,9 +1,11 @@
 //! Menu clicks for tools/test_menu_click_parity.py: reads one JSON case per
 //! line (menu, creative, slots, carried, data, ops) and prints the oracle's
-//! state lines after every click.
+//! state lines after every click. The `*_be` furnace menus run over a furnace
+//! block entity: its data slots follow `Furnace::input_clicked`.
 //!
 //! usage: menu_fixture RESOURCES INPUT OUTPUT
 use horizon_client::{
+    containers::{Furnace, FurnaceKind},
     crafting::Recipes,
     item_data::{canon_stack, parse_stack},
     items::Items,
@@ -46,7 +48,20 @@ fn main() -> horizon_client::Result<()> {
     let mut out = String::new();
     for line in input.lines() {
         let case: Value = serde_json::from_str(line)?;
-        let kind = Kind::parse(case["menu"].as_str().unwrap_or_default()).ok_or("menu kind")?;
+        let name = case["menu"].as_str().unwrap_or_default();
+        // FurnaceMenu over the server's AbstractFurnaceBlockEntity.
+        let furnace_kind = match name {
+            "furnace_be" => Some(FurnaceKind::Furnace),
+            "blast_furnace_be" => Some(FurnaceKind::BlastFurnace),
+            "smoker_be" => Some(FurnaceKind::Smoker),
+            _ => None,
+        };
+        let kind = Kind::parse(
+            name.strip_suffix("_be")
+                .filter(|_| furnace_kind.is_some())
+                .unwrap_or(name),
+        )
+        .ok_or("menu kind")?;
         let mut menu = Menu::new(kind);
         menu.creative = case["creative"].as_bool().unwrap_or(false);
         for (i, slot) in case["slots"].as_array().ok_or("slots")?.iter().enumerate() {
@@ -57,6 +72,15 @@ fn main() -> horizon_client::Result<()> {
         for (i, v) in case["data"].as_array().ok_or("data")?.iter().enumerate() {
             menu.data[i] = v.as_i64().unwrap_or(0) as i32;
         }
+        let mut furnace = furnace_kind.map(|kind| Furnace {
+            kind,
+            items: [0, 1, 2].map(|i| menu.slot(i).cloned()),
+            lit_remaining: menu.data[0],
+            lit_total: menu.data[1],
+            cooking_timer: menu.data[2],
+            cooking_total: menu.data[3],
+            speed: 1.0,
+        });
         menu.drops.clear();
         out += &format!("init {}\n", state(&menu));
         for op in case["ops"].as_array().ok_or("ops")? {
@@ -80,7 +104,15 @@ fn main() -> horizon_client::Result<()> {
                 _ => {}
             }
             let kind = Input::parse(op[2].as_str().unwrap_or_default()).ok_or("input")?;
-            match menu.click(&env, slot, button, kind) {
+            let clicked = menu.click(&env, slot, button, kind);
+            if let Some(f) = furnace.as_mut() {
+                let before = f.items[0].clone();
+                f.items = [0, 1, 2].map(|i| menu.slot(i).cloned());
+                f.input_clicked(&recipes, before);
+                menu.data[2] = f.cooking_timer;
+                menu.data[3] = f.cooking_total;
+            }
+            match clicked {
                 Ok(()) => out += &format!("{}\n", state(&menu)),
                 Err(name) => out += &format!("error {name}\n"),
             }
