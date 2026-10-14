@@ -2701,7 +2701,6 @@ fn main() {
                 Cow::Borrowed(horizon_theme::fonts::GEIST_MEDIUM),
                 Cow::Borrowed(horizon_theme::fonts::GEIST_SEMIBOLD),
                 Cow::Borrowed(horizon_theme::fonts::GEIST_MONO),
-                Cow::Borrowed(horizon_theme::fonts::INSTRUMENT_SERIF),
             ])
             .expect("bundled fonts");
         let bounds = Bounds::centered(None, size(px(1040.), px(700.)), cx);

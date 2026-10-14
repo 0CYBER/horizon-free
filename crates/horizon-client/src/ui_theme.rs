@@ -72,22 +72,22 @@ pub fn save_preferences(dir: &Path) {
     let _ = std::fs::write(dir.join("horizon.txt"), format!("menuStyle:{value}\n"));
 }
 
-/// The launcher's dark palette (`horizon_theme::DARK`) in the HUD's colour
-/// encoding, plus the translucent surfaces the menus put over the backdrop.
+/// The dark palette (`horizon_theme::DARK`) in the HUD's colour encoding, plus the
+/// translucent surfaces the menus put over the backdrop.
 pub mod color {
     use crate::hud::rgba;
     use horizon_theme::DARK as P;
     pub const fn hex(c: u32, a: u8) -> u32 {
         (a as u32) << 24 | (c & 0xff) << 16 | (c >> 8 & 0xff) << 8 | (c >> 16 & 0xff)
     }
-    pub const BG: u32 = hex(P.bg, 255);
-    pub const SIDEBAR: u32 = hex(P.sidebar, 255);
-    pub const RAISED: u32 = hex(P.raised, 255);
-    pub const HOVER: u32 = hex(P.hover, 255);
-    pub const BORDER: u32 = hex(P.border, 255);
-    pub const TEXT: u32 = hex(P.text, 255);
-    pub const MUTED: u32 = hex(P.muted, 255);
-    pub const FAINT: u32 = hex(P.faint, 255);
+    pub const BG: u32 = hex(P.page, 255);
+    pub const SIDEBAR: u32 = hex(P.plate_soft, 255);
+    pub const RAISED: u32 = hex(P.plate_soft, 255);
+    pub const HOVER: u32 = hex(P.plate, 255);
+    pub const BORDER: u32 = hex(P.rule, 255);
+    pub const TEXT: u32 = hex(P.ink, 255);
+    pub const MUTED: u32 = hex(P.ink_soft, 255);
+    pub const FAINT: u32 = hex(P.muted, 255);
     pub const ACCENT: u32 = hex(P.accent, 255);
     pub const ON_ACCENT: u32 = hex(P.on_accent, 255);
     pub const DANGER: u32 = hex(P.danger, 255);
@@ -106,16 +106,25 @@ pub mod color {
 }
 
 /// The launcher's type scale and shapes (`horizon_theme`), in dp.
-pub use horizon_theme::{
-    BODY, CONTROL, CONTROL_LARGE, HERO, LARGE, RADIUS, RADIUS_CARD, RADIUS_GROUP, RADIUS_SEGMENT,
-    ROW_LABEL, SEGMENT, SIDEBAR, SMALL, TITLE, WORDMARK, ease_out_cubic, ease_out_quint,
-};
+pub use horizon_theme::{CONTROL, CONTROL_LARGE, SEGMENT, ease_out_cubic, ease_out_quint};
+pub const SMALL: f32 = horizon_theme::CAPTION.px;
+pub const BODY: f32 = horizon_theme::LABEL.px;
+pub const LARGE: f32 = horizon_theme::BODY.px;
+pub const TITLE: f32 = horizon_theme::TITLE.px;
+pub const HERO: f32 = horizon_theme::DISPLAY.px;
+pub const WORDMARK: f32 = 96.;
+pub const RADIUS: f32 = horizon_theme::RADIUS;
+pub const RADIUS_SEGMENT: f32 = horizon_theme::RADIUS;
+pub const RADIUS_GROUP: f32 = horizon_theme::RADIUS;
+pub const RADIUS_CARD: f32 = horizon_theme::RADIUS_PLATE;
+pub const ROW_LABEL: f32 = 150.;
+pub const SIDEBAR: f32 = 200.;
 /// Motion durations in seconds (`horizon_theme::QUICK` and `MOVE`).
 pub fn quick() -> f32 {
-    horizon_theme::QUICK.as_secs_f32()
+    horizon_theme::QUICK.secs()
 }
 pub fn move_() -> f32 {
-    horizon_theme::MOVE.as_secs_f32()
+    horizon_theme::MOVE.secs()
 }
 /// How visible the live title backdrop is (0..1), set by the game each frame.
 static BACKDROP: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -153,7 +162,7 @@ impl Fonts {
         let f = |b: &'static [u8]| FontRef::try_from_slice(b).expect("bundled font");
         Self {
             faces: [
-                f(horizon_theme::fonts::INSTRUMENT_SERIF),
+                f(horizon_theme::fonts::GEIST_MEDIUM),
                 f(horizon_theme::fonts::GEIST_REGULAR),
                 f(horizon_theme::fonts::GEIST_MEDIUM),
                 f(horizon_theme::fonts::GEIST_SEMIBOLD),
@@ -862,11 +871,7 @@ impl<'a> Ui<'a> {
         if !enabled {
             self.opacity *= horizon_theme::DISABLED;
         } else if self.pressed(x, y, w, h) {
-            self.opacity *= if kind == Kind::Primary {
-                horizon_theme::PRESSED
-            } else {
-                horizon_theme::PRESSED_SOFT
-            };
+            self.opacity *= horizon_theme::PRESSED;
         }
         let fg = match kind {
             Kind::Primary => {
@@ -877,7 +882,7 @@ impl<'a> Ui<'a> {
                     w,
                     h,
                     RADIUS,
-                    color::with_alpha(color::WHITE, horizon_theme::PRIMARY_HOVER * hover),
+                    color::with_alpha(color::WHITE, 0.10 * hover),
                 );
                 color::ON_ACCENT
             }

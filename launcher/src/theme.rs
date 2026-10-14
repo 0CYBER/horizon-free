@@ -1,29 +1,33 @@
-//! The launcher's view of Horizon's design tokens (`crates/horizon-theme`), which the game's
-//! menus share: one neutral palette in two appearances and one accent, spacing 4/8/12/16/24/32,
-//! Geist / Instrument Serif / Geist Mono (bundled, SIL Open Font License), five sizes.
+//! The launcher's view of Horizon's design tokens (`crates/horizon-theme`, described in
+//! `docs/design-system.md`), which the game's menus and the website share: cool neutrals in two
+//! appearances and one violet accent, Geist and Geist Mono (bundled, SIL Open Font License).
 use gpui::{rgb, Hsla, WindowAppearance};
 use horizon_theme as tokens;
 use std::time::Duration;
 
 pub const FONT: &str = tokens::FONT;
-pub const DISPLAY: &str = tokens::DISPLAY;
+/// Display type is Geist too, at medium weight.
+pub const DISPLAY: &str = tokens::FONT;
 pub const MONO: &str = tokens::MONO;
 
-pub const SMALL: f32 = tokens::SMALL;
-pub const BODY: f32 = tokens::BODY;
-pub const LARGE: f32 = tokens::LARGE;
-pub const TITLE: f32 = tokens::TITLE;
-pub const HERO: f32 = tokens::HERO;
+pub const SMALL: f32 = tokens::CAPTION.px;
+pub const BODY: f32 = tokens::LABEL.px;
+pub const LARGE: f32 = tokens::BODY.px;
+pub const TITLE: f32 = tokens::TITLE.px;
+pub const HERO: f32 = tokens::DISPLAY.px;
 
 /// Shapes and controls, shared with the game's menus.
-pub use tokens::{
-    CONTROL, DISABLED, PRESSED, PRESSED_SOFT, PRIMARY_HOVER, RADIUS, RADIUS_GROUP, RADIUS_SEGMENT,
-    ROW_LABEL, SEGMENT, SIDEBAR,
-};
+pub use tokens::{CONTROL, DISABLED, PRESSED, RADIUS, SEGMENT};
+pub const PRESSED_SOFT: f32 = tokens::PRESSED;
+pub const PRIMARY_HOVER: f32 = 0.10;
+pub const RADIUS_SEGMENT: f32 = tokens::RADIUS;
+pub const RADIUS_GROUP: f32 = tokens::RADIUS;
+pub const ROW_LABEL: f32 = 150.;
+pub const SIDEBAR: f32 = 200.;
 
 /// Motion: short and eased out, never bouncy.
-pub const QUICK: Duration = tokens::QUICK;
-pub const MOVE: Duration = tokens::MOVE;
+pub const QUICK: Duration = tokens::QUICK.duration();
+pub const MOVE: Duration = tokens::MOVE.duration();
 
 #[derive(Clone, Copy)]
 pub struct Theme {
@@ -63,14 +67,14 @@ impl Theme {
 
     fn from(p: tokens::Palette) -> Self {
         Self {
-            bg: c(p.bg),
-            sidebar: c(p.sidebar),
-            raised: c(p.raised),
-            hover: c(p.hover),
-            border: c(p.border),
-            text: c(p.text),
-            muted: c(p.muted),
-            faint: c(p.faint),
+            bg: c(p.page),
+            sidebar: c(p.plate_soft),
+            raised: c(p.plate_soft),
+            hover: c(p.plate),
+            border: c(p.rule),
+            text: c(p.ink),
+            muted: c(p.ink_soft),
+            faint: c(p.muted),
             accent: c(p.accent),
             on_accent: c(p.on_accent),
             danger: c(p.danger),
