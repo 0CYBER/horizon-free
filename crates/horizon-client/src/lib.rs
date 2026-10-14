@@ -4,6 +4,7 @@
 pub mod advancements;
 pub mod ambience;
 pub mod animate_tick;
+pub mod arrows;
 pub mod assets;
 pub mod atlas_sources;
 pub mod attack_strength;
