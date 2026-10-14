@@ -130,18 +130,69 @@ particle_types! {
     Shriek = "shriek",
     SonicBoom = "sonic_boom",
     Vibration = "vibration",
+    SweepAttack = "sweep_attack",
+    Glow = "glow",
+    WaxOn = "wax_on",
+    WaxOff = "wax_off",
+    ElectricSpark = "electric_spark",
+    Scrape = "scrape",
+    SquidInk = "squid_ink",
+    GlowSquidInk = "glow_squid_ink",
+    Item = "item",
+    ItemSlime = "item_slime",
+    ItemSnowball = "item_snowball",
+    ItemCobweb = "item_cobweb",
+    SulfurCubeGoo = "sulfur_cube_goo",
+    Flash = "flash",
+    Firefly = "firefly",
+    TrialSpawnerDetection = "trial_spawner_detection",
+    TrialSpawnerDetectionOminous = "trial_spawner_detection_ominous",
+    TrialOmen = "trial_omen",
+    RaidOmen = "raid_omen",
+    OminousSpawning = "ominous_spawning",
+    Spit = "spit",
+    Fishing = "fishing",
+    DustPlume = "dust_plume",
+    RedPoplarLeaves = "red_poplar_leaves",
+    OrangePoplarLeaves = "orange_poplar_leaves",
+    YellowPoplarLeaves = "yellow_poplar_leaves",
+    PauseMobGrowth = "pause_mob_growth",
+    ResetMobGrowth = "reset_mob_growth",
+    BlockMarker = "block_marker",
 }
 impl ParticleType {
-    /// `ParticleType.getOverrideLimiter`: spawned regardless of distance.
+    /// `ParticleType.getOverrideLimiter` (`ParticleTypes.register(name, true)`):
+    /// spawned regardless of distance.
     pub fn override_limiter(self) -> bool {
         matches!(
             self,
-            Self::DamageIndicator
+            Self::BlockMarker
+                | Self::DamageIndicator
                 | Self::ExplosionEmitter
                 | Self::Explosion
-                | Self::Poof
+                | Self::Gust
                 | Self::GustEmitterLarge
                 | Self::GustEmitterSmall
+                | Self::SonicBoom
+                | Self::SculkCharge
+                | Self::SculkChargePop
+                | Self::Vibration
+                | Self::Poof
+                | Self::Spit
+                | Self::SquidInk
+                | Self::SweepAttack
+                | Self::CampfireCosySmoke
+                | Self::CampfireSignalSmoke
+                | Self::GlowSquidInk
+                | Self::Glow
+                | Self::WaxOn
+                | Self::WaxOff
+                | Self::ElectricSpark
+                | Self::Scrape
+                | Self::TrialSpawnerDetection
+                | Self::TrialSpawnerDetectionOminous
+                | Self::VaultConnection
+                | Self::OminousSpawning
         )
     }
 }
@@ -161,6 +212,9 @@ pub struct ParticleOptions {
     pub to_color: [f32; 3],
     /// `TrailParticleOption`: the point it flies to and how many ticks it takes.
     pub trail: Option<([f64; 3], i32)>,
+    /// `ItemParticleOption`: the particle sprite of each layer of the item's
+    /// model as resolved for the ground.
+    pub item: Option<Vec<String>>,
 }
 impl ParticleOptions {
     pub fn simple(ty: ParticleType) -> Self {
@@ -171,6 +225,14 @@ impl ParticleOptions {
             scale: 1.0,
             to_color: [1.0, 0.0, 0.0],
             trail: None,
+            item: None,
+        }
+    }
+    /// `ItemParticleOption`: the stack's layer particle sprites (`BreakingItemParticle`).
+    pub fn item(layers: Vec<String>) -> Self {
+        Self {
+            item: Some(layers),
+            ..Self::simple(ParticleType::Item)
         }
     }
     /// `DustColorTransitionOptions`.
@@ -260,6 +322,8 @@ enum Size {
     ReversePortal,
     /// `ShriekParticle.getQuadSize`.
     Shriek,
+    /// `FireworkParticles.OverlayParticle.getQuadSize`: a sine pulse.
+    Flash,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Light {
@@ -271,6 +335,8 @@ enum Light {
     AgeEmission,
     /// `addSmoothBlockEmission` with the age fraction to the fourth power.
     AgeEmission4,
+    /// `FireflyParticle.getLightCoords`: block light fading in and out, no sky.
+    Firefly,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Behaviour {
@@ -358,6 +424,20 @@ enum Behaviour {
     /// `TrailParticle`: eases towards its target over its lifetime.
     Trail {
         target: [f64; 3],
+    },
+    /// `SquidInkParticle`: `SimpleAnimatedParticle`, sinking through air.
+    SquidInk,
+    /// `FireflyParticle`: wanders, fading in and out, gone inside blocks.
+    Firefly,
+    /// `WakeParticle` (fishing): grows and cycles four sprites.
+    Wake,
+    /// `DustPlumeParticle`: gravity and friction decay every tick.
+    DustPlume,
+    /// `FlyStraightTowardsParticle`: from its start along its motion back to
+    /// the start, the colour moving from one to the other.
+    FlyStraight {
+        start: [f64; 3],
+        colors: [u32; 2],
     },
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -692,6 +772,11 @@ impl Particle {
                 let b = (b * b) * (b * b);
                 (sky, (block + (b.clamp(0.0, 1.0) * 240.0) as u32).min(240))
             }
+            Light::Firefly => (
+                0,
+                (255.0 * fade_amount(self.lifetime_progress(self.age as f32 + partial), 0.1, 0.3))
+                    as u32,
+            ),
         }
     }
     fn quad_size(&self, a: f32) -> f32 {
@@ -709,7 +794,26 @@ impl Particle {
                 self.size * (1.0 - (self.age as f32 + a) / (self.lifetime as f32 * 1.5))
             }
             Size::Shriek => self.size * (t * 0.75).clamp(0.0, 1.0),
+            Size::Flash => {
+                7.1 * trig::sin(f64::from(
+                    (self.age as f32 + a - 1.0) * 0.25 * std::f64::consts::PI as f32,
+                ))
+            }
         }
+    }
+    /// `FireflyParticle.getLifetimeProgress`.
+    fn lifetime_progress(&self, age: f32) -> f32 {
+        (age / self.lifetime as f32).clamp(0.0, 1.0)
+    }
+}
+/// `FireflyParticle.getFadeAmount`.
+fn fade_amount(progress: f32, fade_in: f32, fade_out: f32) -> f32 {
+    if progress >= 1.0 - fade_in {
+        (1.0 - progress) / fade_in
+    } else if progress <= fade_out {
+        progress / fade_out
+    } else {
+        1.0
     }
 }
 
@@ -827,6 +931,9 @@ pub struct ParticleEngine {
     starters: Vec<Starter>,
     /// Local sounds requested by particles (dripstone drips): (event, position, volume, pitch).
     pub sounds: Vec<(&'static str, [f64; 3], f32, f32)>,
+    /// The item particles' sprites (`BreakingItemParticle`'s slime ball, snowball
+    /// and cobweb models, resolved for the ground), one per model layer.
+    pub item_sprites: HashMap<ParticleType, Vec<String>>,
 }
 /// `ParticleGroup.MAX_PARTICLES` (per render group; one group here).
 const MAX_PARTICLES: usize = 16384;
@@ -849,6 +956,7 @@ impl ParticleEngine {
             starters: Vec::new(),
             camera: [0.0; 3],
             sounds: Vec::new(),
+            item_sprites: HashMap::new(),
         };
         let dir = root.join("assets/minecraft/particles");
         for &ty in ParticleType::ALL {
@@ -1227,12 +1335,22 @@ impl ParticleEngine {
                 q.set = set;
                 q
             }
-            T::Smoke | T::LargeSmoke | T::WhiteSmoke | T::Ash | T::WhiteAsh => {
+            T::Smoke | T::LargeSmoke | T::WhiteSmoke | T::Ash | T::WhiteAsh | T::DustPlume => {
                 // BaseAshSmokeParticle(dir, xa, scale, colorRandom, maxLifetime, gravity, hasPhysics).
                 let (dir, scale, color_random, max_lifetime, gravity, physics, vel) = match ty {
                     T::Smoke | T::WhiteSmoke => ([0.1, 0.1, 0.1], 1.0, 0.3, 8, -0.1, true, v),
                     T::LargeSmoke => ([0.1, 0.1, 0.1], 2.5, 0.3, 8, -0.1, true, v),
                     T::Ash => ([0.1, -0.1, 0.1], 1.0, 0.5, 20, 0.1, false, [0.0; 3]),
+                    // DustPlumeParticle: ya + 0.15F.
+                    T::DustPlume => (
+                        [0.7, 0.6, 0.7],
+                        1.0,
+                        0.5,
+                        7,
+                        0.5,
+                        false,
+                        [v[0], v[1] + f64::from(0.15f32), v[2]],
+                    ),
                     _ => {
                         // WhiteAshParticle.Provider draws the motion.
                         let pr = &mut self.random;
@@ -1267,6 +1385,15 @@ impl ParticleEngine {
                 }
                 q.size_curve = Size::GrowIn;
                 q.behaviour = Behaviour::Animated;
+                if ty == T::DustPlume {
+                    let shift = r.next_float() * 0.2;
+                    q.set_color(
+                        186.0 / 255.0 - shift,
+                        177.0 / 255.0 - shift,
+                        194.0 / 255.0 - shift,
+                    );
+                    q.behaviour = Behaviour::DustPlume;
+                }
                 q.set = set;
                 q
             }
@@ -1740,9 +1867,9 @@ impl ParticleEngine {
                 }
                 q
             }
-            T::Poof | T::Snowflake => {
+            T::Poof | T::Snowflake | T::Spit => {
                 let mut q = Particle::at(r, ty, p);
-                if ty == T::Poof {
+                if ty != T::Snowflake {
                     q.gravity = -0.1;
                     q.friction = 0.9;
                 } else {
@@ -1752,7 +1879,7 @@ impl ParticleEngine {
                 for i in 0..3 {
                     q.velocity[i] = v[i] + f64::from((r.next_float() * 2.0 - 1.0) * 0.05);
                 }
-                if ty == T::Poof {
+                if ty != T::Snowflake {
                     let col = r.next_float() * 0.3 + 0.7;
                     q.set_color(col, col, col);
                     q.size = 0.1 * (r.next_float() * r.next_float() * 6.0 + 1.0);
@@ -1760,11 +1887,15 @@ impl ParticleEngine {
                     q.size = 0.1 * (r.next_float() * r.next_float() + 1.0);
                 }
                 q.lifetime = (16.0 / (f64::from(r.next_float()) * 0.8 + 0.2)) as i32 + 2;
-                q.behaviour = if ty == T::Poof {
-                    Behaviour::Animated
-                } else {
+                q.behaviour = if ty == T::Snowflake {
                     Behaviour::Snowflake
+                } else {
+                    Behaviour::Animated
                 };
+                // SpitParticle: ExplodeParticle falling at gravity 0.5.
+                if ty == T::Spit {
+                    q.gravity = 0.5;
+                }
                 if ty == T::Snowflake {
                     q.set_color(0.923, 0.964, 0.999);
                 }
@@ -2005,7 +2136,12 @@ impl ParticleEngine {
                 q.set = set;
                 q
             }
-            T::CherryLeaves | T::PaleOakLeaves | T::TintedLeaves => {
+            T::CherryLeaves
+            | T::PaleOakLeaves
+            | T::TintedLeaves
+            | T::RedPoplarLeaves
+            | T::OrangePoplarLeaves
+            | T::YellowPoplarLeaves => {
                 let (fall, side, swirl, flow, scale, start) = if ty == T::CherryLeaves {
                     (0.25f32, 2.0f32, false, true, 1.0f32, 0.0f32)
                 } else {
@@ -2041,7 +2177,13 @@ impl ParticleEngine {
                 };
                 q
             }
-            T::Effect | T::InstantEffect | T::EntityEffect | T::Witch | T::Infested => {
+            T::Effect
+            | T::InstantEffect
+            | T::EntityEffect
+            | T::Witch
+            | T::Infested
+            | T::TrialOmen
+            | T::RaidOmen => {
                 // SpellParticle: x/z velocity from `SpellParticle.RANDOM`, y from the option.
                 let xa = 0.5 - self.spell_random.next_double();
                 let za = 0.5 - self.spell_random.next_double();
@@ -2115,6 +2257,239 @@ impl ParticleEngine {
                 q.behaviour = Behaviour::DragonBreath { hit_ground: false };
                 q.set = set;
                 q.set_power(o.scale);
+                q
+            }
+            // AttackSweepParticle: `xAux` shrinks it; still, bright, animated over 4 ticks.
+            T::SweepAttack => {
+                let mut q = Particle::moving(r, ty, p, [0.0; 3]);
+                q.lifetime = 4;
+                let col = r.next_float() * 0.6 + 0.4;
+                q.set_color(col, col, col);
+                q.size = 1.0 - v[0] as f32 * 0.5;
+                q.light = Light::FullBright;
+                q.behaviour = Behaviour::HugeExplosion;
+                q.set = set;
+                q
+            }
+            // GlowParticle and its providers.
+            T::Glow | T::WaxOn | T::WaxOff | T::ElectricSpark | T::Scrape => {
+                let pr = &mut self.random;
+                let start = if ty == T::Glow {
+                    let xa = 0.5 - pr.next_double();
+                    [xa, v[1], 0.5 - pr.next_double()]
+                } else {
+                    [0.0; 3]
+                };
+                let mut q = Particle::moving(r, ty, p, start);
+                q.friction = 0.96;
+                q.speed_up_when_y_blocked = true;
+                q.size *= 0.75;
+                q.has_physics = false;
+                q.light = Light::AgeEmission;
+                q.behaviour = Behaviour::Animated;
+                q.set = set;
+                match ty {
+                    T::ElectricSpark => {
+                        q.set_color(1.0, 0.9, 1.0);
+                        q.velocity = [v[0] * 0.25, v[1] * 0.25, v[2] * 0.25];
+                        q.lifetime = pr.next_int_bound(2).unwrap_or(0) + 2;
+                    }
+                    T::Glow => {
+                        if pr.next_boolean() {
+                            q.set_color(0.6, 1.0, 0.8);
+                        } else {
+                            q.set_color(0.08, 0.4, 0.4);
+                        }
+                        q.velocity[1] *= f64::from(0.2f32);
+                        if v[0] == 0.0 && v[2] == 0.0 {
+                            q.velocity[0] *= f64::from(0.1f32);
+                            q.velocity[2] *= f64::from(0.1f32);
+                        }
+                        q.lifetime = (8.0 / (pr.next_double() * 0.8 + 0.2)) as i32;
+                    }
+                    T::Scrape => {
+                        if pr.next_boolean() {
+                            q.set_color(0.29, 0.58, 0.51);
+                        } else {
+                            q.set_color(0.43, 0.77, 0.62);
+                        }
+                        q.velocity = [v[0] * 0.01, v[1] * 0.01, v[2] * 0.01];
+                        q.lifetime = pr.next_int_bound(30).unwrap_or(0) + 10;
+                    }
+                    _ => {
+                        if ty == T::WaxOn {
+                            q.set_color(0.91, 0.55, 0.08);
+                        } else {
+                            q.set_color(1.0, 0.9, 1.0);
+                        }
+                        q.velocity = [v[0] * 0.01 / 2.0, v[1] * 0.01, v[2] * 0.01 / 2.0];
+                        q.lifetime = pr.next_int_bound(30).unwrap_or(0) + 10;
+                    }
+                }
+                q
+            }
+            // SquidInkParticle (SimpleAnimatedParticle, gravity 0).
+            T::SquidInk | T::GlowSquidInk => {
+                let mut q = Particle::at(r, ty, p);
+                q.friction = 0.92;
+                q.size = 0.5;
+                if ty == T::GlowSquidInk {
+                    // ARGB.colorFromFloat(1, 0.2, 0.8, 0.6), back to floats.
+                    q.set_color(51.0 / 255.0, 204.0 / 255.0, 153.0 / 255.0);
+                } else {
+                    q.set_color(0.0, 0.0, 0.0);
+                }
+                q.lifetime = (q.size * 12.0 / (r.next_float() * 0.8 + 0.2)) as i32;
+                q.has_physics = false;
+                q.velocity = v;
+                q.light = Light::FullBright;
+                q.behaviour = Behaviour::SquidInk;
+                q.set = set;
+                q
+            }
+            // BreakingItemParticle: a crumb of the item's sprite.
+            T::Item | T::ItemSlime | T::ItemSnowball | T::ItemCobweb | T::SulfurCubeGoo => {
+                let sprite = if ty == T::SulfurCubeGoo {
+                    self.first(ty)
+                } else {
+                    // ItemStackRenderState.pickParticleMaterial.
+                    let layers = match ty {
+                        T::Item => o.item.clone().unwrap_or_default(),
+                        _ => self.item_sprites.get(&ty).cloned().unwrap_or_default(),
+                    };
+                    if layers.is_empty() {
+                        Sprite::Index(u32::MAX)
+                    } else {
+                        let i = self.random.next_int_bound(layers.len() as i32).unwrap_or(0);
+                        Sprite::Named(layers[i as usize].clone())
+                    }
+                };
+                let mut q = Particle::moving(r, ty, p, [0.0; 3]);
+                q.sprite = sprite;
+                q.gravity = 1.0;
+                q.size /= 2.0;
+                let uo = r.next_float() * 3.0;
+                let vo = r.next_float() * 3.0;
+                q.uv = [(uo + 1.0) / 4.0, vo / 4.0, uo / 4.0, (vo + 1.0) / 4.0];
+                if ty == T::Item {
+                    for i in 0..3 {
+                        q.velocity[i] = q.velocity[i] * f64::from(0.1f32) + v[i];
+                    }
+                }
+                q
+            }
+            // FireworkParticles.OverlayParticle: the flash of an explosion.
+            T::Flash => {
+                let mut q = Particle::at(r, ty, p);
+                q.lifetime = 4;
+                q.set_color(o.color[0], o.color[1], o.color[2]);
+                q.rgba[3] = o.color[3];
+                q.size_curve = Size::Flash;
+                q
+            }
+            // FireflyParticle; the provider draws its motion, sprite and lifetime.
+            T::Firefly => {
+                let pr = &mut self.random;
+                let xa = 0.5 - pr.next_double();
+                let ya = if pr.next_boolean() { v[1] } else { -v[1] };
+                let za = 0.5 - pr.next_double();
+                let sprite = self.sprite_from_set(ty);
+                let mut q = Particle::moving(r, ty, p, [xa, ya, za]);
+                q.sprite = sprite;
+                q.speed_up_when_y_blocked = true;
+                q.friction = 0.96;
+                q.size *= 0.75;
+                q.velocity[1] *= f64::from(0.8f32);
+                q.velocity[0] *= f64::from(0.8f32);
+                q.velocity[2] *= f64::from(0.8f32);
+                q.lifetime = self
+                    .random
+                    .next_int_between_inclusive(200, 300)
+                    .unwrap_or(200);
+                q.scale(1.5);
+                q.rgba[3] = 0.0;
+                q.light = Light::Firefly;
+                q.behaviour = Behaviour::Firefly;
+                q
+            }
+            // TrialSpawnerDetectionParticle (scale 1.5 from the provider).
+            T::TrialSpawnerDetection | T::TrialSpawnerDetectionOminous => {
+                let scale = 1.5f32;
+                let mut q = Particle::moving(r, ty, p, [0.0; 3]);
+                q.friction = 0.96;
+                q.gravity = -0.1;
+                q.speed_up_when_y_blocked = true;
+                q.velocity[0] *= 0.0;
+                q.velocity[1] *= 0.9;
+                q.velocity[2] *= 0.0;
+                for i in 0..3 {
+                    q.velocity[i] += v[i];
+                }
+                q.size *= 0.75 * scale;
+                // Mth.randomBetween(random, 0.5, 1.0).
+                q.lifetime = ((8.0 / (r.next_float() * (1.0 - 0.5) + 0.5) * scale) as i32).max(1);
+                q.light = Light::Block15;
+                q.size_curve = Size::GrowIn;
+                q.behaviour = Behaviour::Animated;
+                q.set = set;
+                q
+            }
+            // FlyStraightTowardsParticle.OminousSpawnProvider.
+            T::OminousSpawning => {
+                let sprite = self.sprite_from_set(ty);
+                let mut q = Particle::at(r, ty, p);
+                q.sprite = sprite;
+                q.velocity = v;
+                let start = [p[0] + v[0], p[1] + v[1], p[2] + v[2]];
+                q.previous = start;
+                q.position = start;
+                q.size = 0.1 * (r.next_float() * 0.5 + 0.2);
+                q.has_physics = false;
+                q.free_move = true;
+                q.lifetime = (r.next_float() * 5.0) as i32 + 25;
+                q.light = Light::Block15;
+                q.behaviour = Behaviour::FlyStraight {
+                    start: p,
+                    colors: [0xFF45_AEFE, 0xFFFF_FFFF],
+                };
+                // Mth.randomBetween(level.getRandom(), 3, 5).
+                let s = self.level_random.next_float() * (5.0 - 3.0) + 3.0;
+                q.scale(s);
+                q
+            }
+            // WakeParticle.
+            T::Fishing => {
+                let mut q = Particle::moving(r, ty, p, [0.0; 3]);
+                q.velocity[0] *= f64::from(0.3f32);
+                q.velocity[1] = f64::from(r.next_float() * 0.2 + 0.1);
+                q.velocity[2] *= f64::from(0.3f32);
+                q.set_size(0.01, 0.01);
+                q.lifetime = (8.0 / (f64::from(r.next_float()) * 0.8 + 0.2)) as i32;
+                q.gravity = 0.0;
+                q.velocity = v;
+                q.behaviour = Behaviour::Wake;
+                q.set = set;
+                q
+            }
+            // SimpleVerticalParticle.
+            T::PauseMobGrowth | T::ResetMobGrowth => {
+                let mut q = Particle::moving(r, ty, p, v);
+                q.velocity = v;
+                q.gravity = 0.0;
+                q.velocity[1] += if ty == T::ResetMobGrowth { 0.03 } else { -0.03 };
+                q.size *= r.next_float() * 0.6 + 0.5;
+                q.lifetime = 8;
+                q
+            }
+            // BlockMarker: the block's particle sprite, half a block wide, 80 ticks.
+            T::BlockMarker => {
+                let (sprite, _) = o.block.clone()?;
+                let mut q = Particle::at(r, ty, p);
+                q.sprite = Sprite::Named(sprite);
+                q.gravity = 0.0;
+                q.lifetime = 80;
+                q.has_physics = false;
+                q.size = 0.5;
                 q
             }
             T::Trail => {
@@ -2256,6 +2631,19 @@ impl ParticleEngine {
                         }
                     }
                 }
+                // The flash: ColorParticleOption.create(FLASH, first colour), alpha 0.
+                let c = colors[0];
+                let rgba = [
+                    ((c >> 16) & 255) as f32 / 255.0,
+                    ((c >> 8) & 255) as f32 / 255.0,
+                    (c & 255) as f32 / 255.0,
+                    ((c >> 24) & 255) as f32 / 255.0,
+                ];
+                self.create(
+                    &ParticleOptions::colored(ParticleType::Flash, rgba),
+                    s.at,
+                    [0.0; 3],
+                );
             }
             s.life += 1;
             if s.life > s.lifetime {
@@ -2886,6 +3274,93 @@ impl ParticleEngine {
                 p.velocity[1] -= f64::from(0.003f32);
                 p.velocity[1] = p.velocity[1].max(f64::from(-0.14f32));
             }
+            Behaviour::SquidInk => {
+                // SimpleAnimatedParticle.tick, then SquidInkParticle's.
+                p.base_tick(level);
+                self.sprite_from_age(p);
+                let half = |p: &mut Particle| {
+                    if p.age > p.lifetime / 2 {
+                        p.rgba[3] =
+                            1.0 - (p.age as f32 - (p.lifetime / 2) as f32) / p.lifetime as f32;
+                    }
+                };
+                half(p);
+                if !p.removed {
+                    self.sprite_from_age(p);
+                    half(p);
+                    let b = ParticleLevel::block_at(p.position);
+                    if level.facts.is_air(level.world.block(b[0], b[1], b[2])) {
+                        p.velocity[1] -= f64::from(0.0074f32);
+                    }
+                }
+            }
+            Behaviour::Firefly => {
+                p.base_tick(level);
+                let b = ParticleLevel::block_at(p.position);
+                if !level.facts.is_air(level.world.block(b[0], b[1], b[2])) {
+                    p.removed = true;
+                } else {
+                    p.rgba[3] = fade_amount(p.lifetime_progress(p.age as f32), 0.3, 0.5);
+                    if p.random.next_float() > 0.95 || p.age == 1 {
+                        let r = &mut p.random;
+                        let mut speed = || f64::from(-0.05f32 + 0.1 * r.next_float());
+                        p.velocity = [speed(), speed(), speed()];
+                    }
+                }
+            }
+            Behaviour::Wake => {
+                p.previous = p.position;
+                let life = 60 - p.lifetime;
+                let lifetime = p.lifetime;
+                p.lifetime -= 1;
+                if lifetime <= 0 {
+                    p.removed = true;
+                    return;
+                }
+                p.velocity[1] -= f64::from(p.gravity);
+                p.move_by(level, p.velocity);
+                for c in &mut p.velocity {
+                    *c *= f64::from(0.98f32);
+                }
+                let size = life as f32 * 0.001;
+                p.set_size(size, size);
+                // SpriteSet.get(life % 4, 4).
+                if let Some(set) = p.set {
+                    let sprites = &self.set_sprites[set as usize];
+                    let index = (life % 4) as usize * (sprites.len() - 1) / 4;
+                    p.sprite = Sprite::Index(sprites[index]);
+                }
+            }
+            Behaviour::DustPlume => {
+                p.gravity *= 0.88;
+                p.friction *= 0.92;
+                p.base_tick(level);
+                self.sprite_from_age(p);
+            }
+            Behaviour::FlyStraight { start, colors } => {
+                p.previous = p.position;
+                let age = p.age;
+                p.age += 1;
+                if age >= p.lifetime {
+                    p.removed = true;
+                    return;
+                }
+                let normalized = p.age as f32 / p.lifetime as f32;
+                let along = 1.0 - normalized;
+                for i in 0..3 {
+                    p.position[i] = start[i] + p.velocity[i] * f64::from(along);
+                }
+                // ARGB.srgbLerp: Mth.lerpInt on each 8-bit channel.
+                let lerp = |shift: u32| {
+                    let (a, b) = (
+                        (colors[0] >> shift & 255) as i32,
+                        (colors[1] >> shift & 255) as i32,
+                    );
+                    (a + (normalized * (b - a) as f32).floor() as i32) as f32 / 255.0
+                };
+                p.set_color(lerp(16), lerp(8), lerp(0));
+                p.rgba[3] = lerp(24);
+            }
             Behaviour::DragonBreath { mut hit_ground } => {
                 p.previous = p.position;
                 let age = p.age;
@@ -2961,6 +3436,10 @@ impl ParticleEngine {
             };
             let size = p.quad_size(partial);
             let mut alpha = p.rgba[3];
+            // OverlayParticle.extract: the flash fades as it pulses.
+            if p.ty == ParticleType::Flash {
+                alpha = 0.6 - (p.age as f32 + partial - 1.0) * 0.25 * 0.5;
+            }
             if let Behaviour::FlyTowards { alpha: la, .. } = p.behaviour {
                 alpha = lifetime_alpha(la, p.age, p.lifetime, partial);
             }

@@ -45,6 +45,7 @@ mod golems;
 mod growth;
 mod hand;
 mod item_draw;
+mod item_particles;
 mod jukebox;
 mod lan;
 mod lan_actions;
