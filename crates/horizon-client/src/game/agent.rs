@@ -506,6 +506,11 @@ impl Game<'_> {
             Mode::Error { message, .. } => {
                 json!({ "mode": "world-operation-error", "message": message })
             }
+            Mode::Multiplayer(horizon_client::multiplayer::Screen::Disconnected {
+                reason, ..
+            }) => {
+                json!({ "mode": "multiplayer", "disconnected": reason })
+            }
             Mode::Multiplayer(_) => json!({ "mode": "multiplayer" }),
         }
     }

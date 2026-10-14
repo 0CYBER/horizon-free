@@ -484,7 +484,7 @@ impl Game<'_> {
                 }
                 let name = words
                     .get(2)
-                    .map_or_else(|| self.options.player_name.clone(), |n| (*n).to_owned());
+                    .map_or_else(|| self.options.player_name(), |n| (*n).to_owned());
                 self.connect_server(arg(1)?, &name)?;
                 ok()
             }
