@@ -70,6 +70,7 @@ def normal(d):
     d.setdefault('matrix', IDENTITY)
     if d['type'] == 'sprite':
         d.setdefault('region', None)
+        d.setdefault('pipeline', 'pipeline/gui_textured')
     if d['type'] == 'text':
         d.setdefault('runs', None)
     return d

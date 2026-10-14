@@ -292,6 +292,9 @@ pub struct HudBatch {
     pub height: f32,
     /// Glyph pixels to upload into the atlas before drawing.
     pub patches: Vec<crate::font::Patch>,
+    /// Vertex ranges drawn with `RenderPipelines.CROSSHAIR`'s
+    /// `BlendFunction.INVERT` instead of alpha blending.
+    pub invert: Vec<std::ops::Range<u32>>,
 }
 pub fn rgba(r: u8, g: u8, b: u8, a: u8) -> u32 {
     u32::from(a) << 24 | u32::from(b) << 16 | u32::from(g) << 8 | u32::from(r)
@@ -314,7 +317,36 @@ impl HudBatch {
             width: (window[0] as f32 / scale as f32).ceil(),
             height: (window[1] as f32 / scale as f32).ceil(),
             patches: Vec::new(),
+            invert: Vec::new(),
         }
+    }
+    /// Draw the vertices added since `start` with the inverting blend.
+    pub fn invert_since(&mut self, start: usize) {
+        let range = start as u32..self.vertices.len() as u32;
+        if range.is_empty() {
+            return;
+        }
+        match self.invert.last_mut() {
+            Some(last) if last.end == range.start => last.end = range.end,
+            _ => self.invert.push(range),
+        }
+    }
+    /// The vertex ranges in order, each with whether it inverts.
+    pub fn runs(&self) -> Vec<(std::ops::Range<u32>, bool)> {
+        let mut out = Vec::new();
+        let mut at = 0;
+        for r in &self.invert {
+            if r.start > at {
+                out.push((at..r.start, false));
+            }
+            out.push((r.clone(), true));
+            at = r.end;
+        }
+        let end = self.vertices.len() as u32;
+        if end > at {
+            out.push((at..end, false));
+        }
+        out
     }
     /// `AbstractContainerScreen.init`: center in integer GUI coordinates.
     pub fn centered_origin(&self, width: f32, height: f32) -> (f32, f32) {
@@ -604,6 +636,8 @@ pub struct HudRenderer {
     /// The shared atlas texture, for run-time glyph uploads.
     pub atlas_texture: Option<wgpu::Texture>,
     pipeline: wgpu::RenderPipeline,
+    /// `RenderPipelines.CROSSHAIR`.
+    invert_pipeline: wgpu::RenderPipeline,
     group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
     buffer: wgpu::Buffer,
@@ -684,35 +718,55 @@ impl HudRenderer {
             ..Default::default()
         });
         let attributes = wgpu::vertex_attr_array![0=>Float32x2,1=>Float32x2,2=>Unorm8x4];
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("HUD"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<HudVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &attributes,
-                })],
+        let create = |label, blend| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<HudVertex>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &attributes,
+                    })],
+                },
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let pipeline = create("HUD", wgpu::BlendState::ALPHA_BLENDING);
+        // BlendFunction.INVERT: ONE_MINUS_DST_COLOR, ONE_MINUS_SRC_COLOR,
+        // ONE, ZERO.
+        let invert_pipeline = create(
+            "HUD crosshair",
+            wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::OneMinusDst,
+                    dst_factor: wgpu::BlendFactor::OneMinusSrc,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::Zero,
+                    operation: wgpu::BlendOperation::Add,
+                },
             },
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        );
         let capacity = 1 << 16;
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("HUD vertices"),
@@ -723,6 +777,7 @@ impl HudRenderer {
         Ok(Self {
             atlas_texture: None,
             pipeline,
+            invert_pipeline,
             group,
             uniform,
             buffer,
@@ -800,10 +855,16 @@ impl HudRenderer {
             color_attachments: &attachments,
             ..Default::default()
         });
-        pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.group, &[]);
         pass.set_vertex_buffer(0, self.buffer.slice(..));
-        pass.draw(0..count as u32, 0..1);
+        for (range, invert) in batch.runs() {
+            pass.set_pipeline(if invert {
+                &self.invert_pipeline
+            } else {
+                &self.pipeline
+            });
+            pass.draw(range, 0..1);
+        }
     }
 }
 
@@ -811,6 +872,25 @@ impl HudRenderer {
 mod tests {
     use super::*;
 
+    #[test]
+    fn inverted_ranges_split_the_draws_in_order() {
+        let mut batch = HudBatch::new([854, 480]);
+        let quad = |b: &mut HudBatch| b.quad([[0.0; 2]; 4], [[0.0; 2]; 4], 0);
+        quad(&mut batch);
+        let start = batch.vertices.len();
+        quad(&mut batch);
+        batch.invert_since(start);
+        let start = batch.vertices.len();
+        quad(&mut batch);
+        batch.invert_since(start);
+        batch.invert_since(batch.vertices.len());
+        quad(&mut batch);
+        assert_eq!(batch.invert, vec![6..18]);
+        assert_eq!(
+            batch.runs(),
+            vec![(0..6, false), (6..18, true), (18..24, false)]
+        );
+    }
     #[test]
     fn container_origins_use_java_integer_division() {
         // Odd scaled dimensions, odd image sizes and an oversized panel.
@@ -821,6 +901,7 @@ mod tests {
                 width: width as f32,
                 height: height as f32,
                 patches: Vec::new(),
+                invert: Vec::new(),
             };
             for (image_width, image_height) in [(195, 136), (176, 166), (176, 222)] {
                 assert_eq!(
