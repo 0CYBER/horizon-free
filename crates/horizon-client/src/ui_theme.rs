@@ -521,6 +521,12 @@ impl<'a> Ui<'a> {
     /// Register an interactive rectangle; returns its hover layer (0..1,
     /// eased over `QUICK` like the launcher's `hover_layer`).
     pub fn interact(&mut self, id: u64, x: f32, y: f32, w: f32, h: f32, enabled: bool) -> f32 {
+        if enabled && self.real {
+            // Where a controller's D-pad can move focus, in GUI pixels.
+            let k = self.density / self.scale;
+            let (ox, oy) = self.offset;
+            crate::widgets::target([(x + ox) * k, (y + oy) * k, w * k, h * k]);
+        }
         if enabled {
             let (ox, oy) = self.offset;
             self.hits.push(Hit {

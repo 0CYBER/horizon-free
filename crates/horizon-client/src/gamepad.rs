@@ -462,6 +462,56 @@ pub fn hotbar_step(selected: usize, forward: bool) -> usize {
     }
 }
 
+/// Menu cursor speed in GUI pixels per second at full tilt.
+pub const CURSOR_SPEED: f32 = 300.0;
+
+/// How far the menu cursor moves for a stick over `seconds`, in GUI pixels
+/// (`y` down): a squared curve, so a light touch lands on a slot.
+pub fn cursor_delta(stick: [f32; 2], deadzone: f32, seconds: f32) -> (f32, f32) {
+    let v = radial(stick, deadzone);
+    let len = length(v);
+    if len == 0.0 {
+        return (0.0, 0.0);
+    }
+    let speed = (CURSOR_SPEED * len + 30.0) * seconds;
+    (v[0] * speed, -v[1] * speed)
+}
+
+/// The target a D-pad press moves focus to: the nearest one inside a cone
+/// around the direction, weighing sideways distance double.
+pub fn focus_step(from: (f32, f32), button: Button, targets: &[(f32, f32)]) -> Option<usize> {
+    let (dx, dy) = match button {
+        Button::DPadUp => (0.0, -1.0),
+        Button::DPadDown => (0.0, 1.0),
+        Button::DPadLeft => (-1.0, 0.0),
+        Button::DPadRight => (1.0, 0.0),
+        _ => return None,
+    };
+    targets
+        .iter()
+        .enumerate()
+        .filter_map(|(i, t)| {
+            let (x, y) = (t.0 - from.0, t.1 - from.1);
+            let along = x * dx + y * dy;
+            let across = (x * dy - y * dx).abs();
+            (along > 2.0 && across <= along * 2.0).then_some((i, along + 2.0 * across))
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(i, _)| i)
+}
+
+/// The target within `radius` of `at`, nearest first (the cursor settles
+/// onto a slot or button when the stick lets go).
+pub fn nearest(at: (f32, f32), targets: &[(f32, f32)], radius: f32) -> Option<usize> {
+    targets
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (i, (t.0 - at.0).hypot(t.1 - at.1)))
+        .filter(|(_, d)| *d <= radius)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(i, _)| i)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -582,6 +632,28 @@ mod tests {
         b.left = [0.95, 0.0];
         let m = a.merge(&b);
         assert!(m.held(Button::North) && m.left[0] == 1.0 && m.active(&s));
+    }
+
+    #[test]
+    fn focus_moves_between_slots() {
+        // A 3x2 grid of slots 18 apart and a button below it.
+        let mut targets: Vec<(f32, f32)> = (0..6)
+            .map(|i| (8.0 + (i % 3) as f32 * 18.0, 8.0 + (i / 3) as f32 * 18.0))
+            .collect();
+        targets.push((26.0, 80.0));
+        let from = targets[0];
+        assert_eq!(focus_step(from, Button::DPadRight, &targets), Some(1));
+        assert_eq!(focus_step(from, Button::DPadDown, &targets), Some(3));
+        assert_eq!(focus_step(from, Button::DPadUp, &targets), None);
+        assert_eq!(focus_step(from, Button::DPadLeft, &targets), None);
+        assert_eq!(focus_step(targets[4], Button::DPadDown, &targets), Some(6));
+        // The far end of a row skips nothing in between.
+        assert_eq!(focus_step(targets[2], Button::DPadLeft, &targets), Some(1));
+        assert_eq!(nearest((12.0, 10.0), &targets, 9.0), Some(0));
+        assert_eq!(nearest((100.0, 100.0), &targets, 9.0), None);
+        let (x, y) = cursor_delta([0.0, 1.0], 0.15, 0.1);
+        assert!(x == 0.0 && y < -30.0, "up moves up the screen");
+        assert_eq!(cursor_delta([0.1, 0.0], 0.15, 0.1), (0.0, 0.0));
     }
 
     #[test]
