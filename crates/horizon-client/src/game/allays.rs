@@ -139,21 +139,9 @@ impl Game<'_> {
             {
                 c.extra.egg_time = 6000;
             }
-            for _ in 0..3 {
-                let r = &mut self.world.random;
-                let p = [
-                    at[0] + r.next_double() - 0.5,
-                    at[1] + 0.5 + r.next_double() * 0.6,
-                    at[2] + r.next_double() - 0.5,
-                ];
-                if let Some(ty) = horizon_client::particles::ParticleType::from_name("heart") {
-                    self.particles.add(
-                        &horizon_client::particles::ParticleOptions::simple(ty),
-                        p,
-                        [0.0; 3],
-                    );
-                }
-            }
+            // Allay.duplicateAllay: entity event 18, three spawnHeartParticle.
+            let id = self.mobs[index].id;
+            self.particles_around_mob(id, "heart", horizon_client::particles::Burst::ALLAY);
             self.audio
                 .play("minecraft:block.amethyst_block.chime", Some(at), 2.0, 1.0);
             self.consume_held();

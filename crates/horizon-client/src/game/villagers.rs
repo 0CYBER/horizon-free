@@ -176,9 +176,10 @@ impl Game<'_> {
         villager::ext_mut(&mut self.mobs[ib]).eat_and_digest();
         let from = self.mobs[ia].position;
         let Some((bed, variant)) = child else {
-            for i in [ia, ib] {
-                let p = self.mobs[i].position;
-                self.particles_at("angry_villager", [p.x, p.y + 1.8, p.z]);
+            // VillagerMakeLove: entity event 13 for the partner, then the parent.
+            for i in [ib, ia] {
+                let id = self.mobs[i].id;
+                self.villager_particles(id, "angry_villager");
             }
             return;
         };
@@ -202,12 +203,52 @@ impl Game<'_> {
             child.extra.age = -24000;
             child.extra.bed = Some(bed);
         }
-        self.particles_at("heart", [from.x, from.y + 1.8, from.z]);
+        // VillagerMakeLove.giveBirth: entity event 12 for the child.
+        self.villager_particles(id, "heart");
     }
-    fn particles_at(&mut self, kind: &'static str, at: [f64; 3]) {
-        if let Some(ty) = horizon_client::particles::ParticleType::from_name(kind) {
-            let options = horizon_client::particles::ParticleOptions::simple(ty);
-            self.particles.add(&options, at, [0.0; 3]);
+    /// `Villager.handleEntityEvent` 12, 13, 14 and 42:
+    /// `AbstractVillager.addParticlesAroundSelf`.
+    pub(super) fn villager_particles(&mut self, id: u32, kind: &'static str) {
+        self.particles_around_mob(id, kind, horizon_client::particles::Burst::VILLAGER);
+    }
+    /// `particles::around_self` about mob `id`.
+    pub(super) fn particles_around_mob(
+        &mut self,
+        id: u32,
+        kind: &'static str,
+        burst: horizon_client::particles::Burst,
+    ) {
+        let Some(m) = self.mobs.iter().find(|m| m.id == id) else {
+            return;
+        };
+        let feet = [m.position.x, m.position.y, m.position.z];
+        let size = [f64::from(m.width()), f64::from(m.height())];
+        self.particles_around(kind, feet, size, burst);
+    }
+    /// `particles::around_self` on the client: the particle engine's random
+    /// stands in for the client entity's, so no server draw moves.
+    pub(super) fn particles_around(
+        &mut self,
+        kind: &'static str,
+        feet: [f64; 3],
+        size: [f64; 2],
+        burst: horizon_client::particles::Burst,
+    ) {
+        let Some(ty) = horizon_client::particles::ParticleType::from_name(kind) else {
+            return;
+        };
+        let options = horizon_client::particles::ParticleOptions::simple(ty);
+        let mut spawned = Vec::new();
+        horizon_client::particles::around_self(
+            self.particles.random(),
+            feet,
+            size[0],
+            size[1],
+            burst,
+            |p, v| spawned.push((p, v)),
+        );
+        for (p, v) in spawned {
+            self.particles.add(&options, p, v);
         }
     }
 
@@ -281,7 +322,7 @@ impl Game<'_> {
             }
             let time = m.ai.last_hurt_by_time;
             let alive = m.alive();
-            let at = m.position;
+            let at = m.id;
             let e = villager::ext_mut(m);
             if e.hurt_seen != time {
                 e.hurt_seen = time;
@@ -295,8 +336,9 @@ impl Game<'_> {
                 }
             }
         }
-        for at in angry {
-            self.particles_at("angry_villager", [at.x, at.y + 1.8, at.z]);
+        // Villager.setLastHurtByMob: entity event 13.
+        for id in angry {
+            self.villager_particles(id, "angry_villager");
         }
     }
     /// `Villager.tellWitnessesThatIWasMurdered`: the villagers that saw a
@@ -350,8 +392,8 @@ impl Game<'_> {
             GossipType::Trading,
             gossip::REPUTATION_CHANGE_PER_TRADE,
         );
-        let p = self.mobs[i].position;
-        self.particles_at("happy_villager", [p.x, p.y + 1.8, p.z]);
+        // Villager.customServerAiStep after a trade: entity event 14.
+        self.villager_particles(id, "happy_villager");
     }
     /// `Villager.getPlayerReputation` of the local player.
     pub(super) fn villager_reputation(&self, id: u32) -> i32 {

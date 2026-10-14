@@ -933,6 +933,20 @@ pub enum MobEvent {
         at: [f64; 3],
         count: u32,
     },
+    /// Client particles about a mob's box (`particles::around_self`).
+    AroundSelf {
+        kind: &'static str,
+        feet: [f64; 3],
+        width: f64,
+        height: f64,
+        burst: crate::particles::Burst,
+    },
+    /// One particle exactly at `at`, moving at `velocity`.
+    ParticleAt {
+        kind: &'static str,
+        at: [f64; 3],
+        velocity: [f64; 3],
+    },
     Experience {
         at: [f64; 3],
         amount: u32,
