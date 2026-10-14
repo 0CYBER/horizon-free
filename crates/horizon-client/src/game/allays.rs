@@ -54,6 +54,11 @@ impl Game<'_> {
                 .inflate(horizon_core::geometry::Vec3::new(1.0, 1.0, 1.0));
             if b.contains(e.position) {
                 let take = (max - carried).min(e.stack.count as i32);
+                let (item, id) = (e.clone(), self.mobs[i].id);
+                self.add_pickup(
+                    super::pickups::Taken::Item(Box::new(item)),
+                    super::pickups::Collector::Mob(id),
+                );
                 self.mobs[i].extra.ints[1] += take;
                 let e = &mut self.dropped[j];
                 e.stack.count -= take as u32;

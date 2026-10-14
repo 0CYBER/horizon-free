@@ -293,7 +293,15 @@ impl Game<'_> {
                     j += 1;
                     continue;
                 }
+                let before = self.dropped[j].clone();
                 let rest = villager::ext_mut(&mut self.mobs[i]).add_item(stack, max);
+                if rest.as_ref().is_none_or(|r| r.count < before.stack.count) {
+                    let id = self.mobs[i].id;
+                    self.add_pickup(
+                        super::pickups::Taken::Item(Box::new(before)),
+                        super::pickups::Collector::Mob(id),
+                    );
+                }
                 match rest {
                     None => {
                         self.dropped.remove(j);
