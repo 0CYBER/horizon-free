@@ -69,3 +69,118 @@ gh api -X POST repos/ludovic111/horizon/branches/main/protection/required_status
 
 A skipped `parity` (a fork without the label, a run started by a label) counts as passed, so requiring it never
 blocks a fork's pull request; the maintainer decides whether to run it.
+
+## Game releases
+
+`.github/workflows/release.yml` releases the game by itself. It starts after every green `checks` run of a push
+to main, every hour at :17 (so a release the cooldown held goes out without another merge), and by hand.
+
+```mermaid
+flowchart LR
+    pr(["pull request"]) --> checks{"verify<br/>parity"}
+    checks -- green --> automerge["auto-merge<br/>(merge commit)"]
+    automerge --> main(["main"])
+    main --> mainchecks{"checks on main"}
+    mainchecks -- green --> decide{"decide<br/>tools/release_train.py"}
+    cron(["every hour :17"]) --> decide
+    decide -- "player-facing PRs, 3 h since the last release,<br/>or release-now" --> build
+    decide -- otherwise --> wait(["wait"])
+    subgraph build["build, in parallel"]
+        linux["Linux x86_64<br/>GitHub ubuntu-22.04"]
+        windows["Windows x64<br/>GitHub windows-latest"]
+        mac["macOS arm64<br/>Mac mini runner<br/>+ offscreen game run"]
+    end
+    build --> publish["publish vYYYY.MM.DD[.N]<br/>notes from the merged PRs"]
+    publish --> launcher(["launchers install it"])
+    publish --> kira(["Kira posts it;<br/>pings only with ### New"])
+```
+
+### When it releases
+
+`tools/release_train.py decide --kind game` looks at the pull requests merged into main (first-parent merge
+commits) since the last **published** game release:
+
+- A pull request counts when it changed what players run: `crates/` (not `examples/`, `tests/`, `benches/`),
+  `xtask/`, `packaging/`, `Cargo.toml`, `Cargo.lock`, `research-lock.json`, or an exporter `horizon-prepare`
+  compiles (the `mods/horizon/src/test/java/dev/horizonlab/parity/*.java` files its sources name). Markdown never
+  counts.
+- It releases when at least one pull request counts and the last game release is at least 3 hours old.
+- A pull request labelled `release-now` (a crash or a blocker) releases at once, cooldown or not.
+- A pull request labelled `skip-release` (work players don't see) doesn't count and isn't listed in the notes.
+- One release at a time (concurrency group `game-release`); a run that finds nothing new does nothing.
+- A scheduled or hand-started run releases main's newest commit whose `checks` passed; after `checks`, the commit
+  they passed on.
+
+### Labels
+
+| Label | Effect |
+| --- | --- |
+| `feature` | Listed under **New** (Kira pings the releases role); makes the next launcher release a minor one |
+| `release-now` | Releases as soon as main's checks pass, without the cooldown |
+| `skip-release` | Doesn't trigger a release and isn't listed in the notes |
+| `run-parity` | Runs the parity job once on a fork's pull request |
+| `parity-regression` | Opened by the nightly audit for a harness that fails on main |
+
+Pull requests without `feature` are listed under **Fixed**. Titles are written for players, since they become
+the notes.
+
+### Builds
+
+| Archive | Runs on | Checks |
+| --- | --- | --- |
+| `horizon-linux-x86_64.tar.gz` | GitHub `ubuntu-22.04` (an older glibc, so it runs on any recent distribution) | the standard loader and libraries only (`tools/check_imports.py`) |
+| `horizon-windows-x64.zip` | GitHub `windows-latest`, C runtime linked in | system DLLs only (`tools/check_imports.py`) |
+| `horizon-macos-arm64.zip` | The Mac mini's runner (`vars.MAC_RUNNER=macos-latest` sends it to GitHub) | system libraries only (`otool -L`); a 300-frame offscreen run of a new world with resources prepared from the runner's own Minecraft (`--offscreen --frames 300 --smoke-report`) |
+
+Each builds `horizon-client`, `horizon-ctl` and `horizon-prepare` in release mode, checks all three exist, starts
+each one (`--help`, `--version`), packages the folder with `cargo run -p xtask -- package` and archives it. The
+GitHub jobs keep their Cargo caches (`Swatinem/rust-cache`); the Mac mini keeps its `target/`. Only the Mac
+runs the game: GitHub's runners have neither a GPU worth the name nor the game files.
+
+### Notes
+
+`tools/release_train.py notes` writes them from the same pull requests:
+
+- the title, `Horizon 2026.10.15.1: <the first pull request titles>`, features first, newest first;
+- `### New` (label `feature`) and `### Fixed` (the rest), one line per pull request: its title, its number, the
+  issues it closes;
+- `### Known issues`: the bullets of [docs/known-issues.md](known-issues.md);
+- thanks to outside contributors, how to install, the disclaimer.
+
+Kira posts every published release in #releases and pings the releases role only when the notes have a
+`### New` section.
+
+### Starting one by hand
+
+```sh
+gh workflow run release --ref <branch>                         # dry run: builds everything, writes the notes, publishes nothing
+gh workflow run release --ref main -f dry_run=false            # the usual decision, now
+gh workflow run release --ref main -f dry_run=false -f force=true   # release now, whatever the rules (even while paused)
+```
+
+A hand-started run on any branch but main is always a dry run. The notes are in the run's summary and its
+`release-notes` artifact.
+
+### Pausing
+
+```sh
+gh variable set RELEASES_PAUSED --body 1     # no automatic game or launcher releases
+gh variable delete RELEASES_PAUSED           # back on; the next hourly run catches up
+```
+
+While paused, runs still decide and say why in their summary; `force=true` still releases.
+
+### Rolling back
+
+A bad release is withdrawn by turning it back into a draft:
+
+```sh
+gh release edit v2026.10.15.1 --draft
+```
+
+Launchers list only published releases: the previous version becomes the newest one again, launchers that
+didn't install the bad one won't, and players who did can pick the previous version in the launcher's version
+list (`launcher/src/backend.rs` tests `withdrawn_release_is_never_offered`). The tag stays, so the next release
+that day takes the next number, and its notes start from the last *published* release, so they list the
+withdrawn release's changes again with the fix. Usually the better way out is forward: revert the pull request,
+label the revert `release-now`, and a fixed release is out as soon as main's checks pass.

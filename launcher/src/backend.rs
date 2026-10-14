@@ -1537,6 +1537,29 @@ mod tests {
         assert_eq!(launcher, ["launcher-v9.0.0"]);
     }
 
+    /// Rolling a release back (`gh release edit <tag> --draft`, docs/release-flow.md) makes the
+    /// previous one the newest again: it is what `install latest` and the update check offer.
+    #[test]
+    fn withdrawn_release_is_never_offered() {
+        let asset = ASSET.unwrap_or("horizon-linux-x86_64.tar.gz");
+        let list = serde_json::json!([
+            {"tag_name": "v2026.10.15.1", "draft": true, "assets": [{"name": asset, "browser_download_url": "bad", "size": 1}]},
+            {"tag_name": "v2026.10.15", "assets": [{"name": asset, "browser_download_url": "good", "size": 1}]},
+            {"tag_name": "v2026.10.14", "assets": [{"name": asset, "browser_download_url": "old", "size": 1}]},
+        ]);
+        let releases = parse_releases(&list, Some(asset), is_game_tag);
+        assert!(releases.iter().all(|r| r.tag != "v2026.10.15.1"));
+        assert_eq!(latest(&releases).map(|r| r.tag.as_str()), Some("v2026.10.15"));
+        let offered = |installed: &[&str]| {
+            let installed: Vec<String> = installed.iter().map(|t| t.to_string()).collect();
+            horizon_update(&releases, &installed).map(|r| r.tag)
+        };
+        assert_eq!(offered(&["v2026.10.14"]), Some("v2026.10.15".into()));
+        assert_eq!(offered(&[]), Some("v2026.10.15".into()));
+        // Who installed the withdrawn one is not told to "update" to an older version.
+        assert_eq!(offered(&["v2026.10.15.1", "v2026.10.14"]), None);
+    }
+
     #[test]
     fn versions_compare_by_number() {
         assert_eq!(compare_versions("v2026.10.13", "v2026.10.12"), Greater);
