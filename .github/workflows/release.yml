@@ -7,7 +7,9 @@ name: release
 # Builds Linux (an older Ubuntu, so the binary runs on any recent distribution and on NixOS through nix-ld) and
 # Windows on GitHub, macOS on the Mac mini's runner (MAC_RUNNER=macos-latest sends it to GitHub), then
 # publishes vYYYY.MM.DD[.N] with notes from the merged pull requests, as a beta (a pre-release) that promote.yml makes
-# stable after 6 hours.
+# stable after 6 hours. macOS: with the repository variable MACOS_SIGN_IDENTITY set, the programs are signed with
+# Developer ID and the hardened runtime and the zip is notarized, from the runner's signing keychain
+# (packaging/macos/README.md); unset (forks), ad hoc.
 #   gh workflow run release --ref <branch>                       # dry run: builds and notes, publishes nothing
 #   gh workflow run release -f dry_run=false -f force=true       # on main: release now, whatever the rules say
 on:
@@ -92,7 +94,8 @@ jobs:
             dir: horizon-macos-arm64
             asset: horizon-macos-arm64.zip
     runs-on: ${{ matrix.mac && (vars.MAC_RUNNER || 'ludovics-mac-mini') || matrix.os }}
-    timeout-minutes: 40
+    # Notarizing the zip can take a few minutes.
+    timeout-minutes: ${{ matrix.mac && 60 || 40 }}
     env:
       RUSTFLAGS: ${{ matrix.rustflags }}
     defaults:
@@ -122,6 +125,22 @@ jobs:
         run: |
           for binary in horizon-client horizon-ctl horizon-prepare horizon-server; do
             test -f "target/release/$binary${{ matrix.exe }}" || { echo "::error::target/release/$binary${{ matrix.exe }} is missing"; exit 1; }
+          done
+      - name: The signing keychain, unlocked
+        if: runner.os == 'macOS' && vars.MACOS_SIGN_IDENTITY != ''
+        env:
+          MACOS_SIGN_IDENTITY: ${{ vars.MACOS_SIGN_IDENTITY }}
+        run: packaging/macos/keychain.sh unlock
+      - name: Signed with Developer ID and the hardened runtime
+        # Before the checks below, so they run the programs as players will.
+        if: runner.os == 'macOS' && vars.MACOS_SIGN_IDENTITY != ''
+        env:
+          MACOS_SIGN_IDENTITY: ${{ vars.MACOS_SIGN_IDENTITY }}
+        run: |
+          for binary in horizon-client horizon-ctl horizon-prepare horizon-server; do
+            codesign --force --options runtime --timestamp --keychain "$MACOS_SIGN_KEYCHAIN" \
+              --identifier "dev.horizon.${binary#horizon-}" --sign "$MACOS_SIGN_IDENTITY" "target/release/$binary"
+            codesign --verify --strict --verbose=2 "target/release/$binary"
           done
       - name: Only system libraries
         # Windows: no non-system DLL (a "DLL not found" dialog on some players' machines). Linux: the standard
@@ -200,6 +219,14 @@ jobs:
                fi ;;
           esac
           ls -l "${{ matrix.asset }}"
+      - name: Notarized
+        # A zip of programs can't be stapled: Gatekeeper asks Apple the first time each one runs.
+        if: runner.os == 'macOS' && vars.MACOS_SIGN_IDENTITY != ''
+        run: |
+          for binary in horizon-client horizon-ctl horizon-prepare horizon-server; do
+            codesign --verify --strict "dist/${{ matrix.dir }}/$binary"
+          done
+          packaging/macos/notarize.sh "dist/${{ matrix.asset }}"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
@@ -229,6 +256,9 @@ jobs:
           path: dist/${{ matrix.server_asset }}
           if-no-files-found: error
           retention-days: 3
+      - name: The signing keychain, locked again
+        if: always() && runner.os == 'macOS' && vars.MACOS_SIGN_IDENTITY != ''
+        run: packaging/macos/keychain.sh lock
 
   sign:
     needs: [decide, build]

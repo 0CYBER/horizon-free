@@ -6,6 +6,9 @@ name: launcher
 # A release is launcher-vX.Y.Z: the patch after the last launcher tag, or the next minor when a merged pull
 # request is labelled feature. The version is given to the build (HORIZON_LAUNCHER_VERSION): no bump commits.
 # Never marked latest. Pushes to launcher branches only build. RELEASES_PAUSED=1 stops releases.
+# macOS: with the repository variable MACOS_SIGN_IDENTITY set, Horizon.app and the .dmg are signed with
+# Developer ID, notarized and stapled, from the runner's signing keychain (packaging/macos/README.md);
+# unset (forks), they are signed ad hoc.
 #   gh workflow run launcher --ref <branch>                    # dry run: builds everything, publishes nothing
 #   gh workflow run launcher --ref main -f dry_run=false -f force=true
 
@@ -102,7 +105,8 @@ jobs:
             # which only the Visual C++ redistributable installs.
             rustflags: -C target-feature=+crt-static
     runs-on: ${{ matrix.mac && (vars.MAC_RUNNER || 'ludovics-mac-mini') || matrix.os }}
-    timeout-minutes: 40
+    # Notarizing the app and then the .dmg can take a few minutes each.
+    timeout-minutes: ${{ matrix.mac && 60 || 40 }}
     env:
       RUSTFLAGS: ${{ matrix.rustflags }}
       # Horizon's Azure app for Microsoft sign-in (docs/microsoft-account.md): a repository
@@ -194,11 +198,19 @@ jobs:
           help() { "$client" --help > "$RUNNER_TEMP/help.txt" 2>&1 && head -3 "$RUNNER_TEMP/help.txt" && grep -q -- '--resources' "$RUNNER_TEMP/help.txt"; }
           soft help
           rm -rf "$HORIZON_LAUNCHER_HOME"
+      - name: The signing keychain, unlocked
+        if: runner.os == 'macOS' && vars.MACOS_SIGN_IDENTITY != ''
+        env:
+          MACOS_SIGN_IDENTITY: ${{ vars.MACOS_SIGN_IDENTITY }}
+        run: ../packaging/macos/keychain.sh unlock
       - name: Package
+        env:
+          MACOS_SIGN_IDENTITY: ${{ vars.MACOS_SIGN_IDENTITY }}
         run: |
           rm -rf dist out && mkdir -p out
           if [[ "$RUNNER_OS" == "macOS" ]]; then
-            # Horizon.app, zipped (self-update) and in a .dmg (installer): packaging/macos.
+            # Horizon.app, zipped (self-update) and in a .dmg (installer), signed (and notarized with
+            # Developer ID): packaging/macos.
             python3 -m venv "$RUNNER_TEMP/dmg" && "$RUNNER_TEMP/dmg/bin/pip" install --quiet dmgbuild==1.6.5
             version=${HORIZON_LAUNCHER_VERSION:-$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)}
             DMGBUILD="$RUNNER_TEMP/dmg/bin/dmgbuild" ../packaging/macos/package.sh target/release/${{ matrix.binary }} "$version" out
@@ -218,6 +230,9 @@ jobs:
           name: ${{ matrix.asset }}
           path: launcher/out/*
           retention-days: 3
+      - name: The signing keychain, locked again
+        if: always() && runner.os == 'macOS' && vars.MACOS_SIGN_IDENTITY != ''
+        run: ../packaging/macos/keychain.sh lock
 
   sign:
     needs: [decide, build]

@@ -1644,9 +1644,22 @@ fn find_app(dir: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Whether the bundle's signature (Developer ID or ad hoc) is whole: every file it seals is there
+/// and unchanged.
+#[cfg(target_os = "macos")]
+fn signature_holds(app: &Path) -> bool {
+    Command::new("codesign")
+        .args(["--verify", "--deep", "--strict"])
+        .arg(app)
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
 /// Puts the bundle `new` in place of `app`: copied beside it first (`ditto` keeps its links,
-/// modes and signature), then the old one is moved aside and the new one renamed in, so `app` is
-/// never half written. The running launcher keeps its open files and works on.
+/// modes and signature) and checked, then the old one is moved aside and the new one renamed in,
+/// so `app` is never half written, and checked again where it lands (the old one comes back if it
+/// doesn't hold). The running launcher keeps its open files and works on.
 #[cfg(target_os = "macos")]
 fn replace_bundle(new: &Path, app: &Path) -> Result<(), String> {
     let dir = app.parent().ok_or("The app has no folder.")?;
@@ -1666,6 +1679,12 @@ fn replace_bundle(new: &Path, app: &Path) -> Result<(), String> {
             app.display()
         ));
     }
+    if !signature_holds(&staged) {
+        let _ = fs::remove_dir_all(&staged);
+        return Err(
+            "The downloaded app's signature doesn't hold; the launcher stays as it is.".into(),
+        );
+    }
     fs::rename(app, &old).map_err(|e| {
         let _ = fs::remove_dir_all(&staged);
         format!("Could not move {} aside: {e}", app.display())
@@ -1675,6 +1694,16 @@ fn replace_bundle(new: &Path, app: &Path) -> Result<(), String> {
         let _ = fs::remove_dir_all(&staged);
         return Err(format!(
             "Could not put the new app at {}: {e}",
+            app.display()
+        ));
+    }
+    if !signature_holds(app) {
+        let failed = dir.join(format!(".{name}.failed-{}", std::process::id()));
+        if fs::rename(app, &failed).is_ok() && fs::rename(&old, app).is_ok() {
+            let _ = fs::remove_dir_all(&failed);
+        }
+        return Err(format!(
+            "The new app's signature doesn't hold at {}; the launcher stays as it was.",
             app.display()
         ));
     }
@@ -2586,6 +2615,15 @@ mod tests {
             ["Horizon.app"],
             "nothing staged or moved aside is left"
         );
+
+        // A bundle changed after it was signed is refused, and the installed one stays.
+        let tampered = make(&work.join("tampered"), "3.0.0");
+        fs::write(tampered.join("Contents/Resources/version"), "3.0.1").unwrap();
+        assert!(replace_bundle(&tampered, &installed).is_err());
+        let version = fs::read_to_string(installed.join("Contents/Resources/version")).unwrap();
+        assert_eq!(version, "2.0.0");
+        let left = fs::read_dir(work.join("Applications")).unwrap().count();
+        assert_eq!(left, 1, "nothing staged is left");
         let _ = fs::remove_dir_all(&work);
     }
 
