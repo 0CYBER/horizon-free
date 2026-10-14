@@ -102,6 +102,12 @@ fn selector_controls_require_selection_and_search_uses_filtered_indices() {
     f.world("A", "Alpha");
     f.world("B", "Beta");
     f.title.enter_singleplayer();
+    let Mode::Select { worlds, .. } = &mut f.title.mode else {
+        panic!("existing worlds should open the selector");
+    };
+    // Beta must have a different index in the full list and filtered list.
+    // Filesystem timestamp precision must not decide which world comes first.
+    worlds.sort_by(|a, b| a.folder.cmp(&b.folder));
     for label in ["Play Selected World", "Edit", "Delete", "Re-Create"] {
         assert!(
             !f.title
@@ -113,7 +119,10 @@ fn selector_controls_require_selection_and_search_uses_filtered_indices() {
         );
         assert_eq!(f.click(label), Action::None);
     }
+    // Clicking the disabled footer controls leaves the search box unfocused.
+    f.title.click(240.0, 31.0, (480.0, 262.0));
     f.title.type_text("bEtA");
+    assert_eq!(f.title.search, "bEtA");
     f.title.click(240.0, 60.0, (480.0, 262.0));
     f.click("Edit");
     assert!(matches!(&f.title.mode, Mode::Edit { world, .. } if world.folder == "B"));
