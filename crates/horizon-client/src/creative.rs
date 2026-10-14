@@ -444,6 +444,26 @@ mod tests {
     }
 
     #[test]
+    fn inventory_tab_can_return_to_category_and_search() {
+        let mut c = creative(90);
+        for (selected, inventory, search) in [
+            (2, true, false),
+            (0, false, false),
+            (1, false, true),
+            (2, true, false),
+        ] {
+            c.search = "anvil".into();
+            c.scroll = 0.5;
+            c.select(selected);
+            assert_eq!(c.selected, selected);
+            assert_eq!(c.tab().inventory, inventory);
+            assert_eq!(c.tab().search, search);
+            assert!(c.search.is_empty());
+            assert_eq!(c.scroll, 0.0);
+        }
+    }
+
+    #[test]
     fn hidden_tabs_are_skipped() {
         let c = creative(0);
         let ids: Vec<&str> = c.tabs.iter().map(|t| t.id.as_str()).collect();

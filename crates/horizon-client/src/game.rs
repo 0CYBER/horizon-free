@@ -588,6 +588,22 @@ pub struct Resources {
     /// Enchantments, workstation recipes and brewing (game/stations.rs).
     stations: horizon_client::stations::StationData,
 }
+/// Ctrl+Q reads the physical keyboard, independently of sprint key mappings.
+fn drop_whole_stack(physical_keys: &HashSet<KeyCode>) -> bool {
+    physical_keys.contains(&KeyCode::ControlLeft) || physical_keys.contains(&KeyCode::ControlRight)
+}
+
+fn select_creative_tab(
+    creative: &mut Creative,
+    clicks: &mut horizon_client::container_screen::Clicks,
+    tab: usize,
+) {
+    creative.select(tab);
+    *clicks = Default::default();
+    // Tabs are outside the panel; their release must not drop a carried stack.
+    clicks.skip_release();
+}
+
 struct Game<'a> {
     res: &'a mut Resources,
     collision: &'a BlockCollisionRegistry<'a>,
@@ -4170,8 +4186,7 @@ impl Game<'_> {
             (Some(n), _) => self.menu_click(Some(slot), n as i32, Input::Swap),
             (None, KeyCode::KeyF) => self.menu_click(Some(slot), 40, Input::Swap),
             (None, KeyCode::KeyQ) => {
-                let all = self.physical_keys.contains(&KeyCode::ControlLeft)
-                    || self.physical_keys.contains(&KeyCode::ControlRight);
+                let all = drop_whole_stack(&self.physical_keys);
                 self.menu_click(Some(slot), i32::from(all), Input::Throw)
             }
             _ => false,
@@ -4274,16 +4289,21 @@ impl Game<'_> {
     fn clicked_outside(&self, batch: &HudBatch) -> bool {
         use horizon_client::container_screen::{Book, Image, clicked_outside};
         let (ox, oy) = self.inventory_origin(batch);
-        let (shift, width) = match self.station.as_ref().map(|s| s.kind) {
-            Some(stations::Kind::Merchant) => (-50.0, 276),
-            Some(stations::Kind::Beacon) => (beacon::SHIFT, 230),
-            _ => (0.0, 176),
+        let (shift, width, height) = if self.creative_inventory_open() {
+            (0.0, Creative::WIDTH as i32, Creative::HEIGHT as i32)
+        } else {
+            let (shift, width) = match self.station.as_ref().map(|s| s.kind) {
+                Some(stations::Kind::Merchant) => (-50.0, 276),
+                Some(stations::Kind::Beacon) => (beacon::SHIFT, 230),
+                _ => (0.0, 176),
+            };
+            (shift, width, self.screen_height() as i32)
         };
         let image = Image {
             left: (ox + shift) as i32,
             top: oy as i32,
             width,
-            height: self.screen_height() as i32,
+            height,
         };
         let book = self
             .recipe_book_area(batch)
@@ -7421,7 +7441,7 @@ impl Game<'_> {
         for (i, t) in tabs.iter().enumerate() {
             let (tx, ty) = Creative::tab_position(t);
             if cx >= ox + tx && cx < ox + tx + 26.0 && cy >= oy + ty && cy < oy + ty + 32.0 {
-                self.creative_screen.select(i);
+                select_creative_tab(&mut self.creative_screen, &mut self.inv_clicks, i);
                 self.inv_drag = None;
                 self.last_inv_click = None;
                 return;
@@ -7429,9 +7449,7 @@ impl Game<'_> {
         }
         if self.creative_inventory_open() {
             if Self::creative_trash_hovered(&batch, self.cursor) {
-                if self.keys.contains(&KeyCode::ShiftLeft)
-                    || self.keys.contains(&KeyCode::ShiftRight)
-                {
+                if self.has_shift_down() {
                     self.inventory.fill(None);
                     self.armor.fill(None);
                     self.offhand = None;
@@ -7441,12 +7459,8 @@ impl Game<'_> {
                     self.carried = None;
                 }
                 self.inv_drag = None;
-            } else if self.slot_at(&batch, cx, cy).is_some()
-                || !(cx >= ox
-                    && cx < ox + Creative::WIDTH
-                    && cy >= oy
-                    && cy < oy + Creative::HEIGHT)
-            {
+                self.inv_clicks = Default::default();
+            } else if self.slot_at(&batch, cx, cy).is_some() || self.clicked_outside(&batch) {
                 self.inventory_press(right);
             }
             return;
@@ -8002,8 +8016,7 @@ impl Game<'_> {
                 self.using = None;
             }
             KeyCode::KeyQ if self.screen == Screen::Playing => {
-                let all = self.physical_keys.contains(&KeyCode::ControlLeft)
-                    || self.physical_keys.contains(&KeyCode::ControlRight);
+                let all = drop_whole_stack(&self.physical_keys);
                 self.drop_held(all);
             }
             KeyCode::Digit1
@@ -8453,7 +8466,7 @@ impl ApplicationHandler for Game<'_> {
                             self.click_creative(button == MouseButton::Right);
                         }
                         Screen::Creative if self.creative_screen.tab().inventory => {
-                            self.inventory_release();
+                            self.inventory_mouse_release(button == MouseButton::Right);
                         }
                         Screen::Creative if button == MouseButton::Left => {
                             self.creative_screen.release();
@@ -9279,4 +9292,66 @@ pub fn run() -> Result<()> {
         return Err(e);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_client::container_screen::{Button, Clicks, Release, Target};
+    use horizon_client::keymapping::{KeyAction, SPRINT, ToggleKeys};
+
+    #[test]
+    fn selecting_creative_tabs_does_not_drop_the_carried_stack_on_release() {
+        let mut creative = Creative::from_json(&serde_json::json!({
+            "schema": 2,
+            "tabs": [{"type": "CATEGORY"}, {"type": "INVENTORY"}]
+        }))
+        .unwrap();
+        for button in [Button::Left, Button::Right] {
+            let mut clicks = Clicks::default();
+            for tab in [1, 1, 0, 1] {
+                select_creative_tab(&mut creative, &mut clicks, tab);
+                assert_eq!(creative.selected, tab);
+                assert_eq!(creative.tab().inventory, tab == 1);
+                assert_eq!(
+                    clicks.release(
+                        &Target::<usize>::Outside,
+                        button,
+                        false,
+                        false,
+                        false,
+                        false
+                    ),
+                    Release::Nothing
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn stack_drop_requires_physical_ctrl_even_with_sprint_latched() {
+        for sprint in [false, true] {
+            let mut toggles = ToggleKeys::default();
+            if sprint {
+                toggles.key(SPRINT, KeyAction::Press, false, true);
+                toggles.key(SPRINT, KeyAction::Release, false, true);
+            }
+            assert_eq!(toggles.is_down(SPRINT), sprint);
+
+            for held in 0..4 {
+                let mut physical_keys = HashSet::from([KeyCode::ShiftLeft, KeyCode::KeyQ]);
+                if held & 1 != 0 {
+                    physical_keys.insert(KeyCode::ControlLeft);
+                }
+                if held & 2 != 0 {
+                    physical_keys.insert(KeyCode::ControlRight);
+                }
+                assert_eq!(drop_whole_stack(&physical_keys), held != 0);
+                physical_keys.remove(&KeyCode::ControlLeft);
+                physical_keys.remove(&KeyCode::ControlRight);
+                assert!(!drop_whole_stack(&physical_keys));
+                assert_eq!(toggles.is_down(SPRINT), sprint);
+            }
+        }
+    }
 }
