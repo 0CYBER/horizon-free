@@ -128,6 +128,9 @@ fn mob_meta(m: &Mob, hub: &Hub) -> Vec<(u8, i32, Value)> {
     if m.health < m.kind.max_health {
         meta.push((9, serializer::FLOAT, Value::Float(m.health.max(0.0))));
     }
+    if kind == "minecraft:rabbit" && m.no_ai {
+        meta.push((15, serializer::BYTE, Value::Byte(1)));
+    }
     if m.is_baby()
         && let Some(index) = baby_index(kind)
     {

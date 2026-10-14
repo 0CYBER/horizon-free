@@ -132,6 +132,9 @@ impl Mob {
     }
     /// MoveControl.tick (and the flying / smooth-swimming variants).
     pub fn move_control_tick(&mut self, w: &MobWorld, events: &mut Vec<super::MobEvent>) {
+        if self.species() == super::Species::Rabbit {
+            return super::rabbit::move_control(self, w);
+        }
         let attr_speed = self.movement_speed();
         match self.ai.mov.kind {
             MoveKind::Custom => super::ai::custom_move_control(self, w, events),
@@ -376,6 +379,9 @@ impl Mob {
     }
     /// JumpControl.tick.
     pub fn jump_control_tick(&mut self) {
+        if self.species() == super::Species::Rabbit {
+            return super::rabbit::jump_control(self);
+        }
         self.ai.jumping = self.ai.jump;
         self.ai.jump = false;
     }
