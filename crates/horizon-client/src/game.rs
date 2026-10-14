@@ -95,6 +95,7 @@ mod sculk_fixture;
 mod shield;
 mod sign_edit;
 mod sniffers;
+mod spawner;
 mod spill;
 mod station_control;
 mod stations;
@@ -849,6 +850,8 @@ struct Game<'a> {
     tridents: Vec<trident::ThrownTrident>,
     rockets: Vec<fireworks::Rocket>,
     creaking: creaking::CreakingState,
+    /// Monster spawners' display mobs (`game/spawner.rs`).
+    spawners: spawner::SpawnerState,
     trident_model: Option<horizon_client::mobs::Part>,
     tnts: Vec<tnt::PrimedTnt>,
     hoppers: HashMap<(i32, i32, i32), machines::HopperState>,
@@ -895,6 +898,10 @@ struct Game<'a> {
     forced_hit: Option<Hit>,
     /// Level events of this tick for the guests, and the guest acting now.
     lan_events: Vec<(i32, [i32; 3], i32, Option<u32>)>,
+    /// Block events (position, b0, b1, state) and entity events (id, event,
+    /// position) for the guests.
+    lan_block_events: Vec<([i32; 3], i32, i32, u16)>,
+    lan_entity_events: Vec<(i32, i8, [f64; 3])>,
     lan_acting: Option<u32>,
     /// Command feedback to forward to a guest.
     chat_capture: Option<Vec<horizon_client::text::Text>>,
@@ -1624,6 +1631,9 @@ impl Game<'_> {
                     data,
                 } => self.sculk_charge_event(pos, data),
                 LevelEvent::LevelEvent { id: 3007, pos, .. } => self.shriek_event(pos),
+                LevelEvent::LevelEvent { id: 2004, pos, .. } => {
+                    self.spawner_burst([pos.x, pos.y, pos.z])
+                }
                 LevelEvent::LevelEvent {
                     id: id @ 3002..=3005,
                     pos,
@@ -2062,7 +2072,8 @@ impl Game<'_> {
                         self.pop_resource(pos, d);
                     }
                 }
-                let xp = if silk {
+                // SpawnerBlock.spawnAfterBreak pops its experience whatever the tool.
+                let xp = if silk && &*facts.name != "minecraft:spawner" {
                     0
                 } else {
                     self.block_experience(&facts.name)
@@ -3501,7 +3512,8 @@ impl Game<'_> {
                 | BlockEntity::Lectern(_)
                 | BlockEntity::Sculk(_)
                 | BlockEntity::Banner(_)
-                | BlockEntity::CreakingHeart(_),
+                | BlockEntity::CreakingHeart(_)
+                | BlockEntity::Spawner(_),
             ) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
@@ -3749,7 +3761,8 @@ impl Game<'_> {
                     | BlockEntity::Lectern(_)
                     | BlockEntity::Sculk(_)
                     | BlockEntity::Banner(_)
-                    | BlockEntity::CreakingHeart(_),
+                    | BlockEntity::CreakingHeart(_)
+                    | BlockEntity::Spawner(_),
                 ) => {}
                 None if self.mount_active() => self.draw_mount_background(batch, ox, oy),
                 None => {
@@ -5246,6 +5259,7 @@ impl Game<'_> {
         self.tick_jukeboxes();
         self.tick_beacons();
         self.tick_creaking_hearts()?;
+        self.tick_spawners()?;
         let mut lit_changes = Vec::new();
         for (pos, entity) in self.world.block_entities.iter_mut() {
             if let BlockEntity::Furnace(f) = entity
@@ -6596,7 +6610,12 @@ impl Game<'_> {
             "sculk_catalyst" | "sculk_sensor" | "calibrated_sculk_sensor" | "sculk_shrieker" => {
                 (5, 5)
             }
-            "spawner" => (15, 43),
+            // SpawnerBlock.spawnAfterBreak: 15 + nextInt(15) + nextInt(15).
+            "spawner" => {
+                let r = &mut self.world.random;
+                let a = r.next_int_bound(15).unwrap_or(0);
+                return (15 + a + r.next_int_bound(15).unwrap_or(0)) as u32;
+            }
             _ => (0, 0),
         };
         if max == 0 {
@@ -9078,6 +9097,7 @@ pub fn run() -> Result<()> {
         tridents: Vec::new(),
         rockets: Vec::new(),
         creaking: Default::default(),
+        spawners: Default::default(),
         trident_model: horizon_client::mobs::load_model(&root, "minecraft:trident#main"),
         tnts: Vec::new(),
         hoppers: HashMap::new(),
@@ -9106,6 +9126,8 @@ pub fn run() -> Result<()> {
         saved_for_exit: false,
         forced_hit: None,
         lan_events: Vec::new(),
+        lan_block_events: Vec::new(),
+        lan_entity_events: Vec::new(),
         lan_acting: None,
         chat_capture: None,
         cmds: Default::default(),

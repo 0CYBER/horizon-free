@@ -478,6 +478,9 @@ public final class VanillaBlockUpdateOracle {
         /** The levels by dimension (the portal oracle's two). */
         Map<net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level>, net.minecraft.server.level.ServerLevel> levels;
         @Override public net.minecraft.server.level.ServerLevel getLevel(net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> key) { return levels == null ? null : levels.get(key); }
+        /** The player list of the oracles whose player is an operator; null elsewhere. */
+        static net.minecraft.server.players.PlayerList players;
+        @Override public net.minecraft.server.players.PlayerList getPlayerList() { return players; }
         @Override public int getMaxPlayers() { return 0; }
         @Override public net.minecraft.server.permissions.LevelBasedPermissionSet operatorUserPermissions() { return null; }
         @Override public net.minecraft.server.permissions.PermissionSet getFunctionCompilationPermissions() { return null; }

@@ -716,6 +716,11 @@ pub fn base_transform(m: &Mob, alpha: f32, camera: glam::DVec3) -> glam::Mat4 {
         m.previous.y + (m.position.y - m.previous.y) * a,
         m.previous.z + (m.position.z - m.previous.z) * a,
     ) - camera;
+    base_transform_at(m, alpha, glam::Mat4::from_translation(p.as_vec3()))
+}
+/// `base_transform` from a pose of the entity's origin (`EntityRenderDispatcher.submit`
+/// under a pose stack, as `SpawnerRenderer` draws the mob inside a spawner).
+pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 {
     let mut body = m.previous_body_yaw + wrap(m.body_yaw - m.previous_body_yaw) * alpha;
     if shaking(m) {
         // LivingEntityRenderer.setupRotations: a rapid wobble.
@@ -737,7 +742,7 @@ pub fn base_transform(m: &Mob, alpha: f32, camera: glam::DVec3) -> glam::Mat4 {
         None => super::aquatic::rotations(m, alpha, body)
             .unwrap_or_else(|| glam::Mat4::from_rotation_y((180.0 - body).to_radians())),
     };
-    let mut base = glam::Mat4::from_translation(p.as_vec3()) * rotation;
+    let mut base = origin * rotation;
     if m.death_time > 0 && !super::creaking::tearing_down(m) {
         let f = ((m.death_time as f32 + alpha - 1.0) / 20.0 * 1.6)
             .sqrt()
@@ -922,25 +927,48 @@ pub fn render_with(
                 let w = super::illusioner::wobble(i, age);
                 let shifted =
                     camera - glam::DVec3::new(off[0] + w[0], off[1] + w[1], off[2] + w[2]);
-                render_visible(m, alpha, shifted, atlas, light, data, extra, out);
+                let base = base_transform(m, alpha, shifted);
+                render_visible(m, alpha, base, atlas, light, data, extra, out);
             }
         }
         return;
     }
-    render_visible(m, alpha, camera, atlas, light, data, extra, out);
+    render_visible(
+        m,
+        alpha,
+        base_transform(m, alpha, camera),
+        atlas,
+        light,
+        data,
+        extra,
+        out,
+    );
+}
+/// A mob drawn under `origin` instead of at its position (the spinning mob
+/// of `SpawnerRenderer.submitEntityInSpawner`).
+pub fn render_posed(
+    m: &Mob,
+    alpha: f32,
+    origin: glam::Mat4,
+    atlas: Atlas,
+    light: u32,
+    data: &MobData,
+    out: &mut Vec<Vertex>,
+) {
+    let base = base_transform_at(m, alpha, origin);
+    render_visible(m, alpha, base, atlas, light, data, &[], out);
 }
 #[allow(clippy::too_many_arguments)]
 fn render_visible(
     m: &Mob,
     alpha: f32,
-    camera: glam::DVec3,
+    base: glam::Mat4,
     atlas: Atlas,
     light: u32,
     data: &MobData,
     extra: &[(&Part, [f32; 4], u32)],
     out: &mut Vec<Vertex>,
 ) {
-    let base = base_transform(m, alpha, camera);
     let overlay = u32::from(red_overlay(m));
     let s = anim::state(m, alpha);
     let (model_key, texture) = body(m);

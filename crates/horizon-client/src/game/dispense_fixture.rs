@@ -340,6 +340,34 @@ impl Game<'_> {
                 disabled.join(",")
             ));
         }
+        // A spawner's next spawn data (its id and number of keys), potentials and delay.
+        let mut spawners: Vec<_> = self
+            .world
+            .block_entities
+            .iter()
+            .filter_map(|(p, e)| match e {
+                BlockEntity::Spawner(s) => Some((*p, s)),
+                _ => None,
+            })
+            .collect();
+        spawners.sort_unstable_by_key(|s| s.0);
+        for (p, s) in spawners {
+            let next = s.next_data().map_or("-".to_owned(), |d| {
+                format!(
+                    "{}/{}",
+                    d.id().unwrap_or_else(|| "?".into()),
+                    d.entity.len()
+                )
+            });
+            out.push(format!(
+                "spawner {},{},{} next={next} potentials={} delay={}",
+                p.0,
+                p.1,
+                p.2,
+                s.potentials.len(),
+                s.spawn_delay as i16
+            ));
+        }
         self.fixture_entities(&old_mobs, &old_stands, &mut out);
         for (i, t) in targets.iter().enumerate() {
             out.push(self.fixture_describe(i, t));
@@ -449,11 +477,19 @@ impl Game<'_> {
                 f64::from(pos.z) + 0.5,
             ],
         });
+        self.chat_capture = Some(Vec::new());
         let used = self.use_item_as_player();
         self.forced_hit = None;
+        let messages = self.chat_capture.take().unwrap_or_default();
         used?;
         self.process_level_events()?;
         let mut out = Vec::new();
+        for m in messages {
+            let key = m.component()["translate"]
+                .as_str()
+                .map_or_else(|| m.plain(), str::to_owned);
+            out.push(format!("msg {key}"));
+        }
         if let Some(s) = &stack {
             let used = self.stats.get("used", &s.item) - used_before;
             if used != 0 {
