@@ -59,8 +59,6 @@ enum Cmd {
     },
     /// Show a release's patch notes (default: the newest)
     Notes { tag: Option<String> },
-    /// Show the roadmap
-    Next,
     /// Show the Discord, sponsor and website links
     Links,
     /// Show or set the game's menu style (classic is vanilla's own screens)
@@ -238,14 +236,6 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                     r.date,
                     backend::markdown_to_text(&r.body)
                 );
-            }
-        }
-        Cmd::Next => {
-            let roadmap = backend::roadmap()?;
-            if as_json {
-                json(serde_json::json!({ "roadmap": roadmap }));
-            } else {
-                print!("{}", backend::markdown_to_text(&roadmap));
             }
         }
         Cmd::Links => {

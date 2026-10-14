@@ -1,8 +1,9 @@
 // The page's behaviour: the download buttons for this platform, the latest releases, the
-// roadmap and links from main, the navigation, the menus' tabs, the lightbox and the motion.
+// links and contributors, the navigation, the menus' tabs, the lightbox and the motion.
 // Everything degrades to the baked-in content when GitHub can't be reached.
-import { markdown, escape, section } from "./markdown.js";
+import { escape } from "./markdown.js";
 import { releasesHtml } from "./releases.js";
+import { contributorsFrom, contributorsHtml } from "./contributors.js";
 
 const REPO = "ludovic111/horizon";
 const RELEASES_PAGE = `https://github.com/${REPO}/releases?q=launcher-v&expanded=true`;
@@ -46,6 +47,16 @@ const releases = cached("horizon:releases", () =>
   ),
 ).catch(() => baked.releases);
 
+async function setUpContributors() {
+  let list = baked.contributors || [];
+  try {
+    list = contributorsFrom(await cached("horizon:contributors", () => get(`https://api.github.com/repos/${REPO}/contributors?per_page=100`)));
+  } catch {}
+  if (list.length) document.getElementById("contributors-list").innerHTML = contributorsHtml(list);
+  // With nobody to show, the block and its menu entries go, as an empty link's card does.
+  document.querySelectorAll("[data-contributors]").forEach((el) => (el.hidden = !list.length));
+}
+
 // --- Download ------------------------------------------------------------------------
 
 function platform() {
@@ -74,21 +85,13 @@ async function setUpDownload() {
   document.querySelectorAll("[data-download-meta]").forEach((p) => (p.innerHTML = meta));
 }
 
-// --- Patch notes, the roadmap and the links from main ---------------------------------
+// --- Patch notes and the links from main ---------------------------------
 
 const isGame = (tag) => /^v\d{4}\.\d{1,2}\.\d{1,2}/.test(tag);
 
 async function setUpNotes() {
   const list = (await releases).filter((r) => isGame(r.tag_name));
   if (list.length) document.getElementById("releases").innerHTML = releasesHtml(list.slice(0, 3));
-}
-
-async function setUpRoadmap() {
-  try {
-    const readme = await cached("horizon:readme", () => get(`https://raw.githubusercontent.com/${REPO}/main/README.md`, "text"));
-    const roadmap = section(readme, "Roadmap");
-    if (roadmap) document.getElementById("roadmap").innerHTML = markdown(roadmap, { shift: 1 });
-  } catch {}
 }
 
 async function setUpLinks() {
@@ -119,7 +122,7 @@ function setUpNav() {
     const line = innerHeight * 0.4;
     let index = -1;
     sections.forEach((s, i) => {
-      if (s.getBoundingClientRect().top <= line) index = i;
+      if (s.getClientRects().length && s.getBoundingClientRect().top <= line) index = i;
     });
     if (index !== current) {
       current = index;
@@ -237,7 +240,7 @@ function setUpReveal() {
   // Siblings that enter together come in one after another.
   const stagger = (els, step) => els.forEach((el, i) => el.style.setProperty("--d", `${i * step}ms`));
   document.querySelectorAll(".facts, .features, .cards, .mosaic").forEach((group) => stagger([...group.children], 90));
-  document.querySelectorAll(".section-head, .parity-count, .parity-copy, .next-head, .launcher-copy").forEach((group) => stagger([...group.querySelectorAll(":scope > .reveal")], 70));
+  document.querySelectorAll(".section-head, .parity-count, .parity-copy, .launcher-copy").forEach((group) => stagger([...group.querySelectorAll(":scope > .reveal")], 70));
   stagger([...document.querySelectorAll(".system")], 45);
 
   const count = document.querySelector("[data-digits]");
@@ -314,5 +317,5 @@ setUpTabs();
 setUpLightbox();
 setUpDownload();
 setUpNotes();
-setUpRoadmap();
 setUpLinks();
+setUpContributors();
