@@ -289,6 +289,7 @@ pub fn accepts_damage(m: &mut Mob, source: &Damage, amount: f32) -> bool {
     let immune = matches!(
         source.kind,
         DamageKind::PlayerAttack
+            | DamageKind::MaceSmash
             | DamageKind::MobAttack
             | DamageKind::Arrow
             | DamageKind::Thrown

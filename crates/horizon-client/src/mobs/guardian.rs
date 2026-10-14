@@ -291,7 +291,10 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if m.hurt_time == 10
         && !moving
         && let Some((d, _)) = m.last_damage
-        && matches!(d.kind, DamageKind::PlayerAttack | DamageKind::MobAttack)
+        && matches!(
+            d.kind,
+            DamageKind::PlayerAttack | DamageKind::MaceSmash | DamageKind::MobAttack
+        )
     {
         let from = [m.position.x, m.position.y, m.position.z];
         match d.attacker {
