@@ -1,9 +1,9 @@
 // Builds the site into dist/: src/index.html with the README's parity table, roadmap and
-// the community links baked in, plus public/ and fingerprinted CSS and JS. No dependencies.
+// the community links and contributors baked in, plus public/ and fingerprinted CSS and JS. No dependencies.
 //
 // Railway builds only website/, so the README and links.json come from the repo when they
-// are next to it (a local checkout) and from main on GitHub otherwise. The latest releases
-// are baked in when GitHub answers, so the page reads well before (or without) JavaScript.
+// are next to it (a local checkout) and from main on GitHub otherwise. The latest releases and
+// the contributors are baked in when GitHub answers, so the page reads well before (or without) JavaScript.
 import { readFile, writeFile, mkdir, rm, cp } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -11,6 +11,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { markdown, inline, section, escape } from "./src/markdown.js";
 import { releasesHtml } from "./src/releases.js";
+import { contributorsFrom, contributorsHtml } from "./src/contributors.js";
 
 const site = dirname(fileURLToPath(import.meta.url));
 const dist = join(site, "dist");
@@ -48,6 +49,18 @@ try {
   else console.warn(`releases: ${res.status} from GitHub; the page will load them itself`);
 } catch (e) {
   console.warn(`releases: ${e.message}; the page will load them itself`);
+}
+
+let contributors = [];
+try {
+  const res = await fetch(`https://api.github.com/repos/${REPO}/contributors?per_page=100`, {
+    headers: { Accept: "application/vnd.github+json", ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}) },
+    signal: AbortSignal.timeout(15000),
+  });
+  if (res.ok) contributors = contributorsFrom(await res.json());
+  else console.warn(`contributors: ${res.status} from GitHub; the page will load them itself`);
+} catch (e) {
+  console.warn(`contributors: ${e.message}; the page will load them itself`);
 }
 
 // --- The parity table ------------------------------------------------------------------
@@ -115,7 +128,7 @@ await cp(join(site, "LEGAL.md"), join(dist, "LEGAL.md"));
 // The page's modules, fingerprinted; each import of a shared module is rewritten to its name.
 const names = {};
 const rewrite = (code) => code.replace(/"\.\/(\w+\.js)"/g, (all, file) => (names[file] ? `"./${names[file]}"` : all));
-for (const file of ["markdown.js", "releases.js", "main.js"]) {
+for (const file of ["markdown.js", "releases.js", "contributors.js", "main.js"]) {
   const code = rewrite(await readFile(join(site, "src", file), "utf8"));
   names[file] = `${file.replace(".js", "")}.${fingerprint(code)}.js`;
   await writeFile(join(dist, "assets", names[file]), code);
@@ -129,6 +142,7 @@ const inlineCss = css.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\s*\n\s*/g, "\n"
 
 const baked = {
   links,
+  contributors,
   releases: releases.slice(0, 12).map((r) => ({
     tag_name: r.tag_name,
     name: r.name,
@@ -160,6 +174,8 @@ const values = {
   LAUNCHER_META: `${launcher ? `Launcher ${escape(launcher.tag_name.replace("launcher-v", ""))} for` : "For"} Linux x86-64, macOS on Apple Silicon and Windows x64.`,
   DISCORD: escape(links.discord || DEFAULT_LINKS.discord),
   SPONSOR: escape(links.sponsor || DEFAULT_LINKS.sponsor),
+  CONTRIBUTORS: contributorsHtml(contributors),
+  CONTRIBUTORS_HIDDEN: contributors.length ? "" : " hidden",
   BAKED: JSON.stringify(baked).replace(/</g, "\\u003c"),
   YEAR: String(new Date().getUTCFullYear()),
 };
@@ -182,5 +198,5 @@ await writeFile(join(dist, ".csp-style"), hashes(/<style>([\s\S]*?)<\/style>/g))
 
 console.log(
   `built dist/ from ${readmeFrom}: ${body.length} subsystems, ${percent}, ${harnesses} harnesses, ` +
-    `${game.length} game releases baked${launcher ? `, launcher ${launcher.tag_name}` : ""}`,
+    `${game.length} game releases baked${launcher ? `, launcher ${launcher.tag_name}` : ""}, ${contributors.length} contributors`,
 );

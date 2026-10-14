@@ -46,6 +46,7 @@
           <a href="#patch-notes">Notes</a>
           <a href="#next">Roadmap</a>
           <a href="#community">Community</a>
+          <a href="#contributors" data-contributors{{CONTRIBUTORS_HIDDEN}}>Contributors</a>
         </nav>
         <div class="nav-end">
           <a class="nav-github" href="https://github.com/ludovic111/horizon">GitHub</a>
@@ -64,6 +65,7 @@
         <a href="#patch-notes">Patch notes</a>
         <a href="#next">Roadmap</a>
         <a href="#community">Community</a>
+        <a href="#contributors" data-contributors{{CONTRIBUTORS_HIDDEN}}>Contributors</a>
       </nav>
       <div class="menu-foot">
         <a class="button secondary large" href="https://github.com/ludovic111/horizon">GitHub</a>
@@ -228,6 +230,11 @@
             <a class="card reveal" data-card data-link="sponsor" href="{{SPONSOR}}"><span class="card-title">Sponsor</span><span class="card-text">Sponsors on GitHub fund the next release.</span><span class="card-arrow" aria-hidden="true">→</span></a>
             <a class="card reveal" data-card href="https://github.com/ludovic111/horizon"><span class="card-title">Source</span><span class="card-text">Issues and pull requests are welcome.</span><span class="card-arrow" aria-hidden="true">→</span></a>
           </div>
+          <div class="contributors" id="contributors" aria-labelledby="contributors-title" data-contributors{{CONTRIBUTORS_HIDDEN}}>
+            <h3 class="contributors-title reveal" id="contributors-title">Contributors</h3>
+            <p class="contributors-text reveal">Everyone who has committed to Horizon on GitHub, with how many commits.</p>
+            <ul class="contributors-list reveal" id="contributors-list">{{CONTRIBUTORS}}</ul>
+          </div>
         </div>
       </section>
     </main>
@@ -238,7 +245,7 @@
         <div class="footer-cols">
           <p>Horizon is made by <a href="https://lu4ovic.com">Ludovic Marie</a>, who is responsible for it and for this site; reach him through <a href="https://lu4ovic.com/#contact">lu4ovic.com</a>. Horizon contains no Minecraft code, assets or data, and this site offers no game files: you need your own legally obtained copy of Minecraft: Java Edition. Minecraft is a trademark of Mojang Synergies AB.</p>
           <p>Horizon's original work is under the <a href="https://github.com/ludovic111/horizon/blob/main/LICENSE">MIT licence</a>. The fonts are Geist and Instrument Serif, under the SIL Open Font License (<a href="/fonts/OFL-Geist.txt">Geist</a>, <a href="/fonts/OFL-InstrumentSerif.txt">Instrument Serif</a>). Every asset on this site is listed in <a href="/LEGAL.md">LEGAL.md</a>.</p>
-          <p>Privacy: this site sets no cookies, has no analytics or trackers and loads nothing from third parties except GitHub. To show the latest releases, patch notes, roadmap and links, your browser asks <code>api.github.com</code> and <code>raw.githubusercontent.com</code> for them; <a href="https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement">GitHub's privacy statement</a> covers those requests.</p>
+          <p>Privacy: this site sets no cookies, has no analytics or trackers and loads nothing from third parties except GitHub. To show the latest releases, patch notes, roadmap, links and contributors, your browser asks <code>api.github.com</code> and <code>raw.githubusercontent.com</code> for them, and <code>avatars.githubusercontent.com</code> for the contributors' pictures; <a href="https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement">GitHub's privacy statement</a> covers those requests.</p>
         </div>
         <div class="footer-bar">
           <span class="footer-mark">Horizon</span>

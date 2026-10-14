@@ -20,7 +20,7 @@
 		Referrer-Policy strict-origin-when-cross-origin
 		X-Frame-Options DENY
 		Permissions-Policy "interest-cohort=(), browsing-topics=(), camera=(), microphone=(), geolocation=()"
-		Content-Security-Policy "default-src 'self'; script-src 'self' {$CSP_SCRIPT}; style-src 'self' {$CSP_STYLE}; img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.github.com https://raw.githubusercontent.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		Content-Security-Policy "default-src 'self'; script-src 'self' {$CSP_SCRIPT}; style-src 'self' {$CSP_STYLE}; img-src 'self' data: https://avatars.githubusercontent.com; font-src 'self'; connect-src 'self' https://api.github.com https://raw.githubusercontent.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 		-Server
 	}
 	@assets path /assets/*

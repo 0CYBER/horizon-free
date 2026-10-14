@@ -6,7 +6,7 @@ One static page in the launcher's design language rather than its layout: the pa
 violet accent of `crates/horizon-theme`, Instrument Serif for display type and Geist for the
 rest, 1px dividers and short, eased motion. A full-viewport hero over Horizon's own sunset,
 then a scroll through what it is, the screenshots, the parity grid, the launcher, the patch
-notes, the roadmap and the community links. Plain HTML, CSS and JavaScript; no framework and
+notes, the roadmap, the community links and the contributors. Plain HTML, CSS and JavaScript; no framework and
 no runtime dependencies.
 
 ## Layout
@@ -17,9 +17,10 @@ serve.mjs          a tiny static server for local checks
 src/index.html     the page, with {{placeholders}} build.mjs fills
 src/404.html       the not-found page
 src/style.css      the design tokens and every style
-src/main.js        download buttons, patch notes, roadmap, links, nav and menu, tabs, lightbox, motion
+src/main.js        download buttons, patch notes, roadmap, links, contributors, nav and menu, tabs, lightbox, motion
 src/markdown.js    a small Markdown renderer (escapes everything), shared by build and page
 src/releases.js    the patch notes' markup, shared by build and page
+src/contributors.js the contributors' filtering and markup, shared by build and page
 public/            fonts, screenshots, the hero, icons, og.png, robots.txt, sitemap.xml: copied as is
 scripts/assets.mjs rebuilds public/ from the repo (fonts to WOFF2, images to WebP)
 scripts/shots.mjs  Playwright screenshots at every width, and og.png
@@ -32,12 +33,15 @@ shots/             (gitignored) full-page screenshots at 360–1920 px, a 1250×
 
 - **Built in** (`build.mjs`): the parity table, its score, harness count and audit date,
   and the roadmap, all from `README.md`; the Discord and Sponsor links from
-  `launcher/links.json`; the latest releases, when GitHub answers. Locally these come from
+  `launcher/links.json`; the latest releases and the contributors (`/repos/ludovic111/horizon/contributors`,
+  bots left out, the owner first), when GitHub answers; without an answer the build still succeeds and
+  the Contributors block and its menu entries stay hidden until the page loads them. Locally these come from
   the checkout; on Railway, which builds only this folder, from `main` on GitHub. The build
   fails if the README has no parity table or roadmap, so a broken README never deploys.
 - **Fetched by the page**: the releases (the download button picks the newest
   `launcher-v*` release's asset for the visitor's OS, and the three latest game releases'
-  notes are rendered), the roadmap from the raw README on `main`, and `links.json`. Each
+  notes are rendered), the contributors (avatars come from `avatars.githubusercontent.com`),
+  the roadmap from the raw README on `main`, and `links.json`. Each
   falls back to what was built in, and the download button to the releases page.
 
 ## Run it locally
