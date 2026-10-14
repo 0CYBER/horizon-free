@@ -5,7 +5,7 @@ use horizon_client::{
     Result,
     attack_strength::{AttackStrength, HeldStack},
     first_person::{
-        Clicks, Hand, HandHeights, HandWorld, Hit, SwingAnimation, SwingState, UseResult,
+        Clicks, Hand, HandHeights, HandSway, HandWorld, Hit, SwingAnimation, SwingState, UseResult,
         swing_duration,
     },
 };
@@ -308,6 +308,9 @@ fn run(case: &Value, out: &mut impl Write) -> Result<()> {
     let mut strength = AttackStrength::default();
     // FirstPersonHandsAndItems' visible items start as ItemStack.EMPTY.
     let mut visible = [0usize, 0usize];
+    // The player's xRot and yRot, and the hands' lag behind them.
+    let mut rot = [0.0f32; 2];
+    let mut sway = HandSway::default();
     for (s, step) in case["steps"].as_array().unwrap().iter().enumerate() {
         probe.step = step;
         probe.events.clear();
@@ -327,6 +330,10 @@ fn run(case: &Value, out: &mut impl Write) -> Result<()> {
             step["ud"].as_bool().unwrap(),
         );
         probe.swing.tick();
+        if let Some(r) = step["rot"].as_array() {
+            rot = [fl(&r[0]), fl(&r[1])];
+        }
+        sway.tick(rot[0], rot[1]);
         let main = probe.stack(Hand::Main).clone();
         strength.tick(held(&main));
         // FirstPersonHandsAndItems.tick: shouldInstantlyReplaceVisibleItem
@@ -363,7 +370,7 @@ fn run(case: &Value, out: &mut impl Write) -> Result<()> {
         let d = &clicks.destroying;
         writeln!(
             out,
-            "tick {s} {current} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
+            "tick {s} {current} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
             sw.ticks,
             fb(sw.animation),
             fb(sw.old_animation),
@@ -379,7 +386,11 @@ fn run(case: &Value, out: &mut impl Write) -> Result<()> {
             clicks.right_click_delay,
             d.delay,
             d.active,
-            fb(d.progress)
+            fb(d.progress),
+            fb(sway.x_bob),
+            fb(sway.y_bob),
+            fb(sway.x_bob_o),
+            fb(sway.y_bob_o)
         )?;
     }
     Ok(())

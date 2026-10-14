@@ -1569,6 +1569,7 @@ impl Game<'_> {
                 let mut player = PlayerMotion::new(self.motion, position)?;
                 player.velocity = delta;
                 self.player = Some(player);
+                self.sway = Default::default();
                 self.eye = 1.62;
                 self.previous_eye = 1.62;
                 self.clock.reset();

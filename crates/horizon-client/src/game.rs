@@ -706,6 +706,9 @@ struct Game<'a> {
     /// The first-person equip heights and the items the hands show (with
     /// the slot each came from).
     heights: horizon_client::first_person::HandHeights,
+    /// The hands' lag behind the view (`LocalPlayer.xBob`, `yBob`); a new
+    /// LocalPlayer (joining, respawning, changing dimension) starts at 0.
+    sway: horizon_client::first_person::HandSway,
     visible_hands: [(usize, Option<ItemStack>); 2],
     /// `Minecraft`'s attack handling, attack clicks since the last tick and
     /// the attack strength tickers the hand reads.
@@ -2585,6 +2588,7 @@ impl Game<'_> {
         }
         self.previous_position = feet;
         self.player = Some(player);
+        self.sway = Default::default();
         self.apply_equipment();
         self.eye = 1.62;
         self.previous_eye = 1.62;
@@ -5650,6 +5654,7 @@ impl Game<'_> {
         player.velocity = Vec3::ZERO;
         self.previous_position = player.position;
         self.player = Some(player);
+        self.sway = Default::default();
         self.apply_equipment();
         let at = [f64::from(spot[0]), f64::from(spot[1]), f64::from(spot[2])];
         self.audio
@@ -6526,7 +6531,11 @@ impl Game<'_> {
         };
         let inverse_height = 1.0 - self.heights.interpolated(a)[0];
         let view = horizon_client::camera::view_matrix(self.yaw, self.pitch);
-        let to_world = view.inverse();
+        // The hand sway: both hands turn by a tenth of the bobs' lag.
+        let [sway_x, sway_y] = self.sway.rotation(a, self.pitch, self.yaw);
+        let to_world = view.inverse()
+            * glam::Mat4::from_rotation_x(sway_x.to_radians())
+            * glam::Mat4::from_rotation_y(sway_y.to_radians());
         let eye = self.eye_position().unwrap_or_default();
         let light = self.world.light(
             eye[0].floor() as i32,
@@ -8616,6 +8625,7 @@ pub fn run() -> Result<()> {
         swing: Default::default(),
         swings_started: 0,
         heights: Default::default(),
+        sway: Default::default(),
         visible_hands: [(0, None), (0, None)],
         clicks: Default::default(),
         attack_clicks: 0,
