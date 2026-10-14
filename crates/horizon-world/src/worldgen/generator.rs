@@ -20,7 +20,7 @@ use super::{
     biome_temperature::{BiomeTemperature, BiomeTemperatureSettings},
     carver::{CarverCatalog, WorldCarver, generate_carving_mask},
     carving::{CarvingBlocks, apply_carving_mask},
-    climate::{ClimateSampler, quantize},
+    climate::{ClimateSampler, decode_parameter, quantize},
     decode_noise,
     density::DensityRegistry,
     material_condition::{
@@ -31,6 +31,7 @@ use super::{
     material_stage::{SurfaceInputs, TopMaterialInputs, build_surface},
     material_surface::{ClayBandBlocks, MaterialSurface},
     router::{NoiseRouter, RouterField, RouterSamplers},
+    spawn_finder::{SpawnTargetPoint, find_spawn_position},
     tags::TagDefinitions,
     terrain::{PreLightChunkStage, TerrainAquifer, TerrainBlockStates, TerrainChunk, fill_noise},
 };
@@ -608,6 +609,9 @@ struct Pipeline<R: RandomSource> {
     carver_cache: Mutex<HashMap<(i32, i32), BiomeId>>,
     pub(super) decoration: Option<super::generator_decoration::Decoration>,
     pub(super) structures: Option<super::generator_structures::StructureState>,
+    /// The noise settings' `spawn_target` points.
+    spawn_target: Vec<SpawnTargetPoint>,
+    spawn_position: std::sync::OnceLock<[i32; 2]>,
 }
 const CACHE_LIMIT: usize = 16384;
 type BiomeCache = Mutex<HashMap<(i32, i32), Arc<BiomeChunk<BiomeId>>>>;
@@ -706,6 +710,27 @@ where
             .ok_or_else(|| resource("material_rule"))?;
         let rule = library.rule(rule_name)?;
         let preliminary = router.get(RouterField::ChunkSurfaceLevel).clone();
+        let spawn_target = match settings_json.get("spawn_target") {
+            Some(Value::Array(points)) => points
+                .iter()
+                .map(|point| {
+                    let Value::Object(fields) = point else {
+                        return Err(resource("spawn_target point"));
+                    };
+                    let parameters = fields
+                        .iter()
+                        .map(|(name, interval)| {
+                            Ok((
+                                library.named_density(name)?,
+                                decode_parameter(&interval.to_string())?,
+                            ))
+                        })
+                        .collect::<Result<_, GeneratorError>>()?;
+                    Ok(SpawnTargetPoint { parameters })
+                })
+                .collect::<Result<_, GeneratorError>>()?,
+            _ => Vec::new(),
+        };
         let source = data
             .source_catalog
             .decode(&generator["biome_source"].to_string())?
@@ -783,6 +808,8 @@ where
             carver_cache: Mutex::new(HashMap::new()),
             decoration: None,
             structures: None,
+            spawn_target,
+            spawn_position: std::sync::OnceLock::new(),
         };
         pipeline.decoration =
             super::generator_decoration::Decoration::new(&pipeline.data, &pipeline.source)?;
@@ -1363,6 +1390,7 @@ trait SeededPipeline: Send + Sync {
     fn unsupported_features(&self) -> Vec<(String, String)>;
     fn forget_structure_starts(&self);
     fn ring_positions(&self, set: &str) -> Option<Vec<ChunkPos>>;
+    fn spawn_position(&self) -> Result<[i32; 2], GeneratorError>;
     fn locate(
         &self,
         worker: &mut WorkerState,
@@ -1461,6 +1489,19 @@ where
     }
     fn ring_positions(&self, set: &str) -> Option<Vec<ChunkPos>> {
         self.structures.as_ref()?.cached_rings(set)
+    }
+    fn spawn_position(&self) -> Result<[i32; 2], GeneratorError> {
+        if let Some(position) = self.spawn_position.get() {
+            return Ok(*position);
+        }
+        // ChunkGenerator.getOrigin is 0 0 without a spawn target.
+        let position = if self.spawn_target.is_empty() {
+            [0, 0]
+        } else {
+            find_spawn_position(&self.spawn_target, &mut SamplerContext::cached())
+                .map_err(|e| GeneratorError::Stage("spawn search", e.to_string()))?
+        };
+        Ok(*self.spawn_position.get_or_init(|| position))
     }
     fn locate(
         &self,
@@ -1744,6 +1785,16 @@ impl OverworldGenerator {
     /// `minecraft:strongholds`), available once structure starts were looked up.
     pub fn ring_positions(&self, set: &str) -> Option<Vec<ChunkPos>> {
         self.pipeline.ring_positions(set)
+    }
+    /// NoiseBasedChunkGenerator.getOrigin: the chunk a new world's spawn
+    /// search starts from (NoiseSpawnFinder over the `spawn_target` points).
+    pub fn origin(&self) -> Result<ChunkPos, GeneratorError> {
+        let [x, z] = self.spawn_position()?;
+        Ok(ChunkPos::new(x >> 4, z >> 4))
+    }
+    /// NoiseSpawnFinder.findSpawnPosition: the column `origin` is the chunk of.
+    pub fn spawn_position(&self) -> Result<[i32; 2], GeneratorError> {
+        self.pipeline.spawn_position()
     }
     /// Create per-thread state. Workers are cheap; keep one per thread.
     pub fn worker(&self) -> GeneratorWorker {

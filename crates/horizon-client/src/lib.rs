@@ -140,6 +140,7 @@ pub mod weather;
 pub mod widgets;
 pub mod window;
 pub mod world;
+pub mod world_spawn;
 pub mod worldborder;
 pub mod zip;
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;

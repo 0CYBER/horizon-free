@@ -99,11 +99,25 @@ pub fn no_collision_empty<W, E>(world: &mut W, bounds: Aabb) -> bool
 where
     W: BlockCollisionWorld<Error = E> + EntityMovementWorld<Error = E>,
 {
+    no_collision_in(world, bounds, false)
+}
+/// `noCollision(null, box, true)`: the same with liquids colliding as
+/// blocks (`CollisionContext.emptyWithFluidCollisions`).
+pub fn no_collision_or_liquid<W, E>(world: &mut W, bounds: Aabb) -> bool
+where
+    W: BlockCollisionWorld<Error = E> + EntityMovementWorld<Error = E>,
+{
+    no_collision_in(world, bounds, true)
+}
+fn no_collision_in<W, E>(world: &mut W, bounds: Aabb, fluids: bool) -> bool
+where
+    W: BlockCollisionWorld<Error = E> + EntityMovementWorld<Error = E>,
+{
     no_world_collision(
         world,
         CollisionCheckRequest {
             entity: EntityIdentity(0),
-            context: CollisionContext::empty(false),
+            context: CollisionContext::empty(fluids),
             bounds,
             candidate_budget: 1_000_000,
         },
