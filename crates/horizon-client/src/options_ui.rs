@@ -3,6 +3,7 @@
 //! Language and Resource Packs, laid out like vanilla's HeaderAndFooter /
 //! OptionsList screens and drawn with the shared widgets.
 use crate::{
+    gamepad::{self, GlyphStyle},
     hud::{HudAtlas, HudBatch, rgba},
     keybinds::{self, CATEGORIES, KeyBinds, MAPPINGS},
     lang::{self, LanguageInfo},
@@ -67,6 +68,16 @@ pub enum Opt {
     NotificationDisplayTime,
     ForceUnicode,
     JapaneseGlyphs,
+    /// Horizon's controller settings (`horizon-controller.txt`).
+    PadEnabled,
+    PadVibration,
+    PadLookSensitivity,
+    PadInvertX,
+    PadInvertY,
+    PadToggleSneak,
+    PadMoveDeadzone,
+    PadLookDeadzone,
+    PadGlyphs,
 }
 fn tr(key: &str) -> Text {
     Text::translate(key, &[])
@@ -153,6 +164,16 @@ impl Opt {
             Opt::NotificationDisplayTime => "options.notifications.display_time",
             Opt::ForceUnicode => "options.forceUnicodeFont",
             Opt::JapaneseGlyphs => "options.japaneseGlyphVariants",
+            // Horizon's own options: English captions (no vanilla keys).
+            Opt::PadEnabled => "Controller",
+            Opt::PadVibration => "Vibration",
+            Opt::PadLookSensitivity => "Look Sensitivity",
+            Opt::PadInvertX => "Invert Look X",
+            Opt::PadInvertY => "Invert Look Y",
+            Opt::PadToggleSneak => "Sneak Button",
+            Opt::PadMoveDeadzone => "Move Deadzone",
+            Opt::PadLookDeadzone => "Look Deadzone",
+            Opt::PadGlyphs => "Button Glyphs",
         }
     }
     pub(crate) fn kind(self, s: &Settings) -> Kind {
@@ -187,6 +208,9 @@ impl Opt {
             Opt::ChatHeightFocused => Kind::Slider(s.chat_height_focused),
             Opt::ChatHeightUnfocused => Kind::Slider(s.chat_height_unfocused),
             Opt::ChatLineSpacing => Kind::Slider(s.chat_line_spacing),
+            Opt::PadLookSensitivity => Kind::Slider(s.controller.look_sensitivity),
+            Opt::PadMoveDeadzone => unit(s.controller.move_deadzone, 0.0, 0.5),
+            Opt::PadLookDeadzone => unit(s.controller.look_deadzone, 0.0, 0.5),
             _ => Kind::Cycle,
         }
     }
@@ -313,6 +337,21 @@ impl Opt {
                     &[&format!("{:.1}", s.notification_display_time)],
                 ),
             ),
+            Opt::PadLookSensitivity => percent(c, 2.0 * s.controller.look_sensitivity),
+            Opt::PadMoveDeadzone | Opt::PadLookDeadzone => {
+                let v = if self == Opt::PadMoveDeadzone {
+                    s.controller.move_deadzone
+                } else {
+                    s.controller.look_deadzone
+                };
+                Text::translate(
+                    "options.percent_value",
+                    &[
+                        tr(c),
+                        Text::literal(((v * 100.0).round() as i32).to_string()),
+                    ],
+                )
+            }
             _ => generic(c, self.value_text(s)),
         }
     }
@@ -378,6 +417,21 @@ impl Opt {
             Opt::ShowSubtitles => on_off(s.show_subtitles),
             Opt::ForceUnicode => on_off(s.force_unicode),
             Opt::JapaneseGlyphs => on_off(s.japanese_glyphs),
+            Opt::PadEnabled => on_off(s.controller.enabled),
+            Opt::PadVibration => on_off(s.controller.vibration),
+            Opt::PadInvertX => on_off(s.controller.invert_x),
+            Opt::PadInvertY => on_off(s.controller.invert_y),
+            Opt::PadToggleSneak => tr(if s.controller.toggle_sneak {
+                "options.key.toggle"
+            } else {
+                "options.key.hold"
+            }),
+            Opt::PadGlyphs => Text::literal(match s.controller.glyphs {
+                GlyphStyle::Auto => "Auto",
+                GlyphStyle::Xbox => "Xbox",
+                GlyphStyle::PlayStation => "PlayStation",
+                GlyphStyle::Nintendo => "Nintendo",
+            }),
             _ => Text::empty(),
         }
     }
@@ -411,6 +465,9 @@ impl Opt {
             Opt::ChatHeightFocused => s.chat_height_focused = v,
             Opt::ChatHeightUnfocused => s.chat_height_unfocused = v,
             Opt::ChatLineSpacing => s.chat_line_spacing = v,
+            Opt::PadLookSensitivity => s.controller.look_sensitivity = v,
+            Opt::PadMoveDeadzone => s.controller.move_deadzone = step(0.0, 50.0) / 100.0,
+            Opt::PadLookDeadzone => s.controller.look_deadzone = step(0.0, 50.0) / 100.0,
             _ => {}
         }
         if self.affects_preset() {
@@ -484,6 +541,18 @@ impl Opt {
             Opt::ShowSubtitles => s.show_subtitles = !s.show_subtitles,
             Opt::ForceUnicode => s.force_unicode = !s.force_unicode,
             Opt::JapaneseGlyphs => s.japanese_glyphs = !s.japanese_glyphs,
+            Opt::PadEnabled => s.controller.enabled = !s.controller.enabled,
+            Opt::PadVibration => s.controller.vibration = !s.controller.vibration,
+            Opt::PadInvertX => s.controller.invert_x = !s.controller.invert_x,
+            Opt::PadInvertY => s.controller.invert_y = !s.controller.invert_y,
+            Opt::PadToggleSneak => s.controller.toggle_sneak = !s.controller.toggle_sneak,
+            Opt::PadGlyphs => {
+                let i = GlyphStyle::ALL
+                    .iter()
+                    .position(|g| *g == s.controller.glyphs)
+                    .unwrap_or(0) as u8;
+                s.controller.glyphs = GlyphStyle::ALL[usize::from(next(i, 4))];
+            }
             _ => {}
         }
         if self.affects_preset() {
@@ -542,6 +611,9 @@ pub enum Page {
     /// Horizon's graphics settings (`graphics_ui`).
     Graphics,
     GraphicsAdvanced,
+    /// Horizon's controller settings and button binds.
+    Controller,
+    PadBinds,
 }
 #[derive(Clone, Debug, PartialEq)]
 enum Act {
@@ -552,6 +624,10 @@ enum Act {
     Key(&'static str),
     ResetKey(&'static str),
     ResetKeys,
+    /// Controller binds: wait for a button, reset one, reset all.
+    PadKey(&'static str),
+    ResetPadKey(&'static str),
+    ResetPadKeys,
     /// Back to Horizon's own menus (Horizon only, see `list_rows`).
     HorizonMenus,
 }
@@ -612,6 +688,10 @@ pub struct OptionsUi {
     pub(crate) hdragging: Option<crate::graphics_ui::Item>,
     /// Key Binds: the mapping waiting for a key.
     pub selected_key: Option<&'static str>,
+    /// Controller Binds: the action waiting for a pad button.
+    pub selected_pad_action: Option<&'static str>,
+    /// The glyphs the binds list shows (the setting, else the pad's family).
+    pub pad_style: GlyphStyle,
     pub languages: Vec<LanguageInfo>,
     language_choice: Option<String>,
     language_search: ui::EditBox,
@@ -640,6 +720,8 @@ impl Default for OptionsUi {
             hscroll: 0.0,
             hdragging: None,
             selected_key: None,
+            selected_pad_action: None,
+            pad_style: GlyphStyle::Xbox,
             languages: Vec::new(),
             language_choice: None,
             language_search: search,
@@ -759,6 +841,8 @@ impl OptionsUi {
             Page::Font => "options.font.title",
             Page::Packs => "resourcePack.title",
             Page::Graphics | Page::GraphicsAdvanced => "options.videoTitle",
+            Page::Controller => "Controller Settings",
+            Page::PadBinds => "Controller Binds",
         }
     }
     fn list_rows(&self, s: &Settings) -> Vec<Row> {
@@ -862,6 +946,41 @@ impl OptionsUi {
                     Opt::ToggleCrouch,
                     Opt::ToggleSprint,
                     Opt::AutoJump,
+                ]));
+                // Horizon's controller page, after vanilla's rows.
+                rows.push(Row::Buttons(
+                    button(
+                        0.0,
+                        0.0,
+                        310.0,
+                        Text::literal("Controller Settings..."),
+                        Act::Push(Page::Controller),
+                    ),
+                    None,
+                ));
+                rows
+            }
+            Page::Controller => {
+                let mut rows = vec![Row::Buttons(
+                    button(
+                        0.0,
+                        0.0,
+                        310.0,
+                        Text::literal("Controller Binds..."),
+                        Act::Push(Page::PadBinds),
+                    ),
+                    None,
+                )];
+                rows.extend(pairs(&[
+                    Opt::PadEnabled,
+                    Opt::PadVibration,
+                    Opt::PadLookSensitivity,
+                    Opt::PadToggleSneak,
+                    Opt::PadInvertX,
+                    Opt::PadInvertY,
+                    Opt::PadMoveDeadzone,
+                    Opt::PadLookDeadzone,
+                    Opt::PadGlyphs,
                 ]));
                 rows
             }
@@ -1079,6 +1198,88 @@ impl OptionsUi {
                     150.0,
                     tr("controls.resetAll"),
                     Act::ResetKeys,
+                ));
+                out.push(button(cx + 4.0, h - 27.0, 150.0, tr("gui.done"), Act::Done));
+            }
+            Page::PadBinds => {
+                out.push(Widget {
+                    x: 0.0,
+                    y: 12.0,
+                    w,
+                    h: 9.0,
+                    kind: WKind::Text {
+                        text: tr(Self::title(page)),
+                        color: u32::MAX,
+                        centered: true,
+                    },
+                    list: false,
+                });
+                let row_left = cx - 170.0;
+                let scrollbar_x = row_left + 340.0 + 6.0 + 2.0;
+                let list_start = out.len();
+                let mut y = top + 2.0 - self.scroll;
+                let pad = &s.controller;
+                for (action, _) in gamepad::ACTIONS {
+                    out.push(Widget {
+                        x: row_left + 2.0,
+                        y: y + 6.0,
+                        w: 200.0,
+                        h: 9.0,
+                        kind: WKind::Text {
+                            text: tr(gamepad::action_caption(action)),
+                            color: u32::MAX,
+                            centered: false,
+                        },
+                        list: false,
+                    });
+                    let mut message = match pad.binding(action) {
+                        Some(b) => {
+                            let [r, g, bl] = b.color(self.pad_style);
+                            Text::literal(b.label(self.pad_style))
+                                .with_color(u32::from(r) << 16 | u32::from(g) << 8 | u32::from(bl))
+                        }
+                        None => tr("key.keyboard.unknown"),
+                    };
+                    if pad.conflicts(action) {
+                        message = Text::literal("[ ")
+                            .append(message)
+                            .append(" ]")
+                            .with_color(text::YELLOW);
+                    }
+                    if self.selected_pad_action == Some(*action) {
+                        message = Text::literal("> ")
+                            .append(message.with_style(&Style {
+                                underlined: Some(true),
+                                ..Style::default()
+                            }))
+                            .append(" <")
+                            .with_color(text::YELLOW);
+                    }
+                    let reset_x = scrollbar_x - 50.0 - 10.0;
+                    let change_x = reset_x - 5.0 - 75.0;
+                    out.push(button(change_x, y, 75.0, message, Act::PadKey(action)));
+                    let reset = button(
+                        reset_x,
+                        y,
+                        50.0,
+                        tr("controls.reset"),
+                        Act::ResetPadKey(action),
+                    );
+                    out.push(if pad.is_default(action) {
+                        inactive(reset)
+                    } else {
+                        reset
+                    });
+                    y += 20.0;
+                }
+                content = y + self.scroll - top + 2.0;
+                out[list_start..].iter_mut().for_each(|w| w.list = true);
+                out.push(button(
+                    cx - 154.0,
+                    h - 27.0,
+                    150.0,
+                    tr("controls.resetAll"),
+                    Act::ResetPadKeys,
                 ));
                 out.push(button(cx + 4.0, h - 27.0, 150.0, tr("gui.done"), Act::Done));
             }
@@ -1373,7 +1574,7 @@ impl OptionsUi {
         if list {
             ui::separators(batch, atlas, top, bottom, in_world);
             let sx = match self.page() {
-                Page::KeyBinds => (w / 2.0).floor() + 170.0 + 8.0,
+                Page::KeyBinds | Page::PadBinds => (w / 2.0).floor() + 170.0 + 8.0,
                 Page::Language => (w / 2.0).floor() + 110.0 + 8.0,
                 _ => (w / 2.0).floor() + 155.0 + 8.0,
             };
@@ -1466,6 +1667,10 @@ impl OptionsUi {
             }
             return events;
         }
+        // Controller Binds: a click cancels the wait.
+        if self.selected_pad_action.take().is_some() {
+            return events;
+        }
         // Key Binds: a mouse button pressed while waiting binds it.
         if let Some(name) = self.selected_key.take() {
             let button = if right {
@@ -1504,6 +1709,16 @@ impl OptionsUi {
                     }
                     Act::ResetKeys => {
                         s.keys.reset_all();
+                        events.push(Event::Changed);
+                    }
+                    Act::PadKey(action) => self.selected_pad_action = Some(action),
+                    Act::ResetPadKey(action) => {
+                        s.controller
+                            .bind(action, gamepad::PadSettings::default_of(action));
+                        events.push(Event::Changed);
+                    }
+                    Act::ResetPadKeys => {
+                        s.controller.reset_bindings();
                         events.push(Event::Changed);
                     }
                     Act::HorizonMenus => {
@@ -1606,6 +1821,7 @@ impl OptionsUi {
         self.scroll = 0.0;
         self.dragging = None;
         self.selected_key = None;
+        self.selected_pad_action = None;
         match page {
             Page::Language => {
                 if let Some(code) = self.language_choice.take()
@@ -1697,6 +1913,13 @@ impl OptionsUi {
                 }
                 _ => {}
             }
+        }
+        if let Some(action) = self.selected_pad_action.take() {
+            // As on Key Binds, Escape unbinds; other keys cancel.
+            if key == K::Escape {
+                s.controller.bind(action, None);
+            }
+            return vec![Event::Changed];
         }
         if let Some(name) = self.selected_key.take() {
             // KeyBindsScreen.keyPressed: Escape unbinds.

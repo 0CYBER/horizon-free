@@ -72,7 +72,7 @@ pub const SECTIONS: &[Section] = &[
     },
     Section {
         name: "Controls",
-        blurb: "Keys, the mouse and how movement keys behave.",
+        blurb: "Keys, the mouse, controllers and how movement keys behave.",
         rows: |_| {
             let mut r = vec![HRow::Page(
                 "Key binds",
@@ -91,6 +91,26 @@ pub const SECTIONS: &[Section] = &[
             );
             r.push(HRow::Header("Movement"));
             r.extend([Opt::ToggleCrouch, Opt::ToggleSprint, Opt::AutoJump].map(HRow::Opt));
+            r.push(HRow::Header("Controller"));
+            r.push(HRow::Page(
+                "Controller binds",
+                "Every action and its button",
+                Page::PadBinds,
+            ));
+            r.extend(
+                [
+                    Opt::PadEnabled,
+                    Opt::PadVibration,
+                    Opt::PadLookSensitivity,
+                    Opt::PadToggleSneak,
+                    Opt::PadInvertX,
+                    Opt::PadInvertY,
+                    Opt::PadMoveDeadzone,
+                    Opt::PadLookDeadzone,
+                    Opt::PadGlyphs,
+                ]
+                .map(HRow::Opt),
+            );
             r
         },
     },
@@ -185,6 +205,10 @@ fn switch_value(opt: Opt, s: &Settings) -> Option<bool> {
         Opt::ShowSubtitles => s.show_subtitles,
         Opt::ForceUnicode => s.force_unicode,
         Opt::JapaneseGlyphs => s.japanese_glyphs,
+        Opt::PadEnabled => s.controller.enabled,
+        Opt::PadVibration => s.controller.vibration,
+        Opt::PadInvertX => s.controller.invert_x,
+        Opt::PadInvertY => s.controller.invert_y,
         _ => return None,
     })
 }
