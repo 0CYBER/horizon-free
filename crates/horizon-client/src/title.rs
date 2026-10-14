@@ -245,6 +245,26 @@ impl Title {
         self.mode = Mode::Select { worlds, selected };
         *self.recent.borrow_mut() = None;
     }
+    /// Deletes the world `Mode::Delete` asks about and goes back to the
+    /// refreshed list; a failure (the world is open elsewhere, say) shows the
+    /// error instead and leaves the world. Returns the deleted world's row in
+    /// the list before it went, for a layout that moves the selection there.
+    pub(crate) fn confirm_delete(&mut self) -> Option<usize> {
+        let Mode::Delete { world } = &self.mode else {
+            return None;
+        };
+        let folder = world.folder.clone();
+        let row = list_worlds(&self.saves)
+            .iter()
+            .position(|w| w.folder == folder);
+        if let Err(error) = world_management::delete(&self.saves, &folder) {
+            self.failed(error);
+            return None;
+        }
+        self.return_to_list(None);
+        self.icons.borrow_mut().clear();
+        row
+    }
     fn cancel_create(&mut self) {
         if self.create_return_to_main {
             self.mode = Mode::Main;
@@ -1176,16 +1196,12 @@ impl Title {
                     && (x - (w / 2.0).floor()).abs() < 100.0;
                 Action::None
             }
-            (Mode::Delete { world }, Some(id @ (37 | 38))) => {
-                let folder = world.folder.clone();
-                if id == 37
-                    && let Err(error) = world_management::delete(&self.saves, &folder)
-                {
-                    self.failed(error);
-                    return Action::None;
-                }
-                self.return_to_list(Some(&folder));
-                self.icons.borrow_mut().clear();
+            (Mode::Delete { .. }, Some(37)) => {
+                self.confirm_delete();
+                Action::None
+            }
+            (Mode::Delete { .. }, Some(38)) => {
+                self.escape();
                 Action::None
             }
             (Mode::Error { return_to, .. }, Some(39)) => {

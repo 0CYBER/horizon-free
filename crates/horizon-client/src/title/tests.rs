@@ -533,3 +533,31 @@ fn failed_world_operation_back_button_plays_the_click_sound() {
     assert_eq!(f.click_with_sound("Back"), (Action::None, true));
     assert!(matches!(f.title.mode, Mode::Edit { .. }));
 }
+
+#[test]
+fn delete_refuses_an_open_world_then_removes_it_with_its_lock() {
+    let f = Fixture::new();
+    f.world("World", "World");
+    let open = crate::save::SessionLock::acquire(&f.title.saves.join("World")).unwrap();
+    assert!(world_management::delete(&f.title.saves, "World").is_err());
+    assert!(f.title.saves.join("World/level.dat").is_file());
+    drop(open);
+    world_management::delete(&f.title.saves, "World").unwrap();
+    assert!(!f.title.saves.join("World").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn delete_removes_links_without_following_them() {
+    let f = Fixture::new();
+    f.world("World", "World");
+    let outside = f.root.join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("keep.txt"), "keep").unwrap();
+    std::os::unix::fs::symlink(&outside, f.title.saves.join("World/link")).unwrap();
+    std::os::unix::fs::symlink(&outside, f.title.saves.join("Linked")).unwrap();
+    assert!(world_management::delete(&f.title.saves, "Linked").is_err());
+    world_management::delete(&f.title.saves, "World").unwrap();
+    assert!(!f.title.saves.join("World").exists());
+    assert!(outside.join("keep.txt").is_file());
+}

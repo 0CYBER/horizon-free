@@ -6024,6 +6024,10 @@ impl Game<'_> {
         self.stats.custom("leave_game", 1);
         self.save_game()?;
         self.lan_close(false);
+        // Closing the level storage: once the last writes are on disk the
+        // session lock goes, so the title can delete or back up this world.
+        self.save.flush();
+        self.session_lock = None;
         horizon_client::crash::clear_detail("World");
         self.streaming.paused = true;
         self.world = World::new(self.res.facts.air, 0);
