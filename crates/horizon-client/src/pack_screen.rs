@@ -673,6 +673,21 @@ impl PackScreen {
             self.filter(None);
         }
     }
+    /// Ctrl+A/C/V/X in the search box; false when it does not have the focus.
+    pub fn shortcut(
+        &mut self,
+        m: &Measure,
+        shortcut: crate::clipboard::EditShortcut,
+        clipboard: &mut dyn crate::clipboard::Clipboard,
+    ) -> bool {
+        if !self.search_focused() {
+            return false;
+        }
+        if self.search.shortcut(m, shortcut, clipboard) {
+            self.filter(None);
+        }
+        true
+    }
     /// Backspace in the search box.
     pub fn erase(&mut self, m: &Measure, count: isize) {
         if self.confirm.is_none()

@@ -16,6 +16,7 @@ mod bossbars;
 mod breezes;
 mod cartography;
 mod chat;
+mod clipboard;
 mod combat;
 mod command_harness;
 mod commands;
@@ -626,6 +627,10 @@ struct Game<'a> {
     cursor: (f32, f32),
     captured: bool,
     focused: bool,
+    /// The keyboard's modifier state (`KeyEvent.modifiers`).
+    modifiers: winit::keyboard::ModifiersState,
+    /// The window's fullscreen request and reported state.
+    fullscreen: horizon_client::window::FullscreenState,
     /// MouseHandler's accumulated look and wheel state.
     mouse: MouseLook,
     /// `Options.smoothCamera` (cinematic camera), not persisted.
@@ -841,9 +846,10 @@ struct Game<'a> {
     pause_menu: bool,
     /// MultiPlayerGameMode.previousLocalPlayerMode (F3+N goes back to it).
     previous_mode: Option<horizon_client::command::args::GameMode>,
-    clipboard: Option<arboard::Clipboard>,
-    /// The text last put on the clipboard (reported by `horizon-ctl status`).
-    copied: Option<String>,
+    /// The system clipboard (`KeyboardHandler.clipboardManager`).
+    clipboard: horizon_client::clipboard::SystemClipboard,
+    /// Select All in the append-only text fields.
+    text_selection: horizon_client::clipboard::AppendSelection,
     /// The world was saved for the application ending (`save_for_exit`).
     saved_for_exit: bool,
     /// The block a guest is acting on (game/lan_actions.rs).
@@ -8046,10 +8052,14 @@ impl ApplicationHandler for Game<'_> {
         if self.window.is_some() {
             return;
         }
+        // The Window constructor: created fullscreen when options.txt says so.
+        let fullscreen = self.settings.fullscreen;
+        self.fullscreen = horizon_client::window::FullscreenState::new(fullscreen);
         let window = match event_loop.create_window(
             Window::default_attributes()
                 .with_title("Horizon")
-                .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0)),
+                .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0))
+                .with_fullscreen(fullscreen.then_some(winit::window::Fullscreen::Borderless(None))),
         ) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -8084,6 +8094,9 @@ impl ApplicationHandler for Game<'_> {
         }
         if let WindowEvent::Focused(false) = &event {
             self.physical_keys.clear();
+        }
+        if let WindowEvent::ModifiersChanged(m) = &event {
+            self.modifiers = m.state();
         }
         // KeyboardHandler.keyPress: the debug keys come before the game's.
         if let WindowEvent::KeyboardInput {
@@ -8130,6 +8143,7 @@ impl ApplicationHandler for Game<'_> {
                     if let Some(r) = &mut self.renderer {
                         r.resize(size.width, size.height);
                     }
+                    self.observe_fullscreen();
                 }
                 WindowEvent::Focused(focused) => {
                     self.focused = focused;
@@ -8367,19 +8381,12 @@ impl ApplicationHandler for Game<'_> {
                         && event.state == ElementState::Pressed
                         && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape)) =>
                 {
-                    match event.physical_key {
-                        PhysicalKey::Code(KeyCode::Backspace) => {
-                            self.creative_screen.search.pop();
-                        }
-                        _ => {
-                            if let Some(text) = &event.text {
-                                self.creative_screen
-                                    .search
-                                    .extend(text.chars().filter(|c| !c.is_control()));
-                            }
-                        }
+                    if let Some(shortcut) = self.edit_shortcut(&event) {
+                        self.creative_search_shortcut(shortcut);
+                    } else {
+                        let backspace = event.physical_key == PhysicalKey::Code(KeyCode::Backspace);
+                        self.creative_search_edit(event.text.as_deref(), backspace);
                     }
-                    self.creative_screen.scroll = 0.0;
                 }
                 WindowEvent::KeyboardInput { event, .. }
                     if self.recipe_search_focused()
@@ -8395,8 +8402,12 @@ impl ApplicationHandler for Game<'_> {
                         && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape)) =>
                 {
                     // The anvil rename box takes every key but Escape (AnvilScreen.keyPressed).
-                    let backspace = event.physical_key == PhysicalKey::Code(KeyCode::Backspace);
-                    self.station_text(event.text.as_deref(), backspace);
+                    if let Some(shortcut) = self.edit_shortcut(&event) {
+                        self.station_shortcut(shortcut);
+                    } else {
+                        let backspace = event.physical_key == PhysicalKey::Code(KeyCode::Backspace);
+                        self.station_text(event.text.as_deref(), backspace);
+                    }
                 }
                 WindowEvent::KeyboardInput { event, .. } if self.remote_chat_open() => {
                     self.remote_chat_key(&event)
@@ -8405,6 +8416,11 @@ impl ApplicationHandler for Game<'_> {
                     self.world_options_key(&event)
                 }
                 WindowEvent::KeyboardInput { event, .. } if self.screen == Screen::Options => {
+                    if let Some(shortcut) = self.edit_shortcut(&event)
+                        && self.options_shortcut(shortcut)
+                    {
+                        return Ok(());
+                    }
                     if event.state == ElementState::Pressed
                         && let PhysicalKey::Code(key) = event.physical_key
                     {
@@ -8413,18 +8429,25 @@ impl ApplicationHandler for Game<'_> {
                 }
                 WindowEvent::KeyboardInput { event, .. } if self.title.is_some() => {
                     if event.state == ElementState::Pressed
-                        && let Some(title) = self.title.as_mut()
-                        && !title.skip_opening()
+                        && self.title.as_ref().is_some_and(|t| !t.skip_opening())
                     {
+                        if let Some(shortcut) = self.edit_shortcut(&event) {
+                            self.title_shortcut(shortcut);
+                            return Ok(());
+                        }
                         match event.physical_key {
-                            PhysicalKey::Code(KeyCode::Backspace) => title.backspace(),
-                            PhysicalKey::Code(KeyCode::Tab) => title.tab(),
-                            PhysicalKey::Code(KeyCode::Escape) => title.escape(),
-                            _ => {
-                                if let Some(text) = &event.text {
-                                    title.type_text(text);
+                            PhysicalKey::Code(KeyCode::Backspace) => self.title_edit(None, true),
+                            PhysicalKey::Code(KeyCode::Tab) => {
+                                if let Some(t) = self.title.as_mut() {
+                                    t.tab();
                                 }
                             }
+                            PhysicalKey::Code(KeyCode::Escape) => {
+                                if let Some(t) = self.title.as_mut() {
+                                    t.escape();
+                                }
+                            }
+                            _ => self.title_edit(event.text.as_deref(), false),
                         }
                     }
                 }
@@ -8484,6 +8507,7 @@ impl ApplicationHandler for Game<'_> {
                     self.key_pressed(key)?;
                 }
                 WindowEvent::RedrawRequested => {
+                    self.observe_fullscreen();
                     let now = Instant::now();
                     let elapsed = now.duration_since(self.previous);
                     self.frame_ticks = elapsed.as_secs_f32() * 20.0;
@@ -8870,6 +8894,8 @@ pub fn run() -> Result<()> {
         cursor: (0.0, 0.0),
         captured: false,
         focused: true,
+        modifiers: winit::keyboard::ModifiersState::empty(),
+        fullscreen: horizon_client::window::FullscreenState::new(false),
         mouse: MouseLook::default(),
         smooth_camera: false,
         toggles: Default::default(),
@@ -9027,8 +9053,8 @@ pub fn run() -> Result<()> {
         show_chunk_borders: false,
         pause_menu: true,
         previous_mode: None,
-        clipboard: None,
-        copied: None,
+        clipboard: Default::default(),
+        text_selection: Default::default(),
         saved_for_exit: false,
         forced_hit: None,
         lan_events: Vec::new(),

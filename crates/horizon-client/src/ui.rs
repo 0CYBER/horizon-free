@@ -520,6 +520,20 @@ fn byte_index(s: &str, chars: usize) -> usize {
 pub fn char_len(s: &str) -> usize {
     s.chars().count()
 }
+impl crate::clipboard::Editable for EditBox {
+    fn select_all(&mut self) {
+        self.move_cursor_to_end(false);
+        self.highlight = 0;
+    }
+    fn selected_text(&self) -> String {
+        EditBox::selected_text(self)
+    }
+    fn insert(&mut self, text: &str) -> bool {
+        let before = self.value.clone();
+        self.insert_text(text);
+        self.value != before
+    }
+}
 impl EditBox {
     pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
         Self {
@@ -576,10 +590,7 @@ impl EditBox {
     /// EditBox.insertText: replace the selection, respecting the maximum length.
     pub fn insert_text(&mut self, text: &str) {
         let (a, b) = self.selected();
-        let filtered: String = text
-            .chars()
-            .filter(|c| !c.is_control() && *c != '§')
-            .collect();
+        let filtered = crate::clipboard::filter_text(text, false);
         let room = self
             .max_length
             .saturating_sub(char_len(&self.value) - (b - a));
@@ -701,6 +712,17 @@ impl EditBox {
             _ => return false,
         }
         true
+    }
+    /// Ctrl+A/C/V/X (`EditBox.keyPressed`). True when the value changed.
+    pub fn shortcut(
+        &mut self,
+        shortcut: crate::clipboard::EditShortcut,
+        clipboard: &mut dyn crate::clipboard::Clipboard,
+    ) -> bool {
+        let before = self.value.clone();
+        crate::clipboard::apply(self, shortcut, clipboard);
+        self.reset_blink();
+        self.value != before
     }
     /// The first shown character after scrolling to the cursor, and the
     /// milliseconds since the field was focused (the cursor's blink).

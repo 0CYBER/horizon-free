@@ -5,7 +5,7 @@ use super::Game;
 use horizon_client::{
     containers::BlockEntity,
     hud::{HudBatch, rgba},
-    signs::{SignData, wood_type},
+    signs::wood_type,
 };
 use std::time::Instant;
 use winit::{
@@ -21,13 +21,6 @@ pub(super) struct SignEditor {
 }
 
 impl Game<'_> {
-    fn edited_sign(&mut self) -> Option<&mut SignData> {
-        let key = self.sign_edit.as_ref()?.pos;
-        match self.world.block_entities.get_mut(&key) {
-            Some(BlockEntity::Sign(sign)) => Some(sign),
-            _ => None,
-        }
-    }
     /// `SignBlock.openTextEdit` for the front side after placement.
     pub(super) fn open_sign_editor(&mut self, pos: (i32, i32, i32), front: bool) {
         self.sign_edit = Some(SignEditor {
@@ -52,10 +45,15 @@ impl Game<'_> {
         if event.state != ElementState::Pressed {
             return;
         }
+        if let Some(shortcut) = self.edit_shortcut(event) {
+            self.sign_shortcut(shortcut);
+            return;
+        }
         let Some(edit) = self.sign_edit.as_mut() else {
             return;
         };
         let front = edit.front;
+        let id = sign_line_id(front, edit.line);
         match event.physical_key {
             PhysicalKey::Code(KeyCode::Escape) => self.close_sign_editor(),
             PhysicalKey::Code(KeyCode::ArrowUp) => edit.line = (edit.line + 3) & 3,
@@ -63,14 +61,17 @@ impl Game<'_> {
                 edit.line = (edit.line + 1) & 3
             }
             PhysicalKey::Code(KeyCode::Backspace) => {
-                let line = edit.line;
-                if let Some(sign) = self.edited_sign() {
+                let (line, key) = (edit.line, edit.pos);
+                if let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get_mut(&key) {
                     let text = if front {
                         &mut sign.front
                     } else {
                         &mut sign.back
                     };
-                    text.lines[line].pop();
+                    let value = &mut text.lines[line];
+                    if !self.text_selection.take(id, value) {
+                        value.pop();
+                    }
                 }
             }
             _ => {
@@ -90,6 +91,7 @@ impl Game<'_> {
                     } else {
                         &mut sign.back
                     };
+                    self.text_selection.take(id, &mut text.lines[line]);
                     for ch in typed.chars().filter(|c| !c.is_control()) {
                         let mut next = text.lines[line].clone();
                         next.push(ch);
@@ -101,6 +103,41 @@ impl Game<'_> {
                 }
             }
         }
+    }
+    /// `TextFieldHelper.keyPressed`'s shortcuts on the edited line: a paste
+    /// (formatting and carriage returns removed) is taken whole or not at
+    /// all, as the line must stay within the sign's width.
+    fn sign_shortcut(&mut self, shortcut: horizon_client::clipboard::EditShortcut) {
+        let Some(edit) = self.sign_edit.as_ref() else {
+            return;
+        };
+        let (key, front, line) = (edit.pos, edit.front, edit.line);
+        let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get_mut(&key) else {
+            return;
+        };
+        let max = sign.max_line_width();
+        let text = if front {
+            &mut sign.front
+        } else {
+            &mut sign.back
+        };
+        let atlas = &self.res.atlas;
+        self.text_selection.apply(
+            sign_line_id(front, line),
+            &mut text.lines[line],
+            shortcut,
+            &mut self.clipboard,
+            |value, pasted| {
+                let next = format!(
+                    "{value}{}",
+                    horizon_client::clipboard::helper_clipboard_contents(pasted)
+                );
+                HudBatch::text_width(atlas, &next) <= max && {
+                    *value = next;
+                    true
+                }
+            },
+        );
     }
     /// Done button (`this.width / 2 - 100, this.height / 4 + 144`, 200x20).
     pub(super) fn sign_edit_click(&mut self, size: [u32; 2]) {
@@ -205,4 +242,9 @@ impl Game<'_> {
             true,
         );
     }
+}
+
+/// The sign line being edited, for Select All.
+fn sign_line_id(front: bool, line: usize) -> horizon_client::clipboard::FieldId {
+    (if front { "sign.front" } else { "sign.back" }, line)
 }
