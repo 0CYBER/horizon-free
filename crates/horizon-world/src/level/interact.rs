@@ -527,4 +527,28 @@ impl Behaviours {
         self.sim(level, ticks)
             .use_without_item(pos, face, hit, player)
     }
+    /// `BlockState.useItemOn` with `item` in the main hand, then, when the
+    /// block asks to try with an empty hand (the default), `useWithoutItem`.
+    /// `SweetBerryBushBlock.useItemOn` passes bone meal on a bush that can
+    /// still grow on to the item.
+    #[allow(clippy::too_many_arguments)]
+    pub fn use_item_on<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        face: Direction,
+        hit: Vec3,
+        player: PlayerContext,
+        item: Option<&str>,
+    ) -> InteractionResult {
+        let state = level.block_state(pos);
+        if item == Some("minecraft:bone_meal")
+            && self.data(state).chain.contains(&Class::SweetBerryBush)
+            && self.table.int(state, self.props.age) < 3
+        {
+            return InteractionResult::Pass;
+        }
+        self.use_without_item(level, ticks, pos, face, hit, player)
+    }
 }

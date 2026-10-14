@@ -39,6 +39,10 @@ impl FlatTerrain {
             biome: biomes.id(&biome),
         })
     }
+    /// FlatLevelSource.getSpawnHeight: the top of the layers.
+    pub fn spawn_height(&self) -> i32 {
+        crate::chunk::MIN_Y + self.layers.len().min(crate::chunk::HEIGHT as usize) as i32
+    }
 }
 impl ChunkGenerator for FlatTerrain {
     type Worker = ();

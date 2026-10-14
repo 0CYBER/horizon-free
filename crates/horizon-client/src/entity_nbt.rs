@@ -29,10 +29,10 @@ pub fn position(tag: &Tag) -> Option<Vec3> {
 pub fn uuid(tag: &Tag) -> Option<[i32; 4]> {
     uuid_from_tag(tag.get("UUID"))
 }
-fn motion(tag: &Tag) -> Vec3 {
+pub fn motion(tag: &Tag) -> Vec3 {
     read_doubles::<3>(tag.get("Motion")).map_or(Vec3::ZERO, |m| Vec3::new(m[0], m[1], m[2]))
 }
-fn rotation(tag: &Tag) -> [f32; 2] {
+pub fn rotation(tag: &Tag) -> [f32; 2] {
     read_doubles::<2>(tag.get("Rotation")).map_or([0.0; 2], |r| [r[0] as f32, r[1] as f32])
 }
 fn flag(tag: &Tag, key: &str) -> bool {

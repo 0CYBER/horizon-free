@@ -999,10 +999,12 @@ fn render_visible(
         } else {
             light
         };
-        let overlay = if armor_slot(&layer.model).is_some_and(|s| super::gear::enchanted(m, s)) {
-            glint_overlay(overlay)
-        } else {
-            overlay
+        // EquipmentLayerRenderer draws armour with OverlayTexture.NO_OVERLAY: never
+        // the hurt tint, the glint (7) when enchanted.
+        let overlay = match armor_slot(&layer.model) {
+            Some(slot) if super::gear::enchanted(m, slot) => 7,
+            Some(_) => 0,
+            None => overlay,
         };
         let start = out.len();
         draw(&part, base, &poses, uv, layer.color, light, overlay, out);
@@ -1022,10 +1024,6 @@ fn armor_slot(model: &str) -> Option<usize> {
         "boots" => super::gear::FEET,
         _ => return None,
     })
-}
-/// The entity shader's glint overlay (7), keeping the hurt tint (8).
-fn glint_overlay(overlay: u32) -> u32 {
-    if overlay == 1 { 8 } else { 7 }
 }
 /// Render with a fixed texture rect (the earlier API).
 pub fn render_single(

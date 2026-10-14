@@ -200,7 +200,7 @@ impl Game<'_> {
         let eye = self.eye_position();
         if let Some(e) = eye {
             let brightness = self.eye_brightness(e);
-            let inside_portal = self.portal_ticks > 0;
+            let inside_portal = self.client_portal_effect();
             self.res.screen_fx.tick(brightness, inside_portal);
             // LocalPlayer water vision and AtmosphericFogEnvironment rain fog.
             let in_water =

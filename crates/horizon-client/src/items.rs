@@ -779,6 +779,33 @@ impl Items {
             .as_str()
             .map(str::to_owned)
     }
+    /// `Block.dropFromBlockInteractLootTable`: the `block_interact` table `id`
+    /// for a right click on `state` (its `match_block` conditions see the
+    /// state), from the table's random sequence when it has one.
+    pub fn interact_loot(
+        &self,
+        id: &str,
+        registry: &BlockRegistry,
+        state: BlockStateId,
+        random: &mut impl RandomSource,
+        sequences: &mut crate::random_sequences::RandomSequences,
+        seed: i64,
+    ) -> Vec<ItemStack> {
+        let (Some(table), Some(block)) = (self.loot.get(id), registry.state(state)) else {
+            return vec![];
+        };
+        let ctx = LootContext {
+            items: self,
+            block: &block.name,
+            properties: &block.properties,
+            held: None,
+            killed_by_player: false,
+        };
+        match table.get("random_sequence").and_then(Value::as_str) {
+            Some(sequence) => ctx.evaluate(table, sequences.get(sequence, seed)),
+            None => ctx.evaluate(table, random),
+        }
+    }
     /// `loot_table` drawing from any random (a random sequence).
     pub fn loot_table_from(
         &self,

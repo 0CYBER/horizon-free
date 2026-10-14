@@ -8,7 +8,18 @@ state fields), runs the real `setupAnim` and writes every part's pose.
 `mobs::anim::setup` and the loaded model tree; the two must agree on every part
 pose and on the baked polygon count and vertex sums.
 
+Both sides then draw the posed model under LivingEntityRenderer's root transform
+(vanilla: ModelPart.render's PoseStack walk and Cube.compile into a capturing
+VertexConsumer; Horizon: `mobs::render::draw`) and compare every vertex's normal
+as the signed bytes each puts in its vertex buffer: vanilla's BufferBuilder.setNormal
+truncates clamp(c) * 127 toward zero (normalIntValue) for the entity format's byte
+normal, Horizon packs its RGBA8_SNORM `Vertex.normal` the same way. A one-step
+difference is accepted only where vanilla's float lies within --normal-edge of a
+truncation step (float rounding); any other difference fails. A checksum of each
+drawn part's posed positions is compared too.
+
   test_entity_model_parity.py [--filter SUBSTRING] [--detail LAYER] [--tolerance EPS]
+                              [--normal-edge EPS] [--position-tolerance EPS]
 """
 import argparse
 import json
@@ -101,7 +112,34 @@ def layers(models):
     return chosen
 
 
-def cases(layer):
+# The renderer's root transform for the normal comparison (keys starting with
+# '@' are not render-state fields): LivingEntityRenderer's body yaw, and the
+# renderer's own scale (uniform like an age scale, or non-uniform like
+# CreeperRenderer's swell, which makes PoseStack.Pose's normals untrusted).
+ROOT_YAWS = [0.0, 37.5, -112.25, 90.0, 180.0, 213.7, -45.0]
+ROOT_SCALES = [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [0.5, 0.5, 0.5], [1.18, 0.92, 1.18], [1.0, 1.0, 1.0]]
+# No vanilla setupAnim scales a part negatively, so '@partScale' sets one part's scale after
+# setupAnim on both sides: PoseStack.Pose.scale flips the normal matrix's signs when |x|=|y|=|z|
+# (trusted), and scales it by 1/x, 1/y, 1/z and normalises otherwise.
+PART_SCALES = [[-1.0, -1.0, -1.0], [-1.0, 1.0, 1.0], [1.0, -1.0, 1.0], [-0.75, 1.25, 1.0], [0.6, 0.6, 0.6]]
+
+
+def scaled_part(model):
+    """A part with cubes, preferably with children, whose name is unique in the tree (Horizon's
+    poses are keyed by name)."""
+    names, found = {}, []
+    def walk(name, node, depth):
+        names[name] = names.get(name, 0) + 1
+        if depth and node.get('polygons'):
+            found.append((not node.get('children'), depth, name))
+        for key, child in sorted(node.get('children', {}).items()):
+            walk(key, child, depth + 1)
+    walk('root', model, 0)
+    found = [f for f in found if names[f[2]] == 1]
+    return min(found)[2] if found else None
+
+
+def cases(layer, model=None):
     rng = random.Random(0x414e494d + sum(map(ord, layer)))
     baby = '_baby#' in layer
     base_cases = [
@@ -117,14 +155,19 @@ def cases(layer):
                            rng.uniform(-50, 50), rng.uniform(-70, 70),
                            rng.choice([0.0, rng.uniform(0.01, 0.99)])))
     cases_out = []
-    for pos, speed, age, y, x, attack in base_cases:
+    for index, (pos, speed, age, y, x, attack) in enumerate(base_cases):
         cases_out.append({'walkAnimationPos': pos, 'walkAnimationSpeed': speed, 'ageInTicks': age,
                'yRot': y, 'xRot': x, 'swingAnimation': attack, 'isBaby': baby, 'ageScale': 0.5 if baby else 1.0,
-               'entityId': 7, 'yHeadRot': y, 'yBodyRot': 0.0})
+               'entityId': 7, 'yHeadRot': y, 'yBodyRot': 0.0,
+               '@rootYaw': ROOT_YAWS[index % len(ROOT_YAWS)], '@rootScale': ROOT_SCALES[index % len(ROOT_SCALES)]})
     name = layer.split(':')[1].split('#')[0].removesuffix('_baby')
     cases_out = [{**c, **DEFAULTS.get(name, {})} for c in cases_out]
     yield from cases_out
     yield from species_cases(layer, cases_out)
+    part = model and scaled_part(model)
+    if part:
+        for index, scale in enumerate(PART_SCALES):
+            yield {**cases_out[2 + index % 2], '@partScale': [part, *scale]}
 
 
 T, F = True, False
@@ -233,11 +276,65 @@ def species_cases(layer, base_cases):
             yield {**base_cases[index], **extra}
 
 
+def compare_vertices(v, r, args, stats):
+    """The posed model's per-vertex normals, as the signed bytes both clients put in the vertex
+    buffer (BufferBuilder.setNormal's normalIntValue; Horizon's RGBA8_SNORM `Vertex.normal`), and
+    a checksum of each drawn part's posed positions."""
+    bad = []
+    vanilla, rust = v.get('vertices', {}), r.get('vertices', {})
+    for path, ve in vanilla.items():
+        ru = rust.get(path)
+        if ru is None:
+            # Horizon does not draw a part scaled to zero: vanilla's vertices all collapse there.
+            if ve['d']:
+                stats['degenerate'] += len(ve['n']) // 3
+            else:
+                bad.append((path, 'drawn by vanilla, not by Horizon'))
+            continue
+        if len(ve['n']) != len(ru['n']):
+            bad.append((path, f'{len(ve["n"]) // 3} vertices != {len(ru["n"]) // 3}'))
+            continue
+        stats['parts'] += 1
+        first = None
+        for i in range(0, len(ve['n']), 3):
+            stats['vertices'] += 1
+            exact = True
+            for c in range(3):
+                a, b = ve['n'][i + c], ru['n'][i + c]
+                f = ve['f'][i // 12 * 3 + c]
+                if a == b:
+                    continue
+                exact = False
+                stats['max_bytes'] = max(stats['max_bytes'], abs(a - b))
+                # A one-byte step where vanilla's float sits within float rounding of a
+                # truncation step (normalIntValue truncates c * 127 toward zero).
+                edge = abs(f * 127.0 - round(f * 127.0)) <= args.normal_edge and abs(a - b) == 1
+                if edge:
+                    stats['edge'] += 1
+                elif first is None:
+                    first = (path, f'vertex {i // 3} normal {ve["n"][i:i + 3]} != {ru["n"][i:i + 3]}'
+                                   f' (vanilla float {ve["f"][i // 12 * 3:i // 12 * 3 + 3]})')
+            stats['exact'] += exact
+        if first:
+            bad.append(first)
+        count = len(ve['n']) // 3
+        if abs(ve['p'] - ru['p']) > args.position_tolerance * count * (1.0 + abs(ve['p']) / max(count, 1)):
+            bad.append((path, f'posed position sum {ve["p"]!r} != {ru["p"]!r}'))
+    for path in rust:
+        if path not in vanilla:
+            bad.append((path, 'drawn by Horizon, not by vanilla'))
+    return bad
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--filter', default='')
     parser.add_argument('--detail', default='')
     parser.add_argument('--tolerance', type=float, default=5e-7)
+    parser.add_argument('--normal-edge', type=float, default=1e-4,
+                        help='accept a one-byte normal step when vanilla\'s float * 127 is this close to an integer')
+    parser.add_argument('--position-tolerance', type=float, default=1e-5,
+                        help='per-vertex tolerance of the posed position checksums, in blocks')
     args = parser.parse_args()
     lock, jars, _ = base.verify_artifacts()
     libraries = baking.client_libraries()
@@ -249,7 +346,7 @@ def main():
         if Path(__file__).with_suffix('.cases.json').exists() else {}
     lines = []
     for layer, cls in sorted(chosen.items()):
-        for case in cases(layer):
+        for case in cases(layer, models[layer]):
             lines.append(f'{layer} {cls}|{json.dumps(case)}')
         for case in extra_cases.get(layer.split(':')[1].split('#')[0], []):
             lines.append(f'{layer} {cls}|{json.dumps(case)}')
@@ -271,6 +368,7 @@ def main():
     rust = [json.loads(l) for l in (build / 'rust.jsonl').read_text().splitlines()]
     assert len(vanilla) == len(rust), (len(vanilla), len(rust))
     errors, skipped, mismatched, checked = {}, set(), {}, 0
+    stats = dict.fromkeys(['parts', 'vertices', 'exact', 'edge', 'degenerate', 'max_bytes'], 0)
     for v, r in zip(vanilla, rust):
         layer = v['layer']
         if 'error' in v:
@@ -297,9 +395,14 @@ def main():
         for path in r['parts']:
             if path not in v['parts']:
                 bad.append((path, 'extra in Horizon'))
+        bad += compare_vertices(v, r, args, stats)
         if bad:
             mismatched.setdefault(layer, []).append((v['case'], bad))
     print(f'{checked} cases compared over {len(chosen) - len(skipped) - len(errors)} layers')
+    print(f'normals: {stats["vertices"]} vertices in {stats["parts"]} drawn parts, {stats["exact"]} with identical '
+          f'packed bytes, {stats["edge"]} components one step apart at a truncation edge, max byte difference '
+          f'{stats["max_bytes"]} (max normal error {stats["max_bytes"] / 127:.5f}); '
+          f'{stats["degenerate"]} collapsed vertices of zero-scaled parts left out')
     if errors:
         print('oracle errors:'); [print(' ', k, v) for k, v in sorted(errors.items())]
     if skipped:

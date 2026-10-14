@@ -143,6 +143,11 @@ pub enum MotionEvent {
     EnterBlock {
         state: BlockStateId,
     },
+    /// `NetherPortalBlock.entityInside`: the player's box swept through a
+    /// nether portal block.
+    InsidePortal {
+        pos: BlockPos,
+    },
 }
 pub struct PlayerMotion {
     pub fluids: horizon_world::entity_fluid::EntityFluidInteraction,
@@ -1072,6 +1077,10 @@ impl MotionWorld<'_, '_, '_> {
                     }
                     "minecraft:cobweb" => self.web_inside(),
                     "minecraft:sweet_berry_bush" => self.sweet_berry_bush_inside(state)?,
+                    "minecraft:nether_portal" => self
+                        .player
+                        .events
+                        .push(MotionEvent::InsidePortal { pos: p }),
                     _ => {}
                 }
                 // ServerPlayer.onInsideBlock
