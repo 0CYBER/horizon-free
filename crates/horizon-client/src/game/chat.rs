@@ -780,12 +780,11 @@ impl Game<'_> {
         let message = match result {
             Ok(_) => {
                 let name = path.file_name().unwrap_or_default().to_string_lossy();
-                let folder = path.parent().unwrap_or(std::path::Path::new("screenshots"));
                 let link = Text::styled(
                     name,
                     Style {
                         underlined: Some(true),
-                        click: Some(ClickEvent::OpenFile(folder.to_string_lossy().into_owned())),
+                        click: Some(ClickEvent::OpenFile(path.to_string_lossy().into_owned())),
                         ..Style::default()
                     },
                 );

@@ -39,14 +39,15 @@ fn clicking_seed_copies_the_raw_value_only_inside_the_link() {
     let font = font();
     for seed in [1, -42, i64::MIN, i64::MAX] {
         let mut chat = Chat::default();
-        add(
-            &mut chat,
-            &font,
-            Text::literal("Seed: ").append(Text::copyable(seed.to_string())),
-        );
+        let seed_text = Text::copyable(seed.to_string()).with_color(text::GOLD);
+        assert_eq!(seed_text.plain(), format!("[{seed}]"));
+        assert_eq!(seed_text.spans[0].style.color, Some(text::GOLD));
+        assert_eq!(seed_text.spans[1].style.color, Some(text::GREEN));
+        assert_eq!(seed_text.spans[2].style.color, Some(text::GOLD));
+        add(&mut chat, &font, Text::literal("Seed: ").append(seed_text));
         let expected = Some(ClickEvent::CopyToClipboard(seed.to_string()));
-        let start = 4.0 + f64::from(font.width("Seed: "));
-        let end = start + f64::from(font.width(&format!("[{seed}]")));
+        let start = 4.0 + f64::from(font.width("Seed: ["));
+        let end = start + f64::from(font.width(&seed.to_string()));
         assert_eq!(chat.click_at(&font, 360, start, 315.0), expected);
         assert_eq!(chat.click_at(&font, 360, end - 0.5, 315.0), expected);
         for (x, y) in [
@@ -64,7 +65,7 @@ fn clicking_seed_copies_the_raw_value_only_inside_the_link() {
 #[test]
 fn click_targets_match_rendered_spans_when_scaled_wrapped_and_scrolled() {
     let font = font();
-    let folder = ClickEvent::OpenFile("/tmp/My screenshots/世界".into());
+    let screenshot = ClickEvent::OpenFile("/tmp/My screenshots/世界.png".into());
     for scale in [0.5, 0.75, 1.0] {
         for line_spacing in [0.0, 0.5, 1.0] {
             let mut chat = Chat::default();
@@ -78,7 +79,7 @@ fn click_targets_match_rendered_spans_when_scaled_wrapped_and_scrolled() {
                     Text::literal("Saved screenshot as ").append(Text::styled(
                         "2026-10-14_18.55.14.png",
                         Style {
-                            click: Some(folder.clone()),
+                            click: Some(screenshot.clone()),
                             bold: Some(true),
                             underlined: Some(true),
                             ..Style::default()

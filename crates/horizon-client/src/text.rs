@@ -44,7 +44,8 @@ pub fn named_color(name: &str) -> Option<u32> {
 pub enum ClickEvent {
     SuggestCommand(String),
     CopyToClipboard(String),
-    /// A local file or directory to open with the system handler.
+    /// A local file to open with the system handler.
+    /// Only allow this in locally constructed messages, never server/LAN text.
     OpenFile(String),
 }
 
@@ -145,11 +146,16 @@ impl Text {
     /// ComponentUtils.copyOnClickText: a green, bracketed clipboard link.
     pub fn copyable(s: impl Into<String>) -> Self {
         let s = s.into();
-        Self::literal(format!("[{s}]")).with_style(&Style {
-            click: Some(ClickEvent::CopyToClipboard(s)),
-            hover: Some(Box::new(Self::translate("chat.copy.click", &[]))),
-            ..Style::color(GREEN)
-        })
+        Self::literal("[")
+            .append(Self::styled(
+                s.clone(),
+                Style {
+                    click: Some(ClickEvent::CopyToClipboard(s)),
+                    hover: Some(Box::new(Self::translate("chat.copy.click", &[]))),
+                    ..Style::color(GREEN)
+                },
+            ))
+            .append("]")
     }
     /// LocateCommand's coordinate link: suggest a teleport without executing it.
     /// Structure and POI results preserve the player's current height (`~`).
@@ -565,8 +571,8 @@ mod tests {
                 json!({"action": "copy_to_clipboard", "value": "-9223372036854775808"}),
             ),
             (
-                ClickEvent::OpenFile("/tmp/My screenshots".into()),
-                json!({"action": "open_file", "path": "/tmp/My screenshots"}),
+                ClickEvent::OpenFile("/tmp/My screenshots/世界.png".into()),
+                json!({"action": "open_file", "path": "/tmp/My screenshots/世界.png"}),
             ),
         ] {
             let style = Style {
@@ -578,11 +584,11 @@ mod tests {
             assert_eq!(text.spans[0].style.click, Some(event));
             let child = Text::copyable("42").with_style(&style);
             assert_eq!(
-                child.spans[0].style.click,
+                child.spans[1].style.click,
                 Some(ClickEvent::CopyToClipboard("42".into()))
             );
             assert_eq!(
-                child.component()["click_event"],
+                child.component()["extra"][0]["click_event"],
                 json!({"action": "copy_to_clipboard", "value": "42"})
             );
         }
