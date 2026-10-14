@@ -130,7 +130,7 @@ Commands block until the action is done and reply with what happened; errors are
 
 ## Build from source
 
-For developers. Requirements: Rust 1.90 or newer, Python 3.10 or newer, JDK 25, and on Linux the ALSA development headers (`libasound2-dev` on Debian and Ubuntu). Development and the vanilla harnesses run on Linux.
+For developers. Requirements: Rust 1.90 or newer, Python 3.10 or newer, JDK 25, and on Linux the ALSA and udev development headers (`libasound2-dev libudev-dev` on Debian and Ubuntu). Development and the vanilla harnesses run on Linux.
 
 Horizon contains no game files and never downloads them. It builds its resources from **your own copy** of Minecraft: Java Edition 26.3, verified against the checksums in `research-lock.json`:
 

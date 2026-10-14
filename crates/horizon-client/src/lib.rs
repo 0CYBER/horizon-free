@@ -53,6 +53,7 @@ pub mod flatgen;
 pub mod fog;
 pub mod font;
 pub mod front;
+pub mod gamepad;
 pub mod gamerules;
 pub mod gfx;
 pub mod gizmos;
