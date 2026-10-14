@@ -633,6 +633,9 @@ struct Game<'a> {
     fullscreen: horizon_client::window::FullscreenState,
     /// MouseHandler's accumulated look and wheel state.
     mouse: MouseLook,
+    /// An agent moved the mouse (`mouse-move`) since the pointer was last
+    /// grabbed or released: its motion turns the view like a grabbed pointer.
+    agent_pointer: bool,
     /// `Options.smoothCamera` (cinematic camera), not persisted.
     smooth_camera: bool,
     /// Sneak, sprint, attack and use as ToggleKeyMappings.
@@ -2988,20 +2991,28 @@ impl Game<'_> {
         self.left = self.toggles.is_down(2);
         self.right = self.toggles.is_down(3);
     }
-    /// `MouseHandler.handleAccumulatedMovement` and `Entity.turn`, once per frame.
-    fn apply_mouse_look(&mut self) {
-        let look = LookOptions {
+    /// The options `MouseHandler.turnPlayer` reads.
+    fn look_options(&self) -> LookOptions {
+        LookOptions {
             sensitivity: f64::from(self.settings.sensitivity),
             smooth_camera: self.smooth_camera,
             scoping: self.scoping(),
             invert_x: self.settings.invert_x,
             invert_y: self.settings.invert_y,
-        };
+        }
+    }
+    /// `MouseHandler.handleAccumulatedMovement` and `Entity.turn`, once per frame.
+    /// An agent moving the mouse (`mouse-move`) counts as a grabbed pointer in
+    /// an active window, as it cannot grab the real one.
+    fn apply_mouse_look(&mut self) {
+        let look = self.look_options();
         let time = self.started.elapsed().as_secs_f64();
-        let grabbed = self.captured && self.screen == Screen::Playing && self.player.is_some();
-        if let Some((xo, yo)) =
-            self.mouse
-                .handle_accumulated_movement(time, self.focused, grabbed, look)
+        let pointer = self.captured || self.agent_pointer;
+        let grabbed = pointer && self.screen == Screen::Playing && self.player.is_some();
+        let active = self.focused || self.agent_pointer;
+        if let Some((xo, yo)) = self
+            .mouse
+            .handle_accumulated_movement(time, active, grabbed, look)
         {
             let mut rotation = Rotation {
                 x_rot: self.pitch,
@@ -3024,6 +3035,8 @@ impl Game<'_> {
             ) || self.book.is_some())
     }
     fn capture(&mut self, capture: bool) {
+        // The real pointer takes over from an agent's.
+        self.agent_pointer = false;
         let Some(window) = &self.window else { return };
         if capture {
             self.mouse.set_ignore_first_move();
@@ -8897,6 +8910,7 @@ pub fn run() -> Result<()> {
         modifiers: winit::keyboard::ModifiersState::empty(),
         fullscreen: horizon_client::window::FullscreenState::new(false),
         mouse: MouseLook::default(),
+        agent_pointer: false,
         smooth_camera: false,
         toggles: Default::default(),
         was_playing: false,
