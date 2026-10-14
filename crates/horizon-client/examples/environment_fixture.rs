@@ -64,6 +64,10 @@ fn main() -> horizon_client::Result<()> {
         );
         put("visual/fog_start_distance", format!("{:?}", sky.fog_start));
         put("visual/fog_end_distance", format!("{:?}", sky.fog_end));
+        put(
+            "visual/cloud_fog_end_distance",
+            format!("{:?}", sky.cloud_fog_end),
+        );
         out.push_str(&row);
         out.push_str("}\n");
     }

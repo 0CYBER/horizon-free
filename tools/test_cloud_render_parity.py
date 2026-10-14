@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Compare fancy cloud exterior/interior faces and nearest-first mesh traversal with 26.3."""
+"""Compare fancy cloud exterior/interior faces, nearest-first mesh traversal and the
+cell radius of the Cloud Distance option (independent of the render distance) with 26.3."""
 try:
     from . import lab, oracle_harness as harness
 except ImportError:
@@ -16,6 +17,9 @@ def make_input(build):
     for radius in range(11):
         for bottom in (-5, -4, 0, 1):
             cases.append(f"1 {radius} 0 {bottom} 0\n")
+    # CloudRenderer.prepare: radius from options.cloudRange (2..128 chunks).
+    for cloud_range in (2, 3, 4, 7, 8, 12, 32, 64, 127, 128):
+        cases.append(f"2 {cloud_range} 0 -5 0\n")
     inputs = build / "inputs.txt"
     inputs.write_text("".join(cases))
     return inputs, len(cases)

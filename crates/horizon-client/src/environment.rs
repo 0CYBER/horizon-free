@@ -139,6 +139,8 @@ pub struct Sky {
     /// Environmental fog (`visual/fog_start_distance` / `fog_end_distance`).
     pub fog_start: f32,
     pub fog_end: f32,
+    /// `visual/cloud_fog_end_distance`.
+    pub cloud_fog_end: f32,
 }
 impl Environment {
     pub fn load(root: &Path) -> Result<Self> {
@@ -299,6 +301,10 @@ impl Environment {
                 .base
                 .get("minecraft:visual/fog_end_distance")
                 .map_or(1024.0, |v| v[0]),
+            cloud_fog_end: self
+                .base
+                .get("minecraft:visual/cloud_fog_end_distance")
+                .map_or(2048.0, |v| v[0]),
         }
     }
 }

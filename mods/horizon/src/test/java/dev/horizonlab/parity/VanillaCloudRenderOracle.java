@@ -29,13 +29,17 @@ public final class VanillaCloudRenderOracle {
             int kind = Integer.parseInt(parts[0]), x = Integer.parseInt(parts[1]), z = Integer.parseInt(parts[2]);
             int bottom = Integer.parseInt(parts[3]), neighbors = Integer.parseInt(parts[4]);
             Object pos = positions[bottom > 0 ? 2 : bottom + 4 < 0 ? 0 : 1];
-            ByteBuffer buffer = ByteBuffer.allocate(100000);
+            ByteBuffer buffer = ByteBuffer.allocate(kind == 2 ? 4_000_000 : 100000);
             if (kind == 0) {
                 long flags = ((neighbors & 1) != 0 ? 8 : 0) | ((neighbors & 2) != 0 ? 2 : 0)
                     | ((neighbors & 4) != 0 ? 1 : 0) | ((neighbors & 8) != 0 ? 4 : 0);
                 cell.invoke(renderer, pos, buffer, x, z, 0xfffffff0L | flags);
-            } else {
+            } else if (kind == 1) {
                 mesh.invoke(renderer, pos, buffer, 0, 0, true, x);
+            } else {
+                // prepare(..., range, ...): radiusCells from the Cloud Distance option.
+                int radiusBlocks = x * 16;
+                mesh.invoke(renderer, pos, buffer, 0, 0, true, net.minecraft.util.Mth.ceil(radiusBlocks / 12.0F));
             }
             output.append(index++);
             buffer.flip();

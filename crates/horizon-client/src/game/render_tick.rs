@@ -83,6 +83,7 @@ impl Game<'_> {
             ],
             biome,
             render_distance_chunks: self.streaming.radius,
+            cloud_range_chunks: self.settings.cloud_range,
             camera_y: camera.y,
             min_y: MIN_Y,
             flat: false,
