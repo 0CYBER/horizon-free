@@ -1,64 +1,147 @@
 name: launcher
-# Builds the launcher on Linux, macOS and Windows. A pushed `launcher-vX.Y.Z` tag also puts the
-# three archives on a draft GitHub release of that tag, to publish by hand. Horizon's own
-# releases are tagged `vYYYY.MM.DD`; the launcher reads only `launcher-v*` releases for itself.
+# Builds the launcher on Linux, macOS and Windows, and releases it by itself (docs/release-flow.md): after a
+# push to main that changes the launcher or what it builds in (crates/horizon-prepare, crates/horizon-theme),
+# every hour (a release the cooldown held goes out) and by hand, tools/release_train.py decides as for the game.
+# A release is launcher-vX.Y.Z: the patch after the last launcher tag, or the next minor when a merged pull
+# request is labelled feature. The version is given to the build (HORIZON_LAUNCHER_VERSION): no bump commits.
+# Never marked latest. Pushes to launcher branches only build. RELEASES_PAUSED=1 stops releases.
+#   gh workflow run launcher --ref <branch>                    # dry run: builds everything, publishes nothing
+#   gh workflow run launcher --ref main -f dry_run=false -f force=true
 
 on:
-  workflow_dispatch:
   push:
-    branches: [launcher, 'launcher-*']
-    tags: ['launcher-v*']
+    branches: [main, launcher, 'launcher-*']
+    paths:
+      - 'launcher/**'
+      - 'crates/horizon-prepare/**'
+      - 'crates/horizon-theme/**'
+      - '.github/workflows/launcher.yml'
+  schedule:
+    - cron: '47 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build everything and write the notes, but publish nothing
+        type: boolean
+        default: true
+      force:
+        description: Release even without launcher changes, within the cooldown or while paused
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
+concurrency:
+  group: launcher-${{ github.ref == 'refs/heads/main' && 'release' || github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  decide:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      release: ${{ steps.decide.outputs.release }}
+      tag: ${{ steps.decide.outputs.tag }}
+      head: ${{ steps.decide.outputs.head }}
+      version: ${{ steps.decide.outputs.version }}
+      dry_run: ${{ steps.mode.outputs.dry_run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: mode
+        # Off main every run is a dry run (a launcher branch's push only builds).
+        run: echo "dry_run=${{ github.ref != 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && inputs.dry_run) }}" >> "$GITHUB_OUTPUT"
+      - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASES_PAUSED: ${{ vars.RELEASES_PAUSED }}
+          # A push or a run off main builds its own commit; otherwise main's newest commit with green checks.
+          HEAD_SHA: ${{ (github.event_name == 'push' || steps.mode.outputs.dry_run == 'true') && github.sha || '' }}
+          FORCE: ${{ inputs.force && 'yes' || '' }}
+        run: |
+          python3 tools/release_train.py decide --kind launcher ${HEAD_SHA:+--head "$HEAD_SHA"} ${FORCE:+--force} | tee decision.json
+          echo "### $(jq -r '.reason' decision.json)" >> "$GITHUB_STEP_SUMMARY"
+          tag=$(jq -r '.tag' decision.json)
+          echo "version=${tag#launcher-v}" >> "$GITHUB_OUTPUT"
+          # A dry run (and a launcher branch's push) builds whatever the decision.
+          if [[ "${{ steps.mode.outputs.dry_run }}" == true ]]; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "head=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: decide
+    if: needs.decide.outputs.release == 'true'
+    name: build ${{ matrix.name }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - name: linux
+            os: ubuntu-22.04
             asset: horizon-launcher-linux-x86_64.tar.gz
             binary: horizon-launcher
-          - os: macos-latest
+          - name: macos
+            mac: true
             asset: horizon-launcher-macos-arm64.zip
             binary: horizon-launcher
-          - os: windows-latest
+          - name: windows
+            os: windows-latest
             asset: horizon-launcher-windows-x64.zip
             binary: horizon-launcher.exe
             # The C runtime linked in: without it the launcher asks for VCRUNTIME140.dll,
             # which only the Visual C++ redistributable installs.
             rustflags: -C target-feature=+crt-static
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.mac && (vars.MAC_RUNNER || 'ludovics-mac-mini') || matrix.os }}
+    timeout-minutes: 40
     env:
       RUSTFLAGS: ${{ matrix.rustflags }}
       # Horizon's Azure app for Microsoft sign-in (docs/microsoft-account.md): a repository
       # variable, not a secret. Unset, the launcher says sign-in is not configured.
       HORIZON_MSA_CLIENT_ID: ${{ vars.HORIZON_MSA_CLIENT_ID }}
+      # The release's version, built in (launcher/src/backend.rs VERSION); a launcher branch's build keeps
+      # Cargo.toml's.
+      HORIZON_LAUNCHER_VERSION: ${{ (github.event_name != 'push' || github.ref == 'refs/heads/main') && needs.decide.outputs.version || '' }}
     defaults:
       run:
         working-directory: launcher
         shell: bash
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.decide.outputs.head }}
+          persist-credentials: false
+          # The Mac mini's runner keeps its target/ between runs.
+          clean: ${{ runner.environment == 'github-hosted' }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        if: runner.environment == 'github-hosted'
         with:
           workspaces: launcher
+          shared-key: launcher-${{ matrix.name }}
       - name: Linux libraries GPUI links to
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libfontconfig-dev libvulkan-dev libasound2-dev
-      - name: The tag matches Cargo.toml
-        if: startsWith(github.ref, 'refs/tags/launcher-v')
-        run: grep -qx "version = \"${GITHUB_REF_NAME#launcher-v}\"" Cargo.toml
       - run: cargo test --release --locked --lib
       - run: cargo build --release --locked
+      - name: The version is the release's
+        run: |
+          out=$(target/release/${{ matrix.binary }} --version)
+          echo "$out"
+          expected="${HORIZON_LAUNCHER_VERSION:-$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)}"
+          [[ "$out" == "horizon-launcher $expected" ]] || { echo "::error::expected horizon-launcher $expected"; exit 1; }
       - name: Only system libraries
-        if: runner.os == 'Windows'
-        run: python ../tools/check_imports.py target/release/${{ matrix.binary }}
+        run: |
+          file=target/release/${{ matrix.binary }}
+          case "$RUNNER_OS" in
+            Windows) python ../tools/check_imports.py "$file" ;;
+            macOS) others=$(otool -L "$file" | tail -n +2 | awk '{print $1}' | grep -v -E '^(/usr/lib/|/System/Library/)' || true)
+                   [[ -z "$others" ]] || { echo "::error::links $others"; exit 1; } ;;
+          esac
       - name: Smoke test
         env:
           HORIZON_LAUNCHER_NO_SELF_UPDATE: '1'
@@ -67,10 +150,10 @@ jobs:
           set -euo pipefail
           export HORIZON_LAUNCHER_HOME="${RUNNER_TEMP//\\//}/horizon-launcher-smoke"
           export HORIZON_HOME="$HORIZON_LAUNCHER_HOME/game"
+          rm -rf "$HORIZON_LAUNCHER_HOME"
           launcher="$PWD/target/release/${{ matrix.binary }}"
           # GitHub's API rate-limits shared runner addresses now and then: try a few times.
           retry() { for i in 1 2 3 4; do "$@" && return 0; sleep $((i * 15)); done; return 1; }
-          "$launcher" --version
           retry "$launcher" versions
           retry "$launcher" install latest
           "$launcher" versions --installed
@@ -86,16 +169,16 @@ jobs:
           soft() { if [[ "$RUNNER_OS" == "Linux" ]]; then "$@" || echo "::warning::$* failed"; else "$@"; fi; }
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             python ../tools/check_imports.py "$client"
-            python ../tools/check_imports.py "$launcher"
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
             soft python3 ../tools/check_imports.py "$client"
           fi
           # The client starts: --help prints before any window or GPU is needed.
           help() { "$client" --help > "$RUNNER_TEMP/help.txt" 2>&1 && head -3 "$RUNNER_TEMP/help.txt" && grep -q -- '--resources' "$RUNNER_TEMP/help.txt"; }
           soft help
+          rm -rf "$HORIZON_LAUNCHER_HOME"
       - name: Package
         run: |
-          mkdir -p dist
+          rm -rf dist ${{ matrix.asset }} && mkdir -p dist
           cp target/release/${{ matrix.binary }} dist/
           cd dist
           if [[ "${{ matrix.asset }}" == *.tar.gz ]]; then
@@ -109,23 +192,44 @@ jobs:
         with:
           name: ${{ matrix.asset }}
           path: launcher/${{ matrix.asset }}
+          retention-days: 7
 
   release:
-    if: startsWith(github.ref, 'refs/tags/launcher-v')
-    needs: build
+    needs: [decide, build]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 tools/release_train.py notes --kind launcher --tag "${{ needs.decide.outputs.tag }}" \
+            --head "${{ needs.decide.outputs.head }}" --out notes > /dev/null
+          { echo "## $(cat notes/title.txt)"; echo; cat notes/body.md; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
-      # A draft, and never marked latest: Horizon's own releases stay the repository's latest.
-      - uses: softprops/action-gh-release@v2
+      # Never marked latest: Horizon's own releases stay the repository's latest.
+      - name: Publish ${{ needs.decide.outputs.tag }}
+        if: needs.decide.outputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.decide.outputs.tag }}
+        run: |
+          gh release create "$TAG" --target "${{ needs.decide.outputs.head }}" --title "$(cat notes/title.txt)" \
+            --notes-file notes/body.md --latest=false dist/horizon-launcher-*
+      - name: Dry run, the release that would be published
+        if: needs.decide.outputs.dry_run == 'true'
+        run: |
+          echo "Would publish ${{ needs.decide.outputs.tag }} at ${{ needs.decide.outputs.head }}: $(cat notes/title.txt)"
+          ls -l dist
+      - uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ github.ref_name }}
-          name: Horizon launcher ${{ github.ref_name }}
-          draft: true
-          make_latest: false
-          files: dist/*
+          name: launcher-release-notes
+          path: notes/

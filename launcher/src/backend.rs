@@ -10,10 +10,18 @@ use std::sync::{Arc, Mutex};
 
 pub const REPO: &str = "ludovic111/horizon";
 pub const README_URL: &str = "https://github.com/ludovic111/horizon/blob/main/launcher/README.md";
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// This launcher's version: the release workflow sets `HORIZON_LAUNCHER_VERSION` from the
+/// `launcher-vX.Y.Z` tag it builds (no version-bump commits); other builds say Cargo.toml's.
+pub const VERSION: &str = version_or(option_env!("HORIZON_LAUNCHER_VERSION"));
 /// Launcher releases are tagged `launcher-vX.Y.Z`; Horizon's own are `vYYYY.MM.DD`.
 pub const LAUNCHER_TAG_PREFIX: &str = "launcher-v";
-const AGENT: &str = concat!("horizon-launcher/", env!("CARGO_PKG_VERSION"));
+
+const fn version_or(injected: Option<&'static str>) -> &'static str {
+    match injected {
+        Some(v) if !v.is_empty() => v,
+        _ => env!("CARGO_PKG_VERSION"),
+    }
+}
 
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct Release {
@@ -63,7 +71,9 @@ const CLIENT: &str = if cfg!(windows) {
 };
 
 fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new().user_agent(AGENT).build()
+    ureq::AgentBuilder::new()
+        .user_agent(&format!("horizon-launcher/{VERSION}"))
+        .build()
 }
 
 fn get(url: &str) -> Result<ureq::Response, String> {
@@ -176,11 +186,53 @@ pub fn releases() -> Result<Vec<Release>, String> {
 
 /// Published launcher releases (`launcher-v…`), newest first, with this platform's archive.
 pub fn launcher_releases() -> Result<Vec<Release>, String> {
-    Ok(parse_releases(
-        &release_list()?,
-        LAUNCHER_ASSET,
-        is_launcher_tag,
-    ))
+    Ok(launcher_releases_in(&release_list()?))
+}
+
+/// The launcher releases in `list` (the newest 100 releases). Game releases come out several times
+/// a day, so the newest launcher release can be older than all of those: then the newest
+/// `launcher-v` tags are looked up one by one (a draft's tag is skipped: it has no public release).
+fn launcher_releases_in(list: &serde_json::Value) -> Vec<Release> {
+    let found = parse_releases(list, LAUNCHER_ASSET, is_launcher_tag);
+    if found.iter().any(|r| r.asset.is_some()) {
+        return found;
+    }
+    let json = |url: String| -> Result<serde_json::Value, String> {
+        get(&url)?.into_json().map_err(|e| e.to_string())
+    };
+    let api = format!("https://api.github.com/repos/{REPO}");
+    let Ok(refs) = json(format!(
+        "{api}/git/matching-refs/tags/{LAUNCHER_TAG_PREFIX}"
+    )) else {
+        return found;
+    };
+    for tag in newest_launcher_tags(&refs).into_iter().take(3) {
+        if let Ok(release) = json(format!("{api}/releases/tags/{tag}")) {
+            let one = parse_releases(
+                &serde_json::json!([release]),
+                LAUNCHER_ASSET,
+                is_launcher_tag,
+            );
+            if one.iter().any(|r| r.asset.is_some()) {
+                return one;
+            }
+        }
+    }
+    found
+}
+
+/// The `launcher-vX.Y.Z` tags in GitHub's matching-refs answer, newest first.
+fn newest_launcher_tags(refs: &serde_json::Value) -> Vec<String> {
+    let mut tags: Vec<String> = refs
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| r["ref"].as_str()?.strip_prefix("refs/tags/"))
+        .filter(|t| is_launcher_tag(t))
+        .map(String::from)
+        .collect();
+    tags.sort_by(|a, b| compare_versions(b, a));
+    tags
 }
 
 /// The newest Horizon release that has a build for this platform.
@@ -1125,7 +1177,7 @@ pub fn check_updates() -> Result<Updates, String> {
     let list = release_list()?;
     Ok(Updates {
         horizon: horizon_update(&parse_releases(&list, ASSET, is_game_tag), &installed()),
-        launcher: launcher_update(&parse_releases(&list, LAUNCHER_ASSET, is_launcher_tag)),
+        launcher: launcher_update(&launcher_releases_in(&list)),
     })
 }
 
@@ -1561,6 +1613,47 @@ mod tests {
         assert_eq!(offered(&[]), Some("v2026.10.15".into()));
         // Who installed the withdrawn one is not told to "update" to an older version.
         assert_eq!(offered(&["v2026.10.15.1", "v2026.10.14"]), None);
+    }
+
+    #[test]
+    fn the_version_is_the_one_the_release_workflow_injects() {
+        assert_eq!(version_or(Some("0.4.2")), "0.4.2");
+        assert_eq!(version_or(Some("")), env!("CARGO_PKG_VERSION"));
+        assert_eq!(version_or(None), env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            VERSION,
+            option_env!("HORIZON_LAUNCHER_VERSION")
+                .filter(|v| !v.is_empty())
+                .unwrap_or(env!("CARGO_PKG_VERSION"))
+        );
+        // Self-update compares releases with that version: this launcher's own release is no update.
+        let r = |tag: String| Release {
+            tag,
+            name: String::new(),
+            body: String::new(),
+            date: String::new(),
+            asset: Some(("u".into(), 1)),
+        };
+        assert!(launcher_update(&[r(format!("{LAUNCHER_TAG_PREFIX}{VERSION}"))]).is_none());
+        assert_eq!(
+            parse_version_output(&format!("horizon-launcher {VERSION}\n")),
+            Some(VERSION)
+        );
+    }
+
+    #[test]
+    fn launcher_tags_from_matching_refs_newest_first() {
+        let refs = serde_json::json!([
+            {"ref": "refs/tags/launcher-v0.1.9"},
+            {"ref": "refs/tags/launcher-v0.1.10"},
+            {"ref": "refs/tags/launcher-vnext"},
+            {"ref": "refs/tags/v2026.10.15"},
+            {"ref": "refs/tags/launcher-v0.2.0"},
+        ]);
+        assert_eq!(
+            newest_launcher_tags(&refs),
+            ["launcher-v0.2.0", "launcher-v0.1.10", "launcher-v0.1.9"]
+        );
     }
 
     #[test]
