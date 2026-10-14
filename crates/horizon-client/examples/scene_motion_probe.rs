@@ -458,7 +458,7 @@ fn main() -> Result<()> {
                 "weaving" => world.player.status.weaving = op["value"].as_bool().unwrap(),
                 "flying" => {
                     let flying = op["value"].as_bool().unwrap();
-                    world.player.may_fly = flying;
+                    world.player.may_fly = op["may_fly"].as_bool().unwrap_or(flying);
                     world.player.flying = flying;
                 }
                 "trigger" => world.player.jump_trigger_time = op["value"].as_i64().unwrap() as i32,

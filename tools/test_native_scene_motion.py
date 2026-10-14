@@ -340,6 +340,18 @@ def corpus():
             yield dict(position=vec((25.5,4,25.5)),ops=[op('seed',seed),op('block',name='minecraft:'+name,position=[25,3,25],properties=properties),
                 *[v for _ in range(8) for v in [op('fall',bits(8)),op('landing',bits(-.1),ground=True,position=[25,3,25])]],
                 op('block',name='minecraft:stone',position=[25,3,25])])
+    # Creative players are exempt even while walking. Compare small/big falls,
+    # block damage multipliers and switching back to survival on the same actor.
+    for name in ['stone','hay_block','pointed_dripstone']:
+        for distance in [4,8,20]:
+            for flying in [False,True]:
+                ops=[op('block',name='minecraft:'+name,position=[25,3,25]),
+                     op('flying',flying,may_fly=True),op('fall',bits(distance)),
+                     op('landing',bits(-.125),ground=True,position=[25,3,25]),
+                     op('flying',False,may_fly=False),op('fall',bits(distance)),
+                     op('landing',bits(-.125),ground=True,position=[25,3,25]),
+                     op('block',name='minecraft:stone',position=[25,3,25])]
+                yield dict(position=vec((25.5,4,25.5)),ops=ops)
     for safe in [0,1,3,6,20]:
         for multiplier in [0,.5,1,2]:
             for impact in [None,3,4,4.1,7,18]:

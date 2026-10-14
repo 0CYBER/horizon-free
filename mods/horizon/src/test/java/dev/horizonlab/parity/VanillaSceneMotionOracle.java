@@ -392,7 +392,7 @@ public final class VanillaSceneMotionOracle {
                         case "frozen"->p.frozen=op.get("value").getAsInt();
                         case "portal_tick"->p.portalTick(op.get("creative").getAsBoolean());
                         case "weaving"->p.weaving=op.get("value").getAsBoolean();
-                        case "flying"->{var a=p.getAbilities();a.mayfly=a.flying=op.get("value").getAsBoolean();}
+                        case "flying"->{var a=p.getAbilities();a.flying=op.get("value").getAsBoolean();a.mayfly=op.has("may_fly")?op.get("may_fly").getAsBoolean():a.flying;}
                         case "trigger"->trigger.setInt(p,op.get("value").getAsInt());
                         case "delay"->delay.setInt(p,op.get("value").getAsInt());
                         case "ack_attributes"->{p.attrs.getAttributesToUpdate().clear();p.attrs.getAttributesToSync().clear();}
