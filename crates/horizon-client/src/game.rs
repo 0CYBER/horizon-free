@@ -3258,18 +3258,54 @@ impl Game<'_> {
                     | Screen::WorldOptions
             ) || self.book.is_some())
     }
+    /// `MouseHandler.grabMouse` / `releaseMouse`. Both put the pointer at
+    /// the window's centre, so a screen opened from gameplay (inventory,
+    /// chest, pause, chat, sign, book, death) starts with the cursor in the
+    /// middle instead of wherever the system last left it. Releasing when
+    /// already released does nothing, so moving from screen to screen keeps
+    /// the cursor where it is. Like GLFW's `glfwSetCursorPos`, nothing warps
+    /// while the window is unfocused (losing focus releases the pointer).
     fn capture(&mut self, capture: bool) {
         // The real pointer takes over from an agent's.
         self.agent_pointer = false;
         let Some(window) = &self.window else { return };
+        let size = self.renderer.as_ref().map_or_else(
+            || window.inner_size().into(),
+            |r| [r.config.width, r.config.height],
+        );
+        let centre =
+            winit::dpi::PhysicalPosition::new(f64::from(size[0]) / 2.0, f64::from(size[1]) / 2.0);
+        let warp = |window: &Window| {
+            let _ = window.set_cursor_position(centre);
+        };
         if capture {
             self.mouse.set_ignore_first_move();
             self.captured = window
                 .set_cursor_grab(CursorGrabMode::Locked)
                 .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined))
                 .is_ok();
+            if self.captured && self.focused {
+                warp(window);
+            }
         } else {
-            let _ = window.set_cursor_grab(CursorGrabMode::None);
+            if self.captured {
+                // Wayland moves a pointer only as the locked pointer's
+                // position hint, which the compositor applies as the lock
+                // goes (sway and Hyprland do): set it before ungrabbing.
+                // X11, Windows and macOS warp, so warp again once free
+                // (Wayland refuses that one).
+                if self.focused {
+                    warp(window);
+                }
+                let _ = window.set_cursor_grab(CursorGrabMode::None);
+                if self.focused {
+                    warp(window);
+                }
+                let scale = HudBatch::new(size).scale;
+                self.cursor = (size[0] as f32 / 2.0 / scale, size[1] as f32 / 2.0 / scale);
+            } else {
+                let _ = window.set_cursor_grab(CursorGrabMode::None);
+            }
             self.captured = false;
         }
         window.set_cursor_visible(!self.captured);
