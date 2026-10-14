@@ -187,20 +187,27 @@ jobs:
           rm -rf "$HORIZON_LAUNCHER_HOME"
       - name: Package
         run: |
-          rm -rf dist ${{ matrix.asset }} && mkdir -p dist
-          cp target/release/${{ matrix.binary }} dist/
-          cd dist
-          if [[ "${{ matrix.asset }}" == *.tar.gz ]]; then
-            tar czf ../${{ matrix.asset }} ${{ matrix.binary }}
-          elif [[ "$RUNNER_OS" == "Windows" ]]; then
-            7z a ../${{ matrix.asset }} ${{ matrix.binary }}
+          rm -rf dist out && mkdir -p out
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            # Horizon.app, zipped (self-update) and in a .dmg (installer): packaging/macos.
+            python3 -m venv "$RUNNER_TEMP/dmg" && "$RUNNER_TEMP/dmg/bin/pip" install --quiet dmgbuild==1.6.5
+            version=${HORIZON_LAUNCHER_VERSION:-$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)}
+            DMGBUILD="$RUNNER_TEMP/dmg/bin/dmgbuild" ../packaging/macos/package.sh target/release/${{ matrix.binary }} "$version" out
+            rm -rf out/Horizon.app
           else
-            zip ../${{ matrix.asset }} ${{ matrix.binary }}
+            mkdir -p dist
+            cp target/release/${{ matrix.binary }} dist/
+            if [[ "${{ matrix.asset }}" == *.tar.gz ]]; then
+              (cd dist && tar czf ../out/${{ matrix.asset }} ${{ matrix.binary }})
+            else
+              (cd dist && 7z a ../out/${{ matrix.asset }} ${{ matrix.binary }})
+            fi
           fi
+          ls -l out
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
-          path: launcher/${{ matrix.asset }}
+          path: launcher/out/*
           retention-days: 7
 
   release:

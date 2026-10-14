@@ -34,6 +34,10 @@ gilrs = "0.11"
 # HTTPS to the Minecraft services (online-mode session join).
 ureq = { version = "2", default-features = false, features = ["tls"] }
 
+[target.'cfg(windows)'.build-dependencies]
+# The icon resource in the .exe (build.rs).
+winresource = "0.1"
+
 [features]
 # Records the call sites of mob random draws (`mob_ai_probe` traces).
 rng-trace = ["horizon-core/rng-trace"]

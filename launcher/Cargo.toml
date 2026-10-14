@@ -35,5 +35,9 @@ keyring = { version = "3", features = ["apple-native"] }
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
 
+[target.'cfg(windows)'.build-dependencies]
+# The icon resource in the .exe (build.rs).
+winresource = "0.1"
+
 [profile.release]
 strip = true
