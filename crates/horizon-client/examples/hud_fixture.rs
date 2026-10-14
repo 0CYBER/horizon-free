@@ -93,8 +93,9 @@ fn encode(draws: &[GuiDraw]) -> Vec<Value> {
                 h,
                 region,
                 color,
+                blend,
             } => {
-                json!({"type": "sprite", "sprite": sprite, "x": x, "y": y, "w": w, "h": h, "region": region, "color": *color as i32})
+                json!({"type": "sprite", "sprite": sprite, "x": x, "y": y, "w": w, "h": h, "region": region, "color": *color as i32, "pipeline": blend.pipeline()})
             }
             GuiDraw::AtlasSprite {
                 sprite,
@@ -190,7 +191,12 @@ fn decorations(c: &Value, atlas: &HudAtlas) -> Vec<GuiDraw> {
     // Spectators only see it over a spectatable target (none here).
     if c["crosshair"].as_bool().unwrap_or(false) && mode != "spectator" {
         let attack = (indicator == "CROSSHAIR").then(|| float("attackScale", 1.0));
-        draws.extend(hud_layout::crosshair(w, h, attack, false));
+        // crosshairPickEntity: absent, or a living entity alive or not.
+        let target = c["target"].as_bool();
+        let full = attack.is_some_and(|a| {
+            hud_layout::full_attack_indicator(a, float("attackDelay", 5.0), target)
+        });
+        draws.extend(hud_layout::crosshair(w, h, attack, full));
     }
     if mode != "spectator" {
         let pop = |v: &Value| v.as_f64().map(|p| p as f32 - partial);

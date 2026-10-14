@@ -15,6 +15,10 @@ def decorations(rng, n):
         'crosshair': rng.random() < 0.7,
         'attackIndicator': rng.choice(['OFF', 'CROSSHAIR', 'HOTBAR']),
         'attackScale': rng.choice([1.0, round(rng.random(), 3), 0.0, 0.999]),
+        # Minecraft.crosshairPickEntity (a living entity, alive or dead) and
+        # getCurrentItemAttackStrengthDelay, for the full indicator.
+        'target': rng.choice([None, True, True, False]),
+        'attackDelay': rng.choice([5.0, 12.5, 4.0, 20.0, 5.0001, 10.0]),
         'selected': rng.randint(0, 8), 'rightHanded': rng.random() < 0.7,
         'slots': [rng.choice([None, 0, 0, 3, 5]) if rng.random() < 0.6 else None for _ in range(9)],
         'offhand': rng.choice([None, None, 0, 4]), 'partial': round(rng.random(), 3),
@@ -30,6 +34,8 @@ def decorations(rng, n):
         'xpProgress': rng.choice([0.0, round(rng.random(), 4), 0.999]), 'xpLevel': rng.choice([0, 1, 7, 30, 123, 4000]),
         'experienceBar': rng.random() < 0.8,
     }
+    if case['target'] and rng.random() < 0.5:
+        case['attackScale'] = 1.0
     if case['damageCooldown'] and rng.random() < 0.5:
         case['healthBlinkTime'] = case['tick'] + rng.randint(1, 20)
     if rng.random() < 0.15:
