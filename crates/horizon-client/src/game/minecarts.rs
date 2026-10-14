@@ -1077,7 +1077,7 @@ impl Game<'_> {
         true
     }
     /// A block model's faces under `m` (block space 0..1), lit flat.
-    fn block_model_vertices(
+    pub(super) fn block_model_vertices(
         &self,
         state: BlockStateId,
         m: glam::Mat4,
