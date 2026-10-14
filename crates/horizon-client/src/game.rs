@@ -5937,6 +5937,7 @@ impl Game<'_> {
         if self.remote.is_none() {
             self.stats.custom("leave_game", 1);
         }
+        self.lan_close(false);
         self.save_game()
     }
     fn close_world(&mut self) -> Result<()> {
@@ -5950,6 +5951,7 @@ impl Game<'_> {
         }
         self.stats.custom("leave_game", 1);
         self.save_game()?;
+        self.lan_close(false);
         horizon_client::crash::clear_detail("World");
         self.streaming.paused = true;
         self.world = World::new(self.res.facts.air, 0);
