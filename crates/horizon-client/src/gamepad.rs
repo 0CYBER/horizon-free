@@ -589,6 +589,29 @@ pub fn nearest(at: (f32, f32), targets: &[(f32, f32)], radius: f32) -> Option<us
         .map(|(i, _)| i)
 }
 
+/// Damage taken, from the player's health between polls. The baseline is
+/// forgotten whenever there is no player or a new player entity replaces
+/// the old one (a world loaded, a respawn, a server joined, a dimension
+/// change), so arriving with less health than before isn't damage.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct HealthWatch {
+    last: Option<f32>,
+}
+impl HealthWatch {
+    /// The health now (`None` without a player); returns the damage taken
+    /// since the last call.
+    pub fn observe(&mut self, health: Option<f32>) -> Option<f32> {
+        let before = std::mem::replace(&mut self.last, health);
+        match (before, health) {
+            (Some(before), Some(now)) if now < before => Some(before - now),
+            _ => None,
+        }
+    }
+    pub fn forget(&mut self) {
+        self.last = None;
+    }
+}
+
 /// What makes the pad vibrate (Bedrock-like: short, light pulses).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Rumble {
@@ -819,6 +842,21 @@ mod tests {
         assert!(!s.is_default("key.drop") && s.is_default("key.jump"));
         assert_eq!(action_caption(HOTBAR_NEXT), "Hotbar: Next Slot");
         assert_eq!(action_caption("key.jump"), "key.jump");
+    }
+
+    #[test]
+    fn health_watch_only_counts_damage_in_one_life() {
+        let mut w = HealthWatch::default();
+        assert_eq!(w.observe(Some(20.0)), None);
+        assert_eq!(w.observe(Some(15.0)), Some(5.0));
+        assert_eq!(w.observe(Some(18.0)), None, "healing");
+        // A new player entity (world, respawn, server, dimension).
+        w.forget();
+        assert_eq!(w.observe(Some(6.0)), None);
+        // No player in between (title, loading) forgets too.
+        assert_eq!(w.observe(None), None);
+        assert_eq!(w.observe(Some(2.0)), None);
+        assert_eq!(w.observe(Some(1.0)), Some(1.0));
     }
 
     #[test]

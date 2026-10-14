@@ -2653,6 +2653,7 @@ impl Game<'_> {
         }
         self.previous_position = feet;
         self.player = Some(player);
+        self.pad.player_replaced();
         self.sway = Default::default();
         self.apply_equipment();
         self.eye = 1.62;

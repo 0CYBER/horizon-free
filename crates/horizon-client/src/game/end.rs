@@ -485,6 +485,7 @@ impl Game<'_> {
         player.fall_distance = 0.0;
         self.previous_position = player.position;
         self.player = Some(player);
+        self.pad.player_replaced();
         self.sway = Default::default();
         self.apply_equipment();
         let pitch = self.world.random.next_float() * 0.4 + 0.8;

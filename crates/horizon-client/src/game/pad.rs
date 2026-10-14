@@ -6,7 +6,7 @@
 use super::{Game, Screen};
 use horizon_client::{
     Result,
-    gamepad::{self, Button, Edges, GlyphStyle, PadState, Rumble},
+    gamepad::{self, Button, Edges, GlyphStyle, HealthWatch, PadState, Rumble},
     keybinds::{KeyBinds, key_code, mouse_button},
     mouse::Rotation,
 };
@@ -52,8 +52,8 @@ pub(super) struct Pads {
     rumbles: Vec<(gilrs::ff::Effect, Instant)>,
     /// The last vibration asked for, for `pad status`.
     last_rumble: Option<(&'static str, gamepad::Pulse)>,
-    /// The player's health at the last poll (a drop is damage taken).
-    last_health: Option<f32>,
+    /// The player's health between polls (a drop is damage taken).
+    health: HealthWatch,
 }
 
 fn gilrs_button(button: Button) -> gilrs::Button {
@@ -79,6 +79,11 @@ fn gilrs_button(button: Button) -> gilrs::Button {
 }
 
 impl Pads {
+    /// A new player entity took over (spawn, respawn, a server joined, a
+    /// dimension change): its health is not compared with the old one's.
+    pub(super) fn player_replaced(&mut self) {
+        self.health.forget();
+    }
     /// Open gilrs on first use. A platform without it (or a Linux without
     /// udev) leaves controllers off; the game runs as before.
     fn start(&mut self) {
@@ -187,14 +192,16 @@ impl Game<'_> {
             self.pad.in_use = true;
         }
         self.pad.state = state;
-        // Damage from any source, here or on a server.
-        let health = self.player.as_ref().map(|p| p.health.health());
-        if let (Some(before), Some(now)) = (self.pad.last_health, health)
-            && now < before
-        {
-            self.pad_rumble(Rumble::Hurt(before - now));
+        // Damage from any source, here or on a server; nothing counts on
+        // the title screen.
+        let health = self
+            .player
+            .as_ref()
+            .filter(|_| self.title.is_none())
+            .map(|p| p.health.health());
+        if let Some(damage) = self.pad.health.observe(health) {
+            self.pad_rumble(Rumble::Hurt(damage));
         }
-        self.pad.last_health = health;
         let now = Instant::now();
         self.pad.rumbles.retain(|(_, end)| *end > now);
         let ticking = self.title.is_none() && self.screen == Screen::Playing && !self.pause;
