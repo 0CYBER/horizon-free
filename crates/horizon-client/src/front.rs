@@ -81,7 +81,12 @@ impl Default for Opening {
 fn page(mode: &Mode) -> usize {
     match mode {
         Mode::Main => 0,
-        Mode::Select { .. } | Mode::Create { .. } => 1,
+        Mode::Select { .. }
+        | Mode::Create { .. }
+        | Mode::Edit { .. }
+        | Mode::Backup { .. }
+        | Mode::Delete { .. }
+        | Mode::Error { .. } => 1,
         Mode::Multiplayer(_) => 2,
     }
 }
@@ -91,6 +96,13 @@ impl Title {
     /// Horizon's layout for every title mode. `backdrop` is how much of the
     /// live backdrop is visible (0 shows the plain cold background).
     pub fn draw_horizon(&self, ui: &mut Ui, backdrop: f32) {
+        if matches!(
+            self.mode,
+            Mode::Edit { .. } | Mode::Backup { .. } | Mode::Delete { .. } | Mode::Error { .. }
+        ) {
+            self.draw(ui.atlas, ui.batch, ui.cursor);
+            return;
+        }
         let reveal = self.opening_phase(backdrop >= 1.0);
         if backdrop < 1.0 {
             ui.cold_background(1.0 - backdrop);
@@ -135,6 +147,7 @@ impl Title {
                     let caret = (self.started.elapsed().as_millis() / 500).is_multiple_of(2);
                     multiplayer_page(ui, x, w, screen, caret);
                 }
+                _ => unreachable!("World-management screens use the classic layout"),
             }
         }
         ui.opacity = 1.0;
@@ -306,6 +319,12 @@ impl Title {
         if self.skip_opening() {
             return Action::None;
         }
+        if matches!(
+            self.mode,
+            Mode::Edit { .. } | Mode::Backup { .. } | Mode::Delete { .. } | Mode::Error { .. }
+        ) {
+            return self.click(x, y, (batch.width, batch.height));
+        }
         let hit = {
             let mut ui = Ui::dry(atlas, batch, (x, y));
             self.draw_horizon(&mut ui, 1.0);
@@ -391,6 +410,7 @@ impl Title {
                 MAKE => return self.create_action(),
                 _ => {}
             },
+            Mode::Edit { .. } | Mode::Backup { .. } | Mode::Delete { .. } | Mode::Error { .. } => {}
             Mode::Multiplayer(screen) => {
                 let id = match hit {
                     JOIN => Some(40),

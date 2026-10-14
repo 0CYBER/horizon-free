@@ -3261,6 +3261,9 @@ impl Game<'_> {
             self.draw_options(&mut batch);
             return batch;
         }
+        if let Some(title) = &mut self.title {
+            title.poll_backup();
+        }
         if let Some(title) = &self.title {
             if horizon_client::ui_theme::horizon() {
                 let fade = self.backdrop_fade();
@@ -8333,6 +8336,17 @@ impl ApplicationHandler for Game<'_> {
                         }) * wheel_sensitivity
                     };
                     let d = scaled(raw_y) as f32;
+                    if let Some(title) = &mut self.title
+                        && !horizon_client::ui_theme::horizon()
+                    {
+                        let size = self
+                            .window
+                            .as_ref()
+                            .map(|w| w.inner_size())
+                            .unwrap_or_default();
+                        let batch = HudBatch::new([size.width, size.height]);
+                        title.scroll_worlds(d, self.cursor, (batch.width, batch.height));
+                    }
                     if self.screen == Screen::Playing
                         && self.player.is_some()
                         && !self.extras_scroll(d)
@@ -8590,6 +8604,11 @@ impl ApplicationHandler for Game<'_> {
                             return Ok(());
                         }
                         match event.physical_key {
+                            PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
+                                if let Some(t) = self.title.as_mut() {
+                                    t.confirm_edit();
+                                }
+                            }
                             PhysicalKey::Code(KeyCode::Backspace) => self.title_edit(None, true),
                             PhysicalKey::Code(KeyCode::Tab) => {
                                 if let Some(t) = self.title.as_mut() {

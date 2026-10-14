@@ -923,6 +923,7 @@ dependencies = [
  "ureq",
  "wgpu",
  "winit",
+ "zip",
 ]
 
 [[package]]
