@@ -2228,7 +2228,8 @@ impl Launcher {
     }
 
     fn join_friend(&mut self) {
-        if self.mode != Mode::Client || horizon_friends::invite::parse(&self.friend_code).is_none() {
+        if self.mode != Mode::Client || horizon_friends::invite::parse(&self.friend_code).is_none()
+        {
             return;
         }
         self.joining = Some(self.friend_code.clone());

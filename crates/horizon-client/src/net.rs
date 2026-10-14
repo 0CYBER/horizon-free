@@ -150,32 +150,46 @@ impl Drop for Session {
 /// client reaches on a loopback port, so everything after is a plain join.
 pub const FRIEND: &str = horizon_friends::ADDRESS_PREFIX;
 
-/// An address as players and logs see it: a friend's invite code without
-/// its secret half.
+/// An address as players and logs see it: a friend's invite code stays
+/// out of it (its secret is in there).
 pub fn shown_address(address: &str) -> String {
     match address.strip_prefix(FRIEND) {
-        Some(code) => match horizon_friends::Code::parse(code) {
-            Some(code) => format!("Friend's world ({}-****)", code.nameplate),
-            None => "Friend's world".to_owned(),
+        Some(code) => match horizon_friends::invite::parse(code) {
+            Some(horizon_friends::invite::Parsed::Short(c)) => {
+                format!("Friend's world ({}-****)", c.nameplate)
+            }
+            _ => "Friend's world".to_owned(),
         },
         None => address.to_owned(),
     }
 }
 
-/// Find the friend's world behind the code and open the tunnel: the loopback
-/// address to connect to.
+/// The relay the player set (`friendsRelay` in horizon.txt, beside
+/// options.txt), else `HORIZON_RELAY_URL`. None by default.
+pub fn friends_relay_setting() -> Option<String> {
+    let dir = std::env::current_dir().ok()?;
+    crate::ui_theme::preference(&dir, "friendsRelay")
+        .filter(|r| !r.is_empty())
+        .or_else(horizon_friends::relay_url)
+}
+/// Remember the relay typed on Join a friend (empty forgets it).
+pub fn save_friends_relay(relay: &str) {
+    if let Ok(dir) = std::env::current_dir() {
+        crate::ui_theme::set_preference(&dir, "friendsRelay", (!relay.is_empty()).then_some(relay));
+    }
+}
+
+/// Reach the friend's world from the code (directly, or through a relay)
+/// and open the tunnel: the loopback address to connect to.
 fn join_friend(code: &str, send: &Sender<Event>) -> Result<(String, u16), String> {
     use horizon_friends::{
-        Code, JoinError, PathMode,
+        PathMode,
         guest::{self, GuestConfig},
     };
-    let code = Code::parse(code)
-        .ok_or("That isn't an invite code: codes are eight letters and digits, like K7QM-3XPD.")?;
-    let relay = horizon_friends::relay_url().ok_or_else(|| JoinError::NotAvailable.to_string())?;
     status(send, "Finding your friend's world...");
     let tunnel = guest::join(&GuestConfig {
-        relay,
-        code,
+        code: code.to_owned(),
+        relay: friends_relay_setting(),
         protocol: PROTOCOL_VERSION,
         game: horizon_protocol::GAME_VERSION.to_owned(),
         path: PathMode::from_env(),

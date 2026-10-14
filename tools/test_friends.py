@@ -1,22 +1,24 @@
 #!/usr/bin/env python3
 """Play with friends end to end, without the internet.
 
-A relay (`horizon-relay`) on a free local port; a host Horizon that opens a
-world and shares it behind an invite code (`friends host`); a guest Horizon
-that joins with the code (`connect friend:CODE`). The guest joins twice:
-first on the direct path, then started with HORIZON_FRIENDS_PATH=relay so
-the session goes through the relay. Each time both sides must see the
-other's chat line, the other moving, a block the host places and the block
-the guest breaks; the host's counts say which path each session took, and
-the relay's relayed bytes must stay small for the direct session and grow
-with the relayed one. Last, the host stops sharing and a guest using the
-old code is told the invite has ended.
+(a) The code alone: a host Horizon opens a world and shares it (`friends
+host`) with no relay anywhere; a guest Horizon joins with the full invite
+code (`connect friend:CODE`) by dialling the endpoints in it. (b) A
+self-hosted relay run locally (`horizon-relay`): the host also gets a short
+code from it, and a guest started with HORIZON_FRIENDS_PATH=relay joins with
+the short code through it. Each time both sides must see the other's chat
+line, the other moving, a block the host places and the block the guest
+breaks; then the host stops sharing and a guest with the old code is told
+why it can't join. `--baseline` first runs the same checks over plain LAN.
+The router is never asked to open a port (HORIZON_FRIENDS_UPNP=0) and STUN
+is off: nothing leaves the machine.
 
     python3 tools/test_friends.py --client target/fast/horizon-client --relay target/fast/horizon-relay
 
-`--relay-url HOST:PORT` uses a relay already running elsewhere (two
-machines); `--role host|guest` then runs one side only and prints or takes
-the code (`--code`). Needs a display on Linux (xvfb-run -a).
+`--role host|guest` runs one side only (two machines, e.g. over a tailnet):
+the host prints the code, the guest takes it with `--code` (`--relay-url`
+for a relay elsewhere, `--path relay` to force it). Needs a display on Linux
+(xvfb-run -a).
 """
 import argparse
 import json
@@ -112,7 +114,6 @@ class Game:
 def host_world(host):
     host('open Friends 0 creative')
     host.wait('status', lambda v: v['player'] is not None and v['pending_chunks'] == 0, 120, 'host world')
-    assert host('friends status')['available'], 'HORIZON_RELAY_URL did not reach the host'
     host('friends host')
     return host.wait('friends status', lambda v: v['code'], 30, 'invite code')['code']
 
@@ -182,13 +183,45 @@ def leave(host, guest, name):
     host.wait('lan status', lambda v: all(g['name'] != name for g in v['guests']), 30, 'the guest leaving')
 
 
-def full(args, work, relay_url):
-    env = {'HORIZON_RELAY_URL': relay_url}
+def start_relay(args, work):
+    """A relay on a free local port, as anyone would run their own."""
+    port = free_port()
+    url = f'127.0.0.1:{port}'
+    log = (work / 'relay.log').open('w+')
+    process = subprocess.Popen([str(args.relay.resolve())], env=dict(os.environ, PORT=str(port)),
+                               stdout=log, stderr=subprocess.STDOUT)
+    deadline = time.monotonic() + 10
+    while True:
+        try:
+            health(url)
+            return process, log, url
+        except OSError:
+            assert time.monotonic() < deadline, 'the relay did not start'
+            time.sleep(0.1)
+
+
+def set_relay(game, url):
+    """What typing the relay on Join a friend saves (horizon.txt)."""
+    path = game.home / 'horizon.txt'
+    lines = [l for l in (path.read_text().splitlines() if path.exists() else []) if not l.startswith('friendsRelay:')]
+    path.write_text('\n'.join(lines + [f'friendsRelay:{url}']) + '\n')
+
+
+def full(args, work):
+    # Tests never touch the real router or ask the internet. Both games run on
+    # this machine, so the code also holds 127.0.0.1 (a firewall such as
+    # macOS's may hold back connections to the LAN address from an unsigned
+    # binary started over SSH, which can't show its prompt).
+    env = {'HORIZON_FRIENDS_UPNP': '0', 'HORIZON_STUN_SERVERS': 'none', 'HORIZON_FRIENDS_LOOPBACK': '1'}
     host = Game(args.client, args.resources, work, 'host', env)
     games = [host]
+    relay = None
     try:
+        # (a) The code alone: no relay anywhere.
         code = host_world(host)
-        print(f'host shares the world: {code[:4]}-****')
+        status = host('friends status')
+        assert status['short'] is None and len(code) > 30, status
+        print(f'host shares the world: a {len(code.replace("-", ""))}-symbol code, no relay; {status["summary"]}')
         if args.baseline:
             # The same checks over plain LAN, without the tunnel: the behaviour
             # the tunnel must reproduce.
@@ -199,42 +232,47 @@ def full(args, work, relay_url):
             print('plain LAN: chat, movement and blocks both ways')
             leave(host, guest, 'Plain')
             guest.stop()
-        # Direct path.
-        guest = Game(args.client, args.resources, work, 'guest-direct', env)
+        guest = Game(args.client, args.resources, work, 'guest-code', env)
         games.append(guest)
-        before = health(relay_url)['relayed_bytes']
         join(guest, code, 'Guest')
         play_together(host, guest, 'Guest', 1)
-        direct_bytes = health(relay_url)['relayed_bytes'] - before
         assert host('friends status')['direct'] == 1, host('friends status')
-        assert direct_bytes < 64 * 1024, f'the direct session went through the relay ({direct_bytes} bytes)'
-        print(f'direct path: chat, movement and blocks both ways; relay carried {direct_bytes} bytes')
+        print('code alone: chat, movement and blocks both ways, no server involved')
         leave(host, guest, 'Guest')
+        host('friends stop')
+        assert host('friends status')['code'] is None
+        assert host('lan status') == {'open': False}, 'sharing opened LAN, so stopping closes it'
+        join(guest, code, 'Late')
+        reason = guest.wait('screen', lambda v: v['menu']['disconnected'], 30, 'the ended code')['menu']['disconnected']
+        assert "Couldn't reach your friend's game" in reason, reason
+        print(f'after stopping: "{reason}"')
         guest.stop()
-        # Forced relay path.
-        guest = Game(args.client, args.resources, work, 'guest-relay',
-                     dict(env, HORIZON_FRIENDS_PATH='relay'))
+        # (b) A self-hosted relay, run locally: the short code, relayed.
+        relay, relay_log, relay_url = start_relay(args, work)
+        set_relay(host, relay_url)
+        host('friends host')
+        status = host.wait('friends status', lambda v: v['short'], 30, 'the short code')
+        short = status['short']
+        guest = Game(args.client, args.resources, work, 'guest-relay', dict(env, HORIZON_FRIENDS_PATH='relay'))
         games.append(guest)
+        set_relay(guest, relay_url)
         before = health(relay_url)['relayed_bytes']
-        join(guest, code, 'Relayed')
+        join(guest, short, 'Relayed')
         play_together(host, guest, 'Relayed', 2)
         relayed_bytes = health(relay_url)['relayed_bytes'] - before
         status = host('friends status')
         assert status['relayed'] == 1, status
         # Render distance 2: the join is some tens of kB of compressed chunks.
-        assert relayed_bytes > max(32 * 1024, 4 * direct_bytes), \
-            f'the relayed session carried only {relayed_bytes} bytes (direct: {direct_bytes})'
-        print(f'relay path: chat, movement and blocks both ways; relay carried {relayed_bytes} bytes')
+        assert relayed_bytes > 32 * 1024, f'the relayed session carried only {relayed_bytes} bytes'
+        print(f'self-hosted relay, short code {short[:4]}-****: chat, movement and blocks both ways; '
+              f'relay carried {relayed_bytes} bytes')
         leave(host, guest, 'Relayed')
-        # The code ends with sharing.
         host('friends stop')
-        assert host('friends status')['code'] is None
-        join(guest, code, 'Late')
+        join(guest, short, 'Late')
         reason = guest.wait('screen', lambda v: v['menu']['disconnected'], 30, 'the ended invite')['menu']['disconnected']
         assert 'invite has ended' in reason, reason
         print(f'after stopping: "{reason}"')
-        assert host('lan status') == {'open': False}, 'sharing opened LAN, so stopping closes it'
-        return code
+        return code + short
     except Exception:
         for g in games:
             print(f'--- {g.home.name} log tail ---')
@@ -243,10 +281,21 @@ def full(args, work, relay_url):
     finally:
         for g in games:
             g.stop()
+        if relay:
+            relay.terminate()
+            relay.wait(timeout=10)
+            relay_log.seek(0)
+            text = relay_log.read()
+            print(f'relay log: {text.splitlines()}')
+            # Counts only: no code, no address, no name.
+            for secret in ['127.0.0.1', 'Guest', 'Relayed', 'Late']:
+                assert secret not in text, f'the relay logged {secret!r}'
 
 
 def one_side(args, work):
-    env = {'HORIZON_RELAY_URL': args.relay_url}
+    env = {'HORIZON_FRIENDS_UPNP': '0', 'HORIZON_STUN_SERVERS': 'none'}
+    if args.relay_url:
+        env['HORIZON_RELAY_URL'] = args.relay_url
     if args.path:
         env['HORIZON_FRIENDS_PATH'] = args.path
     game = Game(args.client, args.resources, work, args.role, env)
@@ -276,7 +325,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--client', type=Path, required=True)
     parser.add_argument('--relay', type=Path, help='horizon-relay binary (started on a free local port)')
-    parser.add_argument('--relay-url', help='an already running relay, HOST:PORT')
+    parser.add_argument('--relay-url', help='--role: a relay already running elsewhere, HOST:PORT')
     parser.add_argument('--resources', type=Path, default=ROOT / '.local/horizon-client/26.3')
     parser.add_argument('--role', choices=['host', 'guest'])
     parser.add_argument('--code')
@@ -290,39 +339,10 @@ def main():
     with tempfile.TemporaryDirectory(prefix='hzf-', dir='/tmp') as directory:
         work = Path(directory)
         if args.role:
-            assert args.relay_url, '--role needs --relay-url'
             return one_side(args, work)
-        relay = None
-        relay_url = args.relay_url
-        if not relay_url:
-            assert args.relay, 'give --relay or --relay-url'
-            port = free_port()
-            relay_url = f'127.0.0.1:{port}'
-            relay_log = (work / 'relay.log').open('w+')
-            relay = subprocess.Popen([str(args.relay.resolve())], env=dict(os.environ, PORT=str(port)),
-                                     stdout=relay_log, stderr=subprocess.STDOUT)
-            deadline = time.monotonic() + 10
-            while True:
-                try:
-                    health(relay_url)
-                    break
-                except OSError:
-                    assert time.monotonic() < deadline, 'the relay did not start'
-                    time.sleep(0.1)
-        try:
-            code = full(args, work, relay_url)
-        finally:
-            if relay:
-                relay.terminate()
-                relay.wait(timeout=10)
-                relay_log.seek(0)
-                text = relay_log.read()
-                print(f'relay log: {text.splitlines()}')
-        if relay:
-            # Counts only: no code, no address, no name.
-            for secret in [code[:4], '127.0.0.1', 'Guest', 'Relayed']:
-                assert secret not in text, f'the relay logged {secret!r}'
-    print('Play with friends passed: direct and relayed sessions, chat, movement and blocks both ways')
+        assert args.relay, 'give --relay (the relay binary, run locally for the relay half)'
+        full(args, work)
+    print('Play with friends passed: the code alone and a self-hosted relay; chat, movement and blocks both ways')
 
 
 if __name__ == '__main__':

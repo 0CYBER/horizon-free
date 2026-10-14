@@ -455,7 +455,7 @@ impl Title {
                         _ => 50,
                     }),
                     FIELD_A | FIELD_B => {
-                        if let Screen::Edit { focus, .. } = screen {
+                        if let Screen::Edit { focus, .. } | Screen::Friend { focus, .. } = screen {
                             *focus = u8::from(hit == FIELD_B);
                         }
                         None
@@ -486,6 +486,25 @@ impl Title {
         }
         Action::None
     }
+}
+
+/// The end of `text` that fits `width`, led by an ellipsis when cut.
+fn tail_fit(ui: &Ui, text: &str, width: f32) -> String {
+    if ui.measure(Face::Regular, BODY, text) <= width {
+        return text.to_owned();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut start = 0;
+    while start < chars.len() {
+        let tail: String = std::iter::once('…')
+            .chain(chars[start..].iter().copied())
+            .collect();
+        if ui.measure(Face::Regular, BODY, &tail) <= width {
+            return tail;
+        }
+        start += 1;
+    }
+    String::new()
 }
 
 /// The page header plus a row of actions under it; returns the y below.
@@ -960,15 +979,15 @@ fn multiplayer_page(ui: &mut Ui, x: f32, w: f32, screen: &Screen, caret: bool) {
             );
             ui.divider(x, y + rh, w);
         }
-        Screen::Friend { code } => {
+        Screen::Friend { code, relay, focus } => {
             let y = header(
                 ui,
                 x,
                 "Join a friend",
                 "Paste the invite code your friend sees in their pause menu.",
             );
-            let available = horizon_friends::relay_url().is_some();
-            let ok = available && horizon_friends::Code::parse(code).is_some();
+            let parsed = horizon_friends::invite::parse_detailed(code);
+            let ok = parsed.is_ok();
             actions_right(
                 ui,
                 x + w,
@@ -980,26 +999,45 @@ fn multiplayer_page(ui: &mut Ui, x: f32, w: f32, screen: &Screen, caret: bool) {
             );
             ui.divider(x, y, w);
             let rh = 12.0 + CONTROL + 12.0;
-            ui.text_line(Face::Regular, BODY, rh, x, y, color::MUTED, "Invite code");
             let fx = x + t::ROW_LABEL + 16.0;
-            ui.field(
-                FIELD_A,
-                [fx, y + 12.0, (w - t::ROW_LABEL - 16.0).min(240.0), CONTROL],
-                code,
-                "K7QM-3XPD",
-                true,
-                caret,
-            );
-            ui.divider(x, y + rh, w);
-            if !available {
-                ui.text(
-                    Face::Regular,
-                    SMALL,
-                    x,
-                    y + rh + 12.0,
-                    color::FAINT,
-                    "Joining friends isn't available yet in this build.",
+            let fw = w - t::ROW_LABEL - 16.0;
+            let rows = [
+                (FIELD_A, "Invite code", code, "Paste the code here", fw),
+                (
+                    FIELD_B,
+                    "Relay (optional)",
+                    relay,
+                    "host:port, for short codes",
+                    fw.min(360.0),
+                ),
+            ];
+            let mut ry = y;
+            for (i, (fid, label, value, hint, width)) in rows.into_iter().enumerate() {
+                ui.text_line(Face::Regular, BODY, rh, x, ry, color::MUTED, label);
+                // A long code shows its end, where the typing is.
+                let shown = tail_fit(ui, value, width - 28.0);
+                ui.field(
+                    fid,
+                    [fx, ry + 12.0, width, CONTROL],
+                    &shown,
+                    hint,
+                    usize::from(*focus) == i,
+                    caret,
                 );
+                ry += rh;
+                ui.divider(x, ry, w);
+            }
+            let note = match parsed {
+                _ if code.trim().is_empty() => None,
+                Err(e) => Some(e.to_string()),
+                Ok(horizon_friends::invite::Parsed::Short(_)) if relay.trim().is_empty() => Some(
+                    "This is a relay's short code: fill in your friend's relay above, or ask for the full code."
+                        .to_owned(),
+                ),
+                Ok(_) => None,
+            };
+            if let Some(note) = note {
+                ui.text(Face::Regular, SMALL, x, ry + 12.0, color::MUTED, &note);
             }
         }
         Screen::Disconnected { reason, retry } => {

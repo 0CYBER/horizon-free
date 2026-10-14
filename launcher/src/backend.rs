@@ -1057,8 +1057,8 @@ pub fn client(tag: &str) -> Result<Command, String> {
 
 /// Start the game straight into a friend's world: `--server friend:CODE`.
 pub fn join_friend(cmd: &mut Command, code: &str) -> Result<(), String> {
-    let code = horizon_friends::Code::parse(code)
-        .ok_or("That isn't an invite code: codes are eight letters and digits, like K7QM-3XPD.")?;
+    horizon_friends::invite::parse_detailed(code).map_err(|e| e.to_string())?;
+    let code: String = code.chars().filter(|c| !c.is_whitespace()).collect();
     cmd.arg("--server")
         .arg(format!("{}{code}", horizon_friends::ADDRESS_PREFIX));
     Ok(())

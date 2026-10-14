@@ -49,6 +49,9 @@ pub enum Screen {
     /// from Horizon's multiplayer page).
     Friend {
         code: String,
+        /// The relay for short codes (optional; saved on Join).
+        relay: String,
+        focus: u8,
     },
     Disconnected {
         reason: String,
@@ -212,18 +215,18 @@ impl Screen {
                     53,
                 ),
             ],
-            Self::Friend { code } => vec![
+            Self::Friend { code, .. } => vec![
                 b(
                     w / 2.0 - 100.0,
-                    h / 4.0 + 96.0 + 12.0,
+                    h / 4.0 + 96.0 + 18.0,
                     200.0,
                     "Join",
-                    horizon_friends::Code::parse(code).is_some(),
+                    horizon_friends::invite::parse(code).is_some(),
                     56,
                 ),
                 b(
                     w / 2.0 - 100.0,
-                    h / 4.0 + 120.0 + 12.0,
+                    h / 4.0 + 120.0 + 18.0,
                     200.0,
                     "Cancel",
                     true,
@@ -465,9 +468,18 @@ impl Screen {
                     blink,
                 );
             }
-            Self::Friend { code } => {
+            Self::Friend { code, relay, focus } => {
                 centered(batch, "Join a Friend", 20.0, u32::MAX);
-                Self::field(atlas, batch, "Invite Code", code, 100.0 - 11.0, true, blink);
+                Self::field(atlas, batch, "Invite Code", code, 53.0, *focus == 0, blink);
+                Self::field(
+                    atlas,
+                    batch,
+                    "Relay (optional)",
+                    relay,
+                    94.0,
+                    *focus == 1,
+                    blink,
+                );
             }
             Self::Disconnected { reason, retry } => {
                 centered(
@@ -514,11 +526,7 @@ impl Screen {
                     address: String::new(),
                 }
             }
-            (Self::List { .. }, Some(47)) => {
-                *self = Self::Friend {
-                    code: String::new(),
-                }
-            }
+            (Self::List { .. }, Some(47)) => *self = Self::friend(),
             (Self::List { .. }, Some(42)) => {
                 *self = Self::Edit {
                     index: None,
@@ -610,12 +618,14 @@ impl Screen {
             (Self::Direct { address }, Some(52)) => {
                 return Outcome::Connect(address.trim().to_owned());
             }
-            (Self::Friend { code }, Some(56)) => {
-                if let Some(code) = horizon_friends::Code::parse(code) {
+            (Self::Friend { code, relay, .. }, Some(56)) => {
+                if horizon_friends::invite::parse(code).is_some() {
+                    crate::net::save_friends_relay(relay.trim());
+                    let code: String = code.chars().filter(|c| !c.is_whitespace()).collect();
                     return Outcome::Connect(format!("{}{code}", crate::net::FRIEND));
                 }
             }
-            (Self::Edit { focus, .. }, None) => {
+            (Self::Edit { focus, .. } | Self::Friend { focus, .. }, None) => {
                 for (i, fy) in [(0u8, 53.0 + 11.0), (1, 94.0 + 11.0)] {
                     if y >= fy && y < fy + 20.0 && (x - w / 2.0).abs() < 100.0 {
                         *focus = i;
@@ -635,8 +645,18 @@ impl Screen {
                 ..
             } => Some(if *focus == 0 { name } else { address }),
             Self::Direct { address } => Some(address),
-            Self::Friend { code } => Some(code),
+            Self::Friend {
+                code, relay, focus, ..
+            } => Some(if *focus == 0 { code } else { relay }),
             _ => None,
+        }
+    }
+    /// Join a friend, with the relay the player set before.
+    pub fn friend() -> Self {
+        Self::Friend {
+            code: String::new(),
+            relay: crate::net::friends_relay_setting().unwrap_or_default(),
+            focus: 0,
         }
     }
     /// Auto-reconnect's attempt, once its countdown is over.
@@ -655,15 +675,26 @@ impl Screen {
             Self::Edit { focus: 0, .. } => ("server.name", 0),
             Self::Edit { .. } => ("server.address", 0),
             Self::Direct { .. } => ("server.direct", 0),
-            Self::Friend { .. } => ("friend.code", 0),
+            Self::Friend { focus: 0, .. } => ("friend.code", 0),
+            Self::Friend { .. } => ("friend.relay", 0),
             _ => return None,
         };
-        self.focused_field().map(|f| (id, f, 128))
+        let max = self.max_length();
+        self.focused_field().map(|f| (id, f, max))
+    }
+    /// Invite codes with IPv6 and a relay run past a server address's 128.
+    fn max_length(&self) -> usize {
+        if matches!(self, Self::Friend { .. }) {
+            256
+        } else {
+            128
+        }
     }
     pub fn type_text(&mut self, text: &str) {
+        let max = self.max_length();
         if let Some(field) = self.focused_field() {
             for c in text.chars().filter(|c| !c.is_control()) {
-                if field.chars().count() < 128 {
+                if field.chars().count() < max {
                     field.push(c);
                 }
             }
@@ -675,7 +706,7 @@ impl Screen {
         }
     }
     pub fn tab(&mut self) {
-        if let Self::Edit { focus, .. } = self {
+        if let Self::Edit { focus, .. } | Self::Friend { focus, .. } = self {
             *focus = (*focus + 1) % 2;
         }
     }

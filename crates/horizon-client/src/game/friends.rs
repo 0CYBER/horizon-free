@@ -30,15 +30,6 @@ pub const HELP: &[&str] = &[
     "friends status                 the code, how friends reach this host, the guests",
 ];
 
-/// The relay the player set (Join a friend's Relay field, `friendsRelay`
-/// in horizon.txt), else `HORIZON_RELAY_URL`. None by default.
-pub(super) fn relay_setting() -> Option<String> {
-    let dir = std::env::current_dir().ok()?;
-    horizon_client::ui_theme::preference(&dir, "friendsRelay")
-        .filter(|r| !r.is_empty())
-        .or_else(horizon_friends::relay_url)
-}
-
 /// `HORIZON_STUN_SERVERS`, else `friendsStun` in horizon.txt, else the defaults.
 fn stun_servers() -> Vec<String> {
     if std::env::var_os("HORIZON_STUN_SERVERS").is_some() {
@@ -78,7 +69,7 @@ impl Game<'_> {
             lan: std::net::SocketAddr::from(([127, 0, 0, 1], port)),
             protocol: PROTOCOL_VERSION,
             game: GAME_VERSION.to_owned(),
-            relay: relay_setting(),
+            relay: horizon_client::net::friends_relay_setting(),
             path: PathMode::from_env(),
             port: std::env::var("HORIZON_FRIENDS_PORT")
                 .ok()
