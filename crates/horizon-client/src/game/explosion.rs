@@ -109,8 +109,14 @@ impl Game<'_> {
         }
         hits as f32 / count as f32
     }
-    /// `ServerExplosion.calculateExplodedPositions`.
-    fn exploded_positions(&mut self, center: [f64; 3], radius: f32) -> Vec<[i32; 3]> {
+    /// `ServerExplosion.calculateExplodedPositions`; `resists` overrides one
+    /// block's resistance (`ExplosionDamageCalculator.getBlockExplosionResistance`).
+    fn exploded_positions(
+        &mut self,
+        center: [f64; 3],
+        radius: f32,
+        resists: Option<([i32; 3], f32)>,
+    ) -> Vec<[i32; 3]> {
         let (min_y, max_y) = self.with_level(|_, level, _| {
             use horizon_world::level::LevelAccess;
             (level.min_y(), level.max_y())
@@ -147,8 +153,14 @@ impl Game<'_> {
                         } else {
                             0.0
                         };
-                        if !self.res.facts.is_air(state) || f.fluid != Fluid::None {
-                            power -= (f.explosion_resistance.max(fluid) + 0.3) * 0.3;
+                        match resists {
+                            Some((at, resistance)) if at == pos => {
+                                power -= (resistance + 0.3) * 0.3;
+                            }
+                            _ if !self.res.facts.is_air(state) || f.fluid != Fluid::None => {
+                                power -= (f.explosion_resistance.max(fluid) + 0.3) * 0.3;
+                            }
+                            _ => {}
                         }
                         if power > 0.0 {
                             set.put(Key(pos), ());
@@ -163,8 +175,9 @@ impl Game<'_> {
         }
         set.entries().map(|(k, _)| k.0).collect()
     }
-    /// `ServerExplosion.hurtEntities` (player, mobs, items, primed TNT).
-    fn explosion_hurt_entities(&mut self, center: [f64; 3], radius: f32) {
+    /// `ServerExplosion.hurtEntities` (player, mobs, items, primed TNT);
+    /// the player takes `damage_type`.
+    fn explosion_hurt_entities(&mut self, center: [f64; 3], radius: f32, damage_type: &str) {
         if radius < 1.0e-5 {
             return;
         }
@@ -223,7 +236,7 @@ impl Game<'_> {
                 let mut hurt = false;
                 let creative = self.creative;
                 if let Some(p) = self.player.as_mut()
-                    && let Some(id) = self.motion.health.damage.id("minecraft:explosion")
+                    && let Some(id) = self.motion.health.damage.id(damage_type)
                 {
                     // Creative players are invulnerable to explosions.
                     if !creative && player_hurtable {
@@ -335,6 +348,26 @@ impl Game<'_> {
         interaction: BlockInteraction,
         fire: bool,
     ) -> Result<()> {
+        self.server_explode_as(
+            center,
+            radius,
+            interaction,
+            fire,
+            "minecraft:explosion",
+            None,
+        )
+    }
+    /// `server_explode` with the damage type the player takes and a block
+    /// whose explosion resistance the damage calculator overrides.
+    pub(super) fn server_explode_as(
+        &mut self,
+        center: [f64; 3],
+        radius: f32,
+        interaction: BlockInteraction,
+        fire: bool,
+        damage_type: &str,
+        resists: Option<([i32; 3], f32)>,
+    ) -> Result<()> {
         if let Some(p) = &self.player {
             let d = [
                 p.position.x - center[0],
@@ -344,11 +377,11 @@ impl Game<'_> {
             let distance = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
             self.pad_rumble(horizon_client::gamepad::Rumble::Explosion { distance, radius });
         }
-        let mut targets = self.exploded_positions(center, radius);
         // Explosion.explode: the blast is heard.
         let ctx = horizon_client::sculk::Context::default();
         self.post_game_event("minecraft:explode", center, ctx);
-        self.explosion_hurt_entities(center, radius);
+        let mut targets = self.exploded_positions(center, radius, resists);
+        self.explosion_hurt_entities(center, radius, damage_type);
         if interaction != BlockInteraction::Keep {
             // Util.shuffle(list, level.random)
             for i in (2..=targets.len()).rev() {
@@ -375,8 +408,12 @@ impl Game<'_> {
                         .facts
                         .get(self.world.block(pos[0], pos[1] - 1, pos[2]))
                         .solid_render
-                    && let Some(fire) = self.res.assets.registry.default_state("minecraft:fire")
                 {
+                    // BaseFireBlock.getState: soul fire on its base blocks,
+                    // fire shaped by its neighbours elsewhere.
+                    let at = BlockPos::new(pos[0], pos[1], pos[2]);
+                    let fire =
+                        self.with_level(|b, level, ticks| b.fire_state_for(level, ticks, at));
                     self.level_set(pos, fire)?;
                 }
             }
@@ -420,32 +457,36 @@ impl Game<'_> {
         }
         if !is_tnt {
             let dynamic = self.pending.dynamic(pos);
-            let drops = self.res.items.block_drops_full(
+            // LootContextParams.EXPLOSION_RADIUS under DESTROY_WITH_DECAY: the
+            // tables' survives_explosion and explosion_decay draw from their
+            // random sequence.
+            let decay = (interaction == BlockInteraction::DestroyWithDecay).then_some(radius);
+            let drops = self.res.items.block_drops_exploded(
                 self.res.assets.registry,
                 state,
                 None,
                 &dynamic,
                 &mut self.world.random,
                 Some((&mut self.rand_sequences, self.level.seed)),
+                decay,
             );
             for mut stack in drops {
                 if &*stack.item == "minecraft:air" || stack.count == 0 {
                     continue;
                 }
                 self.pending.attach(pos, &mut stack);
-                // survives_explosion / explosion_decay: 1 / radius per stack.
-                if interaction == BlockInteraction::DestroyWithDecay
-                    && self.world.random.next_float() > 1.0 / radius
-                {
-                    continue;
-                }
                 add_or_append_stack(stacks, stack, pos);
             }
         }
         self.pending.clear(pos);
         self.level_set(pos, self.world.air)?;
-        if is_tnt {
-            self.spawn_primed_tnt(BlockPos::new(pos[0], pos[1], pos[2]), true);
+        // TntBlock.wasExploded: new PrimedTnt (its push drawn first), then
+        // getRandomShortFuse(80); no game event.
+        if is_tnt && self.ui.rules.bool("tnt_explodes") {
+            let r = &mut self.world.random;
+            let rot = r.next_double() * f64::from(std::f32::consts::TAU);
+            let fuse = r.next_int_bound(20).unwrap_or(0) + 10;
+            self.add_primed_tnt(BlockPos::new(pos[0], pos[1], pos[2]), rot, fuse);
         }
         Ok(())
     }

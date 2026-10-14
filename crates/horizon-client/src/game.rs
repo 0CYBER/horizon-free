@@ -88,6 +88,7 @@ mod recipe_book;
 mod remote;
 mod render_control;
 mod render_tick;
+mod respawn_anchor;
 mod scoreboard;
 mod screens;
 mod sculk;
@@ -791,6 +792,11 @@ struct Game<'a> {
     portals: nether_portal::Portals,
     /// The pending travel goes through an End portal (EndPortalBlock destinations).
     end_travel: bool,
+    /// The respawn point when it is not the world spawn or a bed: a respawn
+    /// anchor (`game/respawn_anchor.rs`).
+    respawn_config: Option<respawn_anchor::RespawnConfig>,
+    /// A respawn travelling to its anchor's dimension and chunks.
+    respawn_travel: Option<respawn_anchor::RespawnConfig>,
     /// The next enter_dimension call comes from an End portal.
     end_portal_travel: bool,
     end: end::EndState,
@@ -1725,7 +1731,10 @@ impl Game<'_> {
                             food.saturation = (food.saturation + 0.4).min(food.food as f32);
                         }
                     }
-                    PlayerEffect::InteractLoot(_) | PlayerEffect::RespawnAnchor => {}
+                    PlayerEffect::RespawnAnchor => {
+                        self.respawn_anchor_used([pos.x, pos.y, pos.z])?
+                    }
+                    PlayerEffect::InteractLoot(_) => {}
                 },
                 LevelEvent::PrimeTnt { pos, rot } => self.add_primed_tnt(pos, rot, 80),
                 LevelEvent::BlockEvent {
@@ -2119,6 +2128,7 @@ impl Game<'_> {
             return Ok(());
         }
         let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
+        let mut anchor_passed = None;
         // MultiPlayerGameMode.useItemOn: blocks react first unless sneaking with an item.
         if !(sneaking && self.held().is_some())
             && let Some(hit) = self.pick()
@@ -2135,6 +2145,15 @@ impl Game<'_> {
             if self.use_composter(hit.pos, held.as_ref()) {
                 self.swing_arm();
                 return Ok(());
+            }
+            match self.use_respawn_anchor(hit.pos, held.as_ref())? {
+                respawn_anchor::AnchorUse::Charged => {
+                    self.swing_arm();
+                    return Ok(());
+                }
+                // The main hand passes; its item is used, then the off hand's glowstone.
+                respawn_anchor::AnchorUse::Pass => anchor_passed = Some(hit.pos),
+                respawn_anchor::AnchorUse::Other => {}
             }
             let face = match hit.face {
                 [0, 1, 0] => Direction::Up,
@@ -2157,17 +2176,21 @@ impl Game<'_> {
             };
             let at = Vec3::new(hit.point[0], hit.point[1], hit.point[2]);
             let item = held.as_ref().map(|s| s.item.to_string());
-            let result = self.with_level(|b, level, ticks| {
-                b.use_item_on(
-                    level,
-                    ticks,
-                    BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]),
-                    face,
-                    at,
-                    player,
-                    item.as_deref(),
-                )
-            });
+            let result = if anchor_passed.is_some() {
+                horizon_world::level::InteractionResult::Pass
+            } else {
+                self.with_level(|b, level, ticks| {
+                    b.use_item_on(
+                        level,
+                        ticks,
+                        BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]),
+                        face,
+                        at,
+                        player,
+                        item.as_deref(),
+                    )
+                })
+            };
             self.process_level_events()?;
             if result.consumes_action() {
                 self.swing_arm();
@@ -2175,6 +2198,12 @@ impl Game<'_> {
             }
         }
         let Some(stack) = self.held().cloned() else {
+            // Minecraft.startUseItem goes on to the off hand.
+            if let Some(pos) = anchor_passed
+                && self.charge_anchor_from_offhand(pos)?
+            {
+                return Ok(());
+            }
             self.use_offhand();
             return Ok(());
         };
@@ -2239,6 +2268,11 @@ impl Game<'_> {
             return Ok(());
         };
         if info.block.is_none() {
+            if let Some(pos) = anchor_passed
+                && self.charge_anchor_from_offhand(pos)?
+            {
+                return Ok(());
+            }
             self.use_offhand();
             return Ok(());
         }
@@ -2585,7 +2619,10 @@ impl Game<'_> {
             self.streaming.center = (cx, cz);
             if (-2..=2).all(|dz| (-2..=2).all(|dx| self.streaming.is_lit(cx + dx, cz + dz))) {
                 let (player, target) = self.travelling.take().ok_or("travel")?;
-                if self.end_travel {
+                if let Some(config) = self.respawn_travel.take() {
+                    drop(player);
+                    self.place_respawned(config)?;
+                } else if self.end_travel {
                     self.place_after_end_travel(player, target)?;
                 } else {
                     self.place_after_travel(player, target)?;
@@ -5649,6 +5686,17 @@ impl Game<'_> {
         self.travelling = None;
         self.player = None;
         self.spawn = None;
+        self.respawn_travel = None;
+        self.respawn_config =
+            self.level
+                .respawn_elsewhere
+                .as_ref()
+                .map(|(dim, pos, yaw, forced)| respawn_anchor::RespawnConfig {
+                    dim: Dim::from_id(dim),
+                    pos: *pos,
+                    yaw: *yaw,
+                    forced: *forced,
+                });
         self.spawn_search = 0;
         self.spawn_origin = None;
         self.spawn_spiral = Default::default();
@@ -7097,6 +7145,8 @@ impl Game<'_> {
             f64::from(head[1]) + 0.6,
             f64::from(head[2]) + 0.5,
         ));
+        // The bed replaces a respawn anchor.
+        self.respawn_config = None;
         self.level.spawn = Some([
             f64::from(head[0]),
             f64::from(head[1]) + 1.0,
@@ -7474,6 +7524,9 @@ impl Game<'_> {
         level.weather = self.world.weather;
         level.day_time = self.world.day_time;
         level.spawn = self.spawn.map(|s| [s.x, s.y, s.z]);
+        level.respawn_elsewhere = self
+            .respawn_config
+            .map(|c| (c.dim.id().to_owned(), c.pos, c.yaw, c.forced));
         level.rotation = [self.yaw, self.pitch];
         level.xp_level = self.experience.level;
         level.xp_progress = self.experience.progress;
@@ -9050,6 +9103,8 @@ pub fn run() -> Result<()> {
         travelling: None,
         portals: Default::default(),
         end_travel: false,
+        respawn_config: None,
+        respawn_travel: None,
         end_portal_travel: false,
         end: Default::default(),
         block_ticks: Ticks::new(0),

@@ -247,10 +247,18 @@ public final class VanillaDispenserOracle {
         w.registries = ParityData.access;
         w.server.loot.delegate = ParityData.loot;
         VanillaBlockUpdateOracle.set(Level.class, w, "damageSources", new net.minecraft.world.damagesource.DamageSources(ParityData.access));
+        if (f.has("dim") && f.get("dim").getAsString().equals("nether")) {
+            // The Nether's dimension type and attributes (respawn anchors work, beds explode).
+            if (NETHER == null) NETHER = VanillaBlockUpdateOracle.loadDimensionType(net.minecraft.world.level.dimension.BuiltinDimensionTypes.NETHER);
+            w.type = NETHER;
+            w.dimensionKey = Level.NETHER;
+            w.attributes = net.minecraft.world.attribute.EnvironmentAttributeSystem.builder().addConstantLayer(NETHER.attributes()).build();
+        }
         if (f.has("rules")) {
             for (var rule : f.getAsJsonObject("rules").entrySet()) {
                 if (rule.getKey().equals("tnt_explodes")) w.rules.set(GameRules.TNT_EXPLODES, rule.getValue().getAsBoolean(), null);
                 if (rule.getKey().equals("spawner_blocks_work")) w.rules.set(GameRules.SPAWNER_BLOCKS_WORK, rule.getValue().getAsBoolean(), null);
+                if (rule.getKey().equals("block_explosion_drop_decay")) w.rules.set(GameRules.BLOCK_EXPLOSION_DROP_DECAY, rule.getValue().getAsBoolean(), null);
             }
         }
         if (f.has("items")) {
@@ -302,6 +310,8 @@ public final class VanillaDispenserOracle {
             used = use(w, origin, f.getAsJsonObject("use"));
         } else if (f.has("use_item")) {
             used = useItem(w, origin, f.getAsJsonObject("use_item"));
+        } else if (f.has("respawn_at")) {
+            used = respawnAt(w, origin, f.getAsJsonObject("respawn_at"));
         } else if (f.has("hopper")) {
             // HopperBlockEntity.pushItemsTick, once.
             var hopper = (net.minecraft.world.level.block.entity.HopperBlockEntity) w.getBlockEntity(origin);
@@ -378,6 +388,8 @@ public final class VanillaDispenserOracle {
         result.addAll(used);
         result.add("rng " + w.rng.nextLong());
     }
+
+    static net.minecraft.world.level.dimension.DimensionType NETHER;
 
     /** The player of a "use" case: its main hand, game mode and the statistics it is awarded. */
     static final class User extends net.minecraft.server.level.ServerPlayer {
@@ -506,8 +518,15 @@ public final class VanillaDispenserOracle {
         var advancements = (net.minecraft.server.PlayerAdvancements) VanillaBlockUpdateOracle.allocate.invoke(VanillaBlockUpdateOracle.unsafe, net.minecraft.server.PlayerAdvancements.class);
         VanillaBlockUpdateOracle.set(net.minecraft.server.PlayerAdvancements.class, advancements, "activeTriggers", new HashMap<>());
         VanillaBlockUpdateOracle.set(net.minecraft.server.level.ServerPlayer.class, player, "advancements", advancements);
-        // Standing three blocks south of the clicked block, looking down at it.
-        var at = net.minecraft.world.phys.Vec3.atBottomCenterOf(pos).add(0, 1, 3);
+        // Standing three blocks (or `distance`) south of the clicked block, looking down at it.
+        double distance = use.has("distance") ? use.get("distance").getAsDouble() : 3;
+        var at = net.minecraft.world.phys.Vec3.atBottomCenterOf(pos).add(0, 1, distance);
+        if (use.has("respawn")) {
+            var r = use.getAsJsonArray("respawn");
+            BlockPos point = new BlockPos(r.get(0).getAsInt(), r.get(1).getAsInt(), r.get(2).getAsInt());
+            player.setRespawnPosition(new net.minecraft.server.level.ServerPlayer.RespawnConfig(
+                net.minecraft.world.level.storage.LevelData.RespawnData.of(w.dimension(), point, 0.0F, 0.0F), false), false);
+        }
         VanillaBlockUpdateOracle.set(Entity.class, player, "position", at);
         VanillaBlockUpdateOracle.set(Entity.class, player, "blockPosition", BlockPos.containing(at));
         VanillaBlockUpdateOracle.set(Entity.class, player, "xRot", 90f);
@@ -526,7 +545,31 @@ public final class VanillaDispenserOracle {
         }
         List<String> out = new ArrayList<>(player.stats);
         out.add("held " + ParityData.canon(player.hand) + " using " + (player.using == null ? "-" : player.using));
+        var respawn = player.getRespawnConfig();
+        out.add("respawn " + (respawn == null ? "-" : respawn.respawnData().dimension().identifier() + " " + VanillaBlockUpdateOracle.pos(respawn.respawnData().pos())));
         return out;
+    }
+
+    /**
+     * ServerPlayer.findRespawnAndUseSpawnBlock for a respawn point at `pos`
+     * (a respawn anchor, in the Nether or not): the position, the yaw that
+     * looks at the block, and the charge used (a block change).
+     */
+    static List<String> respawnAt(VanillaBlockUpdateOracle.World w, BlockPos pos, JsonObject op) throws Exception {
+        var config = new net.minecraft.server.level.ServerPlayer.RespawnConfig(
+            net.minecraft.world.level.storage.LevelData.RespawnData.of(w.dimension(), pos, 0.0F, 0.0F), op.get("forced").getAsBoolean());
+        Method find = net.minecraft.server.level.ServerPlayer.class.getDeclaredMethod("findRespawnAndUseSpawnBlock",
+            ServerLevel.class, net.minecraft.server.level.ServerPlayer.RespawnConfig.class, boolean.class);
+        find.setAccessible(true);
+        var found = (Optional<?>) find.invoke(null, w, config, op.get("consume").getAsBoolean());
+        if (found.isEmpty()) return List.of("respawn none");
+        Object angle = found.get();
+        Method position = angle.getClass().getDeclaredMethod("position");
+        Method yaw = angle.getClass().getDeclaredMethod("yaw");
+        position.setAccessible(true);
+        yaw.setAccessible(true);
+        var p = (net.minecraft.world.phys.Vec3) position.invoke(angle);
+        return List.of("respawn " + num(p.x) + " " + num(p.y) + " " + num(p.z) + " " + Float.floatToRawIntBits((float) yaw.invoke(angle)));
     }
 
     /** The level's block entity positions by x, y, z. */

@@ -137,6 +137,8 @@ impl Game<'_> {
         // Hopper cooldowns of an earlier case.
         self.hoppers.clear();
         self.ui.rules = Default::default();
+        self.dim = super::Dim::Overworld;
+        self.respawn_config = None;
         // The oracle level plays on normal difficulty.
         self.ui.difficulty = 2;
         // The oracle level has world seed 0 and fresh random sequences.
@@ -162,6 +164,9 @@ impl Game<'_> {
             }
         }
         self.world.game_time = case["time"].as_i64().unwrap_or(0);
+        if case["dim"].as_str() == Some("nether") {
+            self.dim = super::Dim::Nether;
+        }
         // The oracle level's clock stands at day time 6000.
         self.world.day_time = 6000;
         if let Some(rules) = case["rules"].as_object() {
@@ -272,6 +277,26 @@ impl Game<'_> {
             used = self.fixture_use(origin, op)?;
         } else if let Some(op) = case.get("use_item") {
             used = self.fixture_use_item(origin, op)?;
+        } else if let Some(op) = case.get("respawn_at") {
+            // ServerPlayer.findRespawnAndUseSpawnBlock for a respawn point at the origin.
+            let config = super::respawn_anchor::RespawnConfig {
+                dim: self.dim,
+                pos: [origin.x, origin.y, origin.z],
+                yaw: 0.0,
+                forced: op["forced"].as_bool().unwrap_or(false),
+            };
+            let found =
+                self.find_respawn_and_use(config, op["consume"].as_bool().unwrap_or(true))?;
+            used.push(match found {
+                Some((p, yaw)) => format!(
+                    "respawn {} {} {} {}",
+                    num(p.x),
+                    num(p.y),
+                    num(p.z),
+                    yaw.to_bits() as i32
+                ),
+                None => "respawn none".to_owned(),
+            });
         } else if case.get("hopper").is_some() {
             // HopperBlockEntity.pushItemsTick, once.
             self.hopper_try_move_items((origin.x, origin.y, origin.z));
@@ -447,14 +472,24 @@ impl Game<'_> {
             GameMode::Survival
         };
         self.creative = self.mode == GameMode::Creative;
+        let distance = op["distance"].as_f64().unwrap_or(3.0);
         let mut player = PlayerMotion::new(
             self.motion,
             horizon_core::geometry::Vec3::new(
                 f64::from(pos.x) + 0.5,
                 f64::from(pos.y) + 1.0,
-                f64::from(pos.z) + 3.5,
+                f64::from(pos.z) + 0.5 + distance,
             ),
         )?;
+        if let Some(r) = op["respawn"].as_array() {
+            let p = |i: usize| r.get(i).and_then(Value::as_i64).unwrap_or(0) as i32;
+            self.respawn_config = Some(super::respawn_anchor::RespawnConfig {
+                dim: self.dim,
+                pos: [p(0), p(1), p(2)],
+                yaw: 0.0,
+                forced: false,
+            });
+        }
         player.health.food.food = op["food"].as_i64().unwrap_or(20) as i32;
         self.player = Some(player);
         self.yaw = 0.0;
@@ -488,7 +523,10 @@ impl Game<'_> {
             let key = m.component()["translate"]
                 .as_str()
                 .map_or_else(|| m.plain(), str::to_owned);
-            out.push(format!("msg {key}"));
+            // The oracle player's advancements are not tracked.
+            if !key.starts_with("chat.type.advancement") {
+                out.push(format!("msg {key}"));
+            }
         }
         if let Some(s) = &stack {
             let used = self.stats.get("used", &s.item) - used_before;
@@ -504,6 +542,16 @@ impl Game<'_> {
             "held {} using {using}",
             canon_stack(self.inventory[self.selected].as_ref())
         ));
+        out.push(match self.respawn_config {
+            Some(c) => format!(
+                "respawn {} {},{},{}",
+                c.dim.id(),
+                c.pos[0],
+                c.pos[1],
+                c.pos[2]
+            ),
+            None => "respawn -".to_owned(),
+        });
         self.player = None;
         self.using = None;
         Ok(out)

@@ -1732,6 +1732,9 @@ pub struct Level {
     pub day_time: i64,
     /// The player's respawn point (bed, or the world spawn).
     pub spawn: Option<[f64; 3]>,
+    /// A respawn point in another dimension than the Overworld (a respawn
+    /// anchor): dimension, block, yaw and `forced`.
+    pub respawn_elsewhere: Option<(String, [i32; 3], f32, bool)>,
     pub position: Option<[f64; 3]>,
     pub rotation: [f32; 2],
     pub health: f32,
@@ -1924,7 +1927,18 @@ impl Level {
             && let Some(Tag::IntArray(pos)) = respawn.get("pos")
             && pos.len() == 3
         {
-            self.spawn = Some([f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])]);
+            let dimension =
+                text(respawn.get("dimension")).unwrap_or_else(|| "minecraft:overworld".into());
+            if dimension == "minecraft:overworld" {
+                self.spawn = Some([f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])]);
+            } else {
+                let yaw = match respawn.get("yaw") {
+                    Some(Tag::Float(b)) => f32::from_bits(*b),
+                    _ => 0.0,
+                };
+                let forced = number(respawn.get("forced")).is_some_and(|v| v != 0);
+                self.respawn_elsewhere = Some((dimension, [pos[0], pos[1], pos[2]], yaw, forced));
+            }
         }
         let mut inventory = Vec::new();
         let mut inventory_components = HashMap::new();
@@ -2116,8 +2130,19 @@ impl Level {
         if let Some(pos) = self.position {
             entries.push(("Pos", doubles(&pos)));
         }
-        // A respawn point other than the world spawn (a bed).
-        if let Some(s) = self.spawn {
+        // A respawn point other than the world spawn: an anchor elsewhere, or a bed.
+        if let Some((dimension, block, yaw, forced)) = &self.respawn_elsewhere {
+            let mut respawn = vec![
+                ("dimension", string(dimension)),
+                ("pos", Tag::IntArray(block.to_vec())),
+                ("yaw", Tag::Float(yaw.to_bits())),
+                ("pitch", Tag::Float(0f32.to_bits())),
+            ];
+            if *forced {
+                respawn.push(("forced", Tag::Byte(1)));
+            }
+            entries.push(("respawn", Tag::compound(respawn)));
+        } else if let Some(s) = self.spawn {
             let block = [
                 s[0].floor() as i32,
                 s[1].floor() as i32,

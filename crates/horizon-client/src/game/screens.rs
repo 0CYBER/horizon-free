@@ -261,6 +261,16 @@ impl Game<'_> {
                 self.toggles.respawn();
                 self.remote_respawn();
             }
+            Some(0) if self.respawn_config.is_some() => {
+                // LocalPlayer.respawn: KeyMapping.resetToggleKeys.
+                self.toggles.respawn();
+                // PlayerList.respawn at the respawn anchor, once it is loaded.
+                self.begin_anchor_respawn()?;
+                self.screen = Screen::Playing;
+                self.ui.death_text = None;
+                self.spawn_player()?;
+                self.capture(true);
+            }
             Some(0) => {
                 // LocalPlayer.respawn: KeyMapping.resetToggleKeys.
                 self.toggles.respawn();

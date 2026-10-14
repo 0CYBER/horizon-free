@@ -2010,6 +2010,7 @@ impl Game<'_> {
             f64::from(pos[1]),
             f64::from(pos[2]) + 0.5,
         ));
+        self.respawn_config = None;
         let dim = Text::literal(self.dim.id());
         let p = pos.map(|v| Text::literal(v.to_string()));
         let mut args = vec![
