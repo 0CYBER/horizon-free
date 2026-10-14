@@ -141,6 +141,26 @@ impl Game<'_> {
             "key" => {
                 let key = key_code(arg(1)?).ok_or_else(|| format!("unknown key {}", words[1]))?;
                 self.require_world()?;
+                // KeyboardHandler.keyPress: the debug keys see the physical key first.
+                let physical = key;
+                {
+                    use horizon_client::debug_keys::KeyAction;
+                    let action = arg(2)?;
+                    if action != "up" {
+                        self.physical_keys.insert(key);
+                        if self.debug_key(key, KeyAction::Press) {
+                            if action == "tap" {
+                                self.physical_keys.remove(&key);
+                                self.debug_key(key, KeyAction::Release);
+                            }
+                            return ok();
+                        }
+                    }
+                    if action == "up" {
+                        self.physical_keys.remove(&key);
+                        self.debug_key(key, KeyAction::Release);
+                    }
+                }
                 // Physical key presses follow the key binds like the keyboard does.
                 let key = if matches!(self.screen, Screen::Chat | Screen::Options) {
                     key
@@ -171,7 +191,8 @@ impl Game<'_> {
                     "tap" => {
                         self.control_key_down(key)?;
                         self.keys.remove(&key);
-                        self.physical_keys.remove(&key);
+                        self.physical_keys.remove(&physical);
+                        self.debug_key(physical, horizon_client::debug_keys::KeyAction::Release);
                     }
                     other => {
                         return Err(
@@ -561,6 +582,15 @@ impl Game<'_> {
         });
         json!({
             "screen": self.screen_name(),
+            "debug": {
+                "overlay": self.debug,
+                "hitboxes": self.show_hitboxes,
+                "chunk_borders": self.show_chunk_borders,
+                "pause_menu": self.pause_menu,
+                "advanced_tooltips": self.settings.file.bool("advancedItemTooltips"),
+                "pause_on_lost_focus": self.settings.file.bool("pauseOnLostFocus"),
+                "clipboard": self.copied,
+            },
             "dimension": self.dim.id(),
             "creative": self.creative,
             "player": player,

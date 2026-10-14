@@ -144,6 +144,10 @@ pub struct Frame<'a> {
     pub dark_disc: bool,
     /// The hit block outline as line segments (from, to) in world space.
     pub outline: Vec<[f64; 6]>,
+    /// Debug gizmo lines (`gizmos::camera_relative`): depth tested, then
+    /// drawn over everything.
+    pub debug_lines: &'a [[f32; 8]],
+    pub debug_lines_on_top: &'a [[f32; 8]],
     pub hud: &'a HudBatch,
     /// CardinalLighting.Type.NETHER, otherwise DEFAULT.
     pub nether_lighting: bool,
@@ -222,6 +226,12 @@ pub struct Renderer {
     sky: wgpu::RenderPipeline,
     dark_disc: wgpu::RenderPipeline,
     lines: wgpu::RenderPipeline,
+    /// Gizmo lines (`RenderTypes.linesTranslucentNoDepthWrite`) and the
+    /// always-on-top ones.
+    debug_lines: wgpu::RenderPipeline,
+    debug_lines_on_top: wgpu::RenderPipeline,
+    debug_line_buffer: wgpu::Buffer,
+    debug_line_capacity: u64,
     entity_pipeline: wgpu::RenderPipeline,
     crumbling_pipeline: wgpu::RenderPipeline,
     cloud_pipeline: wgpu::RenderPipeline,
@@ -534,6 +544,13 @@ impl Renderer {
             attributes: &line_attributes,
         })];
         let alpha_blend = wgpu::BlendState::ALPHA_BLENDING;
+        let debug_line_attributes =
+            wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3,2=>Unorm8x4,3=>Float32];
+        let debug_line_buffers = [Some(wgpu::VertexBufferLayout {
+            array_stride: 32,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &debug_line_attributes,
+        })];
         let pipeline = |label: &str,
                         vertex: &str,
                         fragment: &str,
@@ -637,6 +654,28 @@ impl Renderer {
             None,
             false,
             true,
+            Some(alpha_blend),
+        );
+        let debug_lines = pipeline(
+            "Debug lines",
+            "vs_debug_line",
+            "fs_debug_line",
+            &debug_line_buffers,
+            wgpu::PrimitiveTopology::TriangleStrip,
+            None,
+            false,
+            true,
+            Some(alpha_blend),
+        );
+        let debug_lines_on_top = pipeline(
+            "Debug lines on top",
+            "vs_debug_line",
+            "fs_debug_line",
+            &debug_line_buffers,
+            wgpu::PrimitiveTopology::TriangleStrip,
+            None,
+            false,
+            false,
             Some(alpha_blend),
         );
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
@@ -743,6 +782,12 @@ impl Renderer {
         let outline = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Outline"),
             size: 24 * MAX_OUTLINE_EDGES,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let debug_line_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Debug lines"),
+            size: 32 * 4096,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1300,6 +1345,10 @@ impl Renderer {
             sky,
             dark_disc,
             lines,
+            debug_lines,
+            debug_lines_on_top,
+            debug_line_buffer,
+            debug_line_capacity: 4096,
             entity_pipeline,
             crumbling_pipeline,
             cloud_pipeline,
@@ -1982,6 +2031,28 @@ impl Renderer {
             self.queue
                 .write_buffer(&self.indirect, 0, bytemuck::cast_slice(&self.draws));
         }
+        let debug_depth = frame.debug_lines.len() as u32;
+        let debug_top = frame.debug_lines_on_top.len() as u32;
+        if debug_depth + debug_top > 0 {
+            let needed = u64::from(debug_depth + debug_top);
+            if needed > self.debug_line_capacity {
+                self.debug_line_capacity = needed.next_power_of_two();
+                self.debug_line_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Debug lines"),
+                    size: 32 * self.debug_line_capacity,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+            }
+            let all: Vec<[f32; 8]> = frame
+                .debug_lines
+                .iter()
+                .chain(frame.debug_lines_on_top)
+                .copied()
+                .collect();
+            self.queue
+                .write_buffer(&self.debug_line_buffer, 0, bytemuck::cast_slice(&all));
+        }
         let outline_edges = frame.outline.len().min(MAX_OUTLINE_EDGES as usize);
         if outline_edges > 0 {
             let lines = outline_vertices(&frame.outline[..outline_edges], camera);
@@ -2156,6 +2227,16 @@ impl Renderer {
                 pass.set_pipeline(&self.lines);
                 pass.set_vertex_buffer(0, self.outline.slice(..));
                 pass.draw(0..4, 0..outline_edges as u32);
+            }
+            if debug_depth > 0 {
+                pass.set_pipeline(&self.debug_lines);
+                pass.set_vertex_buffer(0, self.debug_line_buffer.slice(..));
+                pass.draw(0..4, 0..debug_depth);
+            }
+            if debug_top > 0 {
+                pass.set_pipeline(&self.debug_lines_on_top);
+                pass.set_vertex_buffer(0, self.debug_line_buffer.slice(..));
+                pass.draw(0..4, debug_depth..debug_depth + debug_top);
             }
             pass.set_pipeline(&self.translucent);
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);

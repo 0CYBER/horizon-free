@@ -31,6 +31,10 @@ impl Game<'_> {
     /// `ServerPlayer.setGameMode` and `GameType.updatePlayerAbilities`.
     pub(super) fn set_mode(&mut self, mode: GameMode) {
         let was_spectator = self.spectator();
+        // MultiPlayerGameMode.setLocalMode: the mode it leaves.
+        if mode != self.mode {
+            self.previous_mode = Some(self.mode);
+        }
         self.mode = mode;
         self.creative = mode == GameMode::Creative;
         // GameType.updatePlayerAbilities applies at once.

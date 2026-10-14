@@ -25,6 +25,7 @@ mod copper_golems;
 mod creaking;
 mod creatures;
 mod crossbow;
+mod debug_keys;
 mod dedicated;
 mod dispense_fixture;
 mod dispenser;
@@ -829,6 +830,18 @@ struct Game<'a> {
     /// This world is open to the network (game/lan.rs).
     lan: Option<lan::LanHost>,
     world_options: Option<lan_screen::WorldOptions>,
+    /// KeyboardHandler's debug key state (game/debug_keys.rs), the physical
+    /// keys held, and the debug renderers F3+B and F3+G switch on.
+    debug_keys: horizon_client::debug_keys::DebugKeys,
+    show_hitboxes: bool,
+    show_chunk_borders: bool,
+    /// PauseScreen.showPauseMenu (false after F3+Escape).
+    pause_menu: bool,
+    /// MultiPlayerGameMode.previousLocalPlayerMode (F3+N goes back to it).
+    previous_mode: Option<horizon_client::command::args::GameMode>,
+    clipboard: Option<arboard::Clipboard>,
+    /// The text last put on the clipboard (reported by `horizon-ctl status`).
+    copied: Option<String>,
     /// The world was saved for the application ending (`save_for_exit`).
     saved_for_exit: bool,
     /// The block a guest is acting on (game/lan_actions.rs).
@@ -2630,6 +2643,7 @@ impl Game<'_> {
         Ok(())
     }
     fn tick(&mut self) -> Result<()> {
+        self.tick_debug_keys()?;
         if self.remote.is_some() {
             return self.tick_remote();
         }
@@ -3339,7 +3353,20 @@ impl Game<'_> {
         self.draw_chat(&mut batch);
         self.draw_tab_list(&mut batch);
         match self.screen {
-            Screen::Paused => self.draw_pause_menu(&mut batch),
+            Screen::Paused if self.pause_menu => self.draw_pause_menu(&mut batch),
+            // PauseScreen(false): only its title, at the top.
+            Screen::Paused => {
+                let title = self.translate("menu.paused", "Game Paused");
+                let tw = HudBatch::text_width(&self.res.atlas, &title);
+                batch.text(
+                    &self.res.atlas,
+                    &title,
+                    ((batch.width / 2.0).floor() - (tw / 2.0).floor()).floor(),
+                    10.0,
+                    u32::MAX,
+                    true,
+                );
+            }
             Screen::Dead => self.draw_death_screen(&mut batch),
             Screen::Stats => self.draw_stats(&mut batch),
             Screen::Advancements => self.draw_advancements(&mut batch),
@@ -7522,6 +7549,18 @@ impl Game<'_> {
             sky.sky_color = [0.9, 0.9, 1.0];
             sky.sky_light_factor = 1.0;
         }
+        // DebugRenderer: chunk borders and hitboxes (F3+G, F3+B).
+        let (debug_lines, debug_lines_on_top) = if self.show_hitboxes || self.show_chunk_borders {
+            let g = self.debug_gizmos(alpha as f32);
+            let view = horizon_client::camera::view_matrix(view_yaw, view_pitch);
+            let at = camera.to_array();
+            (
+                horizon_client::gizmos::camera_relative(&g.lines, at, view),
+                horizon_client::gizmos::camera_relative(&g.on_top, at, view),
+            )
+        } else {
+            (Vec::new(), Vec::new())
+        };
         // LevelRenderer.renderHitOutline: the outline shape's edges.
         let outline = if self.screen == Screen::Playing && !self.spectator() {
             self.pick()
@@ -7674,6 +7713,8 @@ impl Game<'_> {
             }),
             dark_disc: self.dark_disc(camera),
             outline,
+            debug_lines: &debug_lines,
+            debug_lines_on_top: &debug_lines_on_top,
             hud: &hud,
             entities: &entities,
             additive: &additive,
@@ -7764,6 +7805,7 @@ impl Game<'_> {
                 Screen::Options => self.options_key(KeyCode::Escape, None)?,
                 Screen::Playing => {
                     self.screen = Screen::Paused;
+                    self.pause_menu = true;
                     self.capture(false);
                 }
                 Screen::Creative => {
@@ -7774,6 +7816,7 @@ impl Game<'_> {
                 Screen::Paused | Screen::Inventory => {
                     self.close_container();
                     self.screen = Screen::Playing;
+                    self.pause_menu = true;
                     self.capture(true);
                 }
                 Screen::Dead => {}
@@ -7833,7 +7876,6 @@ impl Game<'_> {
                 }
                 _ => {}
             },
-            KeyCode::F3 => self.debug = !self.debug,
             // key.swapOffhand: ServerboundPlayerActionPacket SWAP_ITEM_WITH_OFFHAND.
             KeyCode::KeyF if self.screen == Screen::Playing => {
                 std::mem::swap(&mut self.offhand, &mut self.inventory[self.selected]);
@@ -8046,6 +8088,23 @@ impl ApplicationHandler for Game<'_> {
         if let WindowEvent::Focused(false) = &event {
             self.physical_keys.clear();
         }
+        // KeyboardHandler.keyPress: the debug keys come before the game's.
+        if let WindowEvent::KeyboardInput {
+            event: key_event, ..
+        } = &event
+            && let PhysicalKey::Code(key) = key_event.physical_key
+            && self.title.is_none()
+        {
+            use horizon_client::debug_keys::KeyAction;
+            let action = match (key_event.state, key_event.repeat) {
+                (ElementState::Released, _) => KeyAction::Release,
+                (_, false) => KeyAction::Press,
+                (_, true) => KeyAction::Repeat,
+            };
+            if self.debug_key(key, action) {
+                return;
+            }
+        }
         if matches!(
             event,
             WindowEvent::KeyboardInput { .. }
@@ -8086,6 +8145,7 @@ impl ApplicationHandler for Game<'_> {
                         if self.screen == Screen::Playing
                             && self.player.is_some()
                             && !self.options.no_pause
+                            && self.settings.file.bool("pauseOnLostFocus")
                             && self.book.is_none()
                             && self.sign_edit.is_none()
                         {
@@ -8264,7 +8324,7 @@ impl ApplicationHandler for Game<'_> {
                         Screen::Creative if button == MouseButton::Left => {
                             self.creative_screen.release();
                         }
-                        Screen::Paused if pressed => self.pause_click()?,
+                        Screen::Paused if pressed && self.pause_menu => self.pause_click()?,
                         Screen::WorldOptions if pressed && button == MouseButton::Left => {
                             self.world_options_click()
                         }
@@ -8965,6 +9025,13 @@ pub fn run() -> Result<()> {
         remote: None,
         lan: None,
         world_options: None,
+        debug_keys: Default::default(),
+        show_hitboxes: false,
+        show_chunk_borders: false,
+        pause_menu: true,
+        previous_mode: None,
+        clipboard: None,
+        copied: None,
         saved_for_exit: false,
         forced_hit: None,
         lan_events: Vec::new(),
