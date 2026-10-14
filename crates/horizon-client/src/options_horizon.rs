@@ -255,7 +255,7 @@ impl OptionsUi {
     ) -> Vec<(Item, f32, f32)> {
         let (w, h) = (ui.w, ui.h);
         if self.in_world {
-            ui.atmosphere(0.72, 1.0);
+            ui.atmosphere(horizon_theme::VEIL, 1.0);
         } else {
             if backdrop < 1.0 {
                 ui.cold_background(1.0 - backdrop);

@@ -96,8 +96,9 @@ pub mod color {
     pub const TEXT: u32 = hex(P.ink, 255);
     /// Values and secondary text (`ink_soft`).
     pub const MUTED: u32 = hex(P.ink_soft, 255);
-    /// Labels, indices, descriptions (`muted`).
-    pub const FAINT: u32 = hex(P.muted, 255);
+    /// Labels, indices, descriptions over the veiled backdrop
+    /// (`horizon_theme::BACKDROP_MUTED`, which holds AA there).
+    pub const FAINT: u32 = hex(horizon_theme::BACKDROP_MUTED, 255);
     pub const ACCENT: u32 = hex(P.accent, 255);
     pub const ON_ACCENT: u32 = hex(P.on_accent, 255);
     pub const DANGER: u32 = hex(P.danger, 255);
@@ -434,6 +435,9 @@ pub struct Ui<'a> {
     /// The number the next settings row shows (`01`, `02`…); `page_header`
     /// starts it again.
     pub row_index: usize,
+    /// Secondary text (indices, inactive items, captions): `FAINT`, or `MUTED` over the home
+    /// page's lighter veil (`horizon_theme::HOME_VEIL`).
+    pub muted: u32,
 }
 impl<'a> Ui<'a> {
     /// `cursor` is in GUI pixels, like every screen's input.
@@ -464,6 +468,7 @@ impl<'a> Ui<'a> {
             opacity: 1.0,
             offset: (0.0, 0.0),
             row_index: 0,
+            muted: color::FAINT,
         }
     }
     /// A layout pass for hit testing: nothing is drawn and no tween starts.
@@ -948,7 +953,7 @@ impl<'a> Ui<'a> {
             }
             Kind::Ghost => {
                 self.rounded(x, y, w, h, PILL, color::with_alpha(color::RAISED, hover));
-                color::mix(color::FAINT, color::TEXT, hover)
+                color::mix(self.muted, color::TEXT, hover)
             }
             Kind::Danger => {
                 self.rounded(x, y, w, h, PILL, color::with_alpha(color::RAISED, hover));
@@ -1008,7 +1013,7 @@ impl<'a> Ui<'a> {
             let (face, fg) = if active {
                 (Face::Medium, color::TEXT)
             } else {
-                (Face::Regular, color::mix(color::FAINT, color::TEXT, hover))
+                (Face::Regular, color::mix(self.muted, color::TEXT, hover))
             };
             self.text_line(face, BODY, CONTROL, x + 12.0, iy, fg, label);
         }
@@ -1042,7 +1047,7 @@ impl<'a> Ui<'a> {
             let fg = if active {
                 color::BG
             } else {
-                color::mix(color::FAINT, color::TEXT, hover)
+                color::mix(self.muted, color::TEXT, hover)
             };
             let lw = self.measure(Face::Medium, BODY, label);
             self.text_line(
@@ -1079,7 +1084,8 @@ impl<'a> Ui<'a> {
     fn index(&mut self, x: f32, y: f32) {
         self.row_index += 1;
         let n = format!("{:02}", self.row_index);
-        self.text(Face::Mono, MICRO, x, y + 2.0, color::FAINT, &n);
+        let muted = self.muted;
+        self.text(Face::Mono, MICRO, x, y + 2.0, muted, &n);
     }
     /// The launcher's settings `row`: its number, a label column, then the
     /// value; py 12. Returns the row height (draw the action yourself,
@@ -1223,18 +1229,21 @@ impl<'a> Ui<'a> {
             color::with_alpha(color::BG, veil * shade.max(0.0)),
         );
     }
-    /// The giant faint wordmark at the foot of a screen, half set below its
-    /// edge.
-    pub fn wordmark(&mut self, x: f32, size: f32) {
-        let line = size.round();
-        let y = self.h - line * 0.62;
+    /// The giant faint wordmark, whole, as wide as the column at `x` (`w` wide, at most `max`
+    /// tall) with its baseline at `bottom`.
+    pub fn wordmark(&mut self, x: f32, w: f32, bottom: f32, max: f32) {
+        let unit = self.measure(Face::Display, 100.0, "horizon") / 100.0;
+        let size = (w / unit).min(max).floor();
+        // Geist's x-height glyphs sit on the baseline; its ascenders reach 0.75 em above it.
+        let line = (size * 1.2).round();
+        let top = bottom - line * 0.5 - size * 0.36;
         self.text_line(
             Face::Display,
             size,
             line,
-            x - size * 0.06,
-            y,
-            color::with_alpha(color::TEXT, 0.05),
+            x - size * 0.05,
+            top,
+            color::with_alpha(color::TEXT, 0.06),
             "horizon",
         );
     }

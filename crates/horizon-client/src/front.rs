@@ -110,9 +110,14 @@ impl Title {
         let shade = t::ease_out_cubic(reveal);
         // The world stays in view on the home page; deeper pages veil it more.
         let veil = if matches!(self.mode, Mode::Main) {
-            0.62
+            horizon_theme::HOME_VEIL
         } else {
             horizon_theme::VEIL
+        };
+        ui.muted = if matches!(self.mode, Mode::Main) {
+            color::MUTED
+        } else {
+            color::FAINT
         };
         ui.atmosphere(veil, shade);
         let side = t::ease_out_cubic((reveal - 0.2) / 0.7);
@@ -189,7 +194,7 @@ impl Title {
         skipped
     }
     fn sidebar(&self, ui: &mut Ui) {
-        let h = ui.h;
+        let (h, muted) = (ui.h, ui.muted);
         ui.sidebar_frame("Horizon");
         ui.sidebar_list(NAV, 12.0, 72.0, SIDEBAR - 24.0, &PAGES, page(&self.mode));
         let qy = h - 12.0 - 18.0 - 12.0 - CONTROL;
@@ -208,19 +213,20 @@ impl Title {
             CONTROL,
             24.0,
             qy,
-            color::mix(color::FAINT, color::TEXT, hover),
+            color::mix(muted, color::TEXT, hover),
             "Quit game",
         );
-        ui.caps(24.0, h - 12.0 - 18.0, color::FAINT, "Horizon 26.3");
+        ui.caps(24.0, h - 12.0 - 18.0, muted, "Horizon 26.3");
     }
     /// Home: the launcher's Play page over the backdrop.
     fn home(&self, ui: &mut Ui, x: f32, w: f32) {
-        ui.wordmark(x, 260.0);
+        ui.wordmark(x, w, ui.h - 64.0, 220.0);
+        let muted = ui.muted;
         let mut y = 36.0 + 28.0;
         ui.caps(
             x,
             y,
-            color::FAINT,
+            muted,
             "Minecraft 26.3  ·  Java Edition, rewritten in Rust",
         );
         y += 24.0;
@@ -232,7 +238,7 @@ impl Title {
             t::LARGE,
             x,
             y,
-            color::FAINT,
+            muted,
             "The world you know, rebuilt from the ground up.",
         );
         y += 22.0 + 28.0;
@@ -286,7 +292,7 @@ impl Title {
         ui.caps(
             x,
             ui.h - 12.0 - 18.0,
-            color::FAINT,
+            muted,
             "Not affiliated with Mojang or Microsoft",
         );
     }
@@ -912,7 +918,7 @@ pub mod pause {
         let (w, h) = (ui.w, ui.h);
         let p = t::ease_out_quint(opened.elapsed().as_secs_f32() / t::move_());
         ui.opacity = p;
-        ui.atmosphere(0.72, 1.0);
+        ui.atmosphere(horizon_theme::VEIL, 1.0);
         ui.offset = (-16.0 * (1.0 - p), 0.0);
         ui.sidebar_frame("Horizon");
         ui.sidebar_list(
