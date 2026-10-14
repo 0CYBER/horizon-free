@@ -1,8 +1,9 @@
 // The page's behaviour: the download buttons for this platform, the latest releases, the
-// roadmap and links from main, the navigation, the menus' tabs, the lightbox and the motion.
+// roadmap, links and contributors, the navigation, the menus' tabs, the lightbox and the motion.
 // Everything degrades to the baked-in content when GitHub can't be reached.
 import { markdown, escape, section } from "./markdown.js";
 import { releasesHtml } from "./releases.js";
+import { contributorsFrom, contributorsHtml } from "./contributors.js";
 
 const REPO = "ludovic111/horizon";
 const RELEASES_PAGE = `https://github.com/${REPO}/releases?q=launcher-v&expanded=true`;
@@ -45,6 +46,16 @@ const releases = cached("horizon:releases", () =>
       })),
   ),
 ).catch(() => baked.releases);
+
+async function setUpContributors() {
+  let list = baked.contributors || [];
+  try {
+    list = contributorsFrom(await cached("horizon:contributors", () => get(`https://api.github.com/repos/${REPO}/contributors?per_page=100`)));
+  } catch {}
+  if (list.length) document.getElementById("contributors-list").innerHTML = contributorsHtml(list);
+  // With nobody to show, the block and its menu entries go, as an empty link's card does.
+  document.querySelectorAll("[data-contributors]").forEach((el) => (el.hidden = !list.length));
+}
 
 // --- Download ------------------------------------------------------------------------
 
@@ -119,7 +130,7 @@ function setUpNav() {
     const line = innerHeight * 0.4;
     let index = -1;
     sections.forEach((s, i) => {
-      if (s.getBoundingClientRect().top <= line) index = i;
+      if (s.getClientRects().length && s.getBoundingClientRect().top <= line) index = i;
     });
     if (index !== current) {
       current = index;
@@ -316,3 +327,4 @@ setUpDownload();
 setUpNotes();
 setUpRoadmap();
 setUpLinks();
+setUpContributors();

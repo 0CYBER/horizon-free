@@ -74,3 +74,10 @@ files: players need their own legally obtained copy of Minecraft: Java Edition.
 
 The parity table and the roadmap are generated from Horizon's README, and the patch notes
 come from Horizon's GitHub releases: Horizon's own text, MIT.
+
+## Contributors
+
+The Contributors block lists the GitHub accounts that have committed to Horizon: login,
+commit count and profile link, from GitHub's API. Their avatars are not stored in this repository;
+the visitor's browser loads them from `avatars.githubusercontent.com`, each one the picture its
+owner chose for their GitHub account. Bots are left out.
