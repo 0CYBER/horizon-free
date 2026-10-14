@@ -145,6 +145,54 @@ impl Drop for Session {
     }
 }
 
+/// An address of the form `friend:K7QM-3XPD` joins a friend's world through
+/// its invite code (horizon-friends): the session goes through a tunnel the
+/// client reaches on a loopback port, so everything after is a plain join.
+pub const FRIEND: &str = horizon_friends::ADDRESS_PREFIX;
+
+/// An address as players and logs see it: a friend's invite code without
+/// its secret half.
+pub fn shown_address(address: &str) -> String {
+    match address.strip_prefix(FRIEND) {
+        Some(code) => match horizon_friends::Code::parse(code) {
+            Some(code) => format!("Friend's world ({}-****)", code.nameplate),
+            None => "Friend's world".to_owned(),
+        },
+        None => address.to_owned(),
+    }
+}
+
+/// Find the friend's world behind the code and open the tunnel: the loopback
+/// address to connect to.
+fn join_friend(code: &str, send: &Sender<Event>) -> Result<(String, u16), String> {
+    use horizon_friends::{
+        Code, JoinError, PathMode,
+        guest::{self, GuestConfig},
+    };
+    let code = Code::parse(code)
+        .ok_or("That isn't an invite code: codes are eight letters and digits, like K7QM-3XPD.")?;
+    let relay = horizon_friends::relay_url().ok_or_else(|| JoinError::NotAvailable.to_string())?;
+    status(send, "Finding your friend's world...");
+    let tunnel = guest::join(&GuestConfig {
+        relay,
+        code,
+        protocol: PROTOCOL_VERSION,
+        game: horizon_protocol::GAME_VERSION.to_owned(),
+        path: PathMode::from_env(),
+    })
+    .map_err(|e| e.to_string())?;
+    status(
+        send,
+        if tunnel.direct {
+            "Connected straight to your friend..."
+        } else {
+            "Connected to your friend through the relay..."
+        },
+    );
+    let (port, _) = tunnel.serve_loopback().map_err(|e| e.to_string())?;
+    Ok(("127.0.0.1".to_owned(), port))
+}
+
 fn status(send: &Sender<Event>, text: &str) {
     let _ = send.send(Event::Status(text.to_owned()));
 }
@@ -169,10 +217,16 @@ fn run(
     shared_writer: &Mutex<Option<ConnWriter>>,
     shared_counters: &Mutex<Option<Arc<Counters>>>,
 ) -> Result<String, String> {
-    let Some((host, port)) = parse_address(address) else {
-        return Ok(format!("Invalid server address: {address}"));
+    let (host, port) = match address.strip_prefix(FRIEND) {
+        Some(code) => join_friend(code, send)?,
+        None => {
+            let Some(target) = parse_address(address) else {
+                return Ok(format!("Invalid server address: {address}"));
+            };
+            status(send, "Connecting to the server...");
+            target
+        }
     };
-    status(send, "Connecting to the server...");
     let mut c =
         Connection::connect(&host, port, Duration::from_secs(10)).map_err(|e| e.to_string())?;
     *shared_counters.lock().unwrap() = Some(c.reader.counters.clone());

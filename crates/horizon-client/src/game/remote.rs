@@ -158,7 +158,7 @@ impl Game<'_> {
             .ok_or("registries.json not found next to the resources; run the data generator reports (horizon-prepare)")?;
         let lang = Arc::new(horizon_client::net::load_language(&root));
         let view = self.settings.render_distance.clamp(2, 32) as i8;
-        horizon_client::crash::set_detail("Server", address.to_owned());
+        horizon_client::crash::set_detail("Server", horizon_client::net::shown_address(address));
         // A signed-in account always plays under its own name.
         let auth = horizon_client::auth::current();
         let name = auth.as_ref().map_or(name, |a| a.name.as_str());
@@ -2597,10 +2597,8 @@ impl Game<'_> {
         let atlas = &self.res.atlas;
         let (w, h) = (batch.width, batch.height);
         batch.fill(atlas, 0.0, 0.0, w, h, rgba(20, 20, 20, 255));
-        for (i, line) in [r.status.as_str(), r.session.address.as_str()]
-            .iter()
-            .enumerate()
-        {
+        let shown = horizon_client::net::shown_address(&r.session.address);
+        for (i, line) in [r.status.as_str(), shown.as_str()].iter().enumerate() {
             let tw = HudBatch::text_width(atlas, line);
             batch.text(
                 atlas,
@@ -2682,7 +2680,7 @@ impl Game<'_> {
     pub(super) fn remote_status(&self) -> Option<serde_json::Value> {
         let r = self.remote.as_ref()?;
         Some(serde_json::json!({
-            "address": r.session.address,
+            "address": horizon_client::net::shown_address(&r.session.address),
             "name": r.session.name,
             "joined": r.joined,
             "status": r.status,
@@ -2695,6 +2693,13 @@ impl Game<'_> {
                 m
             }),
             "players": r.players.values().collect::<Vec<_>>(),
+            // Where the other players' entities are (harnesses check movement).
+            "player_positions": r
+                .entities
+                .values()
+                .filter(|t| t.kind == "minecraft:player")
+                .map(|t| t.position)
+                .collect::<Vec<_>>(),
             "health": r.health.0,
             "food": r.health.1,
             "decode_errors": r.decode_errors,

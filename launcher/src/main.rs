@@ -138,6 +138,12 @@ struct Launcher {
     input: String,
     input_focused: bool,
     focus: FocusHandle,
+    /// Join a friend: the code typed on the Play page, and the one the game
+    /// starting now joins.
+    friend_code: String,
+    friend_focused: bool,
+    friend_focus: FocusHandle,
+    joining: Option<String>,
     console_scroll: ScrollHandle,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
@@ -233,6 +239,10 @@ impl Launcher {
             input: String::new(),
             input_focused: false,
             focus: cx.focus_handle(),
+            friend_code: String::new(),
+            friend_focused: false,
+            friend_focus: cx.focus_handle(),
+            joining: None,
             console_scroll: ScrollHandle::new(),
             tx,
             rx,
@@ -358,6 +368,11 @@ impl Launcher {
                             Err(e) => self.client_error = Some(format!("Playing offline: {e}")),
                         }
                         self.accounts = Accounts::load();
+                        if let Some(code) = self.joining.take() {
+                            if let Err(e) = backend::join_friend(&mut cmd, &code) {
+                                self.client_error = Some(e);
+                            }
+                        }
                         match backend::spawn(Job::Client, cmd, self.tx.clone()) {
                             Ok(r) => self.client = Some(r),
                             Err(e) => self.client_error = Some(e),
@@ -1404,8 +1419,9 @@ impl Launcher {
                 Some(a) => format!("{} (Microsoft account)", a.name),
                 None => "Offline: online servers need a Microsoft account.".to_string(),
             };
+            rows = rows.child(self.join_friend_row(prepared && !running, cx));
             rows = rows.child(index_row(
-                3,
+                4,
                 "Playing as",
                 Some(div().child(who).into_any_element()),
                 Some(
@@ -2120,6 +2136,108 @@ impl Launcher {
         (rows, n)
     }
 
+    /// Join a friend: a code field and Join, which starts the game straight
+    /// into the friend's world (errors show in the game).
+    fn join_friend_row(&self, can_play: bool, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let focused = self.friend_focused;
+        let field = div()
+            .id("friend-code")
+            .track_focus(&self.friend_focus)
+            .flex()
+            .items_center()
+            .w(px(260.))
+            .h(px(30.))
+            .px(px(12.))
+            .overflow_hidden()
+            .rounded(px(6.))
+            .border_1()
+            .border_color(if focused { t.accent } else { t.rule })
+            .bg(t.surface)
+            .font_family(theme::MONO)
+            .text_size(px(12.))
+            .cursor_text()
+            .child(if self.friend_code.is_empty() && !focused {
+                div().text_color(t.muted).child("Paste an invite code")
+            } else {
+                // The end of a long code stays in view while typing.
+                let shown: String = {
+                    let chars: Vec<char> = self.friend_code.chars().collect();
+                    chars[chars.len().saturating_sub(30)..].iter().collect()
+                };
+                div().text_color(t.ink).child(shown)
+            })
+            .when(focused, |d| d.child(div().w(px(1.)).h(px(14.)).bg(t.ink)))
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                window.focus(&this.friend_focus);
+                cx.notify();
+            }))
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| {
+                let k = &ev.keystroke;
+                let paste = k.key == "v" && (k.modifiers.control || k.modifiers.platform);
+                match k.key.as_str() {
+                    "enter" => this.join_friend(),
+                    "backspace" => {
+                        this.friend_code.pop();
+                    }
+                    _ if paste => {
+                        if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
+                            this.friend_code.push_str(text.trim());
+                        }
+                    }
+                    _ if !k.modifiers.control && !k.modifiers.platform => {
+                        if let Some(ch) = &k.key_char {
+                            this.friend_code.push_str(ch);
+                        }
+                    }
+                    _ => return,
+                }
+                this.friend_code.truncate(256);
+                cx.stop_propagation();
+                cx.notify();
+            }));
+        let valid = horizon_friends::invite::parse(&self.friend_code).is_some();
+        let mut join = button("join-friend", "Join", Kind::Secondary, &t);
+        if can_play && valid {
+            join = join.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.join_friend();
+                cx.notify();
+            }));
+        } else {
+            join = disabled(join);
+        }
+        index_row(
+            3,
+            "Join a friend",
+            Some(
+                div()
+                    .child("Paste the code a friend shows when they invite you.")
+                    .into_any_element(),
+            ),
+            Some(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(field)
+                    .child(join)
+                    .into_any_element(),
+            ),
+            &t,
+        )
+    }
+
+    fn join_friend(&mut self) {
+        if self.mode != Mode::Client || horizon_friends::invite::parse(&self.friend_code).is_none() {
+            return;
+        }
+        self.joining = Some(self.friend_code.clone());
+        self.play();
+        if self.starting_client.is_none() {
+            self.joining = None;
+        }
+    }
+
     fn console(&self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let running = self.server.is_some();
@@ -2585,6 +2703,7 @@ impl Render for Launcher {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = self.theme;
         self.input_focused = self.focus.is_focused(window);
+        self.friend_focused = self.friend_focus.is_focused(window);
         let content = match self.page {
             Page::Play => self.play_page(cx),
             Page::Versions => self.versions_page(cx),

@@ -33,6 +33,7 @@ const MAKE: u64 = id("create.make", 0);
 const SERVER: u64 = id("mp.row", 0);
 const JOIN: u64 = id("mp.join", 0);
 const DIRECT: u64 = id("mp.direct", 0);
+const FRIEND: u64 = id("mp.friend", 0);
 const ADD: u64 = id("mp.add", 0);
 const EDIT: u64 = id("mp.edit", 0);
 const DELETE: u64 = id("mp.delete", 0);
@@ -435,6 +436,7 @@ impl Title {
                 let id = match hit {
                     JOIN => Some(40),
                     DIRECT => Some(41),
+                    FRIEND => Some(47),
                     ADD => Some(42),
                     EDIT => Some(43),
                     DELETE => Some(44),
@@ -443,11 +445,13 @@ impl Title {
                         Screen::List { .. } => 46,
                         Screen::Edit { .. } => 51,
                         Screen::Direct { .. } => 53,
+                        Screen::Friend { .. } => 57,
                         Screen::Disconnected { .. } => 54,
                     }),
                     CANCEL_RETRY => Some(55),
                     DONE => Some(match screen {
                         Screen::Direct { .. } => 52,
+                        Screen::Friend { .. } => 56,
                         _ => 50,
                     }),
                     FIELD_A | FIELD_B => {
@@ -803,6 +807,7 @@ fn multiplayer_page(ui: &mut Ui, x: f32, w: f32, screen: &Screen, caret: bool) {
             let saved = selected.is_some_and(|i| i < servers.len());
             let mut items = vec![
                 (JOIN, "Join", Kind::Primary, has),
+                (FRIEND, "Join a friend", Kind::Secondary, true),
                 (ADD, "Add server", Kind::Secondary, true),
                 (DIRECT, "Direct connect", Kind::Secondary, true),
                 (REFRESH, "Refresh", Kind::Ghost, true),
@@ -954,6 +959,48 @@ fn multiplayer_page(ui: &mut Ui, x: f32, w: f32, screen: &Screen, caret: bool) {
                 caret,
             );
             ui.divider(x, y + rh, w);
+        }
+        Screen::Friend { code } => {
+            let y = header(
+                ui,
+                x,
+                "Join a friend",
+                "Paste the invite code your friend sees in their pause menu.",
+            );
+            let available = horizon_friends::relay_url().is_some();
+            let ok = available && horizon_friends::Code::parse(code).is_some();
+            actions_right(
+                ui,
+                x + w,
+                y - 24.0 - 58.0,
+                &[
+                    (DONE, "Join", Kind::Primary, ok),
+                    (BACK, "Cancel", Kind::Ghost, true),
+                ],
+            );
+            ui.divider(x, y, w);
+            let rh = 12.0 + CONTROL + 12.0;
+            ui.text_line(Face::Regular, BODY, rh, x, y, color::MUTED, "Invite code");
+            let fx = x + t::ROW_LABEL + 16.0;
+            ui.field(
+                FIELD_A,
+                [fx, y + 12.0, (w - t::ROW_LABEL - 16.0).min(240.0), CONTROL],
+                code,
+                "K7QM-3XPD",
+                true,
+                caret,
+            );
+            ui.divider(x, y + rh, w);
+            if !available {
+                ui.text(
+                    Face::Regular,
+                    SMALL,
+                    x,
+                    y + rh + 12.0,
+                    color::FAINT,
+                    "Joining friends isn't available yet in this build.",
+                );
+            }
         }
         Screen::Disconnected { reason, retry } => {
             let mut y = header(

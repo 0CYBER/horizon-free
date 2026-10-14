@@ -1055,6 +1055,15 @@ pub fn client(tag: &str) -> Result<Command, String> {
     Ok(cmd)
 }
 
+/// Start the game straight into a friend's world: `--server friend:CODE`.
+pub fn join_friend(cmd: &mut Command, code: &str) -> Result<(), String> {
+    let code = horizon_friends::Code::parse(code)
+        .ok_or("That isn't an invite code: codes are eight letters and digits, like K7QM-3XPD.")?;
+    cmd.arg("--server")
+        .arg(format!("{}{code}", horizon_friends::ADDRESS_PREFIX));
+    Ok(())
+}
+
 /// The dedicated server's command in `folder`, once prepared and the EULA is agreed to.
 pub fn server(tag: &str, folder: &Path, accept_eula: bool) -> Result<Command, String> {
     need_prepared(tag)?;

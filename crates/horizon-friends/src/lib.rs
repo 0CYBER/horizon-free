@@ -32,6 +32,11 @@ use std::{
     time::Duration,
 };
 
+/// The game's server address for a friend's world: `friend:K7QM-3XPD`
+/// (`horizon-client --server friend:…`, what the launcher's Join a friend
+/// starts).
+pub const ADDRESS_PREFIX: &str = "friend:";
+
 /// Fill `buf` from the OS random generator.
 pub(crate) fn fill_random(buf: &mut [u8]) -> io::Result<()> {
     getrandom::fill(buf).map_err(|e| io::Error::other(e.to_string()))

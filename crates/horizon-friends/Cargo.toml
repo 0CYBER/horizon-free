@@ -1,9 +1,8 @@
 [package]
 name = "horizon-friends"
 version = "0.1.0"
-edition.workspace = true
-license.workspace = true
-rust-version.workspace = true
+edition = "2024"
+license = "MIT"
 description = "Play with friends: invite codes, the relay protocol, the end-to-end encrypted tunnel between a host's integrated server and its guests"
 
 [dependencies]

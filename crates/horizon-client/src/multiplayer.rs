@@ -45,6 +45,11 @@ pub enum Screen {
     Direct {
         address: String,
     },
+    /// Join a friend's world with its invite code (Horizon's own, reached
+    /// from Horizon's multiplayer page).
+    Friend {
+        code: String,
+    },
     Disconnected {
         reason: String,
         /// Auto-reconnect's next attempt, until it is cancelled.
@@ -205,6 +210,24 @@ impl Screen {
                     "Cancel",
                     true,
                     53,
+                ),
+            ],
+            Self::Friend { code } => vec![
+                b(
+                    w / 2.0 - 100.0,
+                    h / 4.0 + 96.0 + 12.0,
+                    200.0,
+                    "Join",
+                    horizon_friends::Code::parse(code).is_some(),
+                    56,
+                ),
+                b(
+                    w / 2.0 - 100.0,
+                    h / 4.0 + 120.0 + 12.0,
+                    200.0,
+                    "Cancel",
+                    true,
+                    57,
                 ),
             ],
             Self::Disconnected { retry, .. } => {
@@ -442,6 +465,10 @@ impl Screen {
                     blink,
                 );
             }
+            Self::Friend { code } => {
+                centered(batch, "Join a Friend", 20.0, u32::MAX);
+                Self::field(atlas, batch, "Invite Code", code, 100.0 - 11.0, true, blink);
+            }
             Self::Disconnected { reason, retry } => {
                 centered(
                     batch,
@@ -485,6 +512,11 @@ impl Screen {
             (Self::List { .. }, Some(41)) => {
                 *self = Self::Direct {
                     address: String::new(),
+                }
+            }
+            (Self::List { .. }, Some(47)) => {
+                *self = Self::Friend {
+                    code: String::new(),
                 }
             }
             (Self::List { .. }, Some(42)) => {
@@ -568,12 +600,20 @@ impl Screen {
                 *self = Self::list(saves);
             }
             (
-                Self::Edit { .. } | Self::Direct { .. } | Self::Disconnected { .. },
-                Some(51 | 53 | 54),
+                Self::Edit { .. }
+                | Self::Direct { .. }
+                | Self::Friend { .. }
+                | Self::Disconnected { .. },
+                Some(51 | 53 | 54 | 57),
             ) => *self = Self::list(saves),
             (Self::Disconnected { retry, .. }, Some(55)) => *retry = None,
             (Self::Direct { address }, Some(52)) => {
                 return Outcome::Connect(address.trim().to_owned());
+            }
+            (Self::Friend { code }, Some(56)) => {
+                if let Some(code) = horizon_friends::Code::parse(code) {
+                    return Outcome::Connect(format!("{}{code}", crate::net::FRIEND));
+                }
             }
             (Self::Edit { focus, .. }, None) => {
                 for (i, fy) in [(0u8, 53.0 + 11.0), (1, 94.0 + 11.0)] {
@@ -595,6 +635,7 @@ impl Screen {
                 ..
             } => Some(if *focus == 0 { name } else { address }),
             Self::Direct { address } => Some(address),
+            Self::Friend { code } => Some(code),
             _ => None,
         }
     }
@@ -614,6 +655,7 @@ impl Screen {
             Self::Edit { focus: 0, .. } => ("server.name", 0),
             Self::Edit { .. } => ("server.address", 0),
             Self::Direct { .. } => ("server.direct", 0),
+            Self::Friend { .. } => ("friend.code", 0),
             _ => return None,
         };
         self.focused_field().map(|f| (id, f, 128))
