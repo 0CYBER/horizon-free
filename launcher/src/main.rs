@@ -189,6 +189,17 @@ impl Launcher {
         if settings.server_dir.is_none() {
             settings.server_dir = Some(backend::data_dir().join("server"));
         }
+        // Release builds on Linux keep their entry in the applications menu up to date (a moved
+        // binary changes it); `HORIZON_LAUNCHER_DESKTOP_ENTRY=1` does it in a development build.
+        if cfg!(target_os = "linux")
+            && settings.desktop_entry()
+            && (!cfg!(debug_assertions)
+                || std::env::var_os("HORIZON_LAUNCHER_DESKTOP_ENTRY").is_some())
+        {
+            std::thread::spawn(|| {
+                let _ = horizon_launcher::desktop::install(backend::exe_path());
+            });
+        }
         let installed = backend::installed();
         if settings
             .selected

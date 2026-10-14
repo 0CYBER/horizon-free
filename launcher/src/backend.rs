@@ -1280,6 +1280,77 @@ fn replace_binary(new: &Path, _exe: &Path) -> std::io::Result<()> {
     self_replace::self_replace(new)
 }
 
+/// The app bundle the launcher runs from (`…/Horizon.app` for `…/Horizon.app/Contents/MacOS/
+/// horizon-launcher`), or None for a bare binary, as launchers before the .app shipped.
+pub fn app_bundle(exe: &Path) -> Option<&Path> {
+    let macos = exe.parent()?;
+    let contents = macos.parent()?;
+    let app = contents.parent()?;
+    (macos.file_name()? == "MacOS"
+        && contents.file_name()? == "Contents"
+        && app.extension()? == "app")
+        .then_some(app)
+}
+
+/// Finds the first `*.app` folder under `dir`.
+fn find_app(dir: &Path) -> Option<PathBuf> {
+    for entry in fs::read_dir(dir).ok()?.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if path.extension().is_some_and(|e| e == "app") {
+                return Some(path);
+            }
+            if let Some(found) = find_app(&path) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+/// Puts the bundle `new` in place of `app`: copied beside it first (`ditto` keeps its links,
+/// modes and signature), then the old one is moved aside and the new one renamed in, so `app` is
+/// never half written. The running launcher keeps its open files and works on.
+#[cfg(target_os = "macos")]
+fn replace_bundle(new: &Path, app: &Path) -> Result<(), String> {
+    let dir = app.parent().ok_or("The app has no folder.")?;
+    let name = app.file_name().unwrap_or_default().to_string_lossy();
+    let staged = dir.join(format!(".{name}.update-{}", std::process::id()));
+    let old = dir.join(format!(".{name}.old-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&staged);
+    let copied = Command::new("ditto")
+        .arg(new)
+        .arg(&staged)
+        .status()
+        .map_err(|e| format!("ditto: {e}"))?;
+    if !copied.success() {
+        let _ = fs::remove_dir_all(&staged);
+        return Err(format!(
+            "Could not copy the new app next to {}.",
+            app.display()
+        ));
+    }
+    fs::rename(app, &old).map_err(|e| {
+        let _ = fs::remove_dir_all(&staged);
+        format!("Could not move {} aside: {e}", app.display())
+    })?;
+    if let Err(e) = fs::rename(&staged, app) {
+        let _ = fs::rename(&old, app);
+        let _ = fs::remove_dir_all(&staged);
+        return Err(format!(
+            "Could not put the new app at {}: {e}",
+            app.display()
+        ));
+    }
+    let _ = fs::remove_dir_all(&old);
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn replace_bundle(_new: &Path, _app: &Path) -> Result<(), String> {
+    Err("App bundles are a macOS thing.".into())
+}
+
 /// Downloads a launcher release and puts its binary in place of this one. The running process
 /// keeps working; `restart` starts the new one. When the file there already is that release or
 /// a newer one (updated from the command line or another window), there is nothing to do.
@@ -1302,6 +1373,17 @@ pub fn self_update(release: &Release, progress: impl Fn(f32)) -> Result<(), Stri
     download(&url, size, &archive, &progress)?;
     let unpacked = work.join("unpacked");
     unpack(&archive, &url, &unpacked)?;
+    // A launcher inside Horizon.app replaces the whole bundle (its Info.plist, icon and
+    // signature belong with the binary); a bare binary, as older launchers are, only the binary,
+    // which the macOS archive also holds (Horizon.app/Contents/MacOS/horizon-launcher).
+    if let Some(app) = app_bundle(exe_path()) {
+        if let Some(new) = find_app(&unpacked) {
+            replace_bundle(&new, app)?;
+            let _ = fs::remove_dir_all(&work);
+            progress(1.0);
+            return Ok(());
+        }
+    }
     let binary =
         find_file(&unpacked, LAUNCHER_BINARY).ok_or("The download has no launcher binary.")?;
     replace_binary(&binary, exe_path()).map_err(|e| {
@@ -1521,6 +1603,10 @@ pub struct Settings {
     /// Off by default, so the opening animation shows unless the player turns it off.
     #[serde(default)]
     pub skip_opening: bool,
+    /// Linux: whether the launcher keeps its entry in the applications menu (`desktop`). Unset
+    /// means yes; removing the entry stores `false`, so it doesn't come back on the next start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desktop_entry: Option<bool>,
 }
 
 impl Settings {
@@ -1529,6 +1615,10 @@ impl Settings {
     }
     pub fn parse(text: &str) -> Self {
         serde_json::from_str(text).unwrap_or_default()
+    }
+    /// Whether the launcher keeps its entry in the applications menu (Linux).
+    pub fn desktop_entry(&self) -> bool {
+        self.desktop_entry.unwrap_or(true)
     }
     /// Whether new Horizon versions are installed automatically.
     pub fn auto_install(&self) -> bool {
@@ -1876,6 +1966,96 @@ mod tests {
         write("v2026.10.20", crate_file, "rust preparer, changed");
         assert_eq!(reuse_prepared(&versions, "v2026.10.20"), None);
         let _ = fs::remove_dir_all(&versions);
+    }
+
+    #[test]
+    fn finds_the_app_bundle_around_the_binary() {
+        let exe = Path::new("/Applications/Horizon.app/Contents/MacOS/horizon-launcher");
+        assert_eq!(
+            app_bundle(exe),
+            Some(Path::new("/Applications/Horizon.app"))
+        );
+        assert_eq!(app_bundle(Path::new("/Users/me/horizon-launcher")), None);
+        assert_eq!(
+            app_bundle(Path::new("/x/Contents/MacOS/horizon-launcher")),
+            None
+        );
+        let work = std::env::temp_dir().join(format!("horizon-find-app-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&work);
+        fs::create_dir_all(work.join("dist/Horizon.app/Contents/MacOS")).unwrap();
+        assert_eq!(find_app(&work), Some(work.join("dist/Horizon.app")));
+        let _ = fs::remove_dir_all(&work);
+    }
+
+    /// The whole update of an app bundle, as the release ships it: signed, zipped with `ditto`,
+    /// unpacked by the launcher, swapped in place of the installed one, still valid.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_app_bundle_updates_in_place() {
+        use std::os::unix::fs::PermissionsExt;
+        let work = std::env::temp_dir().join(format!("horizon-bundle-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&work);
+        let make = |dir: &Path, version: &str| {
+            let app = dir.join("Horizon.app");
+            fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
+            fs::create_dir_all(app.join("Contents/Resources")).unwrap();
+            let bin = app.join("Contents/MacOS/horizon-launcher");
+            fs::copy("/usr/bin/true", &bin).unwrap();
+            fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+            fs::write(app.join("Contents/Resources/version"), version).unwrap();
+            fs::write(
+                app.join("Contents/Info.plist"),
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict>\
+                 <key>CFBundleExecutable</key><string>horizon-launcher</string>\
+                 <key>CFBundleIdentifier</key><string>dev.horizon.test</string>\
+                 <key>CFBundlePackageType</key><string>APPL</string></dict></plist>\n",
+            )
+            .unwrap();
+            let signed = Command::new("codesign")
+                .args(["--force", "--sign", "-"])
+                .arg(&app)
+                .status()
+                .unwrap();
+            assert!(signed.success());
+            app
+        };
+        let installed = make(&work.join("Applications"), "1.0.0");
+        let release = make(&work.join("release"), "2.0.0");
+        let zip = work.join("release.zip");
+        let zipped = Command::new("ditto")
+            .args(["-c", "-k", "--norsrc", "--noextattr", "--keepParent"])
+            .arg(&release)
+            .arg(&zip)
+            .status()
+            .unwrap();
+        assert!(zipped.success());
+        unpack(&zip, "release.zip", &work.join("unpacked")).unwrap();
+        let new = find_app(&work.join("unpacked")).unwrap();
+        replace_bundle(&new, &installed).unwrap();
+        let version = fs::read_to_string(installed.join("Contents/Resources/version")).unwrap();
+        assert_eq!(version, "2.0.0");
+        let bin = installed.join("Contents/MacOS/horizon-launcher");
+        assert!(
+            Command::new(&bin).status().unwrap().success(),
+            "still executable"
+        );
+        let valid = Command::new("codesign")
+            .args(["--verify", "--strict"])
+            .arg(&installed)
+            .status()
+            .unwrap();
+        assert!(valid.success(), "the updated bundle's signature holds");
+        let left: Vec<_> = fs::read_dir(work.join("Applications"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(
+            left,
+            ["Horizon.app"],
+            "nothing staged or moved aside is left"
+        );
+        let _ = fs::remove_dir_all(&work);
     }
 
     #[test]
