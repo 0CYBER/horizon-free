@@ -70,9 +70,14 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher menu-style [horizon|classic]   show or set the game's menu style
     horizon-launcher update [--check]               Horizon and the launcher
     horizon-launcher logs [--lines N] [--crash]     the end of the game's log, or its newest crash report
+    horizon-launcher account [list]                 the Microsoft accounts signed in (* = plays)
+    horizon-launcher account sign-in                sign in in your browser with a code
+    horizon-launcher account sign-out <name>
+    horizon-launcher account select <name>          play as this account
+    horizon-launcher account offline                play without an account
 
 `--json` prints JSON where there is something to report (`versions`, `install`, `notes`,
-`next`, `links`, `menu-style`, `update --check`, `logs`). Errors go to stderr with exit code 1. `server` runs in the terminal,
+`next`, `links`, `menu-style`, `update --check`, `logs`, `account`). Errors go to stderr with exit code 1. `server` runs in the terminal,
 so lines you type reach its console. `HORIZON_LAUNCHER_HOME` replaces the data folder (for
 scripts and tests).
 
@@ -84,12 +89,28 @@ scripts and tests).
 
 (with the full path to the binary if it is not on your `PATH`). Its tools: `list_versions`,
 `install_version`, `remove_version`, `prepare_resources`, `launch_client`, `start_server`,
-`server_command`, `server_log`, `stop_server`, `patch_notes`, `links`, `menu_style`, `logs` and
-`check_updates`.
+`server_command`, `server_log`, `stop_server`, `patch_notes`, `links`, `menu_style`, `logs`,
+`check_updates`, `accounts`, `sign_in` (returns the link and code for the player; the sign-in
+finishes in the background), `sign_out` and `select_account`.
 A server started through MCP stops (cleanly, with `stop`) when the session ends. Starting one
 needs `accept_eula`, which an agent should only pass with the player's consent.
 
 The window, the command line and the MCP server all call the same core, `src/backend.rs`.
+
+## Microsoft accounts
+
+Settings → Accounts signs in a Microsoft account to play on online-mode servers under your own
+name and skin: the launcher shows a code, you enter it at microsoft.com/link, and the launcher
+checks that the account owns Minecraft: Java Edition. The Play page says who plays ("Playing as");
+without an account the game plays offline, as before. Tokens live in the system keychain (Keychain,
+Credential Manager, or the Secret Service on Linux), never in a file, a log or the command line;
+`accounts.json` in the data folder keeps only names and UUIDs. Without a keychain you stay signed
+in until the launcher closes. When the game starts, it gets the session in a private file it
+deletes as soon as it has read it. Sign out removes the tokens.
+
+Sign-in needs Horizon's own Azure app registration: its client ID is built in from
+`HORIZON_MSA_CLIENT_ID` (and `HORIZON_MSA_CLIENT_ID` at run time overrides it; empty = not
+configured). How it works: [docs/microsoft-account.md](../docs/microsoft-account.md).
 
 ## Logs and crash reports
 
