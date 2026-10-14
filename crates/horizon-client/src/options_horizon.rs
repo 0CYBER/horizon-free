@@ -10,6 +10,7 @@
 //! of control belong in `ui_theme` so the launcher-matching look stays in one
 //! place. Everything else (sliders dragging, scrolling, Done) is handled here.
 use crate::{
+    extras,
     graphics_style::Cost,
     graphics_ui::{self, Item, Level},
     hud::{HudAtlas, HudBatch},
@@ -34,6 +35,8 @@ pub enum HRow {
     Level,
     /// A graphics setting with its frame-time cost and description.
     Graphics(Item, Cost, &'static str),
+    /// One of Horizon's extras (`extras`), off by default.
+    Extra(extras::Item),
 }
 /// A sidebar section: name, description, rows.
 pub struct Section {
@@ -170,6 +173,16 @@ pub const SECTIONS: &[Section] = &[
                 HRow::Style,
                 HRow::Page("Resource packs", "Textures, sounds and fonts", Page::Packs),
             ]
+        },
+    },
+    Section {
+        name: "Extras",
+        blurb: "Optional additions, all off by default: the game stays vanilla until you turn one on.",
+        rows: |_| {
+            extras::rows()
+                .into_iter()
+                .map(|r| r.map_or_else(HRow::Header, HRow::Extra))
+                .collect()
         },
     },
 ];
@@ -402,6 +415,33 @@ impl OptionsUi {
                         );
                     }
                 }
+                HRow::Extra(item) => {
+                    let cy = y + ROW_H / 2.0;
+                    let id = ROW + i as u64;
+                    let cost = item.cost().map_or((0, ""), |c| (c as u8, c.label()));
+                    let (caption, text) = (item.caption(), item.description());
+                    if let Some(on) = item.switch(&s.extras) {
+                        ui.described_row(x, y, caption, "", 0.0, cost, text, cw - 60.0);
+                        ui.switch(id, control_x, cy, on);
+                    } else {
+                        let value = if item == extras::Item::ZoomKey
+                            && self.selected_key == Some(extras::ZOOM_KEY)
+                        {
+                            "Press a key".to_owned()
+                        } else {
+                            item.value(&s.extras)
+                        };
+                        let bw = ui.button_width(&value, false).max(96.0);
+                        ui.described_row(x, y, caption, "", 0.0, cost, text, cw - bw - 24.0);
+                        ui.button(
+                            id,
+                            [control_x - bw, y + 12.0, bw, CONTROL],
+                            &value,
+                            Button::Secondary,
+                            true,
+                        );
+                    }
+                }
                 HRow::Style => {
                     ui.row(x, y, "Menu style", "", 0.0);
                     let labels = ["Horizon", "Classic"];
@@ -513,6 +553,10 @@ impl OptionsUi {
             }
             return events;
         }
+        // A click anywhere stops waiting for the zoom key.
+        if self.selected_key == Some(extras::ZOOM_KEY) {
+            self.selected_key = None;
+        }
         match self.horizon_target(s, atlas, x, y) {
             Some(Target::Nav(i)) => {
                 self.section = i;
@@ -554,6 +598,13 @@ impl OptionsUi {
                         events.push(Event::Changed);
                     }
                     Some(HRow::Page(_, _, page)) => self.open_page(*page),
+                    Some(HRow::Extra(extras::Item::ZoomKey)) => {
+                        self.selected_key = Some(extras::ZOOM_KEY);
+                    }
+                    Some(HRow::Extra(item)) => {
+                        item.cycle(&mut s.extras, right);
+                        events.push(Event::Changed);
+                    }
                     _ => {}
                 }
             }
