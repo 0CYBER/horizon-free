@@ -26,6 +26,9 @@ impl Game<'_> {
     }
     /// Open the options screens (OptionsScreen) from the title or pause menu.
     pub(super) fn open_options(&mut self, from_title: bool) {
+        // Gameplay keys must not stay held behind the options screen, where
+        // bindings can also change before the physical key is released.
+        self.keys.clear();
         self.screen = Screen::Options;
         self.options_from_title = from_title;
         let ui = &mut self.ui.options;
