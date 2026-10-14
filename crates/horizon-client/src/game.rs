@@ -9005,9 +9005,7 @@ pub fn run() -> Result<()> {
         player_model: None,
     };
     game.ui.vanilla_root = vanilla_root;
-    game.res.atlas.font.uniform = game.settings.force_unicode;
-    game.res.atlas.font.japanese = game.settings.japanese_glyphs;
-    game.ui.chat.options = game.settings.chat_options();
+    game.apply_settings();
     if let Some(path) = &game.options.control {
         let server = horizon_client::control::Server::start(path)
             .map_err(|e| format!("control socket {}: {e}", path.display()))?;
