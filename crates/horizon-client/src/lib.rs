@@ -27,6 +27,7 @@ pub mod camera;
 pub mod cauldron;
 pub mod chat;
 pub mod chunk;
+pub mod chunk_map;
 pub mod clipboard;
 pub mod clock;
 pub mod clouds;
