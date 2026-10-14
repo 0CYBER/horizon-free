@@ -31,32 +31,8 @@ fn entity_shader() -> String {
     crate::overlay::wgsl_constants() + include_str!("entity.wgsl")
 }
 
-// Separate special materials without changing entity order or their overlays.
-fn batch_entities(
-    entities: &[Vertex],
-    additive: &[Vertex],
-    hand: &[Vertex],
-) -> (Vec<Vertex>, [u32; 4]) {
-    let mut combined = Vec::with_capacity(entities.len() + additive.len() + hand.len());
-    let mut counts = [0u32; 4];
-    for (i, layer) in [0, 11, 12, 4].into_iter().enumerate() {
-        for quad in entities.as_chunks::<4>().0 {
-            let material = match quad[0].layer {
-                11 => 11,
-                12 => 12,
-                4 => 4,
-                _ => 0,
-            };
-            if material == layer {
-                combined.extend_from_slice(quad);
-                counts[i] += 1;
-            }
-        }
-    }
-    combined.extend_from_slice(additive);
-    combined.extend_from_slice(hand);
-    (combined, counts)
-}
+mod entity_batch;
+use entity_batch::EntityBatch;
 
 /// Window.getAppropriateLineWidth, in framebuffer pixels.
 pub fn outline_width(width: u32) -> f32 {
@@ -263,6 +239,7 @@ pub struct Renderer {
     hand_globals: wgpu::Buffer,
     entity_buffer: wgpu::Buffer,
     entity_capacity: u64,
+    entity_batch: EntityBatch,
     group: wgpu::BindGroup,
     globals: wgpu::Buffer,
     lightmap: wgpu::Texture,
@@ -1413,6 +1390,7 @@ impl Renderer {
             hand_globals,
             entity_buffer,
             entity_capacity,
+            entity_batch: EntityBatch::default(),
             group,
             globals,
             lightmap,
@@ -2117,18 +2095,17 @@ impl Renderer {
             self.queue
                 .write_buffer(&self.outline, 0, bytemuck::cast_slice(&lines));
         }
-        let (
-            combined,
-            [
-                entity_quads,
-                crumbling_quads,
-                translucent_crumbling_quads,
-                cloud_quads,
-            ],
-        ) = batch_entities(frame.entities, frame.additive, frame.hand);
+        let [
+            entity_quads,
+            crumbling_quads,
+            translucent_crumbling_quads,
+            cloud_quads,
+        ] = self
+            .entity_batch
+            .update(frame.entities, frame.additive, frame.hand);
         let world_quads =
             entity_quads + crumbling_quads + translucent_crumbling_quads + cloud_quads;
-        let all_entities = &combined;
+        let all_entities = &self.entity_batch.combined;
         let hand_quads = (frame.hand.len() / 4) as u32;
         let additive_quads = (frame.additive.len() / 4) as u32;
         let entity_vertices = all_entities.len() as u64;
@@ -2612,7 +2589,9 @@ mod tests {
             .into_iter()
             .flat_map(|(layer, id)| quad(layer, id))
             .collect();
-        let (vertices, counts) = super::batch_entities(&entities, &quad(3, 5), &quad(0, 6));
+        let mut batch = super::EntityBatch::default();
+        let counts = batch.update(&entities, &quad(3, 5), &quad(0, 6));
+        let vertices = &batch.combined;
         assert_eq!(counts, [2, 1, 1, 2]);
         assert_eq!(
             vertices
