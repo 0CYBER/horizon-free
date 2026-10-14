@@ -947,6 +947,19 @@ impl Game<'_> {
                         }
                     }
                 }
+                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
+                    && m.species() == horizon_client::mobs::Species::Creeper
+                {
+                    for (index, _, value) in &p.values {
+                        match (index, value) {
+                            // Creeper.DATA_SWELL_DIR, DATA_IS_POWERED, DATA_IS_IGNITED.
+                            (16, Value::Int(dir)) => m.extra.counter = *dir,
+                            (17, Value::Bool(powered)) => m.extra.charged = *powered,
+                            (18, Value::Bool(ignited)) => m.extra.flag = *ignited,
+                            _ => {}
+                        }
+                    }
+                }
                 for (index, _, value) in &p.values {
                     if *index == ITEM_ENTITY_ITEM
                         && let Value::Item(stack) = value
@@ -1758,6 +1771,9 @@ impl Game<'_> {
             m.age += 1;
             if m.species() == horizon_client::mobs::Species::Rabbit {
                 horizon_client::mobs::rabbit::base_tick(m);
+            }
+            if m.species() == horizon_client::mobs::Species::Creeper {
+                horizon_client::mobs::hostile::creeper_client_tick(m);
             }
             if m.hurt_time > 0 {
                 m.hurt_time -= 1;

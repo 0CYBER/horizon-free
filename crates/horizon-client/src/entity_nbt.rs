@@ -170,14 +170,11 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
     }
     match id {
         "minecraft:creeper" => {
-            for (key, value) in [
-                ("Fuse", Tag::Short(30)),
-                ("ExplosionRadius", Tag::Byte(3)),
-                ("ignited", Tag::Byte(0)),
-            ] {
+            for (key, value) in [("Fuse", Tag::Short(30)), ("ExplosionRadius", Tag::Byte(3))] {
                 map.entry(key.into()).or_insert(value);
             }
             map.insert("powered".into(), Tag::Byte(i8::from(m.extra.charged)));
+            map.insert("ignited".into(), Tag::Byte(i8::from(m.extra.flag)));
         }
         "minecraft:cat" => {
             if let Some(owner) = m.extra.owner {
@@ -602,6 +599,8 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     m.no_gravity = m.no_gravity || flag(tag, "NoGravity");
     if m.species() == crate::mobs::Species::Creeper {
         m.extra.charged = flag(tag, "powered");
+        // Creeper.readAdditionalSaveData: `ignited` lights the fuse.
+        m.extra.flag = flag(tag, "ignited");
     }
     if matches!(
         m.species(),

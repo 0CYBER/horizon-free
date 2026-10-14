@@ -225,9 +225,17 @@ fn mob_meta(m: &Mob, hub: &Hub) -> Vec<(u8, i32, Value)> {
                 meta.push((18, serializer::INT, Value::Int(e.size)));
             }
         }
-        // Creeper.DATA_IS_POWERED.
-        "minecraft:creeper" if e.charged => {
-            meta.push((17, serializer::BOOLEAN, Value::Bool(true)));
+        // Creeper.DATA_SWELL_DIR, DATA_IS_POWERED and DATA_IS_IGNITED: the
+        // guest swells the creeper from them. The direction always goes in,
+        // as only changed entries are sent and it drops back to -1.
+        "minecraft:creeper" => {
+            meta.push((16, serializer::INT, Value::Int(e.counter)));
+            if e.charged {
+                meta.push((17, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            if e.flag {
+                meta.push((18, serializer::BOOLEAN, Value::Bool(true)));
+            }
         }
         // Enderman.DATA_CARRY_STATE.
         "minecraft:enderman" => {
