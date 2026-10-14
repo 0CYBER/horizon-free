@@ -8,12 +8,16 @@
 //!
 //! `tokens`: writes `website/src/tokens.css`, the design tokens of `crates/horizon-theme` as CSS
 //! custom properties (a horizon-theme test fails when the file is out of date).
+//!
+//! `icons`: renders the icon masters in `docs/media/brand` (with `rsvg-convert`, from librsvg)
+//! into every size the platforms and the website use, and packs `packaging/icons/horizon.ico`
+//! and `horizon.icns`. `docs/media/brand/README.md` lists what goes where.
 
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-const USAGE: &str = "usage: cargo run -p xtask -- package BINARY OUTDIR | tokens";
+const USAGE: &str = "usage: cargo run -p xtask -- package BINARY OUTDIR | tokens | icons";
 
 /// What the release folder takes from the repository at HEAD, as `git archive` writes it.
 const ARCHIVED: [&str; 5] = [
@@ -34,6 +38,7 @@ fn main() -> ExitCode {
     let result = match args.as_slice() {
         [task, binary, out] if task == "package" => package(Path::new(binary), Path::new(out)),
         [task] if task == "tokens" => tokens(),
+        [task] if task == "icons" => icons(),
         _ => Err(USAGE.to_string()),
     };
     match result {
@@ -66,6 +71,145 @@ fn tokens() -> Result<(), String> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../website/src/tokens.css");
     fs::write(&path, horizon_theme::css()).map_err(|e| format!("{}: {e}", path.display()))?;
     println!("wrote website/src/tokens.css");
+    Ok(())
+}
+
+/// The square icon's sizes: Linux's hicolor theme, and the ones the .ico holds.
+const HICOLOR: [u32; 8] = [16, 24, 32, 48, 64, 128, 256, 512];
+const ICO: [u32; 7] = [16, 24, 32, 48, 64, 128, 256];
+/// The .icns entries: type and pixel size, macOS's tile drawn on Apple's grid.
+const ICNS: [(&[u8; 4], u32); 11] = [
+    (b"icp4", 16),
+    (b"icp5", 32),
+    (b"icp6", 64),
+    (b"ic07", 128),
+    (b"ic08", 256),
+    (b"ic09", 512),
+    (b"ic10", 1024),
+    (b"ic11", 32),
+    (b"ic12", 64),
+    (b"ic13", 256),
+    (b"ic14", 512),
+];
+
+fn render(svg: &Path, size: (u32, u32)) -> Result<Vec<u8>, String> {
+    let output = Command::new("rsvg-convert")
+        .arg("-w")
+        .arg(size.0.to_string())
+        .arg("-h")
+        .arg(size.1.to_string())
+        .arg(svg)
+        .output()
+        .map_err(|e| format!("rsvg-convert (librsvg): {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "rsvg-convert {}: {}",
+            svg.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(output.stdout)
+}
+
+fn write(path: &Path, data: &[u8]) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    fs::write(path, data).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// An .ico whose images are PNGs (Windows Vista and later read them at every size).
+fn ico(images: &[(u32, Vec<u8>)]) -> Vec<u8> {
+    let mut out = vec![0, 0, 1, 0];
+    out.extend((images.len() as u16).to_le_bytes());
+    let mut offset = 6 + 16 * images.len();
+    for (size, png) in images {
+        // A width or height of 256 is written as 0.
+        let side = if *size >= 256 { 0 } else { *size as u8 };
+        out.extend([side, side, 0, 0]);
+        out.extend(1u16.to_le_bytes());
+        out.extend(32u16.to_le_bytes());
+        out.extend((png.len() as u32).to_le_bytes());
+        out.extend((offset as u32).to_le_bytes());
+        offset += png.len();
+    }
+    for (_, png) in images {
+        out.extend(png);
+    }
+    out
+}
+
+/// An .icns of PNG entries.
+fn icns(entries: &[(&[u8; 4], Vec<u8>)]) -> Vec<u8> {
+    let body: usize = entries.iter().map(|(_, png)| 8 + png.len()).sum();
+    let mut out = b"icns".to_vec();
+    out.extend(((8 + body) as u32).to_be_bytes());
+    for (kind, png) in entries {
+        out.extend(*kind);
+        out.extend(((8 + png.len()) as u32).to_be_bytes());
+        out.extend(png);
+    }
+    out
+}
+
+fn icons() -> Result<(), String> {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let brand = repo.join("docs/media/brand");
+    let square = brand.join("icon.svg");
+    let packaging = repo.join("packaging/icons");
+    for size in HICOLOR {
+        let png = render(&square, (size, size))?;
+        write(
+            &packaging.join(format!("hicolor/{size}x{size}/apps/horizon.png")),
+            &png,
+        )?;
+    }
+    write(
+        &packaging.join("hicolor/scalable/apps/horizon.svg"),
+        &fs::read(&square).map_err(|e| format!("{}: {e}", square.display()))?,
+    )?;
+    let images = ICO
+        .iter()
+        .map(|&s| render(&square, (s, s)).map(|png| (s, png)))
+        .collect::<Result<Vec<_>, _>>()?;
+    write(&packaging.join("horizon.ico"), &ico(&images))?;
+    let macos = brand.join("icon-macos.svg");
+    let entries = ICNS
+        .iter()
+        .map(|&(kind, s)| render(&macos, (s, s)).map(|png| (kind, png)))
+        .collect::<Result<Vec<_>, _>>()?;
+    write(&packaging.join("horizon.icns"), &icns(&entries))?;
+    // The window icon the game and the launcher set at run time (X11 and Windows title bars).
+    write(
+        &repo.join("crates/horizon-theme/icons/horizon-64.png"),
+        &render(&square, (64, 64))?,
+    )?;
+    // Avatars and the website's icons.
+    let avatar = brand.join("avatar.svg");
+    for (svg, size, out) in [
+        (
+            &avatar,
+            500,
+            "docs/media/brand/social/github-avatar-500.png",
+        ),
+        (&avatar, 512, "docs/media/brand/social/discord-icon-512.png"),
+        (
+            &brand.join("avatar-kira.svg"),
+            512,
+            "docs/media/brand/social/kira-avatar-512.png",
+        ),
+        (&avatar, 180, "website/public/apple-touch-icon.png"),
+        (&square, 32, "website/public/favicon-32.png"),
+        (&square, 1024, "docs/media/brand/icon-1024.png"),
+        (&macos, 1024, "docs/media/brand/icon-macos-1024.png"),
+    ] {
+        write(&repo.join(out), &render(svg, (size, size))?)?;
+    }
+    write(
+        &repo.join("website/public/favicon.svg"),
+        &fs::read(&square).map_err(|e| format!("{}: {e}", square.display()))?,
+    )?;
+    println!("wrote packaging/icons, the window icon, the avatars and the website's icons");
     Ok(())
 }
 

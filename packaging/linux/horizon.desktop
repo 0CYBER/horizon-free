@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Horizon
+Comment=Minecraft: Java Edition 26.3, rewritten in Rust
+Exec=horizon-client
+Icon=horizon
+Terminal=false
+Categories=Game;
+StartupWMClass=horizon
+NoDisplay=true
