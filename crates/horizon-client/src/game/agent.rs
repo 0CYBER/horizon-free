@@ -34,7 +34,9 @@ pub(super) const HELP: &[&str] = &[
     "move DIR SECONDS [--sprint] [--sneak] [--jump]  walk forward|back|left|right",
     "jump                           jump once",
     "goto X Y Z [--near R] [--sprint] [--direct] [--timeout S]  walk to a position along a path",
-    "look-at X Y Z | look-at block X Y Z [FACE] | look-at entity ID",
+    "look-at X Y Z | look-at block X Y Z [FACE] | look-at entity ID  [--over S]",
+    "turn DYAW DPITCH --over S      rotate the view with mouse motion spread over S seconds",
+    "mouse-move DX DY               relative mouse motion, turned like a player's mouse",
     "attack [ID]                    swing at the target (after looking at entity ID)",
     "break X Y Z [--timeout S]      mine a block until it breaks; reports drops and pickups",
     "place X Y Z [--item ITEM]      place the held (or given) item at a position",
@@ -69,7 +71,7 @@ pub(super) struct Args<'a> {
     pub flags: HashMap<&'a str, Option<&'a str>>,
 }
 /// Options that take a value (`--timeout 10` or `--timeout=10`).
-const VALUE_FLAGS: &[&str] = &["timeout", "near", "item", "radius", "hold", "face"];
+const VALUE_FLAGS: &[&str] = &["timeout", "near", "item", "radius", "hold", "face", "over"];
 
 pub(super) fn parse_args<'a>(words: &[&'a str]) -> Args<'a> {
     let mut args = Args::default();
@@ -257,9 +259,27 @@ struct Task {
     name: &'static str,
 }
 
+/// Mouse motion an agent feeds over frames (`mouse-move`, `turn --over`,
+/// `look-at --over`): eased, through `MouseHandler`'s accumulated movement.
+struct Glide {
+    /// The whole motion, in mouse units, and how much has been fed.
+    total: (f64, f64),
+    fed: (f64, f64),
+    started: Instant,
+    over: Duration,
+    /// The frame count when motion was last fed: the reply waits for the
+    /// frame that turns the view with it.
+    fed_frame: u64,
+    deadline: Instant,
+    reply: Sender<String>,
+    /// What `look-at` aimed at, reported once the turn is done.
+    aim: Option<&'static str>,
+}
+
 #[derive(Default)]
 pub(super) struct Agent {
     task: Option<Task>,
+    glide: Option<Glide>,
 }
 
 pub(super) enum Handled {
@@ -975,14 +995,32 @@ impl Game<'_> {
                 };
                 self.start_task("goto", TaskKind::Goto(Box::new(goto)), reply, timeout)
             }
+            "mouse-move" => {
+                self.turning()?;
+                let motion = (a.f64(0, "DX")?, a.f64(1, "DY")?);
+                self.start_glide(motion, 0.0, None, reply)
+            }
+            "turn" if a.has("over") => {
+                self.turning()?;
+                let (dyaw, dpitch) = (a.f64(0, "DYAW")?, a.f64(1, "DPITCH")?);
+                let motion =
+                    horizon_client::mouse::motion_for_turn(dyaw, dpitch, self.look_options());
+                self.start_glide(motion, a.num("over", 0.0)?, None, reply)
+            }
             "look-at" => {
                 self.need_world()?;
-                match a.pos.first().copied() {
+                let over = a.has("over").then(|| a.num("over", 0.0)).transpose()?;
+                if over.is_some() {
+                    self.turning()?;
+                }
+                let before = (self.yaw, self.pitch);
+                let (aim, value) = match a.pos.first().copied() {
                     Some("block") => {
                         let pos = a.block_pos(1)?;
                         let face = a.pos.get(4).map(|f| face_dir(f)).transpose()?;
                         let hit = self.aim_block(pos, face)?;
-                        ok(
+                        (
+                            "block",
                             json!({ "ok": true, "yaw": self.yaw, "pitch": self.pitch, "face": face_name(hit) }),
                         )
                     }
@@ -995,16 +1033,31 @@ impl Game<'_> {
                             .ok_or_else(|| format!("no entity {id}"))?;
                         let c = m.center();
                         self.face_point(c)?;
-                        ok(
+                        (
+                            "entity",
                             json!({ "ok": true, "yaw": self.yaw, "pitch": self.pitch, "target": self.looking_at() }),
                         )
                     }
                     _ => {
                         let at = [a.f64(0, "X")?, a.f64(1, "Y")?, a.f64(2, "Z")?];
                         self.face_point(at)?;
-                        ok(json!({ "ok": true, "yaw": self.yaw, "pitch": self.pitch }))
+                        (
+                            "point",
+                            json!({ "ok": true, "yaw": self.yaw, "pitch": self.pitch }),
+                        )
                     }
-                }
+                };
+                let Some(over) = over else {
+                    return ok(value);
+                };
+                // Turn there with the mouse instead: the shorter way round.
+                let target = (self.yaw, self.pitch);
+                (self.yaw, self.pitch) = before;
+                let dyaw = f64::from(target.0 - before.0 + 180.0).rem_euclid(360.0) - 180.0;
+                let dpitch = f64::from(target.1 - before.1);
+                let motion =
+                    horizon_client::mouse::motion_for_turn(dyaw, dpitch, self.look_options());
+                self.start_glide(motion, over, Some(aim), reply)
             }
             "attack" => {
                 self.playing()?;
@@ -1334,6 +1387,13 @@ impl Game<'_> {
                     );
                     t.name
                 });
+                let turning = self.agent.glide.take().map(|g| {
+                    let _ = g.reply.send(
+                        json!({ "error": "cancelled by stop", "cancelled": true }).to_string(),
+                    );
+                    "turn"
+                });
+                let cancelled = cancelled.or(turning);
                 self.release_agent_keys();
                 ok(json!({ "ok": true, "cancelled": cancelled }))
             }
@@ -1358,8 +1418,106 @@ impl Game<'_> {
         Err(format!("no {item} in the inventory").into())
     }
 
+    /// Mouse motion turns the view only in the world with no screen open
+    /// (`MouseHandler` turns the player while the mouse is grabbed).
+    fn turning(&self) -> Result<()> {
+        self.playing()?;
+        if self.agent.glide.is_some() {
+            return Err("already turning; wait for it or send stop".into());
+        }
+        Ok(())
+    }
+
+    fn start_glide(
+        &mut self,
+        total: (f64, f64),
+        over: f64,
+        aim: Option<&'static str>,
+        reply: &Sender<String>,
+    ) -> Result<Handled> {
+        if !over.is_finite() || !(0.0..=60.0).contains(&over) {
+            return Err("--over takes 0 to 60 seconds".into());
+        }
+        if !(total.0.is_finite() && total.1.is_finite()) {
+            return Err("the motion must be finite".into());
+        }
+        let now = Instant::now();
+        let over = Duration::from_secs_f64(over);
+        self.agent.glide = Some(Glide {
+            total,
+            fed: (0.0, 0.0),
+            started: now,
+            over,
+            fed_frame: self.frames,
+            deadline: now + over + Duration::from_secs(10),
+            reply: reply.clone(),
+            aim,
+        });
+        self.advance_glide();
+        Ok(Handled::Deferred)
+    }
+
+    /// Feed the motion due by now (eased over the glide's time); reply once
+    /// all of it has been turned by a frame.
+    fn advance_glide(&mut self) {
+        let Some(mut g) = self.agent.glide.take() else {
+            return;
+        };
+        let done = |game: &Self, extra: Value| {
+            let mut v = json!({
+                "ok": true,
+                "yaw": game.yaw,
+                "pitch": game.pitch,
+                "motion": [g.total.0, g.total.1],
+            });
+            if let (Value::Object(m), Value::Object(e)) = (&mut v, extra) {
+                m.extend(e);
+            }
+            v
+        };
+        if let Err(e) = self.playing() {
+            let _ = g.reply.send(
+                json!({ "error": format!("stopped turning: {e}"), "yaw": self.yaw, "pitch": self.pitch })
+                    .to_string(),
+            );
+            return;
+        }
+        let now = Instant::now();
+        let t = if g.over.is_zero() {
+            1.0
+        } else {
+            now.duration_since(g.started).as_secs_f64() / g.over.as_secs_f64()
+        };
+        let f = horizon_client::mouse::ease_in_out(t);
+        let due = (g.total.0 * f, g.total.1 * f);
+        let step = (due.0 - g.fed.0, due.1 - g.fed.1);
+        if step != (0.0, 0.0) {
+            self.mouse.add_motion(step.0, step.1);
+            self.agent_pointer = true;
+            g.fed = due;
+            g.fed_frame = self.frames;
+        }
+        if t >= 1.0 && self.frames > g.fed_frame {
+            let extra = match g.aim {
+                Some("block") | Some("entity") => json!({ "target": self.looking_at() }),
+                _ => json!({}),
+            };
+            let _ = g.reply.send(done(self, extra).to_string());
+            return;
+        }
+        if now >= g.deadline {
+            let _ = g.reply.send(
+                json!({ "error": "no frame was drawn to turn the view", "yaw": self.yaw, "pitch": self.pitch })
+                    .to_string(),
+            );
+            return;
+        }
+        self.agent.glide = Some(g);
+    }
+
     /// Advance the running agent task; reply when it ends.
     pub(super) fn advance_agent(&mut self) {
+        self.advance_glide();
         let Some(mut task) = self.agent.task.take() else {
             return;
         };
