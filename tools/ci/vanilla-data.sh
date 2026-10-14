@@ -3,9 +3,9 @@
 # holds the maintainer's own copy, imported and decompiled once (HORIZON_SHARED_SOURCE, default
 # ~/code/horizon-parity/shared-local). It is cloned once into the runner's work folder ($RUNNER_WORKSPACE/
 # shared-local; APFS clones, so no second copy of the bytes), and .local/ links to it as in a parity worktree.
-# .local/horizon-client, the resources horizon-prepare makes, is prepared by this checkout's own preparer
-# once per preparer version (its sources, the exporters and research-lock.json), so a change to the preparer
-# is checked with what it prepares; the four newest preparations are kept.
+# .local/horizon-client and the exporter outputs beside it, what horizon-prepare makes, are prepared by this
+# checkout's own preparer once per preparer version (its sources, the exporters and research-lock.json), so a
+# change to the preparer is checked with what it prepares; the four newest preparations are kept.
 set -euo pipefail
 shared="${RUNNER_WORKSPACE:?}/shared-local"
 source="${HORIZON_SHARED_SOURCE:-$HOME/code/horizon-parity/shared-local}"
@@ -26,16 +26,22 @@ fi
 mkdir -p .local "$shared/prepared"
 for entry in "$shared"/*; do
   name=$(basename "$entry")
-  case "$name" in prepared|horizon-client|*.log) continue ;; esac
+  case "$name" in prepared|*.log) continue ;; esac
   if [ -L ".local/$name" ] || [ ! -e ".local/$name" ]; then ln -sfn "$entry" ".local/$name"; fi
 done
 
 key=$(git ls-files -s crates/horizon-prepare mods/horizon/src/test/java research-lock.json | shasum -a 256 | cut -c1-16)
 prepared="$shared/prepared/$key"
-ln -sfn "$prepared" .local/horizon-client
-if [ ! -f "$prepared/.done" ]; then
+# horizon-prepare writes .local/horizon-client and its exporters' outputs beside it: all of them live in
+# $prepared, listed in $prepared/.entries, and .local/ links to them.
+if [ ! -f "$prepared/.entries" ]; then
   echo "Preparing resources with this checkout's horizon-prepare ($key)"
   rm -rf "$prepared" && mkdir -p "$prepared"
+  # Links to another preparation's outputs go first, so what this one writes shows up as new entries.
+  for entry in .local/*; do
+    if [ -L "$entry" ] && [[ "$(readlink "$entry")" == "$shared/prepared/"* ]]; then rm "$entry"; fi
+  done
+  before=$(ls -1A .local | LC_ALL=C sort)
   started=$SECONDS
   cargo build --release --locked -p horizon-prepare
   if ! target/release/horizon-prepare --root "$PWD" > "$RUNNER_TEMP/prepare.log" 2>&1; then
@@ -43,9 +49,22 @@ if [ ! -f "$prepared/.done" ]; then
     rm -rf "$prepared"
     exit 1
   fi
-  touch "$prepared/.done"
-  echo "Prepared in $((SECONDS - started)) s"
+  LC_ALL=C comm -13 <(echo "$before") <(ls -1A .local | LC_ALL=C sort) > "$RUNNER_TEMP/prepared-entries"
+  while read -r name; do mv ".local/$name" "$prepared/$name"; done < "$RUNNER_TEMP/prepared-entries"
+  mv "$RUNNER_TEMP/prepared-entries" "$prepared/.entries"
+  echo "Prepared in $((SECONDS - started)) s: $(tr '\n' ' ' < "$prepared/.entries")"
 fi
+# The game finds some data relative to its resources (<resources>/../../datagen): beside the prepared folders,
+# the same neighbours as in the shared folder.
+for entry in "$shared"/*; do
+  name=$(basename "$entry")
+  case "$name" in prepared|*.log) continue ;; esac
+  [ -e "$prepared/$name" ] || ln -sfn "$entry" "$prepared/$name"
+done
+while read -r name; do
+  if [ -L ".local/$name" ] || [ ! -e ".local/$name" ]; then ln -sfn "$prepared/$name" ".local/$name"; else
+    echo "::error::.local/$name is not a link to the prepared resources"; exit 1; fi
+done < "$prepared/.entries"
 touch "$prepared"
 # The four newest preparations stay.
 ls -1dt "$shared/prepared"/*/ 2>/dev/null | tail -n +5 | while read -r old; do rm -rf "$old"; done
