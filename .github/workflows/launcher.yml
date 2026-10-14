@@ -126,8 +126,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libfontconfig-dev libvulkan-dev libasound2-dev
-      - run: cargo test --release --locked --lib
-      - run: cargo build --release --locked
+      - name: Metal shaders compiled now, or at run time without the Metal toolchain
+        # GPUI compiles its Metal shaders when it builds; the Mac mini has Xcode without the Metal toolchain
+        # (xcodebuild -downloadComponent MetalToolchain), so there they are compiled when the launcher starts.
+        if: runner.os == 'macOS'
+        run: |
+          if ! xcrun metal --version > /dev/null 2>&1; then
+            echo "::notice::No Metal toolchain on this runner: GPUI compiles its shaders at run time"
+            echo "LAUNCHER_FEATURES=gpui/runtime_shaders" >> "$GITHUB_ENV"
+          fi
+      - run: cargo test --release --locked --lib ${LAUNCHER_FEATURES:+--features "$LAUNCHER_FEATURES"}
+      - run: cargo build --release --locked ${LAUNCHER_FEATURES:+--features "$LAUNCHER_FEATURES"}
       - name: The version is the release's
         run: |
           out=$(target/release/${{ matrix.binary }} --version)
