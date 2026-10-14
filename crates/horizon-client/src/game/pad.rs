@@ -315,6 +315,11 @@ impl Game<'_> {
 
     /// B and Start: what Escape does where the pad is.
     pub(super) fn pad_back(&mut self) -> Result<()> {
+        // The options open over the title screen too: they come first, as
+        // for the keyboard's Escape.
+        if self.screen == Screen::Options {
+            return self.options_key(KeyCode::Escape, None);
+        }
         if let Some(title) = self.title.as_mut() {
             title.escape();
             return Ok(());
@@ -469,6 +474,7 @@ impl Game<'_> {
                         "reason": why, "strong": p.strong, "weak": p.weak, "ms": p.millis,
                     })),
                     "in_use": self.pad.in_use,
+                    "menu": self.pad_menu_status(),
                     "held": held,
                     "left": s.left,
                     "right": s.right,

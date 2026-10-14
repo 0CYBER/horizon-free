@@ -240,6 +240,10 @@ impl Screen {
         blink: bool,
     ) {
         let w = batch.width;
+        crate::widgets::target_as(
+            [w / 2.0 - 100.0, y + 11.0, 200.0, 20.0],
+            crate::widgets::Kind::Field,
+        );
         batch.text(
             atlas,
             label,

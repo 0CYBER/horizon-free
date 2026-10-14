@@ -477,6 +477,10 @@ impl<'a> Ui<'a> {
         ui.real = false;
         ui
     }
+    /// A drawn frame, not a hit-testing pass.
+    pub fn is_real(&self) -> bool {
+        self.real
+    }
     /// Move rasterized glyphs into the batch's atlas uploads (real frames only).
     pub fn finish(self) {
         if self.real {

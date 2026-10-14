@@ -854,6 +854,10 @@ impl Title {
                 .enumerate()
                 {
                     let y = 40.0 + i as f32 * 40.0;
+                    crate::widgets::target_as(
+                        [(w / 2.0).floor() - 100.0, y + 11.0, 200.0, 20.0],
+                        crate::widgets::Kind::Field,
+                    );
                     batch.text(
                         atlas,
                         label,

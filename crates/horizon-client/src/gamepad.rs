@@ -684,14 +684,24 @@ pub fn stick_direction(stick: [f32; 2], threshold: f32) -> Option<Button> {
 /// the focused edge's centre (`nextFocusPathVaguelyInDirection`). Bounds are
 /// inclusive as in `ScreenRectangle` (a right edge is `x + w - 1`).
 pub fn focus_step_rect(from: Rect, button: Button, targets: &[Rect]) -> Option<usize> {
-    // (axis: 0 = x, 1 = y; positive direction)
-    let (axis, positive) = match button {
-        Button::DPadUp => (1, false),
-        Button::DPadDown => (1, true),
-        Button::DPadLeft => (0, false),
-        Button::DPadRight => (0, true),
-        _ => return None,
-    };
+    focus_step_strict(from, button, targets).or_else(|| focus_step_vague(from, button, targets))
+}
+
+/// The direction as (axis: 0 = x, 1 = y; positive).
+fn direction(button: Button) -> Option<(usize, bool)> {
+    match button {
+        Button::DPadUp => Some((1, false)),
+        Button::DPadDown => Some((1, true)),
+        Button::DPadLeft => Some((0, false)),
+        Button::DPadRight => Some((0, true)),
+        _ => None,
+    }
+}
+
+/// The first pass of [`focus_step_rect`]: targets overlapping the focused
+/// one on the other axis (a row, a column).
+pub fn focus_step_strict(from: Rect, button: Button, targets: &[Rect]) -> Option<usize> {
+    let (axis, positive) = direction(button)?;
     let other = 1 - axis;
     let lo = |r: &Rect, a: usize| r[a];
     let hi = |r: &Rect, a: usize| r[a] + r[a + 2] - 1.0;
@@ -725,9 +735,22 @@ pub fn focus_step_rect(from: Rect, button: Button, targets: &[Rect]) -> Option<u
         };
         primary.then(a.2.total_cmp(&b.2))
     });
-    if let Some((i, ..)) = strict.first() {
-        return Some(*i);
-    }
+    strict.first().map(|s| s.0)
+}
+
+/// The second pass of [`focus_step_rect`]: the target whose facing edge's
+/// centre is nearest the focused edge's centre.
+pub fn focus_step_vague(from: Rect, button: Button, targets: &[Rect]) -> Option<usize> {
+    let (axis, positive) = direction(button)?;
+    let other = 1 - axis;
+    let lo = |r: &Rect, a: usize| r[a];
+    let hi = |r: &Rect, a: usize| r[a] + r[a + 2] - 1.0;
+    let bound = |r: &Rect, a: usize, pos: bool| if pos { hi(r, a) } else { lo(r, a) };
+    let after = |a: f32, b: f32| if positive { a > b + 1e-3 } else { b > a + 1e-3 };
+    let same = |a: &Rect, b: &Rect| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.5);
+    let mut strip = from;
+    strip[axis] = bound(&from, axis, positive) + if positive { 1.0 } else { -1.0 };
+    strip[axis + 2] = 1.0;
     let centre = |r: &Rect, a: usize| (hi(r, a) + lo(r, a)) / 2.0;
     let edge = bound(&strip, axis, positive);
     let mid = centre(&strip, other);
@@ -744,6 +767,37 @@ pub fn focus_step_rect(from: Rect, button: Button, targets: &[Rect]) -> Option<u
         })
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(i, _)| i)
+}
+
+/// How far a list scrolled between two frames' targets: the vertical shift
+/// most targets of the same position and size agree on (targets that didn't
+/// move, outside the list, don't count). `None` when nothing moved.
+pub fn scroll_shift(before: &[Rect], after: &[Rect]) -> Option<f32> {
+    let same = |a: &Rect, b: &Rect| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.5);
+    if before.len() == after.len() && before.iter().zip(after).all(|(a, b)| same(a, b)) {
+        return None;
+    }
+    let mut votes: Vec<(f32, usize)> = Vec::new();
+    for b in before {
+        for a in after {
+            let dy = a[1] - b[1];
+            if (a[0] - b[0]).abs() < 0.5
+                && (a[2] - b[2]).abs() < 0.5
+                && (a[3] - b[3]).abs() < 0.5
+                && dy.abs() >= 0.5
+            {
+                match votes.iter_mut().find(|v| (v.0 - dy).abs() < 0.5) {
+                    Some(v) => v.1 += 1,
+                    None => votes.push((dy, 1)),
+                }
+            }
+        }
+    }
+    // Most votes; among equals the smallest move (the next row, not a far one).
+    votes
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then(b.0.abs().total_cmp(&a.0.abs())))
+        .map(|v| v.0)
 }
 
 /// The target a remembered focus rectangle stands for in a new frame: the
@@ -1091,6 +1145,17 @@ mod tests {
         // A list scrolled by 4 pixels keeps the row.
         assert_eq!(refind([0.0, 24.0, 10.0, 10.0], &rects, 8.0), Some(1));
         assert_eq!(refind([90.0, 90.0, 10.0, 10.0], &rects, 8.0), None);
+        // Rows 24 apart scrolled up by 24 under a fixed button.
+        let before: Vec<Rect> = (0..5)
+            .map(|i| [10.0, 40.0 + 24.0 * i as f32, 100.0, 20.0])
+            .chain([[10.0, 200.0, 50.0, 20.0]])
+            .collect();
+        let after: Vec<Rect> = (0..5)
+            .map(|i| [10.0, 16.0 + 24.0 * i as f32, 100.0, 20.0])
+            .chain([[10.0, 200.0, 50.0, 20.0]])
+            .collect();
+        assert_eq!(scroll_shift(&before, &after), Some(-24.0));
+        assert_eq!(scroll_shift(&before, &before), None);
         let tabs = [
             ([60.0, 0.0, 26.0, 32.0], false),
             ([0.0, 0.0, 26.0, 32.0], true),

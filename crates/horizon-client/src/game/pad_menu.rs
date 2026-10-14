@@ -45,13 +45,16 @@ const STICK_STEP: f32 = 0.55;
 const SCROLL_TRIES: u8 = 4;
 
 /// A focus step that ran off the visible part of a list: the list was
-/// scrolled and the step runs again once a new frame is drawn.
-#[derive(Clone, Copy)]
+/// scrolled and the step runs again once a new frame is drawn. When the
+/// targets didn't move (nothing scrolled), the step takes vanilla's vague
+/// pass instead.
+#[derive(Clone)]
 struct Pending {
     button: Button,
     from: Rect,
     generation: u64,
     tries: u8,
+    before: Vec<Rect>,
 }
 
 #[derive(Default)]
@@ -111,8 +114,20 @@ impl Game<'_> {
 
     /// Where focus can land: buttons drawn last frame, every registered
     /// target (sliders, fields, rows, Horizon-style widgets), and the slots
-    /// and tabs of inventories (GUI pixels).
+    /// and tabs of inventories (GUI pixels), on screen.
     fn pad_targets(&self) -> Vec<Target> {
+        let mut targets = self.pad_all_targets();
+        if let Some(batch) = self.gui_scale() {
+            let (w, h) = (batch.width + 0.5, batch.height + 0.5);
+            targets.retain(|t| {
+                let [x, y, tw, th] = t.rect;
+                x >= -0.5 && y >= -0.5 && x + tw <= w && y + th <= h
+            });
+        }
+        targets
+    }
+
+    fn pad_all_targets(&self) -> Vec<Target> {
         let mut targets: Vec<Target> = widgets::last()
             .iter()
             .filter(|w| w.enabled)
@@ -146,6 +161,15 @@ impl Game<'_> {
                     let (x, y) = self.slot_position(i);
                     slot(ox + x, oy + y)
                 }));
+                targets.extend(
+                    self.station_targets()
+                        .into_iter()
+                        .map(|[x, y, w, h]| Target {
+                            rect: [ox + x, oy + y, w, h],
+                            kind: Kind::Button,
+                        }),
+                );
+                targets.extend(self.recipe_book_targets());
             }
             Screen::Creative => {
                 let (ox, oy) = Self::creative_origin(&batch);
@@ -500,21 +524,25 @@ impl Game<'_> {
             return;
         }
         let rects: Vec<Rect> = targets.iter().map(|t| t.rect).collect();
-        match gamepad::focus_step_rect(focus.rect, button, &rects) {
+        let vertical = matches!(button, Button::DPadUp | Button::DPadDown);
+        let step = if vertical {
+            gamepad::focus_step_strict(focus.rect, button, &rects)
+        } else {
+            gamepad::focus_step_rect(focus.rect, button, &rects)
+        };
+        match step {
             Some(i) => self.pad_focus_on(event_loop, targets[i]),
-            None if matches!(button, Button::DPadUp | Button::DPadDown) => {
+            None if vertical => {
                 // Off the visible rows of a list: scroll it and try again on
                 // the next frame.
-                self.pad_wheel(
-                    event_loop,
-                    0.0,
-                    if button == Button::DPadUp { 1.0 } else { -1.0 },
-                );
+                let up = button == Button::DPadUp;
+                self.pad_wheel(event_loop, 0.0, if up { 1.0 } else { -1.0 });
                 self.pad.menu.pending = Some(Pending {
                     button,
                     from: focus.rect,
                     generation: widgets::generation(),
                     tries: 1,
+                    before: rects,
                 });
             }
             None => {}
@@ -720,34 +748,58 @@ impl Game<'_> {
     /// and keep the hidden pointer on the focused widget.
     fn pad_follow_focus(&mut self, event_loop: &ActiveEventLoop, targets: &[Target]) {
         let rects: Vec<Rect> = targets.iter().map(|t| t.rect).collect();
-        if let Some(focus) = self.pad.menu.focus {
-            self.pad.menu.focus = gamepad::refind(focus.rect, &rects, 12.0).map(|i| targets[i]);
-            if self.pad.menu.focus.is_none() && self.pad.menu.pos.is_some() {
-                // The widget went away (a page changed): start again.
-                self.pad.menu.focus = self.pad_first_target(targets);
-            }
-        } else if self.pad.menu.pos.is_some() {
-            // The pad drives but nothing is focused (switched from the pointer).
-            let centres: Vec<(f32, f32)> = targets.iter().map(Target::center).collect();
-            self.pad.menu.focus =
-                gamepad::nearest(self.cursor, &centres, f32::INFINITY).map(|i| targets[i]);
-        }
-        if let Some(p) = self.pad.menu.pending
-            && widgets::generation() > p.generation
+        let ready = self
+            .pad
+            .menu
+            .pending
+            .as_ref()
+            .map(|p| widgets::generation() > p.generation);
+        if ready == Some(true)
+            && let Some(p) = self.pad.menu.pending.take()
         {
-            self.pad.menu.pending = None;
-            match gamepad::focus_step_rect(p.from, p.button, &rects) {
-                Some(i) => self.pad_focus_on(event_loop, targets[i]),
-                None if p.tries < SCROLL_TRIES => {
-                    let up = p.button == Button::DPadUp;
-                    self.pad_wheel(event_loop, 0.0, if up { 1.0 } else { -1.0 });
-                    self.pad.menu.pending = Some(Pending {
-                        generation: widgets::generation(),
-                        tries: p.tries + 1,
-                        ..p
-                    });
+            // A step scrolled a list: carry on from where the focused row
+            // moved, or take the vague pass when nothing scrolled.
+            let step = match gamepad::scroll_shift(&p.before, &rects) {
+                Some(dy) => {
+                    let mut from = p.from;
+                    from[1] += dy;
+                    self.pad.menu.focus = gamepad::refind(from, &rects, 2.0).map(|i| targets[i]);
+                    gamepad::focus_step_strict(from, p.button, &rects).map(|i| (i, Some(from)))
                 }
-                None => {}
+                None => gamepad::focus_step_vague(p.from, p.button, &rects).map(|i| (i, None)),
+            };
+            match step {
+                Some((i, _)) => self.pad_focus_on(event_loop, targets[i]),
+                None => {
+                    if let Some(dy) = gamepad::scroll_shift(&p.before, &rects)
+                        && p.tries < SCROLL_TRIES
+                    {
+                        let up = p.button == Button::DPadUp;
+                        self.pad_wheel(event_loop, 0.0, if up { 1.0 } else { -1.0 });
+                        let mut from = p.from;
+                        from[1] += dy;
+                        self.pad.menu.pending = Some(Pending {
+                            from,
+                            generation: widgets::generation(),
+                            tries: p.tries + 1,
+                            before: rects.clone(),
+                            ..p
+                        });
+                    }
+                }
+            }
+        } else if ready.is_none() {
+            if let Some(focus) = self.pad.menu.focus {
+                self.pad.menu.focus = gamepad::refind(focus.rect, &rects, 12.0).map(|i| targets[i]);
+                if self.pad.menu.focus.is_none() && self.pad.menu.pos.is_some() {
+                    // The widget went away (a page changed): start again.
+                    self.pad.menu.focus = self.pad_first_target(targets);
+                }
+            } else if self.pad.menu.pos.is_some() {
+                // The pad drives but nothing is focused (switched from the pointer).
+                let centres: Vec<(f32, f32)> = targets.iter().map(Target::center).collect();
+                self.pad.menu.focus =
+                    gamepad::nearest(self.cursor, &centres, f32::INFINITY).map(|i| targets[i]);
             }
         }
         let Some(focus) = self.pad.menu.focus else {
@@ -773,6 +825,26 @@ impl Game<'_> {
         if let Some(window) = &self.window {
             window.set_cursor_visible(show && !self.captured);
         }
+    }
+
+    /// `pad status`: the menu mode, the focused target and every target.
+    pub(super) fn pad_menu_status(&self) -> serde_json::Value {
+        let kind = |k: Kind| match k {
+            Kind::Button => "button",
+            Kind::Slider { .. } => "slider",
+            Kind::Field => "field",
+            Kind::Row => "row",
+            Kind::Slot => "slot",
+            Kind::Tab(true) => "tab*",
+            Kind::Tab(false) => "tab",
+        };
+        let target = |t: &Target| serde_json::json!({ "rect": t.rect, "kind": kind(t.kind) });
+        serde_json::json!({
+            "mode": if self.pad_focus_mode() { "focus" } else { "pointer" },
+            "focus": self.pad.menu.focus.as_ref().map(target),
+            "keyboard": self.pad.menu.osk.is_some(),
+            "targets": self.pad_targets().iter().map(target).collect::<Vec<_>>(),
+        })
     }
 
     // ---- text fields ----

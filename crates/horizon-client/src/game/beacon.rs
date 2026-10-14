@@ -274,6 +274,17 @@ impl Game<'_> {
         }
     }
     /// Clicks on the power, confirm and cancel buttons.
+    /// The effect, upgrade, confirm and cancel buttons a controller can
+    /// focus (GUI origin relative).
+    pub(super) fn beacon_targets(&self) -> Vec<[f32; 4]> {
+        let (ux, uy) = upgrade_button();
+        buttons()
+            .into_iter()
+            .map(|(_, x, y, _)| (x, y))
+            .chain([(ux, uy), (164.0, 107.0), (190.0, 107.0)])
+            .map(|(x, y)| [x + SHIFT, y, 22.0, 22.0])
+            .collect()
+    }
     pub(super) fn beacon_click(&mut self, local: (f32, f32)) -> bool {
         let l = (local.0 - SHIFT, local.1);
         let levels = self.beacon_levels();
