@@ -304,8 +304,6 @@ impl Game<'_> {
                 self.world_options = Some(o);
                 self.apply_world_options(&before, &wanted);
                 self.close_world_options();
-                self.screen = Screen::Playing;
-                self.capture(true);
                 return;
             }
             None => {}
