@@ -108,6 +108,8 @@ pub const SECTIONS: &[Section] = &[
                     Opt::PadMoveDeadzone,
                     Opt::PadLookDeadzone,
                     Opt::PadGlyphs,
+                    Opt::PadMenuNav,
+                    Opt::PadKeyboard,
                 ]
                 .map(HRow::Opt),
             );

@@ -285,7 +285,13 @@ pub fn slider(
 ) {
     if active {
         // A controller's D-pad can focus it (Horizon's controller support).
-        crate::widgets::target([x, y, w, 20.0]);
+        crate::widgets::target_as(
+            [x, y, w, 20.0],
+            crate::widgets::Kind::Slider {
+                value,
+                track: [x + 4.0, w - 8.0],
+            },
+        );
     }
     let track = if hover && active {
         "gui/sprites/widget/slider_highlighted"
@@ -737,6 +743,10 @@ impl EditBox {
     /// Draw the field; `format` styles the visible text (command colouring).
     pub fn draw(&mut self, batch: &mut HudBatch, atlas: &HudAtlas, format: Option<&Text>) {
         self.layout(atlas);
+        crate::widgets::target_as(
+            [self.x, self.y, self.width, self.height],
+            crate::widgets::Kind::Field,
+        );
         if self.bordered {
             let sprite = if self.focused {
                 "gui/sprites/widget/text_field_highlighted"

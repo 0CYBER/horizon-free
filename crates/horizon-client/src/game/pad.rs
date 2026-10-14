@@ -255,7 +255,7 @@ impl Game<'_> {
         if down && !self.pad_focused() {
             return Ok(());
         }
-        let playing = self.title.is_none() && self.screen == Screen::Playing;
+        let playing = !self.pad_in_menu();
         if down && playing && !self.captured && self.focused {
             // Like a click into the window: take the pointer.
             self.capture(true);
@@ -340,11 +340,7 @@ impl Game<'_> {
     /// The left stick as the move vector, while playing.
     pub(super) fn pad_move(&self) -> Option<[f32; 2]> {
         let settings = &self.settings.controller;
-        if !settings.enabled
-            || self.title.is_some()
-            || self.screen != Screen::Playing
-            || !self.pad_focused()
-        {
+        if !settings.enabled || self.pad_in_menu() || !self.pad_focused() {
             return None;
         }
         gamepad::move_vector(self.pad.state.left, settings.move_deadzone)
@@ -353,12 +349,7 @@ impl Game<'_> {
     /// The right stick turns the view, once per frame (`Entity.turn`).
     pub(super) fn pad_look(&mut self, seconds: f32) {
         let settings = &self.settings.controller;
-        if !settings.enabled
-            || self.title.is_some()
-            || self.screen != Screen::Playing
-            || self.player.is_none()
-            || !self.pad_focused()
-        {
+        if !settings.enabled || self.pad_in_menu() || self.player.is_none() || !self.pad_focused() {
             return;
         }
         // A long frame (a hitch) must not spin the view.

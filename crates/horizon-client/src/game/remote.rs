@@ -2300,7 +2300,7 @@ impl Game<'_> {
     }
     /// ChatScreen: typing, Enter to send, Escape to cancel.
     pub(super) fn remote_chat_key(&mut self, event: &winit::event::KeyEvent) {
-        use winit::keyboard::{Key, NamedKey};
+        use winit::keyboard::Key;
         if event.state != winit::event::ElementState::Pressed {
             return;
         }
@@ -2325,23 +2325,44 @@ impl Game<'_> {
             return;
         }
         // Logical keys: the text, not the scancode, decides (layouts, virtual keyboards).
-        match &event.logical_key {
-            Key::Named(NamedKey::Escape) => {
+        let named = match &event.logical_key {
+            Key::Named(n) => Some(*n),
+            _ => None,
+        };
+        self.remote_chat_input(named, event.text.as_deref());
+    }
+    /// A named key or typed text in the chat input (the keyboard, or a
+    /// controller's on-screen keyboard).
+    pub(super) fn remote_chat_input(
+        &mut self,
+        named: Option<winit::keyboard::NamedKey>,
+        text: Option<&str>,
+    ) {
+        use winit::keyboard::NamedKey;
+        const INPUT: horizon_client::clipboard::FieldId = ("remote.chat", 0);
+        let Some(r) = self.remote.as_mut() else {
+            return;
+        };
+        let Some(input) = r.chat_input.as_mut() else {
+            return;
+        };
+        match named {
+            Some(NamedKey::Escape) => {
                 r.chat_input = None;
                 self.capture(true);
             }
-            Key::Named(NamedKey::Backspace) => {
+            Some(NamedKey::Backspace) => {
                 if !self.text_selection.take(INPUT, input) {
                     input.pop();
                 }
             }
-            Key::Named(NamedKey::Enter) => {
+            Some(NamedKey::Enter) => {
                 let message = r.chat_input.take().unwrap_or_default();
                 self.send_chat(&message);
                 self.capture(true);
             }
             _ => {
-                if let Some(text) = &event.text {
+                if let Some(text) = text {
                     self.text_selection.take(INPUT, input);
                     for c in text.chars().filter(|c| !c.is_control()) {
                         if input.chars().count() < 256 {
