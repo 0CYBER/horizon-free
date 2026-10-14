@@ -6693,10 +6693,11 @@ impl Game<'_> {
             }
         }
     }
-    /// WeatherEffectRenderer: rain/snow columns within 10 blocks.
+    /// WeatherEffectRenderer: rain and snow columns within the weather radius.
     fn weather_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
-        let (rain, _) = self.world.weather.levels(alpha as f32);
-        if rain <= 0.0 {
+        use horizon_client::weather;
+        let (intensity, _) = self.world.weather.levels(alpha as f32);
+        if intensity <= 0.0 {
             return;
         }
         let atlas = &self.res.atlas;
@@ -6711,75 +6712,70 @@ impl Game<'_> {
             camera.y.floor() as i32,
             camera.z.floor() as i32,
         );
-        let radius = 10;
-        let time = self.ticks as f32 + alpha as f32;
-        for dz in -radius..=radius {
-            for dx in -radius..=radius {
-                let (x, z) = (cx + dx, cz + dz);
-                let d2 = (dx * dx + dz * dz) as f32;
-                if d2 > (radius * radius) as f32 {
-                    continue;
-                }
+        let radius = self.settings.weather_radius;
+        let ticks = self.world.game_time;
+        let partial = alpha as f32;
+        let eye = [camera.x, camera.y, camera.z];
+        // Vanilla draws every rain column before the snow ones.
+        let mut columns = (Vec::new(), Vec::new());
+        for z in cz - radius..=cz + radius {
+            for x in cx - radius..=cx + radius {
                 let top = self.rain_height(x, z, cy + radius + 10);
                 let y0 = (cy - radius).max(top);
                 let y1 = (cy + radius).max(top);
-                if y0 >= y1 {
+                if y1 == y0 {
                     continue;
                 }
-                let Some(snow) = self.precipitation(x, top, z) else {
+                let Some(snow) = self.precipitation(x, cy, z) else {
                     continue;
                 };
-                let hash = (x
-                    .wrapping_mul(x)
-                    .wrapping_mul(3121)
-                    .wrapping_add(x.wrapping_mul(45_238_971))
-                    ^ z.wrapping_mul(z)
-                        .wrapping_mul(418_711)
-                        .wrapping_add(z.wrapping_mul(13761)))
-                    & 31;
-                let r = if snow { snow_tex } else { rain_tex };
-                // Columns face the camera horizontally.
-                let (fx, fz) = (f64::from(x) + 0.5 - camera.x, f64::from(z) + 0.5 - camera.z);
-                let len = (fx * fx + fz * fz).sqrt().max(1e-3);
-                let (sx, sz) = ((-fz / len * 0.5) as f32, (fx / len * 0.5) as f32);
-                let center = glam::Vec3::new(fx as f32, 0.0, fz as f32);
-                let scroll = if snow {
-                    (time / 512.0 + hash as f32 / 32.0) % 1.0
-                } else {
-                    ((time + hash as f32) / 32.0 * (3.0 + (hash % 5) as f32 * 0.25)) % 1.0
-                };
-                let fade = ((1.0 - d2 / (radius * radius) as f32) * 0.5 + 0.5) * rain;
-                let a = (fade.clamp(0.0, 1.0) * 255.0) as u32;
-                let color = a << 24 | 0xFF_FFFF;
+                let mut random = weather::column_random(x, z);
                 let light = self.world.light(x, top.max(cy), z);
-                let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
-                let (b, t) = (
-                    (f64::from(y0) - camera.y) as f32,
-                    (f64::from(y1) - camera.y) as f32,
-                );
-                let vh = r.v1 - r.v0;
-                let corners = [
-                    center + glam::Vec3::new(-sx, b, -sz),
-                    center + glam::Vec3::new(sx, b, sz),
-                    center + glam::Vec3::new(sx, t, sz),
-                    center + glam::Vec3::new(-sx, t, -sz),
-                ];
-                // The rain texture is a vertical strip; sample a scrolling window of it.
-                let s0 = scroll * 0.75;
-                let uv0 = r.v0 + vh * s0;
-                let uv1 = r.v0 + vh * (s0 + 0.25);
-                let uvs = [[r.u0, uv1], [r.u1, uv1], [r.u1, uv0], [r.u0, uv0]];
-                for (p, uv) in corners.iter().zip(uvs) {
-                    out.push(Vertex {
-                        normal: [0; 4],
-                        pos: p.to_array(),
-                        uv,
-                        layer: 0,
-                        color,
-                        light: packed,
-                    });
+                let coords = i32::from(light & 15) << 4 | i32::from(light >> 4) << 20;
+                if snow {
+                    columns.1.push(weather::snow_column(
+                        &mut random,
+                        ticks,
+                        x,
+                        y0,
+                        y1,
+                        z,
+                        coords,
+                        partial,
+                    ));
+                } else {
+                    columns.0.push(weather::rain_column(
+                        &mut random,
+                        ticks,
+                        x,
+                        y0,
+                        y1,
+                        z,
+                        coords,
+                        partial,
+                    ));
                 }
             }
+        }
+        let rain = columns.0.iter().map(|c| (c, 1.0, rain_tex));
+        let snow = columns.1.iter().map(|c| (c, 0.8, snow_tex));
+        for (column, max_alpha, r) in rain.chain(snow) {
+            let quad = weather::column_quad(column, eye, max_alpha, radius, intensity);
+            let color = quad[0].color;
+            let lc = quad[0].light_coords;
+            let light = ((lc >> 20 & 15) * 16) as u32 | (((lc >> 4 & 15) * 16) as u32) << 8;
+            weather::tile(&quad, |pos, uvs| {
+                for (p, [u, v]) in pos.into_iter().zip(uvs) {
+                    out.push(Vertex {
+                        normal: [0; 4],
+                        pos: p,
+                        uv: [r.u0 + (r.u1 - r.u0) * u, r.v0 + (r.v1 - r.v0) * v],
+                        layer: 0,
+                        color,
+                        light,
+                    });
+                }
+            });
         }
     }
     /// Player.startSleepInBed: night or thunder, no monsters within 8 blocks;
