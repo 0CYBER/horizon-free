@@ -705,7 +705,7 @@ impl Game<'_> {
             _ => Ok(0),
         }
     }
-    fn set_game_mode(&mut self, mode: GameMode) -> bool {
+    pub(super) fn set_game_mode(&mut self, mode: GameMode) -> bool {
         if self.mode == mode {
             return false;
         }

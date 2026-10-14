@@ -954,16 +954,11 @@ impl Game<'_> {
         Ok(1)
     }
 
-    /// `VersionCommand`: Horizon reports the version it implements.
-    pub(super) fn cmd_version(&mut self) -> R<i32> {
-        let send = |g: &mut Self, t: Text| {
-            if !g.command_source.is_some_and(|s| s.silent) {
-                g.system_message(t);
-            }
-        };
-        send(self, Text::translate("commands.version.header", &[]));
+    /// `VersionCommand.dumpVersion`'s lines: Horizon reports the version it
+    /// implements.
+    pub(in crate::game) fn version_lines(&self) -> Vec<Text> {
         let protocol = horizon_protocol::PROTOCOL_VERSION;
-        for (key, args) in [
+        let mut lines: Vec<Text> = [
             ("commands.version.id", vec![Text::literal(VERSION_ID)]),
             ("commands.version.name", vec![Text::literal(VERSION_ID)]),
             ("commands.version.data", vec![num(DATA_VERSION)]),
@@ -981,20 +976,28 @@ impl Game<'_> {
                 vec![Text::literal("97.1")],
             ),
             ("commands.version.pack.data", vec![Text::literal("121.0")]),
-        ] {
-            send(self, Text::translate(key, &args));
+        ]
+        .into_iter()
+        .map(|(key, args)| Text::translate(key, &args))
+        .collect();
+        lines.push(Text::translate(
+            if STABLE {
+                "commands.version.stable.yes"
+            } else {
+                "commands.version.stable.no"
+            },
+            &[],
+        ));
+        lines
+    }
+    /// `VersionCommand`.
+    pub(super) fn cmd_version(&mut self) -> R<i32> {
+        if !self.command_source.is_some_and(|s| s.silent) {
+            self.system_message(Text::translate("commands.version.header", &[]));
+            for line in self.version_lines() {
+                self.system_message(line);
+            }
         }
-        send(
-            self,
-            Text::translate(
-                if STABLE {
-                    "commands.version.stable.yes"
-                } else {
-                    "commands.version.stable.no"
-                },
-                &[],
-            ),
-        );
         Ok(1)
     }
 }

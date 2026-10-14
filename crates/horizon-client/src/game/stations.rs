@@ -1928,8 +1928,9 @@ impl Game<'_> {
             "selected": s.selected,
         })
     }
+    /// Options.advancedItemTooltips (F3+H).
     fn options_advanced_tooltips(&self) -> bool {
-        false
+        self.settings.file.bool("advancedItemTooltips")
     }
     /// `TooltipRenderUtil`: dark box with the purple border, first line spaced.
     pub(super) fn draw_tooltip_lines(

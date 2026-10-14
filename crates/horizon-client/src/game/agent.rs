@@ -271,7 +271,7 @@ pub(super) enum Handled {
 }
 
 impl Game<'_> {
-    fn state_string(&self, state: BlockStateId) -> String {
+    pub(super) fn state_string(&self, state: BlockStateId) -> String {
         let Some(s) = self.res.assets.registry.state(state) else {
             return "?".into();
         };

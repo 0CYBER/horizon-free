@@ -11,7 +11,7 @@ use horizon_client::{
 use winit::{event::MouseButton, keyboard::KeyCode, window::Fullscreen};
 
 impl Game<'_> {
-    fn options_path() -> std::path::PathBuf {
+    pub(super) fn options_path() -> std::path::PathBuf {
         std::env::current_dir()
             .unwrap_or_default()
             .join("options.txt")
