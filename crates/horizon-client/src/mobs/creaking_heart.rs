@@ -360,6 +360,7 @@ fn can_spawn_on(b: &Blocks, pos: [i32; 3], state: BlockStateId, above: BlockStat
     let mut scene = SceneCollisions {
         world: b.w.world,
         binding: b.w.collision,
+        subject: None,
     };
     let above_pos = [pos[0], pos[1] + 1, pos[2]];
     let above_empty =
@@ -422,6 +423,7 @@ fn spawn_protector(
         let mut scene = SceneCollisions {
             world: w.world,
             binding: w.collision,
+            subject: None,
         };
         if !scene.unobstructed(bounds).unwrap_or(false) {
             continue;

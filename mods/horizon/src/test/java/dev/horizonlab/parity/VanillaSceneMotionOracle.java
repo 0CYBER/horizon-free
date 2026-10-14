@@ -74,7 +74,8 @@ public final class VanillaSceneMotionOracle {
         return VanillaBlockLandingOracle.sound(s);
     }
     static final class Sources extends DamageSources {
-        DamageSource fall,stalagmite,starve;Sources(){super(null);}
+        DamageSource fall,stalagmite,starve,freeze;Sources(){super(null);}
+        @Override public DamageSource freeze(){return freeze;}
         @Override public DamageSource starve(){return starve;}
         @Override public DamageSource fall(){return fall;}
         @Override public DamageSource stalagmite(){return stalagmite;}
@@ -111,9 +112,14 @@ public final class VanillaSceneMotionOracle {
         @Override public WorldBorder getWorldBorder(){return border;}
         @Override public DamageSources damageSources(){return sources;}
         @Override public net.minecraft.util.RandomSource getRandom(){return rng;}
+        @Override public boolean isRainingAt(BlockPos p){return false;}
         @Override public net.minecraft.server.MinecraftServer getServer(){return server;}
         @Override public void gameEvent(Holder<GameEvent> event,Vec3 pos,GameEvent.Context context){if(event==GameEvent.HIT_GROUND)actor.events.add("hit "+vectorBits(pos)+" "+Block.getId(context.affectedState()));}
         @Override public void gameEvent(Holder<GameEvent> event,BlockPos pos,GameEvent.Context context){actor.events.add("event "+(event==GameEvent.BLOCK_CHANGE?"change":event==GameEvent.BLOCK_DESTROY?"destroy":"unknown")+" "+blockPos(pos)+" "+Block.getId(context.affectedState())+" "+(context.sourceEntity()!=null));}
+        @Override public <T extends net.minecraft.core.particles.ParticleOptions> int sendParticles(T particle,double x,double y,double z,int count,double dx,double dy,double dz,double xs,double ys,double zs,net.minecraft.network.protocol.game.ClientboundLevelParticlesPacket.RandomizationType type){
+            if(particle!=net.minecraft.core.particles.ParticleTypes.SNOWFLAKE||count!=1||dx!=0||dy!=0||dz!=0||type!=net.minecraft.network.protocol.game.ClientboundLevelParticlesPacket.RandomizationType.ALTERNATIVE)throw new AssertionError();
+            actor.events.add("snowflake "+vectorBits(new Vec3(x,y,z))+" "+vectorBits(new Vec3(xs,ys,zs)));return 0;
+        }
         @Override public <T extends net.minecraft.core.particles.ParticleOptions> int sendParticles(T particle,double x,double y,double z,int count,double dx,double dy,double dz,double speed){
             var b=(net.minecraft.core.particles.BlockParticleOption)particle;if(dx!=0||dy!=0||dz!=0)throw new AssertionError();
             actor.events.add(String.format("particles %d %s %d %016x",Block.getId(b.getState()),vectorBits(new Vec3(x,y,z)),count,Double.doubleToLongBits(speed)));return 0;
@@ -199,16 +205,23 @@ public final class VanillaSceneMotionOracle {
             String name=stat==net.minecraft.stats.Stats.DAMAGE_ABSORBED?"absorbed":stat==net.minecraft.stats.Stats.DAMAGE_TAKEN?"taken":stat==net.minecraft.stats.Stats.DAMAGE_RESISTED?"resisted":null;
             if(name==null){name=stat.getPath();if(!Set.of("swim_one_cm","walk_under_water_one_cm","walk_on_water_one_cm","climb_one_cm","sprint_one_cm","crouch_one_cm","walk_one_cm","aviate_one_cm","fly_one_cm").contains(name))throw new AssertionError(stat);}events.add("health-stat "+name+" "+value);
         }
-        @Override public boolean hurtServer(net.minecraft.server.level.ServerLevel level,DamageSource source,float damage){var sources=((Level)level).sources;events.add(String.format("damage %s %08x",source==sources.fall?"fall":source==sources.stalagmite?"stalagmite":source==sources.starve?"starve":"unknown",Float.floatToIntBits(damage)));return super.hurtServer(level,source,damage);}
+        @Override public boolean hurtServer(net.minecraft.server.level.ServerLevel level,DamageSource source,float damage){var sources=((Level)level).sources;events.add(String.format("damage %s %08x",source==sources.fall?"fall":source==sources.stalagmite?"stalagmite":source==sources.starve?"starve":source==sources.freeze?"freeze":"unknown",Float.floatToIntBits(damage)));return super.hurtServer(level,source,damage);}
         @Override public void teleportRelative(double x,double y,double z){setPos(getX()+x,getY()+y,getZ()+z);}
         @Override protected void playStepSound(BlockPos p,BlockState state){}
         @Override public void gameEvent(Holder<GameEvent> event,Entity source){}
         @Override public LivingEntity getControllingPassenger(){return null;}
         @Override public double getFluidHeight(net.minecraft.tags.TagKey<net.minecraft.world.level.material.Fluid> tag){return 0;}
         @Override public double getFluidJumpThreshold(){return .4;}
-        @Override public int getTicksFrozen(){return 0;}
-        @Override public void setTicksFrozen(int value){if(value!=0)throw new AssertionError(value);}
-        @Override protected void applyEffectsFromBlocks(){}
+        // Block-inside effects and frozen ticks run only in "snow_tick" operations.
+        boolean effects;int frozen;Vec3 tickStart;
+        @Override public int getTicksFrozen(){return frozen;}
+        @Override public void setTicksFrozen(int value){if(!effects&&value!=0)throw new AssertionError(value);frozen=value;}
+        @Override protected void applyEffectsFromBlocks(){if(effects)super.applyEffectsFromBlocks();}
+        // LivingEntity.canFreeze with #freeze_immune_wearables, whose only
+        // member a scene wears is leather boots (item tags aren't bound here).
+        @Override public boolean canFreeze(){return !isSpectator()&&!getItemBySlot(net.minecraft.world.entity.EquipmentSlot.FEET).is(net.minecraft.world.item.Items.LEATHER_BOOTS);}
+        // ServerPlayer.lastKnownClientMovement: this tick's movement.
+        @Override public Vec3 getKnownMovement(){return tickStart==null?Vec3.ZERO:position().subtract(tickStart);}
         @Override protected void applyInput(){if(!preparedInput)super.applyInput();}
         void peaceful(){tickRegeneration();}
         void clock()throws Exception{sceneLevel.time++;tickCount++;if(cooldown.getInt(this)>0)cooldown.setInt(this,cooldown.getInt(this)-1);if(hurtTime>0)hurtTime--;}
@@ -240,7 +253,7 @@ public final class VanillaSceneMotionOracle {
         out.printf("%s %s %s %s %s %s %s %016x %s %s %s %08x %d %08x %d %d %s | %s%n",p.horizontalCollision,p.verticalCollision,p.verticalCollisionBelow,p.minorHorizontalCollision,
             p.onGround(),noBlocks.getBoolean(p),pos(support.get(p)),Double.doubleToLongBits(p.fallDistance),pos(last.get(p)),p.needsSync,p.syncPosition,Float.floatToIntBits(storedSpeed.getFloat(p)),delay.getInt(p),Float.floatToIntBits(p.yHeadRot),trigger.getInt(p),grace.getInt(p),impact.get(p)==null?"none":vectorBits((Vec3)impact.get(p)),String.join(";",attributes));
         out.println("events "+String.join(" | ",p.events));p.events.clear();
-        out.println("block "+Block.getId(p.level().getBlockState(new BlockPos(25,3,25))));
+        out.println("block "+Block.getId(p.level().getBlockState(new BlockPos(25,3,25)))+" frozen "+p.frozen+" "+p.isInPowderSnow+" "+p.wasInPowderSnow+" "+vectorBits((Vec3)stuck.get(p)));
         out.printf("health %08x %08x %08x %d %d %08x %d %d %s %d %s %s %s %s %s %d%n",
             Float.floatToIntBits(p.getHealth()),Float.floatToIntBits(p.getAbsorptionAmount()),Float.floatToIntBits(foodExhaustion.getFloat(p.getFoodData())),
             noAction.getInt(p),cooldown.getInt(p),Float.floatToIntBits(lastHurt.getFloat(p)),p.hurtDuration,p.hurtTime,sourceName((DamageSource)lastDamage.get(p)),lastStamp.getLong(p),healthDead.getBoolean(p),p.syncVelocity,
@@ -270,11 +283,11 @@ public final class VanillaSceneMotionOracle {
         var trace=new Trace();trace.out=new PrintWriter(OutputStream.nullOutputStream());trace.fail=-1;
         var level=(Level)allocate.invoke(unsafe,Level.class);level.chunks=VanillaSceneCollisionOracle.scene(description,trace);level.border=new Border();
         level.rng=net.minecraft.util.RandomSource.create(0);level.sources=(Sources)allocate.invoke(unsafe,Sources.class);
-        level.sources.fall=damageSources.get("minecraft:fall");level.sources.stalagmite=damageSources.get("minecraft:stalagmite");level.sources.starve=damageSources.get("minecraft:starve");
+        level.sources.fall=damageSources.get("minecraft:fall");level.sources.stalagmite=damageSources.get("minecraft:stalagmite");level.sources.starve=damageSources.get("minecraft:starve");level.sources.freeze=damageSources.get("minecraft:freeze");
         level.waypoints=(Waypoints)allocate.invoke(unsafe,Waypoints.class);level.waypoints.level=level;
         level.rules=new Rules();level.difficulty=net.minecraft.world.Difficulty.NORMAL;
         var server=(VanillaBlockLandingOracle.Server)allocate.invoke(unsafe,VanillaBlockLandingOracle.Server.class);
-        server.d=new VanillaBlockLandingOracle.Data();server.d.out=new PrintWriter(OutputStream.nullOutputStream());server.d.f=JsonParser.parseString("{\"fail\":-1,\"protected\":false}").getAsJsonObject();level.server=server;
+        server.d=new VanillaBlockLandingOracle.Data();server.d.out=new PrintWriter(OutputStream.nullOutputStream());server.d.f=JsonParser.parseString("{\"fail\":-1,\"protected\":false}").getAsJsonObject();level.server=server;write(field(net.minecraft.server.MinecraftServer.class,"debugSubscribers"),server,new net.minecraft.util.debug.ServerDebugSubscribers(server));
         try(var out=new PrintWriter(Files.newBufferedWriter(dir.resolve(args[0]+".txt")));var enriched=new PrintWriter(Files.newBufferedWriter(dir.resolve("inputs-"+args[0]+".txt")));var lines=Files.lines(dir.resolve("inputs.txt"))){
             for(var line:(Iterable<String>)lines::iterator){
                 var row=JsonParser.parseString(line).getAsJsonObject();var p=(Actor)allocate.invoke(unsafe,Actor.class);p.configure(level);p.events=new ArrayList<>();level.actor=p;
@@ -285,6 +298,8 @@ public final class VanillaSceneMotionOracle {
                 var equipment=new EntityEquipment();write(field(LivingEntity.class,"equipment"),p,equipment);
                 write(field(Player.class,"inventory"),p,new Inventory(p,equipment));
                 p.attrs=new TrackedAttributes(VanillaEntityAttributeOracle.supplier(EntityTypes.PLAYER));write(field(LivingEntity.class,"attributes"),p,p.attrs);
+                write(field(Entity.class,"finalMovementsThisTick"),p,new ArrayList<>());write(field(Entity.class,"visitedBlocks"),p,new it.unimi.dsi.fastutil.longs.LongOpenHashSet());
+                write(field(Entity.class,"insideEffectCollector"),p,new net.minecraft.world.entity.InsideBlockEffectApplier.StepBasedCollector());
                 write(history,p,new ArrayDeque<>());write(support,p,Optional.empty());write(last,p,Optional.empty());write(stuck,p,Vec3.ZERO);write(abilities,p,new Abilities());
                 write(field(ServerPlayer.class,"shoulderEntityLeft"),p,new net.minecraft.nbt.CompoundTag());write(field(ServerPlayer.class,"shoulderEntityRight"),p,new net.minecraft.nbt.CompoundTag());
                 p.connection=(Connection)allocate.invoke(unsafe,Connection.class);
@@ -334,6 +349,27 @@ public final class VanillaSceneMotionOracle {
                         case "travel"->p.travel(VanillaSceneCollisionOracle.vector(op.get("value")));
                         case "tick"->p.movementTick(VanillaSceneCollisionOracle.vector(op.get("value")));
                         case "player_tick"->p.playerMovementTick(VanillaSceneCollisionOracle.vector(op.get("value")),op.get("jumping").getAsBoolean());
+                        case "snow_tick"->{
+                            // The clock, Entity.baseTick's powder snow flags and old
+                            // position, then aiStep with its block-inside effects.
+                            p.clock();p.wasInPowderSnow=p.isInPowderSnow;p.isInPowderSnow=false;
+                            p.xOld=p.getX();p.yOld=p.getY();p.zOld=p.getZ();p.tickStart=p.position();
+                            p.effects=true;
+                            try{p.playerMovementTick(VanillaSceneCollisionOracle.vector(op.get("value")),op.get("jumping").getAsBoolean());}finally{p.effects=false;}
+                        }
+                        case "boots"->{
+                            // Leather boots without data components (item components aren't
+                            // bound here), straight into the equipment: no equip callbacks.
+                            var stack=net.minecraft.world.item.ItemStack.EMPTY;
+                            if(op.get("value").getAsBoolean()){
+                                stack=(net.minecraft.world.item.ItemStack)allocate.invoke(unsafe,net.minecraft.world.item.ItemStack.class);
+                                write(field(net.minecraft.world.item.ItemStack.class,"item"),stack,net.minecraft.world.item.Items.LEATHER_BOOTS.builtInRegistryHolder());
+                                field(net.minecraft.world.item.ItemStack.class,"count").setInt(stack,1);
+                                write(field(net.minecraft.world.item.ItemStack.class,"components"),stack,new net.minecraft.core.component.PatchedDataComponentMap(net.minecraft.core.component.DataComponentMap.EMPTY));
+                            }
+                            ((EntityEquipment)field(LivingEntity.class,"equipment").get(p)).set(net.minecraft.world.entity.EquipmentSlot.FEET,stack);
+                        }
+                        case "frozen"->p.frozen=op.get("value").getAsInt();
                         case "trigger"->trigger.setInt(p,op.get("value").getAsInt());
                         case "delay"->delay.setInt(p,op.get("value").getAsInt());
                         case "ack_attributes"->{p.attrs.getAttributesToUpdate().clear();p.attrs.getAttributesToSync().clear();}

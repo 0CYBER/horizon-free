@@ -163,6 +163,7 @@ impl NaturalLevel for GameLevel<'_, '_> {
         let mut scene = SceneCollisions {
             world: &self.game.world,
             binding: self.w.collision,
+            subject: None,
         };
         no_collision_empty(&mut scene, bounds)
     }

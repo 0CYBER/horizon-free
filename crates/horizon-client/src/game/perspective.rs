@@ -259,6 +259,7 @@ impl Game<'_> {
             scene: SceneCollisions {
                 world: &self.world,
                 binding: self.collision,
+                subject: None,
             },
             facts: &self.res.facts,
             context,

@@ -161,8 +161,8 @@ impl Game<'_> {
                 }
                 _ => Vec::new(),
             },
-            ticks_frozen: 0,
-            percent_frozen: 0.0,
+            ticks_frozen: p.ticks_frozen,
+            percent_frozen: p.percent_frozen(),
             partial,
             portal: [fx.o_portal, fx.portal],
             nausea: 0.0,

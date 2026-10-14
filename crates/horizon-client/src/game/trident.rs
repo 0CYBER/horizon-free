@@ -274,6 +274,7 @@ impl Game<'_> {
                     let mut scene = SceneCollisions {
                         world: &self.world,
                         binding: self.collision,
+                        subject: None,
                     };
                     if let Ok(moved) = scene.resolve(bounds(t.position), t.velocity, 0.0, false) {
                         let blocked = (moved.x - t.velocity.x).abs() > 1e-7

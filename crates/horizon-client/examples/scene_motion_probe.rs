@@ -165,6 +165,17 @@ fn snapshot(out: &mut impl Write, player: &PlayerMotion) -> Result<()> {
         .filter_map(|e| match e {
             MotionEvent::Fall(e) => Some(e.trace()),
             MotionEvent::Health(e) => Some(e.trace()),
+            MotionEvent::Snowflake { position, velocity } => Some(format!(
+                "snowflake {:016x},{:016x},{:016x} {:016x},{:016x},{:016x}",
+                position.x.to_bits(),
+                position.y.to_bits(),
+                position.z.to_bits(),
+                velocity.x.to_bits(),
+                velocity.y.to_bits(),
+                velocity.z.to_bits()
+            )),
+            // The oracle marks every getAdvancements call (ENTER_BLOCK.trigger) so.
+            MotionEvent::EnterBlock { .. } => Some("hurt-criterion".into()),
             MotionEvent::Waypoint { receiver, enabled } => Some(format!(
                 "waypoint {} {enabled}",
                 if *receiver { "receive" } else { "transmit" }
@@ -232,6 +243,8 @@ fn main() -> Result<()> {
                 instances.next().expect("unexpected instance allocation")
             }),
         )?;
+        // The oracle runs block-inside effects only in "snow_tick".
+        player.block_effects = false;
         for op in f["ops"].as_array().unwrap() {
             let mut world = MotionWorld {
                 player: &mut player,
@@ -409,6 +422,26 @@ fn main() -> Result<()> {
                         op["jumping"].as_bool().unwrap(),
                     )?;
                 }
+                "snow_tick" => {
+                    // The clock, then the player tick: baseTick's powder snow
+                    // flags lead PlayerMotion::player_movement_tick.
+                    world.player.health.advance_clock();
+                    let v = vector(&op["value"]);
+                    world.player.block_effects = true;
+                    let ticked = world.player_movement_tick(
+                        [v.x as f32, v.z as f32],
+                        op["jumping"].as_bool().unwrap(),
+                    );
+                    world.player.block_effects = false;
+                    ticked?;
+                }
+                "boots" => {
+                    // Leather boots are also freeze-immune wearables.
+                    let boots = op["value"].as_bool().unwrap();
+                    world.player.leather_boots = boots;
+                    world.player.freeze_immune = boots;
+                }
+                "frozen" => world.player.ticks_frozen = op["value"].as_i64().unwrap() as i32,
                 "trigger" => world.player.jump_trigger_time = op["value"].as_i64().unwrap() as i32,
                 "delay" => world.player.no_jump_delay = op["value"].as_i64().unwrap() as i32,
                 "move" => world.move_self(vector(&op["value"]))?,
@@ -478,7 +511,18 @@ fn main() -> Result<()> {
             }
             let check_block = scene.block(25, 3, 25);
             snapshot(&mut out, &player)?;
-            writeln!(out, "block {}", check_block.0)?;
+            let stuck = player.stuck_multiplier;
+            writeln!(
+                out,
+                "block {} frozen {} {} {} {:016x},{:016x},{:016x}",
+                check_block.0,
+                player.ticks_frozen,
+                player.in_powder_snow,
+                player.was_in_powder_snow,
+                stuck.x.to_bits(),
+                stuck.y.to_bits(),
+                stuck.z.to_bits()
+            )?;
             let h = &player.health;
             let canonical = |v: f32| {
                 if v.is_nan() {

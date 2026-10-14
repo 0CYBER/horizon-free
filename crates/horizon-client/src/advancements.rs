@@ -312,7 +312,7 @@ fn range_i(v: &Value, x: i64) -> bool {
     range_f(v, x as f64)
 }
 /// A registry id, `#tag`, or list matched against one id.
-fn id_matches(v: &Value, registry: &str, id: &str, w: &dyn World) -> bool {
+pub fn id_matches(v: &Value, registry: &str, id: &str, w: &dyn World) -> bool {
     match v {
         Value::Null => true,
         Value::String(s) => match s.strip_prefix('#') {

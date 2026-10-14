@@ -318,6 +318,7 @@ impl Game<'_> {
         let mut scene = SceneCollisions {
             world: &self.world,
             binding: self.collision,
+            subject: None,
         };
         if b.old_status == Status::InAir && b.status != Status::InAir && b.status != Status::OnLand
         {
@@ -583,6 +584,7 @@ impl Game<'_> {
         let mut scene = SceneCollisions {
             world: &self.world,
             binding: self.collision,
+            subject: None,
         };
         if !scene.unobstructed(inner).unwrap_or(false) {
             return false;
