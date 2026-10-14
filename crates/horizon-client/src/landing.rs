@@ -360,8 +360,12 @@ impl BlockLandingWorld for MotionWorld<'_, '_, '_> {
         multiplier: f32,
         source: LandingDamage,
     ) -> Result<bool> {
-        // Nonflying player: Player.causeFallDamage records centimeters before
-        // delegating to LivingEntity. No mayfly ability in the walking scene.
+        // Player.causeFallDamage exempts players with the mayfly ability,
+        // including creative players who are currently walking.
+        if self.player.may_fly {
+            return Ok(false);
+        }
+        // Record centimeters before delegating to LivingEntity.
         if distance >= 2.0 || distance.is_nan() {
             let scaled = distance * 100.0;
             let floor = scaled.floor();
