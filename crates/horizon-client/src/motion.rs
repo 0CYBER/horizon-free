@@ -775,7 +775,7 @@ impl MotionWorld<'_, '_, '_> {
     }
     /// `Entity.applyEffectsFromBlocks` for the blocks Horizon's player reacts
     /// to inside its movement path: powder snow (`PowderSnowBlock.entityInside`
-    /// and the FREEZE / EXTINGUISH effects). Pressure plates, tripwires and
+    /// and the FREEZE / EXTINGUISH effects), cobwebs and sweet berry bushes. Pressure plates, tripwires and
     /// rails are the world tick's scan.
     pub fn apply_effects_from_blocks(&mut self) -> Result<()> {
         use horizon_world::entity_move::MovementRecord;
@@ -955,15 +955,74 @@ impl MotionWorld<'_, '_, '_> {
                 }
             };
             if inside && visited.insert(p.pack()) {
-                if powder_snow {
-                    self.powder_snow_inside(p)?;
-                    entered.push((step, p));
+                match name {
+                    "minecraft:powder_snow" => {
+                        self.powder_snow_inside(p)?;
+                        entered.push((step, p));
+                    }
+                    "minecraft:cobweb" => self.web_inside(),
+                    "minecraft:sweet_berry_bush" => self.sweet_berry_bush_inside(state)?,
+                    _ => {}
                 }
                 // ServerPlayer.onInsideBlock
                 self.player.events.push(MotionEvent::EnterBlock { state });
             }
         }
         Ok(iterations + 1)
+    }
+    /// `Player.makeStuckInBlock`: the next move is scaled by `multiplier`
+    /// (and the fall forgotten) unless flying; the impulse context resets
+    /// either way.
+    fn make_stuck_in_block(&mut self, multiplier: Vec3) {
+        if !self.player.flying {
+            self.player.fall_distance = 0.0;
+            self.player.stuck_multiplier = multiplier;
+        }
+        self.player.impulse.try_reset();
+    }
+    /// `WebBlock.entityInside`: stuck at a quarter of the speed, half with
+    /// the Weaving effect.
+    fn web_inside(&mut self) {
+        let multiplier = if self.player.status.weaving {
+            Vec3::new(0.5, 0.25, 0.5)
+        } else {
+            Vec3::new(0.25, f64::from(0.05_f32), 0.25)
+        };
+        self.make_stuck_in_block(multiplier);
+    }
+    /// `SweetBerryBushBlock.entityInside` for the player: slowed, and pricked
+    /// (`sweetBerryBush` damage, 1) by a grown bush while its known movement
+    /// is at least 0.003 on X or Z.
+    fn sweet_berry_bush_inside(&mut self, state: BlockStateId) -> Result<()> {
+        self.make_stuck_in_block(Vec3::new(f64::from(0.8_f32), 0.75, f64::from(0.8_f32)));
+        let age = self
+            .assets
+            .registry
+            .state(state)
+            .and_then(|s| s.properties.get("age"))
+            .map_or("0", |a| a.as_str());
+        if age == "0" {
+            return Ok(());
+        }
+        // Player.isClientAuthoritative: ServerPlayer.getKnownMovement, this
+        // tick's movement.
+        let known = self.player.position.subtract(self.player.old_position);
+        if known.x * known.x + known.z * known.z > 0.0
+            && (known.x.abs() >= f64::from(0.003_f32) || known.z.abs() >= f64::from(0.003_f32))
+        {
+            let id = self
+                .resources
+                .health
+                .damage
+                .id("minecraft:sweet_berry_bush")
+                .ok_or("missing sweet_berry_bush damage type")?;
+            self.player.events.push(MotionEvent::Health(
+                crate::health::HealthEvent::SweetBerryBushDamage(1.0),
+            ));
+            let rules = self.scene.health_rules;
+            self.player.hurt(&self.resources.health, rules, id, 1.0)?;
+        }
+        Ok(())
     }
     /// `PowderSnowBlock.entityInside` for the player: stuck while the block
     /// at its feet is powder snow, with a snowflake now and then (server).
@@ -977,9 +1036,7 @@ impl MotionWorld<'_, '_, '_> {
         if !in_block {
             return Ok(());
         }
-        // Entity.makeStuckInBlock
-        EntityMoveWorld::reset_fall_distance(self)?;
-        self.player.stuck_multiplier = Vec3::new(f64::from(0.9_f32), 1.5, f64::from(0.9_f32));
+        self.make_stuck_in_block(Vec3::new(f64::from(0.9_f32), 1.5, f64::from(0.9_f32)));
         // ServerPlayer.getKnownMovement: this tick's movement.
         let known = self.player.position.subtract(self.player.old_position);
         let random = &mut self.scene.random;

@@ -74,8 +74,9 @@ public final class VanillaSceneMotionOracle {
         return VanillaBlockLandingOracle.sound(s);
     }
     static final class Sources extends DamageSources {
-        DamageSource fall,stalagmite,starve,freeze;Sources(){super(null);}
+        DamageSource fall,stalagmite,starve,freeze,sweetBerryBush;Sources(){super(null);}
         @Override public DamageSource freeze(){return freeze;}
+        @Override public DamageSource sweetBerryBush(){return sweetBerryBush;}
         @Override public DamageSource starve(){return starve;}
         @Override public DamageSource fall(){return fall;}
         @Override public DamageSource stalagmite(){return stalagmite;}
@@ -188,7 +189,9 @@ public final class VanillaSceneMotionOracle {
         @Override public boolean isAutoSpinAttack(){return false;}
         @Override public boolean isSpectator(){return false;}
         @Override public boolean isNoGravity(){return false;}
-        @Override public boolean hasEffect(Holder<MobEffect> effect){return false;}
+        // No effects but Weaving (WebBlock.entityInside), set without the effect's callbacks.
+        boolean weaving;
+        @Override public boolean hasEffect(Holder<MobEffect> effect){return weaving&&effect==net.minecraft.world.effect.MobEffects.WEAVING;}
         @Override public MobEffectInstance getEffect(Holder<MobEffect> effect){return null;}
         @Override public MoveSimulationType getMoveSimulationType(){return MoveSimulationType.SERVER_AND_CLIENT;}
         @Override public boolean isClientAuthoritative(){return false;}
@@ -205,7 +208,7 @@ public final class VanillaSceneMotionOracle {
             String name=stat==net.minecraft.stats.Stats.DAMAGE_ABSORBED?"absorbed":stat==net.minecraft.stats.Stats.DAMAGE_TAKEN?"taken":stat==net.minecraft.stats.Stats.DAMAGE_RESISTED?"resisted":null;
             if(name==null){name=stat.getPath();if(!Set.of("swim_one_cm","walk_under_water_one_cm","walk_on_water_one_cm","climb_one_cm","sprint_one_cm","crouch_one_cm","walk_one_cm","aviate_one_cm","fly_one_cm").contains(name))throw new AssertionError(stat);}events.add("health-stat "+name+" "+value);
         }
-        @Override public boolean hurtServer(net.minecraft.server.level.ServerLevel level,DamageSource source,float damage){var sources=((Level)level).sources;events.add(String.format("damage %s %08x",source==sources.fall?"fall":source==sources.stalagmite?"stalagmite":source==sources.starve?"starve":source==sources.freeze?"freeze":"unknown",Float.floatToIntBits(damage)));return super.hurtServer(level,source,damage);}
+        @Override public boolean hurtServer(net.minecraft.server.level.ServerLevel level,DamageSource source,float damage){var sources=((Level)level).sources;events.add(String.format("damage %s %08x",source==sources.fall?"fall":source==sources.stalagmite?"stalagmite":source==sources.starve?"starve":source==sources.freeze?"freeze":source==sources.sweetBerryBush?"sweet_berry_bush":"unknown",Float.floatToIntBits(damage)));return super.hurtServer(level,source,damage);}
         @Override public void teleportRelative(double x,double y,double z){setPos(getX()+x,getY()+y,getZ()+z);}
         @Override protected void playStepSound(BlockPos p,BlockState state){}
         @Override public void gameEvent(Holder<GameEvent> event,Entity source){}
@@ -283,7 +286,7 @@ public final class VanillaSceneMotionOracle {
         var trace=new Trace();trace.out=new PrintWriter(OutputStream.nullOutputStream());trace.fail=-1;
         var level=(Level)allocate.invoke(unsafe,Level.class);level.chunks=VanillaSceneCollisionOracle.scene(description,trace);level.border=new Border();
         level.rng=net.minecraft.util.RandomSource.create(0);level.sources=(Sources)allocate.invoke(unsafe,Sources.class);
-        level.sources.fall=damageSources.get("minecraft:fall");level.sources.stalagmite=damageSources.get("minecraft:stalagmite");level.sources.starve=damageSources.get("minecraft:starve");level.sources.freeze=damageSources.get("minecraft:freeze");
+        level.sources.fall=damageSources.get("minecraft:fall");level.sources.stalagmite=damageSources.get("minecraft:stalagmite");level.sources.starve=damageSources.get("minecraft:starve");level.sources.freeze=damageSources.get("minecraft:freeze");level.sources.sweetBerryBush=damageSources.get("minecraft:sweet_berry_bush");
         level.waypoints=(Waypoints)allocate.invoke(unsafe,Waypoints.class);level.waypoints.level=level;
         level.rules=new Rules();level.difficulty=net.minecraft.world.Difficulty.NORMAL;
         var server=(VanillaBlockLandingOracle.Server)allocate.invoke(unsafe,VanillaBlockLandingOracle.Server.class);
@@ -370,6 +373,8 @@ public final class VanillaSceneMotionOracle {
                             ((EntityEquipment)field(LivingEntity.class,"equipment").get(p)).set(net.minecraft.world.entity.EquipmentSlot.FEET,stack);
                         }
                         case "frozen"->p.frozen=op.get("value").getAsInt();
+                        case "weaving"->p.weaving=op.get("value").getAsBoolean();
+                        case "flying"->{var a=p.getAbilities();a.mayfly=a.flying=op.get("value").getAsBoolean();}
                         case "trigger"->trigger.setInt(p,op.get("value").getAsInt());
                         case "delay"->delay.setInt(p,op.get("value").getAsInt());
                         case "ack_attributes"->{p.attrs.getAttributesToUpdate().clear();p.attrs.getAttributesToSync().clear();}

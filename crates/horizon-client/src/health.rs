@@ -81,6 +81,8 @@ pub enum HealthEvent {
     StarvationDamage(f32),
     /// `LivingEntity.aiStep` hurting a fully frozen entity.
     FreezeDamage(f32),
+    /// `SweetBerryBushBlock.entityInside` pricking a moving entity.
+    SweetBerryBushDamage(f32),
     Updated {
         id: u8,
         value: f32,
@@ -106,6 +108,9 @@ impl HealthEvent {
         match self {
             Self::StarvationDamage(amount) => format!("damage starve {:08x}", amount.to_bits()),
             Self::FreezeDamage(amount) => format!("damage freeze {:08x}", amount.to_bits()),
+            Self::SweetBerryBushDamage(amount) => {
+                format!("damage sweet_berry_bush {:08x}", amount.to_bits())
+            }
             Self::Updated { id, value, dirty } => {
                 format!("updated {id} {:08x} {dirty}", value.to_bits())
             }

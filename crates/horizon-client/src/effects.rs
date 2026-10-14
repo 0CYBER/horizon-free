@@ -283,6 +283,7 @@ impl PlayerEffects {
             levitation: self.amplifier("levitation"),
             resistance: self.amplifier("resistance"),
             fire_resistance: self.get("fire_resistance").is_some(),
+            weaving: self.get("weaving").is_some(),
             water_breathing: self.get("water_breathing").is_some()
                 || self.get("conduit_power").is_some(),
             protection: Vec::new(),
@@ -378,6 +379,8 @@ pub struct StatusFlags {
     pub levitation: Option<i32>,
     pub resistance: Option<i32>,
     pub fire_resistance: bool,
+    /// Weaving: cobwebs hold half as much (`WebBlock.entityInside`).
+    pub weaving: bool,
     pub water_breathing: bool,
     /// Armor enchantment protection per damage type id (`EnchantmentHelper.getDamageProtection`).
     pub protection: Vec<(String, f32)>,
