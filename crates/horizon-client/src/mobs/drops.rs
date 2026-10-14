@@ -301,6 +301,7 @@ fn loot_stack(item: &str, count: i32) -> LootStack {
         enchantments: Vec::new(),
         potion: None,
         map: false,
+        exploration: None,
         ominous_amplifier: None,
     }
 }

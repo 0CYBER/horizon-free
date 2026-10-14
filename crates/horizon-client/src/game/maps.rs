@@ -138,11 +138,115 @@ fn packed_rgba(packed: u8) -> [u8; 4] {
     let ch = |s: u32| ((col >> s & 255) * modifier / 255) as u8;
     [ch(16), ch(8), ch(0), 255]
 }
+/// `has(DataComponents.MAP_ID)`: filled maps and the explorer map items
+/// (`buried_treasure_map`, `woodland_mansion_map`, ..., all `MapItem`s).
 pub(super) fn map_id(stack: &ItemStack) -> Option<i32> {
-    if &*stack.item != "minecraft:filled_map" {
-        return None;
-    }
     stack.data().and_then(|d| d.map_id)
+}
+/// `MapDecorationTypes`: the sprite of a decoration type that a
+/// `minecraft:map_decorations` entry can name.
+fn decoration_sprite(id: &str) -> Option<&'static str> {
+    Some(match id.strip_prefix("minecraft:").unwrap_or(id) {
+        "player" => "map/decorations/player",
+        "frame" => "map/decorations/frame",
+        "red_marker" => "map/decorations/red_marker",
+        "blue_marker" => "map/decorations/blue_marker",
+        "target_x" => "map/decorations/target_x",
+        "target_point" => "map/decorations/target_point",
+        "player_off_map" => "map/decorations/player_off_map",
+        "player_off_limits" => "map/decorations/player_off_limits",
+        "mansion" => "map/decorations/woodland_mansion",
+        "monument" => "map/decorations/ocean_monument",
+        "red_x" => "map/decorations/red_x",
+        "village_desert" => "map/decorations/desert_village",
+        "village_plains" => "map/decorations/plains_village",
+        "village_savanna" => "map/decorations/savanna_village",
+        "village_snowy" => "map/decorations/snowy_village",
+        "village_taiga" => "map/decorations/taiga_village",
+        "jungle_temple" => "map/decorations/jungle_temple",
+        "swamp_hut" => "map/decorations/swamp_hut",
+        "trial_chambers" => "map/decorations/trial_chambers",
+        "abandoned_camp" => "map/decorations/abandoned_camp",
+        "ancient_city" => "map/decorations/ancient_city",
+        "desert_pyramid" => "map/decorations/desert_pyramid",
+        "mineshaft" => "map/decorations/mineshaft",
+        "ocean_ruin_warm" => "map/decorations/warm_ocean_ruins",
+        _ => return None,
+    })
+}
+/// `minecraft:map_decorations` of a map item: (sprite, x, z, rotation), in
+/// the component's order.
+fn static_decorations(stack: &ItemStack) -> Vec<(&'static str, f64, f64, f32)> {
+    let Some(Tag::Compound(entries)) = stack.data().and_then(|d| {
+        d.other
+            .iter()
+            .find(|(k, _)| k == "minecraft:map_decorations")
+            .map(|(_, t)| t)
+    }) else {
+        return Vec::new();
+    };
+    let number = |t: Option<&Tag>| match t {
+        Some(Tag::Double(b)) => Some(f64::from_bits(*b)),
+        Some(Tag::Float(b)) => Some(f64::from(f32::from_bits(*b))),
+        Some(Tag::Int(v)) => Some(f64::from(*v)),
+        _ => None,
+    };
+    entries
+        .values()
+        .filter_map(|e| {
+            let sprite = match e.get("type") {
+                Some(Tag::String(s)) => decoration_sprite(&s.to_string_lossy())?,
+                _ => return None,
+            };
+            Some((
+                sprite,
+                number(e.get("x"))?,
+                number(e.get("z"))?,
+                number(e.get("rotation")).unwrap_or(0.0) as f32,
+            ))
+        })
+        .collect()
+}
+/// `MapItemSavedData.addTargetDecoration`: the `"+"` entry of
+/// `minecraft:map_decorations`, rotation 180.
+fn target_decoration(decoration: &str, at: [i32; 3]) -> Tag {
+    Tag::compound([(
+        "+",
+        Tag::compound([
+            ("type", Tag::String(decoration.into())),
+            ("x", Tag::Double(f64::from(at[0]).to_bits())),
+            ("z", Tag::Double(f64::from(at[2]).to_bits())),
+            ("rotation", Tag::Float(180.0f32.to_bits())),
+        ]),
+    )])
+}
+/// `MapItemSavedData.clampMapCoordinate`.
+fn clamp_map_coordinate(d: f32) -> i8 {
+    if d <= -63.0 {
+        -128
+    } else if d >= 63.0 {
+        127
+    } else {
+        (d * 2.0 + 0.5) as i8
+    }
+}
+/// `MapItemSavedData.calculateRotation`: spinning in the Nether.
+fn decoration_rotation(nether: bool, game_time: i64, y_rot: f64) -> u8 {
+    if nether {
+        let s = (game_time / 10) as i32;
+        (s.wrapping_mul(s)
+            .wrapping_mul(34_187_121)
+            .wrapping_add(s.wrapping_mul(121))
+            >> 15
+            & 15) as u8
+    } else {
+        let adjusted = if y_rot < 0.0 {
+            y_rot - 8.0
+        } else {
+            y_rot + 8.0
+        };
+        ((adjusted * 16.0 / 360.0) as i32 & 15) as u8
+    }
 }
 impl Game<'_> {
     fn dimension_id(&self) -> &'static str {
@@ -199,6 +303,161 @@ impl Game<'_> {
             self.maps.data.insert(id, data);
             let last = self.maps.last_id.unwrap_or(-1).max(id);
             self.maps.last_id = Some(last);
+            self.render_biome_preview(id);
+        }
+    }
+    /// `ExplorationMapFunction.run` for an item a generated chest still holds
+    /// unsearched (`structure_blocks::take_pending_map`): the nearest
+    /// structure of the tag around `origin`, a new map centred on it with its
+    /// biome preview and target decoration. False when nothing is found: the
+    /// loot table's `filtered` map_id check would have discarded the item.
+    pub(super) fn resolve_pending_map(&mut self, item: &mut ItemStack, origin: [f64; 3]) -> bool {
+        let Some(map) = horizon_client::structure_blocks::take_pending_map(item) else {
+            return true;
+        };
+        let names = self.structure_tag(&map.destination);
+        let from = origin.map(|v| v.floor() as i32);
+        let found = self
+            .end
+            .locator()
+            .filter(|_| !names.is_empty())
+            .and_then(|t| t.locate(&names, from, map.search_radius));
+        let Some((_, at)) = found else {
+            return false;
+        };
+        let mut data = MapData::fresh(
+            f64::from(at[0]),
+            f64::from(at[2]),
+            map.zoom,
+            self.dimension_id(),
+        );
+        data.unlimited = true;
+        let id = self.new_map_id(data);
+        self.render_biome_preview(id);
+        let d = item.data_mut();
+        d.map_id = Some(id);
+        d.other.retain(|(k, _)| k != "minecraft:map_decorations");
+        d.other.push((
+            "minecraft:map_decorations".into(),
+            target_decoration(&map.decoration, at),
+        ));
+        true
+    }
+    /// The unsearched exploration maps of a container being opened
+    /// (`RandomizableContainer.unpackLootTable` runs the function then).
+    pub(super) fn resolve_container_maps(&mut self, key: (i32, i32, i32), origin: [f64; 3]) {
+        use horizon_client::containers::BlockEntity;
+        let Some(BlockEntity::Chest(slots)) = self.world.block_entities.get(&key) else {
+            return;
+        };
+        let pending: Vec<usize> = slots
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| {
+                s.as_ref()
+                    .is_some_and(horizon_client::structure_blocks::has_pending_map)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        for i in pending {
+            let Some(BlockEntity::Chest(slots)) = self.world.block_entities.get_mut(&key) else {
+                return;
+            };
+            let Some(mut item) = slots[i].take() else {
+                continue;
+            };
+            let keep = self.resolve_pending_map(&mut item, origin);
+            if let Some(BlockEntity::Chest(slots)) = self.world.block_entities.get_mut(&key) {
+                slots[i] = keep.then_some(item);
+            }
+        }
+    }
+    /// `MapItem.renderBiomePreviewMap`: the map's biomes at sea level, water
+    /// outlines (`#water_on_map_outlines`) drawn in orange and brown.
+    pub(super) fn render_biome_preview(&mut self, id: i32) {
+        let Some(terrain) = self.end.locator() else {
+            return;
+        };
+        let dim = self.dimension_id();
+        let zoom = self.streaming.biome_zoom;
+        let watery_biomes: std::collections::HashSet<String> = self
+            .tag_entries("worldgen/biome", "minecraft:water_on_map_outlines")
+            .into_iter()
+            .collect();
+        let Some(m) = self.maps.data.get(&id) else {
+            return;
+        };
+        if m.dimension != dim {
+            return;
+        }
+        let scale = 1i32 << m.scale;
+        let start_x = m.center[0] / scale - 64;
+        let start_z = m.center[1] / scale - 64;
+        let sea_level = 63;
+        let quarts: Vec<[i32; 3]> = (0..128)
+            .flat_map(|row| {
+                (0..128).map(move |column| {
+                    zoom.quart_at_block(horizon_core::position::BlockPos::new(
+                        (start_x + column) * scale,
+                        sea_level,
+                        (start_z + row) * scale,
+                    ))
+                })
+            })
+            .collect();
+        let watery: Vec<bool> = terrain
+            .noise_biomes(&quarts)
+            .into_iter()
+            .map(|b| b.is_some_and(|b| watery_biomes.contains(&b)))
+            .collect();
+        let is_watery = |x: i32, z: i32| watery[(z * 128 + x) as usize];
+        // MapColor ids and MapColor.Brightness ids.
+        const ORANGE: u8 = 15;
+        const BROWN: u8 = 26;
+        const LOW: u8 = 0;
+        const NORMAL: u8 = 1;
+        const HIGH: u8 = 2;
+        const LOWEST: u8 = 3;
+        let Some(m) = self.maps.data.get_mut(&id) else {
+            return;
+        };
+        for mx in 1..127 {
+            for mz in 1..127 {
+                let mut water_count = 0;
+                for dx in -1..2 {
+                    for dz in -1..2 {
+                        if (dx != 0 || dz != 0) && is_watery(mx + dx, mz + dz) {
+                            water_count += 1;
+                        }
+                    }
+                }
+                let mut brightness = LOWEST;
+                let mut color = 0;
+                if is_watery(mx, mz) {
+                    color = ORANGE;
+                    if water_count > 7 && mz % 2 == 0 {
+                        let sin = horizon_core::geometry::trig::sin(f64::from(mz as f32 + 0.0));
+                        match (mx + (sin * 7.0) as i32) / 8 % 5 {
+                            0 | 4 => brightness = LOW,
+                            1 | 3 => brightness = NORMAL,
+                            2 => brightness = HIGH,
+                            _ => {}
+                        }
+                    } else if water_count > 7 {
+                        color = 0;
+                    } else if water_count > 5 {
+                        brightness = NORMAL;
+                    } else if water_count > 1 {
+                        brightness = LOW;
+                    }
+                } else if water_count > 0 {
+                    color = BROWN;
+                    brightness = if water_count > 3 { NORMAL } else { LOWEST };
+                }
+                if color != 0 {
+                    m.update_color(mx, mz, color << 2 | brightness);
+                }
+            }
         }
     }
     /// Registers `data` under a free map id.
@@ -250,20 +509,33 @@ impl Game<'_> {
         let Some(p) = self.player.as_ref().map(|p| p.position) else {
             return;
         };
+        // A generated exploration map that reached the inventory unsearched
+        // (moved out of its chest by a hopper): searched from here.
+        for i in 0..self.inventory.len() {
+            if self.inventory[i]
+                .as_ref()
+                .is_some_and(horizon_client::structure_blocks::has_pending_map)
+                && let Some(mut item) = self.inventory[i].take()
+            {
+                let keep = self.resolve_pending_map(&mut item, [p.x, p.y, p.z]);
+                self.inventory[i] = keep.then_some(item);
+            }
+        }
         let held: Vec<i32> = [Some(self.selected), Some(super::shield::OFFHAND_SLOT)]
             .into_iter()
             .flatten()
             .filter_map(|i| self.stack_in(i).and_then(map_id))
             .collect();
-        let carried: Vec<i32> = self
+        let carried: Vec<(i32, Vec<(&'static str, f64, f64, f32)>)> = self
             .inventory
             .iter()
             .chain(std::iter::once(&self.offhand))
             .flatten()
-            .filter_map(map_id)
+            .filter_map(|s| Some((map_id(s)?, static_decorations(s))))
             .collect();
         let (yaw, dim) = (self.yaw, self.dimension_id());
-        for id in carried {
+        let (nether, game_time) = (self.dim == super::Dim::Nether, self.world.game_time);
+        for (id, targets) in carried {
             let Some(m) = self.map(id) else { continue };
             // tickCarriedBy: the player marker while tracking in this dimension.
             m.decorations.clear();
@@ -300,6 +572,26 @@ impl Game<'_> {
                         y: clamp(dz),
                         rot,
                     });
+                }
+            }
+            // The item's MAP_DECORATIONS (an explorer map's target), added
+            // after the players as addDecoration would.
+            let s = (1 << m.scale) as f32;
+            for (sprite, x, z, rotation) in targets {
+                let dx = (x - f64::from(m.center[0])) as f32 / s;
+                let dz = (z - f64::from(m.center[1])) as f32 / s;
+                let inside = (-63.0..=63.0).contains(&dx) && (-63.0..=63.0).contains(&dz);
+                if !inside && !m.unlimited {
+                    continue;
+                }
+                let d = Decoration {
+                    sprite,
+                    x: clamp_map_coordinate(dx),
+                    y: clamp_map_coordinate(dz),
+                    rot: decoration_rotation(nether, game_time, f64::from(rotation)),
+                };
+                if !m.decorations.contains(&d) {
+                    m.decorations.push(d);
                 }
             }
         }
@@ -661,5 +953,58 @@ impl Game<'_> {
             self.map_vertices(id, m, light, out);
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_target_decoration_type_has_its_sprite() {
+        // MapDecorationTypes: (name, asset).
+        for (name, asset) in [
+            ("mansion", "woodland_mansion"),
+            ("monument", "ocean_monument"),
+            ("red_x", "red_x"),
+            ("village_desert", "desert_village"),
+            ("village_plains", "plains_village"),
+            ("village_savanna", "savanna_village"),
+            ("village_snowy", "snowy_village"),
+            ("village_taiga", "taiga_village"),
+            ("jungle_temple", "jungle_temple"),
+            ("swamp_hut", "swamp_hut"),
+            ("trial_chambers", "trial_chambers"),
+            ("abandoned_camp", "abandoned_camp"),
+            ("ancient_city", "ancient_city"),
+            ("desert_pyramid", "desert_pyramid"),
+            ("mineshaft", "mineshaft"),
+            ("ocean_ruin_warm", "warm_ocean_ruins"),
+        ] {
+            assert_eq!(
+                decoration_sprite(&format!("minecraft:{name}")),
+                Some(format!("map/decorations/{asset}").as_str()),
+                "{name}"
+            );
+        }
+        assert_eq!(decoration_sprite("minecraft:nothing"), None);
+    }
+
+    #[test]
+    fn target_decorations_read_back_with_vanilla_rotation() {
+        let mut stack = ItemStack::new("minecraft:buried_treasure_map", 1);
+        stack.data_mut().map_id = Some(3);
+        stack.data_mut().other.push((
+            "minecraft:map_decorations".into(),
+            target_decoration("minecraft:red_x", [120, 40, -300]),
+        ));
+        assert_eq!(map_id(&stack), Some(3));
+        let found = static_decorations(&stack);
+        assert_eq!(found, vec![("map/decorations/red_x", 120.0, -300.0, 180.0)]);
+        // calculateRotation(180): (byte) (188 * 16 / 360) = 8.
+        assert_eq!(decoration_rotation(false, 0, 180.0), 8);
+        assert_eq!(decoration_rotation(false, 0, -90.0), 12);
+        assert_eq!(clamp_map_coordinate(-70.0), -128);
+        assert_eq!(clamp_map_coordinate(10.25), 21);
     }
 }

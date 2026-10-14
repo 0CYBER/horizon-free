@@ -1403,6 +1403,8 @@ trait SeededPipeline: Send + Sync {
         worker: &mut WorkerState,
         search: &BiomeSearch<'_>,
     ) -> Option<(String, [i32; 3])>;
+    /// `BiomeSource.getNoiseBiome` at each quart position (unloaded chunks).
+    fn noise_biomes(&self, worker: &mut WorkerState, quarts: &[[i32; 3]]) -> Vec<Option<String>>;
     fn jigsaw_pieces(
         &self,
         worker: &mut WorkerState,
@@ -1561,6 +1563,21 @@ where
             }
         }
         None
+    }
+    fn noise_biomes(&self, worker: &mut WorkerState, quarts: &[[i32; 3]]) -> Vec<Option<String>> {
+        let mut resolver = self.source.resolver(
+            &self.climate,
+            self.router.get(RouterField::Erosion).as_ref(),
+        );
+        quarts
+            .iter()
+            .map(|&quart| {
+                resolver
+                    .sample(&mut worker.carver_context, quart)
+                    .ok()
+                    .map(str::to_owned)
+            })
+            .collect()
     }
     fn jigsaw_pieces(
         &self,
@@ -1841,6 +1858,9 @@ impl GeneratorWorker {
     }
     /// `BiomeSource.findClosestBiome3d`: the first sampled position whose
     /// noise biome passes `allowed`, spiralling out from the origin.
+    pub fn noise_biomes(&mut self, quarts: &[[i32; 3]]) -> Vec<Option<String>> {
+        self.pipeline.noise_biomes(&mut self.state, quarts)
+    }
     pub fn find_closest_biome(&mut self, search: &BiomeSearch<'_>) -> Option<(String, [i32; 3])> {
         self.pipeline.find_closest_biome(&mut self.state, search)
     }
