@@ -31,19 +31,30 @@ struct Out {
     @location(1) color: vec4<f32>,
     @location(2) spherical: f32,
     @location(3) cylindrical: f32,
-    @location(5) flash: f32,
+    // entity.vsh's overlayColor: the OverlayTexture texel (see overlay_texel).
+    @location(5) overlay_color: vec4<f32>,
     @location(4) @interpolate(flat) overlay: u32,
     // Overlay 6: the sprite's v origin and height, for v repeated inside it.
     @location(6) @interpolate(flat) wrap: vec2<f32>,
     // Overlays 9 and 10: projection_from_position(gl_Position), the End portal's texProj0.
     @location(7) proj: vec4<f32>,
     @location(8) back_color: vec4<f32>,
+    // entity.vsh's lightMapColor, multiplied in after the overlay.
+    @location(9) light_color: vec4<f32>,
 }
 // Shipped light.glsl; normals are already transformed and RGBA8_SNORM packed.
 fn entity_light(normal: vec3<f32>, nether: bool) -> f32 {
     let l0 = normalize(vec3(0.2, 1.0, -0.7));
     let l1 = normalize(vec3(-0.2, select(1.0, -1.0, nether), 0.7));
     return min(1.0, (max(0.0, dot(l0, normal)) + max(0.0, dot(l1, normal))) * 0.6 + 0.4);
+}
+// The OverlayTexture texel entity.vsh fetches: rows 0-7 hold the hurt red
+// 0xB2FF0000; row 10 is white with alpha (1 - u / 15 * 0.75) * 255, u = 15
+// for the primed TNT flash (OverlayTexture.u(1.0)), so 63. Alpha 1 changes nothing.
+fn overlay_texel(overlay: u32) -> vec4<f32> {
+    if overlay == 1u || overlay == 8u { return vec4(1.0, 0.0, 0.0, 178.0 / 255.0); }
+    if overlay == 5u { return vec4(1.0, 1.0, 1.0, 63.0 / 255.0); }
+    return vec4(1.0);
 }
 @vertex fn vs_entity(@location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
     @location(2) overlay: u32, @location(3) color: vec4<f32>, @location(4) light: vec4<u32>, @location(5) normal: vec4<f32>) -> Out {
@@ -54,24 +65,22 @@ fn entity_light(normal: vec3<f32>, nether: bool) -> f32 {
     let l = vec2(f32(light.y), f32(light.x));
     let lm = textureSampleLevel(lightmap, lightmap_sampler,
         clamp(l / 256.0 + 0.5 / 16.0, vec2(0.5 / 16.0), vec2(15.5 / 16.0)), 0.0);
-    // Celestial bodies, clouds, beacon beams and breaking cracks are unlit.
-    var c = select(color * lm, color, overlay == 2u || overlay == 4u || overlay == 6u || overlay == 11u || overlay == 12u);
+    // Celestial bodies, clouds, beacon beams, End portals and breaking cracks are unlit.
+    let unlit = overlay == 2u || overlay == 4u || overlay == 6u || overlay == 9u || overlay == 10u
+        || overlay == 11u || overlay == 12u;
+    out.light_color = select(lm, vec4(1.0), unlit);
     // Overlay 6 (beacon beams): the light bytes carry the sprite's v range.
     out.wrap = vec2(f32(light.x | (light.y << 8u)), f32(light.z | (light.w << 8u))) / 65535.0;
+    // minecraft_mix_light: the vertex colour times the cardinal light only.
+    var c = color;
     var back = c;
     if normal.w != 0.0 {
         c = vec4(c.rgb * entity_light(normal.xyz, globals.time.y != 0.0), c.a);
         back = select(c, vec4(back.rgb * entity_light(-normal.xyz, globals.time.y != 0.0), back.a), normal.w < 0.0);
     }
-    // Hurt overlay (OverlayTexture red tint).
-    if overlay == 1u || overlay == 8u {
-        c = vec4(mix(c.rgb, vec3(1.0, 0.0, 0.0), 0.3), c.a);
-        back = vec4(mix(back.rgb, vec3(1.0, 0.0, 0.0), 0.3), back.a);
-    }
     out.color = c;
     out.back_color = back;
-    // Overlay 5: OverlayTexture white flash (primed TNT), applied after texturing.
-    out.flash = select(0.0, 0.75, overlay == 5u);
+    out.overlay_color = overlay_texel(overlay);
     // Sky geometry (clouds, celestial bodies) is exempt from render-distance fog.
     out.spherical = select(length(position), 0.0, overlay >= 2u && overlay <= 4u);
     out.cylindrical = select(max(length(position.xz), abs(position.y)), 0.0, overlay >= 2u && overlay <= 4u);
@@ -140,7 +149,10 @@ fn linear_fog(d: f32, start: f32, end: f32) -> f32 {
         return vec4(color.rgb, color.a * (1.0 - linear_fog(in.spherical, 0.0, globals.fog_ends.y)));
     }
     if color.a < 0.1 { discard; }
-    color = vec4(mix(color.rgb, vec3(1.0), in.flash), color.a);
+    // entity.fsh calculateFinalColor: the overlay (hurt red, TNT white) over the
+    // lit texture, then the lightmap, then the glint and fog.
+    color = vec4(mix(in.overlay_color.rgb, color.rgb, in.overlay_color.a), color.a);
+    color *= in.light_color;
     if in.overlay == 7u || in.overlay == 8u {
         // Enchantment glint (overlay 7, 8 with the hurt tint): the purple
         // enchanted_glint sheen drifting diagonally over the item's shape.
@@ -158,6 +170,6 @@ fn linear_fog(d: f32, start: f32, end: f32) -> f32 {
 }
 
 @fragment fn fs_celestial(in: Out) -> @location(0) vec4<f32> {
-    let color = textureSample(atlas, atlas_sampler, in.uv) * in.color;
+    let color = textureSample(atlas, atlas_sampler, in.uv) * in.color * in.light_color;
     return color;
 }
