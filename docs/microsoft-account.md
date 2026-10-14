@@ -57,8 +57,7 @@ All requests use HTTPS and JSON except the two OAuth calls (form-encoded):
    messages: 2148916233 no Xbox profile yet, 2148916235 Xbox Live not available in the country,
    2148916236/2148916237 adult verification (South Korea), 2148916238 child account (needs a family).
 5. **Minecraft**: `POST https://api.minecraftservices.com/authentication/login_with_xbox`
-   (`identityToken = "XBL3.0 x=<uhs>;<XSTS token>"`), the endpoint taken from the services discovery
-   document (authentication/loginXbox) like authlib does. Result: the Minecraft access token (24 h).
+   (`identityToken = "XBL3.0 x=<uhs>;<XSTS token>"`). Result: the Minecraft access token (24 h).
 6. **Entitlements**: `GET https://api.minecraftservices.com/entitlements/mcstore`: the account must
    own `game_minecraft` or `product_minecraft` (Game Pass included), else "This account doesn't own
    Minecraft Java Edition".
