@@ -2942,9 +2942,10 @@ impl Game<'_> {
                         b.notify_written(level, ticks, position, level_flags::UPDATE_ALL)
                     });
                 }
-                MotionEvent::Fall(horizon_client::landing::FallEvent::Damage { .. }) => {
-                    self.audio
-                        .play("minecraft:entity.player.hurt", Some(feet), 1.0, 1.0);
+                MotionEvent::Health(horizon_client::health::HealthEvent::DamageBroadcast {
+                    source,
+                }) => {
+                    self.player_hurt_sound(source, feet);
                 }
                 MotionEvent::Snowflake { position, velocity } => self.snowflake(position, velocity),
                 MotionEvent::EnterBlock { state } => self.trigger_enter_block(state),

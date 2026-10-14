@@ -1352,9 +1352,6 @@ impl Game<'_> {
                 (player.velocity.y / 2.0 + 0.4).min(0.4),
                 player.velocity.z / 2.0 + dz / l * 0.4,
             );
-            let at = [player.position.x, player.position.y, player.position.z];
-            self.audio
-                .play("minecraft:entity.player.hurt", Some(at), 1.0, 1.0);
             self.hurt_armor(amount);
             self.thorns(from);
         }
