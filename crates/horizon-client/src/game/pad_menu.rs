@@ -65,6 +65,11 @@ impl Game<'_> {
             .iter()
             .filter(|w| w.enabled)
             .map(|w| (w.x + w.w / 2.0, w.y + w.h / 2.0))
+            .chain(
+                widgets::last_targets()
+                    .into_iter()
+                    .map(|[x, y, w, h]| (x + w / 2.0, y + h / 2.0)),
+            )
             .collect();
         if self.title.is_some() {
             return targets;

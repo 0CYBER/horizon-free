@@ -17,6 +17,24 @@ pub struct Widget {
 thread_local! {
     /// Buttons drawn since the last `end_frame`, and the last frame's.
     static WIDGETS: RefCell<(Vec<Widget>, Vec<Widget>, u64)> = const { RefCell::new((Vec::new(), Vec::new(), 0)) };
+    /// Every interactive rectangle of Horizon-style menus (sidebar items,
+    /// switches, sliders, segments), labelled or not: where a controller's
+    /// D-pad can move focus. Drawn since `end_frame`, and the last frame's.
+    static TARGETS: RefCell<(Vec<[f32; 4]>, Vec<[f32; 4]>)> = const { RefCell::new((Vec::new(), Vec::new())) };
+}
+
+/// An interactive rectangle (GUI pixels) a controller can focus.
+pub fn target(rect: [f32; 4]) {
+    TARGETS.with_borrow_mut(|(current, _)| {
+        if current.len() < 1024 {
+            current.push(rect);
+        }
+    });
+}
+
+/// The focus targets of the last drawn frame.
+pub fn last_targets() -> Vec<[f32; 4]> {
+    TARGETS.with_borrow(|(_, last)| last.clone())
 }
 
 /// Called by the button drawers.
@@ -46,6 +64,7 @@ pub fn end_frame(frames: u64) {
         if *seen != frames {
             *seen = frames;
             *last = std::mem::take(current);
+            TARGETS.with_borrow_mut(|(current, last)| *last = std::mem::take(current));
         }
     });
 }
