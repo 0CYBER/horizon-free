@@ -1,0 +1,316 @@
+//! Repository tasks, run with `cargo run -p xtask -- TASK`.
+//!
+//! `package BINARY OUTDIR`: a playable Horizon folder with the game binary, horizon-ctl and
+//! horizon-prepare (built beside it: cargo build --release -p horizon-client --bins -p
+//! horizon-prepare), the exporters horizon-prepare compiles, its sources (the launcher compares
+//! them to its own), and PLAY.txt. It holds none of Minecraft's files: players prepare those
+//! from their own copy. .github/workflows/release.yml makes the release folders with it.
+
+use std::fs;
+use std::path::{Component, Path, PathBuf};
+use std::process::{Command, ExitCode};
+
+const USAGE: &str = "usage: cargo run -p xtask -- package BINARY OUTDIR";
+
+/// What the release folder takes from the repository at HEAD, as `git archive` writes it.
+const ARCHIVED: [&str; 5] = [
+    "tools",
+    "mods/horizon/src/test/java",
+    "crates/horizon-prepare",
+    "research-lock.json",
+    "LICENSE",
+];
+
+/// The programs that sit beside the client: horizon-ctl, the command line and MCP server that
+/// play the game, and horizon-prepare, which prepares the resources from the player's own
+/// Minecraft.
+const TOOLS: [&str; 2] = ["horizon-ctl", "horizon-prepare"];
+
+fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let result = match args.as_slice() {
+        [task, binary, out] if task == "package" => package(Path::new(binary), Path::new(out)),
+        _ => Err(USAGE.to_string()),
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("xtask: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn git(repo: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .map_err(|e| format!("git: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "git {}: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(output.stdout)
+}
+
+fn package(binary: &Path, out: &Path) -> Result<(), String> {
+    let top = git(
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+        &["rev-parse", "--show-toplevel"],
+    )?;
+    let repo = PathBuf::from(String::from_utf8_lossy(&top).trim());
+    match fs::remove_dir_all(out) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(format!("{}: {e}", out.display()));
+        }
+        _ => {}
+    }
+    fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
+    let mut args = vec!["archive", "--format=tar", "HEAD"];
+    args.extend(ARCHIVED);
+    extract(&git(&repo, &args)?, out)?;
+    copy_into(binary, out)?;
+    let exe = binary.extension().is_some_and(|e| e == "exe");
+    for tool in TOOLS {
+        let name = if exe {
+            format!("{tool}.exe")
+        } else {
+            tool.to_string()
+        };
+        let path = binary.parent().unwrap_or(Path::new("")).join(name);
+        if !path.is_file() {
+            return Err(format!(
+                "{} is missing; build it too: cargo build --release -p horizon-client --bins -p horizon-prepare",
+                path.display()
+            ));
+        }
+        copy_into(&path, out)?;
+    }
+    let play = repo.join("packaging/PLAY.txt");
+    copy(&play, &out.join("PLAY.txt"))
+}
+
+/// `cp FILE DIR/`.
+fn copy_into(file: &Path, dir: &Path) -> Result<(), String> {
+    let name = file
+        .file_name()
+        .ok_or_else(|| format!("{} is not a file", file.display()))?;
+    copy(file, &dir.join(name))
+}
+
+/// `cp FROM TO` to a new file: the source's mode within the umask, so the programs stay
+/// executable.
+fn copy(from: &Path, to: &Path) -> Result<(), String> {
+    let error = |e: std::io::Error| format!("{}: {e}", from.display());
+    let data = fs::read(from).map_err(error)?;
+    let permissions = fs::metadata(from).map_err(error)?.permissions();
+    #[cfg(unix)]
+    let mode = std::os::unix::fs::PermissionsExt::mode(&permissions);
+    #[cfg(not(unix))]
+    let mode = if permissions.readonly() { 0o444 } else { 0o666 };
+    create(to, &data, mode)
+}
+
+/// A new file holding `data`, created with `mode` within the process umask as tar and cp create
+/// theirs (on Windows only the read-only bit counts).
+fn create(path: &Path, data: &[u8], mode: u32) -> Result<(), String> {
+    use std::io::Write;
+    let error = |e: std::io::Error| format!("{}: {e}", path.display());
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, mode & 0o7777);
+    options
+        .open(path)
+        .and_then(|mut file| file.write_all(data))
+        .map_err(error)?;
+    if cfg!(not(unix)) && mode & 0o222 == 0 {
+        let mut permissions = fs::metadata(path).map_err(error)?.permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(path, permissions).map_err(error)?;
+    }
+    Ok(())
+}
+
+/// A NUL-terminated tar header field.
+fn field(bytes: &[u8]) -> &[u8] {
+    &bytes[..bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len())]
+}
+
+fn octal(bytes: &[u8]) -> Result<u64, String> {
+    let text = std::str::from_utf8(field(bytes)).map_err(|e| e.to_string())?;
+    let text = text.trim_matches(|c: char| c == ' ' || c == '\0');
+    u64::from_str_radix(if text.is_empty() { "0" } else { text }, 8)
+        .map_err(|e| format!("bad tar number {text:?}: {e}"))
+}
+
+/// `path` under `out`, refusing anything that would land outside it.
+fn inside(out: &Path, path: &str) -> Result<PathBuf, String> {
+    let relative = Path::new(path.trim_end_matches('/'));
+    if !relative
+        .components()
+        .all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
+    {
+        return Err(format!("unsafe path in the archive: {path}"));
+    }
+    Ok(out.join(relative))
+}
+
+/// The `path` record of a pax extended header, if it has one.
+fn pax_path(mut records: &[u8]) -> Result<Option<String>, String> {
+    let mut path = None;
+    while !records.is_empty() {
+        let space = records
+            .iter()
+            .position(|b| *b == b' ')
+            .ok_or("bad pax record")?;
+        let length: usize = std::str::from_utf8(&records[..space])
+            .ok()
+            .and_then(|n| n.parse().ok())
+            .filter(|n| *n > space && *n <= records.len())
+            .ok_or("bad pax record length")?;
+        let record = &records[space + 1..length - 1];
+        if let Some(value) = record.strip_prefix(b"path=") {
+            path = Some(String::from_utf8(value.to_vec()).map_err(|e| e.to_string())?);
+        }
+        records = &records[length..];
+    }
+    Ok(path)
+}
+
+/// `tar -x -C out` for the ustar/pax archives `git archive` writes: directories and regular
+/// files, created with the archive's modes within the process umask as tar creates them for an
+/// ordinary user, so executables stay executable.
+fn extract(tar: &[u8], out: &Path) -> Result<(), String> {
+    let mut pos = 0;
+    let mut long_path = None;
+    while pos + 512 <= tar.len() {
+        let header = &tar[pos..pos + 512];
+        if header.iter().all(|b| *b == 0) {
+            return Ok(());
+        }
+        let size = octal(&header[124..136])? as usize;
+        let start = pos + 512;
+        let data = tar
+            .get(start..start + size)
+            .ok_or("the archive ends inside an entry")?;
+        pos = start + size.div_ceil(512) * 512;
+        let path = match long_path.take() {
+            Some(path) => path,
+            None => {
+                let name = String::from_utf8_lossy(field(&header[..100])).into_owned();
+                let prefix = String::from_utf8_lossy(field(&header[345..500])).into_owned();
+                if prefix.is_empty() {
+                    name
+                } else {
+                    format!("{prefix}/{name}")
+                }
+            }
+        };
+        let mode = octal(&header[100..108])? as u32;
+        match header[156] {
+            // The global header holds the commit id.
+            b'g' => {}
+            b'x' => long_path = pax_path(data)?,
+            b'5' => {
+                let dir = inside(out, &path)?;
+                let mut builder = fs::DirBuilder::new();
+                builder.recursive(true);
+                #[cfg(unix)]
+                std::os::unix::fs::DirBuilderExt::mode(&mut builder, mode & 0o7777);
+                builder
+                    .create(&dir)
+                    .map_err(|e| format!("{}: {e}", dir.display()))?;
+            }
+            b'0' | 0 => {
+                let file = inside(out, &path)?;
+                if let Some(parent) = file.parent() {
+                    fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+                }
+                create(&file, data, mode)?;
+            }
+            kind => {
+                return Err(format!(
+                    "{path}: unsupported entry type {:?} in the archive",
+                    kind as char
+                ));
+            }
+        }
+    }
+    Err("the archive has no end".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn header(name: &str, mode: u32, size: usize, kind: u8) -> Vec<u8> {
+        let mut h = vec![0u8; 512];
+        h[..name.len()].copy_from_slice(name.as_bytes());
+        h[100..107].copy_from_slice(format!("{mode:07o}").as_bytes());
+        h[124..135].copy_from_slice(format!("{size:011o}").as_bytes());
+        h[156] = kind;
+        h[257..263].copy_from_slice(b"ustar\0");
+        h
+    }
+
+    fn entry(tar: &mut Vec<u8>, name: &str, mode: u32, kind: u8, data: &[u8]) {
+        tar.extend(header(name, mode, data.len(), kind));
+        tar.extend(data);
+        tar.resize(tar.len().div_ceil(512) * 512, 0);
+    }
+
+    #[test]
+    fn archives_extract_with_their_paths_and_modes() {
+        let out = std::env::temp_dir().join(format!("xtask-extract-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&out);
+        let long = format!("tools/{}/run.sh", "d".repeat(120));
+        let pax = format!("path={long}\n");
+        let pax = format!("{} {pax}", pax.len() + 4);
+        let mut tar = Vec::new();
+        entry(
+            &mut tar,
+            "pax_global_header",
+            0o666,
+            b'g',
+            b"52 comment=abc\n",
+        );
+        entry(&mut tar, "tools/", 0o775, b'5', b"");
+        entry(&mut tar, "tools/a.py", 0o664, b'0', b"print(1)\n");
+        entry(&mut tar, "tools/b.sh", 0o775, b'0', b"#!/bin/sh\n");
+        entry(&mut tar, "PaxHeaders/x", 0o666, b'x', pax.as_bytes());
+        entry(&mut tar, "ignored-name", 0o775, b'0', b"long\n");
+        tar.extend([0; 1024]);
+        extract(&tar, &out).unwrap();
+        assert_eq!(fs::read(out.join("tools/a.py")).unwrap(), b"print(1)\n");
+        assert_eq!(fs::read(out.join(&long)).unwrap(), b"long\n");
+        assert!(!out.join("ignored-name").exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = |p: &str| fs::metadata(out.join(p)).unwrap().permissions().mode();
+            assert_eq!(mode("tools/a.py") & 0o111, 0);
+            assert_eq!(mode("tools/b.sh") & 0o100, 0o100);
+            assert_eq!(mode(&long) & 0o100, 0o100);
+            assert_eq!(mode("tools") & 0o100, 0o100);
+        }
+        fs::remove_dir_all(&out).unwrap();
+    }
+
+    #[test]
+    fn archives_stay_inside_the_folder() {
+        let out = Path::new("out");
+        assert!(inside(out, "../x").is_err());
+        assert!(inside(out, "/etc/x").is_err());
+        assert_eq!(inside(out, "tools/").unwrap(), out.join("tools"));
+        let mut tar = Vec::new();
+        entry(&mut tar, "link", 0o777, b'2', b"");
+        tar.extend([0; 1024]);
+        assert!(extract(&tar, out).unwrap_err().contains("unsupported"));
+    }
+}

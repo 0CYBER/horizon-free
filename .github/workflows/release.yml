@@ -29,8 +29,7 @@ jobs:
           python tools/check_imports.py target/release/horizon-ctl.exe
           python tools/check_imports.py target/release/horizon-prepare.exe
       - name: Package
-        shell: bash
-        run: packaging/package.sh target/release/horizon-client.exe dist/horizon-windows-x64
+        run: cargo +stable run --locked -p xtask -- package target/release/horizon-client.exe dist/horizon-windows-x64
       - uses: actions/upload-artifact@v4
         with:
           name: horizon-windows-x64
@@ -51,7 +50,7 @@ jobs:
           python3 tools/check_imports.py target/release/horizon-ctl
           python3 tools/check_imports.py target/release/horizon-prepare
       - name: Package
-        run: packaging/package.sh target/release/horizon-client dist/horizon-linux-x86_64
+        run: cargo +stable run --locked -p xtask -- package target/release/horizon-client dist/horizon-linux-x86_64
       - uses: actions/upload-artifact@v4
         with:
           name: horizon-linux-x86_64

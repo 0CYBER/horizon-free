@@ -441,7 +441,7 @@ fn resources_compatible(from: &Path, to: &Path, manifest: &serde_json::Value) ->
     sources.iter().all(|s| same(s))
 }
 
-/// Where a version folder keeps the preparer's sources (packaging/package.sh copies them).
+/// Where a version folder keeps the preparer's sources (the release package copies them).
 const PREPARER_CRATE: &str = "crates/horizon-prepare";
 
 /// The files under `dir/relative`, as paths relative to `dir`.
