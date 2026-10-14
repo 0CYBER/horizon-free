@@ -142,7 +142,7 @@ jobs:
       - name: Resources prepared from the runner's own Minecraft
         if: runner.environment == 'self-hosted'
         run: bash tools/ci/vanilla-data.sh
-      - name: The game runs (offscreen, a new world, 300 frames)
+      - name: The game runs (offscreen, a new world, 1500 frames)
         if: runner.environment == 'self-hosted'
         run: |
           set -euo pipefail
@@ -153,13 +153,13 @@ jobs:
           client="$PWD/target/release/horizon-client"
           resources="$PWD/.local/horizon-client/$version"
           (cd "$home" && HORIZON_HOME="$home" HORIZON_NO_AUDIO=1 "$client" --resources "$resources" --offscreen \
-            --world smoke --seed 1 --render-distance 4 --frames 300 --timeout-seconds 180 \
+            --world smoke --seed 1 --render-distance 4 --frames 1500 --timeout-seconds 180 \
             --smoke-report "$home/smoke.json" > "$home/client.log" 2>&1) || { tail -40 "$home/client.log"; exit 1; }
           python3 - "$home/smoke.json" <<'EOF'
           import json, sys
           report = json.load(open(sys.argv[1]))
           print(json.dumps(report))
-          if report.get("error") is not None or report.get("frames") != 300 or not report.get("chunks") \
+          if report.get("error") is not None or report.get("frames", 0) < 1500 or not report.get("chunks") \
                   or not report.get("meshed_sections") or not report.get("player"):
               sys.exit("the smoke run did not draw a world")
           EOF
