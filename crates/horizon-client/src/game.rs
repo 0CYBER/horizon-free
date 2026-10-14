@@ -558,6 +558,8 @@ impl LevelAccess for GameLevel<'_> {
 #[derive(Clone, Debug)]
 struct FallingBlock {
     state: BlockStateId,
+    /// `DATA_START_POS`: spawn position used to select weighted block models.
+    start_pos: BlockPos,
     position: Vec3,
     previous: Vec3,
     velocity: Vec3,
@@ -1726,6 +1728,7 @@ impl Game<'_> {
                     );
                     self.falling.push(FallingBlock {
                         state,
+                        start_pos: pos,
                         position: p,
                         previous: p,
                         velocity: Vec3::ZERO,
@@ -4969,12 +4972,9 @@ impl Game<'_> {
                 }
             }
         }
-        // Falling blocks: a unit cube with the block's texture.
-        for f in self.falling.clone() {
-            let Some((sprite, tint)) = self.particle_sprite(f.state) else {
-                continue;
-            };
-            let Some(r) = self.res.atlas.sprites.get(&sprite).copied() else {
+        // Falling blocks use their baked model, including non-cubic shapes.
+        for f in &self.falling {
+            let Some((_, tint)) = self.particle_sprite(f.state) else {
                 continue;
             };
             let p = glam::DVec3::new(
@@ -4989,50 +4989,17 @@ impl Game<'_> {
                 f.position.z.floor() as i32,
             );
             let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
-            let v = |x: f32, y: f32, z: f32| o + glam::Vec3::new(x, y, z);
-            let faces = [
-                (
-                    [v(0., 1., 1.), v(1., 1., 1.), v(1., 1., 0.), v(0., 1., 0.)],
-                    1.0,
-                ),
-                (
-                    [v(0., 0., 0.), v(1., 0., 0.), v(1., 0., 1.), v(0., 0., 1.)],
-                    0.5,
-                ),
-                (
-                    [v(1., 0., 0.), v(0., 0., 0.), v(0., 1., 0.), v(1., 1., 0.)],
-                    0.8,
-                ),
-                (
-                    [v(0., 0., 1.), v(1., 0., 1.), v(1., 1., 1.), v(0., 1., 1.)],
-                    0.8,
-                ),
-                (
-                    [v(0., 0., 0.), v(0., 0., 1.), v(0., 1., 1.), v(0., 1., 0.)],
-                    0.6,
-                ),
-                (
-                    [v(1., 0., 1.), v(1., 0., 0.), v(1., 1., 0.), v(1., 1., 1.)],
-                    0.6,
-                ),
-            ];
-            for (corners, shade) in faces {
-                let c = |sft: u32| (((tint >> sft) & 255) as f32 * shade) as u32;
-                let color = 0xFF00_0000 | c(0) << 16 | c(8) << 8 | c(16);
-                for (p, uv) in
-                    corners
-                        .iter()
-                        .zip([[r.u0, r.v1], [r.u1, r.v1], [r.u1, r.v0], [r.u0, r.v0]])
-                {
-                    out.push(Vertex {
-                        normal: [0; 4],
-                        pos: p.to_array(),
-                        uv,
-                        layer: 0,
-                        color,
-                        light: packed,
-                    });
-                }
+            let start = out.len();
+            self.block_model_vertices(
+                f.state,
+                f.start_pos,
+                glam::Mat4::from_translation(o),
+                packed,
+                &mut out,
+            );
+            let tint = horizon_client::mobs::render::abgr(tint);
+            for vertex in &mut out[start..] {
+                vertex.color = horizon_client::hud_layout::multiply(vertex.color, tint);
             }
         }
         self.tnt_geometry(camera, alpha, &mut out);
