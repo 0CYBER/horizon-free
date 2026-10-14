@@ -1734,6 +1734,20 @@ impl Launcher {
                 cx.notify();
             },
         ));
+        // Linux: the launcher's entry in the applications menu (`horizon_launcher::desktop`).
+        let menu_entry = switch("desktop-entry", self.settings.desktop_entry(), &t).on_click(
+            cx.listener(|this, _: &ClickEvent, _, cx| {
+                let on = !this.settings.desktop_entry();
+                this.settings.desktop_entry = Some(on);
+                this.settings.save();
+                let _ = if on {
+                    horizon_launcher::desktop::install(backend::exe_path()).map(|_| ())
+                } else {
+                    horizon_launcher::desktop::remove()
+                };
+                cx.notify();
+            }),
+        );
         let this = cx.entity().downgrade();
         let menus = segments(
             "menu-style",
@@ -1914,7 +1928,20 @@ impl Launcher {
                                 .into_any_element(),
                         ),
                         &t,
-                    )),
+                    ))
+                    .when(cfg!(target_os = "linux"), |d| {
+                        d.child(index_row(
+                            n + 8,
+                            "Applications menu",
+                            Some(plain(if self.settings.desktop_entry() {
+                                "Horizon and its icon are in your desktop's menu."
+                            } else {
+                                "Not in your desktop's menu."
+                            })),
+                            Some(menu_entry.into_any_element()),
+                            &t,
+                        ))
+                    }),
             )
             .child(agents)
     }
