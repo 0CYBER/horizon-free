@@ -593,6 +593,13 @@ impl Title {
             *focus = (*focus + 1) % 2;
         }
     }
+    /// The server auto-reconnect retries now, once its countdown is over.
+    pub fn due_retry(&mut self) -> Option<String> {
+        match &mut self.mode {
+            Mode::Multiplayer(screen) => screen.due_retry(),
+            _ => None,
+        }
+    }
     pub fn escape(&mut self) {
         if let Mode::Multiplayer(screen) = &mut self.mode
             && !screen.escape(&self.saves)

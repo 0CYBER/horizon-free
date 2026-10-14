@@ -162,6 +162,7 @@ impl Game<'_> {
         let auth = horizon_client::auth::current();
         let name = auth.as_ref().map_or(name, |a| a.name.as_str());
         let session = Session::connect(address, name, auth.clone(), view, lang.clone());
+        self.extras_connecting(address);
         let player_type = super::perspective::player_type(&root);
         let mut streaming = Streaming::new(
             Arc::new(NoTerrain),
@@ -260,6 +261,10 @@ impl Game<'_> {
 
     /// Disconnect and return to the multiplayer screen (DisconnectedScreen).
     pub(super) fn leave_server(&mut self, reason: Option<String>) -> Result<()> {
+        if reason.is_none() {
+            // Leaving on purpose: nothing for auto-reconnect to retry.
+            self.extras_left();
+        }
         if let Some(mut r) = self.remote.take() {
             r.session.disconnect();
         }
@@ -284,7 +289,10 @@ impl Game<'_> {
         let saves = std::env::current_dir()?.join("saves");
         let mut title = horizon_client::title::Title::new(saves.clone());
         title.mode = horizon_client::title::Mode::Multiplayer(match reason {
-            Some(reason) => horizon_client::multiplayer::Screen::Disconnected { reason },
+            Some(reason) => horizon_client::multiplayer::Screen::Disconnected {
+                reason,
+                retry: None,
+            },
             None => horizon_client::multiplayer::Screen::list(&saves),
         });
         self.title = Some(title);
@@ -374,6 +382,7 @@ impl Game<'_> {
                     uuid,
                 } => {
                     self.set_registries(registries);
+                    self.extras_joined();
                     if let Some(r) = self.remote.as_mut() {
                         r.joined = true;
                         r.profile = uuid;
@@ -389,9 +398,15 @@ impl Game<'_> {
                         }
                     }
                 }
-                Event::Disconnected(reason) => {
+                Event::Disconnected {
+                    reason,
+                    from_server,
+                } => {
                     log::info!("Horizon: disconnected: {reason}");
-                    return self.leave_server(Some(reason));
+                    let retry = self.reconnect_after(&reason, from_server);
+                    self.leave_server(Some(reason))?;
+                    self.offer_reconnect(retry);
+                    return Ok(());
                 }
                 Event::Packet(packet) => self.handle_packet(*packet)?,
             }

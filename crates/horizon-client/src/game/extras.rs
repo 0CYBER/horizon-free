@@ -9,6 +9,9 @@ use horizon_client::{
     hud::{HudBatch, MINIMAP_SPRITE},
     keybinds,
     minimap::{self, Layer, Minimap, View},
+    multiplayer,
+    reconnect::{Retry, Tracker},
+    title::Mode,
 };
 use std::time::Duration;
 use winit::{event::MouseButton, keyboard::KeyCode};
@@ -23,6 +26,8 @@ pub(super) struct ExtrasState {
     minimap: Minimap,
     /// The dimension the minimap's tiles belong to.
     minimap_dim: Option<Dim>,
+    /// Auto-reconnect's attempts at the current server.
+    reconnect: Tracker,
 }
 /// CPU time the minimap's tiles may take per frame.
 const MINIMAP_BUDGET: Duration = Duration::from_micros(300);
@@ -84,6 +89,53 @@ impl Game<'_> {
         } else {
             self.extras.fps.clear();
         }
+    }
+    /// Auto-reconnect: a connection to `address` starts.
+    pub(super) fn extras_connecting(&mut self, address: &str) {
+        self.extras.reconnect.connecting(address);
+    }
+    /// Auto-reconnect: the server let the player in.
+    pub(super) fn extras_joined(&mut self) {
+        self.extras.reconnect.joined(std::time::Instant::now());
+    }
+    /// Auto-reconnect: the player left the server on purpose.
+    pub(super) fn extras_left(&mut self) {
+        self.extras.reconnect.reset();
+    }
+    /// Auto-reconnect's next attempt after a disconnect, when it is on and
+    /// the reason allows one.
+    pub(super) fn reconnect_after(&mut self, reason: &str, from_server: bool) -> Option<Retry> {
+        if !self.settings.extras.auto_reconnect {
+            self.extras.reconnect.reset();
+            return None;
+        }
+        let now = std::time::Instant::now();
+        self.extras.reconnect.ended(reason, from_server, now)
+    }
+    /// Show the attempt's countdown on the Disconnected screen.
+    pub(super) fn offer_reconnect(&mut self, retry: Option<Retry>) {
+        let Some(retry) = retry else {
+            return;
+        };
+        if let Some(title) = self.title.as_mut()
+            && let Mode::Multiplayer(multiplayer::Screen::Disconnected { retry: slot, .. }) =
+                &mut title.mode
+        {
+            log::info!(
+                "Horizon: reconnecting to {} in {} s",
+                retry.address,
+                retry.seconds_left(std::time::Instant::now())
+            );
+            *slot = Some(retry);
+        }
+    }
+    /// Auto-reconnect: connect again once the countdown is over.
+    pub(super) fn extras_retry(&mut self) -> horizon_client::Result<()> {
+        if let Some(address) = self.title.as_mut().and_then(|t| t.due_retry()) {
+            let name = self.options.player_name.clone();
+            self.connect_server(&address, &name)?;
+        }
+        Ok(())
     }
     /// The minimap's view of the player, if it shows.
     fn minimap_view(&self) -> Option<View> {

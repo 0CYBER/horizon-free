@@ -8691,6 +8691,7 @@ impl ApplicationHandler for Game<'_> {
                         }
                     }
                     self.extras_frame(elapsed);
+                    self.extras_retry()?;
                     self.apply_mouse_look();
                     self.pad_look(elapsed.as_secs_f32());
                     self.advance_flight();

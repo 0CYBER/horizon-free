@@ -47,6 +47,8 @@ pub enum Screen {
     },
     Disconnected {
         reason: String,
+        /// Auto-reconnect's next attempt, until it is cancelled.
+        retry: Option<crate::reconnect::Retry>,
     },
 }
 /// What a click asks the title screen to do.
@@ -205,14 +207,27 @@ impl Screen {
                     53,
                 ),
             ],
-            Self::Disconnected { .. } => vec![b(
-                w / 2.0 - 100.0,
-                h / 2.0 + 30.0,
-                200.0,
-                "Back to Server List",
-                true,
-                54,
-            )],
+            Self::Disconnected { retry, .. } => {
+                let mut v = vec![b(
+                    w / 2.0 - 100.0,
+                    h / 2.0 + 30.0,
+                    200.0,
+                    "Back to Server List",
+                    true,
+                    54,
+                )];
+                if retry.is_some() {
+                    v.push(b(
+                        w / 2.0 - 100.0,
+                        h / 2.0 + 54.0,
+                        200.0,
+                        "Cancel Reconnecting",
+                        true,
+                        55,
+                    ));
+                }
+                v
+            }
         }
     }
     fn field(
@@ -427,7 +442,7 @@ impl Screen {
                     blink,
                 );
             }
-            Self::Disconnected { reason } => {
+            Self::Disconnected { reason, retry } => {
                 centered(
                     batch,
                     "Connection Lost",
@@ -436,6 +451,10 @@ impl Screen {
                 );
                 for (i, line) in wrap(reason, 300.0, atlas).iter().enumerate() {
                     centered(batch, line, h / 2.0 - 16.0 + i as f32 * 9.0, u32::MAX);
+                }
+                if let Some(r) = retry {
+                    let text = r.text(std::time::Instant::now());
+                    centered(batch, &text, h / 2.0 + 16.0, rgba(170, 170, 170, 255));
                 }
             }
         }
@@ -552,6 +571,7 @@ impl Screen {
                 Self::Edit { .. } | Self::Direct { .. } | Self::Disconnected { .. },
                 Some(51 | 53 | 54),
             ) => *self = Self::list(saves),
+            (Self::Disconnected { retry, .. }, Some(55)) => *retry = None,
             (Self::Direct { address }, Some(52)) => {
                 return Outcome::Connect(address.trim().to_owned());
             }
@@ -577,6 +597,16 @@ impl Screen {
             Self::Direct { address } => Some(address),
             _ => None,
         }
+    }
+    /// Auto-reconnect's attempt, once its countdown is over.
+    pub fn due_retry(&mut self) -> Option<String> {
+        let Self::Disconnected { retry, .. } = self else {
+            return None;
+        };
+        if !retry.as_ref()?.due(std::time::Instant::now()) {
+            return None;
+        }
+        retry.take().map(|r| r.address)
     }
     /// The focused text field, its id and maximum length (copy and paste).
     pub fn focused_text(&mut self) -> Option<(crate::clipboard::FieldId, &mut String, usize)> {
