@@ -227,12 +227,129 @@ def portal_corpus():
         ops += restore()
         yield dict(position=vec((25.5,4,25.5)),ops=ops)
 
+def water_corpus():
+    """Falls into water, waterlogged blocks, bubble columns, kelp/seagrass and
+    lava (#180). "fluid_tick" runs Entity.baseTick's fluid phase alone
+    (wasEyeInWater, the real updateFluidInteraction with its fall reset,
+    splash and currents, lava's fall halving, firstTick); scripted falling
+    velocities go through the real Entity.move (the FALLDAMAGE_RESETTING ray
+    with ClipContext.Fluid.WATER, then LivingEntity.checkFallDamage refreshing
+    the fluids before the fall is applied). No fluid travel: the player never
+    travels while touching a fluid here."""
+    def place(name,positions,properties=None):
+        return [op('block',name='minecraft:'+name,position=list(p),**({'properties':properties} if properties else {})) for p in positions]
+    def restore(positions):
+        return [op('block',name='minecraft:air',position=list(p)) for p in positions]
+    def fall(start_y,steps,v=0.,settle=4):
+        # Vanilla's falling speeds (gravity 0.08, drag 0.98), applied by Entity.move.
+        ops=[]
+        for _ in range(steps):
+            ops += [op('fluid_tick'),op('velocity',vec((0,v,0))),op('move',vec((0,v,0)))]
+            v=(v-.08)*.98
+        return ops+[op('fluid_tick') for _ in range(settle)]
+    def pool(y0,depth,x=range(23,28),z=range(23,28)):
+        return [(a,y,b) for a in x for y in range(y0,y0+depth) for b in z]
+    rng=random.Random(0x57415452)
+    starts=[(25.5,5.2),(25.7,6),(25.5,9),(24.2,16),(25.5,16.3),(26.9,28)]
+    # Pools of source, flowing and falling water, one to three deep (the
+    # #180 repro: a 1-deep pool 12 blocks below).
+    for depth in [1,2,3]:
+        for properties in [{'level':'0'}]+([{'level':str(l)} for l in (1,4,7,8,12)] if depth==1 else []):
+            for x,y in starts:
+                blocks=pool(4,depth)
+                ops=[op('seed',rng.randrange(1<<31))]+place('water',blocks,properties)+fall(y,45)+restore(blocks)
+                yield dict(position=vec((x,y,25.3)),ops=ops)
+    # The same falls with a preset fall distance and speed (teleported, then
+    # one move into the pool), and falls landing just beside the pool.
+    for preset,v in [(12,-.9),(3.5,-.5),(30,-3.2),(0,-.08)]:
+        for x in [25.5,22.9,22.7,27.6,28.31]:
+            blocks=pool(4,1)
+            ops=[op('seed',rng.randrange(1<<31))]+place('water',blocks)+[op('fall',bits(preset))]+fall(5.0-v,3,v)+restore(blocks)
+            yield dict(position=vec((x,5.0-v,25.5)),ops=ops)
+    # Waterlogged floors: the water's surface is under or above the feet.
+    for name,properties in [('oak_slab',{'type':'bottom'}),('oak_slab',{'type':'top'}),('oak_stairs',{'facing':'north'}),
+                            ('oak_fence',{}),('oak_trapdoor',{'half':'bottom'}),('oak_trapdoor',{'half':'top','open':'true'}),
+                            ('lantern',{}),('mangrove_roots',{}),('ladder',{'facing':'north'}),('copper_grate',{}),('iron_bars',{})]:
+            for logged in ['true','false']:
+                for x,y in [(25.5,9),(25.3,16)]:
+                    blocks=pool(4,1,range(24,27),range(24,27))
+                    ops=place(name,blocks,dict(properties,waterlogged=logged))+fall(y,40)+restore(blocks)
+                    yield dict(position=vec((x,y,25.5)),ops=ops)
+    # Bubble columns, kelp and seagrass are water too.
+    for name,properties in [('bubble_column',{'drag':'true'}),('bubble_column',{'drag':'false'}),('kelp',{'age':'3'}),
+                            ('kelp_plant',{}),('seagrass',{}),('tall_seagrass',{'half':'lower'})]:
+        for depth in [1,3]:
+            blocks=pool(4,depth,range(24,27),range(24,27))
+            ops=place(name,blocks,properties)+fall(16,45)+restore(blocks)
+            yield dict(position=vec((25.5,16,25.5)),ops=ops)
+    # Lava resets nothing but halves the fall every base tick after the first.
+    for depth in [1,2]:
+        for properties in [{'level':'0'},{'level':'3'}]:
+            for x,y in [(25.5,4.5),(25.5,9),(25.5,16)]:
+                blocks=pool(4,depth)
+                ops=[op('fall',bits(6))]+place('lava',blocks,properties)+fall(y,45)+restore(blocks)
+                yield dict(position=vec((x,y,25.5)),ops=ops)
+    # Water over lava, and a falling player passing a lava layer into water.
+    lava=pool(6,1,range(24,27),range(24,27));water=pool(4,2,range(24,27),range(24,27))
+    ops=place('water',water)+place('lava',lava)+fall(14,40)+restore(lava+water)
+    yield dict(position=vec((25.5,14,25.5)),ops=ops)
+    # Fast falls through a hanging water layer: the fall-reset ray finds the
+    # water only at 1 block per tick or more (and the shape cached by the
+    # first query of each state).
+    for properties in [{'level':'0'},{'level':'2'},{'level':'7'},{'level':'8'}]:
+        for v in [-.99,-1.0,-1.6,-3.5,-9]:
+            for y in [20,21.3,23.95]:
+                layer=pool(12,1)
+                ops=[op('fall',bits(20))]+place('water',layer,properties)
+                ops += [op('velocity',vec((0,v,0))),op('move',vec((0,v,0))) ]*4+[op('fluid_tick')]+fall(8,12)+restore(layer)
+                yield dict(position=vec((25.5,y,25.5)),ops=ops)
+    # Flying players are not pushed but still lose their fall in water.
+    for flying in [False,True]:
+        for x,z in [(25.5,25.5),(24.1,26.8)]:
+            flow=[(25,4,25)]
+            ring=[(a,4,b) for a in range(23,28) for b in range(23,28) if (a,b)!=(25,25)]
+            ops=[op('flying',flying,may_fly=True)]+place('water',flow)+[op('block',name='minecraft:water',position=[a,4,b],properties={'level':str(min(7,max(abs(a-25),abs(b-25))))}) for a,_,b in ring]
+            ops += [op('fall',bits(9))]+[op('fluid_tick') for _ in range(12)]+[op('velocity',vec((0,0,0)))]+[op('fluid_tick') for _ in range(6)]
+            ops += restore(flow+ring)
+            yield dict(position=vec((x,4,z)),ops=ops)
+    # Currents of flowing water, small and large speeds, every cell position.
+    for i in range(24):
+        cells=[(a,4,b) for a in range(22,29) for b in range(22,29)]
+        levels={c:rng.choice(['0','1','2','3','5','7','8','9']) for c in cells}
+        ops=[op('block',name='minecraft:water',position=list(c),properties={'level':levels[c]}) for c in cells]
+        ops += [op('velocity',vec((rng.choice([0,.002,-.1]),0,rng.choice([0,.0029,.2]))))]
+        ops += [op('fluid_tick') for _ in range(8)]
+        ops += restore(cells)
+        yield dict(position=vec((rng.uniform(22.4,28.6),4,rng.uniform(22.4,28.6))),ops=ops)
+    # Eyes under water, splashes of every size: scale changes the eye height
+    # and the width that counts the particles.
+    for scale in [.25,.5,1,2.5]:
+        for start,v in [(10,-.2),(10,-1.2),(7,-.05),(4.3,0)]:
+            blocks=pool(4,3)
+            ops=[op('seed',rng.randrange(1<<31)),op('attribute',bits(scale),name='minecraft:scale'),op('refresh_dimensions')]
+            ops += place('water',blocks)+fall(start,30,v)
+            # Out of the water and back in: a second splash.
+            ops += [op('move',vec((0,6,0))),op('fluid_tick'),op('velocity',vec((0,-.6,0))),op('move',vec((0,-.6,0))),op('fluid_tick'),op('fluid_tick')]
+            ops += restore(blocks)
+            yield dict(position=vec((25.5,start,25.5)),ops=ops)
+    # LivingEntity.checkFallDamage on its own, landing with or without having
+    # touched the water this tick, and on the first tick (no splash).
+    for wet in [False,True]:
+        for ticked in [0,1,2]:
+            for dy in [-.5,-1.5,0]:
+                blocks=pool(4,1)
+                ops=([op('block',name='minecraft:water',position=list(b)) for b in blocks] if wet else [])+[op('fluid_tick') for _ in range(ticked)]
+                ops += [op('fall',bits(8)),op('landing',bits(dy),ground=True,position=[25,3,25]),op('fall',bits(8)),op('landing',bits(dy),ground=False,position=[25,3,25])]
+                ops += restore(blocks)
+                yield dict(position=vec((25.5,4,25.5)),ops=ops)
+
 def corpus():
     yield from attribute_corpus(False)
     yield from portal_corpus()
     yield from pose_corpus(False)
     yield from powder_snow_corpus()
     yield from stuck_corpus()
+    yield from water_corpus()
     def food(level=20,saturation=5,exhaustion=0,timer=0):
         return op('food',food=level,saturation=single(saturation),exhaustion=single(exhaustion),timer=timer)
     # Actual ServerPlayer.checkMovementStatistics with all query contexts. These
@@ -560,7 +677,7 @@ def main():
         'java':subprocess.check_output(['java','--version'],text=True).splitlines()[0],'fixtures':len(fixtures),
         'operations':operations,'sources_sha256':tested,'resources':resource_hash,'input_sha256':input_hash,
         'references':references,
-        'scope':('Client sprint scene executes the real LocalPlayer.aiStep prefix through sprint decisions, stopping at the riding/parent movement boundary, followed by real LocalPlayer.modifyInput and the native server actor simulation. Sprint setters dispatch to that server actor, sharing its actual FoodData and collision conditions. Compares local sprint timer/input history and actual attribute changes, movement, distance exhaustion and hunger. Actual local crouch selection precedes new keyboard input; slowdown, sprint eligibility and pose-dependent dimensions share resident state. No effects, equipment, vehicles or fluid physics. Full client/server tick and networking remain unfinished. ' if args.sprint_input else '')+'Stored PlayerMotion binds resident client chunks and registered attributes/coefficients to air travel, jumping, Entity.move, step resolution, ground/support updates, restitution and speed factors. Repeated native Player.travel/jump/move and actual Player.aiStep / direct LivingEntity.aiStep compare position, velocity, bounds, collision/ground flags, support, climb state, fall-reset field, both sync flags, speed, head yaw, jump trigger and jump delay by exact bits. Prepared-local-input Player.aiStep paths verify the stored speed refresh after movement, with empty inventory and no nearby entities. Travel uses the actual Player.getSpeed movement-attribute query, independently of that stored base-living speed field; both getter and setter execute native bodies. Dry aiStep includes small-velocity cleanup, input damping, held/released jump timing and server frost-modifier removal. Snapshots also compare all allocated attribute instances, base/cache/dirty state, modifier values/operations/permanence and pending update/sync membership. Per-reference JVM holder/instance hashes are replayed so pending callback order and resulting ordered events also match. Dry resident scene with standing, crouching and crawling bounds, cached eye height, native pose-fit selection and ledge backoff; zero frozen ticks, empty equipment, no interpolation, fluids, vehicles, effects or other entities. The oracle controls pose storage and invokes actual native refreshDimensions on changes; full synchronized pose schema and network notifications remain separate. Actual pending attribute refresh runs after player movement and before pose selection in simulation operations, clamping health/absorption and rebuilding scale-dependent dimensions. Native ServerPlayer waypoint-receive and inherited transmit callbacks are compared as ordered requests; the waypoint manager and its network delivery remain controlled consumers. Direct refresh operations and the full enclosing tick remain separate boundaries. Actual LivingEntity.checkFallDamage, registered Block.fallOn/bounceOn and Player/LivingEntity.causeFallDamage are composed, including float-narrowed fall-distance accumulation, reset, last-climb clearing, safe-fall and damage-multiplier attributes, impulse exemptions and ordered landing particle/sound/statistic/hit-ground/damage requests. Farmland pushes the stored player and replaces actual chunk state; repeated turtle-egg changes preserve hatch. Block state at the landing fixture is compared after every operation. World RNG is a seeded native legacy stream. Actual ServerPlayer/Player/LivingEntity hurt dispatch now updates native synchronized health and player absorption, modified armor/toughness reduction, exhaustion, damage cooldown/last-source state and velocity synchronization. Native health storage and dirty flags are compared after every operation. Damage sources use actual decoded/tagged pinned damage registries. ServerPlayer jump statistics and exhaustion are included; dead-or-dying state disables movement input and jumping. Empty equipment/hands/effects, configurable difficulty and natural regeneration, damage gamerules enabled, loaded client and no spawn-extra fall particles define this scene domain. Ordered health/statistic/combat-record/broadcast/sound/criterion/death requests are compared; criterion argument payloads retain the separate combat gate. Actual health changes are applied, but audiovisual playback, persistent statistics, combat tracker internals, full death/drop/respawn services, block neighbor/drop/block-entity callbacks, movement emission, block-inside and networking remain controlled consumers. Actual FoodData.tick and ServerPlayer.tickRegeneration now share the same stored health, attributes, exhaustion and registered starvation damage. Snapshots compare food level, saturation, exhaustion, timer and tick count. Cases cover all four difficulties, regeneration rule changes, absorption during starvation, Peaceful recovery, timer overflow and nonfinite food values. Simulation operations compose clock setup, actual player movement and actual food ticking in their native order, including fall damage followed by regeneration in the same tick. Explicit clock operations establish cooldown/hurt-time/game-time/tick-count state; full enclosing native tick/doTick methods are not invoked by those setup operations. Input preparation has its own client comparison. ServerPlayer.checkMovementStatistics executes on accepted resident deltas after movement and before food ticking. Additional direct method fixtures cover all 512 overlapping passenger/swim/eye-water/water/climb/ground/sprint/crouch/glide flag combinations, invulnerable abilities, centimeter rounding, overflow, signed zero and nonfinite deltas. Those query contexts apply only to the statistics method; fluid/vehicle/glide physics remain unbound. ServerGamePacketListener packet acceptance/rejection and scheduling are not executed. Powder snow operations (snow_tick) run the clock, the powder snow flags and old position of baseTick, then actual aiStep with the real Entity.applyEffectsFromBlocks (movement-path block sweep, StepBasedCollector, PowderSnowBlock.entityInside: stuck multiplier, ALTERNATIVE snowflake particles from the level random, FREEZE/EXTINGUISH, ServerPlayer.onInsideBlock criteria; NetherPortalBlock.entityInside (setAsInsidePortal, with portal_tick running the cooldown and PortalProcessor of Entity.handlePortal without a destination), WebBlock.entityInside with and without Weaving and SweetBerryBushBlock.entityInside at every age through Player.makeStuckInBlock, with sweet_berry_bush damage on the known movement) and the server freezing phase (thaw, frost modifier, freeze damage every 40 ticks); leather boots are a component-less stack and #freeze_immune_wearables is emulated by them. Outside snow_tick block-inside effects stay disabled on both sides. No full Player.tick, consumable item-use lifecycle, local input lifecycle, nonempty inventory/equipment ticks, full freezing, complete death lifecycle or full gameplay parity claim.'})
+        'scope':('Client sprint scene executes the real LocalPlayer.aiStep prefix through sprint decisions, stopping at the riding/parent movement boundary, followed by real LocalPlayer.modifyInput and the native server actor simulation. Sprint setters dispatch to that server actor, sharing its actual FoodData and collision conditions. Compares local sprint timer/input history and actual attribute changes, movement, distance exhaustion and hunger. Actual local crouch selection precedes new keyboard input; slowdown, sprint eligibility and pose-dependent dimensions share resident state. No effects, equipment, vehicles or fluid physics. Full client/server tick and networking remain unfinished. ' if args.sprint_input else '')+'Stored PlayerMotion binds resident client chunks and registered attributes/coefficients to air travel, jumping, Entity.move, step resolution, ground/support updates, restitution and speed factors. Repeated native Player.travel/jump/move and actual Player.aiStep / direct LivingEntity.aiStep compare position, velocity, bounds, collision/ground flags, support, climb state, fall-reset field, both sync flags, speed, head yaw, jump trigger and jump delay by exact bits. Prepared-local-input Player.aiStep paths verify the stored speed refresh after movement, with empty inventory and no nearby entities. Travel uses the actual Player.getSpeed movement-attribute query, independently of that stored base-living speed field; both getter and setter execute native bodies. Dry aiStep includes small-velocity cleanup, input damping, held/released jump timing and server frost-modifier removal. Snapshots also compare all allocated attribute instances, base/cache/dirty state, modifier values/operations/permanence and pending update/sync membership. Per-reference JVM holder/instance hashes are replayed so pending callback order and resulting ordered events also match. Dry resident scene with standing, crouching and crawling bounds, cached eye height, native pose-fit selection and ledge backoff; zero frozen ticks, empty equipment, no interpolation, fluid travel, vehicles, effects or other entities. The oracle controls pose storage and invokes actual native refreshDimensions on changes; full synchronized pose schema and network notifications remain separate. Actual pending attribute refresh runs after player movement and before pose selection in simulation operations, clamping health/absorption and rebuilding scale-dependent dimensions. Native ServerPlayer waypoint-receive and inherited transmit callbacks are compared as ordered requests; the waypoint manager and its network delivery remain controlled consumers. Direct refresh operations and the full enclosing tick remain separate boundaries. Actual LivingEntity.checkFallDamage, registered Block.fallOn/bounceOn and Player/LivingEntity.causeFallDamage are composed, including float-narrowed fall-distance accumulation, reset, last-climb clearing, safe-fall and damage-multiplier attributes, impulse exemptions and ordered landing particle/sound/statistic/hit-ground/damage requests. Farmland pushes the stored player and replaces actual chunk state; repeated turtle-egg changes preserve hatch. Block state at the landing fixture is compared after every operation. World RNG is a seeded native legacy stream. Actual ServerPlayer/Player/LivingEntity hurt dispatch now updates native synchronized health and player absorption, modified armor/toughness reduction, exhaustion, damage cooldown/last-source state and velocity synchronization. Native health storage and dirty flags are compared after every operation. Damage sources use actual decoded/tagged pinned damage registries. ServerPlayer jump statistics and exhaustion are included; dead-or-dying state disables movement input and jumping. Empty equipment/hands/effects, configurable difficulty and natural regeneration, damage gamerules enabled, loaded client and no spawn-extra fall particles define this scene domain. Ordered health/statistic/combat-record/broadcast/sound/criterion/death requests are compared; criterion argument payloads retain the separate combat gate. Actual health changes are applied, but audiovisual playback, persistent statistics, combat tracker internals, full death/drop/respawn services, block neighbor/drop/block-entity callbacks, movement emission, block-inside and networking remain controlled consumers. Actual FoodData.tick and ServerPlayer.tickRegeneration now share the same stored health, attributes, exhaustion and registered starvation damage. Snapshots compare food level, saturation, exhaustion, timer and tick count. Cases cover all four difficulties, regeneration rule changes, absorption during starvation, Peaceful recovery, timer overflow and nonfinite food values. Simulation operations compose clock setup, actual player movement and actual food ticking in their native order, including fall damage followed by regeneration in the same tick. Explicit clock operations establish cooldown/hurt-time/game-time/tick-count state; full enclosing native tick/doTick methods are not invoked by those setup operations. Input preparation has its own client comparison. ServerPlayer.checkMovementStatistics executes on accepted resident deltas after movement and before food ticking. Additional direct method fixtures cover all 512 overlapping passenger/swim/eye-water/water/climb/ground/sprint/crouch/glide flag combinations, invulnerable abilities, centimeter rounding, overflow, signed zero and nonfinite deltas. Those query contexts apply only to the statistics method; fluid/vehicle/glide physics remain unbound. ServerGamePacketListener packet acceptance/rejection and scheduling are not executed. Powder snow operations (snow_tick) run the clock, the powder snow flags and old position of baseTick, then actual aiStep with the real Entity.applyEffectsFromBlocks (movement-path block sweep, StepBasedCollector, PowderSnowBlock.entityInside: stuck multiplier, ALTERNATIVE snowflake particles from the level random, FREEZE/EXTINGUISH, ServerPlayer.onInsideBlock criteria; NetherPortalBlock.entityInside (setAsInsidePortal, with portal_tick running the cooldown and PortalProcessor of Entity.handlePortal without a destination), WebBlock.entityInside with and without Weaving and SweetBerryBushBlock.entityInside at every age through Player.makeStuckInBlock, with sweet_berry_bush damage on the known movement) and the server freezing phase (thaw, frost modifier, freeze damage every 40 ticks); leather boots are a component-less stack and #freeze_immune_wearables is emulated by them. Outside snow_tick block-inside effects stay disabled on both sides. Water operations (fluid_tick) run Entity.baseTick's fluid phase alone with the real updateFluidInteraction over the vanilla #water/#lava fluid tags (EntityFluidInteraction heights, eyes, currents with Player.isPushedByFluid, fall reset, Entity.doWaterSplashEffect sound/BUBBLE/SPLASH particles/SPLASH game event from the level random, firstTick) and lava's fall halving; every player tick runs that phase first. Scripted falls through the real Entity.move cover the FALLDAMAGE_RESETTING ray with ClipContext.Fluid.WATER (first-query fluid shape cache) and LivingEntity.checkFallDamage refreshing the fluids before applying the fall: source, flowing and falling water, waterlogged slabs/stairs/fences/trapdoors/lanterns/roots/ladders/grates/bars, bubble columns, kelp, seagrass and lava. The player never travels while touching a fluid (no water travel/swimming here). No full Player.tick, consumable item-use lifecycle, local input lifecycle, nonempty inventory/equipment ticks, full freezing, complete death lifecycle or full gameplay parity claim.'})
     print(f'Scoped scene motion parity passed: {report}',flush=True)
 
 if __name__=='__main__':main()
