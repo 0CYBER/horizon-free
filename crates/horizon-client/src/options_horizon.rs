@@ -16,10 +16,7 @@ use crate::{
     hud::{HudAtlas, HudBatch},
     options_ui::{Event, Kind, Opt, OptionsUi, Page, apply_preset},
     settings::{SOUND_SOURCES, Settings},
-    ui_theme::{
-        self as t, CONTROL, Face, Kind as Button, MenuStyle, ROW_LABEL, SIDEBAR, SMALL, Ui, color,
-        id,
-    },
+    ui_theme::{self as t, CONTROL, Kind as Button, MenuStyle, ROW_LABEL, SIDEBAR, Ui, color, id},
 };
 
 /// One row of a section.
@@ -258,28 +255,18 @@ impl OptionsUi {
     ) -> Vec<(Item, f32, f32)> {
         let (w, h) = (ui.w, ui.h);
         if self.in_world {
-            ui.atmosphere(0.45, 1.0);
+            ui.atmosphere(0.72, 1.0);
         } else {
             if backdrop < 1.0 {
                 ui.cold_background(1.0 - backdrop);
             }
-            ui.atmosphere(0.66, 1.0);
+            ui.atmosphere(horizon_theme::VEIL, 1.0);
         }
         let section = self.section.min(SECTIONS.len() - 1);
         // The sidebar.
-        ui.fill(0.0, 0.0, SIDEBAR, h, color::with_alpha(color::SIDEBAR, 0.8));
-        ui.vline(SIDEBAR - 1.0, 0.0, h, color::BORDER);
-        ui.text_line(
-            Face::Display,
-            22.0,
-            30.0,
-            22.0,
-            16.0,
-            color::TEXT,
-            "Options",
-        );
+        ui.sidebar_frame("Options");
         let names: Vec<&str> = SECTIONS.iter().map(|s| s.name).collect();
-        ui.sidebar_list(NAV, 12.0, 66.0, SIDEBAR - 24.0, &names, section);
+        ui.sidebar_list(NAV, 12.0, 72.0, SIDEBAR - 24.0, &names, section);
         let dy = h - 12.0 - CONTROL;
         ui.button(
             DONE,
@@ -325,7 +312,7 @@ impl OptionsUi {
         for (i, row) in rows.iter().enumerate() {
             match *row {
                 HRow::Header(label) => {
-                    ui.text(Face::Medium, SMALL, x, y + 18.0, color::FAINT, label);
+                    ui.caps(x, y + 20.0, color::FAINT, label);
                     y += HEADER_H;
                     ui.divider(x, y, cw);
                     continue;
