@@ -28,7 +28,7 @@ copy is: the Mac mini. Its runner runs as the maintainer's account and keeps its
    (its sources, the exporters in `mods/horizon/src/test/java` and `research-lock.json`). The game's sounds, which
    depend only on the Minecraft version, are kept once in `shared-local/sounds/<version>/` (copied from a folder
    `horizon-prepare sounds` made from the maintainer's own game; the Mac mini has no official launcher of its own)
-   and linked into each preparation, for the audio harnesses.
+   and cloned into each preparation (not linked: vanilla's packs refuse symbolic links), for the audio harnesses.
 3. `tools/parity.py --changed <base sha>` picks the harnesses whose traced dependencies (their script, Python
    modules, Java oracles and every Rust source their probes compile) changed since the merge base, plus any
    harness nothing is recorded about yet, and runs those that have no pass for their current inputs. A change to

@@ -74,10 +74,17 @@ while read -r name; do
     echo "::error::.local/$name is not a link to the prepared resources"; exit 1; fi
 done < "$prepared/.entries"
 # The game's sounds (horizon-prepare sounds copies them from the official launcher's asset store) depend only on the
-# Minecraft version: kept once in $shared/sounds/<version>/ (sounds.json and sounds/) and linked into each preparation.
+# Minecraft version: kept once in $shared/sounds/<version>/ (sounds.json and sounds/) and copied into each preparation
+# as clones (APFS, or reflinks on Linux: no second copy of the bytes). Not links: vanilla's resource packs refuse
+# symbolic links inside a pack, so its sound oracles would find no sound files.
 assets="$prepared/horizon-client/$version/assets/minecraft"
 if [ -f "$shared/sounds/$version/sounds.json" ] && [ -d "$assets" ]; then
-  for entry in sounds.json sounds; do [ -e "$assets/$entry" ] || ln -sfn "$shared/sounds/$version/$entry" "$assets/$entry"; done
+  for entry in sounds.json sounds; do
+    [ -L "$assets/$entry" ] && rm "$assets/$entry"
+    [ -e "$assets/$entry" ] && continue
+    if [ "$(uname)" = Darwin ]; then cp -cR "$shared/sounds/$version/$entry" "$assets/"
+    else cp -R --reflink=auto "$shared/sounds/$version/$entry" "$assets/"; fi
+  done
 fi
 touch "$prepared"
 # The four newest preparations stay.
