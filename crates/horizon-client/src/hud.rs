@@ -723,7 +723,7 @@ impl HudRenderer {
             ..Default::default()
         });
         let attributes = wgpu::vertex_attr_array![0=>Float32x2,1=>Float32x2,2=>Unorm8x4];
-        let create = |label, blend| {
+        let create = |label, blend, fragment_entry| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&pipeline_layout),
@@ -742,7 +742,7 @@ impl HudRenderer {
                 multisample: Default::default(),
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
-                    entry_point: Some("fs_main"),
+                    entry_point: Some(fragment_entry),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
@@ -754,7 +754,7 @@ impl HudRenderer {
                 cache: None,
             })
         };
-        let pipeline = create("HUD", wgpu::BlendState::ALPHA_BLENDING);
+        let pipeline = create("HUD", wgpu::BlendState::ALPHA_BLENDING, "fs_main");
         // BlendFunction.INVERT: ONE_MINUS_DST_COLOR, ONE_MINUS_SRC_COLOR,
         // ONE, ZERO.
         let invert_pipeline = create(
@@ -771,6 +771,7 @@ impl HudRenderer {
                     operation: wgpu::BlendOperation::Add,
                 },
             },
+            "fs_crosshair",
         );
         let capacity = 1 << 16;
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -876,6 +877,17 @@ impl HudRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hud_shader_validates_both_fragment_entries() {
+        let module = naga::front::wgsl::parse_str(include_str!("hud.wgsl")).unwrap();
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap();
+    }
 
     #[test]
     fn inverted_ranges_split_the_draws_in_order() {
