@@ -22,10 +22,11 @@ use horizon_world::{
 };
 use std::sync::Arc;
 
+/// An entity, item and effect vertex (the entity pipelines), with a face
+/// normal for `entity.wgsl`'s directional light.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
-    /// Section-relative position.
     pub pos: [f32; 3],
     pub uv: [f32; 2],
     pub layer: u32,
@@ -36,9 +37,26 @@ pub struct Vertex {
     /// RGBA8_SNORM face normal; w = -127 for two-sided lighting, 0 to keep baked/unlit colour.
     pub normal: [i8; 4],
 }
+/// A section vertex, 28 bytes like vanilla's `DefaultVertexFormat.BLOCK`
+/// (position, colour, UV0, UV2) with the sprite's array layer beside the
+/// light. Terrain has no normal: `ModelBlockRenderer` bakes the face shade
+/// into the colour and `terrain.vsh` only multiplies it by the lightmap.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct TerrainVertex {
+    /// Section-relative position.
+    pub pos: [f32; 3],
+    pub uv: [f32; 2],
+    /// Sprite array layer, with `OPAQUE_LAYER` for opaque leaves.
+    pub layer: u16,
+    /// Smooth light, 16x fixed point: sky in the low byte, block in the high one.
+    pub light: u16,
+    /// RGBA8: tint multiplied by directional shade and ambient occlusion.
+    pub color: u32,
+}
 pub struct SectionMesh {
-    pub solid: Vec<Vertex>,
-    pub translucent: Vec<Vertex>,
+    pub solid: Vec<TerrainVertex>,
+    pub translucent: Vec<TerrainVertex>,
     /// VisGraph: bit `a * 6 + b` is set when faces `a` and `b` (Direction
     /// order) are connected through non-opaque blocks.
     pub visibility: u64,
@@ -192,11 +210,11 @@ pub struct MeshFacts {
 pub struct MeshTables {
     info: Vec<Info>,
     pub visibility: FaceVisibility,
-    water_still: u32,
-    water_flow: u32,
-    water_overlay: u32,
-    lava_still: u32,
-    lava_flow: u32,
+    water_still: u16,
+    water_flow: u16,
+    water_overlay: u16,
+    lava_still: u16,
+    lava_flow: u16,
 }
 fn redstone_color(power: u8) -> u32 {
     // RedstoneWireBlock.COLORS
@@ -212,11 +230,18 @@ impl MeshTables {
         facts: &BlockFacts,
         visibility: FaceVisibility,
     ) -> crate::Result<Self> {
-        let layer = |name: &str| -> crate::Result<u32> {
+        // Terrain vertices keep the sprite layer below `OPAQUE_LAYER`.
+        let layers = assets.sprite_layers.values().max().map_or(0, |l| l + 1);
+        if layers > u32::from(OPAQUE_LAYER) {
+            return Err(
+                format!("{layers} block sprites, terrain vertices index {OPAQUE_LAYER}").into(),
+            );
+        }
+        let layer = |name: &str| -> crate::Result<u16> {
             assets
                 .sprite_layers
                 .get(name)
-                .copied()
+                .map(|&l| l as u16)
                 .ok_or_else(|| format!("missing fluid sprite {name}").into())
         };
         let mut covers = std::collections::HashMap::new();
@@ -416,8 +441,8 @@ impl Padded {
         Self { blocks, light }
     }
 }
-/// Set on a vertex's sprite layer when its texture alpha must be ignored.
-pub const OPAQUE_LAYER: u32 = 1 << 31;
+/// Set on a terrain vertex's sprite layer when its texture alpha must be ignored.
+pub const OPAQUE_LAYER: u16 = 1 << 15;
 const UNSET: u32 = u32::MAX;
 const NO_BIOME: u16 = u16::MAX;
 /// The `ColorResolver`s `ClientLevel` caches block tints for.
@@ -530,8 +555,8 @@ fn pack_rgb([r, g, b]: [u32; 3]) -> u32 {
 }
 /// Vanilla light coords (block*16 in the low half, sky*16 in the high half) to
 /// the vertex layout (sky*16 in bits 0..8, block*16 in bits 8..16).
-fn pack_coords(coords: u32) -> u32 {
-    (coords >> 16 & 0xFF) | (coords & 0xFF) << 8
+fn pack_coords(coords: u32) -> u16 {
+    ((coords >> 16 & 0xFF) | (coords & 0xFF) << 8) as u16
 }
 pub struct Mesher<'a> {
     /// CardinalLighting.NETHER: brighter up/down faces.
@@ -723,15 +748,14 @@ impl Mesher<'_> {
                 None => [g; 3],
             };
             let p = q.positions[i];
-            target.push(Vertex {
-                normal: [0; 4],
+            target.push(TerrainVertex {
                 pos: [p[0] + origin[0], p[1] + origin[1], p[2] + origin[2]],
                 uv: q.uv[i],
                 // Opaque leaves (forceOpaque) draw in the solid layer: no alpha cutout.
                 layer: if !self.cutout_leaves && state.leaves {
-                    face.layer | OPAQUE_LAYER
+                    face.layer as u16 | OPAQUE_LAYER
                 } else {
-                    face.layer
+                    face.layer as u16
                 },
                 color: pack_rgb(rgb),
                 light: pack_coords(lighting::with_emission(coords[i], q.light_emission)),

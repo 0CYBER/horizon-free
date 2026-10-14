@@ -5,7 +5,7 @@ use crate::{
     Result,
     environment::Sky,
     hud::{HudBatch, HudRenderer},
-    mesher::{SectionMesh, Vertex},
+    mesher::{SectionMesh, TerrainVertex, Vertex},
     sprites::SpriteAnimation,
 };
 use glam::{DVec3, Mat4, Vec3, Vec4};
@@ -22,6 +22,9 @@ const CRUMBLING_BLEND: wgpu::BlendState = wgpu::BlendState {
     },
     alpha: wgpu::BlendComponent::REPLACE,
 };
+/// `TerrainVertex` for `vs_terrain`: position, UV, layer, light, colour.
+const TERRAIN_ATTRIBUTES: [wgpu::VertexAttribute; 5] =
+    wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x2,2=>Uint16,4=>Uint8x2,3=>Unorm8x4];
 
 /// entity.wgsl after the OverlayTexture constants it reads.
 fn entity_shader() -> String {
@@ -376,7 +379,7 @@ impl Renderer {
     /// Bytes of the section vertex arena's buffers, and of the vertices
     /// resident sections hold in them.
     pub fn section_vertex_bytes(&self) -> [u64; 2] {
-        let stride = std::mem::size_of::<Vertex>() as u64;
+        let stride = std::mem::size_of::<TerrainVertex>() as u64;
         let vertices: u64 = self
             .sections
             .values()
@@ -547,14 +550,12 @@ impl Renderer {
             bind_group_layouts: &[Some(&bindings)],
             ..Default::default()
         });
-        let vertex_attributes =
-            wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x2,2=>Uint32,3=>Unorm8x4,4=>Uint8x4];
         let instance_attributes = wgpu::vertex_attr_array![5=>Float32x4];
         let terrain_buffers = [
             Some(wgpu::VertexBufferLayout {
-                array_stride: std::mem::size_of::<Vertex>() as u64,
+                array_stride: std::mem::size_of::<TerrainVertex>() as u64,
                 step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &vertex_attributes,
+                attributes: &TERRAIN_ATTRIBUTES,
             }),
             Some(wgpu::VertexBufferLayout {
                 array_stride: 16,
@@ -1341,7 +1342,11 @@ impl Renderer {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let arena = arena::Arena::new(&device, std::mem::size_of::<Vertex>() as u64, 1 << 20);
+        let arena = arena::Arena::new(
+            &device,
+            std::mem::size_of::<TerrainVertex>() as u64,
+            1 << 20,
+        );
         let indirect = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Section draws"),
             size: 1024 * 20,
@@ -1574,7 +1579,7 @@ impl Renderer {
         }
         let vertices = (mesh.solid.len() + mesh.translucent.len()) as u64;
         let (page, start) = self.arena.alloc(&self.device, &self.queue, vertices);
-        let stride = std::mem::size_of::<Vertex>() as u64;
+        let stride = std::mem::size_of::<TerrainVertex>() as u64;
         for (offset, part) in [(0, &mesh.solid), (mesh.solid.len(), &mesh.translucent)] {
             if !part.is_empty() {
                 let bytes: &[u8] = bytemuck::cast_slice(part);
@@ -2597,6 +2602,23 @@ mod tests {
         )
         .validate(&module)
         .unwrap();
+    }
+    #[test]
+    fn terrain_attributes_follow_the_terrain_vertex() {
+        use super::TerrainVertex;
+        use std::mem::offset_of;
+        let offsets = super::TERRAIN_ATTRIBUTES.map(|a| (a.shader_location, a.offset as usize));
+        assert_eq!(
+            offsets,
+            [
+                (0, offset_of!(TerrainVertex, pos)),
+                (1, offset_of!(TerrainVertex, uv)),
+                (2, offset_of!(TerrainVertex, layer)),
+                (4, offset_of!(TerrainVertex, light)),
+                (3, offset_of!(TerrainVertex, color)),
+            ]
+        );
+        assert_eq!(std::mem::size_of::<TerrainVertex>(), 28);
     }
     #[test]
     fn cracks_multiply_instead_of_covering_the_block() {
