@@ -480,14 +480,7 @@ impl Game<'_> {
                 ok()
             }
             "quit" => {
-                if self.title.is_none() {
-                    // Player.closeContainer: menu items go back before saving.
-                    self.close_container();
-                    if self.remote.is_none() {
-                        self.stats.custom("leave_game", 1);
-                    }
-                    self.save_game()?;
-                }
+                self.save_for_exit()?;
                 event_loop.exit();
                 ok()
             }
