@@ -98,6 +98,11 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
     };
     let mut tag = base.tag(raw);
     for (key, value) in [
+        (
+            "Fire",
+            Tag::Short(m.fire_ticks.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16),
+        ),
+        ("Air", Tag::Short(m.air as i16)),
         ("Health", Tag::Float(m.health.max(0.0).to_bits())),
         (
             "HurtTime",
@@ -324,6 +329,20 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             crate::mobs::villager::write_nbt(m, map);
         }
         "minecraft:wandering_trader" => put_offers(map, m),
+        "minecraft:axolotl" => {
+            if let Some(ttl) = crate::mobs::animal_brain::hunting_cooldown(m) {
+                map.insert(
+                    "Brain".into(),
+                    Tag::compound([(
+                        "memories",
+                        Tag::compound([(
+                            "minecraft:has_hunting_cooldown",
+                            Tag::compound([("value", Tag::Byte(1)), ("ttl", Tag::Long(ttl))]),
+                        )]),
+                    )]),
+                );
+            }
+        }
         "minecraft:allay" => {
             // InventoryCarrier: the fetched stack; the liked player memory.
             let mut inv = Vec::new();
@@ -710,6 +729,17 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         }
         crate::mobs::zombie_villager::read_nbt(&mut m, tag);
     }
+    if m.species() == crate::mobs::Species::Axolotl
+        && let Some(memory) = tag
+            .get("Brain")
+            .and_then(|b| b.get("memories"))
+            .and_then(|b| b.get("minecraft:has_hunting_cooldown"))
+        && let Some(ttl) = number(memory.get("ttl"))
+    {
+        crate::mobs::animal_brain::set_hunting_cooldown(&mut m, ttl);
+    }
+    m.fire_ticks = number(tag.get("Fire")).unwrap_or(0) as i32;
+    m.air = number(tag.get("Air")).unwrap_or(300) as i32;
     if m.species() == crate::mobs::Species::Allay {
         if let Some(Tag::List(inv)) = tag.get("Inventory")
             && let Some(first) = inv.first()
@@ -853,6 +883,8 @@ pub fn item_entity_from_nbt(tag: &Tag, id: u32, bob_offset: f32) -> Option<ItemE
     let stack = item_from_nbt(tag.get("Item")?)?;
     let position = position(tag)?;
     Some(ItemEntity {
+        health: number(tag.get("Health")).unwrap_or(5) as i32,
+        fire_ticks: number(tag.get("Fire")).unwrap_or(0) as i32,
         id,
         stack,
         position,
@@ -1141,11 +1173,8 @@ pub fn armor_stand_to_nbt(a: &ArmorStand, uuid: [i32; 4], raw: Option<&Tag>) -> 
     } else if let Tag::Compound(map) = &mut tag {
         map.remove(&"Marker".into());
     }
-    if let Tag::Compound(map) = &tag
-        && !map.contains_key(&horizon_world::nbt::JavaString::from("Health"))
-    {
-        put(&mut tag, "Health", Tag::Float(20f32.to_bits()));
-    }
+    put(&mut tag, "Health", Tag::Float(a.health.to_bits()));
+    put(&mut tag, "Fire", Tag::Short(a.fire_ticks as i16));
     // LivingEntity.addAdditionalSaveData and ArmorStand's own fields.
     if let Tag::Compound(map) = &mut tag {
         for (key, value) in [
@@ -1170,6 +1199,8 @@ pub fn armor_stand_to_nbt(a: &ArmorStand, uuid: [i32; 4], raw: Option<&Tag>) -> 
 pub fn armor_stand_from_nbt(tag: &Tag, id: u32) -> Option<ArmorStand> {
     let mut a = ArmorStand::new(id, position(tag)?, rotation(tag)[0]);
     a.velocity = motion(tag);
+    a.health = float(tag.get("Health")).unwrap_or(20.0) as f32;
+    a.fire_ticks = number(tag.get("Fire")).unwrap_or(0) as i32;
     if let Some(eq) = tag.get("equipment") {
         for (i, slot) in ArmorStand::SLOTS.iter().enumerate() {
             a.equipment[i] = eq.get(slot).and_then(item_from_nbt);
@@ -1421,6 +1452,8 @@ mod tests {
     #[test]
     fn item_entities_round_trip() {
         let e = ItemEntity {
+            health: 5,
+            fire_ticks: 0,
             id: 7,
             stack: ItemStack {
                 item: Arc::from("minecraft:diamond_pickaxe"),

@@ -1000,7 +1000,7 @@ impl Goal for MeleeAttack {
         let Some(t) = m.target_info(cx.w) else {
             return false;
         };
-        if !t.alive {
+        if !t.alive || !t.can_be_seen_as_enemy {
             return false;
         }
         let path = m.create_path_to_entity(cx.w, [t.position.x, t.position.y, t.position.z], 0);
@@ -1012,7 +1012,7 @@ impl Goal for MeleeAttack {
         let Some(t) = m.target_info(cx.w) else {
             return false;
         };
-        if !t.alive {
+        if !t.alive || !t.can_be_seen_as_enemy {
             return false;
         }
         if !self.follow_unseen {
@@ -1229,7 +1229,7 @@ pub fn target_continue(st: &mut TargetState, must_see: bool, m: &mut Mob, cx: &m
     let Some(t) = cx.w.target_info(who) else {
         return false;
     };
-    if !t.alive || t.is_player && t.creative {
+    if !t.alive || !t.can_be_seen_as_enemy || t.is_player && t.creative {
         return false;
     }
     let follow = m.attrs.follow_range * st.follow_scale;
@@ -1287,6 +1287,7 @@ impl Goal for NearestTarget {
                 let candidates: Vec<(u32, Vec3)> =
                     cx.w.nearby(pos, range, move |s| {
                         s.id != id
+                            && !s.playing_dead
                             && match prey {
                                 Prey::Species(list) => list.contains(&s.species),
                                 Prey::Filter(f) => f(s),
@@ -1381,7 +1382,7 @@ impl Goal for HurtByTarget {
         let Some(t) = cx.w.target_info(by) else {
             return false;
         };
-        t.alive && !(t.is_player && t.creative)
+        t.alive && t.can_be_seen_as_enemy && !(t.is_player && t.creative)
     }
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         target_continue(&mut self.st, true, m, cx)
@@ -2060,7 +2061,12 @@ impl Goal for TryFindWater {
         !m.ai.nav.is_done()
     }
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
-        m.nav_move_to(cx.w, self.wanted, 1.0);
+        let speed = if m.species() == Species::Axolotl {
+            0.15
+        } else {
+            1.0
+        };
+        m.nav_move_to(cx.w, self.wanted, speed);
     }
 }
 /// `MoveToBlockGoal`'s shared state: search, walk to and stay at a block.

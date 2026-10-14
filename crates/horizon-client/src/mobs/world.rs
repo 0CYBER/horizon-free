@@ -15,6 +15,7 @@ pub struct TargetInfo {
     pub eye_y: f64,
     pub bounds: Aabb,
     pub alive: bool,
+    pub can_be_seen_as_enemy: bool,
     pub is_player: bool,
     pub creative: bool,
 }
@@ -200,6 +201,7 @@ impl MobWorld<'_> {
                 eye_y: p.eye[1],
                 bounds: p.bounds,
                 alive: p.alive,
+                can_be_seen_as_enemy: true,
                 is_player: true,
                 creative: p.creative,
             }),
@@ -208,6 +210,7 @@ impl MobWorld<'_> {
                 eye_y: s.eye_y,
                 bounds: s.bounds,
                 alive: s.alive,
+                can_be_seen_as_enemy: !s.playing_dead,
                 is_player: false,
                 creative: false,
             }),

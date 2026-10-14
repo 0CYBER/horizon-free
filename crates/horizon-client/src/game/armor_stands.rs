@@ -366,8 +366,25 @@ impl Game<'_> {
             world: &self.world,
             binding: self.collision,
         };
-        for a in &mut self.armor_stands {
+        let mut dead = Vec::new();
+        for (i, a) in self.armor_stands.iter_mut().enumerate() {
             a.tick(&mut scene);
+            if !a.environment_tick(&self.world, &self.res.facts, self.res.assets.registry) {
+                dead.push(i);
+            }
+        }
+        for i in dead.into_iter().rev() {
+            let a = self.armor_stands.remove(i);
+            let at = [a.position.x, a.position.y, a.position.z];
+            for stack in a.equipment.into_iter().flatten() {
+                self.spawn_item(stack, at, [0.0; 3], 10);
+            }
+            self.audio
+                .play("minecraft:entity.armor_stand.break", Some(at), 1.0, 1.0);
+            self.world.modified.insert((
+                a.position.x.floor() as i32 >> 4,
+                a.position.z.floor() as i32 >> 4,
+            ));
         }
     }
     /// ArmorStandRenderer: the stand with its default pose, then armor layers.

@@ -20,6 +20,7 @@ pub struct ToolRule {
 }
 #[derive(Clone, Debug)]
 pub struct ItemInfo {
+    pub fire_resistant: bool,
     pub id: Arc<str>,
     pub max_stack: u32,
     pub max_damage: u32,
@@ -307,6 +308,26 @@ fn entity_spec(tags: &HashMap<String, HashSet<String>>, spec: &str) -> HashSet<S
     }
 }
 impl Items {
+    pub fn resists_fire(&self, stack: &ItemStack, source: &str) -> bool {
+        if let Some(data) = stack.data()
+            && let Some((_, v)) = data
+                .other
+                .iter()
+                .find(|(key, _)| key == "minecraft:damage_resistant")
+        {
+            return match v.get("types") {
+                Some(horizon_world::nbt::Tag::String(tag)) => {
+                    tag.to_string().is_ok_and(|id|id=="#minecraft:is_fire" || id==source)
+                }
+                Some(horizon_world::nbt::Tag::List(tags)) => tags.iter().any(
+                    |t| matches!(t,horizon_world::nbt::Tag::String(id) if id.to_string().is_ok_and(|id|id==source)),
+                ),
+                _ => false,
+            };
+        }
+        self.get(&stack.item).is_some_and(|i| i.fire_resistant)
+    }
+
     pub fn load(root: &Path, registry: &BlockRegistry, facts: &BlockFacts) -> Result<Self> {
         let mut block_for_item: HashMap<&str, BlockStateId> = HashMap::new();
         for (i, s) in facts.states.iter().enumerate() {
@@ -370,6 +391,8 @@ impl Items {
             items.insert(
                 id.clone(),
                 ItemInfo {
+                    fire_resistant: c["minecraft:damage_resistant"]["types"].as_str()
+                        == Some("#minecraft:is_fire"),
                     id: id.clone(),
                     max_stack: c["minecraft:max_stack_size"].as_u64().unwrap_or(64) as u32,
                     max_damage: c["minecraft:max_damage"].as_u64().unwrap_or(0) as u32,

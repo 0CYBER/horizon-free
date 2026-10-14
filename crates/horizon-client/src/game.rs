@@ -1162,6 +1162,8 @@ impl Game<'_> {
         // ItemEntity.bobOffs comes from the entity's own random, not the level's.
         let bob = self.particles.random().next_float() * std::f32::consts::PI * 2.0;
         self.dropped.push(ItemEntity {
+            health: 5,
+            fire_ticks: 0,
             id: self.next_entity,
             stack,
             position: p,
@@ -1255,10 +1257,32 @@ impl Game<'_> {
         // ServerLevel.tick: only entities in entity-ticking chunks tick.
         let ticking = self.entity_ticking_area();
         items.retain_mut(|item| {
-            !ticking(
+            if !ticking(
                 item.position.x.floor() as i32,
                 item.position.z.floor() as i32,
-            ) || item.tick(&self.world, &self.res.facts, self.collision)
+            ) {
+                return true;
+            }
+            if !item.tick(&self.world, &self.res.facts, self.collision) {
+                return false;
+            }
+            let environment = item.environment_tick(
+                &self.world,
+                &self.res.facts,
+                self.res.assets.registry,
+                &self.res.items,
+            );
+            // shortcut: age is the fresh-drop clock; use entity ticks for saved/frozen-age phase parity.
+            if environment.should_play_lava_hurt_sound(item.age) {
+                let pitch = 2.0 + self.world.random.next_float() * 0.4;
+                self.audio.play(
+                    "minecraft:entity.generic.burn",
+                    Some([item.position.x, item.position.y, item.position.z]),
+                    0.4,
+                    pitch,
+                );
+            }
+            environment.alive
         });
         let Some(p) = self.player.as_ref() else {
             self.dropped = items;
@@ -1569,7 +1593,13 @@ impl Game<'_> {
                         _ => None,
                     };
                     if let Some((name, volume)) = sound {
-                        self.audio.play(name, c, volume, 1.0);
+                        let pitch = if id == 1009 {
+                            2.6 + (self.world.random.next_float() - self.world.random.next_float())
+                                * 0.8
+                        } else {
+                            1.0
+                        };
+                        self.audio.play(name, c, volume, pitch);
                     }
                 }
                 LevelEvent::Sound {
@@ -2568,10 +2598,25 @@ impl Game<'_> {
         };
         let mut player = PlayerMotion::new(self.motion, feet)?;
         player.yaw = self.yaw;
+        player.fire_ticks = self
+            .level
+            .player_extra
+            .as_ref()
+            .and_then(|t| horizon_client::save::number(t.get("Fire")))
+            .unwrap_or(0) as i32;
+        player.air = self
+            .level
+            .player_extra
+            .as_ref()
+            .and_then(|t| horizon_client::save::number(t.get("Air")))
+            .unwrap_or(300) as i32;
         let spectator = self.mode == horizon_client::command::args::GameMode::Spectator;
         player.may_fly = self.creative || spectator;
         player.invulnerable = self.creative || spectator;
         player.spectator = spectator;
+        player.respiration = self.armor[0]
+            .as_ref()
+            .map_or(0, |s| s.enchantment_level("minecraft:respiration") as i32);
         player.pitch = self.pitch;
         // LivingEntity.canGlideUsing: a glider in its slot that will not break next.
         player.glider = self.armor[1].as_ref().is_some_and(|s| {
@@ -2671,6 +2716,9 @@ impl Game<'_> {
         player.auto_jump_enabled = self.settings.auto_jump;
         player.invulnerable = self.creative || spectator;
         player.spectator = spectator;
+        player.respiration = self.armor[0]
+            .as_ref()
+            .map_or(0, |s| s.enchantment_level("minecraft:respiration") as i32);
         player.pitch = self.pitch;
         // LivingEntity.canGlideUsing: a glider in its slot that will not break next.
         player.glider = self.armor[1].as_ref().is_some_and(|s| {
@@ -2833,7 +2881,6 @@ impl Game<'_> {
     /// world's entities and blocks, and the network hub.
     fn tick_world(&mut self, running: bool) -> Result<()> {
         horizon_client::spans::time("tick_effects", || self.tick_effects());
-        horizon_client::spans::time("tick_burning", || self.tick_burning());
         horizon_client::spans::time("tick_using", || self.tick_using());
         horizon_client::spans::time("tick_hud", || self.tick_hud());
         // The player's digging comes in with its packets, before the level
@@ -3167,8 +3214,7 @@ impl Game<'_> {
                     hunger: effects.get("hunger").is_some(),
                     hardcore: self.level.hardcore,
                     damage_cooldown: p.health.hurt.cooldown > 0,
-                    // Horizon does not track the player's air supply yet.
-                    air: 300,
+                    air: p.air,
                     max_air: 300,
                     under_water,
                     vehicle_hearts,
@@ -4342,6 +4388,89 @@ impl Game<'_> {
     /// ItemEntityRenderer: items bob and spin; blocks render as small cubes.
     fn entity_geometry(&mut self, camera: glam::DVec3, alpha: f64) -> Vec<Vertex> {
         let mut out = Vec::new();
+        let fire_yaw = if self.camera_type == perspective::CameraType::ThirdPersonFront {
+            self.yaw + 180.0
+        } else {
+            self.yaw
+        };
+        for m in &self.mobs {
+            if m.fire_ticks > 0 && !m.removed {
+                let at = m.previous.lerp(m.position, alpha);
+                horizon_client::fire_render::flames(
+                    [at.x, at.y, at.z],
+                    m.width(),
+                    m.height(),
+                    camera,
+                    fire_yaw,
+                    &self.res.atlas.sprites,
+                    self.world.light(
+                        at.x.floor() as i32,
+                        at.y.floor() as i32,
+                        at.z.floor() as i32,
+                    ),
+                    &mut out,
+                );
+            }
+        }
+        if !self.camera_type.first_person()
+            && let Some(p) = &self.player
+            && p.fire_ticks > 0
+            && !p.spectator
+        {
+            let feet = self.previous_position.lerp(p.position, alpha);
+            horizon_client::fire_render::flames(
+                [feet.x, feet.y, feet.z],
+                p.dimensions.width,
+                p.dimensions.height,
+                camera,
+                fire_yaw,
+                &self.res.atlas.sprites,
+                self.world.light(
+                    feet.x.floor() as i32,
+                    feet.y.floor() as i32,
+                    feet.z.floor() as i32,
+                ),
+                &mut out,
+            );
+        }
+        for item in &self.dropped {
+            if item.fire_ticks > 0 {
+                let at = item.previous.lerp(item.position, alpha);
+                horizon_client::fire_render::flames(
+                    [at.x, at.y, at.z],
+                    0.25,
+                    0.25,
+                    camera,
+                    fire_yaw,
+                    &self.res.atlas.sprites,
+                    self.world.light(
+                        at.x.floor() as i32,
+                        at.y.floor() as i32,
+                        at.z.floor() as i32,
+                    ),
+                    &mut out,
+                );
+            }
+        }
+        for stand in &self.armor_stands {
+            if stand.fire_ticks > 0 && !stand.marker {
+                let scale = if stand.small { 0.5 } else { 1.0 };
+                horizon_client::fire_render::flames(
+                    [stand.position.x, stand.position.y, stand.position.z],
+                    0.5 * scale,
+                    1.975 * scale,
+                    camera,
+                    fire_yaw,
+                    &self.res.atlas.sprites,
+                    self.world.light(
+                        stand.position.x.floor() as i32,
+                        stand.position.y.floor() as i32,
+                        stand.position.z.floor() as i32,
+                    ),
+                    &mut out,
+                );
+            }
+        }
         // `ItemEntityRenderer`.
         self.dropped_item_geometry(camera, alpha, &mut out);
         // Mobs and their projectiles.
@@ -5191,6 +5320,8 @@ impl Game<'_> {
         self.score = Default::default();
         self.fns = Default::default();
         self.bosses = Default::default();
+        self.adv = Default::default();
+        self.stats = Default::default();
         // RandomSequences: the world's data/minecraft/random_sequences.dat.
         self.rand_sequences =
             horizon_client::save::read_dat(&save_root.join("data/minecraft/random_sequences.dat"))
@@ -5223,6 +5354,7 @@ impl Game<'_> {
         let (mut streaming, save) = self.make_streaming(&save_root, dim, level.seed)?;
         streaming.radius = self.settings.render_distance;
         let mut world = World::new(self.res.facts.air, level.seed);
+        world.fast_lava = dim == Dim::Nether;
         world.game_time = level.time;
         world.day_time = self.options.time.unwrap_or(level.day_time);
         world.weather = level.weather;
@@ -5452,6 +5584,7 @@ impl Game<'_> {
         let (streaming, save) =
             self.make_streaming(&self.world_root.clone(), target, self.level.seed)?;
         let mut world = World::new(self.res.facts.air, self.level.seed);
+        world.fast_lava = target == Dim::Nether;
         world.game_time = self.world.game_time;
         world.day_time = self.world.day_time;
         world.weather = self.world.weather;
@@ -6218,6 +6351,19 @@ impl Game<'_> {
             }
             if let Some(kind) = mob {
                 if let Some(id) = self.spawn_mob_at(kind, (target[0], target[1], target[2]), true) {
+                    if kind == "axolotl"
+                        && let Some(data) = stack.data().and_then(|d| {
+                            d.other
+                                .iter()
+                                .find(|(key, _)| key == "minecraft:bucket_entity_data")
+                                .map(|(_, v)| v)
+                        })
+                        && let Some(m) = self.mobs.iter_mut().find(|m| m.id == id)
+                        && let Some(horizon_world::nbt::Tag::Long(ticks)) =
+                            data.get("HuntingCooldown")
+                    {
+                        horizon_client::mobs::animal_brain::set_hunting_cooldown(m, *ticks);
+                    }
                     self.mob_placed(id)?;
                 }
                 self.post_block_game_event(
@@ -6227,7 +6373,7 @@ impl Game<'_> {
                     None,
                 );
             }
-            self.trigger_item("minecraft:placed_block", stack);
+            self.trigger_block("minecraft:placed_block", target, stack);
             if !self.creative {
                 self.inventory[self.selected] = Some(ItemStack::new("minecraft:bucket", 1));
             }
@@ -7171,6 +7317,19 @@ impl Game<'_> {
         if let Some(p) = &self.player {
             level.position = Some([p.position.x, p.position.y, p.position.z]);
             level.health = p.health.health();
+            let extra = level
+                .player_extra
+                .get_or_insert_with(|| horizon_world::nbt::Tag::Compound(Default::default()));
+            if let horizon_world::nbt::Tag::Compound(map) = extra {
+                map.insert(
+                    "Fire".into(),
+                    horizon_world::nbt::Tag::Short(
+                        p.fire_ticks.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
+                    ),
+                );
+                map.insert("Air".into(), horizon_world::nbt::Tag::Short(p.air as i16));
+            }
+
             level.food = p.health.food.food;
             level.saturation = p.health.food.saturation;
         }
@@ -7827,7 +7986,16 @@ impl ApplicationHandler for Game<'_> {
             ),
             (&self.res.forcefield.2, self.res.forcefield.0),
         )) {
-            Ok(r) => self.renderer = Some(r),
+            Ok(mut r) => {
+                r.hud.fire_animations = self
+                    .res
+                    .atlas
+                    .fire_animations
+                    .iter()
+                    .map(|(rect, animation)| (*rect, animation.clone(), usize::MAX))
+                    .collect();
+                self.renderer = Some(r);
+            }
             Err(e) => {
                 self.error = Some(e.to_string());
                 event_loop.exit();
@@ -8352,6 +8520,7 @@ impl ApplicationHandler for Game<'_> {
                 }
                 _ => {}
             }
+
             Ok(())
         })();
         if let Err(e) = result {

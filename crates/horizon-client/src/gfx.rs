@@ -1697,16 +1697,17 @@ impl Renderer {
         );
     }
     fn animate(&mut self, tick: u64) {
+        let sprite_size = self.sprite_texture.width();
         for (animation, previous) in &mut self.animations {
             let frame = animation.frame(tick);
             if frame == *previous {
                 continue;
             }
             *previous = frame;
-            let (mips, levels) = mip_chain(animation.pixels(frame), 16, 1);
+            let (mips, levels) = mip_chain(animation.pixels(frame), sprite_size, 1);
             let mut offset = 0;
             for level in 0..levels.min(self.mip_levels) {
-                let size = 16 >> level;
+                let size = sprite_size >> level;
                 let bytes = (size * size * 4) as usize;
                 self.queue.write_texture(
                     wgpu::TexelCopyTextureInfo {
@@ -1772,6 +1773,7 @@ impl Renderer {
         };
         if self.animated_textures {
             self.animate(frame.ticks);
+            self.hud.animate_fire(&self.queue, frame.ticks);
         }
         self.update_lightmap(
             &frame.sky,

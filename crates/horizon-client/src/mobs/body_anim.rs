@@ -1011,7 +1011,7 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses, a: &Animations) -> bool {
             },
             a,
         ),
-        Species::Axolotl => axolotl(p, s, &Axolotl::from_mob(m), a),
+        Species::Axolotl => axolotl(p, s, &Axolotl::from_mob(m, s.partial), a),
         Species::Frog => frog(
             p,
             s,
@@ -1031,14 +1031,20 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses, a: &Animations) -> bool {
     true
 }
 impl Axolotl {
-    pub fn from_mob(m: &Mob) -> Self {
-        let in_water = m.fluids.in_water;
+    pub fn from_mob(m: &Mob, partial: f32) -> Self {
+        let x = &m.extra.axolotl;
         Self {
-            in_water: if in_water { 1.0 } else { 0.0 },
-            on_ground: if m.on_ground { 1.0 } else { 0.0 },
-            walk: m.anim.states[0],
-            swim: m.anim.states[1],
-            ..Self::default()
+            playing_dead: x.factor(0, partial),
+            in_water: x.factor(1, partial),
+            on_ground: x.factor(2, partial),
+            moving: x.factor(3, partial),
+            // Native baby model deliberately reads walkAnimationState, not its underwater counterpart.
+            walk: x.states[0],
+            swim: x.states[1],
+            idle_on_ground: x.states[3],
+            idle_underwater: x.states[4],
+            idle_underwater_on_ground: x.states[5],
+            play_dead: x.states[6],
         }
     }
 }

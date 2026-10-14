@@ -10,6 +10,7 @@ pub mod allay;
 pub mod anim;
 pub mod animal_brain;
 pub mod aquatic;
+pub mod axolotl;
 pub mod body_anim;
 pub mod brain;
 pub mod breeze;
@@ -701,6 +702,7 @@ pub struct Extra {
     pub villager: Option<Box<villager::Ext>>,
     /// The sniffer's and the ghastling's brain.
     pub animal_brain: Option<Box<animal_brain::Brain>>,
+    pub axolotl: axolotl::Animation,
     /// The mob this one rides, and the mob riding it (`getVehicle`, `getFirstPassenger`).
     pub mount: Option<u32>,
     pub rider: Option<u32>,
@@ -937,6 +939,7 @@ pub enum MobEvent {
         amount: u32,
     },
     /// Apply an effect to the player (witch potions, bee stings, cave spider poison).
+    AxolotlSupportPlayer,
     EffectPlayer {
         effect: &'static str,
         ticks: i32,
@@ -1093,6 +1096,9 @@ pub struct SpawnSetup {
 /// A snapshot of another entity mobs can see this tick.
 #[derive(Clone, Debug)]
 pub struct Seen {
+    pub in_water: bool,
+    pub playing_dead: bool,
+    pub last_damage: Option<Damage>,
     pub id: u32,
     pub species: Species,
     pub position: Vec3,
@@ -1151,6 +1157,9 @@ impl Mob {
         let m = self;
         let villager = m.species() == Species::Villager;
         Seen {
+            in_water: self.fluids.in_water,
+            playing_dead: axolotl::is_playing_dead(self),
+            last_damage: self.last_damage.map(|(d, _)| d),
             id: m.id,
             species: m.species(),
             position: m.position,
@@ -1502,6 +1511,7 @@ impl Mob {
         .fold((0.0, 0.0), |(a, t), (x, y)| (a + x, t + y))
     }
     pub fn damage(&mut self, amount: f32, source: Damage) -> bool {
+        axolotl::before_damage(self, amount, &source);
         raider::note_hurt(self);
         if !self.alive() || self.removed || self.invulnerable_flag {
             return false;

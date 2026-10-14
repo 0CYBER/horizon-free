@@ -1192,3 +1192,38 @@ fn creaking_heart_follows_its_logs_and_the_night() {
     }
     assert_eq!(w.prop(heart_at, "creaking_heart_state"), "uprooted");
 }
+
+#[test]
+fn player_breaks_fire_with_extinguish_not_generic_break_event() {
+    for name in ["fire", "soul_fire", "white_wool"] {
+        let mut w = world!();
+        let pos = BlockPos::new(0, 1, 0);
+        let support = w.id("soul_soil", &[]);
+        w.put(BlockPos::new(0, 0, 0), support);
+        let state = w.id(name, &[]);
+        w.put(pos, state);
+        w.level.events.clear();
+        assert!(
+            w.f.behaviours
+                .player_destroy_block(&mut w.level, &mut w.ticks, pos, false)
+        );
+        let is_fire = name != "white_wool";
+        assert_eq!(
+            w.level
+                .events
+                .iter()
+                .any(|e| matches!(e,LevelEvent::LevelEvent {id:1009,pos:p,..} if *p==pos)),
+            is_fire,
+            "extinguish for {name}"
+        );
+        assert_eq!(
+            w.level
+                .events
+                .iter()
+                .any(|e| matches!(e,LevelEvent::LevelEvent {id:2001,pos:p,..} if *p==pos)),
+            !is_fire,
+            "generic break for {name}"
+        );
+        assert_eq!(w.get(pos), w.b().air());
+    }
+}

@@ -28,7 +28,6 @@ use std::sync::Arc;
 pub(super) struct Creatures {
     pub projectiles: Vec<Projectile>,
     /// Player status effects applied by mobs: (effect, ticks left, amplifier).
-    pub player_fire: i32,
     pub pearl_cooldown: u32,
     /// The wind charge's use cooldown (ticks).
     pub wind_cooldown: u32,
@@ -908,6 +907,26 @@ impl Game<'_> {
                     }
                 }
                 MobEvent::Experience { at, amount } => self.spawn_orbs(at, amount),
+                MobEvent::AxolotlSupportPlayer => {
+                    let previous = self
+                        .potions
+                        .effects
+                        .get("regeneration")
+                        .map_or(0, |e| e.duration);
+                    if (0..=2399).contains(&previous) {
+                        self.potions
+                            .effects
+                            .add(horizon_client::effects::EffectInstance::new(
+                                "regeneration",
+                                (previous + 100).min(2400),
+                                0,
+                            ));
+                    }
+                    self.potions
+                        .effects
+                        .list
+                        .retain(|e| e.id != "mining_fatigue");
+                }
                 MobEvent::EffectPlayer {
                     effect,
                     ticks,
@@ -917,9 +936,10 @@ impl Game<'_> {
                 }
                 MobEvent::Ignite { target, seconds } => match target {
                     Who::Player => {
-                        if !self.creative {
-                            self.creatures.player_fire =
-                                self.creatures.player_fire.max(seconds * 20);
+                        if !self.creative
+                            && let Some(p) = self.player.as_mut()
+                        {
+                            p.fire_ticks = p.fire_ticks.max(seconds * 20);
                         }
                     }
                     Who::Mob(id) => {
@@ -1291,24 +1311,6 @@ impl Game<'_> {
     }
     /// Burning applied to the player by mobs.
     fn tick_player_effects(&mut self) {
-        let in_water = self.player.as_ref().is_some_and(|p| {
-            let (x, y, z) = (
-                p.position.x.floor() as i32,
-                p.position.y.floor() as i32,
-                p.position.z.floor() as i32,
-            );
-            self.res.facts.get(self.world.block(x, y, z)).fluid == Fluid::Water
-        });
-        if self.creatures.player_fire > 0 {
-            if in_water {
-                self.creatures.player_fire = 0;
-            } else {
-                if self.creatures.player_fire % 20 == 0 {
-                    self.hurt_player_by("minecraft:on_fire", 1.0);
-                }
-                self.creatures.player_fire -= 1;
-            }
-        }
         self.creatures.wind_cooldown = self.creatures.wind_cooldown.saturating_sub(1);
         if self.creatures.pearl_cooldown > 0 {
             self.creatures.pearl_cooldown -= 1;
@@ -1583,7 +1585,9 @@ impl Game<'_> {
                 Hit::Entity { who, .. } => match who {
                     Who::Player => {
                         if !self.creative {
-                            self.creatures.player_fire = self.creatures.player_fire.max(100);
+                            if let Some(p) = self.player.as_mut() {
+                                p.fire_ticks = p.fire_ticks.max(100);
+                            }
                             self.mob_hits_player(
                                 5.0,
                                 [p.previous.x, p.previous.y, p.previous.z],

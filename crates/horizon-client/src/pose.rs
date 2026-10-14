@@ -72,7 +72,7 @@ impl PlayerMotion {
         Ok(())
     }
     pub fn moving_slowly(&self) -> bool {
-        self.local_crouching || self.pose == Pose::Swimming // dry scene: not in water
+        self.local_crouching || (self.pose == Pose::Swimming && !self.in_water)
     }
 }
 impl MotionWorld<'_, '_, '_> {
@@ -87,6 +87,7 @@ impl MotionWorld<'_, '_, '_> {
     /// the old shift input. This is distinct from Entity's current pose.
     pub fn update_local_crouching(&mut self) -> Result<()> {
         self.player.local_crouching = !self.player.flying
+            && !self.player.swimming
             && self.can_fit_pose(Pose::Crouching)?
             && (self.player.shift_key_down || !self.can_fit_pose(Pose::Standing)?);
         Ok(())
@@ -99,6 +100,8 @@ impl MotionWorld<'_, '_, '_> {
         }
         let desired = if self.player.fall_flying {
             Pose::FallFlying
+        } else if self.player.swimming {
+            Pose::Swimming
         } else if self.player.shift_key_down && !self.player.flying {
             Pose::Crouching
         } else {

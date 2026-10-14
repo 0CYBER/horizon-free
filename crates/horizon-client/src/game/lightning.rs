@@ -322,8 +322,13 @@ impl Game<'_> {
         if let Some(p) = self.player.as_ref().map(|p| p.position)
             && inside([p.x, p.y, p.z])
         {
-            let fire = &mut self.creatures.player_fire;
-            *fire = if *fire + 1 == 0 { 160 } else { *fire + 1 };
+            if let Some(p) = self.player.as_mut() {
+                p.fire_ticks = if p.fire_ticks + 1 == 0 {
+                    160
+                } else {
+                    p.fire_ticks + 1
+                };
+            }
             self.hurt_player_by("minecraft:lightning_bolt", 5.0);
         }
         // Dropped items burn up (ItemEntity health 5), save fire-resistant ones.

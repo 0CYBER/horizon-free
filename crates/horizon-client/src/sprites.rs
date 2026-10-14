@@ -19,6 +19,18 @@ impl SpriteAnimation {
     pub fn frame(&self, tick: u64) -> usize {
         self.clip.sample(tick).frame as usize
     }
+    pub fn resized_pixels(&self, frame: usize, width: u32, height: u32) -> Vec<u8> {
+        let source = self.pixels(frame);
+        let mut out = Vec::with_capacity((width * height * 4) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                let offset = ((y * SPRITE_SIZE / height * SPRITE_SIZE + x * SPRITE_SIZE / width)
+                    * 4) as usize;
+                out.extend_from_slice(&source[offset..offset + 4]);
+            }
+        }
+        out
+    }
     pub fn pixels(&self, frame: usize) -> &[u8] {
         &self.frames[frame]
     }
@@ -142,6 +154,40 @@ impl Sprites {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_fire_sprites_register_full_animation_sequences() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
+        if !root
+            .join("assets/minecraft/textures/block/fire_0.png")
+            .exists()
+        {
+            return;
+        }
+        let mut sprites = Sprites::default();
+        for name in ["fire_0", "fire_1", "soul_fire_0", "soul_fire_1"] {
+            let layer = sprites
+                .insert(&root, &format!("minecraft:block/{name}"))
+                .unwrap();
+            let animation = sprites
+                .animations
+                .iter()
+                .find(|a| a.layer == layer)
+                .expect("fire must be animated");
+            assert_ne!(
+                animation.pixels(animation.frame(0)),
+                animation.pixels(animation.frame(1))
+            );
+            assert_ne!(
+                animation.resized_pixels(animation.frame(0), 16, 16),
+                animation.resized_pixels(animation.frame(1), 16, 16)
+            );
+            assert_eq!(
+                animation.pixels(animation.frame(0)).len(),
+                (SPRITE_SIZE * SPRITE_SIZE * 4) as usize
+            );
+        }
+    }
+
     #[test]
     fn native_32_pixel_animation_frames_keep_every_texel() {
         let root = std::env::temp_dir().join(format!(

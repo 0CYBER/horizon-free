@@ -41,7 +41,10 @@ use std::{
     sync::Arc,
 };
 
+pub(crate) mod environment;
+
 pub struct MotionResources {
+    pub facts: crate::blocks::BlockFacts,
     pub attributes: Arc<Catalog>,
     pub blocks: BoundMovementProperties,
     pub climbable: BTreeSet<String>,
@@ -82,6 +85,7 @@ impl MotionResources {
                 .collect())
         };
         Ok(Self {
+            facts: crate::blocks::BlockFacts::load(root, assets.registry)?,
             landing: crate::landing::load(root, &properties)?,
             health: crate::health::HealthResources::load(root)?,
             attributes,
@@ -128,6 +132,16 @@ pub enum MotionEvent {
     },
 }
 pub struct PlayerMotion {
+    pub fluids: horizon_world::entity_fluid::EntityFluidInteraction,
+    pub in_water: bool,
+    pub eye_in_water: bool,
+    pub in_lava: bool,
+    pub swimming: bool,
+    pub fire_ticks: i32,
+    pub air: i32,
+    pub respiration: i32,
+    pub(crate) first_tick: bool,
+
     pub position: Vec3,
     pub velocity: Vec3,
     pub ground: GroundState,
@@ -257,6 +271,18 @@ impl PlayerMotion {
             local_crouching: false,
             pose: crate::pose::Pose::Standing,
             dimensions: crate::pose::Pose::Standing.dimensions(1.0),
+            fluids: horizon_world::entity_fluid::EntityFluidInteraction::new([
+                environment::WATER,
+                environment::LAVA,
+            ]),
+            in_water: false,
+            eye_in_water: false,
+            in_lava: false,
+            swimming: false,
+            fire_ticks: 0,
+            air: 300,
+            respiration: 0,
+            first_tick: true,
             speed: 0.0,
             item_use_speed: None,
             last_climbable: None,
@@ -358,6 +384,9 @@ impl PlayerMotion {
             horizontal_collision: self.collision.horizontal,
             minor_horizontal_collision: self.collision.minor,
             moving_slowly: self.moving_slowly(),
+            in_water: self.in_water,
+            under_water: self.eye_in_water,
+            swimming: self.swimming,
             ..Default::default()
         };
         // The sprint setter edits attributes and flags, independent of local
@@ -506,14 +535,20 @@ impl MotionWorld<'_, '_, '_> {
         }
         let toggled = flying_before != self.player.flying;
         // Player.tryToStartFallFlying (canGlide: airborne, not flying, a glider).
-        let can_glide = self.player.glider && !self.player.ground.on_ground && !self.player.flying;
+        let can_glide = self.player.glider
+            && !self.player.ground.on_ground
+            && !self.player.flying
+            && !self.player.in_water;
         if jumping && !toggled && !was_jumping && !self.player.fall_flying && can_glide {
             self.player.fall_flying = true;
         }
         // LivingEntity.tick fallFlyTicks, then updateFallFlying.
         if self.player.fall_flying {
             self.player.fall_fly_ticks += 1;
-            let still = self.player.glider && !self.player.ground.on_ground && !self.player.flying;
+            let still = self.player.glider
+                && !self.player.ground.on_ground
+                && !self.player.flying
+                && !self.player.in_water;
             if !still {
                 self.player.fall_flying = false;
             } else if (self.player.fall_fly_ticks + 1) % 10 == 0
@@ -553,8 +588,16 @@ impl MotionWorld<'_, '_, '_> {
     /// services are still incomplete; this composes clocks, movement and hunger.
     pub fn simulation_tick(&mut self, direction: [f32; 2], jumping: bool) -> Result<()> {
         self.player.health.advance_clock();
+        self.update_fluid_environment()?;
+        self.tick_environment_damage()?;
         let previous = self.player.position;
+        self.player.swimming = self.player.sprinting
+            && self.player.in_water
+            && (self.player.swimming || self.player.eye_in_water)
+            && !self.player.flying
+            && !self.player.spectator;
         self.player_movement_tick(direction, jumping)?;
+        self.apply_fire_contact()?;
         self.player.refresh_attributes()?;
         self.update_player_pose()?;
         // The resident scene accepts the resolved local movement directly.
@@ -573,6 +616,7 @@ impl MotionWorld<'_, '_, '_> {
             self.player.auto_jump_time -= 1;
             keys.jump = true;
         }
+        self.sample_fluid_environment(false)?;
         self.player.sprint_input_tick(keys)?;
         self.player.shift_key_down = keys.shift;
         let direction = keys.direction();
@@ -621,8 +665,27 @@ impl MotionWorld<'_, '_, '_> {
             input.x = 0.0;
             input.z = 0.0;
         }
+        if self.player.shift_key_down
+            && !self.player.flying
+            && (self.player.in_water || self.player.in_lava)
+        {
+            self.player.velocity.y -= 0.04;
+        }
         if self.player.jumping {
-            if self.player.ground.on_ground && self.player.no_jump_delay == 0 {
+            let height = self.player.fluids.fluid_height(
+                self,
+                if self.player.in_water {
+                    environment::WATER
+                } else {
+                    environment::LAVA
+                },
+            );
+            if !self.player.flying
+                && (self.player.in_water || self.player.in_lava)
+                && (!self.player.ground.on_ground || height > 0.4)
+            {
+                self.player.velocity.y += 0.04;
+            } else if self.player.ground.on_ground && self.player.no_jump_delay == 0 {
                 self.jump_from_ground()?;
                 self.player.no_jump_delay = 10;
             }
@@ -636,6 +699,8 @@ impl MotionWorld<'_, '_, '_> {
             let y = self.player.velocity.y;
             self.travel_in_air(input)?;
             self.player.velocity.y = y * 0.6;
+        } else if !self.player.flying && (self.player.in_water || self.player.in_lava) {
+            horizon_world::living_fluid::travel_in_fluid(self, input)?;
         } else {
             self.travel_in_air(input)?;
         }
@@ -771,13 +836,13 @@ impl MovementStatisticsWorld for MotionWorld<'_, '_, '_> {
         Ok(false)
     }
     fn swimming(&mut self) -> Result<bool> {
-        Ok(false)
+        Ok(self.player.swimming)
     }
     fn eyes_in_water(&mut self) -> Result<bool> {
-        Ok(false)
+        Ok(self.player.eye_in_water)
     }
     fn in_water(&mut self) -> Result<bool> {
-        Ok(false)
+        Ok(self.player.in_water)
     }
     fn on_climbable(&mut self) -> Result<bool> {
         self.climbable()
@@ -900,7 +965,7 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
         self.player.fall_distance
     }
     fn fall_reset_clip(&mut self, from: Vec3, to: Vec3) -> Result<bool> {
-        // Every fluid in this controlled scene is empty. Tagged reset blocks use
+        // Fluid immersion is handled before travel. Tagged reset blocks use
         // a full block in ClipContext.FALLDAMAGE_RESETTING, not their collider.
         let hit = traverse_blocks(from, to, 1_000_000, |p| {
             let name = &self.assets.registry.state(self.block(p)).unwrap().name;
@@ -1086,10 +1151,10 @@ impl MovementEmissionWorld for MotionWorld<'_, '_, '_> {
         Ok(false)
     }
     fn swimming(&mut self) -> Result<bool> {
-        Ok(false)
+        Ok(self.player.swimming)
     }
     fn in_water(&mut self) -> Result<bool> {
-        Ok(false)
+        Ok(self.player.in_water)
     }
     fn walking_step_sound(&mut self, position: BlockPos, state: BlockStateId) -> Result<()> {
         self.player
@@ -1367,6 +1432,144 @@ mod tests {
     /// Footsteps on the prepared vanilla resources, when they are present:
     /// none while standing (gravity still moves the player every tick), one
     /// per `nextStep` metre while walking.
+    #[test]
+    fn resident_water_and_lava_are_not_treated_as_air() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut scene = World::test_scene(&assets, 3).unwrap();
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
+        let water = assets.registry.default_state("minecraft:water").unwrap();
+        for x in 19..=21 {
+            for y in 3..=7 {
+                for z in 19..=21 {
+                    scene.set(x, y, z, water).unwrap();
+                }
+            }
+        }
+        let mut w = MotionWorld {
+            player: &mut player,
+            scene: &mut scene,
+            assets: &assets,
+            collision_binding: &binding,
+            resources: &resources,
+        };
+        w.controlled_simulation_tick(Default::default()).unwrap();
+        assert!(
+            MovementStatisticsWorld::in_water(&mut w).unwrap(),
+            "resident water must reach the player movement adapter"
+        );
+        assert!(MovementStatisticsWorld::eyes_in_water(&mut w).unwrap());
+        assert!(
+            (w.player.velocity.y + 0.005).abs() < 1e-5,
+            "water drag/gravity must replace air travel: {:?}",
+            w.player.velocity
+        );
+        let lava = assets.registry.default_state("minecraft:lava").unwrap();
+        for x in 19..=21 {
+            for y in 3..=7 {
+                for z in 19..=21 {
+                    w.scene.set(x, y, z, lava).unwrap();
+                }
+            }
+        }
+        w.controlled_simulation_tick(Default::default()).unwrap();
+        assert!(
+            w.player.health.health() < 20.0,
+            "lava must damage a survival player"
+        );
+        // Water extinguishes, swimming is a real pose, and deep water consumes air.
+        for x in 19..=21 {
+            for y in 3..=7 {
+                for z in 19..=21 {
+                    w.scene.set(x, y, z, water).unwrap();
+                }
+            }
+        }
+        w.player.fire_ticks = 160;
+        w.controlled_simulation_tick(Default::default()).unwrap();
+        assert_eq!(w.player.fire_ticks, 0);
+        w.player.air = -19;
+        w.player.health.hurt.cooldown = 0;
+        let hp = w.player.health.health();
+        w.controlled_simulation_tick(Default::default()).unwrap();
+        assert_eq!(w.player.air, 0);
+        assert!(w.player.health.health() < hp, "drowning must hurt");
+        w.player.invulnerable = true;
+        let hp = w.player.health.health();
+        w.player.air = -19;
+        w.controlled_simulation_tick(Default::default()).unwrap();
+        assert_eq!(w.player.health.health(), hp);
+        w.player.invulnerable = false;
+        w.player.air = 300;
+        w.controlled_simulation_tick(crate::sprint::Keys {
+            forward: true,
+            sprint: true,
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(w.player.swimming);
+        assert_eq!(w.player.pose, crate::pose::Pose::Swimming);
+        // Direct fire contact ignites; resistance prevents damage but does not hide flames.
+        let fire = assets.registry.default_state("minecraft:fire").unwrap();
+        for x in 19..=21 {
+            for y in 3..=7 {
+                for z in 19..=21 {
+                    w.scene.set(x, y, z, fire).unwrap();
+                }
+            }
+        }
+        w.player.position = Vec3::new(20.5, 4.0, 20.5);
+        w.player.velocity = Vec3::ZERO;
+        w.player.health.hurt.cooldown = 0;
+        let hp = w.player.health.health();
+        w.controlled_simulation_tick(Default::default()).unwrap();
+        assert!(w.player.fire_ticks > 0);
+        assert!(w.player.health.health() < hp);
+        w.player.status.fire_resistance = true;
+        w.player.health.hurt.cooldown = 0;
+        let hp = w.player.health.health();
+        w.controlled_simulation_tick(Default::default()).unwrap();
+        assert_eq!(w.player.health.health(), hp);
+        // Sprint swimming must keep full input, not the dry crawl/sneak multiplier.
+        for x in 19..=21 {
+            for y in 2..=7 {
+                for z in 19..=30 {
+                    w.scene.set(x, y, z, water).unwrap();
+                }
+            }
+        }
+        w.player.position = Vec3::new(20.5, 4.0, 20.5);
+        w.player.velocity = Vec3::ZERO;
+        w.player.local_crouching = false;
+        w.player.swimming = true;
+        w.player.sprinting = true;
+        w.player.set_pose(crate::pose::Pose::Swimming).unwrap();
+        for _ in 0..30 {
+            w.controlled_simulation_tick(crate::sprint::Keys {
+                forward: true,
+                sprint: true,
+                ..Default::default()
+            })
+            .unwrap();
+        }
+        assert!(
+            w.player.velocity.z > 0.165,
+            "native sprint swim speed must not receive crawl slowdown: {:?}",
+            w.player.velocity
+        );
+        assert!(!w.player.moving_slowly());
+        w.player.in_water = false;
+        assert!(
+            w.player.moving_slowly(),
+            "dry crawling must still slow input"
+        );
+    }
+
     #[test]
     fn footsteps_follow_the_walked_distance_not_the_tick() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");

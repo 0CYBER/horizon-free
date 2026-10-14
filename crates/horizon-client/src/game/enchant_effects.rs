@@ -159,31 +159,12 @@ impl Game<'_> {
                 }
             }
         }
-        if ignite > 0.0 {
-            // Entity.igniteForSeconds; mobs burn for 1 damage per second.
-            let id = self.mobs[mob].id;
-            self.potions.burning.retain(|(m, _)| *m != id);
-            self.potions.burning.push((id, (ignite * 20.0) as i32));
+        if ignite > 0.0
+            && let Some(m) = self.mobs.get_mut(mob)
+            && !m.kind.flags.fire_immune
+        {
+            m.fire_ticks = m.fire_ticks.max((ignite * 20.0) as i32);
         }
-    }
-    /// Burning mobs (fire aspect): one damage every 20 ticks, flame particles.
-    pub(super) fn tick_burning(&mut self) {
-        let mut burning = std::mem::take(&mut self.potions.burning);
-        burning.retain_mut(|(id, ticks)| {
-            *ticks -= 1;
-            let Some(m) = self.mobs.iter_mut().find(|m| m.id == *id && m.alive()) else {
-                return false;
-            };
-            if *ticks % 20 == 0 {
-                let at = [m.position.x, m.position.y, m.position.z];
-                if m.hurt(1.0, None, &mut self.world.random) {
-                    self.last_hurt_by_player.insert(*id);
-                    let _ = at;
-                }
-            }
-            *ticks > 0
-        });
-        self.potions.burning = burning;
     }
     /// Thorns on worn armor when a mob at `from` hits the player.
     pub(super) fn thorns(&mut self, from: [f64; 3]) {

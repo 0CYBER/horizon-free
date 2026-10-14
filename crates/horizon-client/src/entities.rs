@@ -12,6 +12,8 @@ use horizon_world::block_collision::BlockCollisionRegistry;
 
 #[derive(Clone, Debug)]
 pub struct ItemEntity {
+    pub health: i32,
+    pub fire_ticks: i32,
     pub id: u32,
     pub stack: ItemStack,
     pub position: Vec3,
@@ -21,6 +23,17 @@ pub struct ItemEntity {
     pub age: u32,
     pub pickup_delay: u32,
     pub bob_offset: f32,
+}
+/// Environment results needed by the entity owner, including lethal lava damage.
+#[derive(Debug)]
+pub struct ItemEnvironmentTick {
+    pub alive: bool,
+    pub lava_hurt: bool,
+}
+impl ItemEnvironmentTick {
+    pub fn should_play_lava_hurt_sound(&self, tick: u32) -> bool {
+        self.lava_hurt && (!self.alive || tick.is_multiple_of(10))
+    }
 }
 impl ItemEntity {
     pub const WIDTH: f64 = 0.25;
@@ -34,6 +47,50 @@ impl ItemEntity {
                 self.position.z + h,
             ),
         )
+    }
+    pub fn environment_tick(
+        &mut self,
+        world: &World,
+        facts: &BlockFacts,
+        registry: &horizon_world::registry::BlockRegistry,
+        items: &crate::items::Items,
+    ) -> ItemEnvironmentTick {
+        let at = world.block(
+            self.position.x.floor() as i32,
+            (self.position.y + 0.1).floor() as i32,
+            self.position.z.floor() as i32,
+        );
+        let fluid = facts.get(at).fluid;
+        if fluid == Fluid::Water {
+            self.fire_ticks = 0;
+        }
+        if self.fire_ticks > 0 {
+            if self.fire_ticks % 20 == 0
+                && fluid != Fluid::Lava
+                && !items.resists_fire(&self.stack, "minecraft:on_fire")
+            {
+                self.health -= 1;
+            }
+            self.fire_ticks -= 1;
+        }
+        let mut lava_hurt = false;
+        if fluid == Fluid::Lava {
+            self.fire_ticks = self.fire_ticks.max(300);
+            if !items.resists_fire(&self.stack, "minecraft:lava") {
+                self.health -= 4;
+                lava_hurt = true;
+            }
+        }
+        if crate::motion::environment::fire_contact(world, registry, self.bounds()) > 0.0 {
+            self.fire_ticks = self.fire_ticks.max(160);
+            if !items.resists_fire(&self.stack, "minecraft:in_fire") {
+                self.health -= 1;
+            }
+        }
+        ItemEnvironmentTick {
+            alive: self.health > 0,
+            lava_hurt,
+        }
     }
     /// Returns false when the item should be removed.
     pub fn tick(
@@ -58,6 +115,12 @@ impl ItemEntity {
                 self.velocity.x * 0.99,
                 self.velocity.y + if self.velocity.y < 0.06 { 5.0e-4 } else { 0.0 },
                 self.velocity.z * 0.99,
+            );
+        } else if facts.get(eye).fluid == Fluid::Lava {
+            self.velocity = Vec3::new(
+                self.velocity.x * 0.95,
+                self.velocity.y + if self.velocity.y < 0.06 { 5.0e-4 } else { 0.0 },
+                self.velocity.z * 0.95,
             );
         } else {
             self.velocity.y -= 0.04;
@@ -431,6 +494,8 @@ impl ItemFrame {
 /// An armor stand (`ArmorStand`).
 #[derive(Clone, Debug)]
 pub struct ArmorStand {
+    pub fire_ticks: i32,
+    pub health: f32,
     pub id: u32,
     pub position: Vec3,
     pub velocity: Vec3,
@@ -450,6 +515,8 @@ impl ArmorStand {
     pub const SLOTS: [&'static str; 6] = ["mainhand", "offhand", "feet", "legs", "chest", "head"];
     pub fn new(id: u32, position: Vec3, yaw: f32) -> Self {
         Self {
+            fire_ticks: 0,
+            health: 20.0,
             id,
             position,
             velocity: Vec3::ZERO,
@@ -463,6 +530,53 @@ impl ArmorStand {
             marker: false,
             last_hit: i64::MIN / 2,
         }
+    }
+    pub fn environment_tick(
+        &mut self,
+        world: &World,
+        facts: &BlockFacts,
+        registry: &horizon_world::registry::BlockRegistry,
+    ) -> bool {
+        let (lo, hi) = (self.bounds().min_position(), self.bounds().max_position());
+        let mut water = false;
+        let mut lava = false;
+        for x in lo.x.floor() as i32..=hi.x.floor() as i32 {
+            for y in lo.y.floor() as i32..hi.y.ceil() as i32 {
+                for z in lo.z.floor() as i32..=hi.z.floor() as i32 {
+                    match facts.get(world.block(x, y, z)).fluid {
+                        Fluid::Water => water = true,
+                        Fluid::Lava => lava = true,
+                        _ => {}
+                    }
+                }
+            }
+        }
+        if water {
+            self.fire_ticks = 0;
+        }
+        if self.fire_ticks > 0 {
+            if self.fire_ticks % 20 == 0
+                && !lava
+                && !self.invisible
+                && !self.marker
+                && self.health > 0.5
+            {
+                self.health -= 4.0;
+            }
+            self.fire_ticks -= 1;
+        }
+        if lava {
+            self.fire_ticks = self.fire_ticks.max(300);
+        }
+        let fire = crate::motion::environment::fire_contact(world, registry, self.bounds()) > 0.0;
+        if (fire || lava) && !self.invisible && !self.marker {
+            if self.fire_ticks > 0 {
+                self.health -= 0.15;
+            } else {
+                self.fire_ticks = 100;
+            }
+        }
+        self.health > 0.5
     }
     /// EntityType.ARMOR_STAND dimensions (0.5 x 1.975, half for small).
     pub fn bounds(&self) -> Aabb {
@@ -493,5 +607,89 @@ impl ArmorStand {
             v = Vec3::new(0.0, if moved.y != wanted.y { 0.0 } else { v.y * 0.98 }, 0.0);
         }
         self.velocity = v;
+    }
+}
+
+#[cfg(test)]
+mod fire_environment_tests {
+    use super::*;
+    #[test]
+    fn ordinary_items_burn_but_native_netherite_resists_lava() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("items.json").exists() {
+            return;
+        }
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let facts = BlockFacts::load(&root, assets.registry).unwrap();
+        let items = crate::items::Items::load(&root, assets.registry, &facts).unwrap();
+        let mut world = World::test_scene(&assets, 3).unwrap();
+        let at = Vec3::new(20.5, 4.0, 20.5);
+        world
+            .set(
+                20,
+                4,
+                20,
+                assets.registry.default_state("minecraft:lava").unwrap(),
+            )
+            .unwrap();
+        let make = |id: &str| ItemEntity {
+            id: 1,
+            stack: ItemStack {
+                item: std::sync::Arc::from(id),
+                count: 1,
+                damage: 0,
+                extra: None,
+            },
+            health: 5,
+            fire_ticks: 0,
+            position: at,
+            previous: at,
+            velocity: Vec3::ZERO,
+            on_ground: false,
+            age: 0,
+            pickup_delay: 0,
+            bob_offset: 0.0,
+        };
+        let mut wood = make("minecraft:oak_planks");
+        let mut metal = make("minecraft:netherite_ingot");
+        let first = wood.environment_tick(&world, &facts, assets.registry, &items);
+        assert!(first.alive && first.lava_hurt);
+        assert!(
+            !first.should_play_lava_hurt_sound(1),
+            "ordinary entry damage must not repeat the burn sound"
+        );
+        assert!(first.should_play_lava_hurt_sound(10));
+        assert!(
+            wood.fire_ticks > 0,
+            "lava contact must ignite dropped items"
+        );
+        let last = wood.environment_tick(&world, &facts, assets.registry, &items);
+        assert!(
+            !last.alive && last.lava_hurt,
+            "lethal lava damage still emits burn sound"
+        );
+        assert!(
+            last.should_play_lava_hurt_sound(2),
+            "the lethal hit must always play the sound"
+        );
+        for _ in 0..40 {
+            let result = metal.environment_tick(&world, &facts, assets.registry, &items);
+            assert!(result.alive && !result.lava_hurt);
+            assert!(!result.should_play_lava_hurt_sound(10));
+        }
+        assert_eq!(metal.health, 5);
+        world
+            .set(
+                20,
+                4,
+                20,
+                assets.registry.default_state("minecraft:fire").unwrap(),
+            )
+            .unwrap();
+        let mut burning = make("minecraft:oak_planks");
+        let result = burning.environment_tick(&world, &facts, assets.registry, &items);
+        assert!(result.alive && !result.lava_hurt);
+        assert!(burning.fire_ticks > 0);
     }
 }

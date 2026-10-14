@@ -571,6 +571,7 @@ pub fn conditions(v: &Value, ctx: &Entities, w: &dyn World) -> bool {
                         w,
                     )
                 }
+                "minecraft:match_block" => ctx.block_pos.is_some_and(|b| block(v, b, w)),
                 "minecraft:block_state_property" => ctx.block_pos.is_some_and(|b| {
                     let mut pred = serde_json::Map::new();
                     pred.insert("blocks".into(), v["block"].clone());
@@ -927,6 +928,24 @@ mod tests {
         fn in_tag(&self, _: &str, tag: &str, id: &str) -> bool {
             tag == "minecraft:stone_tool_materials" && id == "minecraft:cobblestone"
         }
+    }
+    #[test]
+    fn bucket_axolotl_block_advancements_require_the_placed_block() {
+        let ctx = Entities {
+            this: None,
+            origin: [0.0; 3],
+            tool: None,
+            block_pos: Some([0; 3]),
+        };
+        let stone = serde_json::json!({"type":"minecraft:match_block","blocks":"minecraft:stone"});
+        let wheat = serde_json::json!({"type":"minecraft:match_block","blocks":"minecraft:wheat"});
+        assert!(conditions(&stone, &ctx, &Flat));
+        assert!(!conditions(&wheat, &ctx, &Flat));
+        let absent = Entities {
+            block_pos: None,
+            ..ctx
+        };
+        assert!(!conditions(&stone, &absent, &Flat));
     }
     #[test]
     fn predicates_match_tags_ranges_and_locations() {

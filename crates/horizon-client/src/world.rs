@@ -9,6 +9,7 @@ use std::{
 };
 
 pub struct World {
+    pub fast_lava: bool,
     pub chunks: crate::fast_hash::FxHashMap<(i32, i32), Arc<Chunk>>,
     pub random: LegacyRandom,
     pub revision: u64,
@@ -113,6 +114,7 @@ impl World {
             revision: 0,
             health_rules: crate::health::HealthRules::default(),
             air,
+            fast_lava: false,
             dirty_sections: Default::default(),
             dirty_light: Default::default(),
             light_edits: Vec::new(),
