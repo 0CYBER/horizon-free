@@ -888,6 +888,9 @@ impl Game<'_> {
                 MobEvent::Particles { kind, at, count } => {
                     // Mob particle bursts (hearts, smoke, splashes) around a point.
                     if let Some(ty) = horizon_client::particles::ParticleType::from_name(kind) {
+                        if kind.starts_with("item_") {
+                            self.ensure_item_particle_sprites();
+                        }
                         let options = horizon_client::particles::ParticleOptions::simple(ty);
                         // Count 0: one particle exactly there, at rest.
                         if count == 0 {
@@ -1763,23 +1766,24 @@ impl Game<'_> {
         }
         Ok(())
     }
-    /// Item break particles (snowballs, eggs).
+    /// `Snowball`/`ThrownEgg.handleEntityEvent(3)`: eight crumbs of the
+    /// thrown item where it broke, at rest for a snowball, scattered by the
+    /// client entity's random (the particle engine's here) for an egg.
     fn item_burst(&mut self, at: [f64; 3], item: &str) {
-        let sprite = format!("item/{}", item.trim_start_matches("minecraft:"));
+        let options = self.item_particle(&horizon_client::items::ItemStack::new(item, 1));
+        let egg = item != "minecraft:snowball";
         for _ in 0..8 {
-            let v = [
-                (self.world.random.next_double() - 0.5) * 0.08,
-                self.world.random.next_double() * 0.1,
-                (self.world.random.next_double() - 0.5) * 0.08,
-            ];
-            let p = horizon_client::particles::Particle::terrain(
-                &mut self.world.random,
-                at,
-                v,
-                sprite.clone(),
-                0xFFFFFF,
-            );
-            self.particles.push(p);
+            let v = if egg {
+                let r = self.particles.random();
+                [
+                    (f64::from(r.next_float()) - 0.5) * 0.08,
+                    (f64::from(r.next_float()) - 0.5) * 0.08,
+                    (f64::from(r.next_float()) - 0.5) * 0.08,
+                ]
+            } else {
+                [0.0; 3]
+            };
+            self.particles.add(&options, at, v);
         }
     }
     /// Right click on a mob (Mob.interact / mobInteract). Returns true when consumed.
