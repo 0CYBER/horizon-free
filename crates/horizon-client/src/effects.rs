@@ -287,6 +287,7 @@ impl PlayerEffects {
             weaving: self.get("weaving").is_some(),
             water_breathing: self.get("water_breathing").is_some()
                 || self.get("conduit_power").is_some(),
+            breath_of_the_nautilus: self.get("breath_of_the_nautilus").is_some(),
             protection: Vec::new(),
         }
     }
@@ -384,6 +385,7 @@ pub struct StatusFlags {
     /// Weaving: cobwebs hold half as much (`WebBlock.entityInside`).
     pub weaving: bool,
     pub water_breathing: bool,
+    pub breath_of_the_nautilus: bool,
     /// Armor enchantment protection per damage type id (`EnchantmentHelper.getDamageProtection`).
     pub protection: Vec<(String, f32)>,
 }

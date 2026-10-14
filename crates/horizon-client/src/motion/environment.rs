@@ -20,8 +20,8 @@ impl MotionWorld<'_, '_, '_> {
             .hurt(&self.resources.health, self.scene.health_rules, id, damage)?;
         Ok(())
     }
-    pub(super) fn tick_environment_damage(&mut self) -> Result<()> {
-        if self.player.fluids.was_touching_water || self.player.spectator {
+    pub(super) fn tick_remaining_fire(&mut self) -> Result<()> {
+        if self.player.spectator {
             self.player.fire_ticks = 0;
         }
         if self.player.invulnerable && self.player.fire_ticks > 1 {
@@ -33,8 +33,26 @@ impl MotionWorld<'_, '_, '_> {
             }
             self.player.fire_ticks -= 1;
         }
-        if self.player.is_eye_in_fluid(WATER)
+        if self.player.fluids.was_touching_water {
+            self.player.fire_ticks = self.player.fire_ticks.min(0);
+        }
+        Ok(())
+    }
+    pub(super) fn tick_environment_damage(&mut self) -> Result<()> {
+        let eye = BlockPos::containing(self.player.position.add_vector(Vec3::new(
+            0.0,
+            f64::from(self.player.dimensions.eye_height),
+            0.0,
+        )));
+        let bubble_column = self
+            .assets
+            .registry
+            .state(self.block(eye))
+            .is_some_and(|state| state.name == "minecraft:bubble_column");
+        let submerged = self.player.is_eye_in_fluid(WATER) && !bubble_column;
+        if submerged
             && !self.player.status.water_breathing
+            && !self.player.status.breath_of_the_nautilus
             && !self.player.invulnerable
             && !self.player.spectator
         {
@@ -49,7 +67,10 @@ impl MotionWorld<'_, '_, '_> {
                 self.player.air = 0;
                 self.environment_hurt("minecraft:drown", 2.0)?;
             }
-        } else {
+        } else if !submerged
+            || !self.player.status.breath_of_the_nautilus
+            || self.player.status.water_breathing
+        {
             self.player.air = (self.player.air + 4).min(300);
         }
         if self.player.is_in_lava() {
