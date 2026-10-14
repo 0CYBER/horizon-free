@@ -75,7 +75,7 @@ fn main() {
     let mut model = cube("body".into(), 0.0);
     model.children = (1..6).map(|i| cube(format!("part{i}"), i as f32)).collect();
     let poses = Poses::new(&model);
-    for count in [32, 256, 1024] {
+    for count in [32, 256, 1024, 4096, 8192] {
         let mut expected = Vec::new();
         build(&model, &poses, count, &mut expected);
         let mut retained = Vec::new();
@@ -103,30 +103,38 @@ fn main() {
         let iterations = (100_000 / count).clamp(40, 1000);
         let mut fresh = Vec::new();
         let mut reused = Vec::new();
+        let mut paired_speedups = Vec::new();
         // Alternate order, reporting medians over eleven warmed batches.
         for batch in 0..11 {
+            let mut pair = [0.0; 2];
             for reuse in if batch % 2 == 0 {
                 [false, true]
             } else {
                 [true, false]
             } {
                 let time = measure(&model, &poses, count, iterations, reuse);
+                pair[usize::from(reuse)] = time;
                 if reuse {
                     reused.push(time);
                 } else {
                     fresh.push(time);
                 }
             }
+            paired_speedups.push(pair[0] / pair[1]);
         }
+        paired_speedups.sort_by(f64::total_cmp);
         fresh.sort_by(f64::total_cmp);
         reused.sort_by(f64::total_cmp);
         println!(
-            "entities={count} vertices={} capacity={capacity} retained_bytes={} fresh_us={:.3} reused_us={:.3} speedup={:.3}x iterations={iterations} batches=11 byte_equivalence=pass pointer_capacity_reuse=pass",
+            "entities={count} vertices={} capacity={capacity} retained_bytes={} fresh_us={:.3} reused_us={:.3} speedup={:.3}x paired_speedup_median={:.3}x paired_speedup_range={:.3}..{:.3}x iterations={iterations} batches=11 byte_equivalence=pass pointer_capacity_reuse=pass",
             retained.len(),
             capacity * size_of::<Vertex>(),
             fresh[5],
             reused[5],
-            fresh[5] / reused[5]
+            fresh[5] / reused[5],
+            paired_speedups[5],
+            paired_speedups[0],
+            paired_speedups[10]
         );
     }
 }
