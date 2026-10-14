@@ -43,7 +43,11 @@ impl FluidResources {
                 .iter()
                 .map(|s| assets.blocks_fluid_flow.contains(&*s.name))
                 .collect(),
-            ice: facts.states.iter().map(|s| s.has_class("IceBlock")).collect(),
+            ice: facts
+                .states
+                .iter()
+                .map(|s| s.has_class("IceBlock"))
+                .collect(),
             shapes: Mutex::new(FluidShapeCache::default()),
         })
     }
