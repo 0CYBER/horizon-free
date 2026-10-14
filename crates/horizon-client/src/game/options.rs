@@ -94,7 +94,10 @@ impl Game<'_> {
             .shortcut(&self.res.atlas, shortcut, &mut self.clipboard)
     }
     pub(super) fn options_scroll(&mut self, amount: f32) {
-        self.ui.options.scroll_at(self.cursor, amount);
+        let size = self.gui_size();
+        self.ui
+            .options
+            .scroll_at(&self.settings, size, self.cursor, amount);
     }
     /// Mouse buttons pressed while a key is being bound.
     pub(super) fn options_waiting_for_key(&self) -> bool {

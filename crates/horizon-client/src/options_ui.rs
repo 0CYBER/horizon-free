@@ -906,13 +906,7 @@ impl OptionsUi {
         }
     }
     /// Build every widget of the current page.
-    fn layout(
-        &mut self,
-        s: &Settings,
-        atlas: &HudAtlas,
-        w: f32,
-        h: f32,
-    ) -> (Vec<Widget>, f32, f32, f32) {
+    fn layout(&mut self, s: &Settings, w: f32, h: f32) -> (Vec<Widget>, f32, f32, f32) {
         let mut out = Vec::new();
         let page = self.page();
         let cx = (w / 2.0).floor();
@@ -1235,7 +1229,15 @@ impl OptionsUi {
                 out.push(done(h - 27.0));
             }
         }
-        let _ = atlas;
+        // Layout may change the offset (language centering), or the list may
+        // shrink after a resize/search. Correct the rows in this same frame.
+        let previous_scroll = self.scroll;
+        self.clamp_scroll(top, bottom, content);
+        for widget in &mut out {
+            if widget.list {
+                widget.y += previous_scroll - self.scroll;
+            }
+        }
         (out, top, bottom, content)
     }
     fn clamp_scroll(&mut self, top: f32, bottom: f32, content: f32) {
@@ -1268,8 +1270,7 @@ impl OptionsUi {
             crate::screen_draw::paint(batch, atlas, &draws);
             return;
         }
-        let (widgets, top, bottom, content) = self.layout(s, atlas, w, h);
-        self.clamp_scroll(top, bottom, content);
+        let (widgets, top, bottom, content) = self.layout(s, w, h);
         let in_world = self.in_world;
         ui::menu_background(batch, atlas, 0.0, 0.0, w, h, in_world);
         let list = bottom > top;
@@ -1452,7 +1453,7 @@ impl OptionsUi {
             }
             return events;
         }
-        let (widgets, top, bottom, _) = self.layout(s, atlas, size.0, size.1);
+        let (widgets, top, bottom, _) = self.layout(s, size.0, size.1);
         let mut events = Vec::new();
         if drag {
             if let Some(opt) = self.dragging
@@ -1552,24 +1553,26 @@ impl OptionsUi {
         self.hdragging = None;
         self.graphics.release();
     }
-    pub fn scroll(&mut self, amount: f32) {
+    pub fn scroll(&mut self, s: &Settings, size: (f32, f32), amount: f32) {
+        let (_, top, bottom, content) = self.layout(s, size.0, size.1);
         self.scroll -= amount * 18.0;
+        self.clamp_scroll(top, bottom, content);
     }
     /// The mouse wheel at the cursor.
-    pub fn scroll_at(&mut self, cursor: (f32, f32), amount: f32) {
+    pub fn scroll_at(&mut self, s: &Settings, size: (f32, f32), cursor: (f32, f32), amount: f32) {
         if crate::ui_theme::horizon() && self.page() == Page::Main {
             self.scroll_horizon(amount);
             return;
         }
-        if Self::graphics_level(self.page()).is_some() {
-            self.graphics.scroll(amount);
+        if let Some(level) = Self::graphics_level(self.page()) {
+            self.graphics.scroll(level, size.1, amount);
             return;
         }
         match &mut self.pack_screen {
             Some(p) if self.stack.last() == Some(&Page::Packs) => {
                 p.scroll(cursor.0 as f64, cursor.1 as f64, amount as f64)
             }
-            _ => self.scroll(amount),
+            _ => self.scroll(s, size, amount),
         }
     }
     /// The pack screen at this GUI size, made on first use.
@@ -1729,6 +1732,99 @@ impl OptionsUi {
 mod tests {
     use super::*;
     use crate::ui_theme::{MenuStyle, set_style, style};
+
+    fn languages() -> Vec<LanguageInfo> {
+        (0..30)
+            .map(|i| LanguageInfo {
+                code: format!("language_{i}"),
+                name: format!("Language {i}"),
+                region: String::new(),
+                bidirectional: false,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn classic_scroll_stops_at_both_limits_before_layout() {
+        let s = Settings::default();
+        let size = (480.0, 120.0);
+        for page in [Page::KeyBinds, Page::Chat, Page::Sound, Page::Language] {
+            let mut ui = OptionsUi {
+                languages: languages(),
+                ..Default::default()
+            };
+            ui.show(page);
+            let (_, top, bottom, content) = ui.layout(&s, size.0, size.1);
+            let max = content - (bottom - top);
+            assert!(max > 4.5, "{page:?}");
+            for _ in 0..3 {
+                ui.scroll_at(&s, size, (240.0, 60.0), 1000.0);
+                assert_eq!(ui.scroll, 0.0, "{page:?}");
+            }
+            for _ in 0..3 {
+                ui.scroll_at(&s, size, (240.0, 60.0), -1000.0);
+                assert_eq!(ui.scroll, max, "{page:?}");
+            }
+            ui.scroll_at(&s, size, (240.0, 60.0), 0.25);
+            assert_eq!(ui.scroll, max - 4.5, "{page:?}");
+            ui.scroll_at(&s, size, (240.0, 60.0), 1000.0);
+            ui.scroll_at(&s, size, (240.0, 60.0), -0.25);
+            assert_eq!(ui.scroll, 4.5, "{page:?}");
+        }
+    }
+
+    #[test]
+    fn classic_pages_without_overflow_do_not_scroll() {
+        let s = Settings::default();
+        for page in [Page::Main, Page::Font, Page::Mouse] {
+            let mut ui = OptionsUi::default();
+            ui.show(page);
+            for amount in [-1000.0, 1000.0, -0.25] {
+                ui.scroll(&s, (480.0, 720.0), amount);
+                assert_eq!(ui.scroll, 0.0, "{page:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn classic_resize_positions_rows_at_the_clamped_offset() {
+        let s = Settings::default();
+        let mut ui = OptionsUi::default();
+        ui.show(Page::KeyBinds);
+        ui.scroll(&s, (480.0, 120.0), -1000.0);
+        assert!(ui.scroll > 0.0);
+        let (widgets, _, _, _) = ui.layout(&s, 480.0, 4000.0);
+        assert_eq!(ui.scroll, 0.0);
+        let (expected, _, _, _) = ui.layout(&s, 480.0, 4000.0);
+        assert_eq!(
+            widgets.iter().map(|w| w.y).collect::<Vec<_>>(),
+            expected.iter().map(|w| w.y).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn language_centering_and_filtering_use_bounded_row_positions() {
+        let s = Settings {
+            language: "language_29".into(),
+            ..Default::default()
+        };
+        let mut ui = OptionsUi {
+            languages: languages(),
+            ..Default::default()
+        };
+        ui.show(Page::Language);
+        let (widgets, top, bottom, content) = ui.layout(&s, 480.0, 240.0);
+        assert_eq!(ui.scroll, content - (bottom - top));
+        let (expected, _, _, _) = ui.layout(&s, 480.0, 240.0);
+        assert_eq!(
+            widgets.iter().map(|w| w.y).collect::<Vec<_>>(),
+            expected.iter().map(|w| w.y).collect::<Vec<_>>()
+        );
+        ui.language_search.set_value("language_29");
+        let (widgets, top, _, _) = ui.layout(&s, 480.0, 240.0);
+        assert_eq!(ui.scroll, 0.0);
+        assert_eq!(widgets.iter().find(|w| w.list).unwrap().y, top + 2.0);
+    }
 
     #[test]
     fn classic_video_settings_lead_back_to_horizon_menus() {
