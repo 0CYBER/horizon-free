@@ -40,7 +40,13 @@ pub enum Event {
     DecodeError(String),
     /// The server sent us back to configuration and finished it again.
     Reconfigured(Arc<Dynamic>),
-    Disconnected(String),
+    /// The connection ended. `from_server`: the server gave the reason (or
+    /// the connection was refused for good), rather than the connection
+    /// failing (auto-reconnect retries only failures and shutdowns).
+    Disconnected {
+        reason: String,
+        from_server: bool,
+    },
 }
 
 pub struct Session {
@@ -70,7 +76,7 @@ impl Session {
         let thread = std::thread::Builder::new()
             .name("horizon-net".into())
             .spawn(move || {
-                let reason = match run(
+                let result = run(
                     &address_owned,
                     &name_owned,
                     auth.as_deref(),
@@ -79,14 +85,16 @@ impl Session {
                     &send,
                     &thread_writer,
                     &thread_counters,
-                ) {
-                    Ok(reason) => reason,
-                    Err(e) => e,
-                };
+                );
+                let from_server = result.is_ok();
+                let reason = result.unwrap_or_else(|e| e);
                 if let Some(w) = thread_writer.lock().unwrap().take() {
                     w.shutdown();
                 }
-                let _ = send.send(Event::Disconnected(reason));
+                let _ = send.send(Event::Disconnected {
+                    reason,
+                    from_server,
+                });
             })
             .ok();
         let debug = std::env::var_os("HORIZON_NET_DEBUG").is_some();
@@ -149,7 +157,8 @@ fn tr(lang: &Language, key: &str) -> String {
     lang.get(key).cloned().unwrap_or_else(|| key.to_owned())
 }
 
-/// The whole connection; returns the disconnect reason.
+/// The whole connection. Ok: why it ended for good (the server's reason, or
+/// a refusal no retry fixes); Err: the connection failed.
 fn run(
     address: &str,
     name: &str,
@@ -160,8 +169,9 @@ fn run(
     shared_writer: &Mutex<Option<ConnWriter>>,
     shared_counters: &Mutex<Option<Arc<Counters>>>,
 ) -> Result<String, String> {
-    let (host, port) =
-        parse_address(address).ok_or_else(|| format!("Invalid server address: {address}"))?;
+    let Some((host, port)) = parse_address(address) else {
+        return Ok(format!("Invalid server address: {address}"));
+    };
     status(send, "Connecting to the server...");
     let mut c =
         Connection::connect(&host, port, Duration::from_secs(10)).map_err(|e| e.to_string())?;
@@ -200,7 +210,7 @@ fn run(
                 let reason = serde_json::from_str::<serde_json::Value>(&p.reason_json)
                     .map(|v| json_text(&v, lang))
                     .unwrap_or(p.reason_json);
-                return Err(reason);
+                return Ok(reason);
             }
             login::Clientbound::Hello(hello) => {
                 status(send, &tr(lang, "connect.authorizing"));

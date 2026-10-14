@@ -38,6 +38,7 @@ const REFRESH: u64 = id("mp.refresh", 0);
 const FIELD_A: u64 = id("mp.field", 0);
 const FIELD_B: u64 = id("mp.field", 1);
 const DONE: u64 = id("mp.done", 0);
+const CANCEL_RETRY: u64 = id("mp.cancel_retry", 0);
 
 /// The launcher's opening (`launcher/src/main.rs`): the wordmark holds over
 /// the backdrop, then the interface comes in. A click or a key skips ahead.
@@ -404,6 +405,7 @@ impl Title {
                         Screen::Direct { .. } => 53,
                         Screen::Disconnected { .. } => 54,
                     }),
+                    CANCEL_RETRY => Some(55),
                     DONE => Some(match screen {
                         Screen::Direct { .. } => 52,
                         _ => 50,
@@ -809,7 +811,7 @@ fn multiplayer_page(ui: &mut Ui, x: f32, w: f32, screen: &Screen, caret: bool) {
             );
             ui.divider(x, y + rh, w);
         }
-        Screen::Disconnected { reason } => {
+        Screen::Disconnected { reason, retry } => {
             let mut y = header(
                 ui,
                 x,
@@ -836,6 +838,12 @@ fn multiplayer_page(ui: &mut Ui, x: f32, w: f32, screen: &Screen, caret: bool) {
                 );
             }
             y += box_h + 16.0;
+            if let Some(r) = retry {
+                // Auto-reconnect's countdown, with a way out.
+                let text = r.text(std::time::Instant::now());
+                ui.text_line(Face::Regular, BODY, 19.0, x, y, color::MUTED, &text);
+                y += 19.0 + 12.0;
+            }
             let bw = ui.button_width("Back to servers", false);
             ui.button(
                 BACK,
@@ -844,6 +852,16 @@ fn multiplayer_page(ui: &mut Ui, x: f32, w: f32, screen: &Screen, caret: bool) {
                 Kind::Secondary,
                 true,
             );
+            if retry.is_some() {
+                let cw = ui.button_width("Cancel reconnecting", false);
+                ui.button(
+                    CANCEL_RETRY,
+                    [x + bw + 8.0, y, cw, CONTROL],
+                    "Cancel reconnecting",
+                    Kind::Ghost,
+                    true,
+                );
+            }
         }
     }
 }

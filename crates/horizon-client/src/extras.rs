@@ -92,6 +92,8 @@ pub struct Extras {
     pub minimap_zoom: f32,
     /// Turn with the player (forward up) instead of north up.
     pub minimap_rotate: bool,
+    /// Retry lost multiplayer connections (`reconnect`).
+    pub auto_reconnect: bool,
 }
 impl Default for Extras {
     fn default() -> Self {
@@ -113,6 +115,7 @@ impl Default for Extras {
             minimap_round: false,
             minimap_zoom: 1.0,
             minimap_rotate: false,
+            auto_reconnect: false,
         }
     }
 }
@@ -169,6 +172,7 @@ impl Extras {
                     }
                 }
                 "minimapRotate" => e.minimap_rotate = flag(e.minimap_rotate),
+                "autoReconnect" => e.auto_reconnect = flag(e.auto_reconnect),
                 _ => {}
             }
         }
@@ -176,7 +180,7 @@ impl Extras {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "zoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\n",
+            "zoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\n",
             bool_text(self.zoom),
             self.zoom_key,
             self.zoom_level,
@@ -198,6 +202,7 @@ impl Extras {
             },
             self.minimap_zoom,
             bool_text(self.minimap_rotate),
+            bool_text(self.auto_reconnect),
         )
     }
     /// Written only once something differs from the defaults, so a vanilla
@@ -398,6 +403,7 @@ pub enum Item {
     MinimapShape,
     MinimapZoom,
     MinimapRotate,
+    AutoReconnect,
 }
 /// The Extras page: headers and items.
 pub fn rows() -> Vec<Result<Item, &'static str>> {
@@ -424,6 +430,8 @@ pub fn rows() -> Vec<Result<Item, &'static str>> {
         Ok(Keystrokes),
         Ok(KeystrokesCorner),
         Ok(KeystrokesCps),
+        Err("Multiplayer"),
+        Ok(AutoReconnect),
     ]
 }
 /// "1 block", "2 blocks", "½ block".
@@ -456,6 +464,7 @@ impl Item {
             Item::MinimapShape => "Shape",
             Item::MinimapZoom => "Zoom",
             Item::MinimapRotate => "Turn with the player",
+            Item::AutoReconnect => "Auto-reconnect",
             Item::FpsLows => "Minimum and 1% low",
             Item::Keystrokes => "Keystrokes",
             Item::KeystrokesCps => "Clicks per second",
@@ -478,6 +487,9 @@ impl Item {
             Item::MinimapShape => "Square or round.",
             Item::MinimapZoom => "Blocks per pixel: smaller shows more detail, larger more land.",
             Item::MinimapRotate => "Forward is up; off keeps north up.",
+            Item::AutoReconnect => {
+                "Rejoins a server after a lost connection or a restart, never after a kick or ban."
+            }
             Item::FpsLows => "The slowest frame and the 1% low of the last 5 seconds.",
             Item::Keystrokes => "Movement keys, jump and mouse buttons as you press them.",
             Item::KeystrokesCps => "Clicks in the last second under each mouse button.",
@@ -489,6 +501,7 @@ impl Item {
         match self {
             Item::Zoom | Item::Fps | Item::Keystrokes => Some(Cost::None),
             Item::Minimap => Some(Cost::Low),
+            Item::AutoReconnect => Some(Cost::None),
             _ => None,
         }
     }
@@ -504,6 +517,7 @@ impl Item {
             Item::KeystrokesCps => e.keystrokes_cps,
             Item::Minimap => e.minimap,
             Item::MinimapRotate => e.minimap_rotate,
+            Item::AutoReconnect => e.auto_reconnect,
             _ => return None,
         })
     }
@@ -545,6 +559,7 @@ impl Item {
             }
             Item::Minimap => e.minimap = !e.minimap,
             Item::MinimapRotate => e.minimap_rotate = !e.minimap_rotate,
+            Item::AutoReconnect => e.auto_reconnect = !e.auto_reconnect,
             Item::MinimapCorner => e.minimap_corner = next(&Corner::ALL, e.minimap_corner, back),
             Item::MinimapSize => {
                 let sizes: Vec<u8> = MINIMAP_SIZES.iter().map(|s| s.0).collect();
@@ -564,7 +579,7 @@ mod tests {
     #[test]
     fn everything_is_off_by_default_and_round_trips() {
         let d = Extras::default();
-        assert!(!d.zoom && !d.fps && !d.keystrokes && !d.minimap);
+        assert!(!d.zoom && !d.fps && !d.keystrokes && !d.minimap && !d.auto_reconnect);
         assert_eq!(Extras::parse(""), d);
         assert_eq!(Extras::parse(&d.serialize()), d);
         let mut e = d.clone();
@@ -580,6 +595,7 @@ mod tests {
         e.minimap_zoom = 0.5;
         e.minimap_rotate = true;
         e.minimap_corner = Corner::BottomLeft;
+        e.auto_reconnect = true;
         assert_eq!(Extras::parse(&e.serialize()), e);
     }
 
