@@ -78,17 +78,30 @@ impl Default for SectionMesh {
 pub const ALL_VISIBLE: u64 = (1 << 36) - 1;
 /// VisGraph.resolve: flood fill non-opaque cells and connect the faces each region touches.
 fn visibility(pad: &Padded, info: &[Info]) -> u64 {
-    let mut seen = vec![false; 4096];
+    // Opaque cells are already visited: resolve each state's opacity once,
+    // then reuse this map for the flood fill and the uniform-section shortcuts.
+    let mut seen = [false; 4096];
+    let mut opaque_count = 0;
+    for y in 0..16 {
+        for z in 0..16 {
+            let row = pi(0, y, z);
+            for x in 0..16 {
+                let opaque = info[pad.blocks[row + x] as usize].solid;
+                seen[(y as usize) << 8 | (z as usize) << 4 | x] = opaque;
+                opaque_count += usize::from(opaque);
+            }
+        }
+    }
+    if opaque_count == 0 {
+        return ALL_VISIBLE;
+    }
+    if opaque_count == 4096 {
+        return 0;
+    }
     let mut result = 0u64;
-    let opaque = |x: i32, y: i32, z: i32| info[pad.blocks[pi(x, y, z)] as usize].solid;
     let mut stack = Vec::new();
     for start in 0..4096usize {
-        let (x, y, z) = (
-            (start & 15) as i32,
-            (start >> 8) as i32,
-            ((start >> 4) & 15) as i32,
-        );
-        if seen[start] || opaque(x, y, z) {
+        if seen[start] {
             continue;
         }
         let mut faces = 0u8;
@@ -114,6 +127,11 @@ fn visibility(pad: &Padded, info: &[Info]) -> u64 {
             if x == 15 {
                 faces |= 1 << 5;
             }
+            // A single connected region touching all six faces sets every
+            // pair (including the diagonal); unvisited cavities cannot add more.
+            if faces == 0b11_1111 {
+                return ALL_VISIBLE;
+            }
             for (dx, dy, dz) in [
                 (1, 0, 0),
                 (-1, 0, 0),
@@ -127,7 +145,7 @@ fn visibility(pad: &Padded, info: &[Info]) -> u64 {
                     continue;
                 }
                 let n = (ny << 8 | nz << 4 | nx) as usize;
-                if !seen[n] && !opaque(nx, ny, nz) {
+                if !seen[n] {
                     seen[n] = true;
                     stack.push(n);
                 }
@@ -142,9 +160,14 @@ fn visibility(pad: &Padded, info: &[Info]) -> u64 {
                 }
             }
         }
+        if result == ALL_VISIBLE {
+            return result;
+        }
     }
     result
 }
+#[cfg(test)]
+mod visibility_tests;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tint {
     None,
