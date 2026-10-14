@@ -47,6 +47,8 @@ pub fn allowed(reason: &str, from_server: bool) -> bool {
 #[derive(Debug, Default)]
 pub struct Tracker {
     address: Option<String>,
+    /// The player name the connection used.
+    name: String,
     /// Attempts already made since the last stable connection.
     attempts: usize,
     joined: Option<Instant>,
@@ -55,6 +57,7 @@ pub struct Tracker {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Retry {
     pub address: String,
+    pub name: String,
     pub at: Instant,
     /// 1-based, of `DELAYS.len()`.
     pub attempt: usize,
@@ -78,12 +81,14 @@ impl Retry {
     }
 }
 impl Tracker {
-    /// A connection to `address` starts: a new address starts counting anew.
-    pub fn connecting(&mut self, address: &str) {
+    /// A connection to `address` as `name` starts: a new address starts
+    /// counting anew.
+    pub fn connecting(&mut self, address: &str, name: &str) {
         if self.address.as_deref() != Some(address) {
             self.address = Some(address.to_owned());
             self.attempts = 0;
         }
+        self.name = name.to_owned();
         self.joined = None;
     }
     /// The server let the player in.
@@ -113,6 +118,7 @@ impl Tracker {
         self.attempts += 1;
         Some(Retry {
             address,
+            name: self.name.clone(),
             at: now + delay,
             attempt: self.attempts,
         })
@@ -155,13 +161,16 @@ mod tests {
     fn attempts_back_off_and_stop() {
         let mut t = Tracker::default();
         let now = Instant::now();
-        t.connecting("localhost:25565");
+        t.connecting("localhost:25565", "Tester");
         let mut delays = Vec::new();
         while let Some(r) = t.ended("Connection refused", false, now) {
-            assert_eq!(r.address, "localhost:25565");
+            assert_eq!(
+                (r.address.as_str(), r.name.as_str()),
+                ("localhost:25565", "Tester")
+            );
             assert_eq!(r.attempt, delays.len() + 1);
             delays.push(r.at.duration_since(now).as_secs());
-            t.connecting(&r.address);
+            t.connecting(&r.address, &r.name);
         }
         assert_eq!(delays, DELAYS);
         // Out of attempts, the tracker forgets the address.
@@ -172,26 +181,26 @@ mod tests {
     fn a_short_stay_does_not_reset_the_count() {
         let mut t = Tracker::default();
         let now = Instant::now();
-        t.connecting("a");
+        t.connecting("a", "P");
         for _ in 0..DELAYS.len() {
-            t.connecting("a");
+            t.connecting("a", "P");
             t.joined(now);
             assert!(
                 t.ended("Server closed", true, now + Duration::from_secs(5))
                     .is_some()
             );
         }
-        t.connecting("a");
+        t.connecting("a", "P");
         t.joined(now);
         assert_eq!(
             t.ended("Server closed", true, now + Duration::from_secs(5)),
             None
         );
         // A minute connected starts over.
-        t.connecting("a");
+        t.connecting("a", "P");
         for _ in 0..3 {
             t.ended("Timed out", true, now);
-            t.connecting("a");
+            t.connecting("a", "P");
         }
         t.joined(now);
         let r = t.ended("Timed out", true, now + STABLE).unwrap();
@@ -202,7 +211,7 @@ mod tests {
     fn kicks_and_leaving_reset_and_new_addresses_start_over() {
         let mut t = Tracker::default();
         let now = Instant::now();
-        t.connecting("a");
+        t.connecting("a", "P");
         assert!(t.ended("Server closed", true, now).is_some());
         assert_eq!(t.ended("Kicked by an operator", true, now), None);
         assert_eq!(
@@ -210,9 +219,9 @@ mod tests {
             None,
             "forgotten after a kick"
         );
-        t.connecting("a");
+        t.connecting("a", "P");
         t.ended("Server closed", true, now);
-        t.connecting("b");
+        t.connecting("b", "P");
         assert_eq!(t.ended("Server closed", true, now).unwrap().attempt, 1);
         let mut t = Tracker::default();
         assert_eq!(t.ended("Server closed", true, now), None, "never connected");
@@ -223,6 +232,7 @@ mod tests {
         let now = Instant::now();
         let r = Retry {
             address: "a".into(),
+            name: "P".into(),
             at: now + Duration::from_millis(4200),
             attempt: 2,
         };

@@ -90,9 +90,9 @@ impl Game<'_> {
             self.extras.fps.clear();
         }
     }
-    /// Auto-reconnect: a connection to `address` starts.
-    pub(super) fn extras_connecting(&mut self, address: &str) {
-        self.extras.reconnect.connecting(address);
+    /// Auto-reconnect: a connection to `address` as `name` starts.
+    pub(super) fn extras_connecting(&mut self, address: &str, name: &str) {
+        self.extras.reconnect.connecting(address, name);
     }
     /// Auto-reconnect: the server let the player in.
     pub(super) fn extras_joined(&mut self) {
@@ -131,9 +131,8 @@ impl Game<'_> {
     }
     /// Auto-reconnect: connect again once the countdown is over.
     pub(super) fn extras_retry(&mut self) -> horizon_client::Result<()> {
-        if let Some(address) = self.title.as_mut().and_then(|t| t.due_retry()) {
-            let name = self.options.player_name.clone();
-            self.connect_server(&address, &name)?;
+        if let Some(retry) = self.title.as_mut().and_then(|t| t.due_retry()) {
+            self.connect_server(&retry.address, &retry.name)?;
         }
         Ok(())
     }

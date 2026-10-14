@@ -594,7 +594,7 @@ impl Title {
         }
     }
     /// The server auto-reconnect retries now, once its countdown is over.
-    pub fn due_retry(&mut self) -> Option<String> {
+    pub fn due_retry(&mut self) -> Option<crate::reconnect::Retry> {
         match &mut self.mode {
             Mode::Multiplayer(screen) => screen.due_retry(),
             _ => None,

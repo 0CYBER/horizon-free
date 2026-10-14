@@ -599,14 +599,14 @@ impl Screen {
         }
     }
     /// Auto-reconnect's attempt, once its countdown is over.
-    pub fn due_retry(&mut self) -> Option<String> {
+    pub fn due_retry(&mut self) -> Option<crate::reconnect::Retry> {
         let Self::Disconnected { retry, .. } = self else {
             return None;
         };
         if !retry.as_ref()?.due(std::time::Instant::now()) {
             return None;
         }
-        retry.take().map(|r| r.address)
+        retry.take()
     }
     /// The focused text field, its id and maximum length (copy and paste).
     pub fn focused_text(&mut self) -> Option<(crate::clipboard::FieldId, &mut String, usize)> {

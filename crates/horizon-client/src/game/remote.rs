@@ -162,7 +162,7 @@ impl Game<'_> {
         let auth = horizon_client::auth::current();
         let name = auth.as_ref().map_or(name, |a| a.name.as_str());
         let session = Session::connect(address, name, auth.clone(), view, lang.clone());
-        self.extras_connecting(address);
+        self.extras_connecting(address, name);
         let player_type = super::perspective::player_type(&root);
         let mut streaming = Streaming::new(
             Arc::new(NoTerrain),
