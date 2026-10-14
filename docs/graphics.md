@@ -22,10 +22,12 @@ Every row has a one-line description and its cost in frame time (none, low, medi
 | | sky, fog, weather, animated textures | `horizon-graphics.txt` |
 | Display | FOV, max framerate, VSync, fullscreen, GUI scale | `options.txt` |
 | | resolution scale, anti-aliasing (FXAA), present mode, frame pacing | `horizon-graphics.txt` |
-| Performance | worker threads, upload budget per frame | `horizon-graphics.txt` |
+| Performance | battery mode, worker threads, upload budget per frame | `horizon-graphics.txt` |
 | Overlay | performance overlay: FPS, frame/CPU/GPU times, frame-time graph | `horizon-graphics.txt` |
 
 `options.txt` keeps exactly vanilla's keys and values, so the options harness still compares it with vanilla; Horizon's settings live in `horizon-graphics.txt` beside it. Their defaults render as vanilla does: cave culling on, no upload budgets, sky, fog and weather on, 100% resolution, no FXAA, the present mode following VSync. Frame pacing defaults to Efficient: the limiter sleeps through the last half millisecond where vanilla spins, which changes timing, not pixels.
+
+**Battery mode** (Performance, off by default) is for laptops and handhelds: at most 60 frames per second in a world, 30 in menus without a world or while another window has focus, and half the automatic worker threads (chunks load slower). It changes only when frames are drawn: what they show and the game's 20 ticks per second stay as they are.
 
 Which settings each level shows, their descriptions and costs are in `crates/horizon-client/src/graphics_ui.rs` (`rows`); the Horizon shell draws them in `options_horizon.rs` with `ui_theme::described_row`, and the Classic screens use `graphics_style.rs`.
 
