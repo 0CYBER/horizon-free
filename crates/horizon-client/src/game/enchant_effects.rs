@@ -163,7 +163,7 @@ impl Game<'_> {
             && let Some(m) = self.mobs.get_mut(mob)
             && !m.kind.flags.fire_immune
         {
-            m.fire_ticks = m.fire_ticks.max((ignite * 20.0) as i32);
+            m.ignite_for_ticks((ignite * 20.0) as i32);
         }
     }
     /// Thorns on worn armor when a mob at `from` hits the player.
