@@ -97,11 +97,7 @@ impl MotionWorld<'_, '_, '_> {
             self.player.air = (self.player.air + 4).min(300);
         }
         if self.player.in_lava {
-            if self.player.invulnerable {
-                self.player.fire_ticks = 1;
-            } else {
-                self.player.ignite_for_ticks(300)?;
-            }
+            self.player.ignite_for_ticks(300)?;
             self.environment_hurt("minecraft:lava", 4.0)?;
             self.player.fall_distance *= 0.5;
         }
@@ -115,16 +111,16 @@ impl MotionWorld<'_, '_, '_> {
         let damage = fire_contact(self.scene, self.assets.registry, self.player.bounds());
         if damage > 0.0 {
             if !self.player.in_water {
-                if self.player.invulnerable {
-                    self.player.fire_ticks = 1;
-                } else {
-                    let multiplier = self.player.attribute("minecraft:burning_time")?;
-                    self.player.fire_ticks = ignite_contact(
-                        self.player.fire_ticks,
-                        true,
-                        &mut self.scene.random,
-                        multiplier,
-                    );
+                let multiplier = self.player.attribute("minecraft:burning_time")?;
+                let ticks = ignite_contact(
+                    self.player.fire_ticks,
+                    true,
+                    &mut self.scene.random,
+                    multiplier,
+                );
+                self.player.set_remaining_fire_ticks(ticks);
+                if ticks >= 0 {
+                    self.player.ticks_frozen = 0;
                 }
             }
             self.environment_hurt("minecraft:in_fire", damage)?;

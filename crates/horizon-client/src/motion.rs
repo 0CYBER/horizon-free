@@ -248,9 +248,17 @@ impl PlayerMotion {
                 .unwrap_or(300) as i32;
         }
     }
+    pub fn set_remaining_fire_ticks(&mut self, ticks: i32) {
+        self.fire_ticks = if self.invulnerable {
+            ticks.min(1)
+        } else {
+            ticks
+        };
+    }
     pub fn ignite_for_ticks(&mut self, ticks: i32) -> Result<()> {
         let scaled = (f64::from(ticks) * self.attribute("minecraft:burning_time")?).ceil() as i32;
-        self.fire_ticks = self.fire_ticks.max(scaled);
+        self.set_remaining_fire_ticks(self.fire_ticks.max(scaled));
+        self.ticks_frozen = 0;
         Ok(())
     }
 
@@ -809,7 +817,8 @@ impl MotionWorld<'_, '_, '_> {
             self.player.no_jump_delay = 0;
         }
         if self.player.swimming {
-            let look_y = f64::from(-self.player.pitch.to_radians().sin());
+            let look_y =
+                horizon_world::view_direction::view_vector(self.player.pitch, self.player.yaw).y;
             let near_surface = BlockPos::containing(Vec3::new(
                 self.player.position.x,
                 self.player.position.y + 0.9,
@@ -1940,6 +1949,22 @@ mod tests {
                     .any(|e| matches!(e, MotionEvent::HurtSound(_)))
             );
         }
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
+        let source = resources.health.damage.id("minecraft:mob_attack").unwrap();
+        assert!(
+            player
+                .hurt_blocking(&resources.health, Default::default(), source, 2.0, None)
+                .unwrap()
+                .hurt
+        );
+        assert_eq!(
+            player
+                .events
+                .iter()
+                .filter(|e| matches!(e, MotionEvent::HurtSound("minecraft:entity.player.hurt")))
+                .count(),
+            1
+        );
     }
 
     /// Footsteps on the prepared vanilla resources, when they are present:
@@ -2056,9 +2081,22 @@ mod tests {
         w.player.fire_ticks = -20;
         w.controlled_simulation_tick(Default::default()).unwrap();
         assert_eq!(
-            w.player.fire_ticks, 1,
-            "creative fire contact must remain visible"
+            w.player.fire_ticks, -19,
+            "creative preserves the fire-contact delay"
         );
+        for _ in 0..18 {
+            w.apply_fire_contact().unwrap();
+        }
+        assert_eq!(w.player.fire_ticks, -1);
+        w.apply_fire_contact().unwrap();
+        assert_eq!(
+            w.player.fire_ticks, 1,
+            "creative clamps only after ignition"
+        );
+        w.player.ticks_frozen = 140;
+        w.player.ignite_for_ticks(160).unwrap();
+        assert_eq!(w.player.ticks_frozen, 0);
+        assert_eq!(w.player.fire_ticks, 1);
         w.player.invulnerable = false;
         // Sprint swimming must keep full input, not the dry crawl/sneak multiplier.
         for x in 19..=21 {

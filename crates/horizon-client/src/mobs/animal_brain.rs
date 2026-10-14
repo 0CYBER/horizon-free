@@ -1431,20 +1431,21 @@ impl B {
                 } else {
                     2
                 };
+                let eyes = m.species() != Species::Axolotl;
                 let mm = mem(m);
                 mm.walk_target.set(WalkTarget {
                     target: Tracker::Entity {
                         who: adult,
-                        eye: true,
-                        block_eye: true,
+                        eye: eyes,
+                        block_eye: eyes,
                     },
                     speed,
                     close,
                 });
                 mm.look_target.set(Tracker::Entity {
                     who: adult,
-                    eye: true,
-                    block_eye: true,
+                    eye: eyes,
+                    block_eye: eyes,
                 });
                 true
             }

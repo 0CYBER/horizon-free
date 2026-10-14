@@ -782,7 +782,7 @@ impl Game<'_> {
                     {
                         self.audio.play(
                             "minecraft:entity.axolotl.attack",
-                            Some([m.position.x, m.eye_y(), m.position.z]),
+                            Some([m.position.x, m.position.y, m.position.z]),
                             1.0,
                             1.0,
                         );
@@ -1321,9 +1321,6 @@ impl Game<'_> {
                 (player.velocity.y / 2.0 + 0.4).min(0.4),
                 player.velocity.z / 2.0 + dz / l * 0.4,
             );
-            let at = [player.position.x, player.position.y, player.position.z];
-            self.audio
-                .play("minecraft:entity.player.hurt", Some(at), 1.0, 1.0);
             self.hurt_armor(amount);
             self.thorns(from);
         }
@@ -1851,13 +1848,9 @@ impl Game<'_> {
             && self.mobs[index].alive()
         {
             let mut filled = ItemStack::new("minecraft:axolotl_bucket", 1);
-            filled.extra = Some(Box::new(horizon_client::item_data::StackData {
-                other: vec![(
-                    "minecraft:bucket_entity_data".into(),
-                    horizon_client::entity_nbt::bucket_data(&self.mobs[index]),
-                )],
-                ..Default::default()
-            }));
+            filled.extra = Some(Box::new(horizon_client::entity_nbt::bucket_components(
+                &self.mobs[index],
+            )));
             self.audio.play(
                 "minecraft:item.bucket.fill_axolotl",
                 Some(self.mobs[index].center()),

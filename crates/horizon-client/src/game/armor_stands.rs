@@ -378,15 +378,13 @@ impl Game<'_> {
         for i in dead.into_iter().rev() {
             let a = self.armor_stands.remove(i);
             let at = [a.position.x, a.position.y, a.position.z];
-            for stack in a.equipment.into_iter().flatten() {
-                self.spawn_item(stack, at, [0.0; 3], 10);
+            let (pos, drops) = burnt_armor_stand_equipment(a);
+            for stack in drops {
+                self.pop_resource(pos, stack);
             }
             self.audio
                 .play("minecraft:entity.armor_stand.break", Some(at), 1.0, 1.0);
-            self.world.modified.insert((
-                a.position.x.floor() as i32 >> 4,
-                a.position.z.floor() as i32 >> 4,
-            ));
+            self.world.modified.insert((pos[0] >> 4, pos[2] >> 4));
         }
     }
     /// ArmorStandRenderer: the stand with its default pose, then armor layers.
@@ -703,4 +701,38 @@ fn skull_kind(item: &str) -> Option<&'static str> {
         "minecraft:player_head" => "player",
         _ => return None,
     })
+}
+
+fn burnt_armor_stand_equipment(a: ArmorStand) -> ([i32; 3], Vec<ItemStack>) {
+    let pos = [
+        a.position.x.floor() as i32,
+        a.position.y.floor() as i32 + 1,
+        a.position.z.floor() as i32,
+    ];
+    let drops = a
+        .equipment
+        .into_iter()
+        .flatten()
+        .filter(|stack| stack.enchantment_level("minecraft:vanishing_curse") == 0)
+        .collect();
+    (pos, drops)
+}
+#[cfg(test)]
+mod burn_drop_tests {
+    use super::*;
+    #[test]
+    fn burnt_equipment_drops_above_the_block_and_vanishing_items_do_not_drop() {
+        let mut stand = ArmorStand::new(1, Vec3::new(-0.1, 4.8, 0.0), 0.0);
+        let kept = ItemStack::new("minecraft:diamond_boots", 1);
+        let mut vanished = ItemStack::new("minecraft:diamond_helmet", 1);
+        vanished
+            .data_mut()
+            .enchantments
+            .push(("minecraft:vanishing_curse".into(), 1));
+        stand.equipment[0] = Some(kept.clone());
+        stand.equipment[1] = Some(vanished);
+        let (pos, drops) = burnt_armor_stand_equipment(stand);
+        assert_eq!(pos, [-1, 5, 0]);
+        assert_eq!(drops, vec![kept]);
+    }
 }

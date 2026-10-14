@@ -623,7 +623,7 @@ pub fn resource_root(vanilla: &Path, packs: &[Pack], cache: &Path) -> PathBuf {
     match build_overlay(vanilla, packs, &out) {
         Ok(()) => out,
         Err(e) => {
-            eprintln!("Horizon: resource packs not applied: {e}");
+            log::warn!("Horizon: resource packs not applied: {e}");
             vanilla.to_path_buf()
         }
     }

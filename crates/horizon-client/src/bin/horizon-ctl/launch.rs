@@ -10,6 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use horizon_client::logging::{data_dir, game_home};
 use serde_json::{Value, json};
 
 #[cfg(windows)]
@@ -17,42 +18,12 @@ const CLIENT: &str = "horizon-client.exe";
 #[cfg(not(windows))]
 const CLIENT: &str = "horizon-client";
 
-/// The platform data folder (what the `dirs` crate's data_dir gives).
-fn data_dir() -> PathBuf {
-    let env = |k: &str| {
-        std::env::var_os(k)
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from)
-    };
-    let home = env("HOME").or_else(|| env("USERPROFILE"));
-    if cfg!(windows) {
-        if let Some(d) = env("APPDATA") {
-            return d;
-        }
-    } else if cfg!(target_os = "macos") {
-        if let Some(h) = &home {
-            return h.join("Library/Application Support");
-        }
-    } else if let Some(d) = env("XDG_DATA_HOME") {
-        return d;
-    } else if let Some(h) = &home {
-        return h.join(".local/share");
-    }
-    std::env::temp_dir()
-}
 pub fn launcher_home() -> PathBuf {
     match std::env::var_os("HORIZON_LAUNCHER_HOME").filter(|h| !h.is_empty()) {
         Some(h) => PathBuf::from(h),
         None => data_dir().join("horizon-launcher"),
     }
 }
-pub fn game_home() -> PathBuf {
-    match std::env::var_os("HORIZON_HOME").filter(|h| !h.is_empty()) {
-        Some(h) => PathBuf::from(h),
-        None => data_dir().join("horizon"),
-    }
-}
-
 /// `v2026.10.13.1` gives [2026, 10, 13, 1]; a pre-release suffix is ignored.
 pub fn version_parts(tag: &str) -> Vec<u64> {
     tag.trim_start_matches('v')

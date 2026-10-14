@@ -91,6 +91,21 @@ impl Session {
                 Err(f) => (vec![text(&f.reply)], true),
             };
         }
+        if cmd.name == "logs" {
+            let words = match commands::line_for(cmd, args) {
+                Ok(w) => w,
+                Err(e) => return (vec![text(&json!({ "error": e, "kind": "usage" }))], true),
+            };
+            return match self.run(&words) {
+                Ok(reply) => (
+                    vec![
+                        json!({ "type": "text", "text": format!("{}\n\n{}", reply["path"].as_str().unwrap_or_default(), reply["text"].as_str().unwrap_or_default()) }),
+                    ],
+                    false,
+                ),
+                Err(f) => (vec![text(&f.reply)], true),
+            };
+        }
         let mut words = match commands::line_for(cmd, args) {
             Ok(w) => w,
             Err(e) => return (vec![text(&json!({ "error": e, "kind": "usage" }))], true),
@@ -202,6 +217,7 @@ mod tests {
             "click_button",
             "screenshot",
             "inventory",
+            "logs",
         ] {
             let want = if want == "break_block" { "break" } else { want };
             assert!(names.contains(want), "{want}");

@@ -31,7 +31,7 @@ pub fn open_folder(dir: &Path) {
         "xdg-open"
     };
     if let Err(e) = std::process::Command::new(program).arg(dir).spawn() {
-        eprintln!("Horizon: could not open {}: {e}", dir.display());
+        log::warn!("Horizon: could not open {}: {e}", dir.display());
     }
 }
 /// The resource root to load from, given the vanilla root and the selection.
@@ -106,7 +106,7 @@ impl Game<'_> {
         }
         let root = startup_root(&vanilla, &self.settings.resource_packs);
         if let Err(e) = self.reload_resources(&root) {
-            eprintln!("Horizon: resource reload failed: {e}");
+            log::warn!("Horizon: resource reload failed: {e}");
         }
     }
     fn reload_resources(&mut self, root: &Path) -> horizon_client::Result<()> {

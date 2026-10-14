@@ -41,6 +41,8 @@ pub struct Sprites {
     /// Edge length of every array layer and the layers' current frames, set
     /// by [`Sprites::finish`].
     pub size: u32,
+    /// Smallest native layer before array-size resampling.
+    pub minimum_size: u32,
     pub pixels: Vec<u8>,
     pub layers: BTreeMap<String, u32>,
     pub animations: Vec<SpriteAnimation>,
@@ -78,6 +80,7 @@ impl Sprites {
     pub fn finish(&mut self) {
         let layers = self.native.len().max(1) as u64;
         let largest = self.native.iter().map(|n| n.0).max().unwrap_or(SPRITE_SIZE);
+        self.minimum_size = self.native.iter().map(|n| n.0).min().unwrap_or(SPRITE_SIZE);
         let mut size = largest.max(SPRITE_SIZE).next_power_of_two();
         while size > SPRITE_SIZE && layers * u64::from(size * size) * 4 > MAX_ARRAY_BYTES {
             size /= 2;
@@ -105,7 +108,7 @@ impl Sprites {
         match self.load(root, name) {
             Ok(layer) => Ok(layer),
             Err(e) => {
-                eprintln!("Horizon: using the missing texture for {name}: {e}");
+                log::warn!("Horizon: using the missing texture for {name}: {e}");
                 // MissingTextureAtlasSprite.generateMissingImage: 16x16,
                 // magenta and black quarters.
                 let frame: Vec<u8> = (0..SPRITE_SIZE * SPRITE_SIZE)
@@ -243,6 +246,34 @@ pub(crate) fn test_animation(size: u32, layer: u32) -> SpriteAnimation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_32px_only_atlas_does_not_add_an_extra_mipmap() {
+        let mut sprites = Sprites {
+            native: vec![
+                (32, Arc::new(vec![vec![255; 32 * 32 * 4]]), 0),
+                (32, Arc::new(vec![vec![128; 32 * 32 * 4]]), 0),
+            ],
+            ..Default::default()
+        };
+        sprites.finish();
+        assert_eq!((sprites.size, sprites.minimum_size), (32, 32));
+        for level in 0..=4 {
+            assert_eq!(
+                crate::gfx::sprite_mipmap_limit(level, sprites.size, sprites.minimum_size, 6),
+                level
+            );
+        }
+        sprites
+            .native
+            .push((16, Arc::new(vec![vec![255; 16 * 16 * 4]]), 0));
+        sprites.finish();
+        assert_eq!((sprites.size, sprites.minimum_size), (32, 16));
+        assert_eq!(
+            crate::gfx::sprite_mipmap_limit(0, sprites.size, sprites.minimum_size, 6),
+            1
+        );
+    }
+
     #[test]
     fn hud_animation_resampling_uses_the_actual_frame_size() {
         for size in [16, 32, 64] {

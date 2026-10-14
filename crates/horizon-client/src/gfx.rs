@@ -267,6 +267,7 @@ pub struct Renderer {
     animations: Vec<(SpriteAnimation, usize)>,
     /// Edge length of the block sprite array's layers.
     sprite_size: u32,
+    sprite_minimum_size: u32,
     indices: wgpu::Buffer,
     index_quads: u32,
     instances: wgpu::Buffer,
@@ -375,6 +376,7 @@ impl Renderer {
         offscreen: bool,
         sprite_pixels: &[u8],
         sprite_size: u32,
+        sprite_minimum_size: u32,
         layers: u32,
         animations: &[SpriteAnimation],
         hud_atlas: (&[u8], u32, u32),
@@ -399,9 +401,18 @@ impl Renderer {
             .await
             .map_err(|e| format!("{NO_GPU_DRIVER} ({e})"))?;
         let info = adapter.get_info();
-        eprintln!(
+        log::info!(
             "Horizon renderer: {} ({:?}, {:?})",
-            info.name, info.backend, info.device_type
+            info.name,
+            info.backend,
+            info.device_type
+        );
+        crate::crash::set_detail(
+            "Graphics Adapter",
+            format!(
+                "{} ({:?}, {:?}), driver {} {}",
+                info.name, info.backend, info.device_type, info.driver, info.driver_info
+            ),
         );
         let limits = adapter.limits();
         if limits.max_texture_array_layers < layers {
@@ -1379,6 +1390,7 @@ impl Renderer {
             lightmap_sampler,
             animations: animations.iter().map(|a| (a.clone(), usize::MAX)).collect(),
             sprite_size,
+            sprite_minimum_size,
             indices,
             index_quads,
             instances,
@@ -1623,7 +1635,12 @@ impl Renderer {
     /// The Mipmap Levels option: block textures sample at most `levels`
     /// reduced copies (0: none).
     pub fn set_mipmap_levels(&mut self, levels: u32) {
-        let levels = sprite_mipmap_limit(levels, self.sprite_texture.width(), self.mip_levels);
+        let levels = sprite_mipmap_limit(
+            levels,
+            self.sprite_texture.width(),
+            self.sprite_minimum_size,
+            self.mip_levels,
+        );
         if levels == self.mipmaps {
             return;
         }
@@ -2619,9 +2636,9 @@ mod tests {
     }
 }
 
-fn sprite_mipmap_limit(requested: u32, size: u32, available: u32) -> u32 {
-    // 16px textures are doubled in this atlas; mip1 retains their original texels.
-    let upscale = (size / 16).max(1).ilog2();
+pub(crate) fn sprite_mipmap_limit(requested: u32, size: u32, minimum: u32, available: u32) -> u32 {
+    // Only the atlas native minimum determines how many resampling-only mips to skip.
+    let upscale = (size / minimum.max(1)).max(1).ilog2();
     requested.saturating_add(upscale).min(available - 1)
 }
 fn animate_sprites(
@@ -2653,8 +2670,8 @@ mod sprite_upload_tests {
     #[test]
     fn mipmap_option_keeps_real_16px_reductions() {
         for levels in 0..=4 {
-            assert_eq!(sprite_mipmap_limit(levels, 32, 6), levels + 1);
-            assert_eq!(sprite_mipmap_limit(levels, 16, 5), levels);
+            assert_eq!(sprite_mipmap_limit(levels, 32, 16, 6), levels + 1);
+            assert_eq!(sprite_mipmap_limit(levels, 16, 16, 5), levels);
         }
     }
     #[test]

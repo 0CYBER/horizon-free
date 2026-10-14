@@ -408,6 +408,9 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             &mut m.random,
             multiplier,
         );
+        if m.fire_ticks >= 0 {
+            m.ticks_frozen = 0;
+        }
         m.damage(fire, Damage::of(DamageKind::InFire));
     }
     // Fire: water extinguishes, lava ignites, burning hurts every second.

@@ -111,6 +111,11 @@ const BLOCK_XYZ: [Param; 3] = [
     p("y", Ty::Int, "block Y"),
     p("z", Ty::Int, "block Z"),
 ];
+const OVER: Param = flag(
+    "over",
+    Ty::Num,
+    "turn with mouse motion spread over this many seconds (eased), as a player would",
+);
 const FACE: Ty = Ty::Enum(&["down", "up", "north", "south", "west", "east"]);
 
 macro_rules! cmd {
@@ -145,6 +150,11 @@ pub const COMMANDS: &[Cmd] = &[
     cmd!("wait-ready", Session, "wait-ready [SECONDS]", "wait until the player has spawned and no chunks are pending",
         "Polls status every 250 ms; replies with the status, or an error after SECONDS (default 120).",
         ["horizon-ctl wait-ready 300"], &[opt("seconds", Ty::Num, "how long to wait (default 120)")], mcp: true, local: true),
+    cmd!("logs", Session, "logs [--lines N] [--crash]", "the end of the game's log, or its newest crash report",
+        "Reads the game home ($HORIZON_HOME, else ~/.local/share/horizon): logs/latest.log (the last N lines, default 100) or, with --crash, the newest file in crash-reports. Read-only; works whether the game runs or not.",
+        ["horizon-ctl logs", "horizon-ctl logs --lines 300", "horizon-ctl logs --crash"],
+        &[flag("lines", Ty::Int, "how many lines of latest.log (default 100)"), flag("crash", Ty::Bool, "the newest crash report instead")],
+        mcp: true, local: true),
     cmd!("status", Session, "status", "game, renderer and streaming state (the scripting socket's original summary)",
         "", ["horizon-ctl status"], &[], mcp: false, local: false),
     cmd!("open", Session, "open WORLD [SEED] [creative]", "open or create a world from the title screen",
@@ -200,16 +210,22 @@ pub const COMMANDS: &[Cmd] = &[
     cmd!("look", Move, "look YAW PITCH", "set the view direction in degrees",
         "Yaw 0 faces south (+Z), 90 west (-X), 180 north, -90 east; pitch 90 looks straight down.",
         ["horizon-ctl look 90 10"], &[p("yaw", Ty::Num, "yaw in degrees"), p("pitch", Ty::Num, "pitch in degrees (-90 up .. 90 down)")], mcp: true, local: false),
-    cmd!("turn", Move, "turn DYAW DPITCH", "rotate the view by an amount", "", ["horizon-ctl turn 45 0"],
-        &[p("dyaw", Ty::Num, "yaw change"), p("dpitch", Ty::Num, "pitch change")], mcp: false, local: false),
-    cmd!("look-at", Move, "look-at X Y Z | look-at block X Y Z [FACE] | look-at entity ID", "turn to face a point, a block (a visible face of it) or an entity",
-        "look-at block aims at a face the crosshair can reach and fails when none is visible.",
-        ["horizon-ctl look-at 10.5 65 3.5", "horizon-ctl look-at block 10 64 3 up", "horizon-ctl look-at entity 42"],
-        &XYZ, mcp: true, local: false),
-    cmd!("look-at-block", Move, "look-at-block X Y Z [FACE]", "aim the crosshair at a block (same as look-at block)", "",
-        ["horizon-ctl look-at-block 10 64 3"], &[BLOCK_XYZ[0], BLOCK_XYZ[1], BLOCK_XYZ[2], opt("face", FACE, "which face to aim at")], mcp: true, local: false, wire: "look-at block"),
-    cmd!("look-at-entity", Move, "look-at-entity ID", "face an entity (same as look-at entity)", "",
-        ["horizon-ctl look-at-entity 42"], &[p("id", Ty::Int, "entity id from entities")], mcp: true, local: false, wire: "look-at entity"),
+    cmd!("turn", Move, "turn DYAW DPITCH [--over S]", "rotate the view by an amount",
+        "Without --over the view jumps. With --over S the turn is mouse motion fed over S seconds with ease-in-out, through the same path as a real mouse (sensitivity, inverted axes, cinematic camera), and the reply comes once it is done.",
+        ["horizon-ctl turn 45 0", "horizon-ctl turn -90 10 --over 0.5"],
+        &[p("dyaw", Ty::Num, "yaw change in degrees"), p("dpitch", Ty::Num, "pitch change in degrees"), OVER], mcp: true, local: false),
+    cmd!("mouse-move", Move, "mouse-move DX DY", "move the mouse: relative motion that turns the view like a player's mouse",
+        "DX and DY are mouse units (pixels of relative motion) added to the frame's accumulated movement and turned by MouseHandler.turnPlayer: degrees = units x 0.15 x (sensitivity x 0.6 + 0.2)^3 x 8 (without the 8 while scoping), inverted axes and the cinematic camera included. Positive DX turns right, positive DY looks down. Works in the world with no screen open; replies with yaw and pitch after the frame that turned.",
+        ["horizon-ctl mouse-move 100 0", "horizon-ctl mouse-move -25 40"],
+        &[p("dx", Ty::Num, "horizontal motion (positive turns right)"), p("dy", Ty::Num, "vertical motion (positive looks down)")], mcp: true, local: false),
+    cmd!("look-at", Move, "look-at X Y Z | look-at block X Y Z [FACE] | look-at entity ID  [--over S]", "turn to face a point, a block (a visible face of it) or an entity",
+        "look-at block aims at a face the crosshair can reach and fails when none is visible. --over S turns there with mouse motion over S seconds (the shorter way round) instead of jumping.",
+        ["horizon-ctl look-at 10.5 65 3.5", "horizon-ctl look-at block 10 64 3 up", "horizon-ctl look-at entity 42 --over 0.4"],
+        &[XYZ[0], XYZ[1], XYZ[2], OVER], mcp: true, local: false),
+    cmd!("look-at-block", Move, "look-at-block X Y Z [FACE] [--over S]", "aim the crosshair at a block (same as look-at block)", "",
+        ["horizon-ctl look-at-block 10 64 3", "horizon-ctl look-at-block 10 64 3 up --over 0.3"], &[BLOCK_XYZ[0], BLOCK_XYZ[1], BLOCK_XYZ[2], opt("face", FACE, "which face to aim at"), OVER], mcp: true, local: false, wire: "look-at block"),
+    cmd!("look-at-entity", Move, "look-at-entity ID [--over S]", "face an entity (same as look-at entity)", "",
+        ["horizon-ctl look-at-entity 42"], &[p("id", Ty::Int, "entity id from entities"), OVER], mcp: true, local: false, wire: "look-at entity"),
     cmd!("tp", Move, "tp X Y Z", "teleport the player", "", ["horizon-ctl tp 0 80 0"], &XYZ, mcp: true, local: false),
     // Act
     cmd!("break", Act, "break X Y Z [--timeout S]", "mine a block, holding the attack button until it breaks",
@@ -540,6 +556,21 @@ mod tests {
                 &json!({ "x": 1, "y": 2, "z": 3, "face": "sideways" })
             )
             .is_err()
+        );
+        let turn = find("turn").unwrap();
+        assert_eq!(
+            line_for(turn, &json!({ "dyaw": -90, "dpitch": 10.5, "over": 0.5 })).unwrap(),
+            ["turn", "-90", "10.5", "--over", "0.5"]
+        );
+        let mouse = find("mouse-move").unwrap();
+        assert_eq!(tool_name(mouse), "mouse_move");
+        assert_eq!(
+            line_for(mouse, &json!({ "dx": -25, "dy": 40 })).unwrap(),
+            ["mouse-move", "-25", "40"]
+        );
+        assert_eq!(
+            line_for(block, &json!({ "x": 1, "y": 2, "z": 3, "over": 0.3 })).unwrap(),
+            ["look-at", "block", "1", "2", "3", "--over", "0.3"]
         );
         let button = find("click-button").unwrap();
         assert_eq!(

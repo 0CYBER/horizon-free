@@ -202,6 +202,13 @@ impl MouseLook {
         }
     }
 
+    /// `onMove` with the pointer grabbed, for relative motion an agent makes
+    /// (`horizon-ctl mouse-move`): added to the frame's accumulated movement.
+    pub fn add_motion(&mut self, dx: f64, dy: f64) {
+        self.accumulated_dx += dx;
+        self.accumulated_dy += dy;
+    }
+
     /// Movement accumulated since the last frame (for screens' mouse-moved events).
     pub fn accumulated(&self) -> (f64, f64) {
         (self.accumulated_dx, self.accumulated_dy)
@@ -226,9 +233,7 @@ impl MouseLook {
     }
 
     fn turn_player(&mut self, mousea: f64, look: LookOptions) -> (f64, f64) {
-        let ss = look.sensitivity * f64::from(0.6f32) + f64::from(0.2f32);
-        let sensitivity_mod = ss * ss * ss;
-        let sens = sensitivity_mod * 8.0;
+        let (sensitivity_mod, sens) = sensitivity_scales(look.sensitivity);
         let (xo, yo) = if look.smooth_camera {
             (
                 self.smooth_turn_x
@@ -274,9 +279,172 @@ impl MouseLook {
     }
 }
 
+/// `MouseHandler.turnPlayer`'s scales: `sensitivityMod = (s*0.6F+0.2F)^3`
+/// and `sens = sensitivityMod * 8`.
+fn sensitivity_scales(sensitivity: f64) -> (f64, f64) {
+    let ss = sensitivity * f64::from(0.6f32) + f64::from(0.2f32);
+    let sensitivity_mod = ss * ss * ss;
+    (sensitivity_mod, sensitivity_mod * 8.0)
+}
+
+/// Degrees `Entity.turn` turns per unit of mouse motion: 0.15 x `sens`
+/// (`sensitivityMod` while scoping). With the cinematic camera the same total
+/// is reached, spread over the following frames.
+pub fn degrees_per_count(look: LookOptions) -> f64 {
+    let (sensitivity_mod, sens) = sensitivity_scales(look.sensitivity);
+    let scale = if look.scoping && !look.smooth_camera {
+        sensitivity_mod
+    } else {
+        sens
+    };
+    0.15 * scale
+}
+
+/// The mouse motion that turns the view by `dyaw` and `dpitch` degrees with
+/// these options, the inverted axes included.
+pub fn motion_for_turn(dyaw: f64, dpitch: f64, look: LookOptions) -> (f64, f64) {
+    let per_count = degrees_per_count(look);
+    let flip = |inverted: bool| if inverted { -1.0 } else { 1.0 };
+    (
+        dyaw / per_count * flip(look.invert_x),
+        dpitch / per_count * flip(look.invert_y),
+    )
+}
+
+/// Ease-in-out (a half cosine) over `t` in 0..=1: how much of a spread-out
+/// turn is done at that point of its time.
+pub fn ease_in_out(t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    0.5 - 0.5 * (std::f64::consts::PI * t).cos()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const PLAIN: LookOptions = LookOptions {
+        sensitivity: 0.5,
+        smooth_camera: false,
+        scoping: false,
+        invert_x: false,
+        invert_y: false,
+    };
+
+    /// One frame of motion `(dx, dy)` through `onMove`'s grabbed path,
+    /// `handleAccumulatedMovement` and `Entity.turn`.
+    fn frame(look: &mut MouseLook, rot: &mut Rotation, time: f64, d: (f64, f64), o: LookOptions) {
+        look.add_motion(d.0, d.1);
+        if let Some((xo, yo)) = look.handle_accumulated_movement(time, true, true, o) {
+            rot.turn(xo, yo);
+        }
+    }
+
+    fn rotation() -> Rotation {
+        Rotation {
+            x_rot: 0.0,
+            y_rot: 0.0,
+            x_rot_o: 0.0,
+            y_rot_o: 0.0,
+        }
+    }
+
+    #[test]
+    fn turn_player_matches_the_vanilla_formula() {
+        // MouseHandler.turnPlayer: ss = sensitivity*0.6F + 0.2F, sens = ss^3 * 8,
+        // then Entity.turn: yRot += (float)xo * 0.15F, xRot += (float)yo * 0.15F.
+        for sensitivity in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            for (dx, dy) in [(1.0, 0.0), (37.0, -12.5), (-400.0, 250.0)] {
+                let o = LookOptions {
+                    sensitivity,
+                    ..PLAIN
+                };
+                let ss = sensitivity * f64::from(0.6f32) + f64::from(0.2f32);
+                let sens = ss * ss * ss * 8.0;
+                let mut look = MouseLook::default();
+                let mut rot = rotation();
+                frame(&mut look, &mut rot, 1.0, (dx, dy), o);
+                let yaw = (dx * sens) as f32 * 0.15;
+                let pitch = ((dy * sens) as f32 * 0.15).clamp(-90.0, 90.0);
+                assert_eq!(
+                    (rot.y_rot, rot.x_rot),
+                    (yaw, pitch),
+                    "s {sensitivity} d {dx},{dy}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn inverted_and_scoping_turns() {
+        let mut look = MouseLook::default();
+        let mut rot = rotation();
+        let o = LookOptions {
+            invert_y: true,
+            ..PLAIN
+        };
+        frame(&mut look, &mut rot, 1.0, (0.0, 10.0), o);
+        assert!(rot.x_rot < 0.0, "inverted Y looks up: {}", rot.x_rot);
+        // Scoping drops the factor 8.
+        let scoped = LookOptions {
+            scoping: true,
+            ..PLAIN
+        };
+        assert!((degrees_per_count(PLAIN) / degrees_per_count(scoped) - 8.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn motion_for_turn_round_trips_through_turn_player() {
+        for o in [
+            PLAIN,
+            LookOptions {
+                sensitivity: 0.9,
+                invert_x: true,
+                invert_y: true,
+                ..PLAIN
+            },
+            LookOptions {
+                scoping: true,
+                ..PLAIN
+            },
+        ] {
+            let (dx, dy) = motion_for_turn(73.5, -21.25, o);
+            let mut look = MouseLook::default();
+            let mut rot = rotation();
+            frame(&mut look, &mut rot, 1.0, (dx, dy), o);
+            assert!((rot.y_rot - 73.5).abs() < 1e-3, "{o:?}: {}", rot.y_rot);
+            assert!((rot.x_rot + 21.25).abs() < 1e-3, "{o:?}: {}", rot.x_rot);
+        }
+    }
+
+    #[test]
+    fn cinematic_camera_spreads_the_same_motion_over_frames() {
+        // SmoothDouble: the first frame turns part of the way, later frames
+        // without new motion carry on towards the same total.
+        let o = LookOptions {
+            smooth_camera: true,
+            ..PLAIN
+        };
+        let (dx, _) = motion_for_turn(30.0, 0.0, o);
+        let mut look = MouseLook::default();
+        let mut rot = rotation();
+        frame(&mut look, &mut rot, 0.0, (0.0, 0.0), o);
+        frame(&mut look, &mut rot, 1.0 / 60.0, (dx, 0.0), o);
+        let first = rot.y_rot;
+        assert!(first > 0.0 && first < 30.0, "{first}");
+        for i in 2..600 {
+            frame(&mut look, &mut rot, f64::from(i) / 60.0, (0.0, 0.0), o);
+        }
+        assert!((rot.y_rot - 30.0).abs() < 0.05, "{}", rot.y_rot);
+    }
+
+    #[test]
+    fn ease_in_out_starts_and_ends_slowly() {
+        assert_eq!(ease_in_out(0.0), 0.0);
+        assert!((ease_in_out(0.5) - 0.5).abs() < 1e-12);
+        assert!((ease_in_out(1.0) - 1.0).abs() < 1e-12);
+        assert!(ease_in_out(0.1) < 0.1 && ease_in_out(0.9) > 0.9);
+        assert_eq!(ease_in_out(2.0), 1.0);
+    }
     #[test]
     fn default_sensitivity_turns_point_fifteen_degrees_per_count_at_one() {
         let mut look = MouseLook::default();

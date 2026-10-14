@@ -280,16 +280,55 @@ impl Settings {
             .parent()
             .map(crate::graphics::Graphics::load)
             .unwrap_or_default();
-        let Ok(bytes) = fs::read(path) else {
-            return Self {
+        let settings = match fs::read(path) {
+            Ok(bytes) => Self {
+                horizon,
+                ..Self::parse(&String::from_utf8_lossy(&bytes))
+            },
+            Err(_) => Self {
                 horizon,
                 ..Self::default()
-            };
+            },
         };
-        Self {
-            horizon,
-            ..Self::parse(&String::from_utf8_lossy(&bytes))
-        }
+        settings.describe_for_crashes();
+        settings
+    }
+    /// The render settings and resource packs a crash report lists.
+    fn describe_for_crashes(&self) {
+        let on = |b: bool| if b { "on" } else { "off" };
+        let scale = match self.gui_scale {
+            0 => "auto".to_owned(),
+            n => n.to_string(),
+        };
+        crate::crash::set_detail(
+            "Render Settings",
+            format!(
+                "render distance {}, simulation distance {}, graphics {}, FOV {:.0}, max FPS {}, VSync {}, fullscreen {}, GUI scale {scale}, smooth lighting {}, clouds {}, biome blend {}, mipmap levels {}",
+                self.render_distance,
+                self.simulation_distance,
+                self.graphics_preset,
+                self.fov,
+                if self.max_fps >= 260 {
+                    "unlimited".to_owned()
+                } else {
+                    self.max_fps.to_string()
+                },
+                on(self.vsync),
+                on(self.fullscreen),
+                on(self.smooth_lighting),
+                self.clouds,
+                self.biome_blend,
+                self.mipmap_levels,
+            ),
+        );
+        crate::crash::set_detail(
+            "Resource Packs",
+            if self.resource_packs.is_empty() {
+                "vanilla".to_owned()
+            } else {
+                self.resource_packs.join(", ")
+            },
+        );
     }
     pub fn parse(text: &str) -> Self {
         Self::from_file(OptionsFile::parse(text))
@@ -474,6 +513,7 @@ impl Settings {
         self.to_file().serialize()
     }
     pub fn save(&self, path: &Path) {
+        self.describe_for_crashes();
         let _ = fs::write(path, self.serialize());
         if let Some(dir) = path.parent() {
             self.horizon.save(dir);

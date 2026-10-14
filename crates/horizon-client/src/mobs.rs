@@ -794,6 +794,8 @@ pub struct Mob {
     pub invulnerable_flag: bool,
     pub climbing: bool,
     pub fire_ticks: i32,
+    pub ticks_frozen: i32,
+    pub glowing: bool,
     pub air: i32,
     pub last_hurt: f32,
     pub last_damage: Option<(Damage, i64)>,
@@ -1183,6 +1185,7 @@ impl Mob {
         self.fire_ticks = self
             .fire_ticks
             .max((f64::from(ticks) * self.burning_time()).ceil() as i32);
+        self.ticks_frozen = 0;
     }
 
     /// What other mobs see of this one this tick (`player`: the player's
@@ -1445,6 +1448,8 @@ impl Mob {
             invulnerable_flag: false,
             climbing: false,
             fire_ticks: 0,
+            ticks_frozen: 0,
+            glowing: false,
             air: 300,
             last_hurt: 0.0,
             last_damage: None,

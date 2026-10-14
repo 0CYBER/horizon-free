@@ -18,7 +18,7 @@ pub fn loot_data(root: &Path) -> Option<Arc<LootData>> {
     LOOT.get_or_init(|| match LootData::load(root) {
         Ok(data) => Some(Arc::new(data)),
         Err(e) => {
-            eprintln!("Horizon: loot tables unavailable, structure containers stay empty: {e}");
+            log::warn!("Horizon: loot tables unavailable, structure containers stay empty: {e}");
             None
         }
     })

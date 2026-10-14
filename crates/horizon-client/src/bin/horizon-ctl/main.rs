@@ -183,6 +183,7 @@ impl Session {
                 thread::sleep(Duration::from_secs_f64(seconds.max(0.0)));
                 self.game(&format!("key {key} up"))
             }
+            "logs" => logs(&horizon_client::logging::game_home(), &words[1..]),
             "wait-ready" => {
                 let limit = if words.len() > 1 {
                     number(1, "SECONDS")?
@@ -226,6 +227,52 @@ impl Session {
             thread::sleep(Duration::from_millis(250));
         }
     }
+}
+
+/// `logs [--lines N] [--crash]` for the game in `home`: the reply's `text` is the log's last
+/// lines or the report.
+fn logs(home: &Path, words: &[String]) -> Result<Value, Failure> {
+    use horizon_client::logging;
+    let mut lines = 100;
+    let mut crash = false;
+    let mut it = words.iter();
+    while let Some(word) = it.next() {
+        match word.as_str() {
+            "--crash" => crash = true,
+            "--lines" => {
+                lines = it
+                    .next()
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .filter(|&n| n > 0)
+                    .ok_or_else(|| Failure::usage("--lines takes a number above 0"))?;
+            }
+            other => {
+                return Err(Failure::usage(format!(
+                    "unknown argument {other}; usage: {}",
+                    usage("logs")
+                )));
+            }
+        }
+    }
+    let missing = |what: String| Failure {
+        reply: json!({ "error": what }),
+        status: GAME_ERROR,
+    };
+    if crash {
+        let path = logging::newest_crash_report(home).ok_or_else(|| {
+            missing(format!(
+                "no crash report in {}",
+                logging::crash_reports_dir(home).display()
+            ))
+        })?;
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| missing(format!("{}: {e}", path.display())))?;
+        return Ok(json!({ "path": path, "text": text }));
+    }
+    let path = logging::logs_dir(home).join("latest.log");
+    let tail =
+        logging::tail(&path, lines).map_err(|e| missing(format!("{}: {e}", path.display())))?;
+    Ok(json!({ "path": path, "text": tail.join("\n") + "\n" }))
 }
 
 fn usage(name: &str) -> String {
@@ -424,6 +471,17 @@ fn main() -> ExitCode {
                 _ => script(&mut session, std::io::stdin().lock(), keep_going, pretty),
             }
         }
+        // Text for people; scripts and MCP get the JSON reply.
+        Some("logs") => match session.run(&args) {
+            Ok(reply) => {
+                print!("{}", reply["text"].as_str().unwrap_or_default());
+                0
+            }
+            Err(f) => {
+                print(&f.reply, pretty);
+                f.status
+            }
+        },
         Some(_) => match session.run(&args) {
             Ok(reply) => {
                 print(&reply, pretty);
@@ -441,6 +499,52 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn logs_reads_the_end_of_latest_log_and_the_newest_crash_report() {
+        let home = std::env::temp_dir().join(format!("horizon-ctl-logs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let words = |s: &str| -> Vec<String> { s.split_whitespace().map(String::from).collect() };
+        let failure = logs(&home, &words("")).unwrap_err();
+        assert!(
+            failure.reply["error"]
+                .as_str()
+                .unwrap()
+                .contains("latest.log")
+        );
+        std::fs::create_dir_all(home.join("logs")).unwrap();
+        let text: String = (1..=150)
+            .map(|i| format!("[10:00:00] [Render thread/INFO]: line {i}\n"))
+            .collect();
+        std::fs::write(home.join("logs/latest.log"), text).unwrap();
+        let reply = logs(&home, &words("")).unwrap();
+        let tail = reply["text"].as_str().unwrap();
+        assert_eq!(tail.lines().count(), 100);
+        assert!(tail.starts_with("[10:00:00] [Render thread/INFO]: line 51\n"));
+        assert!(tail.ends_with("line 150\n"));
+        let reply = logs(&home, &words("--lines 2")).unwrap();
+        assert_eq!(
+            reply["text"],
+            "[10:00:00] [Render thread/INFO]: line 149\n[10:00:00] [Render thread/INFO]: line 150\n"
+        );
+        assert_eq!(logs(&home, &words("--lines 0")).unwrap_err().status, USAGE);
+        assert_eq!(logs(&home, &words("--tail")).unwrap_err().status, USAGE);
+        assert!(logs(&home, &words("--crash")).is_err());
+        std::fs::create_dir_all(home.join("crash-reports")).unwrap();
+        std::fs::write(
+            home.join("crash-reports/crash-2026-10-13_10.00.00-client.txt"),
+            "old",
+        )
+        .unwrap();
+        std::fs::write(
+            home.join("crash-reports/crash-2026-10-14_10.00.00-client.txt"),
+            "new",
+        )
+        .unwrap();
+        let reply = logs(&home, &words("--crash")).unwrap();
+        assert_eq!(reply["text"], "new");
+        let _ = std::fs::remove_dir_all(&home);
+    }
 
     #[test]
     fn script_lines_split_like_a_shell() {

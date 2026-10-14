@@ -136,6 +136,21 @@ the launcher, `horizon-ctl launch --world X --wait` is all an agent needs.
 Other arguments go to the game; its output goes to a `.log` file beside the
 socket.
 
+**Logs and crash reports.** Like vanilla, the game writes `logs/latest.log`
+in the game home (`$HORIZON_HOME`, else `~/.local/share/horizon`; the
+dedicated server in its own folder) with lines like
+`[12:04:31] [Render thread/INFO]: message`, and at start archives the last
+run's as `logs/<yyyy-mm-dd>-<n>.log.gz` (seven a day). Messages still print on
+stderr as before. A panic on the main thread or a fatal error writes
+`crash-reports/crash-<yyyy-mm-dd_HH.MM.SS>-client.txt` (the error, its stack,
+the machine, the GPU, render settings, resource packs, the open world and the
+last 50 log lines) and the game exits with a non-zero code. `horizon-ctl logs
+[--lines N]` prints the end of latest.log and `horizon-ctl logs --crash` the
+newest report (the `logs` MCP tool returns the same). F3 + C held for ten
+seconds crashes the game on purpose, as in vanilla (the world is saved first);
+development builds also crash with `HORIZON_DEBUG_CRASH=SECONDS`, that long
+after the first frame.
+
 **MCP.** `horizon-ctl mcp` serves the Model Context Protocol over stdin and
 stdout (JSON-RPC 2.0, one message per line), with one tool per command and a
 JSON schema for each; `screenshot` returns the frame as an image. Register it

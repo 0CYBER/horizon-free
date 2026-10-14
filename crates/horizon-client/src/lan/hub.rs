@@ -815,7 +815,7 @@ impl Hub {
         let mut g = self.guests.remove(i);
         g.left_reason = reason.to_owned();
         if std::env::var_os("HORIZON_NET_DEBUG").is_some() {
-            eprintln!("[lan] {} left: {reason}", g.name);
+            log::info!("[lan] {} left: {reason}", g.name);
         }
         if !g.placed {
             return g;
