@@ -72,7 +72,7 @@ impl PlayerMotion {
         Ok(())
     }
     pub fn moving_slowly(&self) -> bool {
-        self.local_crouching || (self.pose == Pose::Swimming && !self.in_water)
+        self.local_crouching || (self.pose == Pose::Swimming && !self.fluids.was_touching_water)
     }
 }
 impl MotionWorld<'_, '_, '_> {

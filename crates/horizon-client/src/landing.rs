@@ -219,7 +219,7 @@ impl FallDamageWorld for MotionWorld<'_, '_, '_> {
     type Error = Box<dyn std::error::Error>;
     type State = BlockStateId;
     fn is_in_water(&mut self) -> Result<bool> {
-        Ok(false)
+        Ok(self.player.fluids.was_touching_water)
     }
     fn fall_distance(&self) -> f64 {
         self.player.fall_distance
@@ -253,8 +253,8 @@ impl FallDamageWorld for MotionWorld<'_, '_, '_> {
 }
 impl LivingLandingWorld for MotionWorld<'_, '_, '_> {
     fn update_fluid_interaction(&mut self) -> Result<bool> {
-        Ok(false)
-    } // dry scene
+        self.update_fluids()
+    }
     fn is_server_level(&self) -> bool {
         true
     }
