@@ -583,6 +583,7 @@ code {
   margin: 24px 0 -0.24em; text-align: center; white-space: nowrap;
   font: 400 27vw/0.9 var(--display); letter-spacing: -0.045em;
   color: transparent; -webkit-text-stroke: 1px #24242a;
+  pointer-events: none;
   user-select: none;
 }
 
