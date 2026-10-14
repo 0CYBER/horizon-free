@@ -78,15 +78,19 @@ def health(relay_url):
 class Game:
     """A Horizon client with a control socket in its own home."""
 
+    # Extra words before and after the client (`--xvfb`, `--offscreen`).
+    prefix = []
+    extra = []
+
     def __init__(self, client, resources, work, name, env):
         self.home = work / name
         self.home.mkdir()
         self.endpoint = self.home / 'c.sock'
         self.log = (self.home / 'client.log').open('w+')
-        self.process = subprocess.Popen([
+        self.process = subprocess.Popen(Game.prefix + [
             str(client), '--resources', str(resources), '--render-distance', '2', '--test-terrain',
             '--control-socket', str(self.endpoint), '--timeout-seconds', '600',
-        ], cwd=self.home, env=dict(os.environ, HORIZON_HOME=str(self.home), HORIZON_NO_AUDIO='1', **env),
+        ] + Game.extra, cwd=self.home, env=dict(os.environ, HORIZON_HOME=str(self.home), HORIZON_NO_AUDIO='1', **env),
             stdout=self.log, stderr=subprocess.STDOUT)
         wait_for(self.endpoint, 'screen', lambda v: v['screen'] == 'title', 120, f'{name} title')
 
@@ -333,7 +337,11 @@ def main():
     parser.add_argument('--wait', type=float, default=600)
     parser.add_argument('--hold', type=float, default=0, help='guest: stay this many seconds before leaving')
     parser.add_argument('--baseline', action='store_true', help='first run the same checks over plain LAN')
+    parser.add_argument('--offscreen', action='store_true', help='run the games without a window')
+    parser.add_argument('--xvfb', action='store_true', help='run the games under xvfb-run (headless Linux)')
     args = parser.parse_args()
+    Game.prefix = ['xvfb-run', '-a'] if args.xvfb else []
+    Game.extra = ['--offscreen'] if args.offscreen else []
     args.client, args.resources = args.client.resolve(), args.resources.resolve()
     # Short: Unix socket paths are limited to about 100 bytes.
     with tempfile.TemporaryDirectory(prefix='hzf-', dir='/tmp') as directory:
