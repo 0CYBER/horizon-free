@@ -515,14 +515,16 @@ impl Launcher {
             let log = |line| {
                 let _ = tx.send(Msg::Line(Job::Prepare, line));
             };
-            let result = backend::preparer(&tag, &minecraft, &log).and_then(|p| match p {
-                backend::Preparer::Process(cmd) => {
-                    backend::spawn(Job::Prepare, cmd, tx.clone()).map(|_running| false)
-                }
-                backend::Preparer::InProcess(options) => {
-                    backend::prepare_in_process(&options, &log).map(|_| true)
-                }
-            });
+            let result = backend::preparer(&tag, &minecraft, &log)
+                .inspect(|_| backend::sounds(&tag, &minecraft, &log))
+                .and_then(|p| match p {
+                    backend::Preparer::Process(cmd) => {
+                        backend::spawn(Job::Prepare, cmd, tx.clone()).map(|_running| false)
+                    }
+                    backend::Preparer::InProcess(options) => {
+                        backend::prepare_in_process(&options, &log).map(|_| true)
+                    }
+                });
             match result {
                 // A process sends its own Exit when it ends.
                 Ok(false) => {}

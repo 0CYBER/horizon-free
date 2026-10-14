@@ -22,6 +22,11 @@ fn hint(text: &str, version: &str) -> String {
     text.replace("{version}", version)
 }
 
+/// What to do when the player's launcher install lacks the pinned version's files.
+pub(crate) fn launcher_hint(version: &str) -> String {
+    hint(LAUNCHER_HINT, version)
+}
+
 /// research-lock.json and the folder the pinned version's files go to.
 pub struct Lock {
     pub json: Value,
@@ -120,7 +125,7 @@ pub fn minecraft_dir(chosen: Option<&Path>) -> PathBuf {
 
 /// Copy one file from the player's install, checked like a download; an existing verified
 /// copy is kept.
-fn import_copy(
+pub(crate) fn import_copy(
     source: &Path,
     destination: &Path,
     checksum: &str,
@@ -156,7 +161,7 @@ fn import_copy(
 
 /// The pinned version JSON from the launcher's versions/ directory. The launcher's copy wins
 /// over the cached one so the manifest matches the asset index installed alongside it.
-fn import_manifest(lock: &Lock, minecraft: &Path) -> Result<Value, String> {
+pub(crate) fn import_manifest(lock: &Lock, minecraft: &Path) -> Result<Value, String> {
     let version = &lock.version;
     let destination = lock.directory.join("manifest.json");
     let source = minecraft
@@ -355,7 +360,7 @@ fn client_library_artifacts(manifest: &Value) -> Result<Vec<&Value>, String> {
 }
 
 /// A relative path with only normal components and forward slashes, from a manifest or bundle.
-fn safe_relative(path: &str) -> Option<PathBuf> {
+pub(crate) fn safe_relative(path: &str) -> Option<PathBuf> {
     if path.contains('\\') || path.starts_with('/') {
         return None;
     }

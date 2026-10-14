@@ -97,7 +97,10 @@ impl Session {
                 let tag = backend::resolve_version(arg_str(args, "version"))?;
                 let minecraft =
                     backend::minecraft_dir(arg_str(args, "minecraft_dir").map(PathBuf::from))?;
-                let (result, tail) = match backend::preparer(&tag, &minecraft, &|_| {})? {
+                let preparer = backend::preparer(&tag, &minecraft, &|_| {})?;
+                let sound = std::cell::RefCell::new(Vec::new());
+                backend::sounds(&tag, &minecraft, &|line| sound.borrow_mut().push(line));
+                let (result, tail) = match preparer {
                     backend::Preparer::Process(cmd) => {
                         let run = Logged::start(Job::Prepare, cmd)?;
                         let result = run.wait();
@@ -120,6 +123,7 @@ impl Session {
                         (result, tail)
                     }
                 };
+                let tail = format!("{}\n{tail}", sound.into_inner().join("\n"));
                 result
                     .map(|_| format!("{tag} is prepared.\n{tail}"))
                     .map_err(|e| format!("{e}\n{tail}"))
