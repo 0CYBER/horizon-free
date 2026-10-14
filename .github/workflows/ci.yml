@@ -1,14 +1,25 @@
 name: checks
+# verify: every pull request and every push to main, on GitHub's runners (the repository is public).
+# parity: the vanilla harnesses a pull request's changes can affect, on the Mac mini's runner, which holds the
+# maintainer's own Minecraft files (Horizon never downloads the game). A fork's pull request runs it only when
+# a maintainer adds the run-parity label, once per label. See docs/release-flow.md.
 on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  # A new push to a pull request replaces its running checks; main's runs all finish (releases follow them).
+  group: checks-${{ github.event.pull_request.number || github.sha }}-${{ github.event.action == 'labeled' && 'label' || 'run' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   verify:
+    if: github.event.action != 'labeled'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,12 +37,49 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      # Dependencies and the workspace's own build, saved from main's runs (pull requests read main's cache).
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: verify
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Check formatting and lint
         run: |
           cargo +stable fmt --all -- --check
           cargo +stable clippy --workspace --all-targets -- -D warnings
       - name: Test Rust core and voxel kernel correctness
         run: cargo +stable test --workspace
+  parity:
+    if: >-
+      github.event_name == 'pull_request' && (
+        (github.event.pull_request.head.repo.full_name == github.repository && github.event.action != 'labeled') ||
+        (github.event.action == 'labeled' && github.event.label.name == 'run-parity'))
+    runs-on: [self-hosted, horizon-game]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The commit the event names: a fork's later pushes need another run-parity label.
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          # Keeps .local/ (parity state, probe builds, oracle results) and target/ between runs.
+          clean: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Tools from the runner
+        run: bash tools/ci/runner-env.sh
+      - name: Vanilla data, and resources prepared by this preparer
+        run: bash tools/ci/vanilla-data.sh
+      - name: The harnesses this change can affect
+        env:
+          PARITY_HOSTS: ''
+        run: python3 tools/parity.py --changed ${{ github.event.pull_request.base.sha }} --timeout 1500
+      - name: Logs of the failed harnesses
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parity-logs
+          path: .local/parity-runner/logs/
+          if-no-files-found: ignore
   # Horizon never downloads the game. These jobs need a self-hosted Linux runner
   # (label horizon-game) holding the maintainer's own copy: the official launcher's
   # game directory in HORIZON_MINECRAFT_DIR and the pinned server jar in
