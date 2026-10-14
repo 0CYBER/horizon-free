@@ -10,6 +10,7 @@ horizon-prepare: prepare Horizon's resources from your own Minecraft Java Editio
 
 Usage: horizon-prepare [--prepare] [--server-jar PATH] [--minecraft-dir PATH] [--root PATH]
        horizon-prepare sounds [--minecraft-dir PATH] [--root PATH]
+       horizon-prepare panorama [--minecraft-dir PATH] [--root PATH]
 
   --prepare             Import the pinned game files from your own copy first
   --server-jar PATH     The pinned server jar you downloaded yourself
@@ -22,6 +23,9 @@ Usage: horizon-prepare [--prepare] [--server-jar PATH] [--minecraft-dir PATH] [-
 Needs Minecraft played once from the official launcher, and Java (a JDK) of the version
 research-lock.json pins: JAVA_HOME, else javac and java on the PATH.
 The resources go to <root>/.local/horizon-client/<version>; pass that to horizon-client --resources.
+
+horizon-prepare panorama repairs the classic menu background in existing resources without Java.
+Full preparation also imports these textures after extracting the client JAR's placeholders.
 
 horizon-prepare sounds copies the pinned version's sounds (about 380 MB) from the official
 launcher's asset store into the same folder, checking every file. It is optional: without it the
@@ -52,7 +56,7 @@ fn main() -> ExitCode {
     };
     let mut root = None;
     let mut args = std::env::args_os().skip(1).peekable();
-    let sounds = args.next_if(|a| a == "sounds").is_some();
+    let assets = args.next_if(|a| a == "sounds" || a == "panorama");
     while let Some(arg) = args.next() {
         let text = arg.to_string_lossy().into_owned();
         let (flag, inline) = match text.split_once('=') {
@@ -71,8 +75,8 @@ fn main() -> ExitCode {
             }
         };
         let parsed = match flag.as_str() {
-            "--prepare" | "--server-jar" if sounds => {
-                Err(format!("{flag} is for preparing, not for sounds"))
+            "--prepare" | "--server-jar" if assets.is_some() => {
+                Err(format!("{flag} is for preparing, not for asset copying"))
             }
             "--prepare" if inline.is_none() => {
                 options.import = true;
@@ -108,10 +112,14 @@ fn main() -> ExitCode {
         let _ = writeln!(out, "{line}");
         let _ = out.flush();
     };
-    let result = if sounds {
-        horizon_prepare::sounds(&options.root, options.minecraft_dir.as_deref(), &log)
-    } else {
-        horizon_prepare::prepare(&options, &log)
+    let result = match assets.as_deref().and_then(|a| a.to_str()) {
+        Some("sounds") => {
+            horizon_prepare::sounds(&options.root, options.minecraft_dir.as_deref(), &log)
+        }
+        Some("panorama") => {
+            horizon_prepare::panorama(&options.root, options.minecraft_dir.as_deref(), &log)
+        }
+        _ => horizon_prepare::prepare(&options, &log),
     };
     match result {
         Ok(_) => ExitCode::SUCCESS,
