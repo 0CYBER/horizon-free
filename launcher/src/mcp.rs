@@ -1,6 +1,7 @@
 //! `horizon-launcher mcp`: the Model Context Protocol over stdin and stdout (JSON-RPC 2.0, one
 //! message per line), so AI agents can install, prepare and run Horizon. Every tool goes through
 //! `backend`. A server started here lives as long as the session.
+use horizon_launcher::account::{self, Accounts, SignIn, SignInState};
 use horizon_launcher::backend::{self, Job, Logged};
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
@@ -12,6 +13,7 @@ const PROTOCOL: &str = "2025-06-18";
 struct Session {
     server: Option<Logged>,
     client: Option<Logged>,
+    sign_in: Option<SignIn>,
 }
 
 fn tools() -> Value {
@@ -42,6 +44,12 @@ fn tools() -> Value {
           "inputSchema": { "type": "object", "properties": { "style": { "type": "string", "enum": ["horizon", "classic"], "description": "Omit to show the current style." } } } },
         { "name": "logs", "description": "Read the game's log: the last lines of logs/latest.log in the game folder, or with crash the newest crash report (what the game wrote when it last crashed). Read-only.",
           "inputSchema": { "type": "object", "properties": { "lines": { "type": "integer", "minimum": 1, "maximum": 5000, "description": "How many lines of latest.log (default 100)." }, "crash": { "type": "boolean", "description": "Return the newest crash report instead." } } } },
+        { "name": "accounts", "description": "The Microsoft accounts signed in to the launcher (names and UUIDs, never tokens), which one the game plays as (none = offline), and how a sign-in started with sign_in is going.", "inputSchema": none },
+        { "name": "sign_in", "description": "Start signing in a Microsoft account: returns a link and a code the player enters in their browser. The sign-in finishes in the background; check it with accounts. Only when the player asks to sign in.", "inputSchema": none },
+        { "name": "sign_out", "description": "Sign an account out of the launcher (its tokens leave the keychain).",
+          "inputSchema": { "type": "object", "properties": { "account": { "type": "string", "description": "Its name or UUID." } }, "required": ["account"] } },
+        { "name": "select_account", "description": "Choose the account the game plays as, or \"offline\" to play without one.",
+          "inputSchema": { "type": "object", "properties": { "account": { "type": "string", "description": "A name or UUID, or \"offline\"." } }, "required": ["account"] } },
         { "name": "check_updates", "description": "Check GitHub for a Horizon release newer than every installed version, and for a newer launcher.", "inputSchema": none },
     ])
 }
@@ -242,6 +250,70 @@ impl Session {
                 }))
                 .unwrap())
             }
+            "accounts" => {
+                let accounts = Accounts::load();
+                let sign_in = self.sign_in.as_ref().map(|s| match s.state() {
+                    SignInState::Starting => json!({ "state": "starting" }),
+                    SignInState::Code(c) => json!({ "state": "waiting for the player", "link": c.verification_uri, "code": c.user_code }),
+                    SignInState::Done(Ok(a)) => json!({ "state": "signed in", "name": a.name }),
+                    SignInState::Done(Err(e)) => json!({ "state": "failed", "error": e }),
+                });
+                Ok(serde_json::to_string_pretty(&json!({
+                    "accounts": accounts.accounts.iter().map(|a| json!({ "name": a.name, "uuid": a.uuid })).collect::<Vec<_>>(),
+                    "plays_as": accounts.selected().map(|a| a.name.clone()),
+                    "sign_in_configured": account::client_id().is_some(),
+                    "keychain": account::store().persistent(),
+                    "sign_in": sign_in,
+                }))
+                .unwrap())
+            }
+            "sign_in" => {
+                account::client_id().ok_or(account::NOT_CONFIGURED)?;
+                if let Some(s) = self.sign_in.take() {
+                    s.cancel();
+                }
+                let sign_in = SignIn::start();
+                let deadline = std::time::Instant::now() + Duration::from_secs(30);
+                let state = loop {
+                    match sign_in.state() {
+                        SignInState::Starting if std::time::Instant::now() < deadline => {
+                            std::thread::sleep(Duration::from_millis(100))
+                        }
+                        state => break state,
+                    }
+                };
+                self.sign_in = Some(sign_in);
+                match state {
+                    SignInState::Code(c) => Ok(format!(
+                        "Ask the player to open {} and enter the code {}. Then check accounts.",
+                        c.verification_uri, c.user_code
+                    )),
+                    SignInState::Done(Err(e)) => Err(e),
+                    _ => Err("Microsoft did not answer. Try again.".into()),
+                }
+            }
+            "sign_out" | "select_account" => {
+                let who = arg_str(args, "account").ok_or("account is required")?;
+                let mut accounts = Accounts::load();
+                if name == "select_account" && who.eq_ignore_ascii_case("offline") {
+                    accounts.selected = None;
+                    accounts.save()?;
+                    return Ok("The game plays offline.".into());
+                }
+                let a = accounts
+                    .find(who)
+                    .cloned()
+                    .ok_or_else(|| format!("No signed-in account {who}."))?;
+                if name == "sign_out" {
+                    accounts.remove(account::store(), &a.uuid)?;
+                    accounts.save()?;
+                    Ok(format!("Signed out {}.", a.name))
+                } else {
+                    accounts.selected = Some(a.uuid);
+                    accounts.save()?;
+                    Ok(format!("The game plays as {}.", a.name))
+                }
+            }
             _ => Err(format!("Unknown tool {name}")),
         }
     }
@@ -292,6 +364,7 @@ pub fn serve() -> Result<(), String> {
     let mut session = Session {
         server: None,
         client: None,
+        sign_in: None,
     };
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();

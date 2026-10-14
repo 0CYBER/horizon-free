@@ -13,6 +13,7 @@ use gpui::{
     RenderImage, ScrollHandle, SharedString, Stateful, Subscription, TitlebarOptions, Window,
     WindowBounds, WindowOptions,
 };
+use horizon_launcher::account::{self, Accounts, SignIn, SignInState};
 use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Updates};
 use std::borrow::Cow;
 use std::collections::VecDeque;
@@ -147,6 +148,13 @@ struct Launcher {
     client_started: Option<std::time::SystemTime>,
     crash: Option<Crash>,
     server: Option<Running>,
+    /// Microsoft accounts (accounts.json), the sign-in under way and what it last showed.
+    accounts: Accounts,
+    sign_in: Option<SignIn>,
+    sign_in_state: Option<SignInState>,
+    keychain: bool,
+    /// The game is waiting for its session (a token renewal) before it starts.
+    starting_client: Option<String>,
     server_log: VecDeque<String>,
     server_error: Option<String>,
     input: String,
@@ -228,6 +236,11 @@ impl Launcher {
             client_started: None,
             crash: None,
             server: None,
+            accounts: Accounts::load(),
+            sign_in: None,
+            sign_in_state: None,
+            keychain: true,
+            starting_client: None,
             server_log: VecDeque::new(),
             server_error: None,
             input: String::new(),
@@ -239,6 +252,11 @@ impl Launcher {
             _appearance: appearance,
         };
         let tx = this.tx.clone();
+        let keychain_tx = this.tx.clone();
+        // Asking the keychain can block (D-Bus), so not on this thread.
+        std::thread::spawn(move || {
+            let _ = keychain_tx.send(Msg::Keychain(account::store().persistent()));
+        });
         std::thread::spawn(move || {
             let reused = backend::reuse_prepared_everywhere();
             if !reused.is_empty() {
@@ -331,6 +349,25 @@ impl Launcher {
                 Msg::Links(links) => self.links = links,
                 // The page reads is_prepared when drawn; `changed` redraws it.
                 Msg::Reused(_) => self.installed = backend::installed(),
+                Msg::Keychain(persistent) => self.keychain = persistent,
+                Msg::Session(session) => {
+                    if let Some(tag) = self.starting_client.take() {
+                        let mut cmd = backend::client_command(&tag);
+                        match session {
+                            Ok(Some(file)) => {
+                                cmd.arg("--session-file").arg(file);
+                            }
+                            Ok(None) => {}
+                            // Still play, offline, and say why.
+                            Err(e) => self.client_error = Some(format!("Playing offline: {e}")),
+                        }
+                        self.accounts = Accounts::load();
+                        match backend::spawn(Job::Client, cmd, self.tx.clone()) {
+                            Ok(r) => self.client = Some(r),
+                            Err(e) => self.client_error = Some(e),
+                        }
+                    }
+                }
                 Msg::Progress(tag, p) => {
                     self.bar = (self.bar.1, p);
                     self.installing = Some((tag, p));
@@ -454,6 +491,17 @@ impl Launcher {
                 }
             }
         }
+        if let Some(sign_in) = &self.sign_in {
+            let state = sign_in.state();
+            let changed_state = format!("{state:?}") != format!("{:?}", self.sign_in_state);
+            if changed_state {
+                if let SignInState::Done(Ok(_)) = state {
+                    self.accounts = Accounts::load();
+                }
+                self.sign_in_state = Some(state);
+                changed = true;
+            }
+        }
         if self.checked.is_some_and(|at| at.elapsed() > CHECK_EVERY) {
             self.check_updates();
         }
@@ -545,7 +593,7 @@ impl Launcher {
         };
         match self.mode {
             Mode::Client => {
-                if self.client.is_some() {
+                if self.client.is_some() || self.starting_client.is_some() {
                     return;
                 }
                 self.client_error = None;
@@ -554,10 +602,30 @@ impl Launcher {
                 // A little earlier than the spawn: file times can be coarse.
                 self.client_started =
                     Some(std::time::SystemTime::now() - std::time::Duration::from_secs(2));
-                match backend::spawn(Job::Client, backend::client_command(&tag), self.tx.clone()) {
-                    Ok(r) => self.client = Some(r),
-                    Err(e) => self.client_error = Some(e),
-                }
+                // The session (a network round trip when the token needs renewing) comes first;
+                // `drain` starts the game when it arrives.
+                self.starting_client = Some(tag);
+                let tx = self.tx.clone();
+                std::thread::spawn(move || {
+                    let session = (|| {
+                        let mut accounts = Accounts::load();
+                        let Some((a, secrets)) = account::session_for_launch(
+                            &account::Endpoints::live(),
+                            account::store(),
+                            &mut accounts,
+                        )?
+                        else {
+                            return Ok(None);
+                        };
+                        account::write_session_file(
+                            &backend::game_home().join("sessions"),
+                            &a,
+                            &secrets,
+                        )
+                        .map(Some)
+                    })();
+                    let _ = tx.send(Msg::Session(session));
+                });
             }
             Mode::Server => {
                 if let Some(server) = &mut self.server {
@@ -1163,7 +1231,7 @@ impl Launcher {
         let version = backend::game_version(&tag);
         let hero = self.hero(&tag, &version, prepared, cx);
         let running = match self.mode {
-            Mode::Client => self.client.is_some(),
+            Mode::Client => self.client.is_some() || self.starting_client.is_some(),
             Mode::Server => self.server.is_some(),
         };
         let play_label = match (self.mode, running) {
@@ -1263,6 +1331,27 @@ impl Launcher {
                 )),
                 &t,
             ));
+        if self.mode == Mode::Client {
+            let who = match self.accounts.selected() {
+                Some(a) => div().child(format!("{} (Microsoft account)", a.name)),
+                None => div()
+                    .text_color(t.muted)
+                    .child("Offline: online servers need a Microsoft account."),
+            };
+            rows = rows.child(divider(&t)).child(row(
+                "Playing as",
+                who,
+                Some(
+                    button("accounts", "Accounts…", Kind::Ghost, &t).on_click(cx.listener(
+                        |this, _: &ClickEvent, _, cx| {
+                            this.go(Page::Settings);
+                            cx.notify();
+                        },
+                    )),
+                ),
+                &t,
+            ));
+        }
         if self.mode == Mode::Server {
             let folder = self
                 .settings
@@ -1761,6 +1850,7 @@ impl Launcher {
                 div()
                     .flex()
                     .flex_col()
+                    .child(self.account_rows(cx))
                     .child(divider(&t))
                     .child(row("Updates", auto, Some(toggle), &t))
                     .child(divider(&t))
@@ -1806,6 +1896,167 @@ impl Launcher {
                     .child(divider(&t)),
             )
             .child(agents)
+    }
+
+    /// Settings' Microsoft accounts: who is signed in and plays, the sign-in with its code.
+    fn account_rows(&mut self, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let mut rows = div().flex().flex_col();
+        let selected = self.accounts.selected.clone();
+        for (i, a) in self.accounts.accounts.clone().into_iter().enumerate() {
+            let plays = selected.as_ref() == Some(&a.uuid);
+            let value = div()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(a.name.clone())
+                .child(
+                    div()
+                        .text_size(px(theme::SMALL))
+                        .text_color(t.muted)
+                        .child(if plays { "Plays" } else { "Signed in" }),
+                );
+            let uuid = a.uuid.clone();
+            let mut actions = div().flex().gap(px(4.));
+            if plays {
+                actions = actions.child(
+                    button(format!("offline-{i}"), "Play offline", Kind::Ghost, &t).on_click(
+                        cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.accounts.selected = None;
+                            let _ = this.accounts.save();
+                            cx.notify();
+                        }),
+                    ),
+                );
+            } else {
+                let uuid = uuid.clone();
+                actions = actions.child(
+                    button(format!("select-{i}"), "Play as", Kind::Secondary, &t).on_click(
+                        cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.accounts.selected = Some(uuid.clone());
+                            let _ = this.accounts.save();
+                            cx.notify();
+                        }),
+                    ),
+                );
+            }
+            actions = actions.child(
+                button(format!("sign-out-{i}"), "Sign out", Kind::Ghost, &t).on_click(cx.listener(
+                    move |this, _: &ClickEvent, _, cx| {
+                        let store = account::store();
+                        if let Err(e) = this.accounts.remove(store, &uuid) {
+                            this.sign_in_state = Some(SignInState::Done(Err(e)));
+                        }
+                        let _ = this.accounts.save();
+                        cx.notify();
+                    },
+                )),
+            );
+            let label = if i == 0 { "Accounts" } else { "" };
+            rows = rows.child(divider(&t)).child(row(
+                label,
+                value,
+                Some(actions.id(SharedString::from(format!("account-{i}")))),
+                &t,
+            ));
+        }
+        let configured = account::client_id().is_some();
+        let busy = matches!(
+            self.sign_in_state,
+            Some(SignInState::Starting | SignInState::Code(_))
+        );
+        let value = match &self.sign_in_state {
+            _ if !configured => div().text_color(t.muted).child(account::NOT_CONFIGURED),
+            Some(SignInState::Starting) => div().text_color(t.muted).child("Asking Microsoft…"),
+            Some(SignInState::Code(code)) => div()
+                .flex()
+                .flex_col()
+                .gap(px(4.))
+                .child(format!(
+                    "Open {} in your browser and enter this code:",
+                    code.verification_uri
+                ))
+                .child(
+                    div()
+                        .font_family(theme::MONO)
+                        .text_size(px(theme::LARGE))
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(code.user_code.clone()),
+                ),
+            Some(SignInState::Done(Ok(a))) => div().child(format!("Signed in as {}.", a.name)),
+            Some(SignInState::Done(Err(e))) => div().text_color(t.danger).child(e.clone()),
+            None if self.accounts.accounts.is_empty() => div().text_color(t.muted).child(
+                "Sign in to play on online servers with your name and skin. Without an account the game plays offline.",
+            ),
+            None => div().text_color(t.muted).child("Add another account."),
+        };
+        let value = if self.keychain || self.accounts.accounts.is_empty() {
+            value
+        } else {
+            div().flex().flex_col().gap(px(4.)).child(value).child(
+                div()
+                    .text_size(px(theme::SMALL))
+                    .text_color(t.muted)
+                    .child(account::NO_KEYCHAIN),
+            )
+        };
+        let action = if !configured {
+            None
+        } else if let Some(SignInState::Code(code)) = &self.sign_in_state {
+            let (uri, user_code) = (code.verification_uri.clone(), code.user_code.clone());
+            Some(
+                div()
+                    .flex()
+                    .gap(px(4.))
+                    .child(
+                        button("sign-in-copy", "Copy code", Kind::Secondary, &t).on_click(
+                            move |_, _, cx| {
+                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                    user_code.clone(),
+                                ))
+                            },
+                        ),
+                    )
+                    .child(
+                        button("sign-in-open", "Open link", Kind::Secondary, &t)
+                            .on_click(move |_, _, cx| cx.open_url(&uri)),
+                    )
+                    .child(
+                        button("sign-in-cancel", "Cancel", Kind::Ghost, &t).on_click(cx.listener(
+                            |this, _: &ClickEvent, _, cx| {
+                                if let Some(s) = this.sign_in.take() {
+                                    s.cancel();
+                                }
+                                this.sign_in_state = None;
+                                cx.notify();
+                            },
+                        )),
+                    ),
+            )
+        } else if busy {
+            None
+        } else {
+            Some(div().child(
+                button("sign-in", "Sign in with Microsoft", Kind::Secondary, &t).on_click(
+                    cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.sign_in = Some(SignIn::start());
+                        this.sign_in_state = Some(SignInState::Starting);
+                        cx.notify();
+                    }),
+                ),
+            ))
+        };
+        let label = if self.accounts.accounts.is_empty() {
+            "Account"
+        } else {
+            ""
+        };
+        rows.child(divider(&t)).child(row(
+            label,
+            value,
+            action.map(|a| a.id("sign-in-actions")),
+            &t,
+        ))
     }
 
     fn console(&self, cx: &mut Context<Self>) -> Div {
