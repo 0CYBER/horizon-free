@@ -9,8 +9,7 @@ fn main() {
         .ok()
         .and_then(|p| p.trim().parse().ok())
         .unwrap_or(7000);
-    // Dual-stack where the system allows it (Railway's private network is
-    // IPv6), else IPv4.
+    // Dual-stack where the system allows it, else IPv4.
     let listener = TcpListener::bind(("::", port))
         .or_else(|_| TcpListener::bind(("0.0.0.0", port)))
         .unwrap_or_else(|e| {
