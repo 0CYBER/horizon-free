@@ -281,6 +281,36 @@ mod tests {
     }
 
     #[test]
+    fn summoned_age_selects_the_baby_model_and_texture() {
+        let mut template = rabbit();
+        let kind = Arc::make_mut(&mut template.kind);
+        kind.texture = "entity/rabbit/rabbit_brown".into();
+        kind.layers
+            .insert("rabbit_baby#main".into(), kind.model.clone());
+        let types = HashMap::from([(kind.id.clone(), template.kind.clone())]);
+        for (age, baby) in [(-24000, true), (-1, true), (0, false), (6000, false)] {
+            let (tag, _) = horizon_world::nbt::parse_snbt(&format!(
+                "{{id:\"minecraft:rabbit\",Pos:[0.0d,0.0d,0.0d],Age:{age}}}"
+            ))
+            .unwrap();
+            let m = crate::entity_nbt::mob_from_nbt(&tag, &types, 2).unwrap();
+            assert_eq!(m.extra.age, age);
+            assert_eq!(m.is_baby(), baby);
+            assert_eq!(
+                crate::mobs::render::body(&m),
+                if baby {
+                    (
+                        "rabbit_baby#main".into(),
+                        "entity/rabbit/rabbit_brown_baby".into(),
+                    )
+                } else {
+                    ("rabbit#main".into(), "entity/rabbit/rabbit_brown".into())
+                }
+            );
+        }
+    }
+
+    #[test]
     fn landing_waits_then_real_hop_clock_moves_the_model() {
         let mut m = rabbit();
         m.on_ground = true;
