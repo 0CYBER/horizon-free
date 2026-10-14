@@ -15,8 +15,11 @@ The opening, then Play ([clip](docs/opening.webm)):
 - **Versions**: lists the published releases of ludovic111/horizon, installs the build for
   this platform into its own folder, and removes it again.
 - **Play**: prepares resources as `PLAY.txt` describes (your launcher's 26.3 install, the
-  26.3 server jar from that version's own json, Python 3.10+ and Java 25), then starts the
-  client, or a server (`--dedicated --nogui`) in a folder you choose, with a live console.
+  26.3 server jar from that version's own json, and Java 25), then starts the client, or a
+  server (`--dedicated --nogui`) in a folder you choose, with a live console. Preparing is
+  horizon-prepare: linked into the launcher, used in-process when a version ships the same
+  preparer sources, else that version's own `horizon-prepare`; versions released before it
+  still prepare with their Python script and need Python 3.10+.
 - **Patch notes**: each release's notes, newest first, with a link to GitHub Sponsors. Quiet "Join Discord" and "Website" links sit in the sidebar footer.
 
 Data lives in the platform's data directory (`~/.local/share/horizon-launcher` on Linux,

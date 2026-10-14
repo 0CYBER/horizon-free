@@ -472,17 +472,27 @@ impl Launcher {
         self.prepare_log.clear();
         self.prepare_error = None;
         self.prepare_log
-            .push_back("Checking Java, Python and your Minecraft install".into());
+            .push_back("Checking Java and your Minecraft install".into());
         let tx = self.tx.clone();
         // The checks may download the server jar, so they run on the thread too.
         std::thread::spawn(move || {
             let log = |line| {
                 let _ = tx.send(Msg::Line(Job::Prepare, line));
             };
-            let result = backend::prepare_command(&tag, &minecraft, &log)
-                .and_then(|cmd| backend::spawn(Job::Prepare, cmd, tx.clone()));
+            let result = backend::preparer(&tag, &minecraft, &log).and_then(|p| match p {
+                backend::Preparer::Process(cmd) => {
+                    backend::spawn(Job::Prepare, cmd, tx.clone()).map(|_running| false)
+                }
+                backend::Preparer::InProcess(options) => {
+                    backend::prepare_in_process(&options, &log).map(|_| true)
+                }
+            });
             match result {
-                Ok(_running) => {}
+                // A process sends its own Exit when it ends.
+                Ok(false) => {}
+                Ok(true) => {
+                    let _ = tx.send(Msg::Exit(Job::Prepare, Ok(())));
+                }
                 Err(e) => {
                     let _ = tx.send(Msg::Exit(Job::Prepare, Err(e)));
                 }

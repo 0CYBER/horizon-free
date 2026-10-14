@@ -380,12 +380,15 @@ pub fn is_prepared(tag: &str) -> bool {
 
 /// Whether the resources `from` prepared are the ones preparing `to` would make. The output
 /// depends on the Horizon version, not only on Minecraft's: the manifest records the hashes of
-/// the vanilla exporters it was made with (mods/horizon/src/test/java/.../parity), and
-/// prepare_native_client.py writes every file and the manifest's `schema`. So both need the
-/// same pinned Minecraft jars (research-lock.json), the same prepare_native_client.py and the
-/// same exporter sources. The helpers it imports (lab.py and the test_*_parity.py modules)
-/// change between releases in how they find and check the player's files, which the output
-/// does not depend on; they are not compared.
+/// the vanilla exporters it was made with (mods/horizon/src/test/java/.../parity), and the
+/// preparer writes every file and the manifest's `schema`. So both need the same pinned
+/// Minecraft jars (research-lock.json), the same preparer and the same exporter sources. The
+/// preparer is crates/horizon-prepare (its sources ship in the release folder beside the
+/// binary) and tools/prepare_native_client.py (the Python preparer of older versions, a wrapper
+/// of the binary since); a file only one of the two versions has is a different preparer. The
+/// helpers the Python preparer imported (lab.py and the test_*_parity.py modules) change
+/// between releases in how they find and check the player's files, which the output does not
+/// depend on; they are not compared.
 fn resources_compatible(from: &Path, to: &Path, manifest: &serde_json::Value) -> bool {
     let pins = |dir: &Path| {
         read_json(&dir.join("research-lock.json")).map(|lock| {
@@ -401,8 +404,21 @@ fn resources_compatible(from: &Path, to: &Path, manifest: &serde_json::Value) ->
     let Some(fields) = manifest.as_object() else {
         return false;
     };
+    let mut preparer = vec![PathBuf::from("tools/prepare_native_client.py")];
+    for dir in [from, to] {
+        preparer.extend(files_under(dir, Path::new(PREPARER_CRATE)));
+    }
+    let same_or_absent = |path: &Path| match (fs::read(from.join(path)), fs::read(to.join(path))) {
+        (Ok(a), Ok(b)) => a == b,
+        (Err(a), Err(b)) => {
+            a.kind() == std::io::ErrorKind::NotFound && b.kind() == std::io::ErrorKind::NotFound
+        }
+        _ => false,
+    };
+    if !preparer.iter().all(|p| same_or_absent(p)) {
+        return false;
+    }
     let mut sources = vec![
-        "tools/prepare_native_client.py".to_string(),
         "mods/horizon/src/test/java/dev/horizonlab/parity/VanillaHeightmapOracle.java".to_string(),
     ];
     for (_, value) in fields
@@ -423,6 +439,26 @@ fn resources_compatible(from: &Path, to: &Path, manifest: &serde_json::Value) ->
             && matches!((fs::read(from.join(path)), fs::read(to.join(path))), (Ok(a), Ok(b)) if a == b)
     };
     sources.iter().all(|s| same(s))
+}
+
+/// Where a version folder keeps the preparer's sources (packaging/package.sh copies them).
+const PREPARER_CRATE: &str = "crates/horizon-prepare";
+
+/// The files under `dir/relative`, as paths relative to `dir`.
+fn files_under(dir: &Path, relative: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(dir.join(relative)) else {
+        return Vec::new();
+    };
+    let mut files = Vec::new();
+    for entry in entries.flatten() {
+        let path = relative.join(entry.file_name());
+        match entry.file_type() {
+            Ok(t) if t.is_dir() => files.extend(files_under(dir, &path)),
+            Ok(_) => files.push(path),
+            Err(_) => {}
+        }
+    }
+    files
 }
 
 fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
@@ -500,7 +536,7 @@ fn reuse_prepared_in(versions: &Path) -> Vec<(String, String)> {
         .collect()
 }
 
-/// The official launcher's game directory, where prepare_native_client.py looks by default.
+/// The official launcher's game directory, where horizon-prepare looks by default.
 pub fn default_minecraft_dir() -> Option<PathBuf> {
     let home = dirs::home_dir()?;
     let dir = if cfg!(target_os = "macos") {
@@ -531,13 +567,29 @@ fn python() -> Option<&'static str> {
     candidates.iter().copied().find(|p| found(p, "--version"))
 }
 
-/// Checks what the preparation needs and builds its command. PLAY.txt describes the same steps:
-/// the player's own launcher install, the server jar from that version's own json, Java and Python.
-pub fn prepare_command(
-    tag: &str,
-    minecraft: &Path,
-    log: &dyn Fn(String),
-) -> Result<Command, String> {
+/// How a version's resources are prepared.
+pub enum Preparer {
+    /// horizon-prepare, linked into the launcher: the version ships the same preparer sources.
+    InProcess(horizon_prepare::Options),
+    /// The version's own preparer: its horizon-prepare binary when its sources differ from the
+    /// launcher's (a newer or older release), or the Python script of versions made before it.
+    Process(Command),
+}
+
+/// The version's horizon-prepare binary, when it ships one.
+fn preparer_binary(dir: &Path) -> Option<PathBuf> {
+    let binary = dir.join(if cfg!(windows) {
+        "horizon-prepare.exe"
+    } else {
+        "horizon-prepare"
+    });
+    binary.is_file().then_some(binary)
+}
+
+/// Checks what the preparation needs and picks how to run it. PLAY.txt describes the same
+/// steps: the player's own launcher install, the server jar from that version's own json, and
+/// Java (and Python, for versions before horizon-prepare).
+pub fn preparer(tag: &str, minecraft: &Path, log: &dyn Fn(String)) -> Result<Preparer, String> {
     let version = game_version(tag);
     let manifest = minecraft
         .join("versions")
@@ -549,12 +601,27 @@ pub fn prepare_command(
             minecraft.display()
         ));
     }
-    let python = python().ok_or("Python 3.10 or newer is needed. Install it and try again.")?;
-    if !found("java", "-version") {
-        return Err(
-            "Java 25 is needed (a JDK, e.g. Eclipse Temurin 25). Install it and try again.".into(),
-        );
-    }
+    let dir = version_dir(tag);
+    let binary = preparer_binary(&dir);
+    let python = if binary.is_some() {
+        // The JDK the version pins, found as horizon-prepare finds it, so a missing one is
+        // reported before the server jar is downloaded.
+        let major = read_json(&dir.join("research-lock.json"))
+            .and_then(|lock| lock["minecraft"]["java_major"].as_i64())
+            .ok_or("The version's research-lock.json has no java_major")?;
+        horizon_prepare::java::find(major)?;
+        None
+    } else {
+        let python = python()
+            .ok_or("This version prepares with Python: Python 3.10 or newer is needed. Install it, or pick a newer version.")?;
+        if !found("java", "-version") {
+            return Err(
+                "Java 25 is needed (a JDK, e.g. Eclipse Temurin 25). Install it and try again."
+                    .into(),
+            );
+        }
+        Some(python)
+    };
     let jar = data_dir()
         .join("server-jars")
         .join(format!("{version}.jar"));
@@ -577,8 +644,29 @@ pub fn prepare_command(
             .and_then(|_| fs::rename(&partial, &jar))
             .map_err(|e| e.to_string())?;
     }
-    let mut cmd = Command::new(python);
-    cmd.current_dir(version_dir(tag))
+    if let Some(binary) = binary {
+        if horizon_prepare::sources_sha256(&dir.join(PREPARER_CRATE)).as_deref()
+            == Some(horizon_prepare::SOURCES_SHA256)
+        {
+            return Ok(Preparer::InProcess(horizon_prepare::Options {
+                root: dir,
+                import: true,
+                minecraft_dir: Some(minecraft.to_path_buf()),
+                server_jar: Some(jar),
+            }));
+        }
+        let mut cmd = Command::new(binary);
+        cmd.current_dir(&dir)
+            .arg("--root")
+            .arg(&dir)
+            .args(["--prepare", "--server-jar"])
+            .arg(&jar)
+            .arg("--minecraft-dir")
+            .arg(minecraft);
+        return Ok(Preparer::Process(cmd));
+    }
+    let mut cmd = Command::new(python.unwrap());
+    cmd.current_dir(&dir)
         .args([
             "-u",
             "tools/prepare_native_client.py",
@@ -588,7 +676,20 @@ pub fn prepare_command(
         .arg(&jar)
         .arg("--minecraft-dir")
         .arg(minecraft);
-    Ok(cmd)
+    Ok(Preparer::Process(cmd))
+}
+
+/// Runs `Preparer::InProcess` on this thread, each progress line to `log`. A panic is an
+/// error like any other, so the window never waits on a preparation that died.
+pub fn prepare_in_process(
+    options: &horizon_prepare::Options,
+    log: &dyn Fn(String),
+) -> Result<(), String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        horizon_prepare::prepare(options, &|line| log(line.to_string()))
+    }))
+    .unwrap_or_else(|_| Err("The preparation stopped unexpectedly".into()))
+    .map(|_| ())
 }
 
 /// Where the game keeps saves and options.txt: `HORIZON_HOME`, else `horizon` in the platform's
@@ -1430,6 +1531,23 @@ mod tests {
         assert!(is_prepared("v2026.10.17"));
         assert!(!is_prepared("v2026.10.15") && !is_prepared("v2026.10.16"));
         assert!(reuse_prepared_in(&versions).is_empty());
+
+        // Versions with horizon-prepare: its sources are the preparer, so the same sources
+        // reuse each other's resources, and a change or a version without them prepares again.
+        let crate_file = "crates/horizon-prepare/src/lib.rs";
+        release("v2026.10.18", "26.3");
+        write("v2026.10.18", crate_file, "rust preparer");
+        assert_eq!(reuse_prepared(&versions, "v2026.10.18"), None);
+        prepared("v2026.10.18", "26.3");
+        release("v2026.10.19", "26.3");
+        write("v2026.10.19", crate_file, "rust preparer");
+        assert_eq!(
+            reuse_prepared(&versions, "v2026.10.19"),
+            Some("v2026.10.18".into())
+        );
+        release("v2026.10.20", "26.3");
+        write("v2026.10.20", crate_file, "rust preparer, changed");
+        assert_eq!(reuse_prepared(&versions, "v2026.10.20"), None);
         let _ = fs::remove_dir_all(&versions);
     }
 

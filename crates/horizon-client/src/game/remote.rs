@@ -154,7 +154,7 @@ impl Game<'_> {
         let root = self.options.resources.clone();
         let builtin = Builtin::find(&root)
             .and_then(|p| Builtin::load(&p).ok())
-            .ok_or("registries.json not found next to the resources; run the data generator reports (tools/prepare_native_client.py)")?;
+            .ok_or("registries.json not found next to the resources; run the data generator reports (horizon-prepare)")?;
         let lang = Arc::new(horizon_client::net::load_language(&root));
         let view = self.settings.render_distance.clamp(2, 32) as i8;
         let session = Session::connect(address, name, view, lang.clone());

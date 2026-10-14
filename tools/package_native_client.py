@@ -85,7 +85,7 @@ def main():
     if not args.binary.is_file():
         raise SystemExit(f'missing {args.binary}: run cargo build --release -p horizon-client')
     if not (args.resources / 'horizon-resources.json').is_file():
-        raise SystemExit(f'missing prepared resources in {args.resources}: run tools/prepare_native_client.py --prepare')
+        raise SystemExit(f'missing prepared resources in {args.resources}: run horizon-prepare --prepare (cargo run --release -p horizon-prepare -- --prepare)')
     if not (args.resources / 'assets/minecraft/sounds.json').is_file():
         print('warning: no sound assets; run tools/fetch_sounds.py for audio')
 
