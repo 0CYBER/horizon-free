@@ -24,7 +24,7 @@ fn tools() -> Value {
           "inputSchema": { "type": "object", "properties": { "tag": { "type": "string", "description": "A release tag such as v2026.10.13, or \"latest\"." } }, "required": ["tag"] } },
         { "name": "remove_version", "description": "Remove an installed Horizon version and its prepared resources.",
           "inputSchema": { "type": "object", "properties": { "tag": { "type": "string" } }, "required": ["tag"] } },
-        { "name": "prepare_resources", "description": "Prepare a version's resources from the player's own Minecraft install (needs Minecraft 26.3 played once in the official launcher, Java 25 and Python 3.10+). Can take several minutes; returns the end of the log.",
+        { "name": "prepare_resources", "description": "Prepare a version's resources from the player's own Minecraft install (needs Minecraft 26.3 played once in the official launcher and Java 25; versions before horizon-prepare also need Python 3.10+). Can take several minutes; returns the end of the log.",
           "inputSchema": { "type": "object", "properties": { "version": version, "minecraft_dir": { "type": "string", "description": "The official launcher's game folder. Default: the launcher's setting, else the platform default." } } } },
         { "name": "launch_client", "description": "Start the Horizon client (a game window on the player's screen). Returns once it has started.",
           "inputSchema": { "type": "object", "properties": { "version": version } } },
@@ -95,10 +95,25 @@ impl Session {
                 let tag = backend::resolve_version(arg_str(args, "version"))?;
                 let minecraft =
                     backend::minecraft_dir(arg_str(args, "minecraft_dir").map(PathBuf::from))?;
-                let cmd = backend::prepare_command(&tag, &minecraft, &|_| {})?;
-                let run = Logged::start(Job::Prepare, cmd)?;
-                let result = run.wait();
-                let tail = run.tail(20).join("\n");
+                let (result, tail) = match backend::preparer(&tag, &minecraft, &|_| {})? {
+                    backend::Preparer::Process(cmd) => {
+                        let run = Logged::start(Job::Prepare, cmd)?;
+                        let result = run.wait();
+                        (result, run.tail(20).join("\n"))
+                    }
+                    backend::Preparer::InProcess(options) => {
+                        let lines = std::cell::RefCell::new(std::collections::VecDeque::new());
+                        let result = backend::prepare_in_process(&options, &|line| {
+                            let mut lines = lines.borrow_mut();
+                            lines.push_back(line);
+                            if lines.len() > 20 {
+                                lines.pop_front();
+                            }
+                        });
+                        let tail = lines.into_inner().into_iter().collect::<Vec<_>>().join("\n");
+                        (result, tail)
+                    }
+                };
                 result
                     .map(|_| format!("{tag} is prepared.\n{tail}"))
                     .map_err(|e| format!("{e}\n{tail}"))

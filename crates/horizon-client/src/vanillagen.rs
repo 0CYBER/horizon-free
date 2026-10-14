@@ -62,7 +62,7 @@ impl VanillaTerrain {
             if !dir.join("blocks/block-properties.nbt").exists() {
                 eprintln!(
                     "Horizon: the worldgen bundle lacks the block behavior exports (worldgen/blocks/*.nbt); \
-                     run python3 tools/prepare_native_client.py to add them"
+                     prepare again (the launcher, or horizon-prepare --prepare) to add them"
                 );
             }
         }

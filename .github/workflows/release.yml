@@ -1,6 +1,6 @@
 name: release builds
 # Started by hand: gh workflow run release.yml --ref <branch>
-# Builds the Windows x64 and Linux x86_64 clients (with horizon-ctl) and uploads the playable folders
+# Builds the Windows x64 and Linux x86_64 clients (with horizon-ctl and horizon-prepare) and uploads the playable folders
 # as artifacts.
 # macOS builds are made on the development machines. Linux is built here, on an older Ubuntu,
 # so the binary uses the standard loader and runs on any recent distribution (and on NixOS
@@ -20,13 +20,14 @@ jobs:
         # The C runtime linked in, so the game runs without the Visual C++ redistributable.
         env:
           RUSTFLAGS: -C target-feature=+crt-static
-        run: cargo +stable build --release --locked -p horizon-client --bin horizon-client --bin horizon-ctl
+        run: cargo +stable build --release --locked -p horizon-client --bin horizon-client --bin horizon-ctl -p horizon-prepare
       - name: Only system DLLs
         # Vulkan and the rest are loaded at run time; a linked non-system DLL is a
         # "DLL not found" dialog on some players' machines.
         run: |
           python tools/check_imports.py target/release/horizon-client.exe
           python tools/check_imports.py target/release/horizon-ctl.exe
+          python tools/check_imports.py target/release/horizon-prepare.exe
       - name: Package
         shell: bash
         run: packaging/package.sh target/release/horizon-client.exe dist/horizon-windows-x64
@@ -43,11 +44,12 @@ jobs:
       - name: ALSA headers
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev
       - name: Build the client
-        run: cargo +stable build --release --locked -p horizon-client --bin horizon-client --bin horizon-ctl
+        run: cargo +stable build --release --locked -p horizon-client --bin horizon-client --bin horizon-ctl -p horizon-prepare
       - name: Standard loader and libraries only
         run: |
           python3 tools/check_imports.py target/release/horizon-client
           python3 tools/check_imports.py target/release/horizon-ctl
+          python3 tools/check_imports.py target/release/horizon-prepare
       - name: Package
         run: packaging/package.sh target/release/horizon-client dist/horizon-linux-x86_64
       - uses: actions/upload-artifact@v4

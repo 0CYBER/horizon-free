@@ -17,11 +17,10 @@ Downloaded this archive directly?
   More about Horizon: https://playhorizon.dev
 
   To prepare this folder by hand you need Minecraft Java Edition 26.3, played
-  once from the official launcher, Python 3.10+ and Java 25 (a JDK). Then,
-  in this folder:
-    python3 tools/prepare_native_client.py --prepare --server-jar PATH/TO/server.jar
-    python3 tools/fetch_sounds.py          (optional, for sound)
-  (Windows: py instead of python3.) The 26.3 server jar is the
+  once from the official launcher, and Java 25 (a JDK). Then, in this folder:
+    ./horizon-prepare --prepare --server-jar PATH/TO/server.jar
+    python3 tools/fetch_sounds.py          (optional, for sound; needs Python 3.10+)
+  (Windows: horizon-prepare.exe, and py instead of python3.) The 26.3 server jar is the
   downloads.server.url in your launcher's versions/26.3/26.3.json. Add
   --minecraft-dir PATH if your launcher keeps the game elsewhere. Then run
   ./horizon-client (horizon-client.exe on Windows; on macOS the first time:
