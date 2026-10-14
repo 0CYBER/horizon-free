@@ -24,21 +24,30 @@ import static dev.horizonlab.parity.VanillaRegistryCollisionScanOracle.*;
 /** Real arrows (`Arrow`, through `AbstractArrow.tick`) over an independently
  * built copy of the development client's resident scene: flight, water inertia
  * and bubbles, fluid currents and splashes, bubble columns, sticking in blocks,
- * falling out when the block goes, and despawning. No entities to hit, no rain,
- * no owner; sounds, particles and game events are recorded in order. */
+ * falling out when the block goes, and despawning. Burning arrows: lava and fire along
+ * the path, water putting them out, and the blocks they light (TNT, campfires,
+ * candles). No entities to hit, no rain, no owner; sounds, particles and game events are recorded in order. */
 public final class VanillaArrowOracle {
     static final class Border extends WorldBorder {
         @Override public boolean isInsideCloseToBorder(Entity e,AABB b){return false;}
     }
     static String bits(Vec3 v){return String.format("%016x,%016x,%016x",Double.doubleToLongBits(v.x),Double.doubleToLongBits(v.y),Double.doubleToLongBits(v.z));}
     static String sound(SoundEvent s){
-        if(s==SoundEvents.ARROW_HIT)return "hit";if(s==SoundEvents.GENERIC_SPLASH)return "splash";if(s==SoundEvents.GENERIC_EXTINGUISH_FIRE)return "extinguish";
+        if(s==SoundEvents.ARROW_HIT)return "hit";if(s==SoundEvents.TNT_PRIMED)return "tnt_primed";if(s==SoundEvents.GENERIC_SPLASH)return "splash";if(s==SoundEvents.GENERIC_EXTINGUISH_FIRE)return "extinguish";
         throw new AssertionError("unexpected sound "+s);
     }
     static String particle(net.minecraft.core.particles.ParticleOptions p){
         if(p==net.minecraft.core.particles.ParticleTypes.BUBBLE)return "bubble";if(p==net.minecraft.core.particles.ParticleTypes.CRIT)return "crit";
         if(p==net.minecraft.core.particles.ParticleTypes.SPLASH)return "splash";
         throw new AssertionError("unexpected particle "+p);
+    }
+    /** Lava, fire and burning hurt arrows not at all (Projectile.hurtServer only
+     * marks them hurt): untagged stand-in sources. */
+    static final class Sources extends net.minecraft.world.damagesource.DamageSources {
+        net.minecraft.world.damagesource.DamageSource any;Sources(){super(null);}
+        @Override public net.minecraft.world.damagesource.DamageSource lava(){return any;}
+        @Override public net.minecraft.world.damagesource.DamageSource inFire(){return any;}
+        @Override public net.minecraft.world.damagesource.DamageSource onFire(){return any;}
     }
     static final class Level extends net.minecraft.server.level.ServerLevel {
         Map<Long,Chunk> chunks;WorldBorder border;net.minecraft.util.RandomSource rng;List<String> events;net.minecraft.server.MinecraftServer server;
@@ -62,7 +71,20 @@ public final class VanillaArrowOracle {
             if(event==GameEvent.PROJECTILE_SHOOT)events.add("shoot-event");else if(event==GameEvent.SPLASH)events.add("splash-event");else throw new AssertionError(event);
         }
         // Projectile.onHit's PROJECTILE_LAND: the game posts it from the hit it is handed.
-        @Override public void gameEvent(Holder<GameEvent> event,BlockPos pos,GameEvent.Context context){if(event!=GameEvent.PROJECTILE_LAND)throw new AssertionError(event);}
+        @Override public void gameEvent(Holder<GameEvent> event,BlockPos pos,GameEvent.Context context){
+            if(event==GameEvent.PRIME_FUSE)events.add("prime-event");else if(event!=GameEvent.PROJECTILE_LAND)throw new AssertionError(event);
+        }
+        net.minecraft.world.level.gamerules.GameRules rules;Sources sources;
+        @Override public net.minecraft.world.damagesource.DamageSources damageSources(){return sources;}
+        @Override public net.minecraft.world.level.gamerules.GameRules getGameRules(){return rules;}
+        // onProjectileHit's block changes (campfires, candles, TNT's removal).
+        @Override public boolean setBlock(BlockPos p,BlockState state,int flags){
+            chunks.get(key(p.getX()>>4,p.getZ()>>4)).write(p,Block.getId(state));events.add("write "+p.getX()+","+p.getY()+","+p.getZ()+" "+Block.getId(state)+" "+flags);return true;
+        }
+        @Override public boolean addFreshEntity(Entity e){
+            if(!(e instanceof net.minecraft.world.entity.item.PrimedTnt tnt))throw new AssertionError(e);
+            events.add("spawn tnt "+bits(tnt.position())+" "+tnt.getFuse());return true;
+        }
         @Override public void playSound(Entity except,double x,double y,double z,SoundEvent s,SoundSource source,float volume,float pitch){
             events.add(String.format("sound %s %08x %08x",sound(s),Float.floatToIntBits(volume),Float.floatToIntBits(pitch)));
         }
@@ -90,6 +112,10 @@ public final class VanillaArrowOracle {
         var trace=new Trace();trace.out=new PrintWriter(OutputStream.nullOutputStream());trace.fail=-1;
         var level=(Level)allocate.invoke(unsafe,Level.class);level.chunks=VanillaSceneCollisionOracle.scene(description,trace);level.border=new Border();
         level.rng=net.minecraft.util.RandomSource.create(0);level.events=new ArrayList<>();
+        field(net.minecraft.world.level.Level.class,"random").set(level,level.rng);
+        level.rules=new net.minecraft.world.level.gamerules.GameRules(net.minecraft.world.flag.FeatureFlagSet.of());
+        level.sources=(Sources)allocate.invoke(unsafe,Sources.class);
+        level.sources.any=new net.minecraft.world.damagesource.DamageSource(Holder.direct(new net.minecraft.world.damagesource.DamageType("generic",0.0F)));
         var server=(VanillaBlockLandingOracle.Server)allocate.invoke(unsafe,VanillaBlockLandingOracle.Server.class);
         server.d=new VanillaBlockLandingOracle.Data();server.d.out=new PrintWriter(OutputStream.nullOutputStream());server.d.f=JsonParser.parseString("{\"fail\":-1,\"protected\":false}").getAsJsonObject();level.server=server;
         field(net.minecraft.server.MinecraftServer.class,"debugSubscribers").set(server,new net.minecraft.util.debug.ServerDebugSubscribers(server));
@@ -114,6 +140,8 @@ public final class VanillaArrowOracle {
                             VanillaSceneCollisionOracle.put(level.chunks,v.get(0).getAsInt(),v.get(1).getAsInt(),v.get(2).getAsInt(),state);
                         }
                         case "velocity"->a.setDeltaMovement(VanillaSceneCollisionOracle.vector(op.get("value")));
+                        // Flame's projectile_spawned ignite.
+                        case "ignite"->a.igniteForSeconds(Float.intBitsToFloat(Integer.parseUnsignedInt(op.get("value").getAsString(),16)));
                         case "level_seed"->level.rng.setSeed(seed(op.get("value")));
                         default->throw new AssertionError(op);
                     }

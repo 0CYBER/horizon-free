@@ -541,7 +541,7 @@ fn shoot_crossbow(m: &mut Mob, who: Who, cx: &mut Cx) {
         start,
         Some(Who::Mob(m.id)),
     );
-    p.bonus = super::gear::arrow_bonus(m);
+    p.set_bonus(super::gear::arrow_bonus(m));
     // rangedAttackUncertainty at normal difficulty: 14 - 2 * 4.
     p.shoot(
         &mut crate::projectiles::own_random(m),

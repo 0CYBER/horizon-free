@@ -99,6 +99,60 @@ impl ProjectileWorld for ProjWorld<'_, '_> {
             .full_collision
     }
 }
+/// `FlameFeatureRenderer`: fire quads stacked up a burning entity's box,
+/// turned to the camera around Y, at full block light. `at` is the entity's
+/// feet relative to the camera.
+fn flame_geometry(
+    atlas: &horizon_client::hud::HudAtlas,
+    at: glam::Vec3,
+    width: f32,
+    height: f32,
+    camera_yaw: f32,
+    light: u8,
+    out: &mut Vec<Vertex>,
+) {
+    let (Some(fire0), Some(fire1)) = (
+        atlas.sprites.get("block/fire_0").copied(),
+        atlas.sprites.get("block/fire_1").copied(),
+    ) else {
+        return;
+    };
+    let s = width * 1.4;
+    let mut h = height / s;
+    // Mth.rotationAroundAxis(Y, camera.orientation): the camera's turn about Y.
+    let turn = glam::Mat3::from_rotation_y(std::f32::consts::PI - camera_yaw.to_radians());
+    let lift = 0.3 - (h as i32) as f32 * 0.02;
+    let packed = (u32::from(light >> 4) * 16) | ((15 * 16) << 8);
+    let (mut r, mut yo, mut zo, mut ss) = (0.5f32, 0.0f32, 0.0f32, 0);
+    while h > 0.0 {
+        let tex = if ss % 2 == 0 { fire0 } else { fire1 };
+        let (mut u0, v0, mut u1, v1) = (tex.u0, tex.v0, tex.u1, tex.v1);
+        if ss / 2 % 2 == 0 {
+            std::mem::swap(&mut u0, &mut u1);
+        }
+        for (x, y, uv) in [
+            (-r, -yo, [u1, v1]),
+            (r, -yo, [u0, v1]),
+            (r, 1.4 - yo, [u0, v0]),
+            (-r, 1.4 - yo, [u1, v0]),
+        ] {
+            let p = at + turn * glam::Vec3::new(x, y, zo + lift) * s;
+            out.push(Vertex {
+                normal: [0; 4],
+                pos: p.to_array(),
+                uv,
+                layer: 0,
+                color: 0xFFFF_FFFF,
+                light: packed,
+            });
+        }
+        h -= 0.45;
+        yo -= 0.45;
+        r *= 0.9;
+        zo -= 0.03;
+        ss += 1;
+    }
+}
 pub(super) fn seen(m: &Mob, player: Option<[i32; 4]>) -> Seen {
     m.seen(player)
 }
@@ -1402,11 +1456,16 @@ impl Game<'_> {
                 collision: w.collision,
                 fluids: &self.motion.fluids,
                 raining: &rain,
+                mob_griefing: self.ui.rules.bool("mob_griefing"),
+                tnt_explodes: self.ui.rules.bool("tnt_explodes"),
             };
+            // Arrows also hit minecarts (VehicleEntity is pickable).
+            let mut arrow_targets = targets.clone();
+            arrow_targets.extend(self.carts.iter().map(|c| (Who::Mob(c.id), c.bounds())));
             let pw = ProjWorld { w: &w, targets };
             projectiles.retain_mut(|p| {
                 let (keep, hit) = if p.arrow.is_some() {
-                    horizon_client::arrows::tick(p, &scene, &pw.targets)
+                    horizon_client::arrows::tick(p, &scene, &arrow_targets)
                 } else {
                     p.tick(&pw)
                 };
@@ -1465,7 +1524,7 @@ impl Game<'_> {
     }
     /// What an arrow's tick asked for: its particles and sounds.
     fn arrow_event(&mut self, at: Vec3, event: horizon_client::arrows::ArrowEvent) {
-        use horizon_client::arrows::{ArrowEvent, ArrowParticle, ArrowSound};
+        use horizon_client::arrows::{ArrowEvent, ArrowParticle, ArrowSound, BlockReaction};
         use horizon_client::particles::{ParticleOptions, ParticleType};
         let kind = |k| match k {
             ArrowParticle::Bubble => ParticleType::Bubble,
@@ -1525,6 +1584,16 @@ impl Game<'_> {
                     );
                 }
             }
+            ArrowEvent::Block { pos, reaction } => match reaction {
+                BlockReaction::PrimeTnt => {
+                    self.spawn_primed_tnt(pos, false);
+                    self.with_level(|b, level, ticks| b.remove_block(level, ticks, pos, false));
+                    let _ = self.process_level_events();
+                }
+                BlockReaction::Light(lit) => {
+                    let _ = self.level_set([pos.x, pos.y, pos.z], lit);
+                }
+            },
             ArrowEvent::SplashEvent => {
                 self.projectile_event("minecraft:splash", None, [at.x, at.y, at.z]);
             }
@@ -1559,6 +1628,25 @@ impl Game<'_> {
             self.hit_special(id, amount, p.owner == Some(Who::Player));
             return Ok(());
         }
+        if let (
+            ProjectileKind::Arrow { .. },
+            Hit::Entity {
+                who: Who::Mob(id), ..
+            },
+        ) = (&p.kind, hit)
+            && let Some(i) = self.carts.iter().position(|c| c.id == id)
+        {
+            // AbstractArrow.onHitEntity on a minecart.
+            let amount = p.arrow_damage(&mut self.world.random) + p.bonus.damage;
+            let burning = p.arrow.as_ref().is_some_and(|a| a.on_fire());
+            let creative = p.owner == Some(Who::Player) && self.creative;
+            self.arrow_hits_cart(i, amount, p.velocity, burning, creative);
+            if let Some((sound, volume, pitch)) = arrow_impact_sound(&mut self.world.random, true) {
+                self.audio
+                    .play(sound, Some([at.x, at.y, at.z]), volume, pitch);
+            }
+            return Ok(());
+        }
         let atp = [at.x, at.y, at.z];
         // Projectile.onHit: the landing is heard.
         self.projectile_event("minecraft:projectile_land", p.owner, atp);
@@ -1586,7 +1674,8 @@ impl Game<'_> {
                         velocity: [p.velocity.x * k, 0.1, p.velocity.z * k],
                     }])?;
                 }
-                if p.bonus.flame {
+                // AbstractArrow.onHitEntity: a burning arrow sets its target alight.
+                if p.arrow.as_ref().is_some_and(|a| a.on_fire()) {
                     self.handle_mob_events(vec![MobEvent::Ignite {
                         target: who,
                         seconds: 5,
@@ -2586,6 +2675,9 @@ impl Game<'_> {
                             light: packed,
                         });
                     }
+                }
+                if a.arrow.as_ref().is_some_and(|s| s.on_fire()) {
+                    flame_geometry(atlas, c, 0.5, 0.5, self.yaw, light, out);
                 }
                 continue;
             }

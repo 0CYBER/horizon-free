@@ -3,7 +3,7 @@
 #![forbid(unsafe_code)]
 use horizon_client::{
     Result,
-    arrows::{self, ArrowEvent, ArrowParticle, ArrowScene, ArrowSound},
+    arrows::{self, ArrowEvent, ArrowParticle, ArrowScene, ArrowSound, BlockReaction},
     assets::Assets,
     blocks::BlockFacts,
     collisions,
@@ -93,6 +93,8 @@ fn main() -> Result<()> {
                             collision: &binding,
                             fluids: &motion.fluids,
                             raining: &no_rain,
+                            mob_griefing: true,
+                            tnt_explodes: true,
                         };
                         arrows::tick(&mut arrow, &view, &[]);
                     }
@@ -144,6 +146,39 @@ fn main() -> Result<()> {
                                     ));
                                 }
                             }
+                            ArrowEvent::Block { pos, reaction } => match reaction {
+                                BlockReaction::PrimeTnt => {
+                                    // TntBlock.prime: PrimedTnt draws its push from the
+                                    // level random, then removeBlock(pos, false).
+                                    let _ = level_random.next_double();
+                                    let at = Vec3::new(
+                                        f64::from(pos.x) + 0.5,
+                                        f64::from(pos.y),
+                                        f64::from(pos.z) + 0.5,
+                                    );
+                                    events.push(format!("spawn tnt {} 80", bits(at)));
+                                    events.push(format!(
+                                        "sound tnt_primed {:08x} {:08x}",
+                                        1.0f32.to_bits(),
+                                        1.0f32.to_bits()
+                                    ));
+                                    events.push("prime-event".into());
+                                    let air =
+                                        assets.registry.default_state("minecraft:air").unwrap();
+                                    scene.set(pos.x, pos.y, pos.z, air)?;
+                                    events.push(format!(
+                                        "write {},{},{} {} 3",
+                                        pos.x, pos.y, pos.z, air.0
+                                    ));
+                                }
+                                BlockReaction::Light(lit) => {
+                                    scene.set(pos.x, pos.y, pos.z, lit)?;
+                                    events.push(format!(
+                                        "write {},{},{} {} 11",
+                                        pos.x, pos.y, pos.z, lit.0
+                                    ));
+                                }
+                            },
                             ArrowEvent::SplashEvent => events.push("splash-event".into()),
                             ArrowEvent::ShootEvent => events.push("shoot-event".into()),
                         }
@@ -175,6 +210,13 @@ fn main() -> Result<()> {
                     )?;
                 }
                 "velocity" => arrow.velocity = vector(&op["value"]),
+                "ignite" => arrow
+                    .arrow
+                    .as_mut()
+                    .unwrap()
+                    .ignite_for_seconds(f32::from_bits(
+                        u32::from_str_radix(op["value"].as_str().unwrap(), 16).unwrap(),
+                    )),
                 "level_seed" => level_random.set_seed(seed(&op["value"])),
                 other => return Err(format!("unknown operation {other}").into()),
             }

@@ -6830,6 +6830,12 @@ impl Game<'_> {
             p,
             Some(horizon_client::mobs::Who::Player),
         );
+        // Flame: the arrow is spawned burning (EnchantmentHelper.onProjectileSpawned).
+        if let Some(seconds) = self.bow_projectile_ignite()
+            && let Some(a) = arrow.arrow.as_mut()
+        {
+            a.ignite_for_seconds(seconds);
+        }
         let (velocity, on_ground) = self
             .player
             .as_ref()

@@ -11,8 +11,10 @@ order. Cases: flights in the air with and without crits or physics, into and
 through water (inertia, bubbles, splashes, currents of flowing water, eyes),
 kelp, seagrass and waterlogged blocks, bubble columns with and without drag
 and with air or water above, sticking in full and partial blocks, falling out
-when the block goes, starting inside a block, and despawning after 1200 ticks.
-No entities, owner, rain, lava or fire.
+when the block goes, starting inside a block, and despawning after 1200 ticks;
+burning arrows: lava and fire blocks lighting them, water putting them out,
+Flame (ignited at spawn), and TNT, campfires, candles and candle cakes hit by
+burning and non-burning arrows. No entities, owner or rain.
 """
 import json
 import os
@@ -106,6 +108,51 @@ def corpus():
     # Starting inside a block: stopped in place.
     for name in ['stone', 'oak_slab', 'oak_fence']:
         yield arrow((25.5, 9.25, 25.5), (.4, 0, .1), place(name, [(25, 9, 25)]) + ticks(10) + restore([(25, 9, 25)]))
+    # Fire: lava pools and fire blocks light arrows (LAVA_IGNITE 15 s, fireIgnite
+    # 8 s after counting up from below zero), water puts them out with the
+    # extinguish sound, burning arrows keep their fire while stuck.
+    def ignite(seconds):
+        return op('ignite', struct.pack('>f', seconds).hex())
+    lava = [(x, y, z) for x in range(20, 27) for y in range(4, 6) for z in range(20, 27)]
+    for level in ['0', '0', '4']:
+        for _ in range(6):
+            v = aim(rng.choice([.4, 1.3, 2.6]), rng.uniform(-50, 50), rng.uniform(0, 50))
+            ops = place('lava', lava, {'level': level}) + ticks(60) + restore(lava)
+            yield arrow((rng.uniform(20, 27), rng.uniform(7, 11), rng.uniform(16, 19)), v, ops)
+    for _ in range(6):
+        # Through lava, then into water beyond it (and the other way round).
+        lava_wall = [(23, y, z) for y in range(4, 9) for z in range(20, 27)]
+        water_wall = [(26, y, z) for y in range(4, 9) for z in range(20, 27)]
+        first, second = rng.choice([('lava', 'water'), ('water', 'lava')])
+        ops = place(first, lava_wall) + place(second, water_wall) + ticks(40) + restore(lava_wall + water_wall)
+        yield arrow((20.5, 6.5, rng.uniform(21, 26)), aim(rng.choice([.8, 2.0, 3.0]), -90, rng.uniform(-5, 5)), ops)
+    for name in ['fire', 'soul_fire']:
+        flames = [(x, 4, z) for x in range(22, 27) for z in range(22, 27)]
+        base = [] if name == 'fire' else place('soul_sand', [(x, 3, z) for x in range(22, 27) for z in range(22, 27)])
+        for _ in range(5):
+            ops = base + place(name, flames) + ticks(50) + restore(flames)
+            if name == 'soul_fire':
+                ops += place('stone', [(x, 3, z) for x in range(22, 27) for z in range(22, 27)])
+            v = aim(rng.choice([.3, 1.0, 2.0]), rng.uniform(-40, 40), rng.uniform(10, 60))
+            yield arrow((rng.uniform(22, 27), rng.uniform(6, 9), rng.uniform(19, 21)), v, ops)
+    # Flame arrows (100 s): flying, into water, stuck.
+    pool = [(x, y, z) for x in range(20, 29) for y in range(4, 7) for z in range(20, 29)]
+    for target in [None, 'water']:
+        for _ in range(5):
+            ops = [ignite(100.0)] + (place('water', pool) if target else []) + ticks(70) + (restore(pool) if target else [])
+            v = aim(rng.choice([.5, 1.5, 3.0]), rng.uniform(-60, 60), rng.uniform(-20, 40))
+            yield arrow((rng.uniform(20, 28), rng.uniform(7, 12), rng.uniform(16, 19)), v, ops, crit=rng.random() < .5)
+    # Burning (and not burning) arrows hitting the blocks a burning projectile lights.
+    lights = [('tnt', {}), ('campfire', {'lit': 'false'}), ('campfire', {'lit': 'true'}), ('campfire', {'lit': 'false', 'waterlogged': 'true'}),
+              ('soul_campfire', {'lit': 'false'}), ('candle', {'candles': '3', 'lit': 'false'}), ('red_candle', {'lit': 'false', 'waterlogged': 'true'}),
+              ('candle', {'lit': 'true'}), ('candle_cake', {'lit': 'false'}), ('blue_candle_cake', {'lit': 'true'}), ('stone', {})]
+    for name, properties in lights:
+        for burning in [False, True]:
+            target = [(25, 9, 25)]
+            v = rng.choice([(0, -1.2, 0), (.9, -.2, 0), (0, -.3, -.9)])
+            start = (25.5 - v[0] * 3, 9.3 - v[1] * 3, 25.5 - v[2] * 3)
+            ops = ([ignite(rng.choice([1.0, 8.5, 100.0]))] if burning else []) + place(name, target, properties) + ticks(30) + restore(target)
+            yield arrow(start, v, ops)
     # Despawning 1200 ticks after sticking in the floor.
     for _ in range(2):
         yield arrow((rng.uniform(18, 30), 6, rng.uniform(4, 30)), (0, -1, 0), ticks(1215))
