@@ -14,7 +14,8 @@ missing; [Rust rewrite status](rust-parity.md) has the details.
 
 ## Run from a checkout
 
-Use current stable Rust (1.90+), Python 3.10+ and JDK 25. Horizon never
+Use current stable Rust (1.90+) and JDK 25 (Python 3.10+ for the sounds and the
+development harnesses). Horizon never
 downloads the game: resource preparation imports **your own copy** (the 26.3
 client from your official launcher install, and the 26.3 server jar you
 downloaded yourself; see [Build from source](../README.md#build-from-source)),
@@ -23,8 +24,12 @@ exporters against those jars, and extracts the jar's assets and data into ignore
 `.local/horizon-client/26.3/`. Sounds (about 380 MB) are copied from your
 launcher's asset store. Prepared resources are private; never commit them.
 
+Preparation is `horizon-prepare` (`crates/horizon-prepare`, Rust): it needs no Python, only
+the JDK, for the small exporters that call Mojang's own code. Release folders ship it beside
+`horizon-client`, and the launcher prepares with it.
+
 ```sh
-python3 tools/prepare_native_client.py --prepare --server-jar ~/Downloads/server.jar
+cargo run --release -p horizon-prepare -- --prepare --server-jar ~/Downloads/server.jar
 python3 tools/fetch_sounds.py
 cargo run --release -p horizon-client -- --render-distance 12
 ```
@@ -205,7 +210,7 @@ attribute. Sneaking invokes ledge backoff before collision resolution. The
 complete authoritative player tick remains unfinished.
 
 ```sh
-python3 tools/prepare_native_client.py
+cargo run --release -p horizon-prepare
 python3 tools/test_native_scene_collision.py
 ```
 
@@ -264,7 +269,7 @@ The [renderer startup check](../benchmarks/rust-native-walking-2026-10-07/startu
 also passes after the movement integration.
 
 ```sh
-python3 tools/prepare_native_client.py
+cargo run --release -p horizon-prepare
 python3 tools/test_native_scene_motion.py
 python3 tools/test_local_input_parity.py
 ```

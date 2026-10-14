@@ -205,8 +205,12 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
         Cmd::Prepare { minecraft, version } => {
             let tag = backend::resolve_version(version.as_deref())?;
             let minecraft = backend::minecraft_dir(minecraft)?;
-            let cmd = backend::prepare_command(&tag, &minecraft, &|line| eprintln!("{line}"))?;
-            attached(cmd)?;
+            match backend::preparer(&tag, &minecraft, &|line| eprintln!("{line}"))? {
+                backend::Preparer::Process(cmd) => attached(cmd)?,
+                backend::Preparer::InProcess(options) => {
+                    backend::prepare_in_process(&options, &|line| println!("{line}"))?
+                }
+            }
             println!("{tag} is prepared.");
         }
         Cmd::Play { version } => attached(backend::client(&backend::resolve_version(
@@ -301,7 +305,7 @@ fn update(check: bool, as_json: bool) -> Result<(), String> {
                 println!("Launcher: {version} is available; this build does not replace itself.");
             } else {
                 backend::self_update(r, progress(format!("Updating the launcher to {version}")))?;
-                println!("Launcher: updated to {version}; the next start uses it.");
+                println!("Launcher: updated to {version}. Restart the launcher to use it.");
             }
         }
     }

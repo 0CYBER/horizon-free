@@ -642,10 +642,11 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
             let x = m.position.x + w * (2.0 * r.next_double() - 1.0);
             let y = m.position.y + h * r.next_double() + 0.5;
             let z = m.position.z + w * (2.0 * r.next_double() - 1.0);
+            // sendParticles(HAPPY_VILLAGER, x, y, z, 1, 0, 0, 0, 0): exactly there, at rest.
             events.push(MobEvent::Particles {
                 kind: "happy_villager",
                 at: [x, y, z],
-                count: 1,
+                count: 0,
             });
         }
         m.extra.forced_age_timer -= 1;
@@ -671,16 +672,18 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
                 // The heart's speed and getRandomX/Y/Z, drawn even on the server.
                 let (w, h) = (f64::from(m.width()), f64::from(m.height()));
                 let r = &mut m.random;
-                for _ in 0..3 {
-                    let _ = r.next_gaussian();
-                }
+                let velocity = [
+                    r.next_gaussian() * 0.02,
+                    r.next_gaussian() * 0.02,
+                    r.next_gaussian() * 0.02,
+                ];
                 let x = m.position.x + w * (2.0 * r.next_double() - 1.0);
                 let y = m.position.y + h * r.next_double() + 0.5;
                 let z = m.position.z + w * (2.0 * r.next_double() - 1.0);
-                events.push(MobEvent::Particles {
+                events.push(MobEvent::ParticleAt {
                     kind: "heart",
                     at: [x, y, z],
-                    count: 1,
+                    velocity,
                 });
             }
         }

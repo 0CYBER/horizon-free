@@ -418,6 +418,17 @@ impl Game<'_> {
     }
     /// Keys while the chat screen is open.
     pub(super) fn chat_key(&mut self, event: &KeyEvent) {
+        if let Some(shortcut) = self.edit_shortcut(event) {
+            let m = Measure(&self.res.atlas.font);
+            let c = Commands {
+                dispatcher: vanilla::game_dispatcher(),
+                registries: &self.ui.registries,
+            };
+            if let Some(screen) = self.ui.chat_screen.as_mut() {
+                screen.shortcut(&m, &c, shortcut, &mut self.clipboard);
+            }
+            return;
+        }
         let PhysicalKey::Code(key) = event.physical_key else {
             return;
         };

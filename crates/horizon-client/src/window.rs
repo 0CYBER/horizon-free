@@ -1,6 +1,7 @@
 //! Window sizing and frame pacing of 26.3: `Window.calculateScale` and
 //! `setGuiScale`, `MouseHandler`'s scaled positions, `FramerateLimitTracker`,
-//! `FramerateLimiter` and the vsync present-mode choice.
+//! `FramerateLimiter`, the vsync present-mode choice and the fullscreen
+//! request/state pair.
 
 /// `Window.calculateScale`: the largest scale that leaves at least 320x240
 /// GUI pixels, capped by `max_scale` (0 = automatic); an odd result is bumped
@@ -263,9 +264,84 @@ impl FramerateLimiter {
     }
 }
 
+/// blaze3d `Window`'s `fullscreenRequested` / `fullscreen` pair. The window
+/// system has the last word: a change it makes on its own (a compositor
+/// shortcut, a window rule) is adopted by the Fullscreen option
+/// (`Window.updateFullscreenState` -> `Minecraft.fullscreenStateChanged`), and
+/// the window is only asked to change when the option itself changes
+/// (`Window.updateFullscreenIfChanged`), never re-forced to the option.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FullscreenState {
+    /// The state the window system last reported (`Window.fullscreen`).
+    actual: bool,
+    /// The state last asked of the window system, or adopted from it.
+    requested: bool,
+}
+
+impl FullscreenState {
+    /// A window created windowed or, when `requested`, asked to be fullscreen.
+    pub fn new(requested: bool) -> Self {
+        Self {
+            actual: false,
+            requested,
+        }
+    }
+
+    /// `Window.updateFullscreenIfChanged`: the state to ask of the window
+    /// when the option `wanted` differs from what was last asked or adopted.
+    pub fn request(&mut self, wanted: bool) -> Option<bool> {
+        (wanted != self.requested).then(|| {
+            self.requested = wanted;
+            wanted
+        })
+    }
+
+    /// `Window.updateFullscreenState`: the window now reports `now`; returns
+    /// it when it changed, for the option to adopt.
+    pub fn observe(&mut self, now: bool) -> Option<bool> {
+        (now != self.actual).then(|| {
+            self.actual = now;
+            self.requested = now;
+            now
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fullscreen_follows_the_option_only_when_it_changes() {
+        let mut f = FullscreenState::new(false);
+        // Settings applied again with nothing changed: the window is left alone.
+        assert_eq!(f.request(false), None);
+        // The compositor makes the window fullscreen on its own: the option adopts it,
+        // and applying the settings afterwards does not undo it.
+        assert_eq!(f.observe(true), Some(true));
+        assert_eq!(f.request(true), None);
+        assert_eq!(f.observe(true), None);
+        // F11: one request, not repeated while the compositor catches up.
+        assert_eq!(f.request(false), Some(false));
+        assert_eq!(f.request(false), None);
+        assert_eq!(f.observe(false), Some(false));
+        assert_eq!(f.request(false), None);
+    }
+
+    #[test]
+    fn fullscreen_requests_changed_before_the_compositor_answers() {
+        // Created fullscreen from options.txt.
+        let mut f = FullscreenState::new(true);
+        assert_eq!(f.request(true), None);
+        assert_eq!(f.observe(true), Some(true));
+        // Toggled twice before any configure: the second request cancels the first.
+        assert_eq!(f.request(false), Some(false));
+        assert_eq!(f.request(true), Some(true));
+        assert_eq!(f.observe(true), None);
+        // A compositor that refuses leaves the option where the player put it.
+        assert_eq!(f.request(false), Some(false));
+        assert_eq!(f.request(false), None);
+    }
 
     struct Virtual {
         now: i64,

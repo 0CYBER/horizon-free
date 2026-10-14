@@ -140,7 +140,7 @@ Horizon contains no game files and never downloads them. It builds its resources
 ```sh
 git clone https://github.com/ludovic111/horizon.git
 cd horizon
-python3 tools/prepare_native_client.py --prepare --server-jar ~/Downloads/server.jar   # needs JDK 25
+cargo run --release -p horizon-prepare -- --prepare --server-jar ~/Downloads/server.jar   # needs JDK 25
 python3 tools/fetch_sounds.py                      # optional: sounds from your launcher install
 cargo run --release -p horizon-client
 ```

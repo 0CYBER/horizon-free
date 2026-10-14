@@ -198,6 +198,7 @@ public final class VanillaParticleProvidersOracle {
 
     public static void main(String[] args) throws Exception {
         SharedConstants.tryDetectVersion(); Bootstrap.bootStrap();
+        ParityData.init(); // item components, for the item particle providers' stacks
         var u = Class.forName("sun.misc.Unsafe"); unsafe = field(u, "theUnsafe").get(null); allocate = u.getMethod("allocateInstance", Class.class);
         var mc = make(Minecraft.class); field(Minecraft.class, "instance").set(null, mc);
         var manager = make(ModelManager.class); field(ModelManager.class, "blockStateModelSet").set(manager, new Models());

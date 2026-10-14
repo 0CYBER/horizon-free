@@ -476,6 +476,23 @@ fn chars(s: &str) -> usize {
 fn sub(s: &str, from: usize, to: usize) -> String {
     s.chars().skip(from).take(to.saturating_sub(from)).collect()
 }
+/// A text field with the font that scrolls it.
+struct MeasuredField<'a, 'm>(&'a mut TextField, &'a Measure<'m>);
+impl crate::clipboard::Editable for MeasuredField<'_, '_> {
+    fn select_all(&mut self) {
+        let len = chars(&self.0.value);
+        self.0.move_cursor_to(self.1, len, false);
+        self.0.set_highlight(self.1, 0);
+    }
+    fn selected_text(&self) -> String {
+        self.0.selected_text()
+    }
+    fn insert(&mut self, text: &str) -> bool {
+        let before = self.0.value.clone();
+        self.0.insert_text(self.1, text);
+        self.0.value != before
+    }
+}
 impl TextField {
     pub fn new(x: i32, y: i32, width: i32, height: i32) -> Self {
         Self {
@@ -667,6 +684,23 @@ impl TextField {
             _ => return None,
         }
         Some(false)
+    }
+    /// Ctrl+A/C/V/X (`EditBox.keyPressed`). True when the value changed.
+    pub fn shortcut(
+        &mut self,
+        m: &Measure,
+        shortcut: crate::clipboard::EditShortcut,
+        clipboard: &mut dyn crate::clipboard::Clipboard,
+    ) -> bool {
+        crate::clipboard::apply(&mut MeasuredField(self, m), shortcut, clipboard)
+    }
+    /// `getHighlighted`.
+    pub fn selected_text(&self) -> String {
+        sub(
+            &self.value,
+            self.cursor.min(self.highlight),
+            self.cursor.max(self.highlight),
+        )
     }
     /// `getScreenX`: where a character index is drawn, from the box's left.
     pub fn screen_x(&self, m: &Measure, index: usize) -> i32 {

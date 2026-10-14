@@ -8,7 +8,7 @@
 //! [`Behaviours`] holds immutable tables loaded once from the pinned client
 //! resources (`block-behaviours.json`, `gameplay-facts.json`,
 //! `block-tags.json`, `cached-collision.nbt`; see
-//! `tools/prepare_native_client.py`).
+//! `crates/horizon-prepare`).
 //!
 //! # Driving a level
 //!

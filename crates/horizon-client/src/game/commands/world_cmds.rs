@@ -418,7 +418,30 @@ impl Game<'_> {
                     .unwrap_or(1.0)
                     .clamp(0.01, 4.0),
             ),
-            ParticleType::Block | ParticleType::FallingDust | ParticleType::DustPillar => {
+            // ItemParticleOption: an item id, or a stack {id, ...}.
+            ParticleType::Item => {
+                let id = match field("item") {
+                    Some(Tag::String(s)) => s.to_string_lossy(),
+                    Some(Tag::Compound(c)) => {
+                        c.get(&"id".into()).and_then(string).unwrap_or_default()
+                    }
+                    _ => String::new(),
+                };
+                let id = if id.contains(':') {
+                    id
+                } else {
+                    format!("minecraft:{id}")
+                };
+                self.item_particle(&horizon_client::items::ItemStack::new(&id, 1))
+            }
+            ParticleType::ItemSlime | ParticleType::ItemSnowball | ParticleType::ItemCobweb => {
+                self.ensure_item_particle_sprites();
+                ParticleOptions::simple(ty)
+            }
+            ParticleType::Block
+            | ParticleType::FallingDust
+            | ParticleType::DustPillar
+            | ParticleType::BlockMarker => {
                 // BlockParticleOption: a block id, or {Name, Properties}.
                 let text = match field("block_state") {
                     Some(Tag::String(s)) => s.to_string_lossy(),

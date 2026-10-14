@@ -1158,16 +1158,40 @@ impl Game<'_> {
         let Some(s) = self.station.as_mut() else {
             return;
         };
+        let cleared = self.text_selection.take(ANVIL_NAME, &mut s.name);
         if backspace {
-            s.name.pop();
+            if !cleared {
+                s.name.pop();
+            }
         } else if let Some(t) = text {
             for c in t.chars().filter(|c| !c.is_control()) {
-                if s.name.chars().count() < 50 {
+                if s.name.chars().count() < ANVIL_NAME_CHARS {
                     s.name.push(c);
                 }
             }
         }
         self.station_changed();
+    }
+    /// Ctrl+A/C/V/X in the anvil's rename box (an `EditBox` of 50) or the
+    /// recipe book's search box.
+    pub(super) fn station_shortcut(&mut self, shortcut: horizon_client::clipboard::EditShortcut) {
+        if self.recipe_search_focused() {
+            self.recipe_shortcut(shortcut);
+            return;
+        }
+        let Some(s) = self.station.as_mut() else {
+            return;
+        };
+        if Self::append_shortcut(
+            &mut self.text_selection,
+            &mut self.clipboard,
+            ANVIL_NAME,
+            &mut s.name,
+            shortcut,
+            ANVIL_NAME_CHARS,
+        ) {
+            self.station_changed();
+        }
     }
 
     // ---------------------------------------------------------------- drawing
@@ -1928,8 +1952,9 @@ impl Game<'_> {
             "selected": s.selected,
         })
     }
+    /// Options.advancedItemTooltips (F3+H).
     fn options_advanced_tooltips(&self) -> bool {
-        false
+        self.settings.file.bool("advancedItemTooltips")
     }
     /// `TooltipRenderUtil`: dark box with the purple border, first line spaced.
     pub(super) fn draw_tooltip_lines(
@@ -2062,3 +2087,7 @@ impl Game<'_> {
         Ok(())
     }
 }
+
+/// The anvil's rename box (`AnvilScreen`: `setMaxLength(50)`).
+const ANVIL_NAME: horizon_client::clipboard::FieldId = ("anvil.name", 0);
+const ANVIL_NAME_CHARS: usize = 50;

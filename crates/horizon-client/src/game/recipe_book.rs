@@ -165,9 +165,19 @@ impl Game<'_> {
             search.insert_text(text);
         }
     }
+    /// Ctrl+A/C/V/X in the search box.
+    pub(super) fn recipe_shortcut(&mut self, shortcut: horizon_client::clipboard::EditShortcut) {
+        if let Some(search) = self.recipe_ui.search.as_mut() {
+            search.shortcut(shortcut, &mut self.clipboard);
+        }
+    }
     /// A key press while the search box has focus.
     pub(super) fn recipe_key(&mut self, event: &winit::event::KeyEvent) {
         use winit::keyboard::{KeyCode, PhysicalKey};
+        if let Some(shortcut) = self.edit_shortcut(event) {
+            self.recipe_shortcut(shortcut);
+            return;
+        }
         let ctrl = self.keys.contains(&KeyCode::ControlLeft);
         let shift = self.has_shift_down();
         let Some(search) = self.recipe_ui.search.as_mut() else {

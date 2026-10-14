@@ -256,8 +256,13 @@ impl Game<'_> {
             self.damage_held_tool();
             return true;
         }
+        let block = {
+            let p = self.mobs[index].position;
+            [p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32]
+        };
         if name == "minecraft:honeycomb" && !waxed {
             self.mobs[index].extra.vector[0] = -2.0;
+            self.level_event_at(3003, block, 0);
             self.audio
                 .play("minecraft:item.honeycomb.wax_on", Some(at), 1.0, 1.0);
             self.consume_held();
@@ -267,6 +272,7 @@ impl Game<'_> {
             self.mobs[index].extra.vector[0] = -1.0;
             self.audio
                 .play("minecraft:item.axe.scrape", Some(at), 1.0, 1.0);
+            self.level_event_at(3004, block, 0);
             self.damage_held_tool();
             return true;
         }
@@ -276,6 +282,7 @@ impl Game<'_> {
             m.extra.variant = horizon_client::mobs::copper_golem::weather_previous(m.extra.variant);
             self.audio
                 .play("minecraft:item.axe.scrape", Some(at), 1.0, 1.0);
+            self.level_event_at(3005, block, 0);
             self.damage_held_tool();
             return true;
         }

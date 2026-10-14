@@ -432,6 +432,18 @@ impl ChatScreen {
         self.allow_suggestions = true;
         self.update_command_info(m, c);
     }
+    /// Ctrl+A/C/V/X in the input box.
+    pub fn shortcut(
+        &mut self,
+        m: &Measure,
+        c: &Commands,
+        shortcut: crate::clipboard::EditShortcut,
+        clipboard: &mut dyn crate::clipboard::Clipboard,
+    ) {
+        if self.input.shortcut(m, shortcut, clipboard) {
+            self.edited(m, c);
+        }
+    }
     /// Typed text (`charTyped` per character).
     pub fn type_text(&mut self, m: &Measure, c: &Commands, text: &str) {
         for ch in text.chars() {

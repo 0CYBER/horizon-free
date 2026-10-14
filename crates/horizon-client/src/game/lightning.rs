@@ -246,6 +246,13 @@ impl Game<'_> {
                 // The rod's onPlace schedules the 8-tick unpowering.
                 let _ = self.level_set(p, powered);
             }
+            // Level event 3002 with the rod's axis: sparks along it.
+            let axis = match s.properties.get("facing").map(String::as_str) {
+                Some("east" | "west") => 0,
+                Some("north" | "south") => 2,
+                _ => 1,
+            };
+            self.level_event_at(3002, p, axis);
         }
     }
     /// `thunderHit` for entities within 3 blocks (up to 9 above).

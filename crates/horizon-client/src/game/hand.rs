@@ -119,7 +119,7 @@ impl Game<'_> {
     }
     /// Whether an attack would hit an entity rather than the block behind
     /// it: the crosshair's `EntityHitResult`.
-    fn entity_targeted(&self) -> bool {
+    pub(super) fn entity_targeted(&self) -> bool {
         let before = |d: Option<f64>| d.is_some_and(|d| self.before_block(d));
         before(self.painting_hit().map(|h| h.1))
             || before(self.frame_hit().map(|h| h.1))

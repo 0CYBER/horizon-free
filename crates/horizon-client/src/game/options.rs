@@ -11,7 +11,7 @@ use horizon_client::{
 use winit::{event::MouseButton, keyboard::KeyCode, window::Fullscreen};
 
 impl Game<'_> {
-    fn options_path() -> std::path::PathBuf {
+    pub(super) fn options_path() -> std::path::PathBuf {
         std::env::current_dir()
             .unwrap_or_default()
             .join("options.txt")
@@ -81,6 +81,15 @@ impl Game<'_> {
         self.ui.options = ui;
         self.handle_option_events(events)
     }
+    /// Ctrl+A/C/V/X in the options' search boxes; false when none has focus.
+    pub(super) fn options_shortcut(
+        &mut self,
+        shortcut: horizon_client::clipboard::EditShortcut,
+    ) -> bool {
+        self.ui
+            .options
+            .shortcut(&self.res.atlas, shortcut, &mut self.clipboard)
+    }
     pub(super) fn options_scroll(&mut self, amount: f32) {
         self.ui.options.scroll_at(self.cursor, amount);
     }
@@ -145,11 +154,13 @@ impl Game<'_> {
             r.set_mipmap_levels(s.mipmap_levels.max(0) as u32);
             r.set_world_post(s.horizon.resolution_scale as f32 / 100.0, s.horizon.fxaa);
         }
-        if let Some(w) = &self.window {
-            let want = s.fullscreen;
-            if want != w.fullscreen().is_some() {
-                w.set_fullscreen(want.then_some(Fullscreen::Borderless(None)));
-            }
+        // Window.updateFullscreenIfChanged: only a changed option asks the
+        // window to change, so applying settings never undoes a fullscreen
+        // the compositor set up.
+        if let Some(w) = &self.window
+            && let Some(want) = self.fullscreen.request(s.fullscreen)
+        {
+            w.set_fullscreen(want.then_some(Fullscreen::Borderless(None)));
         }
         let mut volumes = s.volumes;
         volumes[0] = 1.0;
@@ -169,6 +180,17 @@ impl Game<'_> {
             font.japanese = s.japanese_glyphs;
             font.reset_cache();
             self.ui.chat.rescale(&self.res.atlas);
+        }
+    }
+    /// `Window.updateFullscreenState`: a fullscreen change made by the window
+    /// system is adopted by the option (`Minecraft.fullscreenStateChanged`).
+    pub(super) fn observe_fullscreen(&mut self) {
+        let Some(w) = &self.window else { return };
+        if let Some(now) = self.fullscreen.observe(w.fullscreen().is_some())
+            && self.settings.fullscreen != now
+        {
+            self.settings.fullscreen = now;
+            self.settings.save(&Self::options_path());
         }
     }
     /// F11 (key.fullscreen): Window.toggleFullScreen, remembered in options.txt.

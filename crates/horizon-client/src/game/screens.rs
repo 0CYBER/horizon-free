@@ -54,7 +54,10 @@ fn death_buttons(w: f32, h: f32) -> [(f32, f32, &'static str, u8); 2] {
 impl Game<'_> {
     /// Whether the pause menu is drawn in Horizon's style (over a blurred world).
     pub(super) fn horizon_pause(&self) -> bool {
-        self.screen == Screen::Paused && self.title.is_none() && horizon_client::ui_theme::horizon()
+        self.screen == Screen::Paused
+            && self.pause_menu
+            && self.title.is_none()
+            && horizon_client::ui_theme::horizon()
     }
     fn pause_labels(&self) -> (String, &'static str) {
         let world = if self.remote.is_some() {

@@ -16,6 +16,7 @@ mod bossbars;
 mod breezes;
 mod cartography;
 mod chat;
+mod clipboard;
 mod combat;
 mod command_harness;
 mod commands;
@@ -25,6 +26,7 @@ mod copper_golems;
 mod creaking;
 mod creatures;
 mod crossbow;
+mod debug_keys;
 mod dedicated;
 mod dispense_fixture;
 mod dispenser;
@@ -44,12 +46,14 @@ mod golems;
 mod growth;
 mod hand;
 mod item_draw;
+mod item_particles;
 mod jukebox;
 mod lan;
 mod lan_actions;
 mod lan_screen;
 mod lan_trading;
 mod leads;
+mod level_particles;
 mod lightning;
 mod llamas;
 mod loom;
@@ -242,7 +246,7 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Horizon — Minecraft Java Edition 26.3 in Rust\n\n  --resources PATH        Prepared resources (tools/prepare_native_client.py)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --name NAME             Player name for multiplayer (default Player)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause."
+                        "Horizon — Minecraft Java Edition 26.3 in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --name NAME             Player name for multiplayer (default Player)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause."
                     );
                     return Ok(None);
                 }
@@ -623,6 +627,10 @@ struct Game<'a> {
     cursor: (f32, f32),
     captured: bool,
     focused: bool,
+    /// The keyboard's modifier state (`KeyEvent.modifiers`).
+    modifiers: winit::keyboard::ModifiersState,
+    /// The window's fullscreen request and reported state.
+    fullscreen: horizon_client::window::FullscreenState,
     /// MouseHandler's accumulated look and wheel state.
     mouse: MouseLook,
     /// `Options.smoothCamera` (cinematic camera), not persisted.
@@ -830,6 +838,19 @@ struct Game<'a> {
     /// This world is open to the network (game/lan.rs).
     lan: Option<lan::LanHost>,
     world_options: Option<lan_screen::WorldOptions>,
+    /// KeyboardHandler's debug key state (game/debug_keys.rs), the physical
+    /// keys held, and the debug renderers F3+B and F3+G switch on.
+    debug_keys: horizon_client::debug_keys::DebugKeys,
+    show_hitboxes: bool,
+    show_chunk_borders: bool,
+    /// PauseScreen.showPauseMenu (false after F3+Escape).
+    pause_menu: bool,
+    /// MultiPlayerGameMode.previousLocalPlayerMode (F3+N goes back to it).
+    previous_mode: Option<horizon_client::command::args::GameMode>,
+    /// The system clipboard (`KeyboardHandler.clipboardManager`).
+    clipboard: horizon_client::clipboard::SystemClipboard,
+    /// Select All in the append-only text fields.
+    text_selection: horizon_client::clipboard::AppendSelection,
     /// The world was saved for the application ending (`save_for_exit`).
     saved_for_exit: bool,
     /// The block a guest is acting on (game/lan_actions.rs).
@@ -1584,6 +1605,11 @@ impl Game<'_> {
                     data,
                 } => self.sculk_charge_event(pos, data),
                 LevelEvent::LevelEvent { id: 3007, pos, .. } => self.shriek_event(pos),
+                LevelEvent::LevelEvent {
+                    id: id @ 3002..=3005,
+                    pos,
+                    data,
+                } => self.block_particle_event(id, pos, data),
                 LevelEvent::LevelEvent {
                     id: 1500,
                     pos,
@@ -2348,11 +2374,13 @@ impl Game<'_> {
             return;
         }
         let duration = 32;
-        let ticks = ticks + 1;
+        // Consumable.shouldEmitParticlesAndSounds(useItemRemainingTicks), with
+        // the remaining ticks before this tick counts down: every 4 ticks once
+        // more than 21.875% of the time has passed (none on the last tick).
         let remaining = duration - ticks.min(duration);
+        let ticks = ticks + 1;
         let eye = self.eye_position().unwrap_or_default();
-        // Consumable.shouldEmitParticlesAndSounds: every 4 ticks in the last 25.
-        if remaining <= 25 && remaining % 4 == 0 {
+        if duration - remaining > (duration as f32 * 0.21875) as u32 && remaining % 4 == 0 {
             let pitch =
                 (self.world.random.next_float() - self.world.random.next_float()) * 0.2 + 1.0;
             self.audio.play(
@@ -2361,38 +2389,12 @@ impl Game<'_> {
                 0.5 + 0.5 * self.world.random.next_int_bound(2).unwrap_or(0) as f32,
                 pitch,
             );
-            // `ItemParticleOption`: the particle material of a random layer of
-            // the stack resolved for the ground (`BreakingItemParticle`).
-            let state = self.resolve_item(
-                &stack,
-                horizon_assets::item_model::DisplayContext::Ground,
-                None,
-                0,
-            );
-            if let Some(sprite) = state.pick_particle(&mut self.world.random) {
-                let (yaw, pitch) = (
-                    f64::from(self.yaw).to_radians(),
-                    f64::from(self.pitch).to_radians(),
-                );
-                let at = [
-                    eye[0] - yaw.sin() * pitch.cos() * 0.3,
-                    eye[1] - 0.1,
-                    eye[2] + yaw.cos() * pitch.cos() * 0.3,
-                ];
-                for _ in 0..5 {
-                    let v = [
-                        (f64::from(self.world.random.next_float()) - 0.5) * 0.1,
-                        0.1,
-                        (f64::from(self.world.random.next_float()) - 0.5) * 0.1,
-                    ];
-                    let p =
-                        Particle::terrain(&mut self.world.random, at, v, sprite.clone(), 0xFFFFFF);
-                    self.particles.push(p);
-                }
-            }
+            self.eat_particles(&stack, 5);
         }
         if ticks >= duration {
             self.using = None;
+            // Consumable.onConsume: emitParticlesAndSounds(..., 16).
+            self.eat_particles(&stack, 16);
             // Consumable.onConsume.
             self.post_entity_event("minecraft:eat", horizon_client::mobs::Who::Player);
             if let Some((nutrition, saturation)) = info.food
@@ -2673,6 +2675,7 @@ impl Game<'_> {
         Ok(())
     }
     fn tick(&mut self) -> Result<()> {
+        self.tick_debug_keys()?;
         if self.remote.is_some() {
             return self.tick_remote();
         }
@@ -3385,7 +3388,20 @@ impl Game<'_> {
         self.draw_chat(&mut batch);
         self.draw_tab_list(&mut batch);
         match self.screen {
-            Screen::Paused => self.draw_pause_menu(&mut batch),
+            Screen::Paused if self.pause_menu => self.draw_pause_menu(&mut batch),
+            // PauseScreen(false): only its title, at the top.
+            Screen::Paused => {
+                let title = self.translate("menu.paused", "Game Paused");
+                let tw = HudBatch::text_width(&self.res.atlas, &title);
+                batch.text(
+                    &self.res.atlas,
+                    &title,
+                    ((batch.width / 2.0).floor() - (tw / 2.0).floor()).floor(),
+                    10.0,
+                    u32::MAX,
+                    true,
+                );
+            }
             Screen::Dead => self.draw_death_screen(&mut batch),
             Screen::Stats => self.draw_stats(&mut batch),
             Screen::Advancements => self.draw_advancements(&mut batch),
@@ -5727,7 +5743,7 @@ impl Game<'_> {
             )
         } else {
             let inner = Arc::new(VanillaTerrain::for_dimension(&self.options.resources.join("worldgen"), res.assets.registry, &res.biomes, seed, dim.id()).map_err(|e| {
-                format!("{e}\nPrepare the worldgen bundle with: python3 tools/prepare_native_client.py")
+                format!("{e}\nPrepare the worldgen bundle with the launcher, or: horizon-prepare --prepare")
             })?);
             self.end.set_locator(Some(inner.clone()));
             Streaming::new(
@@ -6403,7 +6419,7 @@ impl Game<'_> {
             _ => "east",
         };
         let registry = self.res.assets.registry;
-        let (state, sound, loot, damage) = {
+        let (state, sound, loot, damage, particle) = {
             let around = Column {
                 world: &self.world,
                 registry,
@@ -6416,12 +6432,25 @@ impl Game<'_> {
             else {
                 return Ok(false);
             };
-            (state, t.sound.clone(), t.loot.clone(), t.damage)
+            (
+                state,
+                t.sound.clone(),
+                t.loot.clone(),
+                t.damage,
+                t.particle.clone(),
+            )
         };
         let Ok(new) = registry.resolve(&state) else {
             return Ok(false);
         };
         self.level_set(pos, new)?;
+        // BlockTransformer.TransformParticle.send.
+        match particle.as_str() {
+            "scrape" => self.level_event_at(3005, pos, 0),
+            "wax_on" => self.level_event_at(3003, pos, 0),
+            "wax_off" => self.level_event_at(3004, pos, 0),
+            _ => {}
+        }
         if loot.as_deref() == Some("minecraft:till/rooted_dirt") {
             self.pop_resource(
                 [pos[0] + face[0], pos[1] + face[1], pos[2] + face[2]],
@@ -6614,6 +6643,7 @@ impl Game<'_> {
                 && let Ok(state) = registry.resolve(&waxed)
             {
                 self.level_set(hit.pos, state)?;
+                self.level_event_at(3003, hit.pos, 0);
                 self.audio.play(
                     "minecraft:item.honeycomb.wax_on",
                     Some(at(hit.pos)),
@@ -7739,6 +7769,18 @@ impl Game<'_> {
             sky.sky_color = [0.9, 0.9, 1.0];
             sky.sky_light_factor = 1.0;
         }
+        // DebugRenderer: chunk borders and hitboxes (F3+G, F3+B).
+        let (debug_lines, debug_lines_on_top) = if self.show_hitboxes || self.show_chunk_borders {
+            let g = self.debug_gizmos(alpha as f32);
+            let view = horizon_client::camera::view_matrix(view_yaw, view_pitch);
+            let at = camera.to_array();
+            (
+                horizon_client::gizmos::camera_relative(&g.lines, at, view),
+                horizon_client::gizmos::camera_relative(&g.on_top, at, view),
+            )
+        } else {
+            (Vec::new(), Vec::new())
+        };
         // LevelRenderer.renderHitOutline: the outline shape's edges.
         let outline = if self.screen == Screen::Playing && !self.spectator() {
             self.pick()
@@ -7891,6 +7933,8 @@ impl Game<'_> {
             }),
             dark_disc: self.dark_disc(camera),
             outline,
+            debug_lines: &debug_lines,
+            debug_lines_on_top: &debug_lines_on_top,
             hud: &hud,
             entities: &entities,
             additive: &additive,
@@ -7981,6 +8025,7 @@ impl Game<'_> {
                 Screen::Options => self.options_key(KeyCode::Escape, None)?,
                 Screen::Playing => {
                     self.screen = Screen::Paused;
+                    self.pause_menu = true;
                     self.capture(false);
                 }
                 Screen::Creative => {
@@ -7991,6 +8036,7 @@ impl Game<'_> {
                 Screen::Paused | Screen::Inventory => {
                     self.close_container();
                     self.screen = Screen::Playing;
+                    self.pause_menu = true;
                     self.capture(true);
                 }
                 Screen::Dead => {}
@@ -8050,7 +8096,6 @@ impl Game<'_> {
                 }
                 _ => {}
             },
-            KeyCode::F3 => self.debug = !self.debug,
             // key.swapOffhand: ServerboundPlayerActionPacket SWAP_ITEM_WITH_OFFHAND.
             KeyCode::KeyF if self.screen == Screen::Playing => {
                 std::mem::swap(&mut self.offhand, &mut self.inventory[self.selected]);
@@ -8224,10 +8269,14 @@ impl ApplicationHandler for Game<'_> {
         if self.window.is_some() {
             return;
         }
+        // The Window constructor: created fullscreen when options.txt says so.
+        let fullscreen = self.settings.fullscreen;
+        self.fullscreen = horizon_client::window::FullscreenState::new(fullscreen);
         let window = match event_loop.create_window(
             Window::default_attributes()
                 .with_title("Horizon")
-                .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0)),
+                .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0))
+                .with_fullscreen(fullscreen.then_some(winit::window::Fullscreen::Borderless(None))),
         ) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -8263,6 +8312,26 @@ impl ApplicationHandler for Game<'_> {
         if let WindowEvent::Focused(false) = &event {
             self.physical_keys.clear();
         }
+        if let WindowEvent::ModifiersChanged(m) = &event {
+            self.modifiers = m.state();
+        }
+        // KeyboardHandler.keyPress: the debug keys come before the game's.
+        if let WindowEvent::KeyboardInput {
+            event: key_event, ..
+        } = &event
+            && let PhysicalKey::Code(key) = key_event.physical_key
+            && self.title.is_none()
+        {
+            use horizon_client::debug_keys::KeyAction;
+            let action = match (key_event.state, key_event.repeat) {
+                (ElementState::Released, _) => KeyAction::Release,
+                (_, false) => KeyAction::Press,
+                (_, true) => KeyAction::Repeat,
+            };
+            if self.debug_key(key, action) {
+                return;
+            }
+        }
         if matches!(
             event,
             WindowEvent::KeyboardInput { .. }
@@ -8291,6 +8360,7 @@ impl ApplicationHandler for Game<'_> {
                     if let Some(r) = &mut self.renderer {
                         r.resize(size.width, size.height);
                     }
+                    self.observe_fullscreen();
                 }
                 WindowEvent::Focused(focused) => {
                     self.focused = focused;
@@ -8303,6 +8373,7 @@ impl ApplicationHandler for Game<'_> {
                         if self.screen == Screen::Playing
                             && self.player.is_some()
                             && !self.options.no_pause
+                            && self.settings.file.bool("pauseOnLostFocus")
                             && self.book.is_none()
                             && self.sign_edit.is_none()
                         {
@@ -8481,7 +8552,7 @@ impl ApplicationHandler for Game<'_> {
                         Screen::Creative if button == MouseButton::Left => {
                             self.creative_screen.release();
                         }
-                        Screen::Paused if pressed => self.pause_click()?,
+                        Screen::Paused if pressed && self.pause_menu => self.pause_click()?,
                         Screen::WorldOptions if pressed && button == MouseButton::Left => {
                             self.world_options_click()
                         }
@@ -8527,19 +8598,12 @@ impl ApplicationHandler for Game<'_> {
                         && event.state == ElementState::Pressed
                         && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape)) =>
                 {
-                    match event.physical_key {
-                        PhysicalKey::Code(KeyCode::Backspace) => {
-                            self.creative_screen.search.pop();
-                        }
-                        _ => {
-                            if let Some(text) = &event.text {
-                                self.creative_screen
-                                    .search
-                                    .extend(text.chars().filter(|c| !c.is_control()));
-                            }
-                        }
+                    if let Some(shortcut) = self.edit_shortcut(&event) {
+                        self.creative_search_shortcut(shortcut);
+                    } else {
+                        let backspace = event.physical_key == PhysicalKey::Code(KeyCode::Backspace);
+                        self.creative_search_edit(event.text.as_deref(), backspace);
                     }
-                    self.creative_screen.scroll = 0.0;
                 }
                 WindowEvent::KeyboardInput { event, .. }
                     if self.recipe_search_focused()
@@ -8555,8 +8619,12 @@ impl ApplicationHandler for Game<'_> {
                         && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape)) =>
                 {
                     // The anvil rename box takes every key but Escape (AnvilScreen.keyPressed).
-                    let backspace = event.physical_key == PhysicalKey::Code(KeyCode::Backspace);
-                    self.station_text(event.text.as_deref(), backspace);
+                    if let Some(shortcut) = self.edit_shortcut(&event) {
+                        self.station_shortcut(shortcut);
+                    } else {
+                        let backspace = event.physical_key == PhysicalKey::Code(KeyCode::Backspace);
+                        self.station_text(event.text.as_deref(), backspace);
+                    }
                 }
                 WindowEvent::KeyboardInput { event, .. } if self.remote_chat_open() => {
                     self.remote_chat_key(&event)
@@ -8565,6 +8633,11 @@ impl ApplicationHandler for Game<'_> {
                     self.world_options_key(&event)
                 }
                 WindowEvent::KeyboardInput { event, .. } if self.screen == Screen::Options => {
+                    if let Some(shortcut) = self.edit_shortcut(&event)
+                        && self.options_shortcut(shortcut)
+                    {
+                        return Ok(());
+                    }
                     if event.state == ElementState::Pressed
                         && let PhysicalKey::Code(key) = event.physical_key
                     {
@@ -8573,18 +8646,25 @@ impl ApplicationHandler for Game<'_> {
                 }
                 WindowEvent::KeyboardInput { event, .. } if self.title.is_some() => {
                     if event.state == ElementState::Pressed
-                        && let Some(title) = self.title.as_mut()
-                        && !title.skip_opening()
+                        && self.title.as_ref().is_some_and(|t| !t.skip_opening())
                     {
+                        if let Some(shortcut) = self.edit_shortcut(&event) {
+                            self.title_shortcut(shortcut);
+                            return Ok(());
+                        }
                         match event.physical_key {
-                            PhysicalKey::Code(KeyCode::Backspace) => title.backspace(),
-                            PhysicalKey::Code(KeyCode::Tab) => title.tab(),
-                            PhysicalKey::Code(KeyCode::Escape) => title.escape(),
-                            _ => {
-                                if let Some(text) = &event.text {
-                                    title.type_text(text);
+                            PhysicalKey::Code(KeyCode::Backspace) => self.title_edit(None, true),
+                            PhysicalKey::Code(KeyCode::Tab) => {
+                                if let Some(t) = self.title.as_mut() {
+                                    t.tab();
                                 }
                             }
+                            PhysicalKey::Code(KeyCode::Escape) => {
+                                if let Some(t) = self.title.as_mut() {
+                                    t.escape();
+                                }
+                            }
+                            _ => self.title_edit(event.text.as_deref(), false),
                         }
                     }
                 }
@@ -8644,6 +8724,7 @@ impl ApplicationHandler for Game<'_> {
                     self.key_pressed(key)?;
                 }
                 WindowEvent::RedrawRequested => {
+                    self.observe_fullscreen();
                     let now = Instant::now();
                     let elapsed = now.duration_since(self.previous);
                     self.frame_ticks = elapsed.as_secs_f32() * 20.0;
@@ -8850,7 +8931,7 @@ pub fn run() -> Result<()> {
         }
         Err(e) => {
             return Err(format!(
-                "{e}\nPrepare resources with: python3 tools/prepare_native_client.py --prepare"
+                "{e}\nPrepare resources with the launcher, or: horizon-prepare --prepare"
             )
             .into());
         }
@@ -9031,6 +9112,8 @@ pub fn run() -> Result<()> {
         cursor: (0.0, 0.0),
         captured: false,
         focused: true,
+        modifiers: winit::keyboard::ModifiersState::empty(),
+        fullscreen: horizon_client::window::FullscreenState::new(false),
         mouse: MouseLook::default(),
         smooth_camera: false,
         toggles: Default::default(),
@@ -9184,6 +9267,13 @@ pub fn run() -> Result<()> {
         remote: None,
         lan: None,
         world_options: None,
+        debug_keys: Default::default(),
+        show_hitboxes: false,
+        show_chunk_borders: false,
+        pause_menu: true,
+        previous_mode: None,
+        clipboard: Default::default(),
+        text_selection: Default::default(),
         saved_for_exit: false,
         forced_hit: None,
         lan_events: Vec::new(),

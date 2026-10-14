@@ -4,7 +4,7 @@
 use super::Game;
 use horizon_client::{
     items::ItemStack,
-    mobs::{MobEvent, equine, llama},
+    mobs::{equine, llama},
 };
 use horizon_core::random::RandomSource;
 
@@ -45,13 +45,14 @@ impl Game<'_> {
             m.extra.variant3 = (i32::from(m.extra.variant3) + temper).min(llama::MAX_TEMPER) as u8;
             used = true;
         }
-        let at = m.center();
         if happy {
-            let _ = self.handle_mob_events(vec![MobEvent::Particles {
-                kind: "happy_villager",
-                at,
-                count: 1,
-            }]);
+            // AbstractHorse.handleEating: one at rest about the body.
+            let id = m.id;
+            self.particles_around_mob(
+                id,
+                "happy_villager",
+                horizon_client::particles::Burst::HORSE_EATING,
+            );
         }
         if !used {
             return false;

@@ -24,6 +24,8 @@ const BLACK: u32 = 0xFF00_0000;
 const PAGE_CHARS: usize = 1024;
 const MAX_PAGES: usize = 100;
 const LINES: usize = 14;
+/// `BookSignScreen`'s title box.
+const BOOK_TITLE: horizon_client::clipboard::FieldId = ("book.title", 0);
 
 pub(super) enum BookScreen {
     Edit {
@@ -129,6 +131,10 @@ impl Game<'_> {
         if event.state != ElementState::Pressed {
             return;
         }
+        if let Some(shortcut) = self.edit_shortcut(event) {
+            self.book_shortcut(shortcut);
+            return;
+        }
         let key = match event.physical_key {
             PhysicalKey::Code(k) => Some(k),
             _ => None,
@@ -151,7 +157,9 @@ impl Game<'_> {
                     }
                 }
                 Some(KeyCode::Backspace) => {
-                    title.pop();
+                    if !self.text_selection.take(BOOK_TITLE, title) {
+                        title.pop();
+                    }
                 }
                 Some(KeyCode::Enter | KeyCode::NumpadEnter) => {
                     if !title.trim().is_empty() {
@@ -160,6 +168,7 @@ impl Game<'_> {
                 }
                 _ => {
                     if let Some(typed) = event.text.as_ref() {
+                        self.text_selection.take(BOOK_TITLE, title);
                         for c in typed.chars().filter(|c| !c.is_control()) {
                             if title.chars().count() < 15 {
                                 title.push(c);
@@ -172,13 +181,23 @@ impl Game<'_> {
                 Some(KeyCode::Escape) => self.save_book(false),
                 Some(KeyCode::PageUp) => self.turn_page(false),
                 Some(KeyCode::PageDown) => self.turn_page(true),
-                Some(KeyCode::Backspace) => self.edit_page(|p| {
-                    p.pop();
-                }),
-                Some(KeyCode::Enter | KeyCode::NumpadEnter) => self.type_into_page("\n"),
+                Some(KeyCode::Backspace) => {
+                    if !self.take_page_selection() {
+                        self.edit_page(|p| {
+                            p.pop();
+                        })
+                    }
+                }
+                Some(KeyCode::Enter | KeyCode::NumpadEnter) => {
+                    self.take_page_selection();
+                    self.type_into_page("\n")
+                }
                 _ => {
                     if let Some(typed) = event.text.as_ref().map(|t| t.to_string()) {
                         let typed: String = typed.chars().filter(|c| !c.is_control()).collect();
+                        if !typed.is_empty() {
+                            self.take_page_selection();
+                        }
                         self.type_into_page(&typed);
                     }
                 }
@@ -202,6 +221,59 @@ impl Game<'_> {
                 }
             }
             Some(BookScreen::Edit { .. }) => self.type_into_page(&text),
+            _ => {}
+        }
+    }
+    /// Before typing on a page: Select All's selection is cleared (true).
+    fn take_page_selection(&mut self) -> bool {
+        match self.book.as_mut() {
+            Some(BookScreen::Edit { pages, page, .. }) => self
+                .text_selection
+                .take(("book.page", *page), &mut pages[*page]),
+            _ => false,
+        }
+    }
+    /// Ctrl+A/C/V/X: the title box (an `EditBox` of 15) while signing, else
+    /// the page (`MultilineTextField.insertText`: line breaks kept, cut to
+    /// the 1024 characters left, rejected when it overflows the 14 lines).
+    fn book_shortcut(&mut self, shortcut: horizon_client::clipboard::EditShortcut) {
+        let font = &self.res.atlas.font;
+        match self.book.as_mut() {
+            Some(BookScreen::Edit {
+                signing: true,
+                title,
+                ..
+            }) => {
+                Self::append_shortcut(
+                    &mut self.text_selection,
+                    &mut self.clipboard,
+                    BOOK_TITLE,
+                    title,
+                    shortcut,
+                    15,
+                );
+            }
+            Some(BookScreen::Edit { pages, page, .. }) => {
+                // truncateInsertionText counts the whole value, selection included.
+                let room = PAGE_CHARS.saturating_sub(pages[*page].chars().count());
+                self.text_selection.apply(
+                    ("book.page", *page),
+                    &mut pages[*page],
+                    shortcut,
+                    &mut self.clipboard,
+                    |value, pasted| {
+                        let text: String = horizon_client::clipboard::filter_text(pasted, true)
+                            .chars()
+                            .take(room)
+                            .collect();
+                        let next = format!("{value}{text}");
+                        font.split(&Text::literal(&next), 114.0).len() <= LINES && {
+                            *value = next;
+                            true
+                        }
+                    },
+                );
+            }
             _ => {}
         }
     }

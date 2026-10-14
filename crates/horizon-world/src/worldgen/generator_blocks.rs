@@ -1,6 +1,6 @@
 //! Optional block-behavior registries used by feature placement: physical
 //! properties, face support, collision and survival rules. Loaded from the
-//! bundle's `blocks/` directory (Java-exported, see prepare_native_client.py).
+//! bundle's `blocks/` directory (Java-exported, see crates/horizon-prepare).
 use super::generator::GeneratorError;
 use crate::{
     block_collision::BlockCollisionRegistry,

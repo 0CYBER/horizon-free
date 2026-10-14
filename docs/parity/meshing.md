@@ -82,7 +82,7 @@ python3 tools/test_section_mesh_parity.py --only fluids
 ```
 
 It needs the pinned jars (`tools/lab.py prepare`) and prepared client resources
-(`tools/prepare_native_client.py --prepare`). Outputs, logs and
+(`cargo run --release -p horizon-prepare -- --prepare`). Outputs, logs and
 `report.json` go to `target/section-mesh-parity/`; nothing is written under
 `.local/`. The fixture is built with `--profile fast` and reports its
 meshing time.

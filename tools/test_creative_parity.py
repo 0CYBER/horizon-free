@@ -2,7 +2,7 @@
 """Compare the creative inventory's tabs and search with the vanilla client's.
 
 The Java oracle (VanillaCreativeSearchOracle) writes the creative-inventory.json
-that tools/prepare_native_client.py exports (VanillaCreativeTabsExporter: every
+that horizon-prepare exports (VanillaCreativeTabsExporter: every
 tab built by vanilla's CreativeModeTabs over the vanilla data pack's
 registries), then what the vanilla client shows: every tab's display items
 and, for each search query, CreativeModeInventoryScreen.refreshSearchResults'

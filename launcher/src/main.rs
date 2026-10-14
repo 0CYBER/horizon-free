@@ -472,17 +472,27 @@ impl Launcher {
         self.prepare_log.clear();
         self.prepare_error = None;
         self.prepare_log
-            .push_back("Checking Java, Python and your Minecraft install".into());
+            .push_back("Checking Java and your Minecraft install".into());
         let tx = self.tx.clone();
         // The checks may download the server jar, so they run on the thread too.
         std::thread::spawn(move || {
             let log = |line| {
                 let _ = tx.send(Msg::Line(Job::Prepare, line));
             };
-            let result = backend::prepare_command(&tag, &minecraft, &log)
-                .and_then(|cmd| backend::spawn(Job::Prepare, cmd, tx.clone()));
+            let result = backend::preparer(&tag, &minecraft, &log).and_then(|p| match p {
+                backend::Preparer::Process(cmd) => {
+                    backend::spawn(Job::Prepare, cmd, tx.clone()).map(|_running| false)
+                }
+                backend::Preparer::InProcess(options) => {
+                    backend::prepare_in_process(&options, &log).map(|_| true)
+                }
+            });
             match result {
-                Ok(_running) => {}
+                // A process sends its own Exit when it ends.
+                Ok(false) => {}
+                Ok(true) => {
+                    let _ = tx.send(Msg::Exit(Job::Prepare, Ok(())));
+                }
                 Err(e) => {
                     let _ = tx.send(Msg::Exit(Job::Prepare, Err(e)));
                 }
@@ -882,7 +892,7 @@ impl Launcher {
                 .flex()
                 .flex_col()
                 .gap(px(2.))
-                .child(div().child(format!("Launcher {} → {version}", backend::VERSION)))
+                .child(div().child(format!("Launcher updated to {version}")))
                 .child(
                     div()
                         .id("restart")
@@ -890,8 +900,11 @@ impl Launcher {
                         .font_weight(FontWeight::MEDIUM)
                         .cursor_pointer()
                         .hover(|s| s.opacity(0.8))
-                        .child("Restart to update")
-                        .on_click(|_, _, _| backend::restart()),
+                        .child("Restart the launcher")
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.self_update = SelfUpdate::Failed(backend::restart());
+                            cx.notify();
+                        })),
                 ),
             _ => div().child(format!("Launcher {}", backend::VERSION)),
         };
@@ -1513,9 +1526,7 @@ impl Launcher {
             SelfUpdate::Downloading(v, p) => {
                 format!("{}  ·  downloading {v}, {:.0}%", backend::VERSION, p * 100.)
             }
-            SelfUpdate::Ready(v) => {
-                format!("{}  ·  {v} is ready, restart to use it", backend::VERSION)
-            }
+            SelfUpdate::Ready(v) => format!("Updated to {v}. Restart the launcher to use it."),
             SelfUpdate::Failed(e) => format!("{}  ·  the update failed: {e}", backend::VERSION),
             SelfUpdate::Idle => match &self.updates.launcher {
                 Some(r) => format!(
@@ -1531,8 +1542,12 @@ impl Launcher {
         };
         let launcher_action = match &self.self_update {
             SelfUpdate::Ready(_) => Some(
-                button("restart-settings", "Restart", Kind::Secondary, &t)
-                    .on_click(|_, _, _| backend::restart()),
+                button("restart-settings", "Restart", Kind::Secondary, &t).on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
+                        this.self_update = SelfUpdate::Failed(backend::restart());
+                        cx.notify();
+                    },
+                )),
             ),
             SelfUpdate::Downloading(..) => None,
             _ => Some(
