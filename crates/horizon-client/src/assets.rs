@@ -180,15 +180,43 @@ impl Assets {
                 .collect::<Result<_>>()?,
         ));
         let mut material_states = [BlockStateId(0); 6];
-        let mut sprites = crate::sprites::Sprites::default();
         for (layer, name) in MATERIALS.iter().enumerate() {
-            let state = registry
+            material_states[layer] = registry
                 .default_state(&format!("minecraft:{name}"))
                 .ok_or_else(|| invalid("missing test-scene material"))?;
-            material_states[layer] = state;
-            sprites.insert(root, &format!("minecraft:block/{name}"))?;
         }
         let registry: &'static BlockRegistry = Box::leak(Box::new(registry));
+        Self::with_models(
+            root,
+            registry,
+            properties,
+            material_states,
+            blocks_fluid_flow,
+        )
+    }
+    /// The same blocks with the models and sprites of another resource root
+    /// (resource packs changed): the registry and block facts come from the
+    /// game data, which resource packs do not touch.
+    pub fn reload(&self, root: &Path) -> Result<Self> {
+        Self::with_models(
+            root,
+            self.registry,
+            self.properties.clone(),
+            self.material_states,
+            self.blocks_fluid_flow.clone(),
+        )
+    }
+    fn with_models(
+        root: &Path,
+        registry: &'static BlockRegistry,
+        properties: Properties,
+        material_states: [BlockStateId; 6],
+        blocks_fluid_flow: BTreeSet<String>,
+    ) -> Result<Self> {
+        let mut sprites = crate::sprites::Sprites::default();
+        for name in MATERIALS {
+            sprites.insert(root, &format!("minecraft:block/{name}"))?;
+        }
         let models = crate::models::prepare(root, registry, &mut sprites)?;
         // Fluids are drawn by the fluid renderer, not block models; breaking
         // progress uses the destroy-stage overlays.
@@ -204,6 +232,7 @@ impl Assets {
         for stage in 0..10 {
             sprites.insert(root, &format!("minecraft:block/destroy_stage_{stage}"))?;
         }
+        sprites.finish();
         Ok(Self {
             registry,
             properties,

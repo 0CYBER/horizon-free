@@ -387,10 +387,19 @@ pub fn build_overlay(vanilla: &Path, packs: &[Pack], out: &Path) -> io::Result<(
     fs::create_dir_all(out)?;
     // Final owner of every overridden file.
     let mut files: BTreeMap<String, (usize, Provided)> = BTreeMap::new();
+    // Every pack's copy of the files vanilla reads as a resource stack.
+    let mut stacks: BTreeMap<String, Vec<(usize, Provided)>> = BTreeMap::new();
     for (i, p) in packs.iter().enumerate() {
         // A pack's filter hides what the packs below it provide.
         files.retain(|name, _| !p.filter.iter().any(|f| f.blocks(name)));
+        stacks.retain(|name, _| !p.filter.iter().any(|f| f.blocks(name)));
         for (name, provided) in pack_files(p)? {
+            if merge_kind(&name).is_some() {
+                stacks
+                    .entry(name.clone())
+                    .or_default()
+                    .push((i, provided.clone()));
+            }
             files.insert(name, (i, provided));
         }
     }
@@ -413,12 +422,39 @@ pub fn build_overlay(vanilla: &Path, packs: &[Pack], out: &Path) -> io::Result<(
             }
         })
         .collect();
+    // Stacked files merge every layer, vanilla's first (unless filtered).
+    let mut merged: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    for (name, stack) in &stacks {
+        let mut layers = Vec::new();
+        if !filters.iter().any(|f| f.blocks(name))
+            && let Ok(bytes) = fs::read(vanilla.join(name))
+        {
+            layers.push(bytes);
+        }
+        for (owner, (path, inner)) in stack {
+            let bytes = match path {
+                Some(p) => fs::read(p).ok(),
+                None => zips
+                    .get(*owner)
+                    .and_then(Option::as_ref)
+                    .and_then(|z| z.read(inner).ok()),
+            };
+            layers.extend(bytes);
+        }
+        if let Some(kind) = merge_kind(name)
+            && let Some(bytes) = merge(kind, &layers)
+        {
+            merged.insert(name.clone(), bytes);
+        }
+    }
+    #[allow(clippy::too_many_arguments)]
     fn mirror(
         rel: &str,
         vanilla: &Path,
         out: &Path,
         touched: &BTreeSet<String>,
         files: &BTreeMap<String, (usize, Provided)>,
+        merged: &BTreeMap<String, Vec<u8>>,
         filters: &[&Filter],
         zips: &[Option<Zip>],
     ) -> io::Result<()> {
@@ -451,7 +487,9 @@ pub fn build_overlay(vanilla: &Path, packs: &[Pack], out: &Path) -> io::Result<(
         }
         for name in names {
             let child = format!("{prefix}{name}");
-            if let Some((owner, (path, inner))) = files.get(&child) {
+            if let Some(bytes) = merged.get(&child) {
+                fs::write(out.join(&child), bytes)?;
+            } else if let Some((owner, (path, inner))) = files.get(&child) {
                 let target = out.join(&child);
                 match path {
                     Some(p) => link(p, &target)?,
@@ -464,7 +502,7 @@ pub fn build_overlay(vanilla: &Path, packs: &[Pack], out: &Path) -> io::Result<(
             } else if touched.contains(&child)
                 || (vanilla.join(&child).is_dir() && !filters.is_empty())
             {
-                mirror(&child, vanilla, out, touched, files, filters, zips)?;
+                mirror(&child, vanilla, out, touched, files, merged, filters, zips)?;
             } else if filters.iter().any(|f| f.blocks(&child)) {
                 // Hidden by a pack's filter.
             } else {
@@ -473,7 +511,93 @@ pub fn build_overlay(vanilla: &Path, packs: &[Pack], out: &Path) -> io::Result<(
         }
         Ok(())
     }
-    mirror("", vanilla, out, &touched_dirs, &files, &filters, &zips)
+    mirror(
+        "",
+        vanilla,
+        out,
+        &touched_dirs,
+        &files,
+        &merged,
+        &filters,
+        &zips,
+    )
+}
+/// Files vanilla loads from every pack in turn (`getResourceStack`) rather
+/// than from the top pack only.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Merge {
+    /// `ClientLanguage.appendFrom`: later packs override keys.
+    Lang,
+    /// `SoundManager.Preparations.handleRegistration`: sounds add up unless
+    /// an event says `replace`.
+    Sounds,
+    /// `FontManager.loadResourceStack`: the top pack's providers come first.
+    Font,
+    /// `SpriteSourceList.load`: sources from the bottom pack up.
+    Atlas,
+}
+fn merge_kind(name: &str) -> Option<Merge> {
+    let (_, rest) = name.strip_prefix("assets/")?.split_once('/')?;
+    if rest == "sounds.json" {
+        return Some(Merge::Sounds);
+    }
+    let dir = rest.strip_suffix(".json")?.split_once('/')?.0;
+    match dir {
+        "lang" => Some(Merge::Lang),
+        "font" => Some(Merge::Font),
+        "atlases" => Some(Merge::Atlas),
+        _ => None,
+    }
+}
+/// One file with the effect of loading `layers` (bottom first) as vanilla
+/// does. Layers that do not parse are skipped, as vanilla logs and skips them.
+fn merge(kind: Merge, layers: &[Vec<u8>]) -> Option<Vec<u8>> {
+    use serde_json::{Map, Value};
+    let parsed: Vec<Map<String, Value>> = layers
+        .iter()
+        // SoundManager skips a sounds.json Gson rejects, whole.
+        .filter(|b| kind != Merge::Sounds || crate::sound_events::is_valid_file(b))
+        .filter_map(|b| match serde_json::from_slice(b) {
+            Ok(Value::Object(m)) => Some(m),
+            _ => None,
+        })
+        .collect();
+    let list = |key: &str, layers: &mut dyn Iterator<Item = &Map<String, Value>>| {
+        let items: Vec<Value> = layers
+            .filter_map(|l| l.get(key).and_then(Value::as_array))
+            .flatten()
+            .cloned()
+            .collect();
+        Value::Object(Map::from_iter([(key.to_owned(), Value::Array(items))]))
+    };
+    let out = match kind {
+        Merge::Lang => Value::Object(parsed.into_iter().flatten().collect()),
+        Merge::Sounds => {
+            let mut events = Map::new();
+            for (event, def) in parsed.into_iter().flatten() {
+                if !events.contains_key(&event)
+                    || crate::sound_events::json_bool(&def["replace"], false)
+                {
+                    let mut fresh = Map::new();
+                    if let Some(subtitle) = def.get("subtitle") {
+                        fresh.insert("subtitle".into(), subtitle.clone());
+                    }
+                    fresh.insert("sounds".into(), Value::Array(Vec::new()));
+                    events.insert(event.clone(), Value::Object(fresh));
+                }
+                if let (Some(Value::Array(sounds)), Some(Value::Array(more))) = (
+                    events.get_mut(&event).and_then(|e| e.get_mut("sounds")),
+                    def.get("sounds"),
+                ) {
+                    sounds.extend(more.iter().cloned());
+                }
+            }
+            Value::Object(events)
+        }
+        Merge::Font => list("providers", &mut parsed.iter().rev()),
+        Merge::Atlas => list("sources", &mut parsed.iter()),
+    };
+    serde_json::to_vec(&out).ok()
 }
 /// The packs to apply for an options.txt `resourcePacks` list (bottom first).
 pub fn enabled(all: &[Pack], ids: &[String]) -> Vec<Pack> {
@@ -709,6 +833,74 @@ mod tests {
         );
     }
     #[test]
+    fn stacked_resources_merge_like_vanilla() {
+        let json = |v: &str| v.as_bytes().to_vec();
+        let parse = |b: Vec<u8>| serde_json::from_slice::<serde_json::Value>(&b).unwrap();
+        // ClientLanguage: later packs override keys, the rest stays.
+        let lang = merge(
+            Merge::Lang,
+            &[
+                json(r#"{"a":"vanilla a","b":"vanilla b"}"#),
+                json(r#"{"b":"pack b"}"#),
+            ],
+        );
+        assert_eq!(
+            parse(lang.unwrap()),
+            serde_json::json!({"a":"vanilla a","b":"pack b"})
+        );
+        // SoundManager: sounds add up; `replace` starts the event over.
+        let sounds = merge(
+            Merge::Sounds,
+            &[
+                json(r#"{"x":{"subtitle":"s.x","sounds":["v1"]},"y":{"sounds":["v2"]}}"#),
+                json(
+                    r#"{"x":{"sounds":["p1"]},"y":{"replace":true,"subtitle":"s.y","sounds":["p2"]}}"#,
+                ),
+                b"not json".to_vec(),
+            ],
+        );
+        assert_eq!(
+            parse(sounds.unwrap()),
+            serde_json::json!({
+                "x":{"subtitle":"s.x","sounds":["v1","p1"]},
+                "y":{"subtitle":"s.y","sounds":["p2"]}
+            })
+        );
+        // FontManager: the top pack's providers come first.
+        let font = merge(
+            Merge::Font,
+            &[json(r#"{"providers":[1,2]}"#), json(r#"{"providers":[3]}"#)],
+        );
+        assert_eq!(
+            parse(font.unwrap()),
+            serde_json::json!({"providers":[3,1,2]})
+        );
+        // SpriteSourceList: sources from the bottom pack up.
+        let atlas = merge(
+            Merge::Atlas,
+            &[json(r#"{"sources":[1]}"#), json(r#"{"sources":[2]}"#)],
+        );
+        assert_eq!(parse(atlas.unwrap()), serde_json::json!({"sources":[1,2]}));
+        assert_eq!(
+            merge_kind("assets/minecraft/lang/en_us.json"),
+            Some(Merge::Lang)
+        );
+        assert_eq!(
+            merge_kind("assets/minecraft/sounds.json"),
+            Some(Merge::Sounds)
+        );
+        assert_eq!(
+            merge_kind("assets/minecraft/font/default.json"),
+            Some(Merge::Font)
+        );
+        assert_eq!(merge_kind("assets/minecraft/font/unifont.zip"), None);
+        assert_eq!(
+            merge_kind("assets/minecraft/atlases/blocks.json"),
+            Some(Merge::Atlas)
+        );
+        assert_eq!(merge_kind("assets/minecraft/models/block/stone.json"), None);
+    }
+    #[test]
     fn overlay_layers_packs_over_vanilla() {
         let base = std::env::temp_dir().join(format!("horizon-packs-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
@@ -725,7 +917,11 @@ mod tests {
             b"vanilla dirt",
         )
         .unwrap();
-        fs::write(vanilla.join("assets/minecraft/lang/en_us.json"), b"{}").unwrap();
+        fs::write(
+            vanilla.join("assets/minecraft/lang/en_us.json"),
+            br#"{"a":"vanilla","b":"vanilla"}"#,
+        )
+        .unwrap();
         fs::write(vanilla.join("facts.json"), b"[]").unwrap();
         let pack_dir = base.join("packs/Mine");
         fs::create_dir_all(pack_dir.join("assets/minecraft/textures/block")).unwrap();
@@ -737,6 +933,12 @@ mod tests {
         fs::write(
             pack_dir.join("assets/minecraft/textures/block/stone.png"),
             b"pack",
+        )
+        .unwrap();
+        fs::create_dir_all(pack_dir.join("assets/minecraft/lang")).unwrap();
+        fs::write(
+            pack_dir.join("assets/minecraft/lang/en_us.json"),
+            br#"{"b":"pack"}"#,
         )
         .unwrap();
         let packs = discover(&vanilla, &base.join("packs"));
@@ -752,9 +954,10 @@ mod tests {
             fs::read(out.join("assets/minecraft/textures/block/dirt.png")).unwrap(),
             b"vanilla dirt"
         );
+        // A pack's language file adds to vanilla's instead of replacing it.
         assert_eq!(
             fs::read(out.join("assets/minecraft/lang/en_us.json")).unwrap(),
-            b"{}"
+            br#"{"a":"vanilla","b":"pack"}"#
         );
         assert_eq!(fs::read(out.join("facts.json")).unwrap(), b"[]");
         let _ = fs::remove_dir_all(base);

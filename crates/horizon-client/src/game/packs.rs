@@ -1,6 +1,5 @@
-//! Resource pack selection bound to the game: the pack screen lists and
-//! reloading after a change (atlas, fonts, GUI metadata, languages and item
-//! icons live; block textures and models from the next start).
+//! Resource pack selection bound to the game: the pack screen lists, and a
+//! full resource reload after a change, while playing.
 use super::Game;
 use horizon_client::{
     hud::HudAtlas,
@@ -21,6 +20,19 @@ pub fn packs_dir() -> PathBuf {
     std::env::current_dir()
         .unwrap_or_default()
         .join("resourcepacks")
+}
+/// `Util.getPlatform().openPath`: the system file manager on the folder.
+pub fn open_folder(dir: &Path) {
+    let program = if cfg!(target_os = "windows") {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    if let Err(e) = std::process::Command::new(program).arg(dir).spawn() {
+        eprintln!("Horizon: could not open {}: {e}", dir.display());
+    }
 }
 /// The resource root to load from, given the vanilla root and the selection.
 pub fn startup_root(vanilla: &Path, selected: &[String]) -> PathBuf {
@@ -81,63 +93,67 @@ impl Game<'_> {
         o.pack_selection = self.settings.resource_packs.clone();
         o.pack_screen = None;
     }
-    /// Rebuild the overlay and reload what can change while running.
+    /// `Minecraft.reloadResourcePacks`: rebuild the overlay and reload every
+    /// client resource from it, as vanilla's reload listeners do: block
+    /// models and sprites (every section is meshed again,
+    /// `LevelRenderer.allChanged`), the shared atlas (GUI, item, entity,
+    /// particle and font textures), item models, sounds, languages, GUI
+    /// metadata and the cloud and world border textures.
     pub(super) fn reload_packs(&mut self) {
         let vanilla = self.vanilla_root();
         if self.ui.vanilla_root.as_os_str().is_empty() {
             self.ui.vanilla_root = vanilla.clone();
         }
         let root = startup_root(&vanilla, &self.settings.resource_packs);
-        self.options.resources = root.clone();
-        horizon_client::ui::load_metadata(&root);
-        match HudAtlas::build(&root) {
-            Ok(mut atlas) => {
-                atlas.font.uniform = self.settings.force_unicode;
-                atlas.font.japanese = self.settings.japanese_glyphs;
-                let same_size =
-                    atlas.width == self.res.atlas.width && atlas.height == self.res.atlas.height;
-                if same_size {
-                    if let Some(texture) = self
-                        .renderer
-                        .as_ref()
-                        .and_then(|r| r.hud.atlas_texture.clone())
-                        && let Some(r) = self.renderer.as_ref()
-                    {
-                        r.queue.write_texture(
-                            wgpu::TexelCopyTextureInfo {
-                                texture: &texture,
-                                mip_level: 0,
-                                origin: wgpu::Origin3d::ZERO,
-                                aspect: wgpu::TextureAspect::All,
-                            },
-                            &atlas.pixels,
-                            wgpu::TexelCopyBufferLayout {
-                                offset: 0,
-                                bytes_per_row: Some(atlas.width * 4),
-                                rows_per_image: None,
-                            },
-                            wgpu::Extent3d {
-                                width: atlas.width,
-                                height: atlas.height,
-                                depth_or_array_layers: 1,
-                            },
-                        );
-                    }
-                    self.res.atlas = atlas;
-                    match horizon_client::item_render::ItemRenderer::load(&root) {
-                        Ok(r) => self.res.item_renderer = std::sync::Arc::new(r),
-                        Err(e) => eprintln!("Horizon: item model reload failed: {e}"),
-                    }
-                } else {
-                    eprintln!(
-                        "Horizon: resource pack atlas size changed; restart to apply GUI textures"
-                    );
-                }
-            }
-            Err(e) => eprintln!("Horizon: resource pack reload failed: {e}"),
+        if let Err(e) = self.reload_resources(&root) {
+            eprintln!("Horizon: resource reload failed: {e}");
         }
-        let code = lang::code();
-        lang::set(lang::Language::load(&[&root], &code));
+    }
+    fn reload_resources(&mut self, root: &Path) -> horizon_client::Result<()> {
+        let assets = std::sync::Arc::new(self.res.assets.reload(root)?);
+        let mut atlas = HudAtlas::build(root)?;
+        atlas.font.uniform = self.settings.force_unicode;
+        atlas.font.japanese = self.settings.japanese_glyphs;
+        let item_renderer = horizon_client::item_render::ItemRenderer::load(root)?;
+        let visibility = horizon_client::models::load_visibility(root, assets.registry)?;
+        let tables = std::sync::Arc::new(horizon_client::mesher::MeshTables::new(
+            &assets,
+            &self.res.facts,
+            visibility,
+        )?);
+        // Everything loaded: switch over.
+        self.options.resources = root.to_path_buf();
+        let context = std::sync::Arc::new(horizon_client::streaming::WorkerContext {
+            assets: assets.clone(),
+            tables,
+            biomes: self.res.context.biomes.clone(),
+            light: self.res.context.light.clone(),
+        });
+        self.res.layer_names = assets
+            .sprite_layers
+            .iter()
+            .map(|(name, layer)| (*layer, name.trim_start_matches("minecraft:").to_owned()))
+            .collect();
+        self.res.assets = assets;
+        self.res.context = context.clone();
+        self.res.atlas = atlas;
+        self.res.item_renderer = std::sync::Arc::new(item_renderer);
+        self.res.clouds = super::load_clouds(root);
+        self.res.forcefield = super::load_forcefield(root);
+        self.res.names = super::Names::load(root);
+        horizon_client::ui::load_metadata(root);
+        lang::set(lang::Language::load(&[&root.to_path_buf()], &lang::code()));
+        self.audio.reload(root);
+        self.streaming.reload_resources(&mut self.world, context);
+        self.pending_uploads.clear();
+        // New GPU textures: a renderer built from the reloaded resources; the
+        // sections are uploaded again as they are meshed.
+        if let Some(window) = self.window.clone() {
+            self.renderer = None;
+            self.renderer = Some(self.new_renderer(window)?);
+            self.apply_ui_settings();
+        }
         self.ui.chat.rescale(&self.res.atlas);
+        Ok(())
     }
 }

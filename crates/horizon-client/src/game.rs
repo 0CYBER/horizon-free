@@ -6649,6 +6649,25 @@ impl Game<'_> {
         }
         out
     }
+    /// The renderer for the window, with the current block sprites, shared
+    /// atlas and world border texture.
+    fn new_renderer(&self, window: Arc<Window>) -> Result<Renderer> {
+        let assets = &self.res.assets;
+        pollster::block_on(Renderer::new(
+            window,
+            self.options.offscreen,
+            &assets.pixels,
+            assets.sprite_size,
+            assets.texture_layers,
+            &assets.animations,
+            (
+                &self.res.atlas.pixels,
+                self.res.atlas.width,
+                self.res.atlas.height,
+            ),
+            (&self.res.forcefield.2, self.res.forcefield.0),
+        ))
+    }
     fn apply_settings(&mut self) {
         self.streaming.radius = self.settings.render_distance;
         self.streaming.biome_blend = self.settings.biome_blend;
@@ -7796,21 +7815,7 @@ impl ApplicationHandler for Game<'_> {
                 return;
             }
         };
-        let assets = &self.res.assets;
-        match pollster::block_on(Renderer::new(
-            window.clone(),
-            self.options.offscreen,
-            &assets.pixels,
-            assets.sprite_size,
-            assets.texture_layers,
-            &assets.animations,
-            (
-                &self.res.atlas.pixels,
-                self.res.atlas.width,
-                self.res.atlas.height,
-            ),
-            (&self.res.forcefield.2, self.res.forcefield.0),
-        )) {
+        match self.new_renderer(window.clone()) {
             Ok(r) => self.renderer = Some(r),
             Err(e) => {
                 self.error = Some(e.to_string());
@@ -8369,6 +8374,25 @@ impl ApplicationHandler for Game<'_> {
         }
     }
 }
+/// clouds.png as filled cells (`CloudRenderer.prepare`: alpha 10 or more).
+fn load_clouds(root: &std::path::Path) -> (u32, u32, Vec<bool>) {
+    horizon_client::hud::decode(&root.join("assets/minecraft/textures/environment/clouds.png"))
+        .map(|(w, h, px)| {
+            (
+                w,
+                h,
+                px.as_chunks::<4>().0.iter().map(|p| p[3] >= 10).collect(),
+            )
+        })
+        .unwrap_or((1, 1, vec![false]))
+}
+/// misc/forcefield.png for the world border wall (square, power of two).
+fn load_forcefield(root: &std::path::Path) -> (u32, u32, Vec<u8>) {
+    horizon_client::hud::decode(&root.join("assets/minecraft/textures/misc/forcefield.png"))
+        .ok()
+        .filter(|(w, h, _)| w == h && w.is_power_of_two())
+        .unwrap_or((1, 1, vec![0; 4]))
+}
 pub fn run() -> Result<()> {
     let Some(mut options) = Options::read()? else {
         return Ok(());
@@ -8381,10 +8405,24 @@ pub fn run() -> Result<()> {
     let vanilla_root = options.resources.clone();
     let early_settings = Settings::load(&std::env::current_dir()?.join("options.txt"));
     options.resources = packs::startup_root(&vanilla_root, &early_settings.resource_packs);
+    let assets = match Assets::load(&options.resources) {
+        Ok(assets) => assets,
+        // Minecraft.rollbackResourcePacks: the packs break loading, start
+        // with the game's own resources.
+        Err(e) if options.resources != vanilla_root => {
+            eprintln!("Horizon: resource packs failed to load ({e}); using the default resources");
+            options.resources = vanilla_root.clone();
+            Assets::load(&vanilla_root)?
+        }
+        Err(e) => {
+            return Err(format!(
+                "{e}\nPrepare resources with: python3 tools/prepare_native_client.py --prepare"
+            )
+            .into());
+        }
+    };
     let root = options.resources.clone();
-    let assets = Arc::new(Assets::load(&root).map_err(|e| {
-        format!("{e}\nPrepare resources with: python3 tools/prepare_native_client.py --prepare")
-    })?);
+    let assets = Arc::new(assets);
     eprintln!("load assets: {:.2}s", started.elapsed().as_secs_f32());
     let facts = BlockFacts::load(&root, assets.registry)?;
     let mob_data = horizon_client::mobs::MobData::load(&root, &facts);
@@ -8485,23 +8523,8 @@ pub fn run() -> Result<()> {
         end_environment: Environment::load_dimension(&root, "the_end", false)?,
         behaviours: Behaviours::load(registry_owner.registry, &root)?,
         names: Names::load(&root),
-        clouds: horizon_client::hud::decode(
-            &root.join("assets/minecraft/textures/environment/clouds.png"),
-        )
-        .map(|(w, h, px)| {
-            (
-                w,
-                h,
-                px.as_chunks::<4>().0.iter().map(|p| p[3] >= 10).collect(),
-            )
-        })
-        .unwrap_or((1, 1, vec![false])),
-        forcefield: horizon_client::hud::decode(
-            &root.join("assets/minecraft/textures/misc/forcefield.png"),
-        )
-        .ok()
-        .filter(|(w, h, _)| w == h && w.is_power_of_two())
-        .unwrap_or((1, 1, vec![0; 4])),
+        clouds: load_clouds(&root),
+        forcefield: load_forcefield(&root),
         mob_types: MobTypes::load(&root)?
             .types
             .into_iter()
