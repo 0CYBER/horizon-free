@@ -5,43 +5,36 @@ use gpui::{rgb, Hsla, WindowAppearance};
 use horizon_theme as tokens;
 use std::time::Duration;
 
+pub use tokens::{Step, BODY, CAPTION, DISPLAY, HEADING, LABEL, MICRO, TITLE, UI, WORDMARK};
 pub const FONT: &str = tokens::FONT;
-/// Display type is Geist too, at medium weight.
-pub const DISPLAY: &str = tokens::FONT;
 pub const MONO: &str = tokens::MONO;
 
-pub const SMALL: f32 = tokens::CAPTION.px;
-pub const BODY: f32 = tokens::LABEL.px;
-pub const LARGE: f32 = tokens::BODY.px;
-pub const TITLE: f32 = tokens::TITLE.px;
-pub const HERO: f32 = tokens::DISPLAY.px;
-
-/// Shapes and controls, shared with the game's menus.
-pub use tokens::{CONTROL, DISABLED, PRESSED, RADIUS, SEGMENT};
-pub const PRESSED_SOFT: f32 = tokens::PRESSED;
-pub const PRIMARY_HOVER: f32 = 0.10;
-pub const RADIUS_SEGMENT: f32 = tokens::RADIUS;
-pub const RADIUS_GROUP: f32 = tokens::RADIUS;
-pub const ROW_LABEL: f32 = 150.;
-pub const SIDEBAR: f32 = 200.;
+/// Shapes and controls, shared with the game's menus and the website.
+pub use tokens::{
+    CONTROL, CONTROL_LARGE, DISABLED, FIELD, GUTTER, INDEX, PLATE_BLEED, PRESSED, RADIUS,
+    RADIUS_PILL, RADIUS_PLATE, RISE, ROW, SEGMENT,
+};
 
 /// Motion: short and eased out, never bouncy.
 pub const QUICK: Duration = tokens::QUICK.duration();
 pub const MOVE: Duration = tokens::MOVE.duration();
+pub const ENTER: Duration = tokens::ENTER.duration();
+pub const STAGGER: Duration = tokens::STAGGER;
 
 #[derive(Clone, Copy)]
 pub struct Theme {
-    pub bg: Hsla,
-    pub sidebar: Hsla,
-    pub raised: Hsla,
-    pub hover: Hsla,
-    pub border: Hsla,
-    pub text: Hsla,
+    pub page: Hsla,
+    pub plate_soft: Hsla,
+    pub plate: Hsla,
+    pub surface: Hsla,
+    pub rule: Hsla,
+    pub ink: Hsla,
+    pub ink_soft: Hsla,
     pub muted: Hsla,
-    pub faint: Hsla,
     pub accent: Hsla,
     pub on_accent: Hsla,
     pub danger: Hsla,
+    pub success: Hsla,
     pub dark: bool,
 }
 
@@ -50,7 +43,14 @@ fn c(hex: u32) -> Hsla {
 }
 
 impl Theme {
+    /// The system's appearance; `HORIZON_LAUNCHER_APPEARANCE=light` or `dark` overrides it (for
+    /// screenshots and tests).
     pub fn for_appearance(appearance: WindowAppearance) -> Self {
+        match std::env::var("HORIZON_LAUNCHER_APPEARANCE").as_deref() {
+            Ok("light") => return Self::light(),
+            Ok("dark") => return Self::dark(),
+            _ => {}
+        }
         match appearance {
             WindowAppearance::Light | WindowAppearance::VibrantLight => Self::light(),
             _ => Self::dark(),
@@ -67,17 +67,18 @@ impl Theme {
 
     fn from(p: tokens::Palette) -> Self {
         Self {
-            bg: c(p.page),
-            sidebar: c(p.plate_soft),
-            raised: c(p.plate_soft),
-            hover: c(p.plate),
-            border: c(p.rule),
-            text: c(p.ink),
-            muted: c(p.ink_soft),
-            faint: c(p.muted),
+            page: c(p.page),
+            plate_soft: c(p.plate_soft),
+            plate: c(p.plate),
+            surface: c(p.surface),
+            rule: c(p.rule),
+            ink: c(p.ink),
+            ink_soft: c(p.ink_soft),
+            muted: c(p.muted),
             accent: c(p.accent),
             on_accent: c(p.on_accent),
             danger: c(p.danger),
+            success: c(p.success),
             dark: p.dark,
         }
     }
