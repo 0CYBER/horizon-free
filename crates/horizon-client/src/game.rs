@@ -6966,6 +6966,10 @@ impl Game<'_> {
         ))
     }
     fn apply_settings(&mut self) {
+        if let Some(r) = &self.renderer {
+            self.settings
+                .clamp_gui_scale([r.config.width as i32, r.config.height as i32]);
+        }
         self.streaming.radius = self.settings.render_distance;
         self.streaming.biome_blend = self.settings.biome_blend;
         self.streaming.smooth_lighting = self.settings.smooth_lighting;
@@ -8217,6 +8221,7 @@ impl ApplicationHandler for Game<'_> {
             }
         }
         self.window = Some(window);
+        self.apply_settings();
         self.previous = Instant::now();
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {

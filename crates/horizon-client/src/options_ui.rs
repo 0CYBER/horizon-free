@@ -189,7 +189,6 @@ impl Opt {
             } else {
                 s.volumes[i]
             }),
-            Opt::GuiScale => unit(s.gui_scale as f32, 0.0, 6.0),
             Opt::Gamma => Kind::Slider(s.gamma),
             Opt::MaxFps => unit(s.max_fps as f32, 10.0, 260.0),
             Opt::CloudRange => unit(s.cloud_range as f32, 2.0, 128.0),
@@ -261,11 +260,12 @@ impl Opt {
                 }
             }
             Opt::GuiScale => {
-                if s.gui_scale == 0 {
+                let value = if s.gui_scale == 0 {
                     tr("options.guiScale.auto")
                 } else {
                     Text::literal(s.gui_scale.to_string())
-                }
+                };
+                generic(c, value)
             }
             Opt::Gamma => match (f64::from(s.gamma) * 100.0) as i32 {
                 0 => generic(c, tr("options.gamma.min")),
@@ -446,7 +446,6 @@ impl Opt {
             Opt::WheelSensitivity => s.mouse_wheel_sensitivity = 0.01 + v * 9.99,
             Opt::Volume(0) => s.master_volume = v,
             Opt::Volume(i) => s.volumes[i] = v,
-            Opt::GuiScale => s.gui_scale = step(0.0, 6.0) as u32,
             Opt::Gamma => s.gamma = v,
             Opt::MaxFps => s.max_fps = (step(1.0, 26.0) as u32) * 10,
             Opt::CloudRange => s.cloud_range = step(2.0, 128.0) as i32,
@@ -494,7 +493,7 @@ impl Opt {
         )
     }
     /// Advance a cycle button (CycleButton.cycleValue).
-    pub fn cycle(self, s: &mut Settings, back: bool) {
+    pub fn cycle(self, s: &mut Settings, back: bool, framebuffer: [i32; 2]) {
         let next = |n: u8, count: u8| {
             if back {
                 (n + count - 1) % count
@@ -503,6 +502,17 @@ impl Opt {
             }
         };
         match self {
+            Opt::GuiScale => {
+                let max = crate::window::calculate_scale(framebuffer, 0, s.force_unicode) as u32;
+                let value = s.gui_scale.min(max);
+                s.gui_scale = if back {
+                    if value == 0 { max } else { value - 1 }
+                } else if value == max {
+                    0
+                } else {
+                    value + 1
+                };
+            }
             Opt::InvertY => s.invert_y = !s.invert_y,
             Opt::DiscreteScroll => s.discrete_scroll = !s.discrete_scroll,
             Opt::ViewBobbing => s.view_bobbing = !s.view_bobbing,
@@ -1609,16 +1619,20 @@ impl OptionsUi {
         x: f32,
         y: f32,
         size: (f32, f32),
+        framebuffer: [i32; 2],
         drag: bool,
         right: bool,
     ) -> Vec<Event> {
         if crate::ui_theme::horizon() && self.page() == Page::Main {
-            return self.click_horizon(s, atlas, x, y, drag, right);
+            return self.click_horizon(s, atlas, x, y, framebuffer, drag, right);
         }
         if let Some(level) = Self::graphics_level(self.page()) {
             use crate::graphics_ui::Action;
             let mut events = Vec::new();
-            for action in self.graphics.click(level, s, (x, y), size, drag, right) {
+            for action in self
+                .graphics
+                .click(level, s, (x, y), size, framebuffer, drag, right)
+            {
                 match action {
                     Action::ButtonClick => events.push(Event::ButtonClick),
                     Action::Changed => events.push(Event::Changed),
@@ -1709,7 +1723,7 @@ impl OptionsUi {
                         Act::Push(p) => self.push(p),
                         Act::Done => events.extend(self.back(s)),
                         Act::Cycle(opt) => {
-                            opt.cycle(s, right);
+                            opt.cycle(s, right, framebuffer);
                             if opt == Opt::Preset {
                                 apply_preset(s);
                             }
@@ -1986,6 +2000,89 @@ mod tests {
     }
 
     #[test]
+    fn classic_video_gui_scale_cycles_on_press_without_dragging() {
+        let atlas = atlas();
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        ui.show(Page::Video);
+        let size = (480.0, 480.0);
+        let (widgets, _, _, _) = ui.layout(&s, size.0, size.1);
+        let button = widgets
+            .iter()
+            .find(|wd| {
+                matches!(
+                    wd.kind,
+                    WKind::Button {
+                        active: true,
+                        act: Act::Cycle(Opt::GuiScale),
+                        ..
+                    }
+                )
+            })
+            .expect("GUI Scale must be a cycle button in classic Video Settings");
+        let (x, y) = (button.x + 1.0, button.y + 1.0);
+        assert!(Opt::GuiScale.slider_position(&s).is_none());
+        assert!(
+            ui.click(&mut s, &atlas, x, y, size, [854, 480], false, true)
+                .is_empty()
+        );
+        assert_eq!(s.gui_scale, 0);
+        for expected in [1, 2, 0] {
+            assert_eq!(
+                ui.click(&mut s, &atlas, x, y, size, [854, 480], false, false),
+                vec![Event::ButtonClick, Event::Changed]
+            );
+            assert_eq!(s.gui_scale, expected);
+            assert!(
+                ui.click(&mut s, &atlas, x + 100.0, y, size, [854, 480], true, false)
+                    .is_empty()
+            );
+            assert_eq!(s.gui_scale, expected);
+            assert!(ui.release().is_empty());
+        }
+    }
+
+    #[test]
+    fn gui_scale_cycle_handles_reverse_and_out_of_range_saved_values() {
+        for (framebuffer, force_unicode, max) in [
+            ([854, 480], false, 2),
+            ([1920, 1080], false, 4),
+            ([1280, 720], true, 4),
+            ([3840, 2160], false, 9),
+            ([320, 240], false, 1),
+        ] {
+            let mut s = Settings {
+                force_unicode,
+                ..Settings::default()
+            };
+            for expected in (0..=max).rev() {
+                Opt::GuiScale.cycle(&mut s, true, framebuffer);
+                assert_eq!(s.gui_scale, expected);
+            }
+            for expected in (1..=max).chain([0]) {
+                Opt::GuiScale.cycle(&mut s, false, framebuffer);
+                assert_eq!(s.gui_scale, expected);
+            }
+            s.gui_scale = u32::MAX;
+            s.clamp_gui_scale(framebuffer);
+            assert_eq!(s.gui_scale, max);
+            s.gui_scale = u32::MAX;
+            Opt::GuiScale.cycle(&mut s, false, framebuffer);
+            assert_eq!(s.gui_scale, 0);
+            s.gui_scale = u32::MAX;
+            Opt::GuiScale.cycle(&mut s, true, framebuffer);
+            assert_eq!(s.gui_scale, max - 1);
+        }
+        let mut s = Settings {
+            gui_scale: 4,
+            ..Settings::default()
+        };
+        // A resized window supplies a new maximum on the next interaction.
+        Opt::GuiScale.cycle(&mut s, true, [854, 480]);
+        assert_eq!(s.gui_scale, 1);
+    }
+
+    #[test]
     fn classic_buttons_sound_but_disabled_and_nonprimary_clicks_are_silent() {
         let atlas = atlas();
         let mut s = Settings::default();
@@ -2007,14 +2104,17 @@ mod tests {
             })
             .unwrap();
         let (x, y) = (button.x + 1.0, button.y + 1.0);
-        assert!(ui.click(&mut s, &atlas, x, y, size, false, true).is_empty());
+        assert!(
+            ui.click(&mut s, &atlas, x, y, size, [854, 480], false, true)
+                .is_empty()
+        );
         assert_eq!(
-            ui.click(&mut s, &atlas, x, y, size, false, false),
+            ui.click(&mut s, &atlas, x, y, size, [854, 480], false, false),
             vec![Event::ButtonClick, Event::Changed]
         );
         assert!(ui.release().is_empty());
         assert!(
-            ui.click(&mut s, &atlas, 0.0, 0.0, size, false, false)
+            ui.click(&mut s, &atlas, 0.0, 0.0, size, [854, 480], false, false)
                 .is_empty()
         );
         ui.show(Page::KeyBinds);
@@ -2030,6 +2130,7 @@ mod tests {
                 disabled.x + 1.0,
                 disabled.y + 1.0,
                 size,
+                [854, 480],
                 false,
                 false
             )
@@ -2059,24 +2160,27 @@ mod tests {
             .unwrap();
         let (x, y) = (slider.x + slider.w - 1.0, slider.y + 1.0);
         assert_eq!(
-            ui.click(&mut s, &atlas, x, y, size, false, false),
+            ui.click(&mut s, &atlas, x, y, size, [854, 480], false, false),
             vec![Event::Changed]
         );
         assert_eq!(s.master_volume, 1.0);
         assert_eq!(ui.release(), vec![Event::ButtonClick]);
         assert!(ui.release().is_empty());
         assert_eq!(
-            ui.click(&mut s, &atlas, x, y, size, false, false),
+            ui.click(&mut s, &atlas, x, y, size, [854, 480], false, false),
             vec![Event::Changed]
         );
         for cx in [-100.0, 250.0, 1000.0] {
             assert_eq!(
-                ui.click(&mut s, &atlas, cx, -100.0, size, true, false),
+                ui.click(&mut s, &atlas, cx, -100.0, size, [854, 480], true, false),
                 vec![Event::Changed]
             );
         }
         assert_eq!(ui.release(), vec![Event::ButtonClick]);
-        assert!(ui.click(&mut s, &atlas, x, y, size, true, false).is_empty());
+        assert!(
+            ui.click(&mut s, &atlas, x, y, size, [854, 480], true, false)
+                .is_empty()
+        );
     }
 
     #[test]
@@ -2097,8 +2201,17 @@ mod tests {
             })
             .unwrap();
         assert!(
-            ui.click(&mut s, &atlas, row.x + 1.0, row.y + 1.0, size, false, false)
-                .is_empty()
+            ui.click(
+                &mut s,
+                &atlas,
+                row.x + 1.0,
+                row.y + 1.0,
+                size,
+                [854, 480],
+                false,
+                false
+            )
+            .is_empty()
         );
         assert!(ui.release().is_empty());
         let search = ui.language_search.clone();
@@ -2109,6 +2222,7 @@ mod tests {
                 search.x + 1.0,
                 search.y + 1.0,
                 size,
+                [854, 480],
                 false,
                 false
             )
