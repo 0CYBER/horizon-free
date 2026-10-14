@@ -685,7 +685,8 @@ fn steps(
 
     // The JAR holds only gray 1x1 panorama placeholders. Import the indexed
     // textures afterwards, including on reruns that just extracted the JAR again.
-    panorama(repo, minecraft, run.log)?;
+    // Cosmetic assets are optional when preparing from already-imported JARs.
+    sounds::optional_panorama(repo, minecraft, run.log);
 
     // One file each, exported again when the exporter or the jar it reads changed.
     let single = |what: &str,

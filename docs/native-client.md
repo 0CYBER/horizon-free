@@ -23,9 +23,10 @@ verifies it against the pinned checksums, runs vanilla's data generator and smal
 exporters against those jars, and extracts the jar's assets and data into ignored
 `.local/horizon-client/26.3/`. Sounds (about 380 MB) are copied from your
 launcher's asset store by `horizon-prepare sounds`, each file checked against the asset
-index's SHA-1. Preparation also replaces the JAR's gray 1×1 title panorama placeholders
-with the full textures from that asset store. To repair an existing classic menu background
-without rerunning the Java exporters, run `horizon-prepare panorama` (or
+index's SHA-1. Preparation also tries to replace the JAR's gray 1×1 title panorama
+placeholders with the full textures from that asset store. If the store is missing or
+incomplete, preparation logs a warning and keeps the placeholders. To import the panorama
+later without rerunning the Java exporters, run `horizon-prepare panorama` (or
 `cargo run --release -p horizon-prepare -- panorama` in a checkout). Pass
 `--minecraft-dir PATH` when using a different Minecraft installation.
 Prepared resources are private; never commit them.

@@ -85,6 +85,15 @@ pub fn panorama(root: &Path, minecraft: Option<&Path>, log: Log) -> Result<PathB
     copy_assets(root, minecraft, log, is_panorama, "Panorama", &PANORAMA)
 }
 
+/// Full preparation can run from cached JARs without an official launcher install.
+pub(crate) fn optional_panorama(root: &Path, minecraft: Option<&Path>, log: Log) {
+    if let Err(error) = panorama(root, minecraft, log) {
+        log(&format!(
+            "Title panorama not imported: {error}; run horizon-prepare panorama later"
+        ));
+    }
+}
+
 const PANORAMA: [&str; 7] = [
     "minecraft/textures/gui/title/background/panorama_0.png",
     "minecraft/textures/gui/title/background/panorama_1.png",
@@ -138,6 +147,7 @@ fn copy_assets(
         }
     }
     let mut total: u64 = 0;
+    let mut copies = Vec::with_capacity(wanted.len());
     for (name, info) in &wanted {
         let hash = info
             .get("hash")
@@ -151,14 +161,13 @@ fn copy_assets(
         let relative = artifacts::safe_relative(name)
             .ok_or_else(|| format!("Unsafe asset name {name:?} in the asset index"))?;
         let source = launcher_object(&store, hash)?;
-        artifacts::import_copy(
-            &source,
-            &target.join("assets").join(relative),
-            hash,
-            "sha1",
-            "",
-        )?;
+        copies.push((source, target.join("assets").join(relative), hash));
         total += size;
+    }
+    // Check the entire set before replacing any placeholders: a missing late face
+    // must not leave a mixture of real textures and gray faces in either entry point.
+    for (source, destination, hash) in copies {
+        artifacts::import_copy(&source, &destination, hash, "sha1", "")?;
     }
     log(&format!(
         "{label} assets ready: {} files, {:.1} MB",
@@ -364,6 +373,42 @@ mod tests {
             format!("{} is missing from the asset index", PANORAMA[6])
         );
         assert!(!f.root.join(".local/horizon-client/9.9/assets").exists());
+    }
+
+    #[test]
+    fn full_preparation_keeps_placeholders_when_panorama_is_unavailable() {
+        for missing in ["store", "install", "last-object"] {
+            let f = Fixture::new(&format!("optional-panorama-{missing}"));
+            // The JARs and manifest were imported earlier; the launcher need not remain.
+            artifacts::import_manifest(&Lock::read(&f.root).unwrap(), &f.minecraft).unwrap();
+            let target = f.root.join(".local/horizon-client/9.9/assets");
+            for name in PANORAMA {
+                let path = target.join(name);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(path, b"jar placeholder").unwrap();
+            }
+            match missing {
+                "store" => fs::remove_dir_all(f.minecraft.join("assets")).unwrap(),
+                "install" => fs::remove_dir_all(&f.minecraft).unwrap(),
+                _ => fs::remove_file(f.object(f.objects.len() - 1)).unwrap(),
+            }
+            // The repair subcommand remains strict, even for a missing final object.
+            let error = panorama(&f.root, Some(&f.minecraft), &|_| {}).unwrap_err();
+            let lines = std::cell::RefCell::new(Vec::new());
+            // This is the optional import step used by full preparation after extraction.
+            optional_panorama(&f.root, Some(&f.minecraft), &|line| {
+                lines.borrow_mut().push(line.to_string())
+            });
+            assert_eq!(
+                *lines.borrow(),
+                [format!(
+                    "Title panorama not imported: {error}; run horizon-prepare panorama later"
+                )]
+            );
+            for name in PANORAMA {
+                assert_eq!(fs::read(target.join(name)).unwrap(), b"jar placeholder");
+            }
+        }
     }
 
     #[test]
