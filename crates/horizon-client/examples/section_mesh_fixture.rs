@@ -7,7 +7,7 @@ use horizon_client::{
     biome::{BiomeInfo, Biomes, GrassModifier},
     blocks::BlockFacts,
     chunk::{Chunk, Light, MIN_Y, index},
-    mesher::{MeshTables, Mesher, OPAQUE_LAYER, Vertex},
+    mesher::{MeshTables, Mesher, OPAQUE_LAYER, TerrainVertex},
     models,
 };
 use horizon_core::biome::BiomeZoom;
@@ -33,7 +33,8 @@ fn argb(color: u32) -> i32 {
 }
 /// Horizon keeps sky*16 in the low byte and block*16 above it; vanilla's light
 /// coords keep block in the low half-word and sky in the high one.
-fn light_coords(light: u32) -> i32 {
+fn light_coords(light: u16) -> i32 {
+    let light = u32::from(light);
     ((light & 0xFF) << 16 | (light >> 8 & 0xFF)) as i32
 }
 /// Scenes cover the 3x3 chunk region around chunk (0, 0).
@@ -146,9 +147,12 @@ fn scene(
         }
         for quad in vertices {
             let sprite = names
-                .get(&(quad[0].layer & !OPAQUE_LAYER))
+                .get(&u32::from(quad[0].layer & !OPAQUE_LAYER))
                 .ok_or("unknown sprite layer")?;
-            if quad.iter().any(|v: &Vertex| v.layer != quad[0].layer) {
+            if quad
+                .iter()
+                .any(|v: &TerrainVertex| v.layer != quad[0].layer)
+            {
                 return Err("quad mixes sprite layers".into());
             }
             let vertices: Vec<Value> = quad
