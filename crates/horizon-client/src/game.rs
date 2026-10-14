@@ -1711,6 +1711,9 @@ impl Game<'_> {
                 }
                 LevelEvent::Player { pos, effect, .. } => match effect {
                     PlayerEffect::OpenMenu => self.open_menu([pos.x, pos.y, pos.z]),
+                    PlayerEffect::Sleep if self.beds_destroy_on_use() => {
+                        self.destroy_bed_on_use([pos.x, pos.y, pos.z])?
+                    }
                     PlayerEffect::Sleep => self.try_sleep([pos.x, pos.y, pos.z]),
                     PlayerEffect::GiveItem(item) => {
                         if let Some(rest) = self.give(ItemStack {

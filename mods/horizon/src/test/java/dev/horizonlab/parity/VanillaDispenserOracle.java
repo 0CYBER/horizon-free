@@ -253,6 +253,12 @@ public final class VanillaDispenserOracle {
             w.type = NETHER;
             w.dimensionKey = Level.NETHER;
             w.attributes = net.minecraft.world.attribute.EnvironmentAttributeSystem.builder().addConstantLayer(NETHER.attributes()).build();
+        } else if (f.has("dim") && f.get("dim").getAsString().equals("end")) {
+            // The End's (beds explode, anchors do too).
+            if (END == null) END = VanillaBlockUpdateOracle.loadDimensionType(net.minecraft.world.level.dimension.BuiltinDimensionTypes.END);
+            w.type = END;
+            w.dimensionKey = Level.END;
+            w.attributes = net.minecraft.world.attribute.EnvironmentAttributeSystem.builder().addConstantLayer(END.attributes()).build();
         }
         if (f.has("rules")) {
             for (var rule : f.getAsJsonObject("rules").entrySet()) {
@@ -389,7 +395,7 @@ public final class VanillaDispenserOracle {
         result.add("rng " + w.rng.nextLong());
     }
 
-    static net.minecraft.world.level.dimension.DimensionType NETHER;
+    static net.minecraft.world.level.dimension.DimensionType NETHER, END;
 
     /** The player of a "use" case: its main hand, game mode and the statistics it is awarded. */
     static final class User extends net.minecraft.server.level.ServerPlayer {
