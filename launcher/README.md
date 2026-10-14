@@ -18,7 +18,6 @@ The opening, then Play ([clip](docs/opening.webm)):
   26.3 server jar from that version's own json, Python 3.10+ and Java 25), then starts the
   client, or a server (`--dedicated --nogui`) in a folder you choose, with a live console.
 - **Patch notes**: each release's notes, newest first, with a link to GitHub Sponsors. Quiet "Join Discord" and "Website" links sit in the sidebar footer.
-- **What's next**: the README's roadmap, from main.
 
 Data lives in the platform's data directory (`~/.local/share/horizon-launcher` on Linux,
 `~/Library/Application Support/horizon-launcher` on macOS, `%APPDATA%\horizon-launcher` on
@@ -62,7 +61,6 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher play [--version <tag>]
     horizon-launcher server [--dir <dir>] [--version <tag>] [--accept-eula]
     horizon-launcher notes [<tag>]                  patch notes as plain text
-    horizon-launcher next                           the roadmap
     horizon-launcher links                          the Discord, sponsor and website links
     horizon-launcher menu-style [horizon|classic]   show or set the game's menu style
     horizon-launcher update [--check]               Horizon and the launcher
@@ -80,7 +78,7 @@ scripts and tests).
 
 (with the full path to the binary if it is not on your `PATH`). Its tools: `list_versions`,
 `install_version`, `remove_version`, `prepare_resources`, `launch_client`, `start_server`,
-`server_command`, `server_log`, `stop_server`, `patch_notes`, `roadmap`, `links`, `menu_style` and `check_updates`.
+`server_command`, `server_log`, `stop_server`, `patch_notes`, `links`, `menu_style` and `check_updates`.
 A server started through MCP stops (cleanly, with `stop`) when the session ends. Starting one
 needs `accept_eula`, which an agent should only pass with the player's consent.
 

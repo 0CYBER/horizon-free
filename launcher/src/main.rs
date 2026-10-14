@@ -26,16 +26,14 @@ enum Page {
     Play,
     Versions,
     Notes,
-    Next,
     Settings,
 }
 
 impl Page {
-    const ALL: [(Page, &'static str); 5] = [
+    const ALL: [(Page, &'static str); 4] = [
         (Page::Play, "Play"),
         (Page::Versions, "Versions"),
         (Page::Notes, "Patch notes"),
-        (Page::Next, "What's next"),
         (Page::Settings, "Settings"),
     ];
     fn index(self) -> usize {
@@ -121,7 +119,6 @@ struct Launcher {
     bar: (f32, f32),
     mode: Mode,
     releases: Load<Vec<Release>>,
-    roadmap: Load<String>,
     installed: Vec<String>,
     installing: Option<(String, f32)>,
     install_error: Option<(String, String)>,
@@ -202,7 +199,6 @@ impl Launcher {
             bar: (0., 0.),
             mode: Mode::Client,
             releases: Load::Loading,
-            roadmap: Load::Loading,
             installed,
             installing: None,
             install_error: None,
@@ -235,7 +231,6 @@ impl Launcher {
             }
         });
         this.fetch_releases();
-        this.fetch_roadmap();
         this.fetch_links();
         this.check_updates();
         this
@@ -312,21 +307,12 @@ impl Launcher {
         });
     }
 
-    fn fetch_roadmap(&mut self) {
-        self.roadmap = Load::Loading;
-        let tx = self.tx.clone();
-        std::thread::spawn(move || {
-            let _ = tx.send(Msg::Roadmap(backend::roadmap()));
-        });
-    }
-
     fn drain(&mut self, cx: &mut Context<Self>) {
         let mut changed = false;
         while let Ok(msg) = self.rx.try_recv() {
             changed = true;
             match msg {
                 Msg::Releases(r) => self.releases = r.map_or_else(Load::Failed, Load::Ready),
-                Msg::Roadmap(r) => self.roadmap = r.map_or_else(Load::Failed, Load::Ready),
                 Msg::Links(links) => self.links = links,
                 // The page reads is_prepared when drawn; `changed` redraws it.
                 Msg::Reused(_) => self.installed = backend::installed(),
@@ -2044,27 +2030,6 @@ impl Launcher {
         }
         page.child(list)
     }
-
-    fn next_page(&mut self, cx: &mut Context<Self>) -> Div {
-        let t = self.theme;
-        let page = div().flex().flex_col().gap(px(24.)).child(page_header(
-            "What's next",
-            "The roadmap, from the README on GitHub.",
-            &t,
-        ));
-        match &self.roadmap {
-            Load::Loading => page.child(centered("Loading the roadmap…", &t)),
-            Load::Failed(e) => page.child(centered(e, &t).child(
-                button("retry-roadmap", "Try again", Kind::Secondary, &t).on_click(cx.listener(
-                    |this, _: &ClickEvent, _, cx| {
-                        this.fetch_roadmap();
-                        cx.notify();
-                    },
-                )),
-            )),
-            Load::Ready(text) => page.child(divider(&t)).child(markdown::render(text, &t)),
-        }
-    }
 }
 
 /// A thin bar. A known fraction eases from its previous value; an unknown one shuttles slowly.
@@ -2111,7 +2076,6 @@ impl Render for Launcher {
             Page::Play => self.play_page(cx),
             Page::Versions => self.versions_page(cx),
             Page::Notes => self.notes_page(cx),
-            Page::Next => self.next_page(cx),
             Page::Settings => self.settings_page(cx),
         };
         // The new page fades in and rises a few pixels.

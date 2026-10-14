@@ -37,7 +37,6 @@ fn tools() -> Value {
         { "name": "stop_server", "description": "Stop the running server cleanly (it saves the world), killing it if it does not stop within 30 seconds.", "inputSchema": none },
         { "name": "patch_notes", "description": "A release's patch notes as markdown.",
           "inputSchema": { "type": "object", "properties": { "tag": { "type": "string", "description": "Default: the newest release." } } } },
-        { "name": "roadmap", "description": "What's planned next for Horizon, from the README's roadmap.", "inputSchema": none },
         { "name": "links", "description": "The Horizon links: the Discord invite, the GitHub Sponsors page and the website (an empty one is not offered).", "inputSchema": none },
         { "name": "menu_style", "description": "Show or set the game's menu style. \"horizon\" is Horizon's own menus, \"classic\" is vanilla's screens, which have no way back inside the game. The game reads it when it starts.",
           "inputSchema": { "type": "object", "properties": { "style": { "type": "string", "enum": ["horizon", "classic"], "description": "Omit to show the current style." } } } },
@@ -193,7 +192,6 @@ impl Session {
                     r.body
                 ))
             }
-            "roadmap" => backend::roadmap(),
             "links" => Ok(serde_json::to_string_pretty(&backend::links()).unwrap()),
             "menu_style" => {
                 if let Some(name) = arg_str(args, "style") {
