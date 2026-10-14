@@ -184,6 +184,9 @@ public final class VanillaMobAiOracle {
         boolean spawning;
         /** The player hits a mob for 1 at the start of a tick: {tick, mob index}. */
         List<int[]> hurts = new ArrayList<>();
+        /** The player feeds an animal at the start of a tick (Animal.mobInteract with the item in
+         *  its main hand): {tick, mob index, item id}. */
+        List<Object[]> feeds = new ArrayList<>();
     }
 
     static void parse(Path path) throws Exception {
@@ -220,6 +223,7 @@ public final class VanillaMobAiOracle {
                 }
                 case "heart" -> s.hearts.add(f);
                 case "hurt" -> s.hurts.add(new int[] {Integer.parseInt(f[1]), Integer.parseInt(f[2])});
+                case "feed" -> s.feeds.add(new Object[] {Integer.parseInt(f[1]), Integer.parseInt(f[2]), f[3]});
                 case "player" -> {
                     s.player = new double[] {Double.parseDouble(f[1]), Double.parseDouble(f[2]), Double.parseDouble(f[3])};
                     for (int i = 4; i < f.length; i++) {
@@ -712,6 +716,17 @@ public final class VanillaMobAiOracle {
                 for (int[] hurt : s.hurts) {
                     if (hurt[0] == t && hurt[1] < ENTS.size() && ENTS.get(hurt[1]) instanceof LivingEntity hurtMob && !hurtMob.isRemoved())
                         hurtMob.hurtServer(level, level.damageSources().playerAttack(player), 1.0F);
+                }
+                for (Object[] feed : s.feeds) {
+                    int index = (Integer) feed[1];
+                    if ((Integer) feed[0] != t || index >= ENTS.size()
+                        || !(ENTS.get(index) instanceof net.minecraft.world.entity.animal.Animal animal) || animal.isRemoved()) continue;
+                    var hand = net.minecraft.world.InteractionHand.MAIN_HAND;
+                    var held = player.getItemInHand(hand);
+                    player.setItemInHand(hand, new net.minecraft.world.item.ItemStack(
+                        BuiltInRegistries.ITEM.getValue(net.minecraft.resources.Identifier.parse((String) feed[2])), 64));
+                    animal.mobInteract(player, hand);
+                    player.setItemInHand(hand, held);
                 }
                 for (Entity e : List.copyOf(ENTS)) {
                     if (e.isRemoved()) continue;
