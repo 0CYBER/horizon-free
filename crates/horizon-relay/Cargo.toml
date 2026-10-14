@@ -1,0 +1,19 @@
+[package]
+name = "horizon-relay"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Play with friends' relay: hands out invite codes, introduces hosts and guests, relays the encrypted stream when a direct connection fails"
+
+[dependencies]
+horizon-friends = { path = "../horizon-friends" }
+getrandom = "0.3"
+serde_json = "1.0.151"
+
+[[bin]]
+name = "horizon-relay"
+path = "src/main.rs"
+
+[lints]
+workspace = true
