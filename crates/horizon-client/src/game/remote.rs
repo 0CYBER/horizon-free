@@ -915,6 +915,17 @@ impl Game<'_> {
                 }
             }
             C::SetEntityData(p) => {
+                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
+                    && m.species() == horizon_client::mobs::Species::Rabbit
+                {
+                    for (index, _, value) in &p.values {
+                        match (index, value) {
+                            (15, Value::Byte(flags)) => m.no_ai = flags & 1 != 0,
+                            (16, Value::Bool(baby)) => m.extra.age = if *baby { -1 } else { 0 },
+                            _ => {}
+                        }
+                    }
+                }
                 for (index, _, value) in &p.values {
                     if *index == ITEM_ENTITY_ITEM
                         && let Value::Item(stack) = value
@@ -945,6 +956,12 @@ impl Game<'_> {
                 }
             }
             C::EntityEvent(p) => {
+                if p.event == 1
+                    && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
+                    && m.species() == horizon_client::mobs::Species::Rabbit
+                {
+                    horizon_client::mobs::rabbit::hop_event(m);
+                }
                 // EntityEvent.DEATH: start the death animation.
                 if p.event == 3
                     && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
@@ -1718,6 +1735,9 @@ impl Game<'_> {
             m.previous_body_yaw = m.body_yaw;
             m.previous_limb_speed = m.limb_speed;
             m.age += 1;
+            if m.species() == horizon_client::mobs::Species::Rabbit {
+                horizon_client::mobs::rabbit::base_tick(m);
+            }
             if m.hurt_time > 0 {
                 m.hurt_time -= 1;
             }
@@ -1740,6 +1760,9 @@ impl Game<'_> {
             let target = (((dx * dx + dz * dz).sqrt() * 4.0) as f32).min(1.0);
             m.limb_speed += (target - m.limb_speed) * 0.4;
             m.limb_position += m.limb_speed;
+            if m.species() == horizon_client::mobs::Species::Rabbit {
+                horizon_client::mobs::rabbit::post_tick(m);
+            }
         }
         for d in &mut self.dropped {
             d.previous = d.position;

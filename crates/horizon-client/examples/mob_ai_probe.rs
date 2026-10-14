@@ -684,6 +684,7 @@ fn main() -> horizon_client::Result<()> {
     let assets = Assets::load(root)?;
     let registry = assets.registry;
     let facts = BlockFacts::load(root, registry)?;
+    let motion = horizon_client::motion::MotionResources::load(root, &assets)?;
     let data = MobData::load(root, &facts);
     let types = MobTypes::load(root)?;
     let biomes = Biomes::load(root)?;
@@ -911,6 +912,7 @@ fn main() -> horizon_client::Result<()> {
                     world: &world,
                     registry,
                     facts: &facts,
+                    movement: &motion.blocks,
                     collision: &collision,
                     data: &data,
                     player: player.clone(),

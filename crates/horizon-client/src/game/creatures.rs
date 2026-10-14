@@ -324,6 +324,7 @@ impl Game<'_> {
             world: &self.world,
             registry: self.res.assets.registry,
             facts: &self.res.facts,
+            movement: &self.motion.blocks,
             collision: self.collision,
             data: &self.res.mob_data,
             player: self.player_view(),
@@ -681,6 +682,7 @@ impl Game<'_> {
     pub(super) fn handle_mob_events(&mut self, events: Vec<MobEvent>) -> Result<()> {
         for e in events {
             match e {
+                MobEvent::RabbitHop { mob, at } => self.lan_entity_event(mob as i32, 1, at),
                 MobEvent::Sound(name, at, volume, pitch)
                 | MobEvent::LocalSound(name, at, volume, pitch) => {
                     self.audio
