@@ -294,6 +294,8 @@ pub struct EntityView {
     pub struck: Vec<EntityView>,
     pub fishing_open_water: Option<bool>,
     pub variant: Option<String>,
+    /// The data components the entity reports (`Entity.get`): id and value.
+    pub components: Vec<(String, String)>,
 }
 fn range_f(v: &Value, x: f64) -> bool {
     match v {
@@ -442,6 +444,26 @@ pub fn location(v: &Value, p: [f64; 3], w: &dyn World) -> bool {
     }
     true
 }
+/// `DataComponentExactPredicate.test` on an entity: every expected
+/// component equals what the entity reports (absent ones never match).
+fn components(expected: &Value, have: &[(String, String)]) -> bool {
+    let full = |id: &str| {
+        if id.contains(':') {
+            id.to_owned()
+        } else {
+            format!("minecraft:{id}")
+        }
+    };
+    expected.as_object().is_some_and(|o| {
+        o.iter().all(|(id, want)| {
+            let id = full(id);
+            want.as_str().is_some_and(|want| {
+                have.iter()
+                    .any(|(k, v)| full(k) == id && full(v) == full(want))
+            })
+        })
+    })
+}
 /// `EntityPredicate` (26.x keyed sub-predicates).
 pub fn entity(v: &Value, e: &EntityView, w: &dyn World, origin: [f64; 3]) -> bool {
     if v.is_null() {
@@ -521,7 +543,8 @@ pub fn entity(v: &Value, e: &EntityView, w: &dyn World, origin: [f64; 3]) -> boo
             "minecraft:type_specific/fishing_hook" => p["in_open_water"]
                 .as_bool()
                 .is_none_or(|want| e.fishing_open_water == Some(want)),
-            "minecraft:components" | "minecraft:predicates" => true,
+            "minecraft:components" => components(p, &e.components),
+            "minecraft:predicates" => true,
             _ => false,
         };
         if !ok {

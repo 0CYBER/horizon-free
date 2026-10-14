@@ -1984,6 +1984,25 @@ pub fn variant_index(s: Species, name: &str) -> u8 {
     };
     i.unwrap_or(0) as u8
 }
+/// The variant data component a mob reports (`Entity.get`, e.g.
+/// `Wolf.get(DataComponents.WOLF_VARIANT)`): component id and registry entry.
+pub fn variant_component(m: &Mob) -> Option<(&'static str, String)> {
+    species_variant_component(m.species(), m.extra.variant)
+}
+/// [`variant_component`] of a species with the game's variant index.
+pub fn species_variant_component(s: Species, variant: u8) -> Option<(&'static str, String)> {
+    let component = match s {
+        Species::Wolf => "minecraft:wolf/variant",
+        Species::Cat => "minecraft:cat/variant",
+        Species::Frog => "minecraft:frog/variant",
+        Species::Pig => "minecraft:pig/variant",
+        Species::Cow => "minecraft:cow/variant",
+        Species::Chicken => "minecraft:chicken/variant",
+        Species::ZombieNautilus => "minecraft:zombie_nautilus/variant",
+        _ => return None,
+    };
+    Some((component, format!("minecraft:{}", variant_name(s, variant))))
+}
 /// The registry name of the game's variant index.
 pub fn variant_name(s: Species, index: u8) -> &'static str {
     let i = index as usize;
