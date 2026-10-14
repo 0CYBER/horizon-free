@@ -1,7 +1,8 @@
 name: launcher
 # Builds the launcher on Linux, macOS and Windows, and releases it by itself (docs/release-flow.md): after a
 # push to main that changes the launcher or what it builds in (crates/horizon-prepare, crates/horizon-theme),
-# every hour (a release the cooldown held goes out) and by hand, tools/release_train.py decides as for the game.
+# every 10 minutes (a release waiting for merges to settle goes out) and by hand, tools/release_train.py decides as
+# for the game.
 # A release is launcher-vX.Y.Z: the patch after the last launcher tag, or the next minor when a merged pull
 # request is labelled feature. The version is given to the build (HORIZON_LAUNCHER_VERSION): no bump commits.
 # Never marked latest. Pushes to launcher branches only build. RELEASES_PAUSED=1 stops releases.
@@ -17,7 +18,7 @@ on:
       - 'crates/horizon-theme/**'
       - '.github/workflows/launcher.yml'
   schedule:
-    - cron: '47 * * * *'
+    - cron: '7-59/10 * * * *'
   workflow_dispatch:
     inputs:
       dry_run:
@@ -25,7 +26,7 @@ on:
         type: boolean
         default: true
       force:
-        description: Release even without launcher changes, within the cooldown or while paused
+        description: Release even without launcher changes, before merges settle or while paused
         type: boolean
         default: false
 
