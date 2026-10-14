@@ -1410,6 +1410,63 @@ impl Game<'_> {
             let _ = player.hurt(&self.motion.health, self.world.health_rules, id, amount);
         }
     }
+    /// `Player.aiStep` touching arrows in its box grown by (1, 0.5, 1):
+    /// `AbstractArrow.playerTouch`, then `Player.take`'s pickup sound at the
+    /// arrow (`ClientPacketListener.handleTakeItemEntity`).
+    pub(super) fn touch_arrows(&mut self) {
+        use horizon_client::arrows::Touch;
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        if p.health.dead_or_dying() || self.spectator() {
+            return;
+        }
+        let w = f64::from(p.dimensions.width) / 2.0;
+        let reach = Aabb::new(
+            Vec3::new(p.position.x - w, p.position.y, p.position.z - w),
+            Vec3::new(
+                p.position.x + w,
+                p.position.y + f64::from(p.dimensions.height),
+                p.position.z + w,
+            ),
+        )
+        .inflate(Vec3::new(1.0, 0.5, 1.0));
+        // Player.hasInfiniteMaterials.
+        let creative = self.creative;
+        let mut projectiles = std::mem::take(&mut self.creatures.projectiles);
+        projectiles.retain(|shot| {
+            let Some(a) = shot.arrow.as_ref().filter(|a| !a.removed) else {
+                return true;
+            };
+            let at = shot.position;
+            let bounds = Aabb::new(
+                Vec3::new(at.x - 0.25, at.y, at.z - 0.25),
+                Vec3::new(at.x + 0.25, at.y + 0.5, at.z + 0.25),
+            );
+            if !bounds.intersects(reach) {
+                return true;
+            }
+            let taken = match a.player_touch(creative) {
+                Touch::Ignore => false,
+                Touch::Take => true,
+                // Inventory.add: a creative player takes what does not fit.
+                Touch::Give(stack) => self.give(stack).is_none() || creative,
+            };
+            if taken {
+                let r = &mut self.world.random;
+                let pitch = (r.next_float() - r.next_float()) * 1.4 + 2.0;
+                self.audio.play(
+                    "minecraft:entity.item.pickup",
+                    Some([at.x, at.y, at.z]),
+                    0.2,
+                    pitch,
+                );
+            }
+            !taken
+        });
+        self.creatures.projectiles = projectiles;
+    }
+
     fn tick_projectiles(&mut self) -> Result<()> {
         let mut projectiles = std::mem::take(&mut self.creatures.projectiles);
         let mut hits = Vec::new();

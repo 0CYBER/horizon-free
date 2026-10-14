@@ -109,9 +109,18 @@ impl Game<'_> {
             }
             Target::Orb(i) => entity_nbt::orb_to_nbt(self.orbs.get(i)?, random_uuid()),
             Target::Arrow(i) => {
-                let a = self.arrows.get(i)?;
-                let owner = if a.from_player { player_uuid } else { None };
-                entity_nbt::arrow_to_nbt(a, random_uuid(), owner)
+                let p = self.creatures.projectiles.get(i)?;
+                let owner = if p.owner == Some(horizon_client::mobs::Who::Player) {
+                    player_uuid
+                } else {
+                    None
+                };
+                let in_block = p
+                    .arrow
+                    .as_ref()
+                    .and_then(|a| a.last_state)
+                    .map(|s| self.state_to_nbt(s));
+                entity_nbt::arrow_to_nbt(p, random_uuid(), owner, in_block, None)?
             }
         })
     }

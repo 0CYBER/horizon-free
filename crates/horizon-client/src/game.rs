@@ -130,7 +130,7 @@ use horizon_client::{
     containers::{BlockEntity, Providers},
     crafting::Recipes,
     creative::{Creative, Names},
-    entities::{Arrow, Experience, ExperienceOrb, ItemEntity},
+    entities::{Experience, ExperienceOrb, ItemEntity},
     environment::Environment,
     gfx::{Frame, Renderer},
     hud::{HudAtlas, HudBatch, rgba},
@@ -734,7 +734,6 @@ struct Game<'a> {
     /// A new player's spawn search, while its candidates' chunks load.
     player_spawn: Option<horizon_client::world_spawn::PlayerSpawnFinder>,
     mobs: Vec<Mob>,
-    arrows: Vec<Arrow>,
     creatures: creatures::Creatures,
     sculk: sculk::SculkState,
     raiding: raids::Raiding,
@@ -3071,6 +3070,7 @@ impl Game<'_> {
         if running {
             horizon_client::spans::time("entity_portals", || self.handle_entity_portals());
             horizon_client::spans::time("tick_items", || self.tick_items());
+            horizon_client::spans::time("touch_arrows", || self.touch_arrows());
         }
         horizon_client::spans::time("spawn_loaded_entities", || self.spawn_loaded_entities());
         if running {
@@ -4792,56 +4792,6 @@ impl Game<'_> {
         self.guest_model_geometry(camera, alpha, &mut out);
         self.fangs_geometry(camera, alpha, &mut out);
         self.name_tag_geometry(camera, alpha, &mut out);
-        // Arrows: two crossed quads along the flight direction.
-        if let Some(r) = self
-            .res
-            .atlas
-            .sprites
-            .get("entity/projectiles/arrow")
-            .copied()
-        {
-            for a in &self.arrows {
-                let p = glam::DVec3::new(
-                    a.previous.x + (a.position.x - a.previous.x) * alpha,
-                    a.previous.y + (a.position.y - a.previous.y) * alpha,
-                    a.previous.z + (a.position.z - a.previous.z) * alpha,
-                ) - camera;
-                let dir = glam::Vec3::new(
-                    a.velocity.x as f32,
-                    a.velocity.y as f32,
-                    a.velocity.z as f32,
-                )
-                .normalize_or(glam::Vec3::X);
-                let side = dir.cross(glam::Vec3::Y).normalize_or(glam::Vec3::Z) * 0.08;
-                let up = dir.cross(side).normalize_or(glam::Vec3::Y) * 0.08;
-                let c = p.as_vec3();
-                let (u1, v1) = (
-                    r.u0 + (r.u1 - r.u0) * 0.5,
-                    r.v0 + (r.v1 - r.v0) * (5.0 / 32.0),
-                );
-                for off in [side, up] {
-                    let q = [
-                        c - dir * 0.25 - off,
-                        c + dir * 0.25 - off,
-                        c + dir * 0.25 + off,
-                        c - dir * 0.25 + off,
-                    ];
-                    for (v, uv) in q
-                        .iter()
-                        .zip([[r.u0, v1], [u1, v1], [u1, r.v0], [r.u0, r.v0]])
-                    {
-                        out.push(Vertex {
-                            normal: [0; 4],
-                            pos: v.to_array(),
-                            uv,
-                            layer: 0,
-                            color: 0xFFFF_FFFF,
-                            light: 240 | 240 << 8,
-                        });
-                    }
-                }
-            }
-        }
         // Entity shadows (EntityRenderer.extractShadow).
         if let Some(sprite) = self.res.atlas.sprites.get("misc/shadow").copied() {
             let ambient = if self.dim == Dim::Nether { 0.1 } else { 0.0 };
@@ -5731,7 +5681,7 @@ impl Game<'_> {
         self.mobs.clear();
         self.creatures.reset_trader();
         self.portals = Default::default();
-        self.arrows.clear();
+        self.creatures.projectiles.clear();
         self.dropped.clear();
         self.particles.clear();
         self.orbs.clear();
@@ -5882,7 +5832,7 @@ impl Game<'_> {
         self.falling.clear();
         self.tnts.clear();
         self.mobs.clear();
-        self.arrows.clear();
+        self.creatures.projectiles.clear();
         self.dropped.clear();
         self.particles.clear();
         self.orbs.clear();
@@ -6032,7 +5982,7 @@ impl Game<'_> {
         self.world = World::new(self.res.facts.air, 0);
         self.player = None;
         self.mobs.clear();
-        self.arrows.clear();
+        self.creatures.projectiles.clear();
         self.dropped.clear();
         self.particles.clear();
         self.screen = Screen::Playing;
@@ -6802,6 +6752,19 @@ impl Game<'_> {
             p,
             Some(horizon_client::mobs::Who::Player),
         );
+        // ProjectileWeaponItem.useAmmo: creative and Infinity draw without
+        // using the ammo, so the arrow is CREATIVE_ONLY; else setOwner(player)
+        // lets it be picked up.
+        let ammo = arrow_slot
+            .and_then(|i| self.inventory[i].clone())
+            .unwrap_or_else(|| ItemStack::new("minecraft:arrow", 1));
+        if let Some(a) = arrow.arrow.as_mut() {
+            a.set_item(&horizon_client::arrows::drawn_ammo(
+                &ammo,
+                self.creative || infinity,
+            ));
+            a.set_owner(Some(horizon_client::mobs::Who::Player));
+        }
         // Flame: the arrow is spawned burning (EnchantmentHelper.onProjectileSpawned).
         if let Some(seconds) = self.bow_projectile_ignite()
             && let Some(a) = arrow.arrow.as_mut()
@@ -9104,7 +9067,6 @@ pub fn run() -> Result<()> {
         spawn_spiral: Default::default(),
         player_spawn: None,
         mobs: Vec::new(),
-        arrows: Vec::new(),
         creatures: Default::default(),
         sculk: Default::default(),
         raiding: Default::default(),
