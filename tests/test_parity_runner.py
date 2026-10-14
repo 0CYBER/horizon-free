@@ -44,6 +44,25 @@ class ParityRunnerTests(unittest.TestCase):
             source.write_text("two!")
             self.assertTrue(parity.stale("x", state, hasher, "env"))
 
+    def test_a_change_affects_the_harnesses_that_depend_on_it(self):
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(parity, "ROOT", Path(temp)), \
+                mock.patch.object(parity, "SHARED", Path(temp, "shared")):
+            found = {name: Path(temp, "tools", f"test_{name}_parity.py") for name in ("food", "light", "new")}
+            records = {"food": {"dependencies": ["crates/a.rs", "tools/lab.py"]},
+                       "light": {"dependencies": ["crates/lib.rs#keep:light"]}}
+            self.assertEqual(parity.affected_harnesses(found, records, {"crates/a.rs"}), {"food", "new"})
+            self.assertEqual(parity.affected_harnesses(found, records, {"crates/lib.rs"}), {"light", "new"})
+            self.assertEqual(parity.affected_harnesses(found, records, {"tools/test_light_parity.py"}), {"light", "new"})
+            self.assertEqual(parity.affected_harnesses(found, records, {"Cargo.lock"}), {"food", "light", "new"})
+            self.assertEqual(parity.affected_harnesses(found, records, {"README.md"}), {"new"})
+
+    def test_platform_specific_harnesses_are_skipped_elsewhere(self):
+        config = {"linux_only": {"options": "libm"}}
+        with mock.patch.object(parity.sys, "platform", "linux"):
+            self.assertEqual(parity.platform_skips(config), {})
+        with mock.patch.object(parity.sys, "platform", "darwin"):
+            self.assertEqual(parity.platform_skips(config), {"options": "libm"})
+
     def test_a_pass_from_another_worktree_counts_only_for_the_same_content(self):
         with tempfile.TemporaryDirectory() as temp:
             elsewhere, here, shared = Path(temp, "a"), Path(temp, "b"), Path(temp, "shared")
