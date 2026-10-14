@@ -78,7 +78,7 @@ EXTRAS = [
 # Layers a renderer reuses for another entity under a different constant.
 SKIP_LAYERS = re.compile(r'(banner|bell|book|skull|head|chest|shulker_box|boat|cushion|conduit|leash|arrow|trident|'
                          r'shield|elytra|spin_attack|ears|cape|decorated_pot|minecart|wind_charge|evoker_fangs|'
-                         r'llama_spit|shulker_bullet|bee_stinger|end_crystal|armor_stand|copper_golem_\w+|#(helmet|chestplate|leggings|'
+                         r'llama_spit|shulker_bullet|bee_stinger|armor_stand|copper_golem_\w+|#(helmet|chestplate|leggings|'
                          r'boots|outer|armor|decor|saddle|collar|wool|wool_undercoat|eyes|wind|inner|pattern|tendrils|'
                          r'heart|bioluminescent|pulsating_spots|water_patch|flag|cage|shell)$)')
 
@@ -249,6 +249,8 @@ SPECIES = {
     'frog': [{'isSwimming': T}, {'isSwimming': F}, {'jumpAnimationState': 2}, {'croakAnimationState': 1},
              {'tongueAnimationState': 3}, {'swimIdleAnimationState': 2, 'isSwimming': T}],
     'rabbit': [{'hopAnimationState': 2}, {'idleHeadTiltAnimationState': 1}],
+    # EndCrystalModel (not a mob): the base hidden for a placed crystal.
+    'end_crystal': [{'showsBottom': F}, {'showsBottom': F, 'ageInTicks': 91234.5}],
     'fox': FOX,
     # CopperGolemModel: the idle head spin and the four chest interactions (started N ticks ago).
     'copper_golem': [{'idleAnimationState': 4}, {'idleAnimationState': 37}, {'interactionGetItem': 3},
@@ -266,7 +268,7 @@ SPECIES = {
 DEFAULTS = {'creaking': {'canMove': T}, 'wolf': {'tailAngle': 0.6283185307179586}, 'axolotl': {'inWaterFactor': 1.0}, 'bee': {'hasStinger': T}, 'sheep': {'eatTick': 0},
             'goat': {'hasLeftHorn': T, 'hasRightHorn': T}, 'parrot': {'pose': 'STANDING'},
             'phantom': {'flapOffset': 21.0}, 'guardian': {'tailAnimation': 1.3, 'spikesAnimation': 1.0},
-            'elder_guardian': {'tailAnimation': 1.3, 'spikesAnimation': 1.0}}
+            'elder_guardian': {'tailAnimation': 1.3, 'spikesAnimation': 1.0}, 'end_crystal': {'showsBottom': T}}
 
 
 def species_cases(layer, base_cases):

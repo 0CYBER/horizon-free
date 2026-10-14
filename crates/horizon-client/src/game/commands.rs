@@ -109,7 +109,7 @@ impl Game<'_> {
         let Some(input) = &e.input else { return };
         let cursor = e.cursor.min(input.len());
         let suggest = Style {
-            suggest: Some(format!("/{command}")),
+            click: Some(text::ClickEvent::SuggestCommand(format!("/{command}"))),
             ..Style::default()
         };
         let mut context = Text::empty();
@@ -228,7 +228,8 @@ impl Game<'_> {
                 .get(i)
                 .map(|o| [o.position.x, o.position.y, o.position.z]),
             Target::Arrow(i) => self
-                .arrows
+                .creatures
+                .projectiles
                 .get(i)
                 .map(|a| [a.position.x, a.position.y, a.position.z]),
             Target::Stand(id) => self
@@ -392,7 +393,14 @@ impl Game<'_> {
             );
             candidates.extend(self.dropped.iter().map(|i| Target::Item(i.id)));
             candidates.extend((0..self.orbs.len()).map(Target::Orb));
-            candidates.extend((0..self.arrows.len()).map(Target::Arrow));
+            candidates.extend(
+                self.creatures
+                    .projectiles
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| p.arrow.is_some())
+                    .map(|(i, _)| Target::Arrow(i)),
+            );
             candidates.extend(self.armor_stands.iter().map(|a| Target::Stand(a.id)));
             candidates.extend(self.item_frames.iter().map(|f| Target::Frame(f.id)));
             candidates.extend(self.paintings.iter().map(|p| Target::Painting(p.id)));
@@ -569,14 +577,7 @@ impl Game<'_> {
             "difficulty" => self.cmd_difficulty(ctx),
             "seed" => {
                 let seed = self.level.seed.to_string();
-                let green = Style {
-                    color: Some(text::GREEN),
-                    suggest: None,
-                    ..Style::default()
-                };
-                let value = Text::literal("[")
-                    .append(Text::styled(seed.clone(), green))
-                    .append("]");
+                let value = Text::copyable(seed);
                 self.system_message(Text::translate("commands.seed.success", &[value]));
                 Ok(self.level.seed as i32)
             }
@@ -960,7 +961,7 @@ impl Game<'_> {
                 }
             }
             Target::Arrow(i) => {
-                if let Some(a) = self.arrows.get_mut(i) {
+                if let Some(a) = self.creatures.projectiles.get_mut(i) {
                     a.position = v;
                     a.previous = v;
                 }
@@ -1294,8 +1295,13 @@ impl Game<'_> {
                 }
             }
             Target::Arrow(i) => {
-                if i < self.arrows.len() {
-                    self.arrows[i].age = u32::MAX / 2;
+                if let Some(a) = self
+                    .creatures
+                    .projectiles
+                    .get_mut(i)
+                    .and_then(|p| p.arrow.as_mut())
+                {
+                    a.removed = true;
                 }
             }
             Target::Stand(id) => self.armor_stands.retain(|a| a.id != id),
@@ -1325,7 +1331,9 @@ impl Game<'_> {
             self.kill_target(t);
         }
         self.orbs.retain(|o| o.age < u32::MAX / 2);
-        self.arrows.retain(|a| a.age < u32::MAX / 2);
+        self.creatures
+            .projectiles
+            .retain(|p| !p.arrow.as_ref().is_some_and(|a| a.removed));
         let message = if targets.len() == 1 {
             Text::translate("commands.kill.success.single", &[names[0].clone()])
         } else {
@@ -2342,22 +2350,7 @@ impl Game<'_> {
                 &[&poi],
             )));
         };
-        let coords = Text::translate(
-            "chat.coordinates",
-            &[
-                Text::literal(p[0].to_string()),
-                Text::literal("~"),
-                Text::literal(p[2].to_string()),
-            ],
-        );
-        let link = Text::literal("[")
-            .append(coords)
-            .append("]")
-            .with_style(&Style {
-                color: Some(text::GREEN),
-                suggest: Some(format!("/tp @s {} ~ {}", p[0], p[2])),
-                ..Style::default()
-            });
+        let link = Text::teleport_link(p[0], None, p[2]);
         let (dx, dz) = (p[0] - from[0], p[2] - from[2]);
         let distance = ((dx * dx + dz * dz) as f32).sqrt().floor() as i32;
         let shown = if poi.starts_with('#') {
@@ -2413,15 +2406,7 @@ impl Game<'_> {
             } else {
                 biome.clone()
             };
-            let coords = Text::tr("chat.coordinates", &[&p[0], &p[1], &p[2]]);
-            let link = Text::literal("[")
-                .append(coords)
-                .append("]")
-                .with_style(&Style {
-                    color: Some(text::GREEN),
-                    suggest: Some(format!("/tp @s {} {} {}", p[0], p[1], p[2])),
-                    ..Style::default()
-                });
+            let link = Text::teleport_link(p[0], Some(p[1]), p[2]);
             let distance = (d2 as f32).sqrt().floor() as i32;
             self.feedback(Text::translate(
                 "commands.locate.biome.success",
@@ -2449,22 +2434,7 @@ impl Game<'_> {
                 &[&s],
             )));
         };
-        let coords = Text::translate(
-            "chat.coordinates",
-            &[
-                Text::literal(p[0].to_string()),
-                Text::literal("~"),
-                Text::literal(p[2].to_string()),
-            ],
-        );
-        let link = Text::literal("[")
-            .append(coords)
-            .append("]")
-            .with_style(&Style {
-                color: Some(text::GREEN),
-                suggest: Some(format!("/tp @s {} ~ {}", p[0], p[2])),
-                ..Style::default()
-            });
+        let link = Text::teleport_link(p[0], None, p[2]);
         let (dx, dz) = (f64::from(p[0] - from[0]), f64::from(p[2] - from[2]));
         let distance = (dx * dx + dz * dz).sqrt().floor() as i32;
         let shown = if s.starts_with('#') {

@@ -162,6 +162,7 @@ impl Game<'_> {
         let auth = horizon_client::auth::current();
         let name = auth.as_ref().map_or(name, |a| a.name.as_str());
         let session = Session::connect(address, name, auth.clone(), view, lang.clone());
+        self.extras_connecting(address, name);
         let player_type = super::perspective::player_type(&root);
         let mut streaming = Streaming::new(
             Arc::new(NoTerrain),
@@ -182,7 +183,7 @@ impl Game<'_> {
         self.player = None;
         self.spawn = None;
         self.mobs.clear();
-        self.arrows.clear();
+        self.creatures.projectiles.clear();
         self.dropped.clear();
         self.particles.clear();
         self.orbs.clear();
@@ -260,6 +261,10 @@ impl Game<'_> {
 
     /// Disconnect and return to the multiplayer screen (DisconnectedScreen).
     pub(super) fn leave_server(&mut self, reason: Option<String>) -> Result<()> {
+        if reason.is_none() {
+            // Leaving on purpose: nothing for auto-reconnect to retry.
+            self.extras_left();
+        }
         if let Some(mut r) = self.remote.take() {
             r.session.disconnect();
         }
@@ -284,7 +289,10 @@ impl Game<'_> {
         let saves = std::env::current_dir()?.join("saves");
         let mut title = horizon_client::title::Title::new(saves.clone());
         title.mode = horizon_client::title::Mode::Multiplayer(match reason {
-            Some(reason) => horizon_client::multiplayer::Screen::Disconnected { reason },
+            Some(reason) => horizon_client::multiplayer::Screen::Disconnected {
+                reason,
+                retry: None,
+            },
             None => horizon_client::multiplayer::Screen::list(&saves),
         });
         self.title = Some(title);
@@ -374,6 +382,7 @@ impl Game<'_> {
                     uuid,
                 } => {
                     self.set_registries(registries);
+                    self.extras_joined();
                     if let Some(r) = self.remote.as_mut() {
                         r.joined = true;
                         r.profile = uuid;
@@ -389,9 +398,15 @@ impl Game<'_> {
                         }
                     }
                 }
-                Event::Disconnected(reason) => {
+                Event::Disconnected {
+                    reason,
+                    from_server,
+                } => {
                     log::info!("Horizon: disconnected: {reason}");
-                    return self.leave_server(Some(reason));
+                    let retry = self.reconnect_after(&reason, from_server);
+                    self.leave_server(Some(reason))?;
+                    self.offer_reconnect(retry);
+                    return Ok(());
                 }
                 Event::Packet(packet) => self.handle_packet(*packet)?,
             }
@@ -805,6 +820,9 @@ impl Game<'_> {
                 }
             }
             C::BlockChangedAck(_) => {}
+            C::LevelEvent(p) if p.kind == 2015 => {
+                self.dragon_egg_particles(p.pos, p.data);
+            }
             C::LevelEvent(p) if p.kind == 2001 => {
                 // LevelEvent.PARTICLES_DESTROY_BLOCK: someone else broke a block.
                 let state = BlockStateId(p.data.max(0) as u32);
@@ -918,6 +936,30 @@ impl Game<'_> {
                 }
             }
             C::SetEntityData(p) => {
+                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
+                    && m.species() == horizon_client::mobs::Species::Rabbit
+                {
+                    for (index, _, value) in &p.values {
+                        match (index, value) {
+                            (15, Value::Byte(flags)) => m.no_ai = flags & 1 != 0,
+                            (16, Value::Bool(baby)) => m.extra.age = if *baby { -1 } else { 0 },
+                            _ => {}
+                        }
+                    }
+                }
+                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
+                    && m.species() == horizon_client::mobs::Species::Creeper
+                {
+                    for (index, _, value) in &p.values {
+                        match (index, value) {
+                            // Creeper.DATA_SWELL_DIR, DATA_IS_POWERED, DATA_IS_IGNITED.
+                            (16, Value::Int(dir)) => m.extra.counter = *dir,
+                            (17, Value::Bool(powered)) => m.extra.charged = *powered,
+                            (18, Value::Bool(ignited)) => m.extra.flag = *ignited,
+                            _ => {}
+                        }
+                    }
+                }
                 for (index, _, value) in &p.values {
                     if *index == ITEM_ENTITY_ITEM
                         && let Value::Item(stack) = value
@@ -948,6 +990,12 @@ impl Game<'_> {
                 }
             }
             C::EntityEvent(p) => {
+                if p.event == 1
+                    && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
+                    && m.species() == horizon_client::mobs::Species::Rabbit
+                {
+                    horizon_client::mobs::rabbit::hop_event(m);
+                }
                 // EntityEvent.DEATH: start the death animation.
                 if p.event == 3
                     && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
@@ -1721,6 +1769,12 @@ impl Game<'_> {
             m.previous_body_yaw = m.body_yaw;
             m.previous_limb_speed = m.limb_speed;
             m.age += 1;
+            if m.species() == horizon_client::mobs::Species::Rabbit {
+                horizon_client::mobs::rabbit::base_tick(m);
+            }
+            if m.species() == horizon_client::mobs::Species::Creeper {
+                horizon_client::mobs::hostile::creeper_client_tick(m);
+            }
             if m.hurt_time > 0 {
                 m.hurt_time -= 1;
             }
@@ -1743,6 +1797,9 @@ impl Game<'_> {
             let target = (((dx * dx + dz * dz).sqrt() * 4.0) as f32).min(1.0);
             m.limb_speed += (target - m.limb_speed) * 0.4;
             m.limb_position += m.limb_speed;
+            if m.species() == horizon_client::mobs::Species::Rabbit {
+                horizon_client::mobs::rabbit::post_tick(m);
+            }
         }
         for d in &mut self.dropped {
             d.previous = d.position;

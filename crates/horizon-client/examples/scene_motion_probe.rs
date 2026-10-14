@@ -4,7 +4,7 @@ use horizon_client::{
     Result,
     assets::Assets,
     collisions,
-    motion::{MotionEvent, MotionResources, MotionWorld, PlayerMotion},
+    motion::{LAVA, MotionEvent, MotionResources, MotionWorld, PlayerMotion, WATER},
     world::World,
 };
 use horizon_core::geometry::Vec3;
@@ -174,6 +174,31 @@ fn snapshot(out: &mut impl Write, player: &PlayerMotion) -> Result<()> {
                 velocity.y.to_bits(),
                 velocity.z.to_bits()
             )),
+            MotionEvent::Splash {
+                high_speed,
+                volume,
+                pitch,
+            } => Some(format!(
+                "sound {} entity {:08x} {:08x}",
+                if *high_speed { "splash-high" } else { "splash" },
+                volume.to_bits(),
+                pitch.to_bits()
+            )),
+            MotionEvent::SplashParticle {
+                bubble,
+                position,
+                velocity,
+            } => Some(format!(
+                "splash-particle {} {:016x},{:016x},{:016x} {:016x},{:016x},{:016x}",
+                if *bubble { "bubble" } else { "splash" },
+                position.x.to_bits(),
+                position.y.to_bits(),
+                position.z.to_bits(),
+                velocity.x.to_bits(),
+                velocity.y.to_bits(),
+                velocity.z.to_bits()
+            )),
+            MotionEvent::SplashEvent => Some("splash-event".into()),
             // The oracle marks every getAdvancements call (ENTER_BLOCK.trigger) so.
             MotionEvent::EnterBlock { .. } => Some("hurt-criterion".into()),
             MotionEvent::Waypoint { receiver, enabled } => Some(format!(
@@ -415,6 +440,9 @@ fn main() -> Result<()> {
                         p,
                     )?;
                 }
+                // Entity.baseTick's fluid phase alone (wasEyeInWater,
+                // updateFluidInteraction, lava fall halving, firstTick).
+                "fluid_tick" => world.fluid_base_tick()?,
                 "travel" => world.travel_in_air(vector(&op["value"]))?,
                 "tick" => {
                     let v = vector(&op["value"]);
@@ -541,14 +569,20 @@ fn main() -> Result<()> {
             let stuck = player.stuck_multiplier;
             writeln!(
                 out,
-                "block {} frozen {} {} {} {:016x},{:016x},{:016x}",
+                "block {} frozen {} {} {} {:016x},{:016x},{:016x} fluid {} {} {} {} {:016x} {:016x}",
                 check_block.0,
                 player.ticks_frozen,
                 player.in_powder_snow,
                 player.was_in_powder_snow,
                 stuck.x.to_bits(),
                 stuck.y.to_bits(),
-                stuck.z.to_bits()
+                stuck.z.to_bits(),
+                player.fluids.was_touching_water,
+                player.fluids.was_eye_in_water,
+                player.is_eye_in_fluid(WATER),
+                player.fluids.first_tick,
+                player.fluid_height(WATER).to_bits(),
+                player.fluid_height(LAVA).to_bits()
             )?;
             writeln!(
                 out,

@@ -145,6 +145,7 @@ impl Game<'_> {
         let (x, y) = (b.width / 2.0 - 100.0, b.height / 4.0 + 144.0);
         let (mx, my) = self.cursor;
         if mx >= x && mx < x + 200.0 && my >= y && my < y + 20.0 {
+            self.audio.play_button_click();
             self.close_sign_editor();
         }
     }

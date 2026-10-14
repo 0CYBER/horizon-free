@@ -14,26 +14,8 @@ use horizon_client::{
 /// The off hand's place in `visible_hands` (the main hand uses its hotbar slot).
 const OFFHAND: usize = usize::MAX;
 
-/// `Hud.extractCrosshair`: a charged, living target before any obstruction.
-fn attack_indicator_ready(
-    strength: f32,
-    speed: f64,
-    living: Option<f64>,
-    obstruction: Option<f64>,
-    range: Option<&serde_json::Value>,
-    creative: bool,
-) -> bool {
-    let Some(distance) = living else {
-        return false;
-    };
-    if !(strength >= 1.0 && horizon_client::attack_strength::delay(speed) > 5.0)
-        || obstruction.is_some_and(|d| d <= distance)
-    {
-        return false;
-    }
-    let Some(range) = range else {
-        return true;
-    };
+/// `AttackRange.isInRange`: float bounds, then inclusive double comparison.
+fn attack_range_contains(range: &serde_json::Value, distance: f64, creative: bool) -> bool {
     let value = |key: &str, default: f32| range[key].as_f64().map_or(default, |v| v as f32);
     let (min, max) = if creative {
         (
@@ -245,6 +227,43 @@ impl Game<'_> {
             }
         }
     }
+    /// `Minecraft.crosshairPickEntity` when it is a `LivingEntity`: whether
+    /// it is alive (the nearest entity under the crosshair, before any block).
+    pub(super) fn crosshair_living(&self) -> Option<bool> {
+        let nearest = |hits: &[Option<f64>]| hits.iter().flatten().copied().reduce(f64::min);
+        let living = nearest(&[
+            self.mob_hit().map(|h| h.1),
+            self.armor_stand_hit().map(|h| h.1),
+        ])?;
+        let other = nearest(&[
+            self.painting_hit().map(|h| h.1),
+            self.frame_hit().map(|h| h.1),
+            self.boat_hit().map(|h| h.1),
+            self.cart_hit().map(|h| h.1),
+            self.dragon_hit().map(|h| h.1),
+        ]);
+        if !self.before_block(living) || other.is_some_and(|o| o <= living) {
+            return None;
+        }
+        let active = self
+            .using
+            .and_then(|(slot, _)| self.inventory.get(slot).and_then(Option::as_ref))
+            .or_else(|| self.held());
+        if let Some(stack) = active {
+            let components = self
+                .res
+                .item_renderer
+                .models
+                .components(&horizon_client::item_render::stack_view(stack));
+            if let Some(range) = components.get("minecraft:attack_range")
+                && !attack_range_contains(range, living, self.creative)
+            {
+                return None;
+            }
+        }
+        // Only alive mobs are hit, so a picked living entity is alive.
+        Some(true)
+    }
     /// `Attributes.ATTACK_SPEED` with the main-hand item's modifier.
     pub(super) fn main_hand_attack_speed(&self) -> f64 {
         horizon_client::attack_strength::BASE_ATTACK_SPEED
@@ -252,55 +271,6 @@ impl Game<'_> {
                 .held()
                 .and_then(|h| self.res.items.get(&h.item))
                 .map_or(0.0, |i| f64::from(i.attack_speed))
-    }
-    pub(super) fn crosshair_attack_ready(&self, strength: f32, speed: f64) -> bool {
-        let living = [
-            self.mob_hit().map(|h| h.1),
-            self.armor_stand_hit().map(|h| h.1),
-        ]
-        .into_iter()
-        .flatten()
-        .min_by(f64::total_cmp);
-        let block = self.pick().and_then(|hit| {
-            let eye = self.eye_position()?;
-            Some(
-                (0..3)
-                    .map(|i| (hit.point[i] - eye[i]).powi(2))
-                    .sum::<f64>()
-                    .sqrt(),
-            )
-        });
-        let obstruction = [
-            block,
-            self.painting_hit().map(|h| h.1),
-            self.frame_hit().map(|h| h.1),
-            self.boat_hit().map(|h| h.1),
-            self.cart_hit().map(|h| h.1),
-            self.dragon_hit().map(|h| h.1),
-        ]
-        .into_iter()
-        .flatten()
-        .min_by(f64::total_cmp);
-        let active = self
-            .using
-            .and_then(|(slot, _)| self.inventory.get(slot).and_then(Option::as_ref))
-            .or_else(|| self.held());
-        let components = active.map(|stack| {
-            self.res
-                .item_renderer
-                .models
-                .components(&horizon_client::item_render::stack_view(stack))
-        });
-        attack_indicator_ready(
-            strength,
-            speed,
-            living,
-            obstruction,
-            components
-                .as_ref()
-                .and_then(|c| c.get("minecraft:attack_range")),
-            self.creative,
-        )
     }
     /// The visible main- and off-hand items.
     pub(super) fn visible_hand_items(&self) -> [Option<ItemStack>; 2] {
@@ -462,91 +432,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn full_attack_indicator_requires_a_charged_living_target_before_obstructions() {
-        assert!(attack_indicator_ready(
-            1.0,
-            1.6,
-            Some(2.0),
-            None,
-            None,
-            false
-        ));
-        for (strength, speed, living, obstruction) in [
-            (0.99, 1.6, Some(2.0), None),
-            (f32::NAN, 1.6, Some(2.0), None),
-            (1.0, 4.0, Some(2.0), None),
-            (1.0, f64::NAN, Some(2.0), None),
-            (1.0, 1.6, None, None),
-            (1.0, 1.6, Some(2.0), Some(1.5)),
-            (1.0, 1.6, Some(2.0), Some(2.0)),
-        ] {
-            assert!(!attack_indicator_ready(
-                strength,
-                speed,
-                living,
-                obstruction,
-                None,
-                false
-            ));
-        }
-        assert!(attack_indicator_ready(
-            1.0,
-            1.6,
-            Some(2.0),
-            Some(2.5),
-            None,
-            false
-        ));
-    }
-
-    #[test]
-    fn full_attack_indicator_uses_inclusive_float_attack_range_bounds() {
+    fn attack_range_uses_inclusive_float_bounds() {
         let range = serde_json::json!({
-            "min_reach": 2.0,
-            "max_reach": 4.5,
-            "min_creative_reach": 2.0,
-            "max_creative_reach": 6.5,
+            "min_reach": 2.0, "max_reach": 4.5,
+            "min_creative_reach": 2.0, "max_creative_reach": 6.5,
             "hitbox_margin": 0.125,
         });
         for (creative, min, max) in [(false, 1.875, 4.625), (true, 1.875, 6.625)] {
             for distance in [min, max] {
-                assert!(attack_indicator_ready(
-                    1.0,
-                    1.6,
-                    Some(distance),
-                    None,
-                    Some(&range),
-                    creative
-                ));
+                assert!(attack_range_contains(&range, distance, creative));
             }
             for distance in [min - 0.0001, max + 0.0001] {
-                assert!(!attack_indicator_ready(
-                    1.0,
-                    1.6,
-                    Some(distance),
-                    None,
-                    Some(&range),
-                    creative
-                ));
+                assert!(!attack_range_contains(&range, distance, creative));
             }
         }
         let defaults = serde_json::json!({});
-        let max = f64::from(3.0f32 + 0.3f32);
-        assert!(attack_indicator_ready(
-            1.0,
-            1.6,
-            Some(max),
-            None,
-            Some(&defaults),
-            false
-        ));
-        assert!(!attack_indicator_ready(
-            1.0,
-            1.6,
-            Some(max + 1e-8),
-            None,
-            Some(&defaults),
-            false
-        ));
+        for (creative, reach) in [(false, 3.0f32), (true, 5.0f32)] {
+            let max = f64::from(reach + 0.3f32);
+            assert!(attack_range_contains(&defaults, max, creative));
+            assert!(!attack_range_contains(&defaults, max + 1e-8, creative));
+        }
     }
 }

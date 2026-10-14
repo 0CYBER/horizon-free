@@ -130,7 +130,7 @@ use horizon_client::{
     containers::{BlockEntity, Providers},
     crafting::Recipes,
     creative::{Creative, Names},
-    entities::{Arrow, Experience, ExperienceOrb, ItemEntity},
+    entities::{Experience, ExperienceOrb, ItemEntity},
     environment::Environment,
     gfx::{Frame, Renderer},
     hud::{HudAtlas, HudBatch, rgba},
@@ -558,6 +558,8 @@ impl LevelAccess for GameLevel<'_> {
 #[derive(Clone, Debug)]
 struct FallingBlock {
     state: BlockStateId,
+    /// `DATA_START_POS`: spawn position used to select weighted block models.
+    start_pos: BlockPos,
     position: Vec3,
     previous: Vec3,
     velocity: Vec3,
@@ -732,7 +734,6 @@ struct Game<'a> {
     /// A new player's spawn search, while its candidates' chunks load.
     player_spawn: Option<horizon_client::world_spawn::PlayerSpawnFinder>,
     mobs: Vec<Mob>,
-    arrows: Vec<Arrow>,
     creatures: creatures::Creatures,
     sculk: sculk::SculkState,
     raiding: raids::Raiding,
@@ -833,6 +834,8 @@ struct Game<'a> {
     armor_stand_assets: armor_stands::ArmorStandAssets,
     boats: Vec<boats::Boat>,
     boat_models: boats::BoatModels,
+    /// EndCrystalModel's baked layer.
+    crystal_model: Option<horizon_client::mobs::Part>,
     carts: Vec<minecarts::Minecart>,
     /// Songs playing from jukeboxes (tracked sound handles).
     jukebox_sounds: HashMap<(i32, i32, i32), u64>,
@@ -1658,6 +1661,11 @@ impl Game<'_> {
                     self.spawner_burst([pos.x, pos.y, pos.z])
                 }
                 LevelEvent::LevelEvent {
+                    id: 2015,
+                    pos,
+                    data,
+                } => self.dragon_egg_particles([pos.x, pos.y, pos.z], data),
+                LevelEvent::LevelEvent {
                     id: 2013,
                     pos,
                     data,
@@ -1721,6 +1729,7 @@ impl Game<'_> {
                     );
                     self.falling.push(FallingBlock {
                         state,
+                        start_pos: pos,
                         position: p,
                         previous: p,
                         velocity: Vec3::ZERO,
@@ -2852,6 +2861,8 @@ impl Game<'_> {
             .iter()
             .flatten()
             .any(|s| immune.is_some_and(|t| t.contains(&*s.item)));
+        // The dimension's FAST_LAVA: the Nether's lava pushes harder.
+        player.fluids.fast_lava = self.dim == Dim::Nether;
         let grounded = player.ground.on_ground;
         let before = (
             grounded,
@@ -2943,6 +2954,35 @@ impl Game<'_> {
                     position,
                     fall_distance,
                 } => self.smash_landing_particles(state, position, fall_distance),
+                MotionEvent::Splash {
+                    high_speed,
+                    volume,
+                    pitch,
+                } => {
+                    let name = if high_speed {
+                        "minecraft:entity.player.splash.high_speed"
+                    } else {
+                        "minecraft:entity.player.splash"
+                    };
+                    self.audio.play(name, Some(feet), volume, pitch);
+                }
+                MotionEvent::SplashParticle {
+                    bubble,
+                    position,
+                    velocity,
+                } => {
+                    use horizon_client::particles::{ParticleOptions, ParticleType};
+                    let kind = if bubble {
+                        ParticleType::Bubble
+                    } else {
+                        ParticleType::Splash
+                    };
+                    self.particles.add(
+                        &ParticleOptions::simple(kind),
+                        [position.x, position.y, position.z],
+                        [velocity.x, velocity.y, velocity.z],
+                    );
+                }
                 _ => {}
             }
         }
@@ -3032,6 +3072,7 @@ impl Game<'_> {
         if running {
             horizon_client::spans::time("entity_portals", || self.handle_entity_portals());
             horizon_client::spans::time("tick_items", || self.tick_items());
+            horizon_client::spans::time("touch_arrows", || self.touch_arrows());
         }
         horizon_client::spans::time("spawn_loaded_entities", || self.spawn_loaded_entities());
         if running {
@@ -3253,6 +3294,9 @@ impl Game<'_> {
             self.draw_options(&mut batch);
             return batch;
         }
+        if let Some(title) = &mut self.title {
+            title.poll_backup();
+        }
         if let Some(title) = &self.title {
             if horizon_client::ui_theme::horizon() {
                 let fade = self.backdrop_fade();
@@ -3292,19 +3336,16 @@ impl Game<'_> {
             self.draw_spyglass(&mut batch);
             // Hud.extractCrosshair / extractItemHotbar / extractPlayerHealth /
             // extractVehicleHealth and the experience bar, laid out by hud_layout.
-            let attack_speed = self.main_hand_attack_speed();
-            let attack_strength = self.hand_strength.scale(0.0, attack_speed);
             let indicator = self.settings.attack_indicator;
+            let delay = horizon_client::attack_strength::delay(self.main_hand_attack_speed());
+            let strength = self.hand_strength.scale(0.0, self.main_hand_attack_speed());
             if self.camera_type.first_person() && !spectator {
-                let attack = (indicator == 1).then_some(attack_strength);
-                let full = indicator == 1
-                    && attack_strength >= 1.0
-                    && horizon_client::attack_strength::delay(attack_speed) > 5.0
-                    && self.crosshair_attack_ready(attack_strength, attack_speed);
+                let attack = (indicator == 1).then_some(strength);
+                let full = attack.is_some_and(|a| {
+                    hud_layout::full_attack_indicator(a, delay, self.crosshair_living())
+                });
                 let draws = hud_layout::crosshair(wi, hi, attack, full);
-                let start = batch.vertices.len();
                 hud_layout::paint(&mut batch, &self.res.atlas, &draws);
-                batch.invert_since(start);
             }
             if !spectator {
                 let inputs = hud_layout::HotbarInputs {
@@ -3313,7 +3354,7 @@ impl Game<'_> {
                     offhand: self.offhand.is_some(),
                     slots: std::array::from_fn(|i| self.inventory[i].as_ref().map(|_| 0.0)),
                     offhand_pop: 0.0,
-                    attack: (indicator == 2).then_some(attack_strength),
+                    attack: (indicator == 2).then_some(strength),
                 };
                 let draws = hud_layout::hotbar(wi, hi, &inputs);
                 hud_layout::paint(&mut batch, &self.res.atlas, &draws);
@@ -4760,56 +4801,6 @@ impl Game<'_> {
         self.guest_model_geometry(camera, alpha, &mut out);
         self.fangs_geometry(camera, alpha, &mut out);
         self.name_tag_geometry(camera, alpha, &mut out);
-        // Arrows: two crossed quads along the flight direction.
-        if let Some(r) = self
-            .res
-            .atlas
-            .sprites
-            .get("entity/projectiles/arrow")
-            .copied()
-        {
-            for a in &self.arrows {
-                let p = glam::DVec3::new(
-                    a.previous.x + (a.position.x - a.previous.x) * alpha,
-                    a.previous.y + (a.position.y - a.previous.y) * alpha,
-                    a.previous.z + (a.position.z - a.previous.z) * alpha,
-                ) - camera;
-                let dir = glam::Vec3::new(
-                    a.velocity.x as f32,
-                    a.velocity.y as f32,
-                    a.velocity.z as f32,
-                )
-                .normalize_or(glam::Vec3::X);
-                let side = dir.cross(glam::Vec3::Y).normalize_or(glam::Vec3::Z) * 0.08;
-                let up = dir.cross(side).normalize_or(glam::Vec3::Y) * 0.08;
-                let c = p.as_vec3();
-                let (u1, v1) = (
-                    r.u0 + (r.u1 - r.u0) * 0.5,
-                    r.v0 + (r.v1 - r.v0) * (5.0 / 32.0),
-                );
-                for off in [side, up] {
-                    let q = [
-                        c - dir * 0.25 - off,
-                        c + dir * 0.25 - off,
-                        c + dir * 0.25 + off,
-                        c - dir * 0.25 + off,
-                    ];
-                    for (v, uv) in q
-                        .iter()
-                        .zip([[r.u0, v1], [u1, v1], [u1, r.v0], [r.u0, r.v0]])
-                    {
-                        out.push(Vertex {
-                            normal: [0; 4],
-                            pos: v.to_array(),
-                            uv,
-                            layer: 0,
-                            color: 0xFFFF_FFFF,
-                            light: 240 | 240 << 8,
-                        });
-                    }
-                }
-            }
-        }
         // Entity shadows (EntityRenderer.extractShadow).
         if let Some(sprite) = self.res.atlas.sprites.get("misc/shadow").copied() {
             let ambient = if self.dim == Dim::Nether { 0.1 } else { 0.0 };
@@ -4971,12 +4962,9 @@ impl Game<'_> {
                 }
             }
         }
-        // Falling blocks: a unit cube with the block's texture.
-        for f in self.falling.clone() {
-            let Some((sprite, tint)) = self.particle_sprite(f.state) else {
-                continue;
-            };
-            let Some(r) = self.res.atlas.sprites.get(&sprite).copied() else {
+        // Falling blocks use their baked model, including non-cubic shapes.
+        for f in &self.falling {
+            let Some((_, tint)) = self.particle_sprite(f.state) else {
                 continue;
             };
             let p = glam::DVec3::new(
@@ -4991,50 +4979,17 @@ impl Game<'_> {
                 f.position.z.floor() as i32,
             );
             let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
-            let v = |x: f32, y: f32, z: f32| o + glam::Vec3::new(x, y, z);
-            let faces = [
-                (
-                    [v(0., 1., 1.), v(1., 1., 1.), v(1., 1., 0.), v(0., 1., 0.)],
-                    1.0,
-                ),
-                (
-                    [v(0., 0., 0.), v(1., 0., 0.), v(1., 0., 1.), v(0., 0., 1.)],
-                    0.5,
-                ),
-                (
-                    [v(1., 0., 0.), v(0., 0., 0.), v(0., 1., 0.), v(1., 1., 0.)],
-                    0.8,
-                ),
-                (
-                    [v(0., 0., 1.), v(1., 0., 1.), v(1., 1., 1.), v(0., 1., 1.)],
-                    0.8,
-                ),
-                (
-                    [v(0., 0., 0.), v(0., 0., 1.), v(0., 1., 1.), v(0., 1., 0.)],
-                    0.6,
-                ),
-                (
-                    [v(1., 0., 1.), v(1., 0., 0.), v(1., 1., 0.), v(1., 1., 1.)],
-                    0.6,
-                ),
-            ];
-            for (corners, shade) in faces {
-                let c = |sft: u32| (((tint >> sft) & 255) as f32 * shade) as u32;
-                let color = 0xFF00_0000 | c(0) << 16 | c(8) << 8 | c(16);
-                for (p, uv) in
-                    corners
-                        .iter()
-                        .zip([[r.u0, r.v1], [r.u1, r.v1], [r.u1, r.v0], [r.u0, r.v0]])
-                {
-                    out.push(Vertex {
-                        normal: [0; 4],
-                        pos: p.to_array(),
-                        uv,
-                        layer: 0,
-                        color,
-                        light: packed,
-                    });
-                }
+            let start = out.len();
+            self.block_model_vertices(
+                f.state,
+                f.start_pos,
+                glam::Mat4::from_translation(o),
+                packed,
+                &mut out,
+            );
+            let tint = horizon_client::mobs::render::abgr(tint);
+            for vertex in &mut out[start..] {
+                vertex.color = horizon_client::hud_layout::multiply(vertex.color, tint);
             }
         }
         self.tnt_geometry(camera, alpha, &mut out);
@@ -5735,7 +5690,7 @@ impl Game<'_> {
         self.mobs.clear();
         self.creatures.reset_trader();
         self.portals = Default::default();
-        self.arrows.clear();
+        self.creatures.projectiles.clear();
         self.dropped.clear();
         self.particles.clear();
         self.orbs.clear();
@@ -5886,7 +5841,7 @@ impl Game<'_> {
         self.falling.clear();
         self.tnts.clear();
         self.mobs.clear();
-        self.arrows.clear();
+        self.creatures.projectiles.clear();
         self.dropped.clear();
         self.particles.clear();
         self.orbs.clear();
@@ -6036,7 +5991,7 @@ impl Game<'_> {
         self.world = World::new(self.res.facts.air, 0);
         self.player = None;
         self.mobs.clear();
-        self.arrows.clear();
+        self.creatures.projectiles.clear();
         self.dropped.clear();
         self.particles.clear();
         self.screen = Screen::Playing;
@@ -6806,6 +6761,25 @@ impl Game<'_> {
             p,
             Some(horizon_client::mobs::Who::Player),
         );
+        // ProjectileWeaponItem.useAmmo: creative and Infinity draw without
+        // using the ammo, so the arrow is CREATIVE_ONLY; else setOwner(player)
+        // lets it be picked up.
+        let ammo = arrow_slot
+            .and_then(|i| self.inventory[i].clone())
+            .unwrap_or_else(|| ItemStack::new("minecraft:arrow", 1));
+        if let Some(a) = arrow.arrow.as_mut() {
+            a.set_item(&horizon_client::arrows::drawn_ammo(
+                &ammo,
+                self.creative || infinity,
+            ));
+            a.set_owner(Some(horizon_client::mobs::Who::Player));
+        }
+        // Flame: the arrow is spawned burning (EnchantmentHelper.onProjectileSpawned).
+        if let Some(seconds) = self.bow_projectile_ignite()
+            && let Some(a) = arrow.arrow.as_mut()
+        {
+            a.ignite_for_seconds(seconds);
+        }
         let (velocity, on_ground) = self
             .player
             .as_ref()
@@ -6981,6 +6955,7 @@ impl Game<'_> {
             &assets.pixels,
             assets.sprite_size,
             assets.texture_layers,
+            &assets.sprite_mips,
             &assets.animations,
             (
                 &self.res.atlas.pixels,
@@ -6991,6 +6966,10 @@ impl Game<'_> {
         ))
     }
     fn apply_settings(&mut self) {
+        if let Some(r) = &self.renderer {
+            self.settings
+                .clamp_gui_scale([r.config.width as i32, r.config.height as i32]);
+        }
         self.streaming.radius = self.settings.render_distance;
         self.streaming.biome_blend = self.settings.biome_blend;
         self.streaming.smooth_lighting = self.settings.smooth_lighting;
@@ -8220,9 +8199,16 @@ impl ApplicationHandler for Game<'_> {
         // The Window constructor: created fullscreen when options.txt says so.
         let fullscreen = self.settings.fullscreen;
         self.fullscreen = horizon_client::window::FullscreenState::new(fullscreen);
+        let attributes = Window::default_attributes()
+            .with_title("Horizon")
+            .with_window_icon(horizon_client::window::icon());
+        // Wayland names the window by its app id, which the horizon.desktop entry matches.
+        #[cfg(target_os = "linux")]
+        let attributes = winit::platform::wayland::WindowAttributesExtWayland::with_name(
+            attributes, "horizon", "horizon",
+        );
         let window = match event_loop.create_window(
-            Window::default_attributes()
-                .with_title("Horizon")
+            attributes
                 .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0))
                 .with_fullscreen(fullscreen.then_some(winit::window::Fullscreen::Borderless(None))),
         ) {
@@ -8242,6 +8228,7 @@ impl ApplicationHandler for Game<'_> {
             }
         }
         self.window = Some(window);
+        self.apply_settings();
         self.previous = Instant::now();
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
@@ -8368,6 +8355,17 @@ impl ApplicationHandler for Game<'_> {
                         }) * wheel_sensitivity
                     };
                     let d = scaled(raw_y) as f32;
+                    if let Some(title) = &mut self.title
+                        && !horizon_client::ui_theme::horizon()
+                    {
+                        let size = self
+                            .window
+                            .as_ref()
+                            .map(|w| w.inner_size())
+                            .unwrap_or_default();
+                        let batch = HudBatch::new([size.width, size.height]);
+                        title.scroll_worlds(d, self.cursor, (batch.width, batch.height));
+                    }
                     if self.screen == Screen::Playing
                         && self.player.is_some()
                         && !self.extras_scroll(d)
@@ -8422,13 +8420,19 @@ impl ApplicationHandler for Game<'_> {
                         .unwrap_or([1, 1]);
                     let mut b = HudBatch::new(size);
                     let atlas = &self.res.atlas;
-                    let action = self.title.as_mut().map_or(Action::None, |t| {
+                    let (action, sound) = self.title.as_mut().map_or((Action::None, false), |t| {
                         if horizon_client::ui_theme::horizon() {
-                            t.click_horizon(atlas, &mut b, self.cursor.0, self.cursor.1)
+                            (
+                                t.click_horizon(atlas, &mut b, self.cursor.0, self.cursor.1),
+                                false,
+                            )
                         } else {
                             t.click(self.cursor.0, self.cursor.1, (b.width, b.height))
                         }
                     });
+                    if sound {
+                        self.audio.play_button_click();
+                    }
                     match action {
                         Action::Quit => event_loop.exit(),
                         Action::Options => self.open_options(true),
@@ -8507,11 +8511,17 @@ impl ApplicationHandler for Game<'_> {
                         Screen::Creative if button == MouseButton::Left => {
                             self.creative_screen.release();
                         }
-                        Screen::Paused if pressed && self.pause_menu => self.pause_click()?,
+                        Screen::Paused
+                            if pressed && button == MouseButton::Left && self.pause_menu =>
+                        {
+                            self.pause_click()?
+                        }
                         Screen::WorldOptions if pressed && button == MouseButton::Left => {
                             self.world_options_click()
                         }
-                        Screen::Dead if pressed => self.death_click()?,
+                        Screen::Dead if pressed && button == MouseButton::Left => {
+                            self.death_click()?
+                        }
                         Screen::Advancements if button == MouseButton::Left => {
                             let size = self
                                 .renderer
@@ -8613,6 +8623,11 @@ impl ApplicationHandler for Game<'_> {
                             return Ok(());
                         }
                         match event.physical_key {
+                            PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
+                                if let Some(t) = self.title.as_mut() {
+                                    t.confirm_edit();
+                                }
+                            }
                             PhysicalKey::Code(KeyCode::Backspace) => self.title_edit(None, true),
                             PhysicalKey::Code(KeyCode::Tab) => {
                                 if let Some(t) = self.title.as_mut() {
@@ -8698,6 +8713,7 @@ impl ApplicationHandler for Game<'_> {
                         }
                     }
                     self.extras_frame(elapsed);
+                    self.extras_retry()?;
                     self.apply_mouse_look();
                     self.pad_look(elapsed.as_secs_f32());
                     self.advance_flight();
@@ -9089,7 +9105,6 @@ pub fn run() -> Result<()> {
         spawn_spiral: Default::default(),
         player_spawn: None,
         mobs: Vec::new(),
-        arrows: Vec::new(),
         creatures: Default::default(),
         sculk: Default::default(),
         raiding: Default::default(),
@@ -9160,6 +9175,7 @@ pub fn run() -> Result<()> {
         armor_stand_assets: armor_stands::ArmorStandAssets::load(&root),
         boats: Vec::new(),
         boat_models: boats::BoatModels::load(&root),
+        crystal_model: horizon_client::mobs::load_model(&root, "minecraft:end_crystal#main"),
         carts: Vec::new(),
         jukebox_sounds: HashMap::new(),
         bolts: Vec::new(),

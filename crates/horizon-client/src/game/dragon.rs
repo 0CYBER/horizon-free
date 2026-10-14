@@ -1849,7 +1849,7 @@ impl Game<'_> {
     /// raids' and the custom bars, in that order.
     pub(super) fn draw_boss_bars(&self, batch: &mut HudBatch) {
         let mut bars = Vec::new();
-        if let Some(d) = self.dragon.as_ref().filter(|_| self.dim == Dim::End) {
+        if let Some(d) = self.dragon.as_ref().filter(|_| self.dragon_bar_shown()) {
             bars.push(hud_overlays::BossBar {
                 name: Text::literal(
                     self.translate("entity.minecraft.ender_dragon", "Ender Dragon"),
@@ -1869,6 +1869,11 @@ impl Game<'_> {
             &self.res.atlas.font,
         );
         hud_layout::paint(batch, &self.res.atlas, &draws);
+    }
+    /// The dragon fight's boss bar shows (`EnderDragonFight.dragonEvent`,
+    /// with `setCreateWorldFog`).
+    pub(super) fn dragon_bar_shown(&self) -> bool {
+        self.dim == Dim::End && self.dragon.is_some()
     }
     /// `music.dragon` while the boss bar plays music.
     pub(super) fn boss_music(&self) -> bool {
@@ -2066,9 +2071,7 @@ impl Game<'_> {
         }
         // The healing beam to the nearest crystal.
         if let Some(c) = d.nearest_crystal.and_then(|i| self.crystals.get(i)) {
-            let age = c.time as f32 + a;
-            let hh = (age * 0.2).sin() / 2.0 + 0.5;
-            let bob = f64::from((hh * hh + hh) * 0.4 - 1.4);
+            let bob = f64::from(horizon_client::end_crystal::y(c.time as f32 + a));
             let to = glam::DVec3::new(c.position.x, c.position.y + bob, c.position.z);
             self.crystal_beam(pos, to - pos, self.ticks as f32 + a, camera, out);
         }
@@ -2122,7 +2125,7 @@ impl Game<'_> {
     }
     /// `submitCrystalBeams`: an eight-sided tube from `from` (+2 up) along
     /// `delta`, the beam texture scrolling along it.
-    fn crystal_beam(
+    pub(super) fn crystal_beam(
         &self,
         from: glam::DVec3,
         delta: glam::DVec3,

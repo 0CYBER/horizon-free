@@ -307,9 +307,29 @@ impl FullscreenState {
     }
 }
 
+/// Horizon's icon for the window's title bar and the task bar (X11 and Windows; Wayland takes
+/// it from the `horizon.desktop` entry, macOS from the app bundle). `None` if it can't be read.
+pub fn icon() -> Option<winit::window::Icon> {
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(horizon_theme::ICON_PNG));
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+    let mut reader = decoder.read_info().ok()?;
+    let mut bytes = vec![0; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut bytes).ok()?;
+    if info.color_type != png::ColorType::Rgba {
+        return None;
+    }
+    bytes.truncate(info.buffer_size());
+    winit::window::Icon::from_rgba(bytes, info.width, info.height).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_window_icon_decodes() {
+        assert!(icon().is_some());
+    }
 
     #[test]
     fn fullscreen_follows_the_option_only_when_it_changes() {

@@ -1,0 +1,121 @@
+/* Generated from crates/horizon-theme by `cargo run -p xtask -- tokens`; do not edit.
+   docs/design-system.md describes the tokens. */
+
+:root {
+  --page: #fafafc;
+  --plate-soft: #f3f3f8;
+  --plate: #ebecf4;
+  --surface: #ffffff;
+  --rule: #e2e3ea;
+  --ink: #16181f;
+  --ink-soft: #3b3e49;
+  --muted: #646875;
+  --accent: #5b3fd6;
+  --on-accent: #ffffff;
+  --danger: #b4372a;
+  --success: #1d7a48;
+  color-scheme: light;
+  --font: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --mono: "Geist Mono", ui-monospace, monospace;
+  --text-micro: 11px;
+  --text-micro-line: 1.5;
+  --text-micro-tracking: 0.04em;
+  --text-micro-weight: 400;
+  --text-caption: 12px;
+  --text-caption-line: 1.5;
+  --text-caption-tracking: 0em;
+  --text-caption-weight: 400;
+  --text-label: 13px;
+  --text-label-line: 1.5;
+  --text-label-tracking: 0em;
+  --text-label-weight: 400;
+  --text-ui: 14px;
+  --text-ui-line: 1.5;
+  --text-ui-tracking: 0em;
+  --text-ui-weight: 400;
+  --text-body: clamp(15px, calc(15px + 2 * (100vw - 375px) / 1065), 17px);
+  --text-body-line: 1.6;
+  --text-body-tracking: 0em;
+  --text-body-weight: 400;
+  --text-heading: clamp(20px, calc(20px + 4 * (100vw - 375px) / 1065), 24px);
+  --text-heading-line: 1.3;
+  --text-heading-tracking: -0.01em;
+  --text-heading-weight: 500;
+  --text-title: clamp(32px, calc(32px + 16 * (100vw - 375px) / 1065), 48px);
+  --text-title-line: 1.05;
+  --text-title-tracking: -0.02em;
+  --text-title-weight: 500;
+  --text-display: clamp(34px, calc(34px + 30 * (100vw - 375px) / 1065), 64px);
+  --text-display-line: 1.05;
+  --text-display-tracking: -0.025em;
+  --text-display-weight: 500;
+  --text-wordmark: 18vw;
+  --text-wordmark-line: 0.8;
+  --text-wordmark-tracking: -0.04em;
+  --text-wordmark-weight: 500;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+  --space-9: 96px;
+  --gutter: 64px;
+  --gutter-narrow: 16px;
+  --radius: 8px;
+  --radius-plate: 12px;
+  --radius-pill: 999px;
+  --rule-width: 1px;
+  --control: 32px;
+  --control-large: 40px;
+  --segment: 28px;
+  --field: 36px;
+  --row: 86px;
+  --index: 40px;
+  --plate-bleed: 16px;
+  --rise: 8px;
+  --measure: 56ch;
+  --quick: 150ms;
+  --ease-quick: cubic-bezier(0.4, 0, 0.2, 1);
+  --move: 240ms;
+  --ease-move: cubic-bezier(0.23, 1, 0.32, 1);
+  --enter: 600ms;
+  --ease-enter: cubic-bezier(0.23, 1, 0.32, 1);
+  --stagger: 40ms;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --page: #0d0e13;
+    --plate-soft: #181a22;
+    --plate: #20222c;
+    --surface: #16181f;
+    --rule: #24262f;
+    --ink: #ecedf3;
+    --ink-soft: #c5c7d1;
+    --muted: #8b8f9c;
+    --accent: #9a86ff;
+    --on-accent: #0d0e13;
+    --danger: #f07a68;
+    --success: #45c27a;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --page: #0d0e13;
+  --plate-soft: #181a22;
+  --plate: #20222c;
+  --surface: #16181f;
+  --rule: #24262f;
+  --ink: #ecedf3;
+  --ink-soft: #c5c7d1;
+  --muted: #8b8f9c;
+  --accent: #9a86ff;
+  --on-accent: #0d0e13;
+  --danger: #f07a68;
+  --success: #45c27a;
+  color-scheme: dark;
+}

@@ -18,7 +18,6 @@ tar = { version = "0.4", default-features = false }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 dirs = "5"
 self-replace = "1"
-image = { version = "0.25", default-features = false, features = ["jpeg"] }
 clap = { version = "4", features = ["derive"] }
 horizon-theme = { path = "../crates/horizon-theme" }
 horizon-prepare = { path = "../crates/horizon-prepare" }
@@ -34,6 +33,10 @@ futures-lite = "2"
 keyring = { version = "3", features = ["apple-native"] }
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
+
+[target.'cfg(windows)'.build-dependencies]
+# The icon resource in the .exe (build.rs).
+winresource = "0.1"
 
 [profile.release]
 strip = true

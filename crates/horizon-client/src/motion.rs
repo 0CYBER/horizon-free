@@ -43,6 +43,9 @@ use std::{
     sync::Arc,
 };
 
+mod fluids;
+pub use fluids::{FluidResources, LAVA, PlayerFluids, WATER};
+
 pub struct MotionResources {
     pub attributes: Arc<Catalog>,
     pub blocks: BoundMovementProperties,
@@ -50,6 +53,7 @@ pub struct MotionResources {
     pub fall_reset: BTreeSet<String>,
     pub landing: BlockLandingRegistry,
     pub health: crate::health::HealthResources,
+    pub fluids: FluidResources,
 }
 impl MotionResources {
     pub fn load(root: &Path, assets: &Assets) -> Result<Self> {
@@ -86,6 +90,7 @@ impl MotionResources {
         Ok(Self {
             landing: crate::landing::load(root, &properties)?,
             health: crate::health::HealthResources::load(root)?,
+            fluids: FluidResources::load(root, assets)?,
             attributes,
             blocks: properties.bind(&MovementTags {
                 fences: tag("minecraft:fences")?,
@@ -150,6 +155,21 @@ pub enum MotionEvent {
         position: BlockPos,
         fall_distance: f64,
     },
+    /// `Entity.doWaterSplashEffect`: the player's splash (or high-speed
+    /// splash) sound at its position...
+    Splash {
+        high_speed: bool,
+        volume: f32,
+        pitch: f32,
+    },
+    /// ...its BUBBLE (else SPLASH) particles...
+    SplashParticle {
+        bubble: bool,
+        position: Vec3,
+        velocity: Vec3,
+    },
+    /// ...and the SPLASH game event.
+    SplashEvent,
 }
 pub struct PlayerMotion {
     pub position: Vec3,
@@ -213,6 +233,8 @@ pub struct PlayerMotion {
     pub health: crate::health::PlayerHealth,
     /// Status effects and armor protection seen by movement and damage.
     pub status: crate::effects::StatusFlags,
+    /// Water and lava around the player (`Entity.fluidInteraction`).
+    pub fluids: PlayerFluids,
     /// `Entity.isInPowderSnow` / `wasInPowderSnow`.
     pub in_powder_snow: bool,
     pub was_in_powder_snow: bool,
@@ -313,6 +335,7 @@ impl PlayerMotion {
             sync_position: false,
             events: Vec::new(),
             attributes,
+            fluids: PlayerFluids::default(),
             in_powder_snow: false,
             was_in_powder_snow: false,
             ticks_frozen: 0,
@@ -591,6 +614,7 @@ impl MotionWorld<'_, '_, '_> {
         // Entity.baseTick
         self.player.was_in_powder_snow = self.player.in_powder_snow;
         self.player.in_powder_snow = false;
+        self.fluid_base_tick()?;
         self.player.old_position = self.player.position;
         if self.player.jump_trigger_time > 0 {
             self.player.jump_trigger_time -= 1;
@@ -1334,15 +1358,21 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
         self.player.fall_distance
     }
     fn fall_reset_clip(&mut self, from: Vec3, to: Vec3) -> Result<bool> {
-        // Every fluid in this controlled scene is empty. Tagged reset blocks use
-        // a full block in ClipContext.FALLDAMAGE_RESETTING, not their collider.
+        // ClipContext.Block.FALLDAMAGE_RESETTING: tagged reset blocks are a full
+        // block, not their collider; ClipContext.Fluid.WATER: the water's shape.
+        // Both shapes are queried for every visited block (the water's first
+        // query fixes its cached shape), either one hitting ends the ray.
         let hit = traverse_blocks(from, to, 1_000_000, |p| {
+            let water = match self.water_clip(from, to, p) {
+                Ok(hit) => hit,
+                Err(e) => return Some(Err(e)),
+            };
             let name = &self.assets.registry.state(self.block(p)).unwrap().name;
-            (self.resources.fall_reset.contains(name)
-                && VoxelShape::block().clip(from, to, p).is_some())
-            .then_some(())
+            let reset = self.resources.fall_reset.contains(name)
+                && VoxelShape::block().clip(from, to, p).is_some();
+            (water || reset).then_some(Ok(()))
         })?;
-        Ok(hit.is_some())
+        hit.transpose().map(|h| h.is_some())
     }
     fn reset_fall_distance(&mut self) -> Result<()> {
         self.player.fall_distance = 0.0;

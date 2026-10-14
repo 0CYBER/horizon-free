@@ -281,6 +281,12 @@ fn put_s(f: &mut OptionsFile, key: &str, v: &str) {
     }
 }
 impl Settings {
+    /// `ClampingLazyMaxIntRange.validateValue`: clamp once the framebuffer is known.
+    pub fn clamp_gui_scale(&mut self, framebuffer: [i32; 2]) {
+        let max = crate::window::calculate_scale(framebuffer, 0, self.force_unicode) as u32;
+        self.gui_scale = self.gui_scale.min(max);
+    }
+
     pub fn load(path: &Path) -> Self {
         let horizon = path
             .parent()

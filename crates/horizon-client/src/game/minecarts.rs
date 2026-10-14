@@ -16,6 +16,7 @@ use horizon_client::{
 };
 use horizon_core::{
     geometry::{Aabb, Vec3},
+    position::BlockPos,
     random::RandomSource,
 };
 use horizon_world::registry::BlockStateId;
@@ -1042,18 +1043,46 @@ impl Game<'_> {
         if !self.before_block(d) || self.mob_hit().is_some_and(|m| m.1 < d) {
             return false;
         }
+        let burning = self
+            .held()
+            .is_some_and(|s| s.enchantment_level("minecraft:fire_aspect") > 0);
+        self.hurt_cart(i, damage, self.creative, burning);
+        self.swing_arm();
+        true
+    }
+    /// An arrow hit cart `i` (`MinecartTNT.hurtServer`, then
+    /// `VehicleEntity.hurtServer`): a burning arrow sets off a TNT minecart.
+    pub(super) fn arrow_hits_cart(
+        &mut self,
+        i: usize,
+        damage: f32,
+        arrow_velocity: Vec3,
+        burning: bool,
+        creative: bool,
+    ) {
+        if i >= self.carts.len() {
+            return;
+        }
+        if burning && self.carts[i].kind == CartKind::Tnt {
+            let c = self.carts.remove(i);
+            self.explode_cart(&c, arrow_velocity.length_squared());
+            return;
+        }
+        self.hurt_cart(i, damage, creative, false);
+    }
+    /// `VehicleEntity.hurtServer`: shake, add the damage, break past 40 (at
+    /// once for creative players); TNT minecarts prime instead when moving
+    /// or hurt by fire.
+    fn hurt_cart(&mut self, i: usize, damage: f32, creative: bool, fire: bool) {
         let c = &mut self.carts[i];
         c.hurt_dir = -c.hurt_dir;
         c.hurt_time = 10;
         c.damage += damage * 10.0;
-        let destroyed = self.creative || c.damage > 40.0;
+        let destroyed = creative || c.damage > 40.0;
         if destroyed {
             let mut c = self.carts.remove(i);
             let speed = c.velocity.x * c.velocity.x + c.velocity.z * c.velocity.z;
-            let burning = self
-                .held()
-                .is_some_and(|s| s.enchantment_level("minecraft:fire_aspect") > 0);
-            if c.kind == CartKind::Tnt && (burning || speed >= 0.01) {
+            if c.kind == CartKind::Tnt && (fire || speed >= 0.01) {
                 // MinecartTNT.destroy: prime instead of breaking.
                 if c.fuse < 0 {
                     self.prime_cart(&mut c);
@@ -1067,29 +1096,23 @@ impl Game<'_> {
                     for s in c.items.iter().flatten() {
                         self.spawn_item(s.clone(), at, [0.0, 0.1, 0.0], 10);
                     }
-                    if !self.creative {
+                    if !creative {
                         self.spawn_item(ItemStack::new(c.kind.id(), 1), at, [0.0, 0.1, 0.0], 10);
                     }
                 }
             }
         }
-        self.swing_arm();
-        true
     }
     /// A block model's faces under `m` (block space 0..1), lit flat.
-    fn block_model_vertices(
+    pub(super) fn block_model_vertices(
         &self,
         state: BlockStateId,
+        seed_pos: BlockPos,
         m: glam::Mat4,
         light: u32,
         out: &mut Vec<Vertex>,
     ) {
-        let Ok(models) = self
-            .res
-            .assets
-            .model_catalog
-            .collect(state, horizon_core::position::BlockPos::new(0, 0, 0))
-        else {
+        let Ok(models) = self.res.assets.model_catalog.collect(state, seed_pos) else {
             return;
         };
         for (_, model) in &models {
@@ -1238,7 +1261,7 @@ impl Game<'_> {
                         * glam::Mat4::from_translation(glam::Vec3::splat(-0.5));
                     let flash = c.kind == CartKind::Tnt && c.fuse > -1 && (c.fuse / 5) % 2 == 0;
                     let start = out.len();
-                    self.block_model_vertices(state, m, packed, out);
+                    self.block_model_vertices(state, BlockPos::default(), m, packed, out);
                     if flash {
                         // submitWhiteSolidBlock: OverlayTexture.u(1.0) on the cart's own light.
                         for v in &mut out[start..] {

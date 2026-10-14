@@ -99,6 +99,60 @@ impl ProjectileWorld for ProjWorld<'_, '_> {
             .full_collision
     }
 }
+/// `FlameFeatureRenderer`: fire quads stacked up a burning entity's box,
+/// turned to the camera around Y, at full block light. `at` is the entity's
+/// feet relative to the camera.
+fn flame_geometry(
+    atlas: &horizon_client::hud::HudAtlas,
+    at: glam::Vec3,
+    width: f32,
+    height: f32,
+    camera_yaw: f32,
+    light: u8,
+    out: &mut Vec<Vertex>,
+) {
+    let (Some(fire0), Some(fire1)) = (
+        atlas.sprites.get("block/fire_0").copied(),
+        atlas.sprites.get("block/fire_1").copied(),
+    ) else {
+        return;
+    };
+    let s = width * 1.4;
+    let mut h = height / s;
+    // Mth.rotationAroundAxis(Y, camera.orientation): the camera's turn about Y.
+    let turn = glam::Mat3::from_rotation_y(std::f32::consts::PI - camera_yaw.to_radians());
+    let lift = 0.3 - (h as i32) as f32 * 0.02;
+    let packed = (u32::from(light >> 4) * 16) | ((15 * 16) << 8);
+    let (mut r, mut yo, mut zo, mut ss) = (0.5f32, 0.0f32, 0.0f32, 0);
+    while h > 0.0 {
+        let tex = if ss % 2 == 0 { fire0 } else { fire1 };
+        let (mut u0, v0, mut u1, v1) = (tex.u0, tex.v0, tex.u1, tex.v1);
+        if ss / 2 % 2 == 0 {
+            std::mem::swap(&mut u0, &mut u1);
+        }
+        for (x, y, uv) in [
+            (-r, -yo, [u1, v1]),
+            (r, -yo, [u0, v1]),
+            (r, 1.4 - yo, [u0, v0]),
+            (-r, 1.4 - yo, [u1, v0]),
+        ] {
+            let p = at + turn * glam::Vec3::new(x, y, zo + lift) * s;
+            out.push(Vertex {
+                normal: [0; 4],
+                pos: p.to_array(),
+                uv,
+                layer: 0,
+                color: 0xFFFF_FFFF,
+                light: packed,
+            });
+        }
+        h -= 0.45;
+        yo -= 0.45;
+        r *= 0.9;
+        zo -= 0.03;
+        ss += 1;
+    }
+}
 pub(super) fn seen(m: &Mob, player: Option<[i32; 4]>) -> Seen {
     m.seen(player)
 }
@@ -324,6 +378,7 @@ impl Game<'_> {
             world: &self.world,
             registry: self.res.assets.registry,
             facts: &self.res.facts,
+            movement: &self.motion.blocks,
             collision: self.collision,
             data: &self.res.mob_data,
             player: self.player_view(),
@@ -681,6 +736,7 @@ impl Game<'_> {
     pub(super) fn handle_mob_events(&mut self, events: Vec<MobEvent>) -> Result<()> {
         for e in events {
             match e {
+                MobEvent::RabbitHop { mob, at } => self.lan_entity_event(mob as i32, 1, at),
                 MobEvent::Sound(name, at, volume, pitch)
                 | MobEvent::LocalSound(name, at, volume, pitch) => {
                     self.audio
@@ -1354,10 +1410,68 @@ impl Game<'_> {
             let _ = player.hurt(&self.motion.health, self.world.health_rules, id, amount);
         }
     }
+    /// `Player.aiStep` touching arrows in its box grown by (1, 0.5, 1):
+    /// `AbstractArrow.playerTouch`, then `Player.take`'s pickup sound at the
+    /// arrow (`ClientPacketListener.handleTakeItemEntity`).
+    pub(super) fn touch_arrows(&mut self) {
+        use horizon_client::arrows::Touch;
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        if p.health.dead_or_dying() || self.spectator() {
+            return;
+        }
+        let w = f64::from(p.dimensions.width) / 2.0;
+        let reach = Aabb::new(
+            Vec3::new(p.position.x - w, p.position.y, p.position.z - w),
+            Vec3::new(
+                p.position.x + w,
+                p.position.y + f64::from(p.dimensions.height),
+                p.position.z + w,
+            ),
+        )
+        .inflate(Vec3::new(1.0, 0.5, 1.0));
+        // Player.hasInfiniteMaterials.
+        let creative = self.creative;
+        let mut projectiles = std::mem::take(&mut self.creatures.projectiles);
+        projectiles.retain(|shot| {
+            let Some(a) = shot.arrow.as_ref().filter(|a| !a.removed) else {
+                return true;
+            };
+            let at = shot.position;
+            let bounds = Aabb::new(
+                Vec3::new(at.x - 0.25, at.y, at.z - 0.25),
+                Vec3::new(at.x + 0.25, at.y + 0.5, at.z + 0.25),
+            );
+            if !bounds.intersects(reach) {
+                return true;
+            }
+            let taken = match a.player_touch(creative) {
+                Touch::Ignore => false,
+                Touch::Take => true,
+                // Inventory.add: a creative player takes what does not fit.
+                Touch::Give(stack) => self.give(stack).is_none() || creative,
+            };
+            if taken {
+                let r = &mut self.world.random;
+                let pitch = (r.next_float() - r.next_float()) * 1.4 + 2.0;
+                self.audio.play(
+                    "minecraft:entity.item.pickup",
+                    Some([at.x, at.y, at.z]),
+                    0.2,
+                    pitch,
+                );
+            }
+            !taken
+        });
+        self.creatures.projectiles = projectiles;
+    }
+
     fn tick_projectiles(&mut self) -> Result<()> {
         let mut projectiles = std::mem::take(&mut self.creatures.projectiles);
         let mut hits = Vec::new();
         let mut deflections: Vec<[f64; 3]> = Vec::new();
+        let mut arrow_events = Vec::new();
         {
             let mut targets: Vec<(Who, Aabb)> = self
                 .mobs
@@ -1390,9 +1504,33 @@ impl Game<'_> {
                 self.world.random.next_float()
             };
             let w = self.mob_world_base(&[]);
+            // Level.isRainingAt: raining, open to the sky (the biome's
+            // precipitation is not checked here).
+            let (raining, world) = (w.raining, w.world);
+            let rain = move |p: BlockPos| raining && world.light(p.x, p.y, p.z) >> 4 == 15;
+            let scene = horizon_client::arrows::ArrowScene {
+                world: w.world,
+                registry: w.registry,
+                facts: w.facts,
+                collision: w.collision,
+                fluids: &self.motion.fluids,
+                raining: &rain,
+                mob_griefing: self.ui.rules.bool("mob_griefing"),
+                tnt_explodes: self.ui.rules.bool("tnt_explodes"),
+            };
+            // Arrows also hit minecarts (VehicleEntity is pickable).
+            let mut arrow_targets = targets.clone();
+            arrow_targets.extend(self.carts.iter().map(|c| (Who::Mob(c.id), c.bounds())));
             let pw = ProjWorld { w: &w, targets };
             projectiles.retain_mut(|p| {
-                let (keep, hit) = p.tick(&pw);
+                let (keep, hit) = if p.arrow.is_some() {
+                    horizon_client::arrows::tick(p, &scene, &arrow_targets)
+                } else {
+                    p.tick(&pw)
+                };
+                if let Some(a) = p.arrow.as_mut() {
+                    arrow_events.extend(a.events.drain(..).map(|e| (p.position, e)));
+                }
                 let wind = matches!(
                     p.kind,
                     ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge
@@ -1406,6 +1544,9 @@ impl Game<'_> {
                     && breezes.contains(&id)
                 {
                     super::wind::reverse(p, jitter);
+                    if let Some(a) = p.arrow.as_mut() {
+                        a.removed = false;
+                    }
                     deflections.push([at.x, at.y, at.z]);
                     return true;
                 }
@@ -1431,11 +1572,92 @@ impl Game<'_> {
             self.audio
                 .play("minecraft:entity.breeze.deflect", Some(at), 1.0, 1.0);
         }
+        for (at, event) in arrow_events {
+            self.arrow_event(at, event);
+        }
         self.creatures.projectiles.append(&mut projectiles);
         for (p, hit) in hits {
             self.projectile_hit(&p, hit)?;
         }
         Ok(())
+    }
+    /// What an arrow's tick asked for: its particles and sounds.
+    fn arrow_event(&mut self, at: Vec3, event: horizon_client::arrows::ArrowEvent) {
+        use horizon_client::arrows::{ArrowEvent, ArrowParticle, ArrowSound, BlockReaction};
+        use horizon_client::particles::{ParticleOptions, ParticleType};
+        let kind = |k| match k {
+            ArrowParticle::Bubble => ParticleType::Bubble,
+            ArrowParticle::Crit => ParticleType::Crit,
+            ArrowParticle::Splash => ParticleType::Splash,
+        };
+        match event {
+            ArrowEvent::Particle {
+                kind: k,
+                position,
+                velocity,
+            } => self.particles.add(
+                &ParticleOptions::simple(kind(k)),
+                [position.x, position.y, position.z],
+                [velocity.x, velocity.y, velocity.z],
+            ),
+            ArrowEvent::Sound {
+                sound,
+                volume,
+                pitch,
+            } => {
+                let name = match sound {
+                    ArrowSound::Splash => "minecraft:entity.generic.splash",
+                    ArrowSound::HitGround => "minecraft:entity.arrow.hit",
+                    ArrowSound::Extinguish => "minecraft:entity.generic.extinguish_fire",
+                };
+                self.audio
+                    .play(name, Some([at.x, at.y, at.z]), volume, pitch);
+            }
+            ArrowEvent::BubbleColumnParticles { pos } => {
+                // Entity.sendBubbleColumnParticles: the level random places them.
+                for _ in 0..2 {
+                    let r = &mut self.world.random;
+                    let splash = [
+                        f64::from(pos.x) + r.next_double(),
+                        f64::from(pos.y + 1),
+                        f64::from(pos.z) + r.next_double(),
+                    ];
+                    let bubble = [
+                        f64::from(pos.x) + r.next_double(),
+                        f64::from(pos.y + 1),
+                        f64::from(pos.z) + r.next_double(),
+                    ];
+                    self.particles.send_particles(
+                        &ParticleOptions::simple(ParticleType::Splash),
+                        splash,
+                        [0.0; 3],
+                        1.0,
+                        1,
+                    );
+                    self.particles.send_particles(
+                        &ParticleOptions::simple(ParticleType::Bubble),
+                        bubble,
+                        [0.0, 0.01, 0.0],
+                        0.2,
+                        1,
+                    );
+                }
+            }
+            ArrowEvent::Block { pos, reaction } => match reaction {
+                BlockReaction::PrimeTnt => {
+                    self.spawn_primed_tnt(pos, false);
+                    self.with_level(|b, level, ticks| b.remove_block(level, ticks, pos, false));
+                    let _ = self.process_level_events();
+                }
+                BlockReaction::Light(lit) => {
+                    let _ = self.level_set([pos.x, pos.y, pos.z], lit);
+                }
+            },
+            ArrowEvent::SplashEvent => {
+                self.projectile_event("minecraft:splash", None, [at.x, at.y, at.z]);
+            }
+            ArrowEvent::ShootEvent => {}
+        }
     }
     fn projectile_hit(&mut self, p: &Projectile, hit: Hit) -> Result<()> {
         self.combat.projectile_owner = match p.owner {
@@ -1465,6 +1687,25 @@ impl Game<'_> {
             self.hit_special(id, amount, p.owner == Some(Who::Player));
             return Ok(());
         }
+        if let (
+            ProjectileKind::Arrow { .. },
+            Hit::Entity {
+                who: Who::Mob(id), ..
+            },
+        ) = (&p.kind, hit)
+            && let Some(i) = self.carts.iter().position(|c| c.id == id)
+        {
+            // AbstractArrow.onHitEntity on a minecart.
+            let amount = p.arrow_damage(&mut self.world.random) + p.bonus.damage;
+            let burning = p.arrow.as_ref().is_some_and(|a| a.on_fire());
+            let creative = p.owner == Some(Who::Player) && self.creative;
+            self.arrow_hits_cart(i, amount, p.velocity, burning, creative);
+            if let Some((sound, volume, pitch)) = arrow_impact_sound(&mut self.world.random, true) {
+                self.audio
+                    .play(sound, Some([at.x, at.y, at.z]), volume, pitch);
+            }
+            return Ok(());
+        }
         let atp = [at.x, at.y, at.z];
         // Projectile.onHit: the landing is heard.
         self.projectile_event("minecraft:projectile_land", p.owner, atp);
@@ -1492,7 +1733,8 @@ impl Game<'_> {
                         velocity: [p.velocity.x * k, 0.1, p.velocity.z * k],
                     }])?;
                 }
-                if p.bonus.flame {
+                // AbstractArrow.onHitEntity: a burning arrow sets its target alight.
+                if p.arrow.as_ref().is_some_and(|a| a.on_fire()) {
                     self.handle_mob_events(vec![MobEvent::Ignite {
                         target: who,
                         seconds: 5,
@@ -1528,13 +1770,8 @@ impl Game<'_> {
                     self.audio.play(sound, Some(atp), volume, pitch);
                 }
             }
-            (ProjectileKind::Arrow { .. }, Hit::Block { .. }) => {
-                if let Some((sound, volume, pitch)) =
-                    arrow_impact_sound(&mut self.world.random, true)
-                {
-                    self.audio.play(sound, Some(atp), volume, pitch);
-                }
-            }
+            // AbstractArrow.onHitBlock plays its sound itself (ArrowEvent).
+            (ProjectileKind::Arrow { .. }, Hit::Block { .. }) => {}
             (ProjectileKind::Snowball, hit) => {
                 if let Hit::Entity {
                     who: Who::Mob(id), ..
@@ -2497,6 +2734,9 @@ impl Game<'_> {
                             light: packed,
                         });
                     }
+                }
+                if a.arrow.as_ref().is_some_and(|s| s.on_fire()) {
+                    flame_geometry(atlas, c, 0.5, 0.5, self.yaw, light, out);
                 }
                 continue;
             }

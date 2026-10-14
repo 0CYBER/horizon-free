@@ -30,7 +30,7 @@ impl Game<'_> {
             if self.remote.is_none() {
                 error = Some(match self.title.as_ref().map(|t| &t.mode) {
                     Some(horizon_client::title::Mode::Multiplayer(
-                        horizon_client::multiplayer::Screen::Disconnected { reason },
+                        horizon_client::multiplayer::Screen::Disconnected { reason, .. },
                     )) => format!("disconnected: {reason}"),
                     _ => "disconnected".to_owned(),
                 });

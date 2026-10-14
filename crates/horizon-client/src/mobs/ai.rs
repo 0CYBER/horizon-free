@@ -171,7 +171,12 @@ pub fn register(m: &mut Mob) {
         Family::Undead => undead::register(m),
         Family::Hostile => hostile::register(m),
         Family::Aquatic => aquatic::register(m),
-        Family::Generic => generic(m),
+        Family::Generic => {
+            generic(m);
+            if m.species() == Species::Rabbit {
+                super::rabbit::register(m);
+            }
+        }
         Family::Inert => {}
         Family::Witch => super::witch::register(m),
         Family::Tame if m.species() == Species::Cat => super::tame::register_cat(m),
@@ -271,8 +276,9 @@ fn generic(m: &mut Mob) {
         m.ai.targets.add(2, NearestTarget::player(true));
     } else {
         g.add(0, Float);
-        g.add(1, Panic::new(1.25));
-        g.add(5, Stroll::avoiding_water(1.0));
+        let rabbit = m.kind.species == Species::Rabbit;
+        g.add(1, Panic::new(if rabbit { 2.2 } else { 1.25 }));
+        g.add(5, Stroll::avoiding_water(if rabbit { 0.6 } else { 1.0 }));
         g.add(6, LookAtPlayer::new(6.0));
         g.add(7, RandomLookAround::default());
     }
@@ -352,6 +358,9 @@ pub fn tick(
     }
     super::warden::pre_tick(m, w, events);
     base_tick(m, w, events);
+    if m.species() == Species::Rabbit {
+        super::rabbit::base_tick(m);
+    }
     if m.death_time >= super::creaking::death_limit(m) {
         // Creaking.tickDeath: a heart's creaking crumbles away.
         if super::creaking::is_creaking(m) && super::creaking::tearing_down(m) {
@@ -361,6 +370,9 @@ pub fn tick(
     }
     if !m.no_ai {
         ai_step(m, w, level_random, events);
+    }
+    if m.species() == Species::Rabbit {
+        super::rabbit::post_tick(m);
     }
     // Mob.tickHeadTurn -> BodyRotationControl.clientTick (a frozen
     // creaking's waits).
@@ -605,7 +617,7 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
         m.ai.xxa = 0.0;
         m.ai.zza = 0.0;
     }
-    m.handle_jumping();
+    m.handle_jumping(w);
     let input = Vec3::new(
         f64::from(m.ai.xxa),
         f64::from(m.ai.yya),
@@ -849,6 +861,7 @@ fn server_ai_step(
 }
 fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
     match m.species() {
+        Species::Rabbit => super::rabbit::server_ai_step(m),
         Species::Sheep => {}
         Species::Zombie
         | Species::Husk
