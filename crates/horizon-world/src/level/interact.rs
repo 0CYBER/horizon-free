@@ -435,6 +435,25 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         InteractionResult::Success
     }
 
+    /// `ComposterBlock.addLayer` once its `compostable` provider gave
+    /// `layers`: the new state (the old one when no layer is added).
+    fn composter_add_layer(&mut self, pos: BlockPos, layers: i32) -> BlockStateId {
+        let b = self.b;
+        let state = self.state(pos);
+        if layers <= 0 {
+            return state;
+        }
+        let level = b.table.int(state, b.props.level);
+        let next_level = (level + layers).clamp(0, 7);
+        let next = b.table.set_int(state, b.props.level, next_level);
+        self.set_block_and_update(pos, next);
+        self.game_event_state(pos, "minecraft:block_change", next);
+        if next_level == 7 {
+            self.schedule_tick(pos, b.block(state), 20);
+        }
+        next
+    }
+
     /// `DragonEggBlock.teleport`.
     fn dragon_egg_teleport(&mut self, pos: BlockPos, state: BlockStateId) {
         let b = self.b;
@@ -462,6 +481,38 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
 }
 
 impl Behaviours {
+    /// `ComposterBlock.addLayer` at `pos` with the layers its item's
+    /// `compostable` provider gave, followed by level event 1500 (fill
+    /// particles and sound; data 1 when a layer was added) as every caller
+    /// does: `useItemOn` and the hopper input container. The new state.
+    pub fn composter_insert<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        layers: i32,
+    ) -> BlockStateId {
+        let mut sim = self.sim(level, ticks);
+        let state = sim.state(pos);
+        let next = sim.composter_add_layer(pos, layers);
+        sim.level_event(1500, pos, i32::from(next != state));
+        next
+    }
+
+    /// `ComposterBlock.empty`: the hopper output container took the bone meal.
+    pub fn composter_empty<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+    ) {
+        let mut sim = self.sim(level, ticks);
+        let state = sim.state(pos);
+        let next = self.table.set_int(state, self.props.level, 0);
+        sim.set_block_and_update(pos, next);
+        sim.game_event_state(pos, "minecraft:block_change", next);
+    }
+
     /// `BlockState.useWithoutItem` for a right-click on `pos` (hit face and
     /// absolute hit location as in `BlockHitResult`).
     pub fn use_without_item<L: LevelAccess + ?Sized>(
