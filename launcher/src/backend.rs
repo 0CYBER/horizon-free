@@ -591,17 +591,18 @@ fn preparer_binary(dir: &Path) -> Option<PathBuf> {
 /// Java (and Python, for versions before horizon-prepare).
 pub fn preparer(tag: &str, minecraft: &Path, log: &dyn Fn(String)) -> Result<Preparer, String> {
     let version = game_version(tag);
+    let dir = version_dir(tag);
+    let reused = horizon_prepare::artifacts::reuse_imported(&dir, &|line| log(line.to_string()))?;
     let manifest = minecraft
         .join("versions")
         .join(&version)
         .join(format!("{version}.json"));
-    if !manifest.exists() {
+    if !reused && !manifest.exists() {
         return Err(format!(
             "Minecraft {version} is not in {}. Play {version} once from the official launcher, or choose another folder.",
             minecraft.display()
         ));
     }
-    let dir = version_dir(tag);
     let binary = preparer_binary(&dir);
     let python = if binary.is_some() {
         // The JDK the version pins, found as horizon-prepare finds it, so a missing one is
@@ -625,7 +626,7 @@ pub fn preparer(tag: &str, minecraft: &Path, log: &dyn Fn(String)) -> Result<Pre
     let jar = data_dir()
         .join("server-jars")
         .join(format!("{version}.jar"));
-    if !jar.exists() {
+    if !reused && !jar.exists() {
         let json: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&manifest).map_err(|e| e.to_string())?)
                 .map_err(|e| e.to_string())?;
@@ -650,32 +651,26 @@ pub fn preparer(tag: &str, minecraft: &Path, log: &dyn Fn(String)) -> Result<Pre
         {
             return Ok(Preparer::InProcess(horizon_prepare::Options {
                 root: dir,
-                import: true,
+                import: !reused,
                 minecraft_dir: Some(minecraft.to_path_buf()),
-                server_jar: Some(jar),
+                server_jar: (!reused).then_some(jar),
             }));
         }
         let mut cmd = Command::new(binary);
-        cmd.current_dir(&dir)
-            .arg("--root")
-            .arg(&dir)
-            .args(["--prepare", "--server-jar"])
-            .arg(&jar)
-            .arg("--minecraft-dir")
-            .arg(minecraft);
+        cmd.current_dir(&dir).arg("--root").arg(&dir);
+        if !reused {
+            cmd.args(["--prepare", "--server-jar"]).arg(&jar);
+        }
+        cmd.arg("--minecraft-dir").arg(minecraft);
         return Ok(Preparer::Process(cmd));
     }
     let mut cmd = Command::new(python.unwrap());
     cmd.current_dir(&dir)
-        .args([
-            "-u",
-            "tools/prepare_native_client.py",
-            "--prepare",
-            "--server-jar",
-        ])
-        .arg(&jar)
-        .arg("--minecraft-dir")
-        .arg(minecraft);
+        .args(["-u", "tools/prepare_native_client.py"]);
+    if !reused {
+        cmd.args(["--prepare", "--server-jar"]).arg(&jar);
+    }
+    cmd.arg("--minecraft-dir").arg(minecraft);
     Ok(Preparer::Process(cmd))
 }
 
@@ -965,14 +960,12 @@ pub fn remove_version(tag: &str) -> Result<(), String> {
 }
 
 /// The Minecraft folder to prepare from: the one given, the one chosen in the launcher, or the
-/// official launcher's default.
+/// official launcher's default. It may be absent when imported files can be reused.
 pub fn minecraft_dir(requested: Option<PathBuf>) -> Result<PathBuf, String> {
-    requested
+    Ok(requested
         .or(Settings::load().minecraft_dir)
         .or_else(default_minecraft_dir)
-        .ok_or_else(|| {
-            "No Minecraft folder found. Pass the official launcher's game folder.".into()
-        })
+        .unwrap_or_else(|| horizon_prepare::artifacts::minecraft_dir(None)))
 }
 
 /// The server folder: the one given, the one chosen in the launcher, or `server/` in the data folder.

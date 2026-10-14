@@ -21,7 +21,10 @@ The opening, then Play ([clip](docs/opening.webm)):
   server (`--dedicated --nogui`) in a folder you choose, with a live console. Preparing is
   horizon-prepare: linked into the launcher, used in-process when a version ships the same
   preparer sources, else that version's own `horizon-prepare`; versions released before it
-  still prepare with their Python script and need Python 3.10+.
+  still prepare with their Python script and need Python 3.10+. Before importing,
+  preparation reuses checksum-verified game jars and libraries from the current
+  or another installed Horizon version, so the original Minecraft install is
+  only required when no valid imported copy exists.
 - **Patch notes**: each release's notes, newest first, with a link to GitHub Sponsors. Quiet "Join Discord" and "Website" links sit in the sidebar footer.
 
 Data lives in the platform's data directory (`~/.local/share/horizon-launcher` on Linux,

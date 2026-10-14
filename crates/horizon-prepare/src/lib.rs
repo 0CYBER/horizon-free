@@ -402,7 +402,7 @@ pub fn prepare(options: &Options, log: Log) -> Result<PathBuf, String> {
     let lock = artifacts::Lock::read(root)?;
     // Java first: nothing below can finish without it, and the player should hear it at once.
     let jdk = java::find(lock.java_major)?;
-    if options.import {
+    if options.import && !artifacts::reuse_imported(root, log)? {
         artifacts::import(
             root,
             &lock,

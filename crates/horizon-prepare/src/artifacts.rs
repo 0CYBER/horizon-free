@@ -573,6 +573,69 @@ pub struct Artifacts {
     pub libraries: Vec<PathBuf>,
 }
 
+/// Reuses checked imports from this root or another installed version beside it.
+pub fn reuse_imported(root: &Path, log: Log) -> Result<bool, String> {
+    let root = fs::canonicalize(root).map_err(|e| format!("{}: {e}", root.display()))?;
+    let lock = Lock::read(&root)?;
+    let checked = |directory: PathBuf| -> Result<Vec<PathBuf>, String> {
+        let candidate = Lock {
+            json: lock.json.clone(),
+            version: lock.version.clone(),
+            java_major: lock.java_major,
+            directory,
+        };
+        let found = verify(&candidate)?;
+        let client = client_libraries(&candidate, &found.manifest)?;
+        let mut files = vec![
+            candidate.directory.join("manifest.json"),
+            candidate.directory.join("jars/client.jar"),
+            candidate.directory.join("jars/server.jar"),
+            found.jars["server"].clone(),
+        ];
+        files.extend(found.libraries);
+        files.extend(client);
+        Ok(files)
+    };
+    if checked(lock.directory.clone()).is_ok() {
+        log(&format!("Using imported Minecraft {}", lock.version));
+        return Ok(true);
+    }
+    let Some(versions) = root.parent() else {
+        return Ok(false);
+    };
+    let mut siblings: Vec<_> = fs::read_dir(versions)
+        .map_err(|e| format!("{}: {e}", versions.display()))?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path != &root && path.is_dir())
+        .collect();
+    siblings.sort();
+    for sibling in siblings {
+        let source = sibling.join(".local/minecraft").join(&lock.version);
+        let Ok(files) = checked(source.clone()) else {
+            continue;
+        };
+        for file in files {
+            let relative = file.strip_prefix(&source).map_err(|e| e.to_string())?;
+            import_copy(
+                &file,
+                &lock.directory.join(relative),
+                &digest(&file, "sha256")?,
+                "sha256",
+                "",
+            )?;
+        }
+        checked(lock.directory.clone())?;
+        log(&format!(
+            "Reused imported Minecraft {} from {}",
+            lock.version,
+            sibling.display()
+        ));
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 pub fn verify(lock: &Lock) -> Result<Artifacts, String> {
     let manifest_path = lock.directory.join("manifest.json");
     if !manifest_path.exists() {
@@ -597,7 +660,10 @@ pub fn verify(lock: &Lock) -> Result<Artifacts, String> {
             .and_then(|d| d.get(side))
             .and_then(|d| d.get("sha1"))
             .and_then(Value::as_str);
-        if !jar.exists() || Some(digest(&jar, "sha1")?.as_str()) != pinned {
+        if pinned != Some(lock.pin(&format!("{side}_sha1"))?)
+            || !jar.exists()
+            || Some(digest(&jar, "sha1")?.as_str()) != pinned
+        {
             return Err(format!(
                 "{side} artifact checksum changed; prepare again with --prepare"
             ));
@@ -648,6 +714,167 @@ pub fn client_libraries(lock: &Lock, manifest: &Value) -> Result<Vec<PathBuf>, S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+
+    struct Imports {
+        directory: PathBuf,
+        source: PathBuf,
+        target: PathBuf,
+    }
+
+    impl Imports {
+        fn new() -> Self {
+            static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let directory = std::env::temp_dir()
+                .join(format!("horizon-import-reuse-{}-{n}", std::process::id()));
+            let source = directory.join("old");
+            let target = directory.join("new");
+            fs::create_dir_all(&target).unwrap();
+            let imported = source.join(".local/minecraft/9.9");
+            let write = |path: &str, data: &[u8]| {
+                let path = imported.join(path);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(path, data).unwrap();
+            };
+            write("jars/client.jar", b"client");
+            write("jars/server-game.jar", b"server game");
+            write("libraries/server/server.jar", b"server library");
+            write("libraries/client/client.jar", b"client library");
+            write("reports/private.txt", b"not an imported artifact");
+            let mut bundle =
+                zip::ZipWriter::new(fs::File::create(imported.join("jars/server.jar")).unwrap());
+            let entries = [
+                (
+                    "META-INF/versions.list",
+                    format!("{}\t9.9\tgame.jar\n", crate::sha256_hex(b"server game")),
+                ),
+                (
+                    "META-INF/libraries.list",
+                    format!(
+                        "{}\tserver:library:1\tserver.jar\n",
+                        crate::sha256_hex(b"server library")
+                    ),
+                ),
+            ];
+            for (name, text) in entries {
+                bundle
+                    .start_file(name, zip::write::SimpleFileOptions::default())
+                    .unwrap();
+                bundle.write_all(text.as_bytes()).unwrap();
+            }
+            for (name, bytes) in [
+                ("META-INF/versions/game.jar", b"server game".as_slice()),
+                (
+                    "META-INF/libraries/server.jar",
+                    b"server library".as_slice(),
+                ),
+            ] {
+                bundle
+                    .start_file(name, zip::write::SimpleFileOptions::default())
+                    .unwrap();
+                bundle.write_all(bytes).unwrap();
+            }
+            bundle.finish().unwrap();
+            let client_sha1 = digest(&imported.join("jars/client.jar"), "sha1").unwrap();
+            let server_sha1 = digest(&imported.join("jars/server.jar"), "sha1").unwrap();
+            let library_sha1 =
+                digest(&imported.join("libraries/client/client.jar"), "sha1").unwrap();
+            let manifest = format!(
+                "{{\"id\":\"9.9\",\"downloads\":{{\"client\":{{\"sha1\":\"{client_sha1}\"}},\"server\":{{\"sha1\":\"{server_sha1}\"}}}},\"libraries\":[{{\"name\":\"client:library:1\",\"downloads\":{{\"artifact\":{{\"path\":\"client.jar\",\"sha1\":\"{library_sha1}\"}}}}}}]}}"
+            );
+            write("manifest.json", manifest.as_bytes());
+            let manifest_sha1 = digest(&imported.join("manifest.json"), "sha1").unwrap();
+            let lock = format!(
+                "{{\"minecraft\":{{\"version\":\"9.9\",\"java_major\":25,\"manifest_sha1\":\"{manifest_sha1}\",\"client_sha1\":\"{client_sha1}\",\"server_sha1\":\"{server_sha1}\"}}}}"
+            );
+            fs::write(target.join("research-lock.json"), lock).unwrap();
+            Self {
+                directory,
+                source,
+                target,
+            }
+        }
+
+        fn imported(&self, root: &Path) -> PathBuf {
+            root.join(".local/minecraft/9.9")
+        }
+    }
+
+    impl Drop for Imports {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.directory);
+        }
+    }
+
+    #[test]
+    fn imported_files_are_reused_without_the_official_install() {
+        let fixture = Imports::new();
+        assert!(reuse_imported(&fixture.target, &|_| {}).unwrap());
+        let lock = Lock::read(&fixture.target).unwrap();
+        let artifacts = verify(&lock).unwrap();
+        assert_eq!(
+            client_libraries(&lock, &artifacts.manifest).unwrap().len(),
+            1
+        );
+        assert_eq!(artifacts.libraries.len(), 1);
+        assert!(!lock.directory.join("reports/private.txt").exists());
+        // The current root's valid imports suffice even after the older copy is corrupted.
+        fs::write(
+            fixture.imported(&fixture.source).join("jars/client.jar"),
+            b"bad",
+        )
+        .unwrap();
+        assert!(reuse_imported(&fixture.target, &|_| {}).unwrap());
+    }
+
+    #[test]
+    fn reuse_rejects_corrupt_imports() {
+        for file in [
+            "manifest.json",
+            "jars/client.jar",
+            "jars/server.jar",
+            "jars/server-game.jar",
+            "libraries/client/client.jar",
+            "libraries/server/server.jar",
+        ] {
+            let fixture = Imports::new();
+            fs::write(fixture.imported(&fixture.source).join(file), b"bad").unwrap();
+            assert!(!reuse_imported(&fixture.target, &|_| {}).unwrap(), "{file}");
+            assert!(!fixture.imported(&fixture.target).exists());
+        }
+    }
+
+    #[test]
+    fn reuse_checks_the_target_pins() {
+        let fixture = Imports::new();
+        let mut lock = Lock::read(&fixture.target).unwrap();
+        let client = lock.pin("client_sha1").unwrap().to_string();
+        let text = fs::read_to_string(fixture.target.join("research-lock.json")).unwrap();
+        fs::write(
+            fixture.target.join("research-lock.json"),
+            text.replace(&client, "wrong-client-pin"),
+        )
+        .unwrap();
+        assert!(!reuse_imported(&fixture.target, &|_| {}).unwrap());
+        lock.directory = fixture.imported(&fixture.source);
+        assert!(verify(&lock).is_ok());
+    }
+
+    #[test]
+    fn reuse_skips_a_bad_sibling_and_repairs_bad_current_imports() {
+        let fixture = Imports::new();
+        let bad = fixture.directory.join("a-bad");
+        fs::rename(&fixture.source, &bad).unwrap();
+        let valid = Imports::new();
+        fs::rename(&valid.source, &fixture.source).unwrap();
+        fs::write(fixture.imported(&bad).join("jars/client.jar"), b"bad").unwrap();
+        let target = fixture.imported(&fixture.target);
+        fs::create_dir_all(target.join("jars")).unwrap();
+        fs::write(target.join("jars/client.jar"), b"bad").unwrap();
+        assert!(reuse_imported(&fixture.target, &|_| {}).unwrap());
+        assert_eq!(fs::read(target.join("jars/client.jar")).unwrap(), b"client");
+    }
 
     #[test]
     fn natives_follow_the_architecture() {
