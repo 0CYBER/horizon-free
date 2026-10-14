@@ -2860,6 +2860,8 @@ impl Game<'_> {
             .iter()
             .flatten()
             .any(|s| immune.is_some_and(|t| t.contains(&*s.item)));
+        // The dimension's FAST_LAVA: the Nether's lava pushes harder.
+        player.fluids.fast_lava = self.dim == Dim::Nether;
         let grounded = player.ground.on_ground;
         let before = (
             grounded,
@@ -2951,6 +2953,35 @@ impl Game<'_> {
                     position,
                     fall_distance,
                 } => self.smash_landing_particles(state, position, fall_distance),
+                MotionEvent::Splash {
+                    high_speed,
+                    volume,
+                    pitch,
+                } => {
+                    let name = if high_speed {
+                        "minecraft:entity.player.splash.high_speed"
+                    } else {
+                        "minecraft:entity.player.splash"
+                    };
+                    self.audio.play(name, Some(feet), volume, pitch);
+                }
+                MotionEvent::SplashParticle {
+                    bubble,
+                    position,
+                    velocity,
+                } => {
+                    use horizon_client::particles::{ParticleOptions, ParticleType};
+                    let kind = if bubble {
+                        ParticleType::Bubble
+                    } else {
+                        ParticleType::Splash
+                    };
+                    self.particles.add(
+                        &ParticleOptions::simple(kind),
+                        [position.x, position.y, position.z],
+                        [velocity.x, velocity.y, velocity.z],
+                    );
+                }
                 _ => {}
             }
         }
