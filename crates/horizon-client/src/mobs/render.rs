@@ -778,6 +778,25 @@ fn species_rotations(m: &Mob, alpha: f32) -> glam::Mat4 {
         _ => glam::Mat4::IDENTITY,
     }
 }
+/// Creeper.getSwelling: the fuse's progress, past 1 in its last two ticks.
+fn creeper_swelling(m: &Mob, alpha: f32) -> f32 {
+    (m.previous_swell as f32 + alpha * (m.swell - m.previous_swell) as f32) / 28.0
+}
+/// LivingEntityRenderer.getOverlayCoords for the body: the hurt red, or a
+/// swelling creeper's white flash. Layers take the red only (progress 0).
+fn body_overlay(m: &Mob, alpha: f32) -> u32 {
+    let white = if m.species() == Species::Creeper {
+        crate::overlay::creeper_progress(creeper_swelling(m, alpha))
+    } else {
+        0.0
+    };
+    crate::overlay::living(white, red_overlay(m))
+}
+/// LivingEntityRenderState.hasRedOverlay: hurt or dying (not a creaking
+/// tearing down).
+fn red_overlay(m: &Mob) -> bool {
+    m.hurt_time > 0 || (m.death_time > 0 && !super::creaking::tearing_down(m))
+}
 fn species_scale(m: &Mob, alpha: f32) -> glam::Mat4 {
     match m.species() {
         Species::Wither => {
@@ -785,10 +804,9 @@ fn species_scale(m: &Mob, alpha: f32) -> glam::Mat4 {
         }
         Species::Creeper => {
             // CreeperRenderer.scale: swelling with a wobble.
-            let s = ((m.previous_swell as f32 + (m.swell - m.previous_swell) as f32 * alpha)
-                / 28.0)
-                .clamp(0.0, 1.0);
-            let wobble = 1.0 + (s * 100.0).msin() * s * 0.01;
+            let g = creeper_swelling(m, alpha);
+            let wobble = 1.0 + (g * 100.0).msin() * g * 0.01;
+            let s = g.clamp(0.0, 1.0);
             let s4 = s * s * s * s;
             let xz = (1.0 + s4 * 0.4) * wobble;
             let y = (1.0 + s4 * 0.1) / wobble;
@@ -923,8 +941,7 @@ fn render_visible(
     out: &mut Vec<Vertex>,
 ) {
     let base = base_transform(m, alpha, camera);
-    let overlay =
-        u32::from(m.hurt_time > 0 || (m.death_time > 0 && !super::creaking::tearing_down(m)));
+    let overlay = u32::from(red_overlay(m));
     let s = anim::state(m, alpha);
     let (model_key, texture) = body(m);
     let model = m
@@ -942,7 +959,7 @@ fn render_visible(
             uv,
             body_color(m, alpha),
             light,
-            overlay,
+            body_overlay(m, alpha),
             out,
         );
     }
@@ -1013,8 +1030,7 @@ pub fn render_single(
     out: &mut Vec<Vertex>,
 ) {
     let base = base_transform(m, alpha, camera);
-    let overlay =
-        u32::from(m.hurt_time > 0 || (m.death_time > 0 && !super::creaking::tearing_down(m)));
+    let overlay = body_overlay(m, alpha);
     let s = anim::state(m, alpha);
     let model = m.kind.model.clone();
     let mut poses = Poses::new(&model);

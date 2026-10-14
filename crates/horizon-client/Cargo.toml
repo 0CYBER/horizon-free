@@ -37,3 +37,7 @@ rng-trace = ["horizon-core/rng-trace"]
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# Parses and validates the composed entity shader (already built for wgpu).
+naga = { version = "30.0.1", features = ["wgsl-in"] }
