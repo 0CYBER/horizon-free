@@ -33,6 +33,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       RUSTFLAGS: ${{ matrix.rustflags }}
+      # Horizon's Azure app for Microsoft sign-in (docs/microsoft-account.md): a repository
+      # variable, not a secret. Unset, the launcher says sign-in is not configured.
+      HORIZON_MSA_CLIENT_ID: ${{ vars.HORIZON_MSA_CLIENT_ID }}
     defaults:
       run:
         working-directory: launcher

@@ -989,7 +989,12 @@ fn need_prepared(tag: &str) -> Result<(), String> {
 /// The client's command, once its resources are prepared.
 pub fn client(tag: &str) -> Result<Command, String> {
     need_prepared(tag)?;
-    Ok(client_command(tag))
+    let mut cmd = client_command(tag);
+    // A sign-in that can't be renewed (no network, expired) still lets the game start, offline.
+    if let Err(e) = crate::account::attach_session(&mut cmd, &game_home()) {
+        eprintln!("Playing offline: {e}");
+    }
+    Ok(cmd)
 }
 
 /// The dedicated server's command in `folder`, once prepared and the EULA is agreed to.
@@ -1380,6 +1385,11 @@ pub enum Msg {
     LauncherUpdated(Result<(), String>),
     /// `reuse_prepared_everywhere` prepared these versions.
     Reused(Vec<(String, String)>),
+    /// Whether secrets are kept in the OS keychain (else only until the launcher closes).
+    Keychain(bool),
+    /// The selected account's session file for the game about to start (none = offline), or
+    /// why it could not be renewed.
+    Session(Result<Option<PathBuf>, String>),
 }
 
 /// A running process; its output arrives as `Msg::Line`, its end as `Msg::Exit`.
