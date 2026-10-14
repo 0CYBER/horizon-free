@@ -412,9 +412,9 @@ impl Item {
         }
         self.touched(s);
     }
-    pub fn cycle(self, s: &mut Settings, back: bool) {
+    pub fn cycle(self, s: &mut Settings, back: bool, framebuffer: [i32; 2]) {
         match self {
-            Item::Vanilla(o) => o.cycle(s, back),
+            Item::Vanilla(o) => o.cycle(s, back, framebuffer),
             Item::Horizon(h) => h.cycle(s, back),
         }
         self.touched(s);
@@ -648,6 +648,7 @@ impl GraphicsUi {
         s: &mut Settings,
         (x, y): (f32, f32),
         (w, h): (f32, f32),
+        framebuffer: [i32; 2],
         drag: bool,
         right: bool,
     ) -> Vec<Action> {
@@ -681,7 +682,7 @@ impl GraphicsUi {
                         self.dragging = Some(item);
                         item.set_slider(s, ui::slider_value(wd.x, wd.w, x));
                     } else {
-                        item.cycle(s, right);
+                        item.cycle(s, right, framebuffer);
                         return vec![Action::ButtonClick, Action::Changed];
                     }
                     vec![Action::Changed]
@@ -717,11 +718,11 @@ mod tests {
             .unwrap();
         let point = (button.x + 1.0, button.y + 1.0);
         assert!(
-            ui.click(Level::Simple, &mut s, point, size, false, true)
+            ui.click(Level::Simple, &mut s, point, size, [854, 480], false, true)
                 .is_empty()
         );
         assert_eq!(
-            ui.click(Level::Simple, &mut s, point, size, false, false)[0],
+            ui.click(Level::Simple, &mut s, point, size, [854, 480], false, false)[0],
             Action::ButtonClick
         );
         assert!(!ui.release());
@@ -735,13 +736,22 @@ mod tests {
                 &mut s,
                 (slider.x + 1.0, slider.y + 1.0),
                 size,
+                [854, 480],
                 false,
                 false
             ),
             vec![Action::Changed]
         );
         assert_eq!(
-            ui.click(Level::Simple, &mut s, (-100.0, -100.0), size, true, false),
+            ui.click(
+                Level::Simple,
+                &mut s,
+                (-100.0, -100.0),
+                size,
+                [854, 480],
+                true,
+                false
+            ),
             vec![Action::Changed]
         );
         assert!(ui.release());
@@ -808,16 +818,16 @@ mod tests {
     #[test]
     fn presets_set_vanilla_and_horizon_options() {
         let mut s = Settings::default();
-        Item::Horizon(H::Preset).cycle(&mut s, false);
+        Item::Horizon(H::Preset).cycle(&mut s, false, [854, 480]);
         assert_eq!(s.horizon.preset, Preset::Performance);
         assert_eq!(s.render_distance, 8);
         assert_eq!(s.clouds, "false");
         // Any quality change leaves the preset.
-        Item::Vanilla(Opt::Clouds).cycle(&mut s, false);
+        Item::Vanilla(Opt::Clouds).cycle(&mut s, false, [854, 480]);
         assert_eq!(s.horizon.preset, Preset::Custom);
         // Display preferences keep it.
-        Item::Horizon(H::Preset).cycle(&mut s, true);
-        Item::Vanilla(Opt::Vsync).cycle(&mut s, false);
+        Item::Horizon(H::Preset).cycle(&mut s, true, [854, 480]);
+        Item::Vanilla(Opt::Vsync).cycle(&mut s, false, [854, 480]);
         assert_eq!(s.horizon.preset, Preset::Ultra);
     }
 

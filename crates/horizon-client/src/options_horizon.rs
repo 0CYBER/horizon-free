@@ -547,6 +547,7 @@ impl OptionsUi {
         atlas: &HudAtlas,
         x: f32,
         y: f32,
+        framebuffer: [i32; 2],
         drag: bool,
         right: bool,
     ) -> Vec<Event> {
@@ -597,14 +598,14 @@ impl OptionsUi {
                 let section = self.section.min(SECTIONS.len() - 1);
                 match (SECTIONS[section].rows)(s).get(i) {
                     Some(HRow::Opt(opt)) => {
-                        opt.cycle(s, right);
+                        opt.cycle(s, right, framebuffer);
                         if *opt == Opt::Preset {
                             apply_preset(s);
                         }
                         events.push(Event::Changed);
                     }
                     Some(HRow::Graphics(item, ..)) => {
-                        item.cycle(s, right);
+                        item.cycle(s, right, framebuffer);
                         events.push(Event::Changed);
                     }
                     Some(HRow::Page(_, _, page)) => self.open_page(*page),

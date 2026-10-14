@@ -55,6 +55,9 @@ impl Game<'_> {
             self.dragging = true;
         }
         let size = self.gui_size();
+        let framebuffer = self.renderer.as_ref().map_or([1280, 720], |r| {
+            [r.config.width as i32, r.config.height as i32]
+        });
         let mut ui = std::mem::take(&mut self.ui.options);
         let events = ui.click(
             &mut self.settings,
@@ -62,6 +65,7 @@ impl Game<'_> {
             self.cursor.0,
             self.cursor.1,
             size,
+            framebuffer,
             false,
             right,
         );
@@ -70,6 +74,9 @@ impl Game<'_> {
     }
     pub(super) fn options_drag(&mut self) -> Result<()> {
         let size = self.gui_size();
+        let framebuffer = self.renderer.as_ref().map_or([1280, 720], |r| {
+            [r.config.width as i32, r.config.height as i32]
+        });
         let mut ui = std::mem::take(&mut self.ui.options);
         let events = ui.click(
             &mut self.settings,
@@ -77,6 +84,7 @@ impl Game<'_> {
             self.cursor.0,
             self.cursor.1,
             size,
+            framebuffer,
             true,
             false,
         );
