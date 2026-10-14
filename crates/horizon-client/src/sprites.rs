@@ -152,6 +152,21 @@ impl Sprites {
 }
 
 #[cfg(test)]
+pub(crate) fn test_animation(size: u32, layer: u32) -> SpriteAnimation {
+    let frame = |blue: u8| {
+        (0..size * size)
+            .flat_map(|i| [(i % size) as u8, (i / size) as u8, blue, 255])
+            .collect()
+    };
+    let metadata = AnimationMetadata::from_json(r#"{"frametime":1,"frames":[0,1]}"#).unwrap();
+    SpriteAnimation {
+        layer,
+        frames: Arc::new(vec![frame(0), frame(99)]),
+        clip: Arc::new(metadata.clip(2).unwrap().unwrap()),
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]

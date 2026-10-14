@@ -751,8 +751,10 @@ impl Game<'_> {
                     source,
                 } => {
                     let mut killed = false;
+                    let mut hurt = false;
                     if let Some(t) = self.mobs.iter_mut().find(|m| m.id == target) {
                         let hit = t.damage(amount, source);
+                        hurt = hit;
                         if hit {
                             killed = !t.alive();
                             // The hurt or death sound the mob raised.
@@ -768,6 +770,20 @@ impl Game<'_> {
                                 }
                             }
                         }
+                    }
+                    if hurt
+                        && let Some(Who::Mob(attacker)) = source.attacker
+                        && let Some(m) = self
+                            .mobs
+                            .iter()
+                            .find(|m| m.id == attacker && m.species() == Species::Axolotl)
+                    {
+                        self.audio.play(
+                            "minecraft:entity.axolotl.attack",
+                            Some([m.position.x, m.eye_y(), m.position.z]),
+                            1.0,
+                            1.0,
+                        );
                     }
                     if killed && let Some(Who::Mob(killer)) = source.attacker {
                         self.zombie_killed(killer, target);
@@ -939,12 +955,12 @@ impl Game<'_> {
                         if !self.creative
                             && let Some(p) = self.player.as_mut()
                         {
-                            p.fire_ticks = p.fire_ticks.max(seconds * 20);
+                            p.ignite_for_ticks(seconds * 20)?;
                         }
                     }
                     Who::Mob(id) => {
                         if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-                            m.fire_ticks = m.fire_ticks.max(seconds * 20);
+                            m.ignite_for_ticks(seconds * 20);
                         }
                     }
                 },
@@ -1586,7 +1602,7 @@ impl Game<'_> {
                     Who::Player => {
                         if !self.creative {
                             if let Some(p) = self.player.as_mut() {
-                                p.fire_ticks = p.fire_ticks.max(100);
+                                p.ignite_for_ticks(100)?;
                             }
                             self.mob_hits_player(
                                 5.0,
@@ -1598,7 +1614,7 @@ impl Game<'_> {
                     Who::Mob(id) => {
                         if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
                             if !m.kind.flags.fire_immune {
-                                m.fire_ticks = m.fire_ticks.max(100);
+                                m.ignite_for_ticks(100);
                             }
                             m.damage(5.0, source);
                         }
@@ -1811,6 +1827,36 @@ impl Game<'_> {
             .as_ref()
             .map(|h| h.item.to_string())
             .unwrap_or_default();
+        if item == "minecraft:water_bucket"
+            && self.mobs[index].species() == Species::Axolotl
+            && self.mobs[index].alive()
+        {
+            let mut filled = ItemStack::new("minecraft:axolotl_bucket", 1);
+            filled.extra = Some(Box::new(horizon_client::item_data::StackData {
+                other: vec![(
+                    "minecraft:bucket_entity_data".into(),
+                    horizon_client::entity_nbt::bucket_data(&self.mobs[index]),
+                )],
+                ..Default::default()
+            }));
+            self.audio.play(
+                "minecraft:item.bucket.fill_axolotl",
+                Some(self.mobs[index].center()),
+                1.0,
+                1.0,
+            );
+            self.trigger_item("minecraft:filled_bucket", &filled);
+            self.mobs[index].removed = true;
+            if self.creative {
+                if let Some(rest) = self.give(filled) {
+                    self.spawn_item(rest, self.eye_position().unwrap_or([0.0; 3]), [0.0; 3], 40);
+                }
+            } else {
+                self.inventory[self.selected] = Some(filled);
+            }
+            self.swing_arm();
+            return Ok(true);
+        }
         let creative = self.creative;
         let selected = self.selected;
         if self.interact_zombie_villager(index, &item) {

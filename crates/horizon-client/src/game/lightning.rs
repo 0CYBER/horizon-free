@@ -309,11 +309,11 @@ impl Game<'_> {
                 _ => {}
             }
             // Entity.thunderHit: burning (8 seconds) and 5 lightning damage.
-            m.fire_ticks = if m.fire_ticks + 1 == 0 {
-                160
-            } else {
-                m.fire_ticks + 1
-            };
+            m.fire_ticks += 1;
+            if m.fire_ticks == 0 {
+                m.ignite_for_ticks(160);
+            }
+
             m.damage(5.0, damage);
         }
         if !events.is_empty() {
@@ -323,11 +323,12 @@ impl Game<'_> {
             && inside([p.x, p.y, p.z])
         {
             if let Some(p) = self.player.as_mut() {
-                p.fire_ticks = if p.fire_ticks + 1 == 0 {
-                    160
-                } else {
-                    p.fire_ticks + 1
-                };
+                p.fire_ticks += 1;
+                if p.fire_ticks == 0
+                    && let Err(error) = p.ignite_for_ticks(160)
+                {
+                    self.error = Some(error.to_string());
+                }
             }
             self.hurt_player_by("minecraft:lightning_bolt", 5.0);
         }

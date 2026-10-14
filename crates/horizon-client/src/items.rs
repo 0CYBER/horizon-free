@@ -1375,3 +1375,33 @@ mod tests {
         );
     }
 }
+
+pub fn take_held_drop(slot: &mut Option<ItemStack>, all: bool) -> Option<ItemStack> {
+    let stack = slot.as_mut()?;
+    if stack.count == 0 {
+        return None;
+    }
+    let count = if all { stack.count } else { 1 };
+    let thrown = ItemStack {
+        count,
+        ..stack.clone()
+    };
+    stack.count -= count;
+    if stack.count == 0 {
+        *slot = None;
+    }
+    Some(thrown)
+}
+#[cfg(test)]
+mod held_drop_tests {
+    use super::*;
+    #[test]
+    fn one_all_and_empty_drop() {
+        let mut slot = Some(ItemStack::new("minecraft:stone", 4));
+        assert_eq!(take_held_drop(&mut slot, false).unwrap().count, 1);
+        assert_eq!(slot.as_ref().unwrap().count, 3);
+        assert_eq!(take_held_drop(&mut slot, true).unwrap().count, 3);
+        assert!(slot.is_none());
+        assert!(take_held_drop(&mut slot, false).is_none());
+    }
+}

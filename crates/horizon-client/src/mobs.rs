@@ -938,8 +938,9 @@ pub enum MobEvent {
         at: [f64; 3],
         amount: u32,
     },
-    /// Apply an effect to the player (witch potions, bee stings, cave spider poison).
+    /// Regeneration support after an axolotl-assisted kill.
     AxolotlSupportPlayer,
+    /// Apply an effect to the player (witch potions, bee stings, cave spider poison).
     EffectPlayer {
         effect: &'static str,
         ticks: i32,
@@ -1151,6 +1152,20 @@ pub struct Seen {
     pub stats: [f64; 3],
 }
 impl Mob {
+    pub fn burning_time(&self) -> f64 {
+        let base = finalize::value(self, finalize::Attr::BurningTime);
+        let protection: u32 = gear::ARMOR
+            .into_iter()
+            .map(|slot| gear::level(self, slot, "minecraft:fire_protection"))
+            .sum();
+        (base - 0.15 * f64::from(protection)).max(0.0)
+    }
+    pub fn ignite_for_ticks(&mut self, ticks: i32) {
+        self.fire_ticks = self
+            .fire_ticks
+            .max((f64::from(ticks) * self.burning_time()).ceil() as i32);
+    }
+
     /// What other mobs see of this one this tick (`player`: the player's
     /// UUID, which villagers' reputation is keyed by).
     pub fn seen(&self, player: Option<[i32; 4]>) -> Seen {

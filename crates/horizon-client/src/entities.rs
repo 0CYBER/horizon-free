@@ -61,7 +61,8 @@ impl ItemEntity {
             self.position.z.floor() as i32,
         );
         let fluid = facts.get(at).fluid;
-        if fluid == Fluid::Water {
+        let fire_immune = items.resists_fire(&self.stack, "minecraft:in_fire");
+        if fluid == Fluid::Water || fire_immune {
             self.fire_ticks = 0;
         }
         if self.fire_ticks > 0 {
@@ -74,17 +75,18 @@ impl ItemEntity {
             self.fire_ticks -= 1;
         }
         let mut lava_hurt = false;
-        if fluid == Fluid::Lava {
+        if fluid == Fluid::Lava && !fire_immune {
             self.fire_ticks = self.fire_ticks.max(300);
             if !items.resists_fire(&self.stack, "minecraft:lava") {
                 self.health -= 4;
                 lava_hurt = true;
             }
         }
-        if crate::motion::environment::fire_contact(world, registry, self.bounds()) > 0.0 {
+        let fire_damage = crate::motion::environment::fire_contact(world, registry, self.bounds());
+        if fire_damage > 0.0 && !fire_immune {
             self.fire_ticks = self.fire_ticks.max(160);
             if !items.resists_fire(&self.stack, "minecraft:in_fire") {
-                self.health -= 1;
+                self.health -= fire_damage as i32;
             }
         }
         ItemEnvironmentTick {
@@ -569,7 +571,7 @@ impl ArmorStand {
             self.fire_ticks = self.fire_ticks.max(300);
         }
         let fire = crate::motion::environment::fire_contact(world, registry, self.bounds()) > 0.0;
-        if (fire || lava) && !self.invisible && !self.marker {
+        if fire && !self.invisible && !self.marker {
             if self.fire_ticks > 0 {
                 self.health -= 0.15;
             } else {
@@ -679,6 +681,7 @@ mod fire_environment_tests {
             assert!(!result.should_play_lava_hurt_sound(10));
         }
         assert_eq!(metal.health, 5);
+        assert_eq!(metal.fire_ticks, 0, "fire-resistant items must not ignite");
         world
             .set(
                 20,
@@ -691,5 +694,32 @@ mod fire_environment_tests {
         let result = burning.environment_tick(&world, &facts, assets.registry, &items);
         assert!(result.alive && !result.lava_hurt);
         assert!(burning.fire_ticks > 0);
+        world
+            .set(
+                20,
+                4,
+                20,
+                assets
+                    .registry
+                    .default_state("minecraft:soul_fire")
+                    .unwrap(),
+            )
+            .unwrap();
+        let mut soul = make("minecraft:oak_planks");
+        soul.environment_tick(&world, &facts, assets.registry, &items);
+        assert_eq!(soul.health, 3);
+        let mut stand = ArmorStand::new(2, at, 0.0);
+        world
+            .set(
+                20,
+                4,
+                20,
+                assets.registry.default_state("minecraft:lava").unwrap(),
+            )
+            .unwrap();
+        for _ in 0..150 {
+            assert!(stand.environment_tick(&world, &facts, assets.registry));
+        }
+        assert_eq!(stand.health, 20.0, "lava does not hurt armor stands");
     }
 }

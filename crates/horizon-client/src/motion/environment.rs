@@ -12,7 +12,7 @@ use horizon_world::{
 pub(super) const WATER: FluidTagId = FluidTagId(0);
 pub(super) const LAVA: FluidTagId = FluidTagId(1);
 impl MotionWorld<'_, '_, '_> {
-    fn fluid_at(&self, p: BlockPos) -> Result<FluidState> {
+    pub(super) fn fluid_at(&self, p: BlockPos) -> Result<FluidState> {
         Ok(FluidState::from_block(
             self.assets
                 .registry
@@ -21,9 +21,6 @@ impl MotionWorld<'_, '_, '_> {
         )?)
     }
     pub(super) fn update_fluid_environment(&mut self) -> Result<()> {
-        self.sample_fluid_environment(true)
-    }
-    pub(super) fn sample_fluid_environment(&mut self, push: bool) -> Result<()> {
         let mut fluids = std::mem::take(&mut self.player.fluids);
         let result = fluids
             .update(self, false, 4096)
@@ -38,7 +35,7 @@ impl MotionWorld<'_, '_, '_> {
         if self.player.in_water {
             self.player.fall_distance = 0.0;
         }
-        if push && !self.player.flying && !self.player.spectator {
+        if !self.player.flying && !self.player.spectator {
             fluids.apply_current(self, WATER, 0.014)?;
             fluids.apply_current(
                 self,
@@ -51,7 +48,6 @@ impl MotionWorld<'_, '_, '_> {
             )?;
         }
         self.player.fluids = fluids;
-        self.player.first_tick = false;
         Ok(())
     }
     fn environment_hurt(&mut self, source: &str, damage: f32) -> Result<()> {
@@ -69,8 +65,11 @@ impl MotionWorld<'_, '_, '_> {
         Ok(())
     }
     pub(super) fn tick_environment_damage(&mut self) -> Result<()> {
-        if self.player.in_water || self.player.invulnerable || self.player.spectator {
+        if self.player.in_water || self.player.spectator {
             self.player.fire_ticks = 0;
+        }
+        if self.player.invulnerable && self.player.fire_ticks > 1 {
+            self.player.fire_ticks = 1;
         }
         if self.player.fire_ticks > 0 {
             if self.player.fire_ticks % 20 == 0 && !self.player.in_lava {
@@ -98,24 +97,39 @@ impl MotionWorld<'_, '_, '_> {
             self.player.air = (self.player.air + 4).min(300);
         }
         if self.player.in_lava {
-            self.player.fire_ticks = self.player.fire_ticks.max(300);
+            if self.player.invulnerable {
+                self.player.fire_ticks = 1;
+            } else {
+                self.player.ignite_for_ticks(300)?;
+            }
             self.environment_hurt("minecraft:lava", 4.0)?;
             self.player.fall_distance *= 0.5;
         }
         Ok(())
     }
     pub(super) fn apply_fire_contact(&mut self) -> Result<()> {
-        if self.player.spectator || self.player.invulnerable {
+        if self.player.spectator {
             self.player.fire_ticks = 0;
             return Ok(());
         }
         let damage = fire_contact(self.scene, self.assets.registry, self.player.bounds());
         if damage > 0.0 {
             if !self.player.in_water {
-                self.player.fire_ticks =
-                    ignite_contact(self.player.fire_ticks, true, &mut self.scene.random);
+                if self.player.invulnerable {
+                    self.player.fire_ticks = 1;
+                } else {
+                    let multiplier = self.player.attribute("minecraft:burning_time")?;
+                    self.player.fire_ticks = ignite_contact(
+                        self.player.fire_ticks,
+                        true,
+                        &mut self.scene.random,
+                        multiplier,
+                    );
+                }
             }
             self.environment_hurt("minecraft:in_fire", damage)?;
+        } else if self.player.fire_ticks <= 0 {
+            self.player.fire_ticks = -20;
         }
         Ok(())
     }
@@ -308,7 +322,12 @@ impl MotionWorld<'_, '_, '_> {
     }
 }
 
-pub(crate) fn ignite_contact(ticks: i32, player: bool, random: &mut impl RandomSource) -> i32 {
+pub(crate) fn ignite_contact(
+    ticks: i32,
+    player: bool,
+    random: &mut impl RandomSource,
+    multiplier: f64,
+) -> i32 {
     let ticks = if ticks < 0 {
         ticks + 1
     } else if player {
@@ -316,5 +335,24 @@ pub(crate) fn ignite_contact(ticks: i32, player: bool, random: &mut impl RandomS
     } else {
         ticks
     };
-    if ticks >= 0 { ticks.max(160) } else { ticks }
+    if ticks >= 0 {
+        ticks.max((160.0 * multiplier).ceil() as i32)
+    } else {
+        ticks
+    }
+}
+
+#[cfg(test)]
+mod fire_ignition_tests {
+    use super::*;
+    #[test]
+    fn fire_hurts_before_twenty_tick_ignition_and_scales_duration() {
+        let mut r = horizon_core::random::LegacyRandom::new(3);
+        let mut ticks = -20;
+        for _ in 0..19 {
+            ticks = ignite_contact(ticks, true, &mut r, 0.4);
+            assert!(ticks < 0);
+        }
+        assert_eq!(ignite_contact(ticks, true, &mut r, 0.4), 64);
+    }
 }

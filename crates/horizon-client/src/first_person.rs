@@ -330,6 +330,23 @@ pub enum UseResult {
     Fail,
 }
 
+impl UseResult {
+    pub fn should_swing(self, before: u32, after: u32) -> bool {
+        matches!(self, Self::Success { swing: true }) && before == after
+    }
+}
+pub fn consumable_animation(v: &serde_json::Value) -> horizon_world::consumable::UseAnimation {
+    use horizon_world::consumable::UseAnimation;
+    match v
+        .get("animation")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("eat")
+    {
+        "eat" => UseAnimation::Eat,
+        "drink" => UseAnimation::Drink,
+        _ => UseAnimation::None,
+    }
+}
 /// What the click handling reads and does in the world.
 pub trait HandWorld {
     fn hit(&mut self) -> Hit;
@@ -837,5 +854,37 @@ mod continuous_use_tests {
             item_pose(false, 0.0, 0.3, ItemPose::Trident { ticks_used: 5.0 })
         );
         assert_ne!(swing, item_pose(false, 0.0, 0.3, ItemPose::Using));
+    }
+}
+
+#[cfg(test)]
+mod action_result_tests {
+    use super::*;
+    #[test]
+    fn only_successful_actions_swing_once() {
+        assert!(UseResult::Success { swing: true }.should_swing(2, 2));
+        for result in [
+            UseResult::Fail,
+            UseResult::Pass,
+            UseResult::Success { swing: false },
+        ] {
+            assert!(!result.should_swing(2, 2));
+        }
+        assert!(!UseResult::Success { swing: true }.should_swing(2, 3));
+    }
+    #[test]
+    fn consumption_pose_requires_eat_or_drink_animation() {
+        use horizon_world::consumable::UseAnimation::*;
+        assert_eq!(consumable_animation(&serde_json::json!({})), Eat);
+        assert_eq!(
+            consumable_animation(&serde_json::json!({"animation":"drink"})),
+            Drink
+        );
+        for animation in ["none", "block", "bow", "brush"] {
+            assert_eq!(
+                consumable_animation(&serde_json::json!({"animation":animation})),
+                None
+            );
+        }
     }
 }

@@ -847,6 +847,7 @@ struct Game<'a> {
     tab_list: horizon_client::tab_list::TabList,
     subtitles: subtitle_hud::SubtitleState,
     adv: advancements::AdvState,
+    restore_player_environment: bool,
     stats_ui: stats_screen::StatsUi,
     adv_ui: advancements_screen::AdvUi,
     camera_type: perspective::CameraType,
@@ -1215,18 +1216,11 @@ impl Game<'_> {
         if self.eye_position().is_none() {
             return;
         }
-        let Some(stack) = self.inventory[self.selected].as_mut() else {
+        let Some(thrown) =
+            horizon_client::items::take_held_drop(&mut self.inventory[self.selected], all)
+        else {
             return;
         };
-        let count = if all { stack.count } else { 1 };
-        let thrown = ItemStack {
-            count,
-            ..stack.clone()
-        };
-        stack.count -= count;
-        if stack.count == 0 {
-            self.inventory[self.selected] = None;
-        }
         self.player_drop(thrown);
         self.swing_arm();
     }
@@ -2105,7 +2099,7 @@ impl Game<'_> {
         let swings = self.swings_started;
         match self.use_tool(&stack)? {
             UseResult::Success { swing } => {
-                if swing && self.swings_started == swings {
+                if (UseResult::Success { swing }).should_swing(swings, self.swings_started) {
                     self.swing_arm();
                 }
                 return Ok(());
@@ -2598,18 +2592,10 @@ impl Game<'_> {
         };
         let mut player = PlayerMotion::new(self.motion, feet)?;
         player.yaw = self.yaw;
-        player.fire_ticks = self
-            .level
-            .player_extra
-            .as_ref()
-            .and_then(|t| horizon_client::save::number(t.get("Fire")))
-            .unwrap_or(0) as i32;
-        player.air = self
-            .level
-            .player_extra
-            .as_ref()
-            .and_then(|t| horizon_client::save::number(t.get("Air")))
-            .unwrap_or(300) as i32;
+        player.load_environment_once(
+            &mut self.restore_player_environment,
+            self.level.player_extra.as_ref(),
+        );
         let spectator = self.mode == horizon_client::command::args::GameMode::Spectator;
         player.may_fly = self.creative || spectator;
         player.invulnerable = self.creative || spectator;
@@ -4434,7 +4420,12 @@ impl Game<'_> {
             );
         }
         for item in &self.dropped {
-            if item.fire_ticks > 0 {
+            if item.fire_ticks > 0
+                && !self
+                    .res
+                    .items
+                    .resists_fire(&item.stack, "minecraft:in_fire")
+            {
                 let at = item.previous.lerp(item.position, alpha);
                 horizon_client::fire_render::flames(
                     [at.x, at.y, at.z],
@@ -5320,8 +5311,8 @@ impl Game<'_> {
         self.score = Default::default();
         self.fns = Default::default();
         self.bosses = Default::default();
-        self.adv = Default::default();
-        self.stats = Default::default();
+        reset_world_progress(&mut self.adv, &mut self.stats);
+        self.restore_player_environment = true;
         // RandomSequences: the world's data/minecraft/random_sequences.dat.
         self.rand_sequences =
             horizon_client::save::read_dat(&save_root.join("data/minecraft/random_sequences.dat"))
@@ -6351,18 +6342,8 @@ impl Game<'_> {
             }
             if let Some(kind) = mob {
                 if let Some(id) = self.spawn_mob_at(kind, (target[0], target[1], target[2]), true) {
-                    if kind == "axolotl"
-                        && let Some(data) = stack.data().and_then(|d| {
-                            d.other
-                                .iter()
-                                .find(|(key, _)| key == "minecraft:bucket_entity_data")
-                                .map(|(_, v)| v)
-                        })
-                        && let Some(m) = self.mobs.iter_mut().find(|m| m.id == id)
-                        && let Some(horizon_world::nbt::Tag::Long(ticks)) =
-                            data.get("HuntingCooldown")
-                    {
-                        horizon_client::mobs::animal_brain::set_hunting_cooldown(m, *ticks);
+                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+                        horizon_client::entity_nbt::load_bucket_data(m, stack);
                     }
                     self.mob_placed(id)?;
                 }
@@ -6422,7 +6403,12 @@ impl Game<'_> {
                     },
                     Some(at(hit.pos)),
                     1.0,
-                    self.world.random.next_float() * 0.4 + 0.8,
+                    if item == "fire_charge" {
+                        (self.world.random.next_float() - self.world.random.next_float()) * 0.2
+                            + 1.0
+                    } else {
+                        self.world.random.next_float() * 0.4 + 0.8
+                    },
                 );
                 if item == "fire_charge" {
                     self.consume_held();
@@ -6777,7 +6763,16 @@ impl Game<'_> {
                             .item_renderer
                             .models
                             .components(&horizon_client::item_render::stack_view(&stack));
-                        if components.contains_key("minecraft:consumable") {
+                        let animation = components
+                            .get("minecraft:consumable")
+                            .map(horizon_client::first_person::consumable_animation);
+                        if matches!(
+                            animation,
+                            Some(
+                                horizon_world::consumable::UseAnimation::Eat
+                                    | horizon_world::consumable::UseAnimation::Drink
+                            )
+                        ) {
                             ItemPose::Eat {
                                 remaining: owner.use_item_remaining_ticks as f32,
                                 duration: owner.use_duration as f32,
@@ -8928,6 +8923,7 @@ pub fn run() -> Result<()> {
         tab_list: Default::default(),
         subtitles: Default::default(),
         adv: Default::default(),
+        restore_player_environment: true,
         stats_ui: Default::default(),
         adv_ui: Default::default(),
         camera_type: Default::default(),
@@ -9002,4 +8998,29 @@ pub fn run() -> Result<()> {
         return Err(e.into());
     }
     Ok(())
+}
+
+fn reset_world_progress(adv: &mut advancements::AdvState, stats: &mut stats::Stats) {
+    *adv = Default::default();
+    *stats = Default::default();
+}
+
+#[cfg(test)]
+mod runtime_reset_tests {
+    use super::*;
+    #[test]
+    fn world_entry_invalidates_loaded_progress() {
+        let mut adv = advancements::AdvState::default();
+        let mut stats = stats::Stats::default();
+        adv.loaded = true;
+        stats.loaded = true;
+        adv.progress
+            .criteria
+            .insert("minecraft:story/root".into(), Default::default());
+        stats.add("mined", "minecraft:stone", 4);
+        reset_world_progress(&mut adv, &mut stats);
+        assert!(!adv.loaded && !stats.loaded);
+        assert!(adv.progress.criteria.is_empty());
+        assert!(stats.values.is_empty());
+    }
 }

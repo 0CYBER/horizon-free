@@ -401,8 +401,13 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     }
     let fire = crate::motion::environment::fire_contact(w.world, w.registry, m.bounds());
     if fire > 0.0 && !m.kind.flags.fire_immune {
-        m.fire_ticks =
-            crate::motion::environment::ignite_contact(m.fire_ticks, false, &mut m.random);
+        let multiplier = m.burning_time();
+        m.fire_ticks = crate::motion::environment::ignite_contact(
+            m.fire_ticks,
+            false,
+            &mut m.random,
+            multiplier,
+        );
         m.damage(fire, Damage::of(DamageKind::InFire));
     }
     // Fire: water extinguishes, lava ignites, burning hurts every second.
@@ -416,7 +421,7 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         ));
     }
     if m.fluids.in_lava && !m.kind.flags.fire_immune {
-        m.fire_ticks = m.fire_ticks.max(300);
+        m.ignite_for_ticks(300);
         m.damage(4.0, Damage::of(DamageKind::Lava));
     }
     if m.fire_ticks > 0 {
@@ -666,7 +671,7 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
     }
     // Mob.aiStep: undead burn in daylight.
     if m.kind.flags.burns_in_day && m.alive() && sun_burn_tick(m, w) && m.extra.head.is_none() {
-        m.fire_ticks = m.fire_ticks.max(160);
+        m.ignite_for_ticks(160);
     }
     species_ai_step(m, w, events);
 }

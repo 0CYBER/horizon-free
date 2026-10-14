@@ -1569,7 +1569,7 @@ impl Renderer {
     /// The Mipmap Levels option: block textures sample at most `levels`
     /// reduced copies (0: none).
     pub fn set_mipmap_levels(&mut self, levels: u32) {
-        let levels = levels.min(self.mip_levels - 1);
+        let levels = sprite_mipmap_limit(levels, self.sprite_texture.width(), self.mip_levels);
         if levels == self.mipmaps {
             return;
         }
@@ -1697,18 +1697,12 @@ impl Renderer {
         );
     }
     fn animate(&mut self, tick: u64) {
-        let sprite_size = self.sprite_texture.width();
-        for (animation, previous) in &mut self.animations {
-            let frame = animation.frame(tick);
-            if frame == *previous {
-                continue;
-            }
-            *previous = frame;
-            let (mips, levels) = mip_chain(animation.pixels(frame), sprite_size, 1);
-            let mut offset = 0;
-            for level in 0..levels.min(self.mip_levels) {
-                let size = sprite_size >> level;
-                let bytes = (size * size * 4) as usize;
+        animate_sprites(
+            &mut self.animations,
+            tick,
+            self.sprite_texture.width(),
+            self.mip_levels,
+            |layer, level, size, pixels| {
                 self.queue.write_texture(
                     wgpu::TexelCopyTextureInfo {
                         texture: &self.sprite_texture,
@@ -1716,11 +1710,11 @@ impl Renderer {
                         origin: wgpu::Origin3d {
                             x: 0,
                             y: 0,
-                            z: animation.layer,
+                            z: layer,
                         },
                         aspect: wgpu::TextureAspect::All,
                     },
-                    &mips[offset..offset + bytes],
+                    pixels,
                     wgpu::TexelCopyBufferLayout {
                         offset: 0,
                         bytes_per_row: Some(size * 4),
@@ -1732,9 +1726,8 @@ impl Renderer {
                         depth_or_array_layers: 1,
                     },
                 );
-                offset += bytes;
-            }
-        }
+            },
+        );
     }
     pub fn render(&mut self, frame: &Frame) -> Result<bool> {
         if self.suspended {
@@ -2538,5 +2531,67 @@ mod tests {
             ]]
         );
         assert!(super::outline_vertices(&[], glam::DVec3::ZERO).is_empty());
+    }
+}
+
+fn sprite_mipmap_limit(requested: u32, size: u32, available: u32) -> u32 {
+    // 16px textures are doubled in this atlas; mip1 retains their original texels.
+    let upscale = (size / 16).max(1).ilog2();
+    requested.saturating_add(upscale).min(available - 1)
+}
+fn animate_sprites(
+    animations: &mut [(crate::sprites::SpriteAnimation, usize)],
+    tick: u64,
+    size: u32,
+    max_levels: u32,
+    mut write: impl FnMut(u32, u32, u32, &[u8]),
+) {
+    for (animation, previous) in animations {
+        let frame = animation.frame(tick);
+        if frame == *previous {
+            continue;
+        }
+        *previous = frame;
+        let (mips, levels) = mip_chain(animation.pixels(frame), size, 1);
+        let mut offset = 0;
+        for level in 0..levels.min(max_levels) {
+            let edge = size >> level;
+            let bytes = (edge * edge * 4) as usize;
+            write(animation.layer, level, edge, &mips[offset..offset + bytes]);
+            offset += bytes;
+        }
+    }
+}
+#[cfg(test)]
+mod sprite_upload_tests {
+    use super::*;
+    #[test]
+    fn mipmap_option_keeps_real_16px_reductions() {
+        for levels in 0..=4 {
+            assert_eq!(sprite_mipmap_limit(levels, 32, 6), levels + 1);
+            assert_eq!(sprite_mipmap_limit(levels, 16, 5), levels);
+        }
+    }
+    #[test]
+    fn animation_updates_entire_layer_every_mip_once() {
+        for size in [16, 32] {
+            let animation = crate::sprites::test_animation(size, 7);
+            let pixels = animation.pixels(animation.frame(1)).to_vec();
+            let (expected, levels) = mip_chain(&pixels, size, 1);
+            let mut animations = vec![(animation, 0)];
+            let mut writes = Vec::new();
+            let mut record = |layer, level, edge, data: &[u8]| {
+                assert_eq!(layer, 7);
+                assert_eq!(edge, size >> level);
+                assert_eq!(data.len(), (edge * edge * 4) as usize);
+                writes.push(data.to_vec());
+            };
+            animate_sprites(&mut animations, 0, size, levels, &mut record);
+            animate_sprites(&mut animations, 1, size, levels, &mut record);
+            animate_sprites(&mut animations, 1, size, levels, &mut record);
+            assert_eq!(writes.len(), levels as usize);
+            assert_eq!(writes[0], pixels);
+            assert_eq!(writes.concat(), expected);
+        }
     }
 }

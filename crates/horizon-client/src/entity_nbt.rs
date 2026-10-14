@@ -329,20 +329,7 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             crate::mobs::villager::write_nbt(m, map);
         }
         "minecraft:wandering_trader" => put_offers(map, m),
-        "minecraft:axolotl" => {
-            if let Some(ttl) = crate::mobs::animal_brain::hunting_cooldown(m) {
-                map.insert(
-                    "Brain".into(),
-                    Tag::compound([(
-                        "memories",
-                        Tag::compound([(
-                            "minecraft:has_hunting_cooldown",
-                            Tag::compound([("value", Tag::Byte(1)), ("ttl", Tag::Long(ttl))]),
-                        )]),
-                    )]),
-                );
-            }
-        }
+        "minecraft:axolotl" => write_axolotl_memories(m, map),
         "minecraft:allay" => {
             // InventoryCarrier: the fetched stack; the liked player memory.
             let mut inv = Vec::new();
@@ -729,14 +716,8 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         }
         crate::mobs::zombie_villager::read_nbt(&mut m, tag);
     }
-    if m.species() == crate::mobs::Species::Axolotl
-        && let Some(memory) = tag
-            .get("Brain")
-            .and_then(|b| b.get("memories"))
-            .and_then(|b| b.get("minecraft:has_hunting_cooldown"))
-        && let Some(ttl) = number(memory.get("ttl"))
-    {
-        crate::mobs::animal_brain::set_hunting_cooldown(&mut m, ttl);
+    if m.species() == crate::mobs::Species::Axolotl {
+        restore_axolotl_memories(&mut m, tag);
     }
     m.fire_ticks = number(tag.get("Fire")).unwrap_or(0) as i32;
     m.air = number(tag.get("Air")).unwrap_or(300) as i32;
@@ -866,6 +847,8 @@ pub fn item_entity_to_nbt(e: &ItemEntity, uuid: [i32; 4], raw: Option<&Tag>) -> 
     let mut tag = base.tag(raw);
     for (key, value) in [
         ("Item", item_to_nbt(&e.stack)),
+        ("Health", Tag::Short(e.health as i16)),
+        ("Fire", Tag::Short(e.fire_ticks as i16)),
         ("Age", Tag::Short(e.age.min(i16::MAX as u32) as i16)),
         (
             "PickupDelay",
@@ -873,9 +856,6 @@ pub fn item_entity_to_nbt(e: &ItemEntity, uuid: [i32; 4], raw: Option<&Tag>) -> 
         ),
     ] {
         put(&mut tag, key, value);
-    }
-    if let Tag::Compound(map) = &mut tag {
-        map.entry("Health".into()).or_insert(Tag::Short(5));
     }
     tag
 }
@@ -1452,8 +1432,8 @@ mod tests {
     #[test]
     fn item_entities_round_trip() {
         let e = ItemEntity {
-            health: 5,
-            fire_ticks: 0,
+            health: 2,
+            fire_ticks: 73,
             id: 7,
             stack: ItemStack {
                 item: Arc::from("minecraft:diamond_pickaxe"),
@@ -1474,6 +1454,7 @@ mod tests {
         assert_eq!(uuid(&tag), Some([1, 2, 3, 4]));
         let back = item_entity_from_nbt(&tag, 9, 0.0).unwrap();
         assert_eq!(back.stack.damage, 5);
+        assert_eq!((back.health, back.fire_ticks), (2, 73));
         assert_eq!(
             (back.age, back.pickup_delay, back.on_ground),
             (120, 10, true)
@@ -1511,5 +1492,178 @@ mod tests {
         let back = orbs_from_nbt(&tag);
         assert_eq!(back.len(), 3);
         assert_eq!(back[0].value, 7);
+    }
+}
+
+fn write_axolotl_memories(m: &Mob, map: &mut Compound) {
+    let brain = map
+        .entry("Brain".into())
+        .or_insert_with(|| Tag::Compound(Compound::new()));
+    if !matches!(brain, Tag::Compound(_)) {
+        *brain = Tag::Compound(Compound::new());
+    }
+    let Tag::Compound(brain) = brain else { return };
+    let memories = brain
+        .entry("memories".into())
+        .or_insert_with(|| Tag::Compound(Compound::new()));
+    if !matches!(memories, Tag::Compound(_)) {
+        *memories = Tag::Compound(Compound::new());
+    }
+    let Tag::Compound(memories) = memories else {
+        return;
+    };
+    let mm = m.extra.animal_brain.as_deref().map(|b| &b.mem);
+    let hunting = crate::mobs::animal_brain::hunting_cooldown(m)
+        .map(|ttl| Tag::compound([("value", Tag::Byte(1)), ("ttl", Tag::Long(ttl))]));
+    let play_dead = mm
+        .and_then(|m| m.play_dead_ticks.value())
+        .map(|v| Tag::compound([("value", Tag::Int(v))]));
+    let temptation = mm
+        .and_then(|m| m.temptation_cooldown_ticks.value())
+        .map(|v| Tag::compound([("value", Tag::Int(v))]));
+    for (key, value) in [
+        ("minecraft:has_hunting_cooldown", hunting),
+        ("minecraft:play_dead_ticks", play_dead),
+        ("minecraft:temptation_cooldown_ticks", temptation),
+    ] {
+        if let Some(value) = value {
+            memories.insert(key.into(), value);
+        } else {
+            memories.remove(&key.into());
+        }
+    }
+}
+fn restore_axolotl_memories(m: &mut Mob, tag: &Tag) {
+    let memories = tag.get("Brain").and_then(|b| b.get("memories"));
+    let ttl = memories
+        .and_then(|b| b.get("minecraft:has_hunting_cooldown"))
+        .and_then(|v| number(v.get("ttl")))
+        .unwrap_or(0);
+    crate::mobs::animal_brain::set_hunting_cooldown(m, ttl);
+    if let Some(b) = m.extra.animal_brain.as_mut() {
+        if let Some(v) = memories
+            .and_then(|b| b.get("minecraft:play_dead_ticks"))
+            .and_then(|v| number(v.get("value")))
+        {
+            b.mem.play_dead_ticks.set(v as i32);
+        }
+        if let Some(v) = memories
+            .and_then(|b| b.get("minecraft:temptation_cooldown_ticks"))
+            .and_then(|v| number(v.get("value")))
+        {
+            b.mem.temptation_cooldown_ticks.set(v as i32);
+        }
+    }
+}
+pub fn bucket_data(m: &Mob) -> Tag {
+    let mut data = Tag::compound([
+        ("Age", Tag::Int(m.extra.age)),
+        ("Variant", Tag::Int(i32::from(m.extra.variant))),
+        ("Health", Tag::Float(m.health.to_bits())),
+    ]);
+    if let Some(ttl) = crate::mobs::animal_brain::hunting_cooldown(m) {
+        put(&mut data, "HuntingCooldown", Tag::Long(ttl));
+    }
+    data
+}
+pub fn load_bucket_data(m: &mut Mob, stack: &crate::items::ItemStack) {
+    let data = stack.data().and_then(|d| {
+        d.other
+            .iter()
+            .find(|(key, _)| key == "minecraft:bucket_entity_data")
+            .map(|(_, v)| v)
+    });
+    let Some(data) = data else { return };
+    if let Some(v) = number(data.get("Age")) {
+        m.extra.age = v as i32;
+    }
+    if let Some(v) = number(data.get("Variant")) {
+        m.extra.variant = v as u8;
+    }
+    if let Some(v) = float(data.get("Health")) {
+        m.health = v as f32;
+    }
+    if m.species() == crate::mobs::Species::Axolotl {
+        crate::mobs::animal_brain::set_hunting_cooldown(
+            m,
+            number(data.get("HuntingCooldown")).unwrap_or(0),
+        );
+    }
+}
+
+#[cfg(test)]
+mod axolotl_nbt_tests {
+    use super::*;
+    #[test]
+    fn bucket_cooldown_and_brain_memories_survive_and_expired_cooldown_is_removed() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("items.json").exists() {
+            return;
+        }
+        let data = crate::mobs::MobTypes::load(&root).unwrap();
+        let kind = Arc::new(data.types.get("minecraft:axolotl").unwrap().clone());
+        let mut m = Mob::new(1, kind.clone(), Vec3::new(0.0, 4.0, 0.0), 0.0);
+        crate::mobs::animal_brain::set_hunting_cooldown(&mut m, 123);
+        {
+            let mm = &mut m.extra.animal_brain.as_mut().unwrap().mem;
+            mm.play_dead_ticks.set(78);
+            mm.temptation_cooldown_ticks.set(42);
+        }
+        let raw = Tag::compound([(
+            "Brain",
+            Tag::compound([(
+                "memories",
+                Tag::compound([("test:unrelated", Tag::compound([("value", Tag::Int(9))]))]),
+            )]),
+        )]);
+        let tag = mob_to_nbt(&m, [1, 2, 3, 4], Some(&raw));
+        let memories = tag.get("Brain").unwrap().get("memories").unwrap();
+        assert!(memories.get("test:unrelated").is_some());
+        assert_eq!(
+            number(
+                memories
+                    .get("minecraft:play_dead_ticks")
+                    .unwrap()
+                    .get("value")
+            ),
+            Some(78)
+        );
+        assert_eq!(
+            number(
+                memories
+                    .get("minecraft:temptation_cooldown_ticks")
+                    .unwrap()
+                    .get("value")
+            ),
+            Some(42)
+        );
+        let mut stack = crate::items::ItemStack::new("minecraft:axolotl_bucket", 1);
+        stack.extra = Some(Box::new(crate::item_data::StackData {
+            other: vec![("minecraft:bucket_entity_data".into(), bucket_data(&m))],
+            ..Default::default()
+        }));
+        let mut restored = Mob::new(2, kind, Vec3::new(0.0, 4.0, 0.0), 0.0);
+        load_bucket_data(&mut restored, &stack);
+        assert_eq!(
+            crate::mobs::animal_brain::hunting_cooldown(&restored),
+            Some(123)
+        );
+        crate::mobs::animal_brain::set_hunting_cooldown(&mut m, 0);
+        assert!(bucket_data(&m).get("HuntingCooldown").is_none());
+        let saved = mob_to_nbt(&m, [1, 2, 3, 4], Some(&tag));
+        assert!(
+            saved
+                .get("Brain")
+                .unwrap()
+                .get("memories")
+                .unwrap()
+                .get("minecraft:has_hunting_cooldown")
+                .is_none()
+        );
+        restore_axolotl_memories(&mut restored, &saved);
+        let mm = &restored.extra.animal_brain.as_ref().unwrap().mem;
+        assert_eq!(mm.play_dead_ticks.value(), Some(78));
+        assert_eq!(mm.temptation_cooldown_ticks.value(), Some(42));
     }
 }

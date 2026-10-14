@@ -641,10 +641,7 @@ fn targetable(m: &mut Mob, w: &MobWorld, who: Who) -> bool {
         }
         Who::Mob(id) => {
             let Some(s) = w.seen(id) else { return false };
-            s.alive
-                && !s.playing_dead
-                && m.distance_sqr(s.position) <= range * range
-                && m.sees(w, who)
+            s.alive && m.distance_sqr(s.position) <= range * range && m.sees(w, who)
         }
     }
 }
@@ -1430,7 +1427,7 @@ impl B {
                     1.1
                 };
                 let close = if m.species() == Species::Axolotl {
-                    4 + cx.lr.next_int_bound(12).unwrap_or(0)
+                    4
                 } else {
                     2
                 };
@@ -2282,13 +2279,21 @@ pub fn set_play_dead(m: &mut Mob) {
     mem(m).play_dead_ticks.set(super::axolotl::PLAY_DEAD_TICKS);
 }
 pub fn hunting_cooldown(m: &Mob) -> Option<i64> {
-    mem_ref(m).and_then(|mm| mm.hunting_cooldown.get().map(|_| mm.hunting_cooldown.ttl))
+    mem_ref(m).and_then(|mm| {
+        mm.hunting_cooldown
+            .get()
+            .and_then(|_| (mm.hunting_cooldown.ttl > 0).then_some(mm.hunting_cooldown.ttl))
+    })
 }
 pub fn set_hunting_cooldown(m: &mut Mob, ticks: i64) {
     if m.extra.animal_brain.is_none() {
         init(m, i64::from(m.id));
     }
-    mem(m).hunting_cooldown.set_ttl(true, ticks);
+    if ticks > 0 {
+        mem(m).hunting_cooldown.set_ttl(true, ticks);
+    } else {
+        mem(m).hunting_cooldown.clear();
+    }
 }
 fn validate_play_dead(b: &mut Brain) -> bool {
     let Some(ticks) = b.mem.play_dead_ticks.value() else {
@@ -2395,7 +2400,7 @@ fn axolotl_action(m: &mut Mob, cx: &mut Bx, action: AxolotlAction, until: &mut i
                 .w
                 .target_info(target)
                 .is_some_and(|t| m.within_melee_range(&t))
-                && visible_test(m, cx.w, target)
+                && visible_contains(m, cx.w, target)
             {
                 mem(m).walk_target.clear();
             } else {
@@ -2417,7 +2422,7 @@ fn axolotl_action(m: &mut Mob, cx: &mut Bx, action: AxolotlAction, until: &mut i
             let Some(target) = mm.attack_target.value() else {
                 return false;
             };
-            if !visible_test(m, cx.w, target)
+            if !visible_contains(m, cx.w, target)
                 || !cx
                     .w
                     .target_info(target)
@@ -2435,7 +2440,6 @@ fn axolotl_action(m: &mut Mob, cx: &mut Bx, action: AxolotlAction, until: &mut i
                     events: cx.events,
                 },
             );
-            m.sound("entity.axolotl.attack", cx.events);
             mem(m).attack_cooling_down.set_ttl(true, 20);
             true
         }
@@ -2613,7 +2617,7 @@ fn axolotl_package(seed: i64) -> Vec<Entry> {
         e(
             Idle,
             B::MakeLove {
-                t: Timed::new(325, 325),
+                t: Timed::new(110, 110),
                 spawn_at: 0,
             },
         ),
@@ -2862,5 +2866,25 @@ mod axolotl_parity_tests {
     #[test]
     fn axolotl_has_native_activity_brain_not_fallback_goals() {
         assert!(kind_for_species(Species::Axolotl).is_some());
+    }
+}
+
+#[cfg(test)]
+mod breeding_duration_tests {
+    use super::*;
+    #[test]
+    fn axolotl_breeding_uses_native_110_tick_timeout() {
+        let package = axolotl_package(1);
+        let timed = package
+            .iter()
+            .find_map(|e| {
+                if let B::MakeLove { t, .. } = &e.b {
+                    Some(t)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        assert_eq!((timed.min, timed.max), (110, 110));
     }
 }

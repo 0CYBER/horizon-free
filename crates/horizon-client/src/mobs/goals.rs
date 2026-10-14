@@ -1000,7 +1000,7 @@ impl Goal for MeleeAttack {
         let Some(t) = m.target_info(cx.w) else {
             return false;
         };
-        if !t.alive || !t.can_be_seen_as_enemy {
+        if !t.alive {
             return false;
         }
         let path = m.create_path_to_entity(cx.w, [t.position.x, t.position.y, t.position.z], 0);
@@ -1012,7 +1012,7 @@ impl Goal for MeleeAttack {
         let Some(t) = m.target_info(cx.w) else {
             return false;
         };
-        if !t.alive || !t.can_be_seen_as_enemy {
+        if !t.alive {
             return false;
         }
         if !self.follow_unseen {
@@ -2061,12 +2061,7 @@ impl Goal for TryFindWater {
         !m.ai.nav.is_done()
     }
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
-        let speed = if m.species() == Species::Axolotl {
-            0.15
-        } else {
-            1.0
-        };
-        m.nav_move_to(cx.w, self.wanted, speed);
+        m.nav_move_to(cx.w, self.wanted, 1.0);
     }
 }
 /// `MoveToBlockGoal`'s shared state: search, walk to and stay at a block.

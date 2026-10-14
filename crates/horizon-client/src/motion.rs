@@ -140,7 +140,6 @@ pub struct PlayerMotion {
     pub fire_ticks: i32,
     pub air: i32,
     pub respiration: i32,
-    pub(crate) first_tick: bool,
 
     pub position: Vec3,
     pub velocity: Vec3,
@@ -205,6 +204,26 @@ fn attribute_error(error: impl std::fmt::Debug) -> io::Error {
     io::Error::other(format!("movement attribute: {error:?}"))
 }
 impl PlayerMotion {
+    pub fn load_environment_once(
+        &mut self,
+        pending: &mut bool,
+        extra: Option<&horizon_world::nbt::Tag>,
+    ) {
+        if std::mem::take(pending) {
+            self.fire_ticks = extra
+                .and_then(|t| crate::save::number(t.get("Fire")))
+                .unwrap_or(-20) as i32;
+            self.air = extra
+                .and_then(|t| crate::save::number(t.get("Air")))
+                .unwrap_or(300) as i32;
+        }
+    }
+    pub fn ignite_for_ticks(&mut self, ticks: i32) -> Result<()> {
+        let scaled = (f64::from(ticks) * self.attribute("minecraft:burning_time")?).ceil() as i32;
+        self.fire_ticks = self.fire_ticks.max(scaled);
+        Ok(())
+    }
+
     pub fn new(resources: &MotionResources, position: Vec3) -> Result<Self> {
         // Process-owned identities determine native collection callback order.
         // Differential fixtures can replay a reference process's identities.
@@ -279,10 +298,9 @@ impl PlayerMotion {
             eye_in_water: false,
             in_lava: false,
             swimming: false,
-            fire_ticks: 0,
+            fire_ticks: -20,
             air: 300,
             respiration: 0,
-            first_tick: true,
             speed: 0.0,
             item_use_speed: None,
             last_climbable: None,
@@ -538,7 +556,8 @@ impl MotionWorld<'_, '_, '_> {
         let can_glide = self.player.glider
             && !self.player.ground.on_ground
             && !self.player.flying
-            && !self.player.in_water;
+            && !self.player.in_water
+            && !self.player.in_lava;
         if jumping && !toggled && !was_jumping && !self.player.fall_flying && can_glide {
             self.player.fall_flying = true;
         }
@@ -548,7 +567,8 @@ impl MotionWorld<'_, '_, '_> {
             let still = self.player.glider
                 && !self.player.ground.on_ground
                 && !self.player.flying
-                && !self.player.in_water;
+                && !self.player.in_water
+                && !self.player.in_lava;
             if !still {
                 self.player.fall_flying = false;
             } else if (self.player.fall_fly_ticks + 1) % 10 == 0
@@ -587,8 +607,11 @@ impl MotionWorld<'_, '_, '_> {
     /// Resident simulation phases in native order. Enclosing entity/world tick
     /// services are still incomplete; this composes clocks, movement and hunger.
     pub fn simulation_tick(&mut self, direction: [f32; 2], jumping: bool) -> Result<()> {
-        self.player.health.advance_clock();
         self.update_fluid_environment()?;
+        self.simulation_tick_with_fluids(direction, jumping)
+    }
+    fn simulation_tick_with_fluids(&mut self, direction: [f32; 2], jumping: bool) -> Result<()> {
+        self.player.health.advance_clock();
         self.tick_environment_damage()?;
         let previous = self.player.position;
         self.player.swimming = self.player.sprinting
@@ -616,7 +639,7 @@ impl MotionWorld<'_, '_, '_> {
             self.player.auto_jump_time -= 1;
             keys.jump = true;
         }
-        self.sample_fluid_environment(false)?;
+        self.update_fluid_environment()?;
         self.player.sprint_input_tick(keys)?;
         self.player.shift_key_down = keys.shift;
         let direction = keys.direction();
@@ -628,7 +651,7 @@ impl MotionWorld<'_, '_, '_> {
         } else {
             None
         };
-        self.simulation_tick(
+        self.simulation_tick_with_fluids(
             crate::input::modify_input(direction, self.player.item_use_speed, sneak),
             keys.jump,
         )
@@ -665,11 +688,8 @@ impl MotionWorld<'_, '_, '_> {
             input.x = 0.0;
             input.z = 0.0;
         }
-        if self.player.shift_key_down
-            && !self.player.flying
-            && (self.player.in_water || self.player.in_lava)
-        {
-            self.player.velocity.y -= 0.04;
+        if self.player.shift_key_down && !self.player.flying && self.player.in_water {
+            self.player.velocity.y -= f64::from(0.04f32);
         }
         if self.player.jumping {
             let height = self.player.fluids.fluid_height(
@@ -684,13 +704,28 @@ impl MotionWorld<'_, '_, '_> {
                 && (self.player.in_water || self.player.in_lava)
                 && (!self.player.ground.on_ground || height > 0.4)
             {
-                self.player.velocity.y += 0.04;
+                self.player.velocity.y += f64::from(0.04f32);
             } else if self.player.ground.on_ground && self.player.no_jump_delay == 0 {
                 self.jump_from_ground()?;
                 self.player.no_jump_delay = 10;
             }
         } else {
             self.player.no_jump_delay = 0;
+        }
+        if self.player.swimming {
+            let look_y = f64::from(-self.player.pitch.to_radians().sin());
+            let near_surface = BlockPos::containing(Vec3::new(
+                self.player.position.x,
+                self.player.position.y + 0.9,
+                self.player.position.z,
+            ));
+            if look_y <= 0.0
+                || self.player.jumping
+                || self.fluid_at(near_surface)?.kind() != horizon_world::fluid::FluidKind::Empty
+            {
+                let blend = if look_y < -0.2 { 0.085 } else { 0.06 };
+                self.player.velocity.y += (look_y - self.player.velocity.y) * blend;
+            }
         }
         if self.player.fall_flying {
             self.travel_fall_flying()?;
@@ -1492,7 +1527,7 @@ mod tests {
         }
         w.player.fire_ticks = 160;
         w.controlled_simulation_tick(Default::default()).unwrap();
-        assert_eq!(w.player.fire_ticks, 0);
+        assert!(w.player.fire_ticks <= 0);
         w.player.air = -19;
         w.player.health.hurt.cooldown = 0;
         let hp = w.player.health.health();
@@ -1525,16 +1560,28 @@ mod tests {
         }
         w.player.position = Vec3::new(20.5, 4.0, 20.5);
         w.player.velocity = Vec3::ZERO;
+        w.player.fire_ticks = -20;
         w.player.health.hurt.cooldown = 0;
         let hp = w.player.health.health();
         w.controlled_simulation_tick(Default::default()).unwrap();
-        assert!(w.player.fire_ticks > 0);
+        assert!(
+            w.player.fire_ticks < 0,
+            "direct fire hurts during the immunity delay"
+        );
         assert!(w.player.health.health() < hp);
         w.player.status.fire_resistance = true;
         w.player.health.hurt.cooldown = 0;
         let hp = w.player.health.health();
         w.controlled_simulation_tick(Default::default()).unwrap();
         assert_eq!(w.player.health.health(), hp);
+        w.player.invulnerable = true;
+        w.player.fire_ticks = -20;
+        w.controlled_simulation_tick(Default::default()).unwrap();
+        assert_eq!(
+            w.player.fire_ticks, 1,
+            "creative fire contact must remain visible"
+        );
+        w.player.invulnerable = false;
         // Sprint swimming must keep full input, not the dry crawl/sneak multiplier.
         for x in 19..=21 {
             for y in 2..=7 {
@@ -1563,6 +1610,42 @@ mod tests {
             w.player.velocity
         );
         assert!(!w.player.moving_slowly());
+        w.player.position = Vec3::new(20.5, 4.0, 20.5);
+        w.player.velocity = Vec3::ZERO;
+        w.player.pitch = 45.0;
+        w.controlled_simulation_tick(crate::sprint::Keys {
+            forward: true,
+            sprint: true,
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(
+            w.player.velocity.y < -0.04,
+            "look down must steer a swimming player downward"
+        );
+        w.player.position = Vec3::new(20.5, 4.0, 20.5);
+        w.player.velocity = Vec3::ZERO;
+        w.player.pitch = -45.0;
+        w.controlled_simulation_tick(crate::sprint::Keys {
+            forward: true,
+            sprint: true,
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(
+            w.player.velocity.y > 0.02,
+            "look up must steer a submerged swimmer upward"
+        );
+        let extra = horizon_world::nbt::Tag::compound([
+            ("Fire", horizon_world::nbt::Tag::Short(160)),
+            ("Air", horizon_world::nbt::Tag::Short(8)),
+        ]);
+        let mut pending = true;
+        w.player.load_environment_once(&mut pending, Some(&extra));
+        assert_eq!((w.player.fire_ticks, w.player.air), (160, 8));
+        let mut respawn = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
+        respawn.load_environment_once(&mut pending, Some(&extra));
+        assert_eq!((respawn.fire_ticks, respawn.air), (-20, 300));
         w.player.in_water = false;
         assert!(
             w.player.moving_slowly(),

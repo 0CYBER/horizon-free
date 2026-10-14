@@ -45,7 +45,7 @@ impl Toast {
 pub(super) struct AdvState {
     pub(super) tree: Arc<Tree>,
     pub(super) progress: Progress,
-    loaded: bool,
+    pub(super) loaded: bool,
     pub(super) toasts: VecDeque<Toast>,
     /// Awards skip the toast (`/advancement grant ... everything`).
     pub(super) quiet: bool,

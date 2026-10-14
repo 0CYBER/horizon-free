@@ -1177,6 +1177,9 @@ impl Game<'_> {
             // MobBucketItem.checkExtraContent: the mob (from the bucket, so
             // persistent) calls out, then ENTITY_PLACE.
             if let Some(id) = self.spawn_mob_at(kind, target, true) {
+                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+                    horizon_client::entity_nbt::load_bucket_data(m, &stack);
+                }
                 self.mob_placed(id)?;
             }
             self.post_block_game_event(
