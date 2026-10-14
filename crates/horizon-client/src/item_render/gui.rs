@@ -274,17 +274,23 @@ mod tests {
 
     // Sample the emitted triangles in draw order, using opaque test faces.
     fn color_at(batch: &HudBatch, p: Vec2) -> Option<u32> {
-        batch.vertices.chunks_exact(3).rev().find_map(|tri| {
-            let [a, b, c] = std::array::from_fn(|i| Vec2::from(tri[i].pos));
-            let area = (b - a).perp_dot(c - a);
-            if area.abs() < 1e-6 {
-                return None;
-            }
-            let u = (b - p).perp_dot(c - p) / area;
-            let v = (c - p).perp_dot(a - p) / area;
-            let w = 1.0 - u - v;
-            (u >= 0.0 && v >= 0.0 && w >= 0.0).then_some(tri[0].color)
-        })
+        batch
+            .vertices
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .rev()
+            .find_map(|tri| {
+                let [a, b, c] = std::array::from_fn(|i| Vec2::from(tri[i].pos));
+                let area = (b - a).perp_dot(c - a);
+                if area.abs() < 1e-6 {
+                    return None;
+                }
+                let u = (b - p).perp_dot(c - p) / area;
+                let v = (c - p).perp_dot(a - p) / area;
+                let w = 1.0 - u - v;
+                (u >= 0.0 && v >= 0.0 && w >= 0.0).then_some(tri[0].color)
+            })
     }
 
     #[test]
