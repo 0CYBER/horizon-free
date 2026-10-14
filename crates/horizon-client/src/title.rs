@@ -1068,11 +1068,13 @@ impl Title {
                 rgba(160, 160, 160, 255)
             };
             if let Some((icon, size)) = b.icon {
+                // CenteredIcon divides the button and sprite sizes separately:
+                // a 15px icon in a 20px button starts at 10 - 7 = 3, not 2.
                 batch.sprite_scaled(
                     atlas,
                     &format!("gui/sprites/{icon}"),
-                    b.x + ((b.w - size) / 2.0).floor(),
-                    b.y + ((20.0 - size) / 2.0).floor(),
+                    b.x + (b.w / 2.0).floor() - (size / 2.0).floor(),
+                    b.y + 10.0 - (size / 2.0).floor(),
                     size,
                     size,
                     if b.enabled {
@@ -1598,7 +1600,7 @@ mod classic_tests {
     }
 
     #[test]
-    fn classic_logo_crops_transparent_padding_and_overlaps_edition() {
+    fn classic_logo_and_icon_geometry_matches_minecraft() {
         let root = Path::new("/nonexistent/horizon-test-resources");
         let mut atlas = HudAtlas::build(root).unwrap();
         let r = crate::hud::Rect {
@@ -1614,6 +1616,20 @@ mod classic_tests {
             "gui/title/edition".into(),
             crate::hud::Rect { w: 128, h: 16, ..r },
         );
+        for (i, icon) in ["friends/friends", "icon/language", "icon/accessibility"]
+            .into_iter()
+            .enumerate()
+        {
+            atlas.sprites.insert(
+                format!("gui/sprites/{icon}"),
+                crate::hud::Rect {
+                    u0: 0.25 + i as f32 * 0.125,
+                    w: 15,
+                    h: 15,
+                    ..r
+                },
+            );
+        }
         let title = Title::new(PathBuf::new(), root);
         let mut batch = HudBatch::new([1920, 1080]);
         title.draw(&atlas, &mut batch, (0.0, 0.0));
@@ -1624,6 +1640,19 @@ mod classic_tests {
         assert_eq!(batch.vertices[6].pos, [cx - 64.0, 67.0]);
         assert_eq!(batch.vertices[8].pos, [cx + 64.0, 81.0]);
         assert_eq!(batch.vertices[8].uv, [1.0, 14.0 / 16.0]);
+        for i in 0..3 {
+            let quad = batch
+                .vertices
+                .as_chunks::<6>()
+                .0
+                .iter()
+                .find(|quad| quad[0].uv == [0.25 + i as f32 * 0.125, 0.0])
+                .unwrap();
+            let x = cx - 34.0 + i as f32 * 24.0 + 3.0;
+            let y = (batch.height / 4.0).floor() + 48.0 + 72.0 + 3.0;
+            assert_eq!(quad[0].pos, [x, y]);
+            assert_eq!(quad[2].pos, [x + 15.0, y + 15.0]);
+        }
         assert!(
             batch.vertices[12..]
                 .iter()
