@@ -418,8 +418,18 @@ impl OptionsUi {
                 HRow::Extra(item) => {
                     let cy = y + ROW_H / 2.0;
                     let id = ROW + i as u64;
-                    let cost = item.cost().map_or((0, ""), |c| (c as u8, c.label()));
-                    let (caption, text) = (item.caption(), item.description());
+                    let mut cost = item.cost().map_or((0, ""), |c| (c as u8, c.label()));
+                    let (caption, mut text) = (item.caption(), item.description().to_owned());
+                    // A vanilla mapping on the same key: both act on it, like
+                    // the binds list's duplicates; say which.
+                    let conflicts = extras::zoom_key_conflicts(&s.extras, &s.keys);
+                    if item == extras::Item::ZoomKey && !conflicts.is_empty() {
+                        let names: Vec<String> =
+                            conflicts.iter().map(|c| crate::lang::get(c)).collect();
+                        cost = (3, "Also bound");
+                        text = format!("{} uses this key too; both act on it.", names.join(", "));
+                    }
+                    let text = text.as_str();
                     if let Some(on) = item.switch(&s.extras) {
                         ui.described_row(x, y, caption, "", 0.0, cost, text, cw - 60.0);
                         ui.switch(id, control_x, cy, on);

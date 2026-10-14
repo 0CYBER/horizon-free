@@ -191,6 +191,16 @@ impl Zoom {
     pub fn release(&mut self) {
         self.held = false;
     }
+    /// A press or release of the zoom key. Only a press while `playing` (no
+    /// screen or text field open) zooms; anywhere else the key belongs to
+    /// the screen, and the zoom lets go.
+    pub fn key(&mut self, pressed: bool, repeat: bool, playing: bool, level: u8) {
+        if !pressed || !playing {
+            self.release();
+        } else if !repeat {
+            self.press(level);
+        }
+    }
     pub fn held(&self) -> bool {
         self.held
     }
@@ -211,6 +221,19 @@ impl Zoom {
             1.0
         }
     }
+}
+/// Vanilla key mappings bound to the zoom key. The key still reaches them
+/// (a key bound twice triggers both, as vanilla's do), so the Extras page
+/// says so.
+pub fn zoom_key_conflicts(e: &Extras, keys: &crate::keybinds::KeyBinds) -> Vec<&'static str> {
+    if e.zoom_key == "key.keyboard.unknown" {
+        return Vec::new();
+    }
+    crate::keybinds::MAPPINGS
+        .iter()
+        .map(|m| m.0)
+        .filter(|name| keys.get(name) == e.zoom_key)
+        .collect()
 }
 /// The field-of-view modifier target `Camera.tickFov` eases toward: vanilla's
 /// (`getFieldOfViewModifier`) divided by the zoom. A zoom of 1 leaves it as is.
@@ -524,6 +547,48 @@ mod tests {
         }
         let floor = camera.calculate_fov(1.0, 70, 1.0, None, Default::default(), false);
         assert!((floor - 7.0).abs() < 1e-3, "{floor}");
+    }
+
+    #[test]
+    fn the_zoom_key_only_zooms_while_playing() {
+        let mut z = Zoom::default();
+        // In chat, a sign, a text field or any screen: no zoom.
+        z.key(true, false, false, 4);
+        assert!(!z.held());
+        z.key(true, false, true, 4);
+        assert!(z.held());
+        // A screen opening while held lets go (its key presses are the screen's).
+        z.key(true, true, false, 4);
+        assert!(!z.held());
+        // Key repeats do not restart a zoom the wheel changed.
+        z.key(true, false, true, 4);
+        z.scroll(1.0);
+        z.key(true, true, true, 4);
+        assert!((z.factor(false) - 5.0).abs() < 1e-5);
+        z.key(false, false, true, 4);
+        assert!(!z.held());
+    }
+
+    #[test]
+    fn zoom_key_conflicts_name_the_vanilla_mappings() {
+        let mut e = Extras::default();
+        let mut keys = crate::keybinds::KeyBinds::default();
+        assert!(zoom_key_conflicts(&e, &keys).is_empty());
+        e.zoom_key = "key.keyboard.c".into();
+        assert_eq!(
+            zoom_key_conflicts(&e, &keys),
+            [
+                "key.saveToolbarActivator",
+                "key.debug.crash",
+                "key.debug.copyLocation"
+            ]
+        );
+        keys.set("key.drop", "key.keyboard.z");
+        e.zoom_key = "key.keyboard.z".into();
+        assert_eq!(zoom_key_conflicts(&e, &keys), ["key.drop"]);
+        e.zoom_key = "key.keyboard.unknown".into();
+        keys.set("key.smoothCamera", "key.keyboard.unknown");
+        assert!(zoom_key_conflicts(&e, &keys).is_empty());
     }
 
     #[test]

@@ -36,6 +36,11 @@ Horizon category in Controls, and adding one would put a non-vanilla mapping int
 ### Zoom (`zoom`, default off)
 - Hold the zoom key (default **Z**, unused by every vanilla 26.3 key mapping; C
   is `key.saveToolbarActivator`) to zoom. The key does nothing while zoom is off.
+- It zooms only while playing: in chat, signs, books, text fields and every
+  other screen the key is typed or handled as usual. The key is never taken
+  from vanilla's mappings: one bound to the same key still acts (a key bound
+  twice triggers both, as vanilla's do), and the Extras page marks the zoom key
+  "Also bound" and names the mapping.
 - Starts at the default level (4x, settable 2x to 10x); the scroll wheel changes
   it while the key is held (and does not move the hotbar then).
 - **Smooth** (default on) goes through vanilla's own FOV easing: the zoom divides

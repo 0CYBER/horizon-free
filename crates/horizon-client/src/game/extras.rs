@@ -28,17 +28,19 @@ impl Game<'_> {
         let e = &self.settings.extras;
         e.zoom.then(|| keybinds::key_code(&e.zoom_key)).flatten()
     }
-    /// A key press or release while playing; true when the zoom key took it.
-    pub(super) fn extras_key(&mut self, key: KeyCode, pressed: bool, repeat: bool) -> bool {
+    /// A key press or release. The zoom key zooms only while playing with
+    /// no text open; the key itself always goes on to the screen and the key
+    /// binds, as a vanilla key mapping's would.
+    pub(super) fn extras_key(&mut self, key: KeyCode, pressed: bool, repeat: bool) {
         if self.zoom_key() != Some(key) {
-            return false;
+            return;
         }
-        if !pressed {
-            self.extras.zoom.release();
-        } else if !repeat && self.screen == Screen::Playing && self.title.is_none() {
-            self.extras.zoom.press(self.settings.extras.zoom_level);
-        }
-        true
+        let playing = self.screen == Screen::Playing
+            && self.title.is_none()
+            && self.sign_edit.is_none()
+            && self.book.is_none();
+        let level = self.settings.extras.zoom_level;
+        self.extras.zoom.key(pressed, repeat, playing, level);
     }
     /// Wheel steps while playing; true when zooming took them from the hotbar.
     pub(super) fn extras_scroll(&mut self, steps: f32) -> bool {

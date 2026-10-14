@@ -8530,9 +8530,7 @@ impl ApplicationHandler for Game<'_> {
                     let PhysicalKey::Code(key) = event.physical_key else {
                         return Ok(());
                     };
-                    if self.extras_key(key, event.state == ElementState::Pressed, event.repeat) {
-                        return Ok(());
-                    }
+                    self.extras_key(key, event.state == ElementState::Pressed, event.repeat);
                     // key.smoothCamera toggles the cinematic camera.
                     if self.screen == Screen::Playing
                         && event.state == ElementState::Pressed
