@@ -20,7 +20,7 @@ jobs:
         # The C runtime linked in, so the game runs without the Visual C++ redistributable.
         env:
           RUSTFLAGS: -C target-feature=+crt-static
-        run: cargo +stable build --release --locked -p horizon-client --bin horizon-client --bin horizon-ctl -p horizon-prepare
+        run: cargo +stable build --release --locked -p horizon-client --bin horizon-client --bin horizon-ctl -p horizon-prepare --bin horizon-prepare
       - name: Only system DLLs
         # Vulkan and the rest are loaded at run time; a linked non-system DLL is a
         # "DLL not found" dialog on some players' machines.
@@ -43,7 +43,7 @@ jobs:
       - name: ALSA and udev headers
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
       - name: Build the client
-        run: cargo +stable build --release --locked -p horizon-client --bin horizon-client --bin horizon-ctl -p horizon-prepare
+        run: cargo +stable build --release --locked -p horizon-client --bin horizon-client --bin horizon-ctl -p horizon-prepare --bin horizon-prepare
       - name: Standard loader and libraries only
         run: |
           python3 tools/check_imports.py target/release/horizon-client
