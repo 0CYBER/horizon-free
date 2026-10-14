@@ -424,6 +424,10 @@ impl FrameStats {
             self.gpu.extend_from_slice(millis);
         }
     }
+    /// Every recorded frame time, in milliseconds, in order.
+    pub fn frame_millis(&self) -> &[f32] {
+        &self.millis
+    }
     pub fn reset(&mut self) {
         self.millis.clear();
         self.cpu.clear();

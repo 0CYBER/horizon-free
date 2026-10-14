@@ -9088,7 +9088,14 @@ impl ApplicationHandler for Game<'_> {
             return;
         }
         if let Some(w) = &self.window {
-            w.request_redraw();
+            if self.options.offscreen {
+                // Offscreen frames don't wait for the window to be drawn: an
+                // occluded window (a locked macOS session) gets no redraws.
+                let id = w.id();
+                self.window_event(event_loop, id, WindowEvent::RedrawRequested);
+            } else {
+                w.request_redraw();
+            }
         }
         event_loop.set_control_flow(ControlFlow::Poll);
     }
