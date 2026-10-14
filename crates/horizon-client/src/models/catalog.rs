@@ -57,6 +57,16 @@ impl StateModels {
     ) -> Result<Self> {
         let facts: BTreeMap<String, Value> =
             serde_json::from_slice(&fs::read(root.join("model-states.json"))?)?;
+        Self::from_facts(root, registry, blocks, sprites, &facts)
+    }
+    /// Bind and bake models using an already parsed model-state document.
+    pub fn from_facts(
+        root: &Path,
+        registry: &BlockRegistry,
+        blocks: &[&str],
+        sprites: &mut Sprites,
+        facts: &BTreeMap<String, Value>,
+    ) -> Result<Self> {
         let mut choices = Vec::new();
         let mut states = BTreeMap::new();
         let mut variants = BTreeSet::new();
