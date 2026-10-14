@@ -1232,14 +1232,7 @@ impl Game<'_> {
                 self.playing()?;
                 let all = a.pos.first() == Some(&"all");
                 let before = self.held().map(|s| self.stack_value(s));
-                if all {
-                    self.keys.insert(KeyCode::ControlLeft);
-                }
-                let result = self.key_pressed(KeyCode::KeyQ);
-                if all {
-                    self.keys.remove(&KeyCode::ControlLeft);
-                }
-                result?;
+                self.drop_held(all);
                 ok(
                     json!({ "ok": true, "dropped_from": before, "held": self.held().map(|s| self.stack_value(s)) }),
                 )
