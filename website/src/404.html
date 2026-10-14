@@ -5,29 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Not found · Horizon</title>
     <meta name="robots" content="noindex">
-    <meta name="theme-color" content="#111113">
-    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#fafafc" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0d0e13" media="(prefers-color-scheme: dark)">
+    <meta name="color-scheme" content="light dark">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="{{CSS}}">
+    <script>try { const t = localStorage.getItem("theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t } catch {}</script>
   </head>
   <body class="lost">
     <main id="main" class="hero">
-      <div class="hero-media" aria-hidden="true">
-        <div class="hero-parallax">
-          <picture>
-            <source media="(orientation: portrait)" srcset="/media/hero-portrait.webp">
-            <img src="/media/hero-1200.webp" width="1200" height="675" alt="">
-          </picture>
-        </div>
-        <div class="hero-veil"></div>
-      </div>
-      <div class="hero-content">
-        <p class="eyebrow hero-eyebrow">404</p>
-        <h1 class="hero-title">Not here</h1>
-        <p class="hero-line">This page doesn't exist. The rest of Horizon is one page away.</p>
+      <div class="container">
+        <p class="kicker"><span>404</span>Not found</p>
+        <h1 class="display hero-title">Not here.</h1>
+        <p class="lede">This page doesn't exist. The rest of Horizon is one page away.</p>
         <div class="hero-actions"><a class="button primary large" href="/">Back to Horizon</a></div>
         <p class="disclaimer">Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft.</p>
       </div>
     </main>
+    <p class="footer-word" aria-hidden="true">horizon</p>
   </body>
 </html>

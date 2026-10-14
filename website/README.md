@@ -2,10 +2,11 @@
 
 Live at **https://playhorizon.dev**.
 
-One static page in the launcher's design language rather than its layout: the palette and
-violet accent of `crates/horizon-theme`, Instrument Serif for display type and Geist for the
-rest, 1px dividers and short, eased motion. A full-viewport hero over Horizon's own sunset,
-then a scroll through what it is, the screenshots, the parity grid, the launcher, the patch
+One static page in Horizon's design language (`docs/design-system.md`), with the tokens of
+`crates/horizon-theme` (generated into `src/tokens.css` by `cargo run -p xtask -- tokens`):
+Geist and Geist Mono, cool neutrals in a light and a dark appearance (the system's, or the
+toggle's) and one violet accent, numbered index lists with one-pixel rules, and short, eased
+motion. A headline and the download, then a scroll through what it is, the screenshots, the parity grid, the launcher, the patch
 notes, the community links and the contributors. Plain HTML, CSS and JavaScript; no framework and
 no runtime dependencies.
 
@@ -16,12 +17,13 @@ build.mjs          renders dist/ (no dependencies)
 serve.mjs          a tiny static server for local checks
 src/index.html     the page, with {{placeholders}} build.mjs fills
 src/404.html       the not-found page
-src/style.css      the design tokens and every style
+src/tokens.css     the design tokens, generated from crates/horizon-theme (do not edit)
+src/style.css      every style, on top of the tokens
 src/main.js        download buttons, patch notes, links, contributors, nav and menu, tabs, lightbox, motion
 src/markdown.js    a small Markdown renderer (escapes everything), shared by build and page
 src/releases.js    the patch notes' markup, shared by build and page
 src/contributors.js the contributors' filtering and markup, shared by build and page
-public/            fonts, screenshots, the hero, icons, og.png, robots.txt, sitemap.xml: copied as is
+public/            fonts, screenshots, icons, og.png, robots.txt, sitemap.xml: copied as is
 scripts/assets.mjs rebuilds public/ from the repo (fonts to WOFF2, images to WebP)
 scripts/shots.mjs  Playwright screenshots at every width, and og.png
 Dockerfile, Caddyfile, railway.json   the Railway service
@@ -80,18 +82,10 @@ or `launcher/links.json` change on main. No variables are needed; an optional
 `GITHUB_TOKEN` (read-only, public repos) lets the build bake the releases even when
 GitHub's anonymous rate limit is hit.
 
-## The hero
-
-`public/media/hero*.webp` is Horizon's sunset over a savanna river valley
-(`docs/media/sunset.jpg`), darkened a little by `scripts/assets.mjs`, with a portrait crop for
-phones. The launcher's prismal background is not used, and the launcher's screenshots are left
-out because they show it: its licence (backgrounds.supply) is unconfirmed. The launcher section
-shows Horizon's own menus and settings instead; see LEGAL.md.
-
 ## Rules the site keeps
 
 - The disclaimer, "Not an official Minecraft product. Not approved by or associated with
-  Mojang or Microsoft.", is in the hero, the phone menu, the footer and the 404 page.
+  Mojang or Microsoft.", is under the headline, in the phone menu, the footer and the 404 page.
 - No Minecraft logo or wordmark; "Minecraft" appears only descriptively ("for Minecraft:
   Java Edition 26.3"). No game files are offered or linked.
 - Parity is worded as the README words it: 100% of what the harnesses compare.
