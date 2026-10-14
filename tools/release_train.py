@@ -165,12 +165,17 @@ def decision(kind, prs, last_published, now, paused=False, force=False):
 
 def clause(title):
     """The start of a pull request title, for a release's name: "Nether portals: vanilla timing" -> "Nether portals"."""
+    title = re.sub(r"^(?:fix|fixes|fixed)\s+(?:the\s+)?", "", title.strip(), flags=re.I)
     return re.split(r"[:;(]| — | - ", title, maxsplit=1)[0].strip().rstrip(".")
 
 
 def summary(new, fixed, limit=72):
     """A short name for the release, from its pull request titles, features first."""
-    titles = [clause(pr["title"]) for pr in new[::-1] + fixed[::-1]]
+    titles = []
+    for pr in new[::-1] + fixed[::-1]:  # several pull requests of one feature ("Controllers: ...") name it once
+        title = clause(pr["title"])
+        if title.lower() not in (t.lower() for t in titles):
+            titles.append(title)
     shown, text = [], ""
     for title in titles:
         title = title if not shown or not title[1:2].islower() else title[0].lower() + title[1:]
@@ -181,7 +186,8 @@ def summary(new, fixed, limit=72):
         text = candidate
     rest = len(titles) - len(shown)
     if rest:
-        text += f" and {rest} more {'changes' if new else 'fixes'}"
+        noun = ("change" if new else "fix") + ("" if rest == 1 else "es" if not new else "s")
+        text += f" and {rest} more {noun}"
     return text
 
 

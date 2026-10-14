@@ -81,6 +81,14 @@ class ReleaseTrainTests(unittest.TestCase):
         self.assertTrue(title.endswith("more fixes"), title)
         self.assertLess(len(title), 100)
 
+    def test_a_feature_split_over_several_pull_requests_is_named_once(self):
+        prs = [pr(1, "Controllers: rumble", labels=["feature"]), pr(2, "Controllers: menus", labels=["feature"]),
+               pr(3, "Maces: smash attacks"), pr(4, "Fix stuck keys when opening Options")]
+        title, _ = train.notes("game", "v2026.10.15", prs, [])
+        self.assertEqual(title, "Horizon 2026.10.15: Controllers, stuck keys when opening Options, maces")
+        self.assertEqual(train.summary([], [pr(n, f"Change number {n} with a fairly long title") for n in range(4)]),
+                         "Change number 3 with a fairly long title and 3 more fixes")
+
     def test_launcher_notes(self):
         title, body = train.notes("launcher", "launcher-v0.2.0", [pr(3, "Launcher: say the self-update succeeded")], [])
         self.assertEqual(title, "Horizon launcher 0.2.0")
