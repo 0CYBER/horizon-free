@@ -993,12 +993,13 @@ impl OptionsUi {
                 for (name, category) in mappings {
                     if category != last_category {
                         last_category = category;
-                        let label = Text::translate(&format!("key.categories.{category}"), &[])
-                            .with_style(&Style {
-                                bold: Some(true),
-                                underlined: Some(true),
-                                ..Style::default()
-                            });
+                        let label =
+                            Text::translate(&format!("key.category.minecraft.{category}"), &[])
+                                .with_style(&Style {
+                                    bold: Some(true),
+                                    underlined: Some(true),
+                                    ..Style::default()
+                                });
                         out.push(Widget {
                             x: 0.0,
                             y: y + 7.0,
