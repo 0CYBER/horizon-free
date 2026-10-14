@@ -60,9 +60,9 @@ pub fn panels(
                 let seconds = (effect.duration as f32 / tick_rate) as i32;
                 let (hours, minutes, seconds) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
                 if hours > 0 {
-                    format!("{hours}:{minutes:02}:{seconds:02}")
+                    format!("{hours:02}:{minutes:02}:{seconds:02}")
                 } else {
-                    format!("{minutes}:{seconds:02}")
+                    format!("{minutes:02}:{seconds:02}")
                 }
             };
             let width = max_width.min(39 + text_width(&name).max(text_width(&duration)));
@@ -207,7 +207,7 @@ mod tests {
         // Natural order puts shorter durations before infinite effects.
         assert_eq!(
             (&p[0].name, &p[0].duration),
-            (&"Speed II".into(), &"0:22".into())
+            (&"Speed II".into(), &"00:22".into())
         );
         assert_eq!(
             (&p[1].name, &p[1].duration),
@@ -248,7 +248,7 @@ mod tests {
         let p = panels(640, [222, 43], 195, &effects, 10.0, &|_| None, &|_| 60);
         assert_eq!((p[0].x, p[0].y), (419, 43));
         assert_eq!(p[0].name, "speed");
-        assert_eq!(p[0].duration, "2:00:00");
+        assert_eq!(p[0].duration, "02:00:00");
         let p = panels(480, [149, 37], 176, &effects, 20.0, &|_| None, &|_| 150);
         assert_eq!((p[0].x, p[0].width), (327, 146));
     }
