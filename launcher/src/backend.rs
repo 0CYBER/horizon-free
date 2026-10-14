@@ -945,13 +945,74 @@ pub fn self_update_allowed() -> bool {
     !cfg!(debug_assertions) && std::env::var_os("HORIZON_LAUNCHER_NO_SELF_UPDATE").is_none()
 }
 
+/// The version in `horizon-launcher --version`'s output (`horizon-launcher 0.1.5`).
+fn parse_version_output(out: &str) -> Option<&str> {
+    out.trim()
+        .strip_prefix("horizon-launcher ")
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+}
+
+/// The version of the launcher binary now at `path`, which is not this process's once another
+/// update (the command line, another window) has replaced the file.
+fn installed_launcher_version(path: &Path) -> Option<String> {
+    let mut cmd = Command::new(path);
+    cmd.arg("--version")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let out = cmd.output().ok()?;
+    parse_version_output(&String::from_utf8_lossy(&out.stdout)).map(String::from)
+}
+
+/// Puts `new` at `exe`, the path this launcher started from. The running process keeps its
+/// file (unlinked) and works on. Unix only: `self_replace` asks the system where the running
+/// binary is, and Linux answers "<path> (deleted)" once the file has been replaced, so a second
+/// update in the same run failed with "No such file or directory". Windows keeps a running
+/// binary locked, so there `self_replace` moves it aside first.
+#[cfg(unix)]
+fn replace_binary(new: &Path, exe: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = exe.parent().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "the launcher has no folder")
+    })?;
+    let name = exe.file_name().unwrap_or_default().to_string_lossy();
+    let temp = dir.join(format!(".{name}.update-{}", std::process::id()));
+    let mode = fs::metadata(exe).map_or(0o755, |m| m.permissions().mode() | 0o111);
+    let result = fs::copy(new, &temp)
+        .and_then(|_| fs::set_permissions(&temp, fs::Permissions::from_mode(mode)))
+        .and_then(|_| fs::rename(&temp, exe));
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
+}
+
+#[cfg(not(unix))]
+fn replace_binary(new: &Path, _exe: &Path) -> std::io::Result<()> {
+    self_replace::self_replace(new)
+}
+
 /// Downloads a launcher release and puts its binary in place of this one. The running process
-/// keeps working; `restart` starts the new one.
+/// keeps working; `restart` starts the new one. When the file there already is that release or
+/// a newer one (updated from the command line or another window), there is nothing to do.
 pub fn self_update(release: &Release, progress: impl Fn(f32)) -> Result<(), String> {
     let (url, size) = release
         .asset
         .clone()
         .ok_or("This launcher release has no build for this platform.")?;
+    let target = launcher_version(&release.tag).unwrap_or("0");
+    if installed_launcher_version(exe_path())
+        .is_some_and(|v| v != VERSION && compare_versions(&v, target).is_ge())
+    {
+        progress(1.0);
+        return Ok(());
+    }
     let work = data_dir().join(".launcher-update");
     let _ = fs::remove_dir_all(&work);
     fs::create_dir_all(&work).map_err(|e| e.to_string())?;
@@ -961,13 +1022,12 @@ pub fn self_update(release: &Release, progress: impl Fn(f32)) -> Result<(), Stri
     unpack(&archive, &url, &unpacked)?;
     let binary =
         find_file(&unpacked, LAUNCHER_BINARY).ok_or("The download has no launcher binary.")?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&binary, fs::Permissions::from_mode(0o755));
-    }
-    self_replace::self_replace(&binary)
-        .map_err(|e| format!("Could not replace the launcher: {e}"))?;
+    replace_binary(&binary, exe_path()).map_err(|e| {
+        format!(
+            "Could not replace the launcher at {}: {e}",
+            exe_path().display()
+        )
+    })?;
     let _ = fs::remove_dir_all(&work);
     progress(1.0);
     Ok(())
@@ -987,12 +1047,26 @@ fn find_file(dir: &Path, name: &str) -> Option<PathBuf> {
     None
 }
 
-/// Starts the launcher again (the updated binary) with the same arguments, and exits.
-pub fn restart() -> ! {
-    let _ = Command::new(exe_path())
-        .args(std::env::args_os().skip(1))
-        .spawn();
-    std::process::exit(0)
+/// Starts the launcher again (the updated binary) with the same arguments in place of this one:
+/// on Unix the process becomes the new binary (exec), on Windows the new one starts and this one
+/// exits. Returns only when the new binary could not start.
+pub fn restart() -> String {
+    let mut cmd = Command::new(exe_path());
+    cmd.args(std::env::args_os().skip(1));
+    #[cfg(unix)]
+    let error = {
+        use std::os::unix::process::CommandExt;
+        cmd.exec()
+    };
+    #[cfg(not(unix))]
+    let error = match cmd.spawn() {
+        Ok(_) => std::process::exit(0),
+        Err(e) => e,
+    };
+    format!(
+        "Could not start {}: {error}. Close the launcher and open it again.",
+        exe_path().display()
+    )
 }
 
 /// Plain text from markdown, for terminals: headings on their own lines, bullets as "- ",
@@ -1431,6 +1505,67 @@ mod tests {
         assert!(!is_prepared("v2026.10.15") && !is_prepared("v2026.10.16"));
         assert!(reuse_prepared_in(&versions).is_empty());
         let _ = fs::remove_dir_all(&versions);
+    }
+
+    #[test]
+    fn launcher_versions_read_from_the_binary() {
+        assert_eq!(
+            parse_version_output("horizon-launcher 0.1.5\n"),
+            Some("0.1.5")
+        );
+        assert_eq!(parse_version_output("something else"), None);
+        assert_eq!(parse_version_output(""), None);
+        // This test binary is not a launcher: no version, so an update goes ahead.
+        assert_eq!(
+            installed_launcher_version(&std::env::current_exe().unwrap()),
+            None
+        );
+        assert_eq!(
+            installed_launcher_version(Path::new("/nonexistent/horizon-launcher")),
+            None
+        );
+    }
+
+    /// The launcher's file was replaced while it ran (an update from the command line, or an
+    /// earlier one): the next replacement still lands at the path it started from.
+    #[cfg(unix)]
+    #[test]
+    fn a_replaced_binary_is_replaced_again_at_its_path() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir =
+            std::env::temp_dir().join(format!("horizon-launcher-replace-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("horizon-launcher");
+        fs::write(&exe, "old").unwrap();
+        // Another update swaps the file under the running launcher.
+        fs::write(dir.join("other"), "other update").unwrap();
+        fs::rename(dir.join("other"), &exe).unwrap();
+        fs::write(dir.join("new"), "new").unwrap();
+        replace_binary(&dir.join("new"), &exe).unwrap();
+        assert_eq!(fs::read_to_string(&exe).unwrap(), "new");
+        // The file there keeps its mode, made executable (the swapped-in one was 0644).
+        assert_eq!(
+            fs::metadata(&exe).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        // Gone altogether: it is put back, executable.
+        fs::remove_file(&exe).unwrap();
+        replace_binary(&dir.join("new"), &exe).unwrap();
+        assert_eq!(fs::read_to_string(&exe).unwrap(), "new");
+        assert_eq!(
+            fs::metadata(&exe).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        // No temporary file is left beside it.
+        let mut names: Vec<String> = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["horizon-launcher", "new"]);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
