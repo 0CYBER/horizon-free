@@ -1549,7 +1549,10 @@ mod tests {
         ]);
         let releases = parse_releases(&list, Some(asset), is_game_tag);
         assert!(releases.iter().all(|r| r.tag != "v2026.10.15.1"));
-        assert_eq!(latest(&releases).map(|r| r.tag.as_str()), Some("v2026.10.15"));
+        assert_eq!(
+            latest(&releases).map(|r| r.tag.as_str()),
+            Some("v2026.10.15")
+        );
         let offered = |installed: &[&str]| {
             let installed: Vec<String> = installed.iter().map(|t| t.to_string()).collect();
             horizon_update(&releases, &installed).map(|r| r.tag)
