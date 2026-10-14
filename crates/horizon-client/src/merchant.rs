@@ -643,13 +643,7 @@ pub trait MapMaker {
     ) -> ItemStack;
 }
 /// An `exploration_map` function's settings.
-pub struct ExplorationMap {
-    pub destination: String,
-    pub decoration: String,
-    pub zoom: u8,
-    pub search_radius: i32,
-    pub skip_existing_chunks: bool,
-}
+pub use horizon_world::loot::ExplorationMap;
 fn int_provider<R: RandomSource>(v: &Value, random: &mut R) -> i32 {
     match v {
         Value::Number(n) => n.as_i64().unwrap_or(0) as i32,
@@ -953,20 +947,7 @@ impl Trades {
                 let Some(maps) = ctx.maps else {
                     return Some((stack, 0));
                 };
-                let map = ExplorationMap {
-                    destination: m["destination"]
-                        .as_str()
-                        .unwrap_or("#minecraft:on_treasure_maps")
-                        .trim_start_matches('#')
-                        .to_owned(),
-                    decoration: m["decoration"]
-                        .as_str()
-                        .unwrap_or("minecraft:mansion")
-                        .to_owned(),
-                    zoom: m["zoom"].as_u64().unwrap_or(2) as u8,
-                    search_radius: m["search_radius"].as_i64().unwrap_or(50) as i32,
-                    skip_existing_chunks: m["skip_existing_chunks"].as_bool().unwrap_or(true),
-                };
+                let map = ExplorationMap::from_json(m);
                 Some((maps.exploration_map(stack, &map, ctx.origin), 0))
             }
             _ => Some((stack, 0)),

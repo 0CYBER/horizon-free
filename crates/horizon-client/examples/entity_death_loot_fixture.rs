@@ -21,6 +21,7 @@ fn stack(spec: &str) -> LootStack {
         enchantments: Vec::new(),
         potion: None,
         map: false,
+        exploration: None,
         ominous_amplifier: None,
     };
     for e in parts {

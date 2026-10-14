@@ -2861,6 +2861,7 @@ fn to_loot(stack: &ItemStack) -> horizon_world::loot::LootStack {
             .collect(),
         potion: None,
         map: false,
+        exploration: None,
         ominous_amplifier: None,
     }
 }

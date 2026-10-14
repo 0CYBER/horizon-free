@@ -1895,6 +1895,12 @@ impl Game<'_> {
             // ShulkerBoxBlock.canOpen: the lid has no room; nothing opens.
         } else if let Some(entity) = BlockEntity::for_block(&name) {
             self.world.block_entities.entry(key).or_insert(entity);
+            let centre = [
+                f64::from(key.0) + 0.5,
+                f64::from(key.1) + 0.5,
+                f64::from(key.2) + 0.5,
+            ];
+            self.resolve_container_maps(key, centre);
             self.container = Some(key);
             self.container_opener_event(key, true);
             self.post_block_game_event(
