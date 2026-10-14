@@ -149,6 +149,8 @@ public final class VanillaHudOracle {
         @Override public ItemStack getOffhandItem() { return offhand; }
         @Override public HumanoidArm getMainArm() { return b("rightHanded") ? HumanoidArm.RIGHT : HumanoidArm.LEFT; }
         @Override public float getAttackStrengthScale(float a) { return f("attackScale", 1); }
+        @Override public float getCurrentItemAttackStrengthDelay() { return f("attackDelay", 5); }
+        @Override public ItemStack getActiveItem() { return ItemStack.EMPTY; }
         @Override public Level level() { return level; }
         @Override public boolean isSpectator() { return false; }
         @Override public net.minecraft.world.entity.PlayerRideableJumping jumpableVehicle() {
@@ -179,6 +181,12 @@ public final class VanillaHudOracle {
         @Override public boolean showVehicleHealth() { return true; }
     }
 
+    /** Minecraft.crosshairPickEntity: a living entity, alive as the case says. */
+    public static final class Target extends net.minecraft.world.entity.animal.equine.Horse {
+        private Target() { super(null, null); }
+        @Override public boolean isAlive() { return b("target"); }
+    }
+
     /** Records GuiGraphicsExtractor calls. */
     public static final class Capture extends GuiGraphicsExtractor {
         JsonArray draws;
@@ -198,7 +206,7 @@ public final class VanillaHudOracle {
             draws.add(o);
             return o;
         }
-        void sprite(Identifier id, int x, int y, int w, int h, int[] region, int color) {
+        void sprite(RenderPipeline p, Identifier id, int x, int y, int w, int h, int[] region, int color) {
             var o = new JsonObject();
             o.addProperty("type", "sprite");
             o.addProperty("sprite", id.getPath());
@@ -209,11 +217,12 @@ public final class VanillaHudOracle {
                 o.add("region", r);
             }
             o.addProperty("color", color);
+            o.addProperty("pipeline", p.getLocation().getPath());
             posed(o, stack);
         }
-        @Override public void blitSprite(RenderPipeline p, Identifier id, int x, int y, int w, int h, int color) { sprite(id, x, y, w, h, null, color); }
+        @Override public void blitSprite(RenderPipeline p, Identifier id, int x, int y, int w, int h, int color) { sprite(p, id, x, y, w, h, null, color); }
         @Override public void blitSprite(RenderPipeline p, Identifier id, int sw, int sh, int u, int v, int x, int y, int w, int h, int color) {
-            sprite(id, x, y, w, h, new int[] {sw, sh, u, v}, color);
+            sprite(p, id, x, y, w, h, new int[] {sw, sh, u, v}, color);
         }
         @Override public void blitSprite(RenderPipeline p, net.minecraft.client.renderer.texture.TextureAtlasSprite s, int x, int y, int w, int h, int color) {
             var o = new JsonObject();
@@ -430,6 +439,8 @@ public final class VanillaHudOracle {
                             var debug = alloc(net.minecraft.client.gui.components.debug.DebugScreenEntryList.class);
                             put(debug, net.minecraft.client.gui.components.debug.DebugScreenEntryList.class, "currentlyEnabled", new ArrayList<Identifier>());
                             put(mc, Minecraft.class, "debugEntries", debug);
+                            boolean target = c.has("target") && !c.get("target").isJsonNull();
+                            put(mc, Minecraft.class, "crosshairPickEntity", target ? alloc(Target.class) : null);
                             crosshair.invoke(hud, capture, delta);
                         }
                         if (mode != GameType.SPECTATOR) hotbar.invoke(hud, capture, delta);

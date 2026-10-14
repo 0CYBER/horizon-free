@@ -85,7 +85,8 @@ impl Game<'_> {
             render_distance_chunks: self.streaming.radius,
             cloud_range_chunks: self.settings.cloud_range,
             camera_y: camera.y,
-            min_y: MIN_Y,
+            // level.getMinY(): the Nether and the End start at y 0.
+            min_y: if self.dim == Dim::Overworld { MIN_Y } else { 0 },
             flat: false,
             forward: forward.map(|c| c as f32),
             rain,
@@ -93,6 +94,7 @@ impl Game<'_> {
             skybox: self.dim == Dim::Overworld,
             blindness: None,
             darkness: self.darkness_fog(),
+            boss_world_fog: self.dragon_bar_shown(),
         })
     }
     /// `SkyRenderer.shouldRenderDarkDisc`: eye below the horizon (y 63) and not under water.

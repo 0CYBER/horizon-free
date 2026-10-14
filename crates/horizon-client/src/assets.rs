@@ -64,6 +64,8 @@ pub struct Assets {
     pub animations: Vec<crate::sprites::SpriteAnimation>,
     pub sprite_layers: std::collections::BTreeMap<String, u32>,
     pub translucent_layers: Vec<bool>,
+    /// Each layer's `MipmapGenerator` settings.
+    pub sprite_mips: Vec<crate::mipmap::Settings>,
     /// Block names in `#minecraft:blocks_fluid_flow` (fluid flow vectors).
     pub blocks_fluid_flow: BTreeSet<String>,
 }
@@ -248,6 +250,7 @@ impl Assets {
             animations: sprites.animations,
             sprite_layers: sprites.layers,
             translucent_layers: sprites.translucent,
+            sprite_mips: sprites.mips,
             blocks_fluid_flow,
         })
     }

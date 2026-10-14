@@ -320,10 +320,10 @@ impl Game<'_> {
                 let color = self.waypoint_icon(*t).color.unwrap_or(-1) as u32 & 0xFF_FFFF;
                 let style = Style {
                     color: Some(color),
-                    suggest: Some(format!(
+                    click: Some(text::ClickEvent::SuggestCommand(format!(
                         "/execute in {dimension} run tp @s {} {} {}",
                         pos[0], pos[1], pos[2]
-                    )),
+                    ))),
                     hover: Some(Box::new(Text::translate("chat.coordinates.tooltip", &[]))),
                     ..Style::default()
                 };
@@ -701,7 +701,7 @@ impl Game<'_> {
             let mut t = Text::translate("chat.square_brackets", &[inner]);
             if let Some(cmd) = run {
                 t = t.with_style(&Style {
-                    suggest: None,
+                    click: None,
                     ..Style::default()
                 });
                 let _ = cmd;

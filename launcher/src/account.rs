@@ -44,8 +44,14 @@ pub struct Endpoints {
 
 impl Endpoints {
     pub fn live() -> Self {
+        // Development builds only: `HORIZON_MSA_MICROSOFT_ENDPOINT` points the device-code and
+        // token requests at a local mock, to see and screenshot the sign-in panel.
+        let microsoft = std::env::var("HORIZON_MSA_MICROSOFT_ENDPOINT")
+            .ok()
+            .filter(|_| cfg!(debug_assertions))
+            .unwrap_or_else(|| "https://login.microsoftonline.com/consumers/oauth2/v2.0".into());
         Self {
-            microsoft: "https://login.microsoftonline.com/consumers/oauth2/v2.0".into(),
+            microsoft,
             xbox_user: "https://user.auth.xboxlive.com/user/authenticate".into(),
             xsts: "https://xsts.auth.xboxlive.com/xsts/authorize".into(),
             minecraft: "https://api.minecraftservices.com".into(),
@@ -56,7 +62,7 @@ impl Endpoints {
 fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(20))
-        .user_agent(concat!("horizon-launcher/", env!("CARGO_PKG_VERSION")))
+        .user_agent(&format!("horizon-launcher/{}", crate::backend::VERSION))
         .build()
 }
 

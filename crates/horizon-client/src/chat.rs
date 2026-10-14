@@ -9,8 +9,12 @@ use crate::{
     hud::{HudAtlas, HudBatch},
     hud_layout::{self, GuiDraw, PoseOp},
     screen_draw::{self as d, Draw, Measure, TextField},
-    text::{self, Style, Text},
+    text::{self, ClickEvent, Style, Text},
 };
+
+#[cfg(test)]
+#[path = "chat_tests.rs"]
+mod tests;
 
 /// GuiMessageTag.systemSinglePlayer's indicator colour.
 pub const SYSTEM_INDICATOR: u32 = 0xD0D0D0;
@@ -293,6 +297,35 @@ impl Chat {
         let draws = self.layout(batch.height as i32, ticks, focused);
         hud_layout::paint(batch, atlas, &draws);
     }
+    /// The click action under a GUI-space cursor while chat is focused.
+    pub fn click_at(
+        &self,
+        font: &crate::font::Font,
+        height: i32,
+        x: f64,
+        y: f64,
+    ) -> Option<ClickEvent> {
+        let scale = self.options.scale as f32;
+        let mut x = x / f64::from(scale) - 4.0;
+        let bottom = hud_layout::floor((height - 40) as f32 / scale);
+        let from_bottom = f64::from(bottom) - y / f64::from(scale);
+        if x < 0.0 || x >= f64::from(self.max_width()) || from_bottom <= 0.0 {
+            return None;
+        }
+        let row = (from_bottom / f64::from(self.options.line_height())).ceil() as usize - 1;
+        if row >= self.lines_per_page(true) {
+            return None;
+        }
+        let line = self.lines.get(self.scroll + row)?;
+        let content = line.content.resolve_legacy();
+        for (c, style) in content.chars() {
+            x -= f64::from(font.advance(c, style));
+            if x < 0.0 {
+                return style.click.clone();
+            }
+        }
+        None
+    }
     /// Plain text of the newest messages (for tests and the control socket).
     pub fn recent_lines(&self, n: usize) -> Vec<String> {
         self.messages
@@ -419,6 +452,11 @@ impl ChatScreen {
     }
     pub fn value(&self) -> &str {
         &self.input.value
+    }
+    /// Replace the input for a suggest-command link and refresh completions.
+    pub fn suggest_command(&mut self, m: &Measure, c: &Commands, command: &str) {
+        self.input.set_value(m, command);
+        self.edited(m, c);
     }
     /// `ChatScreen.resize`: a new screen with the current text.
     pub fn resize(&mut self, m: &Measure, c: &Commands, width: i32, height: i32) {

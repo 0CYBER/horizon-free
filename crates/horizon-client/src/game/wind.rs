@@ -346,11 +346,6 @@ impl Game<'_> {
             push(p.position, &mut p.velocity, self);
         }
         self.creatures.projectiles = projectiles;
-        let mut arrows = std::mem::take(&mut self.arrows);
-        for a in arrows.iter_mut().filter(|a| !a.stuck) {
-            push(a.position, &mut a.velocity, self);
-        }
-        self.arrows = arrows;
         let mut tnts = std::mem::take(&mut self.tnts);
         for t in &mut tnts {
             push(t.position, &mut t.velocity, self);

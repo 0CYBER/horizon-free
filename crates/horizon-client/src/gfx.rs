@@ -273,6 +273,8 @@ pub struct Renderer {
     lightmap_view: wgpu::TextureView,
     lightmap_sampler: wgpu::Sampler,
     animations: Vec<(SpriteAnimation, usize)>,
+    /// Each sprite layer's MipmapGenerator settings, for animation frames.
+    sprite_mips: Vec<crate::mipmap::Settings>,
     /// Edge length of the block sprite array's layers.
     sprite_size: u32,
     sprite_minimum_size: u32,
@@ -321,41 +323,41 @@ pub struct Renderer {
     pub animated_textures: bool,
     present_modes: Vec<wgpu::PresentMode>,
 }
-fn mip_chain(pixels: &[u8], size: u32, layers: u32) -> (Vec<u8>, u32) {
+/// Every layer's mip levels, layer major (`first` is the first layer's
+/// index into `settings`), made by `MipmapGenerator`.
+fn mip_chain(
+    pixels: &[u8],
+    size: u32,
+    settings: &[crate::mipmap::Settings],
+    first: u32,
+    layers: u32,
+) -> (Vec<u8>, u32) {
     let levels = size.trailing_zeros() + 1;
+    let layer_bytes = (size * size * 4) as usize;
     let mut out = Vec::new();
     for layer in 0..layers as usize {
-        let base =
-            &pixels[layer * (size * size * 4) as usize..(layer + 1) * (size * size * 4) as usize];
-        let mut level = base.to_vec();
-        let mut s = size as usize;
-        out.extend_from_slice(&level);
-        for _ in 1..levels {
-            let n = s / 2;
-            let mut next = vec![0u8; n * n * 4];
-            for y in 0..n {
-                for x in 0..n {
-                    let mut acc = [0u32; 4];
-                    let mut weight = 0u32;
-                    for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                        let p = &level[((y * 2 + dy) * s + x * 2 + dx) * 4..][..4];
-                        let a = u32::from(p[3]);
-                        for c in 0..3 {
-                            acc[c] += u32::from(p[c]) * a;
-                        }
-                        acc[3] += a;
-                        weight += a;
-                    }
-                    let o = &mut next[(y * n + x) * 4..][..4];
-                    for c in 0..3 {
-                        o[c] = acc[c].checked_div(weight).unwrap_or(0) as u8;
-                    }
-                    o[3] = (acc[3] / 4) as u8;
-                }
-            }
-            out.extend_from_slice(&next);
-            level = next;
-            s = n;
+        let base = crate::mipmap::Image {
+            width: size,
+            height: size,
+            pixels: pixels[layer * layer_bytes..(layer + 1) * layer_bytes]
+                .as_chunks::<4>()
+                .0
+                .to_vec(),
+        };
+        let s = settings
+            .get(first as usize + layer)
+            .copied()
+            .unwrap_or_default();
+        let has_transparent = s.has_transparent || base.pixels.iter().any(|p| p[3] == 0);
+        for image in crate::mipmap::generate(
+            base,
+            levels - 1,
+            s.strategy,
+            s.alpha_cutoff_bias,
+            has_transparent,
+            s.item,
+        ) {
+            out.extend(image.pixels.iter().flatten());
         }
     }
     (out, levels)
@@ -397,6 +399,7 @@ impl Renderer {
         sprite_size: u32,
         sprite_minimum_size: u32,
         layers: u32,
+        sprite_mips: &[crate::mipmap::Settings],
         animations: &[SpriteAnimation],
         hud_atlas: (&[u8], u32, u32),
         forcefield: (&[u8], u32),
@@ -718,7 +721,7 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let (mips, mip_levels) = mip_chain(sprite_pixels, sprite_size, layers);
+        let (mips, mip_levels) = mip_chain(sprite_pixels, sprite_size, sprite_mips, 0, layers);
         let sprite_texture = device.create_texture_with_data(
             &queue,
             &wgpu::TextureDescriptor {
@@ -1103,7 +1106,8 @@ impl Renderer {
         // WorldBorderRenderer: misc/forcefield.png as a MipmappedTexture
         // (repeat, linear minification with mipmaps, nearest magnification).
         let (forcefield_pixels, forcefield_size) = forcefield;
-        let (forcefield_mips, forcefield_levels) = mip_chain(forcefield_pixels, forcefield_size, 1);
+        let (forcefield_mips, forcefield_levels) =
+            mip_chain(forcefield_pixels, forcefield_size, &[], 0, 1);
         let forcefield_texture = device.create_texture_with_data(
             &queue,
             &wgpu::TextureDescriptor {
@@ -1410,6 +1414,7 @@ impl Renderer {
             lightmap_view,
             lightmap_sampler,
             animations: animations.iter().map(|a| (a.clone(), usize::MAX)).collect(),
+            sprite_mips: sprite_mips.to_vec(),
             sprite_size,
             sprite_minimum_size,
             indices,
@@ -1793,6 +1798,7 @@ impl Renderer {
             tick,
             self.sprite_size,
             self.mip_levels,
+            &self.sprite_mips,
             |layer, level, size, pixels| {
                 self.queue.write_texture(
                     wgpu::TexelCopyTextureInfo {
@@ -2694,6 +2700,7 @@ fn animate_sprites(
     tick: u64,
     size: u32,
     max_levels: u32,
+    settings: &[crate::mipmap::Settings],
     mut write: impl FnMut(u32, u32, u32, &[u8]),
 ) {
     for (animation, previous) in animations {
@@ -2702,7 +2709,7 @@ fn animate_sprites(
             continue;
         }
         *previous = frame;
-        let (mips, levels) = mip_chain(animation.pixels(frame), size, 1);
+        let (mips, levels) = mip_chain(animation.pixels(frame), size, settings, animation.layer, 1);
         let mut offset = 0;
         for level in 0..levels.min(max_levels) {
             let edge = size >> level;
@@ -2727,7 +2734,8 @@ mod sprite_upload_tests {
         for size in [16, 32] {
             let animation = crate::sprites::test_animation(size, 7);
             let pixels = animation.pixels(animation.frame(1)).to_vec();
-            let (expected, levels) = mip_chain(&pixels, size, 1);
+            let settings = [];
+            let (expected, levels) = mip_chain(&pixels, size, &settings, 7, 1);
             let mut animations = vec![(animation, 0)];
             let mut writes = Vec::new();
             let mut record = |layer, level, edge, data: &[u8]| {
@@ -2736,9 +2744,9 @@ mod sprite_upload_tests {
                 assert_eq!(data.len(), (edge * edge * 4) as usize);
                 writes.push(data.to_vec());
             };
-            animate_sprites(&mut animations, 0, size, levels, &mut record);
-            animate_sprites(&mut animations, 1, size, levels, &mut record);
-            animate_sprites(&mut animations, 1, size, levels, &mut record);
+            animate_sprites(&mut animations, 0, size, levels, &settings, &mut record);
+            animate_sprites(&mut animations, 1, size, levels, &settings, &mut record);
+            animate_sprites(&mut animations, 1, size, levels, &settings, &mut record);
             assert_eq!(writes.len(), levels as usize);
             assert_eq!(writes[0], pixels);
             assert_eq!(writes.concat(), expected);

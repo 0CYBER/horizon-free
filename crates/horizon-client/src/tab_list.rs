@@ -90,6 +90,7 @@ fn sprite(name: &'static str, x: i32, y: i32, w: i32, h: i32) -> GuiDraw {
         h,
         region: None,
         color: WHITE,
+        blend: crate::hud_layout::Blend::Textured,
     }
 }
 

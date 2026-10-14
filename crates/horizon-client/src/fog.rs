@@ -211,6 +211,9 @@ pub struct FogInputs<'a> {
     pub blindness: Option<(i32, bool)>,
     /// The darkness effect's blend factor, while the effect is on.
     pub darkness: Option<f32>,
+    /// `BossHealthOverlay.shouldCreateWorldFog`: a boss bar with
+    /// `createWorldFog` is shown (the Ender Dragon's).
+    pub boss_world_fog: bool,
 }
 
 /// `FogRenderer.setupFog` + `computeFogColor`.
@@ -338,6 +341,12 @@ pub fn setup_fog(tables: &FogTables, state: &FogState, input: &FogInputs) -> Fog
             fog.environmental_end = min_end.max(sky.fog_end + -256.0 * state.rain_fog_multiplier);
             fog.sky_end = rd.min(512.0);
             fog.cloud_end = ((input.cloud_range_chunks * 16) as f32).min(sky.cloud_fog_end);
+            if input.boss_world_fog {
+                fog.environmental_start = fog.environmental_start.min(10.0);
+                fog.environmental_end = fog.environmental_end.min(96.0);
+                fog.sky_end = fog.environmental_end;
+                fog.cloud_end = fog.environmental_end;
+            }
         }
     }
     let span = (rd / 10.0).clamp(4.0, 64.0);
@@ -385,7 +394,55 @@ mod tests {
             skybox: true,
             blindness: None,
             darkness: None,
+            boss_world_fog: false,
         }
+    }
+    #[test]
+    fn boss_world_fog_closes_in() {
+        // AtmosphericFogEnvironment.setupFog under a createWorldFog boss bar.
+        let sky = Sky {
+            fog_end: 1024.0,
+            cloud_fog_end: 2048.0,
+            ..Sky::default()
+        };
+        let tables = FogTables {
+            water_fog_end: vec![1.0],
+        };
+        let mut input = inputs(&sky);
+        input.boss_world_fog = true;
+        let fog = setup_fog(&tables, &FogState::default(), &input);
+        assert_eq!(
+            (fog.environmental_start, fog.environmental_end),
+            (0.0, 96.0)
+        );
+        assert_eq!((fog.sky_end, fog.cloud_end), (96.0, 96.0));
+        // Under water the water environment applies instead.
+        input.fog_type = FogType::Water;
+        let water = setup_fog(&tables, &FogState::default(), &input);
+        assert_eq!(water.environmental_start, -8.0);
+    }
+    #[test]
+    fn void_darkness_starts_32_above_the_floor() {
+        let sky = Sky {
+            fog_end: 1024.0,
+            fog_color: [0.5; 3],
+            sky_color: [0.5; 3],
+            ..Sky::default()
+        };
+        let tables = FogTables {
+            water_fog_end: vec![1.0],
+        };
+        let mut input = inputs(&sky);
+        // The End's floor is y 0: y 16 is halfway into the darkness.
+        input.min_y = 0;
+        input.camera_y = 16.0;
+        let fog = setup_fog(&tables, &FogState::default(), &input);
+        assert_eq!(fog.color[0], 0.5 * 0.25);
+        input.camera_y = 32.0;
+        assert_eq!(
+            setup_fog(&tables, &FogState::default(), &input).color[0],
+            0.5
+        );
     }
     #[test]
     fn render_distance_fog_span() {

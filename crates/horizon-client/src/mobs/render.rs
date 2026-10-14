@@ -169,6 +169,10 @@ pub fn body(m: &Mob) -> (String, String) {
             "frog#main".into(),
             format!("entity/frog/frog_{}", climate(m)),
         ),
+        S::Rabbit => (
+            baby_or(m, "rabbit#main", "rabbit_baby#main"),
+            b(&m.kind.texture),
+        ),
         S::Pig => {
             let model = if baby {
                 "pig_baby#main".into()

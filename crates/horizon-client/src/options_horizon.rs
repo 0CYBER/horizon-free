@@ -10,15 +10,13 @@
 //! of control belong in `ui_theme` so the launcher-matching look stays in one
 //! place. Everything else (sliders dragging, scrolling, Done) is handled here.
 use crate::{
+    extras,
     graphics_style::Cost,
     graphics_ui::{self, Item, Level},
     hud::{HudAtlas, HudBatch},
     options_ui::{Event, Kind, Opt, OptionsUi, Page, apply_preset},
     settings::{SOUND_SOURCES, Settings},
-    ui_theme::{
-        self as t, CONTROL, Face, Kind as Button, MenuStyle, ROW_LABEL, SIDEBAR, SMALL, Ui, color,
-        id,
-    },
+    ui_theme::{self as t, CONTROL, Kind as Button, MenuStyle, ROW_LABEL, SIDEBAR, Ui, color, id},
 };
 
 /// One row of a section.
@@ -34,6 +32,8 @@ pub enum HRow {
     Level,
     /// A graphics setting with its frame-time cost and description.
     Graphics(Item, Cost, &'static str),
+    /// One of Horizon's extras (`extras`), off by default.
+    Extra(extras::Item),
 }
 /// A sidebar section: name, description, rows.
 pub struct Section {
@@ -172,6 +172,16 @@ pub const SECTIONS: &[Section] = &[
             ]
         },
     },
+    Section {
+        name: "Extras",
+        blurb: "Optional additions, all off by default: the game stays vanilla until you turn one on.",
+        rows: |_| {
+            extras::rows()
+                .into_iter()
+                .map(|r| r.map_or_else(HRow::Header, HRow::Extra))
+                .collect()
+        },
+    },
 ];
 
 const NAV: u64 = id("options.nav", 0);
@@ -245,28 +255,18 @@ impl OptionsUi {
     ) -> Vec<(Item, f32, f32)> {
         let (w, h) = (ui.w, ui.h);
         if self.in_world {
-            ui.atmosphere(0.45, 1.0);
+            ui.atmosphere(horizon_theme::VEIL, 1.0);
         } else {
             if backdrop < 1.0 {
                 ui.cold_background(1.0 - backdrop);
             }
-            ui.atmosphere(0.66, 1.0);
+            ui.atmosphere(horizon_theme::VEIL, 1.0);
         }
         let section = self.section.min(SECTIONS.len() - 1);
         // The sidebar.
-        ui.fill(0.0, 0.0, SIDEBAR, h, color::with_alpha(color::SIDEBAR, 0.8));
-        ui.vline(SIDEBAR - 1.0, 0.0, h, color::BORDER);
-        ui.text_line(
-            Face::Display,
-            22.0,
-            30.0,
-            22.0,
-            16.0,
-            color::TEXT,
-            "Options",
-        );
+        ui.sidebar_frame("Options");
         let names: Vec<&str> = SECTIONS.iter().map(|s| s.name).collect();
-        ui.sidebar_list(NAV, 12.0, 66.0, SIDEBAR - 24.0, &names, section);
+        ui.sidebar_list(NAV, 12.0, 72.0, SIDEBAR - 24.0, &names, section);
         let dy = h - 12.0 - CONTROL;
         ui.button(
             DONE,
@@ -312,7 +312,7 @@ impl OptionsUi {
         for (i, row) in rows.iter().enumerate() {
             match *row {
                 HRow::Header(label) => {
-                    ui.text(Face::Medium, SMALL, x, y + 18.0, color::FAINT, label);
+                    ui.caps(x, y + 20.0, color::FAINT, label);
                     y += HEADER_H;
                     ui.divider(x, y, cw);
                     continue;
@@ -393,6 +393,43 @@ impl OptionsUi {
                         let bw = ui.button_width(&value, false).max(96.0);
                         let text_w = cw - bw - 24.0;
                         ui.described_row(x, y, &caption, "", 0.0, cost, text, text_w);
+                        ui.button(
+                            id,
+                            [control_x - bw, y + 12.0, bw, CONTROL],
+                            &value,
+                            Button::Secondary,
+                            true,
+                        );
+                    }
+                }
+                HRow::Extra(item) => {
+                    let cy = y + ROW_H / 2.0;
+                    let id = ROW + i as u64;
+                    let mut cost = item.cost().map_or((0, ""), |c| (c as u8, c.label()));
+                    let (caption, mut text) = (item.caption(), item.description().to_owned());
+                    // A vanilla mapping on the same key: both act on it, like
+                    // the binds list's duplicates; say which.
+                    let conflicts = extras::zoom_key_conflicts(&s.extras, &s.keys);
+                    if item == extras::Item::ZoomKey && !conflicts.is_empty() {
+                        let names: Vec<String> =
+                            conflicts.iter().map(|c| crate::lang::get(c)).collect();
+                        cost = (3, "Also bound");
+                        text = format!("{} uses this key too; both act on it.", names.join(", "));
+                    }
+                    let text = text.as_str();
+                    if let Some(on) = item.switch(&s.extras) {
+                        ui.described_row(x, y, caption, "", 0.0, cost, text, cw - 60.0);
+                        ui.switch(id, control_x, cy, on);
+                    } else {
+                        let value = if item == extras::Item::ZoomKey
+                            && self.selected_key == Some(extras::ZOOM_KEY)
+                        {
+                            "Press a key".to_owned()
+                        } else {
+                            item.value(&s.extras)
+                        };
+                        let bw = ui.button_width(&value, false).max(96.0);
+                        ui.described_row(x, y, caption, "", 0.0, cost, text, cw - bw - 24.0);
                         ui.button(
                             id,
                             [control_x - bw, y + 12.0, bw, CONTROL],
@@ -497,6 +534,7 @@ impl OptionsUi {
         atlas: &HudAtlas,
         x: f32,
         y: f32,
+        framebuffer: [i32; 2],
         drag: bool,
         right: bool,
     ) -> Vec<Event> {
@@ -512,6 +550,10 @@ impl OptionsUi {
                 }
             }
             return events;
+        }
+        // A click anywhere stops waiting for the zoom key.
+        if self.selected_key == Some(extras::ZOOM_KEY) {
+            self.selected_key = None;
         }
         match self.horizon_target(s, atlas, x, y) {
             Some(Target::Nav(i)) => {
@@ -543,17 +585,24 @@ impl OptionsUi {
                 let section = self.section.min(SECTIONS.len() - 1);
                 match (SECTIONS[section].rows)(s).get(i) {
                     Some(HRow::Opt(opt)) => {
-                        opt.cycle(s, right);
+                        opt.cycle(s, right, framebuffer);
                         if *opt == Opt::Preset {
                             apply_preset(s);
                         }
                         events.push(Event::Changed);
                     }
                     Some(HRow::Graphics(item, ..)) => {
-                        item.cycle(s, right);
+                        item.cycle(s, right, framebuffer);
                         events.push(Event::Changed);
                     }
                     Some(HRow::Page(_, _, page)) => self.open_page(*page),
+                    Some(HRow::Extra(extras::Item::ZoomKey)) => {
+                        self.selected_key = Some(extras::ZOOM_KEY);
+                    }
+                    Some(HRow::Extra(item)) => {
+                        item.cycle(&mut s.extras, right);
+                        events.push(Event::Changed);
+                    }
                     _ => {}
                 }
             }

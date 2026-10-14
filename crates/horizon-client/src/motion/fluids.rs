@@ -54,10 +54,22 @@ impl FluidResources {
     pub fn fluid(&self, state: BlockStateId) -> FluidState {
         self.states.get(state).unwrap_or(FluidState::EMPTY)
     }
-    fn sturdy(&self, state: BlockStateId, d: Direction) -> bool {
+    /// `BlockState.isFaceSturdy(FULL)` on that face.
+    pub fn sturdy(&self, state: BlockStateId, d: Direction) -> bool {
         self.sturdy
             .get(state.0 as usize)
             .is_some_and(|s| s & 1 << d as u8 != 0)
+    }
+    /// `#minecraft:blocks_fluid_flow` membership.
+    pub fn blocks_flow(&self, state: BlockStateId) -> bool {
+        self.blocks_flow
+            .get(state.0 as usize)
+            .copied()
+            .unwrap_or(false)
+    }
+    /// `IceBlock` or one of its subclasses.
+    pub fn ice(&self, state: BlockStateId) -> bool {
+        self.ice.get(state.0 as usize).copied().unwrap_or(false)
     }
 }
 /// The player's `EntityFluidInteraction` and the water flags around it.
@@ -279,20 +291,10 @@ impl FluidFlowWorld for MotionWorld<'_, '_, '_> {
         Ok(MotionWorld::block(self, p))
     }
     fn blocks_fluid_flow(&self, s: BlockStateId) -> bool {
-        self.resources
-            .fluids
-            .blocks_flow
-            .get(s.0 as usize)
-            .copied()
-            .unwrap_or(false)
+        self.resources.fluids.blocks_flow(s)
     }
     fn is_ice_class(&self, s: BlockStateId) -> bool {
-        self.resources
-            .fluids
-            .ice
-            .get(s.0 as usize)
-            .copied()
-            .unwrap_or(false)
+        self.resources.fluids.ice(s)
     }
     fn is_face_sturdy(&mut self, s: BlockStateId, _: BlockPos, d: Direction) -> Result<bool> {
         Ok(self.resources.fluids.sturdy(s, d))

@@ -401,14 +401,6 @@ impl Item {
     }
     pub fn label(self, s: &Settings) -> Text {
         match self {
-            // The vanilla button shows the scale alone, under its own caption.
-            Item::Vanilla(Opt::GuiScale) => Text::translate(
-                "options.generic_value",
-                &[
-                    Text::translate("options.guiScale", &[]),
-                    Opt::GuiScale.label(s),
-                ],
-            ),
             Item::Vanilla(o) => o.label(s),
             Item::Horizon(h) => h.label(s),
         }
@@ -420,9 +412,9 @@ impl Item {
         }
         self.touched(s);
     }
-    pub fn cycle(self, s: &mut Settings, back: bool) {
+    pub fn cycle(self, s: &mut Settings, back: bool, framebuffer: [i32; 2]) {
         match self {
-            Item::Vanilla(o) => o.cycle(s, back),
+            Item::Vanilla(o) => o.cycle(s, back, framebuffer),
             Item::Horizon(h) => h.cycle(s, back),
         }
         self.touched(s);
@@ -456,6 +448,7 @@ impl Item {
 /// What the options screens must do after an interaction here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
+    ButtonClick,
     Changed,
     OpenAdvanced,
     OpenSimple,
@@ -655,6 +648,7 @@ impl GraphicsUi {
         s: &mut Settings,
         (x, y): (f32, f32),
         (w, h): (f32, f32),
+        framebuffer: [i32; 2],
         drag: bool,
         right: bool,
     ) -> Vec<Action> {
@@ -671,6 +665,9 @@ impl GraphicsUi {
             }
             return Vec::new();
         }
+        if right {
+            return Vec::new();
+        }
         for wd in widgets {
             if !ui::hovered((x, y), wd.x, wd.y, wd.w, 20.0) {
                 continue;
@@ -679,13 +676,14 @@ impl GraphicsUi {
                 continue;
             }
             return match wd.target {
-                Target::Button(action) => vec![action],
+                Target::Button(action) => vec![Action::ButtonClick, action],
                 Target::Item(item) => {
                     if item.slider(s).is_some() {
                         self.dragging = Some(item);
                         item.set_slider(s, ui::slider_value(wd.x, wd.w, x));
                     } else {
-                        item.cycle(s, right);
+                        item.cycle(s, right, framebuffer);
+                        return vec![Action::ButtonClick, Action::Changed];
                     }
                     vec![Action::Changed]
                 }
@@ -693,8 +691,8 @@ impl GraphicsUi {
         }
         Vec::new()
     }
-    pub fn release(&mut self) {
-        self.dragging = None;
+    pub fn release(&mut self) -> bool {
+        self.dragging.take().is_some()
     }
     pub fn scroll(&mut self, level: Level, h: f32, amount: f32) {
         let content = Self::content_height(level);
@@ -707,6 +705,58 @@ impl GraphicsUi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn graphics_buttons_sound_on_press_and_sliders_on_release() {
+        let mut s = Settings::default();
+        let mut ui = GraphicsUi::default();
+        let size = (480.0, 320.0);
+        let (widgets, _, _) = ui.layout(Level::Simple, size.0, size.1);
+        let button = widgets
+            .iter()
+            .find(|w| matches!(w.target, Target::Button(_)))
+            .unwrap();
+        let point = (button.x + 1.0, button.y + 1.0);
+        assert!(
+            ui.click(Level::Simple, &mut s, point, size, [854, 480], false, true)
+                .is_empty()
+        );
+        assert_eq!(
+            ui.click(Level::Simple, &mut s, point, size, [854, 480], false, false)[0],
+            Action::ButtonClick
+        );
+        assert!(!ui.release());
+        let slider = widgets
+            .iter()
+            .find(|w| matches!(w.target, Target::Item(i) if i.slider(&s).is_some()))
+            .unwrap();
+        assert_eq!(
+            ui.click(
+                Level::Simple,
+                &mut s,
+                (slider.x + 1.0, slider.y + 1.0),
+                size,
+                [854, 480],
+                false,
+                false
+            ),
+            vec![Action::Changed]
+        );
+        assert_eq!(
+            ui.click(
+                Level::Simple,
+                &mut s,
+                (-100.0, -100.0),
+                size,
+                [854, 480],
+                true,
+                false
+            ),
+            vec![Action::Changed]
+        );
+        assert!(ui.release());
+        assert!(!ui.release());
+    }
 
     #[test]
     fn scrolling_stops_at_both_limits_before_layout() {
@@ -768,16 +818,16 @@ mod tests {
     #[test]
     fn presets_set_vanilla_and_horizon_options() {
         let mut s = Settings::default();
-        Item::Horizon(H::Preset).cycle(&mut s, false);
+        Item::Horizon(H::Preset).cycle(&mut s, false, [854, 480]);
         assert_eq!(s.horizon.preset, Preset::Performance);
         assert_eq!(s.render_distance, 8);
         assert_eq!(s.clouds, "false");
         // Any quality change leaves the preset.
-        Item::Vanilla(Opt::Clouds).cycle(&mut s, false);
+        Item::Vanilla(Opt::Clouds).cycle(&mut s, false, [854, 480]);
         assert_eq!(s.horizon.preset, Preset::Custom);
         // Display preferences keep it.
-        Item::Horizon(H::Preset).cycle(&mut s, true);
-        Item::Vanilla(Opt::Vsync).cycle(&mut s, false);
+        Item::Horizon(H::Preset).cycle(&mut s, true, [854, 480]);
+        Item::Vanilla(Opt::Vsync).cycle(&mut s, false, [854, 480]);
         assert_eq!(s.horizon.preset, Preset::Ultra);
     }
 

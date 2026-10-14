@@ -490,6 +490,22 @@ impl Game<'_> {
                 "focus": match focus { 0 => "name", 1 => "seed", _ => "none" },
                 "creative": creative,
             }),
+            Mode::Edit {
+                world,
+                name,
+                focused,
+            } => {
+                json!({ "mode": "edit-world", "folder": world.folder, "fields": { "name": name }, "focus": if *focused { "name" } else { "none" } })
+            }
+            Mode::Backup { world, .. } => {
+                json!({ "mode": "creating-backup", "folder": world.folder })
+            }
+            Mode::Delete { world } => {
+                json!({ "mode": "delete-world", "folder": world.folder, "name": world.name })
+            }
+            Mode::Error { message, .. } => {
+                json!({ "mode": "world-operation-error", "message": message })
+            }
             Mode::Multiplayer(_) => json!({ "mode": "multiplayer" }),
         }
     }
@@ -1312,7 +1328,14 @@ impl Game<'_> {
                                 }
                             }
                         }
-                        _ => return Err("--field works on the create-world screen".into()),
+                        horizon_client::title::Mode::Edit { focused, .. } if field == "name" => {
+                            *focused = true
+                        }
+                        _ => {
+                            return Err(
+                                "--field works on the create-world or edit-world screen".into()
+                            );
+                        }
                     }
                 }
                 if replace {

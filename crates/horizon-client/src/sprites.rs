@@ -48,6 +48,8 @@ pub struct Sprites {
     pub animations: Vec<SpriteAnimation>,
     pub opaque: Vec<bool>,
     pub translucent: Vec<bool>,
+    /// Each layer's `MipmapGenerator` settings.
+    pub mips: Vec<crate::mipmap::Settings>,
     /// Each layer's frames at the texture's own resolution (square), and the
     /// frame shown first.
     native: Vec<(u32, Arc<Vec<Vec<u8>>>, usize)>,
@@ -124,6 +126,7 @@ impl Sprites {
                 let layer = u32::try_from(self.layers.len())?;
                 self.opaque.push(true);
                 self.translucent.push(false);
+                self.mips.push(crate::mipmap::Settings::default());
                 self.layers.insert(name.to_owned(), layer);
                 self.native.push((SPRITE_SIZE, Arc::new(vec![frame]), 0));
                 Ok(layer)
@@ -213,6 +216,27 @@ impl Sprites {
                 clip: Arc::new(clip),
             });
         }
+        // SpriteContents: TextureMetadataSection's mipmap strategy and alpha
+        // cutoff bias, and the whole image's NativeImage.computeTransparency.
+        let texture = metadata
+            .as_ref()
+            .and_then(|v| v.get("texture"))
+            .and_then(|v| serde_json::from_str::<serde_json::Value>(v.get()).ok());
+        self.mips.push(crate::mipmap::Settings {
+            strategy: texture
+                .as_ref()
+                .and_then(|t| t["mipmap_strategy"].as_str())
+                .and_then(crate::mipmap::Strategy::parse)
+                .unwrap_or_default(),
+            alpha_cutoff_bias: texture
+                .as_ref()
+                .and_then(|t| t["alpha_cutoff_bias"].as_f64())
+                .unwrap_or(0.0) as f32,
+            has_transparent: pixels.as_chunks::<4>().0.iter().any(|p| p[3] == 0),
+            item: name
+                .split_once(':')
+                .is_some_and(|(_, p)| p.starts_with("item/")),
+        });
         self.opaque
             .push(pixels.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
         self.translucent.push(

@@ -88,8 +88,12 @@ impl Game<'_> {
             } else {
                 1
             };
+            let slot_ammo = self.arrow_slot();
+            let ammo = slot_ammo
+                .and_then(|i| self.inventory[i].clone())
+                .unwrap_or_else(|| ItemStack::new("minecraft:arrow", 1));
             if !self.creative {
-                let Some(i) = self.arrow_slot() else { return };
+                let Some(i) = slot_ammo else { return };
                 if let Some(s) = self.inventory[i].as_mut() {
                     s.count -= 1;
                     if s.count == 0 {
@@ -97,8 +101,12 @@ impl Game<'_> {
                     }
                 }
             }
+            // useAmmo: the extra multishot arrows and creative's are intangible.
+            let drawn = (0..shots)
+                .map(|i| horizon_client::arrows::drawn_ammo(&ammo, self.creative || i > 0))
+                .collect();
             if let Some(bow) = self.inventory[slot].as_mut() {
-                bow.data_mut().charged = vec![ItemStack::new("minecraft:arrow", 1); shots];
+                bow.data_mut().charged = drawn;
             }
             let pitch = 1.0 / (self.world.random.next_float() * 0.5 + 1.0) + 0.2;
             self.audio.play(sounds[2], at, 1.0, pitch);
@@ -119,7 +127,7 @@ impl Game<'_> {
         let spread = if count > 1 { 10.0 } else { 0.0 };
         let view = glam::DVec3::from_array(view_vector(self.yaw, self.pitch));
         let up = glam::DVec3::from_array(view_vector(self.yaw, self.pitch - 90.0));
-        for (index, _) in charged.iter().enumerate() {
+        for (index, ammo) in charged.iter().enumerate() {
             let angle = if count > 1 {
                 -spread + 2.0 * spread * index as f64 / (count - 1) as f64
             } else {
@@ -142,6 +150,10 @@ impl Game<'_> {
                 Vec3::new(eye[0], eye[1] - 0.1, eye[2]),
                 Some(Who::Player),
             );
+            if let Some(a) = arrow.arrow.as_mut() {
+                a.set_item(ammo);
+                a.set_owner(Some(Who::Player));
+            }
             arrow.shoot(&mut self.world.random, dir.to_array(), 3.15, 1.0);
             self.creatures.projectiles.push(arrow);
             self.player_projectile_shot();

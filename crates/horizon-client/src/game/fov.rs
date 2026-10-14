@@ -54,6 +54,7 @@ impl Game<'_> {
         let target = self
             .fov_player()
             .map_or(1.0, |p| field_of_view_modifier(&p, first_person, effect));
+        let target = self.zoomed_fov_target(target);
         let eye = self.player.as_ref().map(|p| p.dimensions.eye_height);
         self.view.tick(eye, target);
     }
@@ -77,14 +78,15 @@ impl Game<'_> {
     }
     /// `Camera.calculateFov` with `modifyFovBasedOnDeathOrFluid`.
     pub(super) fn fov_degrees(&self, partial: f32, camera: [f64; 3]) -> f32 {
-        self.view.calculate_fov(
+        let fov = self.view.calculate_fov(
             partial,
             self.settings.fov as i32,
             self.fov_effect_scale(),
             self.death_time(),
             self.camera_fluid(camera),
             false,
-        )
+        );
+        self.zoomed_fov_degrees(fov)
     }
     /// `Camera.calculateHudFov`: the first-person hand's field of view.
     pub(super) fn hud_fov_degrees(&self, partial: f32, camera: [f64; 3]) -> f32 {

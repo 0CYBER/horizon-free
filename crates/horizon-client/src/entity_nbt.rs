@@ -5,8 +5,10 @@
 //! Horizon does not model (variants, attributes, equipment, custom names)
 //! survive a Horizon save.
 use crate::{
-    entities::{ArmorStand, Arrow, ExperienceOrb, ItemEntity, ItemFrame, Painting},
-    mobs::{Mob, MobType},
+    arrows::Pickup,
+    entities::{ArmorStand, ExperienceOrb, ItemEntity, ItemFrame, Painting},
+    mobs::{Mob, MobType, Who},
+    projectiles::{Projectile, ProjectileKind},
     save::{
         doubles, float, floats, item_from_nbt, item_to_nbt, number, put, read_doubles, text,
         uuid_from_tag,
@@ -180,14 +182,11 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
     }
     match id {
         "minecraft:creeper" => {
-            for (key, value) in [
-                ("Fuse", Tag::Short(30)),
-                ("ExplosionRadius", Tag::Byte(3)),
-                ("ignited", Tag::Byte(0)),
-            ] {
+            for (key, value) in [("Fuse", Tag::Short(30)), ("ExplosionRadius", Tag::Byte(3))] {
                 map.entry(key.into()).or_insert(value);
             }
             map.insert("powered".into(), Tag::Byte(i8::from(m.extra.charged)));
+            map.insert("ignited".into(), Tag::Byte(i8::from(m.extra.flag)));
         }
         "minecraft:cat" => {
             if let Some(owner) = m.extra.owner {
@@ -615,6 +614,8 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     m.invulnerable_flag = flag(tag, "Invulnerable");
     if m.species() == crate::mobs::Species::Creeper {
         m.extra.charged = flag(tag, "powered");
+        // Creeper.readAdditionalSaveData: `ignited` lights the fuse.
+        m.extra.flag = flag(tag, "ignited");
     }
     if matches!(
         m.species(),
@@ -928,68 +929,102 @@ pub fn orbs_from_nbt(tag: &Tag) -> Vec<ExperienceOrb> {
     vec![orb; count]
 }
 
-/// `AbstractArrow`: damage, crit, inGround, life, pickup, item.
-pub fn arrow_to_nbt(a: &Arrow, uuid: [i32; 4], owner: Option<[i32; 4]>) -> Tag {
-    let v = a.velocity;
-    let horizontal = (v.x * v.x + v.z * v.z).sqrt();
-    let rotation = [
-        (v.x.atan2(v.z).to_degrees()) as f32,
-        (v.y.atan2(horizontal).to_degrees()) as f32,
-    ];
+/// `Projectile` + `AbstractArrow.addAdditionalSaveData` of a live arrow;
+/// `in_block` is its `inBlockState`, `raw` the compound it was loaded with.
+pub fn arrow_to_nbt(
+    p: &Projectile,
+    uuid: [i32; 4],
+    owner: Option<[i32; 4]>,
+    in_block: Option<Tag>,
+    raw: Option<&Tag>,
+) -> Option<Tag> {
+    let a = p.arrow.as_deref()?;
+    let ProjectileKind::Arrow {
+        base_damage,
+        critical,
+        ..
+    } = p.kind
+    else {
+        return None;
+    };
     let base = Base {
         id: "minecraft:arrow",
         uuid,
-        position: a.position,
-        motion: a.velocity,
-        rotation,
+        position: p.position,
+        motion: p.velocity,
+        rotation: [p.yaw, p.pitch],
         on_ground: false,
-        fall_distance: 0.0,
+        fall_distance: a.fall_distance,
     };
-    let mut tag = base.tag(None);
+    let mut tag = base.tag(raw);
     for (key, value) in [
-        ("damage", Tag::Double(a.base_damage.to_bits())),
-        ("crit", Tag::Byte(i8::from(a.critical))),
-        ("inGround", Tag::Byte(i8::from(a.stuck))),
-        (
-            "life",
-            Tag::Short(if a.stuck { a.age.min(1200) as i16 } else { 0 }),
-        ),
-        // Pickup: allowed for the player's arrows, disallowed for mobs'.
-        ("pickup", Tag::Byte(i8::from(a.from_player))),
-        ("shake", Tag::Byte(0)),
-        ("PierceLevel", Tag::Byte(0)),
-        ("HasBeenShot", Tag::Byte(1)),
-        ("SoundEvent", string("minecraft:entity.arrow.hit")),
-        (
-            "item",
-            Tag::compound([("id", string("minecraft:arrow")), ("count", Tag::Int(1))]),
-        ),
+        ("Fire", Tag::Short(a.fire_ticks as i16)),
+        ("life", Tag::Short(a.life as i16)),
+        ("shake", Tag::Byte(a.shake as i8)),
+        ("inGround", Tag::Byte(i8::from(a.in_ground))),
+        ("pickup", Tag::Byte(a.pickup.byte())),
+        ("damage", Tag::Double(base_damage.to_bits())),
+        ("crit", Tag::Byte(i8::from(critical))),
+        ("PierceLevel", Tag::Byte(a.pierce as i8)),
+        ("HasBeenShot", Tag::Byte(i8::from(a.has_been_shot))),
+        ("item", item_to_nbt(&a.pickup_item)),
     ] {
         put(&mut tag, key, value);
+    }
+    if let Tag::Compound(map) = &mut tag {
+        map.entry("SoundEvent".into())
+            .or_insert_with(|| string("minecraft:entity.arrow.hit"));
+        // Projectile: LeftOwner only when set; Owner as the UUID.
+        map.remove(&"LeftOwner".into());
+        map.remove(&"inBlockState".into());
+    }
+    if p.left_owner {
+        put(&mut tag, "LeftOwner", Tag::Byte(1));
+    }
+    if let Some(state) = in_block {
+        put(&mut tag, "inBlockState", state);
     }
     if let Some(owner) = owner {
         put(&mut tag, "Owner", Tag::IntArray(owner.to_vec()));
     }
-    tag
+    Some(tag)
 }
-pub fn arrow_from_nbt(tag: &Tag, player: Option<[i32; 4]>) -> Option<Arrow> {
+/// A saved arrow as a live one (`readAdditionalSaveData`), with its
+/// `inBlockState` compound for the caller to resolve. `effect` is the tipped
+/// arrow's lasting effect from its item.
+pub fn arrow_from_nbt(
+    tag: &Tag,
+    player: Option<[i32; 4]>,
+    effect: impl FnOnce(&crate::items::ItemStack) -> Option<(&'static str, i32)>,
+) -> Option<(Projectile, Option<Tag>)> {
     let position = position(tag)?;
-    let stuck = flag(tag, "inGround");
-    Some(Arrow {
-        from_player: player.is_some() && uuid_from_tag(tag.get("Owner")) == player
-            || number(tag.get("pickup")) == Some(1),
-        critical: flag(tag, "crit"),
-        position,
-        previous: position,
-        velocity: motion(tag),
-        stuck,
-        age: if stuck {
-            number(tag.get("life")).unwrap_or(0).max(0) as u32
-        } else {
-            0
-        },
+    let owner = uuid_from_tag(tag.get("Owner"));
+    let from_player = player.is_some() && owner == player;
+    let item = tag
+        .get("item")
+        .and_then(item_from_nbt)
+        .unwrap_or_else(|| crate::items::ItemStack::new("minecraft:arrow", 1));
+    let kind = ProjectileKind::Arrow {
         base_damage: float(tag.get("damage")).unwrap_or(2.0),
-    })
+        critical: flag(tag, "crit"),
+        effect: effect(&item),
+    };
+    let mut p = Projectile::new(kind, position, from_player.then_some(Who::Player));
+    p.velocity = motion(tag);
+    [p.yaw, p.pitch] = rotation(tag);
+    p.left_owner = flag(tag, "LeftOwner");
+    let a = p.arrow.as_mut()?;
+    a.life = number(tag.get("life")).unwrap_or(0) as i16 as i32;
+    a.shake = (number(tag.get("shake")).unwrap_or(0) as i8 as u8).into();
+    a.in_ground = flag(tag, "inGround");
+    a.pickup = Pickup::from_byte(number(tag.get("pickup")).unwrap_or(0));
+    a.pierce = number(tag.get("PierceLevel")).unwrap_or(0) as u8;
+    a.has_been_shot = flag(tag, "HasBeenShot");
+    a.fire_ticks = number(tag.get("Fire")).unwrap_or(0) as i16 as i32;
+    a.fall_distance = float(tag.get("fall_distance")).unwrap_or(0.0);
+    a.pickup_item = item;
+    p.stuck = a.in_ground;
+    Some((p, tag.get("inBlockState").cloned()))
 }
 
 /// `FallingBlockEntity`: BlockState, Time, DropItem, HurtEntities.

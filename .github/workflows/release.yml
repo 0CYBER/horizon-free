@@ -1,57 +1,223 @@
-name: release builds
-# Started by hand: gh workflow run release.yml --ref <branch>
-# Builds the Windows x64 and Linux x86_64 clients (with horizon-ctl and horizon-prepare) and uploads the playable folders
-# as artifacts.
-# macOS builds are made on the development machines. Linux is built here, on an older Ubuntu,
-# so the binary uses the standard loader and runs on any recent distribution (and on NixOS
-# through nix-ld): a build made on NixOS asks for a /nix/store loader no other system has.
+name: release
+# Automatic game releases (docs/release-flow.md). After every green `checks` run on main, every hour (a release
+# held by the cooldown goes out without another merge) and by hand, tools/release_train.py decides: a release
+# when a pull request merged since the last one changed what players run and that release is 3 hours old, or at
+# once for a pull request labelled release-now. RELEASES_PAUSED=1 (repository variable) stops them.
+# Builds Linux (an older Ubuntu, so the binary runs on any recent distribution and on NixOS through nix-ld) and
+# Windows on GitHub, macOS on the Mac mini's runner (MAC_RUNNER=macos-latest sends it to GitHub), then
+# publishes vYYYY.MM.DD[.N] with notes from the merged pull requests.
+#   gh workflow run release --ref <branch>                       # dry run: builds and notes, publishes nothing
+#   gh workflow run release -f dry_run=false -f force=true       # on main: release now, whatever the rules say
 on:
+  workflow_run:
+    workflows: [checks]
+    types: [completed]
+    branches: [main]
+  schedule:
+    - cron: '17 * * * *'
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build everything and write the notes, but publish nothing
+        type: boolean
+        default: true
+      force:
+        description: Release even without player-facing changes, within the cooldown or while paused
+        type: boolean
+        default: false
 permissions:
   contents: read
+concurrency:
+  group: game-release
+  cancel-in-progress: false
 jobs:
-  windows:
-    runs-on: windows-latest
+  decide:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      release: ${{ steps.decide.outputs.release }}
+      tag: ${{ steps.decide.outputs.tag }}
+      head: ${{ steps.decide.outputs.head }}
+      dry_run: ${{ steps.mode.outputs.dry_run }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust toolchain
-        run: rustup toolchain install stable --profile minimal
-      - name: Build the client
-        # The C runtime linked in, so the game runs without the Visual C++ redistributable.
+        with:
+          fetch-depth: 0
+      - id: mode
+        # A dry run never publishes; a hand-started run off main is always one.
+        run: echo "dry_run=${{ github.event_name == 'workflow_dispatch' && (inputs.dry_run || github.ref != 'refs/heads/main') }}" >> "$GITHUB_OUTPUT"
+      - id: decide
         env:
-          RUSTFLAGS: -C target-feature=+crt-static
-        run: cargo +stable build --release --locked -p horizon-client --bin horizon-client --bin horizon-ctl -p horizon-prepare --bin horizon-prepare
-      - name: Only system DLLs
-        # Vulkan and the rest are loaded at run time; a linked non-system DLL is a
-        # "DLL not found" dialog on some players' machines.
+          GH_TOKEN: ${{ github.token }}
+          RELEASES_PAUSED: ${{ vars.RELEASES_PAUSED }}
+          # The commit whose checks just passed; a dry run builds the branch it was started on; otherwise
+          # main's newest commit with green checks.
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || (steps.mode.outputs.dry_run == 'true' && github.sha) || '' }}
+          FORCE: ${{ inputs.force && 'yes' || '' }}
         run: |
-          python tools/check_imports.py target/release/horizon-client.exe
-          python tools/check_imports.py target/release/horizon-ctl.exe
-          python tools/check_imports.py target/release/horizon-prepare.exe
-      - name: Package
-        run: cargo +stable run --locked -p xtask -- package target/release/horizon-client.exe dist/horizon-windows-x64
-      - uses: actions/upload-artifact@v4
-        with:
-          name: horizon-windows-x64
-          path: dist/horizon-windows-x64
-  linux:
-    runs-on: ubuntu-22.04
+          python3 tools/release_train.py decide --kind game ${HEAD_SHA:+--head "$HEAD_SHA"} ${FORCE:+--force} | tee decision.json
+          echo "### $(jq -r '.reason' decision.json)" >> "$GITHUB_STEP_SUMMARY"
+          # A dry run builds whatever the decision, to test the builds.
+          if [[ "${{ steps.mode.outputs.dry_run }}" == true ]]; then echo "release=true" >> "$GITHUB_OUTPUT"; fi
+
+  build:
+    needs: decide
+    if: needs.decide.outputs.release == 'true'
+    name: build ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-22.04
+            dir: horizon-linux-x86_64
+            asset: horizon-linux-x86_64.tar.gz
+          - name: windows
+            os: windows-latest
+            dir: horizon-windows-x64
+            asset: horizon-windows-x64.zip
+            exe: .exe
+            # The C runtime linked in, so the game runs without the Visual C++ redistributable.
+            rustflags: -C target-feature=+crt-static
+          - name: macos
+            mac: true
+            dir: horizon-macos-arm64
+            asset: horizon-macos-arm64.zip
+    runs-on: ${{ matrix.mac && (vars.MAC_RUNNER || 'ludovics-mac-mini') || matrix.os }}
+    timeout-minutes: 40
+    env:
+      RUSTFLAGS: ${{ matrix.rustflags }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust toolchain
-        run: rustup toolchain install stable --profile minimal
+        with:
+          ref: ${{ needs.decide.outputs.head }}
+          persist-credentials: false
+          # On the Mac mini's runner, keep target/ (incremental) and .local/ (the prepared resources).
+          clean: ${{ runner.environment == 'github-hosted' }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        if: runner.environment == 'github-hosted'
+        with:
+          shared-key: release-${{ matrix.name }}
       - name: ALSA and udev headers
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
-      - name: Build the client
-        run: cargo +stable build --release --locked -p horizon-client --bin horizon-client --bin horizon-ctl -p horizon-prepare --bin horizon-prepare
-      - name: Standard loader and libraries only
+      - name: Build the client, horizon-ctl and horizon-prepare
+        run: cargo build --release --locked -p horizon-client --bin horizon-client --bin horizon-ctl -p horizon-prepare --bin horizon-prepare
+      - name: Every program the release folder takes was built
         run: |
-          python3 tools/check_imports.py target/release/horizon-client
-          python3 tools/check_imports.py target/release/horizon-ctl
-          python3 tools/check_imports.py target/release/horizon-prepare
+          for binary in horizon-client horizon-ctl horizon-prepare; do
+            test -f "target/release/$binary${{ matrix.exe }}" || { echo "::error::target/release/$binary${{ matrix.exe }} is missing"; exit 1; }
+          done
+      - name: Only system libraries
+        # Windows: no non-system DLL (a "DLL not found" dialog on some players' machines). Linux: the standard
+        # loader and libraries every desktop distribution has. macOS: only the system's own libraries.
+        run: |
+          for binary in horizon-client horizon-ctl horizon-prepare; do
+            file="target/release/$binary${{ matrix.exe }}"
+            if [[ "$RUNNER_OS" == macOS ]]; then
+              others=$(otool -L "$file" | tail -n +2 | awk '{print $1}' | grep -v -E '^(/usr/lib/|/System/Library/)' || true)
+              [[ -z "$others" ]] || { echo "::error::$binary links $others"; exit 1; }
+            else
+              ${{ runner.os == 'Windows' && 'python' || 'python3' }} tools/check_imports.py "$file"
+            fi
+          done
+      - name: Every program starts
+        run: |
+          set -euo pipefail
+          bin=target/release
+          "$bin/horizon-client${{ matrix.exe }}" --help | grep -q -- '--resources'
+          "$bin/horizon-ctl${{ matrix.exe }}" --help > /dev/null
+          "$bin/horizon-prepare${{ matrix.exe }}" --version
+          "$bin/horizon-prepare${{ matrix.exe }}" --help | grep -q -- '--minecraft-dir'
+      - name: Tools from the runner
+        if: runner.environment == 'self-hosted'
+        run: bash tools/ci/runner-env.sh
+      - name: Resources prepared from the runner's own Minecraft
+        if: runner.environment == 'self-hosted'
+        run: bash tools/ci/vanilla-data.sh
+      - name: The game runs (offscreen, a new world, 1500 frames)
+        if: runner.environment == 'self-hosted'
+        run: |
+          set -euo pipefail
+          # From a scratch folder: the game keeps its saves and options in the folder it starts in.
+          home="$RUNNER_TEMP/horizon-smoke"
+          rm -rf "$home" && mkdir -p "$home"
+          version=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' research-lock.json | head -1)
+          client="$PWD/target/release/horizon-client"
+          resources="$PWD/.local/horizon-client/$version"
+          (cd "$home" && HORIZON_HOME="$home" HORIZON_NO_AUDIO=1 "$client" --resources "$resources" --offscreen \
+            --world smoke --seed 1 --render-distance 4 --frames 1500 --timeout-seconds 180 \
+            --smoke-report "$home/smoke.json" > "$home/client.log" 2>&1) || { tail -40 "$home/client.log"; exit 1; }
+          python3 - "$home/smoke.json" <<'EOF'
+          import json, sys
+          report = json.load(open(sys.argv[1]))
+          print(json.dumps(report))
+          if report.get("error") is not None or report.get("frames", 0) < 1500 or not report.get("chunks") \
+                  or not report.get("meshed_sections") or not report.get("player"):
+              sys.exit("the smoke run did not draw a world")
+          EOF
       - name: Package
-        run: cargo +stable run --locked -p xtask -- package target/release/horizon-client dist/horizon-linux-x86_64
+        run: |
+          set -euo pipefail
+          cargo run --locked -p xtask -- package "target/release/horizon-client${{ matrix.exe }}" "dist/${{ matrix.dir }}"
+          cd dist
+          rm -f "${{ matrix.asset }}"
+          case "${{ matrix.asset }}" in
+            *.tar.gz) tar czf "${{ matrix.asset }}" "${{ matrix.dir }}" ;;
+            *) if [[ "$RUNNER_OS" == Windows ]]; then 7z a -tzip "${{ matrix.asset }}" "${{ matrix.dir }}" > /dev/null
+               else ditto -c -k --keepParent "${{ matrix.dir }}" "${{ matrix.asset }}"; fi ;;
+          esac
+          ls -l "${{ matrix.asset }}"
       - uses: actions/upload-artifact@v4
         with:
-          name: horizon-linux-x86_64
-          path: dist/horizon-linux-x86_64
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [decide, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 tools/release_train.py notes --kind game --tag "${{ needs.decide.outputs.tag }}" \
+            --head "${{ needs.decide.outputs.head }}" --out notes > /dev/null
+          { echo "## $(cat notes/title.txt)"; echo; cat notes/body.md; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish ${{ needs.decide.outputs.tag }}
+        if: needs.decide.outputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.decide.outputs.tag }}
+        run: |
+          gh release create "$TAG" --target "${{ needs.decide.outputs.head }}" --title "$(cat notes/title.txt)" \
+            --notes-file notes/body.md --latest dist/horizon-linux-x86_64.tar.gz dist/horizon-windows-x64.zip \
+            dist/horizon-macos-arm64.zip
+      - name: Dry run, the release that would be published
+        if: needs.decide.outputs.dry_run == 'true'
+        run: |
+          echo "Would publish ${{ needs.decide.outputs.tag }} at ${{ needs.decide.outputs.head }}: $(cat notes/title.txt)"
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: notes/

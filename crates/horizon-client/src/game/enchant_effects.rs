@@ -393,6 +393,45 @@ impl Game<'_> {
             ) == 0.0;
         (f64::from(power), infinity)
     }
+    /// `EnchantmentHelper.onProjectileSpawned` ignite effects of the held bow
+    /// (flame): the seconds the new arrow burns for.
+    pub(super) fn bow_projectile_ignite(&mut self) -> Option<f32> {
+        let bow = self.inventory[self.selected].clone()?;
+        let ctx = EffectContext {
+            this: Some("minecraft:arrow"),
+            items: Some(&self.res.items),
+            ..Default::default()
+        };
+        let mut ignite: Option<f32> = None;
+        for (id, level) in bow.enchantments() {
+            let Some(def) = self.res.stations.enchantments.get(id) else {
+                continue;
+            };
+            for effect in def.effects["minecraft:projectile_spawned"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                if effect["effect"]["type"] != "minecraft:ignite" {
+                    continue;
+                }
+                let ok = effect.get("requirements").is_none_or(|r| {
+                    self.res.stations.enchantments.condition(
+                        r,
+                        *level,
+                        &ctx,
+                        &mut self.world.random,
+                    )
+                });
+                if ok {
+                    let seconds =
+                        horizon_client::enchant::level_value(&effect["effect"]["duration"], *level);
+                    ignite = Some(ignite.map_or(seconds, |s: f32| s.max(seconds)));
+                }
+            }
+        }
+        ignite
+    }
     /// Enchantment attribute modifiers of worn armor (respiration, depth strider...).
     pub(super) fn apply_enchantment_attributes(&mut self) {
         let mut wanted: Vec<(String, String, f64, String)> = Vec::new();

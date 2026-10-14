@@ -40,7 +40,7 @@ try {
 
 let releases = [];
 try {
-  const res = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=30`, {
+  const res = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=100`, {
     // An optional token (a Railway variable, or `gh auth token` locally) lifts the rate limit.
     headers: { Accept: "application/vnd.github+json", ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}) },
     signal: AbortSignal.timeout(15000),
@@ -131,7 +131,9 @@ for (const file of ["markdown.js", "releases.js", "contributors.js", "main.js"])
   await writeFile(join(dist, "assets", names[file]), code);
 }
 const jsName = names["main.js"];
-const css = await readFile(join(site, "src/style.css"), "utf8");
+// The design tokens come first: src/tokens.css is generated from crates/horizon-theme
+// (`cargo run -p xtask -- tokens`), so the page shares the launcher's and the game's values.
+const css = (await readFile(join(site, "src/tokens.css"), "utf8")) + "\n" + (await readFile(join(site, "src/style.css"), "utf8"));
 // The stylesheet is inlined into the page, so the first paint needs no second request.
 const cssName = `style.${fingerprint(css)}.css`;
 await writeFile(join(dist, "assets", cssName), css);

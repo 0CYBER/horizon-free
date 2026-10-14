@@ -46,6 +46,7 @@ pub mod nether;
 pub mod path;
 pub mod phantom;
 pub mod piglin;
+pub mod rabbit;
 pub mod raider;
 pub mod ravager;
 pub mod render;
@@ -826,6 +827,11 @@ pub struct Mob {
 /// Events a mob tick asks the game to act on.
 #[derive(Clone, Debug)]
 pub enum MobEvent {
+    /// Rabbit entity event 1, sent only when a ground jump actually happens.
+    RabbitHop {
+        mob: u32,
+        at: [f64; 3],
+    },
     Sound(&'static str, [f64; 3], f32, f32),
     /// `ChestBlockEntity.startOpen` / `stopOpen` by a copper golem: the
     /// chest's opener count goes up or down (interaction range 3).
@@ -1369,6 +1375,7 @@ pub struct MobWorld<'a> {
     pub world: &'a World,
     pub registry: &'a horizon_world::registry::BlockRegistry,
     pub facts: &'a BlockFacts,
+    pub movement: &'a horizon_world::movement_properties::BoundMovementProperties,
     pub collision: &'a BlockCollisionRegistry<'a>,
     pub data: &'a MobData,
     pub player: Option<PlayerView>,
