@@ -83,6 +83,7 @@ pub fn outline_vertices(edges: &[[f64; 6]], camera: glam::DVec3) -> Vec<[f32; 6]
 
 mod arena;
 mod occlusion;
+pub mod panorama;
 mod timing;
 mod world_post;
 
@@ -137,7 +138,7 @@ pub struct Frame<'a> {
     /// Skip sections the camera cannot see through open faces (vanilla's
     /// occlusion graph; off in spectator-like views inside blocks).
     pub cave_culling: bool,
-    /// Title screen: only the panorama (in `celestial`) and the HUD.
+    /// Title screen: only the dedicated panorama cube map and the HUD.
     pub title: bool,
     /// Dimensions without a skybox (the Nether) clear to the fog colour.
     pub skybox: bool,
@@ -246,6 +247,7 @@ pub struct Renderer {
     additive_pipeline: wgpu::RenderPipeline,
     celestial_pipeline: wgpu::RenderPipeline,
     celestial_buffer: wgpu::Buffer,
+    panorama: panorama::Panorama,
     /// `RenderPipelines.WORLD_BORDER` and its buffers.
     border_pipeline: wgpu::RenderPipeline,
     border_group: wgpu::BindGroup,
@@ -401,6 +403,7 @@ impl Renderer {
         animations: &[SpriteAnimation],
         hud_atlas: (&[u8], u32, u32),
         forcefield: (&[u8], u32),
+        panorama_faces: &panorama::Faces,
     ) -> Result<Self> {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
@@ -1361,6 +1364,12 @@ impl Renderer {
             .features()
             .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE);
         let world_post = world_post::Post::new(&device, config.format.remove_srgb_suffix());
+        let panorama = panorama::Panorama::new(
+            &device,
+            &queue,
+            config.format.remove_srgb_suffix(),
+            panorama_faces,
+        );
         Ok(Self {
             instance,
             surface,
@@ -1389,6 +1398,7 @@ impl Renderer {
             additive_pipeline,
             celestial_pipeline,
             celestial_buffer,
+            panorama,
             border_pipeline,
             border_group,
             border_uniform,
@@ -1875,6 +1885,15 @@ impl Renderer {
             frame.block_flicker,
         );
         let view_proj = self.view_projection(frame);
+        if frame.title {
+            self.panorama.prepare(
+                &self.queue,
+                self.config.width,
+                self.config.height,
+                frame.yaw,
+                frame.pitch,
+            );
+        }
         let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
         let view = crate::camera::view_matrix(frame.yaw, frame.pitch);
         let sun_angle = frame.sky.sun_angle.to_radians();
@@ -2221,12 +2240,15 @@ impl Renderer {
                 Some(f) => f.sky_end > 2.0,
                 None => !frame.underwater,
             };
-            if sky_visible && (frame.skybox || frame.end_sky) {
+            if frame.title || (sky_visible && (frame.skybox || frame.end_sky)) {
                 if !frame.title && frame.skybox {
                     pass.set_pipeline(&self.sky);
                     pass.draw(0..3, 0..1);
                 }
-                if celestial_vertices > 0 {
+                if frame.title {
+                    self.panorama.draw(&mut pass);
+                    pass.set_bind_group(0, &self.group, &[]);
+                } else if celestial_vertices > 0 {
                     pass.set_pipeline(&self.celestial_pipeline);
                     pass.set_bind_group(0, &self.entity_group, &[]);
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);

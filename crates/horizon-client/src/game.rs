@@ -598,6 +598,7 @@ pub struct Resources {
     biomes: Arc<Biomes>,
     environment: Environment,
     atlas: HudAtlas,
+    panorama: horizon_client::gfx::panorama::Faces,
     layer_names: HashMap<u32, String>,
     mob_types: HashMap<String, Arc<MobType>>,
     mob_data: horizon_client::mobs::MobData,
@@ -6040,91 +6041,6 @@ impl Game<'_> {
         self.capture(false);
         Ok(())
     }
-    /// The title panorama as six camera-centred faces (panorama_0..5:
-    /// front, right, back, left, up, down).
-    fn panorama_geometry(&self) -> Vec<Vertex> {
-        let mut out = Vec::new();
-        let d = 100.0;
-        let faces: [(&str, [glam::Vec3; 4]); 6] = [
-            (
-                "0",
-                [
-                    glam::Vec3::new(-d, d, -d),
-                    glam::Vec3::new(d, d, -d),
-                    glam::Vec3::new(d, -d, -d),
-                    glam::Vec3::new(-d, -d, -d),
-                ],
-            ),
-            (
-                "1",
-                [
-                    glam::Vec3::new(d, d, -d),
-                    glam::Vec3::new(d, d, d),
-                    glam::Vec3::new(d, -d, d),
-                    glam::Vec3::new(d, -d, -d),
-                ],
-            ),
-            (
-                "2",
-                [
-                    glam::Vec3::new(d, d, d),
-                    glam::Vec3::new(-d, d, d),
-                    glam::Vec3::new(-d, -d, d),
-                    glam::Vec3::new(d, -d, d),
-                ],
-            ),
-            (
-                "3",
-                [
-                    glam::Vec3::new(-d, d, d),
-                    glam::Vec3::new(-d, d, -d),
-                    glam::Vec3::new(-d, -d, -d),
-                    glam::Vec3::new(-d, -d, d),
-                ],
-            ),
-            (
-                "4",
-                [
-                    glam::Vec3::new(-d, d, d),
-                    glam::Vec3::new(d, d, d),
-                    glam::Vec3::new(d, d, -d),
-                    glam::Vec3::new(-d, d, -d),
-                ],
-            ),
-            (
-                "5",
-                [
-                    glam::Vec3::new(-d, -d, -d),
-                    glam::Vec3::new(d, -d, -d),
-                    glam::Vec3::new(d, -d, d),
-                    glam::Vec3::new(-d, -d, d),
-                ],
-            ),
-        ];
-        for (index, corners) in faces {
-            let Some(r) = self
-                .res
-                .atlas
-                .sprites
-                .get(&format!("gui/title/background/panorama_{index}"))
-                .copied()
-            else {
-                continue;
-            };
-            let uv = [[r.u0, r.v0], [r.u1, r.v0], [r.u1, r.v1], [r.u0, r.v1]];
-            for (p, uv) in corners.iter().zip(uv) {
-                out.push(Vertex {
-                    normal: [0; 4],
-                    pos: p.to_array(),
-                    uv,
-                    layer: 2,
-                    color: 0xFFFF_FFFF,
-                    light: 0,
-                });
-            }
-        }
-        out
-    }
     /// Equipment attribute modifiers (LivingEntity.collectEquipmentChanges).
     fn apply_equipment(&mut self) {
         let Some(player) = self.player.as_mut() else {
@@ -7006,6 +6922,7 @@ impl Game<'_> {
                 self.res.atlas.height,
             ),
             (&self.res.forcefield.2, self.res.forcefield.0),
+            &self.res.panorama,
         ))
     }
     fn apply_settings(&mut self) {
@@ -7822,7 +7739,7 @@ impl Game<'_> {
             }
         }
         let celestial = if title && !live {
-            self.panorama_geometry()
+            Vec::new()
         } else if self.dim == Dim::Overworld
             && self.potions.effects.get("darkness").is_none()
             && self.potions.effects.get("blindness").is_none()
@@ -8949,6 +8866,7 @@ pub fn run() -> Result<()> {
     let light = Arc::new(LightTables::load(&root, assets.registry, &facts)?);
     log::info!("load tables: {:.2}s", started.elapsed().as_secs_f32());
     let atlas = HudAtlas::build(&root)?;
+    let panorama = horizon_client::gfx::panorama::Faces::load(&root);
     horizon_client::ui::load_metadata(&root);
     horizon_client::lang::set(horizon_client::lang::Language::load(
         &[&root],
@@ -9016,6 +8934,7 @@ pub fn run() -> Result<()> {
         biomes,
         environment,
         atlas,
+        panorama,
         item_renderer: Arc::new(horizon_client::item_render::ItemRenderer::load(&root)?),
         layer_names,
         providers: Providers::load(&root),
