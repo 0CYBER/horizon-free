@@ -3,8 +3,8 @@
 `models::prepare` parsed `model-states.json` to select blocks, then
 `StateModels::load` reopened and parsed the same document for binding and baking.
 `StateModels::from_facts` now borrows the first parsed map. The public `load`
-entry point still reads, parses and validates its own document. Neither path
-changes the unbuffered `serde_json::from_reader(File)` strategy.
+entry point still reads, parses and validates its own document. Both paths retain
+the `fs::read` + `serde_json::from_slice` strategy merged in PR #205.
 
 The shared map uses `BTreeMap`, preserving the original catalog loader's JSON
 validation, including rejection of top-level `null`. The old selection map was
@@ -15,10 +15,10 @@ cache or extra clones were added.
 
 ## Measurement
 
-The committed `model_states_bench` example runs the original two-parse sequence
+The committed `model_states_bench` example runs main's two-parse sequence after PR #205
 (first a serde JSON map, then `StateModels::load`) and the new one-parse sequence
 (first a BTreeMap, then `StateModels::from_facts`). Both select blocks from the
-same generated document and call the actual catalog binding/baking code. Timing
+same generated document with slice parsing and call the actual catalog binding/baking code. Timing
 includes file reads, parsing, filtering, binding, baking and result destruction.
 Fixture generation and equality checks run outside the timed region.
 
@@ -35,12 +35,18 @@ On AMD Ryzen 5 5600X, Linux 7.2.8-zen1-2-zen x86_64, rustc 1.99.0
 
 | Path | Median (15 samples) |
 | --- | ---: |
-| Before: parse twice | 2732.004 ms |
-| After: reuse first parse | 1386.060 ms |
+| Before: parse twice, with #205 slice readers | 96.080 ms |
+| After: reuse first parse, with #205 slice readers | 73.585 ms |
 
-**1.971x speedup; 49.27% less elapsed time** for this loading segment. Each path
+**1.306x speedup; 23.41% less elapsed time** for this loading segment after PR #205. Each path
 has two warmups, sample order alternates, and inputs/results use `black_box`.
 This excludes gallery placements, GPU work and overall application startup.
+
+These measurements supersede the original unbuffered-reader timings
+(2732.004 ms → 1386.060 ms, 1.971x) after rebasing onto main at
+`e96e1571`. The reviewer measured approximately 1.05x with real prepared resources;
+the generated fixture's balance of parsing and binding differs from production.
+The change still removes one complete document read, parse and JSON tree.
 
 Equality validation compares every state's selected variants and baked geometry
 at three positions, plus sprite layers and opacity/translucency flags. The
@@ -52,6 +58,7 @@ source file has been deleted.
 
 ```sh
 export CARGO_TARGET_DIR=/home/bob/Documents/horizon/target
+export CARGO_INCREMENTAL=0
 cargo run -p horizon-client --profile fast --example model_states_bench -- 15
 cargo test -p horizon-client --profile fast --example model_states_bench
 cargo clippy -p horizon-client --all-targets --profile fast -- -D warnings

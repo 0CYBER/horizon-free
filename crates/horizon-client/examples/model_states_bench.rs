@@ -79,7 +79,7 @@ impl Fixture {
         })
     }
     fn facts(&self) -> Result<BTreeMap<String, Value>> {
-        Ok(serde_json::from_reader(fs::File::open(
+        Ok(serde_json::from_slice(&fs::read(
             self.root.join("model-states.json"),
         )?)?)
     }
@@ -98,7 +98,7 @@ impl Fixture {
             StateModels::from_facts(&self.root, &self.registry, &blocks, &mut sprites, &facts)?
         } else {
             let facts: serde_json::Map<String, Value> =
-                serde_json::from_reader(fs::File::open(self.root.join("model-states.json"))?)?;
+                serde_json::from_slice(&fs::read(self.root.join("model-states.json"))?)?;
             let blocks = self.block_names(facts.keys());
             StateModels::load(&self.root, &self.registry, &blocks, &mut sprites)?
         };
@@ -165,7 +165,7 @@ fn main() -> Result<()> {
     let mut before = Vec::new();
     let mut after = Vec::new();
     for iteration in 0..repetitions {
-        // Alternate order to limit cache/order bias. File reads remain unbuffered.
+        // Alternate order to limit cache/order bias. Both paths use slice parsing.
         for reuse in if iteration % 2 == 0 {
             [false, true]
         } else {
