@@ -1018,12 +1018,36 @@ pub fn wrap(ui: &Ui, text: &str, width: f32) -> Vec<String> {
 /// blurred world, with the game's actions as a page. Ids match
 /// `game/screens.rs`'s PauseScreen actions: 0 back to game, 1 options,
 /// 2 save and quit, 3 statistics, 4 advancements, 9 world options.
+/// Play with friends as the pause menu shows it (game/friends.rs fills it).
+#[derive(Clone, Debug, Default)]
+pub struct FriendsView {
+    /// A singleplayer world (not a server): the button is offered.
+    pub shown: bool,
+    /// A relay is configured in this build.
+    pub available: bool,
+    pub sharing: bool,
+    pub code: Option<String>,
+    /// While there is no code: getting one, or why not.
+    pub status: String,
+    /// The players in the world besides the host.
+    pub guests: Vec<String>,
+    pub notice: Option<String>,
+    /// The code was just copied.
+    pub copied: bool,
+}
+
 pub mod pause {
     use super::*;
     fn act(a: u8) -> u64 {
         id("pause", u64::from(a))
     }
-    pub fn draw(ui: &mut Ui, world: &str, quit_label: &str, opened: Instant) {
+    pub fn draw(
+        ui: &mut Ui,
+        world: &str,
+        quit_label: &str,
+        opened: Instant,
+        friends: &FriendsView,
+    ) {
         let (w, h) = (ui.w, ui.h);
         let p = t::ease_out_quint(opened.elapsed().as_secs_f32() / t::move_());
         ui.opacity = p;
@@ -1065,8 +1089,31 @@ pub mod pause {
             Kind::Secondary,
             true,
         );
+        if friends.shown {
+            let iw = ui.button_width("Invite friends", true);
+            ui.button(
+                act(10),
+                [x + bw + lw + 16.0, y, iw, CONTROL_LARGE],
+                "Invite friends",
+                Kind::Secondary,
+                friends.available && !friends.sharing,
+            );
+        }
         y += CONTROL_LARGE + 32.0;
         ui.row_index = 0;
+        if friends.shown && !friends.available {
+            ui.text(
+                Face::Regular,
+                SMALL,
+                x,
+                y - 18.0,
+                color::FAINT,
+                "Inviting friends isn't available yet in this build.",
+            );
+        }
+        if friends.sharing {
+            y = invite(ui, x, y, cw, friends);
+        }
         ui.divider(x, y, cw);
         let rh = ui.row(
             x,
@@ -1088,6 +1135,65 @@ pub mod pause {
         ui.opacity = 1.0;
         ui.offset = (0.0, 0.0);
     }
+    /// The invite section while sharing: the code with Copy and Stop
+    /// sharing, who is here, and what changed. Returns the y below it.
+    fn invite(ui: &mut Ui, x: f32, mut y: f32, cw: f32, f: &FriendsView) -> f32 {
+        ui.divider(x, y, cw);
+        let top = y + 12.0;
+        ui.text(
+            Face::Regular,
+            BODY,
+            x,
+            top + 6.0,
+            color::MUTED,
+            "Invite code",
+        );
+        let vx = x + t::ROW_LABEL + 16.0;
+        match &f.code {
+            Some(code) => {
+                ui.text_line(Face::Display, 22.0, CONTROL, vx, top, color::TEXT, code);
+            }
+            None => {
+                let status = ui.fit(Face::Regular, BODY, &f.status, cw - t::ROW_LABEL - 220.0);
+                ui.text_line(Face::Regular, BODY, CONTROL, vx, top, color::MUTED, &status);
+            }
+        }
+        let stop = "Stop sharing";
+        let sw = ui.button_width(stop, false);
+        ui.button(
+            act(12),
+            [x + cw - sw, top, sw, CONTROL],
+            stop,
+            Kind::Danger,
+            true,
+        );
+        let copy = if f.copied { "Copied" } else { "Copy" };
+        let copy_w = ui.button_width("Copied", false);
+        ui.button(
+            act(11),
+            [x + cw - sw - 8.0 - copy_w, top, copy_w, CONTROL],
+            copy,
+            Kind::Secondary,
+            f.code.is_some(),
+        );
+        y = top + CONTROL + 10.0;
+        let here = if f.guests.is_empty() {
+            "No friends here yet.".to_owned()
+        } else {
+            format!("Here now: {}", f.guests.join(", "))
+        };
+        let lines = [
+            Some("Friends paste the code in Multiplayer, Join a friend, or on the launcher's Play page.".to_owned()),
+            Some(here),
+            f.notice.clone(),
+        ];
+        for line in lines.into_iter().flatten() {
+            let line = ui.fit(Face::Regular, SMALL, &line, cw);
+            ui.text(Face::Regular, SMALL, x, y, color::FAINT, &line);
+            y += (SMALL * 1.45).round();
+        }
+        y + 12.0
+    }
     /// The PauseScreen action under a click, if any.
     pub fn click(
         atlas: &HudAtlas,
@@ -1096,6 +1202,7 @@ pub mod pause {
         y: f32,
         world: &str,
         quit_label: &str,
+        friends: &FriendsView,
     ) -> Option<u8> {
         let mut ui = Ui::dry(atlas, batch, (x, y));
         draw(
@@ -1103,6 +1210,7 @@ pub mod pause {
             world,
             quit_label,
             Instant::now() - std::time::Duration::from_secs(5),
+            friends,
         );
         let hit = ui.hit((x, y))?;
         let nav = id("pause.nav", 0);
@@ -1111,7 +1219,9 @@ pub mod pause {
             h if h == nav + 1 => Some(4),
             h if h == nav + 2 => Some(3),
             h if h == nav + 3 => Some(1),
-            h => [0u8, 1, 2, 3, 4, 9].into_iter().find(|&a| act(a) == h),
+            h => [0u8, 1, 2, 3, 4, 9, 10, 11, 12]
+                .into_iter()
+                .find(|&a| act(a) == h),
         }
     }
 }
