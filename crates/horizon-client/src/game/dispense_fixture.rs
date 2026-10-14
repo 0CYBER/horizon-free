@@ -131,6 +131,8 @@ impl Game<'_> {
         self.level_events.clear();
         self.orbs.clear();
         self.falling.clear();
+        // Hopper cooldowns of an earlier case.
+        self.hoppers.clear();
         self.ui.rules = Default::default();
         // The oracle level plays on normal difficulty.
         self.ui.difficulty = 2;
@@ -260,8 +262,15 @@ impl Game<'_> {
             pos[2].as_i64().unwrap_or(0) as i32,
         );
         let state = self.world.block(origin.x, origin.y, origin.z);
+        let mut used = Vec::new();
         if let Some(op) = case.get("remove") {
             self.fixture_remove(origin, op)?;
+        } else if let Some(op) = case.get("use") {
+            used = self.fixture_use(origin, op)?;
+        } else if case.get("hopper").is_some() {
+            // HopperBlockEntity.pushItemsTick, once.
+            self.hopper_try_move_items((origin.x, origin.y, origin.z));
+            self.process_level_events()?;
         } else {
             self.dispense_from(origin, state)?;
             // CrafterBlockEntity.serverTick, the crafting animation running down.
@@ -335,7 +344,61 @@ impl Game<'_> {
         for (sound, at, _, _) in self.audio.capture.take().unwrap_or_default() {
             out.push(format!("S {} {sound}", floor_pos(at)));
         }
+        out.extend(used);
         out.push(format!("rng {}", self.world.random.next_long()));
+        Ok(out)
+    }
+
+    /// A player holding the case's item right-clicks the block at `pos`
+    /// (`use_item_as_player`'s block steps): the statistics, the result
+    /// and the held stack, as `VanillaDispenserOracle.use` prints them.
+    fn fixture_use(&mut self, pos: BlockPos, op: &Value) -> Result<Vec<String>> {
+        let stack = parse_stack(op["item"].as_str().unwrap_or("-"))?;
+        self.creative = op["creative"].as_bool().unwrap_or(false);
+        self.inventory[self.selected] = stack.clone();
+        let used_before = stack
+            .as_ref()
+            .map_or(0, |s| self.stats.get("used", &s.item));
+        let at = [pos.x, pos.y, pos.z];
+        let mut consumed = self.use_composter(at, stack.as_ref());
+        if !consumed {
+            let player = horizon_world::level::PlayerContext {
+                yaw: 0.0,
+                pitch: 90.0,
+                may_build: true,
+                can_eat: self.creative,
+                game_master: false,
+            };
+            let hit = horizon_core::geometry::Vec3::new(
+                f64::from(pos.x) + 0.5,
+                f64::from(pos.y) + 1.0,
+                f64::from(pos.z) + 0.5,
+            );
+            let result = self.with_level(|b, level, ticks| {
+                b.use_without_item(
+                    level,
+                    ticks,
+                    pos,
+                    horizon_core::geometry::Direction::Up,
+                    hit,
+                    player,
+                )
+            });
+            consumed = result.consumes_action();
+        }
+        self.process_level_events()?;
+        let mut out = Vec::new();
+        if let Some(s) = &stack {
+            let used = self.stats.get("used", &s.item) - used_before;
+            if used != 0 {
+                out.push(format!("stat {} minecraft:used {used}", s.item));
+            }
+        }
+        out.push(format!(
+            "use {} held {}",
+            if consumed { "consumed" } else { "pass" },
+            canon_stack(self.inventory[self.selected].as_ref())
+        ));
         Ok(out)
     }
 

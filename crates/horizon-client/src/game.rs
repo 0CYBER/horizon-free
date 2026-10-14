@@ -19,6 +19,7 @@ mod chat;
 mod combat;
 mod command_harness;
 mod commands;
+mod composter;
 mod control;
 mod copper_golems;
 mod creaking;
@@ -1551,6 +1552,11 @@ impl Game<'_> {
                     data,
                 } => self.sculk_charge_event(pos, data),
                 LevelEvent::LevelEvent { id: 3007, pos, .. } => self.shriek_event(pos),
+                LevelEvent::LevelEvent {
+                    id: 1500,
+                    pos,
+                    data,
+                } => self.composter_fill_event(pos, data == 1),
                 LevelEvent::LevelEvent { id, pos, .. } => {
                     let c = Some([
                         f64::from(pos.x) + 0.5,
@@ -2020,6 +2026,10 @@ impl Game<'_> {
                 return Ok(());
             }
             if self.use_jukebox(hit.pos, held.as_ref()) {
+                self.swing_arm();
+                return Ok(());
+            }
+            if self.use_composter(hit.pos, held.as_ref()) {
                 self.swing_arm();
                 return Ok(());
             }

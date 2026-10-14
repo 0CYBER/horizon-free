@@ -432,6 +432,11 @@ public final class VanillaBlockUpdateOracle {
             world.emit("D " + id.identifier());
             return delegate != null ? delegate.getLootTable(id) : net.minecraft.world.level.storage.loot.LootTable.EMPTY;
         }
+        /** The registries loot contexts resolve providers in (a composter's compostable layers). */
+        @Override
+        public net.minecraft.core.HolderLookup.Provider lookup() {
+            return delegate != null ? delegate.lookup() : ParityData.lookup;
+        }
     }
 
     static final class Server extends net.minecraft.server.MinecraftServer {
