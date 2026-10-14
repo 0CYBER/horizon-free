@@ -835,6 +835,8 @@ struct Game<'a> {
     armor_stand_assets: armor_stands::ArmorStandAssets,
     boats: Vec<boats::Boat>,
     boat_models: boats::BoatModels,
+    /// EndCrystalModel's baked layer.
+    crystal_model: Option<horizon_client::mobs::Part>,
     carts: Vec<minecarts::Minecart>,
     /// Songs playing from jukeboxes (tracked sound handles).
     jukebox_sounds: HashMap<(i32, i32, i32), u64>,
@@ -9138,6 +9140,7 @@ pub fn run() -> Result<()> {
         armor_stand_assets: armor_stands::ArmorStandAssets::load(&root),
         boats: Vec::new(),
         boat_models: boats::BoatModels::load(&root),
+        crystal_model: horizon_client::mobs::load_model(&root, "minecraft:end_crystal#main"),
         carts: Vec::new(),
         jukebox_sounds: HashMap::new(),
         bolts: Vec::new(),

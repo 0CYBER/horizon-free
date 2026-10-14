@@ -294,12 +294,26 @@ fn main() -> horizon_client::Result<()> {
     let types = MobTypes::load(&root)?;
     let animations = MobData::load_animations(&root);
     let mut out = String::new();
+    let crystal = horizon_client::mobs::load_model(&root, "minecraft:end_crystal#main");
     for line in fs::read_to_string(&args[1])?.lines() {
         let v: Value = serde_json::from_str(line)?;
         let layer = v["layer"]
             .as_str()
             .unwrap_or_default()
             .trim_start_matches("minecraft:");
+        // EndCrystalModel is not a mob's: horizon_client::end_crystal poses it.
+        if layer == "end_crystal#main"
+            && let Some(model) = &crystal
+        {
+            let case = &v["case"];
+            let mut poses = horizon_client::end_crystal::poses(
+                model,
+                case["ageInTicks"].as_f64().unwrap_or(0.0) as f32,
+                case["showsBottom"].as_bool().unwrap_or(false),
+            );
+            out.push_str(&format!("{}\n", emit(model, &mut poses, case, layer)));
+            continue;
+        }
         let baby = layer.contains("_baby#");
         let adult = layer.replace("_baby#", "#");
         // Variant layers (sizes, hatless villagers, climate cows...) animate
@@ -576,35 +590,38 @@ fn main() -> horizon_client::Result<()> {
             }
             _ => anim::setup(&mob, s, p, &animations),
         }
-        // The harness's part-scale override, set after setupAnim as the oracle does.
-        if let Some(scale) = case["@partScale"].as_array() {
-            let pose = poses.get(scale[0].as_str().unwrap_or_default());
-            for i in 0..3 {
-                pose[6 + i] = scale[1 + i].as_f64().unwrap_or(1.0) as f32;
-            }
-        }
-        let mut parts = BTreeMap::new();
-        walk(&model, "", &poses, &mut parts);
-        let mut emitted = Vec::new();
-        render::draw(
-            &model,
-            root_transform(case),
-            &poses,
-            [0.0, 0.0, 1.0, 1.0],
-            0xFFFF_FFFF,
-            240 | 240 << 8,
-            0,
-            &mut emitted,
-        );
-        let mut vertices = BTreeMap::new();
-        let mut cursor = 0;
-        drawn(&model, "", &poses, &emitted, &mut cursor, &mut vertices);
-        assert_eq!(cursor, emitted.len(), "{layer}: draw's walk changed");
-        out.push_str(&format!(
-            "{}\n",
-            json!({"parts": parts, "vertices": vertices})
-        ));
+        out.push_str(&format!("{}\n", emit(&model, &mut poses, case, layer)));
     }
     fs::write(&args[2], out)?;
     Ok(())
+}
+
+/// Every part's pose, and the vertices drawn under the harness's root transform.
+fn emit(model: &Part, poses: &mut Poses, case: &Value, layer: &str) -> Value {
+    // The harness's part-scale override, set after setupAnim as the oracle does.
+    if let Some(scale) = case["@partScale"].as_array() {
+        let pose = poses.get(scale[0].as_str().unwrap_or_default());
+        for i in 0..3 {
+            pose[6 + i] = scale[1 + i].as_f64().unwrap_or(1.0) as f32;
+        }
+    }
+    let poses = &*poses;
+    let mut parts = BTreeMap::new();
+    walk(model, "", poses, &mut parts);
+    let mut emitted = Vec::new();
+    render::draw(
+        model,
+        root_transform(case),
+        poses,
+        [0.0, 0.0, 1.0, 1.0],
+        0xFFFF_FFFF,
+        240 | 240 << 8,
+        0,
+        &mut emitted,
+    );
+    let mut vertices = BTreeMap::new();
+    let mut cursor = 0;
+    drawn(model, "", poses, &emitted, &mut cursor, &mut vertices);
+    assert_eq!(cursor, emitted.len(), "{layer}: draw's walk changed");
+    json!({"parts": parts, "vertices": vertices})
 }
