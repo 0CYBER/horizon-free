@@ -1360,6 +1360,7 @@ impl Game<'_> {
         let mut projectiles = std::mem::take(&mut self.creatures.projectiles);
         let mut hits = Vec::new();
         let mut deflections: Vec<[f64; 3]> = Vec::new();
+        let mut arrow_events = Vec::new();
         {
             let mut targets: Vec<(Who, Aabb)> = self
                 .mobs
@@ -1392,9 +1393,28 @@ impl Game<'_> {
                 self.world.random.next_float()
             };
             let w = self.mob_world_base(&[]);
+            // Level.isRainingAt: raining, open to the sky (the biome's
+            // precipitation is not checked here).
+            let (raining, world) = (w.raining, w.world);
+            let rain = move |p: BlockPos| raining && world.light(p.x, p.y, p.z) >> 4 == 15;
+            let scene = horizon_client::arrows::ArrowScene {
+                world: w.world,
+                registry: w.registry,
+                facts: w.facts,
+                collision: w.collision,
+                fluids: &self.motion.fluids,
+                raining: &rain,
+            };
             let pw = ProjWorld { w: &w, targets };
             projectiles.retain_mut(|p| {
-                let (keep, hit) = p.tick(&pw);
+                let (keep, hit) = if p.arrow.is_some() {
+                    horizon_client::arrows::tick(p, &scene, &pw.targets)
+                } else {
+                    p.tick(&pw)
+                };
+                if let Some(a) = p.arrow.as_mut() {
+                    arrow_events.extend(a.events.drain(..).map(|e| (p.position, e)));
+                }
                 let wind = matches!(
                     p.kind,
                     ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge
@@ -1408,6 +1428,9 @@ impl Game<'_> {
                     && breezes.contains(&id)
                 {
                     super::wind::reverse(p, jitter);
+                    if let Some(a) = p.arrow.as_mut() {
+                        a.removed = false;
+                    }
                     deflections.push([at.x, at.y, at.z]);
                     return true;
                 }
@@ -1433,11 +1456,82 @@ impl Game<'_> {
             self.audio
                 .play("minecraft:entity.breeze.deflect", Some(at), 1.0, 1.0);
         }
+        for (at, event) in arrow_events {
+            self.arrow_event(at, event);
+        }
         self.creatures.projectiles.append(&mut projectiles);
         for (p, hit) in hits {
             self.projectile_hit(&p, hit)?;
         }
         Ok(())
+    }
+    /// What an arrow's tick asked for: its particles and sounds.
+    fn arrow_event(&mut self, at: Vec3, event: horizon_client::arrows::ArrowEvent) {
+        use horizon_client::arrows::{ArrowEvent, ArrowParticle, ArrowSound};
+        use horizon_client::particles::{ParticleOptions, ParticleType};
+        let kind = |k| match k {
+            ArrowParticle::Bubble => ParticleType::Bubble,
+            ArrowParticle::Crit => ParticleType::Crit,
+            ArrowParticle::Splash => ParticleType::Splash,
+        };
+        match event {
+            ArrowEvent::Particle {
+                kind: k,
+                position,
+                velocity,
+            } => self.particles.add(
+                &ParticleOptions::simple(kind(k)),
+                [position.x, position.y, position.z],
+                [velocity.x, velocity.y, velocity.z],
+            ),
+            ArrowEvent::Sound {
+                sound,
+                volume,
+                pitch,
+            } => {
+                let name = match sound {
+                    ArrowSound::Splash => "minecraft:entity.generic.splash",
+                    ArrowSound::HitGround => "minecraft:entity.arrow.hit",
+                    ArrowSound::Extinguish => "minecraft:entity.generic.extinguish_fire",
+                };
+                self.audio
+                    .play(name, Some([at.x, at.y, at.z]), volume, pitch);
+            }
+            ArrowEvent::BubbleColumnParticles { pos } => {
+                // Entity.sendBubbleColumnParticles: the level random places them.
+                for _ in 0..2 {
+                    let r = &mut self.world.random;
+                    let splash = [
+                        f64::from(pos.x) + r.next_double(),
+                        f64::from(pos.y + 1),
+                        f64::from(pos.z) + r.next_double(),
+                    ];
+                    let bubble = [
+                        f64::from(pos.x) + r.next_double(),
+                        f64::from(pos.y + 1),
+                        f64::from(pos.z) + r.next_double(),
+                    ];
+                    self.particles.send_particles(
+                        &ParticleOptions::simple(ParticleType::Splash),
+                        splash,
+                        [0.0; 3],
+                        1.0,
+                        1,
+                    );
+                    self.particles.send_particles(
+                        &ParticleOptions::simple(ParticleType::Bubble),
+                        bubble,
+                        [0.0, 0.01, 0.0],
+                        0.2,
+                        1,
+                    );
+                }
+            }
+            ArrowEvent::SplashEvent => {
+                self.projectile_event("minecraft:splash", None, [at.x, at.y, at.z]);
+            }
+            ArrowEvent::ShootEvent => {}
+        }
     }
     fn projectile_hit(&mut self, p: &Projectile, hit: Hit) -> Result<()> {
         self.combat.projectile_owner = match p.owner {
@@ -1530,13 +1624,8 @@ impl Game<'_> {
                     self.audio.play(sound, Some(atp), volume, pitch);
                 }
             }
-            (ProjectileKind::Arrow { .. }, Hit::Block { .. }) => {
-                if let Some((sound, volume, pitch)) =
-                    arrow_impact_sound(&mut self.world.random, true)
-                {
-                    self.audio.play(sound, Some(atp), volume, pitch);
-                }
-            }
+            // AbstractArrow.onHitBlock plays its sound itself (ArrowEvent).
+            (ProjectileKind::Arrow { .. }, Hit::Block { .. }) => {}
             (ProjectileKind::Snowball, hit) => {
                 if let Hit::Entity {
                     who: Who::Mob(id), ..
