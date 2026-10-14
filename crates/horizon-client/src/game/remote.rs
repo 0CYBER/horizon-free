@@ -182,7 +182,7 @@ impl Game<'_> {
         self.player = None;
         self.spawn = None;
         self.mobs.clear();
-        self.arrows.clear();
+        self.creatures.projectiles.clear();
         self.dropped.clear();
         self.particles.clear();
         self.orbs.clear();

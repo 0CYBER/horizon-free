@@ -26,7 +26,9 @@ import static dev.horizonlab.parity.VanillaRegistryCollisionScanOracle.*;
  * and bubbles, fluid currents and splashes, bubble columns, sticking in blocks,
  * falling out when the block goes, and despawning. Burning arrows: lava and fire along
  * the path, water putting them out, and the blocks they light (TNT, campfires,
- * candles). No entities to hit, no rain, no owner; sounds, particles and game events are recorded in order. */
+ * candles). Pickup: the INTANGIBLE_PROJECTILE ammo the constructor sees, `setOwner`, and
+ * `playerTouch` by a player (creative or not, with room in the inventory or not).
+ * No entities to hit, no rain; sounds, particles and game events are recorded in order. */
 public final class VanillaArrowOracle {
     static final class Border extends WorldBorder {
         @Override public boolean isInsideCloseToBorder(Entity e,AABB b){return false;}
@@ -96,6 +98,23 @@ public final class VanillaArrowOracle {
             events.add("sent "+particle(p)+" "+bits(new Vec3(x,y,z))+" "+bits(new Vec3(dx,dy,dz))+String.format(" %016x",Double.doubleToLongBits(speed)));return 0;
         }
     }
+    /** A player for `setOwner` and `playerTouch`: a real inventory and abilities,
+     * and `take` (the pickup packet) recorded. */
+    static final class Toucher extends net.minecraft.server.level.ServerPlayer{
+        boolean took;
+        Toucher(){super(null,null,null,null);}
+        @Override public void take(Entity entity,int count){took=true;}
+    }
+    static Toucher toucher(Object unsafe,Method allocate,boolean creative,String inventory)throws Exception{
+        var player=(Toucher)allocate.invoke(unsafe,Toucher.class);
+        var abilities=new net.minecraft.world.entity.player.Abilities();abilities.instabuild=creative;
+        field(net.minecraft.world.entity.player.Player.class,"abilities").set(player,abilities);
+        var items=new net.minecraft.world.entity.player.Inventory(player,new EntityEquipment());
+        field(net.minecraft.world.entity.player.Player.class,"inventory").set(player,items);
+        int filled=switch(inventory){case "full"->36;case "partial"->35;default->0;};
+        for(int i=0;i<filled;i++)items.setItem(i,new ItemStack(Items.STONE));
+        return player;
+    }
     static Field field(Class<?> c,String n)throws Exception{var f=c.getDeclaredField(n);f.setAccessible(true);return f;}
     static long seed(JsonElement v){return Long.parseLong(v.getAsString());}
     public static void main(String[] args)throws Exception{
@@ -107,6 +126,7 @@ public final class VanillaArrowOracle {
             net.minecraft.tags.FluidTags.LAVA,List.<Holder<net.minecraft.world.level.material.Fluid>>of(net.minecraft.world.level.material.Fluids.FLOWING_LAVA.builtInRegistryHolder(),net.minecraft.world.level.material.Fluids.LAVA.builtInRegistryHolder())))).apply();
         // The arrow's pickup stack: an arrow item without data components.
         Items.ARROW.builtInRegistryHolder().bindComponents(net.minecraft.core.component.DataComponentMap.EMPTY);
+        Items.STONE.builtInRegistryHolder().bindComponents(net.minecraft.core.component.DataComponentMap.EMPTY);
         var u=Class.forName("sun.misc.Unsafe");var f=u.getDeclaredField("theUnsafe");f.setAccessible(true);var unsafe=f.get(null);var allocate=u.getMethod("allocateInstance",Class.class);
         var description=JsonParser.parseString(Files.readString(dir.resolve("scene.json"))).getAsJsonObject();
         var trace=new Trace();trace.out=new PrintWriter(OutputStream.nullOutputStream());trace.fail=-1;
@@ -125,10 +145,14 @@ public final class VanillaArrowOracle {
         try(var out=new PrintWriter(Files.newBufferedWriter(dir.resolve(args[0]+".txt")));var lines=Files.lines(dir.resolve("inputs.txt"))){
             for(var line:(Iterable<String>)lines::iterator){
                 var row=JsonParser.parseString(line).getAsJsonObject();
-                var a=new Arrow(level,0,0,0,new ItemStack(Items.ARROW),null);
+                // ProjectileWeaponItem.useAmmo's stack: intangible when no ammo was used.
+                var ammo=new ItemStack(Items.ARROW);
+                if(row.get("intangible").getAsBoolean())ammo.set(net.minecraft.core.component.DataComponents.INTANGIBLE_PROJECTILE,net.minecraft.util.Unit.INSTANCE);
+                var a=new Arrow(level,0,0,0,ammo,null);
                 random.set(a,net.minecraft.util.RandomSource.create(seed(row.get("seed"))));
                 a.setPos(VanillaSceneCollisionOracle.vector(row.get("position")));a.setDeltaMovement(VanillaSceneCollisionOracle.vector(row.get("velocity")));
                 a.setCritArrow(row.get("crit").getAsBoolean());a.setNoPhysics(row.get("no_physics").getAsBoolean());
+                String touched="-";
                 for(var value:row.getAsJsonArray("ops")){
                     var op=value.getAsJsonObject();
                     switch(op.get("mode").getAsString()){
@@ -143,6 +167,23 @@ public final class VanillaArrowOracle {
                         // Flame's projectile_spawned ignite.
                         case "ignite"->a.igniteForSeconds(Float.intBitsToFloat(Integer.parseUnsignedInt(op.get("value").getAsString(),16)));
                         case "level_seed"->level.rng.setSeed(seed(op.get("value")));
+                        // setOwner(owner) for the pickup rule, then no owner for the flight.
+                        case "owner"->{
+                            Entity owner=switch(op.get("value").getAsString()){
+                                case "player"->toucher(unsafe,allocate,false,"empty");
+                                case "mob"->(Entity)allocate.invoke(unsafe,net.minecraft.world.entity.monster.zombie.Zombie.class);
+                                default->null;
+                            };
+                            a.setOwner(owner);a.setOwner((Entity)null);
+                        }
+                        // ArrowItem.asProjectile (dispensers) sets pickup directly.
+                        case "pickup"->a.pickup=AbstractArrow.Pickup.byOrdinal(op.get("value").getAsInt());
+                        case "touch"->{
+                            var player=toucher(unsafe,allocate,op.get("creative").getAsBoolean(),op.get("inventory").getAsString());
+                            a.playerTouch(player);
+                            int arrows=0;for(int i=0;i<36;i++)if(player.getInventory().getItem(i).getItem()==Items.ARROW)arrows+=player.getInventory().getItem(i).getCount();
+                            touched=player.took+" "+arrows;
+                        }
                         default->throw new AssertionError(op);
                     }
                     var state=(BlockState)lastState.get(a);
@@ -150,6 +191,7 @@ public final class VanillaArrowOracle {
                         inGround.invoke(a),inGroundTime.getInt(a),life.getInt(a),a.shakeTime,state==null?"none":Block.getId(state),a.getRemainingFireTicks(),touching.getBoolean(a),eyes.getBoolean(a),first.getBoolean(a),
                         Double.doubleToLongBits(a.getFluidHeight(net.minecraft.tags.FluidTags.WATER)),Double.doubleToLongBits(a.getFluidHeight(net.minecraft.tags.FluidTags.LAVA)),a.isRemoved(),a.isCritArrow(),Double.doubleToLongBits(a.fallDistance));
                     out.println("events "+String.join(" | ",level.events));level.events.clear();
+                    out.printf("pickup %d %s %s%n",a.pickup.ordinal(),a.getPickupItemStackOrigin().has(net.minecraft.core.component.DataComponents.INTANGIBLE_PROJECTILE),touched);touched="-";
                 }
                 out.println("end");
             }

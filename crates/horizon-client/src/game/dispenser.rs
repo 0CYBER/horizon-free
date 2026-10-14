@@ -967,18 +967,7 @@ impl Game<'_> {
                     "minecraft:tipped_arrow" => ProjectileKind::Arrow {
                         base_damage: 2.0,
                         critical: false,
-                        effect: stack
-                            .potion()
-                            .and_then(horizon_client::brewing::potion)
-                            .and_then(|def| {
-                                def.effects
-                                    .iter()
-                                    .find(|(id, _, _)| {
-                                        !horizon_client::brewing::effect(id)
-                                            .is_some_and(|e| e.instant)
-                                    })
-                                    .map(|(id, duration, _)| (*id, (duration / 8).max(1)))
-                            }),
+                        effect: tipped_effect(&stack),
                     },
                     "minecraft:fire_charge" | "minecraft:wind_charge" => {
                         // asProjectile aims with the level's random first; the
@@ -1001,6 +990,12 @@ impl Game<'_> {
                     _ => ProjectileKind::Snowball,
                 };
                 let mut shot = Projectile::new(kind, at, None);
+                // ArrowItem/SpectralArrowItem.asProjectile: dispensed arrows
+                // may be picked up.
+                if let Some(a) = shot.arrow.as_mut() {
+                    a.set_item(&one);
+                    a.pickup = horizon_client::arrows::Pickup::Allowed;
+                }
                 shot.shoot(&mut own, dir, power, uncertainty);
                 self.creatures.projectiles.push(shot);
             }
@@ -2134,4 +2129,17 @@ impl Game<'_> {
             CLICK,
         ))
     }
+}
+/// A tipped arrow's lasting effect at an eighth of the potion's duration
+/// (`Arrow.doPostHurtEffects`).
+pub(super) fn tipped_effect(stack: &ItemStack) -> Option<(&'static str, i32)> {
+    stack
+        .potion()
+        .and_then(horizon_client::brewing::potion)
+        .and_then(|def| {
+            def.effects
+                .iter()
+                .find(|(id, _, _)| !horizon_client::brewing::effect(id).is_some_and(|e| e.instant))
+                .map(|(id, duration, _)| (*id, (duration / 8).max(1)))
+        })
 }

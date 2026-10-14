@@ -43,6 +43,47 @@ pub enum Pickup {
     Allowed,
     CreativeOnly,
 }
+impl Pickup {
+    /// The saved `pickup` byte (`LEGACY_CODEC`: the ordinal, out of range is
+    /// DISALLOWED).
+    pub fn from_byte(b: i64) -> Self {
+        match b {
+            1 => Self::Allowed,
+            2 => Self::CreativeOnly,
+            _ => Self::Disallowed,
+        }
+    }
+    pub fn byte(self) -> i8 {
+        self as i8
+    }
+}
+/// `DataComponents.INTANGIBLE_PROJECTILE`.
+pub const INTANGIBLE: &str = "minecraft:intangible_projectile";
+/// `ProjectileWeaponItem.useAmmo`'s drawn stack: one of the ammo, marked
+/// intangible when no ammo was used (creative, Infinity, multishot extras).
+pub fn drawn_ammo(ammo: &crate::items::ItemStack, intangible: bool) -> crate::items::ItemStack {
+    let mut drawn = crate::items::ItemStack {
+        count: 1,
+        ..ammo.clone()
+    };
+    if intangible {
+        drawn.data_mut().set_other(
+            INTANGIBLE,
+            Some(horizon_world::nbt::Tag::Compound(Default::default())),
+        );
+    }
+    drawn
+}
+/// What `AbstractArrow.playerTouch` does for a player touching the arrow.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Touch {
+    /// Not stuck yet, still shaking, or not the player's to take.
+    Ignore,
+    /// ALLOWED: taken if the inventory takes this stack whole.
+    Give(crate::items::ItemStack),
+    /// CREATIVE_ONLY in creative: taken without an item.
+    Take,
+}
 /// What an arrow's tick asks the game to play or show.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ArrowEvent {
@@ -108,6 +149,8 @@ pub struct ArrowState {
     /// The block it stuck in (`lastState`).
     pub last_state: Option<BlockStateId>,
     pub pickup: Pickup,
+    /// `pickupItemStack`: what picking the arrow up gives.
+    pub pickup_item: crate::items::ItemStack,
     pub no_physics: bool,
     pub pierce: u8,
     /// `Entity.remainingFireTicks`.
@@ -149,6 +192,7 @@ impl ArrowState {
             shake: 0,
             last_state: None,
             pickup: Pickup::Disallowed,
+            pickup_item: crate::items::ItemStack::new("minecraft:arrow", 1),
             no_physics: false,
             pierce: 0,
             fire_ticks: 0,
@@ -161,6 +205,36 @@ impl ArrowState {
             removed: false,
             random,
             events: Vec::new(),
+        }
+    }
+    /// The `AbstractArrow` constructor's `pickupItemStack`: the drawn ammo
+    /// (one item). Ammo drawn without being used up (`INTANGIBLE_PROJECTILE`)
+    /// makes the arrow CREATIVE_ONLY; vanilla takes the component off the
+    /// stack it was given, not its copy, so the item keeps it.
+    pub fn set_item(&mut self, item: &crate::items::ItemStack) {
+        self.pickup_item = item.clone();
+        if item.data().and_then(|d| d.other(INTANGIBLE)).is_some() {
+            self.pickup = Pickup::CreativeOnly;
+        }
+    }
+    /// `AbstractArrow.setOwner`: a player's arrows may be picked up.
+    pub fn set_owner(&mut self, owner: Option<Who>) {
+        if owner == Some(Who::Player) && self.pickup == Pickup::Disallowed {
+            self.pickup = Pickup::Allowed;
+        }
+    }
+    /// `AbstractArrow.playerTouch` and `tryPickup` (`creative`:
+    /// `Player.hasInfiniteMaterials`). Like vanilla it does not look at
+    /// removal: players only touch arrows still in the world.
+    pub fn player_touch(&self, creative: bool) -> Touch {
+        if !(self.in_ground || self.no_physics) || self.shake > 0 {
+            return Touch::Ignore;
+        }
+        match self.pickup {
+            Pickup::Disallowed => Touch::Ignore,
+            Pickup::Allowed => Touch::Give(self.pickup_item.clone()),
+            Pickup::CreativeOnly if creative => Touch::Take,
+            Pickup::CreativeOnly => Touch::Ignore,
         }
     }
     /// `Entity.isOnFire` (arrows are not fire immune).

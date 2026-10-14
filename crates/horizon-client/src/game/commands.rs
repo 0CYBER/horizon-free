@@ -228,7 +228,8 @@ impl Game<'_> {
                 .get(i)
                 .map(|o| [o.position.x, o.position.y, o.position.z]),
             Target::Arrow(i) => self
-                .arrows
+                .creatures
+                .projectiles
                 .get(i)
                 .map(|a| [a.position.x, a.position.y, a.position.z]),
             Target::Stand(id) => self
@@ -392,7 +393,14 @@ impl Game<'_> {
             );
             candidates.extend(self.dropped.iter().map(|i| Target::Item(i.id)));
             candidates.extend((0..self.orbs.len()).map(Target::Orb));
-            candidates.extend((0..self.arrows.len()).map(Target::Arrow));
+            candidates.extend(
+                self.creatures
+                    .projectiles
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| p.arrow.is_some())
+                    .map(|(i, _)| Target::Arrow(i)),
+            );
             candidates.extend(self.armor_stands.iter().map(|a| Target::Stand(a.id)));
             candidates.extend(self.item_frames.iter().map(|f| Target::Frame(f.id)));
             candidates.extend(self.paintings.iter().map(|p| Target::Painting(p.id)));
@@ -960,7 +968,7 @@ impl Game<'_> {
                 }
             }
             Target::Arrow(i) => {
-                if let Some(a) = self.arrows.get_mut(i) {
+                if let Some(a) = self.creatures.projectiles.get_mut(i) {
                     a.position = v;
                     a.previous = v;
                 }
@@ -1294,8 +1302,13 @@ impl Game<'_> {
                 }
             }
             Target::Arrow(i) => {
-                if i < self.arrows.len() {
-                    self.arrows[i].age = u32::MAX / 2;
+                if let Some(a) = self
+                    .creatures
+                    .projectiles
+                    .get_mut(i)
+                    .and_then(|p| p.arrow.as_mut())
+                {
+                    a.removed = true;
                 }
             }
             Target::Stand(id) => self.armor_stands.retain(|a| a.id != id),
@@ -1325,7 +1338,9 @@ impl Game<'_> {
             self.kill_target(t);
         }
         self.orbs.retain(|o| o.age < u32::MAX / 2);
-        self.arrows.retain(|a| a.age < u32::MAX / 2);
+        self.creatures
+            .projectiles
+            .retain(|p| !p.arrow.as_ref().is_some_and(|a| a.removed));
         let message = if targets.len() == 1 {
             Text::translate("commands.kill.success.single", &[names[0].clone()])
         } else {

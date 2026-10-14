@@ -3,10 +3,14 @@
 #![forbid(unsafe_code)]
 use horizon_client::{
     Result,
-    arrows::{self, ArrowEvent, ArrowParticle, ArrowScene, ArrowSound, BlockReaction},
+    arrows::{
+        self, ArrowEvent, ArrowParticle, ArrowScene, ArrowSound, BlockReaction, Pickup, Touch,
+    },
     assets::Assets,
     blocks::BlockFacts,
     collisions,
+    items::ItemStack,
+    mobs::Who,
     motion::{LAVA, MotionResources, WATER},
     projectiles::{Projectile, ProjectileKind},
     world::World,
@@ -80,8 +84,14 @@ fn main() -> Result<()> {
             .with_arrow_random(LegacyRandom::new(seed(&f["seed"])));
         arrow.velocity = vector(&f["velocity"]);
         arrow.arrow.as_mut().unwrap().no_physics = f["no_physics"].as_bool().unwrap();
+        // ProjectileWeaponItem.useAmmo's stack, intangible when no ammo was used.
+        arrow.arrow.as_mut().unwrap().set_item(&arrows::drawn_ammo(
+            &ItemStack::new("minecraft:arrow", 1),
+            f["intangible"].as_bool().unwrap(),
+        ));
         for op in f["ops"].as_array().unwrap() {
             let mut events = Vec::new();
+            let mut touched = "-".to_string();
             match op["mode"].as_str().unwrap() {
                 "tick" => {
                     if !arrow.arrow.as_ref().unwrap().removed {
@@ -218,6 +228,35 @@ fn main() -> Result<()> {
                         u32::from_str_radix(op["value"].as_str().unwrap(), 16).unwrap(),
                     )),
                 "level_seed" => level_random.set_seed(seed(&op["value"])),
+                "owner" => arrow
+                    .arrow
+                    .as_mut()
+                    .unwrap()
+                    .set_owner(match op["value"].as_str() {
+                        Some("player") => Some(Who::Player),
+                        Some("mob") => Some(Who::Mob(1)),
+                        _ => None,
+                    }),
+                "pickup" => {
+                    arrow.arrow.as_mut().unwrap().pickup =
+                        Pickup::from_byte(op["value"].as_i64().unwrap())
+                }
+                // The game's touch: the inventory takes the arrow unless full,
+                // and a creative player takes it anyway.
+                "touch" => {
+                    let creative = op["creative"].as_bool().unwrap();
+                    let full = op["inventory"] == "full";
+                    let a = arrow.arrow.as_mut().unwrap();
+                    let (taken, arrows) = match a.player_touch(creative) {
+                        Touch::Ignore => (false, 0),
+                        Touch::Take => (true, 0),
+                        Touch::Give(_) => (!full || creative, u32::from(!full)),
+                    };
+                    if taken {
+                        a.removed = true;
+                    }
+                    touched = format!("{taken} {arrows}");
+                }
                 other => return Err(format!("unknown operation {other}").into()),
             }
             let a = arrow.arrow.as_ref().unwrap();
@@ -244,6 +283,13 @@ fn main() -> Result<()> {
                 a.fall_distance.to_bits()
             )?;
             writeln!(out, "events {}", events.join(" | "))?;
+            let a = arrow.arrow.as_ref().unwrap();
+            let intangible = a
+                .pickup_item
+                .data()
+                .and_then(|d| d.other(arrows::INTANGIBLE))
+                .is_some();
+            writeln!(out, "pickup {} {intangible} {touched}", a.pickup.byte())?;
         }
         writeln!(out, "end")?;
     }

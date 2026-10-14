@@ -7,14 +7,19 @@ scene (`VanillaArrowOracle`, client and server jars); Horizon's
 operation prints the arrow's position, motion, rotation, ground state, life,
 shake, stuck block, fire ticks, water flags, fluid heights, removal, crit flag
 and fall distance by exact bits, then its sounds, particles and game events in
-order. Cases: flights in the air with and without crits or physics, into and
+order, then its pickup rule, whether its item is intangible and what a player
+touching it took. Cases: flights in the air with and without crits or physics, into and
 through water (inertia, bubbles, splashes, currents of flowing water, eyes),
 kelp, seagrass and waterlogged blocks, bubble columns with and without drag
 and with air or water above, sticking in full and partial blocks, falling out
 when the block goes, starting inside a block, and despawning after 1200 ticks;
 burning arrows: lava and fire blocks lighting them, water putting them out,
 Flame (ignited at spawn), and TNT, campfires, candles and candle cakes hit by
-burning and non-burning arrows. No entities, owner or rain.
+burning and non-burning arrows; pickup: arrows from no one, a player or a mob,
+from intangible ammo (creative, Infinity, multishot extras) or a dispenser,
+touched in flight, while shaking and when stuck, by survival and creative
+players with empty, partly and fully filled inventories, and without physics.
+No entities to hit, no rain.
 """
 import json
 import os
@@ -42,9 +47,9 @@ def corpus():
         return [op('block', name='minecraft:' + name, position=list(p), **({'properties': properties} if properties else {})) for p in positions]
     def restore(positions):
         return [op('block', name='minecraft:air', position=list(p)) for p in positions]
-    def arrow(position, velocity, ops, crit=False, no_physics=False):
+    def arrow(position, velocity, ops, crit=False, no_physics=False, intangible=False):
         return dict(seed=str(rng.randrange(-1 << 63, 1 << 63)), position=vec(position), velocity=vec(velocity),
-                    crit=crit, no_physics=no_physics, ops=[op('level_seed', str(rng.randrange(1 << 48)))] + ops)
+                    crit=crit, no_physics=no_physics, intangible=intangible, ops=[op('level_seed', str(rng.randrange(1 << 48)))] + ops)
     ticks = lambda n: [op('tick') for _ in range(n)]
     def aim(speed, yaw, pitch):
         import math
@@ -153,6 +158,28 @@ def corpus():
             start = (25.5 - v[0] * 3, 9.3 - v[1] * 3, 25.5 - v[2] * 3)
             ops = ([ignite(rng.choice([1.0, 8.5, 100.0]))] if burning else []) + place(name, target, properties) + ticks(30) + restore(target)
             yield arrow(start, v, ops)
+    # Pickup: who shot it (setOwner), intangible ammo, dispensers' ALLOWED,
+    # then touches in flight, while shaking and once stuck.
+    def touch(creative, inventory):
+        return op('touch', creative=creative, inventory=inventory)
+    sources = [(None, False, None), ('player', False, None), ('mob', False, None), ('player', True, None),
+               (None, True, None), (None, False, 1), ('mob', False, 2), ('player', False, 2), ('none', False, 0)]
+    for owner, intangible, pickup in sources:
+        for creative in [False, True]:
+            for inventory in ['empty', 'partial', 'full']:
+                start = (rng.uniform(18, 30), rng.uniform(5.5, 7), rng.uniform(4, 30))
+                v = aim(rng.choice([.3, .8, 1.5]), rng.uniform(-180, 180), rng.uniform(30, 89))
+                ops = ([op('owner', owner)] if owner else []) + ([op('pickup', pickup)] if pickup is not None else [])
+                ops += [touch(creative, inventory)] + ticks(1)
+                # Until it sticks, touching every tick (shake 7 counts down).
+                ops += [o for _ in range(14) for o in (op('tick'), touch(creative, inventory))]
+                ops += ticks(3) + [touch(creative, inventory), touch(not creative, inventory)] + ticks(2)
+                yield arrow(start, v, ops, crit=rng.random() < .3, intangible=intangible)
+    # Without physics: touched in flight.
+    for owner in [None, 'player']:
+        for creative in [False, True]:
+            ops = ([op('owner', owner)] if owner else []) + [o for _ in range(4) for o in (op('tick'), touch(creative, 'empty'))]
+            yield arrow((rng.uniform(18, 30), 6, rng.uniform(4, 30)), aim(.4, rng.uniform(-180, 180), 0), ops, no_physics=True)
     # Despawning 1200 ticks after sticking in the floor.
     for _ in range(2):
         yield arrow((rng.uniform(18, 30), 6, rng.uniform(4, 30)), (0, -1, 0), ticks(1215))
@@ -185,7 +212,7 @@ def main():
          '-d', classes, oracle, *helpers], 'compile-java')
     fixtures = list(corpus())
     operations = sum(len(f['ops']) for f in fixtures)
-    expected = 2 * operations + len(fixtures)
+    expected = 3 * operations + len(fixtures)
     (build / 'inputs.txt').write_text(''.join(json.dumps(f, separators=(',', ':')) + '\n' for f in fixtures))
     input_hash = lab.digest(build / 'inputs.txt', 'sha256')
     run(['cargo', 'build', '--locked', '-p', 'horizon-client', '--example', 'arrow_probe'], 'compile-rust')
@@ -206,7 +233,7 @@ def main():
     base.ensure_sources_unchanged(sources, tested)
     if resource_hash != client.resource_fingerprint(resources) or input_hash != lab.digest(build / 'inputs.txt', 'sha256'):
         raise AssertionError('Arrow inputs changed during verification')
-    lab.write_json(report, {'schema': 1, 'minecraft': lock['minecraft']['version'], 'manifest_sha1': lock['minecraft']['manifest_sha1'],
+    lab.write_json(report, {'schema': 2, 'minecraft': lock['minecraft']['version'], 'manifest_sha1': lock['minecraft']['manifest_sha1'],
         'platform': platform.platform(), 'rustc': subprocess.check_output(['rustc', '--version'], text=True).strip(),
         'java': subprocess.check_output(['java', '--version'], text=True).splitlines()[0], 'fixtures': len(fixtures),
         'operations': operations, 'sources_sha256': tested, 'resources': resource_hash, 'input_sha256': input_hash,
