@@ -13,8 +13,11 @@ pub const STABLE: Duration = Duration::from_secs(60);
 /// permanent refusal) gave `reason`, rather than the connection failing.
 pub fn allowed(reason: &str, from_server: bool) -> bool {
     let r = reason.to_lowercase();
-    // Kicks, bans, whitelists, version and session refusals: never.
-    const NEVER: [&str; 9] = [
+    // Kicks, bans, whitelists, version refusals and the account's session
+    // refusals (`disconnect.loginFailedInfo.*` but the unreachable session
+    // servers, the server's failed username check, joining an online-mode
+    // server without an account): never.
+    const NEVER: [&str; 13] = [
         "ban",
         "kick",
         "white-list",
@@ -24,6 +27,10 @@ pub fn allowed(reason: &str, from_server: bool) -> bool {
         "another location",
         "online mode",
         "invalid server address",
+        "invalid session",
+        "multiplayer is disabled",
+        "failed to verify username",
+        "microsoft account",
     ];
     if NEVER.iter().any(|w| r.contains(w)) {
         return false;
@@ -32,12 +39,14 @@ pub fn allowed(reason: &str, from_server: bool) -> bool {
         return true;
     }
     // The server going away for a while: vanilla's shutdown and time-out
-    // reasons, a full server, a slow login, and restart messages.
-    const RETRY: [&str; 5] = [
+    // reasons, a full server, a slow login, the server's own session
+    // servers being down, and restart messages.
+    const RETRY: [&str; 6] = [
         "server closed",
         "timed out",
         "the server is full",
         "took too long to log in",
+        "authentication servers",
         "restart",
     ];
     RETRY.iter().any(|w| r.contains(w))
@@ -155,6 +164,39 @@ mod tests {
             true
         ));
         assert!(!allowed("Kicked for spamming", false));
+    }
+
+    #[test]
+    fn online_mode_login_failures() {
+        // The client's join with the session service (net.rs: Err, with
+        // vanilla's disconnect.loginFailedInfo texts).
+        let failed = |why: &str| format!("Failed to log in: {why}");
+        assert!(!allowed(
+            &failed("Invalid session (Try restarting your game and the launcher)"),
+            false
+        ));
+        assert!(!allowed(
+            &failed("You are banned from playing online"),
+            false
+        ));
+        assert!(!allowed(
+            &failed("Multiplayer is disabled. Please check your Microsoft account settings."),
+            false
+        ));
+        assert!(!allowed(crate::net::NOT_SIGNED_IN, false));
+        // Unreachable session servers are worth another try.
+        assert!(allowed(
+            &failed("The authentication servers are currently not reachable. Please try again."),
+            false
+        ));
+        assert!(allowed(&failed("Connection timed out"), false));
+        // The server's side: its username check failed, or its session
+        // servers are down.
+        assert!(!allowed("Failed to verify username!", true));
+        assert!(allowed(
+            "Authentication servers are down. Please try again later. Sorry!",
+            true
+        ));
     }
 
     #[test]

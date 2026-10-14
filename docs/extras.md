@@ -85,10 +85,14 @@ Horizon category in Controls, and adding one would put a non-vanilla mapping int
 - Backoff 5, 10, 20, 40, 60 s; at most 5 attempts, then it stops. The count
   only resets after staying connected for a minute, so a server that drops
   players at once never causes an endless loop.
-- Never after a kick, a ban, a whitelist or version refusal, a duplicate login
-  or an online-mode refusal: only lost connections (errors, time-outs, refused
-  connections while the server restarts) and the server's own "Server closed"
-  shutdown reason.
+- Never after a kick, a ban, a whitelist or version refusal, a duplicate login,
+  an online-mode refusal (no account signed in), or a session refusal from the
+  account's login (invalid session, banned from playing online, multiplayer
+  disabled, the server failing to verify the username). Unreachable session
+  servers, on either side, are retried with the same backoff.
+- Online-mode servers: the retry joins with the account the game signed in
+  with, held in memory for the whole run (`auth::current()`); nothing is
+  written to disk.
 
 ## Shared rules
 
