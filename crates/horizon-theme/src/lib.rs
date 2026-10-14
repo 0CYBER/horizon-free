@@ -271,8 +271,18 @@ pub const DARK: Palette = Palette {
     dark: true,
 };
 
-/// How strongly the game's menus veil the live title backdrop with the page colour.
-pub const VEIL: f32 = 0.86;
+/// How strongly the game's menus veil the live backdrop (the title panorama, or the world behind
+/// the pause and options screens) with the page colour. Every text colour the menus use keeps
+/// WCAG AA over it, even on a selected row's plate, with a backdrop as bright as
+/// [`BRIGHT_BACKDROP`] (a test checks it).
+pub const VEIL: f32 = 0.90;
+/// The title's home page shows more of the world; its text is `ink` and `ink_soft` only.
+pub const HOME_VEIL: f32 = 0.80;
+/// Muted text over the veiled backdrop: the dark palette's `muted`, lifted so it holds AA there.
+pub const BACKDROP_MUTED: u32 = 0x9fa3ae;
+/// The brightest backdrop the veils are measured against: a light grey of luminance 0.77,
+/// brighter than the snowiest title panorama measured (0.49) and a sunlit world.
+pub const BRIGHT_BACKDROP: u32 = 0xe3e3e3;
 
 impl Palette {
     /// Every colour with its token name, in the order the docs list them.
@@ -442,6 +452,36 @@ mod tests {
             assert!(contrast(p.on_accent, p.accent) >= 4.5);
             assert!(contrast(p.page, p.ink) >= 4.5);
         }
+    }
+
+    /// The game's menus over the brightest backdrop: the page colour veiled over it, and a
+    /// selected row's plate (ink at 8 %) on top.
+    #[test]
+    fn menu_text_meets_wcag_aa_over_a_bright_backdrop() {
+        let mix = |a: u32, b: u32, t: f32| {
+            [16, 8, 0].iter().fold(0, |out, s| {
+                let (x, y) = (((a >> s) & 255) as f32, ((b >> s) & 255) as f32);
+                out | ((x * (1. - t) + y * t).round() as u32) << s
+            })
+        };
+        let p = DARK;
+        for (veil, texts) in [
+            (
+                VEIL,
+                &[p.ink, p.ink_soft, BACKDROP_MUTED, p.danger, p.success][..],
+            ),
+            (HOME_VEIL, &[p.ink, p.ink_soft][..]),
+        ] {
+            let bg = mix(BRIGHT_BACKDROP, p.page, veil);
+            let plate = mix(bg, p.ink, 0.08);
+            for &text in texts {
+                for under in [bg, plate] {
+                    let ratio = contrast(text, under);
+                    assert!(ratio >= 4.5, "#{text:06x} over veil {veil}: {ratio:.2}");
+                }
+            }
+        }
+        assert!(contrast(BACKDROP_MUTED, p.page) >= 4.5);
     }
 
     #[test]

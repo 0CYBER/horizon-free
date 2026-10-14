@@ -55,7 +55,11 @@ Every text colour passes WCAG AA (4.5:1) on every background it is used on; the 
 | `success`    | `#1d7a48` | `#45c27a` | "Matches vanilla", "Ready" |
 
 The game's menus draw over the live title backdrop, always in the dark palette, with the page
-colour as a veil (`VEIL`, 0.86) so text keeps its contrast whatever the world shows.
+colour as a flat veil so text keeps its contrast whatever the world shows: `VEIL` (0.90) on
+every page and in a world, `HOME_VEIL` (0.80) on the title's home page, which shows more of the
+world and keeps to `ink` and `ink_soft`. Muted text over the backdrop is `BACKDROP_MUTED`
+(`#9fa3ae`). A test holds every pair to AA over a backdrop of luminance 0.77 (the snowiest title
+panorama measured reaches 0.49), on the bare veil and on a selected row's plate.
 
 ### Type
 
