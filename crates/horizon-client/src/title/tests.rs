@@ -19,7 +19,7 @@ impl Fixture {
         ));
         fs::create_dir_all(root.join("saves")).unwrap();
         Self {
-            title: Title::new(root.join("saves")),
+            title: Title::new(root.join("saves"), &root),
             root,
         }
     }

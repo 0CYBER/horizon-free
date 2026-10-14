@@ -108,7 +108,7 @@ impl Title {
     /// live backdrop is visible (0 shows the plain cold background).
     pub fn draw_horizon(&self, ui: &mut Ui, backdrop: f32) {
         if classic(&self.mode) {
-            self.draw(ui.atlas, ui.batch, ui.cursor);
+            self.draw(ui.atlas, ui.batch, ui.cursor, false);
             return;
         }
         let reveal = self.opening_phase(backdrop >= 1.0);

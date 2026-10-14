@@ -813,9 +813,8 @@ impl OptionsUi {
     }
     /// Open a page whose Done/Escape returns directly to the calling screen.
     pub fn open_at(&mut self, in_world: bool, page: Page) {
-        self.stack = vec![page];
-        self.scroll = 0.0;
-        self.scrollbar_drag_y = None;
+        self.stack.clear();
+        self.push(page);
         self.in_world = in_world;
         self.selected_key = None;
     }
@@ -2461,17 +2460,33 @@ mod tests {
     }
 
     #[test]
-    fn title_accessibility_done_returns_directly_to_the_title() {
+    fn title_shortcuts_initialize_pages_and_return_directly_to_the_title() {
         let mut ui = OptionsUi::default();
         let mut s = Settings::default();
-        ui.open_at(false, Page::Accessibility);
-        assert_eq!(ui.page(), Page::Accessibility);
-        assert!(!ui.in_world);
-        assert!(ui.back(&mut s).contains(&Event::Close));
-        ui.open(false);
-        ui.show(Page::Accessibility);
-        assert!(!ui.back(&mut s).contains(&Event::Close));
-        assert_eq!(ui.page(), Page::Main);
+        for page in [Page::Accessibility, Page::Language] {
+            ui.language_choice = Some("de_de".into());
+            ui.language_search.set_value("old query");
+            ui.open_at(false, page);
+            assert_eq!(ui.page(), page);
+            assert!(!ui.in_world);
+            if page == Page::Language {
+                assert_eq!(ui.language_choice, None);
+                assert!(ui.language_search.value.is_empty());
+                assert!(ui.center_language);
+            }
+            assert!(ui.back(&mut s).contains(&Event::Close));
+            assert_eq!(s.language, "en_us");
+            ui.open(false);
+            ui.show(page);
+            assert!(!ui.back(&mut s).contains(&Event::Close));
+            assert_eq!(ui.page(), Page::Main);
+        }
+        ui.open_at(false, Page::Language);
+        ui.language_choice = Some("de_de".into());
+        let events = ui.back(&mut s);
+        assert!(events.contains(&Event::Language("de_de".into())));
+        assert!(events.contains(&Event::Close));
+        assert_eq!(s.language, "de_de");
     }
 
     #[test]

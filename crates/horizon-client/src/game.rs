@@ -3428,7 +3428,12 @@ impl Game<'_> {
                 title.draw_horizon(&mut ui, fade);
                 ui.finish();
             } else {
-                title.draw(&self.res.atlas, &mut batch, self.cursor);
+                title.draw(
+                    &self.res.atlas,
+                    &mut batch,
+                    self.cursor,
+                    self.settings.file.bool("hideSplashTexts"),
+                );
             }
             return batch;
         }
@@ -8691,6 +8696,9 @@ impl ApplicationHandler for Game<'_> {
                         Action::Options => self.open_options(true),
                         Action::Accessibility => self
                             .open_options_at(true, horizon_client::options_ui::Page::Accessibility),
+                        Action::Language => {
+                            self.open_options_at(true, horizon_client::options_ui::Page::Language)
+                        }
                         Action::Play { folder } => self.open_world(&folder, None, None, false)?,
                         Action::Create {
                             folder,
