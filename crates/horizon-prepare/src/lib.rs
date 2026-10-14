@@ -398,7 +398,8 @@ impl Run<'_> {
 
 /// Prepares the resources; returns their folder (`.local/horizon-client/<version>`).
 pub fn prepare(options: &Options, log: Log) -> Result<PathBuf, String> {
-    let root = &options.root;
+    let root =
+        &fs::canonicalize(&options.root).map_err(|e| format!("{}: {e}", options.root.display()))?;
     let lock = artifacts::Lock::read(root)?;
     // Java first: nothing below can finish without it, and the player should hear it at once.
     let jdk = java::find(lock.java_major)?;
