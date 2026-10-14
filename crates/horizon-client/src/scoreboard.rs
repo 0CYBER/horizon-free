@@ -533,7 +533,7 @@ impl Team {
     /// `PlayerTeam.getFormattedDisplayName`.
     pub fn formatted_display_name(&self) -> Text {
         let inner = hover_name(comp_text(&self.display_name), &self.name).with_style(&Style {
-            suggest: None,
+            click: None,
             ..Style::default()
         });
         self.apply_color(bracketed(inner))

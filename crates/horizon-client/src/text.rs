@@ -39,6 +39,15 @@ pub fn named_color(name: &str) -> Option<u32> {
     COLORS.iter().find(|c| c.1 == name).map(|c| c.2)
 }
 
+/// Click actions carried by locally constructed text components.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ClickEvent {
+    SuggestCommand(String),
+    CopyToClipboard(String),
+    /// A local file or directory to open with the system handler.
+    OpenFile(String),
+}
+
 /// Text style; `None` fields inherit from the enclosing style.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Style {
@@ -48,8 +57,7 @@ pub struct Style {
     pub underlined: Option<bool>,
     pub strikethrough: Option<bool>,
     pub obfuscated: Option<bool>,
-    /// ClickEvent.SuggestCommand: clicking puts this into the chat box.
-    pub suggest: Option<String>,
+    pub click: Option<ClickEvent>,
     /// Hover text.
     pub hover: Option<Box<Text>>,
 }
@@ -68,8 +76,8 @@ impl Style {
         self.underlined = self.underlined.or(base.underlined);
         self.strikethrough = self.strikethrough.or(base.strikethrough);
         self.obfuscated = self.obfuscated.or(base.obfuscated);
-        if self.suggest.is_none() {
-            self.suggest.clone_from(&base.suggest);
+        if self.click.is_none() {
+            self.click.clone_from(&base.click);
         }
         if self.hover.is_none() {
             self.hover.clone_from(&base.hover);
@@ -133,6 +141,15 @@ impl Text {
     }
     pub fn colored(s: impl Into<String>, color: u32) -> Self {
         Self::styled(s, Style::color(color))
+    }
+    /// ComponentUtils.copyOnClickText: a green, bracketed clipboard link.
+    pub fn copyable(s: impl Into<String>) -> Self {
+        let s = s.into();
+        Self::literal(format!("[{s}]")).with_style(&Style {
+            click: Some(ClickEvent::CopyToClipboard(s)),
+            hover: Some(Box::new(Self::translate("chat.copy.click", &[]))),
+            ..Style::color(GREEN)
+        })
     }
     /// Component.translatable(key, args) in the current language.
     pub fn translate(key: &str, args: &[Text]) -> Self {
@@ -423,11 +440,17 @@ fn style_json(style: &Style) -> Vec<(String, Value)> {
             out.push((key.to_owned(), f.into()));
         }
     }
-    if let Some(command) = &style.suggest {
-        out.push((
-            "click_event".to_owned(),
-            json!({ "action": "suggest_command", "command": command }),
-        ));
+    if let Some(click) = &style.click {
+        let event = match click {
+            ClickEvent::SuggestCommand(command) => {
+                json!({ "action": "suggest_command", "command": command })
+            }
+            ClickEvent::CopyToClipboard(value) => {
+                json!({ "action": "copy_to_clipboard", "value": value })
+            }
+            ClickEvent::OpenFile(path) => json!({ "action": "open_file", "path": path }),
+        };
+        out.push(("click_event".to_owned(), event));
     }
     if let Some(hover) = &style.hover {
         out.push((
@@ -516,6 +539,41 @@ pub fn format_translation(template: &str, args: &[Text]) -> Text {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn click_events_serialize_and_inherit_as_one_style_field() {
+        for (event, json) in [
+            (
+                ClickEvent::SuggestCommand("/seed".into()),
+                json!({"action": "suggest_command", "command": "/seed"}),
+            ),
+            (
+                ClickEvent::CopyToClipboard("-9223372036854775808".into()),
+                json!({"action": "copy_to_clipboard", "value": "-9223372036854775808"}),
+            ),
+            (
+                ClickEvent::OpenFile("/tmp/My screenshots".into()),
+                json!({"action": "open_file", "path": "/tmp/My screenshots"}),
+            ),
+        ] {
+            let style = Style {
+                click: Some(event.clone()),
+                ..Style::default()
+            };
+            let text = Text::literal("link").with_style(&style);
+            assert_eq!(text.component()["click_event"], json);
+            assert_eq!(text.spans[0].style.click, Some(event));
+            let child = Text::copyable("42").with_style(&style);
+            assert_eq!(
+                child.spans[0].style.click,
+                Some(ClickEvent::CopyToClipboard("42".into()))
+            );
+            assert_eq!(
+                child.component()["click_event"],
+                json!({"action": "copy_to_clipboard", "value": "42"})
+            );
+        }
+    }
+
     #[test]
     fn formats_like_translatable_contents() {
         let a = [Text::literal("Steve"), Text::colored("Zombie", RED)];

@@ -328,7 +328,7 @@ impl Game<'_> {
         let message = self.expand_selectors(&raw);
         let hover = text::Style {
             hover: Some(Box::new(Text::translate("chat.type.team.hover", &[]))),
-            suggest: Some("/teammsg ".into()),
+            click: Some(text::ClickEvent::SuggestCommand("/teammsg ".into())),
             ..text::Style::default()
         };
         let team_name = team.formatted_display_name().with_style(&hover);
