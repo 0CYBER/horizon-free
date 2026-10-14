@@ -26,3 +26,8 @@ struct Out {
     if c.a < 0.004 { discard; }
     return c;
 }
+@fragment fn fs_crosshair(in: Out) -> @location(0) vec4<f32> {
+    let c = textureSample(atlas, atlas_sampler, in.uv) * in.color;
+    if c.a == 0.0 { discard; }
+    return c;
+}

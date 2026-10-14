@@ -3292,12 +3292,19 @@ impl Game<'_> {
             self.draw_spyglass(&mut batch);
             // Hud.extractCrosshair / extractItemHotbar / extractPlayerHealth /
             // extractVehicleHealth and the experience bar, laid out by hud_layout.
-            // Horizon has no attack cooldown yet: the strength is always full.
+            let attack_speed = self.main_hand_attack_speed();
+            let attack_strength = self.hand_strength.scale(0.0, attack_speed);
             let indicator = self.settings.attack_indicator;
             if self.camera_type.first_person() && !spectator {
-                let attack = (indicator == 1).then_some(1.0);
-                let draws = hud_layout::crosshair(wi, hi, attack, false);
+                let attack = (indicator == 1).then_some(attack_strength);
+                let full = indicator == 1
+                    && attack_strength >= 1.0
+                    && horizon_client::attack_strength::delay(attack_speed) > 5.0
+                    && self.crosshair_attack_ready(attack_strength, attack_speed);
+                let draws = hud_layout::crosshair(wi, hi, attack, full);
+                let start = batch.vertices.len();
                 hud_layout::paint(&mut batch, &self.res.atlas, &draws);
+                batch.invert_since(start);
             }
             if !spectator {
                 let inputs = hud_layout::HotbarInputs {
@@ -3306,7 +3313,7 @@ impl Game<'_> {
                     offhand: self.offhand.is_some(),
                     slots: std::array::from_fn(|i| self.inventory[i].as_ref().map(|_| 0.0)),
                     offhand_pop: 0.0,
-                    attack: (indicator == 2).then_some(1.0),
+                    attack: (indicator == 2).then_some(attack_strength),
                 };
                 let draws = hud_layout::hotbar(wi, hi, &inputs);
                 hud_layout::paint(&mut batch, &self.res.atlas, &draws);

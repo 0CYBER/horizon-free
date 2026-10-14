@@ -287,6 +287,7 @@ pub static GUI_SCALE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU3
 /// One frame of overlay geometry in GUI pixels.
 pub struct HudBatch {
     pub vertices: Vec<HudVertex>,
+    inverse_ranges: Vec<std::ops::Range<u32>>,
     pub scale: f32,
     pub width: f32,
     pub height: f32,
@@ -310,11 +311,43 @@ impl HudBatch {
         }
         Self {
             vertices: Vec::new(),
+            inverse_ranges: Vec::new(),
             scale: scale as f32,
             width: (window[0] as f32 / scale as f32).ceil(),
             height: (window[1] as f32 / scale as f32).ceil(),
             patches: Vec::new(),
         }
+    }
+    /// Use the crosshair's destination-dependent blend for vertices just emitted.
+    /// Calls follow draw order, so ordinary HUD geometry keeps its own blend.
+    pub fn invert_since(&mut self, start: usize) {
+        let range = start as u32..self.vertices.len() as u32;
+        if range.is_empty() {
+            return;
+        }
+        if let Some(last) = self.inverse_ranges.last_mut() {
+            debug_assert!(last.end <= range.start);
+            if last.end == range.start {
+                last.end = range.end;
+                return;
+            }
+        }
+        self.inverse_ranges.push(range);
+    }
+    /// Split the shared vertex buffer without changing the order of overlays.
+    fn draw_ranges(&self) -> impl Iterator<Item = (std::ops::Range<u32>, bool)> + '_ {
+        let end = self.vertices.len() as u32;
+        self.inverse_ranges
+            .iter()
+            .cloned()
+            .chain(std::iter::once(end..end))
+            .scan(0, |start, inverse| {
+                let normal = *start..inverse.start;
+                *start = inverse.end;
+                Some([(normal, false), (inverse, true)])
+            })
+            .flatten()
+            .filter(|(range, _)| !range.is_empty())
     }
     /// `AbstractContainerScreen.init`: center in integer GUI coordinates.
     pub fn centered_origin(&self, width: f32, height: f32) -> (f32, f32) {
@@ -604,6 +637,7 @@ pub struct HudRenderer {
     /// The shared atlas texture, for run-time glyph uploads.
     pub atlas_texture: Option<wgpu::Texture>,
     pipeline: wgpu::RenderPipeline,
+    inverse_pipeline: wgpu::RenderPipeline,
     group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
     buffer: wgpu::Buffer,
@@ -684,35 +718,50 @@ impl HudRenderer {
             ..Default::default()
         });
         let attributes = wgpu::vertex_attr_array![0=>Float32x2,1=>Float32x2,2=>Unorm8x4];
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("HUD"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<HudVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &attributes,
-                })],
+        let make_pipeline = |label, blend, fragment_entry| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<HudVertex>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &attributes,
+                    })],
+                },
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(fragment_entry),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let pipeline = make_pipeline("HUD", wgpu::BlendState::ALPHA_BLENDING, "fs_main");
+        let inverse_pipeline = make_pipeline(
+            "HUD crosshair",
+            wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::OneMinusDst,
+                    dst_factor: wgpu::BlendFactor::OneMinusSrc,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent::REPLACE,
             },
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+            "fs_crosshair",
+        );
         let capacity = 1 << 16;
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("HUD vertices"),
@@ -723,6 +772,7 @@ impl HudRenderer {
         Ok(Self {
             atlas_texture: None,
             pipeline,
+            inverse_pipeline,
             group,
             uniform,
             buffer,
@@ -800,10 +850,16 @@ impl HudRenderer {
             color_attachments: &attachments,
             ..Default::default()
         });
-        pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.group, &[]);
         pass.set_vertex_buffer(0, self.buffer.slice(..));
-        pass.draw(0..count as u32, 0..1);
+        for (range, inverse) in batch.draw_ranges() {
+            pass.set_pipeline(if inverse {
+                &self.inverse_pipeline
+            } else {
+                &self.pipeline
+            });
+            pass.draw(range, 0..1);
+        }
     }
 }
 
@@ -812,11 +868,57 @@ mod tests {
     use super::*;
 
     #[test]
+    fn hud_shader_validates_both_fragment_entries() {
+        let module = naga::front::wgsl::parse_str(include_str!("hud.wgsl")).unwrap();
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap();
+    }
+
+    #[test]
+    fn crosshair_blend_ranges_preserve_overlay_order() {
+        let mut batch = HudBatch::new([640, 480]);
+        assert!(batch.draw_ranges().next().is_none());
+        let quad = |batch: &mut HudBatch| batch.quad([[0.0; 2]; 4], [[0.0; 2]; 4], u32::MAX);
+        quad(&mut batch);
+        assert_eq!(batch.draw_ranges().collect::<Vec<_>>(), [(0..6, false)]);
+        // Missing sprites emit nothing and must not switch the blend.
+        batch.invert_since(batch.vertices.len());
+        let start = batch.vertices.len();
+        quad(&mut batch);
+        batch.invert_since(start);
+        // Adjacent crosshair pieces use the same pipeline.
+        let start = batch.vertices.len();
+        quad(&mut batch);
+        batch.invert_since(start);
+        quad(&mut batch);
+        let start = batch.vertices.len();
+        quad(&mut batch);
+        batch.invert_since(start);
+        assert_eq!(
+            batch.draw_ranges().collect::<Vec<_>>(),
+            [
+                (0..6, false),
+                (6..18, true),
+                (18..24, false),
+                (24..30, true)
+            ]
+        );
+        // A later menu stays on the ordinary blend and draws over the crosshair.
+        quad(&mut batch);
+        assert_eq!(batch.draw_ranges().last(), Some((30..36, false)));
+    }
+
+    #[test]
     fn container_origins_use_java_integer_division() {
         // Odd scaled dimensions, odd image sizes and an oversized panel.
         for (width, height) in [(640, 360), (641, 361), (456, 256), (534, 300), (100, 100)] {
             let batch = HudBatch {
                 vertices: Vec::new(),
+                inverse_ranges: Vec::new(),
                 scale: 3.0,
                 width: width as f32,
                 height: height as f32,
