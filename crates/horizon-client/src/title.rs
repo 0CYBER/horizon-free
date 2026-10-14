@@ -2,7 +2,9 @@
 //! SelectWorldScreen, CreateWorldScreen layouts), drawn as HUD quads.
 use crate::{
     hud::{HudAtlas, HudBatch, rgba},
+    lang,
     save::Level,
+    text::{Text, format_translation},
 };
 use std::path::{Path, PathBuf};
 use std::{
@@ -24,6 +26,37 @@ fn edit_top(h: f32) -> f32 {
 }
 fn confirm_top(h: f32, lines: usize) -> f32 {
     ((h.ceil() - 61.0 - lines as f32 * 9.0) / 2.0).floor()
+}
+
+fn translate(key: &str, fallback: &str, args: &[&dyn std::fmt::Display]) -> String {
+    let args: Vec<Text> = args
+        .iter()
+        .map(|arg| Text::literal(arg.to_string()))
+        .collect();
+    format_translation(&lang::get_or(key, fallback), &args).plain()
+}
+
+enum BackupToast {
+    Created { folder: String, bytes: u64 },
+    Failed(String),
+}
+impl BackupToast {
+    fn text(&self) -> (String, String) {
+        match self {
+            Self::Created { folder, bytes } => (
+                translate("selectWorld.edit.backupCreated", "Backed up: %s", &[folder]),
+                translate(
+                    "selectWorld.edit.backupSize",
+                    "Size: %s MB",
+                    &[&((*bytes as f64 / 1_048_576.0).ceil() as u64)],
+                ),
+            ),
+            Self::Failed(error) => (
+                lang::get_or("selectWorld.edit.backupFailed", "Backup failed"),
+                error.clone(),
+            ),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -55,7 +88,6 @@ pub enum Mode {
     },
     Backup {
         world: WorldEntry,
-        name: String,
     },
     Delete {
         world: WorldEntry,
@@ -95,7 +127,7 @@ pub struct Title {
     message_lines: Cell<usize>,
     backup: Option<mpsc::Receiver<Result<u64, String>>>,
     backup_shown: Cell<bool>,
-    toast: Option<(std::time::Instant, String, u64)>,
+    toast: Option<(std::time::Instant, BackupToast)>,
     icons: RefCell<std::collections::HashMap<PathBuf, (std::time::SystemTime, Option<Vec<u8>>)>>,
     /// The mode last drawn and when it appeared (Horizon's screen fades).
     shown: std::cell::Cell<(std::mem::Discriminant<Mode>, std::time::Instant)>,
@@ -270,21 +302,17 @@ impl Title {
             Err(mpsc::TryRecvError::Disconnected) => Err("Backup worker stopped".into()),
         };
         self.backup = None;
-        if let Mode::Backup { world, name } = &self.mode {
-            let world = world.clone();
-            let name = name.clone();
-            self.mode = Mode::Edit {
-                world: world.clone(),
-                name,
-                focused: false,
+        if let Mode::Backup { world } = &self.mode {
+            let folder = world.folder.clone();
+            self.return_to_list(Some(&folder));
+            let toast = match result {
+                Ok(bytes) => BackupToast::Created { folder, bytes },
+                Err(error) => BackupToast::Failed(error),
             };
-            match result {
-                Ok(bytes) => self.toast = Some((std::time::Instant::now(), world.folder, bytes)),
-                Err(error) => self.failed(error),
-            }
+            self.toast = Some((std::time::Instant::now(), toast));
         }
     }
-    fn start_backup(&mut self, world: WorldEntry, name: String) {
+    fn start_backup(&mut self, world: WorldEntry) {
         let (send, receive) = mpsc::channel();
         let saves = self.saves.clone();
         let folder = world.folder.clone();
@@ -293,7 +321,7 @@ impl Title {
         });
         self.backup_shown.set(false);
         self.backup = Some(receive);
-        self.mode = Mode::Backup { world, name };
+        self.mode = Mode::Backup { world };
     }
     fn icon(
         &self,
@@ -472,7 +500,7 @@ impl Title {
                     (w / 2.0).floor() - 154.0,
                     h - 28.0,
                     71.0,
-                    "Edit",
+                    &lang::get_or("selectWorld.edit", "Edit"),
                     selected.is_some(),
                     13,
                 ),
@@ -480,7 +508,7 @@ impl Title {
                     (w / 2.0).floor() - 75.0,
                     h - 28.0,
                     71.0,
-                    "Delete",
+                    &lang::get_or("selectWorld.delete", "Delete"),
                     selected.is_some(),
                     14,
                 ),
@@ -488,7 +516,7 @@ impl Title {
                     (w / 2.0).floor() + 4.0,
                     h - 28.0,
                     71.0,
-                    "Re-Create",
+                    &lang::get_or("selectWorld.recreate", "Re-Create"),
                     selected.is_some(),
                     15,
                 ),
@@ -525,16 +553,58 @@ impl Title {
                         x,
                         top + 64.0,
                         200.0,
-                        "Reset Icon",
+                        &lang::get_or("selectWorld.edit.resetIcon", "Reset Icon"),
                         self.saves.join(&world.folder).join("icon.png").is_file(),
                         30,
                     ),
-                    b(x, top + 89.0, 200.0, "Open World Folder", true, 31),
-                    b(x, top + 114.0, 200.0, "Make Backup", true, 32),
-                    b(x, top + 139.0, 200.0, "Open Backups Folder", true, 33),
-                    b(x, top + 164.0, 200.0, "Optimize World", false, 34),
-                    b(x, top + 214.0, 98.0, "Save", !name.trim().is_empty(), 35),
-                    b(x + 102.0, top + 214.0, 98.0, "Cancel", true, 36),
+                    b(
+                        x,
+                        top + 89.0,
+                        200.0,
+                        &lang::get_or("selectWorld.edit.openFolder", "Open World Folder"),
+                        true,
+                        31,
+                    ),
+                    b(
+                        x,
+                        top + 114.0,
+                        200.0,
+                        &lang::get_or("selectWorld.edit.backup", "Make Backup"),
+                        true,
+                        32,
+                    ),
+                    b(
+                        x,
+                        top + 139.0,
+                        200.0,
+                        &lang::get_or("selectWorld.edit.backupFolder", "Open Backups Folder"),
+                        true,
+                        33,
+                    ),
+                    b(
+                        x,
+                        top + 164.0,
+                        200.0,
+                        &lang::get_or("selectWorld.edit.optimize", "Optimize World"),
+                        false,
+                        34,
+                    ),
+                    b(
+                        x,
+                        top + 214.0,
+                        98.0,
+                        &lang::get_or("selectWorld.edit.save", "Save"),
+                        !name.trim().is_empty(),
+                        35,
+                    ),
+                    b(
+                        x + 102.0,
+                        top + 214.0,
+                        98.0,
+                        &lang::get_or("gui.cancel", "Cancel"),
+                        true,
+                        36,
+                    ),
                 ]
             }
             Mode::Delete { .. } => {
@@ -542,8 +612,22 @@ impl Title {
                     + 41.0
                     + self.message_lines.get() as f32 * 9.0;
                 vec![
-                    b((w / 2.0).floor() - 152.0, y, 150.0, "Delete", true, 37),
-                    b((w / 2.0).floor() + 2.0, y, 150.0, "Cancel", true, 38),
+                    b(
+                        (w / 2.0).floor() - 152.0,
+                        y,
+                        150.0,
+                        &lang::get_or("selectWorld.deleteButton", "Delete"),
+                        true,
+                        37,
+                    ),
+                    b(
+                        (w / 2.0).floor() + 2.0,
+                        y,
+                        150.0,
+                        &lang::get_or("gui.cancel", "Cancel"),
+                        true,
+                        38,
+                    ),
                 ]
             }
             Mode::Error { .. } => vec![b(
@@ -552,7 +636,7 @@ impl Title {
                     + 41.0
                     + self.message_lines.get() as f32 * 9.0,
                 150.0,
-                "Back",
+                &lang::get_or("gui.back", "Back"),
                 true,
                 39,
             )],
@@ -602,8 +686,19 @@ impl Title {
                     ((w / 2.0).floor() - 100.0, 21.0),
                     &self.search,
                     self.search_focused,
-                    (self.started.elapsed().as_millis() / 300).is_multiple_of(2),
+                    !self.search.is_empty()
+                        && (self.started.elapsed().as_millis() / 300).is_multiple_of(2),
                 );
+                if self.search.is_empty() {
+                    batch.text(
+                        atlas,
+                        &lang::get_or("gui.selectWorld.search", "Search..."),
+                        (w / 2.0).floor() - 96.0,
+                        27.0,
+                        rgba(128, 128, 128, 255),
+                        true,
+                    );
+                }
                 let bottom = h - LIST_BOTTOM;
                 batch.fill(
                     atlas,
@@ -656,13 +751,18 @@ impl Title {
                         true,
                     );
                     let mode = if world.creative {
-                        "Creative Mode"
+                        lang::get_or("gameMode.creative", "Creative Mode")
                     } else {
-                        "Survival Mode"
+                        lang::get_or("gameMode.survival", "Survival Mode")
+                    };
+                    let commands = if world.commands {
+                        format!(", {}", lang::get_or("selectWorld.commands", "Commands"))
+                    } else {
+                        String::new()
                     };
                     let details = format!(
-                        "{mode}{}, Version: {}",
-                        if world.commands { ", Commands" } else { "" },
+                        "{mode}{commands}, {} {}",
+                        lang::get_or("selectWorld.version", "Version:"),
                         world.version
                     );
                     batch.text(
@@ -775,11 +875,17 @@ impl Title {
             }
             Mode::Edit { name, focused, .. } => {
                 batch.fill(atlas, 0.0, 0.0, w, h, rgba(0, 0, 0, 120));
-                centered(atlas, batch, "Edit World", 15.0, u32::MAX);
+                centered(
+                    atlas,
+                    batch,
+                    &lang::get_or("selectWorld.edit.title", "Edit World"),
+                    15.0,
+                    u32::MAX,
+                );
                 let top = edit_top(h);
                 batch.text(
                     atlas,
-                    "World Name",
+                    &lang::get_or("selectWorld.enterName", "World Name"),
                     (w / 2.0).floor() - 100.0,
                     top + 25.0,
                     rgba(160, 160, 160, 255),
@@ -796,14 +902,21 @@ impl Title {
             }
             Mode::Delete { world } => {
                 batch.fill(atlas, 0.0, 0.0, w, h, rgba(0, 0, 0, 120));
-                let message = format!("'{}' will be lost forever! (A long time!)", world.name);
+                let message = translate(
+                    "selectWorld.deleteWarning",
+                    "'%s' will be lost forever! (A long time!)",
+                    &[&world.name],
+                );
                 let lines = wrapped(atlas, &message, w - 50.0);
                 self.message_lines.set(lines.len());
                 let top = confirm_top(h, lines.len());
                 centered(
                     atlas,
                     batch,
-                    "Are you sure you want to delete this world?",
+                    &lang::get_or(
+                        "selectWorld.deleteQuestion",
+                        "Are you sure you want to delete this world?",
+                    ),
                     top,
                     u32::MAX,
                 );
@@ -814,12 +927,21 @@ impl Title {
             Mode::Backup { .. } => {
                 self.backup_shown.set(true);
                 batch.fill(atlas, 0.0, 0.0, w, h, rgba(0, 0, 0, 120));
-                centered(atlas, batch, "Creating Backup", 80.0, u32::MAX);
+                centered(
+                    atlas,
+                    batch,
+                    &lang::get_or("selectWorld.waitingForBackup.title", "Creating Backup"),
+                    80.0,
+                    u32::MAX,
+                );
                 let dots = ["O o o", "o O o", "o o O", "o O o"]
                     [(self.started.elapsed().as_millis() / 300 % 4) as usize];
                 centered(atlas, batch, dots, 120.0, rgba(128, 128, 128, 255));
-                let message = "Depending on the size of your world, this may take a while. Please do not close the game or shut off your device.";
-                for (i, line) in wrapped(atlas, message, 360.0).iter().enumerate() {
+                let message = lang::get_or(
+                    "selectWorld.waitingForBackup.message",
+                    "Depending on the size of your world, this may take a while. Please do not close the game or shut off your device.",
+                );
+                for (i, line) in wrapped(atlas, &message, 360.0).iter().enumerate() {
                     centered(
                         atlas,
                         batch,
@@ -834,7 +956,13 @@ impl Title {
                 let lines = wrapped(atlas, message, w - 50.0);
                 self.message_lines.set(lines.len());
                 let top = confirm_top(h, lines.len());
-                centered(atlas, batch, "World operation failed", top, u32::MAX);
+                centered(
+                    atlas,
+                    batch,
+                    &lang::get_or("selectWorld.access_failure", "Failed to access world"),
+                    top,
+                    u32::MAX,
+                );
                 for (i, line) in lines.iter().enumerate() {
                     centered(atlas, batch, line, top + 17.0 + i as f32 * 9.0, u32::MAX);
                 }
@@ -884,13 +1012,12 @@ impl Title {
                 true,
             );
         }
-        if let Some((at, folder, bytes)) = &self.toast
+        if let Some((at, toast)) = &self.toast
             && at.elapsed().as_secs() < 5
         {
-            let title = format!("Backed up: {folder}");
-            let size = format!("Size: {} MB", (*bytes as f64 / 1_048_576.0).ceil() as u64);
+            let (title, message) = toast.text();
             let width = HudBatch::text_width(atlas, &title)
-                .max(HudBatch::text_width(atlas, &size))
+                .max(HudBatch::text_width(atlas, &message))
                 .ceil()
                 .max(160.0)
                 + 30.0;
@@ -903,7 +1030,7 @@ impl Title {
                 rgba(255, 255, 0, 255),
                 false,
             );
-            batch.text(atlas, &size, w - width + 18.0, 19.0, u32::MAX, false);
+            batch.text(atlas, &message, w - width + 18.0, 19.0, u32::MAX, false);
         }
     }
     /// The action and whether to play `AbstractWidget.playButtonClickSound`.
@@ -1021,7 +1148,7 @@ impl Title {
                     30 => world_management::reset_icon(&self.saves, &world.folder),
                     31 => world_management::open_folder(&self.saves.join(&world.folder)),
                     32 => {
-                        self.start_backup(world, name);
+                        self.start_backup(world);
                         return Action::None;
                     }
                     33 => {

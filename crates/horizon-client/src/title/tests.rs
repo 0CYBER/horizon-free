@@ -63,6 +63,15 @@ impl Fixture {
         self.title.enter_singleplayer();
         self.title.click(240.0, 60.0, (480.0, 262.0));
     }
+    fn finish_backup(&mut self) {
+        self.title.backup_shown.set(true);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while matches!(self.title.mode, Mode::Backup { .. }) {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            self.title.poll_backup();
+        }
+    }
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
@@ -278,7 +287,7 @@ fn backup_zip_preserves_nested_files_excludes_lock_and_keeps_duplicate_backups()
 }
 
 #[test]
-fn backup_screen_blocks_navigation_and_returns_to_unsaved_edit() {
+fn backup_screen_blocks_navigation_and_returns_to_the_selected_world() {
     let mut f = Fixture::new();
     f.world("World", "World");
     f.select();
@@ -292,18 +301,63 @@ fn backup_screen_blocks_navigation_and_returns_to_unsaved_edit() {
     // The first frame must be shown even when the backup finishes immediately.
     f.title.poll_backup();
     assert!(matches!(f.title.mode, Mode::Backup { .. }));
-    f.title.backup_shown.set(true);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while matches!(f.title.mode, Mode::Backup { .. }) {
-        assert!(std::time::Instant::now() < deadline);
-        std::thread::sleep(std::time::Duration::from_millis(10));
-        f.title.poll_backup();
-    }
-    assert!(matches!(&f.title.mode,Mode::Edit { name, .. } if name == "World unsaved"));
-    assert!(f.title.toast.is_some());
+    f.finish_backup();
+    assert!(
+        matches!(&f.title.mode, Mode::Select { worlds, selected: Some(i) } if worlds[*i].folder == "World")
+    );
+    assert!(
+        matches!(&f.title.toast, Some((_, BackupToast::Created { folder, bytes })) if folder == "World" && *bytes > 0)
+    );
     assert_eq!(
         Level::read(&f.title.saves.join("World")).unwrap().name,
         "World"
+    );
+}
+
+#[test]
+fn failed_backup_returns_to_the_selected_world_with_an_error_toast() {
+    let mut f = Fixture::new();
+    f.world("World", "World");
+    f.select();
+    f.click("Edit");
+    f.title.type_text(" unsaved");
+    // A file at the backup-directory path makes the real worker fail reliably.
+    fs::write(f.root.join("backups"), b"not a directory").unwrap();
+    f.click("Make Backup");
+    f.finish_backup();
+    assert!(
+        matches!(&f.title.mode, Mode::Select { worlds, selected: Some(i) } if worlds[*i].folder == "World")
+    );
+    let Some((_, BackupToast::Failed(error))) = &f.title.toast else {
+        panic!("backup failures should produce an error toast");
+    };
+    assert!(!error.is_empty());
+    assert_eq!(
+        Level::read(&f.title.saves.join("World")).unwrap().name,
+        "World"
+    );
+    assert_eq!(
+        fs::read(f.root.join("backups")).unwrap(),
+        b"not a directory"
+    );
+}
+
+#[test]
+fn stopped_backup_worker_returns_to_the_list_with_an_error_toast() {
+    let mut f = Fixture::new();
+    f.world("World", "World");
+    let world = list_worlds(&f.title.saves).remove(0);
+    let (send, receive) = mpsc::channel();
+    f.title.mode = Mode::Backup { world };
+    f.title.backup = Some(receive);
+    f.title.backup_shown.set(true);
+    drop(send);
+    f.title.poll_backup();
+    assert!(
+        matches!(&f.title.mode, Mode::Select { worlds, selected: Some(i) } if worlds[*i].folder == "World")
+    );
+    assert!(
+        matches!(&f.title.toast, Some((_, BackupToast::Failed(error))) if error == "Backup worker stopped")
     );
 }
 
