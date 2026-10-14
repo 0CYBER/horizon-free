@@ -656,91 +656,6 @@ fn local_tab_players(me: TabPlayer, guests: &[Guest]) -> Vec<TabPlayer> {
     players
 }
 
-#[cfg(test)]
-mod tab_list_tests {
-    use super::*;
-    use horizon_client::{
-        lan::{Joined, PlayerSender},
-        tab_list,
-    };
-    use horizon_protocol::packets::configuration::ClientInformation;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicI32, Ordering},
-        mpsc,
-    };
-
-    fn guest(uuid: u128, name: &str) -> Guest {
-        let (tx, _rx) = mpsc::channel();
-        Guest::new(
-            Joined {
-                conn: uuid as u32,
-                uuid,
-                name: name.into(),
-                info: ClientInformation::new(8),
-                brand: "test".into(),
-                sender: PlayerSender {
-                    tx,
-                    pending: Arc::default(),
-                },
-                latency: Arc::new(AtomicI32::new(42)),
-                address: "127.0.0.1:25565".parse().unwrap(),
-            },
-            uuid as i32,
-            [0.0, 64.0, 0.0],
-            8,
-        )
-    }
-
-    #[test]
-    fn lan_tab_list_tracks_join_and_disconnect() {
-        let me = TabPlayer::new(1, PLAYER_NAME);
-        let mut guests = vec![guest(2, "Alex")];
-        let players = local_tab_players(me.clone(), &guests);
-        assert_eq!(players, [me.clone()]);
-        assert!(!tab_list::visible(true, true, players.len(), false));
-
-        guests[0].placed = true;
-        let players = local_tab_players(me.clone(), &guests);
-        assert_eq!(players.len(), 2);
-        assert_eq!(players[0], me);
-        assert_eq!(players[1].uuid, 2);
-        assert_eq!(players[1].name, "Alex");
-        assert!(tab_list::visible(true, true, players.len(), false));
-        assert!(!tab_list::visible(false, true, players.len(), false));
-
-        guests.clear();
-        let players = local_tab_players(me, &guests);
-        assert_eq!(players.len(), 1);
-        assert!(!tab_list::visible(true, true, players.len(), false));
-        assert!(tab_list::visible(true, true, players.len(), true));
-    }
-
-    #[test]
-    fn lan_tab_list_reads_current_guest_state() {
-        let me = TabPlayer::new(1, PLAYER_NAME);
-        let mut guests = vec![guest(2, "Alex"), guest(3, "Grumm")];
-        for guest in &mut guests {
-            guest.placed = true;
-        }
-        guests[0].game_mode = tab_list::SPECTATOR;
-        let players = local_tab_players(me.clone(), &guests);
-        assert_eq!(players.len(), 3);
-        assert_eq!(players[1].game_mode, tab_list::SPECTATOR);
-        assert_eq!(players[1].latency, 42);
-        assert_eq!(players[1].skin, tab_list::default_skin(2));
-        assert_eq!(players[2].name, "Grumm");
-
-        guests[0].game_mode = 1;
-        guests[0].latency.store(123, Ordering::Relaxed);
-        guests.remove(1);
-        let players = local_tab_players(me, &guests);
-        assert_eq!(players.len(), 2);
-        assert_eq!(players[1].game_mode, 1);
-        assert_eq!(players[1].latency, 123);
-    }
-}
-
 /// The commands' view of the game.
 struct GameEnv<'a, 'b> {
     g: &'a mut Game<'b>,
@@ -796,5 +711,90 @@ impl Env for GameEnv<'_, '_> {
     }
     fn feedback(&mut self, message: Text) {
         self.g.feedback(message);
+    }
+}
+
+#[cfg(test)]
+mod tab_list_tests {
+    use super::*;
+    use horizon_client::{
+        lan::{Joined, PlayerSender},
+        tab_list,
+    };
+    use horizon_protocol::packets::configuration::ClientInformation;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicI32, Ordering},
+        mpsc,
+    };
+
+    fn guest(uuid: u128, name: &str) -> Guest {
+        let (tx, _rx) = mpsc::channel();
+        Guest::new(
+            Joined {
+                conn: uuid as u32,
+                uuid,
+                name: name.into(),
+                info: ClientInformation::new(8),
+                brand: "test".into(),
+                sender: PlayerSender {
+                    tx,
+                    pending: Arc::default(),
+                },
+                latency: Arc::new(AtomicI32::new(42)),
+                address: "127.0.0.1:25565".parse().unwrap(),
+            },
+            uuid as i32,
+            [0.0, 64.0, 0.0],
+            8,
+        )
+    }
+
+    #[test]
+    fn lan_tab_list_tracks_join_and_disconnect() {
+        let me = TabPlayer::new(1, PLAYER_NAME);
+        let mut guests = vec![guest(2, "Alex")];
+        let players = local_tab_players(me.clone(), &guests);
+        assert_eq!(players.as_slice(), std::slice::from_ref(&me));
+        assert!(!tab_list::visible(true, true, players.len(), false));
+
+        guests[0].placed = true;
+        let players = local_tab_players(me.clone(), &guests);
+        assert_eq!(players.len(), 2);
+        assert_eq!(players[0], me);
+        assert_eq!(players[1].uuid, 2);
+        assert_eq!(players[1].name, "Alex");
+        assert!(tab_list::visible(true, true, players.len(), false));
+        assert!(!tab_list::visible(false, true, players.len(), false));
+
+        guests.clear();
+        let players = local_tab_players(me, &guests);
+        assert_eq!(players.len(), 1);
+        assert!(!tab_list::visible(true, true, players.len(), false));
+        assert!(tab_list::visible(true, true, players.len(), true));
+    }
+
+    #[test]
+    fn lan_tab_list_reads_current_guest_state() {
+        let me = TabPlayer::new(1, PLAYER_NAME);
+        let mut guests = vec![guest(2, "Alex"), guest(3, "Grumm")];
+        for guest in &mut guests {
+            guest.placed = true;
+        }
+        guests[0].game_mode = tab_list::SPECTATOR;
+        let players = local_tab_players(me.clone(), &guests);
+        assert_eq!(players.len(), 3);
+        assert_eq!(players[1].game_mode, tab_list::SPECTATOR);
+        assert_eq!(players[1].latency, 42);
+        assert_eq!(players[1].skin, tab_list::default_skin(2));
+        assert_eq!(players[2].name, "Grumm");
+
+        guests[0].game_mode = 1;
+        guests[0].latency.store(123, Ordering::Relaxed);
+        guests.remove(1);
+        let players = local_tab_players(me, &guests);
+        assert_eq!(players.len(), 2);
+        assert_eq!(players[1].game_mode, 1);
+        assert_eq!(players[1].latency, 123);
     }
 }
