@@ -89,6 +89,7 @@ pub mod menu;
 pub mod merchant;
 pub mod mesher;
 pub mod minimap;
+pub mod mipmap;
 pub mod mobs;
 pub mod models;
 pub mod motion;
