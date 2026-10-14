@@ -401,14 +401,6 @@ impl Item {
     }
     pub fn label(self, s: &Settings) -> Text {
         match self {
-            // The vanilla button shows the scale alone, under its own caption.
-            Item::Vanilla(Opt::GuiScale) => Text::translate(
-                "options.generic_value",
-                &[
-                    Text::translate("options.guiScale", &[]),
-                    Opt::GuiScale.label(s),
-                ],
-            ),
             Item::Vanilla(o) => o.label(s),
             Item::Horizon(h) => h.label(s),
         }

@@ -189,7 +189,6 @@ impl Opt {
             } else {
                 s.volumes[i]
             }),
-            Opt::GuiScale => unit(s.gui_scale as f32, 0.0, 6.0),
             Opt::Gamma => Kind::Slider(s.gamma),
             Opt::MaxFps => unit(s.max_fps as f32, 10.0, 260.0),
             Opt::CloudRange => unit(s.cloud_range as f32, 2.0, 128.0),
@@ -261,11 +260,12 @@ impl Opt {
                 }
             }
             Opt::GuiScale => {
-                if s.gui_scale == 0 {
+                let value = if s.gui_scale == 0 {
                     tr("options.guiScale.auto")
                 } else {
                     Text::literal(s.gui_scale.to_string())
-                }
+                };
+                generic(c, value)
             }
             Opt::Gamma => match (f64::from(s.gamma) * 100.0) as i32 {
                 0 => generic(c, tr("options.gamma.min")),
@@ -446,7 +446,6 @@ impl Opt {
             Opt::WheelSensitivity => s.mouse_wheel_sensitivity = 0.01 + v * 9.99,
             Opt::Volume(0) => s.master_volume = v,
             Opt::Volume(i) => s.volumes[i] = v,
-            Opt::GuiScale => s.gui_scale = step(0.0, 6.0) as u32,
             Opt::Gamma => s.gamma = v,
             Opt::MaxFps => s.max_fps = (step(1.0, 26.0) as u32) * 10,
             Opt::CloudRange => s.cloud_range = step(2.0, 128.0) as i32,
@@ -503,6 +502,7 @@ impl Opt {
             }
         };
         match self {
+            Opt::GuiScale => s.gui_scale = u32::from(next(s.gui_scale.min(6) as u8, 7)),
             Opt::InvertY => s.invert_y = !s.invert_y,
             Opt::DiscreteScroll => s.discrete_scroll = !s.discrete_scroll,
             Opt::ViewBobbing => s.view_bobbing = !s.view_bobbing,
@@ -1983,6 +1983,61 @@ mod tests {
 
     fn atlas() -> HudAtlas {
         HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets")).unwrap()
+    }
+
+    #[test]
+    fn classic_video_gui_scale_cycles_on_press_without_dragging() {
+        let atlas = atlas();
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        ui.show(Page::Video);
+        let size = (480.0, 480.0);
+        let (widgets, _, _, _) = ui.layout(&s, size.0, size.1);
+        let button = widgets
+            .iter()
+            .find(|wd| {
+                matches!(
+                    wd.kind,
+                    WKind::Button {
+                        active: true,
+                        act: Act::Cycle(Opt::GuiScale),
+                        ..
+                    }
+                )
+            })
+            .expect("GUI Scale must be a cycle button in classic Video Settings");
+        let (x, y) = (button.x + 1.0, button.y + 1.0);
+        assert!(Opt::GuiScale.slider_position(&s).is_none());
+        assert!(ui.click(&mut s, &atlas, x, y, size, false, true).is_empty());
+        assert_eq!(s.gui_scale, 0);
+        for expected in [1, 2, 3, 4, 5, 6, 0] {
+            assert_eq!(
+                ui.click(&mut s, &atlas, x, y, size, false, false),
+                vec![Event::ButtonClick, Event::Changed]
+            );
+            assert_eq!(s.gui_scale, expected);
+            assert!(
+                ui.click(&mut s, &atlas, x + 100.0, y, size, true, false)
+                    .is_empty()
+            );
+            assert_eq!(s.gui_scale, expected);
+            assert!(ui.release().is_empty());
+        }
+    }
+
+    #[test]
+    fn gui_scale_cycle_handles_reverse_and_out_of_range_saved_values() {
+        let mut s = Settings::default();
+        for expected in [6, 5, 4, 3, 2, 1, 0] {
+            Opt::GuiScale.cycle(&mut s, true);
+            assert_eq!(s.gui_scale, expected);
+        }
+        s.gui_scale = u32::MAX;
+        Opt::GuiScale.cycle(&mut s, false);
+        assert_eq!(s.gui_scale, 0);
+        s.gui_scale = u32::MAX;
+        Opt::GuiScale.cycle(&mut s, true);
+        assert_eq!(s.gui_scale, 5);
     }
 
     #[test]
