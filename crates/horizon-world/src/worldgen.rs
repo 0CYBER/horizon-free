@@ -61,6 +61,7 @@ pub mod sculk;
 pub mod settings;
 pub mod simple_block;
 pub mod snow_freeze;
+pub mod spawn_finder;
 pub mod speleothem;
 pub mod spike;
 pub mod spring;

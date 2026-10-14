@@ -126,6 +126,10 @@ impl VanillaTerrain {
         let worker = worker.get_or_insert_with(|| self.generator.worker());
         worker.jigsaw_pieces(query)
     }
+    /// NoiseBasedChunkGenerator.getOrigin: where the world spawn search starts.
+    pub fn origin(&self) -> crate::Result<ChunkPos> {
+        Ok(self.generator.origin()?)
+    }
     /// Concentric ring positions of a structure set (strongholds), once known.
     pub fn ring_positions(&self, set: &str) -> Option<Vec<ChunkPos>> {
         self.generator.ring_positions(set)

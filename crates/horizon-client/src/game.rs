@@ -45,6 +45,7 @@ mod ghasts;
 mod golems;
 mod growth;
 mod hand;
+mod initial_spawn;
 mod item_draw;
 mod item_particles;
 mod jukebox;
@@ -685,7 +686,13 @@ struct Game<'a> {
     book: Option<books::BookScreen>,
     /// Lecterns whose page-turn pulse is running (ticks left).
     lectern_pulses: Vec<((i32, i32, i32), i32)>,
+    /// Steps of the world spawn's chunk spiral taken so far.
     spawn_search: u32,
+    /// The world spawn search's origin chunk and fallback height, once known.
+    spawn_origin: Option<((i32, i32), i32)>,
+    spawn_spiral: horizon_client::world_spawn::ChunkSpiral,
+    /// A new player's spawn search, while its candidates' chunks load.
+    player_spawn: Option<horizon_client::world_spawn::PlayerSpawnFinder>,
     mobs: Vec<Mob>,
     arrows: Vec<Arrow>,
     creatures: creatures::Creatures,
@@ -2502,31 +2509,6 @@ impl Game<'_> {
         }
         Ok(())
     }
-    /// The i-th world spawn search point: a square spiral in 48-block steps.
-    fn spawn_candidate(i: u32) -> (i32, i32) {
-        if i == 0 {
-            return (0, 0);
-        }
-        let mut k = 1u32;
-        let mut ring = 1i32;
-        loop {
-            let points = 8 * ring as u32;
-            if i < k + points {
-                let j = (i - k) as i32;
-                let side = j / (2 * ring);
-                let t = j % (2 * ring) - ring;
-                let (x, z) = match side {
-                    0 => (t, -ring),
-                    1 => (ring, t),
-                    2 => (-t, ring),
-                    _ => (-ring, -t),
-                };
-                return (x * 48, z * 48);
-            }
-            k += points;
-            ring += 1;
-        }
-    }
     /// A column whose surface is a full solid, non-fluid, non-leaf block open to the sky.
     fn land_column(&self, x: i32, z: i32) -> Option<i32> {
         if self.dim == Dim::Nether {
@@ -2585,48 +2567,48 @@ impl Game<'_> {
                 .spawn
                 .map(|s| Vec3::new(s[0] + 0.5, s[1], s[2] + 0.5));
         }
-        let anchor = match saved.or(self.spawn) {
-            Some(p) => (p.x.floor() as i32, p.z.floor() as i32),
-            None => Self::spawn_candidate(self.spawn_search),
-        };
-        let (cx, cz) = (anchor.0 >> 4, anchor.1 >> 4);
-        self.streaming.center = (cx, cz);
-        if !(-1..=1).all(|dz| (-1..=1).all(|dx| self.streaming.is_lit(cx + dx, cz + dz))) {
-            return Ok(());
-        }
         let feet = if let Some(p) = saved {
+            let (cx, cz) = ((p.x.floor() as i32) >> 4, (p.z.floor() as i32) >> 4);
+            self.streaming.center = (cx, cz);
+            if !(-1..=1).all(|dz| (-1..=1).all(|dx| self.streaming.is_lit(cx + dx, cz + dz))) {
+                return Ok(());
+            }
             self.level.position = None;
             p
-        } else if let Some(s) = self.spawn {
+        } else if self.spawn.is_none() || self.player_spawn.is_some() {
+            // A new world: its spawn, then the first player around it.
+            if self.spawn.is_none() {
+                let Some([x, y, z]) = self.find_world_spawn()? else {
+                    return Ok(());
+                };
+                self.spawn = Some(Vec3::new(
+                    f64::from(x) + 0.5,
+                    f64::from(y),
+                    f64::from(z) + 0.5,
+                ));
+                self.level.spawn = Some([f64::from(x), f64::from(y), f64::from(z)]);
+            }
+            let s = self
+                .level
+                .spawn
+                .unwrap_or_default()
+                .map(|v| v.floor() as i32);
+            let Some(feet) = self.find_player_spawn(s)? else {
+                return Ok(());
+            };
+            feet
+        } else {
+            let s = self.spawn.unwrap_or_default();
+            let (cx, cz) = ((s.x.floor() as i32) >> 4, (s.z.floor() as i32) >> 4);
+            self.streaming.center = (cx, cz);
+            if !(-1..=1).all(|dz| (-1..=1).all(|dx| self.streaming.is_lit(cx + dx, cz + dz))) {
+                return Ok(());
+            }
             // WorldSpawn: the stored column, lifted onto its current surface.
             let y = self
                 .land_column(s.x.floor() as i32, s.z.floor() as i32)
                 .map_or(s.y, f64::from);
             Vec3::new(s.x, y.max(s.y), s.z)
-        } else {
-            let mut best: Option<(i64, i32, i32, i32)> = None;
-            for z in (cz - 1) * 16..(cz + 2) * 16 {
-                for x in (cx - 1) * 16..(cx + 2) * 16 {
-                    if let Some(y) = self.land_column(x, z) {
-                        let d = i64::from(x - anchor.0).pow(2) + i64::from(z - anchor.1).pow(2);
-                        if best.is_none_or(|b| d < b.0) {
-                            best = Some((d, x, y, z));
-                        }
-                    }
-                }
-            }
-            match best {
-                Some((_, x, y, z)) => {
-                    let spawn = Vec3::new(f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5);
-                    self.spawn = Some(spawn);
-                    self.level.spawn = Some([f64::from(x), f64::from(y), f64::from(z)]);
-                    spawn
-                }
-                None => {
-                    self.spawn_search += 1;
-                    return Ok(());
-                }
-            }
         };
         let mut player = PlayerMotion::new(self.motion, feet)?;
         player.yaw = self.yaw;
@@ -5559,6 +5541,9 @@ impl Game<'_> {
         self.player = None;
         self.spawn = None;
         self.spawn_search = 0;
+        self.spawn_origin = None;
+        self.spawn_spiral = Default::default();
+        self.player_spawn = None;
         self.mobs.clear();
         self.creatures.reset_trader();
         self.arrows.clear();
@@ -8969,6 +8954,9 @@ pub fn run() -> Result<()> {
         book: None,
         lectern_pulses: Vec::new(),
         spawn_search: 0,
+        spawn_origin: None,
+        spawn_spiral: Default::default(),
+        player_spawn: None,
         mobs: Vec::new(),
         arrows: Vec::new(),
         creatures: Default::default(),
