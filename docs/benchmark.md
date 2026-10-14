@@ -25,7 +25,7 @@ One game is started per render distance (8, 16 and 32 chunks by default), each f
 
 ## Known caveats
 
-- **Fabric Loader is present in the vanilla runs**, to load the driver mod. It patches only the frame hook of the driver mod; its cost after startup is negligible, but its class scanning adds to the startup time (roughly a second; it is the same loader the modded runs use).
+- **Fabric Loader is present in the vanilla runs**, to load the driver mod. The only patch it applies is the driver's frame hook, so its cost after startup is negligible, but its mod discovery and class transformation add to vanilla's startup time (the modded runs use the same loader).
 - **Readiness is detected differently.** Horizon knows exactly how many chunks are pending; for vanilla the driver waits until the loaded chunk count is unchanged for a second with nothing left to compile, and takes the time of the last change. Both stop the clock at the last chunk arriving, within a frame or two.
 - **Locked or headless screens.** A window nobody can see is not composited. On a Mac whose session is locked, Horizon draws only with `--offscreen` (it renders into a texture and does not wait for the window), and vanilla keeps rendering into its window without it being shown. Such runs measure rendering without presentation and are marked `offscreen`; numbers for players come from runs with the window on a real screen.
 - **Different graphics APIs.** Horizon renders with wgpu (Vulkan on Linux and Windows, Metal on macOS); vanilla 26.3 uses OpenGL (or its Vulkan backend when chosen). The backend each game used is stored with the results. This is part of what is being compared.
@@ -47,4 +47,4 @@ Options: `--distances 8,16`, `--scenes village,ocean`, `--seconds 20`, `--heap 4
 
 ## Results
 
-See [benchmarks/perf](../benchmarks/perf) for the raw results.
+Saved runs go to `benchmarks/perf/`; `--table` prints them as Markdown.
