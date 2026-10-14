@@ -146,8 +146,10 @@ stderr as before. A panic on the main thread or a fatal error writes
 the machine, the GPU, render settings, resource packs, the open world and the
 last 50 log lines) and the game exits with a non-zero code. `horizon-ctl logs
 [--lines N]` prints the end of latest.log and `horizon-ctl logs --crash` the
-newest report (the `logs` MCP tool returns the same). Development builds crash
-on purpose with `HORIZON_DEBUG_CRASH=SECONDS`, that long after the first frame.
+newest report (the `logs` MCP tool returns the same). F3 + C held for ten
+seconds crashes the game on purpose, as in vanilla (the world is saved first);
+development builds also crash with `HORIZON_DEBUG_CRASH=SECONDS`, that long
+after the first frame.
 
 **MCP.** `horizon-ctl mcp` serves the Model Context Protocol over stdin and
 stdout (JSON-RPC 2.0, one message per line), with one tool per command and a

@@ -296,10 +296,10 @@ fn panic_message(info: &std::panic::PanicHookInfo) -> String {
     }
 }
 
-/// A `std::backtrace` as one line a frame, `function (file:line:col)`, from the frame that
-/// panicked: the hook's and the panic machinery's frames go, and paths inside the workspace
-/// lose the build machine's prefix.
-pub fn stack_lines(backtrace: &str) -> String {
+/// A `std::backtrace` as one line a frame, `function (file:line:col)`. Captured in a panic hook
+/// (`from_panic`), it starts at the frame that panicked: the hook's and the panic machinery's
+/// frames go. Paths inside the workspace lose the build machine's prefix.
+pub fn stack_lines(backtrace: &str, from_panic: bool) -> String {
     // The workspace as it was on the machine that built this binary (it need not exist here).
     let manifest = env!("CARGO_MANIFEST_DIR");
     let root = manifest
@@ -330,7 +330,8 @@ pub fn stack_lines(backtrace: &str) -> String {
             || name.contains("rust_begin_unwind")
     };
     // The hook's frames, then the panic machinery's, then the code that panicked.
-    let first = match frames.iter().take(30).position(|(name, _)| machinery(name)) {
+    let top = frames.iter().take(30).position(|(name, _)| machinery(name));
+    let first = match top.filter(|_| from_panic) {
         Some(start) => {
             start
                 + frames[start..]
@@ -340,6 +341,12 @@ pub fn stack_lines(backtrace: &str) -> String {
         }
         None => 0,
     };
+    // Some platforms keep std's own capture frames (`<std::backtrace::Backtrace>::create`).
+    let first = first
+        + frames[first..]
+            .iter()
+            .take_while(|(name, _)| name.trim_start_matches('<').starts_with("std::backtrace"))
+            .count();
     frames[first..]
         .iter()
         .map(|(name, at)| match at {
@@ -370,7 +377,10 @@ pub fn panic_report(info: &std::panic::PanicHookInfo, side: &'static str) -> Rep
         time: Local::now(),
         description: "Unexpected error".into(),
         error: panic_message(info),
-        stack: stack_lines(&std::backtrace::Backtrace::force_capture().to_string()),
+        stack: stack_lines(
+            &std::backtrace::Backtrace::force_capture().to_string(),
+            true,
+        ),
         thread: thread_name(),
         side,
         details: system_details(),
@@ -398,12 +408,55 @@ pub fn install(home: PathBuf, side: &'static str) {
     }));
 }
 
+/// Vanilla's debug crash (`key.debug.crash` held for ten seconds): the error `main` gets back,
+/// with the stack where it was raised.
+#[derive(Debug)]
+pub struct DebugCrash {
+    stack: String,
+}
+
+impl DebugCrash {
+    pub const MESSAGE: &str = "Manually triggered debug crash";
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        Self {
+            stack: stack_lines(
+                &std::backtrace::Backtrace::force_capture().to_string(),
+                false,
+            ),
+        }
+    }
+}
+
+impl std::fmt::Display for DebugCrash {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(Self::MESSAGE)
+    }
+}
+
+impl std::error::Error for DebugCrash {}
+
 /// A report for an error `main` got back: the game ends with it.
 pub fn report_error(
     home: &Path,
     side: &'static str,
-    error: &dyn std::error::Error,
+    error: &(dyn std::error::Error + 'static),
 ) -> Option<PathBuf> {
+    if let Some(debug) = error.downcast_ref::<DebugCrash>() {
+        return deliver(
+            home,
+            Report {
+                time: Local::now(),
+                description: DebugCrash::MESSAGE.into(),
+                error: DebugCrash::MESSAGE.into(),
+                stack: debug.stack.clone(),
+                thread: thread_name(),
+                side,
+                details: system_details(),
+                log: crate::logging::recent_lines(),
+            },
+        );
+    }
     let mut message = error.to_string();
     let mut source = error.source();
     while let Some(e) = source {
@@ -507,9 +560,19 @@ mod tests {
             root = env!("CARGO_MANIFEST_DIR")
         );
         assert_eq!(
-            stack_lines(&bt),
+            stack_lines(&bt, true),
             "horizon_client::crash::debug_crash_tick (crates/horizon-client/src/crash.rs:359:9)\nwinit::dispatch (winit-0.30.13/src/event_loop.rs:642:56)\nmain\n"
         );
+    }
+
+    #[test]
+    fn the_debug_crash_is_reported_as_vanillas() {
+        let error: Box<dyn std::error::Error> = DebugCrash::new().into();
+        assert_eq!(error.to_string(), "Manually triggered debug crash");
+        let debug = error.downcast_ref::<DebugCrash>().unwrap();
+        // The stack starts where the crash was raised (DebugCrash::new, in this file).
+        let first = debug.stack.lines().next().unwrap();
+        assert!(first.contains("crash.rs"), "{}", debug.stack);
     }
 
     #[test]

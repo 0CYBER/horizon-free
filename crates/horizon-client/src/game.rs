@@ -650,7 +650,8 @@ struct Game<'a> {
     fps_at: Instant,
     ticks: u64,
     health_hud: hud_layout::HealthHud,
-    error: Option<String>,
+    /// What ends the game with an error; kept as it is, so main can tell a debug crash.
+    error: Option<Box<dyn std::error::Error>>,
     message: Option<(String, Instant)>,
     save: Arc<SaveDir>,
     level: Level,
@@ -5418,10 +5419,7 @@ impl Game<'_> {
             ..Level::default()
         });
         let mut level = level;
-        horizon_client::crash::set_detail(
-            "World",
-            format!("{} (saves/{folder}, {})", level.name, level.dimension),
-        );
+        horizon_client::crash::set_detail("World", format!("{} (saves/{folder})", level.name));
         if let Some(d) = &self.options.dimension {
             level.dimension = d.clone();
             level.position = None;
@@ -8058,7 +8056,7 @@ impl ApplicationHandler for Game<'_> {
         ) {
             Ok(w) => Arc::new(w),
             Err(e) => {
-                self.error = Some(e.to_string());
+                self.error = Some(e.into());
                 event_loop.exit();
                 return;
             }
@@ -8066,7 +8064,7 @@ impl ApplicationHandler for Game<'_> {
         match self.new_renderer(window.clone()) {
             Ok(r) => self.renderer = Some(r),
             Err(e) => {
-                self.error = Some(e.to_string());
+                self.error = Some(e);
                 event_loop.exit();
                 return;
             }
@@ -8617,7 +8615,7 @@ impl ApplicationHandler for Game<'_> {
             Ok(())
         })();
         if let Err(e) = result {
-            self.error = Some(e.to_string());
+            self.error = Some(e);
             event_loop.exit();
         }
     }
@@ -9123,12 +9121,12 @@ pub fn run() -> Result<()> {
             "generated": game.streaming.generated_total,
             "meshed_sections": game.streaming.meshed_total,
             "player": game.player.as_ref().map(|p| [p.position.x, p.position.y, p.position.z]),
-            "error": game.error,
+            "error": game.error.as_ref().map(|e| e.to_string()),
         });
         std::fs::write(path, serde_json::to_vec_pretty(&report)?)?;
     }
     if let Some(e) = game.error {
-        return Err(e.into());
+        return Err(e);
     }
     Ok(())
 }
