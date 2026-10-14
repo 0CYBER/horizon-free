@@ -112,6 +112,7 @@ mod interact;
 pub mod pistons;
 mod place;
 mod portal;
+pub mod portal_travel;
 mod query;
 mod rails;
 mod redstone;

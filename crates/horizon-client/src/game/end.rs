@@ -389,7 +389,7 @@ impl Game<'_> {
             }
         }
         if portal {
-            if self.portal_cooldown == 0 {
+            if self.portals.player.cooldown == 0 {
                 let target = if self.dim == Dim::End {
                     Dim::Overworld
                 } else {
@@ -400,10 +400,10 @@ impl Game<'_> {
                 self.end_portal_travel = false;
                 result?;
                 // Player.getDimensionChangingDelay.
-                self.portal_cooldown = 10;
+                self.portals.player.cooldown = 10;
             } else {
                 // Entity.setAsInsidePortal while cooling down restarts the cooldown.
-                self.portal_cooldown = 10;
+                self.portals.player.cooldown = 10;
             }
         } else if let Some(g) = gateway
             && self.end.gateway_cooldown == 0
@@ -440,7 +440,7 @@ impl Game<'_> {
     ) -> Result<()> {
         self.end_travel = false;
         // Player.getDimensionChangingDelay (enter_dimension uses the Nether portal value).
-        self.portal_cooldown = 10;
+        self.portals.player.cooldown = 10;
         if player.health.dead_or_dying() {
             // Respawning out of the End: a fresh player at the spawn.
             player = PlayerMotion::new(self.motion, target)?;

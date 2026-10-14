@@ -440,7 +440,7 @@ impl Game<'_> {
         i
     }
     /// A mob's entity tag with the mobs riding it under `Passengers`.
-    fn mob_tree_nbt(&mut self, i: usize) -> Tag {
+    pub(super) fn mob_tree_nbt(&mut self, i: usize) -> Tag {
         let id = self.mobs[i].id;
         let uuid = self.uuid_for(id);
         let mut tag = entity_nbt::mob_to_nbt(&self.mobs[i], uuid, self.persist.raw.get(&id));
@@ -463,11 +463,17 @@ impl Game<'_> {
         }
         tag
     }
+    /// Forget an entity that left the world (its UUID and loaded compound).
+    pub(super) fn forget_entity(&mut self, id: u32) {
+        self.persist.uuids.remove(&id);
+        self.persist.raw.remove(&id);
+    }
     /// The compound an entity was loaded with (and commands have edited).
     pub(super) fn persist_raw(&self, id: u32) -> Option<&Tag> {
         self.persist.raw.get(&id)
     }
     fn remember(&mut self, id: u32, uuid: Option<[i32; 4]>, tag: Tag) {
+        self.restore_portal_cooldown(id, &tag);
         if let Some(u) = uuid {
             self.persist.uuids.insert(id, u);
         }
