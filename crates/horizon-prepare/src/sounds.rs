@@ -1,4 +1,4 @@
-//! The pinned version's sounds (sounds.json and the .ogg files) from the player's own official
+//! The pinned version's sounds and title panorama from the player's own official
 //! launcher install, each object checked against the asset index's SHA-1, copied into
 //! `.local/horizon-client/<version>/assets` where the game reads them (tools/fetch_sounds.py and
 //! the tools/lab.py functions it called). Nothing is downloaded.
@@ -76,6 +76,37 @@ fn is_sound(name: &str) -> bool {
 /// `.local/horizon-client/<version>`; returns that folder. Files already there with the right
 /// SHA-1 are kept.
 pub fn sounds(root: &Path, minecraft: Option<&Path>, log: Log) -> Result<PathBuf, String> {
+    copy_assets(root, minecraft, log, is_sound, "Sound", &[])
+}
+
+/// Replaces the client JAR's 1x1 title placeholders with the full panorama from the
+/// launcher's asset store. Also usable on already-prepared resources without Java.
+pub fn panorama(root: &Path, minecraft: Option<&Path>, log: Log) -> Result<PathBuf, String> {
+    copy_assets(root, minecraft, log, is_panorama, "Panorama", &PANORAMA)
+}
+
+const PANORAMA: [&str; 7] = [
+    "minecraft/textures/gui/title/background/panorama_0.png",
+    "minecraft/textures/gui/title/background/panorama_1.png",
+    "minecraft/textures/gui/title/background/panorama_2.png",
+    "minecraft/textures/gui/title/background/panorama_3.png",
+    "minecraft/textures/gui/title/background/panorama_4.png",
+    "minecraft/textures/gui/title/background/panorama_5.png",
+    "minecraft/textures/gui/title/background/panorama_overlay.png",
+];
+
+fn is_panorama(name: &str) -> bool {
+    PANORAMA.contains(&name)
+}
+
+fn copy_assets(
+    root: &Path,
+    minecraft: Option<&Path>,
+    log: Log,
+    wanted_asset: fn(&str) -> bool,
+    label: &str,
+    required: &[&str],
+) -> Result<PathBuf, String> {
     let lock = Lock::read(root)?;
     let minecraft = artifacts::minecraft_dir(minecraft);
     let manifest = artifacts::import_manifest(&lock, &minecraft)?;
@@ -95,10 +126,15 @@ pub fn sounds(root: &Path, minecraft: Option<&Path>, log: Log) -> Result<PathBuf
         .ok_or_else(|| format!("{} has no objects", index.display()))?;
     // A repeated name keeps its first place and its last value, as a Python dict does.
     let mut wanted: Vec<(&str, &Value)> = Vec::new();
-    for (name, info) in objects.iter().filter(|(name, _)| is_sound(name)) {
+    for (name, info) in objects.iter().filter(|(name, _)| wanted_asset(name)) {
         match wanted.iter_mut().find(|(n, _)| n == name) {
             Some(entry) => entry.1 = info,
             None => wanted.push((name, info)),
+        }
+    }
+    for name in required {
+        if !wanted.iter().any(|(n, _)| n == name) {
+            return Err(format!("{name} is missing from the asset index"));
         }
     }
     let mut total: u64 = 0;
@@ -125,7 +161,7 @@ pub fn sounds(root: &Path, minecraft: Option<&Path>, log: Log) -> Result<PathBuf
         total += size;
     }
     log(&format!(
-        "Sound assets ready: {} files, {:.1} MB",
+        "{label} assets ready: {} files, {:.1} MB",
         wanted.len(),
         total as f64 / 1e6
     ));
@@ -142,7 +178,7 @@ mod tests {
     }
 
     /// A Horizon folder and an official launcher directory holding version `9.9` with
-    /// sounds.json, two sounds and a language file in its asset store.
+    /// sounds, a language file and the full title panorama in its asset store.
     struct Fixture {
         dir: PathBuf,
         root: PathBuf,
@@ -152,6 +188,10 @@ mod tests {
 
     impl Fixture {
         fn new(name: &str) -> Fixture {
+            Self::with_panorama(name, &PANORAMA)
+        }
+
+        fn with_panorama(name: &str, panorama: &[&'static str]) -> Fixture {
             let dir = std::env::temp_dir().join(format!(
                 "horizon-prepare-sounds-{name}-{}",
                 std::process::id()
@@ -159,12 +199,16 @@ mod tests {
             let _ = fs::remove_dir_all(&dir);
             let root = dir.join("horizon");
             let minecraft = dir.join("minecraft");
-            let objects: Vec<(&'static str, Vec<u8>)> = vec![
+            let mut objects: Vec<(&'static str, Vec<u8>)> = vec![
                 ("minecraft/sounds.json", b"{\"a\": {}}".to_vec()),
                 ("minecraft/sounds/ambient/cave1.ogg", b"OggS cave".to_vec()),
                 ("minecraft/sounds/dig/stone1.ogg", b"OggS stone".to_vec()),
                 ("minecraft/lang/fr_fr.json", b"{}".to_vec()),
             ];
+            for &name in panorama {
+                // Distinct object bytes let the test catch swapped faces too.
+                objects.push((name, name.as_bytes().to_vec()));
+            }
             let mut index = String::from("{\"objects\": {");
             for (i, (name, data)) in objects.iter().enumerate() {
                 let hash = sha1_hex(data);
@@ -243,6 +287,7 @@ mod tests {
             assert_eq!(&fs::read(target.join("assets").join(name)).unwrap(), data);
         }
         assert!(!target.join("assets/minecraft/lang").exists());
+        assert!(!target.join("assets/minecraft/textures").exists());
         assert_eq!(
             fs::read(target.join("asset-index.json")).unwrap(),
             fs::read(f.minecraft.join("assets/indexes/7.json")).unwrap()
@@ -265,6 +310,60 @@ mod tests {
             .exists());
         fs::remove_file(f.object(1)).unwrap();
         assert!(f.run().unwrap_err().starts_with("Missing asset object"));
+    }
+
+    #[test]
+    fn panorama_replaces_jar_placeholders_and_repairs_repeated_preparations() {
+        let f = Fixture::new("panorama");
+        let target = f.root.join(".local/horizon-client/9.9");
+        for _ in 0..2 {
+            // Full preparation extracts the JAR before importing the asset store.
+            for (name, _) in &f.objects[4..] {
+                let path = target.join("assets").join(name);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(path, b"1x1 gray placeholder").unwrap();
+            }
+            assert_eq!(
+                panorama(&f.root, Some(&f.minecraft), &|_| {}).unwrap(),
+                target
+            );
+            for (name, data) in &f.objects[4..] {
+                assert_eq!(&fs::read(target.join("assets").join(name)).unwrap(), data);
+            }
+        }
+        assert!(!target.join("assets/minecraft/sounds.json").exists());
+        assert!(!target.join("assets/minecraft/lang").exists());
+    }
+
+    #[test]
+    fn panorama_objects_are_verified_before_replacing_placeholders() {
+        let f = Fixture::new("panorama-corrupt");
+        fs::write(f.object(4), b"corrupt panorama").unwrap();
+        let path = f
+            .root
+            .join(".local/horizon-client/9.9/assets")
+            .join(f.objects[4].0);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"placeholder").unwrap();
+        assert!(panorama(&f.root, Some(&f.minecraft), &|_| {})
+            .unwrap_err()
+            .starts_with("Corrupt asset object"));
+        assert_eq!(fs::read(path).unwrap(), b"placeholder");
+        fs::remove_file(f.object(4)).unwrap();
+        assert!(panorama(&f.root, Some(&f.minecraft), &|_| {})
+            .unwrap_err()
+            .starts_with("Missing asset object"));
+    }
+
+    #[test]
+    fn panorama_requires_every_face_and_the_overlay_in_the_index() {
+        let f = Fixture::with_panorama("panorama-incomplete", &PANORAMA[..6]);
+        let error = panorama(&f.root, Some(&f.minecraft), &|_| {}).unwrap_err();
+        assert_eq!(
+            error,
+            format!("{} is missing from the asset index", PANORAMA[6])
+        );
+        assert!(!f.root.join(".local/horizon-client/9.9/assets").exists());
     }
 
     #[test]
