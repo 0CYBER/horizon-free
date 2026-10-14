@@ -5090,7 +5090,8 @@ impl Game<'_> {
         let z_in = (cloud_z - cell_z as f64 * 12.0) as f32;
         let bottom = (cloud_height - camera.y) as f32;
         let filled = |cx: i64, cz: i64| cells[(cz.rem_euclid(h) * w + cx.rem_euclid(w)) as usize];
-        let radius = (self.streaming.radius * 16 + 11) / 12;
+        // The Cloud Distance option, not the render distance.
+        let radius = horizon_client::clouds::radius_cells(self.settings.cloud_range);
         let c = sky.cloud_color;
         let color = |shade: f32| {
             let ch = |v: f32| ((v * shade).clamp(0.0, 1.0) * 255.0) as u32;
@@ -7319,10 +7320,12 @@ impl Game<'_> {
             self.bob_matrix(alpha as f32)
         };
         let distance = (self.streaming.radius * 16) as f32;
+        let depth_far =
+            horizon_client::camera::depth_far(self.streaming.radius, self.settings.cloud_range);
         self.view_frustum = self
             .renderer
             .as_ref()
-            .map(|r| r.camera_frustum(fov_degrees, yaw, pitch, bob, distance));
+            .map(|r| r.camera_frustum(fov_degrees, yaw, pitch, bob, depth_far));
         let mut entities = if title {
             Vec::new()
         } else {
@@ -7394,6 +7397,7 @@ impl Game<'_> {
             bob,
             sky,
             distance,
+            depth_far,
             underwater,
             title: title && !live,
             skybox: self.dim == Dim::Overworld && self.settings.horizon.sky,
@@ -7480,7 +7484,8 @@ impl Game<'_> {
             &mut self.border_state,
         );
         // Camera.depthFar, as the renderer's far plane.
-        let depth_far = (distance as f32 * 4.0).max(1024.0);
+        let depth_far =
+            horizon_client::camera::depth_far(self.streaming.radius, self.settings.cloud_range);
         if !self
             .border_renderer
             .prepare(&self.border_state, camera, distance, depth_far)

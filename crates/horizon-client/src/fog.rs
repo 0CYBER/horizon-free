@@ -196,6 +196,8 @@ pub struct FogInputs<'a> {
     pub water_fog_color: [f32; 3],
     pub biome: u16,
     pub render_distance_chunks: i32,
+    /// The Cloud Distance option, in chunks.
+    pub cloud_range_chunks: i32,
     pub camera_y: f64,
     pub min_y: i32,
     /// Flat worlds use a 1-block void darkness range.
@@ -335,7 +337,7 @@ pub fn setup_fog(tables: &FogTables, state: &FogState, input: &FogInputs) -> Fog
             let min_end = sky.fog_end.min(96.0);
             fog.environmental_end = min_end.max(sky.fog_end + -256.0 * state.rain_fog_multiplier);
             fog.sky_end = rd.min(512.0);
-            fog.cloud_end = 2048.0f32.min(128.0 * 16.0);
+            fog.cloud_end = ((input.cloud_range_chunks * 16) as f32).min(sky.cloud_fog_end);
         }
     }
     let span = (rd / 10.0).clamp(4.0, 64.0);
@@ -373,6 +375,7 @@ mod tests {
             water_fog_color: [0.0, 0.0, 0.2],
             biome: 0,
             render_distance_chunks: 12,
+            cloud_range_chunks: 128,
             camera_y: 70.0,
             min_y: -64,
             flat: false,
@@ -400,6 +403,29 @@ mod tests {
         assert!((fog.render_distance_start - (192.0 - 19.2)).abs() < 1e-4);
         assert_eq!(fog.render_distance_end, 192.0);
         assert_eq!(fog.sky_end, 192.0);
+    }
+    #[test]
+    fn cloud_fog_ends_at_the_cloud_distance() {
+        let sky = Sky {
+            fog_end: 1024.0,
+            cloud_fog_end: 2048.0,
+            ..Sky::default()
+        };
+        let tables = FogTables {
+            water_fog_end: vec![1.0],
+        };
+        let mut input = inputs(&sky);
+        input.render_distance_chunks = 2;
+        input.cloud_range_chunks = 64;
+        assert_eq!(
+            setup_fog(&tables, &FogState::default(), &input).cloud_end,
+            1024.0
+        );
+        input.cloud_range_chunks = 128;
+        assert_eq!(
+            setup_fog(&tables, &FogState::default(), &input).cloud_end,
+            2048.0
+        );
     }
     #[test]
     fn water_vision_ramps() {
