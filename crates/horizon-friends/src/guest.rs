@@ -1,24 +1,30 @@
-//! The guest's end: find the host behind a code, agree on the key, settle
-//! on a direct or relayed stream, then offer it on a loopback port the
+//! The guest's end: reach the host from the code (directly, or through a
+//! relay), agree on the key, then offer the session on a loopback port the
 //! game's client connects to like to any server.
 use crate::{
     Code, PathMode,
     crypto::{self, Role},
-    direct, resolve_relay,
+    direct,
+    invite::{Invite, Parsed},
+    resolve_relay,
     session::{self, Secure},
     wire::{self, ErrorCode, FromRelay, ToRelay},
 };
 use std::{
     fmt, io,
     net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream},
+    sync::mpsc::channel,
     thread::JoinHandle,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 pub struct GuestConfig {
-    pub relay: String,
-    pub code: Code,
-    /// The game's protocol number and version name (the relay refuses a
+    /// The code as pasted: a full invite, or a relay's short code.
+    pub code: String,
+    /// The relay to use for short codes (the player's setting); a full
+    /// invite names its own.
+    pub relay: Option<String>,
+    /// The game's protocol number and version name (a relay refuses a
     /// guest whose protocol differs from the host's).
     pub protocol: i32,
     pub game: String,
@@ -28,8 +34,11 @@ pub struct GuestConfig {
 /// Why joining failed, in words for the player.
 #[derive(Debug)]
 pub enum JoinError {
-    /// No relay is configured in this build.
-    NotAvailable,
+    BadCode(crate::invite::CodeError),
+    /// A short code without a relay to resolve it.
+    NeedsRelay,
+    /// None of the code's endpoints answered, and no relay to fall back to.
+    NotReachable,
     Unreachable(String),
     UnknownCode,
     Ended,
@@ -46,8 +55,16 @@ pub enum JoinError {
 impl fmt::Display for JoinError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotAvailable => write!(f, "Joining friends is not available yet in this build."),
-            Self::Unreachable(e) => write!(f, "Couldn't reach the invite service ({e})."),
+            Self::BadCode(e) => write!(f, "{e}"),
+            Self::NeedsRelay => write!(
+                f,
+                "This short code works through your friend's relay: add the relay's address under Join a friend, or ask for the full code."
+            ),
+            Self::NotReachable => write!(
+                f,
+                "Couldn't reach your friend's game. Ask them to read the note under their code: they may need UPnP on their router, a forwarded port, a relay or a VPN."
+            ),
+            Self::Unreachable(e) => write!(f, "Couldn't reach the relay ({e})."),
             Self::UnknownCode => write!(
                 f,
                 "No world uses this code. Check it, or ask your friend for a new one."
@@ -90,10 +107,76 @@ pub struct Tunnel {
     pub direct: bool,
 }
 
-/// Find the host, agree on the key and settle on a path. Blocks for up to a
-/// few seconds (the direct race).
+/// Join with what the player pasted: a full invite is dialled directly
+/// (every endpoint at once), then through the relay it names, if any; a
+/// short code goes through the configured relay. Blocks for a few seconds.
 pub fn join(config: &GuestConfig) -> Result<Tunnel, JoinError> {
-    let relays = resolve_relay(&config.relay).map_err(|e| JoinError::Unreachable(e.to_string()))?;
+    match crate::invite::parse_detailed(&config.code).map_err(JoinError::BadCode)? {
+        Parsed::Short(code) => {
+            let relay = config.relay.as_deref().ok_or(JoinError::NeedsRelay)?;
+            join_relay(config, relay, &code)
+        }
+        Parsed::Long(invite) => {
+            if config.path != PathMode::RelayOnly
+                && !invite.endpoints.is_empty()
+                && let Some(t) = join_direct(&invite)?
+            {
+                return Ok(t);
+            }
+            match &invite.relay {
+                Some(r) if config.path != PathMode::DirectOnly => {
+                    join_relay(config, &r.address, &r.code)
+                }
+                _ => Err(JoinError::NotReachable),
+            }
+        }
+    }
+}
+
+/// Dial every endpoint of the code; the first that answers as a Horizon
+/// host gets the handshake, the others are dropped before it.
+fn join_direct(invite: &Invite) -> Result<Option<Tunnel>, JoinError> {
+    let (tx, rx) = channel();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut session = [0u8; 8];
+    crate::fill_random(&mut session).map_err(|e| JoinError::Failed(e.to_string()))?;
+    let session = u64::from_le_bytes(session);
+    for &endpoint in &invite.endpoints {
+        let tx = tx.clone();
+        let _ = std::thread::Builder::new()
+            .name("horizon-friends-dial".into())
+            .spawn(move || {
+                if let Ok(mut s) = TcpStream::connect_timeout(&endpoint, Duration::from_secs(4))
+                    && direct::code_hello(&mut s, session).is_ok()
+                {
+                    let _ = tx.send(s);
+                }
+            });
+    }
+    drop(tx);
+    let left = deadline.saturating_duration_since(Instant::now());
+    let Ok(mut stream) = rx.recv_timeout(left) else {
+        return Ok(None);
+    };
+    let key = crypto::exchange(&mut stream, &invite.secret_text(), "direct", session)
+        .map_err(|e| JoinError::Failed(e.to_string()))?;
+    let secure = session::secure(stream, &key, Role::Guest).map_err(|e| {
+        if crypto::is_wrong_code(&e) {
+            JoinError::WrongCode
+        } else {
+            JoinError::Failed(e.to_string())
+        }
+    })?;
+    Ok(Some(Tunnel {
+        secure,
+        direct: true,
+    }))
+}
+
+/// Through a relay with its short code (its own direct race, then the
+/// relay's byte stream).
+fn join_relay(config: &GuestConfig, relay_url: &str, code: &Code) -> Result<Tunnel, JoinError> {
+    let relays = resolve_relay(relay_url).map_err(|e| JoinError::Unreachable(e.to_string()))?;
     let direct_allowed = config.path != PathMode::RelayOnly;
     let (listeners, port) = if direct_allowed {
         match direct::listen(0) {
@@ -124,7 +207,7 @@ pub fn join(config: &GuestConfig) -> Result<Tunnel, JoinError> {
         &mut stream,
         &ToRelay::Join {
             v: wire::VERSION,
-            nameplate: config.code.nameplate.clone(),
+            nameplate: code.nameplate.clone(),
             protocol: config.protocol,
             game: config.game.clone(),
         },
@@ -143,20 +226,13 @@ pub fn join(config: &GuestConfig) -> Result<Tunnel, JoinError> {
                 ErrorCode::HostUnreachable => JoinError::HostUnreachable,
                 ErrorCode::Full => JoinError::Full,
                 ErrorCode::RateLimited => JoinError::RateLimited,
-                ErrorCode::BadRequest => {
-                    JoinError::Failed("the invite service refused the request".into())
-                }
+                ErrorCode::BadRequest => JoinError::Failed("the relay refused the request".into()),
             });
         }
         other => return Err(JoinError::Failed(format!("unexpected answer {other:?}"))),
     };
-    let key = crypto::exchange(
-        &mut stream,
-        &config.code.secret,
-        &config.code.nameplate,
-        session,
-    )
-    .map_err(|_| JoinError::HostUnreachable)?;
+    let key = crypto::exchange(&mut stream, &code.secret, &code.nameplate, session)
+        .map_err(|_| JoinError::HostUnreachable)?;
     let relayed = session::secure(stream, &key, Role::Guest).map_err(|e| {
         if crypto::is_wrong_code(&e) {
             JoinError::WrongCode

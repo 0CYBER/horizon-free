@@ -1,11 +1,16 @@
-//! A relay, a host tunnel in front of an echo server standing in for the
-//! integrated server, and guest tunnels, all on loopback in one process.
+//! Hosts in front of an echo server standing in for the integrated server,
+//! guests, and (for the relay cases) a self-hosted relay, all on loopback
+//! in one process. Port mapping and STUN are off here: they have their own
+//! tests against mock routers and servers in horizon-friends.
 use horizon_friends::{
     Code, Host, HostConfig, HostEvent, JoinError, PathMode,
     guest::{self, GuestConfig},
+    invite::{self, Invite, Parsed},
+    reach,
 };
 use horizon_relay::{Config, Relay, limits::Rates};
 use std::{
+    cell::RefCell,
     io::{Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
     time::{Duration, Instant},
@@ -45,25 +50,26 @@ fn generous() -> Config {
     }
 }
 
-fn host(relay: &str, lan: SocketAddr, path: PathMode) -> (Host, Code) {
-    let host = Host::start(HostConfig {
-        relay: relay.to_owned(),
-        lan,
+fn start(relay: Option<&str>, path: PathMode) -> Host {
+    Host::start(HostConfig {
+        lan: echo_server(),
         protocol: PROTOCOL,
         game: "26.3".into(),
+        relay: relay.map(str::to_owned),
         path,
+        port: 0,
+        reach: reach::Options {
+            map_port: false,
+            stun: Vec::new(),
+            loopback: true,
+        },
     })
-    .unwrap();
-    let code = wait_event(&host, |e| match e {
-        HostEvent::Code(c) => Some(c.clone()),
-        _ => None,
-    });
-    (host, code)
+    .unwrap()
 }
 
 thread_local! {
     /// Events polled but not yet waited for.
-    static BACKLOG: std::cell::RefCell<Vec<HostEvent>> = const { std::cell::RefCell::new(Vec::new()) };
+    static BACKLOG: RefCell<Vec<HostEvent>> = const { RefCell::new(Vec::new()) };
 }
 
 /// The first event (in order) that `f` picks; the others stay queued.
@@ -83,10 +89,25 @@ fn wait_event<T>(host: &Host, mut f: impl FnMut(&HostEvent) -> Option<T>) -> T {
     panic!("no such host event");
 }
 
-fn join(relay: &str, code: &Code, path: PathMode) -> Result<guest::Tunnel, JoinError> {
+/// The invite once ready (and, with a relay, once it holds the short code).
+fn invite_of(host: &Host, with_relay: bool) -> (String, Option<Code>) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let s = host.state();
+        if let Some(code) = s.invite
+            && (!with_relay || s.short.is_some())
+        {
+            return (code, s.short);
+        }
+        assert!(Instant::now() < deadline, "no code");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn join(code: &str, relay: Option<&str>, path: PathMode) -> Result<guest::Tunnel, JoinError> {
     guest::join(&GuestConfig {
-        relay: relay.to_owned(),
-        code: code.clone(),
+        code: code.to_owned(),
+        relay: relay.map(str::to_owned),
         protocol: PROTOCOL,
         game: "26.3".into(),
         path,
@@ -114,110 +135,174 @@ fn payload(n: usize) -> Vec<u8> {
     (0..n).map(|i| (i * 7 + i / 251) as u8).collect()
 }
 
+fn long(code: &str) -> Invite {
+    match invite::parse(code) {
+        Some(Parsed::Long(i)) => i,
+        other => panic!("{other:?}"),
+    }
+}
+
 #[test]
-fn the_direct_path_carries_the_stream() {
-    let (relay, address) = relay(generous());
-    let (host, code) = host(&address, echo_server(), PathMode::Auto);
-    assert_eq!(code.nameplate.len(), 4);
-    let tunnel = join(&address, &code, PathMode::Auto).unwrap();
+fn the_code_alone_connects_without_any_server() {
+    let host = start(None, PathMode::Auto);
+    let (code, short) = invite_of(&host, false);
+    assert!(short.is_none());
+    let invite = long(&code);
+    assert!(invite.relay.is_none());
     assert!(
-        tunnel.direct,
-        "loopback ends should reach each other directly"
+        invite.endpoints.iter().any(|e| e.ip().is_loopback()),
+        "{invite:?}"
     );
-    let data = payload(1 << 20);
-    round_trip(tunnel, &data);
+    let tunnel = join(&code, None, PathMode::Auto).unwrap();
+    assert!(tunnel.direct);
+    round_trip(tunnel, &payload(1 << 20));
     assert!(wait_event(&host, |e| match e {
         HostEvent::Connected { direct, .. } => Some(*direct),
         _ => None,
     }));
-    // Only the handshake went through the relay.
-    let counts = relay.counts();
-    assert!(counts.relayed_bytes < 16 * 1024, "{counts:?}");
-    assert_eq!(counts.hosts, 1);
     wait_event(&host, |e| {
         matches!(e, HostEvent::Disconnected { .. }).then_some(())
     });
     assert_eq!(host.sessions(), 0);
-}
-
-#[test]
-fn the_relay_path_carries_the_stream() {
-    let (relay, address) = relay(generous());
-    let (host, code) = host(&address, echo_server(), PathMode::Auto);
-    let tunnel = join(&address, &code, PathMode::RelayOnly).unwrap();
-    assert!(!tunnel.direct);
-    let data = payload(1 << 20);
-    round_trip(tunnel, &data);
-    assert!(!wait_event(&host, |e| match e {
-        HostEvent::Connected { direct, .. } => Some(*direct),
-        _ => None,
-    }));
-    // Both directions, encrypted and framed: a little more than twice.
-    let relayed = relay.counts().relayed_bytes;
-    assert!(relayed > 2 * data.len() as u64, "{relayed}");
-    // Two guests at once, one per path.
-    let a = join(&address, &code, PathMode::RelayOnly).unwrap();
-    let b = join(&address, &code, PathMode::Auto).unwrap();
+    // Two guests at once.
+    let a = join(&code, None, PathMode::Auto).unwrap();
+    let b = join(&code, None, PathMode::Auto).unwrap();
     let ta = std::thread::spawn(move || round_trip(a, &payload(50_000)));
     round_trip(b, &payload(70_000));
     ta.join().unwrap();
-}
-
-#[test]
-fn the_host_can_refuse_direct_connections() {
-    let (_relay, address) = relay(generous());
-    let (_host, code) = host(&address, echo_server(), PathMode::RelayOnly);
-    let tunnel = join(&address, &code, PathMode::Auto).unwrap();
-    assert!(!tunnel.direct);
-    round_trip(tunnel, b"relay only");
-    // A guest that insists on a direct path gets none.
+    // Without a relay, a relay-only guest has nowhere to go.
     assert!(matches!(
-        join(&address, &code, PathMode::DirectOnly),
-        Err(JoinError::Failed(_))
+        join(&code, None, PathMode::RelayOnly),
+        Err(JoinError::NotReachable)
     ));
 }
 
 #[test]
-fn wrong_secrets_fail_and_retire_the_code() {
+fn a_short_code_through_a_self_hosted_relay() {
+    let (relay, address) = relay(generous());
+    let host = start(Some(&address), PathMode::Auto);
+    let (code, short) = invite_of(&host, true);
+    let short = short.unwrap().to_string();
+    // The full code names the relay too.
+    assert_eq!(long(&code).relay.unwrap().address, address);
+    // A short code needs the relay's address.
+    assert!(matches!(
+        join(&short, None, PathMode::Auto),
+        Err(JoinError::NeedsRelay)
+    ));
+    let tunnel = join(&short, Some(&address), PathMode::RelayOnly).unwrap();
+    assert!(!tunnel.direct);
+    let data = payload(1 << 20);
+    round_trip(tunnel, &data);
+    let relayed = relay.counts().relayed_bytes;
+    assert!(relayed > 2 * data.len() as u64, "{relayed}");
+    // The relay's own direct race (both ends on loopback): direct.
+    let tunnel = join(&short, Some(&address), PathMode::Auto).unwrap();
+    assert!(tunnel.direct);
+    round_trip(tunnel, b"raced");
+}
+
+#[test]
+fn unreachable_endpoints_fall_back_to_the_relay_in_the_code() {
+    let (relay, address) = relay(generous());
+    let host = start(Some(&address), PathMode::Auto);
+    let (code, _) = invite_of(&host, true);
+    // The same invite with an endpoint nobody answers on.
+    let mut invite = long(&code);
+    let dead = TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    invite.endpoints = vec![dead];
+    let started = Instant::now();
+    assert!(matches!(
+        join(&invite.encode(), None, PathMode::DirectOnly),
+        Err(JoinError::NotReachable)
+    ));
+    assert!(started.elapsed() < Duration::from_secs(6));
+    let tunnel = join(&invite.encode(), None, PathMode::Auto).unwrap();
+    round_trip(tunnel, b"fallback");
+    assert!(relay.counts().relayed_bytes > 0);
+    // Without a relay in the code: the host's advice is the way out.
+    invite.relay = None;
+    assert!(matches!(
+        join(&invite.encode(), None, PathMode::Auto),
+        Err(JoinError::NotReachable)
+    ));
+}
+
+#[test]
+fn wrong_secrets_fail() {
     let (_relay, address) = relay(generous());
-    let (host, code) = host(&address, echo_server(), PathMode::Auto);
+    let host = start(Some(&address), PathMode::Auto);
+    let (code, short) = invite_of(&host, true);
+    // A full code with another secret (re-encoded, so the checksum passes).
+    let mut forged = long(&code);
+    forged.secret[0] ^= 1;
+    assert!(matches!(
+        join(&forged.encode(), None, PathMode::DirectOnly),
+        Err(JoinError::WrongCode)
+    ));
+    assert_eq!(
+        wait_event(&host, |e| match e {
+            HostEvent::WrongCode { count } => Some(*count),
+            _ => None,
+        }),
+        1
+    );
+    // Short codes: five wrong secrets retire it for a new one.
+    let short = short.unwrap();
     let wrong = Code {
-        nameplate: code.nameplate.clone(),
-        secret: if code.secret == "0000" {
+        nameplate: short.nameplate.clone(),
+        secret: if short.secret == "0000" {
             "0001".into()
         } else {
             "0000".into()
         },
     };
-    for i in 1..=horizon_friends::host::MAX_WRONG {
-        let e = join(&address, &wrong, PathMode::Auto).err().unwrap();
+    for _ in 0..horizon_friends::host::MAX_WRONG {
+        let e = join(&wrong.to_string(), Some(&address), PathMode::Auto)
+            .err()
+            .unwrap();
         assert!(matches!(e, JoinError::WrongCode), "{e}");
-        let count = wait_event(&host, |e| match e {
-            HostEvent::WrongCode { count } => Some(*count),
-            _ => None,
-        });
-        assert_eq!(count, i);
     }
-    // A new code replaces the old one, which has ended.
-    let fresh = wait_event(&host, |e| match e {
-        HostEvent::Code(c) => Some(c.clone()),
-        _ => None,
-    });
-    assert_ne!(fresh.nameplate, code.nameplate);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let fresh = loop {
+        if let Some(s) = host.state().short
+            && s.nameplate != short.nameplate
+        {
+            break s;
+        }
+        assert!(Instant::now() < deadline, "no new short code");
+        std::thread::sleep(Duration::from_millis(20));
+    };
     assert!(matches!(
-        join(&address, &code, PathMode::Auto),
+        join(&short.to_string(), Some(&address), PathMode::Auto),
         Err(JoinError::Ended)
     ));
-    round_trip(join(&address, &fresh, PathMode::Auto).unwrap(), b"fresh");
+    round_trip(
+        join(&fresh.to_string(), Some(&address), PathMode::Auto).unwrap(),
+        b"fresh",
+    );
+    // The full code follows the new short code; its secret stays.
+    let (code2, _) = invite_of(&host, true);
+    assert_eq!(long(&code2).relay.unwrap().code, fresh);
+    assert_eq!(long(&code2).secret, long(&code).secret);
 }
 
 #[test]
-fn unknown_codes_versions_and_ended_invites() {
+fn bad_codes_unknown_codes_versions_and_ended_invites() {
+    assert!(matches!(
+        join("hello", None, PathMode::Auto),
+        Err(JoinError::BadCode(_))
+    ));
     let (relay, address) = relay(generous());
-    let (mut host, code) = host(&address, echo_server(), PathMode::Auto);
+    let mut host = start(Some(&address), PathMode::RelayOnly);
+    let (_, short) = invite_of(&host, true);
+    let short = short.unwrap();
     let other = guest::join(&GuestConfig {
-        relay: address.clone(),
-        code: code.clone(),
+        code: short.to_string(),
+        relay: Some(address.clone()),
         protocol: PROTOCOL - 1,
         game: "26.2".into(),
         path: PathMode::Auto,
@@ -233,26 +318,23 @@ fn unknown_codes_versions_and_ended_invites() {
     }
     host.stop();
     assert!(matches!(
-        join(&address, &code, PathMode::Auto),
+        join(&short.to_string(), Some(&address), PathMode::Auto),
         Err(JoinError::Ended)
     ));
     // A nameplate nobody holds; five of them block this address for a while.
     let free = (0..)
         .map(|i| horizon_friends::code::nameplate(i * 7919))
-        .find(|n| *n != code.nameplate)
+        .find(|n| *n != short.nameplate)
         .unwrap();
-    let unknown = Code {
-        nameplate: free,
-        secret: "0000".into(),
-    };
+    let unknown = format!("{free}0000");
     for _ in 0..5 {
         assert!(matches!(
-            join(&address, &unknown, PathMode::Auto),
+            join(&unknown, Some(&address), PathMode::Auto),
             Err(JoinError::UnknownCode)
         ));
     }
     assert!(matches!(
-        join(&address, &code, PathMode::Auto),
+        join(&short.to_string(), Some(&address), PathMode::Auto),
         Err(JoinError::RateLimited)
     ));
     let counts = relay.counts();
@@ -284,15 +366,12 @@ fn a_host_that_never_attaches_is_unreachable() {
     else {
         panic!()
     };
-    let code = Code {
-        nameplate,
-        secret: "0000".into(),
-    };
+    let code = format!("{nameplate}0000");
     assert!(matches!(
-        join(&address, &code, PathMode::Auto),
+        join(&code, Some(&address), PathMode::Auto),
         Err(JoinError::HostUnreachable)
     ));
-    // The relay announced the session; attaching late or with another token fails.
+    // The relay announced the session; attaching late fails.
     let FromRelay::Join { session } = wire::recv(&mut control).unwrap() else {
         panic!()
     };
@@ -319,8 +398,14 @@ fn relayed_bandwidth_is_capped() {
         session_rate: rate,
         ..generous()
     });
-    let (_host, code) = host(&address, echo_server(), PathMode::RelayOnly);
-    let tunnel = join(&address, &code, PathMode::RelayOnly).unwrap();
+    let host = start(Some(&address), PathMode::RelayOnly);
+    let (_, short) = invite_of(&host, true);
+    let tunnel = join(
+        &short.unwrap().to_string(),
+        Some(&address),
+        PathMode::RelayOnly,
+    )
+    .unwrap();
     let started = Instant::now();
     round_trip(tunnel, &payload(600_000));
     // The first 100 kB pass at once, the rest at 200 kB/s.

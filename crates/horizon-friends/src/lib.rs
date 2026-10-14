@@ -1,6 +1,9 @@
 //! Play with friends: a host shares the world it opened to LAN behind an
-//! invite code; guests join with the code, directly when the network allows
-//! and through the relay otherwise. Both ends carry the game's TCP stream
+//! invite code that holds its addresses and a secret; guests dial it
+//! directly (the host opens its router port with PCP / NAT-PMP / UPnP and
+//! learns its public address with STUN). A relay anyone can run
+//! (`horizon-relay`) adds short codes and a fallback for networks that
+//! can't be reached. Both ends carry the game's TCP stream
 //! unchanged between loopback ports (the integrated server on the host, a
 //! local port the guest's client connects to), end-to-end encrypted with a
 //! key only the holders of the code can derive. The design, the protocol and
@@ -10,7 +13,11 @@ pub mod crypto;
 pub mod direct;
 pub mod guest;
 pub mod host;
+pub mod invite;
+pub mod portmap;
+pub mod reach;
 mod session;
+pub mod stun;
 pub mod wire;
 
 pub use code::Code;
@@ -48,16 +55,14 @@ impl PathMode {
     }
 }
 
-/// The relay's address: `HORIZON_RELAY_URL` at run time, else the one
-/// compiled in from the same variable. None until a relay is deployed.
+/// A relay from `HORIZON_RELAY_URL` (tests, or players who set it in the
+/// environment); the game adds its own setting. None by default: friends
+/// join from the code alone.
 pub fn relay_url() -> Option<String> {
-    let runtime = std::env::var("HORIZON_RELAY_URL").ok();
-    let compiled = option_env!("HORIZON_RELAY_URL").map(str::to_owned);
-    runtime
-        .into_iter()
-        .chain(compiled)
+    std::env::var("HORIZON_RELAY_URL")
+        .ok()
         .map(|s| s.trim().to_owned())
-        .find(|s| !s.is_empty())
+        .filter(|s| !s.is_empty())
 }
 
 /// `host:port`, optionally written `tcp://host:port`.

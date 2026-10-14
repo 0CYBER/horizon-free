@@ -5,7 +5,7 @@
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::{
     io::{self, Read, Write},
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream, UdpSocket},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -18,6 +18,8 @@ use std::{
 pub const RACE: Duration = Duration::from_millis(3000);
 const RETRY: Duration = Duration::from_millis(250);
 const MAGIC: &[u8; 4] = b"HZF1";
+/// A guest dialling an endpoint from an invite code (no relay involved).
+pub const CODE_MAGIC: &[u8; 4] = b"HZF2";
 
 fn socket_for(addr: &SocketAddr) -> io::Result<Socket> {
     let s = Socket::new(
@@ -85,47 +87,16 @@ pub fn connect_from(port: Option<u16>, to: SocketAddr, timeout: Duration) -> io:
     TcpStream::connect_timeout(&to, timeout)
 }
 
-/// The source address the OS would use toward `to` (a UDP socket only picks
-/// a route: no packet is sent).
-fn route_to(to: SocketAddr) -> Option<IpAddr> {
-    let bind = unspecified(to.is_ipv6(), 0);
-    let s = UdpSocket::bind(bind).ok()?;
-    s.connect(to).ok()?;
-    let ip = s.local_addr().ok()?.ip();
-    (!ip.is_unspecified()).then_some(ip)
-}
-
-/// The addresses this machine can be reached on, best first: toward the
-/// relay (a LAN or tailnet address when the relay is near), then toward the
-/// public IPv4 and IPv6 internet. Loopback only when the relay is local.
-pub fn local_addresses(relay: Option<SocketAddr>) -> Vec<IpAddr> {
-    let mut targets: Vec<SocketAddr> = relay.into_iter().collect();
-    targets.push(SocketAddr::from(([1, 1, 1, 1], 53)));
-    targets.push(SocketAddr::from((
-        [0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111],
-        53,
-    )));
-    let local_relay = relay.is_some_and(|r| r.ip().is_loopback());
-    let mut out = Vec::new();
-    for t in targets {
-        if let Some(ip) = route_to(t)
-            && (local_relay || !ip.is_loopback())
-            && !out.contains(&ip)
-        {
-            out.push(ip);
-        }
-    }
-    out
-}
-
-/// This end's candidates: each local address with the direct port, then the
-/// address the relay saw (when it is not one of them).
+/// This end's candidates for a relayed session: its interface addresses
+/// with the direct port (loopback when the relay is local), then the address
+/// the relay saw (when it is not one of them).
 pub fn candidates(
     port: u16,
     relay: Option<SocketAddr>,
     observed: Option<SocketAddr>,
 ) -> Vec<SocketAddr> {
-    let mut out: Vec<SocketAddr> = local_addresses(relay)
+    let loopback = relay.is_some_and(|r| r.ip().is_loopback());
+    let mut out: Vec<SocketAddr> = crate::reach::interface_addresses(loopback)
         .into_iter()
         .map(|ip| SocketAddr::new(ip, port))
         .collect();
@@ -135,6 +106,7 @@ pub fn candidates(
     {
         out.push(o);
     }
+    out.truncate(crate::invite::MAX_ENDPOINTS);
     out
 }
 
@@ -170,6 +142,52 @@ pub fn read_session(stream: &mut TcpStream) -> io::Result<u64> {
         ));
     }
     Ok(u64::from_be_bytes(theirs[4..].try_into().unwrap()))
+}
+/// What an inbound stream on the host's direct port is.
+pub enum Hello {
+    /// A relayed session's direct race.
+    Relayed(u64),
+    /// A guest with the invite code.
+    Code(u64),
+}
+pub fn read_hello(stream: &mut TcpStream) -> io::Result<Hello> {
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    let mut theirs = [0u8; 12];
+    stream.read_exact(&mut theirs)?;
+    let session = u64::from_be_bytes(theirs[4..].try_into().unwrap());
+    match &theirs[..4] {
+        m if m == MAGIC => Ok(Hello::Relayed(session)),
+        m if m == CODE_MAGIC => Ok(Hello::Code(session)),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "not a Horizon stream",
+        )),
+    }
+}
+/// The guest's side of a code session's opening: send the hello, wait for
+/// its echo (proof a Horizon host listens there).
+pub fn code_hello(stream: &mut TcpStream, session: u64) -> io::Result<()> {
+    let mut hello = [0u8; 12];
+    hello[..4].copy_from_slice(CODE_MAGIC);
+    hello[4..].copy_from_slice(&session.to_be_bytes());
+    stream.set_read_timeout(Some(Duration::from_secs(4)))?;
+    stream.write_all(&hello)?;
+    let mut theirs = [0u8; 12];
+    stream.read_exact(&mut theirs)?;
+    if theirs != hello {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "not a Horizon host",
+        ));
+    }
+    Ok(())
+}
+/// The host echoes a code session's hello.
+pub fn answer_code(stream: &mut TcpStream, session: u64) -> io::Result<()> {
+    let mut hello = [0u8; 12];
+    hello[..4].copy_from_slice(CODE_MAGIC);
+    hello[4..].copy_from_slice(&session.to_be_bytes());
+    stream.write_all(&hello)
 }
 /// Answer an inbound stream's introduction for `session`.
 pub fn answer(stream: &mut TcpStream, session: u64) -> io::Result<()> {
