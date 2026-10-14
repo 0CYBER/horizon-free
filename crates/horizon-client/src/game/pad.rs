@@ -36,6 +36,11 @@ pub(super) struct Pads {
     /// Buttons a `pad ... tap` releases at the next poll.
     taps: Vec<Button>,
     edges: Edges,
+    /// The game tick each button went down in, and releases held back until
+    /// a tick has passed: vanilla samples keys once per tick, so a click
+    /// shorter than that (a quick stick click for sprint) would be lost.
+    pressed_at: [Option<u64>; 16],
+    late_releases: Vec<Button>,
     /// The merged state of the last poll.
     state: PadState,
     /// The pad drove the game last (the mouse and keyboard hand control back).
@@ -173,12 +178,36 @@ impl Game<'_> {
             self.pad.in_use = true;
         }
         self.pad.state = state;
+        let ticking = self.title.is_none() && self.screen == Screen::Playing && !self.pause;
+        for button in std::mem::take(&mut self.pad.late_releases) {
+            if !ticking || self.pad.pressed_at[button as usize] != Some(self.ticks) {
+                self.pad_button_logged(button, false);
+            } else {
+                self.pad.late_releases.push(button);
+            }
+        }
         for (button, down) in edges {
             self.pad_edge(button, down);
         }
     }
 
     fn pad_edge(&mut self, button: Button, down: bool) {
+        let ticking = self.title.is_none() && self.screen == Screen::Playing && !self.pause;
+        if down {
+            // Pressed again before its held-back release went out.
+            if let Some(i) = self.pad.late_releases.iter().position(|b| *b == button) {
+                self.pad.late_releases.remove(i);
+                self.pad_button_logged(button, false);
+            }
+            self.pad.pressed_at[button as usize] = Some(self.ticks);
+        } else if ticking && self.pad.pressed_at[button as usize] == Some(self.ticks) {
+            self.pad.late_releases.push(button);
+            return;
+        }
+        self.pad_button_logged(button, down);
+    }
+
+    fn pad_button_logged(&mut self, button: Button, down: bool) {
         if let Err(e) = self.pad_button(button, down) {
             log::warn!("Horizon: controller {}: {e}", button.name());
         }
