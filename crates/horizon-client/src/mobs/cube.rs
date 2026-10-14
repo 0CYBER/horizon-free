@@ -7,7 +7,10 @@ use super::{
     control::{MoveKind, Operation, rotlerp},
     goals::{Cx, Goal, JUMP, LOOK, MOVE, NearestTarget, Prey, goal_clone, reduced},
 };
-use horizon_core::{geometry::Vec3, random::RandomSource};
+use horizon_core::{
+    geometry::{Vec3, trig},
+    random::RandomSource,
+};
 
 // AnimState slots.
 const SQUISH: usize = 0;
@@ -144,6 +147,31 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     v[SQUISH] += (v[TARGET_SQUISH] - v[SQUISH]) * 0.5;
     let was = m.extra.flag2;
     if m.on_ground && !was {
+        // The landing splash: drawn on the server too, where it spawns nothing.
+        let size = m.width() * 2.0;
+        let radius = size / 2.0;
+        let kind = match m.species() {
+            Species::MagmaCube => "flame",
+            Species::SulfurCube => "sulfur_cube_goo",
+            _ => "item_slime",
+        };
+        let mut i = 0;
+        while (i as f32) < size * 16.0 {
+            let dir = m.random.next_float() * std::f64::consts::TAU as f32;
+            let d = m.random.next_float() * 0.5 + 0.5;
+            let xd = trig::sin(f64::from(dir)) * radius * d;
+            let zd = trig::cos(f64::from(dir)) * radius * d;
+            events.push(MobEvent::Particles {
+                kind,
+                at: [
+                    m.position.x + f64::from(xd),
+                    m.position.y,
+                    m.position.z + f64::from(zd),
+                ],
+                count: 0,
+            });
+            i += 1;
+        }
         let squish = match (m.species(), tiny(m)) {
             (Species::SulfurCube, _) => super::sulfur_cube::squish_sound(m),
             (Species::MagmaCube, true) => "entity.magma_cube.squish_small",

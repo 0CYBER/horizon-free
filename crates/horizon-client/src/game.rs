@@ -52,6 +52,7 @@ mod lan_actions;
 mod lan_screen;
 mod lan_trading;
 mod leads;
+mod level_particles;
 mod lightning;
 mod llamas;
 mod loom;
@@ -1579,6 +1580,11 @@ impl Game<'_> {
                 } => self.sculk_charge_event(pos, data),
                 LevelEvent::LevelEvent { id: 3007, pos, .. } => self.shriek_event(pos),
                 LevelEvent::LevelEvent {
+                    id: id @ 3002..=3005,
+                    pos,
+                    data,
+                } => self.block_particle_event(id, pos, data),
+                LevelEvent::LevelEvent {
                     id: 1500,
                     pos,
                     data,
@@ -2326,11 +2332,13 @@ impl Game<'_> {
             return;
         }
         let duration = 32;
-        let ticks = ticks + 1;
+        // Consumable.shouldEmitParticlesAndSounds(useItemRemainingTicks), with
+        // the remaining ticks before this tick counts down: every 4 ticks once
+        // more than 21.875% of the time has passed (none on the last tick).
         let remaining = duration - ticks.min(duration);
+        let ticks = ticks + 1;
         let eye = self.eye_position().unwrap_or_default();
-        // Consumable.shouldEmitParticlesAndSounds: every 4 ticks in the last 25.
-        if remaining <= 25 && remaining % 4 == 0 {
+        if duration - remaining > (duration as f32 * 0.21875) as u32 && remaining % 4 == 0 {
             let pitch =
                 (self.world.random.next_float() - self.world.random.next_float()) * 0.2 + 1.0;
             self.audio.play(
@@ -2339,38 +2347,12 @@ impl Game<'_> {
                 0.5 + 0.5 * self.world.random.next_int_bound(2).unwrap_or(0) as f32,
                 pitch,
             );
-            // `ItemParticleOption`: the particle material of a random layer of
-            // the stack resolved for the ground (`BreakingItemParticle`).
-            let state = self.resolve_item(
-                &stack,
-                horizon_assets::item_model::DisplayContext::Ground,
-                None,
-                0,
-            );
-            if let Some(sprite) = state.pick_particle(&mut self.world.random) {
-                let (yaw, pitch) = (
-                    f64::from(self.yaw).to_radians(),
-                    f64::from(self.pitch).to_radians(),
-                );
-                let at = [
-                    eye[0] - yaw.sin() * pitch.cos() * 0.3,
-                    eye[1] - 0.1,
-                    eye[2] + yaw.cos() * pitch.cos() * 0.3,
-                ];
-                for _ in 0..5 {
-                    let v = [
-                        (f64::from(self.world.random.next_float()) - 0.5) * 0.1,
-                        0.1,
-                        (f64::from(self.world.random.next_float()) - 0.5) * 0.1,
-                    ];
-                    let p =
-                        Particle::terrain(&mut self.world.random, at, v, sprite.clone(), 0xFFFFFF);
-                    self.particles.push(p);
-                }
-            }
+            self.eat_particles(&stack, 5);
         }
         if ticks >= duration {
             self.using = None;
+            // Consumable.onConsume: emitParticlesAndSounds(..., 16).
+            self.eat_particles(&stack, 16);
             // Consumable.onConsume.
             self.post_entity_event("minecraft:eat", horizon_client::mobs::Who::Player);
             if let Some((nutrition, saturation)) = info.food
@@ -6293,7 +6275,7 @@ impl Game<'_> {
             _ => "east",
         };
         let registry = self.res.assets.registry;
-        let (state, sound, loot, damage) = {
+        let (state, sound, loot, damage, particle) = {
             let around = Column {
                 world: &self.world,
                 registry,
@@ -6306,12 +6288,25 @@ impl Game<'_> {
             else {
                 return Ok(false);
             };
-            (state, t.sound.clone(), t.loot.clone(), t.damage)
+            (
+                state,
+                t.sound.clone(),
+                t.loot.clone(),
+                t.damage,
+                t.particle.clone(),
+            )
         };
         let Ok(new) = registry.resolve(&state) else {
             return Ok(false);
         };
         self.level_set(pos, new)?;
+        // BlockTransformer.TransformParticle.send.
+        match particle.as_str() {
+            "scrape" => self.level_event_at(3005, pos, 0),
+            "wax_on" => self.level_event_at(3003, pos, 0),
+            "wax_off" => self.level_event_at(3004, pos, 0),
+            _ => {}
+        }
         if loot.as_deref() == Some("minecraft:till/rooted_dirt") {
             self.pop_resource(
                 [pos[0] + face[0], pos[1] + face[1], pos[2] + face[2]],
@@ -6494,6 +6489,7 @@ impl Game<'_> {
                 && let Ok(state) = registry.resolve(&waxed)
             {
                 self.level_set(hit.pos, state)?;
+                self.level_event_at(3003, hit.pos, 0);
                 self.audio.play(
                     "minecraft:item.honeycomb.wax_on",
                     Some(at(hit.pos)),

@@ -554,6 +554,110 @@ pub fn destroy_positions(
     }
 }
 
+/// `LivingEntity.spawnItemParticles(stack, count)` (eating, drinking, an item
+/// breaking): `count` crumbs in front of the eyes, thrown up and forwards,
+/// both turned by the pitch and yaw in degrees.
+pub fn item_use_particles(
+    random: &mut impl RandomSource,
+    pitch: f32,
+    yaw: f32,
+    position: [f64; 3],
+    eye_y: f64,
+    count: u32,
+    mut emit: impl FnMut([f64; 3], [f64; 3]),
+) {
+    let (x_rot, y_rot) = (-pitch * trig::DEG_TO_RAD, -yaw * trig::DEG_TO_RAD);
+    for _ in 0..count {
+        let d = Vec3::new(
+            (f64::from(random.next_float()) - 0.5) * 0.1,
+            f64::from(random.next_float()) * 0.1 + 0.1,
+            0.0,
+        )
+        .rotate_x(x_rot)
+        .rotate_y(y_rot);
+        let y = f64::from(-random.next_float()) * 0.6 - 0.3;
+        let p = Vec3::new((f64::from(random.next_float()) - 0.5) * 0.3, y, 0.6)
+            .rotate_x(x_rot)
+            .rotate_y(y_rot);
+        emit(
+            [p.x + position[0], p.y + eye_y, p.z + position[2]],
+            [d.x, d.y + 0.05, d.z],
+        );
+    }
+}
+
+/// `Mth.nextDouble(random, min, max)`.
+fn next_double_between(random: &mut impl RandomSource, min: f64, max: f64) -> f64 {
+    if min >= max {
+        min
+    } else {
+        random.next_double() * (max - min) + min
+    }
+}
+/// `ParticleUtils.spawnParticlesOnBlockFaces(level, pos, particle, UniformInt.of(3, 5))`
+/// (level events 3002 without an axis, 3003 wax on, 3004 wax off, 3005 scrape):
+/// three to five particles on each face, in `Direction.values()` order, moving
+/// along the face at up to half a block a tick.
+pub fn on_block_faces(
+    random: &mut impl RandomSource,
+    pos: [i32; 3],
+    mut emit: impl FnMut([f64; 3], [f64; 3]),
+) {
+    const FACES: [[i32; 3]; 6] = [
+        [0, -1, 0],
+        [0, 1, 0],
+        [0, 0, -1],
+        [0, 0, 1],
+        [-1, 0, 0],
+        [1, 0, 0],
+    ];
+    for face in FACES {
+        let count = random.next_int_bound(5 - 3 + 1).unwrap_or(0) + 3;
+        for _ in 0..count {
+            // getRandomSpeedRanges, then spawnParticleOnFace with step factor 0.55.
+            let speed: [f64; 3] = std::array::from_fn(|_| next_double_between(random, -0.5, 0.5));
+            let mut p = [0.0; 3];
+            let mut v = [0.0; 3];
+            for i in 0..3 {
+                let center = f64::from(pos[i]) + 0.5;
+                if face[i] == 0 {
+                    p[i] = center + next_double_between(random, -0.5, 0.5);
+                    v[i] = speed[i];
+                } else {
+                    p[i] = center + f64::from(face[i]) * 0.55;
+                }
+            }
+            emit(p, v);
+        }
+    }
+}
+/// `ParticleUtils.spawnParticlesAlongAxis(axis, level, pos, 0.125, particle,
+/// UniformInt.of(10, 19))` (level event 3002 on a lightning rod): sparks along
+/// the rod, moving along it. `axis` is 0, 1, 2 for X, Y, Z.
+pub fn along_axis(
+    random: &mut impl RandomSource,
+    axis: usize,
+    pos: [i32; 3],
+    mut emit: impl FnMut([f64; 3], [f64; 3]),
+) {
+    let count = random.next_int_bound(19 - 10 + 1).unwrap_or(0) + 10;
+    for _ in 0..count {
+        let p: [f64; 3] = std::array::from_fn(|i| {
+            f64::from(pos[i])
+                + 0.5
+                + next_double_between(random, -1.0, 1.0) * if i == axis { 0.5 } else { 0.125 }
+        });
+        let v: [f64; 3] = std::array::from_fn(|i| {
+            if i == axis {
+                next_double_between(random, -1.0, 1.0)
+            } else {
+                0.0
+            }
+        });
+        emit(p, v);
+    }
+}
+
 impl Particle {
     /// `Particle(level, x, y, z)` + `SingleQuadParticle` (no initial velocity).
     fn at(random: &mut LegacyRandom, ty: ParticleType, p: [f64; 3]) -> Self {
@@ -1032,6 +1136,10 @@ impl ParticleEngine {
     /// Random generator shared by particle constructors and spawners.
     pub fn random(&mut self) -> &mut LegacyRandom {
         &mut self.random
+    }
+    /// `ClientLevel.random` as client effects use it (`LevelEventHandler`).
+    pub fn level_random(&mut self) -> &mut LegacyRandom {
+        &mut self.level_random
     }
     /// `ClientLevel.addParticle`: dropped beyond 32 blocks of the camera unless
     /// the type overrides the limiter.
