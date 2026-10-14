@@ -157,6 +157,7 @@ impl Game<'_> {
             .ok_or("registries.json not found next to the resources; run the data generator reports (horizon-prepare)")?;
         let lang = Arc::new(horizon_client::net::load_language(&root));
         let view = self.settings.render_distance.clamp(2, 32) as i8;
+        horizon_client::crash::set_detail("Server", address.to_owned());
         let session = Session::connect(address, name, view, lang.clone());
         let player_type = super::perspective::player_type(&root);
         let mut streaming = Streaming::new(
@@ -259,6 +260,7 @@ impl Game<'_> {
         if let Some(mut r) = self.remote.take() {
             r.session.disconnect();
         }
+        horizon_client::crash::clear_detail("Server");
         self.tab_list.reset();
         self.score.board = Default::default();
         self.streaming = Streaming::new(Arc::new(NoTerrain), self.res.context.clone(), 1);
@@ -342,7 +344,7 @@ impl Game<'_> {
         Some(stack)
     }
     fn chat_line(&mut self, text: String) {
-        eprintln!("[chat] {text}");
+        log::info!("[chat] {text}");
         if let Some(r) = self.remote.as_mut() {
             r.chat.push((text, Instant::now()));
             if r.chat.len() > 100 {
@@ -380,12 +382,12 @@ impl Game<'_> {
                     if let Some(r) = self.remote.as_mut() {
                         r.decode_errors += 1;
                         if r.decode_errors <= 20 {
-                            eprintln!("Horizon: skipped undecodable packet {e}");
+                            log::warn!("Horizon: skipped undecodable packet {e}");
                         }
                     }
                 }
                 Event::Disconnected(reason) => {
-                    eprintln!("Horizon: disconnected: {reason}");
+                    log::info!("Horizon: disconnected: {reason}");
                     return self.leave_server(Some(reason));
                 }
                 Event::Packet(packet) => self.handle_packet(*packet)?,
@@ -766,7 +768,7 @@ impl Game<'_> {
                         self.sync_block_entity(pos, state);
                     }
                 }
-                Err(e) => eprintln!("Horizon: chunk {} {}: {e}", p.x, p.z),
+                Err(e) => log::warn!("Horizon: chunk {} {}: {e}", p.x, p.z),
             },
             C::ForgetLevelChunk(p) => {
                 let [x, z] = p.pos;

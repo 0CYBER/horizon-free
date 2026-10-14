@@ -704,6 +704,90 @@ pub fn game_home() -> PathBuf {
         .join("horizon")
 }
 
+// ----- Logs and crash reports ---------------------------------------------------------------------
+
+/// The game's logs (`latest.log` and the day archives), as it writes them in its home.
+pub fn logs_dir() -> PathBuf {
+    game_home().join("logs")
+}
+
+/// Where the game writes `crash-<date>_<time>-client.txt` when it crashes.
+pub fn crash_reports_dir() -> PathBuf {
+    game_home().join("crash-reports")
+}
+
+/// The crash reports in `dir`, oldest first (their names sort by time).
+fn crash_reports_in(dir: &Path) -> Vec<PathBuf> {
+    let mut reports: Vec<PathBuf> = fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("crash-") && n.ends_with(".txt"))
+        })
+        .collect();
+    reports.sort();
+    reports
+}
+
+/// The newest crash report, if any.
+pub fn newest_crash_report() -> Option<PathBuf> {
+    crash_reports_in(&crash_reports_dir()).pop()
+}
+
+/// The newest crash report written at or after `since` (one from the run that started then).
+pub fn crash_report_since(since: std::time::SystemTime) -> Option<PathBuf> {
+    crash_report_in_since(&crash_reports_dir(), since)
+}
+
+fn crash_report_in_since(dir: &Path, since: std::time::SystemTime) -> Option<PathBuf> {
+    crash_reports_in(dir).into_iter().rev().find(|p| {
+        fs::metadata(p)
+            .and_then(|m| m.modified())
+            .is_ok_and(|t| t >= since)
+    })
+}
+
+/// The error a crash report describes, on one line: the lines between its description and the
+/// stack (`panicked at src/game.rs:10:5: boom`).
+pub fn crash_summary(report: &str) -> Option<String> {
+    let mut lines = report
+        .lines()
+        .skip_while(|l| !l.starts_with("Description:"));
+    lines.next()?;
+    let error: Vec<&str> = lines
+        .skip_while(|l| l.trim().is_empty())
+        .take_while(|l| !l.trim().is_empty() && !l.starts_with('\t'))
+        .map(str::trim)
+        .collect();
+    (!error.is_empty()).then(|| error.join(" "))
+}
+
+/// The last `lines` lines of `file`, or why it cannot be read.
+fn tail_of(file: &Path, lines: usize) -> Result<String, String> {
+    let bytes = fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let text = String::from_utf8_lossy(&bytes);
+    let all: Vec<&str> = text.lines().collect();
+    Ok(all[all.len().saturating_sub(lines)..].join("\n") + "\n")
+}
+
+/// `logs`: the end of the game's latest.log, or with `crash` its newest crash report. The path
+/// read comes first.
+pub fn read_logs(lines: usize, crash: bool) -> Result<(PathBuf, String), String> {
+    if crash {
+        let path = newest_crash_report()
+            .ok_or_else(|| format!("No crash report in {}.", crash_reports_dir().display()))?;
+        let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        return Ok((path, text));
+    }
+    let path = logs_dir().join("latest.log");
+    let text = tail_of(&path, lines.max(1))?;
+    Ok((path, text))
+}
+
 /// Which drawing the game's menus use. Classic is vanilla's own screens, which have no way to
 /// switch back, so the launcher is where the player returns to Horizon's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1683,6 +1767,36 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names, ["horizon-launcher", "new"]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn crash_reports_are_found_and_summarised() {
+        let dir =
+            std::env::temp_dir().join(format!("horizon-launcher-crash-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let start = std::time::SystemTime::now() - std::time::Duration::from_secs(2);
+        assert!(crash_report_in_since(&dir, start).is_none());
+        fs::create_dir_all(&dir).unwrap();
+        let report = "---- Horizon Crash Report ----\n// Details below.\n\nTime: 2026-10-14 09:05:07\nDescription: Unexpected error\n\npanicked at src/game.rs:10:5:\nboom\n\t0: horizon_client::game::frame\n";
+        fs::write(dir.join("crash-2026-10-14_09.05.07-client.txt"), report).unwrap();
+        fs::write(dir.join("notes.txt"), "x").unwrap();
+        assert_eq!(
+            crash_report_in_since(&dir, start).unwrap(),
+            dir.join("crash-2026-10-14_09.05.07-client.txt")
+        );
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        assert!(crash_report_in_since(&dir, later).is_none());
+        assert_eq!(
+            crash_summary(report).as_deref(),
+            Some("panicked at src/game.rs:10:5: boom")
+        );
+        assert_eq!(crash_summary("no report"), None);
+        let log = dir.join("latest.log");
+        fs::write(&log, "a\nb\nc\n").unwrap();
+        assert_eq!(tail_of(&log, 2).unwrap(), "b\nc\n");
+        assert_eq!(tail_of(&log, 100).unwrap(), "a\nb\nc\n");
+        assert!(tail_of(&dir.join("missing.log"), 5).is_err());
         let _ = fs::remove_dir_all(&dir);
     }
 

@@ -21,12 +21,12 @@ impl Game<'_> {
         match features {
             Ok(Some(features)) => {
                 self.res.behaviours.set_live_features(Arc::new(features));
-                eprintln!("Horizon: live features ready in {:?}", started.elapsed());
+                log::info!("Horizon: live features ready in {:?}", started.elapsed());
             }
             Ok(None) => {
-                eprintln!("Horizon: the worldgen bundle has no features; saplings will not grow")
+                log::warn!("Horizon: the worldgen bundle has no features; saplings will not grow")
             }
-            Err(e) => eprintln!("Horizon: live features unavailable: {e}"),
+            Err(e) => log::warn!("Horizon: live features unavailable: {e}"),
         }
     }
     /// `BoneMealItem.useOn` for the targeted block.

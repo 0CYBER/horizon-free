@@ -113,6 +113,8 @@ impl Chat {
         ticks: u64,
         focused: bool,
     ) {
+        // ChatComponent.logChatMessage: every message is in the log.
+        crate::logging::write_only(log::Level::Info, &format!("[CHAT] {}", content.plain()));
         if self.log {
             println!("[CHAT] {}", content.plain());
         }

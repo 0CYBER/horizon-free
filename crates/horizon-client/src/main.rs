@@ -2,9 +2,27 @@
 #![forbid(unsafe_code)]
 mod game;
 
+use horizon_client::{crash, logging};
+
 fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let game_args = args.iter().take_while(|a| *a != "--dedicated");
+    let help = game_args.clone().any(|a| a == "--help" || a == "-h");
+    // The dedicated server logs in its own folder, as vanilla's does; the game in its home.
+    let (home, side, thread) = if args.iter().any(|a| a == "--dedicated") {
+        (std::path::PathBuf::from("."), "server", "Server thread")
+    } else {
+        (logging::game_home(), "client", "Render thread")
+    };
+    if !help {
+        logging::init(&home, thread);
+        crash::install(home.clone(), side);
+    }
     if let Err(error) = game::run() {
-        eprintln!("Horizon: {error}");
+        log::error!("Horizon: {error}");
+        if !help {
+            crash::report_error(&home, side, &*error);
+        }
         // Started from Explorer, the console window closes with the game:
         // keep the message on screen until it is read.
         #[cfg(windows)]
@@ -14,4 +32,5 @@ fn main() {
         }
         std::process::exit(1);
     }
+    logging::flush();
 }

@@ -5418,6 +5418,10 @@ impl Game<'_> {
             ..Level::default()
         });
         let mut level = level;
+        horizon_client::crash::set_detail(
+            "World",
+            format!("{} (saves/{folder}, {})", level.name, level.dimension),
+        );
         if let Some(d) = &self.options.dimension {
             level.dimension = d.clone();
             level.position = None;
@@ -5943,6 +5947,7 @@ impl Game<'_> {
         }
         self.stats.custom("leave_game", 1);
         self.save_game()?;
+        horizon_client::crash::clear_detail("World");
         self.streaming.paused = true;
         self.world = World::new(self.res.facts.air, 0);
         self.player = None;
@@ -7951,7 +7956,7 @@ impl Game<'_> {
     }
     fn update_world(&mut self) {
         if let Err(e) = self.poll_remote() {
-            eprintln!("Horizon: {e}");
+            log::warn!("Horizon: {e}");
         }
         if let Some(p) = &self.player {
             self.streaming.center = (
@@ -7986,7 +7991,7 @@ impl Game<'_> {
                     .save_later(&modified, self.res.assets.registry, &self.res.biomes)
             })
         {
-            eprintln!("Horizon: failed to save unloaded chunks: {e}");
+            log::warn!("Horizon: failed to save unloaded chunks: {e}");
         }
         if let Some(renderer) = self.renderer.as_mut() {
             let g = &self.settings.horizon;
@@ -8539,7 +8544,7 @@ impl ApplicationHandler for Game<'_> {
                                 .filter(|(_, ms)| *ms >= 0.5)
                                 .map(|(n, ms)| format!("{n} {ms:.1}"))
                                 .collect();
-                            eprintln!(
+                            log::info!(
                                 "Horizon: slow frame {cpu:.1} ms ({} ticks): {}",
                                 steps,
                                 list.join(", ")
@@ -8596,6 +8601,7 @@ impl ApplicationHandler for Game<'_> {
                         self.frame_stats.record(elapsed.as_secs_f32() * 1000.0);
                         self.frames += 1;
                         self.fps_frames += 1;
+                        horizon_client::crash::debug_crash_tick();
                         if self.fps_at.elapsed() >= Duration::from_secs(1) {
                             self.fps = self.fps_frames as f32 / self.fps_at.elapsed().as_secs_f32();
                             self.fps_frames = 0;
@@ -8643,7 +8649,7 @@ impl ApplicationHandler for Game<'_> {
     /// window turns it into a window close, so Minecraft.stop saves the world.
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         if let Err(e) = self.save_for_exit() {
-            eprintln!("Horizon: failed to save the world on exit: {e}");
+            log::warn!("Horizon: failed to save the world on exit: {e}");
         }
     }
 }
@@ -8683,7 +8689,7 @@ pub fn run() -> Result<()> {
         // Minecraft.rollbackResourcePacks: the packs break loading, start
         // with the game's own resources.
         Err(e) if options.resources != vanilla_root => {
-            eprintln!("Horizon: resource packs failed to load ({e}); using the default resources");
+            log::warn!("Horizon: resource packs failed to load ({e}); using the default resources");
             options.resources = vanilla_root.clone();
             Assets::load(&vanilla_root)?
         }
@@ -8696,29 +8702,29 @@ pub fn run() -> Result<()> {
     };
     let root = options.resources.clone();
     let assets = Arc::new(assets);
-    eprintln!("load assets: {:.2}s", started.elapsed().as_secs_f32());
+    log::info!("load assets: {:.2}s", started.elapsed().as_secs_f32());
     let facts = BlockFacts::load(&root, assets.registry)?;
     let mob_data = horizon_client::mobs::MobData::load(&root, &facts);
-    eprintln!("load facts: {:.2}s", started.elapsed().as_secs_f32());
+    log::info!("load facts: {:.2}s", started.elapsed().as_secs_f32());
     let items = Items::load(&root, assets.registry, &facts)?;
-    eprintln!("load items: {:.2}s", started.elapsed().as_secs_f32());
+    log::info!("load items: {:.2}s", started.elapsed().as_secs_f32());
     let recipes = Recipes::load(&root, &items)?;
     let transformers = horizon_client::block_transform::Transformers::load(&root, assets.registry)?;
     let biomes = Arc::new(Biomes::load(&root)?);
     let environment = Environment::load(&root)?;
-    eprintln!("load biomes+env: {:.2}s", started.elapsed().as_secs_f32());
+    log::info!("load biomes+env: {:.2}s", started.elapsed().as_secs_f32());
     let visibility = models::load_visibility(&root, assets.registry)?;
-    eprintln!("load visibility: {:.2}s", started.elapsed().as_secs_f32());
+    log::info!("load visibility: {:.2}s", started.elapsed().as_secs_f32());
     let tables = Arc::new(MeshTables::new(&assets, &facts, visibility)?);
     let light = Arc::new(LightTables::load(&root, assets.registry, &facts)?);
-    eprintln!("load tables: {:.2}s", started.elapsed().as_secs_f32());
+    log::info!("load tables: {:.2}s", started.elapsed().as_secs_f32());
     let atlas = HudAtlas::build(&root)?;
     horizon_client::ui::load_metadata(&root);
     horizon_client::lang::set(horizon_client::lang::Language::load(
         &[&root],
         &early_settings.language,
     ));
-    eprintln!("load atlas: {:.2}s", started.elapsed().as_secs_f32());
+    log::info!("load atlas: {:.2}s", started.elapsed().as_secs_f32());
     let layer_names = assets
         .sprite_layers
         .iter()
@@ -8727,7 +8733,7 @@ pub fn run() -> Result<()> {
     let registry_owner = assets.clone();
     let collision = collisions::load(&root, registry_owner.registry)?;
     let motion = MotionResources::load(&root, &registry_owner)?;
-    eprintln!(
+    log::info!(
         "load collision+motion: {:.2}s",
         started.elapsed().as_secs_f32()
     );
@@ -8738,7 +8744,7 @@ pub fn run() -> Result<()> {
         light,
     });
     let threads = early_settings.horizon.worker_threads();
-    eprintln!(
+    log::info!(
         "Horizon: resources loaded in {:.1}s; {} block states, {} items, {} biomes; {} worker threads",
         started.elapsed().as_secs_f32(),
         facts.states.len(),
@@ -9064,7 +9070,7 @@ pub fn run() -> Result<()> {
     if let Some(path) = &game.options.control {
         let server = horizon_client::control::Server::start(path)
             .map_err(|e| format!("control socket {}: {e}", path.display()))?;
-        eprintln!("Horizon: control socket {}", server.path().display());
+        log::info!("Horizon: control socket {}", server.path().display());
         game.control = Some(server);
     }
     if let Ok(spec) = std::env::var("HORIZON_DISPENSE_FIXTURE") {

@@ -40,6 +40,8 @@ fn tools() -> Value {
         { "name": "links", "description": "The Horizon links: the Discord invite, the GitHub Sponsors page and the website (an empty one is not offered).", "inputSchema": none },
         { "name": "menu_style", "description": "Show or set the game's menu style. \"horizon\" is Horizon's own menus, \"classic\" is vanilla's screens, which have no way back inside the game. The game reads it when it starts.",
           "inputSchema": { "type": "object", "properties": { "style": { "type": "string", "enum": ["horizon", "classic"], "description": "Omit to show the current style." } } } },
+        { "name": "logs", "description": "Read the game's log: the last lines of logs/latest.log in the game folder, or with crash the newest crash report (what the game wrote when it last crashed). Read-only.",
+          "inputSchema": { "type": "object", "properties": { "lines": { "type": "integer", "minimum": 1, "maximum": 5000, "description": "How many lines of latest.log (default 100)." }, "crash": { "type": "boolean", "description": "Return the newest crash report instead." } } } },
         { "name": "check_updates", "description": "Check GitHub for a Horizon release newer than every installed version, and for a newer launcher.", "inputSchema": none },
     ])
 }
@@ -212,6 +214,12 @@ impl Session {
                 ))
             }
             "links" => Ok(serde_json::to_string_pretty(&backend::links()).unwrap()),
+            "logs" => {
+                let lines = args.get("lines").and_then(Value::as_u64).unwrap_or(100);
+                let crash = args.get("crash").and_then(Value::as_bool).unwrap_or(false);
+                let (path, text) = backend::read_logs(lines.clamp(1, 5000) as usize, crash)?;
+                Ok(format!("{}\n\n{text}", path.display()))
+            }
             "menu_style" => {
                 if let Some(name) = arg_str(args, "style") {
                     let style = backend::MenuStyle::parse(name)

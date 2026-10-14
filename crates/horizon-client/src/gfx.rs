@@ -399,9 +399,18 @@ impl Renderer {
             .await
             .map_err(|e| format!("{NO_GPU_DRIVER} ({e})"))?;
         let info = adapter.get_info();
-        eprintln!(
+        log::info!(
             "Horizon renderer: {} ({:?}, {:?})",
-            info.name, info.backend, info.device_type
+            info.name,
+            info.backend,
+            info.device_type
+        );
+        crate::crash::set_detail(
+            "Graphics Adapter",
+            format!(
+                "{} ({:?}, {:?}), driver {} {}",
+                info.name, info.backend, info.device_type, info.driver, info.driver_info
+            ),
         );
         let limits = adapter.limits();
         if limits.max_texture_array_layers < layers {

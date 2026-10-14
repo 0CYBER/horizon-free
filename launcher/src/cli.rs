@@ -67,6 +67,16 @@ enum Cmd {
         #[arg(value_parser = ["horizon", "classic"])]
         style: Option<String>,
     },
+    /// Print the end of the game's log (logs/latest.log in the game folder), or its newest crash
+    /// report
+    Logs {
+        /// How many lines of latest.log
+        #[arg(long, default_value_t = 100)]
+        lines: usize,
+        /// The newest crash report instead
+        #[arg(long)]
+        crash: bool,
+    },
     /// Look for a newer Horizon release and launcher, and install them
     Update {
         /// Only report what is available
@@ -265,6 +275,14 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 json(serde_json::json!({ "menu_style": style }));
             } else {
                 println!("Menu style: {style}");
+            }
+        }
+        Cmd::Logs { lines, crash } => {
+            let (path, text) = backend::read_logs(lines, crash)?;
+            if as_json {
+                json(serde_json::json!({ "path": path, "text": text }));
+            } else {
+                print!("{text}");
             }
         }
         Cmd::Update { check } => update(check, as_json)?,

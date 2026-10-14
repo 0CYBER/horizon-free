@@ -461,7 +461,7 @@ fn build_stream<T: cpal::SizedSample + cpal::FromSample<f32>>(
                 *out = T::from_sample(*s);
             }
         },
-        |e| eprintln!("Horizon: audio stream error: {e}"),
+        |e| log::warn!("Horizon: audio stream error: {e}"),
         None,
     )?;
     Ok(stream)
@@ -486,7 +486,7 @@ impl Audio {
             Ok(v) => (Some(v), true),
             Err(e) => {
                 if output {
-                    eprintln!("Horizon: no sound: {e}");
+                    log::warn!("Horizon: no sound: {e}");
                 }
                 (None, false)
             }
@@ -533,7 +533,7 @@ impl Audio {
             tried.push(name.clone());
             match open_device(&device, mixer.clone()) {
                 Ok((stream, config)) => {
-                    eprintln!(
+                    log::info!(
                         "Horizon: audio output {name} ({} Hz, {} channels, {})",
                         config.sample_rate().0,
                         config.channels(),

@@ -58,6 +58,12 @@ static SETUP: OnceLock<Mutex<Option<Setup>>> = OnceLock::new();
 
 /// Log4j's console pattern: `[HH:mm:ss] [thread/LEVEL]: message`.
 pub(super) fn log(level: &str, message: &str) {
+    let file_level = match level {
+        "WARN" => ::log::Level::Warn,
+        "ERROR" => ::log::Level::Error,
+        _ => ::log::Level::Info,
+    };
+    horizon_client::logging::write_only(file_level, message);
     let secs = now_millis().div_euclid(1000).rem_euclid(86_400);
     println!(
         "[{:02}:{:02}:{:02}] [Server thread/{level}]: {message}",
