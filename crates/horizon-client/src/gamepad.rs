@@ -76,6 +76,49 @@ impl Button {
     fn bit(self) -> u32 {
         1 << self as u32
     }
+    /// What is printed on the button for a pad family (`Auto` reads as Xbox).
+    pub fn label(self, style: GlyphStyle) -> &'static str {
+        let i = self as usize;
+        match style {
+            GlyphStyle::PlayStation => [
+                "✕", "○", "□", "△", "L1", "R1", "L2", "R2", "Create", "Options", "L3", "R3", "↑",
+                "↓", "←", "→",
+            ][i],
+            GlyphStyle::Nintendo => [
+                "B", "A", "Y", "X", "L", "R", "ZL", "ZR", "−", "+", "LS", "RS", "↑", "↓", "←", "→",
+            ][i],
+            GlyphStyle::Xbox | GlyphStyle::Auto => [
+                "A", "B", "X", "Y", "LB", "RB", "LT", "RT", "View", "Menu", "LS", "RS", "↑", "↓",
+                "←", "→",
+            ][i],
+        }
+    }
+    /// The glyph's colour (RGB): face buttons in their family's colours,
+    /// the rest white.
+    pub fn color(self, style: GlyphStyle) -> [u8; 3] {
+        let face = match self {
+            Button::South => 0,
+            Button::East => 1,
+            Button::West => 2,
+            Button::North => 3,
+            _ => return [255, 255, 255],
+        };
+        match style {
+            GlyphStyle::PlayStation => [
+                [124, 178, 232],
+                [235, 110, 110],
+                [222, 145, 205],
+                [92, 205, 170],
+            ][face],
+            GlyphStyle::Nintendo => [255, 255, 255],
+            GlyphStyle::Xbox | GlyphStyle::Auto => [
+                [110, 200, 90],
+                [235, 90, 80],
+                [80, 150, 240],
+                [240, 200, 60],
+            ][face],
+        }
+    }
 }
 
 /// A pad's inputs at one moment. Sticks are `[x, y]` with right and up
@@ -205,6 +248,16 @@ pub const ACTIONS: &[(&str, Option<Button>)] = &[
     ("key.smoothCamera", None),
 ];
 
+/// An action's name in the binds list: vanilla's translation key, or
+/// Horizon's own English for the pad-only actions.
+pub fn action_caption(action: &str) -> &str {
+    match action {
+        HOTBAR_PREVIOUS => "Hotbar: Previous Slot",
+        HOTBAR_NEXT => "Hotbar: Next Slot",
+        other => other,
+    }
+}
+
 /// Which button pictures prompts use.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum GlyphStyle {
@@ -232,6 +285,22 @@ impl GlyphStyle {
             _ => GlyphStyle::Auto,
         }
     }
+    /// The style the player chose, else the connected pad's.
+    pub fn resolve(self, detected: GlyphStyle) -> GlyphStyle {
+        match self {
+            GlyphStyle::Auto => match detected {
+                GlyphStyle::Auto => GlyphStyle::Xbox,
+                d => d,
+            },
+            chosen => chosen,
+        }
+    }
+    pub const ALL: [GlyphStyle; 4] = [
+        GlyphStyle::Auto,
+        GlyphStyle::Xbox,
+        GlyphStyle::PlayStation,
+        GlyphStyle::Nintendo,
+    ];
     /// The style for a pad by its USB vendor (Sony, Nintendo; Microsoft,
     /// Valve's Steam Deck and Steam Input's virtual pad, and everything else
     /// look like Xbox).
@@ -390,6 +459,14 @@ impl PadSettings {
     }
     pub fn reset_bindings(&mut self) {
         self.bindings.clear();
+    }
+    /// Other actions on the same button (marked in the binds list).
+    pub fn conflicts(&self, action: &str) -> bool {
+        self.binding(action)
+            .is_some_and(|b| self.actions_of(b).iter().any(|a| *a != action))
+    }
+    pub fn is_default(&self, action: &str) -> bool {
+        !self.bindings.contains_key(action)
     }
     /// The actions a button triggers, in `ACTIONS` order.
     pub fn actions_of(&self, button: Button) -> Vec<&'static str> {
@@ -654,6 +731,31 @@ mod tests {
         let (x, y) = cursor_delta([0.0, 1.0], 0.15, 0.1);
         assert!(x == 0.0 && y < -30.0, "up moves up the screen");
         assert_eq!(cursor_delta([0.1, 0.0], 0.15, 0.1), (0.0, 0.0));
+    }
+
+    #[test]
+    fn labels_and_conflicts() {
+        assert_eq!(Button::South.label(GlyphStyle::Xbox), "A");
+        assert_eq!(Button::South.label(GlyphStyle::PlayStation), "✕");
+        assert_eq!(Button::South.label(GlyphStyle::Nintendo), "B");
+        assert_eq!(Button::RightTrigger.label(GlyphStyle::PlayStation), "R2");
+        assert_eq!(Button::DPadLeft.label(GlyphStyle::Xbox), "←");
+        assert_eq!(
+            GlyphStyle::Auto.resolve(GlyphStyle::PlayStation),
+            GlyphStyle::PlayStation
+        );
+        assert_eq!(
+            GlyphStyle::Xbox.resolve(GlyphStyle::PlayStation),
+            GlyphStyle::Xbox
+        );
+        assert_eq!(GlyphStyle::Auto.resolve(GlyphStyle::Auto), GlyphStyle::Xbox);
+        let mut s = PadSettings::default();
+        assert!(!s.conflicts("key.jump"));
+        s.bind("key.drop", Some(Button::South));
+        assert!(s.conflicts("key.jump") && s.conflicts("key.drop"));
+        assert!(!s.is_default("key.drop") && s.is_default("key.jump"));
+        assert_eq!(action_caption(HOTBAR_NEXT), "Hotbar: Next Slot");
+        assert_eq!(action_caption("key.jump"), "key.jump");
     }
 
     #[test]

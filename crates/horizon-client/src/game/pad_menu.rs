@@ -10,6 +10,7 @@ use horizon_client::{
     creative::Creative,
     gamepad::{self, Button},
     hud::{HudBatch, rgba},
+    options_ui::{Event, Page},
     widgets,
 };
 use std::time::Instant;
@@ -220,6 +221,16 @@ impl Game<'_> {
                 _ => {}
             }
             return Ok(());
+        }
+        // Controller Binds waiting for a button: this one (Start cancels).
+        if self.screen == Screen::Options
+            && self.ui.options.page() == Page::PadBinds
+            && let Some(action) = self.ui.options.selected_pad_action.take()
+        {
+            if button != Button::Start {
+                self.settings.controller.bind(action, Some(button));
+            }
+            return self.handle_option_events(vec![Event::Changed]);
         }
         match button {
             Button::East | Button::Start => return self.pad_back(),

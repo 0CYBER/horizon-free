@@ -393,6 +393,8 @@ impl Game<'_> {
                     "sound" => Page::Sound,
                     "controls" => Page::Controls,
                     "keybinds" => Page::KeyBinds,
+                    "controller" => Page::Controller,
+                    "controller-binds" => Page::PadBinds,
                     "mouse" => Page::Mouse,
                     "chat" => Page::Chat,
                     "accessibility" => Page::Accessibility,

@@ -106,7 +106,7 @@ impl Game<'_> {
         }
         Ok(())
     }
-    fn handle_option_events(&mut self, events: Vec<Event>) -> Result<()> {
+    pub(super) fn handle_option_events(&mut self, events: Vec<Event>) -> Result<()> {
         for e in events {
             match e {
                 Event::Changed => {

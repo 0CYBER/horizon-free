@@ -168,6 +168,7 @@ impl Game<'_> {
         }
         self.pad.start();
         let hardware = self.pad.read();
+        self.ui.options.pad_style = self.settings.controller.glyphs.resolve(self.pad.style);
         let state = hardware.merge(&self.pad.injected);
         self.pad.virtual_input = self.pad.injected != PadState::default();
         for button in std::mem::take(&mut self.pad.taps) {
