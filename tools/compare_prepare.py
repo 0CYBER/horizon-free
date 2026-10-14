@@ -35,10 +35,14 @@ PYTHON_REF = '66ce394d2d6dc19ed5f5c53a97b650741af9be76'
 IGNORED_PARTS = {'classes', 'client-classes', 'logs', '.cache'}
 
 
-def tree(ref, destination):
+def tree(ref, destination, archive=None):
+    """The preparer's inputs at `ref`: research-lock.json, the exporters and the Python preparer."""
     destination.mkdir(parents=True)
-    archive = subprocess.run(['git', '-C', str(ROOT), 'archive', ref, 'tools', 'mods/horizon/src/test/java',
-                              'research-lock.json'], check=True, capture_output=True).stdout
+    if archive is None:
+        archive = subprocess.run(['git', '-C', str(ROOT), 'archive', ref, 'tools', 'mods/horizon/src/test/java',
+                                  'research-lock.json'], check=True, capture_output=True).stdout
+    else:
+        archive = archive.read_bytes()
     subprocess.run(['tar', '-x', '-C', str(destination)], input=archive, check=True)
 
 
@@ -66,6 +70,9 @@ def main():
     parser.add_argument('--server-jar', type=Path, required=True)
     parser.add_argument('--minecraft-dir', type=Path, required=True)
     parser.add_argument('--python-ref', default=PYTHON_REF)
+    parser.add_argument('--python-tree', type=Path,
+                        help='a tar of that tree instead of git (git archive REF tools mods/horizon/src/test/java '
+                             'research-lock.json), for a machine without the repository')
     parser.add_argument('--binary', type=Path, help='horizon-prepare to test (default: cargo build --release)')
     parser.add_argument('--work', type=Path, default=ROOT / '.local/compare-prepare')
     parser.add_argument('--keep', action='store_true', help='keep the prepared folders')
@@ -87,7 +94,7 @@ def main():
     folders = {name: work / name for name in ['python-1', 'python-2', 'rust']}
     times = {}
     for name, folder in folders.items():
-        tree(args.python_ref, folder)
+        tree(args.python_ref, folder, args.python_tree)
         command = [str(binary), '--root', str(folder), *game] if name == 'rust' else python
         times[name] = run(name, command, folder, work / f'{name}.log')
     first, second, rust = (hashes(folders[n]) for n in ['python-1', 'python-2', 'rust'])

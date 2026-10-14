@@ -110,7 +110,11 @@ impl Session {
                                 lines.pop_front();
                             }
                         });
-                        let tail = lines.into_inner().into_iter().collect::<Vec<_>>().join("\n");
+                        let tail = lines
+                            .into_inner()
+                            .into_iter()
+                            .collect::<Vec<_>>()
+                            .join("\n");
                         (result, tail)
                     }
                 };

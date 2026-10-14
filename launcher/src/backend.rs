@@ -418,8 +418,9 @@ fn resources_compatible(from: &Path, to: &Path, manifest: &serde_json::Value) ->
     if !preparer.iter().all(|p| same_or_absent(p)) {
         return false;
     }
-    let mut sources =
-        vec!["mods/horizon/src/test/java/dev/horizonlab/parity/VanillaHeightmapOracle.java".to_string()];
+    let mut sources = vec![
+        "mods/horizon/src/test/java/dev/horizonlab/parity/VanillaHeightmapOracle.java".to_string(),
+    ];
     for (_, value) in fields
         .iter()
         .filter(|(key, _)| key.ends_with("_exporters_sha256"))
