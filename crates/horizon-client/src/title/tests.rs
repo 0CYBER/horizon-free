@@ -50,6 +50,9 @@ impl Fixture {
         .unwrap();
     }
     fn click(&mut self, label: &str) -> Action {
+        self.click_with_sound(label).0
+    }
+    fn click_with_sound(&mut self, label: &str) -> (Action, bool) {
         let button = self
             .title
             .buttons(480.0, 262.0)
@@ -420,4 +423,113 @@ fn recreate_uses_existing_name_seed_and_mode_and_scroll_reaches_later_rows() {
     assert!(
         matches!(&f.title.mode,Mode::Select { worlds,selected:Some(i) } if worlds[*i].folder == last)
     );
+}
+
+#[test]
+fn classic_navigation_buttons_sound_even_without_a_game_action() {
+    let mut f = Fixture::new();
+    f.world("World", "World");
+    assert_eq!(
+        f.title.click(0.0, 0.0, (480.0, 262.0)),
+        (Action::None, false)
+    );
+    assert_eq!(
+        f.click_with_sound("Minecraft Realms"),
+        (Action::None, false)
+    );
+    assert_eq!(f.click_with_sound("Singleplayer"), (Action::None, true));
+    assert_eq!(
+        f.click_with_sound("Play Selected World"),
+        (Action::None, false)
+    );
+    assert_eq!(f.click_with_sound("Create New World"), (Action::None, true));
+    assert_eq!(
+        f.title.click(240.0, 55.0, (480.0, 262.0)),
+        (Action::None, false)
+    );
+    assert_eq!(
+        f.click_with_sound("Game Mode: Survival"),
+        (Action::None, true)
+    );
+    assert_eq!(f.click_with_sound("Cancel"), (Action::None, true));
+    assert_eq!(f.click_with_sound("Back"), (Action::None, true));
+    assert_eq!(f.click_with_sound("Options..."), (Action::Options, true));
+}
+
+#[test]
+fn classic_world_selection_is_silent_until_the_entry_launches() {
+    let mut f = Fixture::new();
+    f.world("World", "World");
+    f.title.enter_singleplayer();
+    assert_eq!(
+        f.title.click(240.0, 60.0, (480.0, 262.0)),
+        (Action::None, false)
+    );
+    assert_eq!(
+        f.title.click(240.0, 60.0, (480.0, 262.0)),
+        (
+            Action::Play {
+                folder: "World".into()
+            },
+            true
+        )
+    );
+}
+
+#[test]
+fn world_management_buttons_sound_when_enabled() {
+    let mut f = Fixture::new();
+    f.world("World", "World");
+    f.select();
+    assert_eq!(f.click_with_sound("Edit"), (Action::None, true));
+    assert_eq!(f.click_with_sound("Reset Icon"), (Action::None, false));
+    assert_eq!(f.click_with_sound("Optimize World"), (Action::None, false));
+    fs::write(f.title.saves.join("World/icon.png"), b"icon").unwrap();
+    assert_eq!(f.click_with_sound("Reset Icon"), (Action::None, true));
+    let Mode::Edit { name, .. } = &mut f.title.mode else {
+        panic!("edit screen")
+    };
+    name.clear();
+    assert_eq!(f.click_with_sound("Save"), (Action::None, false));
+    let Mode::Edit { name, .. } = &mut f.title.mode else {
+        panic!("edit screen")
+    };
+    *name = "Renamed".into();
+    assert_eq!(f.click_with_sound("Save"), (Action::None, true));
+    assert_eq!(f.click_with_sound("Edit"), (Action::None, true));
+    assert_eq!(f.click_with_sound("Cancel"), (Action::None, true));
+    assert_eq!(f.click_with_sound("Delete"), (Action::None, true));
+    assert_eq!(f.click_with_sound("Cancel"), (Action::None, true));
+    assert_eq!(f.click_with_sound("Delete"), (Action::None, true));
+    assert_eq!(f.click_with_sound("Delete"), (Action::None, true));
+    assert!(matches!(f.title.mode, Mode::Select { .. }));
+}
+
+#[test]
+fn backup_button_sounds_and_the_progress_screen_is_silent() {
+    let mut f = Fixture::new();
+    f.world("World", "World");
+    f.select();
+    f.click("Edit");
+    assert_eq!(f.click_with_sound("Make Backup"), (Action::None, true));
+    assert_eq!(
+        f.title.click(240.0, 120.0, (480.0, 262.0)),
+        (Action::None, false)
+    );
+    assert!(matches!(f.title.mode, Mode::Backup { .. }));
+    f.finish_backup();
+    assert!(matches!(f.title.mode, Mode::Select { .. }));
+}
+
+#[test]
+fn failed_world_operation_back_button_plays_the_click_sound() {
+    let mut f = Fixture::new();
+    f.world("World", "World");
+    f.select();
+    f.click("Edit");
+    fs::remove_file(f.title.saves.join("World/level.dat")).unwrap();
+    assert_eq!(f.click_with_sound("Save"), (Action::None, true));
+    assert!(matches!(f.title.mode, Mode::Error { .. }));
+    assert_eq!(f.click_with_sound("Back"), (Action::None, true));
+    assert!(matches!(f.title.mode, Mode::Edit { .. }));
 }

@@ -323,7 +323,7 @@ impl Title {
             self.mode,
             Mode::Edit { .. } | Mode::Backup { .. } | Mode::Delete { .. } | Mode::Error { .. }
         ) {
-            return self.click(x, y, (batch.width, batch.height));
+            return self.click(x, y, (batch.width, batch.height)).0;
         }
         let hit = {
             let mut ui = Ui::dry(atlas, batch, (x, y));
