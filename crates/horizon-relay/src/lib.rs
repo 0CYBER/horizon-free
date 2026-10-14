@@ -278,15 +278,29 @@ fn proxy_line(line: &[u8]) -> Option<SocketAddr> {
     }
 }
 
-fn handle(state: &Arc<State>, mut stream: TcpStream, mut peer: SocketAddr) -> io::Result<()> {
+/// IPv4 clients of a dual-stack listener show up as `::ffff:a.b.c.d`:
+/// their address as IPv4, which is what the other end can dial.
+fn unmap(peer: SocketAddr) -> SocketAddr {
+    match peer {
+        SocketAddr::V6(v6) => match v6.ip().to_ipv4_mapped() {
+            Some(v4) => SocketAddr::new(v4.into(), v6.port()),
+            None => peer,
+        },
+        v4 => v4,
+    }
+}
+
+fn handle(state: &Arc<State>, mut stream: TcpStream, peer: SocketAddr) -> io::Result<()> {
     if state.stop.load(Ordering::Relaxed) {
         return Ok(());
     }
+    let mut peer = unmap(peer);
     stream.set_read_timeout(Some(state.config.first_line))?;
     let _ = stream.set_nodelay(true);
     let mut line = wire::read_line(&mut stream)?.ok_or(io::ErrorKind::UnexpectedEof)?;
     if state.config.proxy_protocol {
         peer = proxy_line(&line)
+            .map(unmap)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "no PROXY line"))?;
         line = wire::read_line(&mut stream)?.ok_or(io::ErrorKind::UnexpectedEof)?;
     }
@@ -635,6 +649,16 @@ fn copy(state: &State, mut from: TcpStream, mut to: TcpStream) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mapped_addresses_become_ipv4() {
+        assert_eq!(
+            unmap("[::ffff:203.0.113.7]:5000".parse().unwrap()),
+            "203.0.113.7:5000".parse().unwrap()
+        );
+        let v6: SocketAddr = "[2001:db8::1]:5000".parse().unwrap();
+        assert_eq!(unmap(v6), v6);
+    }
 
     #[test]
     fn proxy_lines() {
