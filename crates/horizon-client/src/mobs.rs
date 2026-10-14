@@ -10,6 +10,7 @@ pub mod allay;
 pub mod anim;
 pub mod animal_brain;
 pub mod aquatic;
+pub mod axolotl;
 pub mod body_anim;
 pub mod brain;
 pub mod breeze;
@@ -677,6 +678,10 @@ pub struct Extra {
     pub legs: Option<Arc<str>>,
     pub feet: Option<Arc<str>>,
     pub using_item: i32,
+    pub fall_flying: bool,
+    pub fall_fly_ticks: i32,
+    pub main_hand_left: bool,
+    pub elytra: ElytraAnimation,
     pub flag: bool,
     pub flag2: bool,
     /// Species scratch values (the wither's head targets and clocks).
@@ -714,6 +719,7 @@ pub struct Extra {
     pub villager: Option<Box<villager::Ext>>,
     /// The sniffer's and the ghastling's brain.
     pub animal_brain: Option<Box<animal_brain::Brain>>,
+    pub axolotl: axolotl::Animation,
     /// The mob this one rides, and the mob riding it (`getVehicle`, `getFirstPassenger`).
     pub mount: Option<u32>,
     pub rider: Option<u32>,
@@ -800,6 +806,8 @@ pub struct Mob {
     pub invulnerable_flag: bool,
     pub climbing: bool,
     pub fire_ticks: i32,
+    pub ticks_frozen: i32,
+    pub glowing: bool,
     pub air: i32,
     pub last_hurt: f32,
     pub last_damage: Option<(Damage, i64)>,
@@ -968,6 +976,8 @@ pub enum MobEvent {
         at: [f64; 3],
         amount: u32,
     },
+    /// Regeneration support after an axolotl-assisted kill.
+    AxolotlSupportPlayer,
     /// Apply an effect to the player (witch potions, bee stings, cave spider poison).
     EffectPlayer {
         effect: &'static str,
@@ -1125,6 +1135,9 @@ pub struct SpawnSetup {
 /// A snapshot of another entity mobs can see this tick.
 #[derive(Clone, Debug)]
 pub struct Seen {
+    pub in_water: bool,
+    pub playing_dead: bool,
+    pub last_damage: Option<Damage>,
     pub id: u32,
     pub species: Species,
     pub position: Vec3,
@@ -1177,12 +1190,30 @@ pub struct Seen {
     pub stats: [f64; 3],
 }
 impl Mob {
+    pub fn burning_time(&self) -> f64 {
+        let base = finalize::value(self, finalize::Attr::BurningTime);
+        let protection: u32 = gear::ARMOR
+            .into_iter()
+            .map(|slot| gear::level(self, slot, "minecraft:fire_protection"))
+            .sum();
+        (base - 0.15 * f64::from(protection)).max(0.0)
+    }
+    pub fn ignite_for_ticks(&mut self, ticks: i32) {
+        self.fire_ticks = self
+            .fire_ticks
+            .max((f64::from(ticks) * self.burning_time()).ceil() as i32);
+        self.ticks_frozen = 0;
+    }
+
     /// What other mobs see of this one this tick (`player`: the player's
     /// UUID, which villagers' reputation is keyed by).
     pub fn seen(&self, player: Option<[i32; 4]>) -> Seen {
         let m = self;
         let villager = m.species() == Species::Villager;
         Seen {
+            in_water: self.fluids.in_water,
+            playing_dead: axolotl::is_playing_dead(self),
+            last_damage: self.last_damage.map(|(d, _)| d),
             id: m.id,
             species: m.species(),
             position: m.position,
@@ -1435,6 +1466,8 @@ impl Mob {
             invulnerable_flag: false,
             climbing: false,
             fire_ticks: 0,
+            ticks_frozen: 0,
+            glowing: false,
             air: 300,
             last_hurt: 0.0,
             last_damage: None,
@@ -1545,6 +1578,7 @@ impl Mob {
         source: Damage,
         armor_effectiveness: Option<&mut dyn FnMut(f32) -> f32>,
     ) -> bool {
+        axolotl::before_damage(self, amount, &source);
         raider::note_hurt(self);
         if !self.alive() || self.removed || self.invulnerable_flag {
             return false;
@@ -1934,5 +1968,64 @@ mod lighting_tests {
             part.polygons[0].vertex_normal(ModelNormals::new(Mat4::from_scale(Vec3::ZERO))),
             [0, 0, 0, -127]
         );
+    }
+}
+
+/// `LivingEntity.elytraAnimationState`: eased wing angles and render interpolation.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ElytraAnimation {
+    pub old: [f32; 3],
+    pub angles: [f32; 3],
+}
+impl ElytraAnimation {
+    pub fn tick(&mut self, flying: bool, crouching: bool, velocity: horizon_core::geometry::Vec3) {
+        use std::f32::consts::PI;
+        self.old = self.angles;
+        let target = if flying {
+            let length =
+                (velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z)
+                    .sqrt();
+            let ratio = if velocity.y < 0.0 && length > 0.0 {
+                1.0 - horizon_core::jmath::pow(-velocity.y / length, 1.5) as f32
+            } else {
+                1.0
+            };
+            [
+                PI / 12.0 + (PI / 9.0 - PI / 12.0) * ratio,
+                0.0,
+                -PI / 12.0 + (-PI / 2.0 + PI / 12.0) * ratio,
+            ]
+        } else if crouching {
+            [PI * 2.0 / 9.0, 0.08726646, -PI / 4.0]
+        } else {
+            [PI / 12.0, 0.0, -PI / 12.0]
+        };
+        for (angle, target) in self.angles.iter_mut().zip(target) {
+            *angle += (target - *angle) * 0.3;
+        }
+    }
+    pub fn angles(&self, partial: f32) -> [f32; 3] {
+        std::array::from_fn(|i| self.old[i] + (self.angles[i] - self.old[i]) * partial)
+    }
+}
+
+#[cfg(test)]
+mod elytra_tests {
+    use super::*;
+    #[test]
+    fn wings_ease_between_ground_flight_and_crouch() {
+        let mut wings = ElytraAnimation::default();
+        wings.tick(false, false, Vec3::ZERO);
+        assert!((wings.angles[0] - std::f32::consts::PI / 12.0 * 0.3).abs() < 0.000001);
+        assert_eq!(wings.angles(0.0), wings.old);
+        assert_eq!(wings.angles(1.0), wings.angles);
+        for _ in 0..40 {
+            wings.tick(true, false, Vec3::new(1.0, 0.0, 0.0));
+        }
+        assert!((wings.angles[2] + std::f32::consts::FRAC_PI_2).abs() < 0.00001);
+        for _ in 0..40 {
+            wings.tick(false, true, Vec3::ZERO);
+        }
+        assert!((wings.angles[1] - 0.08726646).abs() < 0.00001);
     }
 }

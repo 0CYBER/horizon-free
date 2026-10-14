@@ -40,7 +40,6 @@ fn arrow_impact_sound(
 pub(super) struct Creatures {
     pub projectiles: Vec<Projectile>,
     /// Player status effects applied by mobs: (effect, ticks left, amplifier).
-    pub player_fire: i32,
     pub pearl_cooldown: u32,
     /// The wind charge's use cooldown (ticks).
     pub wind_cooldown: u32,
@@ -821,8 +820,10 @@ impl Game<'_> {
                     source,
                 } => {
                     let mut killed = false;
+                    let mut hurt = false;
                     if let Some(t) = self.mobs.iter_mut().find(|m| m.id == target) {
                         let hit = t.damage(amount, source);
+                        hurt = hit;
                         if hit {
                             killed = !t.alive();
                             // The hurt or death sound the mob raised.
@@ -838,6 +839,20 @@ impl Game<'_> {
                                 }
                             }
                         }
+                    }
+                    if hurt
+                        && let Some(Who::Mob(attacker)) = source.attacker
+                        && let Some(m) = self
+                            .mobs
+                            .iter()
+                            .find(|m| m.id == attacker && m.species() == Species::Axolotl)
+                    {
+                        self.audio.play(
+                            "minecraft:entity.axolotl.attack",
+                            Some([m.position.x, m.position.y, m.position.z]),
+                            1.0,
+                            1.0,
+                        );
                     }
                     if killed && let Some(Who::Mob(killer)) = source.attacker {
                         self.zombie_killed(killer, target);
@@ -993,6 +1008,26 @@ impl Game<'_> {
                     }
                 }
                 MobEvent::Experience { at, amount } => self.spawn_orbs(at, amount),
+                MobEvent::AxolotlSupportPlayer => {
+                    let previous = self
+                        .potions
+                        .effects
+                        .get("regeneration")
+                        .map_or(0, |e| e.duration);
+                    if (0..=2399).contains(&previous) {
+                        self.potions
+                            .effects
+                            .add(horizon_client::effects::EffectInstance::new(
+                                "regeneration",
+                                (previous + 100).min(2400),
+                                0,
+                            ));
+                    }
+                    self.potions
+                        .effects
+                        .list
+                        .retain(|e| e.id != "mining_fatigue");
+                }
                 MobEvent::EffectPlayer {
                     effect,
                     ticks,
@@ -1002,14 +1037,15 @@ impl Game<'_> {
                 }
                 MobEvent::Ignite { target, seconds } => match target {
                     Who::Player => {
-                        if !self.creative {
-                            self.creatures.player_fire =
-                                self.creatures.player_fire.max(seconds * 20);
+                        if !self.creative
+                            && let Some(p) = self.player.as_mut()
+                        {
+                            p.ignite_for_ticks(seconds * 20)?;
                         }
                     }
                     Who::Mob(id) => {
                         if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-                            m.fire_ticks = m.fire_ticks.max(seconds * 20);
+                            m.ignite_for_ticks(seconds * 20);
                         }
                     }
                 },
@@ -1374,24 +1410,6 @@ impl Game<'_> {
     }
     /// Burning applied to the player by mobs.
     fn tick_player_effects(&mut self) {
-        let in_water = self.player.as_ref().is_some_and(|p| {
-            let (x, y, z) = (
-                p.position.x.floor() as i32,
-                p.position.y.floor() as i32,
-                p.position.z.floor() as i32,
-            );
-            self.res.facts.get(self.world.block(x, y, z)).fluid == Fluid::Water
-        });
-        if self.creatures.player_fire > 0 {
-            if in_water {
-                self.creatures.player_fire = 0;
-            } else {
-                if self.creatures.player_fire % 20 == 0 {
-                    self.hurt_player_by("minecraft:on_fire", 1.0);
-                }
-                self.creatures.player_fire -= 1;
-            }
-        }
         self.creatures.wind_cooldown = self.creatures.wind_cooldown.saturating_sub(1);
         if self.creatures.pearl_cooldown > 0 {
             self.creatures.pearl_cooldown -= 1;
@@ -1846,7 +1864,9 @@ impl Game<'_> {
                 Hit::Entity { who, .. } => match who {
                     Who::Player => {
                         if !self.creative {
-                            self.creatures.player_fire = self.creatures.player_fire.max(100);
+                            if let Some(p) = self.player.as_mut() {
+                                p.ignite_for_ticks(100)?;
+                            }
                             self.mob_hits_player(
                                 5.0,
                                 [p.previous.x, p.previous.y, p.previous.z],
@@ -1857,7 +1877,7 @@ impl Game<'_> {
                     Who::Mob(id) => {
                         if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
                             if !m.kind.flags.fire_immune {
-                                m.fire_ticks = m.fire_ticks.max(100);
+                                m.ignite_for_ticks(100);
                             }
                             m.damage(5.0, source);
                         }
@@ -2075,6 +2095,32 @@ impl Game<'_> {
             .as_ref()
             .map(|h| h.item.to_string())
             .unwrap_or_default();
+        if item == "minecraft:water_bucket"
+            && self.mobs[index].species() == Species::Axolotl
+            && self.mobs[index].alive()
+        {
+            let mut filled = ItemStack::new("minecraft:axolotl_bucket", 1);
+            filled.extra = Some(Box::new(horizon_client::entity_nbt::bucket_components(
+                &self.mobs[index],
+            )));
+            self.audio.play(
+                "minecraft:item.bucket.fill_axolotl",
+                Some(self.mobs[index].center()),
+                1.0,
+                1.0,
+            );
+            self.trigger_item("minecraft:filled_bucket", &filled);
+            self.mobs[index].removed = true;
+            if self.creative {
+                if let Some(rest) = self.give(filled) {
+                    self.spawn_item(rest, self.eye_position().unwrap_or([0.0; 3]), [0.0; 3], 40);
+                }
+            } else {
+                self.inventory[self.selected] = Some(filled);
+            }
+            self.swing_arm();
+            return Ok(true);
+        }
         let creative = self.creative;
         let selected = self.selected;
         if self.interact_zombie_villager(index, &item) {
@@ -2668,7 +2714,7 @@ impl Game<'_> {
         }
         self.elder_apparition_geometry(alpha, out);
         self.spawner_geometry(camera, alpha, out);
-        // Projectiles: arrows as crossed quads, the rest as item billboards.
+        // Projectiles: the baked vanilla arrow model, the rest as item billboards.
         let (yaw, pitch) = (self.yaw.to_radians(), self.pitch.to_radians());
         let forward = glam::Vec3::new(
             -yaw.sin() * pitch.cos(),
@@ -2703,52 +2749,24 @@ impl Game<'_> {
                 packed = (15 * 16) | ((15 * 16) << 8);
             }
             if a.is_arrow() {
+                let Some(model) = self.arrow_model.as_ref() else {
+                    continue;
+                };
                 let Some(r) = atlas.sprites.get("entity/projectiles/arrow").copied() else {
                     continue;
                 };
-                let dir = glam::Vec3::new(
-                    a.velocity.x as f32,
-                    a.velocity.y as f32,
-                    a.velocity.z as f32,
-                )
-                .normalize_or(glam::Vec3::X);
-                let dir = if a.stuck {
-                    glam::Vec3::new(
-                        -a.yaw.to_radians().sin() * a.pitch.to_radians().cos(),
-                        a.pitch.to_radians().sin(),
-                        a.yaw.to_radians().cos() * a.pitch.to_radians().cos(),
-                    )
-                    .normalize_or(dir)
-                } else {
-                    dir
-                };
-                let side = dir.cross(glam::Vec3::Y).normalize_or(glam::Vec3::Z) * 0.08;
-                let upv = dir.cross(side).normalize_or(glam::Vec3::Y) * 0.08;
-                let (u1, v1) = (
-                    r.u0 + (r.u1 - r.u0) * 0.5,
-                    r.v0 + (r.v1 - r.v0) * (5.0 / 32.0),
+                let m = glam::Mat4::from_translation(c)
+                    * glam::Mat4::from_rotation_y((a.yaw - 90.0).to_radians())
+                    * glam::Mat4::from_rotation_z(a.pitch.to_radians());
+                horizon_client::mobs::render_model(
+                    model,
+                    m,
+                    &|part| part.pose,
+                    [r.u0, r.v0, r.u1, r.v1],
+                    packed,
+                    0,
+                    out,
                 );
-                for off in [side, upv] {
-                    let q = [
-                        c - dir * 0.25 - off,
-                        c + dir * 0.25 - off,
-                        c + dir * 0.25 + off,
-                        c - dir * 0.25 + off,
-                    ];
-                    for (v, uv) in q
-                        .iter()
-                        .zip([[r.u0, v1], [u1, v1], [u1, r.v0], [r.u0, r.v0]])
-                    {
-                        out.push(Vertex {
-                            normal: [0; 4],
-                            pos: v.to_array(),
-                            uv,
-                            layer: 0,
-                            color: 0xFFFF_FFFF,
-                            light: packed,
-                        });
-                    }
-                }
                 if a.arrow.as_ref().is_some_and(|s| s.on_fire()) {
                     flame_geometry(atlas, c, 0.5, 0.5, self.yaw, light, out);
                 }

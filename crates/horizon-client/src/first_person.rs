@@ -8,6 +8,125 @@
 //!
 //! What those read and do in the world is behind [`HandWorld`].
 
+/// The ranged item state read by the first-person hand renderer.
+#[derive(Clone, Copy, Debug)]
+pub enum ItemPose {
+    Swing,
+    Using,
+    Eat {
+        remaining: f32,
+        duration: f32,
+        partial: f32,
+    },
+    Trident {
+        ticks_used: f32,
+    },
+    Bow {
+        ticks_used: f32,
+    },
+    Crossbow {
+        ticks_used: Option<f32>,
+        charge_duration: f32,
+        charged: bool,
+    },
+}
+
+/// `submitArmWithItem`: the main-hand item pose, before the model transform.
+pub fn item_pose(left: bool, inverse_height: f32, attack: f32, pose: ItemPose) -> glam::Mat4 {
+    use glam::{Mat4, Vec3};
+    use horizon_core::geometry::trig::Mth;
+    let invert = if left { -1.0 } else { 1.0 };
+    let pi = std::f32::consts::PI;
+    let mut m = Mat4::from_translation(Vec3::new(
+        invert * 0.56,
+        -0.52 - inverse_height * 0.6,
+        -0.72,
+    ));
+    if let ItemPose::Eat {
+        remaining,
+        duration,
+        partial,
+    } = pose
+    {
+        let time = remaining - partial + 1.0;
+        let fraction = time / duration;
+        let mut eat = Mat4::IDENTITY;
+        if fraction < 0.8 {
+            eat *=
+                Mat4::from_translation(Vec3::new(0.0, ((time / 4.0 * pi).mcos() * 0.1).abs(), 0.0));
+        }
+        let jiggle = 1.0 - horizon_core::jmath::pow(f64::from(fraction), 27.0) as f32;
+        eat *= Mat4::from_translation(Vec3::new(jiggle * 0.6 * invert, jiggle * -0.5, 0.0));
+        eat *= Mat4::from_rotation_y((invert * jiggle * 90.0).to_radians());
+        eat *= Mat4::from_rotation_x((jiggle * 10.0).to_radians());
+        eat *= Mat4::from_rotation_z((invert * jiggle * 30.0).to_radians());
+        return eat * m;
+    }
+    if matches!(pose, ItemPose::Using) {
+        return m;
+    }
+    let charging = match pose {
+        ItemPose::Bow { ticks_used } => {
+            let power = ticks_used / 20.0;
+            Some((
+                ticks_used,
+                ((power * power + power * 2.0) / 3.0).min(1.0),
+                false,
+            ))
+        }
+        ItemPose::Crossbow {
+            ticks_used: Some(ticks),
+            charge_duration,
+            charged: false,
+        } => Some((ticks, (ticks / charge_duration).min(1.0), true)),
+        ItemPose::Trident { ticks_used } => Some((ticks_used, (ticks_used / 10.0).min(1.0), false)),
+        _ => None,
+    };
+    if let Some((ticks, power, crossbow)) = charging {
+        let trident = matches!(pose, ItemPose::Trident { .. });
+        let (x, y, z, pitch, yaw) = if trident {
+            (-0.5, 0.7, 0.1, -55.0f32, 35.3f32)
+        } else if crossbow {
+            (-0.4785682, -0.094387, 0.05731531, -11.935f32, 65.3f32)
+        } else {
+            (-0.2785682, 0.18344387, 0.15731531, -13.935f32, 35.3f32)
+        };
+        m *= Mat4::from_translation(Vec3::new(invert * x, y, z));
+        m *= Mat4::from_rotation_x(pitch.to_radians());
+        m *= Mat4::from_rotation_y((invert * yaw).to_radians());
+        m *= Mat4::from_rotation_z((invert * -9.785f32).to_radians());
+        if power > 0.1 {
+            let shake = ((ticks - 0.1) * 1.3).msin() * (power - 0.1);
+            m *= Mat4::from_translation(Vec3::new(0.0, shake * 0.004, 0.0));
+        }
+        m *= Mat4::from_translation(Vec3::new(
+            0.0,
+            0.0,
+            power * if trident { 0.2 } else { 0.04 },
+        ));
+        m *= Mat4::from_scale(Vec3::new(1.0, 1.0, 1.0 + power * 0.2));
+        m *= Mat4::from_rotation_y((invert * -45.0f32).to_radians());
+    } else {
+        let root = attack.sqrt();
+        m *= Mat4::from_translation(Vec3::new(
+            invert * -0.4 * (root * pi).msin(),
+            0.2 * (root * std::f32::consts::TAU).msin(),
+            -0.2 * (attack * pi).msin(),
+        ));
+        m *= Mat4::from_rotation_y(
+            (invert * (45.0 - (attack * attack * pi).msin() * 20.0)).to_radians(),
+        );
+        m *= Mat4::from_rotation_z((invert * (root * pi).msin() * -20.0).to_radians());
+        m *= Mat4::from_rotation_x(((root * pi).msin() * -80.0).to_radians());
+        m *= Mat4::from_rotation_y((invert * -45.0f32).to_radians());
+        if matches!(pose, ItemPose::Crossbow { charged: true, .. }) && attack < 0.001 {
+            m *= Mat4::from_translation(Vec3::new(invert * -0.641864, 0.0, 0.0));
+            m *= Mat4::from_rotation_y((invert * 10.0f32).to_radians());
+        }
+    }
+    m
+}
+
 /// `InteractionHand`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hand {
@@ -240,6 +359,23 @@ pub enum UseResult {
     Fail,
 }
 
+impl UseResult {
+    pub fn should_swing(self, before: u32, after: u32) -> bool {
+        matches!(self, Self::Success { swing: true }) && before == after
+    }
+}
+pub fn consumable_animation(v: &serde_json::Value) -> horizon_world::consumable::UseAnimation {
+    use horizon_world::consumable::UseAnimation;
+    match v
+        .get("animation")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("eat")
+    {
+        "eat" => UseAnimation::Eat,
+        "drink" => UseAnimation::Drink,
+        _ => UseAnimation::None,
+    }
+}
 /// What the click handling reads and does in the world.
 pub trait HandWorld {
     fn hit(&mut self) -> Hit;
@@ -626,5 +762,158 @@ mod tests {
         assert_eq!(swing_duration(d, None, None), 6);
         assert_eq!(swing_duration(d, Some(1), Some(0)), 4);
         assert_eq!(swing_duration(d, None, Some(2)), 12);
+    }
+}
+
+#[cfg(test)]
+mod item_pose_tests {
+    use super::*;
+    #[test]
+    fn ranged_draw_uses_native_charge_curves_and_caps() {
+        for (ticks, stretch) in [
+            (0.0, 1.0),
+            (10.0, 1.0 + 0.2 * 1.25 / 3.0),
+            (20.0, 1.2),
+            (40.0, 1.2),
+        ] {
+            let m = item_pose(false, 0.0, 0.0, ItemPose::Bow { ticks_used: ticks });
+            assert!((m.determinant() - stretch).abs() < 0.000001);
+        }
+        for duration in [25.0, 20.0, 15.0, 10.0] {
+            let m = item_pose(
+                false,
+                0.0,
+                0.0,
+                ItemPose::Crossbow {
+                    ticks_used: Some(duration),
+                    charge_duration: duration,
+                    charged: false,
+                },
+            );
+            assert!((m.determinant() - 1.2).abs() < 0.000001);
+        }
+    }
+    #[test]
+    fn left_handed_ranged_poses_mirror_the_right_hand() {
+        let reflect = glam::Mat4::from_scale(glam::Vec3::new(-1.0, 1.0, 1.0));
+        for pose in [
+            ItemPose::Swing,
+            ItemPose::Bow { ticks_used: 10.0 },
+            ItemPose::Crossbow {
+                ticks_used: Some(10.0),
+                charge_duration: 25.0,
+                charged: false,
+            },
+            ItemPose::Crossbow {
+                ticks_used: None,
+                charge_duration: 25.0,
+                charged: true,
+            },
+        ] {
+            let left = item_pose(true, 0.2, 0.0, pose).to_cols_array();
+            let right = (reflect * item_pose(false, 0.2, 0.0, pose) * reflect).to_cols_array();
+            for (a, b) in left.into_iter().zip(right) {
+                assert!((a - b).abs() < 0.000001);
+            }
+        }
+    }
+
+    #[test]
+    fn drawing_bow_has_its_own_pose() {
+        assert_ne!(
+            item_pose(false, 0.0, 0.0, ItemPose::Bow { ticks_used: 10.0 }),
+            item_pose(false, 0.0, 0.0, ItemPose::Swing)
+        );
+    }
+    #[test]
+    fn charging_crossbow_has_its_own_pose() {
+        assert_ne!(
+            item_pose(
+                false,
+                0.0,
+                0.0,
+                ItemPose::Crossbow {
+                    ticks_used: Some(10.0),
+                    charge_duration: 25.0,
+                    charged: false
+                }
+            ),
+            item_pose(false, 0.0, 0.0, ItemPose::Swing)
+        );
+    }
+    #[test]
+    fn charged_crossbow_is_aimed_while_idle() {
+        assert_ne!(
+            item_pose(
+                false,
+                0.0,
+                0.0,
+                ItemPose::Crossbow {
+                    ticks_used: None,
+                    charge_duration: 25.0,
+                    charged: true
+                }
+            ),
+            item_pose(false, 0.0, 0.0, ItemPose::Swing)
+        );
+    }
+}
+
+#[cfg(test)]
+mod continuous_use_tests {
+    use super::*;
+    #[test]
+    fn eating_and_throwing_have_use_poses_not_attack_poses() {
+        let swing = item_pose(false, 0.0, 0.3, ItemPose::Swing);
+        assert_ne!(
+            swing,
+            item_pose(
+                false,
+                0.0,
+                0.3,
+                ItemPose::Eat {
+                    remaining: 10.0,
+                    duration: 32.0,
+                    partial: 0.5
+                }
+            )
+        );
+        assert_ne!(
+            swing,
+            item_pose(false, 0.0, 0.3, ItemPose::Trident { ticks_used: 5.0 })
+        );
+        assert_ne!(swing, item_pose(false, 0.0, 0.3, ItemPose::Using));
+    }
+}
+
+#[cfg(test)]
+mod action_result_tests {
+    use super::*;
+    #[test]
+    fn only_successful_actions_swing_once() {
+        assert!(UseResult::Success { swing: true }.should_swing(2, 2));
+        for result in [
+            UseResult::Fail,
+            UseResult::Pass,
+            UseResult::Success { swing: false },
+        ] {
+            assert!(!result.should_swing(2, 2));
+        }
+        assert!(!UseResult::Success { swing: true }.should_swing(2, 3));
+    }
+    #[test]
+    fn consumption_pose_requires_eat_or_drink_animation() {
+        use horizon_world::consumable::UseAnimation::*;
+        assert_eq!(consumable_animation(&serde_json::json!({})), Eat);
+        assert_eq!(
+            consumable_animation(&serde_json::json!({"animation":"drink"})),
+            Drink
+        );
+        for animation in ["none", "block", "bow", "brush"] {
+            assert_eq!(
+                consumable_animation(&serde_json::json!({"animation":animation})),
+                None
+            );
+        }
     }
 }

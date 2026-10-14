@@ -56,15 +56,7 @@ impl Game<'_> {
     }
     /// `LivingEntity.handleDamageEvent` for the player: the hurt sound of the
     /// source's `DamageEffects` (`Player.getHurtSound`).
-    pub(super) fn player_hurt_sound(
-        &mut self,
-        source: horizon_world::damage_source::DamageTypeId,
-        at: [f64; 3],
-    ) {
-        let Some(d) = self.motion.health.damage.definition(source) else {
-            return;
-        };
-        let sound = horizon_client::health::hurt_sound(&d.effects);
+    pub(super) fn player_hurt_sound(&mut self, sound: &str, at: [f64; 3]) {
         let pitch = self.audio.hurt_pitch();
         self.audio.play(sound, Some(at), 1.0, pitch);
     }

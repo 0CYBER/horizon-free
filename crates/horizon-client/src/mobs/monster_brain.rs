@@ -364,7 +364,9 @@ fn can_attack(m: &Mob, w: &MobWorld, who: Who) -> bool {
             .is_some_and(|p| p.alive && !p.creative && !p.spectator),
         Who::Mob(id) => {
             let Some(s) = w.seen(id) else { return false };
-            s.alive && (m.species() != Species::Breeze || s.species == Species::IronGolem)
+            s.alive
+                && !s.playing_dead
+                && (m.species() != Species::Breeze || s.species == Species::IronGolem)
         }
     }
 }

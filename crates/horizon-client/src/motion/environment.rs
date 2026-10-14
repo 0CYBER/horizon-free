@@ -1,0 +1,217 @@
+//! Player liquid travel and environmental damage over the shared fluid state.
+use super::*;
+use horizon_core::random::RandomSource;
+use horizon_world::{
+    fluid::FluidKind,
+    living_fluid::{LivingFluidWorld, TravelFluidTag},
+};
+impl MotionWorld<'_, '_, '_> {
+    fn environment_hurt(&mut self, source: &str, damage: f32) -> Result<()> {
+        if self.player.invulnerable || self.player.spectator {
+            return Ok(());
+        }
+        let id = self
+            .resources
+            .health
+            .damage
+            .id(source)
+            .ok_or("missing environment damage type")?;
+        self.player
+            .hurt(&self.resources.health, self.scene.health_rules, id, damage)?;
+        Ok(())
+    }
+    pub(super) fn tick_remaining_fire(&mut self) -> Result<()> {
+        if self.player.spectator {
+            self.player.fire_ticks = 0;
+        }
+        if self.player.invulnerable && self.player.fire_ticks > 1 {
+            self.player.fire_ticks = 1;
+        }
+        if self.player.fire_ticks > 0 {
+            if self.player.fire_ticks % 20 == 0 && !self.player.is_in_lava() {
+                self.environment_hurt("minecraft:on_fire", 1.0)?;
+            }
+            self.player.fire_ticks -= 1;
+        }
+        if self.player.fluids.was_touching_water {
+            self.player.fire_ticks = self.player.fire_ticks.min(0);
+        }
+        Ok(())
+    }
+    pub(super) fn tick_environment_damage(&mut self) -> Result<()> {
+        let eye = BlockPos::containing(self.player.position.add_vector(Vec3::new(
+            0.0,
+            f64::from(self.player.dimensions.eye_height),
+            0.0,
+        )));
+        let bubble_column = self
+            .assets
+            .registry
+            .state(self.block(eye))
+            .is_some_and(|state| state.name == "minecraft:bubble_column");
+        let submerged = self.player.is_eye_in_fluid(WATER) && !bubble_column;
+        if submerged
+            && !self.player.status.water_breathing
+            && !self.player.status.breath_of_the_nautilus
+            && !self.player.invulnerable
+            && !self.player.spectator
+        {
+            let oxygen = self
+                .player
+                .attribute("minecraft:oxygen_bonus")?
+                .max(f64::from(self.player.respiration));
+            if oxygen <= 0.0 || self.scene.random.next_double() < 1.0 / (oxygen + 1.0) {
+                self.player.air -= 1;
+            }
+            if self.player.air <= -20 {
+                self.player.air = 0;
+                self.environment_hurt("minecraft:drown", 2.0)?;
+            }
+        } else if !submerged
+            || !self.player.status.breath_of_the_nautilus
+            || self.player.status.water_breathing
+        {
+            self.player.air = (self.player.air + 4).min(300);
+        }
+        if self.player.is_in_lava() {
+            self.player.ignite_for_ticks(300)?;
+            self.environment_hurt("minecraft:lava", 4.0)?;
+        }
+        Ok(())
+    }
+    pub(super) fn apply_fire_contact(&mut self) -> Result<()> {
+        if self.player.spectator {
+            self.player.fire_ticks = 0;
+            return Ok(());
+        }
+        let damage = fire_contact(self.scene, self.assets.registry, self.player.bounds());
+        if damage > 0.0 {
+            self.player.ticks_frozen = 0;
+            if !self.player.fluids.was_touching_water {
+                let multiplier = self.player.attribute("minecraft:burning_time")?;
+                let ticks = ignite_contact(
+                    self.player.fire_ticks,
+                    true,
+                    &mut self.scene.random,
+                    multiplier,
+                );
+                self.player.set_remaining_fire_ticks(ticks);
+            }
+            self.environment_hurt("minecraft:in_fire", damage)?;
+        } else if self.player.fire_ticks <= 0 {
+            self.player.fire_ticks = -20;
+        }
+        Ok(())
+    }
+}
+pub(crate) fn fire_contact(
+    world: &World,
+    registry: &horizon_world::registry::BlockRegistry,
+    bounds: Aabb,
+) -> f32 {
+    let b = bounds.deflate(Vec3::new(1e-5, 1e-5, 1e-5));
+    let mut damage = 0.0f32;
+    for x in b.min_position().x.floor() as i32..=b.max_position().x.floor() as i32 {
+        for y in b.min_position().y.floor() as i32..=b.max_position().y.floor() as i32 {
+            for z in b.min_position().z.floor() as i32..=b.max_position().z.floor() as i32 {
+                damage = damage.max(
+                    match registry
+                        .state(world.block(x, y, z))
+                        .map(|s| s.name.as_str())
+                    {
+                        Some("minecraft:fire") => 1.0,
+                        Some("minecraft:soul_fire") => 2.0,
+                        _ => 0.0,
+                    },
+                );
+            }
+        }
+    }
+    damage
+}
+impl LivingFluidWorld for MotionWorld<'_, '_, '_> {
+    fn in_water(&mut self) -> Result<bool> {
+        Ok(self.player.fluids.was_touching_water)
+    }
+    fn sprinting(&mut self) -> Result<bool> {
+        Ok(self.player.sprinting)
+    }
+    fn water_slow_down(&mut self) -> Result<f32> {
+        Ok(0.8)
+    }
+    fn water_movement_efficiency(&mut self) -> Result<f64> {
+        self.player.attribute("minecraft:water_movement_efficiency")
+    }
+    fn dolphins_grace(&mut self) -> Result<bool> {
+        Ok(self.player.status.dolphins_grace)
+    }
+    fn fluid_height(&mut self, tag: TravelFluidTag) -> Result<f64> {
+        Ok(self.player.fluid_height(if tag == TravelFluidTag::Lava {
+            LAVA
+        } else {
+            WATER
+        }))
+    }
+    fn fluid_jump_threshold(&mut self) -> Result<f64> {
+        Ok(0.4)
+    }
+    fn is_free(&mut self, v: Vec3) -> Result<bool> {
+        let b = self.player.bounds().move_by(v);
+        Ok(self.no_player_collision(b)? && !self.has_liquid(b)?)
+    }
+    fn is_vehicle(&mut self) -> Result<bool> {
+        Ok(false)
+    }
+    fn can_float_while_ridden(&mut self) -> Result<bool> {
+        Ok(false)
+    }
+}
+impl MotionWorld<'_, '_, '_> {
+    fn has_liquid(&self, b: Aabb) -> Result<bool> {
+        for x in b.min_position().x.floor() as i32..=b.max_position().x.floor() as i32 {
+            for y in b.min_position().y.floor() as i32..=b.max_position().y.floor() as i32 {
+                for z in b.min_position().z.floor() as i32..=b.max_position().z.floor() as i32 {
+                    if self.fluid_at(BlockPos::new(x, y, z)).kind() != FluidKind::Empty {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+        Ok(false)
+    }
+}
+
+pub(crate) fn ignite_contact(
+    ticks: i32,
+    player: bool,
+    random: &mut impl RandomSource,
+    multiplier: f64,
+) -> i32 {
+    let ticks = if ticks < 0 {
+        ticks + 1
+    } else if player {
+        ticks + 1 + random.next_int_bound(2).unwrap_or(0)
+    } else {
+        ticks
+    };
+    if ticks >= 0 {
+        ticks.max((160.0 * multiplier).ceil() as i32)
+    } else {
+        ticks
+    }
+}
+
+#[cfg(test)]
+mod fire_ignition_tests {
+    use super::*;
+    #[test]
+    fn fire_hurts_before_twenty_tick_ignition_and_scales_duration() {
+        let mut r = horizon_core::random::LegacyRandom::new(3);
+        let mut ticks = -20;
+        for _ in 0..19 {
+            ticks = ignite_contact(ticks, true, &mut r, 0.4);
+            assert!(ticks < 0);
+        }
+        assert_eq!(ignite_contact(ticks, true, &mut r, 0.4), 64);
+    }
+}

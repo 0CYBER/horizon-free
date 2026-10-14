@@ -19,6 +19,18 @@ impl SpriteAnimation {
     pub fn frame(&self, tick: u64) -> usize {
         self.clip.sample(tick).frame as usize
     }
+    pub fn resized_pixels(&self, frame: usize, width: u32, height: u32) -> Vec<u8> {
+        let source = self.pixels(frame);
+        let side = (source.len() / 4).isqrt() as u32;
+        let mut out = Vec::with_capacity((width * height * 4) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                let offset = ((y * side / height * side + x * side / width) * 4) as usize;
+                out.extend_from_slice(&source[offset..offset + 4]);
+            }
+        }
+        out
+    }
     pub fn pixels(&self, frame: usize) -> &[u8] {
         &self.frames[frame]
     }
@@ -29,6 +41,8 @@ pub struct Sprites {
     /// Edge length of every array layer and the layers' current frames, set
     /// by [`Sprites::finish`].
     pub size: u32,
+    /// Smallest native layer before array-size resampling.
+    pub minimum_size: u32,
     pub pixels: Vec<u8>,
     pub layers: BTreeMap<String, u32>,
     pub animations: Vec<SpriteAnimation>,
@@ -68,6 +82,7 @@ impl Sprites {
     pub fn finish(&mut self) {
         let layers = self.native.len().max(1) as u64;
         let largest = self.native.iter().map(|n| n.0).max().unwrap_or(SPRITE_SIZE);
+        self.minimum_size = self.native.iter().map(|n| n.0).min().unwrap_or(SPRITE_SIZE);
         let mut size = largest.max(SPRITE_SIZE).next_power_of_two();
         while size > SPRITE_SIZE && layers * u64::from(size * size) * 4 > MAX_ARRAY_BYTES {
             size /= 2;
@@ -238,8 +253,139 @@ impl Sprites {
 }
 
 #[cfg(test)]
+pub(crate) fn test_animation(size: u32, layer: u32) -> SpriteAnimation {
+    let frame = |blue: u8| {
+        (0..size * size)
+            .flat_map(|i| [(i % size) as u8, (i / size) as u8, blue, 255])
+            .collect()
+    };
+    let metadata = AnimationMetadata::from_json(r#"{"frametime":1,"frames":[0,1]}"#).unwrap();
+    SpriteAnimation {
+        layer,
+        frames: Arc::new(vec![frame(0), frame(99)]),
+        clip: Arc::new(metadata.clip(2).unwrap().unwrap()),
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_32px_only_atlas_does_not_add_an_extra_mipmap() {
+        let mut sprites = Sprites {
+            native: vec![
+                (32, Arc::new(vec![vec![255; 32 * 32 * 4]]), 0),
+                (32, Arc::new(vec![vec![128; 32 * 32 * 4]]), 0),
+            ],
+            ..Default::default()
+        };
+        sprites.finish();
+        assert_eq!((sprites.size, sprites.minimum_size), (32, 32));
+        for level in 0..=4 {
+            assert_eq!(
+                crate::gfx::sprite_mipmap_limit(level, sprites.size, sprites.minimum_size, 6),
+                level
+            );
+        }
+        sprites
+            .native
+            .push((16, Arc::new(vec![vec![255; 16 * 16 * 4]]), 0));
+        sprites.finish();
+        assert_eq!((sprites.size, sprites.minimum_size), (32, 16));
+        assert_eq!(
+            crate::gfx::sprite_mipmap_limit(0, sprites.size, sprites.minimum_size, 6),
+            1
+        );
+    }
+
+    #[test]
+    fn hud_animation_resampling_uses_the_actual_frame_size() {
+        for size in [16, 32, 64] {
+            let animation = test_animation(size, 0);
+            let resized = animation.resized_pixels(1, 16, 16);
+            let last = (15 * size / 16) as u8;
+            assert_eq!(&resized[15 * 4..16 * 4], &[last, 0, 99, 255]);
+            assert_eq!(&resized[255 * 4..256 * 4], &[last, last, 99, 255]);
+        }
+    }
+
+    #[test]
+    fn native_fire_sprites_register_full_animation_sequences() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
+        if !root
+            .join("assets/minecraft/textures/block/fire_0.png")
+            .exists()
+        {
+            return;
+        }
+        let mut sprites = Sprites::default();
+        for name in ["fire_0", "fire_1", "soul_fire_0", "soul_fire_1"] {
+            let layer = sprites
+                .insert(&root, &format!("minecraft:block/{name}"))
+                .unwrap();
+            let animation = sprites
+                .animations
+                .iter()
+                .find(|a| a.layer == layer)
+                .expect("fire must be animated");
+            assert_ne!(
+                animation.pixels(animation.frame(0)),
+                animation.pixels(animation.frame(1))
+            );
+            assert_ne!(
+                animation.resized_pixels(animation.frame(0), 16, 16),
+                animation.resized_pixels(animation.frame(1), 16, 16)
+            );
+            assert_eq!(
+                animation.pixels(animation.frame(0)).len(),
+                (SPRITE_SIZE * SPRITE_SIZE * 4) as usize
+            );
+        }
+    }
+
+    #[test]
+    fn native_32_pixel_animation_frames_keep_every_texel() {
+        let root = std::env::temp_dir().join(format!(
+            "horizon-sprite-detail-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let directory = root.join("assets/test/textures");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("flow.png");
+        let mut pixels = Vec::new();
+        for y in 0..64u8 {
+            for x in 0..32u8 {
+                pixels.extend([x, y, 0, 255]);
+            }
+        }
+        let mut encoder = png::Encoder::new(File::create(&path).unwrap(), 32, 64);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder
+            .write_header()
+            .unwrap()
+            .write_image_data(&pixels)
+            .unwrap();
+        fs::write(path.with_extension("png.mcmeta"), r#"{"animation":{}}"#).unwrap();
+        let mut sprites = Sprites::default();
+        sprites.insert(&root, "test:flow").unwrap();
+        sprites.finish();
+        let size = sprites.size;
+        let initial = sprites.pixels.clone();
+        let animation = sprites.animations[0].clone();
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            size, 32,
+            "half a flowing-water frame must retain 16 texels, not 8"
+        );
+        assert_eq!(initial, pixels[..32 * 32 * 4]);
+        assert_eq!(animation.pixels(animation.frame(1)), &pixels[32 * 32 * 4..]);
+    }
+
     #[test]
     fn animation_boundaries_and_repeated_frames_do_not_depend_on_render_rate() {
         let animation = SpriteAnimation {

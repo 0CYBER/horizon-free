@@ -742,7 +742,7 @@ impl Game<'_> {
         1.0 + amount
     }
     /// `EntityType.spawn(.., pos, reason, tryMoveDown, false)` for a mob.
-    fn spawn_mob_at(&mut self, kind: &str, p: Pos, try_move_down: bool) -> Option<u32> {
+    pub(super) fn spawn_mob_at(&mut self, kind: &str, p: Pos, try_move_down: bool) -> Option<u32> {
         let name = if kind.contains(':') {
             kind.to_owned()
         } else {
@@ -869,7 +869,7 @@ impl Game<'_> {
         self.handle_mob_events(events)
     }
     /// A mob a bucket emptied: `setFromBucket` keeps it, then it calls out.
-    fn mob_placed(&mut self, id: u32) -> Result<()> {
+    pub(super) fn mob_placed(&mut self, id: u32) -> Result<()> {
         if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
             m.persistent = true;
         }
@@ -1137,48 +1137,8 @@ impl Game<'_> {
     ) -> Result<Dispensed> {
         let item = stack.item.to_string();
         let target = offset(pos, facing);
-        let (content, sound, mob) = match item.as_str() {
-            "minecraft:lava_bucket" => (
-                BucketContent::Fluid(FluidKind::Lava),
-                "minecraft:item.bucket.empty_lava",
-                None,
-            ),
-            "minecraft:water_bucket" => (
-                BucketContent::Fluid(FluidKind::Water),
-                "minecraft:item.bucket.empty",
-                None,
-            ),
-            "minecraft:powder_snow_bucket" => (
-                BucketContent::Powder,
-                "minecraft:item.bucket.empty_powder_snow",
-                None,
-            ),
-            "minecraft:axolotl_bucket" => (
-                BucketContent::MobWater,
-                "minecraft:item.bucket.empty_axolotl",
-                Some("axolotl"),
-            ),
-            "minecraft:tadpole_bucket" => (
-                BucketContent::MobWater,
-                "minecraft:item.bucket.empty_tadpole",
-                Some("tadpole"),
-            ),
-            "minecraft:sulfur_cube_bucket" => (
-                BucketContent::Nothing,
-                "minecraft:item.bucket.empty_sulfur_cube",
-                Some("sulfur_cube"),
-            ),
-            other => (
-                BucketContent::MobWater,
-                "minecraft:item.bucket.empty_fish",
-                Some(match other {
-                    "minecraft:salmon_bucket" => "salmon",
-                    "minecraft:cod_bucket" => "cod",
-                    "minecraft:pufferfish_bucket" => "pufferfish",
-                    _ => "tropical_fish",
-                }),
-            ),
-        };
+        let (content, sound, mob) =
+            horizon_client::items::bucket_contents(&item).expect("filled bucket dispatcher");
         let target_pos = Self::pos_of(target);
         let emptied = self
             .with_level(|b, level, ticks| b.bucket_empty(level, ticks, target_pos, content, sound));
@@ -1213,6 +1173,9 @@ impl Game<'_> {
             // MobBucketItem.checkExtraContent: the mob (from the bucket, so
             // persistent) calls out, then ENTITY_PLACE.
             if let Some(id) = self.spawn_mob_at(kind, target, true) {
+                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+                    horizon_client::entity_nbt::load_bucket_data(m, &stack);
+                }
                 self.mob_placed(id)?;
             }
             self.post_block_game_event(
@@ -1333,7 +1296,7 @@ impl Game<'_> {
         Ok((Some(stack), event))
     }
     /// `CampfireBlock.canLight || CandleBlock.canLight || CandleCakeBlock.canLight`.
-    fn can_light(&self, state: BlockStateId, name: &str) -> bool {
+    pub(super) fn can_light(&self, state: BlockStateId, name: &str) -> bool {
         let lit = self.prop(state, "lit");
         let waterlogged = self.prop(state, "waterlogged");
         let dry_unlit = lit.as_deref() == Some("false") && waterlogged.as_deref() == Some("false");

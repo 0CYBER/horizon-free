@@ -266,6 +266,8 @@ pub struct Hum {
     pub left: ArmPose,
     pub crouching: bool,
     pub passenger: bool,
+    pub fall_flying: bool,
+    pub fly_speed_scale: f32,
     /// `Some(aggressive)` for `ZombieModel`-style `animateZombieArms`.
     pub zombie: Option<bool>,
     /// The main hand holds something (`getMainHandItemStack() != EMPTY`).
@@ -282,6 +284,8 @@ impl Hum {
             left,
             crouching: false,
             passenger: false,
+            fall_flying: false,
+            fly_speed_scale: 1.0,
             zombie: None,
             holding: false,
             charge: (0.0, 0.0),
@@ -353,7 +357,10 @@ fn pose_arm(p: &mut Poses, pose: ArmPose, right: bool, h: &Hum) {
 /// `HumanoidModel.setupAnim` (and `ZombieModel.setupAttackAnimation`).
 pub(super) fn humanoid(p: &mut Poses, s: &State, h: &Hum) {
     head(p, s);
-    let (pos, sp) = (s.pos, s.speed);
+    if h.fall_flying {
+        p.xrot("head", -std::f32::consts::FRAC_PI_4);
+    }
+    let (pos, sp) = (s.pos, s.speed / h.fly_speed_scale);
     p.xrot("right_arm", (pos * 0.6662 + PI).mcos() * 2.0 * sp * 0.5);
     p.xrot("left_arm", (pos * 0.6662).mcos() * 2.0 * sp * 0.5);
     p.xrot("right_leg", (pos * 0.6662).mcos() * 1.4 * sp);
@@ -539,7 +546,38 @@ pub fn setup(
             } else {
                 ArmPose::Empty
             };
-            let mut h = Hum::new(right, ArmPose::Empty);
+            let pose = if player {
+                match m.extra.main_hand.as_deref() {
+                    Some("minecraft:bow") if m.extra.using_item > 0 => ArmPose::Bow,
+                    Some("minecraft:crossbow") if m.extra.using_item > 0 && !m.extra.charged => {
+                        ArmPose::CrossbowCharge
+                    }
+                    Some("minecraft:crossbow") if m.extra.charged && s.swing == 0.0 => {
+                        ArmPose::CrossbowHold
+                    }
+                    Some(_) => ArmPose::Item,
+                    None => ArmPose::Empty,
+                }
+            } else {
+                right
+            };
+            let off = if player && m.extra.off_hand.is_some() && !pose.two_handed() {
+                ArmPose::Item
+            } else {
+                ArmPose::Empty
+            };
+            let mut h = if m.extra.main_hand_left {
+                Hum::new(off, pose)
+            } else {
+                Hum::new(pose, off)
+            };
+            h.charge = (m.extra.ints[5] as f32, m.extra.using_item as f32);
+            h.fall_flying = m.extra.fall_flying;
+            if h.fall_flying {
+                let v = m.velocity;
+                h.fly_speed_scale =
+                    (((v.x * v.x + v.y * v.y + v.z * v.z) as f32 / 0.2).powi(3)).max(1.0);
+            }
             h.crouching = m.extra.crouching;
             h.passenger = m.extra.passenger;
             humanoid(p, s, &h);
@@ -628,5 +666,48 @@ pub fn setup(
                 quadruped(p, s);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod flight_pose_tests {
+    use super::*;
+    #[test]
+    fn flight_slows_limbs_and_sets_the_head_pose() {
+        let state = State {
+            pos: 0.0,
+            speed: 1.0,
+            age: 0.0,
+            y_rot: 0.0,
+            x_rot: 0.0,
+            swing: 0.0,
+            baby: false,
+            partial: 0.0,
+        };
+        let make = || Poses {
+            map: [
+                "head",
+                "right_arm",
+                "left_arm",
+                "right_leg",
+                "left_leg",
+                "body",
+            ]
+            .into_iter()
+            .map(|n| (n.to_string(), [0.0; 9]))
+            .collect(),
+            dummy: [0.0; 9],
+            skipped: Default::default(),
+            hidden: Default::default(),
+        };
+        let mut ground = make();
+        let mut flight = make();
+        let mut h = Hum::new(ArmPose::Empty, ArmPose::Empty);
+        humanoid(&mut ground, &state, &h);
+        h.fall_flying = true;
+        h.fly_speed_scale = 8.0;
+        humanoid(&mut flight, &state, &h);
+        assert_eq!(flight.get("head")[3], -std::f32::consts::FRAC_PI_4);
+        assert_eq!(flight.get("right_leg")[3], ground.get("right_leg")[3] / 8.0);
     }
 }

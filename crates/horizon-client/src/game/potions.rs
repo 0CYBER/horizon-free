@@ -57,8 +57,7 @@ pub(super) struct PotionState {
     applied: Vec<(&'static str, &'static str, f64, &'static str)>,
     /// Armor the protection table was computed for.
     protection_for: Option<Vec<Option<ItemStack>>>,
-    /// Mobs set on fire by fire aspect: (mob id, ticks left).
-    pub(super) burning: Vec<(u32, i32)>,
+
     /// Enchantment attribute modifiers on the player: (attribute, id, amount, operation).
     pub(super) enchant_modifiers: Vec<(String, String, f64, String)>,
 }

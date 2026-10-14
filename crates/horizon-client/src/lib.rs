@@ -53,6 +53,7 @@ pub mod extras;
 pub mod extras_hud;
 pub mod fast_hash;
 pub mod fastutil_order;
+pub mod fire_render;
 pub mod first_person;
 pub mod flatgen;
 pub mod fog;

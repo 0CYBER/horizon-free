@@ -43,6 +43,7 @@ use std::{
     sync::Arc,
 };
 
+pub(crate) mod environment;
 mod fluids;
 pub use fluids::{FluidResources, LAVA, PlayerFluids, WATER};
 
@@ -112,6 +113,7 @@ pub enum MotionEvent {
         enabled: bool,
     },
     Health(crate::health::HealthEvent),
+    HurtSound(&'static str),
     Fall(crate::landing::FallEvent),
     Recorded {
         mover: MoverType,
@@ -172,6 +174,11 @@ pub enum MotionEvent {
     SplashEvent,
 }
 pub struct PlayerMotion {
+    pub swimming: bool,
+    pub fire_ticks: i32,
+    pub air: i32,
+    pub respiration: i32,
+
     pub position: Vec3,
     pub velocity: Vec3,
     pub ground: GroundState,
@@ -257,6 +264,34 @@ fn attribute_error(error: impl std::fmt::Debug) -> io::Error {
     io::Error::other(format!("movement attribute: {error:?}"))
 }
 impl PlayerMotion {
+    pub fn load_environment_once(
+        &mut self,
+        pending: &mut bool,
+        extra: Option<&horizon_world::nbt::Tag>,
+    ) {
+        if std::mem::take(pending) {
+            self.fire_ticks = extra
+                .and_then(|t| crate::save::number(t.get("Fire")))
+                .unwrap_or(-20) as i32;
+            self.air = extra
+                .and_then(|t| crate::save::number(t.get("Air")))
+                .unwrap_or(300) as i32;
+        }
+    }
+    pub fn set_remaining_fire_ticks(&mut self, ticks: i32) {
+        self.fire_ticks = if self.invulnerable {
+            ticks.min(1)
+        } else {
+            ticks
+        };
+    }
+    pub fn ignite_for_ticks(&mut self, ticks: i32) -> Result<()> {
+        let scaled = (f64::from(ticks) * self.attribute("minecraft:burning_time")?).ceil() as i32;
+        self.set_remaining_fire_ticks(self.fire_ticks.max(scaled));
+        self.ticks_frozen = 0;
+        Ok(())
+    }
+
     pub fn new(resources: &MotionResources, position: Vec3) -> Result<Self> {
         // Process-owned identities determine native collection callback order.
         // Differential fixtures can replay a reference process's identities.
@@ -324,6 +359,10 @@ impl PlayerMotion {
             local_crouching: false,
             pose: crate::pose::Pose::Standing,
             dimensions: crate::pose::Pose::Standing.dimensions(1.0),
+            swimming: false,
+            fire_ticks: -20,
+            air: 300,
+            respiration: 0,
             speed: 0.0,
             item_use_speed: None,
             last_climbable: None,
@@ -486,6 +525,9 @@ impl PlayerMotion {
             horizontal_collision: self.collision.horizontal,
             minor_horizontal_collision: self.collision.minor,
             moving_slowly: self.moving_slowly(),
+            in_water: self.fluids.was_touching_water,
+            under_water: self.is_under_water(),
+            swimming: self.swimming,
             ..Default::default()
         };
         // The sprint setter edits attributes and flags, independent of local
@@ -611,10 +653,17 @@ impl MotionWorld<'_, '_, '_> {
     /// caller applies LocalPlayer input preparation once. Empty inventory,
     /// equipment and nearby-entity sets are the current scene domain.
     pub fn player_movement_tick(&mut self, direction: [f32; 2], jumping: bool) -> Result<()> {
+        self.fluid_base_tick()?;
+        self.player_movement_tick_with_fluids(direction, jumping)
+    }
+    fn player_movement_tick_with_fluids(
+        &mut self,
+        direction: [f32; 2],
+        jumping: bool,
+    ) -> Result<()> {
         // Entity.baseTick
         self.player.was_in_powder_snow = self.player.in_powder_snow;
         self.player.in_powder_snow = false;
-        self.fluid_base_tick()?;
         self.player.old_position = self.player.position;
         if self.player.jump_trigger_time > 0 {
             self.player.jump_trigger_time -= 1;
@@ -641,14 +690,22 @@ impl MotionWorld<'_, '_, '_> {
         }
         let toggled = flying_before != self.player.flying;
         // Player.tryToStartFallFlying (canGlide: airborne, not flying, a glider).
-        let can_glide = self.player.glider && !self.player.ground.on_ground && !self.player.flying;
+        let can_glide = self.player.glider
+            && !self.player.ground.on_ground
+            && !self.player.flying
+            && !self.player.fluids.was_touching_water
+            && !self.player.is_in_lava();
         if jumping && !toggled && !was_jumping && !self.player.fall_flying && can_glide {
             self.player.fall_flying = true;
         }
         // LivingEntity.tick fallFlyTicks, then updateFallFlying.
         if self.player.fall_flying {
             self.player.fall_fly_ticks += 1;
-            let still = self.player.glider && !self.player.ground.on_ground && !self.player.flying;
+            let still = self.player.glider
+                && !self.player.ground.on_ground
+                && !self.player.flying
+                && !self.player.fluids.was_touching_water
+                && !self.player.is_in_lava();
             if !still {
                 self.player.fall_flying = false;
             } else if (self.player.fall_fly_ticks + 1) % 10 == 0
@@ -688,8 +745,14 @@ impl MotionWorld<'_, '_, '_> {
     /// services are still incomplete; this composes clocks, movement and hunger.
     pub fn simulation_tick(&mut self, direction: [f32; 2], jumping: bool) -> Result<()> {
         self.player.health.advance_clock();
+        self.fluid_base_tick()?;
+        self.simulation_tick_with_fluids(direction, jumping)
+    }
+    fn simulation_tick_with_fluids(&mut self, direction: [f32; 2], jumping: bool) -> Result<()> {
+        self.tick_environment_damage()?;
         let previous = self.player.position;
-        self.player_movement_tick(direction, jumping)?;
+        self.player_movement_tick_with_fluids(direction, jumping)?;
+        self.apply_fire_contact()?;
         self.player.refresh_attributes()?;
         self.update_player_pose()?;
         // The resident scene accepts the resolved local movement directly.
@@ -708,6 +771,8 @@ impl MotionWorld<'_, '_, '_> {
             self.player.auto_jump_time -= 1;
             keys.jump = true;
         }
+        self.player.health.advance_clock();
+        self.fluid_base_tick()?;
         self.player.sprint_input_tick(keys)?;
         self.player.shift_key_down = keys.shift;
         let direction = keys.direction();
@@ -719,7 +784,7 @@ impl MotionWorld<'_, '_, '_> {
         } else {
             None
         };
-        self.simulation_tick(
+        self.simulation_tick_with_fluids(
             crate::input::modify_input(direction, self.player.item_use_speed, sneak),
             keys.jump,
         )
@@ -756,13 +821,43 @@ impl MotionWorld<'_, '_, '_> {
             input.x = 0.0;
             input.z = 0.0;
         }
+        if self.player.shift_key_down
+            && !self.player.flying
+            && self.player.fluids.was_touching_water
+        {
+            self.player.velocity.y -= f64::from(0.04f32);
+        }
         if self.player.jumping {
-            if self.player.ground.on_ground && self.player.no_jump_delay == 0 {
+            let in_lava = self.player.is_in_lava();
+            let height = self.player.fluid_height(if in_lava { LAVA } else { WATER });
+            let water_jump = self.player.fluids.was_touching_water
+                && height > 0.0
+                && (!self.player.ground.on_ground || height > 0.4);
+            let lava_jump = in_lava && (!self.player.ground.on_ground || height > 0.4);
+            if !self.player.flying && (water_jump || lava_jump) {
+                self.player.velocity.y += f64::from(0.04f32);
+            } else if self.player.ground.on_ground && self.player.no_jump_delay == 0 {
                 self.jump_from_ground()?;
                 self.player.no_jump_delay = 10;
             }
         } else {
             self.player.no_jump_delay = 0;
+        }
+        if self.player.swimming {
+            let look_y =
+                horizon_world::view_direction::view_vector(self.player.pitch, self.player.yaw).y;
+            let near_surface = BlockPos::containing(Vec3::new(
+                self.player.position.x,
+                self.player.position.y + 0.9,
+                self.player.position.z,
+            ));
+            if look_y <= 0.0
+                || self.player.jumping
+                || self.fluid_at(near_surface).kind() != horizon_world::fluid::FluidKind::Empty
+            {
+                let blend = if look_y < -0.2 { 0.085 } else { 0.06 };
+                self.player.velocity.y += (look_y - self.player.velocity.y) * blend;
+            }
         }
         if self.player.fall_flying {
             self.travel_fall_flying()?;
@@ -771,6 +866,10 @@ impl MotionWorld<'_, '_, '_> {
             let y = self.player.velocity.y;
             self.travel_in_air(input)?;
             self.player.velocity.y = y * 0.6;
+        } else if !self.player.flying
+            && (self.player.fluids.was_touching_water || self.player.is_in_lava())
+        {
+            horizon_world::living_fluid::travel_in_fluid(self, input)?;
         } else {
             self.travel_in_air(input)?;
         }
@@ -1229,13 +1328,13 @@ impl MovementStatisticsWorld for MotionWorld<'_, '_, '_> {
         Ok(false)
     }
     fn swimming(&mut self) -> Result<bool> {
-        Ok(false)
+        Ok(self.player.swimming)
     }
     fn eyes_in_water(&mut self) -> Result<bool> {
-        Ok(false)
+        Ok(self.player.is_eye_in_fluid(WATER))
     }
     fn in_water(&mut self) -> Result<bool> {
-        Ok(false)
+        Ok(self.player.fluids.was_touching_water)
     }
     fn on_climbable(&mut self) -> Result<bool> {
         self.climbable()
@@ -1560,10 +1659,10 @@ impl MovementEmissionWorld for MotionWorld<'_, '_, '_> {
         Ok(false)
     }
     fn swimming(&mut self) -> Result<bool> {
-        Ok(false)
+        Ok(self.player.swimming)
     }
     fn in_water(&mut self) -> Result<bool> {
-        Ok(false)
+        Ok(self.player.fluids.was_touching_water)
     }
     fn walking_step_sound(&mut self, position: BlockPos, state: BlockStateId) -> Result<()> {
         self.player
@@ -1838,9 +1937,584 @@ impl LivingMotionWorld for MotionWorld<'_, '_, '_> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn player_fire_damage_queues_hurt_sound_only_for_fresh_hits() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        for name in ["on_fire", "in_fire", "lava"] {
+            let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
+            let source = resources
+                .health
+                .damage
+                .id(&format!("minecraft:{name}"))
+                .unwrap();
+            assert!(
+                player
+                    .hurt(&resources.health, Default::default(), source, 1.0)
+                    .unwrap()
+            );
+            assert_eq!(
+                player
+                    .events
+                    .iter()
+                    .filter(|e| matches!(
+                        e,
+                        MotionEvent::HurtSound("minecraft:entity.player.hurt_on_fire")
+                    ))
+                    .count(),
+                1
+            );
+            player.events.clear();
+            assert!(
+                !player
+                    .hurt(&resources.health, Default::default(), source, 1.0)
+                    .unwrap()
+            );
+            assert!(
+                !player
+                    .events
+                    .iter()
+                    .any(|e| matches!(e, MotionEvent::HurtSound(_)))
+            );
+            for _ in 0..20 {
+                player.health.advance_clock();
+            }
+            player.invulnerable = true;
+            player.events.clear();
+            assert!(
+                !player
+                    .hurt(&resources.health, Default::default(), source, 1.0)
+                    .unwrap()
+            );
+            assert!(
+                !player
+                    .events
+                    .iter()
+                    .any(|e| matches!(e, MotionEvent::HurtSound(_)))
+            );
+        }
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
+        let source = resources.health.damage.id("minecraft:mob_attack").unwrap();
+        assert!(
+            player
+                .hurt_blocking(&resources.health, Default::default(), source, 2.0, None)
+                .unwrap()
+                .hurt
+        );
+        assert_eq!(
+            player
+                .events
+                .iter()
+                .filter(|e| matches!(e, MotionEvent::HurtSound("minecraft:entity.player.hurt")))
+                .count(),
+            1
+        );
+    }
+
     /// Footsteps on the prepared vanilla resources, when they are present:
     /// none while standing (gravity still moves the player every tick), one
     /// per `nextStep` metre while walking.
+    #[test]
+    fn resident_water_landing_cancels_a_preset_fall() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        for wet in [false, true] {
+            let mut scene = World::test_scene(&assets, 2).unwrap();
+            if wet {
+                let water = assets.registry.default_state("minecraft:water").unwrap();
+                for x in 19..=21 {
+                    for z in 19..=21 {
+                        scene.set(x, 3, z, water).unwrap();
+                    }
+                }
+            }
+            let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 20.0, 20.5)).unwrap();
+            player.fall_distance = 30.0;
+            let mut w = MotionWorld {
+                player: &mut player,
+                scene: &mut scene,
+                assets: &assets,
+                collision_binding: &binding,
+                resources: &resources,
+            };
+            w.move_self(Vec3::new(0.0, -30.0, 0.0)).unwrap();
+            assert!(w.player.ground.on_ground);
+            assert_eq!(w.player.fluids.was_touching_water, wet);
+            if wet {
+                assert_eq!(w.player.health.health(), 20.0);
+                assert_eq!(w.player.fall_distance, 0.0);
+            } else {
+                assert!(w.player.health.health() < 20.0);
+            }
+        }
+    }
+
+    #[test]
+    fn resident_water_and_lava_are_not_treated_as_air() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut scene = World::test_scene(&assets, 3).unwrap();
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
+        let water = assets.registry.default_state("minecraft:water").unwrap();
+        for x in 19..=21 {
+            for y in 3..=7 {
+                for z in 19..=21 {
+                    scene.set(x, y, z, water).unwrap();
+                }
+            }
+        }
+        let mut w = MotionWorld {
+            player: &mut player,
+            scene: &mut scene,
+            assets: &assets,
+            collision_binding: &binding,
+            resources: &resources,
+        };
+        w.controlled_simulation_tick(Default::default()).unwrap();
+        assert!(
+            MovementStatisticsWorld::in_water(&mut w).unwrap(),
+            "resident water must reach the player movement adapter"
+        );
+        assert!(MovementStatisticsWorld::eyes_in_water(&mut w).unwrap());
+        assert!(
+            !w.player.fluids.was_eye_in_water,
+            "the first controlled tick must run only one fluid base phase"
+        );
+        assert!(
+            (w.player.velocity.y + 0.005).abs() < 1e-5,
+            "water drag/gravity must replace air travel: {:?}",
+            w.player.velocity
+        );
+        let lava = assets.registry.default_state("minecraft:lava").unwrap();
+        for x in 19..=21 {
+            for y in 3..=7 {
+                for z in 19..=21 {
+                    w.scene.set(x, y, z, lava).unwrap();
+                }
+            }
+        }
+        w.controlled_simulation_tick(Default::default()).unwrap();
+        assert!(
+            w.player.health.health() < 20.0,
+            "lava must damage a survival player"
+        );
+        // Water extinguishes, swimming is a real pose, and deep water consumes air.
+        for x in 19..=21 {
+            for y in 3..=7 {
+                for z in 19..=21 {
+                    w.scene.set(x, y, z, water).unwrap();
+                }
+            }
+        }
+        w.player.fire_ticks = 160;
+        w.controlled_simulation_tick(Default::default()).unwrap();
+        assert!(w.player.fire_ticks <= 0);
+        w.player.air = -19;
+        w.player.health.hurt.cooldown = 0;
+        let hp = w.player.health.health();
+        w.controlled_simulation_tick(Default::default()).unwrap();
+        assert_eq!(w.player.air, 0);
+        assert!(w.player.health.health() < hp, "drowning must hurt");
+        w.player.invulnerable = true;
+        let hp = w.player.health.health();
+        w.player.air = -19;
+        w.controlled_simulation_tick(Default::default()).unwrap();
+        assert_eq!(w.player.health.health(), hp);
+        w.player.invulnerable = false;
+        w.player.air = 300;
+        w.controlled_simulation_tick(crate::sprint::Keys {
+            forward: true,
+            sprint: true,
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(w.player.sprinting);
+        assert!(
+            !w.player.swimming,
+            "sprint input follows the swimming phase"
+        );
+        w.controlled_simulation_tick(crate::sprint::Keys {
+            forward: true,
+            sprint: true,
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(w.player.swimming);
+        assert_eq!(w.player.pose, crate::pose::Pose::Swimming);
+        // Direct fire contact ignites; resistance prevents damage but does not hide flames.
+        let fire = assets.registry.default_state("minecraft:fire").unwrap();
+        for x in 19..=21 {
+            for y in 3..=7 {
+                for z in 19..=21 {
+                    w.scene.set(x, y, z, fire).unwrap();
+                }
+            }
+        }
+        w.player.position = Vec3::new(20.5, 4.0, 20.5);
+        w.player.velocity = Vec3::ZERO;
+        w.player.fire_ticks = -20;
+        w.player.health.hurt.cooldown = 0;
+        w.player.ticks_frozen = 140;
+        let hp = w.player.health.health();
+        w.controlled_simulation_tick(Default::default()).unwrap();
+        assert!(
+            w.player.fire_ticks < 0,
+            "direct fire hurts during the immunity delay"
+        );
+        assert_eq!(
+            w.player.ticks_frozen, 0,
+            "fire contact clears freeze during the delay"
+        );
+        assert!(w.player.health.health() < hp);
+        w.player.status.fire_resistance = true;
+        w.player.health.hurt.cooldown = 0;
+        let hp = w.player.health.health();
+        w.controlled_simulation_tick(Default::default()).unwrap();
+        assert_eq!(w.player.health.health(), hp);
+        w.player.invulnerable = true;
+        w.player.fire_ticks = -20;
+        w.player.ticks_frozen = 140;
+        w.controlled_simulation_tick(Default::default()).unwrap();
+        assert_eq!(w.player.ticks_frozen, 0);
+        assert_eq!(
+            w.player.fire_ticks, -19,
+            "creative preserves the fire-contact delay"
+        );
+        for _ in 0..18 {
+            w.apply_fire_contact().unwrap();
+        }
+        assert_eq!(w.player.fire_ticks, -1);
+        w.apply_fire_contact().unwrap();
+        assert_eq!(
+            w.player.fire_ticks, 1,
+            "creative clamps only after ignition"
+        );
+        w.player.ticks_frozen = 140;
+        w.player.ignite_for_ticks(160).unwrap();
+        assert_eq!(w.player.ticks_frozen, 0);
+        assert_eq!(w.player.fire_ticks, 1);
+        w.player.invulnerable = false;
+        // Sprint swimming must keep full input, not the dry crawl/sneak multiplier.
+        for x in 19..=21 {
+            for y in 2..=7 {
+                for z in 19..=30 {
+                    w.scene.set(x, y, z, water).unwrap();
+                }
+            }
+        }
+        w.player.position = Vec3::new(20.5, 4.0, 20.5);
+        w.player.velocity = Vec3::ZERO;
+        w.player.local_crouching = false;
+        w.player.swimming = true;
+        w.player.sprinting = true;
+        w.player.set_pose(crate::pose::Pose::Swimming).unwrap();
+        for _ in 0..30 {
+            w.controlled_simulation_tick(crate::sprint::Keys {
+                forward: true,
+                sprint: true,
+                ..Default::default()
+            })
+            .unwrap();
+        }
+        assert!(
+            w.player.velocity.z > 0.165,
+            "native sprint swim speed must not receive crawl slowdown: {:?}",
+            w.player.velocity
+        );
+        assert!(!w.player.moving_slowly());
+        w.player.position = Vec3::new(20.5, 4.0, 20.5);
+        w.player.velocity = Vec3::ZERO;
+        w.player.pitch = 45.0;
+        w.controlled_simulation_tick(crate::sprint::Keys {
+            forward: true,
+            sprint: true,
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(
+            w.player.velocity.y < -0.04,
+            "look down must steer a swimming player downward"
+        );
+        w.player.position = Vec3::new(20.5, 4.0, 20.5);
+        w.player.velocity = Vec3::ZERO;
+        w.player.pitch = -45.0;
+        w.controlled_simulation_tick(crate::sprint::Keys {
+            forward: true,
+            sprint: true,
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(
+            w.player.velocity.y > 0.02,
+            "look up must steer a submerged swimmer upward"
+        );
+        let extra = horizon_world::nbt::Tag::compound([
+            ("Fire", horizon_world::nbt::Tag::Short(160)),
+            ("Air", horizon_world::nbt::Tag::Short(8)),
+        ]);
+        let mut pending = true;
+        w.player.load_environment_once(&mut pending, Some(&extra));
+        assert_eq!((w.player.fire_ticks, w.player.air), (160, 8));
+        let mut respawn = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
+        respawn.load_environment_once(&mut pending, Some(&extra));
+        assert_eq!((respawn.fire_ticks, respawn.air), (-20, 300));
+        w.player.fluids.was_touching_water = false;
+        assert!(
+            w.player.moving_slowly(),
+            "dry crawling must still slow input"
+        );
+    }
+
+    #[test]
+    fn resident_swimming_uses_previous_eyes_and_requires_water_at_the_feet() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut scene = World::test_scene(&assets, 3).unwrap();
+        let water = assets.registry.default_state("minecraft:water").unwrap();
+        for y in 4..=6 {
+            scene.set(20, y, 20, water).unwrap();
+        }
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
+        let mut w = MotionWorld {
+            player: &mut player,
+            scene: &mut scene,
+            assets: &assets,
+            collision_binding: &binding,
+            resources: &resources,
+        };
+        w.player.local_crouching = true;
+        let sprint = crate::sprint::Keys {
+            forward: true,
+            sprint: true,
+            ..Default::default()
+        };
+        w.fluid_base_tick().unwrap();
+        assert!(w.player.is_eye_in_fluid(WATER));
+        assert!(!w.player.is_under_water());
+        w.player.sprint_input_tick(sprint).unwrap();
+        assert!(
+            !w.player.sprinting,
+            "new eye immersion cannot bypass crouching"
+        );
+        w.fluid_base_tick().unwrap();
+        assert!(w.player.is_under_water());
+        w.player.sprint_input_tick(sprint).unwrap();
+        assert!(w.player.sprinting);
+        assert!(!w.player.swimming, "sprint starts after the base tick");
+        w.fluid_base_tick().unwrap();
+        assert!(w.player.swimming);
+        let air = assets.registry.default_state("minecraft:air").unwrap();
+        w.scene.set(20, 4, 20, air).unwrap();
+        w.player.swimming = false;
+        w.fluid_base_tick().unwrap();
+        assert!(w.player.is_under_water());
+        assert!(
+            !w.player.swimming,
+            "starting a swim requires water in the feet cell"
+        );
+        w.player.swimming = true;
+        w.fluid_base_tick().unwrap();
+        assert!(
+            w.player.swimming,
+            "an existing swim only requires touching water"
+        );
+        w.player.flying = true;
+        w.fluid_base_tick().unwrap();
+        assert!(!w.player.swimming);
+        w.player.flying = false;
+        w.player.spectator = true;
+        w.scene.set(20, 4, 20, water).unwrap();
+        w.fluid_base_tick().unwrap();
+        assert!(
+            w.player.swimming,
+            "spectator flight is applied later in aiStep"
+        );
+    }
+
+    #[test]
+    fn resident_fire_precedes_first_tick_lava_and_water_extinguishing() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        for name in ["minecraft:lava", "minecraft:water"] {
+            let mut scene = World::test_scene(&assets, 3).unwrap();
+            let fluid = assets.registry.default_state(name).unwrap();
+            scene.set(20, 4, 20, fluid).unwrap();
+            let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
+            player.fire_ticks = 160;
+            player.fall_distance = 8.0;
+            let mut w = MotionWorld {
+                player: &mut player,
+                scene: &mut scene,
+                assets: &assets,
+                collision_binding: &binding,
+                resources: &resources,
+            };
+            w.fluid_base_tick().unwrap();
+            assert_eq!(
+                w.player.health.health(),
+                19.0,
+                "base on-fire damage: {name}"
+            );
+            if name == "minecraft:lava" {
+                assert_eq!(w.player.fire_ticks, 159);
+                assert_eq!(w.player.fall_distance, 8.0, "first tick excludes lava");
+                w.fluid_base_tick().unwrap();
+                assert_eq!(
+                    w.player.fall_distance, 4.0,
+                    "later ticks halve exactly once"
+                );
+            } else {
+                assert_eq!(w.player.fire_ticks, 0, "water extinguishes after the hurt");
+                assert_eq!(w.player.fall_distance, 0.0);
+                w.player.fire_ticks = -7;
+                w.fluid_base_tick().unwrap();
+                assert_eq!(
+                    w.player.fire_ticks, -7,
+                    "clearing fire retains negative delay"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn resident_bubble_columns_and_nautilus_preserve_their_air_rules() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut scene = World::test_scene(&assets, 3).unwrap();
+        let water = assets.registry.default_state("minecraft:water").unwrap();
+        scene.set(20, 4, 20, water).unwrap();
+        scene.set(20, 5, 20, water).unwrap();
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
+        let mut w = MotionWorld {
+            player: &mut player,
+            scene: &mut scene,
+            assets: &assets,
+            collision_binding: &binding,
+            resources: &resources,
+        };
+        for (extra_effect, expected_air) in [
+            (None, -19),
+            (Some("water_breathing"), -15),
+            (Some("conduit_power"), -15),
+        ] {
+            let mut effects = crate::effects::PlayerEffects::default();
+            effects.add(crate::effects::EffectInstance::new(
+                "breath_of_the_nautilus",
+                200,
+                0,
+            ));
+            if let Some(id) = extra_effect {
+                effects.add(crate::effects::EffectInstance::new(id, 200, 0));
+            }
+            w.player.status = effects.status();
+            assert!(w.player.status.breath_of_the_nautilus);
+            w.player.air = -19;
+            w.fluid_base_tick().unwrap();
+            w.tick_environment_damage().unwrap();
+            assert_eq!(w.player.air, expected_air);
+            assert_eq!(w.player.health.health(), 20.0);
+        }
+        w.player.status.water_breathing = false;
+        for (name, nautilus) in [
+            ("minecraft:bubble_column", false),
+            ("minecraft:bubble_column", true),
+            ("minecraft:air", true),
+        ] {
+            w.scene
+                .set(20, 5, 20, assets.registry.default_state(name).unwrap())
+                .unwrap();
+            w.player.status.breath_of_the_nautilus = nautilus;
+            w.player.air = -19;
+            w.fluid_base_tick().unwrap();
+            w.tick_environment_damage().unwrap();
+            assert_eq!(w.player.air, -15, "{name}, nautilus={nautilus}");
+            assert_eq!(w.player.health.health(), 20.0);
+        }
+        w.scene.set(20, 5, 20, water).unwrap();
+        w.player.status.breath_of_the_nautilus = false;
+        w.player.air = -19;
+        w.fluid_base_tick().unwrap();
+        w.tick_environment_damage().unwrap();
+        assert_eq!(w.player.air, 0);
+        assert_eq!(w.player.health.health(), 18.0);
+    }
+
+    #[test]
+    fn resident_mixed_fluids_use_lava_height_for_ground_jumps() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        for (water_level, lava_level, ground_jump) in [(0, 6, true), (6, 0, false)] {
+            let mut scene = World::test_scene(&assets, 3).unwrap();
+            for (name, level, x) in [
+                ("minecraft:water", water_level, 20),
+                ("minecraft:lava", lava_level, 21),
+            ] {
+                let mut state = assets
+                    .registry
+                    .state(assets.registry.default_state(name).unwrap())
+                    .unwrap()
+                    .clone();
+                state.properties.insert("level".into(), level.to_string());
+                scene
+                    .set(x, 4, 20, assets.registry.id(&state).unwrap())
+                    .unwrap();
+            }
+            let mut player = PlayerMotion::new(&resources, Vec3::new(21.0, 4.0, 20.5)).unwrap();
+            player.ground.on_ground = true;
+            let mut w = MotionWorld {
+                player: &mut player,
+                scene: &mut scene,
+                assets: &assets,
+                collision_binding: &binding,
+                resources: &resources,
+            };
+            w.fluid_base_tick().unwrap();
+            assert!(w.player.fluids.was_touching_water && w.player.is_in_lava());
+            assert_eq!(w.player.fluid_height(LAVA) <= 0.4, ground_jump);
+            assert_eq!(w.player.fluid_height(WATER) > 0.4, ground_jump);
+            w.dry_tick(TickInput::PreparedLocal {
+                direction: [0.0; 2],
+                jumping: true,
+            })
+            .unwrap();
+            assert_eq!(w.player.no_jump_delay == 10, ground_jump);
+        }
+    }
+
     #[test]
     fn footsteps_follow_the_walked_distance_not_the_tick() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
