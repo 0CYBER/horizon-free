@@ -35,7 +35,9 @@ Failed harnesses' logs are uploaded as the `parity-logs` artifact.
 
 **Platform-specific harnesses.** A harness listed under `linux_only` in `tools/parity_hosts.json` gives
 different results on macOS for a reason that is not a Horizon bug (the reason is printed). `parity.py` skips it on
-other platforms unless it is named on the command line.
+other platforms unless it is named on the command line. The list is empty today: `options`, `chunk_generation`,
+`world_border_render` and `mob_ai`, which once differed on macOS through the platform's libm, pass on the Mac mini
+since `horizon_core::jmath` computes what HotSpot computes (checked 2026-10-14).
 
 **Pull requests from forks** never run code on the Mac mini by themselves. A maintainer who has read the change
 adds the `run-parity` label: that runs the job once, on the commit the pull request had then. To run it again
