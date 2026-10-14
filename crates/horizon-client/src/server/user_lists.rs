@@ -356,7 +356,7 @@ impl<E: Entry> UserList<E> {
         }
         self.map.put(key, entry);
         if let Err(e) = self.save() {
-            eprintln!("Could not save the list after adding a user. {e}");
+            log::warn!("Could not save the list after adding a user. {e}");
         }
         true
     }
@@ -365,7 +365,7 @@ impl<E: Entry> UserList<E> {
             return false;
         }
         if let Err(e) = self.save() {
-            eprintln!("Could not save the list after removing a user. {e}");
+            log::warn!("Could not save the list after removing a user. {e}");
         }
         true
     }

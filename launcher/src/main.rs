@@ -50,6 +50,16 @@ enum SelfUpdate {
     Failed(String),
 }
 
+/// The last game the launcher started ended badly: what it left behind.
+#[derive(Clone)]
+struct Crash {
+    /// The crash report the run wrote, if it wrote one.
+    report: Option<std::path::PathBuf>,
+    /// One line on what went wrong: the report's error, else how the process ended.
+    summary: String,
+    copied: bool,
+}
+
 /// The opening: the wordmark over the image holds at least `OPENING_HOLD` (until the release
 /// list is in, at most `OPENING_MAX`), then the launcher appears over `OPENING_REVEAL`.
 const OPENING_HOLD: Duration = horizon_theme::OPENING_HOLD;
@@ -133,6 +143,9 @@ struct Launcher {
     prepare_error: Option<String>,
     client: Option<Running>,
     client_error: Option<String>,
+    /// When the running client started, to tell its crash report from older ones.
+    client_started: Option<std::time::SystemTime>,
+    crash: Option<Crash>,
     server: Option<Running>,
     server_log: VecDeque<String>,
     server_error: Option<String>,
@@ -212,6 +225,8 @@ impl Launcher {
             prepare_error: None,
             client: None,
             client_error: None,
+            client_started: None,
+            crash: None,
             server: None,
             server_log: VecDeque::new(),
             server_error: None,
@@ -391,11 +406,32 @@ impl Launcher {
                         }
                         Job::Client => {
                             self.client = None;
-                            self.client_error = error.map(|e| {
-                                let tail =
-                                    self.prepare_log.iter().rev().find(|l| !l.trim().is_empty());
-                                tail.map_or(e.clone(), |t| format!("{e}: {t}"))
-                            });
+                            let report = self
+                                .client_started
+                                .take()
+                                .and_then(backend::crash_report_since);
+                            if error.is_some() || report.is_some() {
+                                let summary = report
+                                    .as_ref()
+                                    .and_then(|p| std::fs::read_to_string(p).ok())
+                                    .and_then(|text| backend::crash_summary(&text))
+                                    .or_else(|| {
+                                        let tail = self
+                                            .prepare_log
+                                            .iter()
+                                            .rev()
+                                            .find(|l| !l.trim().is_empty());
+                                        error.as_ref().map(|e| {
+                                            tail.map_or(e.clone(), |t| format!("{e}: {t}"))
+                                        })
+                                    })
+                                    .unwrap_or_default();
+                                self.crash = Some(Crash {
+                                    report,
+                                    summary,
+                                    copied: false,
+                                });
+                            }
                         }
                         Job::Server => {
                             self.server = None;
@@ -511,7 +547,11 @@ impl Launcher {
                     return;
                 }
                 self.client_error = None;
+                self.crash = None;
                 self.prepare_log.clear();
+                // A little earlier than the spawn: file times can be coarse.
+                self.client_started =
+                    Some(std::time::SystemTime::now() - std::time::Duration::from_secs(2));
                 match backend::spawn(Job::Client, backend::client_command(&tag), self.tx.clone()) {
                     Ok(r) => self.client = Some(r),
                     Err(e) => self.client_error = Some(e),
@@ -1328,6 +1368,9 @@ impl Launcher {
             if let Some(e) = self.client_error.clone() {
                 page = page.child(notice(e, &t));
             }
+            if let Some(crash) = self.crash.clone() {
+                page = page.child(self.crash_notice(crash, cx));
+            }
         } else {
             if let Some(e) = self.server_error.clone() {
                 page = page.child(notice(e, &t));
@@ -1335,6 +1378,120 @@ impl Launcher {
             page = page.child(self.console(cx));
         }
         page
+    }
+
+    /// "Horizon crashed": the report and the logs, and where to report it.
+    fn crash_notice(&self, crash: Crash, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let mut actions = div().flex().flex_wrap().gap(px(8.)).mt(px(4.));
+        if let Some(report) = crash.report.clone() {
+            let open = report.clone();
+            actions = actions
+                .child(
+                    button("crash-open", "Open report", Kind::Secondary, &t)
+                        .on_click(move |_, _, cx| cx.open_with_system(&open)),
+                )
+                .child(
+                    button(
+                        "crash-copy",
+                        if crash.copied {
+                            "Copied"
+                        } else {
+                            "Copy report"
+                        },
+                        Kind::Secondary,
+                        &t,
+                    )
+                    .on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| {
+                            if let Ok(text) = std::fs::read_to_string(&report) {
+                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                                if let Some(c) = &mut this.crash {
+                                    c.copied = true;
+                                }
+                            }
+                            cx.notify();
+                        },
+                    )),
+                );
+        }
+        actions = actions.child(
+            button("crash-logs", "Open logs folder", Kind::Secondary, &t).on_click(|_, _, cx| {
+                let dir = backend::logs_dir();
+                let _ = std::fs::create_dir_all(&dir);
+                cx.open_with_system(&dir);
+            }),
+        );
+        let discord = self.links.discord.clone();
+        if !discord.is_empty() {
+            actions = actions.child(
+                button("crash-discord", "Report on Discord", Kind::Secondary, &t)
+                    .on_click(move |_, _, cx| cx.open_url(&discord)),
+            );
+        }
+        actions = actions.child(
+            button("crash-dismiss", "Dismiss", Kind::Ghost, &t).on_click(cx.listener(
+                |this, _: &ClickEvent, _, cx| {
+                    this.crash = None;
+                    cx.notify();
+                },
+            )),
+        );
+        let help = if crash.report.is_some() {
+            "When you report it on Discord, attach the crash report file (or paste it with Copy report) and say what you were doing."
+        } else {
+            "The game ended without a crash report. When you report it on Discord, attach latest.log from the logs folder and say what you were doing."
+        };
+        let mut body = div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .child(
+                div()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("Horizon crashed"),
+            );
+        if !crash.summary.is_empty() {
+            body = body.child(div().text_color(t.muted).child(crash.summary));
+        }
+        if let Some(report) = &crash.report {
+            body = body.child(
+                div()
+                    .font_family(theme::MONO)
+                    .text_size(px(theme::SMALL))
+                    .text_color(t.faint)
+                    .truncate()
+                    .child(short(report)),
+            );
+        }
+        body = body.child(actions).child(
+            div()
+                .mt(px(2.))
+                .text_size(px(theme::SMALL))
+                .text_color(t.muted)
+                .child(help),
+        );
+        div()
+            .flex()
+            .gap(px(10.))
+            .p(px(12.))
+            .rounded(px(6.))
+            .border_1()
+            .border_color(t.border)
+            .text_size(px(13.))
+            .line_height(px(19.))
+            .text_color(t.text)
+            .child(
+                div()
+                    .flex_none()
+                    .mt(px(6.))
+                    .size(px(6.))
+                    .rounded_full()
+                    .bg(t.danger),
+            )
+            .child(body)
     }
 
     /// The Play page's focal point: what will start, and a line from its notes.
@@ -1622,6 +1779,26 @@ impl Launcher {
                         "Data folder",
                         div().child(short(&backend::data_dir())),
                         None,
+                        &t,
+                    ))
+                    .child(divider(&t))
+                    .child(row(
+                        "Logs",
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(short(&backend::logs_dir()))
+                            .child(div().text_size(px(theme::SMALL)).text_color(t.muted).child(
+                                "The game's log, and crash reports beside it in crash-reports.",
+                            )),
+                        Some(button("open-logs", "Open", Kind::Secondary, &t).on_click(
+                            |_, _, cx| {
+                                let dir = backend::logs_dir();
+                                let _ = std::fs::create_dir_all(&dir);
+                                cx.open_with_system(&dir);
+                            },
+                        )),
                         &t,
                     ))
                     .child(divider(&t)),

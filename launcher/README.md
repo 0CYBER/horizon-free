@@ -67,9 +67,10 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher links                          the Discord, sponsor and website links
     horizon-launcher menu-style [horizon|classic]   show or set the game's menu style
     horizon-launcher update [--check]               Horizon and the launcher
+    horizon-launcher logs [--lines N] [--crash]     the end of the game's log, or its newest crash report
 
 `--json` prints JSON where there is something to report (`versions`, `install`, `notes`,
-`next`, `links`, `menu-style`, `update --check`). Errors go to stderr with exit code 1. `server` runs in the terminal,
+`next`, `links`, `menu-style`, `update --check`, `logs`). Errors go to stderr with exit code 1. `server` runs in the terminal,
 so lines you type reach its console. `HORIZON_LAUNCHER_HOME` replaces the data folder (for
 scripts and tests).
 
@@ -81,11 +82,22 @@ scripts and tests).
 
 (with the full path to the binary if it is not on your `PATH`). Its tools: `list_versions`,
 `install_version`, `remove_version`, `prepare_resources`, `launch_client`, `start_server`,
-`server_command`, `server_log`, `stop_server`, `patch_notes`, `links`, `menu_style` and `check_updates`.
+`server_command`, `server_log`, `stop_server`, `patch_notes`, `links`, `menu_style`, `logs` and
+`check_updates`.
 A server started through MCP stops (cleanly, with `stop`) when the session ends. Starting one
 needs `accept_eula`, which an agent should only pass with the player's consent.
 
 The window, the command line and the MCP server all call the same core, `src/backend.rs`.
+
+## Logs and crash reports
+
+The game writes its log to `logs/latest.log` in the game folder (`HORIZON_HOME`, else
+`~/.local/share/horizon`, `~/Library/Application Support/horizon` or `%APPDATA%\horizon`), and
+archives the previous one at start as `logs/<date>-<n>.log.gz`, as Minecraft does. When it
+crashes it writes `crash-reports/crash-<date>_<time>-client.txt` beside them. When a game the
+launcher started crashes, the Play page says so, with buttons to open or copy the report, open the
+logs folder and report it on Discord; Settings has the logs folder too. Nothing is ever sent
+anywhere by itself.
 
 ## Building
 

@@ -1394,7 +1394,7 @@ impl SaveDir {
                     };
                     let records = batch.iter().map(|(k, r, _)| (*k, r.tag())).collect();
                     if let Err(e) = write_region_records(&root, cache, folder, records) {
-                        eprintln!("Horizon: failed to write {folder} files: {e}");
+                        log::warn!("Horizon: failed to write {folder} files: {e}");
                     }
                     // Readers find the files (and a fresh region cache) from here on.
                     if let Ok(mut pending) = pending.lock() {

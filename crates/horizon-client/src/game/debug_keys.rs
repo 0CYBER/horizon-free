@@ -151,12 +151,10 @@ impl Game<'_> {
             )),
             Some(CrashNotice::Crash) => {
                 // Minecraft.emergencySaveAndCrash: the world is saved, then the
-                // game stops with the report.
-                eprintln!(
-                    "---- Minecraft Crash Report ----\n\nDescription: Manually triggered debug crash\n\njava.lang.Throwable: Manually triggered debug crash"
-                );
+                // game stops; main writes the crash report.
+                let crash = horizon_client::crash::DebugCrash::new();
                 let _ = self.save_game();
-                return Err("Manually triggered debug crash".into());
+                return Err(crash.into());
             }
         }
         Ok(())

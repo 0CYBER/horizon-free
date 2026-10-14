@@ -403,7 +403,7 @@ fn handle(stream: TcpStream, addr: SocketAddr, shared: Arc<Shared>) {
     if let Err(e) = conn::serve(stream, addr, shared)
         && std::env::var_os("HORIZON_NET_DEBUG").is_some()
     {
-        eprintln!("[lan] {addr}: {e}");
+        log::warn!("[lan] {addr}: {e}");
     }
 }
 

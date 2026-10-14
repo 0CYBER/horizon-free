@@ -224,7 +224,7 @@ impl Game<'_> {
                         max_y: 320,
                     };
                     let found = inner.find_closest_biome(&search);
-                    eprintln!("Horizon: title backdrop: {BIOME} at {found:?}");
+                    log::info!("Horizon: title backdrop: {BIOME} at {found:?}");
                     let (_, p) = found?;
                     let _ = std::fs::write(&cache, format!("{} {}\n", p[0], p[2]));
                     Some((p[0], p[2]))

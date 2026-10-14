@@ -108,7 +108,7 @@ impl Game<'_> {
             .collect();
         let store = DataStore::load(&packs);
         for (id, e) in &store.errors {
-            eprintln!("Horizon: failed to load function {id}: {e}");
+            log::warn!("Horizon: failed to load function {id}: {e}");
         }
         self.fns.store = store;
         self.sync_function_registries();

@@ -55,12 +55,12 @@ impl VanillaTerrain {
             OverworldGenerator::for_dimension(data, seed, "minecraft:normal", dimension)?;
         let unsupported = generator.unsupported_features();
         if !unsupported.is_empty() {
-            eprintln!(
+            log::warn!(
                 "Horizon: {} placed features cannot run and will be skipped",
                 unsupported.len()
             );
             if !dir.join("blocks/block-properties.nbt").exists() {
-                eprintln!(
+                log::warn!(
                     "Horizon: the worldgen bundle lacks the block behavior exports (worldgen/blocks/*.nbt); \
                      prepare again (the launcher, or horizon-prepare --prepare) to add them"
                 );
@@ -156,7 +156,7 @@ impl ChunkGenerator for VanillaTerrain {
         match worker.generate_proto(ChunkPos::new(x, z)) {
             Ok(chunk) => Box::new(VanillaProto::Ready(Box::new(chunk))),
             Err(e) => {
-                eprintln!("Horizon: generating chunk {x} {z} failed: {e}");
+                log::warn!("Horizon: generating chunk {x} {z} failed: {e}");
                 Box::new(VanillaProto::Failed(x, z))
             }
         }
@@ -187,7 +187,7 @@ impl ChunkGenerator for VanillaTerrain {
                 Err(_) => unreachable!(),
             };
             if let Err(e) = worker.decorate(&mut array) {
-                eprintln!("Horizon: decorating chunk failed: {e}");
+                log::warn!("Horizon: decorating chunk failed: {e}");
             }
             for (slot, chunk) in region.iter_mut().zip(array) {
                 *slot = Box::new(VanillaProto::Ready(Box::new(chunk)));

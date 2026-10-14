@@ -23,6 +23,9 @@ cpal = "0.16"
 symphonia = { version = "0.5", default-features = false, features = ["ogg", "vorbis"] }
 miniz_oxide = "0.8"
 ab_glyph = "0.2.32"
+log = "0.4"
+chrono = { version = "0.4.42", default-features = false, features = ["clock", "std"] }
+flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
 horizon-theme = { path = "../horizon-theme" }
 arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
 
