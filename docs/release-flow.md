@@ -43,8 +43,12 @@ since `horizon_core::jmath` computes what HotSpot computes (checked 2026-10-14).
 adds the `run-parity` label: that runs the job once, on the commit the pull request had then. To run it again
 after new pushes, remove the label and add it again.
 
-**One runner.** The Mac mini has one runner for this repository: parity jobs, the macOS release builds and the
-nightly audit queue behind each other.
+**Two runners.** The Mac mini has two runners for this repository, `ludovics-mac-mini`
+(`~/.actions-runners/horizon`, `CARGO_BUILD_JOBS=10`) and `ludovics-mac-mini-2` (`~/.actions-runners/horizon-2`,
+`CARGO_BUILD_JOBS=6`), with the same labels, so the 30-minute nightly audit or a long parity job never holds a
+release's macOS build back. Each keeps its own checkout, `target/` and Rust install; the second's
+`_work/horizon/shared-local` links to the first's, so they share the vanilla data, the preparations (one at a
+time, under a lock) and the parity passes and slots.
 
 ## Merging
 

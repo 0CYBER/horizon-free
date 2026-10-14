@@ -32,6 +32,14 @@ done
 
 key=$(git ls-files -s crates/horizon-prepare mods/horizon/src/test/java research-lock.json | shasum -a 256 | cut -c1-16)
 prepared="$shared/prepared/$key"
+# Two runners share the vanilla data (~/.actions-runners/horizon-2/_work/horizon/shared-local links to the first
+# one's): one preparation at a time. A lock older than 30 minutes belongs to a job that died.
+lock="$shared/prepared/.lock"
+until mkdir "$lock" 2>/dev/null; do
+  if [ -n "$(find "$lock" -maxdepth 0 -mmin +30 2>/dev/null)" ]; then rmdir "$lock" 2>/dev/null || true; fi
+  sleep 5
+done
+trap 'rmdir "$lock" 2>/dev/null || true' EXIT
 # horizon-prepare writes .local/horizon-client and its exporters' outputs beside it: all of them live in
 # $prepared, listed in $prepared/.entries, and .local/ links to them.
 if [ ! -f "$prepared/.entries" ]; then
