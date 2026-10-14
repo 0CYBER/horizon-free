@@ -8335,13 +8335,19 @@ impl ApplicationHandler for Game<'_> {
                         .unwrap_or([1, 1]);
                     let mut b = HudBatch::new(size);
                     let atlas = &self.res.atlas;
-                    let action = self.title.as_mut().map_or(Action::None, |t| {
+                    let (action, sound) = self.title.as_mut().map_or((Action::None, false), |t| {
                         if horizon_client::ui_theme::horizon() {
-                            t.click_horizon(atlas, &mut b, self.cursor.0, self.cursor.1)
+                            (
+                                t.click_horizon(atlas, &mut b, self.cursor.0, self.cursor.1),
+                                false,
+                            )
                         } else {
                             t.click(self.cursor.0, self.cursor.1, (b.width, b.height))
                         }
                     });
+                    if sound {
+                        self.audio.play_button_click();
+                    }
                     match action {
                         Action::Quit => event_loop.exit(),
                         Action::Options => self.open_options(true),
@@ -8419,11 +8425,17 @@ impl ApplicationHandler for Game<'_> {
                         Screen::Creative if button == MouseButton::Left => {
                             self.creative_screen.release();
                         }
-                        Screen::Paused if pressed && self.pause_menu => self.pause_click()?,
+                        Screen::Paused
+                            if pressed && button == MouseButton::Left && self.pause_menu =>
+                        {
+                            self.pause_click()?
+                        }
                         Screen::WorldOptions if pressed && button == MouseButton::Left => {
                             self.world_options_click()
                         }
-                        Screen::Dead if pressed => self.death_click()?,
+                        Screen::Dead if pressed && button == MouseButton::Left => {
+                            self.death_click()?
+                        }
                         Screen::Advancements if button == MouseButton::Left => {
                             let size = self
                                 .renderer
