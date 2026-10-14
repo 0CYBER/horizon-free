@@ -56,7 +56,7 @@ pub fn prepare(
     sprites: &mut Sprites,
 ) -> Result<PreparedModels> {
     let facts: serde_json::Map<String, Value> =
-        serde_json::from_reader(std::fs::File::open(root.join("model-states.json"))?)?;
+        serde_json::from_slice(&std::fs::read(root.join("model-states.json"))?)?;
     let blocks: Vec<&str> = facts
         .keys()
         .filter(|name| registry.default_state(name).is_some())
@@ -111,7 +111,7 @@ pub fn load_visibility(
         .tag;
     let occlusion = CachedCollisionRegistry::from_nbt(&data, registry)?;
     let raw: BTreeMap<String, Value> =
-        serde_json::from_reader(fs::File::open(root.join("render-definitions.json"))?)?;
+        serde_json::from_slice(&fs::read(root.join("render-definitions.json"))?)?;
     let definitions = raw
         .into_iter()
         .map(|(name, v)| {
