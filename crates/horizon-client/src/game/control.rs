@@ -166,10 +166,12 @@ impl Game<'_> {
                     "down" => self.control_key_down(key)?,
                     "up" => {
                         self.keys.remove(&key);
+                        self.physical_keys.remove(&key);
                     }
                     "tap" => {
                         self.control_key_down(key)?;
                         self.keys.remove(&key);
+                        self.physical_keys.remove(&key);
                     }
                     other => {
                         return Err(
@@ -181,6 +183,7 @@ impl Game<'_> {
             }
             "release" => {
                 self.keys.clear();
+                self.physical_keys.clear();
                 self.left = false;
                 self.right = false;
                 ok()
@@ -499,6 +502,7 @@ impl Game<'_> {
     }
 
     fn control_key_down(&mut self, key: KeyCode) -> Result<()> {
+        self.physical_keys.insert(key);
         if self.screen == Screen::Chat {
             self.chat_key_code(key, None);
             return Ok(());

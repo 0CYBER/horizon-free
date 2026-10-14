@@ -2283,8 +2283,7 @@ impl Game<'_> {
         };
         let slot = (0..64).find(|&s| Self::menu_slot(&menu, s) == Some(internal));
         let Some(slot) = slot else { return };
-        let shift =
-            self.keys.contains(&KeyCode::ShiftLeft) || self.keys.contains(&KeyCode::ShiftRight);
+        let shift = self.has_shift_down();
         let carried = self.to_network(&self.carried).map(|s| Hashed::of(&s));
         let state = self.remote.as_ref().map_or(0, |r| r.state_id);
         self.send(S::ContainerClick(play::ContainerClick {
@@ -2293,6 +2292,38 @@ impl Game<'_> {
             slot: slot as i16,
             button: i8::from(right),
             input: if shift { 1 } else { 0 },
+            changed: Vec::new(),
+            carried,
+        }));
+    }
+    /// A click outside a server's window (slot -999): predicted like
+    /// `MultiPlayerGameMode.handleContainerInput` (the carried stack after
+    /// `doClick`; the server drops the stack and swings the hand).
+    pub(super) fn remote_throw(&mut self, right: bool, input: horizon_client::menu::Input) {
+        use horizon_client::menu::Input;
+        let container = self
+            .remote
+            .as_ref()
+            .and_then(|r| r.menu.as_ref())
+            .map_or(0, |m| m.0);
+        if input == Input::Pickup
+            && let Some(c) = self.carried.as_mut()
+        {
+            if right && c.count > 1 {
+                c.count -= 1;
+            } else {
+                self.carried = None;
+            }
+            self.swing_arm();
+        }
+        let carried = self.to_network(&self.carried).map(|s| Hashed::of(&s));
+        let state = self.remote.as_ref().map_or(0, |r| r.state_id);
+        self.send(S::ContainerClick(play::ContainerClick {
+            container,
+            state,
+            slot: -999,
+            button: i8::from(right),
+            input: if input == Input::Throw { 4 } else { 0 },
             changed: Vec::new(),
             carried,
         }));
