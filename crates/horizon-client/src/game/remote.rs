@@ -158,7 +158,10 @@ impl Game<'_> {
         let lang = Arc::new(horizon_client::net::load_language(&root));
         let view = self.settings.render_distance.clamp(2, 32) as i8;
         horizon_client::crash::set_detail("Server", address.to_owned());
-        let session = Session::connect(address, name, view, lang.clone());
+        // A signed-in account always plays under its own name.
+        let auth = horizon_client::auth::current();
+        let name = auth.as_ref().map_or(name, |a| a.name.as_str());
+        let session = Session::connect(address, name, auth.clone(), view, lang.clone());
         let player_type = super::perspective::player_type(&root);
         let mut streaming = Streaming::new(
             Arc::new(NoTerrain),

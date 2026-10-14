@@ -493,6 +493,8 @@ pub enum Who {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DamageKind {
     PlayerAttack,
+    /// `mace_smash`: a mace hit after a fall (the player attack tags too).
+    MaceSmash,
     MobAttack,
     Arrow,
     Thrown,
@@ -538,6 +540,14 @@ impl Damage {
     pub fn player(from: [f64; 3]) -> Self {
         Self {
             kind: DamageKind::PlayerAttack,
+            attacker: Some(Who::Player),
+            from: Some(from),
+        }
+    }
+    /// `DamageSources.mace`: a player's smash attack.
+    pub fn mace(from: [f64; 3]) -> Self {
+        Self {
+            kind: DamageKind::MaceSmash,
             attacker: Some(Who::Player),
             from: Some(from),
         }
@@ -1551,6 +1561,16 @@ impl Mob {
         .fold((0.0, 0.0), |(a, t), (x, y)| (a + x, t + y))
     }
     pub fn damage(&mut self, amount: f32, source: Damage) -> bool {
+        self.damage_with(amount, source, None)
+    }
+    /// `damage` by a source with a weapon: `armor_effectiveness` runs the
+    /// weapon's armor-effectiveness enchantments (breach) over the armor fraction.
+    pub fn damage_with(
+        &mut self,
+        amount: f32,
+        source: Damage,
+        armor_effectiveness: Option<&mut dyn FnMut(f32) -> f32>,
+    ) -> bool {
         axolotl::before_damage(self, amount, &source);
         raider::note_hurt(self);
         if !self.alive() || self.removed || self.invulnerable_flag {
@@ -1569,7 +1589,11 @@ impl Mob {
             let armor = self.kind.armor + worn;
             let toughness = 2.0 + (self.kind.armor_toughness + worn_toughness) / 4.0;
             let effective = (armor - amount / toughness).clamp(armor * 0.2, 20.0);
-            amount *= 1.0 - effective / 25.0;
+            let mut fraction = effective / 25.0;
+            if let Some(modify) = armor_effectiveness {
+                fraction = modify(fraction).clamp(0.0, 1.0);
+            }
+            amount *= 1.0 - fraction;
         }
         // CombatRules.getDamageAfterMagicAbsorb: enchantment protection.
         let epf = gear::protection(self, source.kind);
@@ -1604,7 +1628,7 @@ impl Mob {
             let (dx, dz) = source.from.map_or((0.0, 0.0), |f| {
                 (f[0] - self.position.x, f[2] - self.position.z)
             });
-            self.knockback(0.4, dx, dz);
+            self.knockback(f64::from(0.4f32), dx, dz);
         }
         ai::after_hurt(self, &source);
         if self.health <= 0.0 {
@@ -1631,7 +1655,7 @@ impl Mob {
     }
     /// LivingEntity.knockback(power, xd, zd) towards the negative direction.
     pub fn knockback(&mut self, power: f64, mut xd: f64, mut zd: f64) {
-        let power = power * (1.0 - self.kind.knockback_resistance);
+        let power = power * (1.0 - self.attrs.knockback_resistance);
         if power <= 0.0 {
             return;
         }

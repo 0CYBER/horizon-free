@@ -281,6 +281,8 @@ public final class VanillaBlockUpdateOracle {
             if (entities != null) entities.add(entity);
             return true;
         }
+        /** No players watch: the hurt animation and its sound are not sent. */
+        @Override public void broadcastDamageEvent(Entity entity, net.minecraft.world.damagesource.DamageSource source) { }
         @Override public void levelEvent(Entity source, int type, BlockPos p, int data) { emit("L " + type + " " + pos(p) + " " + data); }
         @Override public void playSeededSound(Entity except, double x, double y, double z, net.minecraft.core.Holder<SoundEvent> sound, SoundSource source, float volume, float pitch, long seed) {
             emit("S " + pos(BlockPos.containing(x, y, z)) + " " + sound.value().location());
@@ -351,6 +353,28 @@ public final class VanillaBlockUpdateOracle {
             return attributes;
         }
         @Override public net.minecraft.world.level.dimension.DimensionType dimensionType() { return type != null ? type : OVERWORLD_TYPE; }
+        /**
+         * ServerLevel.explode without the players to send the packet to: the
+         * ServerExplosion runs, then the explosion sound the client plays at
+         * the centre is logged.
+         */
+        @Override public void explode(Entity source, net.minecraft.world.damagesource.DamageSource damageSource,
+            net.minecraft.world.level.ExplosionDamageCalculator calculator, double x, double y, double z, float r, boolean fire,
+            net.minecraft.world.level.Level.ExplosionInteraction type, net.minecraft.core.particles.ParticleOptions small,
+            net.minecraft.core.particles.ParticleOptions large, net.minecraft.util.random.WeightedList<net.minecraft.core.particles.ExplosionParticleInfo> blockParticles,
+            net.minecraft.core.Holder<SoundEvent> sound) {
+            java.util.function.Function<net.minecraft.world.level.gamerules.GameRule<Boolean>, net.minecraft.world.level.Explosion.BlockInteraction> destroy =
+                rule -> rules.get(rule) ? net.minecraft.world.level.Explosion.BlockInteraction.DESTROY_WITH_DECAY : net.minecraft.world.level.Explosion.BlockInteraction.DESTROY;
+            var interaction = switch (type) {
+                case NONE -> net.minecraft.world.level.Explosion.BlockInteraction.KEEP;
+                case BLOCK -> destroy.apply(GameRules.BLOCK_EXPLOSION_DROP_DECAY);
+                case MOB -> rules.get(GameRules.MOB_GRIEFING) ? destroy.apply(GameRules.MOB_EXPLOSION_DROP_DECAY) : net.minecraft.world.level.Explosion.BlockInteraction.KEEP;
+                case TNT -> destroy.apply(GameRules.TNT_EXPLOSION_DROP_DECAY);
+                case TRIGGER -> net.minecraft.world.level.Explosion.BlockInteraction.TRIGGER_BLOCK;
+            };
+            new net.minecraft.world.level.ServerExplosion(this, source, damageSource, calculator, new Vec3(x, y, z), r, fire, interaction).explode();
+            if (source == null || !source.isSilent()) emit("S " + pos(BlockPos.containing(x, y, z)) + " " + sound.value().location());
+        }
         /** The overworld (fire in an obsidian frame lights a portal here). */
         @Override public net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension() { return dimensionKey != null ? dimensionKey : net.minecraft.world.level.Level.OVERWORLD; }
         @Override public long getOverworldClockTime() { return DAY.totalTicks(); }

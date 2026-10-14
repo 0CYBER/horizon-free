@@ -30,6 +30,8 @@ horizon-theme = { path = "../horizon-theme" }
 arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
 # Controllers (evdev + libudev on Linux, IOKit on macOS, Windows.Gaming.Input).
 gilrs = "0.11"
+# HTTPS to the Minecraft services (online-mode session join).
+ureq = { version = "2", default-features = false, features = ["tls"] }
 
 [features]
 # Records the call sites of mob random draws (`mob_ai_probe` traces).

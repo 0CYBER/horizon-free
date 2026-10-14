@@ -628,7 +628,8 @@ impl Enchantments {
                 } else {
                     spec
                 };
-                spec.is_null() && entity.is_some() || self.entity_matches(spec, entity)
+                (spec.is_null() && entity.is_some() || self.entity_matches(spec, entity))
+                    && movement_matches(&c["predicate"], role_state(c, ctx))
             }
             "minecraft:random_chance" => {
                 let chance = match &c["chance"] {
@@ -661,6 +662,38 @@ pub struct EffectContext<'a> {
     pub this: Option<&'a str>,
     pub attacker: Option<&'a str>,
     pub direct_attacker: Option<&'a str>,
+    /// The direct attacker's fall distance and whether it flies (elytra or
+    /// abilities), for `movement` and `flags` predicates.
+    pub direct_motion: Option<(f64, bool)>,
+}
+/// The fall distance and flying flag known for an `entity_properties` role.
+fn role_state(c: &Value, ctx: &EffectContext<'_>) -> Option<(f64, bool)> {
+    match c["entity"].as_str().unwrap_or("this") {
+        "direct_attacker" => ctx.direct_motion,
+        _ => None,
+    }
+}
+/// `EntityPredicate`'s `minecraft:movement` fall distance and
+/// `minecraft:flags` is_flying (the parts enchantment requirements use); an
+/// entity whose state is unknown matches neither.
+fn movement_matches(predicate: &Value, state: Option<(f64, bool)>) -> bool {
+    let fall = &predicate["minecraft:movement"]["fall_distance"];
+    let flying = predicate["minecraft:flags"]["is_flying"].as_bool();
+    if fall.is_null() && flying.is_none() {
+        return true;
+    }
+    let Some((distance, is_flying)) = state else {
+        return false;
+    };
+    // MinMaxBounds.Doubles: a number is an exact bound.
+    let bound = |key: &str| {
+        fall.as_f64()
+            .or_else(|| fall.get(key).and_then(Value::as_f64))
+    };
+    // MinMaxBounds.Doubles.matches
+    bound("min").is_none_or(|min| min <= distance)
+        && bound("max").is_none_or(|max| distance <= max)
+        && flying.is_none_or(|f| f == is_flying)
 }
 fn next_int<R: RandomSource>(random: &mut R, bound: i32) -> i32 {
     random.next_int_bound(bound.max(1)).unwrap_or(0)

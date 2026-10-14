@@ -58,6 +58,7 @@ mod level_particles;
 mod lightning;
 mod llamas;
 mod loom;
+mod mace;
 mod machines;
 mod maps;
 mod minecarts;
@@ -88,6 +89,7 @@ mod recipe_book;
 mod remote;
 mod render_control;
 mod render_tick;
+mod respawn_anchor;
 mod scoreboard;
 mod screens;
 mod sculk;
@@ -246,12 +248,13 @@ impl Options {
             player_name: std::env::var("HORIZON_PLAYER_NAME").unwrap_or_else(|_| "Player".into()),
             dedicated: None,
         };
+        let mut session_file = std::env::var("HORIZON_SESSION_FILE").ok();
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Horizon — Minecraft Java Edition 26.3 in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --name NAME             Player name for multiplayer (default Player)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause."
+                        "Horizon — Minecraft Java Edition 26.3 in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --name NAME             Player name for multiplayer (default Player)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause."
                     );
                     return Ok(None);
                 }
@@ -295,6 +298,7 @@ impl Options {
                         "--world" => o.world = Some(value),
                         "--server" => o.server = Some(value),
                         "--name" => o.player_name = value,
+                        "--session-file" => session_file = Some(value),
                         "--control-socket" => o.control = Some(value.into()),
                         "--time" => o.time = Some(value.parse()?),
                         "--weather" => o.weather = Some(value),
@@ -312,6 +316,17 @@ impl Options {
                         _ => return Err(format!("unknown option {arg}").into()),
                     }
                 }
+            }
+        }
+        // The launcher's account: online-mode servers need it. A bad file
+        // only leaves the game offline.
+        if let Some(path) = session_file.filter(|p| !p.is_empty()) {
+            match horizon_client::auth::AuthSession::load(path.as_ref()) {
+                Ok(session) => {
+                    o.player_name = session.name.clone();
+                    horizon_client::auth::set_current(session);
+                }
+                Err(e) => eprintln!("Horizon: not signed in: {e}"),
             }
         }
         Ok(Some(o))
@@ -791,6 +806,11 @@ struct Game<'a> {
     portals: nether_portal::Portals,
     /// The pending travel goes through an End portal (EndPortalBlock destinations).
     end_travel: bool,
+    /// The respawn point when it is not the world spawn or a bed: a respawn
+    /// anchor (`game/respawn_anchor.rs`).
+    respawn_config: Option<respawn_anchor::RespawnConfig>,
+    /// A respawn travelling to its anchor's dimension and chunks.
+    respawn_travel: Option<respawn_anchor::RespawnConfig>,
     /// The next enter_dimension call comes from an End portal.
     end_portal_travel: bool,
     end: end::EndState,
@@ -1655,6 +1675,11 @@ impl Game<'_> {
                     self.spawner_burst([pos.x, pos.y, pos.z])
                 }
                 LevelEvent::LevelEvent {
+                    id: 2013,
+                    pos,
+                    data,
+                } => self.smash_dust(pos, data),
+                LevelEvent::LevelEvent {
                     id: id @ 3002..=3005,
                     pos,
                     data,
@@ -1731,6 +1756,9 @@ impl Game<'_> {
                 }
                 LevelEvent::Player { pos, effect, .. } => match effect {
                     PlayerEffect::OpenMenu => self.open_menu([pos.x, pos.y, pos.z]),
+                    PlayerEffect::Sleep if self.beds_destroy_on_use() => {
+                        self.destroy_bed_on_use([pos.x, pos.y, pos.z])?
+                    }
                     PlayerEffect::Sleep => self.try_sleep([pos.x, pos.y, pos.z]),
                     PlayerEffect::GiveItem(item) => {
                         if let Some(rest) = self.give(ItemStack {
@@ -1751,7 +1779,10 @@ impl Game<'_> {
                             food.saturation = (food.saturation + 0.4).min(food.food as f32);
                         }
                     }
-                    PlayerEffect::InteractLoot(_) | PlayerEffect::RespawnAnchor => {}
+                    PlayerEffect::RespawnAnchor => {
+                        self.respawn_anchor_used([pos.x, pos.y, pos.z])?
+                    }
+                    PlayerEffect::InteractLoot(_) => {}
                 },
                 LevelEvent::PrimeTnt { pos, rot } => self.add_primed_tnt(pos, rot, 80),
                 LevelEvent::BlockEvent {
@@ -2145,6 +2176,7 @@ impl Game<'_> {
             return Ok(());
         }
         let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
+        let mut anchor_passed = None;
         // MultiPlayerGameMode.useItemOn: blocks react first unless sneaking with an item.
         if !(sneaking && self.held().is_some())
             && let Some(hit) = self.pick()
@@ -2161,6 +2193,15 @@ impl Game<'_> {
             if self.use_composter(hit.pos, held.as_ref()) {
                 self.swing_arm();
                 return Ok(());
+            }
+            match self.use_respawn_anchor(hit.pos, held.as_ref())? {
+                respawn_anchor::AnchorUse::Charged => {
+                    self.swing_arm();
+                    return Ok(());
+                }
+                // The main hand passes; its item is used, then the off hand's glowstone.
+                respawn_anchor::AnchorUse::Pass => anchor_passed = Some(hit.pos),
+                respawn_anchor::AnchorUse::Other => {}
             }
             let face = match hit.face {
                 [0, 1, 0] => Direction::Up,
@@ -2183,17 +2224,21 @@ impl Game<'_> {
             };
             let at = Vec3::new(hit.point[0], hit.point[1], hit.point[2]);
             let item = held.as_ref().map(|s| s.item.to_string());
-            let result = self.with_level(|b, level, ticks| {
-                b.use_item_on(
-                    level,
-                    ticks,
-                    BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]),
-                    face,
-                    at,
-                    player,
-                    item.as_deref(),
-                )
-            });
+            let result = if anchor_passed.is_some() {
+                horizon_world::level::InteractionResult::Pass
+            } else {
+                self.with_level(|b, level, ticks| {
+                    b.use_item_on(
+                        level,
+                        ticks,
+                        BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]),
+                        face,
+                        at,
+                        player,
+                        item.as_deref(),
+                    )
+                })
+            };
             self.process_level_events()?;
             if result.consumes_action() {
                 self.swing_arm();
@@ -2201,6 +2246,12 @@ impl Game<'_> {
             }
         }
         let Some(stack) = self.held().cloned() else {
+            // Minecraft.startUseItem goes on to the off hand.
+            if let Some(pos) = anchor_passed
+                && self.charge_anchor_from_offhand(pos)?
+            {
+                return Ok(());
+            }
             self.use_offhand();
             return Ok(());
         };
@@ -2272,6 +2323,11 @@ impl Game<'_> {
             return Ok(());
         };
         if info.block.is_none() {
+            if let Some(pos) = anchor_passed
+                && self.charge_anchor_from_offhand(pos)?
+            {
+                return Ok(());
+            }
             self.use_offhand();
             return Ok(());
         }
@@ -2619,7 +2675,10 @@ impl Game<'_> {
             self.streaming.center = (cx, cz);
             if (-2..=2).all(|dz| (-2..=2).all(|dx| self.streaming.is_lit(cx + dx, cz + dz))) {
                 let (player, target) = self.travelling.take().ok_or("travel")?;
-                if self.end_travel {
+                if let Some(config) = self.respawn_travel.take() {
+                    drop(player);
+                    self.place_respawned(config)?;
+                } else if self.end_travel {
                     self.place_after_end_travel(player, target)?;
                 } else {
                     self.place_after_travel(player, target)?;
@@ -2922,6 +2981,11 @@ impl Game<'_> {
                 MotionEvent::Snowflake { position, velocity } => self.snowflake(position, velocity),
                 MotionEvent::EnterBlock { state } => self.trigger_enter_block(state),
                 MotionEvent::InsidePortal { pos } => self.player_inside_nether_portal(pos),
+                MotionEvent::SmashLanding {
+                    state,
+                    position,
+                    fall_distance,
+                } => self.smash_landing_particles(state, position, fall_distance),
                 _ => {}
             }
         }
@@ -3156,6 +3220,7 @@ impl Game<'_> {
     /// `Minecraft.pause`: a single-player game with a pausing screen open.
     fn pauses_game(&self) -> bool {
         self.remote.is_none()
+            && self.lan.is_none()
             && self.title.is_none()
             && (matches!(
                 self.screen,
@@ -5274,19 +5339,20 @@ impl Game<'_> {
         let delay = 20.0 / speed;
         let scale = ((self.attack_ticks as f32 + 0.5) / delay).clamp(0.0, 1.0);
         let mut amount = damage * (0.2 + scale * scale * 0.8);
+        let target_kind = self.mobs[index].kind.id.clone();
+        let target_kind = format!("minecraft:{}", target_kind.trim_start_matches("minecraft:"));
+        // Item.getAttackDamageBonus (a mace's smash), before the critical hit.
+        amount += self.smash_damage_bonus(&target_kind);
         let player = self.player.as_ref();
+        // Player.canCriticalAttack: falling, off the ground, not sprinting.
         let falling =
-            player.is_some_and(|p| !p.ground.on_ground && p.velocity.y < 0.0 && !p.sprinting);
+            player.is_some_and(|p| !p.ground.on_ground && p.fall_distance > 0.0 && !p.sprinting);
         let crit = scale > 0.9 && falling;
         if crit {
             amount *= 1.5;
         }
         // Enchantment damage (sharpness, smite, bane) scaled by the attack strength.
-        let target_kind = self.mobs[index].kind.id.clone();
-        amount += self.enchant_damage_bonus(&format!(
-            "minecraft:{}",
-            target_kind.trim_start_matches("minecraft:")
-        )) * scale;
+        amount += self.enchant_damage_bonus(&target_kind) * scale;
         self.attack_ticks = 0;
         if let Some(p) = self.player.as_mut()
             && !self.creative
@@ -5298,21 +5364,23 @@ impl Game<'_> {
         self.swing_arm();
         // LivingEntity.setLastHurtMob (tamed wolves join in).
         self.combat.last_hurt_mob = Some((self.mobs[index].id, self.world.game_time));
-        let mob = &mut self.mobs[index];
-        let center = [
-            mob.position.x,
-            mob.position.y + mob.kind.height / 2.0,
-            mob.position.z,
-        ];
-        let dealt = (amount.min(mob.health.max(0.0)) * 10.0).round() as i32;
-        if mob.hurt(amount, from, &mut self.world.random) {
-            self.stats.custom("damage_dealt", dealt);
+        let old_health = self.mobs[index].health;
+        let source = match from {
+            Some(f) => self.attack_source(f),
+            None => horizon_client::mobs::Damage::of(horizon_client::mobs::DamageKind::Generic),
+        };
+        if self.hurt_by_player(index, amount, source) {
+            let mob = &self.mobs[index];
+            // Player.damageStatsAndHearts: the damage the hit actually did.
+            let actual = old_health - mob.health;
             // Player.attack: crit emitter and damage indicator hearts.
             let (feet, width, height) = (
                 [mob.position.x, mob.position.y, mob.position.z],
                 mob.kind.width,
                 mob.kind.height,
             );
+            self.stats
+                .custom("damage_dealt", (actual * 10.0).round() as i32);
             if crit {
                 self.particles.tracking_emitter(
                     horizon_client::particles::ParticleOptions::simple(
@@ -5323,7 +5391,7 @@ impl Game<'_> {
                     height,
                 );
             }
-            if amount > 2.0 {
+            if actual > 2.0 {
                 let indicator = horizon_client::particles::ParticleOptions::simple(
                     horizon_client::particles::ParticleType::DamageIndicator,
                 );
@@ -5332,10 +5400,10 @@ impl Game<'_> {
                     [feet[0], feet[1] + height * 0.5, feet[2]],
                     [0.1, 0.0, 0.1],
                     0.2,
-                    (amount * 0.5) as u32,
+                    (actual * 0.5) as u32,
                 );
             }
-            self.last_hurt_by_player.insert(mob.id);
+            self.last_hurt_by_player.insert(self.mobs[index].id);
             let sound = if crit {
                 "minecraft:entity.player.attack.crit"
             } else if scale > 0.9 {
@@ -5343,33 +5411,21 @@ impl Game<'_> {
             } else {
                 "minecraft:entity.player.attack.weak"
             };
-            self.audio.play(sound, Some(center), 1.0, 1.0);
+            // Player.playServerSideSound: at the player.
+            self.audio.play(sound, from, 1.0, 1.0);
             // The hurt or death sound the mob raised (getHurtSound / getDeathSound,
             // its voice pitch from its own random).
             let queued = std::mem::take(&mut self.mobs[index].outbox);
             for event in queued {
-                if let horizon_client::mobs::MobEvent::Sound(s, _, volume, pitch) = event {
+                if let horizon_client::mobs::MobEvent::Sound(s, at, volume, pitch) = event {
                     self.audio
-                        .play(&format!("minecraft:{s}"), Some(center), volume, pitch);
+                        .play(&format!("minecraft:{s}"), Some(at), volume, pitch);
                 }
             }
-            self.post_attack(index);
-            if let Some(stack) = self.inventory[self.selected].clone()
-                && let Some(max) = self
-                    .res
-                    .items
-                    .get(&stack.item)
-                    .filter(|i| i.max_damage > 0)
-                    .map(|i| i.max_damage)
-            {
-                let loss = self.durability_loss(&stack, 1);
-                if let Some(stack) = self.inventory[self.selected].as_mut() {
-                    stack.damage += loss;
-                    if stack.damage >= max {
-                        self.inventory[self.selected] = None;
-                    }
-                }
-            }
+            self.weapon_hit(index);
+        } else {
+            self.audio
+                .play("minecraft:entity.player.attack.nodamage", from, 1.0, 1.0);
         }
         true
     }
@@ -5784,6 +5840,17 @@ impl Game<'_> {
         self.travelling = None;
         self.player = None;
         self.spawn = None;
+        self.respawn_travel = None;
+        self.respawn_config =
+            self.level
+                .respawn_elsewhere
+                .as_ref()
+                .map(|(dim, pos, yaw, forced)| respawn_anchor::RespawnConfig {
+                    dim: Dim::from_id(dim),
+                    pos: *pos,
+                    yaw: *yaw,
+                    forced: *forced,
+                });
         self.spawn_search = 0;
         self.spawn_origin = None;
         self.spawn_spiral = Default::default();
@@ -6073,6 +6140,7 @@ impl Game<'_> {
         if self.remote.is_none() {
             self.stats.custom("leave_game", 1);
         }
+        self.lan_close(false);
         self.save_game()
     }
     fn close_world(&mut self) -> Result<()> {
@@ -6086,6 +6154,7 @@ impl Game<'_> {
         }
         self.stats.custom("leave_game", 1);
         self.save_game()?;
+        self.lan_close(false);
         horizon_client::crash::clear_detail("World");
         self.streaming.paused = true;
         self.world = World::new(self.res.facts.air, 0);
@@ -7300,6 +7369,8 @@ impl Game<'_> {
             f64::from(head[1]) + 0.6,
             f64::from(head[2]) + 0.5,
         ));
+        // The bed replaces a respawn anchor.
+        self.respawn_config = None;
         self.level.spawn = Some([
             f64::from(head[0]),
             f64::from(head[1]) + 1.0,
@@ -7677,6 +7748,9 @@ impl Game<'_> {
         level.weather = self.world.weather;
         level.day_time = self.world.day_time;
         level.spawn = self.spawn.map(|s| [s.x, s.y, s.z]);
+        level.respawn_elsewhere = self
+            .respawn_config
+            .map(|c| (c.dim.id().to_owned(), c.pos, c.yaw, c.forced));
         level.rotation = [self.yaw, self.pitch];
         level.xp_level = self.experience.level;
         level.xp_progress = self.experience.progress;
@@ -9267,6 +9341,8 @@ pub fn run() -> Result<()> {
         travelling: None,
         portals: Default::default(),
         end_travel: false,
+        respawn_config: None,
+        respawn_travel: None,
         end_portal_travel: false,
         end: Default::default(),
         block_ticks: Ticks::new(0),

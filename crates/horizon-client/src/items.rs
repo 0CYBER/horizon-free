@@ -72,6 +72,8 @@ pub struct ItemInfo {
     pub blocks_attacks: Option<BlocksAttacks>,
     /// `weapon.disable_blocking_for_seconds` (axes).
     pub disable_blocking_seconds: f32,
+    /// `weapon.item_damage_per_attack`, when the item is a weapon.
+    pub weapon_damage: Option<u32>,
     /// `use_effects.speed_multiplier` (UseEffects.DEFAULT: 0.2).
     pub use_speed: f32,
     /// `glider` (elytra).
@@ -464,6 +466,11 @@ impl Items {
                     disable_blocking_seconds: c["minecraft:weapon"]["disable_blocking_for_seconds"]
                         .as_f64()
                         .unwrap_or(0.0) as f32,
+                    weapon_damage: c["minecraft:weapon"].is_object().then(|| {
+                        c["minecraft:weapon"]["item_damage_per_attack"]
+                            .as_u64()
+                            .unwrap_or(1) as u32
+                    }),
                     equip_asset: c["minecraft:equippable"]["asset_id"]
                         .as_str()
                         .map(str::to_owned),
@@ -626,6 +633,7 @@ impl Items {
             properties: &empty,
             held: None,
             killed_by_player: false,
+            explosion_radius: None,
         };
         ctx.evaluate(table, random)
     }
@@ -687,7 +695,22 @@ impl Items {
         random: &mut impl RandomSource,
         sequences: Option<(&mut crate::random_sequences::RandomSequences, i64)>,
     ) -> Vec<ItemStack> {
-        let drops = self.block_drops_raw(registry, state, held, random, sequences);
+        self.block_drops_exploded(registry, state, held, dynamic, random, sequences, None)
+    }
+    /// `block_drops_full` for a block an explosion destroys: `explosion`
+    /// is its radius when the explosion decays drops (`DESTROY_WITH_DECAY`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn block_drops_exploded(
+        &self,
+        registry: &BlockRegistry,
+        state: BlockStateId,
+        held: Option<&ItemStack>,
+        dynamic: &[ItemStack],
+        random: &mut impl RandomSource,
+        sequences: Option<(&mut crate::random_sequences::RandomSequences, i64)>,
+        explosion: Option<f32>,
+    ) -> Vec<ItemStack> {
+        let drops = self.block_drops_raw(registry, state, held, random, sequences, explosion);
         if !drops.iter().any(|d| d.item.starts_with(DYNAMIC)) {
             return drops;
         }
@@ -709,6 +732,7 @@ impl Items {
         held: Option<&ItemStack>,
         random: &mut impl RandomSource,
         sequences: Option<(&mut crate::random_sequences::RandomSequences, i64)>,
+        explosion_radius: Option<f32>,
     ) -> Vec<ItemStack> {
         let Some(block) = registry.state(state) else {
             return vec![];
@@ -738,6 +762,7 @@ impl Items {
                 properties: &block.properties,
                 held,
                 killed_by_player: false,
+                explosion_radius,
             };
             return ctx.evaluate(table, random);
         }
@@ -747,6 +772,7 @@ impl Items {
             properties: &block.properties,
             held,
             killed_by_player: false,
+            explosion_radius,
         };
         ctx.evaluate(table, random)
     }
@@ -769,6 +795,7 @@ impl Items {
             properties: &empty,
             held,
             killed_by_player,
+            explosion_radius: None,
         };
         ctx.evaluate(table, random)
     }
@@ -800,6 +827,7 @@ impl Items {
             properties: &block.properties,
             held: None,
             killed_by_player: false,
+            explosion_radius: None,
         };
         match table.get("random_sequence").and_then(Value::as_str) {
             Some(sequence) => ctx.evaluate(table, sequences.get(sequence, seed)),
@@ -824,6 +852,7 @@ impl Items {
             properties: &empty,
             held,
             killed_by_player,
+            explosion_radius: None,
         };
         ctx.evaluate(table, random)
     }
@@ -845,6 +874,7 @@ impl Items {
             properties: &empty,
             held,
             killed_by_player,
+            explosion_radius: None,
         };
         ctx.evaluate(table, random)
     }
@@ -884,6 +914,8 @@ struct LootContext<'a> {
     properties: &'a BTreeMap<String, String>,
     held: Option<&'a ItemStack>,
     killed_by_player: bool,
+    /// `LootContextParams.EXPLOSION_RADIUS`: an explosion that decays drops.
+    explosion_radius: Option<f32>,
 }
 impl LootContext<'_> {
     /// Level of an enchantment on the tool / killer's weapon.
@@ -945,7 +977,10 @@ impl LootContext<'_> {
             _ => return true,
         };
         match kind {
-            "minecraft:survives_explosion" => true,
+            // ExplosionCondition: 1 / radius under a decaying explosion.
+            "minecraft:survives_explosion" => self
+                .explosion_radius
+                .is_none_or(|r| random.next_float() <= 1.0 / r),
             "minecraft:tool/can_silk_touch" => self.enchantment_level("minecraft:silk_touch") > 0,
             "minecraft:tool/can_shear" => self.held.is_some_and(|h| &*h.item == "minecraft:shears"),
             "minecraft:inverted" => !self.condition(&c["term"], random),
@@ -1230,6 +1265,15 @@ impl LootContext<'_> {
                         }
                     }
                 }
+                // ApplyExplosionDecay: each item survives with 1 / radius.
+                "minecraft:explosion_decay" => {
+                    if let Some(radius) = self.explosion_radius {
+                        let probability = 1.0 / radius;
+                        stack.count = (0..stack.count)
+                            .filter(|_| random.next_float() <= probability)
+                            .count() as u32;
+                    }
+                }
                 "minecraft:limit_count" => {
                     let limit = &f["limit"];
                     if let Some(min) = limit["min"].as_i64() {
@@ -1351,6 +1395,7 @@ mod tests {
             properties: props,
             held,
             killed_by_player: block.is_empty(),
+            explosion_radius: None,
         }
     }
 

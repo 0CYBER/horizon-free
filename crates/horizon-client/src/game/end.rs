@@ -494,14 +494,16 @@ impl Game<'_> {
         Ok(())
     }
 
-    /// Dying in the End respawns in the Overworld.
+    /// Dying away from the Overworld respawns at the world spawn there.
     pub(super) fn respawn_out_of_end(&mut self) -> Result<()> {
-        if self.dim != Dim::End || self.player.is_none() {
+        if self.dim == Dim::Overworld || self.player.is_none() {
             return Ok(());
         }
         self.end_portal_travel = true;
         let result = self.enter_dimension(Dim::Overworld);
         self.end_portal_travel = false;
+        // The arrival places a fresh player at the spawn.
+        self.end_travel = true;
         result
     }
 

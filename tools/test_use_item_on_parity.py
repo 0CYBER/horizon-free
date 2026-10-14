@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Compare a player's right click on a block with vanilla's, for items that are
 both food and blocks (sweet and glow berries, carrots, potatoes), for sweet
-berry bushes and for spawn eggs used on a monster spawner.
+berry bushes, for spawn eggs used on a monster spawner, for respawn anchors and
+for beds in the Nether and the End.
 
 Every case has a block at the origin, something above it, and a player three
 blocks south, survival or creative, hungry or full, sneaking or not, who
@@ -11,12 +12,21 @@ harness (`VanillaDispenserOracle.useItem`): the block's `useItemOn` and
 `useWithoutItem` (picking a bush's berries, `SweetBerryBushBlock.useItemOn`
 passing bone meal on), then `ItemStack.useOn` (`BlockItem.place` with its
 `mayPlaceOn` rules, `BoneMealItem.useOn`, eating a consumable that could
-not be placed, and `SpawnEggItem.useOn` setting a spawner's mob). Horizon runs
+not be placed, and `SpawnEggItem.useOn` setting a spawner's mob). Respawn
+anchors are charged with glowstone, set the respawn point in the Nether and
+explode elsewhere (`RespawnAnchorBlock`, through the stand-in level's real
+`ServerExplosion`, with water at the anchor). Respawn cases call
+`ServerPlayer.findRespawnAndUseSpawnBlock` on an anchor among blocks
+(`RespawnAnchorBlock.findStandUpPosition` through `DismountHelper`): the
+position, the yaw that faces the anchor and the charge it uses. Beds and straw
+beds clicked (head or foot, whole or broken) in the Nether and the End blow up
+or fall apart (`AbstractBedBlock.useWithoutItem` under the dimension's
+`bed_rule`: `BedBlock.destroyOnUse`, `StrawBedBlock.destroyBed`). Horizon runs
 `use_item_as_player` on that hit in a headless game
-(`HORIZON_DISPENSE_FIXTURE`). Both print block changes, dropped items,
-level events, sounds, game events, the used statistic, the held stack, the
-item the player started using, spawners' next spawn data, potentials and
-delay, system messages and the level random afterwards.
+(`HORIZON_DISPENSE_FIXTURE`). Both print block changes, dropped items, level
+events, sounds, game events, the used statistic, the held stack, the item the
+player started using, spawners' next spawn data, potentials and delay, the
+player's respawn point, system messages and the level random afterwards.
 """
 import json
 import os
@@ -37,6 +47,107 @@ ITEMS = ['sweet_berries', 'sweet_berries', 'sweet_berries', 'glow_berries', 'car
 # What is in the way above the clicked block.
 ABOVE = ['air'] * 8 + ['short_grass', 'snow', 'stone', 'water', 'dead_bush', 'fern']
 EGGS = ['zombie', 'skeleton', 'spider', 'cave_spider', 'pig', 'creeper', 'blaze', 'ghast', 'villager', 'bee', 'cod']
+# What stands around an anchor that explodes.
+AROUND = ['stone', 'dirt', 'oak_planks', 'cobblestone', 'glass', 'obsidian', 'netherrack', 'water', 'tnt', 'oak_log',
+          'grass_block', 'soul_sand', 'gravel', 'crying_obsidian']
+
+
+STAND = ['air'] * 6 + ['stone', 'stone', 'oak_slab', 'snow', 'lava', 'magma_block', 'fire', 'cactus', 'water',
+         'ladder', 'oak_trapdoor', 'short_grass', 'white_carpet', 'campfire', 'sweet_berry_bush',
+         'oak_fence', 'powder_snow', 'farmland', 'soul_sand', 'cobweb', 'end_portal']
+
+
+def respawn_case(rng, states, case):
+    """Respawning at an anchor with blocks around it."""
+    charges = rng.choice([0, 1, 1, 2, 4])
+    cells = [[0, 0, 0, states.get('respawn_anchor', charges=str(charges))]]
+    for dy in (-2, -1, 0, 1, 2):
+        for dx in range(-1, 2):
+            for dz in range(-1, 2):
+                if (dx, dy, dz) == (0, 0, 0):
+                    continue
+                if dy == -1 or dy == -2:
+                    name = rng.choice(['stone'] * 6 + STAND)
+                else:
+                    name = rng.choice(['air'] * 3 + STAND)
+                if name == 'air':
+                    continue
+                state = states.any(rng, name) if name in ('oak_trapdoor', 'oak_slab', 'snow', 'campfire', 'water', 'ladder') else states.get(name)
+                cells.append([dx, dy, dz, state])
+    if rng.random() < 0.6:
+        case['dim'] = 'nether'
+    case['respawn_at'] = {'forced': rng.random() < 0.2, 'consume': rng.random() < 0.8}
+    case['cells'] = cells
+
+
+BED_COLORS = ['red', 'white', 'black', 'cyan', 'lime']
+FACINGS = {'north': (0, -1), 'south': (0, 1), 'west': (-1, 0), 'east': (1, 0)}
+
+
+def bed_case(rng, states, case):
+    """A bed (or straw bed) clicked in the Nether or the End, among blocks."""
+    name = 'straw_bed' if rng.random() < 0.25 else rng.choice(BED_COLORS) + '_bed'
+    facing = rng.choice(list(FACINGS))
+    dx, dz = FACINGS[facing]
+    # The clicked block is the origin; the other half lies along the facing.
+    part = rng.choice(['head', 'foot'])
+    other = (-dx, 0, -dz) if part == 'head' else (dx, 0, dz)
+    cells = [[0, 0, 0, states.get(name, facing=facing, part=part, occupied='false')],
+             [0, -1, 0, states.get(rng.choice(['netherrack', 'end_stone', 'obsidian', 'stone']))],
+             [other[0], -1, other[2], states.get('stone')]]
+    if rng.random() < 0.9:
+        cells.append([*other, states.get(name, facing=facing, part='foot' if part == 'head' else 'head', occupied='false')])
+    taken = {tuple(c[:3]) for c in cells}
+    for _ in range(rng.choice([0, 3, 10, 30])):
+        p = (rng.randrange(-3, 4), rng.randrange(-2, 3), rng.randrange(-3, 4))
+        if p in taken:
+            continue
+        taken.add(p)
+        cells.append([*p, states.get(rng.choice(AROUND))])
+    case['dim'] = rng.choice(['nether', 'end'])
+    item = rng.choice(['-', '-', 'apple', 'stone', 'glowstone'])
+    case['use_item'] = {'item': '-' if item == '-' else d_plain(item, 1), 'creative': rng.random() < 0.2,
+                        'sneaking': rng.random() < 0.1, 'food': 20, 'distance': 12}
+    if rng.random() < 0.2:
+        case['rules'] = {'block_explosion_drop_decay': False}
+    case['cells'] = cells
+
+
+def anchor_case(rng, states, case):
+    """A respawn anchor clicked in the Nether or the Overworld, with blocks
+    and water around it."""
+    charges = rng.choice([0, 0, 1, 2, 3, 4, 4])
+    cells = [[0, 0, 0, states.get('respawn_anchor', charges=str(charges))],
+             [0, -1, 0, states.get(rng.choice(['netherrack', 'stone', 'soul_sand', 'obsidian', 'soul_soil']))]]
+    taken = {(0, 0, 0), (0, -1, 0)}
+    for _ in range(rng.choice([0, 3, 8, 20, 40])):
+        p = (rng.randrange(-3, 4), rng.randrange(-2, 3), rng.randrange(-3, 4))
+        if p in taken:
+            continue
+        taken.add(p)
+        name = rng.choice(AROUND)
+        state = states.any(rng, 'water') if name == 'water' and rng.random() < 0.5 else states.get(name)
+        cells.append([*p, state])
+    if rng.random() < 0.2:
+        # Water that would flow into the anchor's place.
+        d = rng.choice([(1, 0, 0), (-1, 0, 0), (0, 0, 1), (0, 0, -1), (0, 1, 0)])
+        cells = [c for c in cells if tuple(c[:3]) != d]
+        cells.append([*d, states.any(rng, 'water') if rng.random() < 0.4 else states.get('water')])
+    nether = rng.random() < 0.5
+    if nether:
+        case['dim'] = 'nether'
+    item = rng.choice(['glowstone'] * 5 + ['apple', '-', 'stone', 'glowstone_dust'])
+    count = rng.choice([1, 1, 16, 64])
+    use = {'item': '-' if item == '-' else d_plain(item, count), 'creative': rng.random() < 0.2,
+           'sneaking': rng.random() < 0.1, 'food': 20,
+           # Away from the blast: the stand-in player is not an entity of the level.
+           'distance': 3 if nether else 12}
+    if rng.random() < 0.3:
+        use['respawn'] = rng.choice([[0, 0, 0], [5, 0, 5]])
+    if rng.random() < 0.2:
+        case['rules'] = {'block_explosion_drop_decay': False}
+    case['use_item'] = use
+    case['cells'] = cells
 
 
 def cases(facts, count, seed):
@@ -46,6 +157,24 @@ def cases(facts, count, seed):
         case = {**h.environment(rng), 'pos': [0, 0, 0]}
         case.pop('raining', None)
         case.pop('thundering', None)
+        if rng.random() < 0.1:
+            bed_case(rng, states, case)
+            case['items'] = []
+            case['mode'] = 'dispense'
+            yield case
+            continue
+        if rng.random() < 0.1:
+            respawn_case(rng, states, case)
+            case['items'] = []
+            case['mode'] = 'dispense'
+            yield case
+            continue
+        if rng.random() < 0.15:
+            anchor_case(rng, states, case)
+            case['items'] = []
+            case['mode'] = 'dispense'
+            yield case
+            continue
         cells = []
         item = rng.choice(ITEMS)
         if rng.random() < 0.15:
@@ -83,8 +212,14 @@ def cases(facts, count, seed):
         yield case
 
 
+def d_plain(item, count):
+    return d.plain(item, count)
+
+
 def kind(case, facts):
     first = facts.states[case['cells'][0][3]][0].split(':')[1]
+    if 'respawn_at' in case:
+        return f'respawn at {first}'
     item = case['use_item']['item']
     item = item.split('"')[1].split(':')[1] if item != '-' else 'empty hand'
     return f'{item} on {first}'
@@ -119,13 +254,15 @@ def main():
     rust = h.split_cases((work / 'rust.txt').read_text(), ignore)
     assert len(native) == len(rust) == len(all_cases), (len(native), len(rust), len(all_cases))
     groups, errors = {}, {}
-    planted = eaten = 0
+    planted = eaten = respawned = exploded = 0
     for case, a, b in zip(all_cases, native, rust):
         if a and a[0].startswith('error'):
             errors.setdefault(a[0], []).append(case)
             continue
         planted += any(line.startswith('set 0,1,0') for line in a)
         eaten += any(line.startswith('held') and not line.endswith('using -') for line in a)
+        respawned += any(line.startswith('respawn ') and line != 'respawn none' and 'respawn_at' in case for line in a)
+        exploded += any(line.endswith(' minecraft:explode') for line in a)
         if not d.same(a, b):
             groups.setdefault(kind(case, facts), []).append((case, a, b))
     for name, entries in sorted(errors.items(), key=lambda e: -len(e[1])):
@@ -133,13 +270,14 @@ def main():
     for name, entries in sorted(groups.items(), key=lambda e: -len(e[1])):
         print(f'{name}: {len(entries)} differing')
         for case, a, b in entries[:args.show]:
-            print('  case ' + d.describe(case, facts) + ' use=' + json.dumps(case['use_item']))
+            print('  case ' + d.describe(case, facts) + ' use=' + json.dumps(case.get('use_item', case.get('respawn_at'))))
             print('   native ' + ' | '.join(sorted(a)))
             print('   rust   ' + ' | '.join(sorted(b)))
     total = sum(len(v) for v in groups.values())
     skipped = sum(len(v) for v in errors.values())
     print(f'{len(all_cases) - total - skipped}/{len(all_cases) - skipped} cases match ({skipped} oracle errors); '
-          f'vanilla planted in {planted} and started eating in {eaten}')
+          f'vanilla planted in {planted}, started eating in {eaten}, exploded {exploded} times and found a respawn '
+          f'spot in {respawned}')
     h.finish(total + skipped)
 
 
