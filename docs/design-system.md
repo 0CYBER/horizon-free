@@ -59,7 +59,9 @@ colour as a flat veil so text keeps its contrast whatever the world shows: `VEIL
 every page and in a world, `HOME_VEIL` (0.80) on the title's home page, which shows more of the
 world and keeps to `ink` and `ink_soft`. Muted text over the backdrop is `BACKDROP_MUTED`
 (`#9fa3ae`). A test holds every pair to AA over a backdrop of luminance 0.77 (the snowiest title
-panorama measured reaches 0.49), on the bare veil and on a selected row's plate.
+panorama measured reaches 0.49), on the bare veil and on a selected row's plate. Their plates
+are the dark `ink` at 8 % and 14 % rather than `plate_soft` and `plate`: over the veil they come
+out the same, and they stay visible over a bright backdrop.
 
 ### Type
 
@@ -116,9 +118,10 @@ Geist (400, 500, 600) and Geist Mono (400), bundled under the SIL Open Font Lice
 - **Segmented control / tabs**: a `plate_soft` pill; the selected segment is an `ink` pill with
   `page` text that slides over `move`.
 - **Navigation**: text only. Launcher: a top bar with the mark and "Horizon" on the left and
-  the pages on the right, `label` size, `muted`, the current one `ink`. Game menus keep their
-  sidebar layout (it suits a controller), but as a plain column of text items on the page
-  colour, the current one in `ink` with a 2 px accent tick, no pill and no separate panel tint.
+  the pages on the right, `label` size, `muted`, the current one `ink` on a soft pill. Game
+  menus keep their sidebar layout (it suits a controller), but as a plain column of text items
+  under the mark, with no panel tint and no border: the current one `ink` on a soft pill that
+  slides to it.
 - **Page header**: `display` title, then one `body` line in `muted`, 56 characters at most.
 - **Notices and dialogs**: a `plate_soft` plate, radius 12, 16–24 padding, no border; a 6 px dot
   in `danger` (or `accent`) leads the title. Actions are buttons in a row below.
