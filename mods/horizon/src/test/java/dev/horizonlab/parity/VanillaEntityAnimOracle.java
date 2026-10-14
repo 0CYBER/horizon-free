@@ -7,6 +7,10 @@ import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
+import com.mojang.blaze3d.vertex.BufferBuilder;
+import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.blaze3d.vertex.VertexConsumer;
+import com.mojang.math.Axis;
 import net.minecraft.SharedConstants;
 import net.minecraft.client.model.EntityModel;
 import net.minecraft.client.model.geom.LayerDefinitions;
@@ -21,7 +25,16 @@ import net.minecraft.server.Bootstrap;
  * fields, runs the real setupAnim and writes every part's pose.
  *
  * Input lines: "layer-key ModelClass|case-json" where case-json is an object of state field
- * name to value. Output lines: {layer, case, parts:{path:[x,y,z,xRot,yRot,zRot,xScale,yScale,zScale,visible]}}.
+ * name to value. Output lines: {layer, case, parts:{path:[x,y,z,xRot,yRot,zRot,xScale,yScale,zScale,visible]},
+ * vertices:{path:{n, f, p, d}}}.
+ *
+ * `vertices` renders the posed model the way ModelPart.render does (translateAndRotate on a
+ * PoseStack, then Cube.compile: PoseStack.Pose.transformNormal once per polygon and
+ * VertexConsumer.addVertex/setNormal per vertex) under LivingEntityRenderer's root transform:
+ * rotateDegrees(YP, 180 - "@rootYaw"), scale(-1, -1, 1), scale("@rootScale"),
+ * translate(0, -1.501, 0). Per drawn part: n = each vertex's normal as the signed bytes
+ * BufferBuilder.setNormal writes (its own normalIntValue), f = each polygon's float normal before
+ * packing, p = sum of x + 2y + 3z over the posed positions, d = all its vertices are one point.
  */
 public final class VanillaEntityAnimOracle {
     private static Field cubes;
@@ -62,6 +75,82 @@ public final class VanillaEntityAnimOracle {
     }
 
     private static final List<String> CLASS_NAMES = new ArrayList<>();
+
+    private static Method normalIntValue;
+
+    /** Records what Cube.compile hands its VertexConsumer: each vertex's position and normal. */
+    private static final class Capture implements VertexConsumer {
+        final List<float[]> vertices = new ArrayList<>();
+        private float[] current;
+
+        @Override
+        public VertexConsumer addVertex(float x, float y, float z) {
+            current = new float[] {x, y, z, Float.NaN, Float.NaN, Float.NaN};
+            vertices.add(current);
+            return this;
+        }
+
+        @Override
+        public VertexConsumer setNormal(float x, float y, float z) {
+            current[3] = x;
+            current[4] = y;
+            current[5] = z;
+            return this;
+        }
+
+        @Override public VertexConsumer setColor(int r, int g, int b, int a) { return this; }
+        @Override public VertexConsumer setColor(int color) { return this; }
+        @Override public VertexConsumer setUv(float u, float v) { return this; }
+        @Override public VertexConsumer setUv1(int u, int v) { return this; }
+        @Override public VertexConsumer setUv2(int u, int v) { return this; }
+        @Override public VertexConsumer setUv3(float u, float v) { return this; }
+        @Override public VertexConsumer setLineWidth(float width) { return this; }
+
+        JsonObject json() throws Exception {
+            var packed = new JsonArray();
+            var floats = new JsonArray();
+            double sum = 0;
+            boolean degenerate = true;
+            float[] first = vertices.get(0);
+            for (int i = 0; i < vertices.size(); i++) {
+                float[] v = vertices.get(i), corner = vertices.get(i - i % 4);
+                for (int c = 3; c < 6; c++) packed.add((byte) normalIntValue.invoke(null, v[c]));
+                if (i % 4 == 0) {
+                    for (int c = 3; c < 6; c++) floats.add(Float.isFinite(v[c]) ? v[c] : 0.0F);
+                } else if (!Arrays.equals(v, 3, 6, corner, 3, 6)) {
+                    throw new IllegalStateException("normal changes inside a polygon");
+                }
+                sum += v[0] + 2.0 * v[1] + 3.0 * v[2];
+                degenerate &= v[0] == first[0] && v[1] == first[1] && v[2] == first[2];
+            }
+            var o = new JsonObject();
+            o.add("n", packed);
+            o.add("f", floats);
+            o.addProperty("p", sum);
+            o.addProperty("d", degenerate);
+            return o;
+        }
+    }
+
+    /** ModelPart.render, keeping each part's vertices apart under its path. */
+    @SuppressWarnings("unchecked")
+    private static void render(String path, ModelPart part, PoseStack poseStack, JsonObject out) throws Exception {
+        if (!part.visible) return;
+        var cubeList = (List<ModelPart.Cube>) cubes.get(part);
+        var kids = (Map<String, ModelPart>) children.get(part);
+        if (cubeList.isEmpty() && kids.isEmpty()) return;
+        poseStack.pushPose();
+        part.translateAndRotate(poseStack);
+        if (!part.skipDraw) {
+            var capture = new Capture();
+            for (ModelPart.Cube cube : cubeList)
+                cube.compile(poseStack.last(), capture, 0xF000F0, net.minecraft.client.renderer.texture.OverlayTexture.NO_OVERLAY, -1);
+            if (!capture.vertices.isEmpty()) out.add(path, capture.json());
+        }
+        for (var entry : kids.entrySet())
+            render(path.isEmpty() ? entry.getKey() : path + "/" + entry.getKey(), entry.getValue(), poseStack, out);
+        poseStack.popPose();
+    }
 
     private static Class<?> raw(java.lang.reflect.Type t, Map<java.lang.reflect.TypeVariable<?>, java.lang.reflect.Type> env) {
         if (t instanceof Class<?> c) return c;
@@ -160,6 +249,8 @@ public final class VanillaEntityAnimOracle {
         cubes.setAccessible(true);
         children = ModelPart.class.getDeclaredField("children");
         children.setAccessible(true);
+        normalIntValue = BufferBuilder.class.getDeclaredMethod("normalIntValue", float.class);
+        normalIntValue.setAccessible(true);
         try (var zip = new java.util.zip.ZipFile(args[2])) {
             zip.stream().map(e -> e.getName()).filter(n -> n.startsWith("net/minecraft/client/model/") && n.endsWith(".class"))
                 .forEach(n -> CLASS_NAMES.add(n.substring(0, n.length() - 6).replace('/', '.')));
@@ -189,14 +280,36 @@ public final class VanillaEntityAnimOracle {
                 var type = stateClass(cls);
                 var state = (EntityRenderState) type.getDeclaredConstructor().newInstance();
                 state.getClass();
-                for (var entry : kase.entrySet()) set(state, entry.getKey(), entry.getValue());
+                for (var entry : kase.entrySet())
+                    if (!entry.getKey().startsWith("@")) set(state, entry.getKey(), entry.getValue());
                 hooks(state, kase);
                 if (state instanceof net.minecraft.client.renderer.entity.state.ArmedEntityRenderState armed && armed.swingAnimation > 0)
                     armed.currentSwing = new net.minecraft.world.entity.LivingEntity.SwingDescription(net.minecraft.world.InteractionHand.MAIN_HAND, net.minecraft.world.item.component.SwingAnimation.DEFAULT, 6);
                 model.setupAnim(state);
+                if (kase.has("@partScale")) {
+                    var override = kase.getAsJsonArray("@partScale");
+                    var part = baked.createPartLookup().apply(override.get(0).getAsString());
+                    if (part == null) throw new IllegalArgumentException("no part " + override.get(0));
+                    part.xScale = override.get(1).getAsFloat();
+                    part.yScale = override.get(2).getAsFloat();
+                    part.zScale = override.get(3).getAsFloat();
+                }
                 var parts = new JsonObject();
                 dump("", baked, parts);
                 result.add("parts", parts);
+                // LivingEntityRenderer.render/setupRotations, without the entity's position.
+                var poseStack = new PoseStack();
+                float yaw = kase.has("@rootYaw") ? kase.get("@rootYaw").getAsFloat() : 0.0F;
+                poseStack.rotateDegrees(Axis.YP, 180.0F - yaw);
+                poseStack.scale(-1.0F, -1.0F, 1.0F);
+                if (kase.has("@rootScale")) {
+                    var scale = kase.getAsJsonArray("@rootScale");
+                    poseStack.scale(scale.get(0).getAsFloat(), scale.get(1).getAsFloat(), scale.get(2).getAsFloat());
+                }
+                poseStack.translate(0.0F, -1.501F, 0.0F);
+                var vertices = new JsonObject();
+                render("", baked, poseStack, vertices);
+                result.add("vertices", vertices);
             } catch (Throwable error) {
                 var cause = error.getCause() != null ? error.getCause() : error;
                 result.addProperty("error", cause.toString());

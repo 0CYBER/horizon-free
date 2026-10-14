@@ -1,14 +1,17 @@
 //! Replays the render states of the vanilla entity-animation oracle through
-//! Horizon's `mobs::anim::setup` and writes every part's pose.
+//! Horizon's `mobs::anim::setup` and writes every part's pose, then draws the
+//! posed model with `mobs::render::draw` under the case's living-entity root
+//! transform and writes each drawn part's packed vertex normals.
 //!
 //! cargo run --profile fast -p horizon-client --example entity_anim_fixture -- \
 //!     RESOURCES VANILLA.jsonl OUT.jsonl
+use horizon_client::mesher::Vertex;
 use horizon_client::mobs::{
     Mob, MobData, MobTypes, Part, Species, allay,
     anim::{self, Poses, State},
     aquatic, body_anim as b_anim, equine, guardian,
     keyframes::AnimationState,
-    shulker, sniffer, species, tame,
+    render, shulker, sniffer, species, tame,
 };
 use horizon_core::geometry::Vec3;
 use serde_json::{Value, json};
@@ -42,6 +45,61 @@ fn walk(part: &Part, path: &str, poses: &Poses, out: &mut BTreeMap<String, Value
         };
         walk(c, &child, poses, out);
     }
+}
+
+/// Splits the vertices `render::draw` emitted for `part` into its drawn parts,
+/// following draw's walk: a hidden or zero-scaled part ends its branch, a
+/// skip-draw part keeps its children. Per part: n = packed normal bytes per
+/// vertex, p = sum of x + 2y + 3z over the positions.
+fn drawn(
+    part: &Part,
+    path: &str,
+    poses: &Poses,
+    vertices: &[Vertex],
+    cursor: &mut usize,
+    out: &mut BTreeMap<String, Value>,
+) {
+    let p = poses.pose(part);
+    if poses.is_hidden(part) || p[6] == 0.0 && p[7] == 0.0 && p[8] == 0.0 {
+        return;
+    }
+    let count = if poses.skips(part) {
+        0
+    } else {
+        part.polygons.len() * 4
+    };
+    if count > 0 {
+        let own = &vertices[*cursor..*cursor + count];
+        let normals: Vec<i8> = own.iter().flat_map(|v| v.normal[..3].to_vec()).collect();
+        let sum: f64 = own
+            .iter()
+            .map(|v| f64::from(v.pos[0]) + 2.0 * f64::from(v.pos[1]) + 3.0 * f64::from(v.pos[2]))
+            .sum();
+        out.insert(path.to_owned(), json!({"n": normals, "p": sum}));
+    }
+    *cursor += count;
+    for c in &part.children {
+        let child = if path.is_empty() {
+            c.name.clone()
+        } else {
+            format!("{path}/{}", c.name)
+        };
+        drawn(c, &child, poses, vertices, cursor, out);
+    }
+}
+
+/// LivingEntityRenderer's root transform without the entity's position:
+/// rotate 180 - yaw about Y, scale(-1, -1, 1), the renderer's own scale, then
+/// translate(0, -1.501, 0) (as `render::base_transform`).
+fn root_transform(case: &Value) -> glam::Mat4 {
+    let yaw = case["@rootYaw"].as_f64().unwrap_or(0.0) as f32;
+    let scale = case["@rootScale"].as_array().map_or(glam::Vec3::ONE, |s| {
+        glam::Vec3::from_array(std::array::from_fn(|i| s[i].as_f64().unwrap_or(1.0) as f32))
+    });
+    glam::Mat4::from_rotation_y((180.0 - yaw).to_radians())
+        * glam::Mat4::from_scale(glam::Vec3::new(-1.0, -1.0, 1.0))
+        * glam::Mat4::from_scale(scale)
+        * glam::Mat4::from_translation(glam::Vec3::new(0.0, -1.501, 0.0))
 }
 
 /// The entity-side values behind the render-state fields the case sets, for
@@ -518,9 +576,34 @@ fn main() -> horizon_client::Result<()> {
             }
             _ => anim::setup(&mob, s, p, &animations),
         }
+        // The harness's part-scale override, set after setupAnim as the oracle does.
+        if let Some(scale) = case["@partScale"].as_array() {
+            let pose = poses.get(scale[0].as_str().unwrap_or_default());
+            for i in 0..3 {
+                pose[6 + i] = scale[1 + i].as_f64().unwrap_or(1.0) as f32;
+            }
+        }
         let mut parts = BTreeMap::new();
         walk(&model, "", &poses, &mut parts);
-        out.push_str(&format!("{}\n", json!({"parts": parts})));
+        let mut emitted = Vec::new();
+        render::draw(
+            &model,
+            root_transform(case),
+            &poses,
+            [0.0, 0.0, 1.0, 1.0],
+            0xFFFF_FFFF,
+            240 | 240 << 8,
+            0,
+            &mut emitted,
+        );
+        let mut vertices = BTreeMap::new();
+        let mut cursor = 0;
+        drawn(&model, "", &poses, &emitted, &mut cursor, &mut vertices);
+        assert_eq!(cursor, emitted.len(), "{layer}: draw's walk changed");
+        out.push_str(&format!(
+            "{}\n",
+            json!({"parts": parts, "vertices": vertices})
+        ));
     }
     fs::write(&args[2], out)?;
     Ok(())
