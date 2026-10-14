@@ -148,7 +148,7 @@ pub fn paint(
                 &panel.duration,
                 (panel.x + 32) as f32,
                 (panel.y + 16) as f32,
-                0xff7f7f7f,
+                0xff808080,
                 true,
             );
         }

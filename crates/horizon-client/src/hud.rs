@@ -860,6 +860,7 @@ mod tests {
             inventory_effects::panels(480, [72, 37], 176, &[effect], 20.0, &|_| None, &|_| 60);
         batch.vertices.clear();
         assert!(inventory_effects::paint(&mut batch, &atlas, &panels, [0, 0]).is_none());
+        assert!(batch.vertices.iter().any(|v| v.color == 0xff808080));
         assert_eq!(batch.vertices[0].pos, [250.0, 37.0]);
         assert_eq!(batch.vertices[1].pos, [254.0, 37.0]);
         let background = atlas.sprites["gui/sprites/container/inventory/effect_background"];
