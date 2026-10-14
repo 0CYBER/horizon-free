@@ -181,7 +181,7 @@ jobs:
           name: ${{ matrix.asset }}
           path: dist/${{ matrix.asset }}
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 3
 
   publish:
     needs: [decide, build]
@@ -222,3 +222,4 @@ jobs:
         with:
           name: release-notes
           path: notes/
+          retention-days: 3

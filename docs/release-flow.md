@@ -229,3 +229,16 @@ time, on the Mac mini's runner, after preparing the resources again if the prepa
 The bugs session picks the issues up. The audit's logs are the run's `nightly-parity-logs` artifact; harnesses
 listed `linux_only` are skipped there (see above). By hand: `gh workflow run "nightly audit"` (add
 `-f dry_run=true` to leave issues alone).
+
+## Disk
+
+Releases ship often, so nothing they leave behind may grow without bound.
+
+- **Artifacts:** every upload keeps 3 days (nightly parity logs 7); a release's assets live on the release itself.
+- **Mac runners:** `tools/ci/runner-gc.sh` runs every 6 hours from launchd on the Mac mini, as a copy taken from main
+  (`~/.actions-runners/runner-gc.sh`, plist `dev.horizon.runner-gc`), never from a pull request's checkout. It skips a
+  runner in a job, removes a checkout's cargo build folders past 12 GB (`MAX_TARGET_GB`) and harness work folders
+  under `.local/` untouched for 3 days (`STALE_DAYS`), and keeps the 2 newest shared preparations (`KEEP_PREPARED`)
+  while no runner works. Runner builds go through the machine's sccache (`tools/ci/runner-env.sh`), so what it removes
+  comes back from the cache. Update the copy after changing the script:
+  `ssh macmini 'curl -fsSL https://raw.githubusercontent.com/ludovic111/horizon/main/tools/ci/runner-gc.sh -o ~/.actions-runners/runner-gc.sh'`.
