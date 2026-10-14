@@ -519,6 +519,13 @@ impl LevelAccess for GameLevel<'_> {
                 effect: PlayerEffect::DropItem(item),
                 ..
             } => self.pop_above(pos, item),
+            // Picking a sweet berry bush or cave vines: the harvest loot,
+            // popped before the pick sound draws its pitch.
+            LevelEvent::Player {
+                pos,
+                state,
+                effect: PlayerEffect::InteractLoot(table),
+            } => self.drop_interact_loot(pos, state, table),
             event => self.events.push(event),
         }
     }
@@ -2109,14 +2116,16 @@ impl Game<'_> {
                 game_master: false,
             };
             let at = Vec3::new(hit.point[0], hit.point[1], hit.point[2]);
+            let item = held.as_ref().map(|s| s.item.to_string());
             let result = self.with_level(|b, level, ticks| {
-                b.use_without_item(
+                b.use_item_on(
                     level,
                     ticks,
                     BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]),
                     face,
                     at,
                     player,
+                    item.as_deref(),
                 )
             });
             self.process_level_events()?;
@@ -2158,14 +2167,10 @@ impl Game<'_> {
             }
             return Ok(());
         }
-        if info.food.is_some()
-            && let Some(p) = self.player.as_ref()
-            && (p.health.food.food < 20 || self.creative)
-        {
-            // Consumable.startConsuming: held right click for consume_seconds.
-            if self.using.is_none() {
-                self.using = Some((self.selected, 0));
-            }
+        // Food that is also a block item (berries, carrots, potatoes) aimed at
+        // a block tries to place first: BlockItem.useOn eats only when the
+        // placement fails.
+        if !(info.block.is_some() && self.pick().is_some()) && self.start_eating(&info) {
             return Ok(());
         }
         if self.use_bone_meal(&stack)? || self.ignite_tnt(&stack)? {
@@ -2198,6 +2203,8 @@ impl Game<'_> {
             return Ok(());
         }
         if !self.may_build() {
+            // ItemStack.useOn passes in adventure mode; useItem eats.
+            self.start_eating(&info);
             return Ok(());
         }
         let face = match hit.face {
@@ -2223,6 +2230,11 @@ impl Game<'_> {
         let outcome = self.with_level(|b, level, ticks| b.place_block(level, ticks, &ctx));
         let PlaceOutcome::Placed { pos, state } = outcome else {
             self.process_level_events()?;
+            // BlockItem.useOn: a consumable that could not be placed is used,
+            // which ItemStack.useOn counts as a use of the item.
+            if self.start_eating(&info) {
+                self.stats.add("used", &stack.item, 1);
+            }
             return Ok(());
         };
         let target = [pos.x, pos.y, pos.z];
@@ -2239,25 +2251,18 @@ impl Game<'_> {
             }
         }
         self.swing_arm();
-        let sounds = self.res.facts.get(state).sounds.clone();
-        let center = [
-            f64::from(target[0]) + 0.5,
-            f64::from(target[1]) + 0.5,
-            f64::from(target[2]) + 0.5,
-        ];
-        // SolidBucketItem.getPlaceSound: the bucket's own empty sound.
+        // BlockItem.place's sound is among the level events;
+        // SolidBucketItem.getPlaceSound replaces it with the bucket's own.
         let solid_bucket = &*stack.item == "minecraft:powder_snow_bucket";
-        let place_sound = if solid_bucket {
-            "minecraft:item.bucket.empty_powder_snow"
-        } else {
-            &sounds.place
-        };
-        self.audio.play(
-            place_sound,
-            Some(center),
-            (sounds.volume + 1.0) / 2.0,
-            sounds.pitch * 0.8,
-        );
+        if solid_bucket {
+            for event in &mut self.level_events {
+                if let LevelEvent::Sound { pos: at, sound, .. } = event
+                    && *at == pos
+                {
+                    *sound = "minecraft:item.bucket.empty_powder_snow".into();
+                }
+            }
+        }
         self.process_level_events()?;
         // BlockItem.place: the used statistic and the placed_block trigger.
         self.stats.add("used", &stack.item, 1);
@@ -2270,6 +2275,22 @@ impl Game<'_> {
             self.inventory[self.selected] = Some(ItemStack::new("minecraft:bucket", 1));
         }
         Ok(())
+    }
+    /// `Consumable.startConsuming` for held food the player can eat
+    /// (`Player.canEat`): the right click is held for `consume_seconds`.
+    fn start_eating(&mut self, info: &horizon_client::items::ItemInfo) -> bool {
+        if info.food.is_none()
+            || !self
+                .player
+                .as_ref()
+                .is_some_and(|p| p.health.food.food < 20 || self.creative)
+        {
+            return false;
+        }
+        if self.using.is_none() {
+            self.using = Some((self.selected, 0));
+        }
+        true
     }
     fn consume_held(&mut self) {
         if self.creative {

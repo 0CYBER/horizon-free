@@ -221,6 +221,23 @@ impl GameLevel<'_> {
             delay: 10,
         });
     }
+    /// `Block.dropFromBlockInteractLootTable` with `Block.popResource` of
+    /// every stack.
+    pub(super) fn drop_interact_loot(&mut self, pos: BlockPos, state: BlockStateId, table: &str) {
+        let drops = self.items.interact_loot(
+            table,
+            self.registry,
+            state,
+            &mut self.world.random,
+            self.rand_sequences,
+            self.seed,
+        );
+        for stack in drops {
+            if &*stack.item != "minecraft:air" && stack.count > 0 {
+                self.pop_resource([pos.x, pos.y, pos.z], stack);
+            }
+        }
+    }
     /// `Block.dropResources(state, level, pos, blockEntity)`: the block's loot
     /// (from its random sequence, else the level random), with what its block
     /// entity copies into it, popped at once.
