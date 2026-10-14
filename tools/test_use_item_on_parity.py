@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Compare a player's right click on a block with vanilla's, for items that are
 both food and blocks (sweet and glow berries, carrots, potatoes), for sweet
-berry bushes, for spawn eggs used on a monster spawner and for respawn anchors.
+berry bushes, for spawn eggs used on a monster spawner, for respawn anchors and
+for beds in the Nether and the End.
 
 Every case has a block at the origin, something above it, and a player three
 blocks south, survival or creative, hungry or full, sneaking or not, who
@@ -17,7 +18,10 @@ explode elsewhere (`RespawnAnchorBlock`, through the stand-in level's real
 `ServerExplosion`, with water at the anchor). Respawn cases call
 `ServerPlayer.findRespawnAndUseSpawnBlock` on an anchor among blocks
 (`RespawnAnchorBlock.findStandUpPosition` through `DismountHelper`): the
-position, the yaw that faces the anchor and the charge it uses. Horizon runs
+position, the yaw that faces the anchor and the charge it uses. Beds and straw
+beds clicked (head or foot, whole or broken) in the Nether and the End blow up
+or fall apart (`AbstractBedBlock.useWithoutItem` under the dimension's
+`bed_rule`: `BedBlock.destroyOnUse`, `StrawBedBlock.destroyBed`). Horizon runs
 `use_item_as_player` on that hit in a headless game
 (`HORIZON_DISPENSE_FIXTURE`). Both print block changes, dropped items, level
 events, sounds, game events, the used statistic, the held stack, the item the
@@ -76,6 +80,39 @@ def respawn_case(rng, states, case):
     case['cells'] = cells
 
 
+BED_COLORS = ['red', 'white', 'black', 'cyan', 'lime']
+FACINGS = {'north': (0, -1), 'south': (0, 1), 'west': (-1, 0), 'east': (1, 0)}
+
+
+def bed_case(rng, states, case):
+    """A bed (or straw bed) clicked in the Nether or the End, among blocks."""
+    name = 'straw_bed' if rng.random() < 0.25 else rng.choice(BED_COLORS) + '_bed'
+    facing = rng.choice(list(FACINGS))
+    dx, dz = FACINGS[facing]
+    # The clicked block is the origin; the other half lies along the facing.
+    part = rng.choice(['head', 'foot'])
+    other = (-dx, 0, -dz) if part == 'head' else (dx, 0, dz)
+    cells = [[0, 0, 0, states.get(name, facing=facing, part=part, occupied='false')],
+             [0, -1, 0, states.get(rng.choice(['netherrack', 'end_stone', 'obsidian', 'stone']))],
+             [other[0], -1, other[2], states.get('stone')]]
+    if rng.random() < 0.9:
+        cells.append([*other, states.get(name, facing=facing, part='foot' if part == 'head' else 'head', occupied='false')])
+    taken = {tuple(c[:3]) for c in cells}
+    for _ in range(rng.choice([0, 3, 10, 30])):
+        p = (rng.randrange(-3, 4), rng.randrange(-2, 3), rng.randrange(-3, 4))
+        if p in taken:
+            continue
+        taken.add(p)
+        cells.append([*p, states.get(rng.choice(AROUND))])
+    case['dim'] = rng.choice(['nether', 'end'])
+    item = rng.choice(['-', '-', 'apple', 'stone', 'glowstone'])
+    case['use_item'] = {'item': '-' if item == '-' else d_plain(item, 1), 'creative': rng.random() < 0.2,
+                        'sneaking': rng.random() < 0.1, 'food': 20, 'distance': 12}
+    if rng.random() < 0.2:
+        case['rules'] = {'block_explosion_drop_decay': False}
+    case['cells'] = cells
+
+
 def anchor_case(rng, states, case):
     """A respawn anchor clicked in the Nether or the Overworld, with blocks
     and water around it."""
@@ -120,6 +157,12 @@ def cases(facts, count, seed):
         case = {**h.environment(rng), 'pos': [0, 0, 0]}
         case.pop('raining', None)
         case.pop('thundering', None)
+        if rng.random() < 0.1:
+            bed_case(rng, states, case)
+            case['items'] = []
+            case['mode'] = 'dispense'
+            yield case
+            continue
         if rng.random() < 0.1:
             respawn_case(rng, states, case)
             case['items'] = []

@@ -164,8 +164,10 @@ impl Game<'_> {
             }
         }
         self.world.game_time = case["time"].as_i64().unwrap_or(0);
-        if case["dim"].as_str() == Some("nether") {
-            self.dim = super::Dim::Nether;
+        match case["dim"].as_str() {
+            Some("nether") => self.dim = super::Dim::Nether,
+            Some("end") => self.dim = super::Dim::End,
+            _ => {}
         }
         // The oracle level's clock stands at day time 6000.
         self.world.day_time = 6000;

@@ -240,6 +240,59 @@ impl Game<'_> {
         ];
         self.block_explosion(center, in_water.then_some(pos))
     }
+    /// `BedRule.destroyOnUse` of the dimension's `bed_rule` and
+    /// `straw_bed_rule`: true in the Nether and the End.
+    pub(super) fn beds_destroy_on_use(&self) -> bool {
+        self.dim != Dim::Overworld
+    }
+    /// `AbstractBedBlock.useWithoutItem` where the bed rule destroys on use
+    /// (the bed's head at `head`): `BedBlock.destroyOnUse` removes both
+    /// halves and explodes; `StrawBedBlock` just falls apart.
+    pub(super) fn destroy_bed_on_use(&mut self, head: [i32; 3]) -> Result<()> {
+        let state = self.world.block(head[0], head[1], head[2]);
+        let name = self.res.facts.get(state).name.clone();
+        let center = [
+            f64::from(head[0]) + 0.5,
+            f64::from(head[1]) + 0.5,
+            f64::from(head[2]) + 0.5,
+        ];
+        if &*name == "minecraft:straw_bed" {
+            // StrawBedBlock.destroyBed.
+            self.audio.play(
+                "minecraft:block.straw_bed.break_leave",
+                Some(center),
+                1.0,
+                1.0,
+            );
+            return self.level_set(head, self.world.air);
+        }
+        // removeBlock(head), then the foot behind it if it is still this bed.
+        let facing = self
+            .res
+            .assets
+            .registry
+            .state(state)
+            .and_then(|s| s.properties.get("facing").cloned())
+            .unwrap_or_default();
+        let back = match facing.as_str() {
+            "north" => [0, 0, 1],
+            "south" => [0, 0, -1],
+            "west" => [1, 0, 0],
+            _ => [-1, 0, 0],
+        };
+        self.level_set(head, self.world.air)?;
+        let foot = [head[0] + back[0], head[1], head[2] + back[2]];
+        if self
+            .res
+            .facts
+            .get(self.world.block(foot[0], foot[1], foot[2]))
+            .name
+            == name
+        {
+            self.level_set(foot, self.world.air)?;
+        }
+        self.block_explosion(center, None)
+    }
     /// `Level.explode(null, badRespawnPointExplosion(center), calculator,
     /// center, 5, true, ExplosionInteraction.BLOCK)` (beds and anchors):
     /// `water_at` is the block that resists like water.
