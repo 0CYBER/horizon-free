@@ -427,6 +427,32 @@ fn remainder(item: &str) -> Option<&'static str> {
     }
 }
 impl Furnace {
+    /// `AbstractFurnaceBlockEntity.setItem` on the input slot: anything but
+    /// the same item with the same components restarts cooking, with the
+    /// total time of the new input's recipe (200 ticks without one).
+    pub fn set_input(&mut self, recipes: &Recipes, stack: Option<ItemStack>) {
+        let same = match (&self.items[0], &stack) {
+            (Some(old), Some(new)) => old.same_item_same_components(new),
+            _ => false,
+        };
+        self.items[0] = stack;
+        if !same {
+            self.cooking_total = self.items[0]
+                .as_ref()
+                .and_then(|input| recipes.cook(self.kind.recipe_type(), input))
+                .map_or(200, |recipe| total_time(recipe.time, self.speed));
+            self.cooking_timer = 0;
+        }
+    }
+    /// A menu click wrote its slots into `items`, and `before` was the input
+    /// slot until then: the menu called `setItem` on it only if it changed
+    /// (`Slot.setByPlayer`; partial takes and merges keep the stack).
+    pub fn input_clicked(&mut self, recipes: &Recipes, before: Option<ItemStack>) {
+        if self.items[0] != before {
+            let after = std::mem::replace(&mut self.items[0], before);
+            self.set_input(recipes, after);
+        }
+    }
     /// One server tick. Returns `Some(lit)` when the LIT block state must change.
     pub fn tick(
         &mut self,

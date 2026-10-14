@@ -8,7 +8,9 @@ sequences covering every ContainerInput (pickup, quick move, swap, clone,
 throw, the three quick craft drags, pickup all) over the player inventory,
 crafting table, chests, hopper, dispenser, shulker box, the furnaces, the
 brewing stand, the crafter (the client's menu, and the server's over the block
-entity with slot state packets) and the loom (with its pattern buttons). After
+entity with slot state packets), the loom (with its pattern buttons) and the
+server's furnace menus over their block entities (`*_be`: a new input restarts
+cooking, other clicks keep its progress). After
 every click the slots, carried stack, data slots and drops are compared.
 """
 import argparse
@@ -22,8 +24,9 @@ except ImportError:
 
 MENUS = {'inventory': 46, 'crafting': 46, 'chest1': 45, 'chest2': 54, 'chest3': 63, 'chest4': 72, 'chest5': 81,
          'chest6': 90, 'hopper': 41, 'dispenser': 45, 'shulker': 63, 'furnace': 39, 'blast_furnace': 39, 'smoker': 39, 'brewing': 41, 'crafter': 46,
-         'crafter_be': 46, 'loom': 40}
-DATA = {'furnace': 4, 'blast_furnace': 4, 'smoker': 4, 'brewing': 4, 'crafter': 10, 'crafter_be': 10, 'loom': 1}
+         'crafter_be': 46, 'loom': 40, 'furnace_be': 39, 'blast_furnace_be': 39, 'smoker_be': 39}
+DATA = {'furnace': 4, 'blast_furnace': 4, 'smoker': 4, 'brewing': 4, 'crafter': 10, 'crafter_be': 10, 'loom': 1,
+        'furnace_be': 4, 'blast_furnace_be': 4, 'smoker_be': 4}
 DYES = ['white', 'orange', 'magenta', 'light_blue', 'yellow', 'lime', 'pink', 'gray', 'light_gray', 'cyan', 'purple',
         'blue', 'brown', 'green', 'red', 'black']
 PATTERNS = ['minecraft:' + p for p in ('base', 'square_bottom_left', 'stripe_bottom', 'cross', 'border', 'gradient',
@@ -180,13 +183,29 @@ def main():
             slots[0] = '-'
         if menu in ('inventory', 'crafting') and rng.random() < 0.6:
             g.recipe(slots, 2 if menu == 'inventory' else 3)
+        if menu.endswith('_be') and menu != 'crafter_be' and rng.random() < 0.7:
+            # Mostly something cooking: a smeltable input, the same in the
+            # inventory and in hand, so merges and partial takes happen.
+            food = snbt('minecraft:' + rng.choice(['raw_iron', 'beef', 'potato', 'sand', 'cobblestone', 'oak_log']),
+                        rng.choice([1, 2, 5, 32, 64]))
+            slots[0] = food
+            for i in rng.sample(range(3, size), 4):
+                slots[i] = food if rng.random() < 0.6 else g.stack()
+            carried_food = food if rng.random() < 0.5 else None
+        else:
+            carried_food = None
         def datum(i):
+            if menu.endswith('_be') and menu != 'crafter_be':
+                # litTimeRemaining, litTotalTime, cookingTimer, cookingTotalTime
+                return [rng.choice([0, 37, 1600]), 1600, rng.choice([0, 1, 57, 199]), rng.choice([200, 100])][i]
             if menu in ('crafter', 'crafter_be'):
                 return rng.choice([0, 0, 1])
             if menu == 'loom':
                 return rng.choice([-1, -1, 0, 0, 1, 2, 3, 30])
             return 0
         carried = (g.loom_stack() if menu == 'loom' else g.stack()) if rng.random() < 0.5 else '-'
+        if carried_food is not None:
+            carried = carried_food
         cases.append({'menu': menu, 'creative': rng.random() < 0.25, 'slots': slots,
                       'carried': carried, 'data': [datum(i) for i in range(DATA.get(menu, 0))],
                       'ops': g.ops(size, menu)})

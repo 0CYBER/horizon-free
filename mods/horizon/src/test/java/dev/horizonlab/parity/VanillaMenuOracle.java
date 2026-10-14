@@ -82,6 +82,9 @@ public final class VanillaMenuOracle {
         @Override public void playSeededSound(net.minecraft.world.entity.Entity p, double x, double y, double z, net.minecraft.core.Holder<net.minecraft.sounds.SoundEvent> s, net.minecraft.sounds.SoundSource c, float v, float pitch, long seed) { }
         @Override public boolean addFreshEntity(net.minecraft.world.entity.Entity e) { return true; }
         @Override public void gameEvent(net.minecraft.core.Holder<net.minecraft.world.level.gameevent.GameEvent> e, BlockPos p, net.minecraft.world.level.gameevent.GameEvent.Context c) { }
+        // BlockEntity.setChanged of the "*_be" furnaces: no chunks here.
+        @Override public void blockEntityChanged(BlockPos pos) { }
+        @Override public void updateNeighbourForOutputSignal(BlockPos pos, net.minecraft.world.level.block.Block block) { }
     }
 
     static final class FakePlayer extends ServerPlayer {
@@ -141,6 +144,31 @@ public final class VanillaMenuOracle {
                     Field data = net.minecraft.world.level.block.entity.CrafterBlockEntity.class.getDeclaredField("containerData");
                     data.setAccessible(true);
                     yield new CrafterMenu(0, inv, crafter, (ContainerData) data.get(crafter));
+                } catch (ReflectiveOperationException e) {
+                    throw new AssertionError(e);
+                }
+            }
+            case "furnace_be", "blast_furnace_be", "smoker_be" -> {
+                // The server's menu: the block entity is the container and its data,
+                // so AbstractFurnaceBlockEntity.setItem restarts cooking.
+                net.minecraft.world.level.block.entity.AbstractFurnaceBlockEntity be = switch (kind) {
+                    case "furnace_be" -> new net.minecraft.world.level.block.entity.FurnaceBlockEntity(BlockPos.ZERO,
+                        net.minecraft.world.level.block.Blocks.FURNACE.defaultBlockState());
+                    case "blast_furnace_be" -> new net.minecraft.world.level.block.entity.BlastFurnaceBlockEntity(BlockPos.ZERO,
+                        net.minecraft.world.level.block.Blocks.BLAST_FURNACE.defaultBlockState());
+                    default -> new net.minecraft.world.level.block.entity.SmokerBlockEntity(BlockPos.ZERO,
+                        net.minecraft.world.level.block.Blocks.SMOKER.defaultBlockState());
+                };
+                be.setLevel(player.world);
+                try {
+                    Field data = net.minecraft.world.level.block.entity.AbstractFurnaceBlockEntity.class.getDeclaredField("dataAccess");
+                    data.setAccessible(true);
+                    ContainerData furnaceData = (ContainerData) data.get(be);
+                    yield switch (kind) {
+                        case "furnace_be" -> new FurnaceMenu(0, inv, be, furnaceData);
+                        case "blast_furnace_be" -> new BlastFurnaceMenu(0, inv, be, furnaceData);
+                        default -> new SmokerMenu(0, inv, be, furnaceData);
+                    };
                 } catch (ReflectiveOperationException e) {
                     throw new AssertionError(e);
                 }

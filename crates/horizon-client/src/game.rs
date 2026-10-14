@@ -4015,7 +4015,8 @@ impl Game<'_> {
                 .container
                 .and_then(|k| self.world.block_entities.get_mut(&k))
         {
-            f.cooking_timer = 0;
+            // AbstractFurnaceBlockEntity.setItem: only a new input restarts cooking.
+            f.input_clicked(&self.res.recipes, before[0].clone());
         }
         self.apply_equipment();
         true
@@ -4205,15 +4206,8 @@ impl Game<'_> {
             }
             return;
         }
-        if is_furnace
-            && slot == 300
-            && let Some(BlockEntity::Furnace(f)) = self
-                .container
-                .and_then(|k| self.world.block_entities.get_mut(&k))
-        {
-            // Changing the input restarts cooking (AbstractFurnaceBlockEntity.setItem).
-            f.cooking_timer = 0;
-        }
+        // Changing the input restarts cooking (AbstractFurnaceBlockEntity.setItem).
+        let furnace_input = (is_furnace && slot == 300).then(|| self.slot_mut(300).clone());
         if slot == 200 {
             // ResultSlot: take the crafted stack and consume one of each ingredient.
             let mut crafted = 0;
@@ -4324,8 +4318,15 @@ impl Game<'_> {
             }
             (Some(c), Some(s)) => (Some(c), Some(s)),
         };
-        *self.slot_mut(slot) = new_slot;
         self.carried = new_carried;
+        *self.slot_mut(slot) = new_slot;
+        if let Some(before) = furnace_input
+            && let Some(BlockEntity::Furnace(f)) = self
+                .container
+                .and_then(|k| self.world.block_entities.get_mut(&k))
+        {
+            f.input_clicked(&self.res.recipes, before);
+        }
     }
     /// ItemEntityRenderer: items bob and spin; blocks render as small cubes.
     fn entity_geometry(&mut self, camera: glam::DVec3, alpha: f64) -> Vec<Vertex> {
