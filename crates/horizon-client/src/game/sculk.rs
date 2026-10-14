@@ -507,6 +507,19 @@ impl Game<'_> {
         let ctx = self.who_context(who, state);
         self.post_game_event(event, center((pos[0], pos[1], pos[2])), ctx);
     }
+    /// `LivingEntity.actuallyHurt`'s damage vibration, heard as the hit lands;
+    /// the end-of-tick scan then knows this damage.
+    pub(super) fn mob_damage_event(&mut self, id: u32) {
+        if let Some(t) = self
+            .mobs
+            .iter()
+            .find(|m| m.id == id)
+            .and_then(|m| m.last_damage.map(|(_, t)| t))
+        {
+            self.sculk.damaged.insert(id, t);
+        }
+        self.post_entity_event("minecraft:entity_damage", Who::Mob(id));
+    }
     /// A game event of an entity at its position.
     pub(super) fn post_entity_event(&mut self, event: &'static str, who: Who) {
         let at = match who {

@@ -117,6 +117,7 @@ pub fn accepts_damage(m: &mut Mob, source: &Damage) -> bool {
     let direct = matches!(
         source.kind,
         DamageKind::PlayerAttack
+            | DamageKind::MaceSmash
             | DamageKind::MobAttack
             | DamageKind::Arrow
             | DamageKind::Thrown

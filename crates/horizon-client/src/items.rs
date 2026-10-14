@@ -70,6 +70,8 @@ pub struct ItemInfo {
     pub blocks_attacks: Option<BlocksAttacks>,
     /// `weapon.disable_blocking_for_seconds` (axes).
     pub disable_blocking_seconds: f32,
+    /// `weapon.item_damage_per_attack`, when the item is a weapon.
+    pub weapon_damage: Option<u32>,
     /// `use_effects.speed_multiplier` (UseEffects.DEFAULT: 0.2).
     pub use_speed: f32,
     /// `glider` (elytra).
@@ -439,6 +441,11 @@ impl Items {
                     disable_blocking_seconds: c["minecraft:weapon"]["disable_blocking_for_seconds"]
                         .as_f64()
                         .unwrap_or(0.0) as f32,
+                    weapon_damage: c["minecraft:weapon"].is_object().then(|| {
+                        c["minecraft:weapon"]["item_damage_per_attack"]
+                            .as_u64()
+                            .unwrap_or(1) as u32
+                    }),
                     equip_asset: c["minecraft:equippable"]["asset_id"]
                         .as_str()
                         .map(str::to_owned),

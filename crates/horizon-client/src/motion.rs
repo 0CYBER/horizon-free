@@ -143,6 +143,13 @@ pub enum MotionEvent {
     InsidePortal {
         pos: BlockPos,
     },
+    /// `ServerPlayer.checkFallDamage` after a mace smash: block particles
+    /// from the landing block, more the further the fall.
+    SmashLanding {
+        state: BlockStateId,
+        position: BlockPos,
+        fall_distance: f64,
+    },
 }
 pub struct PlayerMotion {
     pub position: Vec3,
@@ -200,6 +207,9 @@ pub struct PlayerMotion {
     pub events: Vec<MotionEvent>,
     pub attributes: LiveAttributes<Box<dyn FnMut() -> i32>>,
     pub impulse: ImpulseContext,
+    /// `ServerPlayer.spawnExtraParticlesOnFall`: a mace smash on a grounded
+    /// target makes the next landing throw up the block below.
+    pub spawn_extra_particles_on_fall: bool,
     pub health: crate::health::PlayerHealth,
     /// Status effects and armor protection seen by movement and damage.
     pub status: crate::effects::StatusFlags,
@@ -259,6 +269,7 @@ impl PlayerMotion {
             health: crate::health::PlayerHealth::new(&resources.health, &mut attributes)?,
             status: crate::effects::StatusFlags::default(),
             impulse: ImpulseContext::default(),
+            spawn_extra_particles_on_fall: false,
             position,
             velocity: Vec3::ZERO,
             ground: GroundState::default(),
@@ -1385,6 +1396,15 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
         state: BlockStateId,
         position: BlockPos,
     ) -> Result<()> {
+        if self.player.spawn_extra_particles_on_fall && grounded && self.player.fall_distance > 0.0
+        {
+            self.player.events.push(MotionEvent::SmashLanding {
+                state,
+                position,
+                fall_distance: self.player.fall_distance,
+            });
+            self.player.spawn_extra_particles_on_fall = false;
+        }
         self.player.events.push(MotionEvent::Landing {
             dy,
             grounded,

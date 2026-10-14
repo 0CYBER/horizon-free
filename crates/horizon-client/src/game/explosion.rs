@@ -3,14 +3,64 @@
 //! draws), entity damage with exposure and knockback, block interaction with
 //! merged drops and TNT chain priming, and optional fire.
 use super::Game;
-use horizon_client::{Result, blocks::Fluid, items::ItemStack};
+use horizon_client::{Result, blocks::Fluid, collisions::SceneCollisions, items::ItemStack};
 use horizon_core::{
-    geometry::Vec3,
+    geometry::{Vec3, VoxelShape},
     position::BlockPos,
     random::{LegacyRandom, RandomSource},
 };
-use horizon_world::java_hash_map::{JavaHashMap, JavaKey};
-use std::cmp::Ordering;
+use horizon_world::{
+    collision_context::{CollisionContext, CollisionEntity, CollisionItem},
+    entity_obstruction::EntityIdentity,
+    java_hash_map::{JavaHashMap, JavaKey},
+    registry::BlockStateId,
+    world_ray::{RayBlockMode, RayFluidMode, RayWorld, clip_world},
+};
+use std::{cmp::Ordering, io};
+
+/// `Level.clip` with `ClipContext.Block.COLLIDER`, no fluids and the
+/// collision context of the entity whose exposure is measured.
+struct ColliderRays<'a, 'r> {
+    scene: SceneCollisions<'a, 'r>,
+    context: CollisionContext<'static>,
+}
+impl RayWorld for ColliderRays<'_, '_> {
+    type Error = io::Error;
+    type Block = BlockStateId;
+    type Fluid = ();
+    fn block_state(&mut self, p: BlockPos) -> io::Result<BlockStateId> {
+        Ok(self.scene.world.block(p.x, p.y, p.z))
+    }
+    fn fluid_state(&mut self, _: BlockPos) -> io::Result<()> {
+        Ok(())
+    }
+    fn block_shape(
+        &mut self,
+        state: BlockStateId,
+        p: BlockPos,
+        _: RayBlockMode,
+    ) -> io::Result<VoxelShape> {
+        let binding = self.scene.binding;
+        binding
+            .collision_shape_with_context(&mut self.scene, state, p, &self.context)
+            .map_err(|e| io::Error::other(format!("{e:?}")))
+    }
+    fn interaction_shape(&mut self, _: BlockStateId, _: BlockPos) -> io::Result<VoxelShape> {
+        Ok(VoxelShape::empty())
+    }
+    fn fluid_is_source(&mut self, _: ()) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn fluid_is_empty(&mut self, _: ()) -> io::Result<bool> {
+        Ok(true)
+    }
+    fn fluid_is_water(&mut self, _: ()) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn fluid_shape(&mut self, _: (), _: BlockPos) -> io::Result<VoxelShape> {
+        Ok(VoxelShape::empty())
+    }
+}
 
 /// `BlockPos` with Java `Vec3i.hashCode` / `compareTo`.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -48,35 +98,6 @@ pub(super) fn client_float() -> f32 {
 }
 
 impl Game<'_> {
-    /// `Level.clip(from, to, COLLIDER, NONE)` missing every block, with full
-    /// collision cubes as obstacles.
-    fn clear_line(&self, from: [f64; 3], to: [f64; 3]) -> bool {
-        let d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
-        let length = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-        let steps = (length / 0.1).ceil().max(1.0) as i32;
-        let mut last = [i32::MIN; 3];
-        for i in 0..=steps {
-            let t = f64::from(i) / f64::from(steps);
-            let b = [
-                (from[0] + d[0] * t).floor() as i32,
-                (from[1] + d[1] * t).floor() as i32,
-                (from[2] + d[2] * t).floor() as i32,
-            ];
-            if b == last {
-                continue;
-            }
-            last = b;
-            if self
-                .res
-                .facts
-                .get(self.world.block(b[0], b[1], b[2]))
-                .full_collision
-            {
-                return false;
-            }
-        }
-        true
-    }
     /// `ServerExplosion.getSeenPercent` for an entity box.
     pub(super) fn seen_percent(&self, center: [f64; 3], min: [f64; 3], max: [f64; 3]) -> f32 {
         let xs = 1.0 / ((max[0] - min[0]) * 2.0 + 1.0);
@@ -87,6 +108,23 @@ impl Game<'_> {
         if xs < 0.0 || ys < 0.0 || zs < 0.0 {
             return 0.0;
         }
+        // ClipContext(..., entity): the entity standing at the box's bottom.
+        let mut rays = ColliderRays {
+            scene: SceneCollisions {
+                world: &self.world,
+                binding: self.collision,
+                subject: None,
+            },
+            context: CollisionContext::for_entity(
+                CollisionEntity {
+                    identity: EntityIdentity(0),
+                    y: min[1],
+                    descending: false,
+                    main_hand: Some(CollisionItem::EMPTY),
+                },
+                false,
+            ),
+        };
         let (mut hits, mut count) = (0, 0);
         let mut xx = 0.0;
         while xx <= 1.0 {
@@ -97,7 +135,18 @@ impl Game<'_> {
                     let x = min[0] + (max[0] - min[0]) * xx;
                     let y = min[1] + (max[1] - min[1]) * yy;
                     let z = min[2] + (max[2] - min[2]) * zz;
-                    if self.clear_line([x + x_offset, y, z + z_offset], center) {
+                    let from = Vec3::new(x + x_offset, y, z + z_offset);
+                    let to = Vec3::new(center[0], center[1], center[2]);
+                    let missed = clip_world(
+                        &mut rays,
+                        from,
+                        to,
+                        RayBlockMode::Collider,
+                        RayFluidMode::None,
+                        4096,
+                    )
+                    .is_ok_and(|r| r.miss);
+                    if missed {
                         hits += 1;
                     }
                     count += 1;

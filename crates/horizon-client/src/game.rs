@@ -58,6 +58,7 @@ mod level_particles;
 mod lightning;
 mod llamas;
 mod loom;
+mod mace;
 mod machines;
 mod maps;
 mod minecarts;
@@ -1641,6 +1642,11 @@ impl Game<'_> {
                     self.spawner_burst([pos.x, pos.y, pos.z])
                 }
                 LevelEvent::LevelEvent {
+                    id: 2013,
+                    pos,
+                    data,
+                } => self.smash_dust(pos, data),
+                LevelEvent::LevelEvent {
                     id: id @ 3002..=3005,
                     pos,
                     data,
@@ -2916,6 +2922,11 @@ impl Game<'_> {
                 MotionEvent::Snowflake { position, velocity } => self.snowflake(position, velocity),
                 MotionEvent::EnterBlock { state } => self.trigger_enter_block(state),
                 MotionEvent::InsidePortal { pos } => self.player_inside_nether_portal(pos),
+                MotionEvent::SmashLanding {
+                    state,
+                    position,
+                    fall_distance,
+                } => self.smash_landing_particles(state, position, fall_distance),
                 _ => {}
             }
         }
@@ -5182,19 +5193,20 @@ impl Game<'_> {
         let delay = 20.0 / speed;
         let scale = ((self.attack_ticks as f32 + 0.5) / delay).clamp(0.0, 1.0);
         let mut amount = damage * (0.2 + scale * scale * 0.8);
+        let target_kind = self.mobs[index].kind.id.clone();
+        let target_kind = format!("minecraft:{}", target_kind.trim_start_matches("minecraft:"));
+        // Item.getAttackDamageBonus (a mace's smash), before the critical hit.
+        amount += self.smash_damage_bonus(&target_kind);
         let player = self.player.as_ref();
+        // Player.canCriticalAttack: falling, off the ground, not sprinting.
         let falling =
-            player.is_some_and(|p| !p.ground.on_ground && p.velocity.y < 0.0 && !p.sprinting);
+            player.is_some_and(|p| !p.ground.on_ground && p.fall_distance > 0.0 && !p.sprinting);
         let crit = scale > 0.9 && falling;
         if crit {
             amount *= 1.5;
         }
         // Enchantment damage (sharpness, smite, bane) scaled by the attack strength.
-        let target_kind = self.mobs[index].kind.id.clone();
-        amount += self.enchant_damage_bonus(&format!(
-            "minecraft:{}",
-            target_kind.trim_start_matches("minecraft:")
-        )) * scale;
+        amount += self.enchant_damage_bonus(&target_kind) * scale;
         self.attack_ticks = 0;
         if let Some(p) = self.player.as_mut()
             && !self.creative
@@ -5206,21 +5218,23 @@ impl Game<'_> {
         self.swing_arm();
         // LivingEntity.setLastHurtMob (tamed wolves join in).
         self.combat.last_hurt_mob = Some((self.mobs[index].id, self.world.game_time));
-        let mob = &mut self.mobs[index];
-        let center = [
-            mob.position.x,
-            mob.position.y + mob.kind.height / 2.0,
-            mob.position.z,
-        ];
-        let dealt = (amount.min(mob.health.max(0.0)) * 10.0).round() as i32;
-        if mob.hurt(amount, from, &mut self.world.random) {
-            self.stats.custom("damage_dealt", dealt);
+        let old_health = self.mobs[index].health;
+        let source = match from {
+            Some(f) => self.attack_source(f),
+            None => horizon_client::mobs::Damage::of(horizon_client::mobs::DamageKind::Generic),
+        };
+        if self.hurt_by_player(index, amount, source) {
+            let mob = &self.mobs[index];
+            // Player.damageStatsAndHearts: the damage the hit actually did.
+            let actual = old_health - mob.health;
             // Player.attack: crit emitter and damage indicator hearts.
             let (feet, width, height) = (
                 [mob.position.x, mob.position.y, mob.position.z],
                 mob.kind.width,
                 mob.kind.height,
             );
+            self.stats
+                .custom("damage_dealt", (actual * 10.0).round() as i32);
             if crit {
                 self.particles.tracking_emitter(
                     horizon_client::particles::ParticleOptions::simple(
@@ -5231,7 +5245,7 @@ impl Game<'_> {
                     height,
                 );
             }
-            if amount > 2.0 {
+            if actual > 2.0 {
                 let indicator = horizon_client::particles::ParticleOptions::simple(
                     horizon_client::particles::ParticleType::DamageIndicator,
                 );
@@ -5240,10 +5254,10 @@ impl Game<'_> {
                     [feet[0], feet[1] + height * 0.5, feet[2]],
                     [0.1, 0.0, 0.1],
                     0.2,
-                    (amount * 0.5) as u32,
+                    (actual * 0.5) as u32,
                 );
             }
-            self.last_hurt_by_player.insert(mob.id);
+            self.last_hurt_by_player.insert(self.mobs[index].id);
             let sound = if crit {
                 "minecraft:entity.player.attack.crit"
             } else if scale > 0.9 {
@@ -5251,33 +5265,21 @@ impl Game<'_> {
             } else {
                 "minecraft:entity.player.attack.weak"
             };
-            self.audio.play(sound, Some(center), 1.0, 1.0);
+            // Player.playServerSideSound: at the player.
+            self.audio.play(sound, from, 1.0, 1.0);
             // The hurt or death sound the mob raised (getHurtSound / getDeathSound,
             // its voice pitch from its own random).
             let queued = std::mem::take(&mut self.mobs[index].outbox);
             for event in queued {
-                if let horizon_client::mobs::MobEvent::Sound(s, _, volume, pitch) = event {
+                if let horizon_client::mobs::MobEvent::Sound(s, at, volume, pitch) = event {
                     self.audio
-                        .play(&format!("minecraft:{s}"), Some(center), volume, pitch);
+                        .play(&format!("minecraft:{s}"), Some(at), volume, pitch);
                 }
             }
-            self.post_attack(index);
-            if let Some(stack) = self.inventory[self.selected].clone()
-                && let Some(max) = self
-                    .res
-                    .items
-                    .get(&stack.item)
-                    .filter(|i| i.max_damage > 0)
-                    .map(|i| i.max_damage)
-            {
-                let loss = self.durability_loss(&stack, 1);
-                if let Some(stack) = self.inventory[self.selected].as_mut() {
-                    stack.damage += loss;
-                    if stack.damage >= max {
-                        self.inventory[self.selected] = None;
-                    }
-                }
-            }
+            self.weapon_hit(index);
+        } else {
+            self.audio
+                .play("minecraft:entity.player.attack.nodamage", from, 1.0, 1.0);
         }
         true
     }

@@ -281,6 +281,8 @@ public final class VanillaBlockUpdateOracle {
             if (entities != null) entities.add(entity);
             return true;
         }
+        /** No players watch: the hurt animation and its sound are not sent. */
+        @Override public void broadcastDamageEvent(Entity entity, net.minecraft.world.damagesource.DamageSource source) { }
         @Override public void levelEvent(Entity source, int type, BlockPos p, int data) { emit("L " + type + " " + pos(p) + " " + data); }
         @Override public void playSeededSound(Entity except, double x, double y, double z, net.minecraft.core.Holder<SoundEvent> sound, SoundSource source, float volume, float pitch, long seed) {
             emit("S " + pos(BlockPos.containing(x, y, z)) + " " + sound.value().location());

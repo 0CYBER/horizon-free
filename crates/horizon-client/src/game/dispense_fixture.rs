@@ -59,8 +59,18 @@ pub(super) fn record_events(events: &[horizon_world::level::LevelEvent]) {
     }
 }
 
+/// Java's `String.format("%.6f")`: the exact value rounded half up (away
+/// from zero) where Rust rounds a tie to even.
 fn num(v: f64) -> String {
-    format!("{v:.6}")
+    let exact = format!("{:.40}", v.abs());
+    let tie = exact
+        .split_once('.')
+        .is_some_and(|(_, f)| f[6..].starts_with('5') && f[7..].bytes().all(|b| b == b'0'));
+    if tie {
+        format!("{:.6}", v + 0.5e-6_f64.copysign(v))
+    } else {
+        format!("{v:.6}")
+    }
 }
 fn floor_pos(p: [f64; 3]) -> String {
     format!(
@@ -299,6 +309,8 @@ impl Game<'_> {
                 ),
                 None => "respawn none".to_owned(),
             });
+        } else if let Some(op) = case.get("attack") {
+            used = self.fixture_attack(op, &targets)?;
         } else if case.get("hopper").is_some() {
             // HopperBlockEntity.pushItemsTick, once.
             self.hopper_try_move_items((origin.x, origin.y, origin.z));
@@ -559,6 +571,119 @@ impl Game<'_> {
         Ok(out)
     }
 
+    /// The player's hit on the first target with the case's item, from the
+    /// attack strength's scaled `base` damage on: the item's damage bonus and
+    /// source, the hurt with the weapon's armor effects, then `weapon_hit`
+    /// (the mace's smash, post-attack enchantments, the wear), as
+    /// `VanillaDispenserOracle.attack` prints them.
+    fn fixture_attack(&mut self, op: &Value, targets: &[Target]) -> Result<Vec<String>> {
+        let stack = parse_stack(op["item"].as_str().unwrap_or("-"))?;
+        self.mode = if op["creative"].as_bool().unwrap_or(false) {
+            GameMode::Creative
+        } else {
+            GameMode::Survival
+        };
+        self.creative = self.mode == GameMode::Creative;
+        let v3 = |v: &Value| {
+            horizon_core::geometry::Vec3::new(
+                v[0].as_f64().unwrap_or(0.0),
+                v[1].as_f64().unwrap_or(0.0),
+                v[2].as_f64().unwrap_or(0.0),
+            )
+        };
+        let mut player = PlayerMotion::new(self.motion, v3(&op["player"]))?;
+        player.velocity = v3(&op["motion"]);
+        player.fall_distance = op["fall"].as_f64().unwrap_or(0.0);
+        player.fall_flying = op["fall_flying"].as_bool().unwrap_or(false);
+        player.flying = op["flying"].as_bool().unwrap_or(false);
+        player.may_fly = self.creative;
+        if !op["impact"].is_null() {
+            player.impulse.impact_position = Some(v3(&op["impact"]));
+        }
+        let feet = [player.position.x, player.position.y, player.position.z];
+        self.player = Some(player);
+        self.inventory[self.selected] = stack.clone();
+        let used_before = stack
+            .as_ref()
+            .map_or(0, |s| self.stats.get("used", &s.item));
+        let Some(&Target::Mob(id)) = targets.first() else {
+            return Err("an attack case hits a mob".into());
+        };
+        let index = self
+            .mobs
+            .iter()
+            .position(|m| m.id == id)
+            .ok_or("the target is gone")?;
+        let kind = self.mobs[index].kind.id.clone();
+        let base = op["base"].as_f64().unwrap_or(0.0) as f32;
+        let bonus = self.smash_damage_bonus(&kind);
+        let source = self.attack_source(feet);
+        let hurt = self.hurt_by_player(index, base + bonus, source);
+        // The hurt sound the mob raised, where it stands.
+        for event in std::mem::take(&mut self.mobs[index].outbox) {
+            if let horizon_client::mobs::MobEvent::Sound(s, at, volume, pitch) = event {
+                self.audio
+                    .play(&format!("minecraft:{s}"), Some(at), volume, pitch);
+            }
+        }
+        if hurt {
+            self.weapon_hit(index);
+        }
+        self.process_level_events()?;
+        let mut out = Vec::new();
+        if let Some(s) = &stack {
+            let used = self.stats.get("used", &s.item) - used_before;
+            if used != 0 {
+                out.push(format!("stat {} minecraft:used {used}", s.item));
+            }
+        }
+        let source = match source.kind {
+            horizon_client::mobs::DamageKind::MaceSmash => "minecraft:mace_smash",
+            _ => "minecraft:player_attack",
+        };
+        out.push(format!(
+            "attack bonus={} source={source} hurt={hurt}",
+            num(f64::from(bonus))
+        ));
+        for (i, t) in targets.iter().enumerate() {
+            let (health, v) = match *t {
+                Target::Mob(id) => match self.mobs.iter().find(|m| m.id == id) {
+                    Some(m) => (num(f64::from(m.health)), m.velocity),
+                    None => continue,
+                },
+                Target::Stand(id) => match self.armor_stands.iter().find(|s| s.id == id) {
+                    Some(s) => ("-".to_owned(), s.velocity),
+                    None => continue,
+                },
+            };
+            out.push(format!(
+                "V {i} {health} {} {} {}",
+                num(v.x),
+                num(v.y),
+                num(v.z)
+            ));
+        }
+        if let Some(p) = self.player.take() {
+            let impact = p.impulse.impact_position.map_or("-".to_owned(), |i| {
+                format!("{},{},{}", num(i.x), num(i.y), num(i.z))
+            });
+            out.push(format!(
+                "P {} {} {} fall={} impact={impact} grace={} extra={}",
+                num(p.velocity.x),
+                num(p.velocity.y),
+                num(p.velocity.z),
+                num(p.fall_distance),
+                p.impulse.reset_grace_time,
+                p.spawn_extra_particles_on_fall
+            ));
+        }
+        out.push(format!(
+            "held {}",
+            canon_stack(self.inventory[self.selected].as_ref())
+        ));
+        Ok(out)
+    }
+
     /// A stack in a block entity's slot: a container's, a jukebox's record, a
     /// lectern's book, or the items of a block entity Horizon keeps as saved.
     fn fixture_fill(&mut self, p: (i32, i32, i32), slot: usize, stack: Option<ItemStack>) {
@@ -678,8 +803,10 @@ impl Game<'_> {
         self.next_entity += 1;
         let id = self.next_entity;
         if kind == "minecraft:armor_stand" {
-            self.armor_stands
-                .push(horizon_client::entities::ArmorStand::new(id, at, yaw));
+            let mut stand = horizon_client::entities::ArmorStand::new(id, at, yaw);
+            stand.marker = e["marker"].as_bool().unwrap_or(false);
+            stand.on_ground = e["ground"].as_bool().unwrap_or(false);
+            self.armor_stands.push(stand);
             return Ok(Target::Stand(id));
         }
         let t = self
@@ -727,6 +854,14 @@ impl Game<'_> {
         }
         if flag("loot") {
             mob.extra.pick_up_loot = true;
+        }
+        mob.on_ground = flag("ground");
+        if let Some(health) = e["health"].as_f64() {
+            mob.attrs.max_health = health as f32;
+            mob.health = health as f32;
+        }
+        if let Some(resistance) = e["knockback_resistance"].as_f64() {
+            mob.attrs.knockback_resistance = resistance;
         }
         if flag("brown") && s == Species::Mooshroom {
             mob.extra.variant = 1;
