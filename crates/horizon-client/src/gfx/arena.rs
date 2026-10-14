@@ -84,6 +84,10 @@ impl Arena {
     fn span(vertices: u64) -> u64 {
         vertices.max(1).next_multiple_of(GRAIN)
     }
+    /// Bytes of every page's buffer.
+    pub fn bytes(&self) -> u64 {
+        self.pages.iter().map(|p| p.capacity).sum::<u64>() * self.stride
+    }
     pub fn buffer(&self, page: u32) -> &wgpu::Buffer {
         &self.pages[page as usize].buffer
     }

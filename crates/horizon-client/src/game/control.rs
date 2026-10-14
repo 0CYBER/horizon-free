@@ -572,6 +572,9 @@ impl Game<'_> {
             json!({ "pos": hit.pos, "block": &*self.res.facts.get(state).name })
         });
         let renderer = self.renderer.as_ref().map(|r| {
+            let [arena_bytes, section_vertex_bytes] = r.section_vertex_bytes();
+            // Device memory by the backend's allocator (Vulkan; absent elsewhere).
+            let memory = r.device.generate_allocator_report();
             json!({
                 "gpu": r.info.name,
                 "backend": format!("{:?}", r.info.backend),
@@ -580,6 +583,10 @@ impl Game<'_> {
                 "drawn_sections": r.drawn_sections,
                 "uploaded_bytes": r.uploaded_bytes,
                 "resident_sections": r.resident_sections(),
+                "arena_bytes": arena_bytes,
+                "section_vertex_bytes": section_vertex_bytes,
+                "gpu_allocated_bytes": memory.as_ref().map(|m| m.total_allocated_bytes),
+                "gpu_reserved_bytes": memory.as_ref().map(|m| m.total_reserved_bytes),
             })
         });
         json!({

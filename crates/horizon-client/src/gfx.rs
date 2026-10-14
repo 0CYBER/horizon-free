@@ -373,6 +373,17 @@ impl Renderer {
     pub fn resident_sections(&self) -> usize {
         self.sections.len()
     }
+    /// Bytes of the section vertex arena's buffers, and of the vertices
+    /// resident sections hold in them.
+    pub fn section_vertex_bytes(&self) -> [u64; 2] {
+        let stride = std::mem::size_of::<Vertex>() as u64;
+        let vertices: u64 = self
+            .sections
+            .values()
+            .map(|s| u64::from(s.solid + s.translucent) * 4)
+            .sum();
+        [self.arena.bytes(), vertices * stride]
+    }
 }
 impl Renderer {
     pub async fn new(
