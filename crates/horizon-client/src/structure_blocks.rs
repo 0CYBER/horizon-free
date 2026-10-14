@@ -44,6 +44,10 @@ pub fn block_entities(
         let Some(mut entity) = BlockEntity::for_block(block) else {
             continue;
         };
+        // MonsterRoomFeature and the structures' setEntityId.
+        if let BlockEntity::Spawner(s) = &mut entity {
+            **s = crate::mobs::spawner::Spawner::load(&Tag::Compound(nbt.clone()));
+        }
         if let (BlockEntity::Chest(slots), Some(table), Some(loot)) =
             (&mut entity, text(nbt, "LootTable"), loot)
         {

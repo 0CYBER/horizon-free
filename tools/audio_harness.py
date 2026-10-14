@@ -33,7 +33,7 @@ COMMON_SOURCES = [
 
 def require_sounds():
     if not (RESOURCES / 'assets/minecraft/sounds.json').is_file():
-        raise SystemExit('Sound assets missing: run tools/fetch_sounds.py first')
+        raise SystemExit('Sound assets missing: run cargo run -p horizon-prepare -- sounds first')
 
 
 def run_harness(name, oracle, example, inputs_text, extra_sources=(), java_args=(), rust_args=(), scope='', timeout=1800):

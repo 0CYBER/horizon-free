@@ -177,6 +177,8 @@ pub struct Settings {
     pub sprint_window: i32,
     /// Horizon's own graphics settings (`horizon-graphics.txt`, not options.txt).
     pub horizon: crate::graphics::Graphics,
+    /// Controller settings (`horizon-controller.txt`, Horizon's own).
+    pub controller: crate::gamepad::PadSettings,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -246,6 +248,7 @@ impl Default for Settings {
             toggle_use: false,
             sprint_window: 7,
             horizon: Default::default(),
+            controller: Default::default(),
         }
     }
 }
@@ -280,13 +283,19 @@ impl Settings {
             .parent()
             .map(crate::graphics::Graphics::load)
             .unwrap_or_default();
+        let controller = path
+            .parent()
+            .map(crate::gamepad::PadSettings::load)
+            .unwrap_or_default();
         let settings = match fs::read(path) {
             Ok(bytes) => Self {
                 horizon,
+                controller,
                 ..Self::parse(&String::from_utf8_lossy(&bytes))
             },
             Err(_) => Self {
                 horizon,
+                controller,
                 ..Self::default()
             },
         };
@@ -385,6 +394,7 @@ impl Settings {
             toggle_use: f.bool("toggleUse"),
             sprint_window: f.int("sprintWindow"),
             horizon: Default::default(),
+            controller: Default::default(),
             auto_jump: f.bool("autoJump"),
             language: f.string("lang"),
             force_unicode: f.bool("forceUnicodeFont"),
@@ -517,6 +527,7 @@ impl Settings {
         let _ = fs::write(path, self.serialize());
         if let Some(dir) = path.parent() {
             self.horizon.save(dir);
+            self.controller.save(dir);
         }
     }
     /// Volume of a sound source (master excluded).

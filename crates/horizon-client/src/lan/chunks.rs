@@ -254,7 +254,6 @@ impl ChunkEncoder {
                                     tag: block_entities
                                         .get(&pos)
                                         .and_then(entity_tag)
-                                        .or_else(|| saved_update_tag(chunk, pos))
                                         .unwrap_or(Tag::End),
                                 });
                             }
@@ -343,43 +342,11 @@ fn java_hash_order<T>(items: &mut Vec<T>, pos: impl Fn(&T) -> (i32, i32, i32)) {
     items.extend(iteration.into_iter().filter_map(|i| slots[i].take()));
 }
 
-/// The update tag of a block entity Horizon keeps only as loaded NBT:
-/// SpawnerBlockEntity.getUpdateTag is its saved fields without
-/// SpawnPotentials (saveCustomOnly, so no id or position).
-fn saved_update_tag(chunk: &Chunk, pos: (i32, i32, i32)) -> Option<Tag> {
-    let saved = chunk.saved.as_ref()?;
-    let tag = saved.block_entities.iter().find(|t| {
-        let Tag::Compound(c) = t else { return false };
-        let at = |k: &str| match c.get(&k.into()) {
-            Some(Tag::Int(v)) => Some(*v),
-            _ => None,
-        };
-        (at("x"), at("y"), at("z")) == (Some(pos.0), Some(pos.1), Some(pos.2))
-    })?;
-    if crate::block_entity_nbt::id(tag).as_deref() != Some("minecraft:mob_spawner") {
-        return None;
-    }
-    let Tag::Compound(mut c) = crate::block_entity_nbt::canonical(tag)? else {
-        return None;
-    };
-    for key in [
-        "id",
-        "x",
-        "y",
-        "z",
-        "keepPacked",
-        "SpawnPotentials",
-        "components",
-    ] {
-        c.remove(&key.into());
-    }
-    Some(Tag::Compound(c))
-}
-
 /// The update tag of a block entity (getUpdateTag) for what the client shows.
 pub fn entity_tag(entity: &BlockEntity) -> Option<Tag> {
     match entity {
         BlockEntity::Sign(sign) => Some(Tag::compound(sign.encode())),
+        BlockEntity::Spawner(s) => Some(s.update_tag()),
         BlockEntity::Jukebox(_) | BlockEntity::Lectern(_) => None,
         _ => None,
     }

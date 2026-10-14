@@ -1573,6 +1573,7 @@ impl Game<'_> {
                 let mut player = PlayerMotion::new(self.motion, position)?;
                 player.velocity = delta;
                 self.player = Some(player);
+                self.pad.player_replaced();
                 self.sway = Default::default();
                 self.eye = 1.62;
                 self.previous_eye = 1.62;
@@ -1637,6 +1638,7 @@ impl Game<'_> {
                 r.loaded_sent = true;
             }
         }
+        let stick = self.pad_move();
         let Some(player) = self.player.as_mut() else {
             return Ok(());
         };
@@ -1651,7 +1653,9 @@ impl Game<'_> {
             jump: held(KeyCode::Space),
             shift: held(KeyCode::ShiftLeft),
             sprint: held(KeyCode::ControlLeft),
-        };
+            analog: None,
+        }
+        .with_stick(stick.filter(|_| playing));
         let input = u8::from(keys.forward)
             | u8::from(keys.backward) << 1
             | u8::from(keys.left) << 2

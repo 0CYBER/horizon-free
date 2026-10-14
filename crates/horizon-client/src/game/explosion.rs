@@ -335,6 +335,15 @@ impl Game<'_> {
         interaction: BlockInteraction,
         fire: bool,
     ) -> Result<()> {
+        if let Some(p) = &self.player {
+            let d = [
+                p.position.x - center[0],
+                p.position.y - center[1],
+                p.position.z - center[2],
+            ];
+            let distance = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            self.pad_rumble(horizon_client::gamepad::Rumble::Explosion { distance, radius });
+        }
         let mut targets = self.exploded_positions(center, radius);
         // Explosion.explode: the blast is heard.
         let ctx = horizon_client::sculk::Context::default();

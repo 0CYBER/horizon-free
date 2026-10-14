@@ -88,7 +88,7 @@ impl Game<'_> {
         self.right = false;
         self.capture(false);
     }
-    fn close_book(&mut self) {
+    pub(super) fn close_book(&mut self) {
         self.book = None;
         self.capture(true);
     }

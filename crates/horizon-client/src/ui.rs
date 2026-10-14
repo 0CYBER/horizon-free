@@ -283,6 +283,10 @@ pub fn slider(
     hover: bool,
     active: bool,
 ) {
+    if active {
+        // A controller's D-pad can focus it (Horizon's controller support).
+        crate::widgets::target([x, y, w, 20.0]);
+    }
     let track = if hover && active {
         "gui/sprites/widget/slider_highlighted"
     } else {

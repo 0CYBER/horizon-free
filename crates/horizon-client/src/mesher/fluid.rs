@@ -2,7 +2,9 @@
 //! occlusion against neighbour shapes, flow-rotated top UVs, the water overlay
 //! beside glass and leaves, back faces, cardinal shading and max(self, above)
 //! light.
-use super::{Info, MeshTables, Padded, SectionMesh, Vertex, lighting, pack_coords, pack_rgb, pi};
+use super::{
+    Info, MeshTables, Padded, SectionMesh, TerrainVertex, lighting, pack_coords, pack_rgb, pi,
+};
 use horizon_core::{
     geometry::{Axis, Direction, VoxelShape, trig},
     position::BlockPos,
@@ -303,9 +305,8 @@ pub(super) fn tesselate(
         &mut out.solid
     };
     let mut quad =
-        |v: [([f32; 3], [f32; 2]); 4], layer: u32, color: u32, light: u32, back: bool| {
-            let vertex = |(pos, uv): ([f32; 3], [f32; 2])| Vertex {
-                normal: [0; 4],
+        |v: [([f32; 3], [f32; 2]); 4], layer: u16, color: u32, light: u16, back: bool| {
+            let vertex = |(pos, uv): ([f32; 3], [f32; 2])| TerrainVertex {
                 pos,
                 uv,
                 layer,

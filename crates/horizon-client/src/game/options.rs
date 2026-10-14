@@ -26,6 +26,9 @@ impl Game<'_> {
     }
     /// Open the options screens (OptionsScreen) from the title or pause menu.
     pub(super) fn open_options(&mut self, from_title: bool) {
+        // Gameplay keys must not stay held behind the options screen, where
+        // bindings can also change before the physical key is released.
+        self.keys.clear();
         self.screen = Screen::Options;
         self.options_from_title = from_title;
         let ui = &mut self.ui.options;
@@ -91,7 +94,10 @@ impl Game<'_> {
             .shortcut(&self.res.atlas, shortcut, &mut self.clipboard)
     }
     pub(super) fn options_scroll(&mut self, amount: f32) {
-        self.ui.options.scroll_at(self.cursor, amount);
+        let size = self.gui_size();
+        self.ui
+            .options
+            .scroll_at(&self.settings, size, self.cursor, amount);
     }
     /// Mouse buttons pressed while a key is being bound.
     pub(super) fn options_waiting_for_key(&self) -> bool {
@@ -106,7 +112,7 @@ impl Game<'_> {
         }
         Ok(())
     }
-    fn handle_option_events(&mut self, events: Vec<Event>) -> Result<()> {
+    pub(super) fn handle_option_events(&mut self, events: Vec<Event>) -> Result<()> {
         for e in events {
             match e {
                 Event::Changed => {

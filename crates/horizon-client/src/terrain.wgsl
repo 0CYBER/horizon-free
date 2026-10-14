@@ -43,7 +43,7 @@ fn sample_lightmap(sky: f32, block: f32) -> vec4<f32> {
 }
 @vertex fn vs_terrain(
     @location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
-    @location(2) layer: u32, @location(3) color: vec4<f32>, @location(4) light: vec4<u32>,
+    @location(2) layer: u32, @location(3) color: vec4<f32>, @location(4) light: vec2<u32>,
     @location(5) origin: vec4<f32>) -> TerrainOut {
     let pos = position + origin.xyz;
     var out: TerrainOut;
@@ -66,13 +66,13 @@ fn apply_fog(color: vec4<f32>, spherical: f32, cylindrical: f32) -> vec4<f32> {
     return vec4(mix(color.rgb, globals.fog_color.rgb, f * globals.fog_color.a), color.a);
 }
 @fragment fn fs_solid(in: TerrainOut) -> @location(0) vec4<f32> {
-    // Bit 31 of the layer marks opaque leaves (forceOpaque): no alpha cutout.
-    let color = textureSample(sprites, sprite_sampler, in.uv, i32(in.layer & 0x7fffffffu)) * in.color;
-    if color.a < 0.5 && (in.layer & 0x80000000u) == 0u { discard; }
+    // Bit 15 of the layer marks opaque leaves (forceOpaque): no alpha cutout.
+    let color = textureSample(sprites, sprite_sampler, in.uv, i32(in.layer & 0x7fffu)) * in.color;
+    if color.a < 0.5 && (in.layer & 0x8000u) == 0u { discard; }
     return apply_fog(vec4(color.rgb, 1.0), in.spherical, in.cylindrical);
 }
 @fragment fn fs_translucent(in: TerrainOut) -> @location(0) vec4<f32> {
-    let color = textureSample(sprites, sprite_sampler, in.uv, i32(in.layer & 0x7fffffffu)) * in.color;
+    let color = textureSample(sprites, sprite_sampler, in.uv, i32(in.layer & 0x7fffu)) * in.color;
     if color.a < 0.01 { discard; }
     return apply_fog(color, in.spherical, in.cylindrical);
 }

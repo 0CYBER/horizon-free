@@ -78,6 +78,28 @@ impl Hub {
         );
     }
 
+    /// ClientboundBlockEventPacket (`PlayerList.broadcast` within 64 blocks).
+    pub fn block_event(&self, pos: [i32; 3], b0: i32, b1: i32, state: u16) {
+        let block = self
+            .encoder
+            .block_ids
+            .get(usize::from(state))
+            .copied()
+            .unwrap_or(0);
+        let at = [f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])];
+        self.broadcast_near(
+            at,
+            64.0,
+            &C::BlockEvent(play::BlockEvent {
+                pos,
+                b0: b0 as u8,
+                b1: b1 as u8,
+                block,
+            }),
+            None,
+        );
+    }
+
     pub fn entity_event(&self, id: i32, event: i8, at: [f64; 3]) {
         self.broadcast_near(
             at,

@@ -28,7 +28,9 @@ pub(super) struct GameLevel<'g, 'a> {
     pub(super) game: &'g Game<'a>,
     w: MobWorld<'g>,
     /// Boxes of the mobs this pass created, not yet in the game's list.
-    pending: std::cell::RefCell<Vec<Aabb>>,
+    pub(super) pending: std::cell::RefCell<Vec<Aabb>>,
+    /// The types and boxes of what a spawner created this tick.
+    pub(super) pending_ids: std::cell::RefCell<Vec<(String, Aabb)>>,
 }
 impl GameLevel<'_, '_> {
     fn biome(&self, x: i32, y: i32, z: i32) -> Option<&BiomeInfo> {
@@ -165,7 +167,20 @@ impl NaturalLevel for GameLevel<'_, '_> {
             binding: self.w.collision,
             subject: None,
         };
+        // getEntityCollisions(null, box): living shulkers are solid.
+        let grown = bounds.inflate(Vec3::new(1e-7, 1e-7, 1e-7));
         no_collision_empty(&mut scene, bounds)
+            && !self.game.mobs.iter().any(|m| {
+                m.species() == Species::Shulker
+                    && m.alive()
+                    && !m.removed
+                    && m.bounds().intersects(grown)
+            })
+            && !self
+                .pending_ids
+                .borrow()
+                .iter()
+                .any(|(id, b)| id == "minecraft:shulker" && b.intersects(grown))
     }
     fn unobstructed(&self, bounds: Aabb) -> bool {
         let player = self
@@ -194,12 +209,49 @@ impl NaturalLevel for GameLevel<'_, '_> {
         self.w.data.state(self.state(x, y, z)).flags & data::LAND != 0
     }
 }
+impl horizon_client::mobs::spawner::SpawnerLevel for GameLevel<'_, '_> {
+    fn alive_player_near(&self, x: f64, y: f64, z: f64, range: f64) -> bool {
+        let Some(p) = self.game.player_view() else {
+            return false;
+        };
+        if !p.alive || p.spectator {
+            return false;
+        }
+        let at = self.game.player.as_ref().map(|p| p.position);
+        at.is_some_and(|a| {
+            let d = (a.x - x).powi(2) + (a.y - y).powi(2) + (a.z - z).powi(2);
+            range < 0.0 || d < range * range
+        })
+    }
+    fn spawner_blocks_work(&self) -> bool {
+        self.game.ui.rules.bool("spawner_blocks_work")
+    }
+    fn entity_exists(&self, id: &str) -> bool {
+        self.game.res.mob_types.contains_key(id) || self.game.entity_type_exists(id)
+    }
+    fn count_entities(&self, id: &str, bounds: Aabb) -> usize {
+        let mobs = self
+            .game
+            .mobs
+            .iter()
+            .filter(|m| !m.removed && m.kind.id == id && m.bounds().intersects(bounds))
+            .count();
+        let pending = self
+            .pending_ids
+            .borrow()
+            .iter()
+            .filter(|(k, b)| k == id && b.intersects(bounds))
+            .count();
+        mobs + pending
+    }
+}
 impl<'a> Game<'a> {
     pub(super) fn natural_level(&self) -> GameLevel<'_, 'a> {
         GameLevel {
             game: self,
             w: self.mob_world_base(&[]),
             pending: Default::default(),
+            pending_ids: Default::default(),
         }
     }
     /// Creates a mob the spawner accepted, finalized the game's way; the

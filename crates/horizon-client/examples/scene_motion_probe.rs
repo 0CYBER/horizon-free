@@ -278,6 +278,7 @@ fn main() -> Result<()> {
                         jump: mask & 16 != 0,
                         shift: mask & 32 != 0,
                         sprint: mask & 64 != 0,
+                        analog: None,
                     })?;
                 }
                 "movement_statistics" => world.check_movement_statistics(vector(&op["value"]))?,
@@ -457,7 +458,7 @@ fn main() -> Result<()> {
                 "weaving" => world.player.status.weaving = op["value"].as_bool().unwrap(),
                 "flying" => {
                     let flying = op["value"].as_bool().unwrap();
-                    world.player.may_fly = flying;
+                    world.player.may_fly = op["may_fly"].as_bool().unwrap_or(flying);
                     world.player.flying = flying;
                 }
                 "trigger" => world.player.jump_trigger_time = op["value"].as_i64().unwrap() as i32,

@@ -441,7 +441,7 @@ fn resources_compatible(from: &Path, to: &Path, manifest: &serde_json::Value) ->
     sources.iter().all(|s| same(s))
 }
 
-/// Where a version folder keeps the preparer's sources (packaging/package.sh copies them).
+/// Where a version folder keeps the preparer's sources (the release package copies them).
 const PREPARER_CRATE: &str = "crates/horizon-prepare";
 
 /// The files under `dir/relative`, as paths relative to `dir`.
@@ -677,6 +677,53 @@ pub fn preparer(tag: &str, minecraft: &Path, log: &dyn Fn(String)) -> Result<Pre
         .arg("--minecraft-dir")
         .arg(minecraft);
     Ok(Preparer::Process(cmd))
+}
+
+/// Copies the pinned version's sounds from the player's own launcher install into the version's
+/// resources (`horizon-prepare sounds`), each line to `log`. Sound is optional, so a launcher
+/// install without them is a line in the log, never a failed preparation. The version's own
+/// preparer does it when it is not the launcher's and knows how; versions from before it read
+/// the sounds where the launcher's preparer puts them.
+pub fn sounds(tag: &str, minecraft: &Path, log: &dyn Fn(String)) {
+    let dir = version_dir(tag);
+    let own = horizon_prepare::sources_sha256(&dir.join(PREPARER_CRATE)).as_deref()
+        == Some(horizon_prepare::SOURCES_SHA256);
+    let binary = preparer_binary(&dir).filter(|binary| {
+        !own && Command::new(binary)
+            .arg("--help")
+            .output()
+            .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("horizon-prepare sounds"))
+    });
+    log("Copying the sounds from your Minecraft install".into());
+    let result = match binary {
+        Some(binary) => Command::new(binary)
+            .current_dir(&dir)
+            .arg("sounds")
+            .arg("--root")
+            .arg(&dir)
+            .arg("--minecraft-dir")
+            .arg(minecraft)
+            .output()
+            .map_err(|e| e.to_string())
+            .and_then(|o| {
+                let text = |b: &[u8]| String::from_utf8_lossy(b).trim().to_string();
+                for line in text(&o.stdout).lines() {
+                    log(line.to_string());
+                }
+                match o.status.success() {
+                    true => Ok(()),
+                    false => Err(text(&o.stderr).trim_start_matches("error: ").to_string()),
+                }
+            }),
+        None => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            horizon_prepare::sounds(&dir, Some(minecraft), &|line| log(line.to_string()))
+        }))
+        .unwrap_or_else(|_| Err("The sound copy stopped unexpectedly".into()))
+        .map(|_| ()),
+    };
+    if let Err(e) = result {
+        log(format!("No sound (the game will be silent): {e}"));
+    }
 }
 
 /// Runs `Preparer::InProcess` on this thread, each progress line to `log`. A panic is an

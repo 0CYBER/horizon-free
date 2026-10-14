@@ -134,10 +134,12 @@ impl Game<'_> {
                 .chain(super::render_control::HELP)
                 .chain(super::sculk::HELP)
                 .chain(super::agent::HELP)
+                .chain(super::pad::HELP)
                 .collect::<Vec<_>>() }))),
             "setblock" | "fill" | "particle" | "signedit" => self.render_command(&words),
             "sculk" => Ok(Some(self.sculk_command(&words)?)),
             "status" => Ok(Some(self.control_status())),
+            "pad" => Ok(Some(self.pad_command(&words)?)),
             "key" => {
                 let key = key_code(arg(1)?).ok_or_else(|| format!("unknown key {}", words[1]))?;
                 self.require_world()?;
@@ -161,8 +163,9 @@ impl Game<'_> {
                         self.debug_key(key, KeyAction::Release);
                     }
                 }
-                // Physical key presses follow the key binds like the keyboard does.
-                let key = if matches!(self.screen, Screen::Chat | Screen::Options) {
+                // Text screens consume raw presses; releases follow key binds.
+                let typing = matches!(self.screen, Screen::Chat | Screen::Options);
+                let key = if typing && arg(2)? != "up" {
                     key
                 } else {
                     match self.settings.keys.translate(key) {
@@ -391,6 +394,8 @@ impl Game<'_> {
                     "sound" => Page::Sound,
                     "controls" => Page::Controls,
                     "keybinds" => Page::KeyBinds,
+                    "controller" => Page::Controller,
+                    "controller-binds" => Page::PadBinds,
                     "mouse" => Page::Mouse,
                     "chat" => Page::Chat,
                     "accessibility" => Page::Accessibility,
@@ -570,6 +575,9 @@ impl Game<'_> {
             json!({ "pos": hit.pos, "block": &*self.res.facts.get(state).name })
         });
         let renderer = self.renderer.as_ref().map(|r| {
+            let [arena_bytes, section_vertex_bytes] = r.section_vertex_bytes();
+            // Device memory by the backend's allocator (Vulkan; absent elsewhere).
+            let memory = r.device.generate_allocator_report();
             json!({
                 "gpu": r.info.name,
                 "backend": format!("{:?}", r.info.backend),
@@ -578,6 +586,10 @@ impl Game<'_> {
                 "drawn_sections": r.drawn_sections,
                 "uploaded_bytes": r.uploaded_bytes,
                 "resident_sections": r.resident_sections(),
+                "arena_bytes": arena_bytes,
+                "section_vertex_bytes": section_vertex_bytes,
+                "gpu_allocated_bytes": memory.as_ref().map(|m| m.total_allocated_bytes),
+                "gpu_reserved_bytes": memory.as_ref().map(|m| m.total_reserved_bytes),
             })
         });
         json!({

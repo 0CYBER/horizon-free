@@ -716,6 +716,11 @@ pub fn base_transform(m: &Mob, alpha: f32, camera: glam::DVec3) -> glam::Mat4 {
         m.previous.y + (m.position.y - m.previous.y) * a,
         m.previous.z + (m.position.z - m.previous.z) * a,
     ) - camera;
+    base_transform_at(m, alpha, glam::Mat4::from_translation(p.as_vec3()))
+}
+/// `base_transform` from a pose of the entity's origin (`EntityRenderDispatcher.submit`
+/// under a pose stack, as `SpawnerRenderer` draws the mob inside a spawner).
+pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 {
     let mut body = m.previous_body_yaw + wrap(m.body_yaw - m.previous_body_yaw) * alpha;
     if shaking(m) {
         // LivingEntityRenderer.setupRotations: a rapid wobble.
@@ -737,7 +742,7 @@ pub fn base_transform(m: &Mob, alpha: f32, camera: glam::DVec3) -> glam::Mat4 {
         None => super::aquatic::rotations(m, alpha, body)
             .unwrap_or_else(|| glam::Mat4::from_rotation_y((180.0 - body).to_radians())),
     };
-    let mut base = glam::Mat4::from_translation(p.as_vec3()) * rotation;
+    let mut base = origin * rotation;
     if m.extra.fall_flying {
         let ticks = m.extra.fall_fly_ticks as f32 + alpha;
         let scale = (ticks * ticks / 100.0).min(1.0);
@@ -800,6 +805,25 @@ fn species_rotations(m: &Mob, alpha: f32) -> glam::Mat4 {
         _ => glam::Mat4::IDENTITY,
     }
 }
+/// Creeper.getSwelling: the fuse's progress, past 1 in its last two ticks.
+fn creeper_swelling(m: &Mob, alpha: f32) -> f32 {
+    (m.previous_swell as f32 + alpha * (m.swell - m.previous_swell) as f32) / 28.0
+}
+/// LivingEntityRenderer.getOverlayCoords for the body: the hurt red, or a
+/// swelling creeper's white flash. Layers take the red only (progress 0).
+fn body_overlay(m: &Mob, alpha: f32) -> u32 {
+    let white = if m.species() == Species::Creeper {
+        crate::overlay::creeper_progress(creeper_swelling(m, alpha))
+    } else {
+        0.0
+    };
+    crate::overlay::living(white, red_overlay(m))
+}
+/// LivingEntityRenderState.hasRedOverlay: hurt or dying (not a creaking
+/// tearing down).
+fn red_overlay(m: &Mob) -> bool {
+    m.hurt_time > 0 || (m.death_time > 0 && !super::creaking::tearing_down(m))
+}
 fn species_scale(m: &Mob, alpha: f32) -> glam::Mat4 {
     match m.species() {
         Species::Wither => {
@@ -807,10 +831,9 @@ fn species_scale(m: &Mob, alpha: f32) -> glam::Mat4 {
         }
         Species::Creeper => {
             // CreeperRenderer.scale: swelling with a wobble.
-            let s = ((m.previous_swell as f32 + (m.swell - m.previous_swell) as f32 * alpha)
-                / 28.0)
-                .clamp(0.0, 1.0);
-            let wobble = 1.0 + (s * 100.0).msin() * s * 0.01;
+            let g = creeper_swelling(m, alpha);
+            let wobble = 1.0 + (g * 100.0).msin() * g * 0.01;
+            let s = g.clamp(0.0, 1.0);
             let s4 = s * s * s * s;
             let xz = (1.0 + s4 * 0.4) * wobble;
             let y = (1.0 + s4 * 0.1) / wobble;
@@ -926,27 +949,49 @@ pub fn render_with(
                 let w = super::illusioner::wobble(i, age);
                 let shifted =
                     camera - glam::DVec3::new(off[0] + w[0], off[1] + w[1], off[2] + w[2]);
-                render_visible(m, alpha, shifted, atlas, light, data, extra, out);
+                let base = base_transform(m, alpha, shifted);
+                render_visible(m, alpha, base, atlas, light, data, extra, out);
             }
         }
         return;
     }
-    render_visible(m, alpha, camera, atlas, light, data, extra, out);
+    render_visible(
+        m,
+        alpha,
+        base_transform(m, alpha, camera),
+        atlas,
+        light,
+        data,
+        extra,
+        out,
+    );
+}
+/// A mob drawn under `origin` instead of at its position (the spinning mob
+/// of `SpawnerRenderer.submitEntityInSpawner`).
+pub fn render_posed(
+    m: &Mob,
+    alpha: f32,
+    origin: glam::Mat4,
+    atlas: Atlas,
+    light: u32,
+    data: &MobData,
+    out: &mut Vec<Vertex>,
+) {
+    let base = base_transform_at(m, alpha, origin);
+    render_visible(m, alpha, base, atlas, light, data, &[], out);
 }
 #[allow(clippy::too_many_arguments)]
 fn render_visible(
     m: &Mob,
     alpha: f32,
-    camera: glam::DVec3,
+    base: glam::Mat4,
     atlas: Atlas,
     light: u32,
     data: &MobData,
     extra: &[(&Part, [f32; 4], u32)],
     out: &mut Vec<Vertex>,
 ) {
-    let base = base_transform(m, alpha, camera);
-    let overlay =
-        u32::from(m.hurt_time > 0 || (m.death_time > 0 && !super::creaking::tearing_down(m)));
+    let overlay = u32::from(red_overlay(m));
     let s = anim::state(m, alpha);
     let (model_key, texture) = body(m);
     let model = m
@@ -964,7 +1009,7 @@ fn render_visible(
             uv,
             body_color(m, alpha),
             light,
-            overlay,
+            body_overlay(m, alpha),
             out,
         );
     }
@@ -1035,8 +1080,7 @@ pub fn render_single(
     out: &mut Vec<Vertex>,
 ) {
     let base = base_transform(m, alpha, camera);
-    let overlay =
-        u32::from(m.hurt_time > 0 || (m.death_time > 0 && !super::creaking::tearing_down(m)));
+    let overlay = body_overlay(m, alpha);
     let s = anim::state(m, alpha);
     let model = m.kind.model.clone();
     let mut poses = Poses::new(&model);

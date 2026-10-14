@@ -71,5 +71,6 @@ impl Game<'_> {
             height,
             30,
         );
+        self.pad_rumble(horizon_client::gamepad::Rumble::Totem);
     }
 }

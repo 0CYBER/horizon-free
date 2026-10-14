@@ -33,7 +33,7 @@ impl Game<'_> {
         self.right = false;
         self.capture(false);
     }
-    fn close_sign_editor(&mut self) {
+    pub(super) fn close_sign_editor(&mut self) {
         if let Some(edit) = self.sign_edit.take() {
             self.world
                 .modified

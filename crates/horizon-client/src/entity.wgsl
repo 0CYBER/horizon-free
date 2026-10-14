@@ -48,12 +48,14 @@ fn entity_light(normal: vec3<f32>, nether: bool) -> f32 {
     let l1 = normalize(vec3(-0.2, select(1.0, -1.0, nether), 0.7));
     return min(1.0, (max(0.0, dot(l0, normal)) + max(0.0, dot(l1, normal))) * 0.6 + 0.4);
 }
-// The OverlayTexture texel entity.vsh fetches: rows 0-7 hold the hurt red
-// 0xB2FF0000; row 10 is white with alpha (1 - u / 15 * 0.75) * 255, u = 15
-// for the primed TNT flash (OverlayTexture.u(1.0)), so 63. Alpha 1 changes nothing.
+// The OverlayTexture texel entity.vsh fetches (constants from overlay.rs):
+// the hurt red for overlays 1 and 8, the white row at column 15 for the
+// primed TNT flash (5) and at column overlay - 16 for 16..=31 (a creeper's
+// swelling). Alpha 1 changes nothing.
 fn overlay_texel(overlay: u32) -> vec4<f32> {
-    if overlay == 1u || overlay == 8u { return vec4(1.0, 0.0, 0.0, 178.0 / 255.0); }
-    if overlay == 5u { return vec4(1.0, 1.0, 1.0, 63.0 / 255.0); }
+    if overlay == 1u || overlay == 8u { return HURT_OVERLAY; }
+    if overlay == 5u { return vec4(1.0, 1.0, 1.0, WHITE_OVERLAY_ALPHA[15]); }
+    if overlay >= 16u && overlay < 32u { return vec4(1.0, 1.0, 1.0, WHITE_OVERLAY_ALPHA[overlay - 16u]); }
     return vec4(1.0);
 }
 @vertex fn vs_entity(@location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,

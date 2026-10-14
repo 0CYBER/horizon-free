@@ -113,6 +113,23 @@ public final class VanillaNaturalSpawnOracle {
         @Override public double nextGaussian() { return 0.0; }
     }
 
+    /**
+     * finalizeSpawn's random in spawner cases: the neutral answers, except that
+     * nextInt(100) answers 99 so no spider spawns with a skeleton riding it.
+     */
+    static final class SpawnerNeutral implements RandomSource {
+        @Override public RandomSource fork() { return this; }
+        @Override public net.minecraft.world.level.levelgen.PositionalRandomFactory forkPositional() { throw new UnsupportedOperationException(); }
+        @Override public void setSeed(long seed) {}
+        @Override public int nextInt() { return 0; }
+        @Override public int nextInt(int bound) { return bound == 100 ? 99 : 0; }
+        @Override public long nextLong() { return 0L; }
+        @Override public boolean nextBoolean() { return false; }
+        @Override public float nextFloat() { return 0.75F; }
+        @Override public double nextDouble() { return 0.75; }
+        @Override public double nextGaussian() { return 0.0; }
+    }
+
     static final class Lvl extends ServerLevel {
         Lvl() { super(null, null, null, null, null, null, false, 0L, List.of(), false); }
         RegistryAccess registries;
@@ -140,6 +157,11 @@ public final class VanillaNaturalSpawnOracle {
         ServerChunkCache chunkSource;
         StructureManager structures;
         RandomSource neutral = new Neutral();
+        RandomSource spawnerNeutral = new SpawnerNeutral();
+        /** Spawner cases: the level's own random, but for finalizeSpawn's draws. */
+        RandomSource spawnerRandom;
+        /** Spawner cases: the tick whose events are logged (-1 while loading). */
+        int tick = -1;
         List<String> log;
         boolean logColumns;
         int next = 1;
@@ -183,7 +205,23 @@ public final class VanillaNaturalSpawnOracle {
         @Override public net.minecraft.world.attribute.EnvironmentAttributeSystem environmentAttributes() { return attributes; }
         @Override public WorldBorder getWorldBorder() { return border; }
         @Override public GameRules getGameRules() { return rules; }
-        @Override public RandomSource getRandom() { return neutral; }
+        @Override public RandomSource getRandom() {
+            if (spawnerRandom == null) return neutral;
+            boolean finalizing = StackWalker.getInstance().walk(f -> f.anyMatch(x -> x.getMethodName().equals("finalizeSpawn")));
+            return finalizing ? spawnerNeutral : spawnerRandom;
+        }
+        @Override public boolean tryAddFreshEntityWithPassengers(Entity entity) {
+            addFreshEntityWithPassengers(entity);
+            log.add(tick + " spawn " + BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()) + " " + bits(entity.getX()) + " " + bits(entity.getY()) + " " + bits(entity.getZ()) + " " + yaw(entity));
+            return true;
+        }
+        @Override public void blockEvent(BlockPos pos, net.minecraft.world.level.block.Block block, int b0, int b1) { if (tick >= 0) log.add(tick + " bevent " + b0 + " " + b1); }
+        @Override public void sendBlockUpdated(BlockPos pos, BlockState old, BlockState current, int flags) { if (tick >= 0) log.add(tick + " update"); }
+        @Override public void levelEvent(Entity source, int type, BlockPos pos, int data) { if (tick >= 0) log.add(tick + " levent " + type + " " + data); }
+        @Override public void gameEvent(Holder<net.minecraft.world.level.gameevent.GameEvent> event, Vec3 at, net.minecraft.world.level.gameevent.GameEvent.Context context) {
+            if (tick >= 0) log.add(tick + " gevent " + event.unwrapKey().orElseThrow().identifier() + " " + Mth.floor(at.x) + " " + Mth.floor(at.y) + " " + Mth.floor(at.z));
+        }
+        @Override public void broadcastEntityEvent(Entity entity, byte event) { if (tick >= 0) log.add(tick + " eevent " + event); }
         @Override public ServerChunkCache getChunkSource() { return chunkSource; }
         @Override public StructureManager structureManager() { return structures; }
         @Override public LevelData.RespawnData getRespawnData() { return respawn; }
@@ -299,6 +337,7 @@ public final class VanillaNaturalSpawnOracle {
         @Override public boolean isSpectator() { return mode == GameType.SPECTATOR; }
         @Override public boolean isCreative() { return mode == GameType.CREATIVE; }
         @Override public GameType gameMode() { return mode; }
+        @Override public boolean isAlive() { return true; }
     }
 
     static String bits(double v) { return Long.toHexString(Double.doubleToRawLongBits(v)); }
@@ -358,6 +397,7 @@ public final class VanillaNaturalSpawnOracle {
         level.playerList = new ArrayList<>();
         level.border = new WorldBorder();
         level.neutral = new Neutral();
+        level.spawnerNeutral = new SpawnerNeutral();
         level.rules = new GameRules(net.minecraft.world.flag.FeatureFlags.REGISTRY.allFlags());
         level.biomeManager = new BiomeManager((x, y, z) -> level.biome, 0L) {
             @Override public Holder<Biome> getBiome(BlockPos pos) { return level.biomeAt(pos.getX(), pos.getY(), pos.getZ()); }
@@ -424,6 +464,7 @@ public final class VanillaNaturalSpawnOracle {
                     level.seed = Long.parseLong(c.getOrDefault("wseed", "0"));
                     level.difficulty = Difficulty.byName(c.getOrDefault("difficulty", "normal"));
                     level.rules.set(net.minecraft.world.level.gamerules.GameRules.SPAWN_MOBS, !c.getOrDefault("rules", "1").equals("0"), null);
+                    level.rules.set(net.minecraft.world.level.gamerules.GameRules.SPAWNER_BLOCKS_WORK, !c.getOrDefault("spawners", "1").equals("0"), null);
                     // The dimension and biome layers; the moon timeline's surface slime chance as a constant.
                     level.attributes = net.minecraft.world.attribute.EnvironmentAttributeSystem.builder().addStaticLayers(level)
                         .addConstantLayer(net.minecraft.world.attribute.EnvironmentAttributeMap.builder()
@@ -476,7 +517,37 @@ public final class VanillaNaturalSpawnOracle {
                     Chunk chunk = (Chunk) alloc(Chunk.class);
                     chunk.level = level;
                     chunk.at = new ChunkPos(Integer.parseInt(cp[0]), Integer.parseInt(cp[1]));
-                    if (mode.equals("gen")) {
+                    if (mode.equals("spawner")) {
+                        // SpawnerBlockEntity.serverTick, `ticks` times, at `spos`, loaded from `snbt` (base64 SNBT).
+                        level.spawnerRandom = mainRandom;
+                        level.tick = -1;
+                        String[] sp = c.get("spos").split(",");
+                        BlockPos at = new BlockPos(Integer.parseInt(sp[0]), Integer.parseInt(sp[1]), Integer.parseInt(sp[2]));
+                        var nbt = net.minecraft.nbt.TagParser.parseCompoundFully(new String(Base64.getDecoder().decode(c.get("snbt")), StandardCharsets.UTF_8));
+                        var spawner = new net.minecraft.world.level.block.entity.SpawnerBlockEntity(at, Blocks.SPAWNER.defaultBlockState());
+                        spawner.getSpawner().load(level, at, net.minecraft.world.level.storage.TagValueInput.create(net.minecraft.util.ProblemReporter.DISCARDING, access, nbt));
+                        int ticks = Integer.parseInt(c.getOrDefault("ticks", "1"));
+                        try {
+                            for (int t = 0; t < ticks; t++) {
+                                level.tick = t;
+                                net.minecraft.world.level.block.entity.SpawnerBlockEntity.serverTick(level, at, Blocks.SPAWNER.defaultBlockState(), spawner);
+                            }
+                        } finally {
+                            level.tick = -1;
+                            level.spawnerRandom = null;
+                        }
+                        var out = net.minecraft.world.level.storage.TagValueOutput.createWithContext(net.minecraft.util.ProblemReporter.DISCARDING, access);
+                        spawner.getSpawner().save(out);
+                        CompoundTag saved = out.buildResult();
+                        String next = saved.getCompound("SpawnData").flatMap(d -> d.getCompound("entity")).flatMap(e -> e.getString("id")).orElse("-");
+                        StringBuilder pots = new StringBuilder();
+                        for (var p : saved.getListOrEmpty("SpawnPotentials")) {
+                            String id = ((CompoundTag) p).getCompound("data").flatMap(d -> d.getCompound("entity")).flatMap(e -> e.getString("id")).orElse("-");
+                            pots.append(pots.isEmpty() ? "" : ",").append(id).append('*').append(((CompoundTag) p).getIntOr("weight", 0));
+                        }
+                        log.add("end delay=" + saved.getShortOr("Delay", (short) 0) + " next=" + next + " pots=" + pots);
+                        log.add("next " + mainRandom.nextInt(1000));
+                    } else if (mode.equals("gen")) {
                         level.logColumns = true;
                         int n = level.entities.size();
                         RandomSource random = RandomSource.create(Long.parseLong(c.getOrDefault("gseed", "0")));

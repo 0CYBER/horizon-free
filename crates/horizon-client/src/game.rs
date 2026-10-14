@@ -73,6 +73,8 @@ mod net_harness;
 mod nether_portal;
 mod options;
 mod packs;
+mod pad;
+mod pad_menu;
 mod paintings;
 mod passengers;
 mod persist;
@@ -93,6 +95,7 @@ mod sculk_fixture;
 mod shield;
 mod sign_edit;
 mod sniffers;
+mod spawner;
 mod spill;
 mod station_control;
 mod stations;
@@ -589,6 +592,22 @@ pub struct Resources {
     /// Enchantments, workstation recipes and brewing (game/stations.rs).
     stations: horizon_client::stations::StationData,
 }
+/// Ctrl+Q reads the physical keyboard, independently of sprint key mappings.
+fn drop_whole_stack(physical_keys: &HashSet<KeyCode>) -> bool {
+    physical_keys.contains(&KeyCode::ControlLeft) || physical_keys.contains(&KeyCode::ControlRight)
+}
+
+fn select_creative_tab(
+    creative: &mut Creative,
+    clicks: &mut horizon_client::container_screen::Clicks,
+    tab: usize,
+) {
+    creative.select(tab);
+    *clicks = Default::default();
+    // Tabs are outside the panel; their release must not drop a carried stack.
+    clicks.skip_release();
+}
+
 struct Game<'a> {
     res: &'a mut Resources,
     collision: &'a BlockCollisionRegistry<'a>,
@@ -661,6 +680,8 @@ struct Game<'a> {
     previous: Instant,
     /// FramerateLimitTracker.latestInputTime.
     last_input: Instant,
+    /// Controllers (Horizon's own).
+    pad: pad::Pads,
     frames: u64,
     fps: f32,
     fps_frames: u64,
@@ -829,6 +850,8 @@ struct Game<'a> {
     tridents: Vec<trident::ThrownTrident>,
     rockets: Vec<fireworks::Rocket>,
     creaking: creaking::CreakingState,
+    /// Monster spawners' display mobs (`game/spawner.rs`).
+    spawners: spawner::SpawnerState,
     trident_model: Option<horizon_client::mobs::Part>,
     arrow_model: Option<horizon_client::mobs::Part>,
     tnts: Vec<tnt::PrimedTnt>,
@@ -876,6 +899,10 @@ struct Game<'a> {
     forced_hit: Option<Hit>,
     /// Level events of this tick for the guests, and the guest acting now.
     lan_events: Vec<(i32, [i32; 3], i32, Option<u32>)>,
+    /// Block events (position, b0, b1, state) and entity events (id, event,
+    /// position) for the guests.
+    lan_block_events: Vec<([i32; 3], i32, i32, u16)>,
+    lan_entity_events: Vec<(i32, i8, [f64; 3])>,
     lan_acting: Option<u32>,
     /// Command feedback to forward to a guest.
     chat_capture: Option<Vec<horizon_client::text::Text>>,
@@ -1624,6 +1651,9 @@ impl Game<'_> {
                     data,
                 } => self.sculk_charge_event(pos, data),
                 LevelEvent::LevelEvent { id: 3007, pos, .. } => self.shriek_event(pos),
+                LevelEvent::LevelEvent { id: 2004, pos, .. } => {
+                    self.spawner_burst([pos.x, pos.y, pos.z])
+                }
                 LevelEvent::LevelEvent {
                     id: id @ 3002..=3005,
                     pos,
@@ -2002,6 +2032,7 @@ impl Game<'_> {
         self.with_player_actor(|game| game.break_block_as_player(pos))
     }
     fn break_block_as_player(&mut self, pos: [i32; 3]) -> Result<()> {
+        self.pad_rumble(horizon_client::gamepad::Rumble::BlockBroken);
         // ServerPlayerGameMode.destroyBlock.
         let state = self.world.block(pos[0], pos[1], pos[2]);
         let facts = self.res.facts.get(state).clone();
@@ -2067,7 +2098,8 @@ impl Game<'_> {
                         self.pop_resource(pos, d);
                     }
                 }
-                let xp = if silk {
+                // SpawnerBlock.spawnAfterBreak pops its experience whatever the tool.
+                let xp = if silk && &*facts.name != "minecraft:spawner" {
                     0
                 } else {
                     self.block_experience(&facts.name)
@@ -2673,6 +2705,7 @@ impl Game<'_> {
         }
         self.previous_position = feet;
         self.player = Some(player);
+        self.pad.player_replaced();
         self.sway = Default::default();
         self.apply_equipment();
         self.eye = 1.62;
@@ -2708,6 +2741,7 @@ impl Game<'_> {
         self.update_totem_ready();
         self.tick_command_extras();
         let camera_eye = self.camera_eye_height();
+        let stick = self.pad_move();
         if self.riding.is_some() && self.player.is_some() {
             let playing = self.screen == Screen::Playing;
             let held = |k| playing && self.keys.contains(&k);
@@ -2719,7 +2753,9 @@ impl Game<'_> {
                 jump: held(KeyCode::Space),
                 shift: held(KeyCode::ShiftLeft),
                 sprint: false,
-            };
+                analog: None,
+            }
+            .with_stick(stick.filter(|_| playing));
             self.tick_riding(keys)?;
         }
         let riding = self.riding.is_some();
@@ -2748,7 +2784,9 @@ impl Game<'_> {
             jump: held(KeyCode::Space),
             shift: held(KeyCode::ShiftLeft),
             sprint: held(KeyCode::ControlLeft),
-        };
+            analog: None,
+        }
+        .with_stick(stick.filter(|_| playing));
         if !riding {
             self.previous_position = player.position;
         }
@@ -3023,6 +3061,40 @@ impl Game<'_> {
             self.keys.remove(&key);
         }
     }
+    /// A key event after rebinding, as the default key of its mapping (the
+    /// keyboard and controllers both end here).
+    fn mapped_key(&mut self, key: KeyCode, pressed: bool, repeat: bool) -> Result<()> {
+        // Sneak and sprint are ToggleKeyMappings: a press (or a key
+        // repeat) flips them when toggling; only releases reach them
+        // behind a screen (KeyboardHandler.keyPress).
+        let toggle = match key {
+            KeyCode::ShiftLeft => Some((0, self.settings.toggle_crouch)),
+            KeyCode::ControlLeft => Some((1, self.settings.toggle_sprint)),
+            _ => None,
+        };
+        if let Some((slot, option)) = toggle {
+            let action = match (pressed, repeat) {
+                (false, _) => KeyAction::Release,
+                (_, false) => KeyAction::Press,
+                (_, true) => KeyAction::Repeat,
+            };
+            let screen_open = self.screen != Screen::Playing || self.title.is_some();
+            self.toggles.key(slot, action, screen_open, option);
+            self.sync_toggle(slot);
+            if !pressed {
+                return Ok(());
+            }
+        } else if !pressed {
+            self.keys.remove(&key);
+            return Ok(());
+        } else {
+            self.keys.insert(key);
+        }
+        if repeat {
+            return Ok(());
+        }
+        self.key_pressed(key)
+    }
     /// `KeyMapping.releaseAll` when a screen opens and
     /// `restoreToggleStatesOnScreenClosed` when it closes.
     fn track_toggle_screens(&mut self) {
@@ -3087,7 +3159,11 @@ impl Game<'_> {
             && self.title.is_none()
             && (matches!(
                 self.screen,
-                Screen::Paused | Screen::Options | Screen::Stats | Screen::Advancements
+                Screen::Paused
+                    | Screen::Options
+                    | Screen::Stats
+                    | Screen::Advancements
+                    | Screen::WorldOptions
             ) || self.book.is_some())
     }
     fn capture(&mut self, capture: bool) {
@@ -3143,6 +3219,7 @@ impl Game<'_> {
         let mut batch = self.hud_layers(size);
         self.frame_graph
             .draw(self.settings.horizon.overlay, &mut batch, &self.res.atlas);
+        self.draw_pad_cursor(&mut batch);
         batch
     }
     fn hud_layers(&mut self, size: [u32; 2]) -> HudBatch {
@@ -3443,7 +3520,13 @@ impl Game<'_> {
         self.draw_book(&mut batch);
         batch
     }
+    fn creative_inventory_open(&self) -> bool {
+        self.screen == Screen::Creative && self.creative_screen.tab().inventory
+    }
     fn inventory_origin(&self, batch: &HudBatch) -> (f32, f32) {
+        if self.creative_inventory_open() {
+            return Self::creative_origin(batch);
+        }
         let (x, y) = batch.centered_origin(176.0, self.screen_height());
         (x + self.recipe_book_shift(batch.width), y)
     }
@@ -3454,6 +3537,9 @@ impl Game<'_> {
     }
     /// 300.. are the open container's slots.
     fn slots(&self) -> Vec<usize> {
+        if self.creative_inventory_open() {
+            return Creative::inventory_slots().collect();
+        }
         if let Some(v) = self.station_slots().or_else(|| self.mount_slots()) {
             return v;
         }
@@ -3470,7 +3556,8 @@ impl Game<'_> {
                 | BlockEntity::Lectern(_)
                 | BlockEntity::Sculk(_)
                 | BlockEntity::Banner(_)
-                | BlockEntity::CreakingHeart(_),
+                | BlockEntity::CreakingHeart(_)
+                | BlockEntity::Spawner(_),
             ) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
@@ -3484,6 +3571,11 @@ impl Game<'_> {
     }
     /// InventoryMenu / CraftingMenu slot layouts.
     fn slot_position(&self, i: usize) -> (f32, f32) {
+        if self.creative_inventory_open()
+            && let Some(position) = Creative::inventory_slot_position(i)
+        {
+            return position;
+        }
         if let Some(p) = self
             .station_slot_position(i)
             .or_else(|| self.machine_slot_position(i))
@@ -3593,6 +3685,32 @@ impl Game<'_> {
             .find_with(&grid, n, &scale)
             .map(|(name, result)| (name.to_owned(), result))
     }
+    fn draw_inventory_slots(&mut self, batch: &mut HudBatch, ox: f32, oy: f32) {
+        for i in self.slots() {
+            let (sx, sy) = self.slot_position(i);
+            if i == 504 && self.offhand.is_none() {
+                batch.sprite(
+                    &self.res.atlas,
+                    "gui/sprites/container/slot/shield",
+                    ox + sx,
+                    oy + sy,
+                );
+            }
+            if (500..504).contains(&i) && self.armor[i - 500].is_none() {
+                let icon = ["helmet", "chestplate", "leggings", "boots"][i - 500];
+                batch.sprite(
+                    &self.res.atlas,
+                    &format!("gui/sprites/container/slot/{icon}"),
+                    ox + sx,
+                    oy + sy,
+                );
+            }
+            let stack = self.slot_view(i);
+            if let Some(stack) = stack {
+                self.draw_item(batch, &stack, ox + sx, oy + sy);
+            }
+        }
+    }
     fn draw_inventory(&mut self, batch: &mut HudBatch) {
         if self.draw_station(batch) {
             return;
@@ -3687,7 +3805,8 @@ impl Game<'_> {
                     | BlockEntity::Lectern(_)
                     | BlockEntity::Sculk(_)
                     | BlockEntity::Banner(_)
-                    | BlockEntity::CreakingHeart(_),
+                    | BlockEntity::CreakingHeart(_)
+                    | BlockEntity::Spawner(_),
                 ) => {}
                 None if self.mount_active() => self.draw_mount_background(batch, ox, oy),
                 None => {
@@ -3719,30 +3838,7 @@ impl Game<'_> {
         if self.container.is_none() && self.craft_size != 3 && !self.mount_active() {
             self.draw_inventory_player(batch, ox, oy);
         }
-        for i in self.slots() {
-            let (sx, sy) = self.slot_position(i);
-            if i == 504 && self.offhand.is_none() {
-                batch.sprite(
-                    &self.res.atlas,
-                    "gui/sprites/container/slot/shield",
-                    ox + sx,
-                    oy + sy,
-                );
-            }
-            if (500..504).contains(&i) && self.armor[i - 500].is_none() {
-                let icon = ["helmet", "chestplate", "leggings", "boots"][i - 500];
-                batch.sprite(
-                    &self.res.atlas,
-                    &format!("gui/sprites/container/slot/{icon}"),
-                    ox + sx,
-                    oy + sy,
-                );
-            }
-            let stack = self.slot_view(i);
-            if let Some(stack) = stack {
-                self.draw_item(batch, &stack, ox + sx, oy + sy);
-            }
-        }
+        self.draw_inventory_slots(batch, ox, oy);
         self.draw_recipe_book(batch);
         if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
             let (sx, sy) = self.slot_position(slot);
@@ -4204,7 +4300,7 @@ impl Game<'_> {
             (Some(n), _) => self.menu_click(Some(slot), n as i32, Input::Swap),
             (None, KeyCode::KeyF) => self.menu_click(Some(slot), 40, Input::Swap),
             (None, KeyCode::KeyQ) => {
-                let all = self.keys.contains(&KeyCode::ControlLeft);
+                let all = drop_whole_stack(&self.physical_keys);
                 self.menu_click(Some(slot), i32::from(all), Input::Throw)
             }
             _ => false,
@@ -4307,16 +4403,21 @@ impl Game<'_> {
     fn clicked_outside(&self, batch: &HudBatch) -> bool {
         use horizon_client::container_screen::{Book, Image, clicked_outside};
         let (ox, oy) = self.inventory_origin(batch);
-        let (shift, width) = match self.station.as_ref().map(|s| s.kind) {
-            Some(stations::Kind::Merchant) => (-50.0, 276),
-            Some(stations::Kind::Beacon) => (beacon::SHIFT, 230),
-            _ => (0.0, 176),
+        let (shift, width, height) = if self.creative_inventory_open() {
+            (0.0, Creative::WIDTH as i32, Creative::HEIGHT as i32)
+        } else {
+            let (shift, width) = match self.station.as_ref().map(|s| s.kind) {
+                Some(stations::Kind::Merchant) => (-50.0, 276),
+                Some(stations::Kind::Beacon) => (beacon::SHIFT, 230),
+                _ => (0.0, 176),
+            };
+            (shift, width, self.screen_height() as i32)
         };
         let image = Image {
             left: (ox + shift) as i32,
             top: oy as i32,
             width,
-            height: self.screen_height() as i32,
+            height,
         };
         let book = self
             .recipe_book_area(batch)
@@ -5290,6 +5391,7 @@ impl Game<'_> {
         self.tick_jukeboxes();
         self.tick_beacons();
         self.tick_creaking_hearts()?;
+        self.tick_spawners()?;
         let mut lit_changes = Vec::new();
         for (pos, entity) in self.world.block_entities.iter_mut() {
             if let BlockEntity::Furnace(f) = entity
@@ -6672,7 +6774,12 @@ impl Game<'_> {
             "sculk_catalyst" | "sculk_sensor" | "calibrated_sculk_sensor" | "sculk_shrieker" => {
                 (5, 5)
             }
-            "spawner" => (15, 43),
+            // SpawnerBlock.spawnAfterBreak: 15 + nextInt(15) + nextInt(15).
+            "spawner" => {
+                let r = &mut self.world.random;
+                let a = r.next_int_bound(15).unwrap_or(0);
+                return (15 + a + r.next_int_bound(15).unwrap_or(0)) as u32;
+            }
             _ => (0, 0),
         };
         if max == 0 {
@@ -7341,63 +7448,100 @@ impl Game<'_> {
             );
         }
         let atlas = &self.res.atlas;
-        batch.text(
-            atlas,
-            &tab.title,
-            ox + 8.0,
-            oy + 6.0,
-            rgba(64, 64, 64, 255),
-            false,
-        );
+        if !tab.inventory {
+            batch.text(
+                atlas,
+                &tab.title,
+                ox + 8.0,
+                oy + 6.0,
+                rgba(64, 64, 64, 255),
+                false,
+            );
+        }
         if tab.search {
             let shown = format!("{}_", self.creative_screen.search);
             batch.text(atlas, &shown, ox + 82.0, oy + 6.0, u32::MAX, true);
         }
-        let items = self.creative_screen.items(&self.res.names);
-        let first = self.creative_screen.first_row(&self.res.names);
         let mut hovered: Option<String> = None;
-        for r in 0..5 {
-            for c in 0..9 {
-                let Some(stack) = items.get((first + r) * 9 + c) else {
-                    continue;
-                };
-                let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 18.0 + r as f32 * 18.0);
-                self.draw_item(batch, stack, x, y);
-                if self.cursor.0 >= x
-                    && self.cursor.0 < x + 16.0
-                    && self.cursor.1 >= y
-                    && self.cursor.1 < y + 16.0
-                {
-                    batch.fill(&self.res.atlas, x, y, 16.0, 16.0, rgba(255, 255, 255, 128));
-                    hovered = Some(stack.item.to_string());
-                }
+        if tab.inventory {
+            self.draw_player_preview(
+                batch,
+                ox + 73.0,
+                oy + 6.0,
+                ox + 105.0,
+                oy + 49.0,
+                20.0,
+                0.0625,
+            );
+            self.draw_inventory_slots(batch, ox, oy);
+            if Self::creative_trash_hovered(batch, self.cursor) {
+                let (x, y) = Creative::TRASH_POSITION;
+                batch.fill(
+                    &self.res.atlas,
+                    ox + x,
+                    oy + y,
+                    16.0,
+                    16.0,
+                    rgba(255, 255, 255, 128),
+                );
             }
-        }
-        for c in 0..9 {
-            let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 112.0);
-            if let Some(stack) = self.inventory[c].clone() {
-                self.draw_item(batch, &stack, x, y);
-                if self.cursor.0 >= x
-                    && self.cursor.0 < x + 16.0
-                    && self.cursor.1 >= y
-                    && self.cursor.1 < y + 16.0
-                {
-                    hovered = Some(stack.item.to_string());
-                }
+            if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
+                let (x, y) = self.slot_position(slot);
+                batch.fill(
+                    &self.res.atlas,
+                    ox + x,
+                    oy + y,
+                    16.0,
+                    16.0,
+                    rgba(255, 255, 255, 128),
+                );
             }
-        }
-        let scrollable = self.creative_screen.rows(&self.res.names) > 5;
-        let scroller = if scrollable {
-            "gui/sprites/container/creative_inventory/scroller"
         } else {
-            "gui/sprites/container/creative_inventory/scroller_disabled"
-        };
-        batch.sprite(
-            &self.res.atlas,
-            scroller,
-            ox + Creative::SCROLL_X,
-            oy + Creative::SCROLL_Y + self.creative_screen.scroller_offset(),
-        );
+            let items = self.creative_screen.items(&self.res.names);
+            let first = self.creative_screen.first_row(&self.res.names);
+            for r in 0..5 {
+                for c in 0..9 {
+                    let Some(stack) = items.get((first + r) * 9 + c) else {
+                        continue;
+                    };
+                    let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 18.0 + r as f32 * 18.0);
+                    self.draw_item(batch, stack, x, y);
+                    if self.cursor.0 >= x
+                        && self.cursor.0 < x + 16.0
+                        && self.cursor.1 >= y
+                        && self.cursor.1 < y + 16.0
+                    {
+                        batch.fill(&self.res.atlas, x, y, 16.0, 16.0, rgba(255, 255, 255, 128));
+                        hovered = Some(stack.item.to_string());
+                    }
+                }
+            }
+            for c in 0..9 {
+                let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 112.0);
+                if let Some(stack) = self.inventory[c].clone() {
+                    self.draw_item(batch, &stack, x, y);
+                    if self.cursor.0 >= x
+                        && self.cursor.0 < x + 16.0
+                        && self.cursor.1 >= y
+                        && self.cursor.1 < y + 16.0
+                    {
+                        hovered = Some(stack.item.to_string());
+                    }
+                }
+            }
+            let scrollable = self.creative_screen.rows(&self.res.names) > 5;
+            let scroller = if scrollable {
+                "gui/sprites/container/creative_inventory/scroller"
+            } else {
+                "gui/sprites/container/creative_inventory/scroller_disabled"
+            };
+            batch.sprite(
+                &self.res.atlas,
+                scroller,
+                ox + Creative::SCROLL_X,
+                oy + Creative::SCROLL_Y + self.creative_screen.scroller_offset(),
+            );
+        }
         for t in &tabs {
             let (tx, ty) = Creative::tab_position(t);
             if self.cursor.0 >= ox + tx
@@ -7410,10 +7554,27 @@ impl Game<'_> {
         }
         if let Some(stack) = self.carried.clone() {
             self.draw_item(batch, &stack, self.cursor.0 - 8.0, self.cursor.1 - 8.0);
-        } else if let Some(item) = hovered {
+        }
+        if tab.inventory {
+            if Self::creative_trash_hovered(batch, self.cursor) {
+                self.tooltip(batch, "Destroy Item", self.cursor.0, self.cursor.1);
+            } else {
+                self.draw_slot_tooltip(batch);
+            }
+        } else if self.carried.is_none()
+            && let Some(item) = hovered
+        {
             let name = self.res.names.item(&item);
             self.tooltip(batch, &name, self.cursor.0, self.cursor.1);
         }
+    }
+    fn creative_trash_hovered(batch: &HudBatch, cursor: (f32, f32)) -> bool {
+        let (ox, oy) = Self::creative_origin(batch);
+        let (x, y) = Creative::TRASH_POSITION;
+        cursor.0 >= ox + x
+            && cursor.0 < ox + x + 16.0
+            && cursor.1 >= oy + y
+            && cursor.1 < oy + y + 16.0
     }
     fn click_creative(&mut self, right: bool) {
         let Some(size) = self
@@ -7430,13 +7591,29 @@ impl Game<'_> {
         for (i, t) in tabs.iter().enumerate() {
             let (tx, ty) = Creative::tab_position(t);
             if cx >= ox + tx && cx < ox + tx + 26.0 && cy >= oy + ty && cy < oy + ty + 32.0 {
-                if t.inventory {
-                    self.screen = Screen::Inventory;
-                    return;
-                }
-                self.creative_screen.select(i);
+                select_creative_tab(&mut self.creative_screen, &mut self.inv_clicks, i);
+                self.inv_drag = None;
+                self.last_inv_click = None;
                 return;
             }
+        }
+        if self.creative_inventory_open() {
+            if Self::creative_trash_hovered(&batch, self.cursor) {
+                if self.has_shift_down() {
+                    self.inventory.fill(None);
+                    self.armor.fill(None);
+                    self.offhand = None;
+                    self.craft_grid[..4].fill(None);
+                    self.apply_equipment();
+                } else {
+                    self.carried = None;
+                }
+                self.inv_drag = None;
+                self.inv_clicks = Default::default();
+            } else if self.slot_at(&batch, cx, cy).is_some() || self.clicked_outside(&batch) {
+                self.inventory_press(right);
+            }
+            return;
         }
         // Holding the scrollbar scrolls as the mouse moves (mouseDragged).
         if !right
@@ -7765,7 +7942,7 @@ impl Game<'_> {
         } else {
             Vec::new()
         };
-        let hand = if title || self.screen == Screen::Inventory || self.scoping() {
+        let hand = if title || self.scoping() {
             Vec::new()
         } else {
             self.hand_geometry(alpha)
@@ -7956,7 +8133,8 @@ impl Game<'_> {
             | KeyCode::Digit9
             | KeyCode::KeyF
             | KeyCode::KeyQ
-                if self.screen == Screen::Inventory && self.inventory_hotkey(key) => {}
+                if (self.screen == Screen::Inventory || self.creative_inventory_open())
+                    && self.inventory_hotkey(key) => {}
             KeyCode::KeyT if self.screen == Screen::Inventory => self.recipe_focus_search(),
             KeyCode::KeyT if self.screen == Screen::Playing => self.open_chat(""),
             // key.advancements.
@@ -8002,7 +8180,7 @@ impl Game<'_> {
                 self.using = None;
             }
             KeyCode::KeyQ if self.screen == Screen::Playing => {
-                let all = self.keys.contains(&KeyCode::ControlLeft);
+                let all = drop_whole_stack(&self.physical_keys);
                 self.drop_held(all);
             }
             KeyCode::Digit1
@@ -8294,6 +8472,8 @@ impl ApplicationHandler for Game<'_> {
                         }
                         if self.screen == Screen::Inventory {
                             self.loom_drag();
+                        }
+                        if self.screen == Screen::Inventory || self.creative_inventory_open() {
                             self.inventory_drag_move();
                         }
                         if self.dragging && self.screen == Screen::Options {
@@ -8449,6 +8629,9 @@ impl ApplicationHandler for Game<'_> {
                         Screen::Creative if pressed => {
                             self.click_creative(button == MouseButton::Right);
                         }
+                        Screen::Creative if self.creative_screen.tab().inventory => {
+                            self.inventory_mouse_release(button == MouseButton::Right);
+                        }
                         Screen::Creative if button == MouseButton::Left => {
                             self.creative_screen.release();
                         }
@@ -8529,18 +8712,23 @@ impl ApplicationHandler for Game<'_> {
                 WindowEvent::KeyboardInput { event, .. } if self.remote_chat_open() => {
                     self.remote_chat_key(&event)
                 }
-                WindowEvent::KeyboardInput { event, .. } if self.screen == Screen::WorldOptions => {
+                WindowEvent::KeyboardInput { event, .. }
+                    if self.screen == Screen::WorldOptions
+                        && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape)) =>
+                {
                     self.world_options_key(&event)
                 }
-                WindowEvent::KeyboardInput { event, .. } if self.screen == Screen::Options => {
+                // Options consumes presses; releases still reach the bound
+                // gameplay mapping below, including sneak/sprint toggles.
+                WindowEvent::KeyboardInput { event, .. }
+                    if self.screen == Screen::Options && event.state == ElementState::Pressed =>
+                {
                     if let Some(shortcut) = self.edit_shortcut(&event)
                         && self.options_shortcut(shortcut)
                     {
                         return Ok(());
                     }
-                    if event.state == ElementState::Pressed
-                        && let PhysicalKey::Code(key) = event.physical_key
-                    {
+                    if let PhysicalKey::Code(key) = event.physical_key {
                         self.options_key(key, event.text.as_deref())?;
                     }
                 }
@@ -8592,36 +8780,7 @@ impl ApplicationHandler for Game<'_> {
                         }
                         None => return Ok(()),
                     };
-                    // Sneak and sprint are ToggleKeyMappings: a press (or a key
-                    // repeat) flips them when toggling; only releases reach them
-                    // behind a screen (KeyboardHandler.keyPress).
-                    let toggle = match key {
-                        KeyCode::ShiftLeft => Some((0, self.settings.toggle_crouch)),
-                        KeyCode::ControlLeft => Some((1, self.settings.toggle_sprint)),
-                        _ => None,
-                    };
-                    if let Some((slot, option)) = toggle {
-                        let action = match (event.state, event.repeat) {
-                            (ElementState::Released, _) => KeyAction::Release,
-                            (_, false) => KeyAction::Press,
-                            (_, true) => KeyAction::Repeat,
-                        };
-                        let screen_open = self.screen != Screen::Playing || self.title.is_some();
-                        self.toggles.key(slot, action, screen_open, option);
-                        self.sync_toggle(slot);
-                        if event.state != ElementState::Pressed {
-                            return Ok(());
-                        }
-                    } else if event.state != ElementState::Pressed {
-                        self.keys.remove(&key);
-                        return Ok(());
-                    } else {
-                        self.keys.insert(key);
-                    }
-                    if event.repeat {
-                        return Ok(());
-                    }
-                    self.key_pressed(key)?;
+                    self.mapped_key(key, event.state == ElementState::Pressed, event.repeat)?;
                 }
                 WindowEvent::RedrawRequested => {
                     self.observe_fullscreen();
@@ -8666,6 +8825,7 @@ impl ApplicationHandler for Game<'_> {
                         }
                     }
                     self.apply_mouse_look();
+                    self.pad_look(elapsed.as_secs_f32());
                     self.advance_flight();
                     let ticked = Instant::now();
                     let rendered = self.render()?;
@@ -8771,6 +8931,7 @@ impl ApplicationHandler for Game<'_> {
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.poll_control(event_loop);
+        self.poll_pads(event_loop);
         if self.options.frames.is_some() && self.started.elapsed() > self.options.timeout {
             self.error = Some("frame-limited run timed out".into());
             event_loop.exit();
@@ -9029,6 +9190,7 @@ pub fn run() -> Result<()> {
         started: now,
         previous: now,
         last_input: now,
+        pad: Default::default(),
         frames: 0,
         fps: 0.0,
         fps_frames: 0,
@@ -9152,6 +9314,7 @@ pub fn run() -> Result<()> {
         tridents: Vec::new(),
         rockets: Vec::new(),
         creaking: Default::default(),
+        spawners: Default::default(),
         trident_model: horizon_client::mobs::load_model(&root, "minecraft:trident#main"),
         arrow_model: horizon_client::mobs::load_model(&root, "minecraft:arrow#main"),
         tnts: Vec::new(),
@@ -9181,6 +9344,8 @@ pub fn run() -> Result<()> {
         saved_for_exit: false,
         forced_hit: None,
         lan_events: Vec::new(),
+        lan_block_events: Vec::new(),
+        lan_entity_events: Vec::new(),
         lan_acting: None,
         chat_capture: None,
         cmds: Default::default(),
@@ -9208,9 +9373,7 @@ pub fn run() -> Result<()> {
         player_model: None,
     };
     game.ui.vanilla_root = vanilla_root;
-    game.res.atlas.font.uniform = game.settings.force_unicode;
-    game.res.atlas.font.japanese = game.settings.japanese_glyphs;
-    game.ui.chat.options = game.settings.chat_options();
+    game.apply_settings();
     if let Some(path) = &game.options.control {
         let server = horizon_client::control::Server::start(path)
             .map_err(|e| format!("control socket {}: {e}", path.display()))?;
@@ -9299,5 +9462,67 @@ mod runtime_reset_tests {
         assert!(!adv.loaded && !stats.loaded);
         assert!(adv.progress.criteria.is_empty());
         assert!(stats.values.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_client::container_screen::{Button, Clicks, Release, Target};
+    use horizon_client::keymapping::{KeyAction, SPRINT, ToggleKeys};
+
+    #[test]
+    fn selecting_creative_tabs_does_not_drop_the_carried_stack_on_release() {
+        let mut creative = Creative::from_json(&serde_json::json!({
+            "schema": 2,
+            "tabs": [{"type": "CATEGORY"}, {"type": "INVENTORY"}]
+        }))
+        .unwrap();
+        for button in [Button::Left, Button::Right] {
+            let mut clicks = Clicks::default();
+            for tab in [1, 1, 0, 1] {
+                select_creative_tab(&mut creative, &mut clicks, tab);
+                assert_eq!(creative.selected, tab);
+                assert_eq!(creative.tab().inventory, tab == 1);
+                assert_eq!(
+                    clicks.release(
+                        &Target::<usize>::Outside,
+                        button,
+                        false,
+                        false,
+                        false,
+                        false
+                    ),
+                    Release::Nothing
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn stack_drop_requires_physical_ctrl_even_with_sprint_latched() {
+        for sprint in [false, true] {
+            let mut toggles = ToggleKeys::default();
+            if sprint {
+                toggles.key(SPRINT, KeyAction::Press, false, true);
+                toggles.key(SPRINT, KeyAction::Release, false, true);
+            }
+            assert_eq!(toggles.is_down(SPRINT), sprint);
+
+            for held in 0..4 {
+                let mut physical_keys = HashSet::from([KeyCode::ShiftLeft, KeyCode::KeyQ]);
+                if held & 1 != 0 {
+                    physical_keys.insert(KeyCode::ControlLeft);
+                }
+                if held & 2 != 0 {
+                    physical_keys.insert(KeyCode::ControlRight);
+                }
+                assert_eq!(drop_whole_stack(&physical_keys), held != 0);
+                physical_keys.remove(&KeyCode::ControlLeft);
+                physical_keys.remove(&KeyCode::ControlRight);
+                assert!(!drop_whole_stack(&physical_keys));
+                assert_eq!(toggles.is_down(SPRINT), sprint);
+            }
+        }
     }
 }
