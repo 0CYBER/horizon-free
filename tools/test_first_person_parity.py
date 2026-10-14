@@ -47,9 +47,12 @@ ITEMS = [None, ['minecraft:diamond_sword', 1], ['minecraft:diamond_pickaxe', 1],
 TARGETS = [(0, 64, 0), (1, 64, 0), (0, 65, 2)]
 
 
-def step(hit=('miss',), ac=0, uc=0, ad=False, ud=False, busy=False, using=False, uses=None, shrink=False, set=None):
+def step(hit=('miss',), ac=0, uc=0, ad=False, ud=False, busy=False, using=False, uses=None, shrink=False, set=None,
+         rot=None):
+    """rot: the player's (xRot, yRot) from this step on (LocalPlayer.applyInput's hand sway)."""
     return dict(hit=list(hit), ac=ac, uc=uc, ad=ad, ud=ud, busy=busy, using=using,
-                uses=uses or dict(entity='pass', block='pass', item='pass'), shrink=shrink, set=set)
+                uses=uses or dict(entity='pass', block='pass', item='pass'), shrink=shrink, set=set,
+                rot=None if rot is None else [fbits(rot[0]), fbits(rot[1])])
 
 
 def case(steps, creative=False, main=None, off=None, blocks=None, haste=None, fatigue=None):
@@ -120,12 +123,24 @@ def scenarios():
             yield case(steps, True, None, blocks={TARGETS[1]: 'minecraft:dirt'}, haste=haste, fatigue=fatigue)
 
 
+def turning_cases():
+    """The hands lag behind the view: turns, snaps, a yaw past 180 and back, pitch to its limits."""
+    for main in (None, ['minecraft:diamond_sword', 1]):
+        steps = [step(rot=(0.0, 0.0))]
+        steps += [step(rot=(0.0, 4.5 * i)) for i in range(1, 40)]
+        steps += [step()] * 6
+        steps += [step(rot=(90.0, 179.5)), step(rot=(-90.0, 185.25)), step(rot=(-12.75, 900.0))] + [step()] * 8
+        steps += [step(rot=(30.0 - i, -720.0 + 33.3 * i), ac=i % 2, ad=True) for i in range(30)] + [step()] * 4
+        yield case(steps, False, main)
+
+
 def random_cases(rng):
     results = ['success', 'server', 'consume', 'pass', 'fail']
     for _ in range(3000):
         blocks = {p: rng.choice(list(BLOCKS) + ['minecraft:air']) for p in TARGETS}
         steps = []
         for _ in range(rng.randrange(5, 80)):
+            rot = (rng.uniform(-90.0, 90.0), rng.uniform(-1080.0, 1080.0)) if rng.random() < 0.3 else None
             hit = rng.choice([('miss',), ('entity', rng.random() < 0.7)] + [block_hit(p, rng.randrange(6)) for p in TARGETS] * 2)
             setting = None
             if rng.random() < 0.04:
@@ -133,7 +148,7 @@ def random_cases(rng):
             steps.append(step(hit, ac=rng.choice([0] * 6 + [1, 1, 2]), uc=rng.choice([0] * 8 + [1, 2]), ad=rng.random() < 0.5,
                               ud=rng.random() < 0.3, busy=rng.random() < 0.05, using=rng.random() < 0.08,
                               uses=dict(entity=rng.choice(results), block=rng.choice(results), item=rng.choice(results)),
-                              shrink=rng.random() < 0.3, set=setting))
+                              shrink=rng.random() < 0.3, set=setting, rot=rot))
         yield case(steps, rng.random() < 0.4, rng.choice(ITEMS), rng.choice(ITEMS), blocks,
                    rng.choice([None] * 6 + [0, 1, 3]), rng.choice([None] * 6 + [0, 2]))
 
@@ -145,7 +160,7 @@ def make_cases(build):
     cases.mkdir(exist_ok=True)
     count = 0
     with path.open('w') as out:
-        for generator in (scenarios(), random_cases(rng)):
+        for generator in (scenarios(), turning_cases(), random_cases(rng)):
             for c in generator:
                 text = json.dumps(c, separators=(',', ':'))
                 out.write(text + '\n')
@@ -163,7 +178,8 @@ def main():
              'FirstPersonHandsAndItems.tick and itemUsed, on a LocalPlayer shell with a real Inventory, effects and attribute '
              'modifiers, over scripted clicks, held buttons, crosshair targets, item changes and use results. Level effects '
              '(particles, game events), packets and the outcome of using items on blocks, entities and the air are scripted '
-             'or absorbed; every vanilla item plays the swap animation unscaled except spears, which are not scripted.')
+             'or absorbed; every vanilla item plays the swap animation unscaled except spears, which are not scripted. Steps also '
+             'turn the player: the real LocalPlayer.applyInput moves xBob and yBob, the hands\' lag behind the view.')
     harness.differential(
         'rust-first-person-parity', 'VanillaFirstPersonOracle', 'first_person_probe', make_cases, scope,
         sources=[lab.ROOT / 'crates/horizon-client/src/first_person.rs', lab.ROOT / 'crates/horizon-client/src/attack_strength.rs',

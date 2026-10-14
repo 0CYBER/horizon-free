@@ -192,6 +192,35 @@ impl HandHeights {
     }
 }
 
+/// `LocalPlayer.xBob` and `yBob`: the hands lag behind the view when it
+/// turns. `LocalPlayer.applyInput` eases them halfway to the rotation every
+/// tick; `FirstPersonHandsAndItemsRenderer` turns the hands by a tenth of
+/// the gap left.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct HandSway {
+    pub x_bob: f32,
+    pub y_bob: f32,
+    pub x_bob_o: f32,
+    pub y_bob_o: f32,
+}
+impl HandSway {
+    /// `LocalPlayer.applyInput` with the player's `getXRot` and `getYRot`.
+    pub fn tick(&mut self, x_rot: f32, y_rot: f32) {
+        self.y_bob_o = self.y_bob;
+        self.x_bob_o = self.x_bob;
+        self.x_bob += (x_rot - self.x_bob) * 0.5;
+        self.y_bob += (y_rot - self.y_bob) * 0.5;
+    }
+    /// The degrees the hands turn about X, then Y, before either is drawn:
+    /// `(viewXRot - xBob) * 0.1` and `(viewYRot - yBob) * 0.1`, the bobs
+    /// interpolated as `extractRenderState` does.
+    pub fn rotation(&self, partial: f32, view_x_rot: f32, view_y_rot: f32) -> [f32; 2] {
+        let x_bob = crate::camera::lerp(partial, self.x_bob_o, self.x_bob);
+        let y_bob = crate::camera::lerp(partial, self.y_bob_o, self.y_bob);
+        [(view_x_rot - x_bob) * 0.1, (view_y_rot - y_bob) * 0.1]
+    }
+}
+
 /// `HitResult` at the crosshair (`Minecraft.hitResult`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Hit {
