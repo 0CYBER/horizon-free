@@ -5,7 +5,7 @@
 use crate::fast_hash::{FxHashMap, FxHashSet};
 use crate::{
     chunk::{Chunk, SECTIONS},
-    light::{LightTables, light_chunk},
+    light::{LightTables, apply_lighting, light_chunk},
     mesher::{MeshTables, Mesher, Region, SectionMesh, borrow},
     world::World,
 };
@@ -63,7 +63,7 @@ pub enum Done {
     Generated(Chunk),
     Proto(i32, i32, Proto),
     Decorated(i32, i32, Box<[Proto; 9]>),
-    Lit(i32, i32, Vec<Arc<crate::chunk::Section>>, u64),
+    Lit(i32, i32, Vec<crate::chunk::Light>, u64),
     Meshed(i32, i32, i32, SectionMesh, u64),
 }
 struct Queued {
@@ -426,11 +426,7 @@ impl Streaming {
                     if let Some(chunk) = world.chunks.get_mut(&(x, z)) {
                         let chunk = Arc::make_mut(chunk);
                         // Keep blocks edited since the snapshot; take only light.
-                        for (target, lit) in chunk.sections.iter_mut().zip(sections) {
-                            let mut section = (**target).clone();
-                            section.light = lit.light.clone();
-                            *target = Arc::new(section);
-                        }
+                        apply_lighting(chunk, sections);
                         chunk.lit = true;
                         self.lit.insert((x, z));
                         self.replay_light_edits(world, x, z, snapshot);

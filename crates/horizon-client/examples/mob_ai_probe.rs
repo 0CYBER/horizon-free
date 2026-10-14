@@ -11,7 +11,7 @@ use horizon_client::{
     collisions,
     containers::{BlockEntity, CreakingHeart},
     items::{ItemStack, Items},
-    light::{LightTables, light_chunk},
+    light::{LightTables, apply_lighting, light_chunk},
     mobs::{
         Damage, MobType, creaking,
         creaking_heart::{self, HeartEvent, HeartHost},
@@ -779,7 +779,7 @@ fn main() -> horizon_client::Result<()> {
                     })
                 });
                 let mut c = (*world.chunks[&(x, z)]).clone();
-                c.sections = light_chunk(&region, &tables, true);
+                apply_lighting(&mut c, light_chunk(&region, &tables, true));
                 c.lit = true;
                 ((x, z), c)
             })

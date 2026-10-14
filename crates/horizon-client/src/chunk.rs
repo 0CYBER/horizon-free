@@ -20,6 +20,15 @@ pub enum Light {
     Uniform(u8),
     Full(Box<[u8; 4096]>),
 }
+impl Light {
+    #[inline]
+    pub fn get(&self, i: usize) -> u8 {
+        match self {
+            Self::Uniform(v) => *v,
+            Self::Full(a) => a[i],
+        }
+    }
+}
 #[inline]
 pub fn index(x: i32, y: i32, z: i32) -> usize {
     ((y & 15) << 8 | (z & 15) << 4 | (x & 15)) as usize
@@ -59,10 +68,7 @@ impl Section {
     }
     #[inline]
     pub fn light(&self, i: usize) -> u8 {
-        match &self.light {
-            Light::Uniform(v) => *v,
-            Light::Full(a) => a[i],
-        }
+        self.light.get(i)
     }
     pub fn is_uniform(&self, v: u16) -> bool {
         self.blocks.is_uniform(u32::from(v))
