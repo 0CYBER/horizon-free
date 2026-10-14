@@ -1444,7 +1444,7 @@ impl B {
                 });
                 mm.look_target.set(Tracker::Entity {
                     who: adult,
-                    eye: eyes,
+                    eye: true,
                     block_eye: eyes,
                 });
                 true

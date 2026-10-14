@@ -400,6 +400,9 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         m.fall_distance = 0.0;
     }
     let fire = crate::motion::environment::fire_contact(w.world, w.registry, m.bounds());
+    if fire > 0.0 {
+        m.ticks_frozen = 0;
+    }
     if fire > 0.0 && !m.kind.flags.fire_immune {
         let multiplier = m.burning_time();
         m.fire_ticks = crate::motion::environment::ignite_contact(
@@ -408,9 +411,6 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             &mut m.random,
             multiplier,
         );
-        if m.fire_ticks >= 0 {
-            m.ticks_frozen = 0;
-        }
         m.damage(fire, Damage::of(DamageKind::InFire));
     }
     // Fire: water extinguishes, lava ignites, burning hurts every second.

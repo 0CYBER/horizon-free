@@ -2074,11 +2074,16 @@ mod tests {
         w.player.velocity = Vec3::ZERO;
         w.player.fire_ticks = -20;
         w.player.health.hurt.cooldown = 0;
+        w.player.ticks_frozen = 140;
         let hp = w.player.health.health();
         w.controlled_simulation_tick(Default::default()).unwrap();
         assert!(
             w.player.fire_ticks < 0,
             "direct fire hurts during the immunity delay"
+        );
+        assert_eq!(
+            w.player.ticks_frozen, 0,
+            "fire contact clears freeze during the delay"
         );
         assert!(w.player.health.health() < hp);
         w.player.status.fire_resistance = true;
@@ -2088,7 +2093,9 @@ mod tests {
         assert_eq!(w.player.health.health(), hp);
         w.player.invulnerable = true;
         w.player.fire_ticks = -20;
+        w.player.ticks_frozen = 140;
         w.controlled_simulation_tick(Default::default()).unwrap();
+        assert_eq!(w.player.ticks_frozen, 0);
         assert_eq!(
             w.player.fire_ticks, -19,
             "creative preserves the fire-contact delay"

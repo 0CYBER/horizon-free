@@ -598,7 +598,7 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         m.extra.main_hand = None;
     }
     m.death_time = number(tag.get("DeathTime")).unwrap_or(0) as i32;
-    m.persistent = flag(tag, "PersistenceRequired");
+    m.persistent |= flag(tag, "PersistenceRequired");
     m.extra.pick_up_loot = flag(tag, "CanPickUpLoot");
     m.custom_name = custom_name(tag);
     if m.kind.category == "creature" {
@@ -613,7 +613,6 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     m.ticks_frozen = number(tag.get("TicksFrozen")).unwrap_or(0) as i32;
     m.silent = flag(tag, "Silent");
     m.invulnerable_flag = flag(tag, "Invulnerable");
-    m.no_gravity = m.no_gravity || flag(tag, "NoGravity");
     if m.species() == crate::mobs::Species::Creeper {
         m.extra.charged = flag(tag, "powered");
     }
@@ -1578,7 +1577,7 @@ pub fn bucket_data(m: &Mob) -> Tag {
         ("NoAI", m.no_ai),
         ("Silent", m.silent),
         ("NoGravity", m.no_gravity),
-        ("Glowing", m.glowing || m.has_effect("glowing")),
+        ("Glowing", m.glowing),
         ("Invulnerable", m.invulnerable_flag),
         ("PersistenceRequired", m.persistent),
     ] {
@@ -1632,12 +1631,12 @@ pub fn load_bucket_data(m: &mut Mob, stack: &crate::items::ItemStack) {
             ("NoGravity", &mut m.no_gravity),
             ("Glowing", &mut m.glowing),
             ("Invulnerable", &mut m.invulnerable_flag),
-            ("PersistenceRequired", &mut m.persistent),
         ] {
             if let Some(v) = number(data.get(key)) {
                 *flag = v != 0;
             }
         }
+        m.persistent |= flag(data, "PersistenceRequired");
         if m.species() == crate::mobs::Species::Axolotl {
             crate::mobs::animal_brain::set_hunting_cooldown(
                 m,
@@ -1746,6 +1745,28 @@ mod axolotl_nbt_tests {
         );
         assert_eq!(restored.custom_name.as_deref(), Some("Bucket friend"));
         assert_eq!(restored.health, 5.0);
+        m.glowing = false;
+        m.add_effect("glowing", 200, 0);
+        assert!(m.has_effect("glowing"));
+        assert!(bucket_data(&m).get("Glowing").is_none());
+        m.glowing = true;
+        assert_eq!(number(bucket_data(&m).get("Glowing")), Some(1));
+        for (persistent, expected) in [(None, false), (Some(0), false), (Some(1), true)] {
+            let mut data = Tag::Compound(Compound::new());
+            if let Some(value) = persistent {
+                put(&mut data, "PersistenceRequired", Tag::Byte(value));
+            }
+            let mut bucket = crate::items::ItemStack::new("minecraft:axolotl_bucket", 1);
+            bucket
+                .data_mut()
+                .set_other("minecraft:bucket_entity_data", Some(data));
+            restored.persistent = false;
+            load_bucket_data(&mut restored, &bucket);
+            assert_eq!(restored.persistent, expected);
+            restored.persistent = true;
+            load_bucket_data(&mut restored, &bucket);
+            assert!(restored.persistent, "bucket data cannot clear persistence");
+        }
         restored.ticks_frozen = 140;
         restored.ignite_for_ticks(160);
         assert_eq!(restored.ticks_frozen, 0);

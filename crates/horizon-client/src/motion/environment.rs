@@ -110,6 +110,7 @@ impl MotionWorld<'_, '_, '_> {
         }
         let damage = fire_contact(self.scene, self.assets.registry, self.player.bounds());
         if damage > 0.0 {
+            self.player.ticks_frozen = 0;
             if !self.player.in_water {
                 let multiplier = self.player.attribute("minecraft:burning_time")?;
                 let ticks = ignite_contact(
@@ -119,9 +120,6 @@ impl MotionWorld<'_, '_, '_> {
                     multiplier,
                 );
                 self.player.set_remaining_fire_ticks(ticks);
-                if ticks >= 0 {
-                    self.player.ticks_frozen = 0;
-                }
             }
             self.environment_hurt("minecraft:in_fire", damage)?;
         } else if self.player.fire_ticks <= 0 {
