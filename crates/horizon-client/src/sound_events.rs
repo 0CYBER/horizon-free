@@ -106,6 +106,42 @@ pub struct WeighedSoundEvents {
     /// The subtitle translation key.
     pub subtitle: Option<String>,
 }
+/// A `sounds.json` entry: event, `replace`, subtitle and sounds.
+type Registration = (String, bool, Option<String>, Vec<Sound>);
+/// Parse a `sounds.json`; `None` when Gson would reject the whole file (a
+/// malformed entry anywhere in it).
+fn parse_file(namespace: &str, text: &[u8]) -> Option<Vec<Registration>> {
+    let Ok(Value::Object(map)) = serde_json::from_slice::<Value>(text) else {
+        return None;
+    };
+    let mut parsed = Vec::new();
+    for (name, def) in &map {
+        let Value::Object(object) = def else {
+            return None;
+        };
+        let replace = json_bool(object.get("replace").unwrap_or(&Value::Null), false);
+        let subtitle = match object.get("subtitle") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(s)) => Some(s.clone()),
+            Some(_) => return None,
+        };
+        let mut sounds = Vec::new();
+        if let Some(list) = object.get("sounds") {
+            let Value::Array(list) = list else {
+                return None;
+            };
+            for s in list {
+                sounds.push(parse_sound(s)?);
+            }
+        }
+        parsed.push((format!("{namespace}:{name}"), replace, subtitle, sounds));
+    }
+    Some(parsed)
+}
+/// Whether vanilla's `SoundManager` reads this `sounds.json` at all.
+pub fn is_valid_file(text: &[u8]) -> bool {
+    parse_file("minecraft", text).is_some()
+}
 /// The sound event registry (`SoundManager.registry`).
 #[derive(Clone, Debug, Default)]
 pub struct SoundRegistry {
@@ -148,7 +184,7 @@ fn json_int(v: &Value, fallback: i32) -> i32 {
         _ => fallback,
     }
 }
-fn json_bool(v: &Value, fallback: bool) -> bool {
+pub(crate) fn json_bool(v: &Value, fallback: bool) -> bool {
     match v {
         Value::Bool(b) => *b,
         Value::String(s) => s == "true",
@@ -213,29 +249,9 @@ impl SoundRegistry {
     /// One `sounds.json` (`Preparations.handleRegistration` for each entry).
     /// `exists(namespace, path)` says whether a sound file is present.
     pub fn add_file(&mut self, namespace: &str, text: &[u8], exists: &dyn Fn(&str, &str) -> bool) {
-        let Ok(Value::Object(map)) = serde_json::from_slice::<Value>(text) else {
+        let Some(parsed) = parse_file(namespace, text) else {
             return;
         };
-        // A malformed entry makes Gson reject the whole file.
-        let mut parsed = Vec::new();
-        for (name, def) in &map {
-            let Value::Object(object) = def else { return };
-            let replace = json_bool(object.get("replace").unwrap_or(&Value::Null), false);
-            let subtitle = match object.get("subtitle") {
-                None | Some(Value::Null) => None,
-                Some(Value::String(s)) => Some(s.clone()),
-                Some(_) => return,
-            };
-            let mut sounds = Vec::new();
-            if let Some(list) = object.get("sounds") {
-                let Value::Array(list) = list else { return };
-                for s in list {
-                    let Some(sound) = parse_sound(s) else { return };
-                    sounds.push(sound);
-                }
-            }
-            parsed.push((format!("{namespace}:{name}"), replace, subtitle, sounds));
-        }
         for (location, replace, subtitle, sounds) in parsed {
             let entry = match self.events.get_mut(&location) {
                 Some(entry) if !replace => entry,

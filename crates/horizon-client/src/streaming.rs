@@ -14,7 +14,7 @@ use horizon_world::worldgen::decoration_order::DecorationOrder;
 use std::{
     collections::{BinaryHeap, HashSet},
     sync::{
-        Arc, Condvar, Mutex,
+        Arc, Condvar, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -94,6 +94,9 @@ struct Shared {
     queue: Mutex<BinaryHeap<Queued>>,
     ready: Condvar,
     stop: AtomicBool,
+    /// What meshing reads (block models and sprites), swapped when resource
+    /// packs reload; each mesh job takes the current one.
+    context: RwLock<Arc<WorkerContext>>,
 }
 pub struct Streaming {
     shared: Arc<Shared>,
@@ -165,6 +168,7 @@ impl Streaming {
             queue: Mutex::new(BinaryHeap::new()),
             ready: Condvar::new(),
             stop: AtomicBool::new(false),
+            context: RwLock::new(context.clone()),
         });
         let (send, results) = mpsc::channel();
         let light_tables = context.light.clone();
@@ -173,22 +177,11 @@ impl Streaming {
                 let shared = shared.clone();
                 let send = send.clone();
                 let generator = generator.clone();
-                let context = context.clone();
+                let light = context.light.clone();
                 thread::Builder::new()
                     .name(format!("horizon-worker-{i}"))
                     .spawn(move || {
                         let mut worker = generator.worker();
-                        let mut mesher = Mesher {
-                            nether_shading: false,
-                            zoom: BiomeZoom::new(0),
-                            blend_radius: 2,
-                            smooth_lighting: true,
-                            cutout_leaves: true,
-                            assets: &context.assets,
-                            tables: &context.tables,
-                            biomes: &context.biomes,
-                            visibility: context.tables.visibility.clone(),
-                        };
                         loop {
                             let job = {
                                 let mut queue = shared.queue.lock().unwrap();
@@ -212,18 +205,22 @@ impl Streaming {
                                     Done::Decorated(x, z, region)
                                 }
                                 Job::Finish(proto) => Done::Generated(generator.finish(proto)),
-                                Job::Light(x, z, region, seq, sky) => Done::Lit(
-                                    x,
-                                    z,
-                                    light_chunk(&borrow(&region), &context.light, sky),
-                                    seq,
-                                ),
+                                Job::Light(x, z, region, seq, sky) => {
+                                    Done::Lit(x, z, light_chunk(&borrow(&region), &light, sky), seq)
+                                }
                                 Job::Mesh(x, sy, z, region, seq, settings) => {
-                                    mesher.nether_shading = settings.nether;
-                                    mesher.zoom = settings.zoom;
-                                    mesher.blend_radius = settings.blend_radius;
-                                    mesher.smooth_lighting = settings.smooth_lighting;
-                                    mesher.cutout_leaves = settings.cutout_leaves;
+                                    let context = shared.context.read().unwrap().clone();
+                                    let mut mesher = Mesher {
+                                        nether_shading: settings.nether,
+                                        zoom: settings.zoom,
+                                        blend_radius: settings.blend_radius,
+                                        smooth_lighting: settings.smooth_lighting,
+                                        cutout_leaves: settings.cutout_leaves,
+                                        assets: &context.assets,
+                                        tables: &context.tables,
+                                        biomes: &context.biomes,
+                                        visibility: context.tables.visibility.clone(),
+                                    };
                                     Done::Meshed(x, sy, z, mesher.mesh(&borrow(&region), sy), seq)
                                 }
                             };
@@ -271,6 +268,20 @@ impl Streaming {
             meshed_total: 0,
             remote: false,
             extra: Vec::new(),
+        }
+    }
+    /// Resource packs reloaded (`LevelRenderer.allChanged`): mesh with the new
+    /// models and sprites, and rebuild every loaded section. Meshes in flight
+    /// were made with the old resources; their results are dropped.
+    pub fn reload_resources(&mut self, world: &mut World, context: Arc<WorkerContext>) {
+        *self.shared.context.write().unwrap() = context;
+        self.meshing.clear();
+        for &(x, z) in world.chunks.keys() {
+            if self.lit.contains(&(x, z)) {
+                for sy in 0..SECTIONS as i32 {
+                    world.dirty_sections.insert((x, sy, z));
+                }
+            }
         }
     }
     /// A column received from a server: store it and relight it and its neighbours.

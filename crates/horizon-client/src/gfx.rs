@@ -255,6 +255,8 @@ pub struct Renderer {
     lightmap_view: wgpu::TextureView,
     lightmap_sampler: wgpu::Sampler,
     animations: Vec<(SpriteAnimation, usize)>,
+    /// Edge length of the block sprite array's layers.
+    sprite_size: u32,
     indices: wgpu::Buffer,
     index_quads: u32,
     instances: wgpu::Buffer,
@@ -1327,6 +1329,7 @@ impl Renderer {
             lightmap_view,
             lightmap_sampler,
             animations: animations.iter().map(|a| (a.clone(), usize::MAX)).collect(),
+            sprite_size,
             indices,
             index_quads,
             instances,
@@ -1704,10 +1707,10 @@ impl Renderer {
                 continue;
             }
             *previous = frame;
-            let (mips, levels) = mip_chain(animation.pixels(frame), 16, 1);
+            let (mips, levels) = mip_chain(animation.pixels(frame), self.sprite_size, 1);
             let mut offset = 0;
             for level in 0..levels.min(self.mip_levels) {
-                let size = 16 >> level;
+                let size = self.sprite_size >> level;
                 let bytes = (size * size * 4) as usize;
                 self.queue.write_texture(
                     wgpu::TexelCopyTextureInfo {
