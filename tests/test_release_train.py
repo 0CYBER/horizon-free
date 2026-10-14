@@ -8,9 +8,10 @@ from tools import release_train as train
 NOW = dt.datetime(2026, 10, 15, 12, 0, tzinfo=dt.timezone.utc)
 
 
-def pr(number, title="Fix a thing", labels=(), paths=("crates/horizon-client/src/game.rs",), issues=(), author="ludovic111"):
+def pr(number, title="Fix a thing", labels=(), paths=("crates/horizon-client/src/game.rs",), issues=(), author="ludovic111",
+       merged=dt.timedelta(hours=9)):
     return {"number": number, "title": title, "labels": list(labels), "paths": list(paths), "issues": list(issues),
-            "author": author, "url": f"https://github.com/ludovic111/horizon/pull/{number}"}
+            "author": author, "url": f"https://github.com/ludovic111/horizon/pull/{number}", "merged_at": NOW - merged}
 
 
 class ReleaseTrainTests(unittest.TestCase):
@@ -47,17 +48,19 @@ class ReleaseTrainTests(unittest.TestCase):
         self.assertEqual(train.next_launcher_tag(tags, minor=True), "launcher-v0.2.0")
 
     def test_decision(self):
-        hour = dt.timedelta(hours=1)
-        decide = lambda prs, age, **kw: train.decision("game", prs, NOW - age, NOW, **kw)[0]
-        self.assertTrue(decide([pr(1)], 4 * hour))
-        self.assertFalse(decide([pr(1)], 2 * hour), "within the cooldown")
-        self.assertTrue(decide([pr(1, labels=["release-now"])], 0.1 * hour))
-        self.assertFalse(decide([pr(1, paths=[])], 9 * hour), "nothing players run")
-        self.assertFalse(decide([pr(1, labels=["skip-release"])], 9 * hour))
-        self.assertFalse(decide([pr(1, labels=["release-now", "skip-release"])], 9 * hour))
-        self.assertFalse(decide([pr(1)], 9 * hour, paused=True))
-        self.assertTrue(decide([], 0.1 * hour, paused=True, force=True))
-        self.assertTrue(train.decision("game", [pr(1)], None, NOW)[0], "the first release")
+        minute = dt.timedelta(minutes=1)
+        decide = lambda prs, **kw: train.decision("game", prs, NOW, **kw)[0]
+        self.assertTrue(decide([pr(1, merged=16 * minute)]), "settled for the debounce")
+        self.assertFalse(decide([pr(1, merged=5 * minute)]), "merged moments ago")
+        self.assertFalse(decide([pr(1, merged=40 * minute), pr(2, merged=5 * minute)]), "a burst still merging")
+        self.assertTrue(decide([pr(1, merged=61 * minute), pr(2, merged=2 * minute)]), "merges that never pause still ship")
+        self.assertTrue(decide([pr(1, labels=["release-now"], merged=minute)]))
+        self.assertFalse(decide([pr(1, paths=[])]), "nothing players run")
+        self.assertFalse(decide([pr(1, labels=["skip-release"])]))
+        self.assertFalse(decide([pr(1, labels=["release-now", "skip-release"])]))
+        self.assertFalse(decide([pr(1, merged=5 * minute), pr(2, labels=["skip-release"], merged=minute)]), "the settled one waits for nothing")
+        self.assertFalse(decide([pr(1)], paused=True))
+        self.assertTrue(decide([], paused=True, force=True))
 
     def test_notes(self):
         prs = [pr(5, "Nether portals: vanilla timing and linking (fixes #94)", issues=[94]),
@@ -73,6 +76,9 @@ class ReleaseTrainTests(unittest.TestCase):
         self.assertNotIn("#8", body)
         self.assertIn("Thanks to @cosmic.", body)
         self.assertLess(body.index("### New"), body.index("### Fixed"))
+        title, _ = train.notes("game", "v2026.10.15.2", [pr(9, "Horizon's mark", labels=["feature"]),
+                                                         pr(10, "Game menus", labels=["feature"])], [])
+        self.assertEqual(title, "Horizon 2026.10.15.2: Game menus, Horizon's mark", "proper nouns keep their capital")
 
     def test_a_long_release_is_named_after_its_first_titles(self):
         prs = [pr(n, f"Change number {n} with a fairly long title") for n in range(1, 10)]

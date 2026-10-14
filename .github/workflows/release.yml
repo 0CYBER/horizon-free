@@ -1,8 +1,9 @@
 name: release
-# Automatic game releases (docs/release-flow.md). After every green `checks` run on main, every hour (a release
-# held by the cooldown goes out without another merge) and by hand, tools/release_train.py decides: a release
-# when a pull request merged since the last one changed what players run and that release is 3 hours old, or at
-# once for a pull request labelled release-now. RELEASES_PAUSED=1 (repository variable) stops them.
+# Automatic game releases (docs/release-flow.md). After every green `checks` run on main, every 10 minutes (so a
+# release waiting for merges to settle goes out without another merge) and by hand, tools/release_train.py decides:
+# a release when pull requests merged since the last one changed what players run and the newest merged 15 minutes
+# ago (the oldest an hour ago, if merges never pause), or at once for a pull request labelled release-now.
+# RELEASES_PAUSED=1 (repository variable) stops them.
 # Builds Linux (an older Ubuntu, so the binary runs on any recent distribution and on NixOS through nix-ld) and
 # Windows on GitHub, macOS on the Mac mini's runner (MAC_RUNNER=macos-latest sends it to GitHub), then
 # publishes vYYYY.MM.DD[.N] with notes from the merged pull requests.
@@ -14,7 +15,7 @@ on:
     types: [completed]
     branches: [main]
   schedule:
-    - cron: '17 * * * *'
+    - cron: '2-59/10 * * * *'
   workflow_dispatch:
     inputs:
       dry_run:
@@ -22,7 +23,7 @@ on:
         type: boolean
         default: true
       force:
-        description: Release even without player-facing changes, within the cooldown or while paused
+        description: Release even without player-facing changes, before merges settle or while paused
         type: boolean
         default: false
 permissions:
