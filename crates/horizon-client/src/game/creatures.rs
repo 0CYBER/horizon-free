@@ -47,6 +47,7 @@ impl ProjectileWorld for ProjWorld<'_, '_> {
         let mut scene = SceneCollisions {
             world: self.w.world,
             binding: self.w.collision,
+            subject: None,
         };
         let r = traverse_blocks(from, to, 256, |p: BlockPos| {
             let state = self.w.world.block(p.x, p.y, p.z);

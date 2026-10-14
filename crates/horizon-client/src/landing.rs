@@ -295,6 +295,7 @@ impl BlockPushWorld for MotionWorld<'_, '_, '_> {
         let mut world = SceneCollisions {
             world: self.scene,
             binding: self.collision_binding,
+            subject: None,
         };
         self.collision_binding
             .collision_shape(&mut world, state, [p.x, p.y, p.z])

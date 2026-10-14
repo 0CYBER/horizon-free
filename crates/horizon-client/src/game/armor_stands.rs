@@ -159,6 +159,7 @@ impl Game<'_> {
         let mut scene = horizon_client::collisions::SceneCollisions {
             world: &self.world,
             binding: self.collision,
+            subject: None,
         };
         if !scene.unobstructed(bounds).unwrap_or(false)
             || self
@@ -362,6 +363,7 @@ impl Game<'_> {
         let mut scene = horizon_client::collisions::SceneCollisions {
             world: &self.world,
             binding: self.collision,
+            subject: None,
         };
         for a in &mut self.armor_stands {
             a.tick(&mut scene);

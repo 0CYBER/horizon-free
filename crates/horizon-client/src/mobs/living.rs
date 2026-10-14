@@ -122,6 +122,7 @@ impl MobWorld<'_> {
         let mut scene = SceneCollisions {
             world: self.world,
             binding: self.collision,
+            subject: None,
         };
         let state = self.world.block(x, y, z);
         let at = horizon_core::position::BlockPos::new(x, y, z);
@@ -168,6 +169,7 @@ impl MobWorld<'_> {
         let mut scene = SceneCollisions {
             world: self.world,
             binding: self.collision,
+            subject: None,
         };
         scene.unobstructed(b).unwrap_or(false)
     }
@@ -311,6 +313,7 @@ impl Mob {
         let mut scene = SceneCollisions {
             world: w.world,
             binding: w.collision,
+            subject: None,
         };
         let moved = scene
             .resolve(self.bounds(), wanted, step, self.on_ground)

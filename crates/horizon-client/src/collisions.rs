@@ -39,9 +39,24 @@ pub fn load<'r>(root: &Path, registry: &'r BlockRegistry) -> Result<BlockCollisi
     Ok(BlockCollisionRegistry::new(Arc::new(cached))?)
 }
 
+/// What powder snow's contextual collision asks of the colliding entity
+/// (`PowderSnowBlock.getCollisionShape`).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PowderSnowSubject {
+    pub fall_distance: f64,
+    /// `FallingBlockEntity`.
+    pub falling_block: bool,
+    /// A living entity with leather boots on its feet.
+    pub leather_boots: bool,
+    /// `EntityTypeTags.POWDER_SNOW_WALKABLE_MOBS`.
+    pub walkable_type: bool,
+}
+
 pub struct SceneCollisions<'w, 'r> {
     pub world: &'w World,
     pub binding: &'w BlockCollisionRegistry<'r>,
+    /// The entity colliding, for powder snow; None: no fall, no boots.
+    pub subject: Option<PowderSnowSubject>,
 }
 impl SceneCollisions<'_, '_> {
     /// Position contexts permit geometric movement probes without inventing a
@@ -169,18 +184,18 @@ impl LiquidCollisionWorld for SceneCollisions<'_, '_> {
 }
 impl PowderSnowWorld for SceneCollisions<'_, '_> {
     type Error = io::Error;
-    // Entities here are never falling blocks and wear no leather boots.
     fn powder_snow_entity(&mut self, _: EntityIdentity) -> io::Result<PowderSnowEntity> {
+        let subject = self.subject.unwrap_or_default();
         Ok(PowderSnowEntity {
-            fall_distance: 0.0,
-            falling_block: false,
+            fall_distance: subject.fall_distance,
+            falling_block: subject.falling_block,
         })
     }
     fn powder_snow_walkable_tag(&mut self, _: EntityIdentity) -> io::Result<bool> {
-        Ok(false)
+        Ok(self.subject.is_some_and(|s| s.walkable_type))
     }
     fn feet_are_leather_boots(&mut self, _: EntityIdentity) -> io::Result<bool> {
-        Ok(false)
+        Ok(self.subject.is_some_and(|s| s.leather_boots))
     }
 }
 

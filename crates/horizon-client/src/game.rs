@@ -74,6 +74,7 @@ mod perspective;
 mod piglins;
 mod postprocess;
 mod potions;
+mod powder_snow;
 mod raids;
 mod recipe_book;
 mod remote;
@@ -534,6 +535,8 @@ struct FallingBlock {
     no_gravity: bool,
     /// `FallingBlockEntity.dropItem`.
     drop_item: bool,
+    /// `Entity.fallDistance` (powder snow holds a block that fell far at 0.9).
+    fall_distance: f64,
     /// The UUID and compound it was loaded with, kept while it moves.
     saved: Option<Box<([i32; 4], horizon_world::nbt::Tag)>>,
 }
@@ -1621,6 +1624,7 @@ impl Game<'_> {
                         age: 0,
                         no_gravity: false,
                         drop_item: true,
+                        fall_distance: 0.0,
                         saved: None,
                     });
                 }
@@ -1832,7 +1836,17 @@ impl Game<'_> {
                 next.y.floor() as i32,
                 next.z.floor() as i32,
             );
-            let solid = self.res.facts.get(below).full_collision && f.velocity.y < 0.0;
+            let below_facts = self.res.facts.get(below);
+            // PowderSnowBlock.getCollisionShape for a FallingBlockEntity: the
+            // whole block, or 0.9 high after a fall of more than 2.5 blocks,
+            // where the block it rests in is the snow itself.
+            let powder_snow = &*below_facts.name == "minecraft:powder_snow";
+            let sunk = powder_snow
+                && f.fall_distance > 2.5
+                && next.y - next.y.floor() < f64::from(0.9_f32);
+            let solid =
+                (below_facts.full_collision || powder_snow && f.fall_distance <= 2.5 || sunk)
+                    && f.velocity.y < 0.0;
             // FallingBlockEntity.tick: off the ground, it gives up after 600
             // ticks (100 outside the world) and drops itself as an item.
             let y = next.y.floor() as i32;
@@ -1849,11 +1863,14 @@ impl Game<'_> {
                     f.state,
                     [
                         next.x.floor() as i32,
-                        next.y.floor() as i32 + 1,
+                        next.y.floor() as i32 + i32::from(!sunk),
                         next.z.floor() as i32,
                     ],
                 ));
                 return false;
+            }
+            if next.y < f.position.y {
+                f.fall_distance += f.position.y - next.y;
             }
             f.position = next;
             f.velocity = Vec3::new(
@@ -2198,8 +2215,15 @@ impl Game<'_> {
             f64::from(target[1]) + 0.5,
             f64::from(target[2]) + 0.5,
         ];
+        // SolidBucketItem.getPlaceSound: the bucket's own empty sound.
+        let solid_bucket = &*stack.item == "minecraft:powder_snow_bucket";
+        let place_sound = if solid_bucket {
+            "minecraft:item.bucket.empty_powder_snow"
+        } else {
+            &sounds.place
+        };
         self.audio.play(
-            &sounds.place,
+            place_sound,
             Some(center),
             (sounds.volume + 1.0) / 2.0,
             sounds.pitch * 0.8,
@@ -2211,6 +2235,10 @@ impl Game<'_> {
         self.check_wither_spawn(target)?;
         self.check_golem_spawn(target)?;
         self.consume_held();
+        // SolidBucketItem.useOn: BucketItem.getEmptySuccessItem in hand.
+        if solid_bucket && !self.creative {
+            self.inventory[self.selected] = Some(ItemStack::new("minecraft:bucket", 1));
+        }
         Ok(())
     }
     fn consume_held(&mut self) {
@@ -2699,6 +2727,20 @@ impl Game<'_> {
             })
             .and_then(|s| self.res.items.get(&s.item))
             .map(|i| i.use_speed);
+        // PowderSnowBlock.canEntityWalkOnPowderSnow and LivingEntity.canFreeze.
+        player.leather_boots = self.armor[3]
+            .as_ref()
+            .is_some_and(|s| &*s.item == "minecraft:leather_boots");
+        let immune = self
+            .res
+            .items
+            .item_tags
+            .get("minecraft:freeze_immune_wearables");
+        player.freeze_immune = self
+            .armor
+            .iter()
+            .flatten()
+            .any(|s| immune.is_some_and(|t| t.contains(&*s.item)));
         let grounded = player.ground.on_ground;
         let before = (
             grounded,
@@ -2782,9 +2824,12 @@ impl Game<'_> {
                     self.audio
                         .play("minecraft:entity.player.hurt", Some(feet), 1.0, 1.0);
                 }
+                MotionEvent::Snowflake { position, velocity } => self.snowflake(position, velocity),
+                MotionEvent::EnterBlock { state } => self.trigger_enter_block(state),
                 _ => {}
             }
         }
+        self.powder_snow_fire()?;
         self.apply_totem();
         let Some(player) = self.player.as_mut() else {
             return Ok(());
@@ -3144,6 +3189,8 @@ impl Game<'_> {
                     hud_layout::HeartKind::Poisoned
                 } else if effects.get("wither").is_some() {
                     hud_layout::HeartKind::Withered
+                } else if p.is_fully_frozen() {
+                    hud_layout::HeartKind::Frozen
                 } else {
                     hud_layout::HeartKind::Normal
                 };
@@ -6318,6 +6365,23 @@ impl Game<'_> {
             return Ok(true);
         }
         if item == "bucket" {
+            // getPlayerPOVHitResult(SOURCE_ONLY): powder snow's outline before
+            // a fluid source behind it.
+            if let Some(hit) = self.pick()
+                && self.is_powder_snow(hit.pos)
+            {
+                let eye = self.eye_position().unwrap_or(hit.point);
+                let d = |p: [f64; 3]| {
+                    (p[0] - eye[0]).powi(2) + (p[1] - eye[1]).powi(2) + (p[2] - eye[2]).powi(2)
+                };
+                if self
+                    .pick_fluid()
+                    .is_none_or(|fluid| d(fluid.point) >= d(hit.point))
+                {
+                    self.pick_up_powder_snow(hit.pos)?;
+                    return Ok(true);
+                }
+            }
             let Some(hit) = self.pick_fluid() else {
                 return Ok(false);
             };

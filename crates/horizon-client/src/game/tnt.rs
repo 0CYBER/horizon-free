@@ -88,6 +88,7 @@ impl Game<'_> {
             let mut scene = SceneCollisions {
                 world: &self.world,
                 binding: self.collision,
+                subject: None,
             };
             let wanted = t.velocity;
             let moved = scene

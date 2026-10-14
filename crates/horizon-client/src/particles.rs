@@ -685,6 +685,7 @@ impl ParticleLevel<'_> {
         let mut scene = SceneCollisions {
             world: self.world,
             binding: self.collision,
+            subject: None,
         };
         match scene.resolve(bb, Vec3::new(d[0], d[1], d[2]), 0.0, false) {
             Ok(v) => [v.x, v.y, v.z],
