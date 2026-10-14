@@ -2575,7 +2575,6 @@ dependencies = [
  "gpui",
  "horizon-prepare",
  "horizon-theme",
- "image",
  "keyring",
  "oo7",
  "pulldown-cmark",

@@ -25,7 +25,7 @@ The opening, then Play ([clip](docs/opening.webm)):
   preparation reuses checksum-verified game jars and libraries from the current
   or another installed Horizon version, so the original Minecraft install is
   only required when no valid imported copy exists.
-- **Patch notes**: each release's notes, newest first, with a link to GitHub Sponsors. Quiet "Join Discord" and "Website" links sit in the sidebar footer.
+- **Patch notes**: each release's notes, newest first, with a link to GitHub Sponsors. Quiet "Discord" and "Website" links sit in the footer.
 
 Data lives in the platform's data directory (`~/.local/share/horizon-launcher` on Linux,
 `~/Library/Application Support/horizon-launcher` on macOS, `%APPDATA%\horizon-launcher` on
@@ -49,7 +49,7 @@ is open, and shows a small "available, Install" line on Play.
 
 It also updates itself from GitHub releases tagged `launcher-vX.Y.Z` (Horizon's own are
 `vYYYY.MM.DD`; neither is ever taken for the other). It downloads the new build, replaces its
-own binary, and offers "Restart to update" in the sidebar. Development builds and
+own binary, and offers "Restart" in the footer. Development builds and
 `HORIZON_LAUNCHER_NO_SELF_UPDATE=1` never replace themselves.
 
 Launcher releases are automatic (docs/release-flow.md in the repository): when main changes the
@@ -139,10 +139,9 @@ client starts (`--help`) and that the binaries import only system libraries (Win
     cargo test --lib    # tag separation, version order, update selection, notes as text,
                         # the auto-install default, the links fallback, the menu style file
 
-Geist, Geist Mono and Instrument Serif (SIL Open Font License, `crates/horizon-theme/fonts/OFL-*.txt`, shared with the game's menus) are
+Geist and Geist Mono (SIL Open Font License, `crates/horizon-theme/fonts/OFL-*.txt`, shared with the game's menus) are
 bundled so the type is the same on every platform.
 
-Background image (`assets/background.jpg`): backgrounds.supply (free preview), licence to confirm before release.
 
 ## Screenshots
 

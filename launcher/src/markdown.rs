@@ -144,7 +144,7 @@ pub fn render(source: &str, t: &Theme) -> AnyElement {
             let style = match span {
                 Span::Strong => HighlightStyle {
                     font_weight: Some(FontWeight::SEMIBOLD),
-                    color: Some(t.text),
+                    color: Some(t.ink),
                     ..Default::default()
                 },
                 Span::Emphasis => HighlightStyle {
@@ -152,12 +152,12 @@ pub fn render(source: &str, t: &Theme) -> AnyElement {
                     ..Default::default()
                 },
                 Span::Code => HighlightStyle {
-                    background_color: Some(t.raised),
-                    color: Some(t.text),
+                    background_color: Some(t.plate_soft),
+                    color: Some(t.ink),
                     ..Default::default()
                 },
                 Span::Link => HighlightStyle {
-                    color: Some(t.text),
+                    color: Some(t.ink),
                     ..Default::default()
                 },
             };
@@ -169,16 +169,16 @@ pub fn render(source: &str, t: &Theme) -> AnyElement {
         .flex()
         .flex_col()
         .gap(px(8.))
-        .text_size(px(13.5))
-        .line_height(px(21.))
-        .text_color(t.muted);
+        .text_size(px(crate::theme::UI.px))
+        .line_height(px(22.))
+        .text_color(t.ink_soft);
     for block in blocks {
         column = column.child(match block {
             Block::Heading(level, text, spans) => div()
                 .pt(px(if level <= 2 { 12. } else { 6. }))
-                .text_size(px(if level <= 2 { 14.5 } else { 13.5 }))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(t.text)
+                .text_size(px(if level <= 2 { 16. } else { 14. }))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(t.ink)
                 .child(styled(text, spans))
                 .into_any_element(),
             Block::Paragraph(text, spans) => div().child(styled(text, spans)).into_any_element(),
@@ -187,7 +187,7 @@ pub fn render(source: &str, t: &Theme) -> AnyElement {
                 .gap(px(8.))
                 .pl(px(depth as f32 * 16.))
                 .child(
-                    div().flex_none().w(px(16.)).text_color(t.faint).child(
+                    div().flex_none().w(px(16.)).text_color(t.muted).child(
                         number
                             .map(|n| format!("{n}."))
                             .unwrap_or_else(|| "–".into()),
@@ -196,32 +196,30 @@ pub fn render(source: &str, t: &Theme) -> AnyElement {
                 .child(div().flex_1().min_w_0().child(styled(text, spans)))
                 .into_any_element(),
             Block::Code(code) => div()
-                .p(px(12.))
-                .rounded(px(6.))
-                .border_1()
-                .border_color(t.border)
-                .bg(t.raised)
+                .p(px(16.))
+                .rounded(px(crate::theme::RADIUS_PLATE))
+                .bg(t.plate_soft)
                 .font_family(crate::theme::MONO)
                 .text_size(px(12.))
                 .line_height(px(18.))
-                .text_color(t.text)
+                .text_color(t.ink)
                 .child(code.trim_end().to_string())
                 .into_any_element(),
-            Block::Rule => div().h(px(1.)).bg(t.border).my(px(8.)).into_any_element(),
+            Block::Rule => div().h(px(1.)).bg(t.rule).my(px(8.)).into_any_element(),
             Block::Table(rows) => {
                 let mut grid = div()
                     .flex()
                     .flex_col()
                     .my(px(4.))
                     .border_t_1()
-                    .border_color(t.border);
+                    .border_color(t.rule);
                 for (i, row) in rows.into_iter().enumerate() {
                     let mut line = div()
                         .flex()
                         .gap(px(16.))
                         .py(px(8.))
                         .border_b_1()
-                        .border_color(t.border);
+                        .border_color(t.rule);
                     let columns = row.len();
                     for (j, (text, spans)) in row.into_iter().enumerate() {
                         // Two-column tables keep a narrow first column; wider ones share the width.
@@ -234,7 +232,7 @@ pub fn render(source: &str, t: &Theme) -> AnyElement {
                         };
                         line = line.child(
                             cell.when(i == 0, |d| {
-                                d.text_color(t.text)
+                                d.text_color(t.ink)
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_size(px(12.5))
                             })
