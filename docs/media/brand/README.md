@@ -41,6 +41,12 @@ cd website && npm install
 node -e 'const {chromium}=require("playwright");(async()=>{const b=await chromium.launch();for(const[f,w,h,o]of[["card",1280,640,"github-social-1280x640"],["banner",960,540,"discord-banner-960x540"]]){const p=await b.newPage({viewport:{width:w,height:h}});await p.goto("file://"+require("path").resolve("../docs/media/brand/social/"+f+".html"));await p.waitForTimeout(300);await p.screenshot({path:"../docs/media/brand/social/"+o+".png"})}await b.close()})()'
 ```
 
+## Drawn in code
+
+| Where | What |
+|-------|------|
+| `crates/horizon-client/src/title_edition.rs` | the R, U and S of "RUST EDITION" under the classic title screen's logo: Horizon's own glyphs (MIT), rectangles in that file. The banner is rebuilt at load time from the player's own `textures/gui/title/edition.png` (its "EDITION" and "T" carried over, its shades sampled), so no Mojang pixels are in the repository; a resource pack's banner is left as drawn |
+
 ## Uploading (the accounts are Ludovic's)
 
 - **GitHub avatar**: github.com/settings/profile (or the organisation's settings), *Edit* the

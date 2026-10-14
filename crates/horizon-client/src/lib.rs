@@ -144,6 +144,7 @@ pub mod tab_list;
 pub mod testgen;
 pub mod text;
 pub mod title;
+pub mod title_edition;
 pub mod ui;
 pub mod ui_theme;
 pub mod vanillagen;

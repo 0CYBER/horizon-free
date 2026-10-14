@@ -199,6 +199,15 @@ impl HudAtlas {
                 .collect()
         });
         images.extend(atlas_sprites(root, &images));
+        // The title screen's "JAVA EDITION" banner reads "RUST EDITION".
+        if let Some(edition) = images
+            .iter_mut()
+            .find(|i| i.0 == crate::title_edition::SPRITE)
+            && let Some(pixels) =
+                crate::title_edition::rust_edition(edition.1, edition.2, &edition.3)
+        {
+            edition.3 = pixels;
+        }
         images.push(("horizon/white".into(), 4, 4, vec![255; 64]));
         // Map textures (game/maps.rs) are written into these slots at run time.
         for i in 0..MAP_SLOTS {

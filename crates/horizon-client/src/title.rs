@@ -652,24 +652,21 @@ impl Title {
         let (w, h) = (batch.width.ceil(), batch.height.ceil());
         match &self.mode {
             Mode::Main => {
-                // Logo: minecraft.png is a 1024x256 sheet drawn at 256x64.
-                batch.sprite_scaled(
+                // LogoRenderer: the logo's top 44 of 64 rows, then the edition
+                // banner's top 14 of 16 rows overlapping its bottom by 7.
+                batch.sprite_region(
                     atlas,
                     "gui/title/minecraft",
-                    (w / 2.0).floor() - 128.0,
-                    30.0,
+                    [(w / 2.0).floor() - 128.0, 30.0, 256.0, 44.0],
                     256.0,
                     64.0,
-                    u32::MAX,
                 );
-                batch.sprite_scaled(
+                batch.sprite_region(
                     atlas,
-                    "gui/title/edition",
-                    (w / 2.0).floor() - 64.0,
-                    30.0 + 64.0 - 7.0,
+                    crate::title_edition::SPRITE,
+                    [(w / 2.0).floor() - 64.0, 30.0 + 44.0 - 7.0, 128.0, 14.0],
                     128.0,
-                    14.0,
-                    u32::MAX,
+                    16.0,
                 );
                 let version = "Horizon 26.3 (Rust)";
                 batch.text(atlas, version, 2.0, h - 10.0, u32::MAX, true);
