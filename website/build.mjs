@@ -122,6 +122,28 @@ await mkdir(join(dist, "assets"), { recursive: true });
 await cp(join(site, "public"), dist, { recursive: true });
 await cp(join(site, "LEGAL.md"), join(dist, "LEGAL.md"));
 
+// The icons keep their names (browsers and other sites ask for /favicon.svg and the
+// rest), so the pages link them with their content's hash: a new mark reaches everyone
+// at once instead of after the week the server lets browsers keep the old one.
+const iconVersions = {};
+for (const icon of ["favicon.svg", "favicon-32.png", "apple-touch-icon.png"]) {
+  iconVersions[icon] = fingerprint(await readFile(join(site, "public", icon)));
+}
+// /favicon.ico, which browsers request on their own: the 32-pixel PNG in an ICO
+// container (one image entry; ICO has held PNG data since Windows Vista).
+const png32 = await readFile(join(site, "public", "favicon-32.png"));
+const ico = Buffer.alloc(22);
+ico.writeUInt16LE(0, 0); // reserved
+ico.writeUInt16LE(1, 2); // type: icon
+ico.writeUInt16LE(1, 4); // one image
+ico.writeUInt8(32, 6); // width
+ico.writeUInt8(32, 7); // height
+ico.writeUInt16LE(1, 10); // colour planes
+ico.writeUInt16LE(32, 12); // bits per pixel
+ico.writeUInt32LE(png32.length, 14);
+ico.writeUInt32LE(22, 18); // the image follows the header and its entry
+await writeFile(join(dist, "favicon.ico"), Buffer.concat([ico, png32]));
+
 // The page's modules, fingerprinted; each import of a shared module is rewritten to its name.
 const names = {};
 const rewrite = (code) => code.replace(/"\.\/(\w+\.js)"/g, (all, file) => (names[file] ? `"./${names[file]}"` : all));
@@ -184,6 +206,7 @@ for (const page of ["index.html", "404.html"]) {
     if (!(key in values)) throw new Error(`${page}: unknown placeholder ${all}`);
     return values[key];
   });
+  html = html.replace(/href="\/(favicon\.svg|favicon-32\.png|apple-touch-icon\.png)"/g, (all, icon) => `href="/${icon}?v=${iconVersions[icon]}"`);
   await writeFile(join(dist, page), html);
 }
 
