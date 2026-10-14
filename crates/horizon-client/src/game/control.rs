@@ -163,8 +163,9 @@ impl Game<'_> {
                         self.debug_key(key, KeyAction::Release);
                     }
                 }
-                // Physical key presses follow the key binds like the keyboard does.
-                let key = if matches!(self.screen, Screen::Chat | Screen::Options) {
+                // Text screens consume raw presses; releases follow key binds.
+                let typing = matches!(self.screen, Screen::Chat | Screen::Options);
+                let key = if typing && arg(2)? != "up" {
                     key
                 } else {
                     match self.settings.keys.translate(key) {

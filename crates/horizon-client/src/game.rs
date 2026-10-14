@@ -8474,15 +8474,17 @@ impl ApplicationHandler for Game<'_> {
                 WindowEvent::KeyboardInput { event, .. } if self.screen == Screen::WorldOptions => {
                     self.world_options_key(&event)
                 }
-                WindowEvent::KeyboardInput { event, .. } if self.screen == Screen::Options => {
+                // Options consumes presses; releases still reach the bound
+                // gameplay mapping below, including sneak/sprint toggles.
+                WindowEvent::KeyboardInput { event, .. }
+                    if self.screen == Screen::Options && event.state == ElementState::Pressed =>
+                {
                     if let Some(shortcut) = self.edit_shortcut(&event)
                         && self.options_shortcut(shortcut)
                     {
                         return Ok(());
                     }
-                    if event.state == ElementState::Pressed
-                        && let PhysicalKey::Code(key) = event.physical_key
-                    {
+                    if let PhysicalKey::Code(key) = event.physical_key {
                         self.options_key(key, event.text.as_deref())?;
                     }
                 }
