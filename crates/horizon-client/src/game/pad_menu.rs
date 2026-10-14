@@ -1035,10 +1035,13 @@ impl Game<'_> {
     /// the design system's focus colour: a two-dp accent ring.
     fn draw_pad_focus(&self, batch: &mut HudBatch, focus: Target) {
         let [x, y, w, h] = focus.rect;
+        // The options' sub-pages keep the classic layout under either style.
         let horizon = horizon_client::ui_theme::horizon()
-            && (self.title.is_some()
-                || self.screen == Screen::Options
-                || self.screen == Screen::Paused);
+            && if self.screen == Screen::Options {
+                self.ui.options.page() == Page::Main
+            } else {
+                self.title.is_some() || self.screen == Screen::Paused
+            };
         if horizon {
             use horizon_client::ui_theme::{self as theme, Ui, color};
             let mut ui = Ui::new(&self.res.atlas, batch, self.cursor);
