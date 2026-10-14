@@ -109,7 +109,7 @@ impl Game<'_> {
         let Some(input) = &e.input else { return };
         let cursor = e.cursor.min(input.len());
         let suggest = Style {
-            suggest: Some(format!("/{command}")),
+            click: Some(text::ClickEvent::SuggestCommand(format!("/{command}"))),
             ..Style::default()
         };
         let mut context = Text::empty();
@@ -569,14 +569,7 @@ impl Game<'_> {
             "difficulty" => self.cmd_difficulty(ctx),
             "seed" => {
                 let seed = self.level.seed.to_string();
-                let green = Style {
-                    color: Some(text::GREEN),
-                    suggest: None,
-                    ..Style::default()
-                };
-                let value = Text::literal("[")
-                    .append(Text::styled(seed.clone(), green))
-                    .append("]");
+                let value = Text::copyable(seed);
                 self.system_message(Text::translate("commands.seed.success", &[value]));
                 Ok(self.level.seed as i32)
             }
@@ -2342,22 +2335,7 @@ impl Game<'_> {
                 &[&poi],
             )));
         };
-        let coords = Text::translate(
-            "chat.coordinates",
-            &[
-                Text::literal(p[0].to_string()),
-                Text::literal("~"),
-                Text::literal(p[2].to_string()),
-            ],
-        );
-        let link = Text::literal("[")
-            .append(coords)
-            .append("]")
-            .with_style(&Style {
-                color: Some(text::GREEN),
-                suggest: Some(format!("/tp @s {} ~ {}", p[0], p[2])),
-                ..Style::default()
-            });
+        let link = Text::teleport_link(p[0], None, p[2]);
         let (dx, dz) = (p[0] - from[0], p[2] - from[2]);
         let distance = ((dx * dx + dz * dz) as f32).sqrt().floor() as i32;
         let shown = if poi.starts_with('#') {
@@ -2413,15 +2391,7 @@ impl Game<'_> {
             } else {
                 biome.clone()
             };
-            let coords = Text::tr("chat.coordinates", &[&p[0], &p[1], &p[2]]);
-            let link = Text::literal("[")
-                .append(coords)
-                .append("]")
-                .with_style(&Style {
-                    color: Some(text::GREEN),
-                    suggest: Some(format!("/tp @s {} {} {}", p[0], p[1], p[2])),
-                    ..Style::default()
-                });
+            let link = Text::teleport_link(p[0], Some(p[1]), p[2]);
             let distance = (d2 as f32).sqrt().floor() as i32;
             self.feedback(Text::translate(
                 "commands.locate.biome.success",
@@ -2449,22 +2419,7 @@ impl Game<'_> {
                 &[&s],
             )));
         };
-        let coords = Text::translate(
-            "chat.coordinates",
-            &[
-                Text::literal(p[0].to_string()),
-                Text::literal("~"),
-                Text::literal(p[2].to_string()),
-            ],
-        );
-        let link = Text::literal("[")
-            .append(coords)
-            .append("]")
-            .with_style(&Style {
-                color: Some(text::GREEN),
-                suggest: Some(format!("/tp @s {} ~ {}", p[0], p[2])),
-                ..Style::default()
-            });
+        let link = Text::teleport_link(p[0], None, p[2]);
         let (dx, dz) = (f64::from(p[0] - from[0]), f64::from(p[2] - from[2]));
         let distance = (dx * dx + dz * dz).sqrt().floor() as i32;
         let shown = if s.starts_with('#') {

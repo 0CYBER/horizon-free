@@ -535,7 +535,9 @@ impl Game<'_> {
         let hint = if enabled { "disable" } else { "enable" };
         let style = text::Style {
             color: Some(if enabled { text::GREEN } else { text::RED }),
-            suggest: Some(format!("/datapack {hint} \"{id}\"")),
+            click: Some(text::ClickEvent::SuggestCommand(format!(
+                "/datapack {hint} \"{id}\""
+            ))),
             ..text::Style::default()
         };
         let description = self
