@@ -3162,6 +3162,7 @@ impl Game<'_> {
     /// `Minecraft.pause`: a single-player game with a pausing screen open.
     fn pauses_game(&self) -> bool {
         self.remote.is_none()
+            && self.lan.is_none()
             && self.title.is_none()
             && (matches!(
                 self.screen,
