@@ -9,7 +9,7 @@ use horizon_world::{
 use serde_json::Value;
 use std::{
     collections::BTreeSet,
-    fs::File,
+    fs::{self, File},
     io::{self, BufReader},
     path::Path,
     sync::Arc,
@@ -97,8 +97,7 @@ impl Assets {
         if manifest["data_version"].as_i64() != Some(i64::from(DATA_VERSION)) {
             return Err(invalid("resources do not match Horizon's pinned data version").into());
         }
-        let facts: Value =
-            serde_json::from_reader(BufReader::new(File::open(root.join("facts.json"))?))?;
+        let facts: Value = serde_json::from_slice(&fs::read(root.join("facts.json"))?)?;
         let states = facts["states"]
             .as_array()
             .ok_or_else(|| invalid("missing registry state facts"))?;

@@ -3,7 +3,13 @@
 use crate::Result;
 use horizon_world::registry::{BlockRegistry, BlockStateId};
 use serde_json::Value;
-use std::{collections::HashMap, fs::File, io::BufReader, path::Path, sync::Arc};
+use std::{
+    collections::HashMap,
+    fs::{self, File},
+    io::BufReader,
+    path::Path,
+    sync::Arc,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RenderShape {
@@ -106,9 +112,7 @@ pub struct BlockFacts {
 }
 impl BlockFacts {
     pub fn load(root: &Path, registry: &BlockRegistry) -> Result<Self> {
-        let raw: Value = serde_json::from_reader(BufReader::new(File::open(
-            root.join("gameplay-facts.json"),
-        )?))?;
+        let raw: Value = serde_json::from_slice(&fs::read(root.join("gameplay-facts.json"))?)?;
         let entries = raw["states"]
             .as_array()
             .ok_or("missing gameplay state facts")?;
