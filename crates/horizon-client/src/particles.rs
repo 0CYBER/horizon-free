@@ -447,6 +447,115 @@ pub fn breaking_position(
     Some(p)
 }
 
+/// A burst of particles about an entity's box (`around_self`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Burst {
+    pub count: u32,
+    /// Scale of the Gaussian speeds; `None` spawns them at rest without drawing any.
+    pub speed: Option<f64>,
+    /// Added to `getRandomY()`.
+    pub y: f64,
+}
+impl Burst {
+    /// `AbstractVillager.addParticlesAroundSelf`.
+    pub const VILLAGER: Self = Self {
+        count: 5,
+        speed: Some(0.02),
+        y: 1.0,
+    };
+    /// `TamableAnimal`/`AbstractHorse.spawnTamingParticles`,
+    /// `Ocelot.spawnTrustingParticles`, `Animal`'s entity event 18.
+    pub const TAMING: Self = Self {
+        count: 7,
+        speed: Some(0.02),
+        y: 0.5,
+    };
+    /// `Allay`'s entity event 18: three `spawnHeartParticle`.
+    pub const ALLAY: Self = Self {
+        count: 3,
+        speed: Some(0.02),
+        y: 0.5,
+    };
+    /// `Dolphin.addParticlesAroundSelf`.
+    pub const DOLPHIN: Self = Self {
+        count: 7,
+        speed: Some(0.01),
+        y: 0.2,
+    };
+    /// `AbstractHorse.handleEating`'s growth particle.
+    pub const HORSE_EATING: Self = Self {
+        count: 1,
+        speed: None,
+        y: 0.5,
+    };
+}
+/// The particle bursts entity events show on the client: the particle and
+/// burst of `handleEntityEvent(event)` for the entity type `entity`.
+pub fn entity_event_burst(entity: &str, event: u8) -> Option<(&'static str, Burst)> {
+    let entity = entity.strip_prefix("minecraft:").unwrap_or(entity);
+    let tamable = matches!(
+        entity,
+        "wolf" | "cat" | "parrot" | "nautilus" | "zombie_nautilus"
+    );
+    let horse = matches!(
+        entity,
+        "horse"
+            | "donkey"
+            | "mule"
+            | "llama"
+            | "trader_llama"
+            | "camel"
+            | "camel_husk"
+            | "skeleton_horse"
+            | "zombie_horse"
+    );
+    Some(match (entity, event) {
+        ("villager", 12) => ("heart", Burst::VILLAGER),
+        ("villager", 13) => ("angry_villager", Burst::VILLAGER),
+        ("villager", 14) => ("happy_villager", Burst::VILLAGER),
+        ("villager", 42) => ("splash", Burst::VILLAGER),
+        ("allay", 18) => ("heart", Burst::ALLAY),
+        ("dolphin", 38) => ("happy_villager", Burst::DOLPHIN),
+        ("ocelot", 41) => ("heart", Burst::TAMING),
+        ("ocelot", 40) => ("smoke", Burst::TAMING),
+        (_, 7) if tamable || horse => ("heart", Burst::TAMING),
+        (_, 6) if tamable || horse => ("smoke", Burst::TAMING),
+        (_, 18) if !matches!(entity, "villager" | "allay") => ("heart", Burst::TAMING),
+        _ => return None,
+    })
+}
+
+/// Particles about an entity's box, as `AbstractVillager.addParticlesAroundSelf`,
+/// `Animal`'s love hearts (entity event 18), `TamableAnimal` and
+/// `AbstractHorse.spawnTamingParticles`, `Ocelot.spawnTrustingParticles`,
+/// `Allay`'s hearts and `Dolphin.addParticlesAroundSelf` place them: `count`
+/// times three Gaussian speeds scaled by `speed` (none drawn without one), then
+/// `getRandomX(1.0)`, `getRandomY() + y` and `getRandomZ(1.0)`.
+pub fn around_self(
+    random: &mut impl RandomSource,
+    feet: [f64; 3],
+    width: f64,
+    height: f64,
+    burst: Burst,
+    mut emit: impl FnMut([f64; 3], [f64; 3]),
+) {
+    for _ in 0..burst.count {
+        let v = burst.speed.map_or([0.0; 3], |s| {
+            [
+                random.next_gaussian() * s,
+                random.next_gaussian() * s,
+                random.next_gaussian() * s,
+            ]
+        });
+        let p = [
+            feet[0] + width * ((2.0 * random.next_double() - 1.0) * 1.0),
+            feet[1] + height * random.next_double() + burst.y,
+            feet[2] + width * ((2.0 * random.next_double() - 1.0) * 1.0),
+        ];
+        emit(p, v);
+    }
+}
+
 /// ClientLevel.addDestroyBlockEffect placement and pre-constructor velocities.
 pub fn destroy_positions(
     pos: [i32; 3],

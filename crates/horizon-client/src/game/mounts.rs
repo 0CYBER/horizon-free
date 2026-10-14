@@ -437,16 +437,12 @@ impl Game<'_> {
                 if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
                     m.extra.owner = owner;
                     m.persistent = true;
-                    let at = [
-                        m.position.x,
-                        m.position.y + f64::from(m.height()) * 0.5 + 0.5,
-                        m.position.z,
-                    ];
-                    let _ = self.handle_mob_events(vec![MobEvent::Particles {
-                        kind: "heart",
-                        at,
-                        count: 7,
-                    }]);
+                    // AbstractHorse.tameWithName: entity event 7, spawnTamingParticles(true).
+                    self.particles_around_mob(
+                        mob,
+                        "heart",
+                        horizon_client::particles::Burst::TAMING,
+                    );
                 }
             }
             MobEvent::Buck { mob } if self.riding == Some(mob) => self.dismount_mount(),

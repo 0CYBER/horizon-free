@@ -2925,15 +2925,21 @@ impl B {
                             child,
                         });
                     } else if m.random.next_int_bound(35).unwrap_or(1) == 0 {
-                        let mut p = vec![m.position];
+                        // Entity event 12 for the partner, then this villager:
+                        // AbstractVillager.addParticlesAroundSelf(HEART).
+                        let mut bodies = Vec::new();
                         if let Some(t) = cx.w.target_info(target) {
-                            p.push(t.position);
+                            let (min, max) = (t.bounds.min_position(), t.bounds.max_position());
+                            bodies.push((t.position, max.x - min.x, max.y - min.y));
                         }
-                        for at in p {
-                            cx.events.push(MobEvent::Particles {
+                        bodies.push((m.position, f64::from(m.width()), f64::from(m.height())));
+                        for (feet, width, height) in bodies {
+                            cx.events.push(MobEvent::AroundSelf {
                                 kind: "heart",
-                                at: [at.x, at.y + 1.8, at.z],
-                                count: 1,
+                                feet: [feet.x, feet.y, feet.z],
+                                width,
+                                height,
+                                burst: crate::particles::Burst::VILLAGER,
                             });
                         }
                     }
@@ -3527,21 +3533,16 @@ fn pois_scan_order(_m: &Mob, found: &[(Poi, [i32; 3])]) -> Vec<usize> {
 }
 /// Entity event 14: the client shows happy particles (with its own random,
 /// not the mob's).
+/// Entity event 14 (`AcquirePoi`, `AssignProfessionFromJobSite`):
+/// `AbstractVillager.addParticlesAroundSelf(HAPPY_VILLAGER)` on the client.
 fn happy_particles(m: &Mob, cx: &mut Bx) {
-    let mut r = LegacyRandom::new(cx.now ^ i64::from(m.id));
-    let (w, h) = (f64::from(m.width()), f64::from(m.height()));
-    for _ in 0..5 {
-        let at = [
-            m.position.x + w * (2.0 * r.next_double() - 1.0),
-            m.position.y + h * r.next_double() + 1.0,
-            m.position.z + w * (2.0 * r.next_double() - 1.0),
-        ];
-        cx.events.push(MobEvent::Particles {
-            kind: "happy_villager",
-            at,
-            count: 0,
-        });
-    }
+    cx.events.push(MobEvent::AroundSelf {
+        kind: "happy_villager",
+        feet: [m.position.x, m.position.y, m.position.z],
+        width: f64::from(m.width()),
+        height: f64::from(m.height()),
+        burst: crate::particles::Burst::VILLAGER,
+    });
 }
 /// `BehaviorUtils.findSectionClosestToVillage`.
 fn closest_section(villages: &[[i32; 3]], center: [i32; 3], radius: i32) -> [i32; 3] {

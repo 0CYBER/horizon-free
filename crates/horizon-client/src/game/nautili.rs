@@ -4,7 +4,7 @@
 use super::Game;
 use horizon_client::{
     items::ItemStack,
-    mobs::{MobEvent, Species, nautilus},
+    mobs::{Species, nautilus},
 };
 use horizon_core::random::RandomSource;
 
@@ -84,14 +84,14 @@ impl Game<'_> {
                     m.nav_stop();
                     m.ai.target = None;
                 }
-                let at = [
-                    m.position.x,
-                    m.position.y + f64::from(m.height()) * 0.5 + 0.5,
-                    m.position.z,
-                ];
                 let sound = nautilus::eat_sound(m);
                 let kind = if tamed { "heart" } else { "smoke" };
-                let _ = self.handle_mob_events(vec![MobEvent::Particles { kind, at, count: 7 }]);
+                // TamableAnimal.spawnTamingParticles (entity event 7 or 6).
+                self.particles_around_mob(
+                    self.mobs[index].id,
+                    kind,
+                    horizon_client::particles::Burst::TAMING,
+                );
                 self.nautilus_sound(index, sound);
                 if tamed {
                     let view = self.mob_entity(&self.mobs[index]);

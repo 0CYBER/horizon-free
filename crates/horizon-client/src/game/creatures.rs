@@ -909,6 +909,19 @@ impl Game<'_> {
                         }
                     }
                 }
+                MobEvent::AroundSelf {
+                    kind,
+                    feet,
+                    width,
+                    height,
+                    burst,
+                } => self.particles_around(kind, feet, [width, height], burst),
+                MobEvent::ParticleAt { kind, at, velocity } => {
+                    if let Some(ty) = horizon_client::particles::ParticleType::from_name(kind) {
+                        let options = horizon_client::particles::ParticleOptions::simple(ty);
+                        self.particles.add(&options, at, velocity);
+                    }
+                }
                 MobEvent::Experience { at, amount } => self.spawn_orbs(at, amount),
                 MobEvent::EffectPlayer {
                     effect,
@@ -1969,11 +1982,6 @@ impl Game<'_> {
                     && !horizon_client::mobs::tame::angry(m) =>
             {
                 consume = true;
-                let at = [
-                    m.position.x,
-                    m.position.y + f64::from(m.height()) * 0.5 + 0.5,
-                    m.position.z,
-                ];
                 let tamed = m.random.next_int_bound(3).unwrap_or(1) == 0;
                 if tamed {
                     horizon_client::mobs::tame::set_tame(m, true);
@@ -1985,7 +1993,12 @@ impl Game<'_> {
                 }
                 // TamableAnimal.spawnTamingParticles.
                 let kind = if tamed { "heart" } else { "smoke" };
-                self.handle_mob_events(vec![MobEvent::Particles { kind, at, count: 7 }])?;
+                // TamableAnimal.spawnTamingParticles (entity event 7 or 6).
+                self.particles_around_mob(
+                    self.mobs[index].id,
+                    kind,
+                    horizon_client::particles::Burst::TAMING,
+                );
                 if tamed {
                     let view = self.mob_entity(&self.mobs[index]);
                     self.trigger_entity("minecraft:tame_animal", "entity", &view);
@@ -2045,11 +2058,6 @@ impl Game<'_> {
             Species::Cat if !m.extra.tame && is_food => {
                 consume = true;
                 m.persistent = true;
-                let at = [
-                    m.position.x,
-                    m.position.y + f64::from(m.height()) * 0.5 + 0.5,
-                    m.position.z,
-                ];
                 let tamed = m.random.next_int_bound(3).unwrap_or(1) == 0;
                 if tamed {
                     m.extra.tame = true;
@@ -2058,7 +2066,12 @@ impl Game<'_> {
                 }
                 eat = eating_sound(m, &mut self.world.random);
                 let kind = if tamed { "heart" } else { "smoke" };
-                self.handle_mob_events(vec![MobEvent::Particles { kind, at, count: 7 }])?;
+                // TamableAnimal.spawnTamingParticles (entity event 7 or 6).
+                self.particles_around_mob(
+                    self.mobs[index].id,
+                    kind,
+                    horizon_client::particles::Burst::TAMING,
+                );
                 if tamed {
                     let view = self.mob_entity(&self.mobs[index]);
                     self.trigger_entity("minecraft:tame_animal", "entity", &view);
@@ -2090,18 +2103,18 @@ impl Game<'_> {
                     let pitch = 1.0 + (m.random.next_float() - m.random.next_float()) * 0.2;
                     eat = Some(("entity.parrot.eat", 1.0, pitch));
                 }
-                let at = [
-                    m.position.x,
-                    m.position.y + f64::from(m.height()) * 0.5 + 0.5,
-                    m.position.z,
-                ];
                 let tamed = m.random.next_int_bound(10).unwrap_or(1) == 0;
                 if tamed {
                     m.extra.tame = true;
                     m.extra.owner = self.level.player_uuid.or(Some([0, 0, 0, 1]));
                 }
                 let kind = if tamed { "heart" } else { "smoke" };
-                self.handle_mob_events(vec![MobEvent::Particles { kind, at, count: 7 }])?;
+                // TamableAnimal.spawnTamingParticles (entity event 7 or 6).
+                self.particles_around_mob(
+                    self.mobs[index].id,
+                    kind,
+                    horizon_client::particles::Burst::TAMING,
+                );
                 if tamed {
                     let view = self.mob_entity(&self.mobs[index]);
                     self.trigger_entity("minecraft:tame_animal", "entity", &view);
