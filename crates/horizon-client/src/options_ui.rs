@@ -338,8 +338,20 @@ impl Opt {
                 ),
             ),
             Opt::PadLookSensitivity => percent(c, 2.0 * s.controller.look_sensitivity),
-            Opt::PadMoveDeadzone => percent(c, s.controller.move_deadzone),
-            Opt::PadLookDeadzone => percent(c, s.controller.look_deadzone),
+            Opt::PadMoveDeadzone | Opt::PadLookDeadzone => {
+                let v = if self == Opt::PadMoveDeadzone {
+                    s.controller.move_deadzone
+                } else {
+                    s.controller.look_deadzone
+                };
+                Text::translate(
+                    "options.percent_value",
+                    &[
+                        tr(c),
+                        Text::literal(((v * 100.0).round() as i32).to_string()),
+                    ],
+                )
+            }
             _ => generic(c, self.value_text(s)),
         }
     }
