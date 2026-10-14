@@ -25,7 +25,10 @@ copy is: the Mac mini. Its runner runs as the maintainer's account and keeps its
 2. `tools/ci/vanilla-data.sh` links `.local/` to the runner's copy of the vanilla data, cloned once from
    `~/code/horizon-parity/shared-local` into `~/.actions-runners/horizon/_work/horizon/shared-local`, and
    prepares `.local/horizon-client` with the pull request's own `horizon-prepare` once per preparer version
-   (its sources, the exporters in `mods/horizon/src/test/java` and `research-lock.json`).
+   (its sources, the exporters in `mods/horizon/src/test/java` and `research-lock.json`). The game's sounds, which
+   depend only on the Minecraft version, are kept once in `shared-local/sounds/<version>/` (copied from a folder
+   `horizon-prepare sounds` made from the maintainer's own game; the Mac mini has no official launcher of its own)
+   and linked into each preparation, for the audio harnesses.
 3. `tools/parity.py --changed <base sha>` picks the harnesses whose traced dependencies (their script, Python
    modules, Java oracles and every Rust source their probes compile) changed since the merge base, plus any
    harness nothing is recorded about yet, and runs those that have no pass for their current inputs. A change to
@@ -35,9 +38,10 @@ Failed harnesses' logs are uploaded as the `parity-logs` artifact.
 
 **Platform-specific harnesses.** A harness listed under `linux_only` in `tools/parity_hosts.json` gives
 different results on macOS for a reason that is not a Horizon bug (the reason is printed). `parity.py` skips it on
-other platforms unless it is named on the command line. The list is empty today: `options`, `chunk_generation`,
-`world_border_render` and `mob_ai`, which once differed on macOS through the platform's libm, pass on the Mac mini
-since `horizon_core::jmath` computes what HotSpot computes (checked 2026-10-14).
+other platforms unless it is named on the command line. Today it holds only `save_roundtrip` (it needs `vscreen`):
+`options`, `chunk_generation`, `world_border_render` and `mob_ai`, which once differed on macOS through the
+platform's libm, pass on the Mac mini since `horizon_core::jmath` computes what HotSpot computes (checked
+2026-10-14).
 
 **Pull requests from forks** never run code on the Mac mini by themselves. A maintainer who has read the change
 adds the `run-parity` label: that runs the job once, on the commit the pull request had then. To run it again

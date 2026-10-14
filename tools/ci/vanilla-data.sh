@@ -26,7 +26,7 @@ fi
 mkdir -p .local "$shared/prepared"
 for entry in "$shared"/*; do
   name=$(basename "$entry")
-  case "$name" in prepared|*.log) continue ;; esac
+  case "$name" in prepared|sounds|*.log) continue ;; esac
   if [ -L ".local/$name" ] || [ ! -e ".local/$name" ]; then ln -sfn "$entry" ".local/$name"; fi
 done
 
@@ -66,13 +66,19 @@ fi
 # the same neighbours as in the shared folder.
 for entry in "$shared"/*; do
   name=$(basename "$entry")
-  case "$name" in prepared|*.log) continue ;; esac
+  case "$name" in prepared|sounds|*.log) continue ;; esac
   [ -e "$prepared/$name" ] || ln -sfn "$entry" "$prepared/$name"
 done
 while read -r name; do
   if [ -L ".local/$name" ] || [ ! -e ".local/$name" ]; then ln -sfn "$prepared/$name" ".local/$name"; else
     echo "::error::.local/$name is not a link to the prepared resources"; exit 1; fi
 done < "$prepared/.entries"
+# The game's sounds (horizon-prepare sounds copies them from the official launcher's asset store) depend only on the
+# Minecraft version: kept once in $shared/sounds/<version>/ (sounds.json and sounds/) and linked into each preparation.
+assets="$prepared/horizon-client/$version/assets/minecraft"
+if [ -f "$shared/sounds/$version/sounds.json" ] && [ -d "$assets" ]; then
+  for entry in sounds.json sounds; do [ -e "$assets/$entry" ] || ln -sfn "$shared/sounds/$version/$entry" "$assets/$entry"; done
+fi
 touch "$prepared"
 # The four newest preparations stay.
 ls -1dt "$shared/prepared"/*/ 2>/dev/null | tail -n +5 | while read -r old; do rm -rf "$old"; done
