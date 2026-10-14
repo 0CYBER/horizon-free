@@ -14,7 +14,10 @@ pub mod artifacts;
 mod inventory;
 pub mod java;
 pub mod pyjson;
+mod sounds;
 mod survival;
+
+pub use sounds::sounds;
 
 use pyjson::Value;
 use sha2::Digest;

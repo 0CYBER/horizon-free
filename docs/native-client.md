@@ -14,23 +14,24 @@ missing; [Rust rewrite status](rust-parity.md) has the details.
 
 ## Run from a checkout
 
-Use current stable Rust (1.90+) and JDK 25 (Python 3.10+ for the sounds and the
-development harnesses). Horizon never
+Use current stable Rust (1.90+) and JDK 25 (Python 3.10+ only for the development
+harnesses). Horizon never
 downloads the game: resource preparation imports **your own copy** (the 26.3
 client from your official launcher install, and the 26.3 server jar you
 downloaded yourself; see [Build from source](../README.md#build-from-source)),
 verifies it against the pinned checksums, runs vanilla's data generator and small
 exporters against those jars, and extracts the jar's assets and data into ignored
 `.local/horizon-client/26.3/`. Sounds (about 380 MB) are copied from your
-launcher's asset store. Prepared resources are private; never commit them.
+launcher's asset store by `horizon-prepare sounds`, each file checked against the asset
+index's SHA-1. Prepared resources are private; never commit them.
 
 Preparation is `horizon-prepare` (`crates/horizon-prepare`, Rust): it needs no Python, only
 the JDK, for the small exporters that call Mojang's own code. Release folders ship it beside
-`horizon-client`, and the launcher prepares with it.
+`horizon-client`, and the launcher prepares with it and copies the sounds as part of preparing.
 
 ```sh
 cargo run --release -p horizon-prepare -- --prepare --server-jar ~/Downloads/server.jar
-python3 tools/fetch_sounds.py
+cargo run --release -p horizon-prepare -- sounds
 cargo run --release -p horizon-client -- --render-distance 12
 ```
 

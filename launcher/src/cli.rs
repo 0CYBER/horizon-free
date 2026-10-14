@@ -215,7 +215,9 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
         Cmd::Prepare { minecraft, version } => {
             let tag = backend::resolve_version(version.as_deref())?;
             let minecraft = backend::minecraft_dir(minecraft)?;
-            match backend::preparer(&tag, &minecraft, &|line| eprintln!("{line}"))? {
+            let preparer = backend::preparer(&tag, &minecraft, &|line| eprintln!("{line}"))?;
+            backend::sounds(&tag, &minecraft, &|line| println!("{line}"));
+            match preparer {
                 backend::Preparer::Process(cmd) => attached(cmd)?,
                 backend::Preparer::InProcess(options) => {
                     backend::prepare_in_process(&options, &|line| println!("{line}"))?

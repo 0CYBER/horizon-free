@@ -87,7 +87,7 @@ def main():
     if not (args.resources / 'horizon-resources.json').is_file():
         raise SystemExit(f'missing prepared resources in {args.resources}: run horizon-prepare --prepare (cargo run --release -p horizon-prepare -- --prepare)')
     if not (args.resources / 'assets/minecraft/sounds.json').is_file():
-        print('warning: no sound assets; run tools/fetch_sounds.py for audio')
+        print('warning: no sound assets; run cargo run -p horizon-prepare -- sounds for audio')
 
     system = {'Linux': 'linux', 'Darwin': 'macos'}.get(platform.system())
     if system is None:

@@ -9,6 +9,7 @@ const HELP: &str = "\
 horizon-prepare: prepare Horizon's resources from your own Minecraft Java Edition
 
 Usage: horizon-prepare [--prepare] [--server-jar PATH] [--minecraft-dir PATH] [--root PATH]
+       horizon-prepare sounds [--minecraft-dir PATH] [--root PATH]
 
   --prepare             Import the pinned game files from your own copy first
   --server-jar PATH     The pinned server jar you downloaded yourself
@@ -21,6 +22,10 @@ Usage: horizon-prepare [--prepare] [--server-jar PATH] [--minecraft-dir PATH] [-
 Needs Minecraft played once from the official launcher, and Java (a JDK) of the version
 research-lock.json pins: JAVA_HOME, else javac and java on the PATH.
 The resources go to <root>/.local/horizon-client/<version>; pass that to horizon-client --resources.
+
+horizon-prepare sounds copies the pinned version's sounds (about 380 MB) from the official
+launcher's asset store into the same folder, checking every file. It is optional: without it the
+game is silent. Nothing is downloaded; it needs the version played once from the official launcher.
 ";
 
 /// The folder with research-lock.json: beside the executable in a release folder, else the
@@ -46,7 +51,8 @@ fn main() -> ExitCode {
         server_jar: None,
     };
     let mut root = None;
-    let mut args = std::env::args_os().skip(1);
+    let mut args = std::env::args_os().skip(1).peekable();
+    let sounds = args.next_if(|a| a == "sounds").is_some();
     while let Some(arg) = args.next() {
         let text = arg.to_string_lossy().into_owned();
         let (flag, inline) = match text.split_once('=') {
@@ -65,6 +71,9 @@ fn main() -> ExitCode {
             }
         };
         let parsed = match flag.as_str() {
+            "--prepare" | "--server-jar" if sounds => {
+                Err(format!("{flag} is for preparing, not for sounds"))
+            }
             "--prepare" if inline.is_none() => {
                 options.import = true;
                 Ok(())
@@ -99,7 +108,12 @@ fn main() -> ExitCode {
         let _ = writeln!(out, "{line}");
         let _ = out.flush();
     };
-    match horizon_prepare::prepare(&options, &log) {
+    let result = if sounds {
+        horizon_prepare::sounds(&options.root, options.minecraft_dir.as_deref(), &log)
+    } else {
+        horizon_prepare::prepare(&options, &log)
+    };
+    match result {
         Ok(_) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");
