@@ -338,6 +338,10 @@ impl Game<'_> {
             baby: m.is_baby(),
             on_ground: m.on_ground,
             equipment,
+            components: horizon_client::mobs::finalize::variant_component(m)
+                .map(|(id, value)| (id.to_owned(), value))
+                .into_iter()
+                .collect(),
             ..Default::default()
         }
     }
