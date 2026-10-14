@@ -466,6 +466,7 @@ pub fn encode_block_entity(
                 entries.push(("creaking", uuid_tag(uuid)));
             }
         }
+        BlockEntity::Spawner(s) => entries.extend(s.save()),
     }
     Tag::compound(entries)
 }
@@ -588,6 +589,7 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
         | BlockEntity::Lectern(_)
         | BlockEntity::Banner(_)
         | BlockEntity::CreakingHeart(_) => {}
+        BlockEntity::Spawner(s) => **s = crate::mobs::spawner::Spawner::load(tag),
     }
     Some((pos, entity))
 }

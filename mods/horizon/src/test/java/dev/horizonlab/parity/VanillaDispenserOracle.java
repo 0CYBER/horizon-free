@@ -250,6 +250,7 @@ public final class VanillaDispenserOracle {
         if (f.has("rules")) {
             for (var rule : f.getAsJsonObject("rules").entrySet()) {
                 if (rule.getKey().equals("tnt_explodes")) w.rules.set(GameRules.TNT_EXPLODES, rule.getValue().getAsBoolean(), null);
+                if (rule.getKey().equals("spawner_blocks_work")) w.rules.set(GameRules.SPAWNER_BLOCKS_WORK, rule.getValue().getAsBoolean(), null);
             }
         }
         if (f.has("items")) {
@@ -284,6 +285,10 @@ public final class VanillaDispenserOracle {
         // Creating the targets must not move the stream the dispenser draws from.
         w.rng = new LegacyRandomSource(f.get("seed").getAsLong());
         VanillaBlockUpdateOracle.set(Level.class, w, "random", w.rng);
+        // Spawners have their block entity from the start (the oracle level makes them on demand).
+        for (var cell : List.copyOf(w.cells.entrySet())) {
+            if (cell.getValue().getBlock() instanceof net.minecraft.world.level.block.SpawnerBlock) w.getBlockEntity(cell.getKey());
+        }
         w.log = new StringBuilder();
         w.blockEvents.clear();
         Map<BlockPos, BlockState> before = new HashMap<>(w.cells);
@@ -328,6 +333,18 @@ public final class VanillaDispenserOracle {
                 for (int i = 0; i < 9; i++) if (crafter.isSlotDisabled(i)) disabled.append(disabled.length() > 0 ? "," : "").append(i);
                 result.add("crafter " + VanillaBlockUpdateOracle.pos(at) + " ticks=" + ticksField.getInt(crafter) + " triggered=" + crafter.isTriggered()
                     + " signal=" + crafter.getRedstoneSignal() + " disabled=" + disabled);
+            }
+        }
+        for (BlockPos at : containers) {
+            // A spawner's next spawn data, potentials and delay (BaseSpawner.save).
+            if (w.blockEntities.get(at) instanceof net.minecraft.world.level.block.entity.SpawnerBlockEntity spawner) {
+                var out = net.minecraft.world.level.storage.TagValueOutput.createWithContext(net.minecraft.util.ProblemReporter.DISCARDING, ParityData.access);
+                spawner.getSpawner().save(out);
+                var saved = out.buildResult();
+                var entity = saved.getCompound("SpawnData").flatMap(d -> d.getCompound("entity"));
+                String next = entity.map(e -> e.getString("id").orElse("?") + "/" + e.size()).orElse("-");
+                result.add("spawner " + VanillaBlockUpdateOracle.pos(at) + " next=" + next + " potentials=" + saved.getListOrEmpty("SpawnPotentials").size()
+                    + " delay=" + saved.getShortOr("Delay", (short) 0));
             }
         }
         for (BlockPos at : containers) {
@@ -449,6 +466,16 @@ public final class VanillaDispenserOracle {
         @Override public void awardStat(net.minecraft.stats.Stat<?> stat, int count) {
             stats.add("stat " + User.key(stat) + " " + BuiltInRegistries.STAT_TYPE.getKey(stat.getType()) + " " + count);
         }
+        @Override public net.minecraft.server.players.NameAndId nameAndId() { return new net.minecraft.server.players.NameAndId(new UUID(0L, 0L), "Player"); }
+        @Override public void sendSystemMessage(net.minecraft.network.chat.Component message) {
+            stats.add("msg " + (message.getContents() instanceof net.minecraft.network.chat.contents.TranslatableContents t ? t.getKey() : message.getString()));
+        }
+    }
+
+    /** The single player's list: the player is an operator (cheats are on). */
+    static final class Ops extends net.minecraft.server.players.PlayerList {
+        Ops() { super(null, null, null, null); }
+        @Override public boolean isOp(net.minecraft.server.players.NameAndId nameAndId) { return true; }
     }
 
     /**
@@ -460,6 +487,9 @@ public final class VanillaDispenserOracle {
      * the item the player started using follow.
      */
     static List<String> useItem(VanillaBlockUpdateOracle.World w, BlockPos pos, JsonObject use) throws Exception {
+        if (VanillaBlockUpdateOracle.Server.players == null) {
+            VanillaBlockUpdateOracle.Server.players = (Ops) VanillaBlockUpdateOracle.allocate.invoke(VanillaBlockUpdateOracle.unsafe, Ops.class);
+        }
         Clicker player = (Clicker) VanillaBlockUpdateOracle.allocate.invoke(VanillaBlockUpdateOracle.unsafe, Clicker.class);
         player.world = w;
         player.creative = use.get("creative").getAsBoolean();

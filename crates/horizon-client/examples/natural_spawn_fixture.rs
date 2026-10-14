@@ -9,6 +9,10 @@
 //! 1.0), foxes and axolotls from the third, sulfur cubes have size 2, salmon
 //! are small, slimes and magma cubes keep size 1, tropical fish school.
 //!
+//! Spawner cases (`mode=spawner`, tools/test_spawner_parity.py) tick a
+//! `mobs::spawner::Spawner` loaded from the case's SNBT on the same world and
+//! print its events tick by tick.
+//!
 //! usage: natural_spawn_fixture RESOURCES INPUT OUTPUT
 use horizon_client::{
     assets::Assets,
@@ -25,6 +29,7 @@ use horizon_client::{
             SpawnPlayer, SpawnRequest, SpawnState, Spawned, StructureAt, StructureSpawns,
             spawn_box,
         },
+        spawner::{Spawner, SpawnerAdded, SpawnerEvent, SpawnerLevel, SpawnerSpawn},
         species::{self, Baby},
     },
 };
@@ -73,6 +78,8 @@ struct Shared<'a> {
     structures: &'a StructureSpawns,
     collision: &'a BlockCollisionRegistry<'a>,
     air: BlockStateId,
+    /// Every entity type id (`entity-types.json`).
+    entity_types: &'a HashSet<String>,
 }
 struct World<'a> {
     s: &'a Shared<'a>,
@@ -95,8 +102,10 @@ struct World<'a> {
     respawn: Option<[i32; 3]>,
     unloaded: HashSet<(i32, i32)>,
     spawn_mobs: bool,
-    /// Boxes of living entities (case entities, then spawned mobs).
-    entities: RefCell<Vec<Aabb>>,
+    /// The `spawner_blocks_work` game rule.
+    spawners_work: bool,
+    /// Types and boxes of living entities (case entities, then spawned mobs).
+    entities: RefCell<Vec<(String, Aabb)>>,
 }
 impl World<'_> {
     fn biome_at(&self, x: i32, y: i32, z: i32) -> &str {
@@ -280,10 +289,21 @@ impl NaturalLevel for World<'_> {
             block: &lookup,
             binding: self.s.collision,
         };
+        // getEntityCollisions(null, box): living shulkers are solid.
+        let grown = bounds.inflate(horizon_core::geometry::Vec3::new(1e-7, 1e-7, 1e-7));
         no_collision_empty(&mut world, bounds)
+            && !self
+                .entities
+                .borrow()
+                .iter()
+                .any(|(id, b)| id == "minecraft:shulker" && b.intersects(grown))
     }
     fn unobstructed(&self, bounds: Aabb) -> bool {
-        !self.entities.borrow().iter().any(|b| b.intersects(bounds))
+        !self
+            .entities
+            .borrow()
+            .iter()
+            .any(|(_, b)| b.intersects(bounds))
     }
     fn spawn_mobs(&self) -> bool {
         self.spawn_mobs
@@ -296,6 +316,28 @@ impl NaturalLevel for World<'_> {
     }
     fn pathfindable_land(&self, x: i32, y: i32, z: i32) -> bool {
         self.s.data.state(self.state(x, y, z)).flags & horizon_client::mobs::data::LAND != 0
+    }
+}
+
+impl SpawnerLevel for World<'_> {
+    fn alive_player_near(&self, x: f64, y: f64, z: f64, range: f64) -> bool {
+        self.players.iter().any(|(p, mode)| {
+            let d = (p[0] - x).powi(2) + (p[1] - y).powi(2) + (p[2] - z).powi(2);
+            mode != "spectator" && (range < 0.0 || d < range * range)
+        })
+    }
+    fn spawner_blocks_work(&self) -> bool {
+        self.spawners_work
+    }
+    fn entity_exists(&self, id: &str) -> bool {
+        self.s.types.types.contains_key(id) || self.s.entity_types.contains(id)
+    }
+    fn count_entities(&self, id: &str, bounds: Aabb) -> usize {
+        self.entities
+            .borrow()
+            .iter()
+            .filter(|(k, b)| k == id && b.intersects(bounds))
+            .count()
     }
 }
 
@@ -369,6 +411,17 @@ fn main() -> horizon_client::Result<()> {
     let biomes = Biomes::load(root)?;
     let structures = StructureSpawns::load(root);
     let collision = collisions::load(root, registry)?;
+    let entity_types: HashSet<String> = fs::read(root.join("entity-types.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .and_then(|v| {
+            v.as_object().map(|o| {
+                o.keys()
+                    .map(|k| horizon_client::command::args::normalize(k))
+                    .collect()
+            })
+        })
+        .unwrap_or_default();
     let shared = Shared {
         facts: &facts,
         data: &data,
@@ -378,6 +431,7 @@ fn main() -> horizon_client::Result<()> {
         structures: &structures,
         collision: &collision,
         air: facts.air,
+        entity_types: &entity_types,
     };
     let mut adaptation: HashMap<String, bool> = HashMap::new();
     let mut out = String::new();
@@ -538,12 +592,18 @@ fn main() -> horizon_client::Result<()> {
             respawn,
             unloaded,
             spawn_mobs: get("rules", "1") != "0",
+            spawners_work: get("spawners", "1") != "0",
             entities: RefCell::new(
                 case_entities
                     .iter()
-                    .filter_map(|(t, p, _)| {
-                        let t = types.types.get(t)?;
-                        Some(spawn_box(p[0], p[1], p[2], t.width as f32, t.height as f32))
+                    .filter_map(|(id, p, _)| {
+                        let t = types.types.get(id)?;
+                        // Entity.setPos (a shulker sits at its block's centre).
+                        let p = horizon_client::mobs::spawner::entity_position(t.species, *p);
+                        Some((
+                            id.clone(),
+                            spawn_box(p[0], p[1], p[2], t.width as f32, t.height as f32),
+                        ))
                     })
                     .collect(),
             ),
@@ -560,14 +620,16 @@ fn main() -> horizon_client::Result<()> {
         let mut log: Vec<String> = Vec::new();
         let mut spawn = |l: &World, r: &SpawnRequest| -> Option<Spawned> {
             let bounds = neutral_box(l, r);
-            l.entities.borrow_mut().push(bounds);
+            l.entities.borrow_mut().push((r.entity.to_owned(), bounds));
             Some(Spawned {
                 bounds,
                 school: true,
             })
         };
         let mode = get("mode", "chunk");
-        if mode == "gen" {
+        if mode == "spawner" {
+            spawner_case(&world, &get, &mut random, &mut log)?;
+        } else if mode == "gen" {
             let mut gen_random = LegacyRandom::new(get("gseed", "0").parse()?);
             // The level random of the spawn predicates: no creature's predicate
             // draws from it (the oracle's answers fixed values).
@@ -684,5 +746,88 @@ fn main() -> horizon_client::Result<()> {
         let _ = writeln!(out, "{name} {}", log.join(" ; "));
     }
     fs::write(args.get(3).ok_or("missing OUTPUT")?, out)?;
+    Ok(())
+}
+
+/// `SpawnerBlockEntity.serverTick` `ticks` times at `spos` for the spawner in
+/// `snbt` (base64 SNBT), as the oracle logs it.
+fn spawner_case(
+    world: &World,
+    get: &dyn Fn(&str, &'static str) -> String,
+    random: &mut LegacyRandom,
+    log: &mut Vec<String>,
+) -> horizon_client::Result<()> {
+    let v: Vec<i32> = get("spos", "0,0,0")
+        .split(',')
+        .map(|n| n.parse().unwrap_or(0))
+        .collect();
+    let pos = [v[0], v[1], v[2]];
+    let text = horizon_client::skins::base64_decode(&get("snbt", "")).ok_or("bad snbt")?;
+    let tag = horizon_world::nbt::parse_snbt(&String::from_utf8(text)?)?.0;
+    let mut spawner = Spawner::load(&tag);
+    let ticks: i32 = get("ticks", "1").parse()?;
+    for tick in 0..ticks {
+        let mut events = Vec::new();
+        let mut spawned = std::collections::VecDeque::new();
+        let mut spawn = |l: &World, r: &SpawnerSpawn| -> Option<SpawnerAdded> {
+            let t = l.s.types.types.get(r.id)?;
+            let [x, y, z] = r.position;
+            let bounds = spawn_box(x, y, z, t.width as f32, t.height as f32);
+            l.entities.borrow_mut().push((r.id.to_owned(), bounds));
+            spawned.push_back(format!(
+                "{tick} spawn {} {} {} {} {}",
+                r.id,
+                bits(x),
+                bits(y),
+                bits(z),
+                // Shulker.finalizeSpawn faces it south.
+                yaw_text(
+                    r.id,
+                    if r.finalize && r.id == "minecraft:shulker" {
+                        0.0
+                    } else {
+                        r.yaw
+                    }
+                )
+            ));
+            Some(SpawnerAdded {
+                id: spawned.len() as u32,
+                bounds,
+                mob: true,
+            })
+        };
+        spawner.server_tick(world, random, pos, &mut spawn, &mut events);
+        for e in events {
+            match e {
+                SpawnerEvent::BlockUpdated => log.push(format!("{tick} update")),
+                SpawnerEvent::BlockEvent(id) => log.push(format!("{tick} bevent {id} 0")),
+                // Each spawn's level event follows its tryAddFreshEntityWithPassengers.
+                SpawnerEvent::LevelEvent(id) => {
+                    log.extend(spawned.pop_front());
+                    log.push(format!("{tick} levent {id} 0"));
+                }
+                SpawnerEvent::EntityPlace(_, p) => log.push(format!(
+                    "{tick} gevent minecraft:entity_place {} {} {}",
+                    p[0], p[1], p[2]
+                )),
+                SpawnerEvent::SpawnAnim(_) => log.push(format!("{tick} eevent 20")),
+            }
+        }
+    }
+    let next = spawner
+        .next_data()
+        .and_then(|d| d.id())
+        .unwrap_or_else(|| "-".into());
+    let pots: Vec<String> = spawner
+        .potentials
+        .iter()
+        .map(|(d, w)| format!("{}*{w}", d.id().unwrap_or_else(|| "-".into())))
+        .collect();
+    log.push(format!(
+        "end delay={} next={next} pots={}",
+        spawner.spawn_delay as i16,
+        pots.join(",")
+    ));
+    log.push(format!("next {}", random.next_int_bound(1000).unwrap_or(0)));
     Ok(())
 }

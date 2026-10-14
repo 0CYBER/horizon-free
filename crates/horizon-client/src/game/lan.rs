@@ -707,6 +707,19 @@ impl Game<'_> {
         }
     }
 
+    /// `Level.blockEvent` for the guests (`ClientboundBlockEventPacket`).
+    pub(super) fn lan_block_event(&mut self, pos: [i32; 3], b0: i32, b1: i32) {
+        if self.audio.capture.is_some() {
+            let state = self.world.block(pos[0], pos[1], pos[2]).0 as u16;
+            self.lan_block_events.push((pos, b0, b1, state));
+        }
+    }
+    /// `Level.broadcastEntityEvent` for the guests.
+    pub(super) fn lan_entity_event(&mut self, id: i32, event: i8, at: [f64; 3]) {
+        if self.audio.capture.is_some() {
+            self.lan_entity_events.push((id, event, at));
+        }
+    }
     /// Send the tick's level events, sounds and mob animations.
     fn lan_flush_effects(&mut self, host: &mut LanHost) {
         for (kind, pos, data, acting) in std::mem::take(&mut self.lan_events) {
@@ -715,6 +728,12 @@ impl Game<'_> {
                     .push([f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])]);
             }
             host.hub.level_event(kind, pos, data, acting);
+        }
+        for (pos, b0, b1, state) in std::mem::take(&mut self.lan_block_events) {
+            host.hub.block_event(pos, b0, b1, state);
+        }
+        for (id, event, at) in std::mem::take(&mut self.lan_entity_events) {
+            host.hub.entity_event(id, event, at);
         }
         self.lan_broadcast_effects(host);
         if host.hub.guests.is_empty() {

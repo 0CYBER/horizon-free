@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare a player's right click on a block with vanilla's, for items that are
-both food and blocks (sweet and glow berries, carrots, potatoes) and for sweet
-berry bushes.
+both food and blocks (sweet and glow berries, carrots, potatoes), for sweet
+berry bushes and for spawn eggs used on a monster spawner.
 
 Every case has a block at the origin, something above it, and a player three
 blocks south, survival or creative, hungry or full, sneaking or not, who
@@ -10,11 +10,13 @@ right-clicks the top face of the origin holding an item. Vanilla runs the real
 harness (`VanillaDispenserOracle.useItem`): the block's `useItemOn` and
 `useWithoutItem` (picking a bush's berries, `SweetBerryBushBlock.useItemOn`
 passing bone meal on), then `ItemStack.useOn` (`BlockItem.place` with its
-`mayPlaceOn` rules, `BoneMealItem.useOn`, and eating a consumable that could
-not be placed). Horizon runs `use_item_as_player` on that hit in a headless
-game (`HORIZON_DISPENSE_FIXTURE`). Both print block changes, dropped items,
+`mayPlaceOn` rules, `BoneMealItem.useOn`, eating a consumable that could
+not be placed, and `SpawnEggItem.useOn` setting a spawner's mob). Horizon runs
+`use_item_as_player` on that hit in a headless game
+(`HORIZON_DISPENSE_FIXTURE`). Both print block changes, dropped items,
 level events, sounds, game events, the used statistic, the held stack, the
-item the player started using, and the level random afterwards.
+item the player started using, spawners' next spawn data, potentials and
+delay, system messages and the level random afterwards.
 """
 import json
 import os
@@ -34,6 +36,7 @@ ITEMS = ['sweet_berries', 'sweet_berries', 'sweet_berries', 'glow_berries', 'car
          'wheat_seeds', 'beetroot_seeds', 'apple']
 # What is in the way above the clicked block.
 ABOVE = ['air'] * 8 + ['short_grass', 'snow', 'stone', 'water', 'dead_bush', 'fern']
+EGGS = ['zombie', 'skeleton', 'spider', 'cave_spider', 'pig', 'creeper', 'blaze', 'ghast', 'villager', 'bee', 'cod']
 
 
 def cases(facts, count, seed):
@@ -45,7 +48,15 @@ def cases(facts, count, seed):
         case.pop('thundering', None)
         cells = []
         item = rng.choice(ITEMS)
-        if rng.random() < 0.3:
+        if rng.random() < 0.15:
+            # A spawn egg on a fresh monster spawner (SpawnEggItem.useOn).
+            cells.append([0, 0, 0, states.get('spawner')])
+            if rng.random() < 0.3:
+                cells.append([0, 1, 0, states.get(rng.choice(['stone', 'water', 'short_grass']))])
+            item = rng.choice([f'{e}_spawn_egg' for e in EGGS] + ['apple', '-'])
+            if rng.random() < 0.15:
+                case['rules'] = {'spawner_blocks_work': False}
+        elif rng.random() < 0.3:
             # A sweet berry bush on grass: pick it, bone meal it, or plant against it.
             age = rng.randrange(4)
             cells.append([0, 0, 0, states.get('sweet_berry_bush', age=str(age))])

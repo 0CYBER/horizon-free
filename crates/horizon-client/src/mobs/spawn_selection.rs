@@ -445,7 +445,7 @@ fn fluid_at<L: NaturalLevel>(l: &L, x: i32, y: i32, z: i32) -> crate::blocks::Fl
     l.facts().get(l.state(x, y, z)).fluid
 }
 /// `checkSpawnRules(level, NATURAL)` of a freshly created mob at a block.
-fn mob_spawn_rules<L: NaturalLevel>(s: Species, l: &L, x: i32, y: i32, z: i32) -> bool {
+pub(crate) fn mob_spawn_rules<L: NaturalLevel>(s: Species, l: &L, x: i32, y: i32, z: i32) -> bool {
     use crate::blocks::Fluid;
     let value = match walk_target(s) {
         WalkTarget::NotPathfinder | WalkTarget::Zero => 0.0,
@@ -584,7 +584,7 @@ pub fn spawn_aabb(s: Species, x: f64, y: f64, z: f64, width: f32, height: f32) -
     )
 }
 /// `checkSpawnObstruction` of a freshly created mob with the given box.
-fn spawn_obstruction<L: NaturalLevel>(
+pub(crate) fn spawn_obstruction<L: NaturalLevel>(
     s: Species,
     l: &L,
     bounds: Aabb,

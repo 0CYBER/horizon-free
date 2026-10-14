@@ -304,7 +304,7 @@ impl Game<'_> {
         }
     }
     /// A saved mob and, under `Passengers`, the mobs riding it.
-    fn load_mob(&mut self, tag: Tag, mount: Option<u32>) -> Option<u32> {
+    pub(super) fn load_mob(&mut self, tag: Tag, mount: Option<u32>) -> Option<u32> {
         self.next_entity += 1;
         let uuid = entity_nbt::uuid(&tag);
         // Structure entities placed with finalizeEntities.
