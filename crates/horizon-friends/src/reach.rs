@@ -64,8 +64,8 @@ fn virtual_interface(name: &str) -> bool {
 }
 
 /// This machine's addresses worth offering, best first: private IPv4 (the
-/// LAN), shared IPv4 (Tailscale's 100.64/10, CGNAT), other IPv4, global
-/// IPv6, unique-local IPv6 (some VPNs). No link-local; loopback on request.
+/// LAN), shared IPv4 (Tailscale's 100.64/10, CGNAT), other IPv4, one global
+/// IPv6. No link-local or unique-local; loopback on request.
 pub fn interface_addresses(loopback: bool) -> Vec<IpAddr> {
     let mut found: Vec<(u8, IpAddr)> = Vec::new();
     for i in if_addrs::get_if_addrs().unwrap_or_default() {
@@ -88,8 +88,8 @@ pub fn interface_addresses(loopback: bool) -> Vec<IpAddr> {
             IpAddr::V6(v6) if v6.is_loopback() || v6.is_unspecified() => continue,
             // fe80::/10.
             IpAddr::V6(v6) if v6.segments()[0] & 0xffc0 == 0xfe80 => continue,
-            // fc00::/7.
-            IpAddr::V6(v6) if v6.segments()[0] & 0xfe00 == 0xfc00 => 4,
+            // fc00::/7: VPNs that use it (Tailscale) also give an IPv4 address.
+            IpAddr::V6(v6) if v6.segments()[0] & 0xfe00 == 0xfc00 => continue,
             IpAddr::V6(_) => 3,
         };
         if !found.iter().any(|(_, a)| *a == ip) {
@@ -97,17 +97,18 @@ pub fn interface_addresses(loopback: bool) -> Vec<IpAddr> {
         }
     }
     found.sort_by_key(|(r, _)| *r);
-    // One IPv6 address per kind is enough (temporary addresses multiply them).
-    let mut out = Vec::new();
-    let mut v6_kinds = Vec::new();
-    for (rank, ip) in found {
-        if ip.is_ipv6() {
-            if v6_kinds.contains(&rank) {
-                continue;
-            }
-            v6_kinds.push(rank);
+    // One global IPv6 address is enough (temporary addresses multiply
+    // them), and one address per /24 (Wi-Fi and Ethernet on the same LAN).
+    let mut out: Vec<IpAddr> = Vec::new();
+    for (_, ip) in found {
+        let same = out.iter().any(|o| match (o, ip) {
+            (IpAddr::V6(_), IpAddr::V6(_)) => true,
+            (IpAddr::V4(a), IpAddr::V4(b)) => a.octets()[..3] == b.octets()[..3],
+            _ => false,
+        });
+        if !same {
+            out.push(ip);
         }
-        out.push(ip);
     }
     out
 }

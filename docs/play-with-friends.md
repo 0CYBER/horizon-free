@@ -192,7 +192,8 @@ host's version), `host_unreachable`, `full`, `rate_limited`, `bad_request`.
   machine with a public address, e.g. a VPS).
 - **"Couldn't reach your friend's game"** (guest): the host's note under the code says why. A firewall
   on the host computer can also block the direct port: allow `horizon-client` on private and public
-  networks.
+  networks (Windows asks the first time; on macOS answer "Allow" when asked whether Horizon may accept
+  incoming network connections).
 - **"The code has a typo"**: copy it again; codes are only letters and digits in groups of five.
 - **"This short code works through your friend's relay"**: enter the relay's address under Join a
   friend, or ask for the full code.
