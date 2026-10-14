@@ -184,3 +184,30 @@ list (`launcher/src/backend.rs` tests `withdrawn_release_is_never_offered`). The
 that day takes the next number, and its notes start from the last *published* release, so they list the
 withdrawn release's changes again with the fix. Usually the better way out is forward: revert the pull request,
 label the revert `release-now`, and a fixed release is out as soon as main's checks pass.
+
+## Launcher releases
+
+`.github/workflows/launcher.yml` releases the launcher the same way. It starts on a push to main that changes
+`launcher/`, `crates/horizon-prepare/` or `crates/horizon-theme/` (what the launcher builds in), every hour at :47,
+and by hand; pushes to `launcher` and `launcher-*` branches only build.
+
+- `tools/release_train.py decide --kind launcher` counts the pull requests merged since the last published
+  launcher release that changed those paths (not `launcher/links.json`, which the launcher reads from main, nor
+  tests or Markdown), with the same 3-hour cooldown, `release-now`, `skip-release` and `RELEASES_PAUSED`.
+- The tag is `launcher-vX.Y.Z`: the patch after the last launcher tag, or the next minor (`X.Y+1.0`) when one of
+  those pull requests is labelled `feature`.
+- No version-bump commits: the build gets the version in `HORIZON_LAUNCHER_VERSION`, which
+  `launcher/src/backend.rs` reads with `option_env!` (falling back to `Cargo.toml`'s), so `--version`, the window,
+  the User-Agent and the self-update comparison all use it. Each build checks `--version` says it.
+- Linux on GitHub `ubuntu-22.04`, Windows on `windows-latest`, macOS on the Mac mini's runner; each runs the
+  launcher's tests, checks its libraries, and installs the latest game release with the new launcher.
+- Published with `--latest=false`: the repository's latest release stays a game release. Notes list the pull
+  requests under New and Fixed; Kira posts launcher releases without pinging.
+
+Starting by hand, pausing and rolling back work as for the game (`gh workflow run launcher …`,
+`RELEASES_PAUSED`, `gh release edit launcher-vX.Y.Z --draft`). Launchers older than the withdrawn release then
+see the previous one as the newest; launchers that already updated keep running.
+
+With several game releases a day, the newest launcher release soon falls out of the newest 100 releases the
+launcher and the website read: both then look the newest `launcher-v` tags up one by one
+(`git/matching-refs/tags/launcher-v`, then `releases/tags/<tag>`).

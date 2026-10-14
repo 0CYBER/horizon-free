@@ -56,7 +56,7 @@ impl Endpoints {
 fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(20))
-        .user_agent(concat!("horizon-launcher/", env!("CARGO_PKG_VERSION")))
+        .user_agent(&format!("horizon-launcher/{}", crate::backend::VERSION))
         .build()
 }
 
