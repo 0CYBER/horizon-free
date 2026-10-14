@@ -146,6 +146,7 @@ pub mod structure_blocks;
 pub mod tab_list;
 pub mod testgen;
 pub mod text;
+pub mod tick_chunk_membership;
 pub mod title;
 pub mod title_edition;
 pub mod ui;
