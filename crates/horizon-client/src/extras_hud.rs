@@ -2,7 +2,7 @@
 //! vanilla font, in GUI pixels, stacked per corner (`docs/extras.md`).
 use crate::{
     extras::{Corner, FpsReading},
-    hud::{HudAtlas, HudBatch, rgba},
+    hud::{HudAtlas, HudBatch, Rect, rgba},
 };
 
 /// The gap between an overlay and the screen edge or the next overlay.
@@ -42,6 +42,60 @@ impl Corners {
             self.height - edge - h
         };
         (x, y)
+    }
+}
+
+/// How the minimap shows: its corner and side in GUI pixels, its image (an
+/// atlas rect), the player arrow (the map item's decoration sprite) turned
+/// `arrow` degrees clockwise from up, and the rim's N toward `north` when the
+/// map turns.
+pub struct MinimapLook {
+    pub corner: Corner,
+    pub size: f32,
+    pub image: Rect,
+    pub arrow: f32,
+    pub north: Option<(f32, f32)>,
+}
+pub fn draw_minimap(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    corners: &mut Corners,
+    look: &MinimapLook,
+) {
+    let MinimapLook {
+        corner,
+        size,
+        image,
+        arrow,
+        north,
+    } = *look;
+    let (x, y) = corners.place(corner, size, size);
+    batch.rect_uv(x, y, size, size, image, u32::MAX);
+    let (cx, cy) = (x + size / 2.0, y + size / 2.0);
+    if let Some(r) = atlas.sprites.get("map/decorations/player").copied() {
+        // MapRenderer's decorations draw the sprite flipped: its arrow
+        // points down the texture, so up on screen is half a turn.
+        let (s, c) = (arrow + 180.0).to_radians().sin_cos();
+        let p = |dx: f32, dy: f32| [cx + dx * c - dy * s, cy + dx * s + dy * c];
+        let h = 4.0;
+        batch.quad(
+            [p(-h, h), p(h, h), p(h, -h), p(-h, -h)],
+            [[r.u0, r.v0], [r.u1, r.v0], [r.u1, r.v1], [r.u0, r.v1]],
+            u32::MAX,
+        );
+    }
+    if let Some((nx, ny)) = north {
+        let reach = size / 2.0 - 6.0;
+        let tw = HudBatch::text_width(atlas, "N");
+        let (tx, ty) = (cx + nx * reach - tw / 2.0, cy + ny * reach - 4.0);
+        batch.text(
+            atlas,
+            "N",
+            tx.round(),
+            ty.round(),
+            rgba(255, 255, 255, 255),
+            true,
+        );
     }
 }
 
