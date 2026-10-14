@@ -31,6 +31,7 @@ pub mod collisions;
 pub mod command;
 pub mod command_storage;
 pub mod component;
+pub mod container_screen;
 pub mod containers;
 pub mod control;
 pub mod crafting;

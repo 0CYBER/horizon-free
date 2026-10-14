@@ -595,6 +595,8 @@ struct Game<'a> {
     craft_size: usize,
     /// A quick craft drag over inventory slots: (button, game slots so far).
     inv_drag: Option<(i32, Vec<usize>)>,
+    /// `AbstractContainerScreen`'s quick craft and skip-release state.
+    inv_clicks: horizon_client::container_screen::Clicks,
     /// The last inventory click, for the double click that gathers a stack.
     last_inv_click: Option<(std::time::Instant, usize, bool)>,
     /// Open container block entity, if any.
@@ -611,6 +613,8 @@ struct Game<'a> {
     /// The game mode; `creative` mirrors `mode == Creative`.
     mode: horizon_client::command::args::GameMode,
     keys: HashSet<KeyCode>,
+    // Physical input is separate from remapped and toggled movement keys.
+    physical_keys: HashSet<KeyCode>,
     left: bool,
     right: bool,
     cursor: (f32, f32),
@@ -4076,13 +4080,30 @@ impl Game<'_> {
     /// The plain inventory mouse press: starts a quick craft drag when a
     /// stack is held, gathers on a double click, else the normal click.
     fn inventory_press(&mut self, right: bool) {
+        use horizon_client::container_screen::Target;
         use horizon_client::menu::Input;
-        let slot = self.renderer.as_ref().and_then(|r| {
-            let batch = HudBatch::new([r.config.width, r.config.height]);
-            self.slot_at(&batch, self.cursor.0, self.cursor.1)
-        });
-        let shift =
-            self.keys.contains(&KeyCode::ShiftLeft) || self.keys.contains(&KeyCode::ShiftRight);
+        let (slot, outside) = self.inventory_target();
+        let shift = self.has_shift_down();
+        let target = Target::of(slot, outside);
+        let input = self.inv_clicks.press(
+            &target,
+            Self::screen_button(right),
+            self.carried.is_none(),
+            shift,
+            false,
+        );
+        if outside {
+            // slotId -999: an empty hand throws nothing; a carried stack
+            // starts a drag whose release drops it.
+            match input {
+                Some(input) => self.throw_click(right, input),
+                None if self.inv_clicks.quick_crafting().is_some() => {
+                    self.inv_drag = Some((i32::from(right), Vec::new()));
+                }
+                None => {}
+            }
+            return;
+        }
         if let Some(slot) = slot
             && !shift
             && slot != 200
@@ -4096,6 +4117,8 @@ impl Game<'_> {
             self.last_inv_click = Some((now, slot, right));
             if double && self.menu_click(Some(slot), 0, Input::PickupAll) {
                 self.last_inv_click = None;
+                // The double click's own release (`mouseReleased`'s PICKUP_ALL).
+                self.inv_clicks.skip_release();
                 return;
             }
             if self.carried.is_some() {
@@ -4120,6 +4143,125 @@ impl Game<'_> {
             && let Some((_, slots)) = self.inv_drag.as_mut()
         {
             slots.push(slot);
+        }
+    }
+    /// The hovered slot and whether the cursor is outside the window.
+    fn inventory_target(&self) -> (Option<usize>, bool) {
+        let Some(r) = self.renderer.as_ref() else {
+            return (None, false);
+        };
+        let batch = HudBatch::new([r.config.width, r.config.height]);
+        (
+            self.slot_at(&batch, self.cursor.0, self.cursor.1),
+            self.clicked_outside(&batch),
+        )
+    }
+    fn screen_button(right: bool) -> horizon_client::container_screen::Button {
+        use horizon_client::container_screen::Button;
+        if right { Button::Right } else { Button::Left }
+    }
+    /// `Screen.hasShiftDown` / `InputWithModifiers.hasShiftDown`: the
+    /// physical Shift keys, whatever the sneak key is bound or toggled to.
+    pub(super) fn has_shift_down(&self) -> bool {
+        self.physical_keys.contains(&KeyCode::ShiftLeft)
+            || self.physical_keys.contains(&KeyCode::ShiftRight)
+    }
+    /// `hasClickedOutside` of the open screen at the cursor.
+    fn clicked_outside(&self, batch: &HudBatch) -> bool {
+        use horizon_client::container_screen::{Book, Image, clicked_outside};
+        let (ox, oy) = self.inventory_origin(batch);
+        let (shift, width) = match self.station.as_ref().map(|s| s.kind) {
+            Some(stations::Kind::Merchant) => (-50.0, 276),
+            Some(stations::Kind::Beacon) => (beacon::SHIFT, 230),
+            _ => (0.0, 176),
+        };
+        let image = Image {
+            left: (ox + shift) as i32,
+            top: oy as i32,
+            width,
+            height: self.screen_height() as i32,
+        };
+        let book = self
+            .recipe_book_area(batch)
+            .map(|(visible, tab_hovered)| Book {
+                visible,
+                selected_tab_hovered: tab_hovered,
+            });
+        clicked_outside(
+            f64::from(self.cursor.0),
+            f64::from(self.cursor.1),
+            image,
+            book,
+        )
+    }
+    /// A click outside the window (slot id -999): `THROW` does nothing; a
+    /// `PICKUP` drops the carried stack (left) or one of it (right), thrown
+    /// from the hand (`AbstractContainerMenu.doClick`, `LivingEntity.drop`).
+    fn throw_click(&mut self, right: bool, input: horizon_client::menu::Input) {
+        use horizon_client::menu::Input;
+        let button = i32::from(right);
+        if self.remote.is_some() {
+            self.remote_throw(right, input);
+            return;
+        }
+        let before = self.carried.clone();
+        if !self.menu_click(None, button, input) && input == Input::Pickup {
+            // A screen the menu engine doesn't model: the same doClick.
+            if let Some(c) = self.carried.as_mut() {
+                let thrown = if right {
+                    let one = ItemStack {
+                        count: 1,
+                        ..c.clone()
+                    };
+                    c.count -= 1;
+                    if c.count == 0 {
+                        self.carried = None;
+                    }
+                    one
+                } else {
+                    self.carried.take().expect("some")
+                };
+                self.player_drop(thrown);
+            }
+        }
+        if self.carried != before {
+            self.swing_arm();
+        }
+        if let Some(key) = self.container {
+            self.container_changed(key);
+        }
+    }
+    /// Mouse release over an inventory screen: `mouseReleased` ends or
+    /// cancels the drag, drops a stack released outside, or clicks.
+    fn inventory_mouse_release(&mut self, right: bool) {
+        use horizon_client::container_screen::{Release, Target};
+        let (slot, outside) = self.inventory_target();
+        let dragged = self.inv_drag.as_ref().is_some_and(|(_, s)| !s.is_empty());
+        let release = self.inv_clicks.release(
+            &Target::of(slot, outside),
+            Self::screen_button(right),
+            self.carried.is_none(),
+            dragged,
+            self.has_shift_down(),
+            false,
+        );
+        match (release, Target::of(slot, outside)) {
+            (Release::QuickCraft, _) => self.inventory_release(),
+            (Release::Click(input), Target::Outside) => {
+                self.inv_drag = None;
+                self.throw_click(right, input);
+            }
+            (Release::Click(input), Target::Slot(slot)) if self.inv_drag.is_some() => {
+                // The drag never reached a slot: a plain click where it ends.
+                self.inv_drag = None;
+                if !self.menu_click(Some(slot), i32::from(right), input) {
+                    self.click_inventory(right);
+                }
+                if let Some(key) = self.container {
+                    self.container_changed(key);
+                }
+            }
+            _ => self.inv_drag = None,
         }
     }
     /// Mouse release: finishes a quick craft drag (one slot is a plain click).
@@ -4174,8 +4316,7 @@ impl Game<'_> {
         let Some(slot) = self.slot_at(&batch, self.cursor.0, self.cursor.1) else {
             return;
         };
-        let held_shift =
-            self.keys.contains(&KeyCode::ShiftLeft) || self.keys.contains(&KeyCode::ShiftRight);
+        let held_shift = self.has_shift_down();
         if self.crafter_click(slot, held_shift, right) {
             return;
         }
@@ -4191,8 +4332,7 @@ impl Game<'_> {
             return;
         }
         let max = |items: &Items, s: &ItemStack| items.get(&s.item).map_or(64, |i| i.max_stack);
-        let shift =
-            self.keys.contains(&KeyCode::ShiftLeft) || self.keys.contains(&KeyCode::ShiftRight);
+        let shift = held_shift;
         if slot >= 300
             && let Some(key) = self.container
         {
@@ -7803,6 +7943,18 @@ impl ApplicationHandler for Game<'_> {
         if self.window.as_ref().is_none_or(|w| w.id() != id) {
             return;
         }
+        if let WindowEvent::KeyboardInput { event, .. } = &event
+            && let PhysicalKey::Code(key) = event.physical_key
+        {
+            if event.state == ElementState::Pressed {
+                self.physical_keys.insert(key);
+            } else {
+                self.physical_keys.remove(&key);
+            }
+        }
+        if let WindowEvent::Focused(false) = &event {
+            self.physical_keys.clear();
+        }
         if matches!(
             event,
             WindowEvent::KeyboardInput { .. }
@@ -8017,7 +8169,7 @@ impl ApplicationHandler for Game<'_> {
                             }
                         }
                         Screen::Inventory => {
-                            self.inventory_release();
+                            self.inventory_mouse_release(button == MouseButton::Right);
                             self.loom_release();
                         }
                         Screen::Chat if pressed && button == MouseButton::Left => self.chat_click(),
@@ -8528,6 +8680,7 @@ pub fn run() -> Result<()> {
         craft_grid: vec![None; 9],
         craft_size: 2,
         inv_drag: None,
+        inv_clicks: Default::default(),
         last_inv_click: None,
         container: None,
         station: None,
@@ -8543,6 +8696,7 @@ pub fn run() -> Result<()> {
             horizon_client::command::args::GameMode::Survival
         },
         keys: HashSet::new(),
+        physical_keys: HashSet::new(),
         left: false,
         right: false,
         cursor: (0.0, 0.0),
