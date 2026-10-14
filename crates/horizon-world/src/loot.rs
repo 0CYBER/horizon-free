@@ -26,8 +26,42 @@ pub struct LootStack {
     pub potion: Option<String>,
     /// Set by exploration_map (the map_id component of a found map).
     pub map: bool,
+    /// The search an exploration_map function asked for, left to the game
+    /// (it needs the level's structures and maps).
+    pub exploration: Option<Box<ExplorationMap>>,
     /// Set by set_ominous_bottle_amplifier.
     pub ominous_amplifier: Option<i32>,
+}
+/// `ExplorationMapFunction`'s settings.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExplorationMap {
+    /// A structure tag, without `#`.
+    pub destination: String,
+    pub decoration: String,
+    pub zoom: u8,
+    pub search_radius: i32,
+    pub skip_existing_chunks: bool,
+}
+impl ExplorationMap {
+    /// The function's fields with their codec defaults (`DEFAULT_DESTINATION`
+    /// on_treasure_maps, `DEFAULT_DECORATION` mansion, zoom 2, radius 50,
+    /// skipping known structures).
+    pub fn from_json(f: &Value) -> Self {
+        Self {
+            destination: f["destination"]
+                .as_str()
+                .unwrap_or("#minecraft:on_treasure_maps")
+                .trim_start_matches('#')
+                .to_owned(),
+            decoration: f["decoration"]
+                .as_str()
+                .unwrap_or("minecraft:mansion")
+                .to_owned(),
+            zoom: f["zoom"].as_u64().unwrap_or(2) as u8,
+            search_radius: f["search_radius"].as_i64().unwrap_or(50) as i32,
+            skip_existing_chunks: f["skip_existing_chunks"].as_bool().unwrap_or(true),
+        }
+    }
 }
 impl LootStack {
     fn new(item: &str) -> Self {
@@ -38,6 +72,7 @@ impl LootStack {
             enchantments: Vec::new(),
             potion: None,
             map: false,
+            exploration: None,
             ominous_amplifier: None,
         }
     }
@@ -1045,8 +1080,15 @@ impl<R: RandomSource> Context<'_, R> {
                 }
             }
             // ExplorationMapFunction needs an origin; with one, the map is
-            // taken as found (the structure search itself is not run).
-            "minecraft:exploration_map" => stack.map = self.biome.is_some(),
+            // taken as found here and the game runs the structure search
+            // (it drops the map when nothing is found, as the filtered
+            // map_id check after it would).
+            "minecraft:exploration_map" => {
+                stack.map = self.biome.is_some();
+                if stack.map {
+                    stack.exploration = Some(Box::new(ExplorationMap::from_json(f)));
+                }
+            }
             "minecraft:filtered" => {
                 let pass = self.item_matches(&f["item_filter"], &stack);
                 let branch = if pass { &f["on_pass"] } else { &f["on_fail"] };

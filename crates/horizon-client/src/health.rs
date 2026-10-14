@@ -76,6 +76,18 @@ impl HealthResources {
             .expect("validated landing source")
     }
 }
+/// `DamageEffects.sound()` by its serialized id: what `Player.getHurtSound`
+/// plays for a damage type's `effects` (unknown ids fall back to `hurt`, the codec default).
+pub fn hurt_sound(effects: &str) -> &'static str {
+    match effects {
+        "drowning" => "minecraft:entity.player.hurt_drown",
+        "burning" => "minecraft:entity.player.hurt_on_fire",
+        "poking" => "minecraft:entity.player.hurt_sweet_berry_bush",
+        "freezing" => "minecraft:entity.player.hurt_freeze",
+        // HURT and THORNS (both SoundEvents.PLAYER_HURT).
+        _ => "minecraft:entity.player.hurt",
+    }
+}
 #[derive(Clone, Copy, Debug)]
 pub enum HealthEvent {
     StarvationDamage(f32),
@@ -97,6 +109,11 @@ pub enum HealthEvent {
         amount: f32,
     },
     Phase(&'static str),
+    /// `ServerLevel.broadcastDamageEvent`: the client's
+    /// `LivingEntity.handleDamageEvent` plays the source's hurt sound.
+    DamageBroadcast {
+        source: DamageTypeId,
+    },
     Criterion {
         original: f32,
         amount: f32,
@@ -119,6 +136,7 @@ impl HealthEvent {
                 format!("record-damage {:08x}", amount.to_bits())
             }
             Self::Phase(name) => name.into(),
+            Self::DamageBroadcast { .. } => "broadcast-damage".into(),
             Self::Criterion { .. } => "hurt-criterion".into(),
         }
     }
@@ -559,7 +577,10 @@ impl HurtWorld for Environment<'_> {
         Ok(())
     }
     fn broadcast_damage(&mut self, _: &mut State) -> io::Result<()> {
-        self.phase("broadcast-damage")
+        self.event(HealthEvent::DamageBroadcast {
+            source: self.source.type_id(),
+        });
+        Ok(())
     }
     fn mark_hurt(&mut self, _: &mut State) -> io::Result<()> {
         *self.sync_velocity = true;
@@ -597,13 +618,7 @@ impl HurtWorld for Environment<'_> {
     }
     fn hurt_sound(&mut self, _: &mut State) -> io::Result<()> {
         self.phase("hurt-sound")?;
-        let sound = match self.source.definition().effects.as_str() {
-            "burning" => "minecraft:entity.player.hurt_on_fire",
-            "drowning" => "minecraft:entity.player.hurt_drown",
-            "freezing" => "minecraft:entity.player.hurt_freeze",
-            "poking" => "minecraft:entity.player.hurt_sweet_berry_bush",
-            _ => "minecraft:entity.player.hurt",
-        };
+        let sound = hurt_sound(&self.source.definition().effects);
         self.events.push(MotionEvent::HurtSound(sound));
         Ok(())
     }
@@ -662,5 +677,23 @@ impl ServerPlayerHurtWorld for Environment<'_> {
     }
     fn can_harm_player(&mut self, _: &mut State, _: ()) -> io::Result<bool> {
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn hurt_sounds_follow_damage_effects() {
+        // DamageEffects: HURT, THORNS, DROWNING, BURNING, POKING, FREEZING.
+        for (effects, sound) in [
+            ("hurt", "minecraft:entity.player.hurt"),
+            ("thorns", "minecraft:entity.player.hurt"),
+            ("drowning", "minecraft:entity.player.hurt_drown"),
+            ("burning", "minecraft:entity.player.hurt_on_fire"),
+            ("poking", "minecraft:entity.player.hurt_sweet_berry_bush"),
+            ("freezing", "minecraft:entity.player.hurt_freeze"),
+        ] {
+            assert_eq!(super::hurt_sound(effects), sound, "{effects}");
+        }
     }
 }

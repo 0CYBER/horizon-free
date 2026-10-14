@@ -12,5 +12,10 @@ if [ "$(uname)" = Darwin ]; then
   java_home=$(/usr/libexec/java_home -v "$java_major")
   { echo "$bin"; echo "$java_home/bin"; echo /opt/homebrew/bin; } >> "$GITHUB_PATH"
   echo "JAVA_HOME=$java_home" >> "$GITHUB_ENV"
+  # Builds go through the machine's sccache (shared with ~/fleet/rbuild), so the build folders runner-gc.sh
+  # removes come back from the cache instead of compiling cold.
+  if [ -x /opt/homebrew/bin/sccache ]; then
+    { echo "RUSTC_WRAPPER=/opt/homebrew/bin/sccache"; echo "CARGO_INCREMENTAL=0"; } >> "$GITHUB_ENV"
+  fi
 fi
 echo "HORIZON_NO_AUDIO=1" >> "$GITHUB_ENV"

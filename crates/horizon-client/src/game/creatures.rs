@@ -1449,6 +1449,7 @@ impl Game<'_> {
         // Player.hasInfiniteMaterials.
         let creative = self.creative;
         let mut projectiles = std::mem::take(&mut self.creatures.projectiles);
+        let mut picked = Vec::new();
         projectiles.retain(|shot| {
             let Some(a) = shot.arrow.as_ref().filter(|a| !a.removed) else {
                 return true;
@@ -1476,10 +1477,17 @@ impl Game<'_> {
                     0.2,
                     pitch,
                 );
+                picked.push(shot.clone());
             }
             !taken
         });
         self.creatures.projectiles = projectiles;
+        for shot in picked {
+            self.add_pickup(
+                super::pickups::Taken::Arrow(Box::new(shot)),
+                super::pickups::Collector::Player,
+            );
+        }
     }
 
     fn tick_projectiles(&mut self) -> Result<()> {
@@ -2715,12 +2723,21 @@ impl Game<'_> {
         );
         let right = forward.cross(glam::Vec3::Y).normalize_or_zero();
         let up = right.cross(forward).normalize_or_zero();
-        for a in &self.creatures.projectiles {
-            let p = glam::DVec3::new(
+        let live = self.creatures.projectiles.iter().map(|a| {
+            let at = [
                 a.previous.x + (a.position.x - a.previous.x) * alpha,
                 a.previous.y + (a.position.y - a.previous.y) * alpha,
                 a.previous.z + (a.position.z - a.previous.z) * alpha,
-            ) - camera;
+            ];
+            (a, at)
+        });
+        // ItemPickupParticle: a picked-up arrow flying to its collector.
+        let taken = self.pickups.live.iter().filter_map(|p| match &p.taken {
+            super::pickups::Taken::Arrow(a) => Some((&**a, super::pickups::position(p, alpha))),
+            _ => None,
+        });
+        for (a, at) in live.chain(taken) {
+            let p = glam::DVec3::from_array(at) - camera;
             let c = p.as_vec3();
             let light = self.world.light(
                 a.position.x.floor() as i32,
@@ -2862,6 +2879,7 @@ fn to_loot(stack: &ItemStack) -> horizon_world::loot::LootStack {
             .collect(),
         potion: None,
         map: false,
+        exploration: None,
         ominous_amplifier: None,
     }
 }

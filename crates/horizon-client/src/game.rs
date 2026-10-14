@@ -81,6 +81,7 @@ mod paintings;
 mod passengers;
 mod persist;
 mod perspective;
+mod pickups;
 mod piglins;
 mod postprocess;
 mod potions;
@@ -208,12 +209,24 @@ struct Options {
     offscreen: bool,
     /// Multiplayer: `--server HOST[:PORT]` joins at start; `--name` is the offline player name.
     server: Option<String>,
-    player_name: String,
+    /// `--name`, `HORIZON_PLAYER_NAME` or the signed-in account's name; else
+    /// [`Options::player_name`] uses the kept offline name.
+    player_name: Option<String>,
     /// `--dedicated`: run as a dedicated server; vanilla's server arguments
     /// (`--nogui`, `--port`, `--world`, `--universe`, `--initSettings`) follow.
     dedicated: Option<Vec<String>>,
 }
 impl Options {
+    /// The name to join servers with: the one given, else the offline name kept
+    /// next to options.txt (created on first use).
+    fn player_name(&self) -> String {
+        self.player_name.clone().unwrap_or_else(|| {
+            std::env::current_dir().map_or_else(
+                |_| horizon_client::offline_name::generate(0),
+                |dir| horizon_client::offline_name::load_or_create(&dir),
+            )
+        })
+    }
     fn read() -> Result<Option<Self>> {
         let sibling = std::env::current_exe()?
             .parent()
@@ -246,7 +259,9 @@ impl Options {
                 .ok()
                 .and_then(|v| v.parse().ok()),
             server: None,
-            player_name: std::env::var("HORIZON_PLAYER_NAME").unwrap_or_else(|_| "Player".into()),
+            player_name: std::env::var("HORIZON_PLAYER_NAME")
+                .ok()
+                .filter(|n| !n.is_empty()),
             dedicated: None,
         };
         let mut session_file = std::env::var("HORIZON_SESSION_FILE").ok();
@@ -255,7 +270,7 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Horizon — Minecraft Java Edition 26.3 in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --name NAME             Player name for multiplayer (default Player)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause."
+                        "Horizon — Minecraft Java Edition 26.3 in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause."
                     );
                     return Ok(None);
                 }
@@ -298,7 +313,7 @@ impl Options {
                         "--screenshot-after" => o.screenshot_after = Some(value.parse()?),
                         "--world" => o.world = Some(value),
                         "--server" => o.server = Some(value),
-                        "--name" => o.player_name = value,
+                        "--name" => o.player_name = Some(value),
                         "--session-file" => session_file = Some(value),
                         "--control-socket" => o.control = Some(value.into()),
                         "--time" => o.time = Some(value.parse()?),
@@ -324,7 +339,7 @@ impl Options {
         if let Some(path) = session_file.filter(|p| !p.is_empty()) {
             match horizon_client::auth::AuthSession::load(path.as_ref()) {
                 Ok(session) => {
-                    o.player_name = session.name.clone();
+                    o.player_name = Some(session.name.clone());
                     horizon_client::auth::set_current(session);
                 }
                 Err(e) => eprintln!("Horizon: not signed in: {e}"),
@@ -583,6 +598,7 @@ pub struct Resources {
     biomes: Arc<Biomes>,
     environment: Environment,
     atlas: HudAtlas,
+    panorama: horizon_client::gfx::panorama::Faces,
     layer_names: HashMap<u32, String>,
     mob_types: HashMap<String, Arc<MobType>>,
     mob_data: horizon_client::mobs::MobData,
@@ -720,6 +736,8 @@ struct Game<'a> {
     dropped: Vec<ItemEntity>,
     next_entity: u32,
     particles: horizon_client::particles::ParticleEngine,
+    /// `ItemPickupParticle`s: taken items, orbs and arrows flying to their collector.
+    pickups: pickups::Pickups,
     /// Sign text being edited (`SignEditScreen`).
     sign_edit: Option<sign_edit::SignEditor>,
     /// An open book, book and quill or lectern screen.
@@ -1421,6 +1439,10 @@ impl Game<'_> {
                 match self.give(item.stack.clone()) {
                     None => {
                         self.stats.add("picked_up", &kind, before as i32);
+                        self.add_pickup(
+                            pickups::Taken::Item(Box::new(item)),
+                            pickups::Collector::Player,
+                        );
                         let pitch = ((self.world.random.next_float()
                             - self.world.random.next_float())
                             * 0.7
@@ -1434,6 +1456,10 @@ impl Game<'_> {
                         if rest.count < before {
                             self.stats
                                 .add("picked_up", &kind, (before - rest.count) as i32);
+                            self.add_pickup(
+                                pickups::Taken::Item(Box::new(item.clone())),
+                                pickups::Collector::Player,
+                            );
                             self.audio
                                 .play("minecraft:entity.item.pickup", Some(feet), 0.2, 1.0);
                         }
@@ -1896,6 +1922,12 @@ impl Game<'_> {
             // ShulkerBoxBlock.canOpen: the lid has no room; nothing opens.
         } else if let Some(entity) = BlockEntity::for_block(&name) {
             self.world.block_entities.entry(key).or_insert(entity);
+            let centre = [
+                f64::from(key.0) + 0.5,
+                f64::from(key.1) + 0.5,
+                f64::from(key.2) + 0.5,
+            ];
+            self.resolve_container_maps(key, centre);
             self.container = Some(key);
             self.container_opener_event(key, true);
             self.post_block_game_event(
@@ -2943,12 +2975,7 @@ impl Game<'_> {
         self.record_combat(&events);
         for event in events {
             match event {
-                MotionEvent::HurtSound(sound) => {
-                    let pitch = (self.world.random.next_float() - self.world.random.next_float())
-                        * 0.2
-                        + 1.0;
-                    self.audio.play(sound, Some(feet), 1.0, pitch);
-                }
+                MotionEvent::HurtSound(sound) => self.player_hurt_sound(sound, feet),
                 MotionEvent::Emission {
                     position, state, ..
                 } if !crouching => {
@@ -5056,16 +5083,25 @@ impl Game<'_> {
             );
             let right = forward.cross(glam::Vec3::Y).normalize_or_zero();
             let up = right.cross(forward).normalize_or_zero();
-            for o in &self.orbs {
-                let p = glam::DVec3::new(
+            let live = self.orbs.iter().map(|o| {
+                let at = [
                     o.previous.x + (o.position.x - o.previous.x) * alpha,
-                    o.previous.y + (o.position.y - o.previous.y) * alpha + 0.1,
+                    o.previous.y + (o.position.y - o.previous.y) * alpha,
                     o.previous.z + (o.position.z - o.previous.z) * alpha,
-                ) - camera;
+                ];
+                (o, at, alpha as f32)
+            });
+            // ItemPickupParticle: the render state extracted at partial tick 1.
+            let taken = self.pickups.live.iter().filter_map(|p| match &p.taken {
+                pickups::Taken::Orb(o) => Some((&**o, pickups::position(p, alpha), 1.0)),
+                _ => None,
+            });
+            for (o, at, partial) in live.chain(taken) {
+                let p = glam::DVec3::new(at[0], at[1] + 0.1, at[2]) - camera;
                 let icon = o.icon();
                 let (du, dv) = ((r.u1 - r.u0) / 4.0, (r.v1 - r.v0) / 4.0);
                 let (u0, v0) = (r.u0 + (icon % 4) as f32 * du, r.v0 + (icon / 4) as f32 * dv);
-                let t = (o.age as f32 + alpha as f32) / 2.0;
+                let t = (o.age as f32 + partial) / 2.0;
                 let red = ((t.sin() + 1.0) * 0.5 * 255.0) as u32;
                 let blue = (((t + 4.188_79).sin() + 1.0) * 0.1 * 255.0) as u32;
                 let color = 0x8000_0000 | blue << 16 | 255 << 8 | red;
@@ -5828,6 +5864,7 @@ impl Game<'_> {
         self.creatures.projectiles.clear();
         self.dropped.clear();
         self.particles.clear();
+        self.pickups.clear();
         self.orbs.clear();
         self.experience = Experience {
             level: self.level.xp_level,
@@ -5980,6 +6017,7 @@ impl Game<'_> {
         self.creatures.projectiles.clear();
         self.dropped.clear();
         self.particles.clear();
+        self.pickups.clear();
         self.orbs.clear();
         self.mining = None;
         self.travelling = Some((player, destination));
@@ -6130,6 +6168,7 @@ impl Game<'_> {
         self.creatures.projectiles.clear();
         self.dropped.clear();
         self.particles.clear();
+        self.pickups.clear();
         self.screen = Screen::Playing;
         if let Some(r) = self.renderer.as_mut() {
             r.clear_sections();
@@ -6137,91 +6176,6 @@ impl Game<'_> {
         self.title = Some(Title::new(std::env::current_dir()?.join("saves")));
         self.capture(false);
         Ok(())
-    }
-    /// The title panorama as six camera-centred faces (panorama_0..5:
-    /// front, right, back, left, up, down).
-    fn panorama_geometry(&self) -> Vec<Vertex> {
-        let mut out = Vec::new();
-        let d = 100.0;
-        let faces: [(&str, [glam::Vec3; 4]); 6] = [
-            (
-                "0",
-                [
-                    glam::Vec3::new(-d, d, -d),
-                    glam::Vec3::new(d, d, -d),
-                    glam::Vec3::new(d, -d, -d),
-                    glam::Vec3::new(-d, -d, -d),
-                ],
-            ),
-            (
-                "1",
-                [
-                    glam::Vec3::new(d, d, -d),
-                    glam::Vec3::new(d, d, d),
-                    glam::Vec3::new(d, -d, d),
-                    glam::Vec3::new(d, -d, -d),
-                ],
-            ),
-            (
-                "2",
-                [
-                    glam::Vec3::new(d, d, d),
-                    glam::Vec3::new(-d, d, d),
-                    glam::Vec3::new(-d, -d, d),
-                    glam::Vec3::new(d, -d, d),
-                ],
-            ),
-            (
-                "3",
-                [
-                    glam::Vec3::new(-d, d, d),
-                    glam::Vec3::new(-d, d, -d),
-                    glam::Vec3::new(-d, -d, -d),
-                    glam::Vec3::new(-d, -d, d),
-                ],
-            ),
-            (
-                "4",
-                [
-                    glam::Vec3::new(-d, d, d),
-                    glam::Vec3::new(d, d, d),
-                    glam::Vec3::new(d, d, -d),
-                    glam::Vec3::new(-d, d, -d),
-                ],
-            ),
-            (
-                "5",
-                [
-                    glam::Vec3::new(-d, -d, -d),
-                    glam::Vec3::new(d, -d, -d),
-                    glam::Vec3::new(d, -d, d),
-                    glam::Vec3::new(-d, -d, d),
-                ],
-            ),
-        ];
-        for (index, corners) in faces {
-            let Some(r) = self
-                .res
-                .atlas
-                .sprites
-                .get(&format!("gui/title/background/panorama_{index}"))
-                .copied()
-            else {
-                continue;
-            };
-            let uv = [[r.u0, r.v0], [r.u1, r.v0], [r.u1, r.v1], [r.u0, r.v1]];
-            for (p, uv) in corners.iter().zip(uv) {
-                out.push(Vertex {
-                    normal: [0; 4],
-                    pos: p.to_array(),
-                    uv,
-                    layer: 2,
-                    color: 0xFFFF_FFFF,
-                    light: 0,
-                });
-            }
-        }
-        out
     }
     /// Equipment attribute modifiers (LivingEntity.collectEquipmentChanges).
     fn apply_equipment(&mut self) {
@@ -6853,6 +6807,7 @@ impl Game<'_> {
         let mut orbs = std::mem::take(&mut self.orbs);
         orbs.retain_mut(|o| o.tick(&self.world, &self.res.facts, self.collision, target));
         let mut gained = 0;
+        let mut taken = Vec::new();
         if let Some((min, max)) = bounds {
             orbs.retain(|o| {
                 let touching = o.position.x + 0.25 > min[0]
@@ -6865,12 +6820,16 @@ impl Game<'_> {
                     // ExperienceOrb.playerTouch: one orb every 2 ticks.
                     self.xp_delay = 2;
                     gained += o.value;
+                    taken.push(o.clone());
                     return false;
                 }
                 true
             });
         }
         self.orbs = orbs;
+        for o in taken {
+            self.add_pickup(pickups::Taken::Orb(Box::new(o)), pickups::Collector::Player);
+        }
         if gained > 0 {
             gained = self.mending(gained);
         }
@@ -7158,6 +7117,7 @@ impl Game<'_> {
                 self.res.atlas.height,
             ),
             (&self.res.forcefield.2, self.res.forcefield.0),
+            &self.res.panorama,
         ))?;
         renderer.hud.fire_animations = self
             .res
@@ -7995,7 +7955,7 @@ impl Game<'_> {
             }
         }
         let celestial = if title && !live {
-            self.panorama_geometry()
+            Vec::new()
         } else if self.dim == Dim::Overworld
             && self.potions.effects.get("darkness").is_none()
             && self.potions.effects.get("blindness").is_none()
@@ -8660,7 +8620,7 @@ impl ApplicationHandler for Game<'_> {
                             creative,
                         } => self.open_world(&folder, Some(&name), seed, creative)?,
                         Action::Connect { address } => {
-                            self.connect_server(&address, &self.options.player_name.clone())?
+                            self.connect_server(&address, &self.options.player_name())?
                         }
                         Action::None => {}
                     }
@@ -9123,6 +9083,7 @@ pub fn run() -> Result<()> {
     let light = Arc::new(LightTables::load(&root, assets.registry, &facts)?);
     log::info!("load tables: {:.2}s", started.elapsed().as_secs_f32());
     let atlas = HudAtlas::build(&root)?;
+    let panorama = horizon_client::gfx::panorama::Faces::load(&root);
     horizon_client::ui::load_metadata(&root);
     horizon_client::lang::set(horizon_client::lang::Language::load(
         &[&root],
@@ -9190,6 +9151,7 @@ pub fn run() -> Result<()> {
         biomes,
         environment,
         atlas,
+        panorama,
         item_renderer: Arc::new(horizon_client::item_render::ItemRenderer::load(&root)?),
         layer_names,
         providers: Providers::load(&root),
@@ -9314,6 +9276,7 @@ pub fn run() -> Result<()> {
         dropped: Vec::new(),
         next_entity: 0,
         particles,
+        pickups: Default::default(),
         sign_edit: None,
         book: None,
         lectern_pulses: Vec::new(),
@@ -9502,7 +9465,7 @@ pub fn run() -> Result<()> {
         _ if game.options.server.is_some() => {
             let (address, name) = (
                 game.options.server.clone().unwrap_or_default(),
-                game.options.player_name.clone(),
+                game.options.player_name(),
             );
             game.connect_server(&address, &name)?;
             if let Some(report) = std::env::var_os("HORIZON_NET_REPORT") {

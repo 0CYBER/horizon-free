@@ -748,10 +748,12 @@ impl Game<'_> {
             let rest = self.as_guest(host, conn, |g| g.give(stack)).flatten();
             match rest {
                 None => {
-                    self.dropped.remove(i);
+                    let item = self.dropped.remove(i);
+                    self.guest_pickup(host, id, item);
                     taken.push((item_id, before));
                 }
                 Some(rest) if rest.count < before => {
+                    self.guest_pickup(host, id, self.dropped[i].clone());
                     self.dropped[i].stack = rest;
                     taken.push((item_id, before - self.dropped[i].stack.count));
                 }
@@ -762,6 +764,23 @@ impl Game<'_> {
             host.hub.take_item(item as i32, id, count as i32, position);
             host.hub
                 .sound("minecraft:entity.item.pickup", position, 0.2, 1.4, 7, None);
+        }
+    }
+
+    /// The host's own `ItemPickupParticle` toward the guest's model.
+    fn guest_pickup(
+        &mut self,
+        host: &LanHost,
+        id: i32,
+        item: horizon_client::entities::ItemEntity,
+    ) {
+        use super::pickups::{Collector, Taken, guest_target};
+        if let Some(target) = guest_target(host, id as u32) {
+            self.add_pickup_toward(
+                Taken::Item(Box::new(item)),
+                Collector::Guest(id as u32),
+                target,
+            );
         }
     }
 

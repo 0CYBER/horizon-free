@@ -6,8 +6,9 @@
     python3 tools/release_train.py notes --kind game --tag v2026.10.15 --out dist/notes
 
 A kind releases when a pull request merged into main since its last published release changed one of its
-player-facing paths (GAME_PATHS, LAUNCHER_PATHS) and that release is at least COOLDOWN old, or when one of those
-pull requests is labelled release-now. Pull requests labelled skip-release (work players don't see) don't count
+player-facing paths (GAME_PATHS, LAUNCHER_PATHS) and the newest of them merged at least DEBOUNCE ago (a burst
+of merges becomes one release), or the oldest at least MAX_WAIT ago (merges that never pause still ship), or when one
+of those pull requests is labelled release-now. Pull requests labelled skip-release (work players don't see) don't count
 towards a release and aren't listed in the notes. RELEASES_PAUSED=1 (a repository variable) stops automatic releases.
 
 Game releases are tagged vYYYY.MM.DD, then .1, .2 the same UTC day; launcher releases launcher-vX.Y.Z, the
@@ -29,7 +30,11 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = os.environ.get("GITHUB_REPOSITORY", "ludovic111/horizon")
-COOLDOWN = dt.timedelta(hours=3)
+DEBOUNCE = dt.timedelta(minutes=15)
+MAX_WAIT = dt.timedelta(hours=1)
+# Kept as typed in release titles, where the clauses after the first are lowercased.
+PROPER = {"Horizon", "Horizon's", "Minecraft", "Mojang", "Microsoft", "Java", "Xbox", "PlayStation", "Steam", "Windows",
+          "Linux", "LAN", "Kira", "Discord", "Wayland", "Hyprland", "F3", "GUI", "UI"}
 EXPORTERS = "mods/horizon/src/test/java/dev/horizonlab/parity/"
 
 # What players run. Documentation (*.md), tests, benchmarks and harness probes (examples/) never count.
@@ -119,7 +124,7 @@ def changed_paths(commit):
 
 def pull_request(number):
     data = gh_json("pr", "view", str(number), "--repo", REPO, "--json",
-                   "number,title,url,labels,closingIssuesReferences,author")
+                   "number,title,url,labels,closingIssuesReferences,author,mergedAt")
     return {
         "number": data["number"],
         "title": data["title"].strip(),
@@ -127,6 +132,7 @@ def pull_request(number):
         "labels": sorted(label["name"] for label in data["labels"]),
         "issues": sorted(issue["number"] for issue in data.get("closingIssuesReferences") or []),
         "author": (data.get("author") or {}).get("login", ""),
+        "merged_at": dt.datetime.fromisoformat(data["mergedAt"].replace("Z", "+00:00")) if data.get("mergedAt") else None,
     }
 
 
@@ -143,12 +149,12 @@ def last_release(releases, kind):
     return max(ours, key=lambda release: tag_key(release["tag_name"]), default=None)
 
 
-def decision(kind, prs, last_published, now, paused=False, force=False):
+def decision(kind, prs, now, paused=False, force=False):
     """Whether to release now, and why. prs: the merged pull requests since the last release, each with the
-    files it changed under "paths" (player-facing ones only)."""
+    files it changed under "paths" (player-facing ones only) and when it merged ("merged_at")."""
     counted = [pr for pr in prs if pr["paths"] and "skip-release" not in pr["labels"]]
     urgent = [pr for pr in counted if "release-now" in pr["labels"]]
-    age = now - last_published if last_published else None
+    merged = [pr["merged_at"] for pr in counted if pr.get("merged_at")]
     if force:
         return True, "started by hand with force"
     if paused:
@@ -157,9 +163,9 @@ def decision(kind, prs, last_published, now, paused=False, force=False):
         return False, "no merged pull request changed what players run"
     if urgent:
         return True, "release-now: " + ", ".join(f"#{pr['number']}" for pr in urgent)
-    if age is not None and age < COOLDOWN:
-        wait = COOLDOWN - age
-        return False, f"{len(counted)} pull requests wait for the cooldown ({wait.seconds // 60} more minutes)"
+    if merged and now - max(merged) < DEBOUNCE and now - min(merged) < MAX_WAIT:
+        wait = DEBOUNCE - (now - max(merged))
+        return False, f"{len(counted)} pull requests: waiting {wait.seconds // 60 + 1} more minutes for merges to settle"
     return True, f"{len(counted)} pull requests changed what players run"
 
 
@@ -178,7 +184,9 @@ def summary(new, fixed, limit=72):
             titles.append(title)
     shown, text = [], ""
     for title in titles:
-        title = title if not shown or not title[1:2].islower() else title[0].lower() + title[1:]
+        first = title.split(" ", 1)[0]
+        if shown and title[1:2].islower() and first not in PROPER:
+            title = title[0].lower() + title[1:]
         candidate = ", ".join(shown + [title])
         if shown and len(candidate) > limit - 20:
             break
@@ -265,7 +273,7 @@ def main():
     parser.add_argument("--kind", choices=["game", "launcher"], required=True)
     parser.add_argument("--head", help="the commit to release (default: the newest commit on main whose checks passed)")
     parser.add_argument("--tag", help="notes: the release's tag")
-    parser.add_argument("--force", action="store_true", help="release even without player-facing changes or within the cooldown")
+    parser.add_argument("--force", action="store_true", help="release even without player-facing changes, before merges settle or while paused")
     parser.add_argument("--out", type=Path, help="notes: write title.txt and body.md here")
     parser.add_argument("--now", help="the time to decide at (ISO 8601; default now)")
     args = parser.parse_args()
@@ -289,8 +297,7 @@ def main():
         print(title + "\n\n" + body)
         return 0
 
-    published = dt.datetime.fromisoformat(last["published_at"].replace("Z", "+00:00")) if last else None
-    release, reason = decision(args.kind, prs, published, now, os.environ.get("RELEASES_PAUSED") == "1", args.force)
+    release, reason = decision(args.kind, prs, now, os.environ.get("RELEASES_PAUSED") == "1", args.force)
     tags = run("git", "tag", "--list").split()
     minor = any("feature" in pr["labels"] for pr in prs if pr["paths"])
     tag = next_game_tag(tags, now.date()) if args.kind == "game" else next_launcher_tag(tags, minor)
