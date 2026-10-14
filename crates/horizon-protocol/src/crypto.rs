@@ -172,7 +172,11 @@ pub fn java_hex_digest(digest: &[u8]) -> String {
     let hex: String = magnitude.iter().map(|b| format!("{b:02x}")).collect();
     let hex = hex.trim_start_matches('0');
     let hex = if hex.is_empty() { "0" } else { hex };
-    if negative { format!("-{hex}") } else { hex.to_owned() }
+    if negative {
+        format!("-{hex}")
+    } else {
+        hex.to_owned()
+    }
 }
 
 /// The server id sent to the session service when joining an online-mode
@@ -181,7 +185,10 @@ pub fn java_hex_digest(digest: &[u8]) -> String {
 pub fn server_hash(server_id: &str, secret: &[u8], public_key: &[u8]) -> String {
     let mut sha = Sha1::new();
     // ISO-8859-1: characters above U+00FF become '?' like String.getBytes.
-    let latin1: Vec<u8> = server_id.chars().map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?')).collect();
+    let latin1: Vec<u8> = server_id
+        .chars()
+        .map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?'))
+        .collect();
     sha.update(&latin1);
     sha.update(secret);
     sha.update(public_key);

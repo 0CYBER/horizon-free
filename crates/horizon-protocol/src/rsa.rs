@@ -150,7 +150,9 @@ fn der(input: &[u8]) -> Result<(u8, &[u8], &[u8])> {
         if n == 0 || n > 4 || rest.len() < n {
             return Err(bad());
         }
-        let len = rest[..n].iter().fold(0usize, |l, b| l << 8 | usize::from(*b));
+        let len = rest[..n]
+            .iter()
+            .fold(0usize, |l, b| l << 8 | usize::from(*b));
         rest = &rest[n..];
         len
     };
@@ -219,8 +221,11 @@ impl RsaPublicKey {
         let limbs = self.size().div_ceil(4);
         let mont = Mont::new(Big::from_be_bytes(&self.modulus, limbs));
         let m = Big::from_be_bytes(block, limbs);
-        mont.pow(&m, &Big::from_be_bytes(exponent, limbs.max(exponent.len().div_ceil(4))))
-            .to_be_bytes(self.size())
+        mont.pow(
+            &m,
+            &Big::from_be_bytes(exponent, limbs.max(exponent.len().div_ceil(4))),
+        )
+        .to_be_bytes(self.size())
     }
     /// RSAES-PKCS1-v1_5 (RFC 8017 7.2.1) with random non-zero padding.
     pub fn encrypt(&self, message: &[u8]) -> Result<Vec<u8>> {
@@ -249,7 +254,11 @@ pub(crate) mod tests {
     use super::*;
 
     pub fn hex(s: &str) -> Vec<u8> {
-        let s = if s.len() % 2 == 1 { format!("0{s}") } else { s.to_owned() };
+        let s = if s.len() % 2 == 1 {
+            format!("0{s}")
+        } else {
+            s.to_owned()
+        };
         (0..s.len())
             .step_by(2)
             .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
