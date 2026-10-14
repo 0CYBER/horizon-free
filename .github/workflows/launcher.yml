@@ -209,7 +209,7 @@ jobs:
         with:
           name: ${{ matrix.asset }}
           path: launcher/out/*
-          retention-days: 7
+          retention-days: 3
 
   release:
     needs: [decide, build]
@@ -250,3 +250,4 @@ jobs:
         with:
           name: launcher-release-notes
           path: notes/
+          retention-days: 3

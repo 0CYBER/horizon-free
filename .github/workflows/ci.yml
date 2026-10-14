@@ -80,6 +80,7 @@ jobs:
           name: parity-logs
           path: .local/parity-runner/logs/
           if-no-files-found: ignore
+          retention-days: 3
   # Horizon never downloads the game. These jobs need a self-hosted Linux runner
   # (label horizon-game) holding the maintainer's own copy: the official launcher's
   # game directory in HORIZON_MINECRAFT_DIR and the pinned server jar in
@@ -541,3 +542,4 @@ jobs:
             dist/client-graphics-smoke.json
             dist/client-graphics-macos-title.json
             dist/client-graphics-macos-world.json
+          retention-days: 3
