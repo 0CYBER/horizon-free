@@ -6955,6 +6955,7 @@ impl Game<'_> {
             &assets.pixels,
             assets.sprite_size,
             assets.texture_layers,
+            &assets.sprite_mips,
             &assets.animations,
             (
                 &self.res.atlas.pixels,
