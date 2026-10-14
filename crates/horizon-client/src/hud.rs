@@ -35,6 +35,8 @@ pub const MAP_SLOTS: usize = 16;
 pub const MINIMAP_SPRITE: &str = "horizon/minimap";
 /// Atlas slots for downloaded player skins (`skins/<sha1>`), 64x64 each.
 pub const SKIN_SLOTS: usize = 32;
+/// Reused by the visible rows of the classic world selector.
+pub const WORLD_ICON_SLOTS: usize = 32;
 pub fn decode(path: &Path) -> Result<(u32, u32, Vec<u8>)> {
     decode_bytes(&fs::read(path)?)
 }
@@ -212,6 +214,14 @@ impl HudAtlas {
         // Downloaded skins (game/scoreboard.rs) likewise.
         for i in 0..SKIN_SLOTS {
             images.push((format!("horizon/skin{i}"), 64, 64, vec![0; 64 * 64 * 4]));
+        }
+        for i in 0..WORLD_ICON_SLOTS {
+            images.push((
+                format!("horizon/world-icon{i}"),
+                64,
+                64,
+                vec![0; 64 * 64 * 4],
+            ));
         }
         // Horizon-style menu text and corner masks (ui_theme), rasterized at run time.
         images.push((

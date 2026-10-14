@@ -28,6 +28,7 @@ chrono = { version = "0.4.42", default-features = false, features = ["clock", "s
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
 horizon-theme = { path = "../horizon-theme" }
 arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 # Controllers (evdev + libudev on Linux, IOKit on macOS, Windows.Gaming.Input).
 gilrs = "0.11"
 # HTTPS to the Minecraft services (online-mode session join).
