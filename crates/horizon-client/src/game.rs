@@ -710,6 +710,8 @@ struct Game<'a> {
     screen: Screen,
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
+    /// CPU geometry storage retained across frames, including empty/title frames.
+    entity_vertices: Vec<Vertex>,
     started: Instant,
     previous: Instant,
     /// FramerateLimitTracker.latestInputTime.
@@ -4862,8 +4864,12 @@ impl Game<'_> {
         }
     }
     /// ItemEntityRenderer: items bob and spin; blocks render as small cubes.
-    fn entity_geometry(&mut self, camera: glam::DVec3, alpha: f64) -> Vec<Vertex> {
-        let mut out = Vec::new();
+    fn entity_geometry(
+        &mut self,
+        camera: glam::DVec3,
+        alpha: f64,
+        mut out: Vec<Vertex>,
+    ) -> Vec<Vertex> {
         let fire_yaw = if self.camera_type == perspective::CameraType::ThirdPersonFront {
             self.yaw + 180.0
         } else {
@@ -7943,11 +7949,14 @@ impl Game<'_> {
             .renderer
             .as_ref()
             .map(|r| r.camera_frustum(fov_degrees, yaw, pitch, bob, depth_far));
-        let mut entities = if title {
-            Vec::new()
-        } else {
-            horizon_client::spans::time("entity_geometry", || self.entity_geometry(camera, alpha))
-        };
+        // Keep the buffer local while builders need mutable access to the game.
+        let mut entities = std::mem::take(&mut self.entity_vertices);
+        entities.clear();
+        if !title {
+            entities = horizon_client::spans::time("entity_geometry", || {
+                self.entity_geometry(camera, alpha, entities)
+            });
+        }
         let mut additive = Vec::new();
         if !title {
             self.bolt_geometry(camera, &mut additive);
@@ -8084,8 +8093,13 @@ impl Game<'_> {
                 None
             },
         };
-        let renderer = self.renderer.as_mut().ok_or("renderer")?;
-        horizon_client::spans::time("renderer", || renderer.render(&frame))
+        let result = match self.renderer.as_mut() {
+            Some(renderer) => horizon_client::spans::time("renderer", || renderer.render(&frame)),
+            None => Err("renderer".into()),
+        };
+        // Restore storage even when rendering fails (for example, a lost surface).
+        self.entity_vertices = entities;
+        result
     }
     /// `LevelExtractor` / `LevelRenderer`: the world border wall this frame.
     fn border_draw(
@@ -9258,6 +9272,7 @@ pub fn run() -> Result<()> {
         screen: Screen::Playing,
         window: None,
         renderer: None,
+        entity_vertices: Vec::new(),
         health_hud: hud_layout::HealthHud::default(),
         started: now,
         previous: now,
