@@ -490,12 +490,27 @@ impl GraphicsUi {
     fn bounds(h: f32) -> (f32, f32) {
         (STYLE.band, h - STYLE.band)
     }
-    /// Widgets and the list's content height.
-    fn layout(&self, level: Level, w: f32, h: f32) -> (Vec<Widget>, Vec<(f32, &'static str)>, f32) {
+    fn content_height(level: Level) -> f32 {
+        rows(level).iter().fold(4.0, |height, row| {
+            height
+                + match row {
+                    Row::Header(_) => STYLE.header_height,
+                    Row::Setting(_) => STYLE.row_height,
+                }
+        })
+    }
+    /// Widgets and the list's content height, using a bounded offset.
+    fn layout(
+        &mut self,
+        level: Level,
+        w: f32,
+        h: f32,
+    ) -> (Vec<Widget>, Vec<(f32, &'static str)>, f32) {
+        let content = Self::content_height(level);
+        self.clamp_scroll(h, content);
         let (top, _) = Self::bounds(h);
         let x = STYLE.row_x(w);
         let mut y = top + 4.0 - self.scroll;
-        let start = y;
         let mut widgets = Vec::new();
         let mut headers = Vec::new();
         for row in rows(level) {
@@ -516,7 +531,6 @@ impl GraphicsUi {
                 }
             }
         }
-        let content = y - start + 4.0;
         let cx = (w / 2.0).floor();
         let by = h - 27.0;
         let other = match level {
@@ -553,9 +567,7 @@ impl GraphicsUi {
         in_world: bool,
     ) {
         let (w, h) = (batch.width, batch.height);
-        let (_, _, content) = self.layout(level, w, h);
-        self.clamp_scroll(h, content);
-        let (widgets, headers, _) = self.layout(level, w, h);
+        let (widgets, headers, content) = self.layout(level, w, h);
         let (top, bottom) = Self::bounds(h);
         STYLE.background(batch, atlas, top, bottom, in_world);
         let shown = |y: f32, height: f32| y >= top && y + height <= bottom;
@@ -684,14 +696,62 @@ impl GraphicsUi {
     pub fn release(&mut self) {
         self.dragging = None;
     }
-    pub fn scroll(&mut self, amount: f32) {
+    pub fn scroll(&mut self, level: Level, h: f32, amount: f32) {
+        let content = Self::content_height(level);
+        self.clamp_scroll(h, content);
         self.scroll -= amount * 18.0;
+        self.clamp_scroll(h, content);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scrolling_stops_at_both_limits_before_layout() {
+        for level in [Level::Simple, Level::Advanced] {
+            let mut ui = GraphicsUi::default();
+            let h = 120.0;
+            let (top, bottom) = GraphicsUi::bounds(h);
+            let max = GraphicsUi::content_height(level) - (bottom - top);
+            assert!(max > 4.5);
+            for _ in 0..3 {
+                ui.scroll(level, h, 1000.0);
+                assert_eq!(ui.scroll, 0.0);
+            }
+            for _ in 0..3 {
+                ui.scroll(level, h, -1000.0);
+                assert_eq!(ui.scroll, max);
+            }
+            ui.scroll(level, h, 0.25);
+            assert_eq!(ui.scroll, max - 4.5);
+            ui.scroll(level, h, 1000.0);
+            ui.scroll(level, h, -0.25);
+            assert_eq!(ui.scroll, 4.5);
+        }
+    }
+
+    #[test]
+    fn resizing_clamps_before_positioning_graphics_rows() {
+        for level in [Level::Simple, Level::Advanced] {
+            let mut ui = GraphicsUi::default();
+            ui.scroll(level, 120.0, -1000.0);
+            assert!(ui.scroll > 0.0);
+            let (widgets, headers, _) = ui.layout(level, 480.0, 4000.0);
+            assert_eq!(ui.scroll, 0.0);
+            if let Some((y, _)) = headers.first() {
+                assert_eq!(*y, STYLE.band + 4.0);
+            }
+            let (expected, _, _) = GraphicsUi::default().layout(level, 480.0, 4000.0);
+            assert_eq!(
+                widgets.iter().map(|w| w.y).collect::<Vec<_>>(),
+                expected.iter().map(|w| w.y).collect::<Vec<_>>()
+            );
+            ui.scroll(level, 4000.0, -1000.0);
+            assert_eq!(ui.scroll, 0.0);
+        }
+    }
 
     #[test]
     fn every_advanced_setting_has_a_description() {
