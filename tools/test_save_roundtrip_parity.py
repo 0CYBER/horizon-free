@@ -46,6 +46,10 @@ SERVER = LOCAL / 'minecraft' / '26.3' / 'jars' / 'server.jar'
 RUN = LOCAL / 'save-roundtrip' / 'run'
 PORT = 25000 + (os.getpid() % 5000) + 1000
 
+# Game rules Horizon's player changes before saving: rule -> (vanilla's value, Horizon's).
+# The new value must be in Horizon's save, and nothing else may differ (#74).
+HORIZON_RULES = {'max_entity_cramming': (24, 30)}
+
 # Differences that do not change what vanilla reads: path pattern (list indices as [])
 # -> reason. Anything else is a failure.
 IGNORED = {
@@ -335,7 +339,9 @@ def horizon_resave(source, destination, bin_dir):
     print(launch.stdout.strip())
     if launch.returncode:
         sys.exit('horizon failed to launch: ' + launch.stdout + launch.stderr)
-    steps = [['wait-ready', '240'], ['save-all'], ['quit']]
+    steps = [['wait-ready', '240']]
+    steps += [['chat', f'/gamerule {rule} {new}'] for rule, (_, new) in HORIZON_RULES.items()]
+    steps += [['save-all'], ['quit']]
     for step in steps:
         result = subprocess.run(ctl + step, cwd=destination, env=env, capture_output=True, text=True)
         print(' '.join(step), '->', result.stdout.strip() or result.stderr.strip())
@@ -545,6 +551,12 @@ def compare_worlds(vanilla, horizon):
             if rel.endswith('scoreboard.dat'):
                 va, hb = normalize_scoreboard(va), normalize_scoreboard(hb)
             compare_dat(rel, va, hb, report)
+    for rule, (old, new) in HORIZON_RULES.items():
+        changed = (f'data/minecraft/game_rules.dat.data.minecraft:{rule}', old, new)
+        if changed in report:
+            report.remove(changed)
+        else:
+            report.append((changed[0], f'{new} set in Horizon', 'not saved'))
     return report
 
 

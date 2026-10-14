@@ -819,6 +819,8 @@ struct Game<'a> {
     /// This world is open to the network (game/lan.rs).
     lan: Option<lan::LanHost>,
     world_options: Option<lan_screen::WorldOptions>,
+    /// The world was saved for the application ending (`save_for_exit`).
+    saved_for_exit: bool,
     /// The block a guest is acting on (game/lan_actions.rs).
     forced_hit: Option<Hit>,
     /// Level events of this tick for the guests, and the guest acting now.
@@ -5714,6 +5716,20 @@ impl Game<'_> {
         }
         Ok(())
     }
+    /// Leaving the game with a world open (window closed, Quit, `quit`):
+    /// menu items go back (Player.closeContainer), then the world is saved,
+    /// once.
+    pub(super) fn save_for_exit(&mut self) -> Result<()> {
+        if self.title.is_some() || self.saved_for_exit {
+            return Ok(());
+        }
+        self.saved_for_exit = true;
+        self.close_container();
+        if self.remote.is_none() {
+            self.stats.custom("leave_game", 1);
+        }
+        self.save_game()
+    }
     fn close_world(&mut self) -> Result<()> {
         self.ambience.clear(&mut self.audio);
         // updateLevelInEngines(null): every sound stops; the music manager
@@ -7113,6 +7129,8 @@ impl Game<'_> {
     }
     /// Copy the live player and world state into the `Level` that gets saved.
     pub(super) fn sync_level(&mut self) {
+        // Level.write saves the game rules (game_rules.dat) with the rest.
+        self.level.game_rules = self.ui.rules.by_name();
         self.level.selected_slot = self.selected as i32;
         let mode = self.mode_id();
         let level = &mut self.level;
@@ -7824,13 +7842,7 @@ impl ApplicationHandler for Game<'_> {
         let result: Result<()> = (|| {
             match event {
                 WindowEvent::CloseRequested => {
-                    if self.title.is_none() {
-                        self.close_container();
-                        if self.remote.is_none() {
-                            self.stats.custom("leave_game", 1);
-                        }
-                        self.save_game()?;
-                    }
+                    self.save_for_exit()?;
                     event_loop.exit();
                 }
                 WindowEvent::Resized(size) => {
@@ -8344,6 +8356,14 @@ impl ApplicationHandler for Game<'_> {
         }
         event_loop.set_control_flow(ControlFlow::Poll);
     }
+    /// The application is ending. On macOS, Quit (Cmd+Q) ends it through
+    /// applicationWillTerminate without a CloseRequested; vanilla's GLFW
+    /// window turns it into a window close, so Minecraft.stop saves the world.
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Err(e) = self.save_for_exit() {
+            eprintln!("Horizon: failed to save the world on exit: {e}");
+        }
+    }
 }
 pub fn run() -> Result<()> {
     let Some(mut options) = Options::read()? else {
@@ -8699,6 +8719,7 @@ pub fn run() -> Result<()> {
         remote: None,
         lan: None,
         world_options: None,
+        saved_for_exit: false,
         forced_hit: None,
         lan_events: Vec::new(),
         lan_acting: None,
