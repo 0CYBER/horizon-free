@@ -7,6 +7,7 @@
     python3 tools/parity.py food light      # these harnesses (names without test_/_parity.py)
     python3 tools/parity.py --failed        # the ones that failed last time
     python3 tools/parity.py --changed origin/main   # those a branch's changes can affect (pull requests)
+    python3 tools/parity.py --changed-files F       # the same, for paths listed in F (a copy without Git history)
     python3 tools/parity.py --list          # what would run, without running it
     python3 tools/parity.py --status        # last result of every harness
 
@@ -1148,6 +1149,8 @@ def main():
     parser.add_argument("--flake-rounds", type=int, default=3, help="runs required by --flake-check (default 3)")
     parser.add_argument("--changed", metavar="REF", help="only harnesses the changes since the merge base with REF can "
                         "affect (and that have not passed with their current inputs): the pull-request check")
+    parser.add_argument("--changed-files", metavar="FILE", help="like --changed, for the changed paths listed in FILE, "
+                        "one per line: for a copy without Git history (tools/pr_ready.py on another machine)")
     args = parser.parse_args()
 
     found = harnesses()
@@ -1175,13 +1178,16 @@ def main():
         chosen = list(found)
     elif args.failed:
         chosen = [name for name in found if records.get(name, {}).get("status") == "fail"]
-    elif args.changed:
-        changed = changed_files(args.changed)
+    elif args.changed or args.changed_files:
+        if args.changed_files:
+            changed, since = set(Path(args.changed_files).read_text().split("\n")) - {""}, ""
+        else:
+            changed, since = changed_files(args.changed), f" since the merge base with {args.changed}"
         if changed is None:
             parser.error(f"no merge base with {args.changed}")
         affected = affected_harnesses(found, records, changed)
         chosen = [name for name in found if name in affected and stale(name, state, hasher, environment)]
-        print(f"{len(changed)} files changed since the merge base with {args.changed}: {len(affected)} harnesses "
+        print(f"{len(changed)} files changed{since}: {len(affected)} harnesses "
               f"depend on them, {len(chosen)} without a pass for their current inputs.", flush=True)
     else:
         chosen = [name for name in found if stale(name, state, hasher, environment)]

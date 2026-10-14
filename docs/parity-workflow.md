@@ -16,6 +16,8 @@ python3 tools/parity.py --repeat 3 food   # run it three times; the runs must ag
 python3 tools/parity.py --hosts macmini,thinkpad   # with other machines (default: tools/parity_hosts.json's default list, empty)
 python3 tools/parity.py --list       # what would run
 python3 tools/parity.py --status     # last result of each harness
+python3 tools/parity.py --changed origin/main      # those a branch's changes can affect (CI's parity job)
+python3 tools/parity.py --changed-files paths.txt  # the same for listed paths, in a copy without Git (tools/pr_ready.py)
 ```
 
 Each harness runs unmodified under a tracer that records the files it depended on: its Python modules, its Java oracle and the oracle sources javac pulled in, other repository files it read, and the Rust sources of the probes it ran (from Cargo's `.d` dep-info files). A pass stands until one of those files, the pinned vanilla artifacts, `Cargo.lock` or the Rust/Java toolchains change. State and logs are in `.local/parity-runner/`; each harness's own outputs stay in its `.local/<name>/` directory.
