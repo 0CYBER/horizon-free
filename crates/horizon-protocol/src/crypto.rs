@@ -1,7 +1,9 @@
 //! Connection encryption (Crypt.getCipher: AES/CFB8/NoPadding with the shared
 //! secret as key and IV) and MD5 name-based UUIDs for offline-mode profiles
-//! (UUIDUtil.createOfflinePlayerUUID). Only the AES forward cipher is needed:
-//! CFB8 encrypts the shift register in both directions.
+//! (UUIDUtil.createOfflinePlayerUUID), the online-mode server hash
+//! (Crypt.digestData) and the shared secret. Only the AES forward cipher is
+//! needed: CFB8 encrypts the shift register in both directions.
+use sha1::{Digest, Sha1};
 
 const SBOX: [u8; 256] = {
     // Generated from the AES field inverse and affine transform at compile time.
@@ -138,6 +140,54 @@ impl Cfb8 {
     }
 }
 
+/// Fill `out` with the operating system's cryptographic randomness.
+pub fn random_bytes(out: &mut [u8]) -> crate::Result<()> {
+    getrandom::fill(out).map_err(|e| crate::Error::new(format!("No secure random source: {e}")))
+}
+
+/// Crypt.generateSecretKey: a random AES-128 key, the connection's shared secret.
+pub fn generate_secret() -> crate::Result<[u8; 16]> {
+    let mut key = [0u8; 16];
+    random_bytes(&mut key)?;
+    Ok(key)
+}
+
+/// `new BigInteger(digest).toString(16)`: the digest read as a signed
+/// two's-complement number, in lowercase hex without leading zeros.
+pub fn java_hex_digest(digest: &[u8]) -> String {
+    let negative = digest.first().is_some_and(|b| b & 0x80 != 0);
+    let mut magnitude = digest.to_vec();
+    if negative {
+        // Two's complement: invert and add one.
+        let mut carry = true;
+        for b in magnitude.iter_mut().rev() {
+            *b = !*b;
+            if carry {
+                let (v, c) = b.overflowing_add(1);
+                *b = v;
+                carry = c;
+            }
+        }
+    }
+    let hex: String = magnitude.iter().map(|b| format!("{b:02x}")).collect();
+    let hex = hex.trim_start_matches('0');
+    let hex = if hex.is_empty() { "0" } else { hex };
+    if negative { format!("-{hex}") } else { hex.to_owned() }
+}
+
+/// The server id sent to the session service when joining an online-mode
+/// server: SHA-1 over the server id (ISO-8859-1), the shared secret and the
+/// server's encoded public key, as a signed hex number.
+pub fn server_hash(server_id: &str, secret: &[u8], public_key: &[u8]) -> String {
+    let mut sha = Sha1::new();
+    // ISO-8859-1: characters above U+00FF become '?' like String.getBytes.
+    let latin1: Vec<u8> = server_id.chars().map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?')).collect();
+    sha.update(&latin1);
+    sha.update(secret);
+    sha.update(public_key);
+    java_hex_digest(&sha.finalize())
+}
+
 /// MD5 (RFC 1321).
 pub fn md5(input: &[u8]) -> [u8; 16] {
     const S: [u32; 64] = [
@@ -254,6 +304,26 @@ mod tests {
         let mut dec = Cfb8::new(&key, &iv);
         dec.decrypt(&mut data);
         assert_eq!(data, plain);
+    }
+
+    /// The digests of single names published with the protocol docs.
+    #[test]
+    fn server_hash_vectors() {
+        let hash = |name: &str| java_hex_digest(&Sha1::digest(name.as_bytes()));
+        assert_eq!(hash("Notch"), "4ed1f46bbe04bc756bcb17c0c7ce3e4632f06a48");
+        assert_eq!(hash("jeb_"), "-7c9d5b0044c130109a5d7b5fb5c317c02b4e28c1");
+        assert_eq!(hash("simon"), "88e16a1019277b15d58faf0541e11910eb756f6");
+        // The three inputs are hashed in order: one update equals three.
+        assert_eq!(server_hash("", b"Not", b"ch"), hash("Notch"));
+        assert_eq!(java_hex_digest(&[0; 4]), "0");
+        assert_eq!(java_hex_digest(&[0xff; 2]), "-1");
+        assert_eq!(java_hex_digest(&[0x80, 0]), "-8000");
+    }
+
+    #[test]
+    fn secrets_are_random() {
+        let (a, b) = (generate_secret().unwrap(), generate_secret().unwrap());
+        assert_ne!(a, b);
     }
 
     #[test]

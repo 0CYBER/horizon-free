@@ -249,6 +249,7 @@ pub(crate) mod tests {
     use super::*;
 
     pub fn hex(s: &str) -> Vec<u8> {
+        let s = if s.len() % 2 == 1 { format!("0{s}") } else { s.to_owned() };
         (0..s.len())
             .step_by(2)
             .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
@@ -274,5 +275,47 @@ pub(crate) mod tests {
         let expected = b * b % n * b % n;
         let r = m.pow(&Big(vec![b as u32, (b >> 32) as u32]), &Big(vec![3, 0]));
         assert_eq!(u128::from(r.0[0]) | u128::from(r.0[1]) << 32, expected);
+    }
+
+    #[test]
+    fn parses_x509_public_keys() {
+        let key = RsaPublicKey::from_der(&hex(TEST_SPKI)).unwrap();
+        assert_eq!(key.modulus, hex(TEST_N));
+        assert_eq!(key.exponent, vec![1, 0, 1]);
+        assert_eq!(key.size(), 128);
+        assert!(RsaPublicKey::from_der(&hex(TEST_SPKI)[..100]).is_err());
+        assert!(RsaPublicKey::from_der(b"not a key").is_err());
+    }
+
+    /// Encrypted with the public key, decrypted with the private exponent:
+    /// a PKCS#1 v1.5 type 2 block with non-zero padding around the message.
+    #[test]
+    fn pkcs1_round_trip() {
+        let key = RsaPublicKey::from_der(&hex(TEST_SPKI)).unwrap();
+        let secret = [0x5au8; 16];
+        let a = key.encrypt(&secret).unwrap();
+        let b = key.encrypt(&secret).unwrap();
+        assert_eq!(a.len(), 128);
+        assert_ne!(a, b, "padding is random");
+        for c in [a, b] {
+            let block = key.apply(&c, &hex(TEST_D));
+            assert_eq!(&block[..2], &[0, 2]);
+            let zero = 2 + block[2..].iter().position(|&b| b == 0).unwrap();
+            assert_eq!(zero, 128 - 16 - 1);
+            assert_eq!(&block[zero + 1..], &secret);
+        }
+        assert!(key.encrypt(&[0; 118]).is_err());
+    }
+
+    /// An OpenSSL signature checked with the public exponent: the block ends
+    /// with SHA-256("hello"), so the modular arithmetic agrees with OpenSSL's.
+    #[test]
+    fn verifies_an_openssl_signature() {
+        let key = RsaPublicKey::from_der(&hex(TEST_SPKI)).unwrap();
+        let block = key.apply(&hex(TEST_SIG_HELLO), &key.exponent);
+        assert_eq!(&block[..2], &[0, 1]);
+        assert!(block.ends_with(&hex(
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        )));
     }
 }
