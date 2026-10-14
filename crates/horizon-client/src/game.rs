@@ -6267,17 +6267,12 @@ impl Game<'_> {
                 if !self.try_light_portal(target)? {
                     self.set_state_named(target, "minecraft:fire", &[])?;
                 }
-                let sound = if item == "fire_charge" {
-                    "minecraft:item.firecharge.use"
-                } else {
-                    "minecraft:item.flintandsteel.use"
-                };
-                self.audio.play(
-                    sound,
-                    Some(at(target)),
-                    1.0,
-                    self.world.random.next_float() * 0.4 + 0.8,
+                let sound = horizon_client::items::fire_starter_sound(item == "fire_charge");
+                let pitch = horizon_client::items::fire_starter_pitch(
+                    item == "fire_charge",
+                    &mut self.world.random,
                 );
+                self.audio.play(sound, Some(at(target)), 1.0, pitch);
                 if item == "fire_charge" {
                     self.consume_held();
                 } else {

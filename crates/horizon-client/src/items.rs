@@ -12,6 +12,27 @@ use std::{
     sync::Arc,
 };
 
+/// A fire starter's use sound: `SoundEvents.FIRECHARGE_USE` or
+/// `FLINTANDSTEEL_USE`.
+pub fn fire_starter_sound(fire_charge: bool) -> &'static str {
+    if fire_charge {
+        "minecraft:item.firecharge.use"
+    } else {
+        "minecraft:item.flintandsteel.use"
+    }
+}
+
+/// The pitch of a fire starter's use sound, from the level's random:
+/// `FlintAndSteelItem.useOn`'s `nextFloat() * 0.4 + 0.8`, or
+/// `FireChargeItem.playSound`'s `(nextFloat() - nextFloat()) * 0.2 + 1.0`.
+pub fn fire_starter_pitch(fire_charge: bool, random: &mut impl RandomSource) -> f32 {
+    if fire_charge {
+        (random.next_float() - random.next_float()) * 0.2 + 1.0
+    } else {
+        random.next_float() * 0.4 + 0.8
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ToolRule {
     pub blocks: Vec<String>,
