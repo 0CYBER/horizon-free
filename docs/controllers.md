@@ -82,7 +82,7 @@ and Java's controller mods do), not focus navigation:
   (half stack / place one), Y = quick move (shift-click), B = back / close.
 - LB / RB switch creative tabs and recipe book pages; right stick scrolls
   (creative grid, lists, chat).
-- Sliders: A grabs, the stick or D-pad left/right moves, A releases.
+- Sliders: hold A on the slider and move the stick, or nudge with the D-pad.
 - Text fields: the Steam Deck's keyboard (Steam + X) types into them like a
   real keyboard. Other platforms have no on-screen keyboard yet; text input
   needs a keyboard.

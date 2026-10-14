@@ -263,6 +263,18 @@ impl Game<'_> {
             self.pad_take_pointer(event_loop);
             return;
         }
+        // With A held (a slider grabbed, a drag), the D-pad nudges instead.
+        if self.pad.menu.held[0] {
+            let (dx, dy) = match button {
+                Button::DPadLeft => (-2.0, 0.0),
+                Button::DPadRight => (2.0, 0.0),
+                Button::DPadUp => (0.0, -2.0),
+                _ => (0.0, 2.0),
+            };
+            let at = self.cursor;
+            self.pad_pointer_to(event_loop, (at.0 + dx, at.1 + dy));
+            return;
+        }
         let from = self.cursor;
         let targets = self.pad_targets();
         if let Some(i) = gamepad::focus_step(from, button, &targets) {
