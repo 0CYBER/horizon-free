@@ -6,7 +6,8 @@
 //! keeps 7 archives a day, the newest with the highest index.
 //!
 //! Messages go through the `log` facade. Horizon's own still print their plain text on stderr,
-//! as they did before the log existed; other crates' warnings and errors only reach the file.
+//! as they did before the log existed; other crates' errors only reach the file (their
+//! warnings are mostly the Vulkan loader's startup chatter).
 use std::collections::VecDeque;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -224,7 +225,7 @@ fn ours(target: &str) -> bool {
 impl log::Log for Logger {
     fn enabled(&self, meta: &log::Metadata) -> bool {
         meta.level() <= log::Level::Info
-            && (ours(meta.target()) || meta.level() <= log::Level::Warn)
+            && (ours(meta.target()) || meta.level() <= log::Level::Error)
     }
 
     fn log(&self, record: &log::Record) {
@@ -264,8 +265,13 @@ impl Logger {
             }
             state.date = now.date_naive();
         }
-        for line in message.lines() {
-            let line = format_line(&now, thread, level, line);
+        // As log4j writes a multi-line message: the pattern once, the rest as it is.
+        for (i, line) in message.lines().enumerate() {
+            let line = if i == 0 {
+                format_line(&now, thread, level, line)
+            } else {
+                line.to_owned()
+            };
             if let Some(latest) = &mut state.file {
                 let _ = writeln!(latest.file, "{line}");
             }

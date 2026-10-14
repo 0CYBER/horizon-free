@@ -48,7 +48,7 @@ pub struct Report {
     pub description: String,
     /// The error's message, first line of the stack section.
     pub error: String,
-    /// Where it happened and how it got there.
+    /// Where it happened and how it got there: one frame a line (`function (file:line:col)`).
     pub stack: String,
     pub thread: String,
     /// `client` or `server`, the end of the file name.
@@ -73,7 +73,7 @@ impl Report {
         let _ = writeln!(out, "Description: {}\n", self.description);
         let _ = writeln!(out, "{}", self.error);
         for line in self.stack.lines() {
-            let _ = writeln!(out, "\t{}", line.trim_start());
+            let _ = writeln!(out, "\tat {line}");
         }
         let _ = writeln!(
             out,
@@ -255,10 +255,19 @@ fn deliver(home: &Path, report: Report) -> Option<PathBuf> {
     if REPORTED.swap(true, Ordering::SeqCst) {
         return None;
     }
-    log::error!(
-        "Horizon crashed: {}\n{}",
-        report.error,
-        report.stack.trim_end()
+    // The panic is on stderr already: the stack goes to the log only.
+    crate::logging::write_only(
+        log::Level::Error,
+        &format!(
+            "Horizon crashed: {}\n{}",
+            report.error,
+            report
+                .stack
+                .lines()
+                .map(|l| format!("\tat {l}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
     );
     crate::logging::flush();
     match report.save(home) {
@@ -287,13 +296,81 @@ fn panic_message(info: &std::panic::PanicHookInfo) -> String {
     }
 }
 
+/// A `std::backtrace` as one line a frame, `function (file:line:col)`, from the frame that
+/// panicked: the hook's and the panic machinery's frames go, and paths inside the workspace
+/// lose the build machine's prefix.
+pub fn stack_lines(backtrace: &str) -> String {
+    // The workspace as it was on the machine that built this binary (it need not exist here).
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let root = manifest
+        .strip_suffix("crates/horizon-client")
+        .unwrap_or(manifest);
+    let mut frames: Vec<(String, Option<String>)> = Vec::new();
+    for line in backtrace.lines() {
+        let line = line.trim();
+        if let Some(at) = line.strip_prefix("at ") {
+            if let Some(frame) = frames.last_mut() {
+                frame.1 = Some(short_path(at, root).to_owned());
+            }
+        } else if let Some((n, name)) = line.split_once(": ")
+            && n.chars().all(|c| c.is_ascii_digit())
+        {
+            frames.push((name.to_owned(), None));
+        }
+    }
+    let machinery = |name: &str| {
+        [
+            "std::panicking::",
+            "core::panicking::",
+            "std::sys::backtrace::",
+            "__rustc::",
+        ]
+        .iter()
+        .any(|p| name.starts_with(p))
+            || name.contains("rust_begin_unwind")
+    };
+    // The hook's frames, then the panic machinery's, then the code that panicked.
+    let first = match frames.iter().take(30).position(|(name, _)| machinery(name)) {
+        Some(start) => {
+            start
+                + frames[start..]
+                    .iter()
+                    .take_while(|(name, _)| machinery(name))
+                    .count()
+        }
+        None => 0,
+    };
+    frames[first..]
+        .iter()
+        .map(|(name, at)| match at {
+            Some(at) => format!("{name} ({at})\n"),
+            None => format!("{name}\n"),
+        })
+        .collect()
+}
+
+/// A source path without the build machine's folders: relative to the workspace, or from the
+/// crate's folder for dependencies (`winit-0.30.13/src/event_loop.rs:642:56`).
+fn short_path<'a>(path: &'a str, root: &str) -> &'a str {
+    if let Some(rest) = path.strip_prefix(root) {
+        return rest;
+    }
+    if let Some(i) = path.find("/registry/src/") {
+        let rest = &path[i + "/registry/src/".len()..];
+        if let Some((_index, krate)) = rest.split_once('/') {
+            return krate;
+        }
+    }
+    path
+}
+
 /// A report for a panic, with the stack captured now (RUST_BACKTRACE or not).
 pub fn panic_report(info: &std::panic::PanicHookInfo, side: &'static str) -> Report {
     Report {
         time: Local::now(),
         description: "Unexpected error".into(),
         error: panic_message(info),
-        stack: std::backtrace::Backtrace::force_capture().to_string(),
+        stack: stack_lines(&std::backtrace::Backtrace::force_capture().to_string()),
         thread: thread_name(),
         side,
         details: system_details(),
@@ -380,7 +457,7 @@ mod tests {
             time: chrono::TimeZone::with_ymd_and_hms(&Local, 2026, 10, 14, 9, 5, 7).unwrap(),
             description: "Unexpected error".into(),
             error: "panicked at src/game.rs:10:5:\nboom".into(),
-            stack: "   0: horizon_client::game::frame\n             at ./src/game.rs:10:5\n".into(),
+            stack: "horizon_client::game::frame (src/game.rs:10:5)\n".into(),
             thread: "Render thread".into(),
             side: "client",
             details: vec![
@@ -410,7 +487,10 @@ mod tests {
         assert_eq!(lines[4], "Description: Unexpected error");
         assert_eq!(lines[6], "panicked at src/game.rs:10:5:");
         assert_eq!(lines[7], "boom");
-        assert_eq!(lines[8], "\t0: horizon_client::game::frame");
+        assert_eq!(
+            lines[8],
+            "\tat horizon_client::game::frame (src/game.rs:10:5)"
+        );
         assert!(text.contains("-- Head --\nThread: Render thread\n"));
         assert!(text.contains(
             "-- System Details --\nDetails:\n\tHorizon Version: 0.1.0\n\tMinecraft Version: 26.3\n\tGraphics: Test GPU (Vulkan), driver 1.0\n"
@@ -418,6 +498,18 @@ mod tests {
         assert!(text.ends_with(
             "-- Last 1 log lines --\n[09:05:06] [Render thread/INFO]: load assets: 1.20s\n"
         ));
+    }
+
+    #[test]
+    fn stacks_start_at_the_panicking_frame() {
+        let bt = format!(
+            "   0: horizon_client::crash::panic_report\n             at {root}/src/crash.rs:296:16\n   1: std::panicking::panic_with_hook\n             at /rustc/abc/library/std/src/panicking.rs:823:13\n   2: core::panicking::panic_fmt\n             at /rustc/abc/library/core/src/panicking.rs:80:14\n   3: horizon_client::crash::debug_crash_tick\n             at {root}/src/crash.rs:359:9\n   4: winit::dispatch\n             at /home/someone/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/event_loop.rs:642:56\n   5: main\n",
+            root = env!("CARGO_MANIFEST_DIR")
+        );
+        assert_eq!(
+            stack_lines(&bt),
+            "horizon_client::crash::debug_crash_tick (crates/horizon-client/src/crash.rs:359:9)\nwinit::dispatch (winit-0.30.13/src/event_loop.rs:642:56)\nmain\n"
+        );
     }
 
     #[test]
@@ -436,7 +528,9 @@ mod tests {
         let report = caught.lock().unwrap().take().expect("the hook ran");
         assert!(report.error.contains("the test crash"));
         assert!(report.error.contains("crash.rs"));
-        assert!(!report.stack.is_empty());
+        // The first frame is the test's own code, not the panic machinery.
+        let first = report.stack.lines().next().unwrap();
+        assert!(first.contains("crash.rs"), "{}", report.stack);
         let text = report.text();
         assert!(text.contains("Description: Unexpected error"));
         assert!(text.contains("\tMinecraft Version: 26.3\n"));
