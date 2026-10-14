@@ -665,6 +665,8 @@ struct Widget {
 /// What the game must do after an interaction.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
+    /// An accepted button press or the release of a slider.
+    ButtonClick,
     /// Close the options screens (back to the pause menu or title).
     Close,
     /// Settings changed: apply them.
@@ -1618,6 +1620,7 @@ impl OptionsUi {
             let mut events = Vec::new();
             for action in self.graphics.click(level, s, (x, y), size, drag, right) {
                 match action {
+                    Action::ButtonClick => events.push(Event::ButtonClick),
                     Action::Changed => events.push(Event::Changed),
                     Action::OpenAdvanced => self.push(Page::GraphicsAdvanced),
                     Action::OpenSimple => {
@@ -1642,6 +1645,9 @@ impl OptionsUi {
             }
             let m = crate::screen_draw::Measure(&atlas.font);
             let p = self.packs(atlas, size);
+            if p.button_at(&m, x as f64, y as f64) {
+                events.push(Event::ButtonClick);
+            }
             let before = p.search_focused();
             let action = p.click(&m, x as f64, y as f64);
             if !before && p.search_focused() {
@@ -1682,6 +1688,11 @@ impl OptionsUi {
             events.push(Event::Changed);
             return events;
         }
+        // AbstractWidget accepts only the primary button. Rebinding above
+        // accepts other mouse buttons, but is not a widget activation.
+        if right {
+            return events;
+        }
         for wd in widgets {
             if !ui::hovered((x, y), wd.x, wd.y, wd.w, wd.h) {
                 continue;
@@ -1692,43 +1703,46 @@ impl OptionsUi {
             match wd.kind {
                 WKind::Button {
                     active: true, act, ..
-                } => match act {
-                    Act::Push(p) => self.push(p),
-                    Act::Done => events.extend(self.back(s)),
-                    Act::Cycle(opt) => {
-                        opt.cycle(s, right);
-                        if opt == Opt::Preset {
-                            apply_preset(s);
+                } => {
+                    events.push(Event::ButtonClick);
+                    match act {
+                        Act::Push(p) => self.push(p),
+                        Act::Done => events.extend(self.back(s)),
+                        Act::Cycle(opt) => {
+                            opt.cycle(s, right);
+                            if opt == Opt::Preset {
+                                apply_preset(s);
+                            }
+                            events.push(Event::Changed);
                         }
-                        events.push(Event::Changed);
-                    }
-                    Act::Key(name) => self.selected_key = Some(name),
-                    Act::ResetKey(name) => {
-                        s.keys.set(name, KeyBinds::default_of(name));
-                        events.push(Event::Changed);
-                    }
-                    Act::ResetKeys => {
-                        s.keys.reset_all();
-                        events.push(Event::Changed);
-                    }
-                    Act::PadKey(action) => self.selected_pad_action = Some(action),
-                    Act::ResetPadKey(action) => {
-                        s.controller
-                            .bind(action, gamepad::PadSettings::default_of(action));
-                        events.push(Event::Changed);
-                    }
-                    Act::ResetPadKeys => {
-                        s.controller.reset_bindings();
-                        events.push(Event::Changed);
-                    }
-                    Act::HorizonMenus => {
-                        self.horizon_menus();
-                        if let Ok(dir) = std::env::current_dir() {
-                            crate::ui_theme::save_preferences(&dir);
+                        Act::Key(name) => self.selected_key = Some(name),
+                        Act::ResetKey(name) => {
+                            s.keys.set(name, KeyBinds::default_of(name));
+                            events.push(Event::Changed);
                         }
+                        Act::ResetKeys => {
+                            s.keys.reset_all();
+                            events.push(Event::Changed);
+                        }
+                        Act::PadKey(action) => self.selected_pad_action = Some(action),
+                        Act::ResetPadKey(action) => {
+                            s.controller
+                                .bind(action, gamepad::PadSettings::default_of(action));
+                            events.push(Event::Changed);
+                        }
+                        Act::ResetPadKeys => {
+                            s.controller.reset_bindings();
+                            events.push(Event::Changed);
+                        }
+                        Act::HorizonMenus => {
+                            self.horizon_menus();
+                            if let Ok(dir) = std::env::current_dir() {
+                                crate::ui_theme::save_preferences(&dir);
+                            }
+                        }
+                        Act::None => {}
                     }
-                    Act::None => {}
-                },
+                }
                 WKind::Slider { opt, .. } => {
                     self.dragging = Some(opt);
                     opt.set_slider(s, ui::slider_value(wd.x, wd.w, x));
@@ -1763,10 +1777,17 @@ impl OptionsUi {
         self.section_shown = None;
         self.hscroll = 0.0;
     }
-    pub fn release(&mut self) {
-        self.dragging = None;
+    pub fn release(&mut self) -> Vec<Event> {
+        // AbstractSliderButton suppresses the press sound and plays once on
+        // release, even if the pointer has left the widget or its value stayed.
+        let slider = self.dragging.take().is_some();
         self.hdragging = None;
-        self.graphics.release();
+        let graphics_slider = self.graphics.release();
+        if slider || graphics_slider {
+            vec![Event::ButtonClick]
+        } else {
+            Vec::new()
+        }
     }
     pub fn scroll(&mut self, s: &Settings, size: (f32, f32), amount: f32) {
         let (_, top, bottom, content) = self.layout(s, size.0, size.1);
@@ -1959,6 +1980,141 @@ impl OptionsUi {
 mod tests {
     use super::*;
     use crate::ui_theme::{MenuStyle, set_style, style};
+
+    fn atlas() -> HudAtlas {
+        HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets")).unwrap()
+    }
+
+    #[test]
+    fn classic_buttons_sound_but_disabled_and_nonprimary_clicks_are_silent() {
+        let atlas = atlas();
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        ui.show(Page::Mouse);
+        let size = (480.0, 320.0);
+        let (widgets, _, _, _) = ui.layout(&s, size.0, size.1);
+        let button = widgets
+            .iter()
+            .find(|wd| {
+                matches!(
+                    wd.kind,
+                    WKind::Button {
+                        active: true,
+                        act: Act::Cycle(_),
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        let (x, y) = (button.x + 1.0, button.y + 1.0);
+        assert!(ui.click(&mut s, &atlas, x, y, size, false, true).is_empty());
+        assert_eq!(
+            ui.click(&mut s, &atlas, x, y, size, false, false),
+            vec![Event::ButtonClick, Event::Changed]
+        );
+        assert!(ui.release().is_empty());
+        assert!(
+            ui.click(&mut s, &atlas, 0.0, 0.0, size, false, false)
+                .is_empty()
+        );
+        ui.show(Page::KeyBinds);
+        let (widgets, _, _, _) = ui.layout(&s, size.0, size.1);
+        let disabled = widgets
+            .iter()
+            .find(|wd| matches!(wd.kind, WKind::Button { active: false, .. }))
+            .unwrap();
+        assert!(
+            ui.click(
+                &mut s,
+                &atlas,
+                disabled.x + 1.0,
+                disabled.y + 1.0,
+                size,
+                false,
+                false
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn classic_sliders_sound_once_on_release_including_unchanged_values() {
+        let atlas = atlas();
+        let size = (480.0, 320.0);
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        ui.show(Page::Sound);
+        let (widgets, _, _, _) = ui.layout(&s, size.0, size.1);
+        let slider = widgets
+            .iter()
+            .find(|wd| {
+                matches!(
+                    wd.kind,
+                    WKind::Slider {
+                        opt: Opt::Volume(0),
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        let (x, y) = (slider.x + slider.w - 1.0, slider.y + 1.0);
+        assert_eq!(
+            ui.click(&mut s, &atlas, x, y, size, false, false),
+            vec![Event::Changed]
+        );
+        assert_eq!(s.master_volume, 1.0);
+        assert_eq!(ui.release(), vec![Event::ButtonClick]);
+        assert!(ui.release().is_empty());
+        assert_eq!(
+            ui.click(&mut s, &atlas, x, y, size, false, false),
+            vec![Event::Changed]
+        );
+        for cx in [-100.0, 250.0, 1000.0] {
+            assert_eq!(
+                ui.click(&mut s, &atlas, cx, -100.0, size, true, false),
+                vec![Event::Changed]
+            );
+        }
+        assert_eq!(ui.release(), vec![Event::ButtonClick]);
+        assert!(ui.click(&mut s, &atlas, x, y, size, true, false).is_empty());
+    }
+
+    #[test]
+    fn classic_language_rows_and_text_fields_are_silent() {
+        let atlas = atlas();
+        let mut s = Settings::default();
+        let mut ui = OptionsUi {
+            languages: languages(),
+            ..Default::default()
+        };
+        ui.show(Page::Language);
+        let size = (480.0, 320.0);
+        let (widgets, top, bottom, _) = ui.layout(&s, size.0, size.1);
+        let row = widgets
+            .iter()
+            .find(|wd| {
+                matches!(wd.kind, WKind::LanguageRow { .. }) && wd.y >= top && wd.y + wd.h <= bottom
+            })
+            .unwrap();
+        assert!(
+            ui.click(&mut s, &atlas, row.x + 1.0, row.y + 1.0, size, false, false)
+                .is_empty()
+        );
+        assert!(ui.release().is_empty());
+        let search = ui.language_search.clone();
+        assert!(
+            ui.click(
+                &mut s,
+                &atlas,
+                search.x + 1.0,
+                search.y + 1.0,
+                size,
+                false,
+                false
+            )
+            .is_empty()
+        );
+    }
 
     fn languages() -> Vec<LanguageInfo> {
         (0..30)

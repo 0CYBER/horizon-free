@@ -617,6 +617,18 @@ impl Audio {
         let seed = self.random.next_long();
         self.play_seeded(event, at, volume, pitch, seed);
     }
+    /// `AbstractWidget.playButtonClickSound`: an unseeded, relative UI sound.
+    pub fn play_button_click(&mut self) {
+        self.play_instance(
+            SoundInstance::for_ui(
+                "minecraft:ui.button.click",
+                1.0,
+                0.25,
+                SoundEngine::unseeded(),
+            ),
+            false,
+        );
+    }
     /// `play` with the seed a sound packet carries.
     pub fn play_seeded(
         &mut self,
@@ -748,6 +760,38 @@ impl Sounds for Audio {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn button_click_uses_vanilla_ui_parameters_without_advancing_world_random() {
+        let mut audio = Audio::silent(Path::new("/nonexistent/horizon-test-assets"));
+        audio.engine.registry.add_file(
+            "minecraft",
+            br#"{"ui.button.click":{"sounds":["gui/button"]}}"#,
+            &|_, _| true,
+        );
+        // Exercise the mixer without opening an output device. The missing
+        // sample is harmless: this test checks the source the engine creates.
+        audio.engine.loaded = true;
+        audio.backend.live = true;
+        let mut random = audio.random.clone();
+        audio.play_button_click();
+        let instance = audio.engine.instance(1).expect("click reached the engine");
+        assert_eq!(instance.identifier, "minecraft:ui.button.click");
+        assert_eq!(instance.source, crate::sound_engine::UI);
+        assert_eq!(instance.volume, 0.25);
+        assert_eq!(instance.pitch, 1.0);
+        assert_eq!(instance.attenuation, Attenuation::None);
+        assert_eq!(instance.position, [0.0; 3]);
+        assert!(instance.relative);
+        assert!(!instance.looping);
+        assert_eq!(audio.random.next_long(), random.next_long());
+        audio.pause();
+        assert_eq!(
+            audio.backend.mixer.lock().unwrap().channels[&1].state,
+            State::Initial
+        );
+        audio.stop_all();
+    }
 
     fn channel(samples: Vec<f32>, linear: Option<f32>, at: [f32; 3], looping: bool) -> Channel {
         Channel {

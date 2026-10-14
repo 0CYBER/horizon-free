@@ -447,13 +447,21 @@ impl Title {
             );
         }
     }
-    pub fn click(&mut self, x: f32, y: f32, size: (f32, f32)) -> Action {
+    /// The action and whether to play `AbstractWidget.playButtonClickSound`.
+    /// Navigation buttons can return `Action::None` while still sounding.
+    pub fn click(&mut self, x: f32, y: f32, size: (f32, f32)) -> (Action, bool) {
         let (w, h) = size;
         let hit = self
             .buttons(w, h)
             .into_iter()
             .find(|b| b.enabled && x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + 20.0)
             .map(|b| b.id);
+        let action = self.click_action(x, y, size, hit);
+        // World list selection is silent; launching its selected entry sounds.
+        let sound = hit.is_some() || matches!(action, Action::Play { .. });
+        (action, sound)
+    }
+    fn click_action(&mut self, x: f32, y: f32, (w, h): (f32, f32), hit: Option<u8>) -> Action {
         match (&mut self.mode, hit) {
             (Mode::Main, Some(1)) => {
                 self.mode = Mode::Select {
@@ -634,4 +642,63 @@ fn date_string(secs: u64) -> String {
     let mo = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if mo <= 2 { y + 1 } else { y };
     format!("{y}-{mo:02}-{d:02} {h:02}:{m:02}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn click_button(title: &mut Title, id: u8) -> (Action, bool) {
+        let b = title
+            .buttons(480.0, 320.0)
+            .into_iter()
+            .find(|b| b.id == id)
+            .unwrap();
+        title.click(b.x + 1.0, b.y + 1.0, (480.0, 320.0))
+    }
+
+    #[test]
+    fn classic_navigation_buttons_sound_even_without_a_game_action() {
+        let mut title = Title::new(PathBuf::from("/nonexistent/horizon-test-saves"));
+        assert_eq!(title.click(0.0, 0.0, (480.0, 320.0)), (Action::None, false));
+        assert_eq!(click_button(&mut title, 0), (Action::None, false)); // Disabled Realms.
+        assert_eq!(click_button(&mut title, 1), (Action::None, true)); // Singleplayer.
+        assert_eq!(click_button(&mut title, 10), (Action::None, false)); // No selected world.
+        assert_eq!(click_button(&mut title, 11), (Action::None, true)); // Create screen.
+        assert_eq!(
+            title.click(240.0, 55.0, (480.0, 320.0)),
+            (Action::None, false)
+        );
+        assert_eq!(click_button(&mut title, 20), (Action::None, true)); // Game mode.
+        assert_eq!(click_button(&mut title, 22), (Action::None, true)); // Cancel.
+        assert_eq!(click_button(&mut title, 12), (Action::None, true)); // Back.
+        assert_eq!(click_button(&mut title, 3), (Action::Options, true));
+    }
+
+    #[test]
+    fn classic_world_selection_is_silent_until_the_entry_launches() {
+        let mut title = Title::new(PathBuf::from("/nonexistent/horizon-test-saves"));
+        title.mode = Mode::Select {
+            worlds: vec![WorldEntry {
+                folder: "world".into(),
+                name: "World".into(),
+                creative: false,
+                modified: std::time::SystemTime::UNIX_EPOCH,
+            }],
+            selected: None,
+        };
+        assert_eq!(
+            title.click(240.0, 40.0, (480.0, 320.0)),
+            (Action::None, false)
+        );
+        assert_eq!(
+            title.click(240.0, 40.0, (480.0, 320.0)),
+            (
+                Action::Play {
+                    folder: "world".into()
+                },
+                true
+            )
+        );
+    }
 }

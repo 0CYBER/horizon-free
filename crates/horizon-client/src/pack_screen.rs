@@ -19,6 +19,7 @@ pub enum Compat {
     TooNew,
     Unknown,
 }
+
 impl Compat {
     fn key(self) -> &'static str {
         match self {
@@ -457,6 +458,18 @@ impl PackScreen {
         self.info(id).is_none_or(|p| !p.fixed || !p.required)
     }
 
+    /// Whether a left click activates a footer or confirmation button.
+    /// Pack entries and the search field do not play widget click sounds.
+    pub fn button_at(&self, m: &Measure, x: f64, y: f64) -> bool {
+        let buttons = if let Some(c) = &self.confirm {
+            self.confirm_layout(m, c).2
+        } else {
+            self.footer()
+        };
+        buttons.into_iter().any(|(bx, by)| {
+            x >= bx as f64 && y >= by as f64 && x < (bx + 150) as f64 && y < (by + 20) as f64
+        })
+    }
     /// A left click (`Screen.mouseClicked`).
     pub fn click(&mut self, m: &Measure, x: f64, y: f64) -> Action {
         if self.confirm.is_some() {
@@ -926,5 +939,60 @@ impl PackScreen {
             );
             d::sprite(out, "widget/scroller", l.scroll_bar_x(), sy, 6, sh);
         }
+    }
+}
+
+#[cfg(test)]
+mod click_sound_tests {
+    use super::*;
+
+    #[test]
+    fn only_footer_and_confirmation_buttons_request_a_click_sound() {
+        let atlas =
+            crate::hud::HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets"))
+                .unwrap();
+        let m = Measure(&atlas.font);
+        let mut screen = PackScreen::new(&m, 480, 320, false, Vec::new(), &[]);
+        assert!(!screen.button_at(&m, 0.0, 0.0));
+        assert!(!screen.button_at(
+            &m,
+            screen.search.x as f64 + 1.0,
+            screen.search.y as f64 + 1.0
+        ));
+        let buttons = screen.footer();
+        for (i, (x, y)) in buttons.into_iter().enumerate() {
+            assert!(screen.button_at(&m, x as f64 + 1.0, y as f64 + 1.0));
+            assert!(!screen.button_at(&m, (x + 150) as f64, (y + 20) as f64));
+            assert_eq!(
+                screen.click(&m, x as f64 + 1.0, y as f64 + 1.0),
+                if i == 0 {
+                    Action::OpenFolder
+                } else {
+                    Action::Done
+                }
+            );
+        }
+        screen.confirm = Some(Confirm {
+            id: "incompatible".into(),
+            title: Text::literal("Confirm"),
+            message: Text::literal("Use this pack?"),
+        });
+        let buttons = screen
+            .confirm_layout(&m, screen.confirm.as_ref().unwrap())
+            .2;
+        for (x, y) in buttons {
+            assert!(screen.button_at(&m, x as f64 + 1.0, y as f64 + 1.0));
+        }
+        assert!(!screen.button_at(
+            &m,
+            screen.footer()[0].0 as f64 + 1.0,
+            screen.footer()[0].1 as f64 + 1.0
+        ));
+        let (x, y) = buttons[1];
+        assert_eq!(
+            screen.click(&m, x as f64 + 1.0, y as f64 + 1.0),
+            Action::None
+        );
+        assert!(!screen.confirming());
     }
 }

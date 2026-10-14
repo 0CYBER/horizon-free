@@ -44,11 +44,16 @@ impl Game<'_> {
     }
     pub(super) fn options_mouse(&mut self, pressed: bool, right: bool) -> Result<()> {
         if !pressed {
-            self.ui.options.release();
+            if right {
+                return Ok(());
+            }
+            let events = self.ui.options.release();
             self.dragging = false;
-            return Ok(());
+            return self.handle_option_events(events);
         }
-        self.dragging = true;
+        if !right {
+            self.dragging = true;
+        }
         let size = self.gui_size();
         let mut ui = std::mem::take(&mut self.ui.options);
         let events = ui.click(
@@ -115,6 +120,7 @@ impl Game<'_> {
     pub(super) fn handle_option_events(&mut self, events: Vec<Event>) -> Result<()> {
         for e in events {
             match e {
+                Event::ButtonClick => self.audio.play_button_click(),
                 Event::Changed => {
                     self.settings.save(&Self::options_path());
                     self.apply_settings();
