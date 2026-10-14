@@ -1849,7 +1849,7 @@ impl Game<'_> {
     /// raids' and the custom bars, in that order.
     pub(super) fn draw_boss_bars(&self, batch: &mut HudBatch) {
         let mut bars = Vec::new();
-        if let Some(d) = self.dragon.as_ref().filter(|_| self.dim == Dim::End) {
+        if let Some(d) = self.dragon.as_ref().filter(|_| self.dragon_bar_shown()) {
             bars.push(hud_overlays::BossBar {
                 name: Text::literal(
                     self.translate("entity.minecraft.ender_dragon", "Ender Dragon"),
@@ -1869,6 +1869,11 @@ impl Game<'_> {
             &self.res.atlas.font,
         );
         hud_layout::paint(batch, &self.res.atlas, &draws);
+    }
+    /// The dragon fight's boss bar shows (`EnderDragonFight.dragonEvent`,
+    /// with `setCreateWorldFog`).
+    pub(super) fn dragon_bar_shown(&self) -> bool {
+        self.dim == Dim::End && self.dragon.is_some()
     }
     /// `music.dragon` while the boss bar plays music.
     pub(super) fn boss_music(&self) -> bool {
