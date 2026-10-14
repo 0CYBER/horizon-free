@@ -305,7 +305,7 @@ fn update(check: bool, as_json: bool) -> Result<(), String> {
                 println!("Launcher: {version} is available; this build does not replace itself.");
             } else {
                 backend::self_update(r, progress(format!("Updating the launcher to {version}")))?;
-                println!("Launcher: updated to {version}; the next start uses it.");
+                println!("Launcher: updated to {version}. Restart the launcher to use it.");
             }
         }
     }

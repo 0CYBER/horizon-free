@@ -892,7 +892,7 @@ impl Launcher {
                 .flex()
                 .flex_col()
                 .gap(px(2.))
-                .child(div().child(format!("Launcher {} → {version}", backend::VERSION)))
+                .child(div().child(format!("Launcher updated to {version}")))
                 .child(
                     div()
                         .id("restart")
@@ -900,8 +900,11 @@ impl Launcher {
                         .font_weight(FontWeight::MEDIUM)
                         .cursor_pointer()
                         .hover(|s| s.opacity(0.8))
-                        .child("Restart to update")
-                        .on_click(|_, _, _| backend::restart()),
+                        .child("Restart the launcher")
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.self_update = SelfUpdate::Failed(backend::restart());
+                            cx.notify();
+                        })),
                 ),
             _ => div().child(format!("Launcher {}", backend::VERSION)),
         };
@@ -1523,9 +1526,7 @@ impl Launcher {
             SelfUpdate::Downloading(v, p) => {
                 format!("{}  ·  downloading {v}, {:.0}%", backend::VERSION, p * 100.)
             }
-            SelfUpdate::Ready(v) => {
-                format!("{}  ·  {v} is ready, restart to use it", backend::VERSION)
-            }
+            SelfUpdate::Ready(v) => format!("Updated to {v}. Restart the launcher to use it."),
             SelfUpdate::Failed(e) => format!("{}  ·  the update failed: {e}", backend::VERSION),
             SelfUpdate::Idle => match &self.updates.launcher {
                 Some(r) => format!(
@@ -1541,8 +1542,12 @@ impl Launcher {
         };
         let launcher_action = match &self.self_update {
             SelfUpdate::Ready(_) => Some(
-                button("restart-settings", "Restart", Kind::Secondary, &t)
-                    .on_click(|_, _, _| backend::restart()),
+                button("restart-settings", "Restart", Kind::Secondary, &t).on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
+                        this.self_update = SelfUpdate::Failed(backend::restart());
+                        cx.notify();
+                    },
+                )),
             ),
             SelfUpdate::Downloading(..) => None,
             _ => Some(
