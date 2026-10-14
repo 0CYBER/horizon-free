@@ -45,6 +45,7 @@ pub mod datapack;
 pub mod debug_keys;
 pub mod effects;
 pub mod enchant;
+pub mod end_crystal;
 pub mod entities;
 pub mod entity_nbt;
 pub mod environment;

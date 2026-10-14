@@ -2066,9 +2066,7 @@ impl Game<'_> {
         }
         // The healing beam to the nearest crystal.
         if let Some(c) = d.nearest_crystal.and_then(|i| self.crystals.get(i)) {
-            let age = c.time as f32 + a;
-            let hh = (age * 0.2).sin() / 2.0 + 0.5;
-            let bob = f64::from((hh * hh + hh) * 0.4 - 1.4);
+            let bob = f64::from(horizon_client::end_crystal::y(c.time as f32 + a));
             let to = glam::DVec3::new(c.position.x, c.position.y + bob, c.position.z);
             self.crystal_beam(pos, to - pos, self.ticks as f32 + a, camera, out);
         }
@@ -2122,7 +2120,7 @@ impl Game<'_> {
     }
     /// `submitCrystalBeams`: an eight-sided tube from `from` (+2 up) along
     /// `delta`, the beam texture scrolling along it.
-    fn crystal_beam(
+    pub(super) fn crystal_beam(
         &self,
         from: glam::DVec3,
         delta: glam::DVec3,
