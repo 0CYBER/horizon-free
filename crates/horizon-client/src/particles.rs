@@ -1264,6 +1264,36 @@ impl ParticleEngine {
         }
         self.create(options, p, v);
     }
+    /// `LevelEventHandler.singleBlockTeleportationParticles` (event 2015).
+    pub fn block_teleportation(&mut self, from: [i32; 3], data: i32, particle_level: u8) {
+        let to = [
+            from[0].wrapping_add(((data >> 16) & 255) - 16),
+            from[1].wrapping_add(((data >> 8) & 255) - 8),
+            from[2].wrapping_add((data & 255) - 16),
+        ]
+        .map(f64::from);
+        let from = from.map(f64::from);
+        let options = ParticleOptions::simple(ParticleType::Portal);
+        for _ in 0..128 {
+            let r = &mut self.level_random;
+            let t = r.next_double();
+            let velocity = std::array::from_fn(|_| f64::from((r.next_float() - 0.5) * 0.2));
+            let position = [
+                to[0] + t * (from[0] - to[0]) + (r.next_double() - 0.5) + 0.5,
+                to[1] + t * (from[1] - to[1]) + r.next_double() - 0.5,
+                to[2] + t * (from[2] - to[2]) + (r.next_double() - 0.5) + 0.5,
+            ];
+            // The option roll shares the level random and precedes the distance check.
+            let limited = match particle_level {
+                1 => r.next_int_bound(3).unwrap_or(0) == 0,
+                2 => true,
+                _ => false,
+            };
+            if !limited {
+                self.add(&options, position, velocity);
+            }
+        }
+    }
     /// `ClientPacketListener.handleExplosion` + `ClientExplosionTracker`: the
     /// explosion particle (emitter for radius >= 2) and up to 512 poof/smoke
     /// particles thrown from air inside the radius.
@@ -3762,6 +3792,52 @@ fn lifetime_alpha(a: [f32; 4], age: i32, lifetime: i32, partial: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn egg_teleport_unpacks_offsets_and_preserves_seeded_draw_order() {
+        let mut engine = ParticleEngine::new(Path::new(""), &HashMap::new());
+        engine.seed_randoms(0, 0, 0);
+        // Destination offset (-15, 7, 15); the unused top byte is ignored.
+        engine.block_teleportation([4, 12, -5], 0xff01_0f1fu32 as i32, 0);
+        assert_eq!(engine.pending.len(), 128);
+        assert!(engine.pending.iter().all(|p| p.ty == ParticleType::Portal));
+        let first = &engine.pending[0];
+        assert_eq!(
+            first.position.map(f64::to_bits),
+            [0x3fd18220c05a530a, 0x402b001e6be383c1, 0xbfc76bf5c46dbe5c]
+        );
+        assert_eq!(
+            first.velocity.map(f64::to_bits),
+            [0xbfaa91aee0000000, 0x3f95c78ce0000000, 0x3f9c24a0e0000000]
+        );
+        assert_eq!(
+            engine.pending[127].position.map(f64::to_bits),
+            [0xbfd728b135cb9ef6, 0x402ddd72dc6d0019, 0x3fe0b5775a29f186]
+        );
+        assert_eq!(engine.level_random.state(), 99_413_408_083_437);
+        assert!(engine.sounds.is_empty());
+    }
+
+    #[test]
+    fn egg_teleport_options_roll_before_distance_rejection() {
+        for (option, count, state) in [
+            (0, 128, 99_413_408_083_437),
+            (1, 89, 244_221_347_771_501),
+            (2, 0, 99_413_408_083_437),
+        ] {
+            for distant in [false, true] {
+                let mut engine = ParticleEngine::new(Path::new(""), &HashMap::new());
+                engine.seed_randoms(0, 0, 0);
+                if distant {
+                    engine.camera = [1000.0; 3];
+                }
+                engine.block_teleportation([4, 12, -5], 0x010f1f, option);
+                assert_eq!(engine.pending.len(), if distant { 0 } else { count });
+                assert_eq!(engine.level_random.state(), state);
+            }
+        }
+    }
+
     #[test]
     fn mining_particles_follow_slab_and_trapdoor_height() {
         for height in [0.5, 3.0 / 16.0] {

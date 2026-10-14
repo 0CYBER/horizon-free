@@ -1658,6 +1658,11 @@ impl Game<'_> {
                     self.spawner_burst([pos.x, pos.y, pos.z])
                 }
                 LevelEvent::LevelEvent {
+                    id: 2015,
+                    pos,
+                    data,
+                } => self.dragon_egg_particles([pos.x, pos.y, pos.z], data),
+                LevelEvent::LevelEvent {
                     id: 2013,
                     pos,
                     data,

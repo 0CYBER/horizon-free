@@ -820,6 +820,9 @@ impl Game<'_> {
                 }
             }
             C::BlockChangedAck(_) => {}
+            C::LevelEvent(p) if p.kind == 2015 => {
+                self.dragon_egg_particles(p.pos, p.data);
+            }
             C::LevelEvent(p) if p.kind == 2001 => {
                 // LevelEvent.PARTICLES_DESTROY_BLOCK: someone else broke a block.
                 let state = BlockStateId(p.data.max(0) as u32);

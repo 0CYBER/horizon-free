@@ -1,12 +1,16 @@
 //! Level events whose client handler (`LevelEventHandler`) spawns particles
-//! on a block: electric sparks (3002), waxing (3003), wax off (3004) and
-//! scraping (3005).
+//! on a block: dragon egg teleportation (2015), electric sparks (3002),
+//! waxing (3003), wax off (3004) and scraping (3005).
 use super::Game;
 use horizon_client::particles::{self, ParticleOptions, ParticleType};
 use horizon_core::position::BlockPos;
 use horizon_world::level::LevelEvent;
 
 impl Game<'_> {
+    pub(super) fn dragon_egg_particles(&mut self, pos: [i32; 3], data: i32) {
+        self.particles
+            .block_teleportation(pos, data, self.settings.particles);
+    }
     /// `LevelEventHandler.levelEvent` 3002 to 3005, drawing from the client
     /// level's random.
     pub(super) fn block_particle_event(&mut self, id: i32, pos: BlockPos, data: i32) {
