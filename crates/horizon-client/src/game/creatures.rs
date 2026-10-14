@@ -24,6 +24,17 @@ use horizon_core::{
 };
 use std::sync::Arc;
 
+/// The world impact sound after successful arrow damage, including self-shots.
+fn arrow_impact_sound(
+    random: &mut impl RandomSource,
+    hurt: bool,
+) -> Option<(&'static str, f32, f32)> {
+    hurt.then(|| {
+        let pitch = 1.2 / (random.next_float() * 0.2 + 0.9);
+        ("minecraft:entity.arrow.hit", 1.0, pitch)
+    })
+}
+
 /// Mob-system state owned by the game.
 #[derive(Default)]
 pub(super) struct Creatures {
@@ -696,10 +707,10 @@ impl Game<'_> {
                 // (`entity_motion_events`).
                 MobEvent::GameEvent { .. } => {}
                 MobEvent::AttackPlayer(amount, from) => {
-                    self.mob_hits_player(amount, from, "minecraft:mob_attack")
+                    self.mob_hits_player(amount, from, "minecraft:mob_attack");
                 }
                 MobEvent::DamagePlayer { amount, from, kind } => {
-                    self.mob_hits_player(amount, from, kind)
+                    self.mob_hits_player(amount, from, kind);
                 }
                 MobEvent::ElderCurse { at } => self.elder_curse(at),
                 MobEvent::Push { target, velocity } => {
@@ -1230,9 +1241,9 @@ impl Game<'_> {
     pub(super) fn mob_hits_player_kind(&mut self, amount: f32, from: [f64; 3], kind: &str) {
         self.mob_hits_player(amount, from, kind);
     }
-    fn mob_hits_player(&mut self, amount: f32, from: [f64; 3], damage_type: &str) {
+    fn mob_hits_player(&mut self, amount: f32, from: [f64; 3], damage_type: &str) -> bool {
         if self.creative {
-            return;
+            return false;
         }
         let projectile = self
             .res
@@ -1294,6 +1305,7 @@ impl Game<'_> {
         if raised {
             self.after_block(outcome, amount, attacker, projectile);
         }
+        outcome.hurt
     }
     /// A status effect from a mob, arrow or splash potion (`addEffect`).
     pub(super) fn give_player_effect(&mut self, effect: &'static str, ticks: i32, amplifier: i32) {
@@ -1486,42 +1498,42 @@ impl Game<'_> {
                         seconds: 5,
                     }])?;
                 }
-                match who {
+                let hurt = match who {
                     Who::Player => {
-                        if !self.creative {
-                            self.mob_hits_player(
-                                amount,
-                                [p.previous.x, p.previous.y, p.previous.z],
-                                "minecraft:arrow",
-                            );
-                            if let Some((e, t)) = effect {
-                                self.give_player_effect(e, *t, 0);
-                            }
-                            self.audio.play(
-                                "minecraft:entity.arrow.hit_player",
-                                Some(atp),
-                                1.0,
-                                1.0,
-                            );
+                        let hurt = self.mob_hits_player(
+                            amount,
+                            [p.previous.x, p.previous.y, p.previous.z],
+                            "minecraft:arrow",
+                        );
+                        if hurt && let Some((e, t)) = effect {
+                            self.give_player_effect(e, *t, 0);
                         }
+                        hurt
                     }
                     Who::Mob(id) => {
-                        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
-                            m.damage(amount, source);
-                        }
+                        let hurt = self
+                            .mobs
+                            .iter_mut()
+                            .find(|m| m.id == id)
+                            .is_some_and(|m| m.damage(amount, source));
                         if p.owner == Some(Who::Player) {
                             self.last_hurt_by_player.insert(id);
                         }
-                        let pitch = 1.2 / (self.world.random.next_float() * 0.2 + 0.9);
-                        self.audio
-                            .play("minecraft:entity.arrow.hit", Some(atp), 1.0, pitch);
+                        hurt
                     }
+                };
+                if let Some((sound, volume, pitch)) =
+                    arrow_impact_sound(&mut self.world.random, hurt)
+                {
+                    self.audio.play(sound, Some(atp), volume, pitch);
                 }
             }
             (ProjectileKind::Arrow { .. }, Hit::Block { .. }) => {
-                let pitch = 1.2 / (self.world.random.next_float() * 0.2 + 0.9);
-                self.audio
-                    .play("minecraft:entity.arrow.hit", Some(atp), 1.0, pitch);
+                if let Some((sound, volume, pitch)) =
+                    arrow_impact_sound(&mut self.world.random, true)
+                {
+                    self.audio.play(sound, Some(atp), volume, pitch);
+                }
             }
             (ProjectileKind::Snowball, hit) => {
                 if let Hit::Entity {
@@ -1626,11 +1638,13 @@ impl Game<'_> {
             (ProjectileKind::LargeFireball { power }, hit) => {
                 if let Hit::Entity { who, .. } = hit {
                     match who {
-                        Who::Player => self.mob_hits_player(
-                            6.0,
-                            [p.previous.x, p.previous.y, p.previous.z],
-                            "minecraft:fireball",
-                        ),
+                        Who::Player => {
+                            self.mob_hits_player(
+                                6.0,
+                                [p.previous.x, p.previous.y, p.previous.z],
+                                "minecraft:fireball",
+                            );
+                        }
                         Who::Mob(id) => {
                             if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
                                 m.damage(6.0, source);
@@ -1708,11 +1722,13 @@ impl Game<'_> {
                 );
             }
             (ProjectileKind::LlamaSpit, Hit::Entity { who, .. }) => match who {
-                Who::Player => self.mob_hits_player(
-                    1.0,
-                    [p.previous.x, p.previous.y, p.previous.z],
-                    "minecraft:spit",
-                ),
+                Who::Player => {
+                    self.mob_hits_player(
+                        1.0,
+                        [p.previous.x, p.previous.y, p.previous.z],
+                        "minecraft:spit",
+                    );
+                }
                 Who::Mob(id) => {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
                         m.damage(1.0, source);
@@ -2632,5 +2648,34 @@ impl Game<'_> {
             f64::from(pos[2]) + 0.5,
         ];
         let _ = self.spawn_mob("minecraft:zombified_piglin", at, false);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_core::random::LegacyRandom;
+
+    #[test]
+    fn arrow_impact_uses_world_sound_volume_and_seeded_pitch() {
+        let mut random = LegacyRandom::new(0);
+        assert_eq!(
+            arrow_impact_sound(&mut random, true),
+            Some((
+                "minecraft:entity.arrow.hit",
+                1.0,
+                f32::from_bits(0x3f92d167)
+            ))
+        );
+        let mut expected = LegacyRandom::new(0);
+        expected.next_float();
+        assert_eq!(random.next_float(), expected.next_float());
+    }
+
+    #[test]
+    fn rejected_arrow_damage_is_silent_without_drawing_pitch() {
+        let mut random = LegacyRandom::new(0);
+        assert_eq!(arrow_impact_sound(&mut random, false), None);
+        assert_eq!(random.next_float(), LegacyRandom::new(0).next_float());
     }
 }
