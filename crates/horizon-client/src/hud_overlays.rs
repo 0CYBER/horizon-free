@@ -105,8 +105,23 @@ pub struct EffectIcon {
     pub show_icon: bool,
 }
 
+impl From<&crate::effects::EffectInstance> for EffectIcon {
+    fn from(effect: &crate::effects::EffectInstance) -> Self {
+        let def = crate::brewing::effect(effect.id);
+        Self {
+            id: effect.id.to_owned(),
+            beneficial: def.is_some_and(|d| d.category == crate::brewing::Category::Beneficial),
+            color: def.map_or(0, |d| d.color as i32),
+            ambient: effect.ambient,
+            duration: effect.duration,
+            // Horizon keeps no showIcon flag: every effect shows its icon.
+            show_icon: true,
+        }
+    }
+}
+
 /// `MobEffectInstance.compareTo`.
-fn compare_effects(a: &EffectIcon, o: &EffectIcon) -> Ordering {
+pub(crate) fn compare_effects(a: &EffectIcon, o: &EffectIcon) -> Ordering {
     if (a.duration <= 32147 || o.duration <= 32147) && !(a.ambient && o.ambient) {
         a.ambient
             .cmp(&o.ambient)

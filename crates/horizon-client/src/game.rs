@@ -3811,6 +3811,9 @@ impl Game<'_> {
             self.draw_item(batch, &stack, self.cursor.0 - 8.0, self.cursor.1 - 8.0);
         }
         self.draw_slot_tooltip(batch);
+        if self.container.is_none() && self.craft_size == 2 && !self.mount_active() {
+            self.draw_inventory_effects(batch, (ox, oy), 176);
+        }
     }
     pub(super) fn close_container(&mut self) {
         self.close_station();
@@ -7364,6 +7367,7 @@ impl Game<'_> {
             let name = self.res.names.item(&item);
             self.tooltip(batch, &name, self.cursor.0, self.cursor.1);
         }
+        self.draw_inventory_effects(batch, (ox, oy), Creative::WIDTH as i32);
     }
     fn creative_trash_hovered(batch: &HudBatch, cursor: (f32, f32)) -> bool {
         let (ox, oy) = Self::creative_origin(batch);
