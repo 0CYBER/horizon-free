@@ -11,6 +11,7 @@ use horizon_client::{
     mesher::Vertex,
     mobs::{
         Damage, DamageKind, Mob, MobEvent, MobWorld, PlayerView, Seen, SpawnSetup, Species, Who,
+        ai::{eating_sound, feed_animal},
         farm::Climate,
         spawning::{self, BiomeFacts},
     },
@@ -45,6 +46,7 @@ impl ProjectileWorld for ProjWorld<'_, '_> {
         let mut scene = SceneCollisions {
             world: self.w.world,
             binding: self.w.collision,
+            subject: None,
         };
         let r = traverse_blocks(from, to, 256, |p: BlockPos| {
             let state = self.w.world.block(p.x, p.y, p.z);
@@ -1903,6 +1905,9 @@ impl Game<'_> {
         let mut consume = false;
         let mut give: Option<&str> = None;
         let mut sound: Option<&str> = None;
+        // Sounds played as vanilla plays them: (event, volume, pitch) at the feet.
+        let mut eat: Option<(&'static str, f32, f32)> = None;
+        let feet = [m.position.x, m.position.y, m.position.z];
         let mut handled = true;
         let mut drops: Vec<(String, u32)> = Vec::new();
         let is_food = m.kind.food.contains(&item);
@@ -1978,9 +1983,9 @@ impl Game<'_> {
                     .get(&item)
                     .and_then(|i| i.food.as_ref())
                     .map_or(2.0, |f| f.0 as f32);
+                // TamableAnimal.feed: playEatingSound, which wolves leave empty.
                 m.health = (m.health + heal).min(m.attrs.max_health);
                 consume = true;
-                sound = Some("entity.wolf.eat");
             }
             Species::Wolf
                 if m.extra.tame
@@ -2082,9 +2087,10 @@ impl Game<'_> {
                     .get(&item)
                     .and_then(|i| i.food.as_ref())
                     .map_or(1.0, |f| f.0 as f32);
+                // TamableAnimal.feed.
                 m.health = (m.health + heal).min(m.attrs.max_health);
                 consume = true;
-                sound = Some("entity.cat.eat");
+                eat = eating_sound(m, &mut self.world.random);
             }
             Species::Cat
                 if m.extra.tame && !(is_food && m.extra.age == 0 && m.extra.in_love <= 0) =>
@@ -2097,7 +2103,6 @@ impl Game<'_> {
             }
             Species::Cat if !m.extra.tame && is_food => {
                 consume = true;
-                sound = Some("entity.cat.eat");
                 m.persistent = true;
                 let at = [
                     m.position.x,
@@ -2110,6 +2115,7 @@ impl Game<'_> {
                     m.extra.owner = self.level.player_uuid.or(Some([0, 0, 0, 1]));
                     m.extra.sitting = true;
                 }
+                eat = eating_sound(m, &mut self.world.random);
                 let kind = if tamed { "heart" } else { "smoke" };
                 self.handle_mob_events(vec![MobEvent::Particles { kind, at, count: 7 }])?;
                 if tamed {
@@ -2135,25 +2141,45 @@ impl Game<'_> {
                 sound = Some("item.flintandsteel.use");
                 self.damage_held_tool();
             }
+            // Parrot.mobInteract: parrot food may tame a wild one (one time in
+            // ten); a parrot never takes it as Animal food (isFood is false).
+            Species::Parrot if !m.extra.tame && is_food => {
+                consume = true;
+                if !m.silent {
+                    let pitch = 1.0 + (m.random.next_float() - m.random.next_float()) * 0.2;
+                    eat = Some(("entity.parrot.eat", 1.0, pitch));
+                }
+                let at = [
+                    m.position.x,
+                    m.position.y + f64::from(m.height()) * 0.5 + 0.5,
+                    m.position.z,
+                ];
+                let tamed = m.random.next_int_bound(10).unwrap_or(1) == 0;
+                if tamed {
+                    m.extra.tame = true;
+                    m.extra.owner = self.level.player_uuid.or(Some([0, 0, 0, 1]));
+                }
+                let kind = if tamed { "heart" } else { "smoke" };
+                self.handle_mob_events(vec![MobEvent::Particles { kind, at, count: 7 }])?;
+                if tamed {
+                    let view = self.mob_entity(&self.mobs[index]);
+                    self.trigger_entity("minecraft:tame_animal", "entity", &view);
+                }
+            }
             // HappyGhast.canFallInLove: never, so only a ghastling takes food.
             _ if is_food
                 && m.kind.flags.animal
+                && species != Species::Parrot
                 && (species != Species::HappyGhast || m.is_baby()) =>
             {
-                // Animal.mobInteract: breed adults, speed up babies.
-                if m.extra.age == 0 && m.extra.in_love <= 0 {
-                    m.extra.in_love = 600;
-                    m.extra.love_player = true;
-                    consume = true;
-                    sound = Some(eat_sound(species));
-                } else if m.extra.age < 0 {
-                    // AgeableMob.ageUp(getSpeedUpSecondsWhenFeeding(-age)) = 10%.
-                    let secs = (-m.extra.age / 20) as f32 * 0.1;
-                    m.extra.age = (m.extra.age + (secs as i32) * 20).min(0);
-                    consume = true;
-                    sound = Some(eat_sound(species));
-                } else {
-                    handled = false;
+                // Animal.mobInteract: breed adults, speed up babies, then
+                // playEatingSound (silent unless the species overrides it).
+                match feed_animal(m, &mut self.world.random) {
+                    Some(sound) => {
+                        consume = true;
+                        eat = sound;
+                    }
+                    None => handled = false,
                 }
             }
             _ => handled = false,
@@ -2167,6 +2193,10 @@ impl Game<'_> {
                 (self.world.random.next_float() - self.world.random.next_float()) * 0.2 + 1.0;
             self.audio
                 .play(&format!("minecraft:{s}"), Some(center), 1.0, pitch);
+        }
+        if let Some((s, volume, pitch)) = eat {
+            self.audio
+                .play(&format!("minecraft:{s}"), Some(feet), volume, pitch);
         }
         if consume
             && !creative
@@ -2514,19 +2544,6 @@ impl Game<'_> {
                 });
             }
         }
-    }
-}
-fn eat_sound(s: Species) -> &'static str {
-    match s {
-        Species::Pig => "entity.pig.eat",
-        Species::Horse | Species::Donkey | Species::Mule => "entity.horse.eat",
-        Species::Llama | Species::TraderLlama => "entity.llama.eat",
-        Species::Goat => "entity.goat.eat",
-        Species::Sniffer => "entity.sniffer.eat",
-        Species::Fox => "entity.fox.eat",
-        Species::Cat => "entity.cat.eat",
-        Species::Panda => "entity.panda.eat",
-        _ => "entity.generic.eat",
     }
 }
 /// Mob.getBaseExperienceReward

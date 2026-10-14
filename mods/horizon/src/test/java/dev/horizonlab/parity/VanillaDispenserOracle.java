@@ -51,6 +51,7 @@ public final class VanillaDispenserOracle {
             case 1051 -> "minecraft:entity.wind_charge.throw";
             case 1505 -> "minecraft:item.bone_meal.use";
             case 1501 -> "minecraft:block.lava.extinguish";
+            case 1500 -> data == 1 ? "minecraft:block.composter.fill_success" : "minecraft:block.composter.fill";
             case 1009 -> data == 0 ? "minecraft:block.fire.extinguish" : data == 1 ? "minecraft:block.generic.extinguish_fire" : null;
             case 2001 -> {
                 BlockState state = Block.stateById(data);
@@ -289,8 +290,15 @@ public final class VanillaDispenserOracle {
         List<Entity> targets = List.copyOf(w.entities);
         BlockPos origin = VanillaBlockUpdateOracle.readPos(f.getAsJsonArray("pos"));
         BlockState state = w.getBlockState(origin);
+        List<String> used = new ArrayList<>();
         if (f.has("remove")) {
             remove(w, origin, f.getAsJsonObject("remove"));
+        } else if (f.has("use")) {
+            used = use(w, origin, f.getAsJsonObject("use"));
+        } else if (f.has("hopper")) {
+            // HopperBlockEntity.pushItemsTick, once.
+            var hopper = (net.minecraft.world.level.block.entity.HopperBlockEntity) w.getBlockEntity(origin);
+            net.minecraft.world.level.block.entity.HopperBlockEntity.pushItemsTick(w, origin, state, hopper);
         } else if (state.getBlock() instanceof CrafterBlock) {
             Method craft = CrafterBlock.class.getDeclaredMethod("dispenseFrom", BlockState.class, ServerLevel.class, BlockPos.class);
             craft.setAccessible(true);
@@ -348,7 +356,58 @@ public final class VanillaDispenserOracle {
             }
         }
         result.addAll(w.blockEvents);
+        result.addAll(used);
         result.add("rng " + w.rng.nextLong());
+    }
+
+    /** The player of a "use" case: its main hand, game mode and the statistics it is awarded. */
+    static final class User extends net.minecraft.server.level.ServerPlayer {
+        VanillaBlockUpdateOracle.World world;
+        boolean creative;
+        ItemStack hand;
+        List<String> stats;
+        User() {
+            super(null, null, null, null);
+        }
+        @Override public ServerLevel level() { return world; }
+        @Override public boolean hasInfiniteMaterials() { return creative; }
+        @Override public boolean isCreative() { return creative; }
+        @Override public boolean isSpectator() { return false; }
+        @Override public EntityType<?> getType() { return EntityTypes.PLAYER; }
+        @Override public net.minecraft.core.Holder<EntityType<?>> typeHolder() { return EntityTypes.PLAYER.builtInRegistryHolder(); }
+        @Override public ItemStack getItemInHand(net.minecraft.world.InteractionHand h) {
+            return h == net.minecraft.world.InteractionHand.MAIN_HAND ? hand : ItemStack.EMPTY;
+        }
+        @Override public void awardStat(net.minecraft.stats.Stat<?> stat, int count) {
+            stats.add("stat " + key(stat) + " " + BuiltInRegistries.STAT_TYPE.getKey(stat.getType()) + " " + count);
+        }
+        static <T> String key(net.minecraft.stats.Stat<T> stat) {
+            return String.valueOf(stat.getType().getRegistry().getKey(stat.getValue()));
+        }
+    }
+
+    /**
+     * ServerPlayerGameMode.useItemOn by a player holding the case's item on the
+     * block at `pos` (not sneaking): `useItemOn`, then `useWithoutItem` when the
+     * block asks to try with an empty hand. The held stack and statistics follow.
+     */
+    static List<String> use(VanillaBlockUpdateOracle.World w, BlockPos pos, JsonObject use) throws Exception {
+        User player = (User) VanillaBlockUpdateOracle.allocate.invoke(VanillaBlockUpdateOracle.unsafe, User.class);
+        player.world = w;
+        player.creative = use.has("creative") && use.get("creative").getAsBoolean();
+        player.hand = stack(use.get("item").getAsString());
+        player.stats = new ArrayList<>();
+        var hit = new net.minecraft.world.phys.BlockHitResult(net.minecraft.world.phys.Vec3.atCenterOf(pos).add(0, 0.5, 0),
+            net.minecraft.core.Direction.UP, pos, false);
+        BlockState state = w.getBlockState(pos);
+        var hand = net.minecraft.world.InteractionHand.MAIN_HAND;
+        var result = state.useItemOn(player.getItemInHand(hand), w, player, hand, hit);
+        if (result instanceof net.minecraft.world.InteractionResult.TryEmptyHandInteraction) {
+            result = state.useWithoutItem(w, player, hit);
+        }
+        List<String> out = new ArrayList<>(player.stats);
+        out.add("use " + (result.consumesAction() ? "consumed" : "pass") + " held " + ParityData.canon(player.hand));
+        return out;
     }
 
     /** The level's block entity positions by x, y, z. */

@@ -170,6 +170,10 @@ impl Game<'_> {
     /// strength and item swap tickers (`Player.tick`), then
     /// `FirstPersonHandsAndItems.tick`.
     pub(super) fn tick_hand(&mut self) {
+        // LocalPlayer.applyInput (the camera is the player's own).
+        if self.player.is_some() {
+            self.sway.tick(self.pitch, self.yaw);
+        }
         self.swing.tick();
         let main = self.inventory[self.selected].clone();
         self.hand_strength.tick(main.as_ref().map(|s| HeldStack {

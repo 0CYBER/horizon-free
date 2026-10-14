@@ -204,6 +204,7 @@ impl Game<'_> {
                                 age,
                                 no_gravity,
                                 drop_item,
+                                fall_distance: 0.0,
                                 saved: uuid.map(|u| Box::new((u, tag.clone()))),
                             });
                         }

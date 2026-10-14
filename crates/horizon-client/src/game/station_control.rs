@@ -46,13 +46,13 @@ impl Game<'_> {
         use winit::keyboard::KeyCode;
         let saved = self.cursor;
         self.cursor = (x, y);
-        let had_shift = self.keys.contains(&KeyCode::ShiftLeft);
+        let had_shift = self.physical_keys.contains(&KeyCode::ShiftLeft);
         if shift {
-            self.keys.insert(KeyCode::ShiftLeft);
+            self.physical_keys.insert(KeyCode::ShiftLeft);
         }
         self.click_inventory(right);
         if shift && !had_shift {
-            self.keys.remove(&KeyCode::ShiftLeft);
+            self.physical_keys.remove(&KeyCode::ShiftLeft);
         }
         self.cursor = saved;
     }

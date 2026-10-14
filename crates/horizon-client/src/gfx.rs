@@ -123,6 +123,8 @@ pub struct Frame<'a> {
     pub sky: Sky,
     /// Render distance in blocks (fog end).
     pub distance: f32,
+    /// `Camera.depthFar`: the far plane (`crate::camera::depth_far`).
+    pub depth_far: f32,
     pub underwater: bool,
     /// Skip sections the camera cannot see through open faces (vanilla's
     /// occlusion graph; off in spectator-like views inside blocks).
@@ -253,6 +255,8 @@ pub struct Renderer {
     lightmap_view: wgpu::TextureView,
     lightmap_sampler: wgpu::Sampler,
     animations: Vec<(SpriteAnimation, usize)>,
+    /// Edge length of the block sprite array's layers.
+    sprite_size: u32,
     indices: wgpu::Buffer,
     index_quads: u32,
     instances: wgpu::Buffer,
@@ -1325,6 +1329,7 @@ impl Renderer {
             lightmap_view,
             lightmap_sampler,
             animations: animations.iter().map(|a| (a.clone(), usize::MAX)).collect(),
+            sprite_size,
             indices,
             index_quads,
             instances,
@@ -1614,7 +1619,7 @@ impl Renderer {
             frame.yaw,
             frame.pitch,
             frame.bob,
-            frame.distance,
+            frame.depth_far,
         )
     }
     /// The view frustum `render` will cull with, for culling geometry built
@@ -1625,15 +1630,14 @@ impl Renderer {
         yaw: f32,
         pitch: f32,
         bob: Mat4,
-        distance: f32,
+        depth_far: f32,
     ) -> Frustum {
         Frustum {
-            planes: frustum(self.projection(fov_degrees, yaw, pitch, bob, distance)),
+            planes: frustum(self.projection(fov_degrees, yaw, pitch, bob, depth_far)),
         }
     }
-    fn projection(&self, fov_degrees: f32, yaw: f32, pitch: f32, bob: Mat4, distance: f32) -> Mat4 {
+    fn projection(&self, fov_degrees: f32, yaw: f32, pitch: f32, bob: Mat4, far: f32) -> Mat4 {
         let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
-        let far = (distance * 4.0).max(1024.0);
         Mat4::perspective_rh(fov_degrees.to_radians(), aspect, 0.05, far)
             * bob
             * crate::camera::view_matrix(yaw, pitch)
@@ -1700,7 +1704,7 @@ impl Renderer {
         animate_sprites(
             &mut self.animations,
             tick,
-            self.sprite_texture.width(),
+            self.sprite_size,
             self.mip_levels,
             |layer, level, size, pixels| {
                 self.queue.write_texture(
@@ -1860,7 +1864,7 @@ impl Renderer {
             frame.hand_fov_degrees,
             self.config.width as f32,
             self.config.height.max(1) as f32,
-            (frame.distance * 4.0).max(1024.0),
+            frame.depth_far,
         ));
         let hand_globals = Globals {
             view_proj: (hand_projection * frame.bob * view).to_cols_array_2d(),

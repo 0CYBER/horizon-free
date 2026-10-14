@@ -590,6 +590,12 @@ impl Camera {
         modify_fov_based_on_death_or_fluid(partial, 70.0, effect_scale, dead, fluid)
     }
 }
+/// `Camera.update`: the far plane covers four times the render distance and
+/// the whole cloud range (`depthFar`).
+pub fn depth_far(render_distance_chunks: i32, cloud_range_chunks: i32) -> f32 {
+    (render_distance_chunks as f32 * 16.0 * 4.0).max((cloud_range_chunks * 16) as f32)
+}
+
 /// `Projection.getMatrix` for a perspective set up by `setupPerspective`:
 /// JOML's `Matrix4f.setPerspective(fov * DEG_TO_RAD, width / height, near,
 /// far, zZeroToOne)`, column-major. Vanilla passes its planes reversed
@@ -768,6 +774,13 @@ pub fn bob_matrix(state: &BobState, damage_tilt_strength: f64, bob_view_option: 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn depth_far_covers_the_cloud_range() {
+        // renderDistance 2 with the default Cloud Distance (128 chunks).
+        assert_eq!(super::depth_far(2, 128), 2048.0);
+        assert_eq!(super::depth_far(32, 2), 2048.0);
+        assert_eq!(super::depth_far(12, 12), 768.0);
+    }
     use super::*;
     #[test]
     fn view_keeps_yaw_at_vertical_pitch_limits() {

@@ -50,7 +50,9 @@ import net.minecraft.world.phys.*;
  * level, connection and item model resolver are shells answering what these
  * read, and the results of using items on blocks, entities and the air are
  * scripted. The attack and use part of Minecraft.handleKeybinds and the
- * ticker lines of Player.tick are mirrored here in vanilla's order.
+ * ticker lines of Player.tick are mirrored here in vanilla's order. Steps may
+ * turn the player; the real LocalPlayer.applyInput moves the hands' xBob and
+ * yBob after it.
  */
 public final class VanillaFirstPersonOracle {
     static Object unsafe;
@@ -150,6 +152,8 @@ public final class VanillaFirstPersonOracle {
         }
 
         @Override public AttributeMap getAttributes() { return attributes; }
+        // The shell Minecraft has no game renderer: the player is the camera.
+        @Override protected boolean isControlledCamera() { return true; }
         @Override public boolean isEyeInFluid(TagKey<Fluid> type) { return false; }
         @Override public boolean onGround() { return true; }
         @Override public boolean isWithinEntityInteractionRange(Entity entity, double buffer) { return inRange; }
@@ -274,6 +278,7 @@ public final class VanillaFirstPersonOracle {
                 swingState.set(player, new LivingEntity.SwingState());
                 lastItem.set(player, ItemStack.EMPTY);
                 hands.set(player, new FirstPersonHandsAndItems());
+                player.input = new net.minecraft.client.player.ClientInput();
                 var effects = new HashMap<Holder<MobEffect>, MobEffectInstance>();
                 if (!c.get("haste").isJsonNull()) {
                     effects.put(MobEffects.HASTE, new MobEffectInstance(MobEffects.HASTE, 100000, c.get("haste").getAsInt()));
@@ -363,6 +368,13 @@ public final class VanillaFirstPersonOracle {
                         }
                         lastItem.set(player, main.copy());
                     }
+                    // LocalPlayer.aiStep's applyInput, after the step's turn.
+                    if (step.has("rot") && !step.get("rot").isJsonNull()) {
+                        var rot = step.getAsJsonArray("rot");
+                        player.setXRot(Float.intBitsToFloat(Integer.parseUnsignedInt(rot.get(0).getAsString(), 16)));
+                        player.setYRot(Float.intBitsToFloat(Integer.parseUnsignedInt(rot.get(1).getAsString(), 16)));
+                    }
+                    player.applyInput();
                     var fp = (FirstPersonHandsAndItems) hands.get(player);
                     fp.tick(player);
                     for (var ev : events) {
@@ -376,7 +388,8 @@ public final class VanillaFirstPersonOracle {
                         + " " + fb(mainHeight.getFloat(fp)) + " " + fb(oMainHeight.getFloat(fp))
                         + " " + fb(offHeight.getFloat(fp)) + " " + fb(oOffHeight.getFloat(fp))
                         + " " + missTime.getInt(mc) + " " + rightClickDelay.getInt(mc) + " " + destroyDelay.getInt(gameMode)
-                        + " " + destroying.getBoolean(gameMode) + " " + fb(progress.getFloat(gameMode)));
+                        + " " + destroying.getBoolean(gameMode) + " " + fb(progress.getFloat(gameMode))
+                        + " " + fb(player.xBob) + " " + fb(player.yBob) + " " + fb(player.xBobO) + " " + fb(player.yBobO));
                 }
             }
         }

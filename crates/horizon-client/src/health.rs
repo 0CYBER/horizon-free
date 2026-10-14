@@ -79,6 +79,8 @@ impl HealthResources {
 #[derive(Clone, Copy, Debug)]
 pub enum HealthEvent {
     StarvationDamage(f32),
+    /// `LivingEntity.aiStep` hurting a fully frozen entity.
+    FreezeDamage(f32),
     Updated {
         id: u8,
         value: f32,
@@ -103,6 +105,7 @@ impl HealthEvent {
     pub fn trace(self) -> String {
         match self {
             Self::StarvationDamage(amount) => format!("damage starve {:08x}", amount.to_bits()),
+            Self::FreezeDamage(amount) => format!("damage freeze {:08x}", amount.to_bits()),
             Self::Updated { id, value, dirty } => {
                 format!("updated {id} {:08x} {dirty}", value.to_bits())
             }
@@ -588,7 +591,16 @@ impl HurtWorld for Environment<'_> {
         self.phase("death-request")
     }
     fn hurt_sound(&mut self, _: &mut State) -> io::Result<()> {
-        self.phase("hurt-sound")
+        self.phase("hurt-sound")?;
+        let sound = match self.source.definition().effects.as_str() {
+            "burning" => "minecraft:entity.player.hurt_on_fire",
+            "drowning" => "minecraft:entity.player.hurt_drown",
+            "freezing" => "minecraft:entity.player.hurt_freeze",
+            "poking" => "minecraft:entity.player.hurt_sweet_berry_bush",
+            _ => "minecraft:entity.player.hurt",
+        };
+        self.events.push(MotionEvent::HurtSound(sound));
+        Ok(())
     }
     fn game_time(&mut self, _: &mut State) -> io::Result<i64> {
         Ok(self.game_time)

@@ -368,6 +368,40 @@ fn water_spreads_on_a_floor() {
 }
 
 #[test]
+fn bucket_source_removal_drains_spread_water() {
+    let mut w = world!();
+    w.floor(0, 10, "stone");
+    let at = BlockPos::new(0, 1, 0);
+    assert!(w.b().bucket_empty(
+        &mut w.level,
+        &mut w.ticks,
+        at,
+        BucketContent::Fluid(crate::fluid::FluidKind::Water),
+        "minecraft:item.bucket.empty"
+    ));
+    for _ in 0..60 {
+        w.tick();
+    }
+    assert_ne!(w.get(BlockPos::new(1, 1, 0)), w.b().air());
+    assert_eq!(
+        w.b().bucket_pickup(&mut w.level, &mut w.ticks, at),
+        Some("minecraft:water_bucket")
+    );
+    for _ in 0..120 {
+        w.tick();
+    }
+    for x in -8..=8 {
+        for z in -8..=8 {
+            assert_eq!(
+                w.get(BlockPos::new(x, 1, z)),
+                w.b().air(),
+                "water remains at {x}, {z}"
+            );
+        }
+    }
+}
+
+#[test]
 fn water_falls_and_makes_sources() {
     let mut w = world!();
     w.floor(0, 4, "stone");

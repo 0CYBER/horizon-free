@@ -32,10 +32,23 @@ static CURRENT: RwLock<Option<Arc<Language>>> = RwLock::new(None);
 /// A source of resource files: the prepared root plus packs, highest priority last.
 pub trait ResourceSource {
     fn read(&self, path: &str) -> Option<Vec<u8>>;
+    /// The namespaces under `assets/` (resource packs may add their own).
+    fn namespaces(&self) -> Vec<String> {
+        vec!["minecraft".into()]
+    }
 }
 impl ResourceSource for std::path::PathBuf {
     fn read(&self, path: &str) -> Option<Vec<u8>> {
         std::fs::read(self.join(path)).ok()
+    }
+    fn namespaces(&self) -> Vec<String> {
+        std::fs::read_dir(self.join("assets"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.path().is_dir())
+            .filter_map(|e| e.file_name().to_str().map(str::to_owned))
+            .collect()
     }
 }
 
@@ -71,20 +84,26 @@ impl Language {
         }
     }
     /// ClientLanguage.loadFrom: en_us first, then the selected language, each
-    /// from every source in priority order (later sources override).
+    /// from every namespace and every source in priority order (later sources
+    /// override).
     pub fn load(sources: &[&dyn ResourceSource], code: &str) -> Self {
         let mut map = HashMap::new();
         let mut codes = vec![DEFAULT];
         if code != DEFAULT {
             codes.push(code);
         }
+        let namespaces: std::collections::BTreeSet<String> =
+            sources.iter().flat_map(|s| s.namespaces()).collect();
         for c in codes {
-            for source in sources {
-                let Some(bytes) = source.read(&format!("assets/minecraft/lang/{c}.json")) else {
-                    continue;
-                };
-                if let Ok(entries) = serde_json::from_slice::<HashMap<String, String>>(&bytes) {
-                    map.extend(entries);
+            for namespace in &namespaces {
+                for source in sources {
+                    let Some(bytes) = source.read(&format!("assets/{namespace}/lang/{c}.json"))
+                    else {
+                        continue;
+                    };
+                    if let Ok(entries) = serde_json::from_slice::<HashMap<String, String>>(&bytes) {
+                        map.extend(entries);
+                    }
                 }
             }
         }

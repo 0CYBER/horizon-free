@@ -15,7 +15,6 @@ use horizon_client::{
     mesher::Vertex,
 };
 use serde_json::Value;
-use winit::keyboard::KeyCode;
 
 /// The game's answers to what the resolver cannot read from the stack.
 pub(super) struct Env<'a, 'g> {
@@ -59,8 +58,7 @@ impl ItemEnv for Env<'_, '_> {
         total as f32
     }
     fn has_shift_down(&self) -> bool {
-        self.game.keys.contains(&KeyCode::ShiftLeft)
-            || self.game.keys.contains(&KeyCode::ShiftRight)
+        self.game.has_shift_down()
     }
     fn local_time(&self, pattern: &str, _locale: &str, _time_zone: Option<&str>) -> String {
         local_time(pattern)

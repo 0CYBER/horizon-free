@@ -1,10 +1,12 @@
 //! Stored movement state for the resident scene. This binds the validated air,
-//! jump, collision, support, restitution and stored health bindings. Entity lifecycle,
+//! jump, collision, support, restitution and stored health bindings, and
+//! powder snow's block-inside effects and freezing. Entity lifecycle, other
 //! block-inside effects and audiovisual event consumers remain separate work.
 use crate::{Result, assets::Assets, collisions::SceneCollisions, world::World};
 use horizon_core::{
-    geometry::{Aabb, Vec3, VoxelShape, traverse_blocks},
+    geometry::{Aabb, Axis, Direction, Vec3, VoxelShape, traverse_blocks},
     position::BlockPos,
+    random::RandomSource,
 };
 use horizon_world::{
     attribute_map::ValueKind,
@@ -109,6 +111,7 @@ pub enum MotionEvent {
         enabled: bool,
     },
     Health(crate::health::HealthEvent),
+    HurtSound(&'static str),
     Fall(crate::landing::FallEvent),
     Recorded {
         mover: MoverType,
@@ -129,6 +132,16 @@ pub enum MotionEvent {
         position: BlockPos,
         state: BlockStateId,
         fall_distance: f64,
+    },
+    /// `PowderSnowBlock.entityInside`'s server particle: one snowflake at
+    /// `position` with `velocity` (`RandomizationType.ALTERNATIVE`).
+    Snowflake {
+        position: Vec3,
+        velocity: Vec3,
+    },
+    /// `ServerPlayer.onInsideBlock`: the enter_block criterion trigger.
+    EnterBlock {
+        state: BlockStateId,
     },
 }
 pub struct PlayerMotion {
@@ -199,6 +212,23 @@ pub struct PlayerMotion {
     pub health: crate::health::PlayerHealth,
     /// Status effects and armor protection seen by movement and damage.
     pub status: crate::effects::StatusFlags,
+    /// `Entity.isInPowderSnow` / `wasInPowderSnow`.
+    pub in_powder_snow: bool,
+    pub was_in_powder_snow: bool,
+    /// `Entity.DATA_TICKS_FROZEN`.
+    pub ticks_frozen: i32,
+    /// Leather boots on the feet (`PowderSnowBlock.canEntityWalkOnPowderSnow`).
+    pub leather_boots: bool,
+    /// An armor piece in `#freeze_immune_wearables` (`LivingEntity.canFreeze`).
+    pub freeze_immune: bool,
+    /// `Entity.oldPosition`: where this tick started.
+    pub old_position: Vec3,
+    /// `Entity.applyEffectsFromBlocks` runs after travel (always in the game;
+    /// differential fixtures turn it off where their reference does).
+    pub block_effects: bool,
+    /// The powder snow blocks this tick's movement went into: the game
+    /// destroys them if the player is burning, then puts the fire out.
+    pub powder_snow_entered: Vec<BlockPos>,
 }
 fn attribute_error(error: impl std::fmt::Debug) -> io::Error {
     io::Error::other(format!("movement attribute: {error:?}"))
@@ -312,7 +342,67 @@ impl PlayerMotion {
             sync_position: false,
             events: Vec::new(),
             attributes,
+            in_powder_snow: false,
+            was_in_powder_snow: false,
+            ticks_frozen: 0,
+            leather_boots: false,
+            freeze_immune: false,
+            old_position: position,
+            block_effects: true,
+            powder_snow_entered: Vec::new(),
         })
+    }
+    /// `Entity.getTicksRequiredToFreeze`.
+    pub const TICKS_REQUIRED_TO_FREEZE: i32 = 140;
+    /// `Entity.getPercentFrozen`.
+    pub fn percent_frozen(&self) -> f32 {
+        self.ticks_frozen.min(Self::TICKS_REQUIRED_TO_FREEZE) as f32
+            / Self::TICKS_REQUIRED_TO_FREEZE as f32
+    }
+    /// `Entity.isFullyFrozen`.
+    pub fn is_fully_frozen(&self) -> bool {
+        self.ticks_frozen >= Self::TICKS_REQUIRED_TO_FREEZE
+    }
+    /// `LivingEntity.canFreeze`: not a spectator, no freeze-immune armor.
+    pub fn can_freeze(&self) -> bool {
+        !self.spectator && !self.freeze_immune
+    }
+    /// What powder snow's contextual collision asks of the player.
+    pub fn powder_snow_subject(&self) -> crate::collisions::PowderSnowSubject {
+        crate::collisions::PowderSnowSubject {
+            fall_distance: self.fall_distance,
+            falling_block: false,
+            leather_boots: self.leather_boots,
+            walkable_type: false,
+        }
+    }
+    /// `LivingEntity.tryAddFrost`: the frozen slowdown, on anything but air.
+    fn try_add_frost(&mut self, on_air: bool) -> Result<()> {
+        if on_air || self.ticks_frozen <= 0 {
+            return Ok(());
+        }
+        let Some(key) = self.attributes.key("minecraft:movement_speed") else {
+            return Ok(());
+        };
+        let Some(handle) = self
+            .attributes
+            .get_instance(Some(key))
+            .map_err(attribute_error)?
+        else {
+            return Ok(());
+        };
+        let slow = -0.05f32 * self.percent_frozen();
+        let modifier = Modifier::new(
+            "minecraft:powder_snow",
+            f64::from(slow),
+            Operation::AddValue,
+        )?;
+        self.attributes
+            .edit(&handle, |value, observer| {
+                value.add_transient(modifier, observer)
+            })
+            .map_err(attribute_error)?;
+        Ok(())
     }
     pub fn bounds(&self) -> Aabb {
         self.dimensions.bounds(self.position)
@@ -463,6 +553,7 @@ impl MotionWorld<'_, '_, '_> {
         SceneCollisions {
             world: self.scene,
             binding: self.collision_binding,
+            subject: Some(self.player.powder_snow_subject()),
         }
     }
     pub(crate) fn no_player_collision(&mut self, bounds: Aabb) -> Result<bool> {
@@ -517,9 +608,10 @@ impl MotionWorld<'_, '_, '_> {
     pub fn travel_in_air(&mut self, input: Vec3) -> Result<()> {
         living_air::travel_in_air(self, input)
     }
-    /// Dry, standing movement phases of LivingEntity.aiStep, including server
-    /// frost-modifier cleanup with zero frozen ticks. Equipment, interpolation,
-    /// effects and world/entity effects remain unbound. Inputs are the native
+    /// Dry, standing movement phases of LivingEntity.aiStep, including powder
+    /// snow's block-inside effects and server freezing (thawing, the frost
+    /// modifier, freeze damage). Equipment, interpolation, effects and other
+    /// world/entity effects remain unbound. Inputs are the native
     /// float xxa/yya/zza fields, before LivingEntity.applyInput damping.
     pub fn movement_tick(&mut self, input: [f32; 3]) -> Result<()> {
         self.dry_tick(TickInput::Living(input))
@@ -528,6 +620,10 @@ impl MotionWorld<'_, '_, '_> {
     /// caller applies LocalPlayer input preparation once. Empty inventory,
     /// equipment and nearby-entity sets are the current scene domain.
     pub fn player_movement_tick(&mut self, direction: [f32; 2], jumping: bool) -> Result<()> {
+        // Entity.baseTick
+        self.player.was_in_powder_snow = self.player.in_powder_snow;
+        self.player.in_powder_snow = false;
+        self.player.old_position = self.player.position;
         if self.player.jump_trigger_time > 0 {
             self.player.jump_trigger_time -= 1;
         }
@@ -739,7 +835,269 @@ impl MotionWorld<'_, '_, '_> {
         } else {
             self.travel_in_air(input)?;
         }
-        self.player.remove_frost()
+        if self.player.block_effects {
+            self.apply_effects_from_blocks()?;
+        }
+        // LivingEntity.aiStep "freezing" (server).
+        if !self.player.in_powder_snow || !self.player.can_freeze() {
+            self.player.ticks_frozen = (self.player.ticks_frozen - 2).max(0);
+        }
+        self.player.remove_frost()?;
+        let on = self.support(movement_support::LEGACY_SUPPORT_OFFSET)?;
+        let on_air = self.assets.registry.state(self.block(on)).is_none_or(|s| {
+            matches!(
+                s.name.as_str(),
+                "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
+            )
+        });
+        self.player.try_add_frost(on_air)?;
+        if self.player.health.tick_count % 40 == 0
+            && self.player.is_fully_frozen()
+            && self.player.can_freeze()
+        {
+            self.freeze_damage()?;
+        }
+        Ok(())
+    }
+    /// `hurtServer(damageSources().freeze(), 1)` for a fully frozen player.
+    fn freeze_damage(&mut self) -> Result<()> {
+        let id = self
+            .resources
+            .health
+            .damage
+            .id("minecraft:freeze")
+            .ok_or("missing freeze damage type")?;
+        self.player.events.push(MotionEvent::Health(
+            crate::health::HealthEvent::FreezeDamage(1.0),
+        ));
+        let rules = self.scene.health_rules;
+        self.player.hurt(&self.resources.health, rules, id, 1.0)?;
+        Ok(())
+    }
+    /// `Entity.applyEffectsFromBlocks` for the blocks Horizon's player reacts
+    /// to inside its movement path: powder snow (`PowderSnowBlock.entityInside`
+    /// and the FREEZE / EXTINGUISH effects). Pressure plates, tripwires and
+    /// rails are the world tick's scan.
+    pub fn apply_effects_from_blocks(&mut self) -> Result<()> {
+        use horizon_world::entity_move::MovementRecord;
+        let mut movements: Vec<MovementRecord> =
+            self.player.history.records().iter().copied().collect();
+        self.player.history.clear();
+        let position = self.player.position;
+        match movements.last() {
+            None => movements.push(MovementRecord {
+                from: self.player.old_position,
+                to: position,
+                original: None,
+            }),
+            Some(last) if last.to.distance_squared(position) > f64::from(9.999_999_4e-11_f32) => {
+                movements.push(MovementRecord {
+                    from: last.to,
+                    to: position,
+                    original: None,
+                })
+            }
+            _ => {}
+        }
+        // isAffectedByBlocks: no physics for spectators.
+        if self.player.spectator {
+            return Ok(());
+        }
+        let mut visited = std::collections::HashSet::new();
+        let mut entered = Vec::new();
+        for movement in &movements {
+            let mut from = movement.from;
+            let delta = movement.to.subtract(movement.from);
+            let mut budget = 16;
+            match movement.original {
+                Some(original) if delta.length_squared() > 0.0 => {
+                    for axis in Axis::step_order(original) {
+                        let step = delta.component(axis);
+                        if step != 0.0 {
+                            let to = from.relative(
+                                match axis {
+                                    Axis::X => Direction::East,
+                                    Axis::Y => Direction::Up,
+                                    Axis::Z => Direction::South,
+                                },
+                                step,
+                            );
+                            budget -= self.check_inside_blocks(
+                                from,
+                                to,
+                                &mut visited,
+                                &mut entered,
+                                budget,
+                            )?;
+                            from = to;
+                        }
+                    }
+                }
+                _ => {
+                    budget -= self.check_inside_blocks(
+                        movement.from,
+                        movement.to,
+                        &mut visited,
+                        &mut entered,
+                        16,
+                    )?;
+                }
+            }
+            if budget <= 0 {
+                self.check_inside_blocks(movement.to, movement.to, &mut visited, &mut entered, 1)?;
+            }
+        }
+        // InsideBlockEffectApplier.StepBasedCollector: the blocks entered
+        // at one step (a sweep iteration differing from the last) form a
+        // group whose EXTINGUISH callbacks (the game destroys those blocks if
+        // the player burns), FREEZE and EXTINGUISH apply once, in order.
+        let mut last_step = -1;
+        let mut groups = 0;
+        for (index, &(step, p)) in entered.iter().enumerate() {
+            if index == 0 || step != last_step {
+                groups += 1;
+                last_step = step;
+            }
+            if groups == 1 {
+                // A later group finds the fire already out.
+                self.player.powder_snow_entered.push(p);
+            }
+        }
+        for _ in 0..groups {
+            if self.player.health.dead_or_dying() {
+                break;
+            }
+            self.player.in_powder_snow = true;
+            if self.player.can_freeze() {
+                self.player.ticks_frozen =
+                    (self.player.ticks_frozen + 1).min(PlayerMotion::TICKS_REQUIRED_TO_FREEZE);
+            }
+        }
+        Ok(())
+    }
+    /// `Entity.checkInsideBlocks(from, to, ...)`: the blocks the box at `to`
+    /// sweeps through from `from`; returns the iterations used plus one.
+    fn check_inside_blocks(
+        &mut self,
+        from: Vec3,
+        to: Vec3,
+        visited: &mut std::collections::HashSet<i64>,
+        entered: &mut Vec<(i32, BlockPos)>,
+        max_iterations: i32,
+    ) -> Result<i32> {
+        let deflated = self.player.dimensions.bounds(to).deflate(Vec3::new(
+            f64::from(1.0e-5_f32),
+            f64::from(1.0e-5_f32),
+            f64::from(1.0e-5_f32),
+        ));
+        let mut hits = Vec::new();
+        let mut iterations = 0;
+        let alive = !self.player.health.dead_or_dying();
+        horizon_core::geometry::sweep_intersected_blocks(
+            from,
+            to,
+            deflated,
+            1_000_000,
+            |p, iteration| {
+                if !alive || iteration >= max_iterations {
+                    return false;
+                }
+                iterations = iteration;
+                hits.push((iteration, p));
+                true
+            },
+        )
+        .map_err(|e| format!("block sweep: {e:?}"))?;
+        for (step, p) in hits {
+            let state = self.block(p);
+            let Some(definition) = self.assets.registry.state(state) else {
+                continue;
+            };
+            let name = definition.name.as_str();
+            if matches!(
+                name,
+                "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
+            ) {
+                continue;
+            }
+            let powder_snow = name == "minecraft:powder_snow";
+            // getEntityInsideCollisionShape is the whole block but for powder
+            // snow (its collision shape, the whole block when it is empty),
+            // filled cauldrons, end portals and tripwires; Horizon doesn't
+            // follow the player into those last three.
+            if matches!(
+                name,
+                "minecraft:water_cauldron"
+                    | "minecraft:lava_cauldron"
+                    | "minecraft:powder_snow_cauldron"
+                    | "minecraft:end_portal"
+                    | "minecraft:tripwire"
+            ) {
+                continue;
+            }
+            let inside = !powder_snow || {
+                let context = self.context();
+                let binding = self.collision_binding;
+                let shape = binding.collision_shape_with_context(
+                    &mut self.collisions(),
+                    state,
+                    p,
+                    &context,
+                )?;
+                shape.is_empty() || shape.boxes() == VoxelShape::block().boxes() || {
+                    let boxes: Vec<_> = shape
+                        .moved(Vec3::new(f64::from(p.x), f64::from(p.y), f64::from(p.z)))
+                        .boxes()
+                        .to_vec();
+                    self.player
+                        .dimensions
+                        .bounds(from)
+                        .collided_along_vector(to.subtract(from), &boxes)
+                }
+            };
+            if inside && visited.insert(p.pack()) {
+                if powder_snow {
+                    self.powder_snow_inside(p)?;
+                    entered.push((step, p));
+                }
+                // ServerPlayer.onInsideBlock
+                self.player.events.push(MotionEvent::EnterBlock { state });
+            }
+        }
+        Ok(iterations + 1)
+    }
+    /// `PowderSnowBlock.entityInside` for the player: stuck while the block
+    /// at its feet is powder snow, with a snowflake now and then (server).
+    fn powder_snow_inside(&mut self, p: BlockPos) -> Result<()> {
+        let feet = BlockPos::containing(self.player.position);
+        let in_block = self
+            .assets
+            .registry
+            .state(self.block(feet))
+            .is_some_and(|s| s.name == "minecraft:powder_snow");
+        if !in_block {
+            return Ok(());
+        }
+        // Entity.makeStuckInBlock
+        EntityMoveWorld::reset_fall_distance(self)?;
+        self.player.stuck_multiplier = Vec3::new(f64::from(0.9_f32), 1.5, f64::from(0.9_f32));
+        // ServerPlayer.getKnownMovement: this tick's movement.
+        let known = self.player.position.subtract(self.player.old_position);
+        let random = &mut self.scene.random;
+        if (known.x != 0.0 || known.z != 0.0) && random.next_boolean() {
+            // Mth.randomBetween(random, -1, 1) * (1 / 12)
+            let xa = (random.next_float() * 2.0 - 1.0) * 0.083_333_336_f32;
+            let za = (random.next_float() * 2.0 - 1.0) * 0.083_333_336_f32;
+            self.player.events.push(MotionEvent::Snowflake {
+                position: Vec3::new(
+                    self.player.position.x,
+                    f64::from(p.y + 1),
+                    self.player.position.z,
+                ),
+                velocity: Vec3::new(f64::from(xa), f64::from(0.05_f32), f64::from(za)),
+            });
+        }
+        Ok(())
     }
     pub fn jump_from_ground(&mut self) -> Result<()> {
         living_motion::jump_from_ground(self)?;
@@ -1032,6 +1390,7 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
         let mut collisions = SceneCollisions {
             world: self.scene,
             binding: self.collision_binding,
+            subject: Some(self.player.powder_snow_subject()),
         };
         self.player.ground.set_with_movement(
             below,
@@ -1364,10 +1723,10 @@ impl LivingAirWorld for MotionWorld<'_, '_, '_> {
         self.player.jumping
     }
     fn was_in_powder_snow(&self) -> bool {
-        false
+        self.player.was_in_powder_snow
     }
     fn can_walk_powder_snow(&mut self) -> Result<bool> {
-        Ok(false)
+        Ok(self.player.leather_boots)
     }
     fn levitation_amplifier(&mut self) -> Result<Option<i32>> {
         Ok(self.player.status.levitation)
@@ -1463,6 +1822,68 @@ impl LivingMotionWorld for MotionWorld<'_, '_, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn player_fire_damage_queues_hurt_sound_only_for_fresh_hits() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        for name in ["on_fire", "in_fire", "lava"] {
+            let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
+            let source = resources
+                .health
+                .damage
+                .id(&format!("minecraft:{name}"))
+                .unwrap();
+            assert!(
+                player
+                    .hurt(&resources.health, Default::default(), source, 1.0)
+                    .unwrap()
+            );
+            assert_eq!(
+                player
+                    .events
+                    .iter()
+                    .filter(|e| matches!(
+                        e,
+                        MotionEvent::HurtSound("minecraft:entity.player.hurt_on_fire")
+                    ))
+                    .count(),
+                1
+            );
+            player.events.clear();
+            assert!(
+                !player
+                    .hurt(&resources.health, Default::default(), source, 1.0)
+                    .unwrap()
+            );
+            assert!(
+                !player
+                    .events
+                    .iter()
+                    .any(|e| matches!(e, MotionEvent::HurtSound(_)))
+            );
+            for _ in 0..20 {
+                player.health.advance_clock();
+            }
+            player.invulnerable = true;
+            player.events.clear();
+            assert!(
+                !player
+                    .hurt(&resources.health, Default::default(), source, 1.0)
+                    .unwrap()
+            );
+            assert!(
+                !player
+                    .events
+                    .iter()
+                    .any(|e| matches!(e, MotionEvent::HurtSound(_)))
+            );
+        }
+    }
 
     /// Footsteps on the prepared vanilla resources, when they are present:
     /// none while standing (gravity still moves the player every tick), one

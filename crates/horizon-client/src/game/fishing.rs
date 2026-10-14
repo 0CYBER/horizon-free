@@ -444,6 +444,7 @@ impl Game<'_> {
         let mut scene = SceneCollisions {
             world: &self.world,
             binding: self.collision,
+            subject: None,
         };
         if let Ok(moved) = scene.resolve(bounds(h.position), h.velocity, 0.0, h.on_ground) {
             let horizontal =

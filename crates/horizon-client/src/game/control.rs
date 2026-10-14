@@ -166,10 +166,12 @@ impl Game<'_> {
                     "down" => self.control_key_down(key)?,
                     "up" => {
                         self.keys.remove(&key);
+                        self.physical_keys.remove(&key);
                     }
                     "tap" => {
                         self.control_key_down(key)?;
                         self.keys.remove(&key);
+                        self.physical_keys.remove(&key);
                     }
                     other => {
                         return Err(
@@ -181,6 +183,7 @@ impl Game<'_> {
             }
             "release" => {
                 self.keys.clear();
+                self.physical_keys.clear();
                 self.left = false;
                 self.right = false;
                 ok()
@@ -480,14 +483,7 @@ impl Game<'_> {
                 ok()
             }
             "quit" => {
-                if self.title.is_none() {
-                    // Player.closeContainer: menu items go back before saving.
-                    self.close_container();
-                    if self.remote.is_none() {
-                        self.stats.custom("leave_game", 1);
-                    }
-                    self.save_game()?;
-                }
+                self.save_for_exit()?;
                 event_loop.exit();
                 ok()
             }
@@ -506,6 +502,7 @@ impl Game<'_> {
     }
 
     fn control_key_down(&mut self, key: KeyCode) -> Result<()> {
+        self.physical_keys.insert(key);
         if self.screen == Screen::Chat {
             self.chat_key_code(key, None);
             return Ok(());

@@ -722,6 +722,7 @@ impl Game<'_> {
         let mut scene = SceneCollisions {
             world: &self.world,
             binding: self.collision,
+            subject: None,
         };
         let mut amount = -1.0;
         // Level.getCollisions(null, aabb): CollisionContext.empty().

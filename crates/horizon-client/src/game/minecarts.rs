@@ -304,6 +304,7 @@ impl Game<'_> {
         let mut scene = SceneCollisions {
             world: &self.world,
             binding: self.collision,
+            subject: None,
         };
         if let Ok(moved) = scene.resolve(c.bounds(), delta, 0.0, c.on_ground) {
             c.position = Vec3::new(

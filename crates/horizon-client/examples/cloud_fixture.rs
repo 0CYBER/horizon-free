@@ -20,10 +20,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 write!(output, " {x},{z},{direction},{}", u8::from(inside)).unwrap();
             }
         };
+        let radius = if *kind == 2 {
+            clouds::radius_cells(*x)
+        } else {
+            *x
+        };
         if *kind == 0 {
             cell(*x, *z, *neighbors);
         } else {
-            for (x, z) in clouds::cells(*x) {
+            for (x, z) in clouds::cells(radius) {
                 cell(x, z, 0);
             }
         }

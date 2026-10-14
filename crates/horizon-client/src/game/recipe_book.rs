@@ -169,7 +169,7 @@ impl Game<'_> {
     pub(super) fn recipe_key(&mut self, event: &winit::event::KeyEvent) {
         use winit::keyboard::{KeyCode, PhysicalKey};
         let ctrl = self.keys.contains(&KeyCode::ControlLeft);
-        let shift = self.keys.contains(&KeyCode::ShiftLeft);
+        let shift = self.has_shift_down();
         let Some(search) = self.recipe_ui.search.as_mut() else {
             return;
         };
@@ -620,8 +620,23 @@ impl Game<'_> {
         false
     }
     fn shift_down(&self) -> bool {
-        use winit::keyboard::KeyCode;
-        self.keys.contains(&KeyCode::ShiftLeft) || self.keys.contains(&KeyCode::ShiftRight)
+        self.has_shift_down()
+    }
+    /// The open screen's book for `hasClickedOutside`: (visible, selected tab
+    /// hovered); None when the screen has no book.
+    pub(super) fn recipe_book_area(&self, batch: &HudBatch) -> Option<(bool, bool)> {
+        let book = self.active_book()?;
+        if !self.book_open(book) {
+            return Some((false, false));
+        }
+        let (xo, yo) = self.book_origin(batch);
+        let tabs = &self.recipe_ui.view.tabs;
+        let selected = self.recipe_ui.tab.unwrap_or(Tab::Search);
+        let hovered = tabs.iter().position(|t| *t == selected).is_some_and(|n| {
+            let (x, y) = self.tab_pos(xo, yo, n);
+            inside(self.cursor, x, y, 35.0, 27.0)
+        });
+        Some((true, hovered))
     }
     /// The grid, result and furnace slots clicks on which end a ghost recipe.
     fn is_book_slot(&self, book: BookType, slot: usize) -> bool {

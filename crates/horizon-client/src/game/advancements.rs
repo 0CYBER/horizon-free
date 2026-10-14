@@ -338,6 +338,10 @@ impl Game<'_> {
             baby: m.is_baby(),
             on_ground: m.on_ground,
             equipment,
+            components: horizon_client::mobs::finalize::variant_component(m)
+                .map(|(id, value)| (id.to_owned(), value))
+                .into_iter()
+                .collect(),
             ..Default::default()
         }
     }
@@ -575,6 +579,28 @@ impl Game<'_> {
                 block_pos: None,
             };
             adv::conditions(&c["player"], &pctx, w) && adv::item(&c["item"], &it, w)
+        });
+    }
+    /// `EnterBlockTrigger`: the block, its state properties and the player.
+    pub(super) fn trigger_enter_block(&mut self, state: horizon_world::registry::BlockStateId) {
+        let Some(definition) = self.res.assets.registry.state(state).cloned() else {
+            return;
+        };
+        let me = self.player_entity();
+        self.trigger("minecraft:enter_block", move |c, w| {
+            let block_ok = adv::id_matches(&c["blocks"], "block", &definition.name, w);
+            let state_ok = c["state"]
+                .as_object()
+                .into_iter()
+                .flatten()
+                .all(|(k, v)| definition.properties.get(k).map(String::as_str) == v.as_str());
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            block_ok && state_ok && adv::conditions(&c["player"], &pctx, w)
         });
     }
     /// `ItemUsedOnLocationTrigger` (placed_block, item_used_on_block).

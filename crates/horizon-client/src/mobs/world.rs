@@ -63,6 +63,7 @@ impl MobWorld<'_> {
         let mut scene = SceneCollisions {
             world: self.world,
             binding: self.collision,
+            subject: None,
         };
         let result = traverse_blocks(from, to, 512, |p: BlockPos| {
             let state = self.world.block(p.x, p.y, p.z);
@@ -87,6 +88,7 @@ impl MobWorld<'_> {
         let mut scene = SceneCollisions {
             world: self.world,
             binding: self.collision,
+            subject: None,
         };
         let full = horizon_core::geometry::Aabb::new(Vec3::ZERO, Vec3::new(1.0, 1.0, 1.0));
         let result = traverse_blocks(from, to, 512, |p: BlockPos| {
@@ -118,6 +120,7 @@ impl MobWorld<'_> {
         let mut scene = SceneCollisions {
             world: self.world,
             binding: self.collision,
+            subject: None,
         };
         let result = traverse_blocks(from, to, 512, |p: BlockPos| {
             let state = self.world.block(p.x, p.y, p.z);
@@ -138,6 +141,7 @@ impl MobWorld<'_> {
         let mut scene = SceneCollisions {
             world: self.world,
             binding: self.collision,
+            subject: None,
         };
         let result = traverse_blocks(from, to, 512, |p: BlockPos| {
             let state = self.world.block(p.x, p.y, p.z);
@@ -157,6 +161,7 @@ impl MobWorld<'_> {
         let mut scene = SceneCollisions {
             world: self.world,
             binding: self.collision,
+            subject: None,
         };
         let state = self.world.block(p[0], p[1], p[2]);
         self.collision

@@ -1,6 +1,6 @@
 //! Command execution (the `execute` side of each vanilla command class):
 //! entity selectors resolved against the game, vanilla feedback and errors.
-mod compute;
+pub(super) mod compute;
 mod data;
 mod effects;
 pub(super) mod execute;

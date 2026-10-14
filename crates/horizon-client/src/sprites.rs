@@ -21,11 +21,11 @@ impl SpriteAnimation {
     }
     pub fn resized_pixels(&self, frame: usize, width: u32, height: u32) -> Vec<u8> {
         let source = self.pixels(frame);
+        let side = (source.len() / 4).isqrt() as u32;
         let mut out = Vec::with_capacity((width * height * 4) as usize);
         for y in 0..height {
             for x in 0..width {
-                let offset = ((y * SPRITE_SIZE / height * SPRITE_SIZE + x * SPRITE_SIZE / width)
-                    * 4) as usize;
+                let offset = ((y * side / height * side + x * side / width) * 4) as usize;
                 out.extend_from_slice(&source[offset..offset + 4]);
             }
         }
@@ -38,22 +38,96 @@ impl SpriteAnimation {
 
 #[derive(Default)]
 pub struct Sprites {
+    /// Edge length of every array layer and the layers' current frames, set
+    /// by [`Sprites::finish`].
     pub size: u32,
     pub pixels: Vec<u8>,
     pub layers: BTreeMap<String, u32>,
     pub animations: Vec<SpriteAnimation>,
     pub opaque: Vec<bool>,
     pub translucent: Vec<bool>,
+    /// Each layer's frames at the texture's own resolution (square), and the
+    /// frame shown first.
+    native: Vec<(u32, Arc<Vec<Vec<u8>>>, usize)>,
 }
-/// Edge length of every sprite array layer.
-// Flow sprites are 32 square: each fluid face samples a 16-texel subregion.
-// shortcut: HD frames above 32 are resampled; use variable-resolution storage for HD-pack parity.
-pub const SPRITE_SIZE: u32 = 32;
+/// Edge length of vanilla's block textures: the smallest array layer.
+pub const SPRITE_SIZE: u32 = 16;
+/// Largest sprite array (all layers of the top mip level): resource packs
+/// with bigger textures are sampled down to fit.
+const MAX_ARRAY_BYTES: u64 = 256 << 20;
+/// Nearest-resample a square RGBA frame to another square size.
+fn resample(frame: &[u8], from: u32, to: u32) -> Vec<u8> {
+    if from == to {
+        return frame.to_vec();
+    }
+    let mut out = Vec::with_capacity((to * to * 4) as usize);
+    for row in 0..to {
+        let source_row = row * from / to;
+        for column in 0..to {
+            let offset = ((source_row * from + column * from / to) * 4) as usize;
+            out.extend_from_slice(&frame[offset..offset + 4]);
+        }
+    }
+    out
+}
 impl Sprites {
+    /// Lay every layer out at one size: the largest texture's (resource packs
+    /// may ship 32x, 64x... textures, like vanilla's stitched atlas), rounded
+    /// up to a power of two and limited to [`MAX_ARRAY_BYTES`]. Smaller
+    /// textures are scaled up by whole pixels, so UVs stay per layer.
+    pub fn finish(&mut self) {
+        let layers = self.native.len().max(1) as u64;
+        let largest = self.native.iter().map(|n| n.0).max().unwrap_or(SPRITE_SIZE);
+        let mut size = largest.max(SPRITE_SIZE).next_power_of_two();
+        while size > SPRITE_SIZE && layers * u64::from(size * size) * 4 > MAX_ARRAY_BYTES {
+            size /= 2;
+        }
+        let mut resized = Vec::with_capacity(self.native.len());
+        self.pixels.clear();
+        for (from, frames, initial) in &self.native {
+            let frames: Arc<Vec<Vec<u8>>> =
+                Arc::new(frames.iter().map(|f| resample(f, *from, size)).collect());
+            self.pixels.extend_from_slice(&frames[*initial]);
+            resized.push(frames);
+        }
+        for animation in &mut self.animations {
+            animation.frames = resized[animation.layer as usize].clone();
+        }
+        self.size = size;
+    }
+    /// The layer of a texture, added on first use. A texture that is missing
+    /// or does not load (a resource pack's filter or a broken file) becomes
+    /// vanilla's missing texture, as in a stitched atlas.
     pub fn insert(&mut self, root: &Path, name: &str) -> Result<u32> {
         if let Some(layer) = self.layers.get(name) {
             return Ok(*layer);
         }
+        match self.load(root, name) {
+            Ok(layer) => Ok(layer),
+            Err(e) => {
+                eprintln!("Horizon: using the missing texture for {name}: {e}");
+                // MissingTextureAtlasSprite.generateMissingImage: 16x16,
+                // magenta and black quarters.
+                let frame: Vec<u8> = (0..SPRITE_SIZE * SPRITE_SIZE)
+                    .flat_map(|i| {
+                        let (x, y) = (i % SPRITE_SIZE, i / SPRITE_SIZE);
+                        if (y < SPRITE_SIZE / 2) ^ (x < SPRITE_SIZE / 2) {
+                            [248, 0, 248, 255]
+                        } else {
+                            [0, 0, 0, 255]
+                        }
+                    })
+                    .collect();
+                let layer = u32::try_from(self.layers.len())?;
+                self.opaque.push(true);
+                self.translucent.push(false);
+                self.layers.insert(name.to_owned(), layer);
+                self.native.push((SPRITE_SIZE, Arc::new(vec![frame]), 0));
+                Ok(layer)
+            }
+        }
+    }
+    fn load(&mut self, root: &Path, name: &str) -> Result<u32> {
         let (namespace, path) = name.split_once(':').ok_or("invalid sprite identifier")?;
         let path = root.join(format!("assets/{namespace}/textures/{path}.png"));
         let metadata = match fs::read_to_string(path.with_extension("png.mcmeta")) {
@@ -103,18 +177,19 @@ impl Sprites {
         let layer = u32::try_from(self.layers.len())?;
         let columns = info.width / width;
         let count = columns * (info.height / height);
+        // Layers are square; a frame of another shape is nearest-resampled to
+        // its longer side so UVs (normalized per layer) are unchanged.
+        let side = width.max(height);
         let mut frames = Vec::new();
         for index in 0..count {
             let x = index % columns * width;
             let y = index / columns * height;
-            // Every array layer is SPRITE_SIZE square; other sizes are
-            // nearest-resampled so UVs (normalized per layer) are unchanged.
-            let mut frame = Vec::with_capacity((SPRITE_SIZE * SPRITE_SIZE * 4) as usize);
-            for row in 0..SPRITE_SIZE {
-                let source_row = y + row * height / SPRITE_SIZE;
-                for column in 0..SPRITE_SIZE {
+            let mut frame = Vec::with_capacity((side * side * 4) as usize);
+            for row in 0..side {
+                let source_row = y + row * height / side;
+                for column in 0..side {
                     let offset =
-                        ((source_row * info.width + x + column * width / SPRITE_SIZE) * 4) as usize;
+                        ((source_row * info.width + x + column * width / side) * 4) as usize;
                     frame.extend_from_slice(&pixels[offset..offset + 4]);
                 }
             }
@@ -145,8 +220,7 @@ impl Sprites {
                 .any(|p| p[3] != 0 && p[3] != 255),
         );
         self.layers.insert(name.to_owned(), layer);
-        self.size = SPRITE_SIZE;
-        self.pixels.extend_from_slice(&frames[initial]);
+        self.native.push((side, frames, initial));
         Ok(layer)
     }
 }
@@ -169,6 +243,17 @@ pub(crate) fn test_animation(size: u32, layer: u32) -> SpriteAnimation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn hud_animation_resampling_uses_the_actual_frame_size() {
+        for size in [16, 32, 64] {
+            let animation = test_animation(size, 0);
+            let resized = animation.resized_pixels(1, 16, 16);
+            let last = (15 * size / 16) as u8;
+            assert_eq!(&resized[15 * 4..16 * 4], &[last, 0, 99, 255]);
+            assert_eq!(&resized[255 * 4..256 * 4], &[last, last, 99, 255]);
+        }
+    }
+
     #[test]
     fn native_fire_sprites_register_full_animation_sequences() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
@@ -233,6 +318,7 @@ mod tests {
         fs::write(path.with_extension("png.mcmeta"), r#"{"animation":{}}"#).unwrap();
         let mut sprites = Sprites::default();
         sprites.insert(&root, "test:flow").unwrap();
+        sprites.finish();
         let size = sprites.size;
         let initial = sprites.pixels.clone();
         let animation = sprites.animations[0].clone();

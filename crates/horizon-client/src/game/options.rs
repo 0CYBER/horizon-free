@@ -121,11 +121,9 @@ impl Game<'_> {
                     self.reload_packs();
                 }
                 Event::OpenPackFolder => {
-                    let dir = std::env::current_dir()
-                        .unwrap_or_default()
-                        .join("resourcepacks");
+                    let dir = super::packs::packs_dir();
                     let _ = std::fs::create_dir_all(&dir);
-                    let _ = std::process::Command::new("xdg-open").arg(&dir).spawn();
+                    super::packs::open_folder(&dir);
                 }
             }
         }

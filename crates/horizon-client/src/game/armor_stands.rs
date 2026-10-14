@@ -162,6 +162,7 @@ impl Game<'_> {
         let mut scene = horizon_client::collisions::SceneCollisions {
             world: &self.world,
             binding: self.collision,
+            subject: None,
         };
         if !scene.unobstructed(bounds).unwrap_or(false)
             || self
@@ -365,6 +366,7 @@ impl Game<'_> {
         let mut scene = horizon_client::collisions::SceneCollisions {
             world: &self.world,
             binding: self.collision,
+            subject: None,
         };
         let mut dead = Vec::new();
         for (i, a) in self.armor_stands.iter_mut().enumerate() {

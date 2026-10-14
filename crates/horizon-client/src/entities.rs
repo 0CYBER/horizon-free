@@ -132,6 +132,7 @@ impl ItemEntity {
             let mut scene = SceneCollisions {
                 world,
                 binding: collision,
+                subject: None,
             };
             let wanted = self.velocity;
             let moved = scene
@@ -333,6 +334,7 @@ impl ExperienceOrb {
         let mut scene = SceneCollisions {
             world,
             binding: collision,
+            subject: None,
         };
         let wanted = self.velocity;
         let moved = scene

@@ -142,6 +142,7 @@ impl Game<'_> {
         let mut scene = SceneCollisions {
             world: &self.world,
             binding: self.collision,
+            subject: None,
         };
         no_collision_empty(
             &mut scene,

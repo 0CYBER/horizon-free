@@ -642,13 +642,12 @@ impl Game<'_> {
         self.build_registries();
         self.sync_rules();
     }
-    /// Save game rules, the clock and the difficulty beside level.dat.
+    /// Save the clock and the difficulty beside level.dat (Level.write saves
+    /// the game rules: a second writer of game_rules.dat could leave it with
+    /// the rules loaded when the world opened).
     pub(super) fn save_world_state(&mut self) {
         if self.world_root.as_os_str().is_empty() {
             return;
-        }
-        if let Err(e) = self.ui.rules.save(&self.world_root) {
-            eprintln!("Horizon: failed to save game rules: {e}");
         }
         use horizon_world::nbt::Tag;
         let c = self.ui.clock;

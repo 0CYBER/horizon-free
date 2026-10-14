@@ -571,7 +571,7 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::ZombifiedPiglin if m.ai.target.is_some() => "entity.zombified_piglin.angry",
         Species::Piglin if m.ai.target.is_some() => "entity.piglin.angry",
         Species::Hoglin if m.ai.target.is_some() => "entity.hoglin.angry",
-        _ => m.kind.sounds[0],
+        _ => voice_sounds(m)[0],
     };
     let _ = w;
     if !sound.is_empty() {
@@ -633,7 +633,23 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
     if m.kind.flags.climber {
         m.climbing = m.horizontal_collision;
     }
-    // AgeableMob.aiStep
+    // AgeableMob.aiStep: a forced age-up's particles (positions drawn on the
+    // server too), then the age.
+    if m.extra.forced_age_timer > 0 {
+        if m.extra.forced_age_timer % 4 == 0 {
+            let (w, h) = (f64::from(m.width()), f64::from(m.height()));
+            let r = &mut m.random;
+            let x = m.position.x + w * (2.0 * r.next_double() - 1.0);
+            let y = m.position.y + h * r.next_double() + 0.5;
+            let z = m.position.z + w * (2.0 * r.next_double() - 1.0);
+            events.push(MobEvent::Particles {
+                kind: "happy_villager",
+                at: [x, y, z],
+                count: 1,
+            });
+        }
+        m.extra.forced_age_timer -= 1;
+    }
     if m.alive() {
         if m.extra.age < 0 {
             let (bw, bh, _) = m.dims();
@@ -996,8 +1012,98 @@ pub fn voice_sounds(m: &Mob) -> [&'static str; 3] {
     match m.species() {
         Species::Nautilus | Species::ZombieNautilus => super::nautilus::sounds(m),
         Species::SulfurCube => super::sulfur_cube::sounds(m),
+        // The sound variant's baby_sounds (classic sets, like the rest here).
+        Species::Pig if m.is_baby() => [
+            "entity.baby_pig.ambient",
+            "entity.baby_pig.hurt",
+            "entity.baby_pig.death",
+        ],
+        Species::Chicken if m.is_baby() => [
+            "entity.baby_chicken.ambient",
+            "entity.baby_chicken.hurt",
+            "entity.baby_chicken.death",
+        ],
         _ => m.kind.sounds,
     }
+}
+/// `Animal.mobInteract` with its food in hand: an adult that can fall in
+/// love does, a baby grows up by a tenth, and either plays its eating sound
+/// (`Strider.mobInteract` plays its own afterwards). `None` when the animal
+/// does not take the food; otherwise the sound to play, if any.
+pub fn feed_animal(
+    m: &mut Mob,
+    level: &mut impl RandomSource,
+) -> Option<Option<(&'static str, f32, f32)>> {
+    if m.extra.age == 0 && m.extra.in_love <= 0 {
+        m.extra.in_love = 600;
+        m.extra.love_player = true;
+    } else if m.extra.age < 0 {
+        // AgeableMob.ageUp(getSpeedUpSecondsWhenFeeding(-age), true): a tenth.
+        let secs = ((-m.extra.age / 20) as f32 * 0.1) as i32;
+        age_up(m, secs, true);
+    } else {
+        return None;
+    }
+    let mut sound = eating_sound(m, level);
+    if m.species() == Species::Strider && !m.silent {
+        let pitch = 1.0 + (m.random.next_float() - m.random.next_float()) * 0.2;
+        sound = Some(("entity.strider.eat", 1.0, pitch));
+    }
+    Some(sound)
+}
+/// `AgeableMob.ageUp(seconds, forced)`.
+pub fn age_up(m: &mut Mob, seconds: i32, forced: bool) {
+    let age = m.extra.age;
+    let grown = (age + seconds * 20).min(0);
+    m.extra.age = grown;
+    if forced {
+        m.extra.forced_age += grown - age;
+        if m.extra.forced_age_timer == 0 {
+            m.extra.forced_age_timer = 40;
+        }
+    }
+    if m.extra.age == 0 {
+        m.extra.age = m.extra.forced_age;
+    }
+}
+/// `Animal.playEatingSound` (empty) and its overrides, as (sound, volume,
+/// pitch); `level` is the level's random. Pigs and cats use the classic sound
+/// set, like their other sounds here.
+pub fn eating_sound(
+    m: &mut Mob,
+    level: &mut impl RandomSource,
+) -> Option<(&'static str, f32, f32)> {
+    let baby = m.is_baby();
+    // Mth.randomBetween(level.getRandom(), 0.8, 1.2).
+    let mut between = || level.next_float() * 0.4 + 0.8;
+    let (sound, volume, pitch, entity_sound) = match m.species() {
+        // makeSound: getSoundVolume, getVoicePitch.
+        Species::Armadillo | Species::Pig | Species::SulfurCube => {
+            let sound = match m.species() {
+                Species::Armadillo => "entity.armadillo.eat",
+                Species::Pig if baby => "entity.baby_pig.eat",
+                Species::Pig => "entity.pig.eat",
+                _ => "entity.small_sulfur_cube.eat",
+            };
+            let pitch = m.voice_pitch();
+            (sound, sound_volume(m), pitch, true)
+        }
+        // playSound(sound, 1, 1).
+        Species::Cat if baby => ("entity.baby_cat.eat", 1.0, 1.0, true),
+        Species::Cat => ("entity.cat.eat", 1.0, 1.0, true),
+        Species::Fox => ("entity.fox.eat", 1.0, 1.0, true),
+        // level().playSound(null, this, sound, NEUTRAL, volume, pitch).
+        Species::Frog => ("entity.frog.eat", 2.0, 1.0, false),
+        Species::Goat if m.extra.screaming => ("entity.goat.screaming.eat", 1.0, between(), false),
+        Species::Goat => ("entity.goat.eat", 1.0, between(), false),
+        Species::Sniffer => ("entity.sniffer.eat", 1.0, between(), false),
+        _ => return None,
+    };
+    // Entity.playSound is skipped for a silent entity.
+    if entity_sound && m.silent {
+        return None;
+    }
+    Some((sound, volume, pitch))
 }
 pub fn sound_volume(m: &Mob) -> f32 {
     match m.species() {

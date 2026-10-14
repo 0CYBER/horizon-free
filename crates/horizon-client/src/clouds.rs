@@ -32,6 +32,12 @@ pub fn faces(mask: u16) -> impl Iterator<Item = (u8, bool)> {
         )
 }
 
+/// `CloudRenderer.prepare`: the cell radius for the Cloud Distance option
+/// (in chunks), independent of the render distance.
+pub fn radius_cells(cloud_range_chunks: i32) -> i32 {
+    ((cloud_range_chunks * 16) as f32 / 12.0).ceil() as i32
+}
+
 /// CloudRenderer builds cells in expanding Manhattan rings, nearest first.
 pub fn cells(radius: i32) -> impl Iterator<Item = (i32, i32)> {
     (0..=2 * radius).flat_map(move |ring| {
@@ -69,6 +75,12 @@ mod tests {
         assert_eq!(face_mask(2, 2, 10.0, [true; 4]), 1 | 4 | 16);
         assert_eq!(face_mask(-2, -2, -5.0, [true; 4]), 2 | 8 | 32);
         assert_eq!(face_mask(2, 2, 0.0, [false; 4]), 3);
+    }
+    #[test]
+    fn cloud_distance_sets_the_radius() {
+        assert_eq!(radius_cells(2), 3);
+        assert_eq!(radius_cells(12), 16);
+        assert_eq!(radius_cells(128), 171);
     }
     #[test]
     fn connected_cells_have_no_exterior_walls() {

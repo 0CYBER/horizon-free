@@ -12,6 +12,27 @@ use std::{
     sync::Arc,
 };
 
+/// A fire starter's use sound: `SoundEvents.FIRECHARGE_USE` or
+/// `FLINTANDSTEEL_USE`.
+pub fn fire_starter_sound(fire_charge: bool) -> &'static str {
+    if fire_charge {
+        "minecraft:item.firecharge.use"
+    } else {
+        "minecraft:item.flintandsteel.use"
+    }
+}
+
+/// The pitch of a fire starter's use sound, from the level's random:
+/// `FlintAndSteelItem.useOn`'s `nextFloat() * 0.4 + 0.8`, or
+/// `FireChargeItem.playSound`'s `(nextFloat() - nextFloat()) * 0.2 + 1.0`.
+pub fn fire_starter_pitch(fire_charge: bool, random: &mut impl RandomSource) -> f32 {
+    if fire_charge {
+        (random.next_float() - random.next_float()) * 0.2 + 1.0
+    } else {
+        random.next_float() * 0.4 + 0.8
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ToolRule {
     pub blocks: Vec<String>,
@@ -37,6 +58,8 @@ pub struct ItemInfo {
     pub fuel: Option<(Value, Value)>,
     /// `brewing_fuel`: uses and speed-multiplier provider references.
     pub brewing_fuel: Option<(Value, Value)>,
+    /// `compostable.layers`: the layers provider (`ComposterBlock.addLayer`).
+    pub compostable: Option<Value>,
     /// Item left behind after crafting/fuel use (e.g. bucket).
     pub remainder: Option<String>,
     /// `equippable.slot` (head, chest, legs, feet, ...).
@@ -467,6 +490,7 @@ impl Items {
                     brewing_fuel: c
                         .get("minecraft:brewing_fuel")
                         .map(|f| (f["uses"].clone(), f["speed_multiplier"].clone())),
+                    compostable: c.get("minecraft:compostable").map(|f| f["layers"].clone()),
                     remainder: c["minecraft:use_remainder"]["id"]
                         .as_str()
                         .or(c["minecraft:crafting_remainder"]["id"].as_str())

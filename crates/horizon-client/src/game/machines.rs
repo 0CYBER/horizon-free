@@ -41,6 +41,9 @@ enum Kind {
     Crafter,
     /// `BrewingStandBlockEntity` (a `WorldlyContainer`).
     Brewing,
+    /// `ComposterBlock.getContainer` at this level (a `WorldlyContainerHolder`
+    /// without a block entity): input below 7, empty at 7, bone meal at 8.
+    Composter(i32),
 }
 
 /// A container: one block entity, or a double chest (`CompoundContainer`).
@@ -71,6 +74,9 @@ impl View {
             (Kind::Brewing, Some(Direction::Up)) => vec![3],
             (Kind::Brewing, Some(Direction::Down)) => vec![0, 1, 2, 3],
             (Kind::Brewing, Some(_)) => vec![0, 1, 2, 4],
+            (Kind::Composter(8), Some(Direction::Down)) => vec![0],
+            (Kind::Composter(level), Some(Direction::Up)) if level < 7 => vec![0],
+            (Kind::Composter(_), _) => vec![],
             _ => (0..self.len()).collect(),
         }
     }
@@ -119,6 +125,8 @@ struct Containers<'a> {
     registry: &'static horizon_world::registry::BlockRegistry,
     /// Brewing recipes, for what a brewing stand accepts (not needed for signals).
     brewing: Option<&'a horizon_client::brewing::Brewing>,
+    /// The stack of a full composter's `OutputContainer`.
+    bone_meal: ItemStack,
 }
 impl Containers<'_> {
     fn prop(&self, state: BlockStateId, key: &str) -> Option<&str> {
@@ -141,9 +149,16 @@ impl Containers<'_> {
     /// first). `blocked_chests`: `ChestBlock.getContainer(.., false)` returns
     /// nothing for a chest under a redstone conductor.
     fn view(&self, pos: Pos, blocked_chests: bool) -> Option<View> {
-        let entity = self.world.block_entities.get(&pos)?;
         let state = self.world.block(pos.0, pos.1, pos.2);
         let name = self.name(state);
+        if name == "minecraft:composter" {
+            let level = self.prop(state, "level").and_then(|l| l.parse().ok())?;
+            return Some(View {
+                parts: vec![(pos, usize::from(level != 7))],
+                kind: Kind::Composter(level),
+            });
+        }
+        let entity = self.world.block_entities.get(&pos)?;
         let kind = match (entity, name) {
             (BlockEntity::Furnace(_), _) => Kind::Furnace,
             (BlockEntity::Crafter(_), _) => Kind::Crafter,
@@ -202,6 +217,10 @@ impl Containers<'_> {
         })
     }
     fn get(&self, view: &View, slot: usize) -> Option<&ItemStack> {
+        if let Kind::Composter(level) = view.kind {
+            // OutputContainer holds one bone meal; InputContainer composts at once.
+            return (level == 8 && slot == 0).then_some(&self.bone_meal);
+        }
         let (pos, i) = view.locate(slot)?;
         self.world
             .block_entities
@@ -264,6 +283,10 @@ impl Containers<'_> {
     }
     /// `canTakeItemThroughFace` (furnaces and brewing stands restrict it).
     fn can_take(&self, view: &View, slot: usize, stack: &ItemStack, face: Direction) -> bool {
+        if let Kind::Composter(level) = view.kind {
+            // OutputContainer.canTakeItemThroughFace.
+            return level == 8 && face == Direction::Down && &*stack.item == "minecraft:bone_meal";
+        }
         if view.kind == Kind::Brewing {
             return slot != 3 || &*stack.item == "minecraft:glass_bottle";
         }
@@ -300,6 +323,15 @@ impl Containers<'_> {
     }
 }
 
+fn bone_meal() -> ItemStack {
+    ItemStack {
+        item: "minecraft:bone_meal".into(),
+        count: 1,
+        damage: 0,
+        extra: None,
+    }
+}
+
 /// Comparator input from a container block entity (0 when there is none).
 pub(super) fn container_signal(
     world: &World,
@@ -314,8 +346,10 @@ pub(super) fn container_signal(
         items,
         registry,
         brewing: None,
+        bone_meal: bone_meal(),
     };
     c.view((pos.x, pos.y, pos.z), true)
+        .filter(|v| !matches!(v.kind, Kind::Composter(_)))
         .map_or(0, |v| c.signal(&v))
 }
 
@@ -327,6 +361,7 @@ impl Game<'_> {
             items: &self.res.items,
             registry: self.res.assets.registry,
             brewing: Some(&self.res.stations.brewing),
+            bone_meal: bone_meal(),
         }
     }
     fn slot_mut_at(&mut self, view: &View, slot: usize) -> Option<&mut Option<ItemStack>> {
@@ -339,6 +374,10 @@ impl Game<'_> {
     }
     /// `BlockEntity.setChanged` for every block entity of a container.
     fn view_changed(&mut self, view: &View) {
+        // A composter's containers change its block state instead.
+        if let Kind::Composter(_) = view.kind {
+            return;
+        }
         for &(pos, _) in &view.parts {
             self.container_changed(pos);
         }
@@ -415,6 +454,10 @@ impl Game<'_> {
         stack: ItemStack,
         face: Option<Direction>,
     ) -> Option<ItemStack> {
+        if let Kind::Composter(_) = view.kind {
+            let (x, y, z) = view.parts[0].0;
+            return self.composter_container_insert([x, y, z], stack, face == Some(Direction::Up));
+        }
         let slots = if matches!(view.kind, Kind::Furnace | Kind::Brewing) && face.is_some() {
             view.slots_for_face(face)
         } else {
@@ -482,7 +525,7 @@ impl Game<'_> {
         Ok(())
     }
     /// `HopperBlockEntity.tryMoveItems` with `suckInItems`.
-    fn hopper_try_move_items(&mut self, pos: Pos) {
+    pub(super) fn hopper_try_move_items(&mut self, pos: Pos) {
         let state = self.world.block(pos.0, pos.1, pos.2);
         let c = self.containers();
         let enabled = c.prop(state, "enabled") != Some("false");
@@ -540,6 +583,23 @@ impl Game<'_> {
         let above = (pos.0, pos.1 + 1, pos.2);
         let c = self.containers();
         if let Some(source) = c.view(above, false) {
+            if let Kind::Composter(level) = source.kind {
+                if level != 8 {
+                    return false;
+                }
+                // tryTakeInItemFromSlot on the OutputContainer: removeItem calls
+                // its setChanged, which empties the composter, and so does the
+                // second setChanged after the move or, when the hopper has no
+                // room, the setItem putting the bone meal back into the detached
+                // container (whose bone meal is lost with it).
+                let bone_meal = c.bone_meal.clone();
+                let at = BlockPos::new(above.0, above.1, above.2);
+                self.with_level(|b, level, ticks| b.composter_empty(level, ticks, at));
+                let moved = self.add_item(None, hopper, bone_meal, None).is_none();
+                self.with_level(|b, level, ticks| b.composter_empty(level, ticks, at));
+                self.world.modified.insert((above.0 >> 4, above.2 >> 4));
+                return moved;
+            }
             let source_hopper = (source.kind == Kind::Hopper).then_some(above);
             for slot in source.slots_for_face(Some(Direction::Down)) {
                 let c = self.containers();

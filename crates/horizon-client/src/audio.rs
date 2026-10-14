@@ -600,6 +600,16 @@ impl Audio {
     pub fn stop_all(&mut self) {
         self.engine.stop_all(&mut self.backend);
     }
+    /// `SoundManager.reload` (resource packs changed): stop every sound, then
+    /// read sound events and sound files from the new resource root.
+    pub fn reload(&mut self, root: &Path) {
+        self.stop_all();
+        self.engine.registry = SoundRegistry::load(root);
+        self.backend.root = root.to_owned();
+        let mut cache = self.backend.cache.lock().unwrap();
+        cache.entries.clear();
+        cache.bytes = 0;
+    }
     /// Play a sound event at a world position, as `ClientLevel.playLocalSound`
     /// (a `SimpleSoundInstance` seeded from the level random), or relative to
     /// the listener without attenuation (`None`).

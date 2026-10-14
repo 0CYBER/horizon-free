@@ -161,6 +161,7 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
     if m.kind.category == "creature" && aged {
         map.insert("Age".into(), Tag::Int(m.extra.age));
         map.insert("AgeLocked".into(), Tag::Byte(i8::from(m.extra.age_locked)));
+        map.insert("ForcedAge".into(), Tag::Int(m.extra.forced_age));
         for (key, value) in [
             ("Age", Tag::Int(0)),
             ("ForcedAge", Tag::Int(0)),
@@ -595,6 +596,7 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     m.custom_name = custom_name(tag);
     if m.kind.category == "creature" {
         m.extra.age = number(tag.get("Age")).unwrap_or(0) as i32;
+        m.extra.forced_age = number(tag.get("ForcedAge")).unwrap_or(0) as i32;
         m.extra.age_locked = flag(tag, "AgeLocked");
     }
     m.name_visible = flag(tag, "CustomNameVisible");

@@ -40,6 +40,7 @@ fn main() -> Result<()> {
     let mut scene = collisions::SceneCollisions {
         world: &world,
         binding: &binding,
+        subject: None,
     };
     fs::write(
         dir.join("scene.json"),
