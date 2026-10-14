@@ -40,7 +40,7 @@ fn pause_icons(w: f32, h: f32) -> [(f32, f32, &'static str); 4] {
         (x0 + 72.0, y, "gui/sprites/pause_menu/player_reporting"),
     ]
 }
-fn death_buttons(w: f32, h: f32) -> [(f32, f32, &'static str, u8); 2] {
+pub(super) fn death_buttons(w: f32, h: f32) -> [(f32, f32, &'static str, u8); 2] {
     [
         (w / 2.0 - 100.0, h / 4.0 + 72.0, "deathScreen.respawn", 0),
         (

@@ -72,6 +72,7 @@ mod nautili;
 mod net_harness;
 mod options;
 mod packs;
+mod pad;
 mod paintings;
 mod passengers;
 mod persist;
@@ -660,6 +661,8 @@ struct Game<'a> {
     previous: Instant,
     /// FramerateLimitTracker.latestInputTime.
     last_input: Instant,
+    /// Controllers (Horizon's own).
+    pad: pad::Pads,
     frames: u64,
     fps: f32,
     fps_frames: u64,
@@ -2666,6 +2669,7 @@ impl Game<'_> {
         self.update_totem_ready();
         self.tick_command_extras();
         let camera_eye = self.camera_eye_height();
+        let stick = self.pad_move();
         if self.riding.is_some() && self.player.is_some() {
             let playing = self.screen == Screen::Playing;
             let held = |k| playing && self.keys.contains(&k);
@@ -2677,7 +2681,9 @@ impl Game<'_> {
                 jump: held(KeyCode::Space),
                 shift: held(KeyCode::ShiftLeft),
                 sprint: false,
-            };
+                analog: None,
+            }
+            .with_stick(stick.filter(|_| playing));
             self.tick_riding(keys)?;
         }
         let riding = self.riding.is_some();
@@ -2706,7 +2712,9 @@ impl Game<'_> {
             jump: held(KeyCode::Space),
             shift: held(KeyCode::ShiftLeft),
             sprint: held(KeyCode::ControlLeft),
-        };
+            analog: None,
+        }
+        .with_stick(stick.filter(|_| playing));
         if !riding {
             self.previous_position = player.position;
         }
@@ -2970,6 +2978,40 @@ impl Game<'_> {
         } else {
             self.keys.remove(&key);
         }
+    }
+    /// A key event after rebinding, as the default key of its mapping (the
+    /// keyboard and controllers both end here).
+    fn mapped_key(&mut self, key: KeyCode, pressed: bool, repeat: bool) -> Result<()> {
+        // Sneak and sprint are ToggleKeyMappings: a press (or a key
+        // repeat) flips them when toggling; only releases reach them
+        // behind a screen (KeyboardHandler.keyPress).
+        let toggle = match key {
+            KeyCode::ShiftLeft => Some((0, self.settings.toggle_crouch)),
+            KeyCode::ControlLeft => Some((1, self.settings.toggle_sprint)),
+            _ => None,
+        };
+        if let Some((slot, option)) = toggle {
+            let action = match (pressed, repeat) {
+                (false, _) => KeyAction::Release,
+                (_, false) => KeyAction::Press,
+                (_, true) => KeyAction::Repeat,
+            };
+            let screen_open = self.screen != Screen::Playing || self.title.is_some();
+            self.toggles.key(slot, action, screen_open, option);
+            self.sync_toggle(slot);
+            if !pressed {
+                return Ok(());
+            }
+        } else if !pressed {
+            self.keys.remove(&key);
+            return Ok(());
+        } else {
+            self.keys.insert(key);
+        }
+        if repeat {
+            return Ok(());
+        }
+        self.key_pressed(key)
     }
     /// `KeyMapping.releaseAll` when a screen opens and
     /// `restoreToggleStatesOnScreenClosed` when it closes.
@@ -8497,36 +8539,7 @@ impl ApplicationHandler for Game<'_> {
                         }
                         None => return Ok(()),
                     };
-                    // Sneak and sprint are ToggleKeyMappings: a press (or a key
-                    // repeat) flips them when toggling; only releases reach them
-                    // behind a screen (KeyboardHandler.keyPress).
-                    let toggle = match key {
-                        KeyCode::ShiftLeft => Some((0, self.settings.toggle_crouch)),
-                        KeyCode::ControlLeft => Some((1, self.settings.toggle_sprint)),
-                        _ => None,
-                    };
-                    if let Some((slot, option)) = toggle {
-                        let action = match (event.state, event.repeat) {
-                            (ElementState::Released, _) => KeyAction::Release,
-                            (_, false) => KeyAction::Press,
-                            (_, true) => KeyAction::Repeat,
-                        };
-                        let screen_open = self.screen != Screen::Playing || self.title.is_some();
-                        self.toggles.key(slot, action, screen_open, option);
-                        self.sync_toggle(slot);
-                        if event.state != ElementState::Pressed {
-                            return Ok(());
-                        }
-                    } else if event.state != ElementState::Pressed {
-                        self.keys.remove(&key);
-                        return Ok(());
-                    } else {
-                        self.keys.insert(key);
-                    }
-                    if event.repeat {
-                        return Ok(());
-                    }
-                    self.key_pressed(key)?;
+                    self.mapped_key(key, event.state == ElementState::Pressed, event.repeat)?;
                 }
                 WindowEvent::RedrawRequested => {
                     self.observe_fullscreen();
@@ -8571,6 +8584,7 @@ impl ApplicationHandler for Game<'_> {
                         }
                     }
                     self.apply_mouse_look();
+                    self.pad_look(elapsed.as_secs_f32());
                     self.advance_flight();
                     let ticked = Instant::now();
                     let rendered = self.render()?;
@@ -8675,6 +8689,7 @@ impl ApplicationHandler for Game<'_> {
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.poll_control(event_loop);
+        self.poll_pads();
         if self.options.frames.is_some() && self.started.elapsed() > self.options.timeout {
             self.error = Some("frame-limited run timed out".into());
             event_loop.exit();
@@ -8933,6 +8948,7 @@ pub fn run() -> Result<()> {
         started: now,
         previous: now,
         last_input: now,
+        pad: Default::default(),
         frames: 0,
         fps: 0.0,
         fps_frames: 0,
