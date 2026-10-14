@@ -16,6 +16,7 @@ use horizon_client::{
 };
 use horizon_core::{
     geometry::{Aabb, Vec3},
+    position::BlockPos,
     random::RandomSource,
 };
 use horizon_world::registry::BlockStateId;
@@ -1080,16 +1081,12 @@ impl Game<'_> {
     pub(super) fn block_model_vertices(
         &self,
         state: BlockStateId,
+        seed_pos: BlockPos,
         m: glam::Mat4,
         light: u32,
         out: &mut Vec<Vertex>,
     ) {
-        let Ok(models) = self
-            .res
-            .assets
-            .model_catalog
-            .collect(state, horizon_core::position::BlockPos::new(0, 0, 0))
-        else {
+        let Ok(models) = self.res.assets.model_catalog.collect(state, seed_pos) else {
             return;
         };
         for (_, model) in &models {
@@ -1238,7 +1235,7 @@ impl Game<'_> {
                         * glam::Mat4::from_translation(glam::Vec3::splat(-0.5));
                     let flash = c.kind == CartKind::Tnt && c.fuse > -1 && (c.fuse / 5) % 2 == 0;
                     let start = out.len();
-                    self.block_model_vertices(state, m, packed, out);
+                    self.block_model_vertices(state, BlockPos::default(), m, packed, out);
                     if flash {
                         // submitWhiteSolidBlock: OverlayTexture.u(1.0) on the cart's own light.
                         for v in &mut out[start..] {

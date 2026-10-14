@@ -543,6 +543,8 @@ impl LevelAccess for GameLevel<'_> {
 #[derive(Clone, Debug)]
 struct FallingBlock {
     state: BlockStateId,
+    /// `DATA_START_POS`: spawn position used to select weighted block models.
+    start_pos: BlockPos,
     position: Vec3,
     previous: Vec3,
     velocity: Vec3,
@@ -1699,6 +1701,7 @@ impl Game<'_> {
                     );
                     self.falling.push(FallingBlock {
                         state,
+                        start_pos: pos,
                         position: p,
                         previous: p,
                         velocity: Vec3::ZERO,
@@ -4952,7 +4955,13 @@ impl Game<'_> {
             );
             let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
             let start = out.len();
-            self.block_model_vertices(f.state, glam::Mat4::from_translation(o), packed, &mut out);
+            self.block_model_vertices(
+                f.state,
+                f.start_pos,
+                glam::Mat4::from_translation(o),
+                packed,
+                &mut out,
+            );
             let tint = horizon_client::mobs::render::abgr(tint);
             for vertex in &mut out[start..] {
                 vertex.color = horizon_client::hud_layout::multiply(vertex.color, tint);

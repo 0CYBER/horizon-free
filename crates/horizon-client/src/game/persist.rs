@@ -198,6 +198,8 @@ impl Game<'_> {
                             let (no_gravity, drop_item) = entity_nbt::falling_block_flags(&tag);
                             self.falling.push(FallingBlock {
                                 state,
+                                // DATA_START_POS is not persisted by vanilla.
+                                start_pos: horizon_core::position::BlockPos::default(),
                                 position,
                                 previous: position,
                                 velocity,
