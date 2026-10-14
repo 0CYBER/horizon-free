@@ -361,6 +361,7 @@ impl Game<'_> {
         player.velocity = rotate_y(player.velocity, -rotation);
         self.previous_position = player.position;
         self.player = Some(player);
+        self.pad.player_replaced();
         self.sway = Default::default();
         self.apply_equipment();
         let pitch = self.world.random.next_float() * 0.4 + 0.8;

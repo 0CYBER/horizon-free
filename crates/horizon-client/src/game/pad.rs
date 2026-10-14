@@ -6,12 +6,12 @@
 use super::{Game, Screen};
 use horizon_client::{
     Result,
-    gamepad::{self, Button, Edges, GlyphStyle, PadState},
+    gamepad::{self, Button, Edges, GlyphStyle, HealthWatch, PadState, Rumble},
     keybinds::{KeyBinds, key_code, mouse_button},
     mouse::Rotation,
 };
 use serde_json::{Value, json};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use winit::{event_loop::ActiveEventLoop, keyboard::KeyCode};
 
 pub(super) const HELP: &[&str] = &[
@@ -48,6 +48,12 @@ pub(super) struct Pads {
     pub(super) style: GlyphStyle,
     /// The cursor the pad drives in menus.
     pub(super) menu: super::pad_menu::MenuCursor,
+    /// Vibrations playing (an effect stops when dropped) and when they end.
+    rumbles: Vec<(gilrs::ff::Effect, Instant)>,
+    /// The last vibration asked for, for `pad status`.
+    last_rumble: Option<(&'static str, gamepad::Pulse)>,
+    /// The player's health between polls (a drop is damage taken).
+    health: HealthWatch,
 }
 
 fn gilrs_button(button: Button) -> gilrs::Button {
@@ -73,6 +79,11 @@ fn gilrs_button(button: Button) -> gilrs::Button {
 }
 
 impl Pads {
+    /// A new player entity took over (spawn, respawn, a server joined, a
+    /// dimension change): its health is not compared with the old one's.
+    pub(super) fn player_replaced(&mut self) {
+        self.health.forget();
+    }
     /// Open gilrs on first use. A platform without it (or a Linux without
     /// udev) leaves controllers off; the game runs as before.
     fn start(&mut self) {
@@ -181,6 +192,18 @@ impl Game<'_> {
             self.pad.in_use = true;
         }
         self.pad.state = state;
+        // Damage from any source, here or on a server; nothing counts on
+        // the title screen.
+        let health = self
+            .player
+            .as_ref()
+            .filter(|_| self.title.is_none())
+            .map(|p| p.health.health());
+        if let Some(damage) = self.pad.health.observe(health) {
+            self.pad_rumble(Rumble::Hurt(damage));
+        }
+        let now = Instant::now();
+        self.pad.rumbles.retain(|(_, end)| *end > now);
         let ticking = self.title.is_none() && self.screen == Screen::Playing && !self.pause;
         for button in std::mem::take(&mut self.pad.late_releases) {
             if !ticking || self.pad.pressed_at[button as usize] != Some(self.ticks) {
@@ -359,6 +382,57 @@ impl Game<'_> {
         self.pitch = rotation.x_rot;
     }
 
+    /// Vibrate the active pad, when vibration is on and the pad is the one
+    /// playing (a pad lying idle while the mouse plays stays still).
+    /// Platforms without force feedback (gilrs on macOS) skip it.
+    pub(super) fn pad_rumble(&mut self, rumble: Rumble) {
+        let settings = &self.settings.controller;
+        if !settings.enabled || !settings.vibration || !self.pad.in_use {
+            return;
+        }
+        let Some(pulse) = rumble.pulse() else {
+            return;
+        };
+        self.pad.last_rumble = Some((rumble.name(), pulse));
+        let (Some(gilrs), Some(id)) = (self.pad.gilrs.as_mut(), self.pad.active) else {
+            return;
+        };
+        if !gilrs
+            .connected_gamepad(id)
+            .is_some_and(|g| g.is_ff_supported())
+        {
+            return;
+        }
+        use gilrs::ff::{BaseEffect, BaseEffectType, EffectBuilder, Repeat, Replay, Ticks};
+        let length = Ticks::from_ms(pulse.millis);
+        let motor = |kind| BaseEffect {
+            kind,
+            scheduling: Replay {
+                play_for: length,
+                ..Default::default()
+            },
+            envelope: Default::default(),
+        };
+        let magnitude = |v: f32| (v.clamp(0.0, 1.0) * f32::from(u16::MAX)) as u16;
+        let effect = EffectBuilder::new()
+            .add_effect(motor(BaseEffectType::Strong {
+                magnitude: magnitude(pulse.strong),
+            }))
+            .add_effect(motor(BaseEffectType::Weak {
+                magnitude: magnitude(pulse.weak),
+            }))
+            .repeat(Repeat::For(length))
+            .gamepads(&[id])
+            .finish(gilrs);
+        match effect.and_then(|e| e.play().map(|()| e)) {
+            Ok(effect) => {
+                let end = Instant::now() + Duration::from_millis(u64::from(pulse.millis) + 50);
+                self.pad.rumbles.push((effect, end));
+            }
+            Err(e) => log::debug!("Horizon: controller vibration: {e}"),
+        }
+    }
+
     /// `horizon-ctl pad ...`.
     pub(super) fn pad_command(&mut self, words: &[&str]) -> Result<Value> {
         let arg = |i: usize| -> Result<&str> {
@@ -400,6 +474,9 @@ impl Game<'_> {
                     "backend": self.pad.gilrs.is_some(),
                     "controllers": pads,
                     "glyphs": self.pad.style.name(),
+                    "last_rumble": self.pad.last_rumble.map(|(why, p)| json!({
+                        "reason": why, "strong": p.strong, "weak": p.weak, "ms": p.millis,
+                    })),
                     "in_use": self.pad.in_use,
                     "held": held,
                     "left": s.left,
