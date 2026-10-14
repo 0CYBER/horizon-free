@@ -9,6 +9,7 @@ pub mod atlas_sources;
 pub mod attack_strength;
 pub mod attribute_updates;
 pub mod audio;
+pub mod auth;
 pub mod auto_jump;
 pub mod banner;
 pub mod biome;
