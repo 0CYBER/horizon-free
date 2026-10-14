@@ -513,7 +513,27 @@ pub fn import(
             &hint(LAUNCHER_HINT, version),
         )?);
     }
-    for (side, jar) in [("client", &client), ("server", &server)] {
+    write_import_metadata(
+        root,
+        lock,
+        &client,
+        &server,
+        &client_libraries,
+        &server_libraries,
+        log,
+    )
+}
+
+fn write_import_metadata(
+    root: &Path,
+    lock: &Lock,
+    client: &Path,
+    server: &Path,
+    client_libraries: &[PathBuf],
+    server_libraries: &[PathBuf],
+    log: Log,
+) -> Result<(), String> {
+    for (side, jar) in [("client", client), ("server", server)] {
         let data = crate::inventory::inventory(jar)?;
         let count = |key| data.get(key).cloned().unwrap_or(Value::Null);
         write_json(
@@ -538,25 +558,19 @@ pub fn import(
     write_json(
         &lock.directory.join("prepared.json"),
         &Value::Object(vec![
-            ("version".into(), Value::str(id)),
+            ("version".into(), Value::str(&lock.version)),
             (
                 "jars".into(),
                 Value::Object(vec![
-                    (
-                        "client".into(),
-                        Value::Str(relative_display(&client, root)?),
-                    ),
-                    (
-                        "server".into(),
-                        Value::Str(relative_display(&server, root)?),
-                    ),
+                    ("client".into(), Value::Str(relative_display(client, root)?)),
+                    ("server".into(), Value::Str(relative_display(server, root)?)),
                 ]),
             ),
             (
                 "libraries".into(),
                 Value::Object(vec![
-                    ("client".into(), paths(&client_libraries)?),
-                    ("server".into(), paths(&server_libraries)?),
+                    ("client".into(), paths(client_libraries)?),
+                    ("server".into(), paths(server_libraries)?),
                 ]),
             ),
         ]),
@@ -597,12 +611,33 @@ pub fn reuse_imported(root: &Path, log: Log) -> Result<bool, String> {
         Ok(files)
     };
     if checked(lock.directory.clone()).is_ok() {
+        if [
+            "prepared.json",
+            "reports/client-inventory.json",
+            "reports/server-inventory.json",
+        ]
+        .iter()
+        .any(|path| !lock.directory.join(path).is_file())
+        {
+            let found = verify(&lock)?;
+            let client_libraries = client_libraries(&lock, &found.manifest)?;
+            write_import_metadata(
+                &root,
+                &lock,
+                &found.jars["client"],
+                &found.jars["server"],
+                &client_libraries,
+                &found.libraries,
+                log,
+            )?;
+        }
         log(&format!("Using imported Minecraft {}", lock.version));
         return Ok(true);
     }
     let Some(versions) = root.parent() else {
         return Ok(false);
     };
+    // Sibling discovery is intended for the launcher's versions/ folder.
     let mut siblings: Vec<_> = fs::read_dir(versions)
         .map_err(|e| format!("{}: {e}", versions.display()))?
         .filter_map(Result::ok)
@@ -625,7 +660,17 @@ pub fn reuse_imported(root: &Path, log: Log) -> Result<bool, String> {
                 "",
             )?;
         }
-        checked(lock.directory.clone())?;
+        let found = verify(&lock)?;
+        let client_libraries = client_libraries(&lock, &found.manifest)?;
+        write_import_metadata(
+            &root,
+            &lock,
+            &found.jars["client"],
+            &found.jars["server"],
+            &client_libraries,
+            &found.libraries,
+            log,
+        )?;
         log(&format!(
             "Reused imported Minecraft {} from {}",
             lock.version,
@@ -716,6 +761,15 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    fn jar(marker: &[u8]) -> Vec<u8> {
+        let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        archive
+            .start_file("marker", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive.write_all(marker).unwrap();
+        archive.finish().unwrap().into_inner()
+    }
+
     struct Imports {
         directory: PathBuf,
         source: PathBuf,
@@ -737,8 +791,10 @@ mod tests {
                 fs::create_dir_all(path.parent().unwrap()).unwrap();
                 fs::write(path, data).unwrap();
             };
-            write("jars/client.jar", b"client");
-            write("jars/server-game.jar", b"server game");
+            let client = jar(b"client");
+            let game = jar(b"server game");
+            write("jars/client.jar", &client);
+            write("jars/server-game.jar", &game);
             write("libraries/server/server.jar", b"server library");
             write("libraries/client/client.jar", b"client library");
             write("reports/private.txt", b"not an imported artifact");
@@ -747,7 +803,7 @@ mod tests {
             let entries = [
                 (
                     "META-INF/versions.list",
-                    format!("{}\t9.9\tgame.jar\n", crate::sha256_hex(b"server game")),
+                    format!("{}\t9.9\tgame.jar\n", crate::sha256_hex(&game)),
                 ),
                 (
                     "META-INF/libraries.list",
@@ -764,7 +820,7 @@ mod tests {
                 bundle.write_all(text.as_bytes()).unwrap();
             }
             for (name, bytes) in [
-                ("META-INF/versions/game.jar", b"server game".as_slice()),
+                ("META-INF/versions/game.jar", game.as_slice()),
                 (
                     "META-INF/libraries/server.jar",
                     b"server library".as_slice(),
@@ -810,6 +866,11 @@ mod tests {
     #[test]
     fn imported_files_are_reused_without_the_official_install() {
         let fixture = Imports::new();
+        fs::write(
+            fixture.imported(&fixture.source).join("prepared.json"),
+            b"stale source metadata",
+        )
+        .unwrap();
         assert!(reuse_imported(&fixture.target, &|_| {}).unwrap());
         let lock = Lock::read(&fixture.target).unwrap();
         let artifacts = verify(&lock).unwrap();
@@ -818,14 +879,66 @@ mod tests {
             1
         );
         assert_eq!(artifacts.libraries.len(), 1);
+        let prepared = read_json(&lock.directory.join("prepared.json")).unwrap();
+        assert_eq!(prepared.get("version").and_then(Value::as_str), Some("9.9"));
+        for side in ["client", "server"] {
+            assert_eq!(
+                prepared
+                    .get("jars")
+                    .unwrap()
+                    .get(side)
+                    .and_then(Value::as_str),
+                Some(
+                    relative_display(&artifacts.jars[side], &fixture.target)
+                        .unwrap()
+                        .as_str()
+                )
+            );
+            let inventory = read_json(
+                &lock
+                    .directory
+                    .join(format!("reports/{side}-inventory.json")),
+            )
+            .unwrap();
+            assert_eq!(
+                inventory.get("jar_sha256").and_then(Value::as_str),
+                Some(digest(&artifacts.jars[side], "sha256").unwrap().as_str())
+            );
+        }
         assert!(!lock.directory.join("reports/private.txt").exists());
+        for side in ["client", "server"] {
+            let libraries = prepared
+                .get("libraries")
+                .unwrap()
+                .get(side)
+                .unwrap()
+                .as_array()
+                .unwrap();
+            assert_eq!(libraries.len(), 1);
+            assert_eq!(
+                libraries[0].as_str(),
+                Some(
+                    relative_display(
+                        &lock.directory.join(format!("libraries/{side}/{side}.jar")),
+                        &fixture.target
+                    )
+                    .unwrap()
+                    .as_str()
+                )
+            );
+        }
         // The current root's valid imports suffice even after the older copy is corrupted.
         fs::write(
             fixture.imported(&fixture.source).join("jars/client.jar"),
             b"bad",
         )
         .unwrap();
+        // Repair metadata omitted by earlier reuse implementations, without a sibling.
+        fs::remove_file(lock.directory.join("prepared.json")).unwrap();
+        fs::remove_file(lock.directory.join("reports/client-inventory.json")).unwrap();
         assert!(reuse_imported(&fixture.target, &|_| {}).unwrap());
+        assert!(read_json(&lock.directory.join("prepared.json")).is_ok());
+        assert!(read_json(&lock.directory.join("reports/client-inventory.json")).is_ok());
     }
 
     #[test]
@@ -873,7 +986,10 @@ mod tests {
         fs::create_dir_all(target.join("jars")).unwrap();
         fs::write(target.join("jars/client.jar"), b"bad").unwrap();
         assert!(reuse_imported(&fixture.target, &|_| {}).unwrap());
-        assert_eq!(fs::read(target.join("jars/client.jar")).unwrap(), b"client");
+        assert_eq!(
+            fs::read(target.join("jars/client.jar")).unwrap(),
+            fs::read(fixture.imported(&fixture.source).join("jars/client.jar")).unwrap()
+        );
     }
 
     #[test]
