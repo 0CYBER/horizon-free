@@ -188,29 +188,6 @@ pub fn latest(releases: &[Release]) -> Option<&Release> {
     releases.iter().find(|r| r.asset.is_some())
 }
 
-/// The README's roadmap section from main (the project status section if it has none).
-pub fn roadmap() -> Result<String, String> {
-    let url = format!("https://raw.githubusercontent.com/{REPO}/main/README.md");
-    let readme = get(&url)?.into_string().map_err(|e| e.to_string())?;
-    let level = |l: &str| l.chars().take_while(|c| *c == '#').count();
-    for title in ["Roadmap", "Project status"] {
-        let lines: Vec<&str> = readme.lines().collect();
-        if let Some(start) = lines
-            .iter()
-            .position(|l| level(l) > 0 && l.trim_start_matches('#').trim() == title)
-        {
-            let depth = level(lines[start]);
-            let section: Vec<&str> = lines[start + 1..]
-                .iter()
-                .take_while(|l| !(level(l) > 0 && level(l) <= depth))
-                .copied()
-                .collect();
-            return Ok(section.join("\n").trim().to_string());
-        }
-    }
-    Err("The README has no roadmap section yet.".into())
-}
-
 /// The community, sponsor and website links, from `launcher/links.json` on main, so they can change
 /// without a launcher release. An empty address hides its button.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -1094,7 +1071,6 @@ pub enum Job {
 
 pub enum Msg {
     Releases(Result<Vec<Release>, String>),
-    Roadmap(Result<String, String>),
     Links(Links),
     Progress(String, f32),
     Installed(String, Result<(), String>),

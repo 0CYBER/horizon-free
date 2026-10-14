@@ -52,7 +52,7 @@ Horizon is downloaded only through **the Horizon launcher**: get it from [playho
   </tr>
 </table>
 
-It lists Horizon's releases and installs the build for your platform, shows each release's patch notes and the roadmap, updates Horizon and itself, and doubles as a command-line tool and an MCP server. See [the launcher's README](launcher/README.md).
+It lists Horizon's releases and installs the build for your platform, shows each release's patch notes, updates Horizon and itself, and doubles as a command-line tool and an MCP server. See [the launcher's README](launcher/README.md).
 
 ## Screenshots
 
@@ -151,7 +151,7 @@ The client starts on the title screen. Command-line options (`--world`, `--seed`
 
 ## Project status
 
-The table below is the project's own audit of each subsystem. Every subsystem now matches vanilla in every harness that compares it. 100% means 100% of what the harnesses compare, not proof that nothing else differs. The remaining known differences and the final checks are listed in the roadmap.
+The table below is the project's own audit of each subsystem. Every subsystem now matches vanilla in every harness that compares it. 100% means 100% of what the harnesses compare, not proof that nothing else differs. The remaining known differences are listed below.
 
 ### Java parity: 100%
 
@@ -180,18 +180,9 @@ them too (Rust uses Java's own float maths on each platform).
 | Audio | 1 | None: the sound engine, sound events, music, situational music, ambience and subtitles match vanilla |
 | Block behaviours and ticking | 1 | None: block updates, random ticks, redstone, dispensers (6,000 cases), crafters (4,000 crafts), block entity removal (containers spill, 4,000 cases), copper golem chest sorting and the sculk family (435 scenarios: shrieker warnings and warden summoning included) match vanilla |
 
-### Roadmap
+### Known issues
 
-**Known differences.** Online-mode servers (Mojang's session servers) are not supported; skins served over https show the default skin unless already cached; pack icons show the unknown-pack texture in game; the creative hotbar keys (C/X) aren't wired to the hotbar loader; item tooltips lack attribute lines.
-
-**Final checks.** A from-scratch audit (`tools/parity.py --all`) on Linux and on macOS, and the launch checks on the packaged Linux, macOS and Windows builds listed in [Rust rewrite status](docs/rust-parity.md#completion-criteria-and-playable-builds).
-
-**Next.** With vanilla parity as the base:
-
-- **Performance optimisation:** take the client and the server as far as they can go (rendering, chunk generation and meshing, memory, multithreaded ticking), building on v2026.10.13.1's faster renderer, while the differential harnesses keep gameplay identical to vanilla.
-- **Mod support:** a stable API for writing and loading mods against Horizon.
-- **Built-in recording:** capture gameplay video in a keypress, without external tools.
-- **Automatic version updates:** a pipeline that ports each new Minecraft release on its own: compare the new version with the pinned one, regenerate the data, rewrite the changed parts and prove them with the same differential harnesses.
+Online-mode servers (Mojang's session servers) are not supported; skins served over https show the default skin unless already cached; pack icons show the unknown-pack texture in game; the creative hotbar keys (C/X) aren't wired to the hotbar loader; item tooltips lack attribute lines.
 
 ## Contributing
 

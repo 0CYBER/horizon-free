@@ -14,8 +14,7 @@ Mojang or Microsoft. Minecraft is a trademark of Mojang Synergies AB.
 
 The site loads no third-party code at runtime: no frameworks, CDNs, analytics, trackers or
 cookies. The only requests to other hosts are the browser's calls to `api.github.com`
-(releases and patch notes) and `raw.githubusercontent.com` (the README's roadmap and
-`launcher/links.json`), both on Horizon's own repository.
+(releases and patch notes) and `raw.githubusercontent.com` (`launcher/links.json`), both on Horizon's own repository.
 
 ## Fonts
 
@@ -72,7 +71,7 @@ files: players need their own legally obtained copy of Minecraft: Java Edition.
 
 ## Text
 
-The parity table and the roadmap are generated from Horizon's README, and the patch notes
+The parity table is generated from Horizon's README, and the patch notes
 come from Horizon's GitHub releases: Horizon's own text, MIT.
 
 ## Contributors

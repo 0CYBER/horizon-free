@@ -1,4 +1,4 @@
-// Builds the site into dist/: src/index.html with the README's parity table, roadmap and
+// Builds the site into dist/: src/index.html with the README's parity table and
 // the community links and contributors baked in, plus public/ and fingerprinted CSS and JS. No dependencies.
 //
 // Railway builds only website/, so the README and links.json come from the repo when they
@@ -106,10 +106,7 @@ const parityCells = body
 const matching = body.filter(([, score]) => Number(score) === 1).length;
 const parityHeadline = matching === body.length ? "Every subsystem matches vanilla." : `${matching} of ${body.length} subsystems match vanilla.`;
 
-// --- The roadmap and the latest notes -------------------------------------------------
-
-const roadmap = section(readme, "Roadmap");
-if (!roadmap) throw new Error("README: no Roadmap section");
+// --- The latest notes -------------------------------------------------
 
 const isGame = (tag) => /^v\d{4}\.\d{1,2}\.\d{1,2}/.test(tag);
 const isLauncher = (tag) => tag.startsWith("launcher-v");
@@ -169,7 +166,6 @@ const values = {
   PARITY_CELLS: parityCells,
   PARITY_HEADLINE: parityHeadline,
   SUBSYSTEMS: String(body.length),
-  ROADMAP: markdown(roadmap, { shift: 1 }),
   NOTES: notesHtml,
   LAUNCHER_META: `${launcher ? `Launcher ${escape(launcher.tag_name.replace("launcher-v", ""))} for` : "For"} Linux x86-64, macOS on Apple Silicon and Windows x64.`,
   DISCORD: escape(links.discord || DEFAULT_LINKS.discord),

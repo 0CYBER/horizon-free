@@ -528,21 +528,6 @@ code {
   .release summary::after { grid-column: 2; margin-left: 0; }
 }
 
-/* What's next: the README's roadmap, its bold leads set as headings. */
-.next-grid { display: grid; gap: 48px; }
-.next-head .title { margin-bottom: 24px; }
-.roadmap { font-size: 16px; }
-.roadmap > p { padding-top: 22px; border-top: 1px solid var(--border); margin-top: 0; margin-bottom: 36px; max-width: 56ch; }
-.roadmap > p > strong:first-child { display: block; margin-bottom: 8px; font-size: 13px; letter-spacing: 0.02em; }
-.roadmap > ul { list-style: none; padding: 0; margin: 0; }
-.roadmap > ul > li { padding: 24px 0; border-top: 1px solid var(--border); margin: 0; max-width: 56ch; }
-.roadmap > ul > li:last-child { border-bottom: 1px solid var(--border); }
-.roadmap > ul > li > strong:first-child { display: block; margin-bottom: 8px; font: 400 30px/1.1 var(--display); letter-spacing: -0.01em; }
-@media (min-width: 1000px) {
-  .next-grid { grid-template-columns: 5fr 7fr; column-gap: clamp(48px, 6vw, 96px); }
-  .next-head { position: sticky; top: calc(var(--nav) + 32px); align-self: start; }
-}
-
 /* Community. */
 .community .title { margin-bottom: clamp(44px, 6vw, 72px); }
 .cards {
