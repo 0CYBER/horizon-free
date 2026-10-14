@@ -1843,7 +1843,7 @@ impl Launcher {
             .gap(px(24.))
             .child(page_header(
                 "Settings",
-                "Updates, menus, and the launcher itself.",
+                "Accounts, updates, menus, and the launcher itself.",
                 &t,
             ))
             .child(
