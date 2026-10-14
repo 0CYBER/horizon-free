@@ -16,11 +16,9 @@ const fonts = [
   "Geist-Medium.ttf",
   "Geist-SemiBold.ttf",
   "GeistMono-Regular.ttf",
-  "InstrumentSerif-Regular.ttf",
 ];
 
-// The launcher's screenshots are left out: they show its background, whose licence is
-// unconfirmed (see LEGAL.md). [source, name]; every image becomes media/<name>.webp and media/<name>-800.webp.
+// [source, name]; every image becomes media/<name>.webp and media/<name>-800.webp.
 export const images = [
   ["docs/media/sunset.jpg", "sunset"],
   ["docs/media/village.jpg", "village"],
@@ -42,7 +40,7 @@ for (const font of fonts) {
   const ttf = await readFile(join(repo, "crates/horizon-theme/fonts", font));
   await writeFile(join(pub, "fonts", font.replace(".ttf", ".woff2")), await wawoff2.compress(ttf));
 }
-for (const licence of ["OFL-Geist.txt", "OFL-InstrumentSerif.txt"]) {
+for (const licence of ["OFL-Geist.txt"]) {
   await copyFile(join(repo, "crates/horizon-theme/fonts", licence), join(pub, "fonts", licence));
 }
 
@@ -52,16 +50,7 @@ for (const [source, name] of images) {
   await sharp(input).resize({ width: 800 }).webp({ quality: 78 }).toFile(join(pub, "media", `${name}-800.webp`));
 }
 
-// The hero: Horizon's sunset over a savanna river valley, darkened and cooled a little so the
-// wordmark and the violet accent sit on it, in a landscape and a portrait crop.
-const hero = () => sharp(join(repo, "docs/media/sunset.jpg")).modulate({ brightness: 0.82, saturation: 0.86 }).linear(1.04, -6);
-await hero().webp({ quality: 74 }).toFile(join(pub, "media/hero.webp"));
-await hero().resize({ width: 1200 }).webp({ quality: 72 }).toFile(join(pub, "media/hero-1200.webp"));
-await hero().extract({ left: 470, top: 0, width: 840, height: 1080 }).resize({ width: 720 }).webp({ quality: 72 }).toFile(join(pub, "media/hero-portrait.webp"));
-
-// Icons from the project's logo.
-await copyFile(join(repo, "docs/media/logo.svg"), join(pub, "favicon.svg"));
-await sharp(join(repo, "docs/media/logo.svg")).resize(180).png().toFile(join(pub, "apple-touch-icon.png"));
-await sharp(join(repo, "docs/media/logo.svg")).resize(32).png().toFile(join(pub, "favicon-32.png"));
+// The icons (favicon.svg, favicon-32.png, apple-touch-icon.png) come from Horizon's mark:
+// `cargo run -p xtask -- icons` writes them with the rest of the brand (docs/media/brand).
 
 console.log("assets written to public/");

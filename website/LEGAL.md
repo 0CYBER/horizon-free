@@ -21,7 +21,6 @@ cookies. The only requests to other hosts are the browser's calls to `api.github
 | File | Source | Licence |
 | --- | --- | --- |
 | `public/fonts/Geist-Regular.woff2`, `Geist-Medium.woff2`, `Geist-SemiBold.woff2`, `GeistMono-Regular.woff2` | Geist and Geist Mono, from `crates/horizon-theme/fonts` (converted from TTF to WOFF2) | SIL Open Font License 1.1, shipped as `public/fonts/OFL-Geist.txt` |
-| `public/fonts/InstrumentSerif-Regular.woff2` | Instrument Serif, from `crates/horizon-theme/fonts` (converted from TTF to WOFF2) | SIL Open Font License 1.1, shipped as `public/fonts/OFL-InstrumentSerif.txt` |
 
 The fonts are self-hosted; nothing is fetched from a font service.
 
@@ -29,23 +28,17 @@ The fonts are self-hosted; nothing is fetched from a font service.
 
 | File | Source | Licence |
 | --- | --- | --- |
-| `public/favicon.svg`, `public/favicon-32.png`, `public/apple-touch-icon.png` | Horizon's logo, `docs/media/logo.svg` (an original drawing of a sunset over blocks) | MIT, Horizon's original work |
-| `public/og.png` | Rendered by `scripts/shots.mjs` from `public/og.html`: the Instrument Serif wordmark over `public/media/hero-1200.webp` | MIT for the layout; the fonts and the hero as listed here |
+| `public/favicon.svg`, `public/favicon-32.png`, `public/apple-touch-icon.png` | Horizon's mark, `docs/media/brand/icon.svg` (an original drawing: an H whose crossbar is the horizon), rendered by `cargo run -p xtask -- icons` | MIT, Horizon's original work |
+| `public/og.png` | Rendered by `scripts/shots.mjs` from `public/og.html`: the mark, a headline and the faint wordmark, in Geist | MIT for the layout; the fonts as listed here |
 
 No Minecraft logo or wordmark appears anywhere on the site, in images or as text styling.
 GitHub and Discord appear only as plain text links, without their logos.
 
-## The hero
+## No hero image
 
-| File | Source | Licence |
-| --- | --- | --- |
-| `public/media/hero.webp`, `hero-1200.webp`, `hero-portrait.webp` | `docs/media/sunset.jpg`, darkened slightly and, for phones, cropped by `scripts/assets.mjs` | A screenshot of Horizon's client, as listed under Screenshots |
-
-The grain over the hero is drawn by the stylesheet (an SVG noise filter inlined as a data URI),
-not an image file. The launcher's own background (`launcher/assets/background.jpg`, from
-backgrounds.supply) is **not** used: its licence is unconfirmed. For the same reason the
-launcher's screenshots, which show it, are not on the site; the launcher section shows
-Horizon's own menus instead. No image from backgrounds.supply or prismal is used anywhere.
+The page opens on type, not a photograph. The launcher's old background
+(`launcher/assets/background.jpg`, from backgrounds.supply, licence never confirmed) is gone from
+the repository, so the launcher's screenshots no longer show it.
 
 ## Screenshots
 
