@@ -31,11 +31,15 @@ falling_lava falling_nectar falling_obsidian_tear falling_spore_blossom falling_
 gust gust_emitter_large gust_emitter_small happy_villager heart infested landing_honey landing_lava
 landing_obsidian_tear large_smoke lava mycelium nautilus note pale_oak_leaves poof portal rain reverse_portal
 sculk_charge_pop sculk_soul smoke small_flame small_gust sneeze snowflake sonic_boom soul soul_fire_flame splash
-spore_blossom_air totem_of_undying underwater vault_connection warped_spore white_ash white_smoke witch""".split()
+spore_blossom_air totem_of_undying underwater vault_connection warped_spore white_ash white_smoke witch
+sweep_attack glow wax_on wax_off electric_spark scrape squid_ink glow_squid_ink item_slime item_snowball item_cobweb
+sulfur_cube_goo firefly trial_spawner_detection trial_spawner_detection_ominous trial_omen raid_omen ominous_spawning
+spit fishing dust_plume red_poplar_leaves orange_poplar_leaves yellow_poplar_leaves pause_mob_growth
+reset_mob_growth""".split()
 
 
 def options(kind, rng):
-    if kind in ('block', 'block_crumble', 'dust_pillar', 'falling_dust'):
+    if kind in ('block', 'block_crumble', 'dust_pillar', 'falling_dust', 'block_marker'):
         return dict(state=STONE)
     if kind == 'dust':
         return dict(color=rng.choice([0xFF0000, 0x3A9E2C, 0xFFFFFF]), scale=rng.choice([1.0, 0.5, 2.0]))
@@ -47,6 +51,10 @@ def options(kind, rng):
         return dict(color=rng.choice([0xFF3366CC, 0x26AA00FF]))
     if kind == 'tinted_leaves':
         return dict(color=0xFF48B518)
+    if kind == 'flash':
+        return dict(color=rng.choice([0xFF3366CC, 0x00FFAA00]))
+    if kind == 'item':
+        return dict(item=rng.choice(['minecraft:apple', 'minecraft:cooked_beef', 'minecraft:egg']))
     if kind == 'dragon_breath':
         return dict(scale=rng.choice([1.0, 0.25]))
     if kind == 'sculk_charge':
@@ -60,7 +68,8 @@ def options(kind, rng):
 
 def cases(rng):
     kinds = SIMPLE + ['block', 'block_crumble', 'dust_pillar', 'falling_dust', 'dust', 'dust_color_transition', 'effect',
-                      'instant_effect', 'entity_effect', 'tinted_leaves', 'dragon_breath', 'sculk_charge', 'shriek', 'trail']
+                      'instant_effect', 'entity_effect', 'tinted_leaves', 'dragon_breath', 'sculk_charge', 'shriek', 'trail',
+                      'block_marker', 'flash', 'item']
     # Dyadic values: serde_json's decimal parsing may round others a unit off.
     starts = [([0.3125, 66.6875, -0.40625], False), ([0.3125, 64.046875, -0.40625], True), ([-5.75, 64.59375, 3.125], True)]
     velocities = [[0.0, 0.0, 0.0], [0.078125, 0.125, -0.046875], [0.0, -0.296875, 0.0], [0.5, 0.0, 0.25]]
@@ -99,7 +108,8 @@ def decode(token):
 # (Intel's libm) round a fraction of a percent of arguments a unit apart from
 # the platform libm horizon_core::jmath uses, so their motion is compared to
 # 1e-12 relative error; everything else about them, and every other type, exactly.
-LIBM = {'cherry_leaves', 'pale_oak_leaves', 'tinted_leaves'}
+LIBM = {'cherry_leaves', 'pale_oak_leaves', 'tinted_leaves', 'red_poplar_leaves', 'orange_poplar_leaves',
+        'yellow_poplar_leaves'}
 
 
 def sections(path):

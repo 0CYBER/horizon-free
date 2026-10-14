@@ -46,9 +46,10 @@ fn options(case: &Value) -> Option<ParticleOptions> {
         [r, g, b, ((c >> 24) & 255) as f32 / 255.0]
     };
     Some(match ty {
-        ParticleType::Block | ParticleType::BlockCrumble | ParticleType::DustPillar => {
-            ParticleOptions::block(ty, "terrain".into(), 0xFF_FFFF)
-        }
+        ParticleType::Block
+        | ParticleType::BlockCrumble
+        | ParticleType::DustPillar
+        | ParticleType::BlockMarker => ParticleOptions::block(ty, "terrain".into(), 0xFF_FFFF),
         // Stone's map colour: FallingDustParticle.Provider's tint without a tint source.
         ParticleType::FallingDust => ParticleOptions::block(ty, "terrain".into(), 0x70_7070),
         ParticleType::Dust => ParticleOptions::dust(rgb(c), scale),
@@ -59,7 +60,15 @@ fn options(case: &Value) -> Option<ParticleOptions> {
             scale,
             ..ParticleOptions::colored(ty, argb)
         },
-        ParticleType::EntityEffect | ParticleType::TintedLeaves => {
+        // The oracle's item models: one layer whose sprite is named after the item.
+        ParticleType::Item => {
+            let item = o["item"].as_str()?;
+            ParticleOptions::item(vec![format!(
+                "item_{}",
+                item.strip_prefix("minecraft:").unwrap_or(item)
+            )])
+        }
+        ParticleType::EntityEffect | ParticleType::TintedLeaves | ParticleType::Flash => {
             ParticleOptions::colored(ty, argb)
         }
         ParticleType::DragonBreath => ParticleOptions {
@@ -137,6 +146,13 @@ fn main() -> Result<()> {
         world(&assets, &facts, true)?,
     ];
     let mut engine = ParticleEngine::new(root, &HashMap::new());
+    for (ty, item) in [
+        (ParticleType::ItemSlime, "item_slime_ball"),
+        (ParticleType::ItemSnowball, "item_snowball"),
+        (ParticleType::ItemCobweb, "item_cobweb"),
+    ] {
+        engine.item_sprites.insert(ty, vec![item.to_owned()]);
+    }
     // The oracle's output: the seed line of each case.
     let mut seeds = Vec::new();
     for line in BufReader::new(File::open(&args[2])?).lines() {

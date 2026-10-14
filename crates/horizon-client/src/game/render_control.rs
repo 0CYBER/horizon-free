@@ -83,8 +83,20 @@ impl Game<'_> {
                 let count = num(8, 1.0)? as u32;
                 let options = match ty {
                     ParticleType::Dust => ParticleOptions::dust([1.0, 0.0, 0.0], 1.0),
-                    ParticleType::Block | ParticleType::FallingDust | ParticleType::DustPillar => {
+                    ParticleType::Block
+                    | ParticleType::FallingDust
+                    | ParticleType::DustPillar
+                    | ParticleType::BlockMarker => {
                         ParticleOptions::block(ty, "block/stone".into(), 0x808080)
+                    }
+                    ParticleType::Item => self.item_particle(
+                        &horizon_client::items::ItemStack::new("minecraft:apple", 1),
+                    ),
+                    ParticleType::ItemSlime
+                    | ParticleType::ItemSnowball
+                    | ParticleType::ItemCobweb => {
+                        self.ensure_item_particle_sprites();
+                        ParticleOptions::simple(ty)
                     }
                     _ => ParticleOptions::simple(ty),
                 };
