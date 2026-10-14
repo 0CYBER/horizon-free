@@ -12,7 +12,7 @@ use horizon_client::{
 };
 use serde_json::{Value, json};
 use std::time::Instant;
-use winit::keyboard::KeyCode;
+use winit::{event_loop::ActiveEventLoop, keyboard::KeyCode};
 
 pub(super) const HELP: &[&str] = &[
     "pad BUTTON down|up|tap         a virtual controller button (south east west north lb rb lt rt select start ls rs up down left right)",
@@ -42,10 +42,12 @@ pub(super) struct Pads {
     pressed_at: [Option<u64>; 16],
     late_releases: Vec<Button>,
     /// The merged state of the last poll.
-    state: PadState,
+    pub(super) state: PadState,
     /// The pad drove the game last (the mouse and keyboard hand control back).
     pub(super) in_use: bool,
     pub(super) style: GlyphStyle,
+    /// The cursor the pad drives in menus.
+    pub(super) menu: super::pad_menu::MenuCursor,
 }
 
 fn gilrs_button(button: Button) -> gilrs::Button {
@@ -153,13 +155,13 @@ impl Pads {
 
 impl Game<'_> {
     /// Once per loop iteration: read the pads and act on button changes.
-    pub(super) fn poll_pads(&mut self) {
+    pub(super) fn poll_pads(&mut self, event_loop: &ActiveEventLoop) {
         let settings = &self.settings.controller;
         if !settings.enabled {
             if self.pad.state != PadState::default() {
                 self.pad.state = PadState::default();
                 for (button, down) in self.pad.edges.release_all() {
-                    self.pad_edge(button, down);
+                    self.pad_edge(event_loop, button, down);
                 }
             }
             return;
@@ -181,34 +183,35 @@ impl Game<'_> {
         let ticking = self.title.is_none() && self.screen == Screen::Playing && !self.pause;
         for button in std::mem::take(&mut self.pad.late_releases) {
             if !ticking || self.pad.pressed_at[button as usize] != Some(self.ticks) {
-                self.pad_button_logged(button, false);
+                self.pad_button_logged(event_loop, button, false);
             } else {
                 self.pad.late_releases.push(button);
             }
         }
         for (button, down) in edges {
-            self.pad_edge(button, down);
+            self.pad_edge(event_loop, button, down);
         }
+        self.pad_menu_frame(event_loop);
     }
 
-    fn pad_edge(&mut self, button: Button, down: bool) {
+    fn pad_edge(&mut self, event_loop: &ActiveEventLoop, button: Button, down: bool) {
         let ticking = self.title.is_none() && self.screen == Screen::Playing && !self.pause;
         if down {
             // Pressed again before its held-back release went out.
             if let Some(i) = self.pad.late_releases.iter().position(|b| *b == button) {
                 self.pad.late_releases.remove(i);
-                self.pad_button_logged(button, false);
+                self.pad_button_logged(event_loop, button, false);
             }
             self.pad.pressed_at[button as usize] = Some(self.ticks);
         } else if ticking && self.pad.pressed_at[button as usize] == Some(self.ticks) {
             self.pad.late_releases.push(button);
             return;
         }
-        self.pad_button_logged(button, down);
+        self.pad_button_logged(event_loop, button, down);
     }
 
-    fn pad_button_logged(&mut self, button: Button, down: bool) {
-        if let Err(e) = self.pad_button(button, down) {
+    fn pad_button_logged(&mut self, event_loop: &ActiveEventLoop, button: Button, down: bool) {
+        if let Err(e) = self.pad_button(event_loop, button, down) {
             log::warn!("Horizon: controller {}: {e}", button.name());
         }
     }
@@ -219,7 +222,12 @@ impl Game<'_> {
         self.focused || self.pad.virtual_input
     }
 
-    fn pad_button(&mut self, button: Button, down: bool) -> Result<()> {
+    fn pad_button(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        button: Button,
+        down: bool,
+    ) -> Result<()> {
         if down && !self.pad_focused() {
             return Ok(());
         }
@@ -228,31 +236,13 @@ impl Game<'_> {
             // Like a click into the window: take the pointer.
             self.capture(true);
         }
-        if button == Button::Start {
+        if !playing {
+            self.pad_menu_button(event_loop, button, down)?;
+            if down {
+                return Ok(());
+            }
+        } else if button == Button::Start {
             return if down { self.pad_back() } else { Ok(()) };
-        }
-        if !playing && down {
-            // Until menus take the pad, it can at least leave them.
-            return match button {
-                Button::East => self.pad_back(),
-                Button::South if self.screen == Screen::Dead && self.title.is_none() => {
-                    // The respawn button, as if clicked.
-                    let size = self
-                        .renderer
-                        .as_ref()
-                        .map_or([1, 1], |r| [r.config.width, r.config.height]);
-                    let b = horizon_client::hud::HudBatch::new(size);
-                    let (x, y, _, _) = super::screens::death_buttons(b.width, b.height)[0];
-                    let cursor = std::mem::replace(&mut self.cursor, (x + 100.0, y + 10.0));
-                    let result = self.death_click();
-                    self.cursor = cursor;
-                    result
-                }
-                Button::North if matches!(self.screen, Screen::Inventory | Screen::Creative) => {
-                    self.mapped_key(KeyCode::KeyE, true, false)
-                }
-                _ => Ok(()),
-            };
         }
         // Releases always reach the mappings, so nothing stays held when a
         // screen opened in between.
@@ -300,7 +290,7 @@ impl Game<'_> {
     }
 
     /// B and Start: what Escape does where the pad is.
-    fn pad_back(&mut self) -> Result<()> {
+    pub(super) fn pad_back(&mut self) -> Result<()> {
         if let Some(title) = self.title.as_mut() {
             title.escape();
             return Ok(());

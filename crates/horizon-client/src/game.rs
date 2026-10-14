@@ -74,6 +74,7 @@ mod nether_portal;
 mod options;
 mod packs;
 mod pad;
+mod pad_menu;
 mod paintings;
 mod passengers;
 mod persist;
@@ -3140,6 +3141,7 @@ impl Game<'_> {
         let mut batch = self.hud_layers(size);
         self.frame_graph
             .draw(self.settings.horizon.overlay, &mut batch, &self.res.atlas);
+        self.draw_pad_cursor(&mut batch);
         batch
     }
     fn hud_layers(&mut self, size: [u32; 2]) -> HudBatch {
@@ -8568,7 +8570,7 @@ impl ApplicationHandler for Game<'_> {
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.poll_control(event_loop);
-        self.poll_pads();
+        self.poll_pads(event_loop);
         if self.options.frames.is_some() && self.started.elapsed() > self.options.timeout {
             self.error = Some("frame-limited run timed out".into());
             event_loop.exit();
