@@ -677,7 +677,7 @@ impl Title {
                     slot = (slot + 1) % crate::hud::WORLD_ICON_SLOTS;
                 }
                 // Clip list quads, including their UVs, to the content area.
-                for quad in batch.vertices[first..].chunks_exact_mut(6) {
+                for quad in batch.vertices[first..].as_chunks_mut::<6>().0 {
                     let top = quad.iter().map(|v| v.pos[1]).fold(f32::INFINITY, f32::min);
                     let bot = quad
                         .iter()
