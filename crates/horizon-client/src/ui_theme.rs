@@ -5,11 +5,13 @@
 //!
 //! It is the launcher's look, from the same tokens: `crates/horizon-theme`
 //! holds the palette, type scale, spacing, radii, control sizes, motion and
-//! the bundled fonts, and `launcher/src/theme.rs` reads the same values, so
-//! changing one changes both. The components below port the launcher's
-//! (`launcher/src/main.rs`): button with hover layer and press state, sidebar
-//! list with the sliding selection, segmented control, switch, settings rows,
-//! page header, and its `ease_out_quint` tweens over `QUICK` and `MOVE`.
+//! the bundled fonts (`docs/design-system.md` describes them), and
+//! `launcher/src/theme.rs` reads the same values, so changing one changes
+//! both. The components below port the launcher's (`launcher/src/main.rs`):
+//! pill buttons with a hover layer and press state, the sidebar of text items
+//! with the sliding selection, the segmented control with its ink pill, the
+//! switch, numbered settings rows with one-pixel rules, the page header, and
+//! tweens over `QUICK` and `MOVE`.
 //!
 //! How to use it from a screen (or to add options, e.g. the Simple/Advanced
 //! graphics settings): build a [`Ui`] over the frame's `HudBatch` with
@@ -80,17 +82,27 @@ pub mod color {
     pub const fn hex(c: u32, a: u8) -> u32 {
         (a as u32) << 24 | (c & 0xff) << 16 | (c >> 8 & 0xff) << 8 | (c >> 16 & 0xff)
     }
+    /// The page, under every veil.
     pub const BG: u32 = hex(P.page, 255);
-    pub const SIDEBAR: u32 = hex(P.plate_soft, 255);
-    pub const RAISED: u32 = hex(P.plate_soft, 255);
-    pub const HOVER: u32 = hex(P.plate, 255);
+    /// Hover plates, secondary buttons, fields, the segmented track: the
+    /// dark palette's soft plate, as ink over the veil so the plates read the
+    /// same over any backdrop (over the page colour they are `plate_soft`).
+    pub const RAISED: u32 = hex(P.ink, 20);
+    /// Pressed plates and a switch that is off (`plate`, the same way).
+    pub const HOVER: u32 = hex(P.ink, 36);
+    /// One-pixel rules between rows, slider tracks.
     pub const BORDER: u32 = hex(P.rule, 255);
+    /// Text and selection (`ink`).
     pub const TEXT: u32 = hex(P.ink, 255);
+    /// Values and secondary text (`ink_soft`).
     pub const MUTED: u32 = hex(P.ink_soft, 255);
-    pub const FAINT: u32 = hex(P.muted, 255);
+    /// Labels, indices, descriptions over the veiled backdrop
+    /// (`horizon_theme::BACKDROP_MUTED`, which holds AA there).
+    pub const FAINT: u32 = hex(horizon_theme::BACKDROP_MUTED, 255);
     pub const ACCENT: u32 = hex(P.accent, 255);
     pub const ON_ACCENT: u32 = hex(P.on_accent, 255);
     pub const DANGER: u32 = hex(P.danger, 255);
+    pub const SUCCESS: u32 = hex(P.success, 255);
     pub const WHITE: u32 = hex(0xffffff, 255);
     pub fn with_alpha(c: u32, a: f32) -> u32 {
         let base = (c >> 24) as f32;
@@ -107,16 +119,22 @@ pub mod color {
 
 /// The launcher's type scale and shapes (`horizon_theme`), in dp.
 pub use horizon_theme::{CONTROL, CONTROL_LARGE, SEGMENT, ease_out_cubic, ease_out_quint};
+/// The type scale in dp: indices (mono), captions, labels and buttons, body,
+/// the large button, section heads, list names, page titles, the opening.
+pub const MICRO: f32 = horizon_theme::MICRO.px;
 pub const SMALL: f32 = horizon_theme::CAPTION.px;
 pub const BODY: f32 = horizon_theme::LABEL.px;
-pub const LARGE: f32 = horizon_theme::BODY.px;
+pub const LARGE: f32 = horizon_theme::UI.px;
+pub const HEADING: f32 = horizon_theme::HEADING.px;
 pub const TITLE: f32 = horizon_theme::TITLE.px;
 pub const HERO: f32 = horizon_theme::DISPLAY.px;
 pub const WORDMARK: f32 = 96.;
+/// Fields; plates (hover rows, selection); pills (buttons, segments).
 pub const RADIUS: f32 = horizon_theme::RADIUS;
-pub const RADIUS_SEGMENT: f32 = horizon_theme::RADIUS;
-pub const RADIUS_GROUP: f32 = horizon_theme::RADIUS;
-pub const RADIUS_CARD: f32 = horizon_theme::RADIUS_PLATE;
+pub const RADIUS_PLATE: f32 = horizon_theme::RADIUS_PLATE;
+pub const PILL: f32 = horizon_theme::RADIUS_PILL;
+/// The index column of a numbered row, and the label column after it.
+pub const INDEX: f32 = horizon_theme::INDEX;
 pub const ROW_LABEL: f32 = 150.;
 pub const SIDEBAR: f32 = 200.;
 /// Motion durations in seconds (`horizon_theme::QUICK` and `MOVE`).
@@ -414,6 +432,12 @@ pub struct Ui<'a> {
     pub opacity: f32,
     /// Added to every x / y drawn (screen slides).
     pub offset: (f32, f32),
+    /// The number the next settings row shows (`01`, `02`…); `page_header`
+    /// starts it again.
+    pub row_index: usize,
+    /// Secondary text (indices, inactive items, captions): `FAINT`, or `MUTED` over the home
+    /// page's lighter veil (`horizon_theme::HOME_VEIL`).
+    pub muted: u32,
 }
 impl<'a> Ui<'a> {
     /// `cursor` is in GUI pixels, like every screen's input.
@@ -443,6 +467,8 @@ impl<'a> Ui<'a> {
             real: true,
             opacity: 1.0,
             offset: (0.0, 0.0),
+            row_index: 0,
+            muted: color::FAINT,
         }
     }
     /// A layout pass for hit testing: nothing is drawn and no tween starts.
@@ -841,17 +867,51 @@ impl<'a> Ui<'a> {
     }
 
     // ---- the launcher's components ----
-    /// The launcher's `page_header`: an Instrument Serif title and a muted line.
-    /// Returns the height used.
+    /// The launcher's `page_header`: a display title and a muted line.
+    /// Returns the height used, and numbers the rows below from 01.
     pub fn page_header(&mut self, x: f32, y: f32, title: &str, description: &str) -> f32 {
-        self.text_line(Face::Display, TITLE, 32.0, x, y, color::TEXT, title);
-        self.text(Face::Regular, BODY, x, y + 38.0, color::MUTED, description);
-        38.0 + (BODY * 1.45).round()
+        self.row_index = 0;
+        let line = (HERO * 1.1).round();
+        self.text_line(Face::Display, HERO, line, x, y, color::TEXT, title);
+        self.text(
+            Face::Regular,
+            LARGE,
+            x,
+            y + line + 10.0,
+            color::FAINT,
+            description,
+        );
+        line + 10.0 + (LARGE * 1.5).round()
     }
-    /// The launcher's `button`: 30 tall (or `CONTROL_LARGE` with `LARGE`
-    /// text), 6 radius, medium weight, a hover layer easing in over `QUICK`,
-    /// and the press state (opacity 0.82 for primary, 0.8 otherwise).
-    /// Returns the hover.
+    /// Mono capitals: the status above a title, section labels, footnotes.
+    pub fn caps(&mut self, x: f32, y: f32, color: u32, text: &str) -> f32 {
+        self.text(Face::Mono, MICRO, x, y, color, &text.to_uppercase())
+    }
+    /// Horizon's mark at `size` dp: two stems, their reflection at a third,
+    /// the horizon across in the accent.
+    pub fn mark(&mut self, x: f32, y: f32, size: f32) {
+        let u = size / 16.0;
+        for sx in [4.0, 10.0] {
+            self.fill(x + sx * u, y + 3.0 * u, 2.0 * u, 4.0 * u, color::TEXT);
+            self.fill(
+                x + sx * u,
+                y + 8.0 * u,
+                2.0 * u,
+                4.0 * u,
+                color::with_alpha(color::TEXT, 0.36),
+            );
+        }
+        self.fill(x + u, y + 7.0 * u, 14.0 * u, u, color::ACCENT);
+    }
+    /// The sidebar's frame, shared by the title, options and pause screens:
+    /// no panel, only the mark and a name at the top, as the launcher's bar.
+    pub fn sidebar_frame(&mut self, title: &str) {
+        self.mark(22.0, 26.0, 18.0);
+        self.text_line(Face::Medium, BODY, 18.0, 48.0, 26.0, color::TEXT, title);
+    }
+    /// The launcher's `button`: a pill 32 tall (or `CONTROL_LARGE` with
+    /// `LARGE` text), medium weight, a hover layer easing in over `QUICK`,
+    /// and the press state. Returns the hover.
     pub fn button(
         &mut self,
         id: u64,
@@ -875,29 +935,28 @@ impl<'a> Ui<'a> {
         }
         let fg = match kind {
             Kind::Primary => {
-                self.rounded(x, y, w, h, RADIUS, color::ACCENT);
+                self.rounded(x, y, w, h, PILL, color::ACCENT);
                 self.rounded(
                     x,
                     y,
                     w,
                     h,
-                    RADIUS,
-                    color::with_alpha(color::WHITE, 0.10 * hover),
+                    PILL,
+                    color::with_alpha(color::WHITE, 0.12 * hover),
                 );
                 color::ON_ACCENT
             }
             Kind::Secondary => {
-                self.rounded(x, y, w, h, RADIUS, color::RAISED);
-                self.rounded(x, y, w, h, RADIUS, color::with_alpha(color::HOVER, hover));
-                self.border(x, y, w, h, RADIUS, color::BORDER);
+                self.rounded(x, y, w, h, PILL, color::RAISED);
+                self.rounded(x, y, w, h, PILL, color::with_alpha(color::HOVER, hover));
                 color::TEXT
             }
             Kind::Ghost => {
-                self.rounded(x, y, w, h, RADIUS, color::with_alpha(color::HOVER, hover));
-                color::mix(color::MUTED, color::TEXT, hover)
+                self.rounded(x, y, w, h, PILL, color::with_alpha(color::RAISED, hover));
+                color::mix(self.muted, color::TEXT, hover)
             }
             Kind::Danger => {
-                self.rounded(x, y, w, h, RADIUS, color::with_alpha(color::HOVER, hover));
+                self.rounded(x, y, w, h, PILL, color::with_alpha(color::RAISED, hover));
                 color::DANGER
             }
         };
@@ -916,14 +975,14 @@ impl<'a> Ui<'a> {
         self.opacity = saved;
         hover
     }
-    /// The width the launcher's button gives a label (padding 12, or 24 large).
+    /// The width the launcher's button gives a label (padding 16, or 24 large).
     pub fn button_width(&self, label: &str, large: bool) -> f32 {
-        let (size, pad) = if large { (LARGE, 24.0) } else { (BODY, 12.0) };
+        let (size, pad) = if large { (LARGE, 24.0) } else { (BODY, 16.0) };
         (self.measure(Face::Medium, size, label) + pad * 2.0).ceil()
     }
-    /// The launcher's sidebar list: 30-tall items 2 apart, a raised pill with
-    /// a 1px border that slides to the selected item over `MOVE`, and hover
-    /// layers on the others. Items are ids `base + index`.
+    /// The launcher's navigation as a sidebar: text items 32 tall and 2 apart,
+    /// a soft pill that slides to the selected item over `MOVE`, hover layers
+    /// on the others. Items are ids `base + index`.
     pub fn sidebar_list(
         &mut self,
         base: u64,
@@ -933,11 +992,10 @@ impl<'a> Ui<'a> {
         labels: &[&str],
         selected: usize,
     ) {
-        const STEP: f32 = 32.0;
+        const STEP: f32 = 34.0;
         let pill = self.tween(base ^ 0x9111, selected as f32, move_());
         let py = y + pill * STEP;
-        self.rounded(x, py, w, CONTROL, RADIUS, color::RAISED);
-        self.border(x, py, w, CONTROL, RADIUS, color::BORDER);
+        self.rounded(x, py, w, CONTROL, PILL, color::RAISED);
         for (i, label) in labels.iter().enumerate() {
             let iy = y + i as f32 * STEP;
             let active = i == selected;
@@ -948,22 +1006,22 @@ impl<'a> Ui<'a> {
                     iy,
                     w,
                     CONTROL,
-                    RADIUS,
-                    color::with_alpha(color::HOVER, 0.7 * hover),
+                    PILL,
+                    color::with_alpha(color::RAISED, 0.8 * hover),
                 );
             }
             let (face, fg) = if active {
                 (Face::Medium, color::TEXT)
             } else {
-                (Face::Regular, color::MUTED)
+                (Face::Regular, color::mix(self.muted, color::TEXT, hover))
             };
-            self.text_line(face, BODY, CONTROL, x + 10.0, iy, fg, label);
+            self.text_line(face, BODY, CONTROL, x + 12.0, iy, fg, label);
         }
     }
-    /// The launcher's segmented control: a raised frame (radius 7, padding 2,
-    /// 1px border) holding 26-tall segments; the active one has the page
-    /// background, a border and medium text. Segments are ids `base + index`.
-    /// Returns the control's width.
+    /// The launcher's segmented control: a soft pill track (padding 2)
+    /// holding 28-tall segments; the selected one is an ink pill with
+    /// page-coloured text. Segments are ids `base + index`. Returns the
+    /// control's width.
     pub fn segmented(
         &mut self,
         base: u64,
@@ -976,31 +1034,28 @@ impl<'a> Ui<'a> {
             .iter()
             .map(|l| (self.measure(Face::Medium, BODY, l) + 28.0).ceil())
             .collect();
-        let total = widths.iter().sum::<f32>() + 2.0 * (labels.len() as f32 - 1.0) + 4.0 + 2.0;
-        let h = SEGMENT + 6.0;
-        self.rounded(x, y, total, h, RADIUS_GROUP, color::RAISED);
-        self.border(x, y, total, h, RADIUS_GROUP, color::BORDER);
-        let mut sx = x + 3.0;
+        let total = widths.iter().sum::<f32>() + 2.0 * (labels.len() as f32 - 1.0) + 4.0;
+        let h = SEGMENT + 4.0;
+        self.rounded(x, y, total, h, PILL, color::RAISED);
+        let mut sx = x + 2.0;
         for (i, (label, sw)) in labels.iter().zip(&widths).enumerate() {
             let active = i == selected;
-            let hover = self.interact(base + i as u64, sx, y + 3.0, *sw, SEGMENT, true);
+            let hover = self.interact(base + i as u64, sx, y + 2.0, *sw, SEGMENT, true);
             if active {
-                self.rounded(sx, y + 3.0, *sw, SEGMENT, RADIUS_SEGMENT, color::BG);
-                self.border(sx, y + 3.0, *sw, SEGMENT, RADIUS_SEGMENT, color::BORDER);
+                self.rounded(sx, y + 2.0, *sw, SEGMENT, PILL, color::TEXT);
             }
             let fg = if active {
-                color::TEXT
+                color::BG
             } else {
-                color::mix(color::MUTED, color::TEXT, hover)
+                color::mix(self.muted, color::TEXT, hover)
             };
-            let face = if active { Face::Medium } else { Face::Regular };
-            let lw = self.measure(face, BODY, label);
+            let lw = self.measure(Face::Medium, BODY, label);
             self.text_line(
-                face,
+                Face::Medium,
                 BODY,
                 SEGMENT,
                 sx + ((sw - lw) / 2.0).round(),
-                y + 3.0,
+                y + 2.0,
                 fg,
                 label,
             );
@@ -1008,45 +1063,55 @@ impl<'a> Ui<'a> {
         }
         total
     }
-    /// The launcher's `switch`: 34x20, accent when on, border colour when off,
-    /// a white 16px knob sliding over `QUICK`. Right-aligned at `right`.
+    /// The launcher's `switch`: 36x20, accent when on, the plate colour when
+    /// off, a white 16px knob sliding over `MOVE`. Right-aligned at `right`.
     pub fn switch(&mut self, id: u64, right: f32, cy: f32, on: bool) {
-        let (w, h) = (34.0, 20.0);
+        let (w, h) = (36.0, 20.0);
         let (x, y) = (right - w, (cy - h / 2.0).round());
         self.interact(id, x - 4.0, y - 4.0, w + 8.0, h + 8.0, true);
-        let t = self.tween(id ^ 0x5717c4, if on { 1.0 } else { 0.0 }, quick());
+        let t = self.tween(id ^ 0x5717c4, if on { 1.0 } else { 0.0 }, move_());
         self.rounded(
             x,
             y,
             w,
             h,
             h / 2.0,
-            color::mix(color::BORDER, color::ACCENT, t),
+            color::mix(color::HOVER, color::ACCENT, t),
         );
-        self.rounded(x + 2.0 + 14.0 * t, y + 2.0, 16.0, 16.0, 8.0, color::WHITE);
+        self.rounded(x + 2.0 + 16.0 * t, y + 2.0, 16.0, 16.0, 8.0, color::WHITE);
     }
-    /// The launcher's settings `row`: a 150-wide muted label column, then the
+    /// The next row's number, in mono, in the index column at `x`.
+    fn index(&mut self, x: f32, y: f32) {
+        self.row_index += 1;
+        let n = format!("{:02}", self.row_index);
+        let muted = self.muted;
+        self.text(Face::Mono, MICRO, x, y + 2.0, muted, &n);
+    }
+    /// The launcher's settings `row`: its number, a label column, then the
     /// value; py 12. Returns the row height (draw the action yourself,
-    /// right-aligned, and a `divider` under it).
+    /// right-aligned, and a `divider` under it). `value_w` is measured from
+    /// the value column as before the numbers came; the index takes its
+    /// share from it.
     pub fn row(&mut self, x: f32, y: f32, label: &str, value: &str, value_w: f32) -> f32 {
         let line = (BODY * 1.45).round();
         let h = 12.0 + line.max(CONTROL) + 12.0;
         let ty = y + (h - line) / 2.0;
-        self.text(Face::Regular, BODY, x, ty, color::MUTED, label);
-        let value = self.fit(Face::Regular, BODY, value, value_w);
+        self.index(x, ty);
+        self.text(Face::Regular, BODY, x + INDEX, ty, color::TEXT, label);
+        let value = self.fit(Face::Regular, BODY, value, (value_w - INDEX).max(0.0));
         self.text(
             Face::Regular,
             BODY,
-            x + ROW_LABEL + 16.0,
+            x + INDEX + ROW_LABEL + 16.0,
             ty,
-            color::TEXT,
+            color::MUTED,
             &value,
         );
         h
     }
     /// A settings row with, under its label, a one-line description led by
     /// the setting's frame-time cost (`cost` 0 none .. 3 high, coloured from
-    /// faint to the danger colour). Same height as [`Ui::row`].
+    /// the muted colour to the danger colour). Same height as [`Ui::row`].
     #[allow(clippy::too_many_arguments)]
     pub fn described_row(
         &mut self,
@@ -1061,8 +1126,10 @@ impl<'a> Ui<'a> {
     ) -> f32 {
         let h = 12.0 + CONTROL + 12.0;
         let top = y + 8.0;
+        self.index(x, top);
+        let x = x + INDEX;
         self.text(Face::Regular, BODY, x, top, color::TEXT, label);
-        let value = self.fit(Face::Regular, BODY, value, value_w);
+        let value = self.fit(Face::Regular, BODY, value, (value_w - INDEX).max(0.0));
         self.text(
             Face::Regular,
             BODY,
@@ -1085,7 +1152,7 @@ impl<'a> Ui<'a> {
             Face::Regular,
             SMALL,
             description,
-            (description_w - used - 8.0).max(0.0),
+            (description_w - INDEX - used - 8.0).max(0.0),
         );
         self.text(
             Face::Regular,
@@ -1097,19 +1164,19 @@ impl<'a> Ui<'a> {
         );
         h
     }
-    /// A slider in the launcher's language: a 4px track in the border colour
-    /// filled with the accent, a white 14px knob. Dragging is the screen's
-    /// job (see [`slider_value`]).
+    /// A slider in the launcher's language: a 2px track in the rule colour
+    /// filled with ink, an ink 14px knob that grows under the pointer.
+    /// Dragging is the screen's job (see [`slider_value`]).
     pub fn slider(&mut self, id: u64, x: f32, cy: f32, w: f32, value: f32) {
         let hover = self.interact(id, x - 8.0, cy - 12.0, w + 16.0, 24.0, true);
         let v = value.clamp(0.0, 1.0);
-        self.rounded(x, cy - 2.0, w, 4.0, 2.0, color::BORDER);
-        self.rounded(x, cy - 2.0, w * v, 4.0, 2.0, color::ACCENT);
+        self.rounded(x, cy - 1.0, w, 2.0, 1.0, color::BORDER);
+        self.rounded(x, cy - 1.0, w * v, 2.0, 1.0, color::TEXT);
         let r = 7.0 + hover;
-        self.rounded(x + w * v - r, cy - r, r * 2.0, r * 2.0, r, color::WHITE);
+        self.rounded(x + w * v - r, cy - r, r * 2.0, r * 2.0, r, color::TEXT);
     }
-    /// A text field: the launcher's raised control with a 1px border that
-    /// takes the accent while focused.
+    /// A text field: a soft plate with no border; focus draws a 1px accent
+    /// ring.
     pub fn field(
         &mut self,
         id: u64,
@@ -1128,71 +1195,62 @@ impl<'a> Ui<'a> {
             w,
             h,
             RADIUS,
-            color::with_alpha(color::HOVER, hover * 0.7),
+            color::with_alpha(color::HOVER, hover * 0.6),
         );
-        self.border(
-            x,
-            y,
-            w,
-            h,
-            RADIUS,
-            color::mix(color::BORDER, color::ACCENT, focus),
-        );
+        self.border(x, y, w, h, RADIUS, color::with_alpha(color::ACCENT, focus));
         let shown = self.fit(Face::Regular, BODY, value, w - 28.0);
         let tw = if value.is_empty() {
             self.text_line(
                 Face::Regular,
                 BODY,
                 h,
-                x + 12.0,
+                x + 14.0,
                 y,
                 color::FAINT,
                 placeholder,
             );
             0.0
         } else {
-            self.text_line(Face::Regular, BODY, h, x + 12.0, y, color::TEXT, &shown)
+            self.text_line(Face::Regular, BODY, h, x + 14.0, y, color::TEXT, &shown)
         };
         if focused && caret {
-            self.fill(x + 12.0 + tw + 1.0, y + 8.0, 1.0, h - 16.0, color::TEXT);
+            self.fill(x + 14.0 + tw + 1.0, y + 9.0, 1.0, h - 18.0, color::TEXT);
         }
     }
-    /// The launcher's atmosphere over the backdrop: a veil of the page
-    /// background, darker from the left and toward the bottom.
+    /// The veil over the live backdrop: the page colour, flat, at `veil`.
+    /// `shade` fades it in with the opening.
     pub fn atmosphere(&mut self, veil: f32, shade: f32) {
         let (w, h) = (self.w, self.h);
-        self.fill(0.0, 0.0, w, h, color::with_alpha(color::BG, veil));
-        self.hgradient(
+        self.fill(
             0.0,
             0.0,
-            w * 0.7,
-            h,
-            color::with_alpha(color::BG, 0.9 * shade),
-            color::with_alpha(color::BG, 0.0),
-        );
-        self.gradient(
-            0.0,
-            h * 0.25,
             w,
-            h * 0.75,
-            color::with_alpha(color::BG, 0.0),
-            color::with_alpha(color::BG, 0.75 * shade),
+            h,
+            color::with_alpha(color::BG, veil * shade.max(0.0)),
         );
     }
-    /// The plain background while the live backdrop loads: the page colour
-    /// with a faint cold light from the top.
+    /// The giant faint wordmark, whole, as wide as the column at `x` (`w` wide, at most `max`
+    /// tall) with its baseline at `bottom`.
+    pub fn wordmark(&mut self, x: f32, w: f32, bottom: f32, max: f32) {
+        let unit = self.measure(Face::Display, 100.0, "horizon") / 100.0;
+        let size = (w / unit).min(max).floor();
+        // Geist's x-height glyphs sit on the baseline; its ascenders reach 0.75 em above it.
+        let line = (size * 1.2).round();
+        let top = bottom - line * 0.5 - size * 0.36;
+        self.text_line(
+            Face::Display,
+            size,
+            line,
+            x - size * 0.05,
+            top,
+            color::with_alpha(color::TEXT, 0.06),
+            "horizon",
+        );
+    }
+    /// The plain background while the live backdrop loads: the page colour.
     pub fn cold_background(&mut self, opacity: f32) {
         let (w, h) = (self.w, self.h);
-        let a = |c: u32, k: f32| color::with_alpha(c, k * opacity);
-        self.fill(0.0, 0.0, w, h, a(color::BG, 1.0));
-        self.gradient(
-            0.0,
-            0.0,
-            w,
-            h * 0.7,
-            a(color::hex(0x3a5a86, 255), 0.22),
-            a(color::hex(0x3a5a86, 255), 0.0),
-        );
+        self.fill(0.0, 0.0, w, h, color::with_alpha(color::BG, opacity));
     }
 }
 /// The slider value (0..1) for a cursor x in GUI pixels over a track at

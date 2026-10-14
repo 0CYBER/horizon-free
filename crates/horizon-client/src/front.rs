@@ -108,12 +108,18 @@ impl Title {
             ui.cold_background(1.0 - backdrop);
         }
         let shade = t::ease_out_cubic(reveal);
+        // The world stays in view on the home page; deeper pages veil it more.
         let veil = if matches!(self.mode, Mode::Main) {
-            0.42
+            horizon_theme::HOME_VEIL
         } else {
-            0.66
+            horizon_theme::VEIL
         };
-        ui.atmosphere(veil * shade, shade);
+        ui.muted = if matches!(self.mode, Mode::Main) {
+            color::MUTED
+        } else {
+            color::FAINT
+        };
+        ui.atmosphere(veil, shade);
         let side = t::ease_out_cubic((reveal - 0.2) / 0.7);
         let main = t::ease_out_cubic((reveal - 0.35) / 0.65);
 
@@ -156,7 +162,7 @@ impl Title {
             // The wordmark rises and fades as the interface comes in.
             let word = 1.0 - t::ease_out_cubic(reveal / 0.6);
             ui.opacity = word;
-            let tw = ui.measure(Face::Display, t::WORDMARK, "Horizon");
+            let tw = ui.measure(Face::Display, t::WORDMARK, "horizon");
             let line = (t::WORDMARK * 1.2).round();
             ui.text_line(
                 Face::Display,
@@ -164,8 +170,8 @@ impl Title {
                 line,
                 ((ui.w - tw) / 2.0).round(),
                 (ui.h - line) / 2.0 - 28.0 * (1.0 - word),
-                color::WHITE,
-                "Horizon",
+                color::TEXT,
+                "horizon",
             );
             ui.opacity = 1.0;
         }
@@ -188,19 +194,9 @@ impl Title {
         skipped
     }
     fn sidebar(&self, ui: &mut Ui) {
-        let h = ui.h;
-        ui.fill(0.0, 0.0, SIDEBAR, h, color::with_alpha(color::SIDEBAR, 0.8));
-        ui.vline(SIDEBAR - 1.0, 0.0, h, color::BORDER);
-        ui.text_line(
-            Face::Display,
-            22.0,
-            30.0,
-            22.0,
-            16.0,
-            color::TEXT,
-            "Horizon",
-        );
-        ui.sidebar_list(NAV, 12.0, 66.0, SIDEBAR - 24.0, &PAGES, page(&self.mode));
+        let (h, muted) = (ui.h, ui.muted);
+        ui.sidebar_frame("Horizon");
+        ui.sidebar_list(NAV, 12.0, 72.0, SIDEBAR - 24.0, &PAGES, page(&self.mode));
         let qy = h - 12.0 - 18.0 - 12.0 - CONTROL;
         let hover = ui.interact(QUIT, 12.0, qy, SIDEBAR - 24.0, CONTROL, true);
         ui.rounded(
@@ -208,51 +204,45 @@ impl Title {
             qy,
             SIDEBAR - 24.0,
             CONTROL,
-            t::RADIUS,
-            color::with_alpha(color::HOVER, 0.7 * hover),
+            t::PILL,
+            color::with_alpha(color::RAISED, 0.8 * hover),
         );
         ui.text_line(
             Face::Regular,
             BODY,
             CONTROL,
-            22.0,
+            24.0,
             qy,
-            color::mix(color::MUTED, color::TEXT, hover),
+            color::mix(muted, color::TEXT, hover),
             "Quit game",
         );
-        ui.text(
-            Face::Regular,
-            SMALL,
-            22.0,
-            h - 12.0 - 18.0,
-            color::FAINT,
-            "Horizon 26.3",
-        );
+        ui.caps(24.0, h - 12.0 - 18.0, muted, "Horizon 26.3");
     }
     /// Home: the launcher's Play page over the backdrop.
     fn home(&self, ui: &mut Ui, x: f32, w: f32) {
+        ui.wordmark(x, w, ui.h - 64.0, 220.0);
+        let muted = ui.muted;
         let mut y = 36.0 + 28.0;
-        ui.text(
-            Face::Medium,
-            SMALL,
+        ui.caps(
             x,
             y,
-            color::FAINT,
+            muted,
             "Minecraft 26.3  ·  Java Edition, rewritten in Rust",
         );
-        y += 22.0;
-        ui.text_line(Face::Display, t::HERO, 58.0, x, y, color::TEXT, "Horizon");
-        y += 58.0 + 12.0;
+        y += 24.0;
+        let line = (t::HERO * 1.1).round();
+        ui.text_line(Face::Display, t::HERO, line, x, y, color::TEXT, "Horizon");
+        y += line + 10.0;
         ui.text(
             Face::Regular,
             t::LARGE,
             x,
             y,
-            color::MUTED,
+            muted,
             "The world you know, rebuilt from the ground up.",
         );
-        y += 22.0 + 24.0;
-        let pw = ui.button_width("Singleplayer", true).max(120.0);
+        y += 22.0 + 28.0;
+        let pw = ui.button_width("Singleplayer", true).max(132.0);
         ui.button(
             PLAY,
             [x, y, pw, CONTROL_LARGE],
@@ -268,7 +258,8 @@ impl Title {
             Kind::Secondary,
             true,
         );
-        y += CONTROL_LARGE + 24.0;
+        y += CONTROL_LARGE + 32.0;
+        ui.row_index = 0;
         ui.divider(x, y, w);
         let worlds = self.recent_worlds();
         let last = worlds.first();
@@ -298,14 +289,11 @@ impl Title {
         };
         y += ui.row(x, y, "Saves", &count, w - t::ROW_LABEL - 16.0);
         ui.divider(x, y, w);
-        let note = "Not affiliated with Mojang or Microsoft";
-        ui.text(
-            Face::Regular,
-            SMALL,
+        ui.caps(
             x,
             ui.h - 12.0 - 18.0,
-            color::FAINT,
-            note,
+            muted,
+            "Not affiliated with Mojang or Microsoft",
         );
     }
     /// A click in Horizon's layout (`x`, `y` in GUI pixels).
@@ -491,8 +479,9 @@ fn actions_right(ui: &mut Ui, right: f32, y: f32, items: &[(u64, &str, Kind, boo
     }
     rx
 }
-/// A selectable list row: the launcher's row look with a hover layer and
-/// the raised selection with its 1px border. Returns the row height.
+/// A selectable list row: its number, the name and a line under it, a mono
+/// detail on the right; a soft plate fades in under the pointer and stays
+/// under the selection, reaching past the row. Returns the row height.
 #[allow(clippy::too_many_arguments)]
 fn list_row(
     ui: &mut Ui,
@@ -506,50 +495,60 @@ fn list_row(
     right: &str,
     dot: Option<u32>,
 ) -> f32 {
-    let h = 60.0;
-    let hover = ui.interact(rid, x - 12.0, y + 2.0, w + 24.0, h - 4.0, true);
+    let h = 64.0;
+    let hover = ui.interact(rid, x - 16.0, y + 2.0, w + 32.0, h - 4.0, true);
     let sel = ui.tween(rid ^ 0x5e1ec7, if selected { 1.0 } else { 0.0 }, t::quick());
     ui.rounded(
-        x - 12.0,
-        y + 4.0,
-        w + 24.0,
-        h - 8.0,
-        t::RADIUS,
-        color::with_alpha(color::HOVER, 0.7 * hover),
+        x - 16.0,
+        y + 3.0,
+        w + 32.0,
+        h - 6.0,
+        t::RADIUS_PLATE,
+        color::with_alpha(color::RAISED, (0.7 * hover).max(sel)),
     );
-    ui.rounded(
-        x - 12.0,
-        y + 4.0,
-        w + 24.0,
-        h - 8.0,
-        t::RADIUS,
-        color::with_alpha(color::RAISED, sel),
+    ui.row_index += 1;
+    let n = format!("{:02}", ui.row_index);
+    ui.text(
+        Face::Mono,
+        t::MICRO,
+        x,
+        y + 15.0,
+        color::mix(color::FAINT, color::TEXT, sel),
+        &n,
     );
-    ui.border(
-        x - 12.0,
-        y + 4.0,
-        w + 24.0,
-        h - 8.0,
-        t::RADIUS,
-        color::with_alpha(color::BORDER, sel),
-    );
-    let mut tx = x;
+    let mut tx = x + t::INDEX;
     if let Some(dot) = dot {
-        ui.rounded(x, y + 17.0, 6.0, 6.0, 3.0, dot);
+        ui.rounded(tx, y + 19.0, 6.0, 6.0, 3.0, dot);
         tx += 16.0;
     }
-    let title = ui.fit(Face::Medium, BODY, title, w - 200.0);
-    ui.text(Face::Medium, BODY, tx, y + 10.0, color::TEXT, &title);
-    let meta = ui.fit(Face::Regular, SMALL, meta, w - 200.0);
-    ui.text(Face::Regular, SMALL, tx, y + 31.0, color::MUTED, &meta);
-    ui.text_right(Face::Regular, SMALL, x + w, y + 21.0, color::FAINT, right);
+    let title = ui.fit(Face::Medium, t::LARGE + 2.0, title, w - 240.0);
+    ui.text(
+        Face::Medium,
+        t::LARGE + 2.0,
+        tx,
+        y + 10.0,
+        color::TEXT,
+        &title,
+    );
+    let meta = ui.fit(Face::Regular, SMALL, meta, w - 240.0);
+    ui.text(Face::Regular, SMALL, tx, y + 35.0, color::FAINT, &meta);
+    let right = right.to_uppercase();
+    ui.text_right(Face::Mono, t::MICRO, x + w, y + 25.0, color::FAINT, &right);
     ui.divider(x, y + h, w);
     h
 }
-/// An empty list: a serif line and a hint.
+/// An empty list: a short line in heading type and a hint.
 fn empty(ui: &mut Ui, x: f32, y: f32, title: &str, hint: &str) {
-    ui.text_line(Face::Display, 22.0, 30.0, x, y + 32.0, color::TEXT, title);
-    ui.text(Face::Regular, BODY, x, y + 66.0, color::MUTED, hint);
+    ui.text_line(
+        Face::Display,
+        t::HEADING,
+        28.0,
+        x,
+        y + 32.0,
+        color::TEXT,
+        title,
+    );
+    ui.text(Face::Regular, BODY, x, y + 64.0, color::FAINT, hint);
 }
 
 fn worlds_page(
@@ -843,8 +842,7 @@ fn multiplayer_page(ui: &mut Ui, x: f32, w: f32, screen: &Screen, caret: bool) {
             // The launcher's error note: a danger dot beside the message.
             let lines = wrap(ui, reason, w - 40.0);
             let box_h = 24.0 + lines.len() as f32 * 19.0;
-            ui.rounded(x, y, w, box_h, t::RADIUS, color::RAISED);
-            ui.border(x, y, w, box_h, t::RADIUS, color::BORDER);
+            ui.rounded(x, y, w, box_h, t::RADIUS_PLATE, color::RAISED);
             ui.rounded(x + 12.0, y + 18.0, 6.0, 6.0, 3.0, color::DANGER);
             for (i, line) in lines.iter().enumerate() {
                 ui.text_line(
@@ -920,44 +918,28 @@ pub mod pause {
         let (w, h) = (ui.w, ui.h);
         let p = t::ease_out_quint(opened.elapsed().as_secs_f32() / t::move_());
         ui.opacity = p;
-        ui.atmosphere(0.35, 1.0);
+        ui.atmosphere(horizon_theme::VEIL, 1.0);
         ui.offset = (-16.0 * (1.0 - p), 0.0);
-        ui.fill(0.0, 0.0, SIDEBAR, h, color::with_alpha(color::SIDEBAR, 0.8));
-        ui.vline(SIDEBAR - 1.0, 0.0, h, color::BORDER);
-        ui.text_line(
-            Face::Display,
-            22.0,
-            30.0,
-            22.0,
-            16.0,
-            color::TEXT,
-            "Horizon",
-        );
+        ui.sidebar_frame("Horizon");
         ui.sidebar_list(
             id("pause.nav", 0),
             12.0,
-            66.0,
+            72.0,
             SIDEBAR - 24.0,
             &["Game", "Advancements", "Statistics", "Options"],
             0,
         );
-        ui.text(
-            Face::Regular,
-            SMALL,
-            22.0,
-            h - 12.0 - 18.0,
-            color::FAINT,
-            "Horizon 26.3",
-        );
+        ui.caps(24.0, h - 12.0 - 18.0, color::FAINT, "Horizon 26.3");
         ui.offset = (0.0, 8.0 * (1.0 - p));
         let x = SIDEBAR + 48.0;
         let cw = (w - x - 48.0).min(760.0);
-        let mut y = 36.0;
-        ui.text(Face::Medium, SMALL, x, y, color::FAINT, "Game paused");
-        y += 22.0;
+        let mut y = 36.0 + 28.0;
+        ui.caps(x, y, color::FAINT, "Game paused");
+        y += 24.0;
+        let line = (t::HERO * 1.1).round();
         let title = ui.fit(Face::Display, t::HERO, world, cw);
-        ui.text_line(Face::Display, t::HERO, 58.0, x, y, color::TEXT, &title);
-        y += 58.0 + 24.0;
+        ui.text_line(Face::Display, t::HERO, line, x, y, color::TEXT, &title);
+        y += line + 32.0;
         let bw = ui.button_width("Back to game", true).max(120.0);
         ui.button(
             act(0),
@@ -974,7 +956,8 @@ pub mod pause {
             Kind::Secondary,
             true,
         );
-        y += CONTROL_LARGE + 24.0;
+        y += CONTROL_LARGE + 32.0;
+        ui.row_index = 0;
         ui.divider(x, y, cw);
         let rh = ui.row(
             x,
