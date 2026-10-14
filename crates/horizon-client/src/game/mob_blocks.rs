@@ -216,14 +216,13 @@ impl Game<'_> {
         light: u32,
         out: &mut Vec<Vertex>,
     ) {
-        let overlay = u32::from(mob.hurt_time > 0);
         self.captain_banner_geometry(mob, camera, alpha, light, out);
         self.held_item_geometry(mob, camera, alpha, light, true, out);
         if mob.species() == Species::Enderman
             && let Some(state) = mob.extra.carried
             && let Some((sprite, tint)) = self.particle_sprite(state)
         {
-            // CarriedBlockLayer.
+            // CarriedBlockLayer: OverlayTexture.NO_OVERLAY, never the hurt tint.
             let base = render::base_transform(mob, alpha as f32, camera);
             let t = base
                 * glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.6875, -0.75))
@@ -240,7 +239,7 @@ impl Game<'_> {
                     tint,
                 },
                 light,
-                overlay,
+                0,
                 out,
             );
         }
@@ -257,7 +256,7 @@ impl Game<'_> {
         lit: bool,
         out: &mut Vec<Vertex>,
     ) {
-        let overlay = u32::from(mob.hurt_time > 0);
+        // ItemInHandLayer submits with OverlayTexture.NO_OVERLAY: no hurt tint.
         for (item, left) in [(&mob.extra.main_hand, false), (&mob.extra.off_hand, true)] {
             let Some(item) = item else { continue };
             let Some(t) =
@@ -297,18 +296,10 @@ impl Game<'_> {
             // `updateForLiving`: seeded by the entity id plus the context ordinal.
             let seed = mob.id as i32 + if left { 1 } else { 2 };
             let state = self.resolve_item(&stack, context, Some(&owner), seed);
-            let start = out.len();
             if lit {
                 self.submit_item_world(&state, t, light, out);
             } else {
                 self.submit_item_unlit(&state, t, light, out);
-            }
-            if overlay != 0 {
-                for v in &mut out[start..] {
-                    if v.layer == 0 {
-                        v.layer = overlay;
-                    }
-                }
             }
         }
     }

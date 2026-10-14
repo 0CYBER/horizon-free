@@ -1240,9 +1240,9 @@ impl Game<'_> {
                     let start = out.len();
                     self.block_model_vertices(state, m, packed, out);
                     if flash {
+                        // submitWhiteSolidBlock: OverlayTexture.u(1.0) on the cart's own light.
                         for v in &mut out[start..] {
-                            v.color = 0xFFFF_FFFF;
-                            v.light = 240 | 240 << 8;
+                            v.layer = 5;
                         }
                     }
                 }
