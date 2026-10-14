@@ -81,7 +81,7 @@ impl Button {
         let i = self as usize;
         match style {
             GlyphStyle::PlayStation => [
-                "✕", "○", "□", "△", "L1", "R1", "L2", "R2", "Create", "Options", "L3", "R3", "↑",
+                "×", "○", "□", "△", "L1", "R1", "L2", "R2", "Create", "Options", "L3", "R3", "↑",
                 "↓", "←", "→",
             ][i],
             GlyphStyle::Nintendo => [
@@ -736,7 +736,7 @@ mod tests {
     #[test]
     fn labels_and_conflicts() {
         assert_eq!(Button::South.label(GlyphStyle::Xbox), "A");
-        assert_eq!(Button::South.label(GlyphStyle::PlayStation), "✕");
+        assert_eq!(Button::South.label(GlyphStyle::PlayStation), "×");
         assert_eq!(Button::South.label(GlyphStyle::Nintendo), "B");
         assert_eq!(Button::RightTrigger.label(GlyphStyle::PlayStation), "R2");
         assert_eq!(Button::DPadLeft.label(GlyphStyle::Xbox), "←");

@@ -98,7 +98,7 @@ the label in the game font, sized to the GUI scale, with two styles:
 
 - **Xbox / Steam Deck / generic**: A B X Y in their usual colours, LB RB LT
   RT, View, Menu, stick icons.
-- **PlayStation**: ✕ ○ □ △ drawn as shapes in their colours, L1 R1 L2 R2,
+- **PlayStation**: × ○ □ △ in their colours (× rather than ✕, which the game fonts lack), L1 R1 L2 R2,
   Create/Share, Options.
 - **Nintendo**: B A Y X by position.
 
