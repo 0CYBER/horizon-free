@@ -56,6 +56,9 @@ struct Scenario {
     spawning: bool,
     /// The player hits a mob for 1 at the start of a tick: (tick, mob index).
     hurts: Vec<(i32, usize)>,
+    /// The player feeds an animal at the start of a tick (Animal.mobInteract):
+    /// (tick, mob index); the scenario only feeds each animal its food.
+    feeds: Vec<(i32, usize)>,
     hand: Option<String>,
     mobs: Vec<MobSpec>,
 }
@@ -92,6 +95,7 @@ fn parse(text: &str) -> Vec<Scenario> {
             }
             "heart" => s.hearts.push(f.iter().map(|x| (*x).to_owned()).collect()),
             "hurt" => s.hurts.push((f[1].parse().unwrap(), f[2].parse().unwrap())),
+            "feed" => s.feeds.push((f[1].parse().unwrap(), f[2].parse().unwrap())),
             "player" => {
                 s.player = Some([
                     f[1].parse().unwrap(),
@@ -893,6 +897,9 @@ fn main() -> horizon_client::Result<()> {
             }
         });
         let mut scratch = LegacyRandom::new(0);
+        // The level's random for eating sounds: only goats and sniffers draw
+        // from it, and the scenarios feed neither.
+        let mut level_random = LegacyRandom::new(0);
         for (i, m) in mobs.iter().enumerate() {
             print(&mut out, 0, i, m, s.creative);
         }
@@ -995,6 +1002,16 @@ fn main() -> horizon_client::Result<()> {
                     creaking::sway(&mut mobs[i], &mut events);
                 }
                 events.append(&mut mobs[i].outbox);
+            }
+            for &(tick, i) in &s.feeds {
+                if tick != t || i >= mobs.len() || mobs[i].removed {
+                    continue;
+                }
+                if let Some(Some((name, volume, pitch))) =
+                    horizon_client::mobs::ai::feed_animal(&mut mobs[i], &mut level_random)
+                {
+                    events.push(MobEvent::Sound(name, [0.0; 3], volume, pitch));
+                }
             }
             #[allow(unused_mut)] // filled only with the rng-trace feature
             let mut traces: Vec<String> = Vec::new();

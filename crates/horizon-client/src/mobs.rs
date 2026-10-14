@@ -619,6 +619,11 @@ pub struct Extra {
     pub age: i32,
     /// `AgeLocked` (tadpoles fed a slime ball... and ageable mobs).
     pub age_locked: bool,
+    /// AgeableMob.forcedAge: the age fed food added, restored as the age
+    /// when it reaches 0 (`ForcedAge`).
+    pub forced_age: i32,
+    /// AgeableMob.forcedAgeTimer: ticks of happy villager particles left.
+    pub forced_age_timer: i32,
     pub in_love: i32,
     pub love_player: bool,
     /// Texture/model variant index (cat type, horse colour, rabbit type...).

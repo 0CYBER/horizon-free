@@ -208,6 +208,16 @@ def scenarios():
     add('golem_part_full', 500, [chest(-3, 1, 'cobblestone*60,cobblestone*64,-,cobblestone*63'),
                                  'mob minecraft:copper_golem 0.5 -60 0.5 0 117 persistent cooldown=0 hand=cobblestone*16'])
     add('golem_idle', 400, ['player 4.5 -60 2.5', 'mob minecraft:copper_golem 0.5 -60 0.5 0 118 persistent'])
+    # The player feeds animals their food (Animal.mobInteract): an adult falls in love once, a baby
+    # grows each time, and each plays its own eating sound or none (Animal.playEatingSound).
+    for species, food, seed in [('cow', 'wheat', 120), ('pig', 'carrot', 121), ('sheep', 'wheat', 122),
+                                ('chicken', 'wheat_seeds', 123)]:
+        for baby in ('', ' baby'):
+            add(f'feed_{species}{baby.replace(" ", "_")}', 80, [
+                'player 3.5 -60 0.5',
+                f'mob minecraft:{species} 0.5 -60 0.5 0 {seed} persistent{baby}',
+                f'feed 20 0 minecraft:{food}', f'feed 40 0 minecraft:{food}',
+            ])
     return s
 
 

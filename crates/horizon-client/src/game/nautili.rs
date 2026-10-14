@@ -59,8 +59,8 @@ impl Game<'_> {
             }
             let m = &mut self.mobs[index];
             if !m.extra.age_locked {
-                let secs = (-m.extra.age / 20) as f32 * 0.1;
-                m.extra.age = (m.extra.age + (secs as i32) * 20).min(0);
+                let secs = ((-m.extra.age / 20) as f32 * 0.1) as i32;
+                horizon_client::mobs::ai::age_up(m, secs, true);
             }
             let sound = nautilus::eat_sound(m);
             self.use_nautilus_food(item);
