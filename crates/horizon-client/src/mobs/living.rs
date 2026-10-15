@@ -346,10 +346,10 @@ impl Mob {
         self.vertical_collision_below = vertical && wanted.y < 0.0;
         self.on_ground = self.vertical_collision_below;
         // Strider.checkFallDamage: lava breaks any fall, and the fluid state
-        // waits for the next baseTick.
+        // waits for the next baseTick; Bat.checkFallDamage does nothing.
         if self.kind.flags.lava_walker && self.fluids.in_lava {
             self.fall_distance = 0.0;
-        } else {
+        } else if self.kind.species != super::Species::Bat {
             self.check_fall_damage(w, moved, events);
         }
         // restituteMovementAfterCollisions with no bounciness: the colliding

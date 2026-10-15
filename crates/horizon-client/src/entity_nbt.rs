@@ -309,6 +309,9 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             }
             map.insert("equipment".into(), Tag::Compound(equipment));
         }
+        "minecraft:bat" => {
+            map.insert("BatFlags".into(), Tag::Byte(i8::from(m.extra.flag)));
+        }
         "minecraft:creaking" => {
             // home_pos: the heart it is bound to.
             if let Some(home) = m.extra.home {
@@ -612,6 +615,10 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     m.ticks_frozen = number(tag.get("TicksFrozen")).unwrap_or(0) as i32;
     m.silent = flag(tag, "Silent");
     m.invulnerable_flag = flag(tag, "Invulnerable");
+    if m.species() == crate::mobs::Species::Bat {
+        // Bat.readAdditionalSaveData: BatFlags bit 0, resting.
+        m.extra.flag = number(tag.get("BatFlags")).unwrap_or(0) & 1 != 0;
+    }
     if m.species() == crate::mobs::Species::Creeper {
         m.extra.charged = flag(tag, "powered");
         // Creeper.readAdditionalSaveData: `ignited` lights the fuse.

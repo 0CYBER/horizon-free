@@ -11,6 +11,7 @@ pub mod anim;
 pub mod animal_brain;
 pub mod aquatic;
 pub mod axolotl;
+pub mod bat;
 pub mod body_anim;
 pub mod brain;
 pub mod breeze;
@@ -294,7 +295,7 @@ pub struct Flags {
     pub climber: bool,
     /// Striders stand on lava.
     pub lava_walker: bool,
-    /// LivingEntity.omnidirectionalAirMover (bees, parrots, bats, allays).
+    /// LivingEntity.omnidirectionalAirMover (bees and parrots).
     pub omnidirectional: bool,
     pub fire_immune: bool,
     /// EntityTypeTags.BURN_IN_DAYLIGHT
@@ -1752,8 +1753,14 @@ impl Mob {
     }
     /// LivingEntity.getVoicePitch.
     pub fn voice_pitch(&mut self) -> f32 {
-        (self.random.next_float() - self.random.next_float()) * 0.2
-            + if self.is_baby() { 1.5 } else { 1.0 }
+        let pitch = (self.random.next_float() - self.random.next_float()) * 0.2
+            + if self.is_baby() { 1.5 } else { 1.0 };
+        // Bat.getVoicePitch: a little lower.
+        if self.species() == Species::Bat {
+            pitch * 0.95
+        } else {
+            pitch
+        }
     }
     /// Mob.playSound with LivingEntity.getVoicePitch.
     pub fn voice(&mut self, event: &'static str, events: &mut Vec<MobEvent>) {

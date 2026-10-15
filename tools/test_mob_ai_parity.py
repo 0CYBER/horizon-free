@@ -228,6 +228,15 @@ def scenarios():
     add('strider_cold', 200, ['mob minecraft:strider 0.5 -60 0.5 0 134 persistent'])
     add('strider_tempted', 200, [LAVA, 'player 9.5 -60 0.5 hand=minecraft:warped_fungus',
                                  'mob minecraft:strider 0.5 -61 0.5 0 135 persistent'])
+    # Bats: hanging under a stone ceiling alone, woken by a player passing beneath, flying off with
+    # nothing above, and fluttering about a closed cave where they may hang up again.
+    CEILING = 'fill -6 -57 -6 6 -57 6 minecraft:stone'
+    add('bat_hanging', 200, [CEILING, 'mob minecraft:bat 0.5 -57.9 0.5 0 141 persistent'])
+    add('bat_woken', 200, [CEILING, 'player 1.5 -60 0.5', 'mob minecraft:bat 0.5 -57.9 0.5 0 142 persistent'])
+    add('bat_flying', 300, ['mob minecraft:bat 0.5 -57 0.5 0 143 persistent'])
+    CAVE = ['fill -5 -60 -5 5 -54 5 minecraft:stone', 'fill -4 -60 -4 4 -55 4 minecraft:air']
+    for i, seed in enumerate([144, 145, 146]):
+        add(f'bat_cave_{i}', 400, CAVE + [f'mob minecraft:bat 0.5 -58 0.5 {90 * i} {seed} persistent'])
     return s
 
 
