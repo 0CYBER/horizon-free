@@ -646,6 +646,9 @@ impl MotionWorld<'_, '_, '_> {
         }
     }
     fn climbable(&mut self) -> Result<bool> {
+        if self.player.spectator {
+            return Ok(false);
+        }
         let p = BlockPos::containing(self.player.position);
         let name = &self
             .assets
@@ -1970,6 +1973,64 @@ impl LivingMotionWorld for MotionWorld<'_, '_, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resident_spectator_flight_ignores_solid_and_climbable_blocks() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let run = |name: &str, spectator: bool| {
+            let mut scene = World::test_scene(&assets, 2).unwrap();
+            let state = assets.registry.default_state(name).unwrap();
+            for x in 19..=23 {
+                for y in 10..=17 {
+                    for z in 19..=23 {
+                        scene.set(x, y, z, state).unwrap();
+                    }
+                }
+            }
+            let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 12.0, 20.5)).unwrap();
+            player.spectator = spectator;
+            player.flying = spectator;
+            player.velocity = Vec3::new(0.4, 0.1, 0.4);
+            let keys = crate::sprint::Keys {
+                forward: true,
+                jump: true,
+                ..Default::default()
+            };
+            let mut trajectory = Vec::new();
+            for _ in 0..4 {
+                MotionWorld {
+                    player: &mut player,
+                    scene: &mut scene,
+                    assets: &assets,
+                    collision_binding: &binding,
+                    resources: &resources,
+                }
+                .controlled_simulation_tick(keys)
+                .unwrap();
+                trajectory.push((player.position, player.velocity));
+            }
+            trajectory
+        };
+        let air = run("minecraft:air", true);
+        for name in [
+            "minecraft:stone",
+            "minecraft:ladder",
+            "minecraft:vine",
+            "minecraft:scaffolding",
+        ] {
+            assert_eq!(run(name, true), air, "spectator flight in {name}");
+        }
+        let air = run("minecraft:air", false);
+        let ladder = run("minecraft:ladder", false);
+        assert!(air.last().unwrap().1.y < 0.0);
+        assert!(ladder.last().unwrap().1.y > 0.0);
+    }
 
     #[test]
     fn player_fire_damage_queues_hurt_sound_only_for_fresh_hits() {
