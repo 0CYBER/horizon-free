@@ -948,6 +948,8 @@ struct Game<'a> {
     /// KeyboardHandler's debug key state (game/debug_keys.rs), the physical
     /// keys held, and the debug renderers F3+B and F3+G switch on.
     debug_keys: horizon_client::debug_keys::DebugKeys,
+    /// The F3 overlay's charts (F3+2, F3+3).
+    debug_charts: horizon_client::debug_chart::DebugCharts,
     show_hitboxes: bool,
     show_chunk_borders: bool,
     /// PauseScreen.showPauseMenu (false after F3+Escape).
@@ -2855,6 +2857,7 @@ impl Game<'_> {
     }
     fn tick(&mut self) -> Result<()> {
         self.tick_debug_keys()?;
+        self.tick_debug_charts();
         if self.remote.is_some() {
             return self.tick_remote();
         }
@@ -3645,7 +3648,7 @@ impl Game<'_> {
                 2 => "north (Towards negative Z)",
                 _ => "east (Towards positive X)",
             };
-            let lines = [
+            let mut lines = vec![
                 format!("Horizon 26.3 (Rust) {:.0} fps", self.fps),
                 format!(
                     "C: {} chunks, {} sections drawn / {}",
@@ -3688,7 +3691,9 @@ impl Game<'_> {
                     self.world.day_time / 24000,
                     self.world.day_time % 24000
                 ),
+                String::new(),
             ];
+            lines.extend(self.debug_chart_lines());
             for (i, line) in lines.iter().enumerate() {
                 if line.is_empty() {
                     continue;
@@ -3711,6 +3716,15 @@ impl Game<'_> {
                     false,
                 );
             }
+            let charts = self.debug_charts.draw(
+                &atlas.font,
+                w as i32,
+                h as i32,
+                self.settings.max_fps,
+                1000.0 / self.clock.rate(),
+                self.remote.is_some(),
+            );
+            hud_layout::paint(&mut batch, atlas, &charts);
         }
         if !self.ui.hide_gui
             && let Some((text, at)) = &self.message
@@ -6287,6 +6301,7 @@ impl Game<'_> {
         self.save.flush();
         self.session_lock = None;
         horizon_client::crash::clear_detail("World");
+        self.debug_charts.reset();
         self.streaming.paused = true;
         self.world = World::new(self.res.facts.air, 0);
         self.player = None;
@@ -9056,6 +9071,7 @@ impl ApplicationHandler for Game<'_> {
                             // In single player the tick is the integrated server's.
                             if self.remote.is_none() {
                                 self.perf.tick(tick.elapsed().as_secs_f32() * 1000.0);
+                                self.debug_charts.log_tick(tick, tick.elapsed());
                             }
                             self.tick_ambience();
                             self.tick_fov();
@@ -9142,6 +9158,7 @@ impl ApplicationHandler for Game<'_> {
                     }
                     if rendered {
                         self.frame_stats.record(elapsed.as_secs_f32() * 1000.0);
+                        self.debug_charts.frame_times.log(elapsed.as_nanos() as i64);
                         if self.frames == 0 {
                             // The launcher times Play to this line (launcher/src/perf.rs).
                             log::info!(
@@ -9620,6 +9637,7 @@ pub fn run() -> Result<()> {
         world_options: None,
         friends: None,
         debug_keys: Default::default(),
+        debug_charts: Default::default(),
         show_hitboxes: false,
         show_chunk_borders: false,
         pause_menu: true,

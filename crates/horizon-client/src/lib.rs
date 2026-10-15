@@ -44,6 +44,7 @@ pub mod crash;
 pub mod creative;
 pub mod data_cmd;
 pub mod datapack;
+pub mod debug_chart;
 pub mod debug_keys;
 pub mod effects;
 pub mod enchant;

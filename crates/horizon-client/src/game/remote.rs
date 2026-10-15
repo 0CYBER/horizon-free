@@ -272,6 +272,7 @@ impl Game<'_> {
             r.session.disconnect();
         }
         horizon_client::crash::clear_detail("Server");
+        self.debug_charts.reset();
         self.tab_list.reset();
         self.score.board = Default::default();
         self.streaming = Streaming::new(Arc::new(NoTerrain), self.res.context.clone(), 1);
@@ -736,6 +737,11 @@ impl Game<'_> {
 
     fn handle_packet(&mut self, packet: C) -> Result<()> {
         match packet {
+            // PingDebugMonitor.onPongReceived.
+            C::PongResponse(p) => {
+                let delay = self.debug_millis() - p.time;
+                self.debug_charts.ping.log(delay);
+            }
             C::Login(p) => {
                 if let Some(r) = self.remote.as_mut() {
                     r.online_mode = p.online_mode;

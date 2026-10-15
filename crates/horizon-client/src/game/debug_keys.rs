@@ -151,7 +151,7 @@ impl Game<'_> {
         }
     }
     /// `Util.getMillis` (positive: KeyboardHandler treats 0 as unset).
-    fn debug_millis(&self) -> i64 {
+    pub(super) fn debug_millis(&self) -> i64 {
         self.started.elapsed().as_millis() as i64 + 1_000_000
     }
     /// `KeyboardHandler.tick`: the debug crash countdown.
@@ -179,6 +179,79 @@ impl Game<'_> {
             }
         }
         Ok(())
+    }
+    /// The network charts' samples each tick: `PingDebugMonitor.tick` while
+    /// they show, `BandwidthDebugMonitor.tick` always.
+    pub(super) fn tick_debug_charts(&mut self) {
+        let shown = self.debug && self.debug_charts.network;
+        let Some(r) = &self.remote else {
+            // The integrated server answers within the tick.
+            if shown {
+                self.debug_charts.ping.log(0);
+            }
+            return;
+        };
+        let received = r
+            .session
+            .counters
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|c| c.bytes_in.load(std::sync::atomic::Ordering::Relaxed));
+        if let Some(total) = received {
+            self.debug_charts.log_bandwidth(total);
+        }
+        if shown {
+            use horizon_protocol::packets::{play::Serverbound, status::Ping};
+            let time = self.debug_millis();
+            self.send(Serverbound::PingRequest(Ping { time }));
+        }
+    }
+    /// The overlay's chart lines (`DebugScreenOverlay`'s "Debug charts").
+    pub(super) fn debug_chart_lines(&self) -> [String; 3] {
+        let keys = &self.settings.keys;
+        let modifier = keys.get("key.debug.modifier");
+        let key = |mapping: &str| {
+            let prefix = if modifier == "key.keyboard.unknown" {
+                String::new()
+            } else {
+                format!("{}+", keybinds::display_name(modifier).plain())
+            };
+            format!(
+                "[{prefix}{}]",
+                keybinds::display_name(keys.get(mapping)).plain()
+            )
+        };
+        let chart = |mapping: &str, name: &str, on: bool| {
+            format!(
+                "{} {name} {}",
+                key(mapping),
+                if on { "visible" } else { "hidden" }
+            )
+        };
+        let remote = self.remote.is_some();
+        let c = &self.debug_charts;
+        [
+            format!(
+                "Debug charts: {}; {};",
+                chart("key.debug.profilingChart", "Profiler", false),
+                chart(
+                    "key.debug.fpsCharts",
+                    if remote { "fps" } else { "fps + tps" },
+                    c.fps
+                ),
+            ),
+            format!(
+                "{}; {}",
+                chart(
+                    "key.debug.networkCharts",
+                    if remote { "Bandwidth + Ping" } else { "Ping" },
+                    c.network
+                ),
+                chart("key.debug.lightmapTexture", "Lightmap", false),
+            ),
+            format!("To edit: press {}", key("key.debug.debugOptions")),
+        ]
     }
     /// `KeyMapping.getTranslatedKeyMessage`.
     fn key_text(&self, mapping: &str) -> Text {
@@ -339,15 +412,21 @@ impl Game<'_> {
                 });
                 true
             }
+            DebugAction::FpsCharts => {
+                self.debug_charts.toggle_fps(&mut self.debug);
+                true
+            }
+            DebugAction::NetworkCharts => {
+                self.debug_charts.toggle_network(&mut self.debug);
+                true
+            }
             // Screens and overlays Horizon does not draw yet (the debug
-            // options screen, the profiler and its charts, the lightmap, the
+            // options screen, the profiler and its chart, the lightmap, the
             // texture dump): the keys are used up as in vanilla.
             DebugAction::DebugOptions
             | DebugAction::DumpDynamicTextures
             | DebugAction::Profiling
             | DebugAction::ProfilingChart
-            | DebugAction::FpsCharts
-            | DebugAction::NetworkCharts
             | DebugAction::LightmapTexture => true,
             DebugAction::ShowHitboxes
             | DebugAction::ShowChunkBorders
