@@ -23,6 +23,8 @@ fn shape_identity_and_geometry_match_the_value_loader() -> crate::Result<()> {
         .iter()
         .map(|s| serde_json::from_str::<Value>(s))
         .collect::<Result<Vec<_>, _>>()?;
+    // Value equality merges signed zero; the legacy string keys do not.
+    let keys: Vec<_> = values.iter().map(Value::to_string).collect();
     let mut shapes = Shapes::default();
     let actual = inputs
         .iter()
@@ -60,7 +62,7 @@ fn shape_identity_and_geometry_match_the_value_loader() -> crate::Result<()> {
         for j in 0..values.len() {
             assert_eq!(
                 Arc::ptr_eq(&actual[i], &actual[j]),
-                value.to_string() == values[j].to_string(),
+                keys[i] == keys[j],
                 "{i}, {j}"
             );
         }
