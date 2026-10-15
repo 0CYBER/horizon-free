@@ -45,3 +45,44 @@ class PerfBenchStatsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WaitLoadedTests(unittest.TestCase):
+    """wait_loaded on a scripted game with a fake clock: one status per 50 ms poll."""
+
+    def run_script(self, statuses):
+        import tools.perf_bench as pb
+        clock = [0.0]
+        it = iter(statuses)
+
+        def control(_command, timeout=None):
+            return next(it)
+
+        real_time, real_sleep = pb.time.time, pb.time.sleep
+        pb.time.time = lambda: clock[0]
+        pb.time.sleep = lambda s: clock.__setitem__(0, clock[0] + s)
+        try:
+            return pb.wait_loaded(control, lambda p: True, 60)
+        finally:
+            pb.time.time, pb.time.sleep = real_time, real_sleep
+
+    @staticmethod
+    def status(chunks, meshed, stages=None):
+        s = {"player": {"position": [0, 0, 0]}, "pending_chunks": 0, "screen": "game",
+             "chunks": chunks, "generated_chunks": chunks, "meshed_sections": meshed}
+        if stages is not None:
+            s["streaming"] = {"queued": 0, "generating": 0, "protos": 296, "decorating": 0,
+                              "finishing": 0, "lighting": 0, "meshing": stages}
+        return s
+
+    def test_stages_end_the_load_before_the_remesh_tail(self):
+        # 20 polls (1 s) of meshing work, then idle stages while blocks keep remeshing
+        # at 400 meshes/s, with a short burst of work every 2 s.
+        loading = [self.status(900, 1000 * i, stages=500) for i in range(20)]
+        tail = [self.status(901, 20000 + 20 * i, stages=40 if i % 40 == 0 else 0) for i in range(400)]
+        self.assertAlmostEqual(self.run_script(loading + tail), 1.0, places=6)
+
+    def test_old_builds_wait_for_meshing_to_go_quiet(self):
+        busy = [self.status(901, 1000 * i) for i in range(20)]
+        quiet = [self.status(901, 20000 + i) for i in range(40)]
+        self.assertAlmostEqual(self.run_script(busy + quiet), 1.0, places=6)

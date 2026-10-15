@@ -272,12 +272,14 @@ QUIET_MESHES_PER_S = 100
 def wait_loaded(control, near, limit):
     """Waits until the player is spawned (near(position)), nothing is queued, the
     resident and generated chunk counts have not changed for a second, as the
-    vanilla driver does, and meshing has gone quiet (fewer than
-    QUIET_MESHES_PER_S section meshes in a second: the last sections drawn);
-    returns when the last of these happened. (pending_chunks alone misses work
-    the threads have already taken, and sections waiting for their neighbours'
-    light; blocks keep being remeshed as they change, so meshes can't be
-    required to stop.)"""
+    vanilla driver does, and the last sections are drawn; returns when the last
+    of these happened. Builds that report `status.streaming` are drawn once no
+    stage (generation, decoration, light, meshing) has held work for half a
+    second; blocks that change after loading (fluids settling, random ticks)
+    only remesh in short bursts. Older builds fall back to meshing going quiet
+    (fewer than QUIET_MESHES_PER_S section meshes in a second), which also
+    waits through that tail. (pending_chunks alone misses work the threads have
+    already taken, and sections waiting for their neighbours' light.)"""
     deadline = time.time() + limit
     last, changed, previous, meshing = None, time.time(), None, time.time()
     while time.time() < deadline:
@@ -293,11 +295,19 @@ def wait_loaded(control, near, limit):
             counts = (s["chunks"], s["generated_chunks"])
             if counts != last:
                 last, changed = counts, now
+            stages = s.get("streaming")
             sample = (now, s["meshed_sections"])
-            if previous and sample[1] - previous[1] > QUIET_MESHES_PER_S * (now - previous[0]):
-                meshing = now
+            if stages is not None:
+                # Protos outside the view distance wait for neighbours that are never generated.
+                if any(v for k, v in stages.items() if k != "protos"):
+                    meshing = now
+                quiet = 0.5
+            else:
+                if previous and sample[1] - previous[1] > QUIET_MESHES_PER_S * (now - previous[0]):
+                    meshing = now
+                quiet = 1.0
             previous = sample
-            if now - max(changed, meshing) >= 1.0:
+            if now - changed >= 1.0 and now - meshing >= quiet:
                 return max(changed, meshing)
         time.sleep(0.05)
     raise TimeoutError(f"not loaded after {limit} s")
