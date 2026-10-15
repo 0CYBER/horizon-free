@@ -72,6 +72,18 @@ Legend: **yes** complete, **part** partial (see note), **no** missing, **—** n
 | Events | no | no | everything is polled |
 | Errors with reasons | part | part | `{"error": "text"}`; horizon-ctl adds `kind` (`usage`, `connection`) to its own errors only |
 
+### After the PRs in [Status](#status)
+
+| Capability | Before | After |
+| --- | --- | --- |
+| Screens: widgets | labelled buttons only | every widget of every screen (`ui`): id, kind, label, bounds, slider value, tab selected, slots with stacks; both menu styles |
+| Screens: act on a widget | `click-button LABEL`, `click-at X Y` | `click ID [right] [shift]`, `set ID VALUE` (sliders), `click` focuses fields |
+| Options | open a page; `render-distance` only | `options-get` all 193 `options.txt` options typed with ranges/choices; `options-set` validates, applies, saves |
+| Waits | `wait TICKS`, `wait-ready` | `wait-for screen\|widget\|loaded\|chat\|event` with timeout errors |
+| Events | none (poll) | `events [--since SEQ]`: screen, chat, death, respawn, item, dimension, world |
+| Launch headless | `--offscreen` by hand | `launch --offscreen` in horizon-ctl and its MCP; `launch_client {offscreen}` |
+| The running game from the launcher's MCP | no (a second server) | every game tool as `game_*` through `horizon-launcher mcp` |
+
 ## Design
 
 ### One vocabulary, four surfaces
@@ -102,7 +114,7 @@ Legend: **yes** complete, **part** partial (see note), **no** missing, **—** n
 pause, options pages, inventories and stations, chat, death, Horizon-style menus):
 
 ```json
-{"screen": "options", "gui_size": [480, 270],
+{"screen": "options", "gui_size": [427, 240], "frame": 3061,
  "widgets": [
    {"id": "fov", "kind": "slider", "label": "FOV: 70", "bounds": [40, 50, 150, 20], "enabled": true, "value": 0.5},
    {"id": "video-settings", "kind": "button", "label": "Video Settings...", "bounds": [...], "enabled": true},
@@ -113,13 +125,16 @@ pause, options pages, inventories and stations, chat, death, Horizon-style menus
 - **Ids are stable and readable**: the label up to its `:` as a slug (`FOV: 70` → `fov`,
   `Video Settings...` → `video-settings`); a repeated slug gets `-2`, `-3` in draw order;
   unlabelled elements are `<kind>-<n>` in draw order. The id of a slider does not change
-  when its value (and so its label) does.
+  when its value (and so its label) does. World, server and language rows carry their
+  names; Horizon-style switches, sliders and segments carry their settings row's caption
+  (`vsync`, `menu-style-horizon`); inventory and menu slots are `slot-<ID>` with their stack.
 - **Kinds**: `button`, `slider` (`value` 0..1 as drawn), `field` (text box), `row` (list
   entry: world, server, pack, language), `tab` (`selected`), `slot`.
 - **Actions by id**: `click ID [right]` (move the pointer there and click, exactly as a
   player would), `set ID VALUE` (a slider to a 0..1 position, a click on its track, as vanilla
   `AbstractSliderButton.onClick` reads the pointer). `type TEXT` keeps typing into the focused
-  field; `click` on a field focuses it.
+  field; `click` on a field focuses it. After a click or a set, the next `ui`, `click` or
+  `set` waits for a redrawn frame, so it never reads the screen the click left.
 - **No new code paths in screens**: the tree is built from what the draw functions already
   register for the controller's focus navigation (`widgets.rs`), so every screen that a
   controller can drive is in it, and clicks go through the same window events as the mouse.
@@ -128,7 +143,7 @@ pause, options pages, inventories and stations, chat, death, Horizon-style menus
 
 - `options-get [KEY...]`: every option of `options.txt` by its vanilla key, with its value
   and what it accepts: `{"key": "fov", "value": 70, "type": "int", "min": 30, "max": 110}`,
-  enums with `choices`, key bindings as `key.keyboard.w`. Horizon's own files
+  enums with `choices`, key bindings as `key.keyboard.w`. Next: Horizon's own files
   (`horizon-graphics.txt`, `horizon-controller.txt`, extras) under their own keys.
 - `options-set KEY VALUE`: validated like vanilla's `OptionInstance.set` (out of range is an
   error here, not a silent reset), applied at once as the options screen would apply it, and
@@ -144,42 +159,45 @@ radius around any point (`--at X Y Z`), and `blocks --of BLOCK` to keep a box qu
 
 ### Waits
 
-`wait-for CONDITION [--timeout S]` replies when the condition holds, or with a `timeout`
-error saying what it last saw:
+`wait-for CONDITION [--timeout S] [--since SEQ]` replies when the condition holds, or with
+an error of kind `timeout` saying what screen it ended on (`wait TICKS` waits for ticks):
 
 - `screen NAME` (the label `state` shows), `widget ID` (a widget is on screen),
-- `loaded` (a world is open, the player exists and no chunk within the render distance is
-  pending),
-- `chat TEXT` (a new chat line containing TEXT),
-- `ticks N` (as `wait`).
+- `loaded` (a world is open, the player exists and no chunk is pending),
+- `chat TEXT` (a new chat line containing TEXT), `event KIND` (an event of that kind);
+  both count from `--since SEQ`, else from now: take `last` from `events` before an action
+  so its event can't slip in before the wait starts.
 
 ### Events
 
-`subscribe [KIND...]` turns the connection into a stream: the reply is `{"ok": true,
-"subscribed": [...]}`, then one JSON line per event until the client closes it:
+`events [--since SEQ]` returns what happened since SEQ, oldest first, and `last`, the SEQ to
+pass next time (the game keeps the newest 256):
 
 ```json
-{"event": "screen", "tick": 1234, "from": "playing", "to": "inventory"}
-{"event": "chat", "tick": 1240, "text": "<Steve> hi"}
-{"event": "death", "tick": 1300, "message": "Steve fell from a high place"}
-{"event": "pickup", "tick": 1310, "item": "minecraft:oak_log", "count": 1}
-{"event": "health", "tick": 1311, "health": 18.0, "food": 20}
-{"event": "dimension", "tick": 1400, "dimension": "minecraft:the_nether"}
-{"event": "world", "tick": 0, "state": "loaded"}
+{"event": "world", "seq": 1, "tick": 0, "state": "opened", "name": "Survival"}
+{"event": "screen", "seq": 2, "tick": 0, "from": "title", "to": "playing"}
+{"event": "item", "seq": 3, "tick": 110, "item": "minecraft:oak_log", "delta": 3}
+{"event": "chat", "seq": 4, "tick": 140, "text": "[Player] hello"}
+{"event": "death", "seq": 7, "tick": 300}
+{"event": "respawn", "seq": 9, "tick": 330}
+{"event": "dimension", "seq": 12, "tick": 900, "from": "minecraft:overworld", "to": "minecraft:the_nether"}
 ```
 
-Events are found by comparing state once per tick on the game thread (no hooks inside game
-logic), so they cannot change what the game does. `horizon-ctl subscribe` prints the stream;
-in MCP, where tools reply once, `events [--since TICK]` returns what was buffered (the last 256).
+Events are found by comparing state once per event loop turn on the game thread, and only
+under `--control` (no hooks inside game logic), so they cannot change what the game does.
+Next: `subscribe [KIND...]`, the same events as a stream on one connection, for clients that
+keep one open (MCP tools reply once, so `events` is what MCP offers).
 
 ### The launcher's MCP proxies the game
 
-An agent configures one MCP server, `horizon-launcher mcp`. `launch_client` starts the game
-with `--control` on a socket in the launcher's data folder; while it runs, `tools/list` also
-lists every `horizon-ctl` MCP tool as `game_<name>` and calls are forwarded over the socket
-(the code is shared: the launcher depends on `horizon-client`'s control client). When the
-game is not running, `game_*` calls fail with `kind: "state"` and say to call
-`launch_client`.
+An agent configures one MCP server, `horizon-launcher mcp`. It runs the selected version's
+`horizon-ctl mcp` (shipped beside the game) as a child and lists every one of its tools as
+`game_<name>` (all but `launch`), passing calls and results (images included) through, so
+the game's tools are defined once, in horizon-ctl's table. `launch_client` starts the game
+with a control socket in the launcher's data folder (`world`, `creative`, `offscreen`
+optional) and returns once it answers. While no game listens, `game_*` calls fail with
+`kind: "state"` and say to call `launch_client`. A game the player starts from the window
+is not under control.
 
 ### Safety
 
@@ -200,16 +218,19 @@ game is not running, `game_*` calls fail with `kind: "state"` and say to call
   events a player produces; registering widgets for the tree draws nothing. Every PR that
   touches game files runs `tools/parity.py --changed origin/main`.
 
-## Plan (most valuable first)
+## Status
 
-1. This document.
-2. `ui`, `click ID`, `set ID VALUE`: the widget tree for every screen.
-3. `options-get` / `options-set`.
-4. `wait-for` and `subscribe` / `events`.
-5. The launcher's MCP proxies the game (`game_*` tools), `launch_client` with `--control`.
-6. Error `kind` on every game error; MCP annotations.
-7. `entity ID`, `entities --at`, packs (`packs list|enable|disable`), F3 lines, launcher settings.
+| Step | PR |
+| --- | --- |
+| This document | #321 |
+| `ui`, `click ID`, `set ID VALUE`: the widget tree of every screen | #349 |
+| `options-get` / `options-set` | #350 |
+| `wait-for`, `events` | #351 |
+| The launcher's MCP proxies the game (`game_*`), `launch_client` under control | #342 |
+| Next: `subscribe` (a stream), error `kind` on every game error, MCP annotations (`openWorldHint`, `destructiveHint`) | |
+| Next: `entity ID`, `entities --at`, packs (`packs list|enable|disable`), F3 lines, Horizon's own option files, launcher settings over CLI/MCP | |
 
-Each PR adds its tests (unit tests next to the code, and steps in
-`tools/agent_control_e2e.py`, which drives the real game offscreen on macOS or on a virtual
-screen on Linux) and updates the tables above.
+Each PR adds its tests: unit tests next to the code, and scenarios in
+`tools/agent_control_e2e.py` (`survival`, `ui`, `options`, `events`; CLI and MCP) and
+`tools/launcher_mcp_e2e.py`, which drive the real game offscreen on macOS or on a virtual
+screen on Linux.
