@@ -7,6 +7,8 @@ use std::{collections::VecDeque, fs, path::Path};
 pub const FILE: &str = "horizon-extras.txt";
 /// The name the options screen uses while the zoom key waits for a key.
 pub const ZOOM_KEY: &str = "horizon.zoom";
+/// The same for the sort key.
+pub const SORT_KEY: &str = "horizon.sort";
 /// Zoom levels the default cycles through, and the wheel's limits.
 pub const ZOOM_LEVELS: [u8; 6] = [2, 3, 4, 6, 8, 10];
 pub const ZOOM_MIN: f32 = 1.25;
@@ -98,6 +100,10 @@ pub struct Extras {
     pub mouse_tweaks: bool,
     /// With them, the wheel over a slot moves its items one at a time.
     pub mouse_tweaks_wheel: bool,
+    /// Sort buttons on the inventory and chest-like containers.
+    pub sort: bool,
+    /// A vanilla key name: sorts the part under the cursor.
+    pub sort_key: String,
 }
 impl Default for Extras {
     fn default() -> Self {
@@ -122,6 +128,8 @@ impl Default for Extras {
             auto_reconnect: false,
             mouse_tweaks: false,
             mouse_tweaks_wheel: true,
+            sort: false,
+            sort_key: "key.keyboard.unknown".into(),
         }
     }
 }
@@ -181,6 +189,8 @@ impl Extras {
                 "autoReconnect" => e.auto_reconnect = flag(e.auto_reconnect),
                 "mouseTweaks" => e.mouse_tweaks = flag(e.mouse_tweaks),
                 "mouseTweaksWheel" => e.mouse_tweaks_wheel = flag(e.mouse_tweaks_wheel),
+                "sort" => e.sort = flag(e.sort),
+                "sortKey" if value.starts_with("key.") => e.sort_key = value.to_owned(),
                 _ => {}
             }
         }
@@ -188,7 +198,7 @@ impl Extras {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "zoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\n",
+            "zoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\nsort:{}\nsortKey:{}\n",
             bool_text(self.zoom),
             self.zoom_key,
             self.zoom_level,
@@ -213,7 +223,19 @@ impl Extras {
             bool_text(self.auto_reconnect),
             bool_text(self.mouse_tweaks),
             bool_text(self.mouse_tweaks_wheel),
+            bool_text(self.sort),
+            self.sort_key,
         )
+    }
+    /// Binds the extra key `name` (`ZOOM_KEY`, `SORT_KEY`); false for
+    /// another name (a vanilla mapping).
+    pub fn set_key(&mut self, name: &str, value: String) -> bool {
+        match name {
+            ZOOM_KEY => self.zoom_key = value,
+            SORT_KEY => self.sort_key = value,
+            _ => return false,
+        }
+        true
     }
     /// Written only once something differs from the defaults, so a vanilla
     /// setup gains no file.
@@ -416,6 +438,8 @@ pub enum Item {
     AutoReconnect,
     MouseTweaks,
     MouseTweaksWheel,
+    Sort,
+    SortKey,
 }
 /// The Extras page: headers and items.
 pub fn rows() -> Vec<Result<Item, &'static str>> {
@@ -445,6 +469,8 @@ pub fn rows() -> Vec<Result<Item, &'static str>> {
         Err("Inventory"),
         Ok(MouseTweaks),
         Ok(MouseTweaksWheel),
+        Ok(Sort),
+        Ok(SortKey),
         Err("Multiplayer"),
         Ok(AutoReconnect),
     ]
@@ -482,6 +508,8 @@ impl Item {
             Item::AutoReconnect => "Auto-reconnect",
             Item::MouseTweaks => "Mouse Tweaks controls",
             Item::MouseTweaksWheel => "Scroll wheel moves items",
+            Item::Sort => "Sort buttons",
+            Item::SortKey => "Sort key",
             Item::FpsLows => "Minimum and 1% low",
             Item::Keystrokes => "Keystrokes",
             Item::KeystrokesCps => "Clicks per second",
@@ -514,6 +542,12 @@ impl Item {
             Item::MouseTweaksWheel => {
                 "Down sends one item of the slot to the other side, up brings one back."
             }
+            Item::Sort => {
+                "Sorts the inventory, chests, barrels, ender chests and shulker boxes in creative tab order, merging stacks."
+            }
+            Item::SortKey => {
+                "Sorts the part under the cursor. Click, then press a key; Escape unbinds it."
+            }
             Item::Keystrokes => "Movement keys, jump and mouse buttons as you press them.",
             Item::KeystrokesCps => "Clicks in the last second under each mouse button.",
         }
@@ -524,7 +558,7 @@ impl Item {
         match self {
             Item::Zoom | Item::Fps | Item::Keystrokes => Some(Cost::None),
             Item::Minimap => Some(Cost::Low),
-            Item::AutoReconnect | Item::MouseTweaks => Some(Cost::None),
+            Item::AutoReconnect | Item::MouseTweaks | Item::Sort => Some(Cost::None),
             _ => None,
         }
     }
@@ -543,6 +577,7 @@ impl Item {
             Item::AutoReconnect => e.auto_reconnect,
             Item::MouseTweaks => e.mouse_tweaks,
             Item::MouseTweaksWheel => e.mouse_tweaks_wheel,
+            Item::Sort => e.sort,
             _ => return None,
         })
     }
@@ -550,6 +585,7 @@ impl Item {
     pub fn value(self, e: &Extras) -> String {
         match self {
             Item::ZoomKey => crate::keybinds::display_name(&e.zoom_key).plain(),
+            Item::SortKey => crate::keybinds::display_name(&e.sort_key).plain(),
             Item::ZoomLevel => format!("{}x", e.zoom_level),
             Item::FpsCorner => e.fps_corner.label().into(),
             Item::KeystrokesCorner => e.keystrokes_corner.label().into(),
@@ -587,6 +623,7 @@ impl Item {
             Item::AutoReconnect => e.auto_reconnect = !e.auto_reconnect,
             Item::MouseTweaks => e.mouse_tweaks = !e.mouse_tweaks,
             Item::MouseTweaksWheel => e.mouse_tweaks_wheel = !e.mouse_tweaks_wheel,
+            Item::Sort => e.sort = !e.sort,
             Item::MinimapCorner => e.minimap_corner = next(&Corner::ALL, e.minimap_corner, back),
             Item::MinimapSize => {
                 let sizes: Vec<u8> = MINIMAP_SIZES.iter().map(|s| s.0).collect();
@@ -594,7 +631,15 @@ impl Item {
             }
             Item::MinimapShape => e.minimap_round = !e.minimap_round,
             Item::MinimapZoom => e.minimap_zoom = next(&MINIMAP_ZOOMS, e.minimap_zoom, back),
-            Item::ZoomKey => {}
+            Item::ZoomKey | Item::SortKey => {}
+        }
+    }
+    /// The key name the options screen waits on for a key item.
+    pub fn key_name(self) -> Option<&'static str> {
+        match self {
+            Item::ZoomKey => Some(ZOOM_KEY),
+            Item::SortKey => Some(SORT_KEY),
+            _ => None,
         }
     }
 }
@@ -607,7 +652,7 @@ mod tests {
     fn everything_is_off_by_default_and_round_trips() {
         let d = Extras::default();
         assert!(!d.zoom && !d.fps && !d.keystrokes && !d.minimap && !d.auto_reconnect);
-        assert!(!d.mouse_tweaks);
+        assert!(!d.mouse_tweaks && !d.sort);
         assert_eq!(Extras::parse(""), d);
         assert_eq!(Extras::parse(&d.serialize()), d);
         let mut e = d.clone();
@@ -626,6 +671,8 @@ mod tests {
         e.auto_reconnect = true;
         e.mouse_tweaks = true;
         e.mouse_tweaks_wheel = false;
+        e.sort = true;
+        e.sort_key = "key.keyboard.r".into();
         assert_eq!(Extras::parse(&e.serialize()), e);
     }
 

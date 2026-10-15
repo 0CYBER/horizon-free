@@ -1928,7 +1928,7 @@ impl Menu {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::{banner::Banners, brewing::Brewing, crafting::Recipes};
 
@@ -1952,7 +1952,8 @@ mod tests {
         });
     }
 
-    fn with_menu(kind: Kind, test: impl FnOnce(&Env, &mut Menu)) {
+    /// A menu over the game's data (`.local/horizon-client`); skipped without it.
+    pub(crate) fn with_menu(kind: Kind, test: impl FnOnce(&Env, &mut Menu)) {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../.local/horizon-client/26.3");
         if !root.join("items.json").exists() {

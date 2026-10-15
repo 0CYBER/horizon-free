@@ -2050,9 +2050,7 @@ impl OptionsUi {
                     .unwrap_or("key.keyboard.unknown")
                     .to_owned()
             };
-            if name == crate::extras::ZOOM_KEY {
-                s.extras.zoom_key = value;
-            } else {
+            if !s.extras.set_key(name, value.clone()) {
                 s.keys.set(name, &value);
             }
             return vec![Event::Changed];

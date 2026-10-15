@@ -1,7 +1,8 @@
 # Horizon extras
 
 Optional conveniences built into the client: zoom, a minimap, an FPS counter, a
-keystroke overlay, auto-reconnect and Mouse Tweaks-style inventory controls. **Every one is off by default**: a fresh
+keystroke overlay, auto-reconnect, Mouse Tweaks-style inventory controls and
+inventory sorting. **Every one is off by default**: a fresh
 install looks and behaves exactly like vanilla 26.3, and turning an extra off
 again restores vanilla's behaviour completely.
 
@@ -15,7 +16,8 @@ again restores vanilla's behaviour completely.
 | Minimap colours, tiles and image | `crates/horizon-client/src/minimap.rs` |
 | Reconnect policy and backoff | `crates/horizon-client/src/reconnect.rs` |
 | Game glue (input hooks, per-frame update) | `crates/horizon-client/src/game/extras.rs` |
-| Mouse Tweaks-style controls | `crates/horizon-client/src/game/tweaks.rs` |
+| Mouse Tweaks-style controls, sort buttons | `crates/horizon-client/src/game/tweaks.rs` |
+| Sort order and its clicks | `crates/horizon-client/src/inv_sort.rs` (pure, unit tested) |
 | The settings page | `options_horizon.rs`: the **Extras** section of Horizon's Options |
 
 `game.rs` only gets one-line hooks (key, wheel, mouse, frame, HUD), so the
@@ -115,6 +117,18 @@ Every action is ordinary slot clicks (`ContainerClick` on a server), so a
 vanilla server sees nothing unusual. With the extra off, the hooks return at
 once and the screens click exactly as vanilla's (`tools/test_menu_click_parity.py`
 and the container screen tests are unchanged).
+
+### Sorting (`sort`, default off; `sortKey`, unbound)
+- A small button right of the container's title (chests, barrels, ender
+  chests, shulker boxes) and one right of the "Inventory" line (the main
+  inventory; the hotbar is left alone). The key, when bound on the Extras
+  page, sorts the part under the cursor (the container when over no slot).
+- Partial stacks of one item merge, then the stacks go in creative tab order
+  (the search tab's), then by name; full stacks before the partial one,
+  empty slots last. It needs an empty hand.
+- Done with ordinary left clicks planned by `inv_sort::plan`, so a vanilla
+  server accepts it; a unit test replays the planned clicks through the menu
+  engine on random chests.
 
 ## Shared rules
 
