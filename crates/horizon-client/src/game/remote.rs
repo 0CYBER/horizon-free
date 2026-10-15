@@ -291,7 +291,7 @@ impl Game<'_> {
             r.clear_sections();
         }
         let saves = std::env::current_dir()?.join("saves");
-        let mut title = horizon_client::title::Title::new(saves.clone());
+        let mut title = horizon_client::title::Title::new(saves.clone(), &self.options.resources);
         title.mode = horizon_client::title::Mode::Multiplayer(match reason {
             Some(reason) => horizon_client::multiplayer::Screen::Disconnected {
                 reason,

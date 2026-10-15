@@ -103,6 +103,8 @@ pub enum Action {
     None,
     Quit,
     Options,
+    Accessibility,
+    Language,
     Play {
         folder: String,
     },
@@ -129,6 +131,7 @@ pub struct Title {
     backup_shown: Cell<bool>,
     toast: Option<(std::time::Instant, BackupToast)>,
     icons: RefCell<std::collections::HashMap<PathBuf, (std::time::SystemTime, Option<Vec<u8>>)>>,
+    splash: Option<String>,
     /// The mode last drawn and when it appeared (Horizon's screen fades).
     shown: std::cell::Cell<(std::mem::Discriminant<Mode>, std::time::Instant)>,
     /// The launcher-style opening (Horizon style, first title of the session).
@@ -143,6 +146,7 @@ struct Button {
     label: String,
     enabled: bool,
     id: u8,
+    icon: Option<(&'static str, f32)>,
 }
 /// Java String.hashCode for text seeds (WorldOptions.parseSeed).
 pub fn parse_seed(text: &str) -> Option<i64> {
@@ -189,8 +193,32 @@ pub fn list_worlds(saves: &Path) -> Vec<WorldEntry> {
     worlds.sort_by_key(|w| std::cmp::Reverse(w.modified));
     worlds
 }
+fn choose_splash(text: &str, index: usize, date: (u32, u32)) -> Option<String> {
+    // SplashManager checks SpecialDates before the resource list (local date).
+    let special = match date {
+        (12, 24) => Some("Merry X-mas!"),
+        (1, 1) => Some("Happy new year!"),
+        (10, 31) => Some("OOoooOOOoooo! Spooky!"),
+        _ => None,
+    };
+    if let Some(special) = special {
+        return Some(special.to_owned());
+    }
+    let splashes: Vec<_> = text
+        .lines()
+        .map(str::trim)
+        // SplashManager.prepare keeps blank lines: only the hidden splash is dropped.
+        .filter(|s| horizon_core::random::java_string_hash(s.encode_utf16()) != 125780783)
+        .collect();
+    splashes
+        .get(index.checked_rem(splashes.len())?)
+        .map(|s| (*s).to_owned())
+}
+
 impl Title {
-    pub fn new(saves: PathBuf) -> Self {
+    pub fn new(saves: PathBuf, resources: &Path) -> Self {
+        use chrono::Datelike;
+        let today = chrono::Local::now();
         let mode = Mode::Main;
         let now = std::time::Instant::now();
         Self {
@@ -207,6 +235,15 @@ impl Title {
             backup_shown: Cell::new(false),
             toast: None,
             icons: RefCell::new(std::collections::HashMap::new()),
+            splash: choose_splash(
+                &std::fs::read_to_string(resources.join("assets/minecraft/texts/splashes.txt"))
+                    .unwrap_or_default(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .subsec_nanos() as usize,
+                (today.month(), today.day()),
+            ),
             opening: std::cell::Cell::new(None),
             recent: std::cell::RefCell::new(None),
         }
@@ -459,45 +496,45 @@ impl Title {
             label: label.into(),
             enabled,
             id,
+            icon: None,
         };
         match &self.mode {
             Mode::Main => {
-                let y = h / 4.0 + 48.0;
-                vec![
-                    b((w / 2.0).floor() - 100.0, y, 200.0, "Singleplayer", true, 1),
-                    b(
-                        (w / 2.0).floor() - 100.0,
-                        y + 24.0,
-                        200.0,
-                        "Multiplayer",
+                let cx = (w / 2.0).floor();
+                let y = (h / 4.0).floor() + 48.0;
+                let mut buttons = vec![
+                    b(cx - 100.0, y, 200.0, "Singleplayer", true, 1),
+                    b(cx - 100.0, y + 24.0, 200.0, "Multiplayer", true, 4),
+                    b(cx - 100.0, y + 48.0, 200.0, "Minecraft Realms", false, 0),
+                    b(cx - 100.0, y + 96.0, 98.0, "Options...", true, 3),
+                    b(cx + 2.0, y + 96.0, 98.0, "Quit Game", true, 2),
+                ];
+                for (i, (label, enabled, id, icon, size)) in [
+                    ("Friends", false, 5, "friends/friends", 15.0),
+                    ("Language", true, 6, "icon/language", 15.0),
+                    (
+                        "Accessibility Settings",
                         true,
-                        4,
-                    ),
-                    b(
-                        (w / 2.0).floor() - 100.0,
-                        y + 48.0,
-                        200.0,
-                        "Minecraft Realms",
-                        false,
-                        0,
-                    ),
-                    b(
-                        (w / 2.0).floor() - 100.0,
-                        y + 84.0,
-                        98.0,
-                        "Options...",
-                        true,
-                        3,
-                    ),
-                    b(
-                        (w / 2.0).floor() + 2.0,
-                        y + 84.0,
-                        98.0,
-                        "Quit Game",
-                        true,
-                        2,
+                        7,
+                        "icon/accessibility",
+                        15.0,
                     ),
                 ]
+                .into_iter()
+                .enumerate()
+                {
+                    let mut button = b(
+                        cx - 34.0 + i as f32 * 24.0,
+                        y + 72.0,
+                        20.0,
+                        label,
+                        enabled,
+                        id,
+                    );
+                    button.icon = Some((icon, size));
+                    buttons.push(button);
+                }
+                buttons
             }
             Mode::Select { selected, .. } => vec![
                 b(
@@ -668,7 +705,13 @@ impl Title {
                 .collect(),
         }
     }
-    pub fn draw(&self, atlas: &HudAtlas, batch: &mut HudBatch, cursor: (f32, f32)) {
+    pub fn draw(
+        &self,
+        atlas: &HudAtlas,
+        batch: &mut HudBatch,
+        cursor: (f32, f32),
+        hide_splash: bool,
+    ) {
         let (w, h) = (batch.width.ceil(), batch.height.ceil());
         match &self.mode {
             Mode::Main => {
@@ -688,6 +731,33 @@ impl Title {
                     128.0,
                     16.0,
                 );
+                if !hide_splash && let Some(splash) = self.splash.as_deref() {
+                    let tw = HudBatch::text_width(atlas, splash);
+                    let start = batch.vertices.len();
+                    batch.text(
+                        atlas,
+                        splash,
+                        -(tw / 2.0).floor(),
+                        -8.0,
+                        rgba(255, 255, 0, 255),
+                        true,
+                    );
+                    let scale = (1.8
+                        - (self.started.elapsed().as_secs_f32() * std::f32::consts::TAU)
+                            .sin()
+                            .abs()
+                            * 0.1)
+                        * 100.0
+                        / (tw + 32.0);
+                    let (sin, cos) = (-20.0f32).to_radians().sin_cos();
+                    for v in &mut batch.vertices[start..] {
+                        let [x, y] = v.pos;
+                        v.pos = [
+                            w / 2.0 + 123.0 + scale * (x * cos - y * sin),
+                            69.0 + scale * (x * sin + y * cos),
+                        ];
+                    }
+                }
                 let version = "Horizon 26.3 (Rust)";
                 batch.text(atlas, version, 2.0, h - 10.0, u32::MAX, true);
                 let notice = "Not affiliated with Mojang or Microsoft";
@@ -1030,6 +1100,20 @@ impl Title {
             } else {
                 rgba(160, 160, 160, 255)
             };
+            if let Some((icon, size)) = b.icon {
+                // CenteredIcon divides the button and sprite sizes separately:
+                // a 15px icon in a 20px button starts at 10 - 7 = 3, not 2.
+                batch.sprite_scaled(
+                    atlas,
+                    &format!("gui/sprites/{icon}"),
+                    b.x + (b.w / 2.0).floor() - (size / 2.0).floor(),
+                    b.y + 10.0 - (size / 2.0).floor(),
+                    size,
+                    size,
+                    u32::MAX,
+                );
+                continue;
+            }
             let tw = HudBatch::text_width(atlas, &b.label);
             batch.text(
                 atlas,
@@ -1097,6 +1181,8 @@ impl Title {
                 }
             }
             (Mode::Main, Some(3)) => Action::Options,
+            (Mode::Main, Some(7)) => Action::Accessibility,
+            (Mode::Main, Some(6)) => Action::Language,
             (Mode::Select { worlds, selected }, Some(10)) => {
                 match selected.and_then(|i| worlds.get(i)) {
                     Some(world) => Action::Play {
@@ -1457,4 +1543,167 @@ fn date_string(secs: u64) -> String {
     let mo = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if mo <= 2 { y + 1 } else { y };
     format!("{y}-{mo:02}-{d:02} {h:02}:{m:02}")
+}
+
+#[cfg(test)]
+mod classic_tests {
+    use super::*;
+
+    #[test]
+    fn classic_main_menu_icons_route_language_and_accessibility() {
+        let mut title = Title::new(
+            PathBuf::new(),
+            Path::new("/nonexistent/horizon-test-resources"),
+        );
+        for (w, h) in [(960.0, 523.0), (480.0, 320.0), (427.0, 240.0)] {
+            let buttons = title.buttons(w, h);
+            let cx = (w / 2.0).floor();
+            let y = (h / 4.0).floor() + 48.0;
+            for (id, x, enabled, icon) in [
+                (5, cx - 34.0, false, "friends/friends"),
+                (6, cx - 10.0, true, "icon/language"),
+                (7, cx + 14.0, true, "icon/accessibility"),
+            ] {
+                let b = buttons.iter().find(|b| b.id == id).unwrap();
+                assert_eq!(
+                    (b.x, b.y, b.w, b.enabled, b.icon),
+                    (x, y + 72.0, 20.0, enabled, Some((icon, 15.0)))
+                );
+                assert_eq!(
+                    title.click(x + 10.0, y + 82.0, (w, h)),
+                    match id {
+                        6 => (Action::Language, true),
+                        7 => (Action::Accessibility, true),
+                        _ => (Action::None, false),
+                    }
+                );
+            }
+            for id in [2, 3] {
+                assert_eq!(buttons.iter().find(|b| b.id == id).unwrap().y, y + 96.0);
+            }
+            // The four-pixel gaps around icons must not activate a button.
+            assert_eq!(
+                title.click(cx + 12.0, y + 82.0, (w, h)),
+                (Action::None, false)
+            );
+            assert_eq!(
+                title.click(cx + 24.0, y + 92.0, (w, h)),
+                (Action::None, false)
+            );
+        }
+    }
+
+    #[test]
+    fn splash_selection_filters_the_forbidden_hash_and_has_no_fallback() {
+        let hidden = "This message will never appear on the splash screen, isn't that weird?";
+        assert_eq!(
+            horizon_core::random::java_string_hash(hidden.encode_utf16()),
+            125780783
+        );
+        let text = format!("\n First! \r\n{hidden}\nSecond!\n");
+        for index in 0..6 {
+            assert_eq!(
+                choose_splash(&text, index, (10, 15)).as_deref(),
+                Some(["", "First!", "Second!"][index % 3])
+            );
+        }
+        assert_eq!(choose_splash(" \r\n", 42, (10, 15)).as_deref(), Some(""));
+        for text in ["", hidden] {
+            assert_eq!(choose_splash(text, 42, (10, 15)), None);
+        }
+    }
+
+    #[test]
+    fn special_date_splashes_override_resources_even_when_the_list_is_empty() {
+        for (date, expected) in [
+            ((12, 24), "Merry X-mas!"),
+            ((1, 1), "Happy new year!"),
+            ((10, 31), "OOoooOOOoooo! Spooky!"),
+        ] {
+            for text in ["", "Ordinary splash!"] {
+                assert_eq!(choose_splash(text, 0, date).as_deref(), Some(expected));
+            }
+        }
+    }
+
+    #[test]
+    fn classic_logo_and_icon_geometry_matches_minecraft() {
+        let root = Path::new("/nonexistent/horizon-test-resources");
+        let mut atlas = HudAtlas::build(root).unwrap();
+        let r = crate::hud::Rect {
+            u0: 0.0,
+            v0: 0.0,
+            u1: 1.0,
+            v1: 1.0,
+            w: 1024,
+            h: 256,
+        };
+        atlas.sprites.insert("gui/title/minecraft".into(), r);
+        atlas.sprites.insert(
+            "gui/title/edition".into(),
+            crate::hud::Rect { w: 128, h: 16, ..r },
+        );
+        for (i, icon) in ["friends/friends", "icon/language", "icon/accessibility"]
+            .into_iter()
+            .enumerate()
+        {
+            atlas.sprites.insert(
+                format!("gui/sprites/{icon}"),
+                crate::hud::Rect {
+                    u0: 0.25 + i as f32 * 0.125,
+                    w: 15,
+                    h: 15,
+                    ..r
+                },
+            );
+        }
+        let mut title = Title::new(PathBuf::new(), root);
+        title.splash = Some("Visible splash!".into());
+        let mut batch = HudBatch::new([1920, 1080]);
+        title.draw(&atlas, &mut batch, (0.0, 0.0), false);
+        let cx = (batch.width / 2.0).floor();
+        assert_eq!(batch.vertices[0].pos, [cx - 128.0, 30.0]);
+        assert_eq!(batch.vertices[2].pos, [cx + 128.0, 74.0]);
+        assert_eq!(batch.vertices[2].uv, [1.0, 44.0 / 64.0]);
+        assert_eq!(batch.vertices[6].pos, [cx - 64.0, 67.0]);
+        assert_eq!(batch.vertices[8].pos, [cx + 64.0, 81.0]);
+        assert_eq!(batch.vertices[8].uv, [1.0, 14.0 / 16.0]);
+        for i in 0..3 {
+            let quad = batch
+                .vertices
+                .as_chunks::<6>()
+                .0
+                .iter()
+                .find(|quad| quad[0].uv == [0.25 + i as f32 * 0.125, 0.0])
+                .unwrap();
+            let x = cx - 34.0 + i as f32 * 24.0 + 3.0;
+            let y = (batch.height / 4.0).floor() + 48.0 + 72.0 + 3.0;
+            assert_eq!(quad[0].pos, [x, y]);
+            assert_eq!(quad[2].pos, [x + 15.0, y + 15.0]);
+            assert!(quad.iter().all(|v| v.color == u32::MAX));
+        }
+        assert!(
+            batch.vertices[12..]
+                .iter()
+                .any(|v| v.color == rgba(255, 255, 0, 255))
+        );
+        let settings = crate::settings::Settings::parse("hideSplashTexts:true\n");
+        for (hide_splash, splash) in [
+            (
+                settings.file.bool("hideSplashTexts"),
+                Some("Hidden splash!".into()),
+            ),
+            (false, None),
+        ] {
+            title.splash = splash;
+            let mut hidden = HudBatch::new([1920, 1080]);
+            title.draw(&atlas, &mut hidden, (0.0, 0.0), hide_splash);
+            assert!(
+                !hidden
+                    .vertices
+                    .iter()
+                    .any(|v| v.color == rgba(255, 255, 0, 255))
+            );
+        }
+    }
 }

@@ -836,9 +836,12 @@ impl OptionsUi {
         }
     }
     pub fn open(&mut self, in_world: bool) {
-        self.stack = vec![Page::Main];
-        self.scroll = 0.0;
-        self.scrollbar_drag_y = None;
+        self.open_at(in_world, Page::Main);
+    }
+    /// Open a page whose Done/Escape returns directly to the calling screen.
+    pub fn open_at(&mut self, in_world: bool, page: Page) {
+        self.stack.clear();
+        self.push(page);
         self.in_world = in_world;
         self.selected_key = None;
     }
@@ -2593,6 +2596,36 @@ mod tests {
         let (widgets, top, _, _) = ui.layout(&s, 480.0, 240.0);
         assert_eq!(ui.scroll, 0.0);
         assert_eq!(widgets.iter().find(|w| w.list).unwrap().y, top + 2.0);
+    }
+
+    #[test]
+    fn title_shortcuts_initialize_pages_and_return_directly_to_the_title() {
+        let mut ui = OptionsUi::default();
+        let mut s = Settings::default();
+        for page in [Page::Accessibility, Page::Language] {
+            ui.language_choice = Some("de_de".into());
+            ui.language_search.set_value("old query");
+            ui.open_at(false, page);
+            assert_eq!(ui.page(), page);
+            assert!(!ui.in_world);
+            if page == Page::Language {
+                assert_eq!(ui.language_choice, None);
+                assert!(ui.language_search.value.is_empty());
+                assert!(ui.center_language);
+            }
+            assert!(ui.back(&mut s).contains(&Event::Close));
+            assert_eq!(s.language, "en_us");
+            ui.open(false);
+            ui.show(page);
+            assert!(!ui.back(&mut s).contains(&Event::Close));
+            assert_eq!(ui.page(), Page::Main);
+        }
+        ui.open_at(false, Page::Language);
+        ui.language_choice = Some("de_de".into());
+        let events = ui.back(&mut s);
+        assert!(events.contains(&Event::Language("de_de".into())));
+        assert!(events.contains(&Event::Close));
+        assert_eq!(s.language, "de_de");
     }
 
     #[test]

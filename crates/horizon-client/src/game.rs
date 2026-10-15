@@ -3450,7 +3450,12 @@ impl Game<'_> {
                 title.draw_horizon(&mut ui, fade);
                 ui.finish();
             } else {
-                title.draw(&self.res.atlas, &mut batch, self.cursor);
+                title.draw(
+                    &self.res.atlas,
+                    &mut batch,
+                    self.cursor,
+                    self.settings.file.bool("hideSplashTexts"),
+                );
             }
             return batch;
         }
@@ -6278,7 +6283,10 @@ impl Game<'_> {
         if let Some(r) = self.renderer.as_mut() {
             r.clear_sections();
         }
-        self.title = Some(Title::new(std::env::current_dir()?.join("saves")));
+        self.title = Some(Title::new(
+            std::env::current_dir()?.join("saves"),
+            &self.options.resources,
+        ));
         self.capture(false);
         Ok(())
     }
@@ -8743,6 +8751,11 @@ impl ApplicationHandler for Game<'_> {
                     match action {
                         Action::Quit => event_loop.exit(),
                         Action::Options => self.open_options(true),
+                        Action::Accessibility => self
+                            .open_options_at(true, horizon_client::options_ui::Page::Accessibility),
+                        Action::Language => {
+                            self.open_options_at(true, horizon_client::options_ui::Page::Language)
+                        }
                         Action::Play { folder } => self.open_world(&folder, None, None, false)?,
                         Action::Create {
                             folder,
@@ -9639,7 +9652,10 @@ pub fn run() -> Result<()> {
             game.open_world(&folder, None, Some(seed), creative)?;
         }
         None => {
-            let title = Title::new(std::env::current_dir()?.join("saves"));
+            let title = Title::new(
+                std::env::current_dir()?.join("saves"),
+                &game.options.resources,
+            );
             // The launcher's opening, once per session and only in Horizon's style.
             if horizon_client::ui_theme::horizon() && game.options.frames.is_none() {
                 title

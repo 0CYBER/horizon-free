@@ -109,7 +109,7 @@ impl Title {
     /// live backdrop is visible (0 shows the plain cold background).
     pub fn draw_horizon(&self, ui: &mut Ui, backdrop: f32) {
         if classic(&self.mode) {
-            self.draw(ui.atlas, ui.batch, ui.cursor);
+            self.draw(ui.atlas, ui.batch, ui.cursor, false);
             return;
         }
         let reveal = self.opening_phase(backdrop >= 1.0);
@@ -1405,7 +1405,7 @@ mod tests {
         for (i, folder) in ["C", "B", "A"].iter().enumerate() {
             world(&saves, folder, 1000 * (i as i64 + 1));
         }
-        let mut title = Title::new(saves.clone());
+        let mut title = Title::new(saves.clone(), &saves);
         title.mode = Mode::Select {
             worlds: list_worlds(&saves),
             selected: None,
