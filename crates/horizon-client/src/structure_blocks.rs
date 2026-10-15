@@ -147,6 +147,9 @@ pub fn block_entities(
         if let BlockEntity::TrialSpawner(s) = &mut entity {
             **s = crate::mobs::trial_spawner::TrialSpawner::load(&Tag::Compound(nbt.clone()));
         }
+        if let BlockEntity::Vault(v) = &mut entity {
+            **v = crate::vault::Vault::load(&Tag::Compound(nbt.clone()));
+        }
         if let (BlockEntity::Chest(slots), Some(table), Some(loot)) =
             (&mut entity, text(nbt, "LootTable"), loot)
         {

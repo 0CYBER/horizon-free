@@ -186,6 +186,9 @@ pub struct Vault {
     pub connected_particles_range: f64,
     /// The shared data changed since the last tick sent it.
     pub shared_dirty: bool,
+    /// `VaultClientData`: the display item's spin and the previous tick's, in degrees.
+    pub spin: f32,
+    pub o_spin: f32,
 }
 
 impl Default for Vault {
@@ -201,6 +204,8 @@ impl Default for Vault {
             connected_players: Vec::new(),
             connected_particles_range: DEFAULT_DEACTIVATION_RANGE,
             shared_dirty: false,
+            spin: 0.0,
+            o_spin: 0.0,
         }
     }
 }
@@ -256,7 +261,28 @@ fn same_set(a: &[Uuid], b: &[Uuid]) -> bool {
     a.len() == b.len() && a.iter().all(|u| b.contains(u))
 }
 
+/// `Mth.wrapDegrees`.
+fn wrap_degrees(degrees: f32) -> f32 {
+    let t = degrees % 360.0;
+    if t >= 180.0 {
+        t - 360.0
+    } else if t < -180.0 {
+        t + 360.0
+    } else {
+        t
+    }
+}
+
 impl Vault {
+    /// `VaultClientData.updateDisplayItemSpin`, every client tick.
+    pub fn update_display_item_spin(&mut self) {
+        self.o_spin = self.spin;
+        self.spin = wrap_degrees(self.spin + 10.0);
+    }
+    /// `VaultRenderer`'s spin: `Mth.rotLerp` between the last two ticks.
+    pub fn display_spin(&self, partial: f32) -> f32 {
+        self.o_spin + partial * wrap_degrees(self.spin - self.o_spin)
+    }
     /// `loadAdditional`. `VaultServerData.set` leaves the total of ejections
     /// out, so a vault loaded mid-ejection counts from 0.
     pub fn load(tag: &Tag) -> Self {
