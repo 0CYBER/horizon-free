@@ -47,6 +47,7 @@ pub mod data_cmd;
 pub mod datapack;
 pub mod debug_chart;
 pub mod debug_keys;
+pub mod debug_overlay;
 pub mod effects;
 pub mod enchant;
 pub mod end_crystal;
