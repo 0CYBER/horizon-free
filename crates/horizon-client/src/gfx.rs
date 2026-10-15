@@ -2749,7 +2749,8 @@ const ANIMATION_MIP_ENTRIES: usize = 4096;
 /// renderer on resource reload drops this entire snapshot, including its cache:
 /// frame indices can never alias another resource's pixels, size or settings.
 struct AnimatedSprites {
-    animations: Vec<(SpriteAnimation, usize)>,
+    /// Each animated sprite and what its layer holds (`None`: not uploaded yet).
+    animations: Vec<(SpriteAnimation, Option<crate::sprites::FrameBlend>)>,
     size: u32,
     settings: Vec<crate::mipmap::Settings>,
     // Cache bookkeeping must not consume randomness or affect other maps' seeding.
@@ -2765,11 +2766,7 @@ impl AnimatedSprites {
         settings: &[crate::mipmap::Settings],
     ) -> Self {
         Self {
-            animations: animations
-                .iter()
-                .cloned()
-                .map(|a| (a, usize::MAX))
-                .collect(),
+            animations: animations.iter().cloned().map(|a| (a, None)).collect(),
             size,
             settings: settings.to_vec(),
             cache: Default::default(),
@@ -2786,35 +2783,53 @@ fn animate_sprites(
 ) {
     let size = state.size;
     let levels = size.trailing_zeros() + 1;
-    for (index, (animation, previous)) in state.animations.iter_mut().enumerate() {
-        let frame = animation.frame(tick);
-        if frame == *previous {
+    let AnimatedSprites {
+        animations,
+        settings,
+        cache,
+        cache_bytes,
+        budget,
+        ..
+    } = state;
+    for (index, (animation, previous)) in animations.iter_mut().enumerate() {
+        let blend = animation.blend(tick);
+        if *previous == Some(blend) {
             continue;
         }
-        *previous = frame;
-        let room = state.cache.len() < ANIMATION_MIP_ENTRIES;
-        let uncached;
-        let mips: &[u8] = match state.cache.entry((index, frame)) {
-            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                let (pixels, _) = mip_chain(
-                    animation.pixels(frame),
-                    size,
-                    &state.settings,
-                    animation.layer,
-                    1,
-                );
-                // Bound both pixel storage and map metadata. Keep admitted
-                // frames rather than churning them on large/unique workloads;
-                // frames that do not fit still use the same generation path.
-                if room && pixels.capacity() <= state.budget - state.cache_bytes {
-                    state.cache_bytes += pixels.capacity();
-                    entry.insert(pixels)
-                } else {
-                    uncached = pixels;
-                    &uncached
-                }
-            }
+        *previous = Some(blend);
+        let (animation, settings) = (&*animation, &**settings);
+        let chain = |frame: usize| {
+            move || mip_chain(animation.pixels(frame), size, settings, animation.layer, 1).0
+        };
+        let (current, mixed);
+        let mips: &[u8] = if blend.millis > 0 {
+            let mut mix = frame_mips(
+                cache,
+                cache_bytes,
+                *budget,
+                (index, blend.frame),
+                chain(blend.frame),
+            )
+            .into_owned();
+            let next = frame_mips(
+                cache,
+                cache_bytes,
+                *budget,
+                (index, blend.next),
+                chain(blend.next),
+            );
+            mix_frames(&mut mix, &next, blend.millis);
+            mixed = mix;
+            &mixed
+        } else {
+            current = frame_mips(
+                cache,
+                cache_bytes,
+                *budget,
+                (index, blend.frame),
+                chain(blend.frame),
+            );
+            &current
         };
         let mut offset = 0;
         for level in 0..levels.min(max_levels) {
@@ -2823,6 +2838,40 @@ fn animate_sprites(
             write(animation.layer, level, edge, &mips[offset..offset + bytes]);
             offset += bytes;
         }
+    }
+}
+/// `animate_sprite_interpolate.fsh`: `mix(current, next, millis / 1000)` per
+/// channel of every mipmap level, stored as 8-bit unorm.
+/// One frame's mip chain: from the cache, or generated and kept while the budget has room.
+/// Frames that do not fit still go through the same generation path.
+fn frame_mips<'a>(
+    cache: &'a mut crate::fast_hash::FxHashMap<(usize, usize), Vec<u8>>,
+    cache_bytes: &mut usize,
+    budget: usize,
+    key: (usize, usize),
+    generate: impl FnOnce() -> Vec<u8>,
+) -> std::borrow::Cow<'a, [u8]> {
+    let room = cache.len() < ANIMATION_MIP_ENTRIES;
+    match cache.entry(key) {
+        std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut().as_slice().into(),
+        std::collections::hash_map::Entry::Vacant(entry) => {
+            let pixels = generate();
+            // Bound both pixel storage and map metadata. Keep admitted frames
+            // rather than churning them on large/unique workloads.
+            if room && pixels.capacity() <= budget - *cache_bytes {
+                *cache_bytes += pixels.capacity();
+                entry.insert(pixels).as_slice().into()
+            } else {
+                pixels.into()
+            }
+        }
+    }
+}
+fn mix_frames(current: &mut [u8], next: &[u8], millis: u32) {
+    let t = millis as f32 / 1000.0;
+    for (c, n) in current.iter_mut().zip(next) {
+        let (a, b) = (f32::from(*c) / 255.0, f32::from(*n) / 255.0);
+        *c = ((a * (1.0 - t) + b * t) * 255.0).round() as u8;
     }
 }
 #[cfg(test)]
@@ -2843,7 +2892,7 @@ mod sprite_upload_tests {
             let settings = [];
             let (expected, levels) = mip_chain(&pixels, size, &settings, 7, 1);
             let mut animations = AnimatedSprites::new(&[animation], size, &settings);
-            animations.animations[0].1 = 0;
+            animations.animations[0].1 = Some(animations.animations[0].0.blend(0));
             let mut writes = Vec::new();
             let mut record = |layer, level, edge, data: &[u8]| {
                 assert_eq!(layer, 7);
@@ -2948,5 +2997,36 @@ mod sprite_upload_tests {
             actual.extend_from_slice(bytes)
         });
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn interpolated_animation_uploads_the_mix_every_tick() {
+        let animation = crate::sprites::test_clip(16, 3, r#"{"frametime":4,"interpolate":true}"#);
+        let settings = [];
+        let (_, levels) = mip_chain(animation.pixels(0), 16, &settings, 3, 1);
+        let mut cached = AnimatedSprites::new(std::slice::from_ref(&animation), 16, &settings);
+        let mut uncached = AnimatedSprites::new(std::slice::from_ref(&animation), 16, &settings);
+        uncached.budget = 0;
+        for state in [&mut cached, &mut uncached] {
+            state.animations[0].1 = Some(animation.blend(0));
+        }
+        let mut blues = Vec::new();
+        let mut uncached_blues = Vec::new();
+        let mut record = |_, level, _, data: &[u8]| {
+            if level == 0 {
+                blues.push(data[2]);
+            }
+        };
+        for tick in [0, 1, 1, 2, 4] {
+            animate_sprites(&mut cached, tick, levels, &mut record);
+            animate_sprites(&mut uncached, tick, levels, |_, level, _, data: &[u8]| {
+                if level == 0 {
+                    uncached_blues.push(data[2]);
+                }
+            });
+        }
+        // Frame 0 is blue 0, frame 1 blue 99: a quarter, a half, then frame 1.
+        assert_eq!(blues, [25, 50, 99]);
+        assert_eq!(uncached_blues, blues);
     }
 }
