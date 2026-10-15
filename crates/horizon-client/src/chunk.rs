@@ -158,6 +158,19 @@ impl Chunk {
     pub fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId {
         BlockStateId(u32::from(self.get(x, y, z)))
     }
+    /// The highest y where `matches`, scanning down. Sections holding only
+    /// `skip` are passed over whole: `matches` must be false for it.
+    pub fn highest(&self, skip: u16, mut matches: impl FnMut(i32) -> bool) -> Option<i32> {
+        self.sections
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, section)| !section.is_uniform(skip))
+            .find_map(|(s, _)| {
+                let base = MIN_Y + s as i32 * 16;
+                (base..base + 16).rev().find(|&y| matches(y))
+            })
+    }
     pub fn set(&mut self, x: i32, y: i32, z: i32, v: u16) -> u16 {
         let s = (y - MIN_Y) >> 4;
         if !(0..SECTIONS as i32).contains(&s) {
@@ -196,5 +209,42 @@ impl Chunk {
             ((qy & 3) << 4 | (qz & 3) << 2 | (qx & 3)) as usize,
             u32::from(biome),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn highest_skips_only_sections_that_cannot_match() {
+        let (air, cave_air, stone) = (0, 7, 1);
+        let mut chunk = Chunk::empty(0, 0);
+        // Stone low down, cave air (uniform in its section) above it, and a
+        // section of air with one stone block higher up.
+        for y in MIN_Y..MIN_Y + 40 {
+            chunk.set(3, y, 4, stone);
+        }
+        for i in 0..4096 {
+            Arc::make_mut(&mut chunk.sections[5]).set(i, cave_air);
+        }
+        chunk.set(3, 150, 4, stone);
+        let full = |c: &Chunk, matches: &dyn Fn(u16) -> bool| {
+            (MIN_Y..MIN_Y + HEIGHT)
+                .rev()
+                .find(|&y| matches(c.get(3, y, 4)))
+        };
+        for matches in [
+            &(|v: u16| v != air) as &dyn Fn(u16) -> bool,
+            &|v: u16| v == stone,
+            &|v: u16| v == cave_air,
+        ] {
+            let fast = chunk.highest(air, |y| matches(chunk.get(3, y, 4)));
+            assert_eq!(fast, full(&chunk, matches));
+        }
+        assert_eq!(
+            chunk.highest(air, |y| chunk.get(3, y, 4) == stone),
+            Some(150)
+        );
+        assert_eq!(Chunk::empty(0, 0).highest(air, |_| unreachable!()), None);
     }
 }

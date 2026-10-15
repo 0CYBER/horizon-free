@@ -198,11 +198,18 @@ impl NaturalLevel for GameLevel<'_, '_> {
     fn spawn_mobs(&self) -> bool {
         self.game.ui.rules.bool("spawn_mobs")
     }
+    /// Scanned down the column: sections of air alone are skipped (air counts
+    /// for no heightmap), and an unloaded column reads as air.
     fn heightmap(&self, kind: Heightmap, x: i32, z: i32) -> i32 {
-        let top = horizon_client::chunk::MIN_Y + horizon_client::chunk::HEIGHT;
-        (horizon_client::chunk::MIN_Y..top)
-            .rev()
-            .find(|&y| spawn_selection::heightmap_blocks(self, kind, x, y, z))
+        let world = self.w.world;
+        world
+            .chunks
+            .get(&(x >> 4, z >> 4))
+            .and_then(|chunk| {
+                chunk.highest(world.air.0 as u16, |y| {
+                    spawn_selection::heightmap_blocks(self, kind, x, y, z)
+                })
+            })
             .map_or(horizon_client::chunk::MIN_Y, |y| y + 1)
     }
     fn pathfindable_land(&self, x: i32, y: i32, z: i32) -> bool {
