@@ -220,6 +220,7 @@ exactly vanilla's, so a vanilla client can share the game folder.
 enabled:true
 vibration:true
 adaptiveTriggers:true
+lightbar:health
 lookSensitivity:0.5
 invertX:false
 invertY:false
@@ -233,7 +234,7 @@ bind_pad.hotbarNext:rb
 ```
 
 Only bindings that differ from the defaults are written. The controls
-options get a Controller page: on/off, vibration, adaptive triggers, look sensitivity, invert
+options get a Controller page: on/off, vibration, adaptive triggers, lightbar, look sensitivity, invert
 X/Y, deadzones, glyph style, sneak toggle, and a binding list like the key
 binds screen (pick an action, press a button; conflicts marked as vanilla
 does; reset).
@@ -435,6 +436,17 @@ done: there the motors' emulation is used. HD haptics are opt-in for now
 (`HORIZON_DUALSENSE_HAPTICS=1`) until they are confirmed on a real pad;
 games started for tests (`HORIZON_NO_AUDIO`) never open them, and the pad's
 audio device is only ever opened by name, never the system's default output.
+
+### Lightbar and player LEDs
+
+"Lightbar: Health / Dimension / Off" in the controller options
+(`lightbar:`, health by default). Health runs from green at full through
+amber at half to red; Dimension is blue in the Overworld, orange in the
+Nether, violet in the End. Both at half brightness (the pad's full light is
+glaring); menus keep the last colour. The player LEDs show player 1 (the
+middle LED). Off leaves both to the pad. When Horizon lets go of the pad, a
+lightbar or LEDs it changed go back to a host's defaults: blue (0, 0, 128)
+and the middle LED, as Linux's driver gives a first pad.
 
 Byte layout from public references, read for facts; no code is copied from
 them (the kernel and dualsensectl are GPL):

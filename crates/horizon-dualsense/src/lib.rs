@@ -61,6 +61,10 @@ const FLAG2_VIBRATION_V2: u8 = 1 << 2;
 const LIGHTBAR_LIGHT_OUT: u8 = 1 << 1;
 /// Player LEDs: switch at once instead of fading.
 pub const PLAYER_LEDS_INSTANT: u8 = 1 << 5;
+/// The middle LED: player 1.
+pub const PLAYER_1: u8 = 1 << 2;
+/// The blue a host gives a first pad (`hid-playstation.c`), restored when Horizon lets go.
+pub const DEFAULT_LIGHTBAR: [u8; 3] = [0, 0, 128];
 
 /// An adaptive trigger's effect: a mode byte and ten parameters.
 pub type TriggerEffect = [u8; 11];

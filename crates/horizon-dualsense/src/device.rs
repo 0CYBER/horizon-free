@@ -1,6 +1,8 @@
 //! The pad over hidapi, and the thread that writes to it: writes block (a Bluetooth report can
 //! take milliseconds), so the game only hands over what the pad should do.
-use crate::{Output, TRIGGER_OFF, TriggerEffect, Vibration, is_dualsense};
+use crate::{
+    DEFAULT_LIGHTBAR, Output, PLAYER_1, TRIGGER_OFF, TriggerEffect, Vibration, is_dualsense,
+};
 use hidapi::{BusType, HidApi, HidDevice, HidResult};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -303,7 +305,13 @@ impl Writer {
             self.flush();
         }
         if let Some(pad) = self.pad.as_mut() {
-            let _ = pad.write(&Output::release());
+            // The lights go back to a host's defaults, if they were changed.
+            let release = Output {
+                lightbar: self.state.lightbar.map(|_| DEFAULT_LIGHTBAR),
+                player_leds: self.state.player_leds.map(|_| PLAYER_1),
+                ..Output::release()
+            };
+            let _ = pad.write(&release);
         }
     }
 
