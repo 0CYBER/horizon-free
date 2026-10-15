@@ -6145,7 +6145,6 @@ impl Game<'_> {
         horizon_client::save::migrate_legacy(&save_root)?;
         self.session_lock = None;
         self.session_lock = Some(horizon_client::save::SessionLock::acquire(&save_root)?);
-        self.persist = Default::default();
         self.score = Default::default();
         self.fns = Default::default();
         self.bosses = Default::default();
@@ -6279,8 +6278,7 @@ impl Game<'_> {
         self.block_ticks = Ticks::new(self.level.seed as i32);
         self.install_live_features();
         self.tick_chunks.clear();
-        self.falling.clear();
-        self.tnts.clear();
+        self.clear_entities();
         self.travelling = None;
         self.player = None;
         self.spawn = None;
@@ -6299,14 +6297,8 @@ impl Game<'_> {
         self.spawn_origin = None;
         self.spawn_spiral = Default::default();
         self.player_spawn = None;
-        self.mobs.clear();
         self.creatures.reset_trader();
         self.portals = Default::default();
-        self.creatures.projectiles.clear();
-        self.dropped.clear();
-        self.particles.clear();
-        self.pickups.clear();
-        self.orbs.clear();
         self.experience = Experience {
             level: self.level.xp_level,
             progress: self.level.xp_progress,
@@ -6629,11 +6621,7 @@ impl Game<'_> {
         self.streaming.paused = true;
         self.world = World::new(self.res.facts.air, 0);
         self.player = None;
-        self.mobs.clear();
-        self.creatures.projectiles.clear();
-        self.dropped.clear();
-        self.particles.clear();
-        self.pickups.clear();
+        self.clear_entities();
         self.screen = Screen::Playing;
         if let Some(r) = self.renderer.as_mut() {
             r.clear_sections();
@@ -6644,6 +6632,33 @@ impl Game<'_> {
         ));
         self.capture(false);
         Ok(())
+    }
+    /// Let go of every entity of the level (saved first): the next world
+    /// opened must not inherit them, nor save them as its own.
+    fn clear_entities(&mut self) {
+        self.mobs.clear();
+        self.dropped.clear();
+        self.orbs.clear();
+        self.creatures.projectiles.clear();
+        self.falling.clear();
+        self.tnts.clear();
+        self.boats.clear();
+        self.carts.clear();
+        self.armor_stands.clear();
+        self.item_frames.clear();
+        self.paintings.clear();
+        self.others.clear();
+        self.dragon = None;
+        self.crystals.clear();
+        self.dragon_fireballs.clear();
+        self.breath_clouds.clear();
+        self.tridents.clear();
+        self.rockets.clear();
+        self.bolts.clear();
+        self.particles.clear();
+        self.pickups.clear();
+        self.riding = None;
+        self.persist = Default::default();
     }
     /// Equipment attribute modifiers (LivingEntity.collectEquipmentChanges).
     fn apply_equipment(&mut self) {
