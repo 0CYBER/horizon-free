@@ -1,16 +1,10 @@
 //! Each launcher's layout, rebuilt with small fake files (never Mojang's).
 use super::*;
 use std::cell::RefCell;
+use std::sync::Mutex;
 
 const CLIENT: &[u8] = b"fake 26.3 client jar";
 const MANIFEST: &[u8] = br#"{"id": "26.3", "fake": true}"#;
-
-fn sha1_hex(data: &[u8]) -> String {
-    Sha1::digest(data)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
 
 fn pins() -> Pins {
     Pins::read(&serde_json::json!({ "minecraft": {
@@ -64,19 +58,19 @@ impl Drop for Scratch {
 /// Mojang's piston-meta, serving `body` and counting the requests.
 struct Mojang {
     body: Vec<u8>,
-    urls: RefCell<Vec<String>>,
+    urls: Mutex<Vec<String>>,
 }
 
 impl Mojang {
     fn new(body: &[u8]) -> Mojang {
         Mojang {
             body: body.to_vec(),
-            urls: RefCell::new(Vec::new()),
+            urls: Mutex::new(Vec::new()),
         }
     }
 
     fn fetch(&self, url: &str) -> Result<Vec<u8>, String> {
-        self.urls.borrow_mut().push(url.to_string());
+        self.urls.lock().unwrap().push(url.to_string());
         Ok(self.body.clone())
     }
 }
@@ -87,14 +81,17 @@ fn resolve_with(
     linked: &Path,
     mojang: &Mojang,
 ) -> Result<PathBuf, String> {
-    resolve(
+    match resolve(
         chosen,
         &pins(),
         known,
         linked,
         &|url| mojang.fetch(url),
         &|_| {},
-    )
+    )? {
+        Resolved::Folder(dir) => Ok(dir),
+        Resolved::NotFound(checked) => Err(not_found("26.3", &checked)),
+    }
 }
 
 /// The linked folder is the official layout, pointing at the launcher's files.
@@ -140,7 +137,7 @@ fn the_official_layout_is_used_as_it_is() {
     let mojang = Mojang::new(b"");
     let got = resolve_with(&dir, &[], &s.0.join("linked"), &mojang).unwrap();
     assert_eq!(got, dir);
-    assert!(mojang.urls.borrow().is_empty());
+    assert!(mojang.urls.lock().unwrap().is_empty());
     assert!(!s.0.join("linked").exists());
 }
 
@@ -172,7 +169,7 @@ fn prism_launcher_and_multimc_are_read_through_their_metadata() {
     assert_eq!(resolve_with(&dir, &[], &linked, &mojang).unwrap(), linked);
     assert_linked(&linked, &dir, jar);
     assert_eq!(
-        *mojang.urls.borrow(),
+        *mojang.urls.lock().unwrap(),
         [format!(
             "https://piston-meta.mojang.com/v1/packages/{}/26.3.json",
             sha1_hex(MANIFEST)
@@ -180,7 +177,7 @@ fn prism_launcher_and_multimc_are_read_through_their_metadata() {
     );
     // A second preparation keeps the version file it has.
     resolve_with(&dir, &[], &linked, &mojang).unwrap();
-    assert_eq!(mojang.urls.borrow().len(), 1);
+    assert_eq!(mojang.urls.lock().unwrap().len(), 1);
 }
 
 #[test]
@@ -276,7 +273,7 @@ fn the_known_folders_are_searched_after_the_chosen_one() {
         &|url| mojang.fetch(url),
         &|line| logged.borrow_mut().push(line),
     );
-    assert_eq!(got.unwrap(), linked);
+    assert_eq!(got.unwrap(), Resolved::Folder(linked.clone()));
     assert_linked(&linked, &prism, jar);
     assert_eq!(
         logged.borrow()[0],
@@ -340,7 +337,7 @@ fn nothing_found_lists_every_folder_and_what_it_lacks() {
     assert!(error.contains("Prism Launcher, MultiMC, the Modrinth App, ATLauncher or GDLauncher"));
     // A launcher that isn't installed isn't listed.
     assert!(!error.contains("atlauncher"));
-    assert!(mojang.urls.borrow().is_empty());
+    assert!(mojang.urls.lock().unwrap().is_empty());
 }
 
 #[test]

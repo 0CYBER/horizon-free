@@ -1,7 +1,7 @@
 //! Everything that is not UI: GitHub, installs, resource preparation, the game's processes and
 //! updates. The GUI, the CLI and the MCP server all go through this module. Functions here
 //! block; the GUI runs them on threads and reads their messages.
-use crate::sources;
+use crate::{account, mojang, sources};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -642,6 +642,54 @@ fn preparer_binary(dir: &Path) -> Option<PathBuf> {
     binary.is_file().then_some(binary)
 }
 
+/// Downloads the pinned version from Mojang into `dir` when the signed-in account owns
+/// Minecraft (asked again now), else says what signing in would do, as the last line of the
+/// not-found error.
+fn download_for_owner(
+    pins: &sources::Pins,
+    dir: &Path,
+    fetch: sources::Fetch,
+    log: &dyn Fn(String),
+) -> Result<(), String> {
+    let v = &pins.version;
+    let owner = (|| -> Result<Option<(String, bool)>, String> {
+        let ep = account::Endpoints::live();
+        let mut accounts = account::Accounts::load();
+        let Some((a, secrets)) = account::session_for_launch(&ep, account::store(), &mut accounts)?
+        else {
+            return Ok(None);
+        };
+        Ok(Some((a.name, account::owns_minecraft(&ep, &secrets)?)))
+    })();
+    match owner {
+        Ok(Some((name, true))) => {
+            log(format!(
+                "{name} owns Minecraft: downloading {v} from Mojang"
+            ));
+            let os = match sources::Os::current() {
+                sources::Os::Linux => "linux",
+                sources::Os::MacOs => "osx",
+                sources::Os::Windows => "windows",
+            };
+            mojang::download(pins, dir, os, 8, fetch, log).map_err(|e| {
+                format!("\n  • Horizon tried to download {v} from Mojang for {name}, but: {e}")
+            })
+        }
+        Ok(Some((name, false))) => Err(format!(
+            "\n  • {name}, the signed-in account, doesn't own Minecraft: Java Edition, so Horizon \
+             can't download it."
+        )),
+        Ok(None) => Err(format!(
+            "\n  • Or sign in with the Microsoft account that owns Minecraft: Horizon then \
+             downloads {v} from Mojang itself."
+        )),
+        Err(e) => Err(format!(
+            "\n  • Downloading {v} from Mojang needs your Microsoft account, which could not be \
+             checked: {e}"
+        )),
+    }
+}
+
 /// Checks what the preparation needs and picks how to run it. PLAY.txt describes the same
 /// steps: the player's own launcher install, the server jar from that version's own json, and
 /// Java (and Python, for versions before horizon-prepare). Also returns the Minecraft folder
@@ -661,9 +709,13 @@ pub fn preparer(
         let pins = read_json(&dir.join("research-lock.json"))
             .and_then(|lock| sources::Pins::read(&lock))
             .ok_or("The version's research-lock.json doesn't pin the Minecraft files")?;
-        let known = sources::Folders::current()
-            .map(|f| sources::known_folders(sources::Os::current(), &f))
-            .unwrap_or_default();
+        let own = data_dir().join("minecraft");
+        let mut known = vec![("Horizon's own download", own.clone())];
+        known.extend(
+            sources::Folders::current()
+                .map(|f| sources::known_folders(sources::Os::current(), &f))
+                .unwrap_or_default(),
+        );
         let fetch = |url: &str| -> Result<Vec<u8>, String> {
             let mut body = Vec::new();
             get(url)?
@@ -673,7 +725,14 @@ pub fn preparer(
             Ok(body)
         };
         let linked = data_dir().join("linked-minecraft");
-        sources::resolve(minecraft, &pins, &known, &linked, &fetch, log)?
+        match sources::resolve(minecraft, &pins, &known, &linked, &fetch, log)? {
+            sources::Resolved::Folder(dir) => dir,
+            sources::Resolved::NotFound(checked) => {
+                let not_found = sources::not_found(&version, &checked);
+                download_for_owner(&pins, &own, &fetch, log).map_err(|e| not_found + &e)?;
+                own
+            }
+        }
     };
     let manifest = minecraft
         .join("versions")

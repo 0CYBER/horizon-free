@@ -194,7 +194,7 @@ fn client_jars(base: &Path, version: &str) -> Vec<String> {
     jars
 }
 
-fn sha1_file(path: &Path) -> Option<String> {
+pub(crate) fn sha1_file(path: &Path) -> Option<String> {
     let mut file = fs::File::open(path).ok()?;
     let mut hash = Sha1::new();
     let mut buffer = vec![0; 1 << 20];
@@ -264,8 +264,17 @@ pub fn not_found(version: &str, checked: &[(PathBuf, String)]) -> String {
     text
 }
 
-/// Fetches a URL's body.
-pub type Fetch<'a> = &'a dyn Fn(&str) -> Result<Vec<u8>, String>;
+/// Fetches a URL's body (from several threads for a download).
+pub type Fetch<'a> = &'a (dyn Fn(&str) -> Result<Vec<u8>, String> + Sync);
+
+/// Where the pinned version is.
+#[derive(Debug, PartialEq)]
+pub enum Resolved {
+    /// A folder in the official launcher's layout.
+    Folder(PathBuf),
+    /// In none of these folders; each with what it lacks.
+    NotFound(Vec<(PathBuf, String)>),
+}
 
 /// A Minecraft folder in the official launcher's layout holding the pinned version: the
 /// chosen folder when it is one, else the files found in the chosen folder (or a folder above
@@ -278,7 +287,7 @@ pub fn resolve(
     linked: &Path,
     fetch: Fetch,
     log: &dyn Fn(String),
-) -> Result<PathBuf, String> {
+) -> Result<Resolved, String> {
     let mut checked = Vec::new();
     let mut found = None;
     for dir in chosen.ancestors().take(4) {
@@ -302,7 +311,7 @@ pub fn resolve(
         }
     }
     let Some((name, found)) = found else {
-        return Err(not_found(&pins.version, &checked));
+        return Ok(Resolved::NotFound(checked));
     };
     log(format!(
         "Using Minecraft {} from {name} ({})",
@@ -310,10 +319,57 @@ pub fn resolve(
         found.base.display()
     ));
     if found.official_layout(&pins.version) {
-        return Ok(found.base);
+        return Ok(Resolved::Folder(found.base));
     }
     link_official_layout(&found, pins, linked, fetch, log)?;
-    Ok(linked.to_path_buf())
+    Ok(Resolved::Folder(linked.to_path_buf()))
+}
+
+/// The pinned version JSON at `path`, from piston-meta (by its sha1) unless it is there.
+pub(crate) fn fetch_manifest(
+    pins: &Pins,
+    path: &Path,
+    fetch: Fetch,
+    log: &dyn Fn(String),
+) -> Result<(), String> {
+    if pins.manifest_accepted(path) {
+        return Ok(());
+    }
+    let (v, sha1) = (&pins.version, &pins.manifests[0]);
+    log(format!("Downloading the {v} version file from Mojang"));
+    let url = format!("https://piston-meta.mojang.com/v1/packages/{sha1}/{v}.json");
+    let body =
+        fetch_checked(fetch, &url, sha1).map_err(|e| format!("Mojang's {v} version file {e}"))?;
+    write_file(path, &body)
+}
+
+pub(crate) fn sha1_hex(data: &[u8]) -> String {
+    Sha1::digest(data)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// A download checked against its sha1; the error says how it differs.
+pub(crate) fn fetch_checked(fetch: Fetch, url: &str, sha1: &str) -> Result<Vec<u8>, String> {
+    let body = fetch(url)?;
+    match sha1_hex(&body) {
+        actual if actual == sha1 => Ok(body),
+        actual => Err(format!("is not the one Horizon pins (sha1 {actual})")),
+    }
+}
+
+/// Writes a file whole: a partial one never takes its place.
+pub(crate) fn write_file(path: &Path, data: &[u8]) -> Result<(), String> {
+    let error = |e: std::io::Error| format!("{}: {e}", path.display());
+    fs::create_dir_all(path.parent().unwrap()).map_err(error)?;
+    let partial = path.with_file_name(format!(
+        "{}.partial",
+        path.file_name().unwrap().to_string_lossy()
+    ));
+    fs::write(&partial, data)
+        .and_then(|_| fs::rename(&partial, path))
+        .map_err(error)
 }
 
 /// Links a launcher's files into the official layout in `linked`: the client jar as
@@ -332,22 +388,8 @@ fn link_official_layout(
     let manifest = versions.join(format!("{v}.json"));
     if let Some(source) = &found.manifest {
         fs::copy(source, &manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
-    } else if !pins.manifest_accepted(&manifest) {
-        let sha1 = &pins.manifests[0];
-        log(format!("Downloading the {v} version file from Mojang"));
-        let body = fetch(&format!(
-            "https://piston-meta.mojang.com/v1/packages/{sha1}/{v}.json"
-        ))?;
-        let actual: String = Sha1::digest(&body)
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
-        if &actual != sha1 {
-            return Err(format!(
-                "Mojang's {v} version file is not the one Horizon pins (sha1 {actual})"
-            ));
-        }
-        fs::write(&manifest, body).map_err(|e| format!("{}: {e}", manifest.display()))?;
+    } else {
+        fetch_manifest(pins, &manifest, fetch, log)?;
     }
     link(&found.client, &versions.join(format!("{v}.jar")))?;
     for dir in ["libraries", "assets"] {
