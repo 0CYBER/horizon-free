@@ -2,6 +2,7 @@
 //! and starts the client or a dedicated server.
 
 mod cli;
+mod game_tools;
 mod markdown;
 mod mcp;
 mod perf;
