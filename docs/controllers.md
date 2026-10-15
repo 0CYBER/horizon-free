@@ -410,16 +410,31 @@ channels 1 and 2 silent), the same shapes come out crisp. Per OS:
 
 | | USB | Bluetooth |
 |---|---|---|
-| macOS | the pad lists as a 4-channel CoreAudio output ("DualSense Wireless Controller", seen on the Mac mini); cpal opens it by name | no audio device |
-| Linux | snd-usb-audio exposes it as the card "Controller" with 4 channels; cpal (ALSA) opens it | no audio device |
-| Windows | a 4-channel WASAPI endpoint named after the pad | no audio device |
+| macOS | the pad lists as a 4-channel CoreAudio output ("DualSense Wireless Controller", seen on the Mac mini by dualsense-1); cpal opens it by name | no audio device |
+| Linux | snd-usb-audio exposes the card "Controller" with 4 channels; cpal opens it through ALSA (`plughw:CARD=Controller`), which fails while PipeWire or PulseAudio holds the card, as desktops do: then the motors' emulation stays | no audio device |
+| Windows | a WASAPI endpoint named "Wireless Controller" (or "DualSense Wireless Controller"), stereo until its speaker setup is set to Quadraphonic in the Sound control panel (`mmsys.cpl`, Configure); until then Horizon finds no 4-channel output and keeps the motors | no audio device |
 
-Over Bluetooth the haptics' samples travel inside vendor output reports
-whose format is only partly reverse-engineered; Horizon doesn't do it, and
-keeps the motors' emulation there. HD haptics are opt-in for now
-(`HORIZON_DUALSENSE_HAPTICS=1`) until they are confirmed on a real pad; games
-started for tests (`HORIZON_NO_AUDIO`) never open them, and the pad's audio
-device is only ever opened by name, never the system's default output.
+The audio haptics play only while the pad is out of its rumble emulation:
+any report with the rumble flags (flags 0, bits 0 and 1) silences them until
+a report without them (SDL: "Leaving emulated rumble bits off will restore
+audio haptics"; nondebug/dualsense and
+[dse-haptics](https://github.com/iranran666/dse-haptics) arm them with an
+all-zero report 0x02). While HD haptics are open the motors stay at zero, so
+every report Horizon sends, starting with the one at opening, keeps them
+armed; that first report also clears the attenuation a PS5 may have left.
+The frame layout `[0, 0, left, right]` at 48 kHz is the one
+[KytyPS5 #843](https://github.com/KytyPS5/KytyPS5/pull/843) plays on
+Windows.
+
+Over Bluetooth the haptics travel as 8-bit 3 kHz samples in vendor output
+report 0x32, reverse-engineered by
+[SAxense](https://github.com/egormanga/SAxense) and since used by DSX 3.2
+and [dualsense-bt-haptics](https://github.com/awalol/dualsense-bt-haptics);
+it needs Bluetooth output, which only Linux gets (see above), and isn't
+done: there the motors' emulation is used. HD haptics are opt-in for now
+(`HORIZON_DUALSENSE_HAPTICS=1`) until they are confirmed on a real pad;
+games started for tests (`HORIZON_NO_AUDIO`) never open them, and the pad's
+audio device is only ever opened by name, never the system's default output.
 
 Byte layout from public references, read for facts; no code is copied from
 them (the kernel and dualsensectl are GPL):
@@ -432,6 +447,7 @@ them (the kernel and dualsensectl are GPL):
 | Nielk1's [TriggerEffectGenerator](https://gist.github.com/Nielk1/6d54cc2c00d2201ccb8c2720ad7538db/f73a299fdc52f43be84d39e62734192ad82bb393) (MIT) | rev. `f73a299` | the trigger modes (official 0x05, 0x21, 0x25, 0x26) and their zone packing |
 | [pydualsense](https://github.com/flok/pydualsense/blob/01445f5ed6ba/pydualsense/pydualsense.py) (MIT) | `01445f5` | sets the attenuation flag with 0 on every report |
 | [nondebug/dualsense](https://github.com/nondebug/dualsense) | `b87450e` | an all-zero report 0x02 leaves rumble emulation for the audio haptics |
+| [KytyPS5 #843](https://github.com/KytyPS5/KytyPS5/pull/843), [dse-haptics](https://github.com/iranran666/dse-haptics), [SAxense](https://github.com/egormanga/SAxense) | read 2026-10-15 | the 4-channel layout, the Windows and Linux device names and setup, the Bluetooth haptics report |
 
 Verified on hardware (USB, dualsense-1, Mac mini): the motors with the V2
 flags (the IMU shook, and settled after a stop that then still sent the

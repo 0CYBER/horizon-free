@@ -72,11 +72,7 @@ impl Haptics {
 }
 
 fn is_dualsense(device: &cpal::Device) -> bool {
-    // "DualSense Wireless Controller" on macOS and Windows; ALSA names the card "Controller".
-    let named = device
-        .name()
-        .is_ok_and(|n| n.contains("DualSense") || n.contains("CARD=Controller"));
-    named
+    device.name().is_ok_and(|n| is_dualsense_name(&n))
         && device.supported_output_configs().is_ok_and(|mut configs| {
             configs.any(|c| {
                 c.channels() >= 4
@@ -85,6 +81,16 @@ fn is_dualsense(device: &cpal::Device) -> bool {
                     && c.sample_format() == cpal::SampleFormat::F32
             })
         })
+}
+
+/// "DualSense Wireless Controller" on macOS; on Windows the endpoint is often just "Speakers
+/// (Wireless Controller)" (DS5Windows' and dse-haptics' setup notes), a name the DualShock 4's
+/// two-channel headset output shares, which the four channels rule out; ALSA names the card
+/// "Controller".
+fn is_dualsense_name(name: &str) -> bool {
+    name.contains("DualSense")
+        || name.contains("Wireless Controller")
+        || name.contains("CARD=Controller")
 }
 
 /// The samples of a vibration: the heavy and light tones at each step's levels, with short
@@ -114,6 +120,18 @@ pub fn waveform(steps: &[(f32, f32, Duration)]) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn device_names() {
+        assert!(is_dualsense_name("DualSense Wireless Controller"));
+        assert!(is_dualsense_name("Speakers (Wireless Controller)"));
+        assert!(is_dualsense_name(
+            "Speakers (2- DualSense Wireless Controller)"
+        ));
+        assert!(is_dualsense_name("plughw:CARD=Controller,DEV=0"));
+        assert!(!is_dualsense_name("MacBook Pro Speakers"));
+        assert!(!is_dualsense_name("hw:CARD=PCH,DEV=0"));
+    }
 
     #[test]
     fn waveform_follows_the_steps() {
