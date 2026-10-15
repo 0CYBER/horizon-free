@@ -4955,6 +4955,22 @@ impl Game<'_> {
             f.input_clicked(&self.res.recipes, before);
         }
     }
+    /// `Camera.setRotation`: the camera's orientation, turned round in
+    /// third-person front view.
+    pub(super) fn camera_orientation(&self) -> glam::Quat {
+        let (view_yaw, view_pitch) =
+            if self.camera_type == perspective::CameraType::ThirdPersonFront {
+                (self.yaw + 180.0, -self.pitch)
+            } else {
+                (self.yaw, self.pitch)
+            };
+        glam::Quat::from_euler(
+            glam::EulerRot::YXZ,
+            std::f32::consts::PI - view_yaw.to_radians(),
+            -view_pitch.to_radians(),
+            0.0,
+        )
+    }
     /// ItemEntityRenderer: items bob and spin; blocks render as small cubes.
     fn entity_geometry(
         &mut self,
@@ -5105,21 +5121,9 @@ impl Game<'_> {
         if let Some(r) = &self.renderer {
             let lid = |p: [i32; 3]| self.chest_lid(p, alpha as f32);
             let anim = |p: [i32; 3]| self.block_anim(p, alpha as f32);
-            let (view_yaw, view_pitch) =
-                if self.camera_type == perspective::CameraType::ThirdPersonFront {
-                    (self.yaw + 180.0, -self.pitch)
-                } else {
-                    (self.yaw, self.pitch)
-                };
             let scene = horizon_client::block_entity_render::Scene {
                 camera,
-                // Camera.setRotation.
-                orientation: glam::Quat::from_euler(
-                    glam::EulerRot::YXZ,
-                    std::f32::consts::PI - view_yaw.to_radians(),
-                    -view_pitch.to_radians(),
-                    0.0,
-                ),
+                orientation: self.camera_orientation(),
                 anim: &anim,
                 texts: None,
                 partial: alpha as f32,
