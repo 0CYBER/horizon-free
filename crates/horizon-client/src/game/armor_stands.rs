@@ -565,9 +565,9 @@ impl Game<'_> {
             held.count -= 1;
             if held.count == 0 {
                 // The worn piece comes back to the hand.
-                self.inventory[self.selected] = current;
+                *self.held_mut() = current;
             } else {
-                self.inventory[self.selected] = Some(held);
+                *self.held_mut() = Some(held);
                 if let Some(old) = current
                     && let Some(rest) = self.give(old)
                     && let Some(eye) = self.eye_position()

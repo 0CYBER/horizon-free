@@ -78,7 +78,7 @@ impl Game<'_> {
             return true;
         }
         if self.using.is_none() {
-            self.using = Some((self.selected, 0));
+            self.using = Some((self.held_slot(), 0));
         }
         true
     }
@@ -99,7 +99,7 @@ impl Game<'_> {
         if ticks < 10 {
             return;
         }
-        let Some(stack) = self.inventory[self.selected].clone() else {
+        let Some(stack) = self.held().cloned() else {
             return;
         };
         let Some(eye) = self.eye_position() else {
@@ -134,13 +134,13 @@ impl Game<'_> {
         }
         // hurtWithoutBreaking, then the thrown copy.
         if !self.creative
-            && let Some(s) = self.inventory[self.selected].as_mut()
+            && let Some(s) = self.held_mut().as_mut()
         {
             s.damage += 1;
         }
-        let thrown = self.inventory[self.selected].clone().unwrap_or(stack);
+        let thrown = self.held().cloned().unwrap_or(stack);
         if !self.creative {
-            self.inventory[self.selected] = None;
+            *self.held_mut() = None;
         }
         let start = Vec3::new(eye[0], eye[1] - 0.1, eye[2]);
         let mut projectile = horizon_client::projectiles::Projectile::new(

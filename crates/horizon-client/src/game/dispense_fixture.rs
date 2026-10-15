@@ -514,9 +514,15 @@ impl Game<'_> {
         }
         self.using = None;
         self.inventory[self.selected] = stack.clone();
-        let used_before = stack
-            .as_ref()
-            .map_or(0, |s| self.stats.get("used", &s.item));
+        self.offhand = parse_stack(op["offhand"].as_str().unwrap_or("-"))?;
+        // The used statistic of each item held, once.
+        let mut items: Vec<_> = [stack.as_ref(), self.offhand.as_ref()]
+            .into_iter()
+            .flatten()
+            .map(|s| s.item.clone())
+            .collect();
+        items.dedup();
+        let used_before: Vec<_> = items.iter().map(|i| self.stats.get("used", i)).collect();
         self.forced_hit = Some(super::Hit {
             pos: [pos.x, pos.y, pos.z],
             face: [0, 1, 0],
@@ -542,10 +548,10 @@ impl Game<'_> {
                 out.push(format!("msg {key}"));
             }
         }
-        if let Some(s) = &stack {
-            let used = self.stats.get("used", &s.item) - used_before;
+        for (item, before) in items.iter().zip(used_before) {
+            let used = self.stats.get("used", item) - before;
             if used != 0 {
-                out.push(format!("stat {} minecraft:used {used}", s.item));
+                out.push(format!("stat {item} minecraft:used {used}"));
             }
         }
         let using = self
@@ -553,8 +559,9 @@ impl Game<'_> {
             .and_then(|(slot, _)| self.stack_in(slot))
             .map_or("-".to_owned(), |s| s.item.to_string());
         out.push(format!(
-            "held {} using {using}",
-            canon_stack(self.inventory[self.selected].as_ref())
+            "held {} offhand {} using {using}",
+            canon_stack(self.inventory[self.selected].as_ref()),
+            canon_stack(self.offhand.as_ref())
         ));
         out.push(match self.respawn_config {
             Some(c) => format!(
@@ -568,6 +575,7 @@ impl Game<'_> {
         });
         self.player = None;
         self.using = None;
+        self.offhand = None;
         Ok(out)
     }
 

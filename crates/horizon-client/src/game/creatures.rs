@@ -2569,11 +2569,11 @@ impl Game<'_> {
         self.audio.play(sound, Some(eye), 0.5, pitch);
         self.swing_arm();
         if !self.creative
-            && let Some(s) = self.inventory[self.selected].as_mut()
+            && let Some(s) = self.held_mut().as_mut()
         {
             s.count -= 1;
             if s.count == 0 {
-                self.inventory[self.selected] = None;
+                *self.held_mut() = None;
             }
         }
         Ok(true)
@@ -2615,11 +2615,11 @@ impl Game<'_> {
         }
         self.swing_arm();
         if !self.creative
-            && let Some(s) = self.inventory[self.selected].as_mut()
+            && let Some(s) = self.held_mut().as_mut()
         {
             s.count -= 1;
             if s.count == 0 {
-                self.inventory[self.selected] = None;
+                *self.held_mut() = None;
             }
         }
         Ok(true)

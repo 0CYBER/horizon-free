@@ -42,9 +42,9 @@ impl Game<'_> {
             self.swings_started += 1;
         }
     }
-    /// `swing(InteractionHand.MAIN_HAND)` with the default animation.
+    /// `swing(hand)` for the hand that acts, with the default animation.
     pub(super) fn swing_arm(&mut self) {
-        self.swing_hand(Hand::Main, SwingAnimation::DEFAULT);
+        self.swing_hand(self.hand, SwingAnimation::DEFAULT);
     }
     /// `Player.resetAttackStrengthTicker`.
     pub(super) fn reset_attack_strength(&mut self) {
@@ -166,18 +166,23 @@ impl Game<'_> {
         if self.clicks.destroying.active || self.hands_busy() {
             return Ok(());
         }
-        let before = self.held().cloned();
+        let before = [self.stack_in(self.selected).cloned(), self.offhand.clone()];
         let swings = self.swings_started;
         let using = self.using.is_some();
-        self.use_item()?;
+        let Some(hand) = self.use_item()? else {
+            return Ok(());
+        };
+        let (before, after) = match hand {
+            Hand::Main => (&before[0], self.stack_in(self.selected).cloned()),
+            Hand::Off => (&before[1], self.offhand.clone()),
+        };
         let swung = self.swings_started != swings;
-        let after = self.held().cloned();
-        let spent = match (&before, &after) {
+        let spent = match (before, &after) {
             (Some(a), Some(b)) => a.count != b.count || a.item != b.item || self.creative,
             _ => false,
         };
         if (swung && spent) || (!using && self.using.is_some() && after.is_some()) {
-            self.heights.item_used(Hand::Main);
+            self.heights.item_used(hand);
         }
         Ok(())
     }

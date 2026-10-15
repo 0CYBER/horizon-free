@@ -136,6 +136,7 @@ use horizon_client::{
     creative::{Creative, Names},
     entities::{Experience, ExperienceOrb, ItemEntity},
     environment::Environment,
+    first_person::Hand,
     gfx::{Frame, Renderer},
     hud::{HudAtlas, HudBatch, rgba},
     hud_layout, hud_overlays,
@@ -796,6 +797,9 @@ struct Game<'a> {
     armor: [Option<ItemStack>; 4],
     /// The off hand (Inventory slot 40, saved as slot 150; menu slot 504 here).
     offhand: Option<ItemStack>,
+    /// The hand an item use acts with (`InteractionHand`): the off hand only
+    /// for its turn in `use_item` and while its item is being used.
+    hand: Hand,
     /// The shield's item cooldown after an axe disabled it (ticks).
     shield_cooldown: u32,
     /// The source of a command run through /execute (the player otherwise).
@@ -1194,8 +1198,26 @@ impl Game<'_> {
         }
         None
     }
+    /// The stack in the hand that acts (`getItemInHand(hand)`).
     fn held(&self) -> Option<&ItemStack> {
-        self.inventory[self.selected].as_ref()
+        self.stack_in(self.held_slot())
+    }
+    fn held_mut(&mut self) -> &mut Option<ItemStack> {
+        self.stack_in_mut(self.held_slot())
+    }
+    /// The slot of the hand that acts: the selected one, or `OFFHAND_SLOT`.
+    fn held_slot(&self) -> usize {
+        match self.hand {
+            Hand::Main => self.selected,
+            Hand::Off => shield::OFFHAND_SLOT,
+        }
+    }
+    /// Run `f` with `hand` acting (`held`, `consume_held`, `swing_arm`).
+    fn with_hand<T>(&mut self, hand: Hand, f: impl FnOnce(&mut Self) -> T) -> T {
+        let prior = std::mem::replace(&mut self.hand, hand);
+        let out = f(self);
+        self.hand = prior;
+        out
     }
     /// Inventory.add: returns the stack that did not fit.
     fn give(&mut self, mut stack: ItemStack) -> Option<ItemStack> {
@@ -2234,20 +2256,22 @@ impl Game<'_> {
         self.process_level_events()?;
         Ok(())
     }
-    fn use_item(&mut self) -> Result<()> {
+    /// The hand whose use ended the click, if any.
+    fn use_item(&mut self) -> Result<Option<Hand>> {
         self.with_player_actor(|game| game.use_item_as_player())
     }
-    fn use_item_as_player(&mut self) -> Result<()> {
+    /// `Minecraft.startUseItem`: the main hand, then the off hand.
+    fn use_item_as_player(&mut self) -> Result<Option<Hand>> {
         // Spectators only look (MultiPlayerGameMode.useItemOn/useItem pass).
         if self.spectator() {
-            return Ok(());
+            return Ok(None);
         }
         // A carrot or warped fungus on a stick boosts the ridden pig or strider.
         if self.riding.is_some()
             && let Some(item) = self.held().map(|s| s.item.clone())
             && self.use_steering_stick(&item)
         {
-            return Ok(());
+            return Ok(Some(Hand::Main));
         }
         if self.interact_frame()
             || self.interact_armor_stand()
@@ -2256,7 +2280,7 @@ impl Game<'_> {
             || self.interact_mob()?
             || self.interact_knot()
         {
-            return Ok(());
+            return Ok(Some(Hand::Main));
         }
         // An EntityHitResult may fall through to Item.use, never to useItemOn.
         let block_hit = if self.entity_targeted() {
@@ -2264,59 +2288,72 @@ impl Game<'_> {
         } else {
             self.pick()
         };
+        for hand in Hand::BOTH {
+            if self.with_hand(hand, |game| game.use_hand(block_hit.as_ref()))? {
+                return Ok(Some(hand));
+            }
+        }
+        Ok(None)
+    }
+    /// One hand's turn in `startUseItem`: `useItemOn` the block aimed at,
+    /// then `useItem`. Whether the click ends here (it acted or failed).
+    fn use_hand(&mut self, block_hit: Option<&Hit>) -> Result<bool> {
+        // isSecondaryUseActive with something in either hand keeps blocks
+        // from reacting.
         let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
-        let mut anchor_passed = None;
-        // MultiPlayerGameMode.useItemOn: blocks react first unless sneaking with an item.
-        if !(sneaking && self.held().is_some())
-            && let Some(hit) = block_hit.as_ref()
+        let hands_full = self.stack_in(self.selected).is_some() || self.offhand.is_some();
+        let mut anchor_passed = false;
+        // MultiPlayerGameMode.useItemOn: blocks react first.
+        if !(sneaking && hands_full)
+            && let Some(hit) = block_hit
         {
             let held = self.held().cloned();
             if self.use_lectern(hit.pos, held.as_ref()) {
                 self.swing_arm();
-                return Ok(());
+                return Ok(true);
             }
             if self.use_jukebox(hit.pos, held.as_ref()) {
                 self.swing_arm();
-                return Ok(());
+                return Ok(true);
             }
             if self.use_composter(hit.pos, held.as_ref()) {
                 self.swing_arm();
-                return Ok(());
+                return Ok(true);
             }
             match self.use_respawn_anchor(hit.pos, held.as_ref())? {
                 respawn_anchor::AnchorUse::Charged => {
                     self.swing_arm();
-                    return Ok(());
+                    return Ok(true);
                 }
                 // The main hand passes; its item is used, then the off hand's glowstone.
-                respawn_anchor::AnchorUse::Pass => anchor_passed = Some(hit.pos),
+                respawn_anchor::AnchorUse::Pass => anchor_passed = true,
                 respawn_anchor::AnchorUse::Other => {}
             }
-            let face = match hit.face {
-                [0, 1, 0] => Direction::Up,
-                [0, -1, 0] => Direction::Down,
-                [0, 0, -1] => Direction::North,
-                [0, 0, 1] => Direction::South,
-                [-1, 0, 0] => Direction::West,
-                _ => Direction::East,
-            };
-            let player = PlayerContext {
-                yaw: self.yaw,
-                pitch: self.pitch,
-                may_build: self.may_build(),
-                can_eat: self.creative
-                    || self
-                        .player
-                        .as_ref()
-                        .is_some_and(|p| p.health.food.food < 20),
-                game_master: false,
-            };
-            let at = Vec3::new(hit.point[0], hit.point[1], hit.point[2]);
-            let item = held.as_ref().map(|s| s.item.to_string());
-            let result = if anchor_passed.is_some() {
-                horizon_world::level::InteractionResult::Pass
-            } else {
-                self.with_level(|b, level, ticks| {
+            // TRY_WITH_EMPTY_HAND: only the main hand's turn uses the block
+            // itself (useWithoutItem).
+            if !anchor_passed && self.hand == Hand::Main {
+                let face = match hit.face {
+                    [0, 1, 0] => Direction::Up,
+                    [0, -1, 0] => Direction::Down,
+                    [0, 0, -1] => Direction::North,
+                    [0, 0, 1] => Direction::South,
+                    [-1, 0, 0] => Direction::West,
+                    _ => Direction::East,
+                };
+                let player = PlayerContext {
+                    yaw: self.yaw,
+                    pitch: self.pitch,
+                    may_build: self.may_build(),
+                    can_eat: self.creative
+                        || self
+                            .player
+                            .as_ref()
+                            .is_some_and(|p| p.health.food.food < 20),
+                    game_master: false,
+                };
+                let at = Vec3::new(hit.point[0], hit.point[1], hit.point[2]);
+                let item = held.as_ref().map(|s| s.item.to_string());
+                let result = self.with_level(|b, level, ticks| {
                     b.use_item_on(
                         level,
                         ticks,
@@ -2326,29 +2363,22 @@ impl Game<'_> {
                         player,
                         item.as_deref(),
                     )
-                })
-            };
-            self.process_level_events()?;
-            if result.consumes_action() {
-                self.swing_arm();
-                return Ok(());
+                });
+                self.process_level_events()?;
+                if result.consumes_action() {
+                    self.swing_arm();
+                    return Ok(true);
+                }
             }
         }
         let Some(stack) = self.held().cloned() else {
-            // Minecraft.startUseItem goes on to the off hand.
-            if let Some(pos) = anchor_passed
-                && self.charge_anchor_from_offhand(pos)?
-            {
-                return Ok(());
-            }
-            self.use_offhand();
-            return Ok(());
+            return Ok(false);
         };
         let Some(info) = self.res.items.get(&stack.item).cloned() else {
-            return Ok(());
+            return Ok(false);
         };
         if block_hit.is_some() && (self.use_bone_meal(&stack)? || self.ignite_tnt(&stack)?) {
-            return Ok(());
+            return Ok(true);
         }
         use horizon_client::first_person::UseResult;
         let swings = self.swings_started;
@@ -2357,18 +2387,18 @@ impl Game<'_> {
                 if (UseResult::Success { swing }).should_swing(swings, self.swings_started) {
                     self.swing_arm();
                 }
-                return Ok(());
+                return Ok(true);
             }
-            UseResult::Fail => return Ok(()),
+            UseResult::Fail => return Ok(true),
             UseResult::Pass => {}
         }
         if self.use_potion_item(&stack)?
             || ((block_hit.is_some() || !stack.item.ends_with("_spawn_egg"))
                 && self.throw_item(&stack)?)
         {
-            return Ok(());
+            return Ok(true);
         }
-        if self.raise_shield(self.selected)
+        if self.raise_shield(self.held_slot())
             || self.use_fishing_rod(&stack)
             || self.use_crossbow(&stack)
             || self.use_trident(&stack)
@@ -2379,29 +2409,29 @@ impl Game<'_> {
             // placed first (useItemOn before useItem).
             || (!(info.block.is_some() && block_hit.is_some()) && self.equip_from_hand(&stack))
         {
-            return Ok(());
+            return Ok(true);
         }
         if &*stack.item == "minecraft:spyglass" {
             self.use_spyglass();
-            return Ok(());
+            return Ok(true);
         }
         if &*stack.item == "minecraft:bow" {
             if self.using.is_none()
                 && (self.creative || self.projectile_slot("minecraft:bow").is_some())
             {
-                self.using = Some((self.selected, 0));
+                self.using = Some((self.held_slot(), 0));
             }
-            return Ok(());
+            return Ok(true);
         }
         // Block foods attempt placement before starting consumption.
         if !(info.block.is_some() && block_hit.is_some()) && self.start_eating(&info) {
-            return Ok(());
+            return Ok(true);
         }
         // BoatItem.use also performs its own fluid/block raycast.
         if self.place_boat(&stack) {
-            return Ok(());
+            return Ok(true);
         }
-        if let Some(hit) = block_hit.as_ref()
+        if let Some(hit) = block_hit
             && (self.launch_firework(hit, &stack)
                 || self.place_minecart(hit, &stack)
                 || self.place_painting(hit, &stack)
@@ -2409,28 +2439,20 @@ impl Game<'_> {
                 || self.place_armor_stand(hit, &stack)
                 || self.place_end_crystal(hit, &stack))
         {
-            return Ok(());
+            return Ok(true);
         }
         if self.use_ender_eye(&stack, block_hit.is_some())? {
-            return Ok(());
+            return Ok(true);
         }
         let Some(hit) = block_hit else {
-            self.use_offhand();
-            return Ok(());
+            return Ok(false);
         };
         if info.block.is_none() {
-            if let Some(pos) = anchor_passed
-                && self.charge_anchor_from_offhand(pos)?
-            {
-                return Ok(());
-            }
-            self.use_offhand();
-            return Ok(());
+            return Ok(false);
         }
         if !self.may_build() {
             // ItemStack.useOn passes in adventure mode; useItem eats.
-            self.start_eating(&info);
-            return Ok(());
+            return Ok(self.start_eating(&info));
         }
         let face = match hit.face {
             [0, 1, 0] => Direction::Up,
@@ -2460,7 +2482,7 @@ impl Game<'_> {
             if self.start_eating(&info) {
                 self.stats.add("used", &stack.item, 1);
             }
-            return Ok(());
+            return Ok(true);
         };
         let target = [pos.x, pos.y, pos.z];
         if let Some(entity) = BlockEntity::for_block(&self.res.facts.get(state).name) {
@@ -2497,9 +2519,9 @@ impl Game<'_> {
         self.consume_held();
         // SolidBucketItem.useOn: BucketItem.getEmptySuccessItem in hand.
         if solid_bucket && !self.creative {
-            self.inventory[self.selected] = Some(ItemStack::new("minecraft:bucket", 1));
+            *self.held_mut() = Some(ItemStack::new("minecraft:bucket", 1));
         }
-        Ok(())
+        Ok(true)
     }
     /// `Consumable.startConsuming` for held food the player can eat
     /// (`Player.canEat`): the right click is held for `consume_seconds`.
@@ -2514,7 +2536,7 @@ impl Game<'_> {
             return false;
         }
         if self.using.is_none() {
-            self.using = Some((self.selected, 0));
+            self.using = Some((self.held_slot(), 0));
         }
         true
     }
@@ -2522,16 +2544,29 @@ impl Game<'_> {
         if self.creative {
             return;
         }
-        if let Some(s) = self.inventory[self.selected].as_mut() {
+        let cell = self.held_mut();
+        if let Some(s) = cell.as_mut() {
             s.count -= 1;
             if s.count == 0 {
-                self.inventory[self.selected] = None;
+                *cell = None;
             }
         }
     }
     fn tick_using(&mut self) {
         // ItemCooldowns.tick for the shield.
         self.shield_cooldown = self.shield_cooldown.saturating_sub(1);
+        let Some((slot, _)) = self.using else {
+            return;
+        };
+        let hand = if slot == shield::OFFHAND_SLOT {
+            Hand::Off
+        } else {
+            Hand::Main
+        };
+        self.with_hand(hand, Self::tick_used_item);
+    }
+    /// `LivingEntity.updatingUsingItem` for the item in use, its hand acting.
+    fn tick_used_item(&mut self) {
         let Some((slot, ticks)) = self.using else {
             return;
         };
@@ -2542,13 +2577,13 @@ impl Game<'_> {
         // Switching hotbar slots only ends a main-hand use.
         let hand_changed = slot != self.selected && slot != shield::OFFHAND_SLOT;
         if !self.right || hand_changed || self.screen != Screen::Playing {
-            if &*stack.item == "minecraft:bow" && slot == self.selected {
+            if &*stack.item == "minecraft:bow" && !hand_changed {
                 self.release_bow(ticks);
             }
             if &*stack.item == "minecraft:spyglass" {
                 self.stop_spyglass();
             }
-            if &*stack.item == "minecraft:trident" && slot == self.selected {
+            if &*stack.item == "minecraft:trident" && !hand_changed {
                 self.release_trident(ticks);
             }
             self.using = None;
@@ -6479,8 +6514,7 @@ impl Game<'_> {
                 self.0.creative
             }
             fn hand(&mut self) -> &mut Option<ItemStack> {
-                let selected = self.0.selected;
-                &mut self.0.inventory[selected]
+                self.0.held_mut()
             }
             fn add(&mut self, stack: &mut ItemStack) -> bool {
                 let before = stack.count;
@@ -6512,7 +6546,7 @@ impl Game<'_> {
         else {
             return Ok(false);
         };
-        let Some(held) = self.inventory[self.selected].as_ref() else {
+        let Some(held) = self.held() else {
             return Ok(false);
         };
         let removes_dye = cauldron::removes_dye(&self.res.items, &held.item);
@@ -6659,19 +6693,23 @@ impl Game<'_> {
         if self.creative {
             return;
         }
-        let amount = match self.inventory[self.selected].clone() {
+        let amount = match self.held().cloned() {
             Some(held) => self.durability_loss(&held, amount),
             None => amount,
         };
-        if let Some(stack) = self.inventory[self.selected].as_mut()
-            && let Some(info) = self.res.items.get(&stack.item)
-            && info.max_damage > 0
+        let max = self
+            .held()
+            .and_then(|s| self.res.items.get(&s.item))
+            .map_or(0, |i| i.max_damage);
+        let cell = self.held_mut();
+        if let Some(stack) = cell.as_mut()
+            && max > 0
         {
             stack.damage += amount;
-            if stack.damage >= info.max_damage {
+            if stack.damage >= max {
                 let broken = stack.item.clone();
+                *cell = None;
                 self.stats.add("broken", &broken, 1);
-                self.inventory[self.selected] = None;
                 if let Some(eye) = self.eye_position() {
                     self.audio.play(
                         "minecraft:entity.item.break",
@@ -6751,8 +6789,8 @@ impl Game<'_> {
                     damage: 0,
                     extra: None,
                 };
-                if self.inventory[self.selected].is_none() {
-                    self.inventory[self.selected] = Some(filled);
+                if self.held().is_none() {
+                    *self.held_mut() = Some(filled);
                 } else if let Some(rest) = self.give(filled)
                     && let Some(eye) = self.eye_position()
                 {
@@ -6806,7 +6844,7 @@ impl Game<'_> {
             }
             self.trigger_block("minecraft:placed_block", target, stack);
             if !self.creative {
-                self.inventory[self.selected] = Some(ItemStack::new("minecraft:bucket", 1));
+                *self.held_mut() = Some(ItemStack::new("minecraft:bucket", 1));
             }
             return Ok(UseResult::Success { swing: true });
         }
@@ -7140,7 +7178,7 @@ impl Game<'_> {
         // FirstPersonHandsAndItemsRenderer: the swing of the hand that
         // swings, and its inverse arm height (the swap scale is 1 for every
         // item but spears).
-        let attack = if self.swing.attack_hand() == horizon_client::first_person::Hand::Main {
+        let attack = if self.swing.attack_hand() == Hand::Main {
             self.swing.animation(a)
         } else {
             0.0
@@ -9597,6 +9635,7 @@ pub fn run() -> Result<()> {
         title: None,
         armor: [None, None, None, None],
         offhand: None,
+        hand: Hand::Main,
         shield_cooldown: 0,
         command_source: None,
         titles: Default::default(),

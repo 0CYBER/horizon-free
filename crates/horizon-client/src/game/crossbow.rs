@@ -88,7 +88,7 @@ impl Game<'_> {
         } else if (self.projectile_slot(CROSSBOW).is_some() || self.creative)
             && self.using.is_none()
         {
-            self.using = Some((self.selected, 0));
+            self.using = Some((self.held_slot(), 0));
         }
         true
     }
@@ -135,7 +135,7 @@ impl Game<'_> {
             let drawn = (0..shots)
                 .map(|i| horizon_client::arrows::drawn_ammo(&ammo, self.creative || i > 0))
                 .collect();
-            if let Some(bow) = self.inventory[slot].as_mut() {
+            if let Some(bow) = self.stack_in_mut(slot).as_mut() {
                 bow.data_mut().charged = drawn;
             }
             let pitch = 1.0 / (self.world.random.next_float() * 0.5 + 1.0) + 0.2;
@@ -147,7 +147,7 @@ impl Game<'_> {
         let Some(eye) = self.eye_position() else {
             return;
         };
-        let Some(bow) = self.inventory[self.selected].as_mut() else {
+        let Some(bow) = self.held_mut().as_mut() else {
             return;
         };
         let charged = std::mem::take(&mut bow.data_mut().charged);

@@ -119,7 +119,7 @@ impl Game<'_> {
             }
             return;
         }
-        let held = &mut self.inventory[self.selected];
+        let held = self.held_mut();
         let last = held.as_ref().is_none_or(|s| s.count <= 1);
         if last {
             *held = Some(filled);
