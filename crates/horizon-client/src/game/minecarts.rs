@@ -191,7 +191,7 @@ pub(super) struct CartModels {
     pub models: HashMap<CartKind, Part>,
 }
 impl CartModels {
-    pub fn load(root: &std::path::Path) -> Self {
+    pub fn load(document: Option<&horizon_client::mobs::EntityModelDocument>) -> Self {
         let kinds = [
             CartKind::Rideable,
             CartKind::Chest,
@@ -202,9 +202,7 @@ impl CartModels {
         ];
         let models = kinds
             .into_iter()
-            .filter_map(|k| {
-                horizon_client::mobs::load_model(root, &format!("{}#main", k.id())).map(|m| (k, m))
-            })
+            .filter_map(|k| document?.model(&format!("{}#main", k.id())).map(|m| (k, m)))
             .collect();
         Self { models }
     }

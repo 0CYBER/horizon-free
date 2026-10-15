@@ -1767,11 +1767,33 @@ pub fn render(
 ) {
     render::render_single(mob, alpha, camera, uv, light, out);
 }
+/// A parsed `entity-models.json` document, shared while loading model batches.
+/// Each lookup still constructs an independent part tree for the caller.
+pub struct EntityModelDocument(Value);
+
+impl EntityModelDocument {
+    pub fn load(root: &Path) -> crate::Result<Self> {
+        Ok(Self(serde_json::from_slice(&fs::read(
+            root.join("entity-models.json"),
+        )?)?))
+    }
+
+    pub fn model(&self, key: &str) -> Option<Part> {
+        self.0.get(key).map(|m| Part::parse("root", m))
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &str> {
+        self.0
+            .as_object()
+            .into_iter()
+            .flat_map(|all| all.keys().map(String::as_str))
+    }
+}
+
 /// Load one baked model layer from `entity-models.json` (e.g. `minecraft:chest#main`).
+/// Batch loaders should share an `EntityModelDocument` instead.
 pub fn load_model(root: &Path, key: &str) -> Option<Part> {
-    let models: Value =
-        serde_json::from_slice(&fs::read(root.join("entity-models.json")).ok()?).ok()?;
-    models.get(key).map(|m| Part::parse("root", m))
+    EntityModelDocument::load(root).ok()?.model(key)
 }
 /// ModelPart.render: translate, rotate ZYX, scale, then children.
 pub fn render_model(

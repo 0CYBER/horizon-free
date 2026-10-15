@@ -151,25 +151,22 @@ impl BoatModels {
             self.models.contains_key(wood)
         }
     }
-    pub fn load(root: &std::path::Path) -> Self {
+    pub fn load(document: Option<&horizon_client::mobs::EntityModelDocument>) -> Self {
         let mut models = HashMap::new();
         let mut chest_models = HashMap::new();
-        if let Ok(bytes) = std::fs::read(root.join("entity-models.json"))
-            && let Ok(serde_json::Value::Object(all)) =
-                serde_json::from_slice::<serde_json::Value>(&bytes)
-        {
-            for key in all.keys() {
+        if let Some(document) = document {
+            for key in document.keys() {
                 if let Some(wood) = key
                     .strip_prefix("minecraft:boat/")
                     .and_then(|k| k.strip_suffix("#main"))
-                    && let Some(part) = horizon_client::mobs::load_model(root, key)
+                    && let Some(part) = document.model(key)
                 {
                     models.insert(wood.to_owned(), part);
                 }
                 if let Some(wood) = key
                     .strip_prefix("minecraft:chest_boat/")
                     .and_then(|k| k.strip_suffix("#main"))
-                    && let Some(part) = horizon_client::mobs::load_model(root, key)
+                    && let Some(part) = document.model(key)
                 {
                     chest_models.insert(wood.to_owned(), part);
                 }
