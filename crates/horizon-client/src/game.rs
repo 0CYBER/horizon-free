@@ -28,6 +28,7 @@ mod creaking;
 mod creatures;
 mod crossbow;
 mod debug_keys;
+mod decorated_pot;
 mod dedicated;
 mod dispense_fixture;
 mod dispenser;
@@ -422,6 +423,8 @@ struct GameLevel<'w> {
     seed: i64,
     behaviours: &'w Behaviours,
     items: &'w Items,
+    /// Container loot tables (`unpackLootTable`).
+    loot: Option<std::sync::Arc<horizon_world::loot::LootData>>,
     registry: &'static horizon_world::registry::BlockRegistry,
     rules: horizon_world::level::GameRules,
     /// Block loot random sequences (`ServerLevel.getRandomSequence`).
@@ -1619,6 +1622,7 @@ impl Game<'_> {
             seed: self.level.seed,
             behaviours: &self.res.behaviours,
             items: &self.res.items,
+            loot: horizon_client::structure_blocks::loot_data(&self.options.resources),
             registry: self.res.assets.registry,
             rules,
             rand_sequences: &mut self.rand_sequences,
@@ -2368,6 +2372,10 @@ impl Game<'_> {
                 return Ok(true);
             }
             if self.use_vault(hit.pos, held.as_ref())? {
+                self.swing_arm();
+                return Ok(true);
+            }
+            if self.use_decorated_pot(hit.pos, held.as_ref()) {
                 self.swing_arm();
                 return Ok(true);
             }

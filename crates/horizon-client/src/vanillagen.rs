@@ -421,6 +421,38 @@ impl ChunkGenerator for VanillaTerrain {
         };
         let mut out = self.column(&chunk);
         out.block_entities = crate::structure_blocks::block_entities(&chunk, self.loot.as_deref());
+        // The block entities Horizon does not model (decorated pots with their
+        // sherds and loot table, brushable blocks) stay as placed, like a
+        // loaded chunk's.
+        let unmodelled: Vec<Tag> = chunk
+            .block_entities
+            .iter()
+            .filter(|(pos, _)| {
+                !out.block_entities
+                    .iter()
+                    .any(|(p, _)| *p == (pos[0], pos[1], pos[2]))
+            })
+            .filter_map(|(pos, nbt)| {
+                let id = crate::lan::chunks::block_entity_type(
+                    chunk.block_name(pos[0], pos[1], pos[2]),
+                )?;
+                let mut nbt = nbt.clone();
+                nbt.insert("id".into(), Tag::String(id.into()));
+                for (key, v) in ["x", "y", "z"].into_iter().zip(pos) {
+                    nbt.insert(key.into(), Tag::Int(*v));
+                }
+                Some(Tag::Compound(nbt))
+            })
+            .collect();
+        if !unmodelled.is_empty() {
+            let mut extras = out
+                .saved
+                .take()
+                .map(Arc::unwrap_or_clone)
+                .unwrap_or_default();
+            extras.block_entities = unmodelled;
+            out.saved = Some(Arc::new(extras));
+        }
         out.structure_refs = chunk
             .structures()
             .into_iter()
