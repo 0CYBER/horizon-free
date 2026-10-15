@@ -5,7 +5,8 @@ A script creates a world through the title menus, finds a tree it can walk to, b
 checks the inventory, crafts planks in the inventory screen, places one and reads it back. It
 runs through the CLI (one horizon-ctl process per command) and through `horizon-ctl mcp` with a
 small JSON-RPC client, and saves a screenshot of each run. The ui scenario drives the menus by
-widget id instead: the title screen, the options (a slider set by id) and the inventory's slots.
+widget id instead: the title screen, the options (a slider set by id) and the inventory's slots;
+the options scenario reads and sets options.txt values by key.
 
     python3 tools/agent_control_e2e.py                 # both modes
     python3 tools/agent_control_e2e.py --mode mcp      # one of them
@@ -39,7 +40,7 @@ POSITIONAL = {
     'find_block': ['block', 'radius'], 'entities': ['radius', 'type'], 'click_slot': ['slot'],
     'click_button': ['label'], 'type': ['text'], 'wait': ['ticks'], 'wait_ready': ['seconds'],
     'command': ['command'], 'look_at_block': ['x', 'y', 'z'], 'click': ['id'], 'set': ['id', 'value'],
-    'give': ['item', 'count'],
+    'give': ['item', 'count'], 'options_get': ['keys'], 'options_set': ['key', 'value'],
 }
 # Booleans the game takes as bare words.
 BARE = {'click_slot': ['right', 'shift'], 'click': ['right', 'shift']}
@@ -308,7 +309,35 @@ def ui_scenario(d, out):
     return {'widgets': len(tree)}
 
 
-SCENARIOS = {'survival': scenario, 'ui': ui_scenario}
+def options_scenario(d, out):
+    # Every option, typed, from the title screen; then set, refused, applied and saved.
+    options = d('options_get')['options']
+    assert len(options) > 100, len(options)
+    assert options['fov'] == {'type': 'int', 'min': 30, 'max': 110, 'value': 70}, options['fov']
+    assert options['renderClouds']['choices'] == ['false', 'fast', 'true'], options['renderClouds']
+    assert d('options_set', key='fov', value='90')['option']['value'] == 90
+    try:
+        d('options_set', key='fov', value='200')
+        raise AssertionError('fov 200 was accepted')
+    except Failed as e:
+        assert '"max":110' in str(e), e
+    d('options_set', key='renderClouds', value='fast')
+    d('options_set', key='key_key.jump', value='key.keyboard.j')
+    got = d('options_get', keys='fov renderClouds key_key.jump')['options']
+    assert [got[k]['value'] for k in ('fov', 'renderClouds', 'key_key.jump')] == [90, 'fast', 'key.keyboard.j'], got
+    saved = (d.cwd / 'options.txt').read_text()
+    assert 'fov:0.5' in saved and 'renderClouds:"fast"' in saved and 'key_key.jump:key.keyboard.j' in saved, saved
+    # The options screen shows it: FOV 90 sits at (90 - 30) / 80 of its slider.
+    d('click', id='options')
+    assert abs(widgets(d)['fov']['value'] - 0.75) < 0.01
+    # Applied at once: a GUI scale of 2 on the 1280x720 window makes the GUI 640x360.
+    d('options_set', key='guiScale', value='2')
+    assert d('ui')['gui_size'] == [640, 360], 'the GUI scale did not apply'
+    d('options_set', key='guiScale', value='0')
+    return {'options': len(options)}
+
+
+SCENARIOS = {'survival': scenario, 'ui': ui_scenario, 'options': options_scenario}
 
 
 def run(mode, ctl, out, resources, which='survival'):

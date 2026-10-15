@@ -137,6 +137,9 @@ impl Game<'_> {
             super::agent::Handled::Deferred => return Ok(None),
             super::agent::Handled::No => {}
         }
+        if let Some(value) = self.options_control(&words, line)? {
+            return Ok(Some(value));
+        }
         if let Some(value) = self.lan_control(&words)? {
             return Ok(Some(value));
         }
@@ -159,6 +162,7 @@ impl Game<'_> {
                 .chain(super::sculk::HELP)
                 .chain(super::agent::HELP)
                 .chain(super::ui_control::HELP)
+                .chain(super::options::CONTROL_HELP)
                 .chain(super::pad::HELP)
                 .collect::<Vec<_>>() }))),
             "setblock" | "fill" | "particle" | "signedit" => self.render_command(&words),

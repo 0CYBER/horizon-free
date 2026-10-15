@@ -128,6 +128,12 @@ game accepts, test hooks included.
   would and `set ID VALUE` moves a slider to 0..1; after a click, the next
   `ui`, `click` or `set` waits for the screen to be redrawn. Design and plans:
   [agent-control.md](agent-control.md).
+- **Options:** `options-get [KEY...]` gives every `options.txt` option by its
+  vanilla key with its value and what it accepts (`{"type": "int", "min": 30,
+  "max": 110, "value": 70}`; enums with `choices`, key bindings as
+  `key.keyboard.w`); `options-set KEY VALUE` sets one, applies it at once and
+  saves `options.txt` as the options screen does. A value the option refuses
+  is an error saying what it accepts, not vanilla's silent reset.
 - **Screens:** `open-inventory`, `click-slot SLOT [right] [shift]` (0-8 hotbar,
   9-35 inventory, 100+ crafting grid, 200 result, 300+ containers, 500-503
   armor, 504 offhand, 600+ stations), `close`, `click-button LABEL` (any
