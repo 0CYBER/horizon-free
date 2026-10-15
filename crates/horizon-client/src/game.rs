@@ -6639,6 +6639,16 @@ impl Game<'_> {
         else {
             return Ok(false);
         };
+        // playerHasBlockingItemUseIntent: a shield in the off hand is raised
+        // instead, unless sneaking.
+        let shield = self
+            .offhand
+            .as_ref()
+            .and_then(|s| self.res.items.get(&s.item))
+            .is_some_and(|i| i.blocks_attacks.is_some());
+        if shield && !self.keys.contains(&KeyCode::ShiftLeft) {
+            return Ok(false);
+        }
         let face_name = match face {
             [0, -1, 0] => "down",
             [0, 1, 0] => "up",
@@ -6697,6 +6707,7 @@ impl Game<'_> {
             1.0,
         );
         self.damage_held(damage);
+        self.post_block_game_event("minecraft:block_change", pos, self.sculk_actor(), Some(new));
         Ok(true)
     }
     fn set_state_named(&mut self, pos: [i32; 3], name: &str, keep: &[&str]) -> Result<bool> {
