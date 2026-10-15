@@ -103,6 +103,9 @@ impl Game<'_> {
         while let Some(request) = self.control.as_ref().and_then(|c| c.try_recv()) {
             self.answer(request, event_loop);
         }
+        if self.control.is_some() {
+            self.watch_events();
+        }
     }
 
     fn answer(&mut self, request: horizon_client::control::Request, event_loop: &ActiveEventLoop) {
@@ -137,6 +140,9 @@ impl Game<'_> {
             super::agent::Handled::Deferred => return Ok(None),
             super::agent::Handled::No => {}
         }
+        if let Some(value) = self.events_command(&words, reply)? {
+            return Ok(value);
+        }
         if let Some(value) = self.options_control(&words, line)? {
             return Ok(Some(value));
         }
@@ -163,6 +169,7 @@ impl Game<'_> {
                 .chain(super::agent::HELP)
                 .chain(super::ui_control::HELP)
                 .chain(super::options::CONTROL_HELP)
+                .chain(super::events::HELP)
                 .chain(super::pad::HELP)
                 .collect::<Vec<_>>() }))),
             "setblock" | "fill" | "particle" | "signedit" => self.render_command(&words),

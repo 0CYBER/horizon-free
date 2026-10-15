@@ -382,7 +382,7 @@ impl Game<'_> {
             Screen::WorldOptions => "world-options",
         }
     }
-    fn inventory_counts(&self) -> BTreeMap<String, i64> {
+    pub(super) fn inventory_counts(&self) -> BTreeMap<String, i64> {
         counts(
             self.inventory
                 .iter()
@@ -1397,6 +1397,13 @@ impl Game<'_> {
                 let label =
                     horizon_client::text::Text::translate("deathScreen.respawn", &[]).plain();
                 let w = widgets::find(&widgets::last(), &label)?;
+                if !w.enabled {
+                    // DeathScreen enables its buttons after 20 ticks.
+                    return Err(
+                        "the Respawn button is not active yet; try again in a second (wait 20)"
+                            .into(),
+                    );
+                }
                 self.synth_click(
                     event_loop,
                     w.x + w.w / 2.0,

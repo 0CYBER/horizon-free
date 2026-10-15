@@ -134,6 +134,13 @@ game accepts, test hooks included.
   `key.keyboard.w`); `options-set KEY VALUE` sets one, applies it at once and
   saves `options.txt` as the options screen does. A value the option refuses
   is an error saying what it accepts, not vanilla's silent reset.
+- **Waits and events:** `wait-for screen NAME|widget ID|loaded|chat TEXT|event
+  KIND [--timeout S] [--since SEQ]` replies once the game gets there (a timeout
+  is an error with `"kind": "timeout"`), so scripts don't poll. `events [--since
+  SEQ]` lists what happened, oldest first, each with a `seq` and the `tick`:
+  `screen` (from, to), `chat` (text), `death`, `respawn`, `item` (item, delta),
+  `dimension`, `world` (opened, closed). Take `last` from `events` before an
+  action whose event you then `wait-for --since` it, so a fast one isn't missed.
 - **Screens:** `open-inventory`, `click-slot SLOT [right] [shift]` (0-8 hotbar,
   9-35 inventory, 100+ crafting grid, 200 result, 300+ containers, 500-503
   armor, 504 offhand, 600+ stations), `close`, `click-button LABEL` (any
