@@ -814,6 +814,7 @@ fn multiplayer_page(ui: &mut Ui, x: f32, w: f32, screen: &Screen, caret: bool) {
             selected,
             pings,
             lan,
+            ..
         } => {
             let games = lan.games();
             let sub = match servers.len() {

@@ -430,6 +430,67 @@ pub(crate) fn scrollbar_thumb(
     Some((y, bar))
 }
 
+/// `AbstractScrollArea`'s scrolling of a list `top..bottom` holding `content`
+/// pixels: the amount, the mouse wheel and the held scrollbar.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Scroll {
+    pub amount: f32,
+    /// The pointer's last y while the scrollbar is held (`scrolling`).
+    held: Option<f32>,
+}
+impl Scroll {
+    fn max(top: f32, bottom: f32, content: f32) -> f32 {
+        (content - (bottom - top)).max(0.0)
+    }
+    /// `setScrollAmount`: kept within the content.
+    pub fn clamp(&mut self, top: f32, bottom: f32, content: f32) {
+        self.amount = self.amount.clamp(0.0, Self::max(top, bottom, content));
+    }
+    /// `mouseScrolled`: `rate` pixels per wheel step.
+    pub fn wheel(&mut self, delta: f32, rate: f32, top: f32, bottom: f32, content: f32) {
+        self.amount -= delta * rate;
+        self.clamp(top, bottom, content);
+    }
+    /// `updateScrolling`: a press on the scrollbar column at `bar_x` (when
+    /// there is something to scroll) holds it.
+    pub fn press(
+        &mut self,
+        (x, y): (f32, f32),
+        bar_x: f32,
+        top: f32,
+        bottom: f32,
+        content: f32,
+    ) -> bool {
+        let over = x >= bar_x && x <= bar_x + 6.0 && y >= top && y < bottom;
+        self.held = (over && Self::max(top, bottom, content) > 0.0).then_some(y);
+        self.held.is_some()
+    }
+    pub fn held(&self) -> bool {
+        self.held.is_some()
+    }
+    /// `mouseDragged` while held: above or below the list jumps to an end,
+    /// otherwise the thumb follows the pointer.
+    pub fn drag(&mut self, y: f32, top: f32, bottom: f32, content: f32) {
+        let Some(last) = self.held else { return };
+        let max = Self::max(top, bottom, content);
+        if y < top {
+            self.amount = 0.0;
+        } else if y > bottom {
+            self.amount = max;
+        } else {
+            let height = bottom - top;
+            let bar = ((height * height / content).trunc()).clamp(32.0, height - 8.0);
+            self.amount += (y - last) * (max.max(1.0) / (height - bar)).max(1.0);
+        }
+        self.clamp(top, bottom, content);
+        self.held = Some(y);
+    }
+    /// `onRelease`.
+    pub fn release(&mut self) {
+        self.held = None;
+    }
+}
+
 /// Vertical scroll bar (AbstractScrollArea): background and scroller sprites.
 pub fn scrollbar(
     batch: &mut HudBatch,
@@ -873,6 +934,28 @@ impl EditBox {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn held_scrollbars_follow_the_pointer_and_stop_at_the_ends() {
+        // A 100-pixel list holding 400: the thumb is 25 -> 32 high, so a
+        // pixel of drag scrolls 300 / 68 pixels (AbstractScrollArea.mouseDragged).
+        let (top, bottom, content) = (0.0, 100.0, 400.0);
+        let mut s = Scroll::default();
+        assert!(!s.press((50.0, 10.0), 100.0, top, bottom, content));
+        assert!(s.press((103.0, 10.0), 100.0, top, bottom, content));
+        s.drag(20.0, top, bottom, content);
+        assert!((s.amount - 10.0 * 300.0 / 68.0).abs() < 1e-3);
+        s.drag(150.0, top, bottom, content);
+        assert_eq!(s.amount, 300.0);
+        s.drag(-5.0, top, bottom, content);
+        assert_eq!(s.amount, 0.0);
+        s.release();
+        s.drag(50.0, top, bottom, content);
+        assert_eq!(s.amount, 0.0);
+        // Nothing to scroll: the column doesn't take the press.
+        assert!(!s.press((103.0, 10.0), 100.0, top, bottom, 90.0));
+        s.wheel(-2.0, 18.0, top, bottom, content);
+        assert_eq!(s.amount, 36.0);
+    }
     #[test]
     fn edit_box_editing() {
         let mut e = EditBox::new(0.0, 0.0, 100.0, 20.0);
