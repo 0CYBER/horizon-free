@@ -37,6 +37,9 @@ pub const MAX_SESSIONS: usize = 8;
 pub const DEFAULT_PORT: u16 = 25580;
 /// Code handshakes in progress at once (scanners can't pile them up).
 const MAX_HANDSHAKES: usize = 8;
+/// The most an inbound stream's opening (hello, key exchange, confirmation)
+/// may take, however slowly its bytes come.
+const HANDSHAKE: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
 pub struct HostConfig {
@@ -296,6 +299,10 @@ fn route_inbound(listeners: Vec<TcpListener>, shared: Arc<Shared>) {
                 .name("horizon-friends-inbound".into())
                 .spawn(move || {
                     let _ = s.set_nonblocking(false);
+                    let Ok(deadline) = crate::deadline(&s, HANDSHAKE) else {
+                        shared.handshakes.fetch_sub(1, Ordering::Relaxed);
+                        return;
+                    };
                     match direct::read_hello(&mut s) {
                         Ok(direct::Hello::Relayed(session)) => {
                             shared.handshakes.fetch_sub(1, Ordering::Relaxed);
@@ -310,7 +317,9 @@ fn route_inbound(listeners: Vec<TcpListener>, shared: Arc<Shared>) {
                                 let _ = tx.send(s);
                             }
                         }
-                        Ok(direct::Hello::Code(session)) => serve_code(&shared, s, session),
+                        Ok(direct::Hello::Code(session)) => {
+                            serve_code(&shared, s, session, deadline)
+                        }
                         Err(_) => {
                             shared.handshakes.fetch_sub(1, Ordering::Relaxed);
                         }
@@ -324,8 +333,9 @@ fn route_inbound(listeners: Vec<TcpListener>, shared: Arc<Shared>) {
 }
 
 /// A guest who dialled an endpoint from the code: agree on the key from
-/// the code's secret, then carry the session.
-fn serve_code(shared: &Arc<Shared>, mut s: TcpStream, session: u64) {
+/// the code's secret, then carry the session (`deadline` bounds the
+/// handshake, not the game).
+fn serve_code(shared: &Arc<Shared>, mut s: TcpStream, session: u64, deadline: crate::Deadline) {
     let secret = shared
         .invite
         .lock()
@@ -338,6 +348,7 @@ fn serve_code(shared: &Arc<Shared>, mut s: TcpStream, session: u64) {
         let key = crypto::exchange(&mut s, &secret, "direct", session)?;
         session::secure(s, &key, Role::Host)
     })();
+    drop(deadline);
     shared.handshakes.fetch_sub(1, Ordering::Relaxed);
     match secured {
         Ok(secure) => carry(shared, session, secure, true),

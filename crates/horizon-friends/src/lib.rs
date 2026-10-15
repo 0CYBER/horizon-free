@@ -26,13 +26,38 @@ pub use host::{Host, HostConfig, HostEvent, HostState};
 
 use std::{
     io,
-    net::{SocketAddr, TcpStream, ToSocketAddrs},
+    net::{Shutdown, SocketAddr, TcpStream, ToSocketAddrs},
+    sync::mpsc::{RecvTimeoutError, Sender, channel},
     thread::JoinHandle,
+    time::Duration,
 };
 
 /// Fill `buf` from the OS random generator.
 pub(crate) fn fill_random(buf: &mut [u8]) -> io::Result<()> {
     getrandom::fill(buf).map_err(|e| io::Error::other(e.to_string()))
+}
+
+/// Ends a stream's opening once its time is up; dropping it first lets the
+/// stream go on. A read timeout alone restarts with every byte, so a peer
+/// sending one byte at a time could hold a handshake (and its slot) for
+/// hours.
+pub struct Deadline {
+    _cancel: Sender<()>,
+}
+
+/// Shut `stream` down after `limit` unless the returned [`Deadline`] is
+/// dropped before.
+pub fn deadline(stream: &TcpStream, limit: Duration) -> io::Result<Deadline> {
+    let stream = stream.try_clone()?;
+    let (tx, rx) = channel::<()>();
+    std::thread::Builder::new()
+        .name("horizon-friends-deadline".into())
+        .spawn(move || {
+            if rx.recv_timeout(limit) == Err(RecvTimeoutError::Timeout) {
+                let _ = stream.shutdown(Shutdown::Both);
+            }
+        })?;
+    Ok(Deadline { _cancel: tx })
 }
 
 /// Which paths a session may take (`HORIZON_FRIENDS_PATH`).
@@ -126,4 +151,35 @@ pub fn pump(
             let _ = reader.get_ref().shutdown(std::net::Shutdown::Both);
             let _ = outbound.join();
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        io::Read,
+        net::TcpListener,
+        time::{Duration, Instant},
+    };
+
+    #[test]
+    fn a_deadline_ends_the_stream_unless_dropped() {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let _kept = TcpStream::connect(l.local_addr().unwrap()).unwrap();
+        let (mut kept, _) = l.accept().unwrap();
+        let _ended = TcpStream::connect(l.local_addr().unwrap()).unwrap();
+        let (mut ended, _) = l.accept().unwrap();
+        drop(deadline(&kept, Duration::from_millis(100)).unwrap());
+        let _running = deadline(&ended, Duration::from_millis(100)).unwrap();
+        let started = Instant::now();
+        assert_eq!(ended.read(&mut [0u8; 1]).unwrap(), 0);
+        assert!(started.elapsed() < Duration::from_secs(2));
+        kept.set_read_timeout(Some(Duration::from_millis(300)))
+            .unwrap();
+        let e = kept.read(&mut [0u8; 1]).unwrap_err();
+        assert!(matches!(
+            e.kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+        ));
+    }
 }

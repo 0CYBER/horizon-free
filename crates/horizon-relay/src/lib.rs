@@ -29,6 +29,8 @@ pub struct Config {
     pub max_hosts: usize,
     pub max_bridges: usize,
     pub max_pending_per_host: usize,
+    /// Connections open at once, of every kind (each is a thread).
+    pub max_connections: usize,
     /// Bytes a second each way per relayed stream.
     pub session_rate: f64,
     /// Bytes a second for everything relayed.
@@ -55,6 +57,7 @@ impl Default for Config {
             max_hosts: 1000,
             max_bridges: 200,
             max_pending_per_host: 8,
+            max_connections: 4096,
             session_rate: 1024.0 * 1024.0,
             total_rate: 100.0 * 1_000_000.0 / 8.0,
             rates: Rates::default(),
@@ -86,6 +89,9 @@ impl Config {
         }
         if let Some(v) = var("RELAY_MAX_PENDING_PER_HOST") {
             c.max_pending_per_host = v;
+        }
+        if let Some(v) = var("RELAY_MAX_CONNECTIONS") {
+            c.max_connections = v;
         }
         if let Some(v) = var::<f64>("RELAY_SESSION_KBPS") {
             c.session_rate = v * 1024.0;
@@ -163,6 +169,7 @@ struct State {
     global_unknown: Mutex<Bucket>,
     total: Mutex<Bucket>,
     bridges: AtomicUsize,
+    connections: AtomicUsize,
     registrations: AtomicU64,
     joins: AtomicU64,
     unknown: AtomicU64,
@@ -202,6 +209,7 @@ impl Relay {
                 config,
                 inner: Mutex::new(Inner::default()),
                 bridges: AtomicUsize::new(0),
+                connections: AtomicUsize::new(0),
                 registrations: AtomicU64::new(0),
                 joins: AtomicU64::new(0),
                 unknown: AtomicU64::new(0),
@@ -232,14 +240,25 @@ impl Relay {
         while !self.state.stop.load(Ordering::Relaxed) {
             match listener.accept() {
                 Ok((stream, peer)) => {
+                    // Beyond the cap the connection is closed unanswered.
+                    if self.state.connections.fetch_add(1, Ordering::Relaxed)
+                        >= self.state.config.max_connections
+                    {
+                        self.state.connections.fetch_sub(1, Ordering::Relaxed);
+                        continue;
+                    }
                     let state = self.state.clone();
-                    let _ =
+                    let spawned =
                         std::thread::Builder::new()
                             .name("relay-conn".into())
                             .spawn(move || {
                                 let _ = stream.set_nonblocking(false);
                                 let _ = handle(&state, stream, peer);
+                                state.connections.fetch_sub(1, Ordering::Relaxed);
                             });
+                    if spawned.is_err() {
+                        self.state.connections.fetch_sub(1, Ordering::Relaxed);
+                    }
                 }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                     std::thread::sleep(Duration::from_millis(10));
@@ -295,6 +314,8 @@ fn handle(state: &Arc<State>, mut stream: TcpStream, peer: SocketAddr) -> io::Re
         return Ok(());
     }
     let mut peer = unmap(peer);
+    // The first line (and an HTTP request) within `first_line` in all.
+    let first_line = horizon_friends::deadline(&stream, state.config.first_line)?;
     stream.set_read_timeout(Some(state.config.first_line))?;
     let _ = stream.set_nodelay(true);
     let mut line = wire::read_line(&mut stream)?.ok_or(io::ErrorKind::UnexpectedEof)?;
@@ -307,6 +328,7 @@ fn handle(state: &Arc<State>, mut stream: TcpStream, peer: SocketAddr) -> io::Re
     if line.starts_with(b"GET ") {
         return http(state, &mut stream, &line, peer);
     }
+    drop(first_line);
     let Ok(hello) = serde_json::from_slice::<ToRelay>(&line) else {
         return refuse(&mut stream, ErrorCode::BadRequest);
     };

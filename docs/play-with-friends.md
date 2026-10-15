@@ -32,7 +32,8 @@ LAN's defaults), then the host's game, on its own:
 3. asks the home router to open the direct port for an hour, renewed every half hour and deleted when
    sharing stops: **PCP** (RFC 6887), then **NAT-PMP** (RFC 6886) on the default gateway, then **UPnP
    IGD** (SSDP discovery, SOAP `AddPortMapping`). A router that only takes permanent UPnP mappings gets
-   one, deleted on stop the same way;
+   one, deleted on stop the same way (if the game crashes instead, a timed mapping expires within the
+   hour; a permanent one stays until it is removed in the router's settings);
 4. asks public **STUN** servers for its public IPv4 address (only the address: STUN sees UDP, the game
    is TCP). Defaults: `stun.cloudflare.com:3478` and `stun.l.google.com:19302`, two independent
    operators of free STUN at a global scale, so one outage doesn't break discovery. `HORIZON_STUN_SERVERS`
@@ -79,7 +80,8 @@ The code's secret never leaves the code. Every session runs a password-authentic
 per-direction ChaCha20-Poly1305 keys with HKDF-SHA256 from the exchange and two fresh randoms, with a
 key confirmation first. A wrong code, a changed byte, a replayed or reordered frame ends the stream.
 The same exchange runs over relayed sessions, where it matters most: the relay gets nothing to test
-guesses against offline.
+guesses against offline. Online guesses on the direct port face the 80-bit secret; at most 8 openings
+run at once there, and each must finish within 10 seconds however slowly its bytes come.
 
 ## Privacy: who sees what
 
@@ -155,6 +157,7 @@ Settings, all optional:
 | `RELAY_MAX_HOSTS` | 1000 | short codes at once |
 | `RELAY_MAX_BRIDGES` | 200 | relayed streams at once |
 | `RELAY_MAX_PENDING_PER_HOST` | 8 | guests joining one host at the same time |
+| `RELAY_MAX_CONNECTIONS` | 4096 | connections open at once, of every kind (more are closed unanswered) |
 | `RELAY_SESSION_KBPS` | 1024 | KiB/s each way per relayed stream |
 | `RELAY_TOTAL_MBPS` | 100 | Mbit/s for everything relayed |
 | `RELAY_GLOBAL_UNKNOWN_PER_MIN` | 120 | unknown short codes a minute, all clients together |
@@ -163,7 +166,7 @@ Settings, all optional:
 
 Fixed limits: per client address (IPv6 by /64), 6 host registrations a minute (burst 3), 12 joins a
 minute (burst 6), 5 unknown short codes in 10 minutes block joins for 10 minutes; a relayed stream idle
-for 120 s is closed (the game's keep-alive sends every 15 s); a first line must arrive within 10 s;
+for 120 s is closed (the game's keep-alive sends every 15 s); the first line must be complete within 10 s;
 hosts answer pings within 60 s; five wrong secrets on a short code and the host retires it for a new one.
 
 ### The relay protocol

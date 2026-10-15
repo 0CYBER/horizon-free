@@ -432,3 +432,30 @@ fn health_and_whoami_answer_http() {
     assert!(get("/whoami").contains("\"address\":\"127.0.0.1:"));
     assert!(get("/").starts_with("HTTP/1.1 404"));
 }
+
+/// A first line trickled a byte at a time still has to arrive within
+/// `first_line` in all; past `max_connections`, connections close unanswered.
+#[test]
+fn slow_first_lines_and_too_many_connections_are_closed() {
+    let (_relay, address) = relay(Config {
+        first_line: Duration::from_secs(1),
+        max_connections: 2,
+        ..Config::default()
+    });
+    let started = Instant::now();
+    let mut slow = TcpStream::connect(&address).unwrap();
+    let held = TcpStream::connect(&address).unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    let mut over = TcpStream::connect(&address).unwrap();
+    over.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    assert_eq!(over.read(&mut [0u8; 1]).unwrap_or(0), 0);
+    while slow.write_all(b"{").is_ok() && started.elapsed() < Duration::from_secs(5) {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let closed = started.elapsed();
+    assert!(
+        closed < Duration::from_secs(3),
+        "the slow first line held on for {closed:?}"
+    );
+    drop(held);
+}
