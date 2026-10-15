@@ -125,10 +125,17 @@ pub enum MotionEvent {
         state: BlockStateId,
         position: BlockPos,
     },
-    /// `Entity.walkingStepSound` on this block.
+    /// `Entity.walkingStepSound` on this block: `Player.playStepSound`
+    /// muffles it under a swim sound when `in_water`.
     Emission {
         position: BlockPos,
         state: BlockStateId,
+        in_water: bool,
+    },
+    /// `Entity.waterSwimSound`: `entity.player.swim`.
+    Swim {
+        volume: f32,
+        pitch: f32,
     },
     Bounce {
         position: BlockPos,
@@ -172,6 +179,15 @@ pub enum MotionEvent {
     },
     /// ...and the SPLASH game event.
     SplashEvent,
+    /// `Entity.sendBubbleColumnParticles`: a SPLASH (or BUBBLE) particle
+    /// over the top of a bubble column the player rides.
+    BubbleColumnParticle {
+        bubble: bool,
+        position: Vec3,
+    },
+    /// Entity event 67 (`LivingEntity.makeDrownParticles`): eight bubbles
+    /// around a drowning player.
+    Drown,
 }
 pub struct PlayerMotion {
     pub swimming: bool,
@@ -514,13 +530,18 @@ impl PlayerMotion {
             .map_err(attribute_error)?;
         Ok(())
     }
-    /// Local input sprint phase for the resident dry, standing, empty-equipment
-    /// player. Fluid, pose, vehicle, ability-flight and effect bindings remain
-    /// separate; hunger and collision conditions use this actor's actual state.
+    /// Local input sprint phase (`LocalPlayer.aiStep`'s sprint decisions).
+    /// Vehicle, item-use and effect bindings remain separate; hunger, flight,
+    /// water and collision conditions use this actor's actual state.
     pub fn sprint_input_tick(&mut self, keys: crate::sprint::Keys) -> Result<()> {
         let conditions = crate::sprint::Conditions {
             sprinting: self.sprinting,
             enough_food: self.health.food.has_enough_food(),
+            may_fly: self.may_fly,
+            flying: self.flying,
+            // Entity.isInShallowWater.
+            shallow_water: self.fluids.was_touching_water && !self.is_under_water(),
+            fall_flying: self.fall_flying,
             on_ground: self.ground.on_ground,
             horizontal_collision: self.collision.horizontal,
             minor_horizontal_collision: self.collision.minor,
@@ -680,7 +701,7 @@ impl MotionWorld<'_, '_, '_> {
         } else if !was_jumping && jumping && !self.player.was_auto_jump {
             if self.player.jump_trigger_time == 0 {
                 self.player.jump_trigger_time = 7;
-            } else {
+            } else if !self.player.swimming {
                 self.player.flying = !self.player.flying;
                 if self.player.flying && self.player.ground.on_ground {
                     self.jump_from_ground()?;
@@ -689,7 +710,8 @@ impl MotionWorld<'_, '_, '_> {
             }
         }
         let toggled = flying_before != self.player.flying;
-        // Player.tryToStartFallFlying (canGlide: airborne, not flying, a glider).
+        // Player.tryToStartFallFlying (canGlide: airborne, not flying, a glider;
+        // never from inside a liquid).
         let can_glide = self.player.glider
             && !self.player.ground.on_ground
             && !self.player.flying
@@ -701,11 +723,8 @@ impl MotionWorld<'_, '_, '_> {
         // LivingEntity.tick fallFlyTicks, then updateFallFlying.
         if self.player.fall_flying {
             self.player.fall_fly_ticks += 1;
-            let still = self.player.glider
-                && !self.player.ground.on_ground
-                && !self.player.flying
-                && !self.player.fluids.was_touching_water
-                && !self.player.is_in_lava();
+            // canGlide alone: water and lava don't end a glide.
+            let still = self.player.glider && !self.player.ground.on_ground && !self.player.flying;
             if !still {
                 self.player.fall_flying = false;
             } else if (self.player.fall_fly_ticks + 1) % 10 == 0
@@ -715,6 +734,13 @@ impl MotionWorld<'_, '_, '_> {
             }
         } else {
             self.player.fall_fly_ticks = 0;
+        }
+        // LocalPlayer.goDownInWater, before LivingEntity.aiStep's velocity cleanup.
+        if self.player.fluids.was_touching_water
+            && self.player.shift_key_down
+            && !self.player.flying
+        {
+            self.player.velocity.y += f64::from(-0.04f32);
         }
         if self.player.flying {
             // Vertical flight: jump up, shift down, three times the flying speed.
@@ -762,6 +788,9 @@ impl MotionWorld<'_, '_, '_> {
             .food_tick(&self.resources.health, self.scene.health_rules)
     }
     pub fn controlled_simulation_tick(&mut self, keys: crate::sprint::Keys) -> Result<()> {
+        // The base tick (fluids, swimming) precedes LocalPlayer.aiStep.
+        self.player.health.advance_clock();
+        self.fluid_base_tick()?;
         self.update_local_crouching()?;
         let mut keys = keys;
         // LocalPlayer.aiStep: a pending auto-jump presses jump for this tick
@@ -771,8 +800,6 @@ impl MotionWorld<'_, '_, '_> {
             self.player.auto_jump_time -= 1;
             keys.jump = true;
         }
-        self.player.health.advance_clock();
-        self.fluid_base_tick()?;
         self.player.sprint_input_tick(keys)?;
         self.player.shift_key_down = keys.shift;
         let direction = keys.direction();
@@ -821,34 +848,16 @@ impl MotionWorld<'_, '_, '_> {
             input.x = 0.0;
             input.z = 0.0;
         }
-        if self.player.shift_key_down
-            && !self.player.flying
-            && self.player.fluids.was_touching_water
-        {
-            self.player.velocity.y -= f64::from(0.04f32);
-        }
-        if self.player.jumping {
-            let in_lava = self.player.is_in_lava();
-            let height = self.player.fluid_height(if in_lava { LAVA } else { WATER });
-            let water_jump = self.player.fluids.was_touching_water
-                && height > 0.0
-                && (!self.player.ground.on_ground || height > 0.4);
-            let lava_jump = in_lava && (!self.player.ground.on_ground || height > 0.4);
-            if !self.player.flying && (water_jump || lava_jump) {
-                self.player.velocity.y += f64::from(0.04f32);
-            } else if self.player.ground.on_ground && self.player.no_jump_delay == 0 {
-                self.jump_from_ground()?;
-                self.player.no_jump_delay = 10;
-            }
-        } else {
-            self.player.no_jump_delay = 0;
-        }
+        self.jump_phase()?;
+        // Player.travel: swim steering, then LivingEntity.travel (fluids
+        // first, then gliding, then air), keeping 0.6 of the vertical speed
+        // while flying.
         if self.player.swimming {
             let look_y =
                 horizon_world::view_direction::view_vector(self.player.pitch, self.player.yaw).y;
             let near_surface = BlockPos::containing(Vec3::new(
                 self.player.position.x,
-                self.player.position.y + 0.9,
+                self.player.position.y + 1.0 - 0.1,
                 self.player.position.z,
             ));
             if look_y <= 0.0
@@ -859,19 +868,18 @@ impl MotionWorld<'_, '_, '_> {
                 self.player.velocity.y += (look_y - self.player.velocity.y) * blend;
             }
         }
-        if self.player.fall_flying {
-            self.travel_fall_flying()?;
-        } else if self.player.flying {
-            // Player.travel while flying: keep 0.6 of the vertical speed.
-            let y = self.player.velocity.y;
-            self.travel_in_air(input)?;
-            self.player.velocity.y = y * 0.6;
-        } else if !self.player.flying
+        let flying_y = self.player.flying.then_some(self.player.velocity.y);
+        if !self.player.flying
             && (self.player.fluids.was_touching_water || self.player.is_in_lava())
         {
             horizon_world::living_fluid::travel_in_fluid(self, input)?;
+        } else if self.player.fall_flying {
+            self.travel_fall_flying()?;
         } else {
             self.travel_in_air(input)?;
+        }
+        if let Some(y) = flying_y {
+            self.player.velocity.y = y * 0.6;
         }
         if self.player.block_effects {
             self.apply_effects_from_blocks()?;
@@ -1028,6 +1036,10 @@ impl MotionWorld<'_, '_, '_> {
             f64::from(1.0e-5_f32),
             f64::from(1.0e-5_f32),
         ));
+        // Mth.square(0.9999900000002526): a long move counts every block it
+        // crosses as precise.
+        let far = 0.999_990_000_000_252_6_f64;
+        let moved_far = from.distance_squared(to) > far * far;
         let mut hits = Vec::new();
         let mut iterations = 0;
         let alive = !self.player.health.dead_or_dying();
@@ -1101,6 +1113,10 @@ impl MotionWorld<'_, '_, '_> {
                     }
                     "minecraft:cobweb" => self.web_inside(),
                     "minecraft:sweet_berry_bush" => self.sweet_berry_bush_inside(state)?,
+                    "minecraft:bubble_column" => {
+                        let precise = moved_far || deflated.intersects(Aabb::block(p));
+                        self.bubble_column_inside(state, p, precise)?
+                    }
                     "minecraft:nether_portal" => self
                         .player
                         .events
@@ -1596,8 +1612,8 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
         Ok(block + efficiency * (1.0 - block))
     }
 }
-// The player's footsteps. Swimming, flapping and the step game event are
-// not bound here (the sculk listeners track the player's steps themselves).
+// The player's footsteps and swim sounds. Flapping and the step game event
+// are not bound here (the sculk listeners track the player's steps themselves).
 impl MovementEmissionWorld for MotionWorld<'_, '_, '_> {
     type Error = Box<dyn std::error::Error>;
     type State = BlockStateId;
@@ -1664,10 +1680,17 @@ impl MovementEmissionWorld for MotionWorld<'_, '_, '_> {
     fn in_water(&mut self) -> Result<bool> {
         Ok(self.player.fluids.was_touching_water)
     }
+    /// `Player.playStepSound`: in water a swim sound, then the step muffled.
     fn walking_step_sound(&mut self, position: BlockPos, state: BlockStateId) -> Result<()> {
-        self.player
-            .events
-            .push(MotionEvent::Emission { position, state });
+        let in_water = self.player.fluids.was_touching_water;
+        if in_water {
+            self.water_swim_sound()?;
+        }
+        self.player.events.push(MotionEvent::Emission {
+            position,
+            state,
+            in_water,
+        });
         Ok(())
     }
     fn step_event(&mut self, _: BlockStateId) -> Result<()> {
@@ -1676,7 +1699,18 @@ impl MovementEmissionWorld for MotionWorld<'_, '_, '_> {
     fn next_step(&mut self) -> Result<f32> {
         Ok(self.player.steps.next_step())
     }
+    /// `Entity.waterSwimSound` and `playSwimSound` (the level random stands
+    /// in for the entity's, as for the splash).
     fn water_swim_sound(&mut self) -> Result<()> {
+        let v = self.player.velocity;
+        let volume = 1.0_f32.min(
+            (v.x * v.x * f64::from(0.2_f32) + v.y * v.y + v.z * v.z * f64::from(0.2_f32)).sqrt()
+                as f32
+                * 0.35,
+        );
+        let random = &mut self.scene.random;
+        let pitch = 1.0 + (random.next_float() - random.next_float()) * 0.4;
+        self.player.events.push(MotionEvent::Swim { volume, pitch });
         Ok(())
     }
     fn entity_event(&mut self, _: MovementEvent) -> Result<()> {

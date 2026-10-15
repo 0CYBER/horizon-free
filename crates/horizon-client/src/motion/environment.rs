@@ -38,7 +38,8 @@ impl MotionWorld<'_, '_, '_> {
         }
         Ok(())
     }
-    pub(super) fn tick_environment_damage(&mut self) -> Result<()> {
+    /// `LivingEntity.baseTick`'s air supply and drowning, then lava.
+    pub fn tick_environment_damage(&mut self) -> Result<()> {
         let eye = BlockPos::containing(self.player.position.add_vector(Vec3::new(
             0.0,
             f64::from(self.player.dimensions.eye_height),
@@ -56,6 +57,13 @@ impl MotionWorld<'_, '_, '_> {
             && !self.player.invulnerable
             && !self.player.spectator
         {
+            // decreaseAirSupply's getAttribute: the instance exists from now
+            // on, even unmodified.
+            let key = self.player.attributes.key("minecraft:oxygen_bonus");
+            self.player
+                .attributes
+                .get_instance(key)
+                .map_err(|e| format!("oxygen bonus: {e:?}"))?;
             let oxygen = self
                 .player
                 .attribute("minecraft:oxygen_bonus")?
@@ -65,6 +73,10 @@ impl MotionWorld<'_, '_, '_> {
             }
             if self.player.air <= -20 {
                 self.player.air = 0;
+                self.player.events.push(MotionEvent::Drown);
+                self.player.events.push(MotionEvent::Health(
+                    crate::health::HealthEvent::DrownDamage(2.0),
+                ));
                 self.environment_hurt("minecraft:drown", 2.0)?;
             }
         } else if !submerged
@@ -153,7 +165,7 @@ impl LivingFluidWorld for MotionWorld<'_, '_, '_> {
         }))
     }
     fn fluid_jump_threshold(&mut self) -> Result<f64> {
-        Ok(0.4)
+        Ok(self.player.fluid_jump_threshold())
     }
     fn is_free(&mut self, v: Vec3) -> Result<bool> {
         let b = self.player.bounds().move_by(v);
@@ -166,7 +178,92 @@ impl LivingFluidWorld for MotionWorld<'_, '_, '_> {
         Ok(false)
     }
 }
+impl PlayerMotion {
+    /// `Entity.getFluidJumpThreshold`: 0.4, or 0 under eyes lower than that.
+    pub fn fluid_jump_threshold(&self) -> f64 {
+        horizon_world::swimming::fluid_jump_threshold(self.dimensions.eye_height)
+    }
+}
 impl MotionWorld<'_, '_, '_> {
+    /// `LivingEntity.aiStep`'s jump phase: rise in water or lava, else jump
+    /// from the ground (or from shallow fluid); nothing while flying.
+    pub(super) fn jump_phase(&mut self) -> Result<()> {
+        if !self.player.jumping || self.player.flying {
+            self.player.no_jump_delay = 0;
+            return Ok(());
+        }
+        let in_lava = self.player.is_in_lava();
+        let height = self.player.fluid_height(if in_lava { LAVA } else { WATER });
+        let in_water = self.player.fluids.was_touching_water && height > 0.0;
+        let threshold = self.player.fluid_jump_threshold();
+        let on_ground = self.player.ground.on_ground;
+        if in_water && !(on_ground && height <= threshold) {
+            // jumpInLiquid(WATER)
+            self.player.velocity.y += f64::from(0.04f32);
+        } else if in_lava && !(on_ground && self.player.fluid_height(LAVA) <= threshold) {
+            // jumpInLiquid(LAVA)
+            self.player.velocity.y += f64::from(0.04f32);
+        } else if (on_ground || in_water && height <= threshold) && self.player.no_jump_delay == 0 {
+            self.jump_from_ground()?;
+            self.player.no_jump_delay = 10;
+        }
+        Ok(())
+    }
+    /// `BubbleColumnBlock.entityInside` with `Player.onAboveBubbleColumn` /
+    /// `onInsideBubbleColumn`: pushed up (or dragged down), faster at the
+    /// surface, never while flying.
+    pub(super) fn bubble_column_inside(
+        &mut self,
+        state: BlockStateId,
+        p: BlockPos,
+        precise: bool,
+    ) -> Result<()> {
+        if !precise {
+            return Ok(());
+        }
+        let drag = self
+            .assets
+            .registry
+            .state(state)
+            .and_then(|s| s.properties.get("drag"))
+            .is_some_and(|d| d == "true");
+        let above = self.block(p.offset(0, 1, 0));
+        // stateAbove.getCollisionShape(level, pos): the shape is asked at the
+        // column's own position.
+        let binding = self.collision_binding;
+        let context = CollisionContext::empty(false);
+        let empty = binding
+            .collision_shape_with_context(&mut self.collisions(), above, p, &context)?
+            .is_empty()
+            && self.resources.fluids.fluid(above).kind() == FluidKind::Empty;
+        if self.player.flying {
+            return Ok(());
+        }
+        let v = self.player.velocity;
+        let y = match (empty, drag) {
+            (true, true) => (-0.9_f64).max(v.y - 0.03),
+            (true, false) => 1.8_f64.min(v.y + 0.1),
+            (false, true) => (-0.3_f64).max(v.y - 0.03),
+            (false, false) => 0.7_f64.min(v.y + 0.06),
+        };
+        self.player.velocity = Vec3::new(v.x, y, v.z);
+        if empty {
+            // Entity.sendBubbleColumnParticles: two splashes and two bubbles
+            // over the column's top, from the level random.
+            let random = &mut self.scene.random;
+            for bubble in [false, true, false, true] {
+                let x = f64::from(p.x) + random.next_double();
+                let z = f64::from(p.z) + random.next_double();
+                self.player.events.push(MotionEvent::BubbleColumnParticle {
+                    bubble,
+                    position: Vec3::new(x, f64::from(p.y + 1), z),
+                });
+            }
+        } else {
+            self.player.fall_distance = 0.0;
+        }
+        Ok(())
+    }
     fn has_liquid(&self, b: Aabb) -> Result<bool> {
         for x in b.min_position().x.floor() as i32..=b.max_position().x.floor() as i32 {
             for y in b.min_position().y.floor() as i32..=b.max_position().y.floor() as i32 {

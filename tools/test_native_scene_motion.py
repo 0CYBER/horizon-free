@@ -343,6 +343,129 @@ def water_corpus():
                 ops += restore(blocks)
                 yield dict(position=vec((25.5,4,25.5)),ops=ops)
 
+def swim_corpus():
+    """The player travelling in water and lava (Cosmic's #59, then #238):
+    Player.travel's swim steering and LivingEntity.travelInFluid (water drag
+    0.8, 0.9 sprinting, Depth Strider's water_movement_efficiency, Dolphin's
+    Grace, lava 0.5 with gravity/4), jumpInLiquid and jumpFromGround in
+    shallow water, jumpOutOfFluid at a ledge, climbing a ladder in water,
+    Entity.updateSwimming with the swimming pose, currents while moving, swim
+    sounds and muffled steps ("simulation_tick": clock, base tick with fluids
+    and air supply, aiStep, pose, statistics, food). Bubble columns go through
+    the real applyEffectsFromBlocks ("snow_tick"): BubbleColumnBlock.entityInside
+    with Player.onInsideBubbleColumn / onAboveBubbleColumn and their particles.
+    The air supply: LivingEntity.baseTick's decrease (Respiration's oxygen
+    bonus from the random), refill, drowning with event 67, and the water
+    breathing effects. The level random is the player's random here, as for
+    the splash."""
+    def fill(name,a,b,properties=None):
+        return [op('fill',name='minecraft:'+name,position=list(a),to=list(b),**({'properties':properties} if properties else {}))]
+    def clear(a,b):
+        return fill('air',a,b)
+    def tick(forward=0.,strafe=0.,jump=False):
+        return op('simulation_tick',vec((strafe,0,forward)),jumping=jump)
+    rng=random.Random(0x5357494d)
+    walks=[(0,0,False),(.98,0,False),(.98,0,True),(0,0,True),(0,.98,False),(-.98,.3,True)]
+    # Deep water, from the floor, the middle, the surface and above it, with
+    # and without sprinting, looking up, level or down.
+    deep=((19,4,19),(31,9,31))
+    for start in [(25.5,4,25.5),(25.5,6.3,25.5),(25.5,9.2,25.5),(24.3,11,26.8)]:
+        for sprint in [False,True]:
+            for pitch in [-70,-15,0,20,85]:
+                for walk in walks:
+                    ops=[op('seed',rng.randrange(1<<31)),op('yaw',single(rng.choice([0,35,90,180,-120]))),op('pitch',single(pitch)),op('sprint',sprint)]
+                    ops+=fill('water',*deep)+[tick(*walk) if i<50 else tick() for i in range(70)]+clear(*deep)
+                    yield dict(position=vec(start),ops=ops)
+    # Shallow water (one block, flowing, two blocks) and waterlogged slabs:
+    # walking and jumping, with Depth Strider and Dolphin's Grace.
+    for name,b,properties in [('water',(31,4,31),{'level':'0'}),('water',(31,4,31),{'level':'5'}),('water',(31,5,31),None),
+                              ('oak_slab',(31,4,31),{'type':'bottom','waterlogged':'true'})]:
+        for efficiency in [0,1/3,2/3,1]:
+            for dolphin in [False,True]:
+                for walk in [(.98,0,False),(.98,0,True),(0,.98,True)]:
+                    ops=[op('seed',rng.randrange(1<<31)),op('yaw',single(rng.choice([0,45,90,200]))),op('sprint',rng.random()<.5)]
+                    ops+=[op('attribute',bits(efficiency),name='minecraft:water_movement_efficiency'),op('effect',dolphin,name='minecraft:dolphins_grace')]
+                    ops+=fill(name,(16,4,16),b,properties)+[tick(*walk) if i<40 else tick() for i in range(55)]+clear((16,4,16),b)
+                    yield dict(position=vec((17.5,4,17.5)),ops=ops)
+    # Swimming in Depth Strider III and with Dolphin's Grace.
+    for efficiency in [0,1]:
+        for dolphin in [False,True]:
+            for pitch in [-30,0,40]:
+                ops=[op('seed',rng.randrange(1<<31)),op('pitch',single(pitch)),op('sprint',True),op('attribute',bits(efficiency),name='minecraft:water_movement_efficiency'),op('effect',dolphin,name='minecraft:dolphins_grace')]
+                ops+=fill('water',(16,4,16),(31,9,31))+[tick(.98) for _ in range(60)]+clear((16,4,16),(31,9,31))
+                yield dict(position=vec((17.5,6.5,17.5)),ops=ops)
+    # Jumping out at a ledge (jumpOutOfFluid) and up a ladder in water.
+    for depth in [2,4]:
+        for jump in [False,True]:
+            for start in [(25.5,4,25.5),(25.5,4+depth-.6,25.5)]:
+                ops=[op('seed',rng.randrange(1<<31))]+fill('stone',(21,4,28),(29,8,29))+fill('water',(21,4,21),(29,3+depth,27))
+                ops+=[tick(.98,0,jump) for _ in range(60)]+clear((21,4,21),(29,8,29))
+                yield dict(position=vec(start),ops=ops)
+    for logged in ['true','false']:
+        for jump in [False,True]:
+            ops=[op('seed',rng.randrange(1<<31))]+fill('water',(21,4,21),(29,7,26))+fill('stone',(25,4,28),(25,8,28))+fill('ladder',(25,4,27),(25,8,27),{'facing':'north','waterlogged':logged})
+            ops+=[tick(.98,0,jump) for _ in range(60)]+clear((21,4,21),(29,8,28))
+            yield dict(position=vec((25.5,4,25.5)),ops=ops)
+    # Lava: deep and shallow, source and flowing. "player_tick" (base tick
+    # fluids, then aiStep) leaves lava's ignition and damage out.
+    def ptick(forward=0.,strafe=0.,jump=False):
+        return op('player_tick',vec((strafe,0,forward)),jumping=jump)
+    for depth in [1,3]:
+        for properties in [{'level':'0'},{'level':'4'}]:
+            for walk in [(0,0,False),(.98,0,False),(0,0,True),(.98,0,True)]:
+                for start in [(25.5,4,25.5),(25.5,9,25.5)]:
+                    box=((19,4,19),(31,3+depth,31))
+                    ops=[op('seed',rng.randrange(1<<31))]+fill('lava',*box,properties)
+                    ops+=[ptick(*walk) if i<40 else ptick() for i in range(60)]+clear(*box)
+                    yield dict(position=vec(start),ops=ops)
+    # Moving through currents of flowing water.
+    for i in range(16):
+        cells=[(a,4,b) for a in range(22,29) for b in range(22,29)]
+        levels={c:rng.choice(['0','1','2','3','5','7','8']) for c in cells}
+        ops=[op('seed',rng.randrange(1<<31)),op('yaw',single(rng.choice([0,90,180,270])))]
+        ops+=[op('block',name='minecraft:water',position=list(c),properties={'level':levels[c]}) for c in cells]
+        ops+=[tick(*rng.choice(walks)) for _ in range(30)]+clear((22,4,22),(28,4,28))
+        yield dict(position=vec((rng.uniform(22.4,28.6),4,rng.uniform(22.4,28.6))),ops=ops)
+    # Flying through water: no fluid travel and no swimming.
+    for walk in [(.98,0,False),(0,0,False)]:
+        ops=[op('flying',True,may_fly=True),op('sprint',True)]+fill('water',*deep)+[tick(*walk) for _ in range(30)]+[op('flying',False,may_fly=True)]+[tick(*walk) for _ in range(30)]+clear(*deep)
+        yield dict(position=vec((25.5,6,25.5)),ops=ops)
+    # Bubble columns up and down of every height, inside and at the top under
+    # air, water or a block; flying riders are not pushed. Only the column's
+    # drag property counts here (no block ticks rebuild it), so down columns
+    # stand on stone: MagmaBlock.stepOn's hot floor is not part of this scene.
+    def snow(forward=0.,jump=False):
+        return op('snow_tick',vec((0,0,forward)),jumping=jump)
+    for drag in ['false','true']:
+        for height in [1,3,6]:
+            for top in ['air','water','stone']:
+                for start in [4,4+height-1.2,4+height+.3]:
+                    for flying in [False,True]:
+                        ops=[op('seed',rng.randrange(1<<31))]+([op('flying',True,may_fly=True)] if flying else [])
+                        ops+=fill('water',(24,4,24),(26,3+height,26))+fill('stone' if drag=='true' else 'soul_sand',(25,3,25),(25,3,25))
+                        ops+=fill('bubble_column',(25,4,25),(25,3+height,25),{'drag':drag})
+                        if top!='air':ops+=fill(top,(24,4+height,24),(26,4+height,26))
+                        # Jumping while flying is LocalPlayer's vertical flight, not this scene's.
+                        ops+=[snow(0,i%20<5 and not flying) for i in range(60)]
+                        ops+=clear((24,4,24),(26,4+height,26))+fill('stone',(25,3,25),(25,3,25))
+                        yield dict(position=vec((25.5,start,25.5)),ops=ops)
+    # The air supply: eyes in water use it up and drown the player every 20
+    # ticks at -20; outside (or in a bubble column at the eyes) it refills by
+    # 4. Water Breathing, Conduit Power and Breath of the Nautilus; Respiration
+    # (oxygen bonus) skips decrements by the random.
+    for effect in [None,'minecraft:water_breathing','minecraft:conduit_power','minecraft:breath_of_the_nautilus']:
+        for oxygen in [0,1,3]:
+            for air in [300,25,2,-15]:
+                ops=[op('seed',rng.randrange(1<<31)),op('air',air),op('attribute',bits(oxygen),name='minecraft:oxygen_bonus')]
+                if effect:ops.append(op('effect',True,name=effect))
+                ops+=fill('water',(21,4,21),(29,7,29))+[tick() for _ in range(90)]+clear((21,4,21),(29,7,29))+[tick() for _ in range(30)]
+                yield dict(position=vec((25.5,4,25.5)),ops=ops)
+    for column in [False,True]:
+        ops=[op('air',10)]+fill('water',(21,4,21),(29,7,29))
+        if column:ops+=fill('bubble_column',(25,4,25),(25,7,25),{'drag':'false'})+fill('soul_sand',(25,3,25),(25,3,25))
+        ops+=[op('air_tick') for _ in range(40)]+[tick() for _ in range(40)]+clear((21,4,21),(29,7,29))+fill('stone',(25,3,25),(25,3,25))
+        yield dict(position=vec((25.5,5,25.5)),ops=ops)
+
 def corpus():
     yield from attribute_corpus(False)
     yield from portal_corpus()
@@ -350,6 +473,7 @@ def corpus():
     yield from powder_snow_corpus()
     yield from stuck_corpus()
     yield from water_corpus()
+    yield from swim_corpus()
     def food(level=20,saturation=5,exhaustion=0,timer=0):
         return op('food',food=level,saturation=single(saturation),exhaustion=single(exhaustion),timer=timer)
     # Actual ServerPlayer.checkMovementStatistics with all query contexts. These
@@ -567,6 +691,35 @@ def corpus():
 def sprint_corpus():
     yield from attribute_corpus(True)
     yield from pose_corpus(True)
+    # Sprint-swimming: LocalPlayer.aiStep starts sprinting under water (not in
+    # shallow water), Entity.updateSwimming turns it into swimming and the pose
+    # follows; sprint-swimming stops out of water or without forward input off
+    # the ground; shift sinks (goDownInWater), jump rises, crouching is off
+    # while swimming. Looking up, level and down; too hungry to sprint; from
+    # the floor, the middle and the surface; out through a one-block gap.
+    def fill(name,a,b):
+        return op('fill',name='minecraft:'+name,position=list(a),to=list(b))
+    runs={
+        'sprint':[65]*40+[1]*20+[0]*20,
+        'tap':[1,0,1]+[1]*40+[0]*20,
+        'sink':[65]*20+[97]*20+[33]*20+[0]*10,
+        'rise':[65]*20+[81]*30+[17]*20+[0]*10,
+        'stop':[65]*20+[64]*15+[65]*10+[0]*10+[65]*10,
+        'strafe':[69]*20+[73]*20+[65]*20+[0]*10,
+    }
+    for name,seq in runs.items():
+        for pitch in [-45,0,30,80]:
+            for food in [20,6]:
+                for y in [4,6.5,9.3]:
+                    ops=[op('food',food=food,saturation=single(5),exhaustion=single(0),timer=0),op('yaw',single(0)),op('pitch',single(pitch))]
+                    ops+=[fill('water',(2,4,2),(22,9,22)),*[op('controlled_tick',k) for k in seq],fill('air',(2,4,2),(22,9,22))]
+                    yield dict(position=vec((12.5,y,4.5)),ops=ops)
+    # Swimming into a one-block-high water tunnel and out of it: crawling.
+    for wet in [True,False]:
+        ops=[fill('water',(10,4,0),(14,7,5))]+([fill('water',(12,4,6),(12,4,13))] if wet else [])+[fill('stone',(12,5,6),(12,5,13))]
+        ops+=[op('pitch',single(20))]+[op('controlled_tick',65) for _ in range(80)]+[op('controlled_tick',1) for _ in range(20)]
+        ops+=[fill('air',(10,4,0),(14,7,13))]
+        yield dict(position=vec((12.5,4,2.5)),ops=ops)
     for level in [0,6,7,8,20]:
         for health in [10,20]:
             for start in [(12,4,0),(25,18,25)]:
@@ -677,7 +830,7 @@ def main():
         'java':subprocess.check_output(['java','--version'],text=True).splitlines()[0],'fixtures':len(fixtures),
         'operations':operations,'sources_sha256':tested,'resources':resource_hash,'input_sha256':input_hash,
         'references':references,
-        'scope':('Client sprint scene executes the real LocalPlayer.aiStep prefix through sprint decisions, stopping at the riding/parent movement boundary, followed by real LocalPlayer.modifyInput and the native server actor simulation. Sprint setters dispatch to that server actor, sharing its actual FoodData and collision conditions. Compares local sprint timer/input history and actual attribute changes, movement, distance exhaustion and hunger. Actual local crouch selection precedes new keyboard input; slowdown, sprint eligibility and pose-dependent dimensions share resident state. No effects, equipment, vehicles or fluid physics. Full client/server tick and networking remain unfinished. ' if args.sprint_input else '')+'Stored PlayerMotion binds resident client chunks and registered attributes/coefficients to air travel, jumping, Entity.move, step resolution, ground/support updates, restitution and speed factors. Repeated native Player.travel/jump/move and actual Player.aiStep / direct LivingEntity.aiStep compare position, velocity, bounds, collision/ground flags, support, climb state, fall-reset field, both sync flags, speed, head yaw, jump trigger and jump delay by exact bits. Prepared-local-input Player.aiStep paths verify the stored speed refresh after movement, with empty inventory and no nearby entities. Travel uses the actual Player.getSpeed movement-attribute query, independently of that stored base-living speed field; both getter and setter execute native bodies. Dry aiStep includes small-velocity cleanup, input damping, held/released jump timing and server frost-modifier removal. Snapshots also compare all allocated attribute instances, base/cache/dirty state, modifier values/operations/permanence and pending update/sync membership. Per-reference JVM holder/instance hashes are replayed so pending callback order and resulting ordered events also match. Dry resident scene with standing, crouching and crawling bounds, cached eye height, native pose-fit selection and ledge backoff; zero frozen ticks, empty equipment, no interpolation, fluid travel, vehicles, effects or other entities. The oracle controls pose storage and invokes actual native refreshDimensions on changes; full synchronized pose schema and network notifications remain separate. Actual pending attribute refresh runs after player movement and before pose selection in simulation operations, clamping health/absorption and rebuilding scale-dependent dimensions. Native ServerPlayer waypoint-receive and inherited transmit callbacks are compared as ordered requests; the waypoint manager and its network delivery remain controlled consumers. Direct refresh operations and the full enclosing tick remain separate boundaries. Actual LivingEntity.checkFallDamage, registered Block.fallOn/bounceOn and Player/LivingEntity.causeFallDamage are composed, including float-narrowed fall-distance accumulation, reset, last-climb clearing, safe-fall and damage-multiplier attributes, impulse exemptions and ordered landing particle/sound/statistic/hit-ground/damage requests. Farmland pushes the stored player and replaces actual chunk state; repeated turtle-egg changes preserve hatch. Block state at the landing fixture is compared after every operation. World RNG is a seeded native legacy stream. Actual ServerPlayer/Player/LivingEntity hurt dispatch now updates native synchronized health and player absorption, modified armor/toughness reduction, exhaustion, damage cooldown/last-source state and velocity synchronization. Native health storage and dirty flags are compared after every operation. Damage sources use actual decoded/tagged pinned damage registries. ServerPlayer jump statistics and exhaustion are included; dead-or-dying state disables movement input and jumping. Empty equipment/hands/effects, configurable difficulty and natural regeneration, damage gamerules enabled, loaded client and no spawn-extra fall particles define this scene domain. Ordered health/statistic/combat-record/broadcast/sound/criterion/death requests are compared; criterion argument payloads retain the separate combat gate. Actual health changes are applied, but audiovisual playback, persistent statistics, combat tracker internals, full death/drop/respawn services, block neighbor/drop/block-entity callbacks, movement emission, block-inside and networking remain controlled consumers. Actual FoodData.tick and ServerPlayer.tickRegeneration now share the same stored health, attributes, exhaustion and registered starvation damage. Snapshots compare food level, saturation, exhaustion, timer and tick count. Cases cover all four difficulties, regeneration rule changes, absorption during starvation, Peaceful recovery, timer overflow and nonfinite food values. Simulation operations compose clock setup, actual player movement and actual food ticking in their native order, including fall damage followed by regeneration in the same tick. Explicit clock operations establish cooldown/hurt-time/game-time/tick-count state; full enclosing native tick/doTick methods are not invoked by those setup operations. Input preparation has its own client comparison. ServerPlayer.checkMovementStatistics executes on accepted resident deltas after movement and before food ticking. Additional direct method fixtures cover all 512 overlapping passenger/swim/eye-water/water/climb/ground/sprint/crouch/glide flag combinations, invulnerable abilities, centimeter rounding, overflow, signed zero and nonfinite deltas. Those query contexts apply only to the statistics method; fluid/vehicle/glide physics remain unbound. ServerGamePacketListener packet acceptance/rejection and scheduling are not executed. Powder snow operations (snow_tick) run the clock, the powder snow flags and old position of baseTick, then actual aiStep with the real Entity.applyEffectsFromBlocks (movement-path block sweep, StepBasedCollector, PowderSnowBlock.entityInside: stuck multiplier, ALTERNATIVE snowflake particles from the level random, FREEZE/EXTINGUISH, ServerPlayer.onInsideBlock criteria; NetherPortalBlock.entityInside (setAsInsidePortal, with portal_tick running the cooldown and PortalProcessor of Entity.handlePortal without a destination), WebBlock.entityInside with and without Weaving and SweetBerryBushBlock.entityInside at every age through Player.makeStuckInBlock, with sweet_berry_bush damage on the known movement) and the server freezing phase (thaw, frost modifier, freeze damage every 40 ticks); leather boots are a component-less stack and #freeze_immune_wearables is emulated by them. Outside snow_tick block-inside effects stay disabled on both sides. Water operations (fluid_tick) run the fluid phase of Entity.baseTick alone with the real updateFluidInteraction over the vanilla #water/#lava fluid tags (EntityFluidInteraction heights, eyes, currents with Player.isPushedByFluid, fall reset, Entity.doWaterSplashEffect sound/BUBBLE/SPLASH particles/SPLASH game event from the level random, firstTick) and the fall halving in lava; every player tick runs that phase first. Scripted falls through the real Entity.move cover the FALLDAMAGE_RESETTING ray with ClipContext.Fluid.WATER (first-query fluid shape cache) and LivingEntity.checkFallDamage refreshing the fluids before applying the fall: source, flowing and falling water, waterlogged slabs/stairs/fences/trapdoors/lanterns/roots/ladders/grates/bars, bubble columns, kelp, seagrass and lava. The player never travels while touching a fluid (no water travel/swimming here). No full Player.tick, consumable item-use lifecycle, local input lifecycle, nonempty inventory/equipment ticks, full freezing, complete death lifecycle or full gameplay parity claim.'})
+        'scope':('Client sprint scene executes the real LocalPlayer.aiStep prefix through sprint decisions, stopping at the riding/parent movement boundary, followed by real LocalPlayer.modifyInput and the native server actor simulation. Sprint setters dispatch to that server actor, sharing its actual FoodData and collision conditions. Compares local sprint timer/input history and actual attribute changes, movement, distance exhaustion and hunger. Actual local crouch selection precedes new keyboard input; slowdown, sprint eligibility and pose-dependent dimensions share resident state. Water flags reach the sprint decisions (sprint-swimming starts under water, stops out of it), LocalPlayer.goDownInWater sinks the actor, and swimming/crawling poses follow Entity.updateSwimming. No effects, equipment or vehicles. Full client/server tick and networking remain unfinished. ' if args.sprint_input else '')+'Stored PlayerMotion binds resident client chunks and registered attributes/coefficients to air travel, jumping, Entity.move, step resolution, ground/support updates, restitution and speed factors. Repeated native Player.travel/jump/move and actual Player.aiStep / direct LivingEntity.aiStep compare position, velocity, bounds, collision/ground flags, support, climb state, fall-reset field, both sync flags, speed, head yaw, jump trigger and jump delay by exact bits. Prepared-local-input Player.aiStep paths verify the stored speed refresh after movement, with empty inventory and no nearby entities. Travel uses the actual Player.getSpeed movement-attribute query, independently of that stored base-living speed field; both getter and setter execute native bodies. Dry aiStep includes small-velocity cleanup, input damping, held/released jump timing and server frost-modifier removal. Snapshots also compare all allocated attribute instances, base/cache/dirty state, modifier values/operations/permanence and pending update/sync membership. Per-reference JVM holder/instance hashes are replayed so pending callback order and resulting ordered events also match. Dry resident scene with standing, crouching and crawling bounds, cached eye height, native pose-fit selection and ledge backoff; zero frozen ticks, empty equipment, no interpolation, vehicles, other effects than the scene flags, or other entities. The oracle controls pose storage and invokes actual native refreshDimensions on changes; full synchronized pose schema and network notifications remain separate. Actual pending attribute refresh runs after player movement and before pose selection in simulation operations, clamping health/absorption and rebuilding scale-dependent dimensions. Native ServerPlayer waypoint-receive and inherited transmit callbacks are compared as ordered requests; the waypoint manager and its network delivery remain controlled consumers. Direct refresh operations and the full enclosing tick remain separate boundaries. Actual LivingEntity.checkFallDamage, registered Block.fallOn/bounceOn and Player/LivingEntity.causeFallDamage are composed, including float-narrowed fall-distance accumulation, reset, last-climb clearing, safe-fall and damage-multiplier attributes, impulse exemptions and ordered landing particle/sound/statistic/hit-ground/damage requests. Farmland pushes the stored player and replaces actual chunk state; repeated turtle-egg changes preserve hatch. Block state at the landing fixture is compared after every operation. World RNG is a seeded native legacy stream. Actual ServerPlayer/Player/LivingEntity hurt dispatch now updates native synchronized health and player absorption, modified armor/toughness reduction, exhaustion, damage cooldown/last-source state and velocity synchronization. Native health storage and dirty flags are compared after every operation. Damage sources use actual decoded/tagged pinned damage registries. ServerPlayer jump statistics and exhaustion are included; dead-or-dying state disables movement input and jumping. Empty equipment/hands/effects, configurable difficulty and natural regeneration, damage gamerules enabled, loaded client and no spawn-extra fall particles define this scene domain. Ordered health/statistic/combat-record/broadcast/sound/criterion/death requests are compared; criterion argument payloads retain the separate combat gate. Actual health changes are applied, but audiovisual playback, persistent statistics, combat tracker internals, full death/drop/respawn services, block neighbor/drop/block-entity callbacks, movement emission, block-inside and networking remain controlled consumers. Actual FoodData.tick and ServerPlayer.tickRegeneration now share the same stored health, attributes, exhaustion and registered starvation damage. Snapshots compare food level, saturation, exhaustion, timer and tick count. Cases cover all four difficulties, regeneration rule changes, absorption during starvation, Peaceful recovery, timer overflow and nonfinite food values. Simulation operations compose clock setup, actual player movement and actual food ticking in their native order, including fall damage followed by regeneration in the same tick. Explicit clock operations establish cooldown/hurt-time/game-time/tick-count state; full enclosing native tick/doTick methods are not invoked by those setup operations. Input preparation has its own client comparison. ServerPlayer.checkMovementStatistics executes on accepted resident deltas after movement and before food ticking. Additional direct method fixtures cover all 512 overlapping passenger/swim/eye-water/water/climb/ground/sprint/crouch/glide flag combinations, invulnerable abilities, centimeter rounding, overflow, signed zero and nonfinite deltas. Those query contexts apply only to the statistics method; fluid/vehicle/glide physics remain unbound. ServerGamePacketListener packet acceptance/rejection and scheduling are not executed. Powder snow operations (snow_tick) run the clock, the powder snow flags and old position of baseTick, then actual aiStep with the real Entity.applyEffectsFromBlocks (movement-path block sweep, StepBasedCollector, PowderSnowBlock.entityInside: stuck multiplier, ALTERNATIVE snowflake particles from the level random, FREEZE/EXTINGUISH, ServerPlayer.onInsideBlock criteria; NetherPortalBlock.entityInside (setAsInsidePortal, with portal_tick running the cooldown and PortalProcessor of Entity.handlePortal without a destination), WebBlock.entityInside with and without Weaving and SweetBerryBushBlock.entityInside at every age through Player.makeStuckInBlock, with sweet_berry_bush damage on the known movement) and the server freezing phase (thaw, frost modifier, freeze damage every 40 ticks); leather boots are a component-less stack and #freeze_immune_wearables is emulated by them. Outside snow_tick block-inside effects stay disabled on both sides. Water operations (fluid_tick) run the fluid phase of Entity.baseTick alone with the real updateFluidInteraction over the vanilla #water/#lava fluid tags (EntityFluidInteraction heights, eyes, currents with Player.isPushedByFluid, fall reset, Entity.doWaterSplashEffect sound/BUBBLE/SPLASH particles/SPLASH game event from the level random, firstTick) and the fall halving in lava; every player tick runs that phase first. Scripted falls through the real Entity.move cover the FALLDAMAGE_RESETTING ray with ClipContext.Fluid.WATER (first-query fluid shape cache) and LivingEntity.checkFallDamage refreshing the fluids before applying the fall: source, flowing and falling water, waterlogged slabs/stairs/fences/trapdoors/lanterns/roots/ladders/grates/bars, bubble columns, kelp, seagrass and lava. Player travel in fluids (swim_corpus, simulation_tick): Player.travel swim steering, LivingEntity.travelInFluid (water drag 0.8/0.9 sprinting, water_movement_efficiency, dolphins_grace, lava 0.5 and gravity/4, jumpOutOfFluid, ladders), the jump phase (jumpInLiquid, jumpFromGround in shallow fluid), Entity.updateSwimming with Player.updateSwimming and the SWIMMING pose, the LivingEntity.baseTick air supply (Respiration, water breathing effects, drowning with entity event 67 and drown damage), swim sounds and muffled steps; BubbleColumnBlock.entityInside through snow_tick (Player.onInsideBubbleColumn/onAboveBubbleColumn, SPLASH/BUBBLE server particles; MagmaBlock.stepOn excluded). No full Player.tick, consumable item-use lifecycle, local input lifecycle, nonempty inventory/equipment ticks, full freezing, complete death lifecycle or full gameplay parity claim.'})
     print(f'Scoped scene motion parity passed: {report}',flush=True)
 
 if __name__=='__main__':main()
