@@ -117,6 +117,8 @@ pub struct Graphics {
     pub preset: Preset,
     /// Skip sections hidden behind closed ones (vanilla's occlusion graph).
     pub cave_culling: bool,
+    /// Hide shared leaf and mangrove-root faces, reducing foliage density.
+    pub cull_leaves: bool,
     /// Meshed sections uploaded per frame; 0 uploads all that are ready.
     pub chunk_updates: u32,
     /// Section mesh bytes uploaded per frame, in KiB; 0 is unlimited.
@@ -149,6 +151,7 @@ impl Default for Graphics {
         Self {
             preset: Preset::Custom,
             cave_culling: true,
+            cull_leaves: false,
             chunk_updates: 0,
             upload_budget_kib: 0,
             sky: true,
@@ -192,6 +195,7 @@ impl Graphics {
             match key.trim() {
                 "preset" => g.preset = Preset::parse(value),
                 "caveCulling" => g.cave_culling = flag(g.cave_culling),
+                "cullLeaves" => g.cull_leaves = flag(g.cull_leaves),
                 "chunkUpdates" => g.chunk_updates = number(g.chunk_updates).min(512),
                 "uploadBudgetKiB" => g.upload_budget_kib = number(g.upload_budget_kib).min(65536),
                 "sky" => g.sky = flag(g.sky),
@@ -226,9 +230,10 @@ impl Graphics {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "preset:{}\ncaveCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nlevel:{}\nbatteryMode:{}\nshaderPack:{}\n",
+            "preset:{}\ncaveCulling:{}\ncullLeaves:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nlevel:{}\nbatteryMode:{}\nshaderPack:{}\n",
             self.preset.name(),
             bool_text(self.cave_culling),
+            bool_text(self.cull_leaves),
             self.chunk_updates,
             self.upload_budget_kib,
             bool_text(self.sky),
@@ -321,6 +326,7 @@ mod tests {
         let g = Graphics {
             preset: Preset::Balanced,
             cave_culling: false,
+            cull_leaves: true,
             chunk_updates: 12,
             upload_budget_kib: 4096,
             sky: false,
@@ -340,7 +346,7 @@ mod tests {
         assert_eq!(Graphics::parse(&g.serialize()), g);
         assert_eq!(Graphics::parse(""), Graphics::default());
         assert_eq!(
-            Graphics::parse("workers:abc\nsky:maybe\n"),
+            Graphics::parse("workers:abc\nsky:maybe\ncullLeaves:maybe\n"),
             Graphics::default()
         );
     }

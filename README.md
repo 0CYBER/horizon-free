@@ -199,6 +199,8 @@ It runs rustfmt, clippy with warnings denied, the tests of the crates you touche
 
 [MIT](LICENSE), for the project's original work only. Dependencies keep their own licences. Minecraft is a trademark of Mojang Synergies AB; Minecraft code and assets belong to Mojang and Microsoft and are covered by the [Minecraft EULA](https://www.minecraft.net/en-us/eula). Decompiled game source and prepared resources stay on your machine and are never published.
 
+Third-party credits and licenses: [Third-party notices](THIRD_PARTY_NOTICES.md).
+
 ## Author
 
 Made by [Ludovic Marie](https://lu4ovic.com) ([@ludovic111](https://github.com/ludovic111)).
