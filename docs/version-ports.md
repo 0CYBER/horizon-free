@@ -245,11 +245,27 @@ summary counts pass / oracle / fail / newly failing.
    files and harnesses, the data-diff excerpts that concern it, and the local path of its source diffs.
 3. Everything regenerated cleanly, so the reader knows what not to look at.
 
-`version_port.py publish` opens one GitHub issue per item of ranks 1 to 3 (labels `version-port` and
-`port-NEW`, title `[NEW] <area>: <summary>`; an open issue with that title is updated instead), with the structured
-diff attached (names, signatures, data-report diffs, harness output; no decompiled code), and a Kira card per issue
-(`card_add` with the issue URL, column `todo`) so contributors and agents can claim them. Rank 4 and 5 go into one
-tracking issue.
+`version_port.py publish OLD NEW` (`tools/port_publish.py`) files the report as GitHub issues. **It is a dry run
+by default**: it prints every issue it would create or update and the first bodies (`--show N`; `--check-github`
+reads the open issues and labels, read-only, to tell creates from updates). `--yes` does it; the first `--yes` run
+and the `version-port` label are Ludovic's call.
+
+- **One issue per item** of rank 1, of rank 2 when a harness newly fails on NEW (or its oracle no longer compiles),
+  and of rank 3 when Horizon's comments name one of the changed methods: title `[NEW] <item>`, labels
+  `version-port` and `port-NEW`. An open issue with the same title is updated, and only its generated part
+  (between `<!-- version-port: generated -->` markers) is replaced: what people wrote around it stays.
+- **One tracking issue**, `[NEW] Port to Minecraft NEW`: the facts, the harness counts, a checklist of the item
+  issues (made after them, so it has their numbers), and every other item: rank-2 leads no harness confirmed, rank-3
+  classes Horizon names but none of whose changed methods, new content, unported changes.
+- **Kira**: the board already shows every open issue as a card in To do, with its labels, so contributors and agents
+  claim them there (`task_claim`); `publish` adds one Kira card for the port itself, linking the tracking issue
+  (`~/code/horizon-parity/tools/kira.mjs card_add`, skipped if the board has it).
+- **No decompiled code, ever**: bodies hold names and signatures only (vanilla classes, methods with their JVM
+  descriptors, fields, packets, registry entries, harness names, javac's one-line errors about Horizon's own oracles,
+  Horizon paths, and the local path of the diff). Every vanilla-derived string is quoted, and `assert_no_code`
+  refuses a body with a code block, or a line or quoted span that reads like Java (declarations, statements, braces).
+
+For 26.2 → 26.3 the dry run would file 48 issues (5 of rank 1, 43 of rank 3) and the tracking issue.
 
 ### The switch and the release
 
@@ -357,6 +373,7 @@ python3 tools/version_port.py diff 26.3 26.4         # summary; the full diff in
 python3 tools/version_port.py regen 26.4            # ports/26.4 on port/26.4: pinned, every table regenerated
 python3 tools/version_port.py report 26.3 26.4 [--results .local/parity-runner/state.json]   # report.md, report.json
 python3 tools/version_port.py harnesses 26.4 --baseline .local/parity-runner/state.json   # in ports/26.4
+python3 tools/version_port.py publish 26.3 26.4     # dry run: the issues it would file (--yes files them)
 python3 tools/version_port.py port 26.4             # prepare both, diff, regen, report
 python3 tools/version_port.py gc                     # keep the pinned version and the newest two others
 python3 tools/vanilla_map.py versions/26.3/classes.json net.minecraft.world.food.FoodData   # its Rust files and harnesses
@@ -372,4 +389,5 @@ python3 tools/vanilla_map.py versions/26.3/classes.json net.minecraft.world.food
 | Tools read the version from the lock (`lab.VERSION`, `lab.GAME`, `lab.RESOURCES`, `lab.version_info()`) | done |
 | `regen` (`tools/port_regen.py`): candidate worktree, its `.local/`, the generators' classes decompiled alone, every generator, `regen.json` in the report | done |
 | Candidate harness run (`tools/port_harness.py`, `harnesses`): horizon-prepare with sounds, every harness, pass / oracle / fail, newly failing against a baseline, in the report | done |
-| `publish`, launchd agent | later |
+| `publish` (`tools/port_publish.py`): dry run by default, issues, tracking issue, Kira card | done (never run with `--yes`) |
+| launchd agent | later |
