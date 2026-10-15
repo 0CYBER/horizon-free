@@ -765,7 +765,7 @@ impl Title {
                 batch.text(atlas, notice, w - tw - 2.0, h - 10.0, u32::MAX, true);
             }
             Mode::Select { worlds, selected } => {
-                batch.fill(atlas, 0.0, 0.0, w, h, rgba(0, 0, 0, 120));
+                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
                 centered(atlas, batch, "Select World", 8.0, u32::MAX);
                 text_field(
                     atlas,
@@ -908,7 +908,7 @@ impl Title {
             Mode::Create {
                 name, seed, focus, ..
             } => {
-                batch.fill(atlas, 0.0, 0.0, w, h, rgba(0, 0, 0, 120));
+                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
                 let title = "Create New World";
                 let tw = HudBatch::text_width(atlas, title);
                 batch.text(atlas, title, (w - tw) / 2.0, 8.0, u32::MAX, true);
@@ -972,7 +972,7 @@ impl Title {
                 }
             }
             Mode::Edit { name, focused, .. } => {
-                batch.fill(atlas, 0.0, 0.0, w, h, rgba(0, 0, 0, 120));
+                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
                 centered(
                     atlas,
                     batch,
@@ -999,7 +999,7 @@ impl Title {
                 );
             }
             Mode::Delete { world } => {
-                batch.fill(atlas, 0.0, 0.0, w, h, rgba(0, 0, 0, 120));
+                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
                 let message = translate(
                     "selectWorld.deleteWarning",
                     "'%s' will be lost forever! (A long time!)",
@@ -1024,7 +1024,7 @@ impl Title {
             }
             Mode::Backup { .. } => {
                 self.backup_shown.set(true);
-                batch.fill(atlas, 0.0, 0.0, w, h, rgba(0, 0, 0, 120));
+                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
                 centered(
                     atlas,
                     batch,
@@ -1050,7 +1050,7 @@ impl Title {
                 }
             }
             Mode::Error { message, .. } => {
-                batch.fill(atlas, 0.0, 0.0, w, h, rgba(0, 0, 0, 120));
+                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
                 let lines = wrapped(atlas, message, w - 50.0);
                 self.message_lines.set(lines.len());
                 let top = confirm_top(h, lines.len());

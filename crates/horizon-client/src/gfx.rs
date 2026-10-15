@@ -169,6 +169,9 @@ pub struct Frame<'a> {
     pub block_flicker: f32,
     /// Blur and grade the frame under a Horizon-style menu (`post`).
     pub post: Option<crate::post::PostGrade>,
+    /// `Screen.extractBlurredBackground`: blur the frame by this radius
+    /// (`menuBackgroundBlurriness`) before the screen is drawn over it.
+    pub menu_blur: Option<f32>,
 }
 /// One frame of the world border wall (`WorldBorderRenderer.render`).
 #[derive(Clone, Debug)]
@@ -287,6 +290,8 @@ pub struct Renderer {
     pub hud: HudRenderer,
     /// The menus' backdrop blur, made on first use.
     post: Option<crate::post::Post>,
+    /// Vanilla's menu background blur, made on first use.
+    menu_blur: Option<crate::menu_blur::MenuBlur>,
     pub info: wgpu::AdapterInfo,
     pub suspended: bool,
     pub drawn_sections: usize,
@@ -1432,6 +1437,7 @@ impl Renderer {
             world_post,
             hud,
             post: None,
+            menu_blur: None,
             info,
             suspended: size.width == 0 || size.height == 0,
             drawn_sections: 0,
@@ -2396,6 +2402,23 @@ impl Renderer {
                 pass.set_pipeline(pipeline);
                 pass.draw_indexed(0..6, (i * 4) as i32, 0..1);
             }
+        }
+        if let Some(radius) = frame.menu_blur
+            && self.config.usage.contains(wgpu::TextureUsages::COPY_SRC)
+        {
+            let format = self.config.format;
+            let device = &self.device;
+            self.menu_blur
+                .get_or_insert_with(|| crate::menu_blur::MenuBlur::new(device, format))
+                .apply(
+                    &self.device,
+                    &self.queue,
+                    &mut encoder,
+                    &target_texture,
+                    &view_target,
+                    [self.config.width, self.config.height],
+                    radius,
+                );
         }
         if let Some(grade) = &frame.post
             && self.config.usage.contains(wgpu::TextureUsages::COPY_SRC)

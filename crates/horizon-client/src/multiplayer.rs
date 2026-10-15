@@ -314,7 +314,7 @@ impl Screen {
     }
     pub fn draw(&self, atlas: &HudAtlas, batch: &mut HudBatch, blink: bool) {
         let (w, h) = (batch.width, batch.height);
-        batch.fill(atlas, 0.0, 0.0, w, h, rgba(0, 0, 0, 120));
+        crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
         let centered = |batch: &mut HudBatch, text: &str, y: f32, color: u32| {
             let tw = HudBatch::text_width(atlas, text);
             batch.text(atlas, text, (w - tw) / 2.0, y, color, true);

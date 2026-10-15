@@ -8226,6 +8226,7 @@ impl Game<'_> {
             } else {
                 None
             },
+            menu_blur: self.menu_blur(),
         };
         let result = match self.renderer.as_mut() {
             Some(renderer) => horizon_client::spans::time("renderer", || renderer.render(&frame)),
@@ -8234,6 +8235,18 @@ impl Game<'_> {
         // Restore storage even when rendering fails (for example, a lost surface).
         self.entity_vertices = entities;
         result
+    }
+    /// `Screen.extractBlurredBackground` over the panorama: every classic
+    /// screen of the title menus but the title itself (`TitleScreen`
+    /// doesn't blur), when `menuBackgroundBlurriness` is at least 1.
+    fn menu_blur(&self) -> Option<f32> {
+        let blurred = !horizon_client::ui_theme::horizon()
+            && self.title.as_ref().is_some_and(|t| {
+                self.screen == Screen::Options
+                    || !matches!(t.mode, horizon_client::title::Mode::Main)
+            });
+        let radius = self.settings.menu_blur as f32;
+        (blurred && radius >= 1.0).then_some(radius)
     }
     /// `LevelExtractor` / `LevelRenderer`: the world border wall this frame.
     fn border_draw(
