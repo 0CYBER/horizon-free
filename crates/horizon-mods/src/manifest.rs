@@ -199,6 +199,27 @@ pub fn componentize(core: &[u8]) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("{e:#}"))
 }
 
+/// The names a component imports: `horizon:mods/game@0.1.0`, ...
+#[cfg(feature = "pack")]
+pub fn component_imports(component: &[u8]) -> Result<Vec<String>, String> {
+    use wit_parser::{WorldItem, WorldKey};
+    let wit_component::DecodedWasm::Component(resolve, world) =
+        wit_component::decode(component).map_err(|e| format!("{e:#}"))?
+    else {
+        return Err("a WIT package, not a component".into());
+    };
+    let names = resolve.worlds[world]
+        .imports
+        .iter()
+        .map(|(key, item)| match (key, item) {
+            (WorldKey::Interface(id), _) | (_, WorldItem::Interface { id, .. }) => resolve
+                .id_of(*id)
+                .unwrap_or_else(|| resolve.name_world_key(key)),
+            _ => resolve.name_world_key(key),
+        });
+    Ok(names.collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

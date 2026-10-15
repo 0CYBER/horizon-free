@@ -15,12 +15,13 @@ log = "0.4"
 wasmtime = { version = "36.0.18", default-features = false, features = ["runtime", "cranelift", "component-model", "std"], optional = true }
 # Turns a mod's core module into a component (cargo horizon-mod build, the tests).
 wit-component = { version = "0.239", optional = true }
+wit-parser = { version = "0.239", optional = true }
 
 [features]
 default = ["runtime"]
 # Loads and runs mods; without it only manifests and packaging (cargo horizon-mod).
 runtime = ["dep:wasmtime"]
-pack = ["dep:wit-component"]
+pack = ["dep:wit-component", "dep:wit-parser"]
 
 [dev-dependencies]
 horizon-mods = { path = ".", features = ["pack"] }
