@@ -150,6 +150,10 @@ impl Session {
             quiet = if idle { quiet + 1 } else { 0 };
         }
     }
+    /// The autosave: proto chunks are saved on a worker, nothing waits.
+    fn autosave(&mut self) {
+        self.streaming.save(&mut self.world, false);
+    }
     fn save(&mut self) {
         self.streaming.save(&mut self.world, true);
         for key in std::mem::take(&mut self.world.modified) {
@@ -182,8 +186,10 @@ fn chunks_left_behind_keep_their_decoration() {
     session.settle_at((0, 0));
     for step in 1..=4 {
         session.settle_at((step * 3, 0));
+        session.autosave();
     }
     session.settle_at((300, 300));
+    session.autosave();
     session.settle_at((0, 0));
     session.settle_at((-4, 0));
     session.save();

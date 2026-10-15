@@ -88,6 +88,9 @@ enum Job {
     Finish(Proto),
     Light(i32, i32, Box<Region>, u64, bool),
     Mesh(i32, i32, i32, Box<Region>, u64, MeshSettings),
+    /// Proto chunks checked out to be saved (`ChunkGenerator::save_protos`),
+    /// off the main thread like vanilla's IOWorker.
+    Save(Vec<((i32, i32), Proto)>),
 }
 pub enum Done {
     Generated(Chunk),
@@ -96,6 +99,7 @@ pub enum Done {
     Decorated(i32, i32, Box<[Proto; 9]>),
     Lit(i32, i32, Vec<crate::chunk::Light>, u64),
     Meshed(i32, i32, i32, SectionMesh, u64),
+    Saved(Vec<((i32, i32), Proto)>),
 }
 struct Queued {
     priority: i64,
@@ -136,10 +140,12 @@ pub struct Streaming {
     order: u64,
     generating: FxHashSet<(i32, i32)>,
     generation_scan: GenerationScan,
-    /// Proto chunks: `None` while checked out to a decoration job.
+    /// Proto chunks: `None` while checked out to a decoration or save job.
     protos: FxHashMap<(i32, i32), Option<Proto>>,
     decorated: FxHashSet<(i32, i32)>,
     decorating: usize,
+    /// Save jobs in flight.
+    saving: usize,
     /// Vanilla's decoration order around the player, and the centre and
     /// radius it was last ranked for.
     decoration_order: DecorationOrder,
@@ -371,6 +377,11 @@ impl Streaming {
                                     Done::Decorated(x, z, region)
                                 }
                                 Job::Finish(proto) => Done::Generated(generator.finish(proto)),
+                                Job::Save(protos) => {
+                                    let refs: Vec<&Proto> = protos.iter().map(|(_, p)| p).collect();
+                                    generator.save_protos(&refs);
+                                    Done::Saved(protos)
+                                }
                                 Job::Light(x, z, region, seq, sky) => {
                                     Done::Lit(x, z, light_chunk(&borrow(&region), &light, sky), seq)
                                 }
@@ -418,6 +429,7 @@ impl Streaming {
             protos: Default::default(),
             decorated: Default::default(),
             decorating: 0,
+            saving: 0,
             decoration_order: DecorationOrder::default(),
             order_area: None,
             finishing: Default::default(),
@@ -506,6 +518,28 @@ impl Streaming {
             let key = (x + (i % 3) as i32 - 1, z + (i / 3) as i32 - 1);
             self.protos.insert(key, Some(proto));
             self.written.insert(key);
+        }
+    }
+    /// Saved proto chunks come back; those now out of range are dropped by
+    /// the next `update`.
+    fn receive_saved(&mut self, protos: Vec<((i32, i32), Proto)>) {
+        self.generation_scan.exhausted = false;
+        self.saving -= 1;
+        for (key, proto) in protos {
+            self.protos.insert(key, Some(proto));
+        }
+    }
+    /// Check out the proto chunks at `keys` and save them on a worker.
+    fn save_checked_out(&mut self, keys: impl IntoIterator<Item = (i32, i32)>) {
+        let protos: Vec<((i32, i32), Proto)> = keys
+            .into_iter()
+            .filter_map(|k| Some((k, self.protos.get_mut(&k)?.take()?)))
+            .collect();
+        if !protos.is_empty() {
+            self.saving += 1;
+            // Ahead of every other job: a column generated again meanwhile
+            // would not find them saved.
+            self.submit(i64::MIN, Job::Save(protos));
         }
     }
     fn receive_generated(&mut self, mut chunk: Chunk, world: &mut World) {
@@ -627,6 +661,7 @@ impl Streaming {
                 }
                 Done::Decorated(x, z, region) => self.receive_decorated(x, z, region),
                 Done::Generated(chunk) => self.receive_generated(chunk, world),
+                Done::Saved(protos) => self.receive_saved(protos),
                 Done::Lit(x, z, sections, seq) => {
                     if self.lighting.get(&(x, z)) != Some(&seq) {
                         continue;
@@ -726,17 +761,17 @@ impl Streaming {
         if !far.is_empty() {
             self.generation_scan.exhausted = false;
         }
-        // Those decoration wrote to are saved (see `ChunkGenerator::save_protos`).
-        let written: Vec<Proto> = far
-            .iter()
-            .filter_map(|k| {
-                let proto = self.protos.remove(k).flatten();
-                if self.written.remove(k) { proto } else { None }
-            })
-            .collect();
-        if !written.is_empty() {
-            self.saves.save_protos(&written.iter().collect::<Vec<_>>());
+        // Those decoration wrote to are saved first (see
+        // `ChunkGenerator::save_protos`), and dropped once back.
+        let mut written = Vec::new();
+        for key in far {
+            if self.written.remove(&key) {
+                written.push(key);
+            } else {
+                self.protos.remove(&key);
+            }
         }
+        self.save_checked_out(written);
         let (protos, finishing) = (&self.protos, &self.finishing);
         self.decorated.retain(|k| {
             protos.contains_key(k) || finishing.contains(k) || world.chunks.contains_key(k)
@@ -1089,18 +1124,26 @@ impl Streaming {
     fn near_finished(&self, x: i32, z: i32, reach: i32) -> bool {
         self.ranges().near_finished(x, z, reach)
     }
-    /// Save what generation holds outside the world, before the world's
-    /// chunks: the proto chunks decoration wrote to. With `wait`, the
-    /// decorations and columns in flight are waited for first (their proto
-    /// chunks are out in the jobs); otherwise they are saved later, as they
+    /// Save what generation holds outside the world: the proto chunks
+    /// decoration wrote to. With `wait`, the decorations, columns and saves
+    /// in flight are waited for first (their proto chunks are out in the
+    /// jobs) and the protos are saved here, before the world's chunks;
+    /// otherwise a worker saves them (vanilla's autosave hands its chunks to
+    /// the IOWorker too), and those out in jobs are saved later, as they
     /// unload or at the next save.
     pub fn save(&mut self, world: &mut World, wait: bool) {
+        if !wait {
+            let written: Vec<(i32, i32)> = self.written.drain().collect();
+            self.save_checked_out(written);
+            return;
+        }
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while wait && (self.decorating > 0 || !self.finishing.is_empty()) {
+        while self.decorating > 0 || !self.finishing.is_empty() || self.saving > 0 {
             let left = deadline.saturating_duration_since(std::time::Instant::now());
             match self.results.recv_timeout(left) {
                 Ok(Done::Decorated(x, z, region)) => self.receive_decorated(x, z, region),
                 Ok(Done::Generated(chunk)) => self.receive_generated(chunk, world),
+                Ok(Done::Saved(protos)) => self.receive_saved(protos),
                 Ok(other) => self.deferred.push(other),
                 Err(_) => {
                     log::warn!("Horizon: chunk generation did not finish before saving");
@@ -1202,6 +1245,16 @@ impl Ranges<'_> {
 }
 impl Drop for Streaming {
     fn drop(&mut self) {
+        // Saves in flight hold proto chunks nothing else would save.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while self.saving > 0 {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            match self.results.recv_timeout(left) {
+                Ok(Done::Saved(_)) => self.saving -= 1,
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
         self.shared.stop.store(true, Ordering::Relaxed);
         self.shared.ready.notify_all();
         for t in self.threads.drain(..) {
