@@ -13,6 +13,7 @@ pub mod audio;
 pub mod auth;
 pub mod auto_jump;
 pub mod banner;
+pub mod benchmark;
 pub mod biome;
 pub mod block_entity_anim;
 pub mod block_entity_nbt;
