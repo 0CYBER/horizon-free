@@ -21,10 +21,12 @@ Games:
   vanilla-mods  the same + Sodium, Lithium, FerriteCore and ImmediatelyFast
                 (pinned in packs/mods.lock.json)
 
-Results: benchmarks/perf/<label>.json. Games run with no audio, from a
-scratch directory under .local/perf-bench.
+Results: benchmarks/perf/<label>-rd<N>.json, one benchmark report per render
+distance (docs/benchmark-report.md), over --repeats games. Games run with no
+audio, from a scratch directory under .local/perf-bench.
 """
 import argparse
+import bisect
 import datetime
 import json
 import math
@@ -105,43 +107,68 @@ LAUNCHER_JVM = ["-XX:+UnlockExperimentalVMOptions", "-XX:+UseG1GC", "-XX:G1NewSi
 PERF_MODS = ["sodium", "lithium", "ferrite-core", "immediatelyfast"]
 
 
-def stats(frame_ms):
-    """Every number of a flight, from its frame times in milliseconds.
+# The benchmark report format, version 1 (docs/benchmark-report.md). crates/horizon-bench is the
+# reference: these functions compute the same figures, with the same rounding, for every game.
+REPORT_FORMAT, REPORT_VERSION = "horizon-benchmark-report", 1
+HISTOGRAM_EDGES_MS = [0, 1, 2, 3, 4.17, 5, 6, 7, 8.33, 10, 12, 14, 16.67, 20, 25, 33.33, 40,
+                      50, 66.67, 100, 150, 250, 500, 1000]
+# Two-sided 95% critical values of Student's t for 1..30 degrees of freedom.
+T95 = [12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228, 2.201, 2.179, 2.160,
+       2.145, 2.131, 2.120, 2.110, 2.101, 2.093, 2.086, 2.080, 2.074, 2.069, 2.064, 2.060, 2.056,
+       2.052, 2.048, 2.045, 2.042]
+
+
+def rnd(v):
+    """Three decimals, halves away from zero (Rust's f64::round)."""
+    return math.copysign(math.floor(abs(v) * 1000 + 0.5), v) / 1000
+
+
+def frames(phase, repeat, frame_ms, cpu_ms=(), gpu_ms=()):
+    """Every figure of a flight, from its frame times in milliseconds (horizon_bench::Frames::of).
 
     The x% low is the average frame time of the slowest x% of frames, as
     frames per second (so a single 2-second freeze shows in the 0.1% low of a
     10,000-frame flight)."""
-    times = sorted(frame_ms)
+    times = sorted(t for t in frame_ms if math.isfinite(t))
     n = len(times)
     if n == 0:
-        return {"frames": 0}
+        return None
     total = sum(times)
-    pct = lambda p: times[min(n, max(1, math.ceil(n * p))) - 1]
+    pct = lambda values, p: values[min(len(values), max(1, math.ceil(len(values) * p))) - 1]
 
     def low(share):
         slowest = times[n - max(1, math.ceil(n * share)):]
         return 1000.0 * len(slowest) / sum(slowest)
 
-    buckets = [4.17, 8.33, 16.67, 33.33, 50.0, 100.0]
-    hist = {}
-    lo = 0.0
-    for hi in buckets + [float("inf")]:
-        key = f"<{hi:g}ms" if hi != float("inf") else f">={buckets[-1]:g}ms"
-        hist[key] = sum(1 for t in times if lo <= t < hi) / n
-        lo = hi
-    return {
-        "frames": n,
-        "seconds": total / 1000.0,
-        "avg_fps": n * 1000.0 / total,
-        "low_1pct_fps": low(0.01),
-        "low_01pct_fps": low(0.001),
-        "p50_ms": pct(0.5),
-        "p95_ms": pct(0.95),
-        "p99_ms": pct(0.99),
-        "p999_ms": pct(0.999),
-        "max_ms": times[-1],
-        "histogram": hist,
+    histogram = [0] * len(HISTOGRAM_EDGES_MS)
+    for t in times:
+        histogram[max(1, bisect.bisect_right(HISTOGRAM_EDGES_MS, t)) - 1] += 1
+    entry = {
+        "phase": phase, "repeat": repeat, "frames": n, "seconds": rnd(total / 1000.0),
+        "avg_fps": rnd(n * 1000.0 / total), "low_1pct_fps": rnd(low(0.01)), "low_01pct_fps": rnd(low(0.001)),
+        "p50_ms": rnd(pct(times, 0.5)), "p95_ms": rnd(pct(times, 0.95)), "p99_ms": rnd(pct(times, 0.99)),
+        "p999_ms": rnd(pct(times, 0.999)), "max_ms": rnd(times[-1]),
     }
+    for key, values in (("cpu_p50_ms", cpu_ms), ("gpu_p50_ms", gpu_ms)):
+        if values:
+            entry[key] = rnd(pct(sorted(values), 0.5))
+    entry["histogram"] = histogram
+    return entry
+
+
+def summary(values):
+    """A measurement over repeats (horizon_bench::Summary::of); None for no values."""
+    values = [v for v in values if v is not None]
+    n = len(values)
+    if n == 0:
+        return None
+    mean = sum(values) / n
+    sd = ci = None
+    if n > 1:
+        sd = math.sqrt(sum((v - mean) ** 2 for v in values) / (n - 1))
+        ci = rnd((T95[n - 2] if n - 1 <= len(T95) else 1.96) * sd / math.sqrt(n))
+        sd = rnd(sd)
+    return {"n": n, "mean": rnd(mean), "stdev": sd, "min": rnd(min(values)), "max": rnd(max(values)), "ci95": ci}
 
 
 class Sampler(threading.Thread):
@@ -237,28 +264,51 @@ def poll(control, check, limit, interval=0.05):
     raise TimeoutError(f"not ready after {limit} s")
 
 
+# Fewer section meshes than this in a second is the game remeshing blocks that change (random
+# ticks), not loading.
+QUIET_MESHES_PER_S = 100
+
+
 def wait_loaded(control, near, limit):
-    """Waits until the player is spawned (near(position)), nothing is queued and
-    the resident and generated chunk counts have not changed for a second, as
-    the vanilla driver does; returns the time of the last change.
-    (pending_chunks alone misses work the threads have already taken; sections
-    are remeshed all the time as blocks change, so meshes are not counted.)"""
+    """Waits until the player is spawned (near(position)), nothing is queued, the
+    resident and generated chunk counts have not changed for a second, as the
+    vanilla driver does, and the last sections are drawn; returns when the last
+    of these happened. Builds that report `status.streaming` are drawn once no
+    stage (generation, decoration, light, meshing) has held work for half a
+    second; blocks that change after loading (fluids settling, random ticks)
+    only remesh in short bursts. Older builds fall back to meshing going quiet
+    (fewer than QUIET_MESHES_PER_S section meshes in a second), which also
+    waits through that tail. (pending_chunks alone misses work the threads have
+    already taken, and sections waiting for their neighbours' light.)"""
     deadline = time.time() + limit
-    last, changed = None, time.time()
+    last, changed, previous, meshing = None, time.time(), None, time.time()
     while time.time() < deadline:
         try:
             s = control("status", timeout=10)
         except (OSError, ValueError, RuntimeError):
             s = {}
         player = s.get("player")
+        now = time.time()
         if not player or not near(player["position"]) or s.get("pending_chunks") != 0 or s.get("screen") == "title":
-            last, changed = None, time.time()
+            last, changed, previous, meshing = None, now, None, now
         else:
             counts = (s["chunks"], s["generated_chunks"])
             if counts != last:
-                last, changed = counts, time.time()
-            elif time.time() - changed >= 1.0:
-                return changed
+                last, changed = counts, now
+            stages = s.get("streaming")
+            sample = (now, s["meshed_sections"])
+            if stages is not None:
+                # Protos outside the view distance wait for neighbours that are never generated.
+                if any(v for k, v in stages.items() if k != "protos"):
+                    meshing = now
+                quiet = 0.5
+            else:
+                if previous and sample[1] - previous[1] > QUIET_MESHES_PER_S * (now - previous[0]):
+                    meshing = now
+                quiet = 1.0
+            previous = sample
+            if now - changed >= 1.0 and now - meshing >= quiet:
+                return max(changed, meshing)
         time.sleep(0.05)
     raise TimeoutError(f"not loaded after {limit} s")
 
@@ -307,13 +357,11 @@ def run_horizon(args, distance):
             begin = time.time()
             summary = control("fly {} {} {} {} {} {} {} {} raw".format(*start, *end, args.seconds, pitch))
             windows.append((begin, time.time()))
-            scene.update(stats(summary.pop("frame_ms")))
-            scene["horizon_summary"] = {k: summary.get(k) for k in ("cpu", "gpu", "phases_avg_ms", "slow_phases_avg_ms")}
+            scene.update({k: summary.get(k) or [] for k in ("frame_ms", "cpu_ms", "gpu_ms")})
             status = control("status")
             scene["meshes_flight"] = status["meshed_sections"] - loaded_meshes
             renderer = status.get("renderer") or {}
-            scene["gpu_allocated_mb"] = (renderer.get("gpu_allocated_bytes") or 0) / 2**20 or None
-            scene["nvidia_mb"] = nvidia_memory_mb(proc.pid)
+            scene["gpu_mb"] = nvidia_memory_mb(proc.pid) or (renderer.get("gpu_allocated_bytes") or 0) / 2**20 or None
             result["scenes"][name] = scene
             print_scene(args.game, distance, name, scene)
     finally:
@@ -476,8 +524,8 @@ def run_vanilla(args, distance):
     for flown in by("flown"):
         name = flown["scene"]
         windows.append((flights[name]["epoch_ms"] / 1000, flown["epoch_ms"] / 1000))
-        scene = {"load_s": loaded[name]["load_ms"] / 1000, **stats(flown["frame_ms"]),
-                 "chunks": flown["chunks"], "nvidia_mb": nvidia}
+        scene = {"load_s": loaded[name]["load_ms"] / 1000, "frame_ms": flown["frame_ms"],
+                 "chunks": flown["chunks"], "gpu_mb": nvidia}
         result["scenes"][name] = scene
         print_scene(args.game, distance, name, scene)
     result["memory"] = sampler.summary(windows)
@@ -495,58 +543,113 @@ def stop(proc):
             proc.kill()
 
 
-def print_scene(game, distance, name, s):
-    print(f"  {game:<12} rd {distance:>2} {name:<9} load {s['load_s']:6.1f} s  {s['avg_fps']:7.1f} fps"
-          f"  1% {s['low_1pct_fps']:6.1f}  0.1% {s['low_01pct_fps']:6.1f}"
-          f"  p50 {s['p50_ms']:6.2f}  p99 {s['p99_ms']:7.2f} ms", flush=True)
+def print_scene(game, distance, name, scene):
+    s = frames(name, 0, scene["frame_ms"]) or {}
+    print(f"  {game:<12} rd {distance:>2} {name:<9} load {scene['load_s']:6.1f} s  {s.get('avg_fps', 0):7.1f} fps"
+          f"  1% {s.get('low_1pct_fps', 0):6.1f}  0.1% {s.get('low_01pct_fps', 0):6.1f}"
+          f"  p50 {s.get('p50_ms', 0):6.2f}  p99 {s.get('p99_ms', 0):7.2f} ms", flush=True)
 
 
 # Report --------------------------------------------------------------------
 
-def machine():
-    info = {"host": platform.node(), "os": f"{platform.system()} {platform.release()}",
-            "arch": platform.machine(), "python": platform.python_version(), "cpus": os.cpu_count()}
+def hardware():
+    """horizon_bench::Hardware::detect: the machine, without its name."""
+    info = {"os": {"darwin": "macos", "win32": "windows"}.get(sys.platform, sys.platform),
+            "arch": {"arm64": "aarch64", "AMD64": "x86_64"}.get(platform.machine(), platform.machine()),
+            "cpu_threads": os.cpu_count()}
     if sys.platform == "darwin":
-        q = lambda key: subprocess.run(["sysctl", "-n", key], capture_output=True, text=True).stdout.strip()
-        info["cpu"], info["ram_gb"] = q("machdep.cpu.brand_string"), int(q("hw.memsize") or 0) / 2**30
+        q = lambda *cmd: subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
+        info.update(os_version=q("sw_vers", "-productVersion"), cpu=q("sysctl", "-n", "machdep.cpu.brand_string"),
+                    ram_mb=int(q("sysctl", "-n", "hw.memsize") or 0) >> 20)
     else:
+        release = dict(l.split("=", 1) for l in Path("/etc/os-release").read_text().splitlines() if "=" in l)
+        info["os_version"] = f"{release.get('PRETTY_NAME', '').strip(chr(34))} (kernel {platform.release()})"
         for line in Path("/proc/cpuinfo").read_text().splitlines():
             if line.startswith("model name"):
                 info["cpu"] = line.split(":", 1)[1].strip()
                 break
-        info["ram_gb"] = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2**30
+        info["ram_mb"] = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") >> 20
     return info
 
 
+def report(args, distance, runs, app):
+    """One v1 report for a game at a render distance, over its repeats."""
+    first = runs[0]
+    renderer = first.get("renderer") or {}
+    hw = hardware()
+    if renderer.get("gpu"):
+        hw["gpu"] = {"name": renderer["gpu"], "vendor": str(renderer.get("vendor") or ""),
+                     "driver": str(renderer.get("driver") or ""), "backend": str(renderer.get("backend") or "").lower(),
+                     "kind": renderer.get("device_type") or ""}
+    size = renderer.get("size")
+    conditions = {"scenario": "perf_bench:" + ",".join(first["scenes"]), "seed": str(SEED),
+                  "render_distance": distance, "simulation_distance": 12, "vsync": False,
+                  "offscreen": bool(args.offscreen), "repeats": len(runs), "warmup_s": args.settle,
+                  "load_avg_1m": rnd(first["load_before"][0])}
+    if size:
+        conditions["window"] = list(size)
+    metrics, entries = {}, []
+
+    def metric(name, values):
+        if (m := summary(values)) is not None:
+            metrics[name] = m
+
+    metric("startup.title_ms", [r["startup"]["title_s"] * 1000 for r in runs])
+    metric("startup.world_ms", [r["startup"]["world_s"] * 1000 for r in runs])
+    for name in first["scenes"]:
+        scenes = [r["scenes"][name] for r in runs if name in r["scenes"]]
+        flights = [frames(name, i, s["frame_ms"], s.get("cpu_ms", ()), s.get("gpu_ms", ())) for i, s in enumerate(scenes)]
+        entries += [f for f in flights if f]
+        metric(f"chunks.{name}.load_ms", [s["load_s"] * 1000 for s in scenes])
+        metric(f"chunks.{name}.meshed_count", [s.get("meshes_load") for s in scenes])
+        for key in ("avg_fps", "low_1pct_fps", "low_01pct_fps"):
+            metric(f"fps.{name}.{key}", [f[key] for f in flights if f])
+        metric(f"memory.{name}.gpu_mb", [s.get("gpu_mb") for s in scenes])
+    metric("memory.rss_peak_mb", [r["memory"].get("rss_peak_mb") for r in runs])
+    metric("memory.rss_steady_mb", [r["memory"].get("rss_steady_mb") for r in runs])
+    return {"format": REPORT_FORMAT, "version": REPORT_VERSION, "kind": "game",
+            "created": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "app": app, "hardware": hw, "conditions": conditions, "metrics": metrics, "frames": entries,
+            "label": args.label}
+
+
 def table(labels):
-    """Markdown tables comparing saved runs (benchmarks/perf/<label>.json)."""
-    runs = [json.loads((ROOT / "benchmarks/perf" / f"{l}.json").read_text()) for l in labels]
-    names = [r["label"] for r in runs]
-    print("| RD | scene | " + " | ".join(f"{n} avg / 1% / 0.1% low FPS" for n in names) + " |")
-    print("| --- | --- |" + " --- |" * len(runs))
-    distances = list(runs[0]["distances"])
-    for rd in distances:
-        for scene in runs[0]["distances"][rd]["scenes"]:
+    """Markdown tables comparing saved runs (benchmarks/perf/<label>-rd<N>.json): means and 95% CIs."""
+    runs = {}
+    for label in labels:
+        for path in sorted((ROOT / "benchmarks/perf").glob(f"{label}-rd*.json"), key=lambda p: int(p.stem.rsplit("rd", 1)[1])):
+            r = json.loads(path.read_text())
+            runs.setdefault(label, {})[r["conditions"]["render_distance"]] = r
+    distances = sorted({d for by in runs.values() for d in by})
+    cell = lambda m, digits=0: "–" if not m else f"{m['mean']:.{digits}f}" + (f" ±{m['ci95']:.{digits}f}" if m["ci95"] else "")
+    print("| RD | scene | " + " | ".join(f"{l}: avg / 1% / 0.1% low FPS" for l in labels) + " |")
+    print("| --- | --- |" + " --- |" * len(labels))
+    for d in distances:
+        scenes = sorted({k.split(".")[1] for by in runs.values() if d in by for k in by[d]["metrics"] if k.startswith("fps.")})
+        for scene in scenes:
             cells = []
-            for r in runs:
-                s = r["distances"].get(rd, {}).get("scenes", {}).get(scene)
-                cells.append(f"{s['avg_fps']:.0f} / {s['low_1pct_fps']:.0f} / {s['low_01pct_fps']:.0f}" if s else "–")
-            print(f"| {rd} | {scene} | " + " | ".join(cells) + " |")
+            for l in labels:
+                m = runs.get(l, {}).get(d, {}).get("metrics", {})
+                cells.append(" / ".join(cell(m.get(f"fps.{scene}.{k}")) for k in ("avg_fps", "low_1pct_fps", "low_01pct_fps")))
+            print(f"| {d} | {scene} | " + " | ".join(cells) + " |")
     print()
-    print("| RD | " + " | ".join(f"{n}: title / world s, scene load s, RSS steady / peak MB" for n in names) + " |")
-    print("| --- |" + " --- |" * len(runs))
-    for rd in distances:
+    print("| RD | " + " | ".join(f"{l}: title / world s, mean scene load s, RSS steady / peak MB, load avg" for l in labels) + " |")
+    print("| --- |" + " --- |" * len(labels))
+    for d in distances:
         cells = []
-        for r in runs:
-            d = r["distances"].get(rd)
-            if not d:
+        for l in labels:
+            r = runs.get(l, {}).get(d)
+            if not r:
                 cells.append("–")
                 continue
-            loads = [s["load_s"] for s in d["scenes"].values()]
-            m = d.get("memory", {})
-            cells.append(f"{d['startup']['title_s']:.1f} / {d['startup']['world_s']:.1f}, "
-                         f"{statistics.mean(loads):.1f}, {m.get('rss_steady_mb') or 0:.0f} / {m.get('rss_peak_mb') or 0:.0f}")
-        print(f"| {rd} | " + " | ".join(cells) + " |")
+            m = r["metrics"]
+            loads = [v["mean"] for k, v in m.items() if k.endswith(".load_ms")]
+            sec = lambda k: f"{m[k]['mean'] / 1000:.1f}" if k in m else "–"
+            mb = lambda k: f"{m[k]['mean']:.0f}" if k in m else "–"
+            cells.append(f"{sec('startup.title_ms')} / {sec('startup.world_ms')}, "
+                         f"{statistics.mean(loads) / 1000 if loads else 0:.1f}, "
+                         f"{mb('memory.rss_steady_mb')} / {mb('memory.rss_peak_mb')}, {r['conditions'].get('load_avg_1m')}")
+        print(f"| {d} | " + " | ".join(cells) + " |")
 
 
 def main():
@@ -565,33 +668,40 @@ def main():
                    help="Horizon renders into a texture and does not wait for the window (locked macOS sessions)")
     p.add_argument("--resources", default=str(ROOT / ".local/horizon-client/26.3"))
     p.add_argument("--build", default=str(ROOT / "target/release"))
-    p.add_argument("--note", help="free text stored with the results")
+    p.add_argument("--repeats", type=int, default=3, help="games per render distance; the report gives means and 95%% CIs")
     p.add_argument("--table", nargs="+", metavar="LABEL", help="print markdown tables of saved runs, and exit")
     args = p.parse_args()
     if args.table:
         table(args.table)
         return
-    label = args.label or f"{args.game}-{platform.node().split('.')[0]}"
+    args.label = args.label or f"{args.game}-{platform.node().split('.')[0]}"
     WORK.mkdir(parents=True, exist_ok=True)
-    commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT,
-                            capture_output=True, text=True).stdout.strip() or None
-    report = {
-        "label": label, "game": args.game, "date": datetime.date.today().isoformat(), "commit": commit,
-        "machine": machine(), "offscreen": args.offscreen, "seed": SEED, "flight_seconds": args.seconds,
-        "settle_seconds": args.settle, "note": args.note,
-        "scenes": {n: {"from": a, "to": b, "pitch": c} for n, a, b, c in scene_list(args)},
-        "distances": {},
-    }
     run = run_horizon if args.game == "horizon" else run_vanilla
     for d in [int(x) for x in args.distances.split(",")]:
-        load_before = os.getloadavg()
-        result = run(args, d)
-        result["load_before"], result["load_after"] = load_before, os.getloadavg()
-        report["distances"][str(d)] = result
-    out = ROOT / "benchmarks/perf" / f"{label}.json"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(report, indent=1) + "\n")
-    print(out)
+        runs = []
+        for _ in range(args.repeats):
+            load_before = os.getloadavg()
+            result = run(args, d)
+            result["load_before"], result["load_after"] = load_before, os.getloadavg()
+            runs.append(result)
+        out = ROOT / "benchmarks/perf" / f"{args.label}-rd{d}.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(report(args, d, runs, app(args)), indent=1) + "\n")
+        print(out)
+
+
+def app(args):
+    if args.game == "horizon":
+        commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT,
+                                capture_output=True, text=True).stdout.strip() or None
+        manifest = (ROOT / "crates/horizon-client/Cargo.toml").read_text()
+        version = next(l.split('"')[1] for l in manifest.splitlines() if l.startswith("version"))
+        return {"name": "horizon-client", "version": version, "commit": commit}
+    lock = json.loads((ROOT / "packs/mods.lock.json").read_text())
+    mods = [{"name": "fabric-loader", "version": lock["fabric_loader"]}]
+    if args.game == "vanilla-mods":
+        mods += [{"name": n, "version": lock["projects"][n]["version"]} for n in PERF_MODS]
+    return {"name": "minecraft", "version": "26.3", "mods": mods}
 
 
 if __name__ == "__main__":

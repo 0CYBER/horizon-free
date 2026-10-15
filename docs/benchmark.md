@@ -26,11 +26,11 @@ One game is started per render distance (8, 16 and 32 chunks by default), each f
 ## Known caveats
 
 - **Fabric Loader is present in the vanilla runs**, to load the driver mod. The only patch it applies is the driver's frame hook, so its cost after startup is negligible, but its mod discovery and class transformation add to vanilla's startup time (the modded runs use the same loader).
-- **Readiness is detected differently.** Horizon knows exactly how many chunks are pending; for vanilla the driver waits until the loaded chunk count is unchanged for a second with nothing left to compile, and takes the time of the last change. Both stop the clock at the last chunk arriving, within a frame or two.
+- **Readiness is detected differently.** For Horizon the driver waits until nothing is queued, the chunk counts are unchanged for a second and meshing has gone quiet (fewer than 100 section meshes a second: blocks that change keep being remeshed), and takes the time of the last of these; sections wait for their neighbours' light before they are meshed, so the chunk counts alone stop the clock before the last sections are drawn. For vanilla it waits until the loaded chunk count is unchanged for a second with nothing left to compile, and takes the time of the last change. Both stop the clock within a frame or two of the last section drawn.
 - **Locked or headless screens.** A window nobody can see is not composited. On a Mac whose session is locked, Horizon draws only with `--offscreen` (it renders into a texture and does not wait for the window), and vanilla keeps rendering into its window without it being shown. Such runs measure rendering without presentation and are marked `offscreen`; numbers for players come from runs with the window on a real screen.
 - **Different graphics APIs.** Horizon renders with wgpu (Vulkan on Linux and Windows, Metal on macOS); vanilla 26.3 uses OpenGL (or its Vulkan backend when chosen). The backend each game used is stored with the results. This is part of what is being compared.
 - **World generation is the same algorithm but not the same threads.** Both generate the same terrain (the parity harnesses check it), with their own threading; the work per chunk differs, which is also part of what is being compared.
-- **Variance.** Flights are short (12 seconds); run each configuration more than once and compare medians before drawing conclusions from small differences. Lows are the noisiest figures.
+- **Variance.** Flights are short (12 seconds), so each configuration runs `--repeats` times (3 by default), each from a fresh world, and every figure is reported as the mean over the repeats with its standard deviation and 95% confidence interval (Student's t). Differences inside the intervals are noise. Lows are the noisiest figures.
 
 ## Reproduce it
 
@@ -43,7 +43,7 @@ python3 tools/perf_bench.py --game vanilla-mods --label mods-mine
 python3 tools/perf_bench.py --table horizon-mine vanilla-mine mods-mine
 ```
 
-Options: `--distances 8,16`, `--scenes village,ocean`, `--seconds 20`, `--heap 4G` (vanilla), `--offscreen` (Horizon, for locked or headless sessions). Results go to `benchmarks/perf/<label>.json`; each game's log, and the vanilla driver's event log, stay in `.local/perf-bench/`. Keep the machine otherwise idle, plugged in, and the window on a screen.
+Options: `--distances 8,16`, `--scenes village,ocean`, `--seconds 20`, `--repeats 5`, `--heap 4G` (vanilla), `--offscreen` (Horizon, for locked or headless sessions). Results go to `benchmarks/perf/<label>-rd<N>.json`, one [benchmark report](benchmark-report.md) per render distance (the same format the game's `--benchmark` and the launcher write), with the load average before each game; each game's log, and the vanilla driver's event log, stay in `.local/perf-bench/`. Keep the machine otherwise idle, plugged in, and the window on a screen.
 
 ## Results
 
