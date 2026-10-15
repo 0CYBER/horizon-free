@@ -103,6 +103,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agent_control_e2e import Cli, Failed, game_env  # noqa: E402
+import lab  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
@@ -118,7 +119,7 @@ class Game:
         self.name = name
         self.work = Path(tempfile.mkdtemp(prefix=f'hzlan-{name}-'))
         (self.work / '.local/horizon-client').mkdir(parents=True)
-        os.symlink(resources, self.work / '.local/horizon-client/26.3')
+        os.symlink(resources, self.work / '.local/horizon-client' / lab.VERSION)
         self.socket = self.work / 'c.sock'
         env = game_env(os.environ.get('VSCREEN', 'lan-e2e'))
         env['HORIZON_HOME'] = str(self.work / 'home')
@@ -1711,7 +1712,7 @@ def main():
         meta = json.loads(subprocess.run(['cargo', 'metadata', '--format-version', '1', '--no-deps'], cwd=ROOT,
                                          capture_output=True, text=True, check=True).stdout)
         bins = Path(meta['target_directory']) / 'fast'
-    resources = (ROOT / '.local/horizon-client/26.3').resolve()
+    resources = lab.RESOURCES.resolve()
     if not (resources / 'horizon-resources.json').exists():
         sys.exit(f'no prepared resources in {resources}')
     out = Path(args.out)
