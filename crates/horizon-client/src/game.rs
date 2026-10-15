@@ -5649,7 +5649,7 @@ impl Game<'_> {
         }
         out
     }
-    /// CloudRenderer (fancy): 12x4x12 cells from clouds.png drifting east.
+    /// CloudRenderer: flat or 12x4x12 extruded cells drifting east.
     fn cloud_geometry(
         &self,
         sky: &horizon_client::environment::Sky,
@@ -5706,6 +5706,12 @@ impl Game<'_> {
                     });
                 }
             };
+            if self.settings.clouds == "fast" {
+                for p in horizon_client::clouds::flat_cell(x0, z0, bottom) {
+                    quad(p, 1.0);
+                }
+                continue;
+            }
             let faces = [
                 (
                     [[x1, y0, z0], [x1, y0, z1], [x0, y0, z1], [x0, y0, z0]],
@@ -8052,9 +8058,11 @@ impl Game<'_> {
             self.end_geometry(camera, &mut entities);
         }
         if (!title || live) && self.dim == Dim::Overworld {
-            horizon_client::spans::time("clouds", || {
-                self.cloud_geometry(&sky, camera, alpha, &mut entities)
-            });
+            if horizon_client::clouds::visible(&self.settings.clouds, sky.cloud_color[3]) {
+                horizon_client::spans::time("clouds", || {
+                    self.cloud_geometry(&sky, camera, alpha, &mut entities)
+                });
+            }
             if self.settings.horizon.weather {
                 horizon_client::spans::time("weather", || {
                     self.weather_geometry(camera, alpha, &mut entities)
