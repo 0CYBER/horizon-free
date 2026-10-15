@@ -1,5 +1,6 @@
 //! Per-state gameplay facts exported from vanilla's own block-state accessors
 //! (`gameplay-facts.json`), indexed by registry state ID.
+mod decode;
 use crate::Result;
 use horizon_world::registry::{BlockRegistry, BlockStateId};
 use serde_json::Value;
@@ -112,9 +113,13 @@ pub struct BlockFacts {
 }
 impl BlockFacts {
     pub fn load(root: &Path, registry: &BlockRegistry) -> Result<Self> {
-        let raw: Value = serde_json::from_slice(&fs::read(root.join("gameplay-facts.json"))?)?;
-        let entries = raw["states"]
-            .as_array()
+        let bytes = fs::read(root.join("gameplay-facts.json"))?;
+        serde_json::from_slice::<decode::Validate>(&bytes)?;
+        let raw: decode::Gameplay<'_> = serde_json::from_slice(&bytes)?;
+        let entries = raw
+            .states
+            .0
+            .as_ref()
             .ok_or("missing gameplay state facts")?;
         if entries.len() != registry.len() {
             return Err("gameplay facts do not match the block registry".into());
@@ -148,40 +153,22 @@ impl BlockFacts {
             .collect();
         let mut names: HashMap<String, Arc<str>> = HashMap::new();
         let mut intern = |s: &str| -> Arc<str> {
-            names
-                .entry(s.to_owned())
-                .or_insert_with(|| Arc::from(s))
-                .clone()
+            if let Some(name) = names.get(s) {
+                return name.clone();
+            }
+            let name: Arc<str> = Arc::from(s);
+            names.insert(s.to_owned(), name.clone());
+            name
         };
-        let mut shapes: HashMap<String, Arc<[[f64; 6]]>> = HashMap::new();
-        let mut shape = |v: &Value, fallback: &dyn Fn() -> Vec<[f64; 6]>| -> Arc<[[f64; 6]]> {
-            let Some(list) = v.as_array() else {
-                return fallback().into();
-            };
-            shapes
-                .entry(v.to_string())
-                .or_insert_with(|| {
-                    list.iter()
-                        .filter_map(|b| {
-                            let b = b.as_array()?;
-                            let n = |i: usize| b.get(i).and_then(Value::as_f64).unwrap_or(0.0);
-                            Some([n(0), n(1), n(2), n(3), n(4), n(5)])
-                        })
-                        .collect()
-                })
-                .clone()
-        };
+        let mut shapes = decode::Shapes::default();
         let mut states = Vec::with_capacity(entries.len());
         for (index, entry) in entries.iter().enumerate() {
             let id = BlockStateId(index as u32);
-            if entry["id"].as_u64() != Some(index as u64) {
+            if entry.id != Some(index as u64) {
                 return Err("gameplay facts are not in registry order".into());
             }
             let state = registry.state(id).ok_or("missing registry state")?;
-            let num = |k: &str| entry[k].as_f64().unwrap_or(0.0);
-            let flag = |k: &str| entry[k].as_bool().unwrap_or(false);
-            let sound = &entry["sound"];
-            let sound_id = |k: &str| sound[k]["id"].as_str().unwrap_or("").to_owned();
+            let sound = &entry.sound;
             let prop = |k: &str| state.properties.get(k).map(String::as_str);
             let (fluid, fluid_level, fluid_falling) = match state.name.as_str() {
                 "minecraft:water" | "minecraft:lava" => {
@@ -220,10 +207,10 @@ impl BlockFacts {
                 }
             };
             let edges = move || if air { Vec::new() } else { cube_edges() };
-            let outline = shape(&entry["outline"], &cube);
-            let outline_edges = shape(&entry["outline_edges"], &edges);
+            let outline = shapes.intern(entry.outline, cube)?;
+            let outline_edges = shapes.intern(entry.outline_edges, edges)?;
             // The export holds MapColor.col; ids are positions in MAP_COLORS.
-            let col = entry["map_color"].as_u64().unwrap_or(0) as u32;
+            let col = entry.map_color.unwrap_or(0) as u32;
             let map_color = if col == 0 {
                 0
             } else {
@@ -234,43 +221,41 @@ impl BlockFacts {
                 outline,
                 outline_edges,
                 name: intern(&state.name),
-                emission: num("emission") as u8,
-                dampening: num("dampening") as u8,
-                skylight_down: flag("skylight_down"),
-                shape_occlusion: flag("shape_occlusion"),
-                can_occlude: flag("can_occlude"),
-                solid_render: flag("solid_render"),
-                hardness: num("hardness") as f32,
-                requires_tool: flag("requires_tool"),
-                replaceable: flag("replaceable"),
-                random_ticks: flag("random_ticks"),
-                block_entity: flag("block_entity"),
-                render_shape: match entry["render_shape"].as_str() {
+                emission: entry.emission as u8,
+                dampening: entry.dampening as u8,
+                skylight_down: entry.skylight_down,
+                shape_occlusion: entry.shape_occlusion,
+                can_occlude: entry.can_occlude,
+                solid_render: entry.solid_render,
+                hardness: entry.hardness as f32,
+                requires_tool: entry.requires_tool,
+                replaceable: entry.replaceable,
+                random_ticks: entry.random_ticks,
+                block_entity: entry.block_entity,
+                render_shape: match entry.render_shape.as_deref() {
                     Some("INVISIBLE") => RenderShape::Invisible,
                     Some("ENTITYBLOCK_ANIMATED") => RenderShape::Animated,
                     _ => RenderShape::Model,
                 },
-                full_collision: flag("full_collision"),
-                friction: num("friction") as f32,
-                explosion_resistance: num("explosion_resistance") as f32,
-                item: intern(entry["item"].as_str().unwrap_or("minecraft:air")),
+                full_collision: entry.full_collision,
+                friction: entry.friction as f32,
+                explosion_resistance: entry.explosion_resistance as f32,
+                item: intern(entry.item.as_deref().unwrap_or("minecraft:air")),
                 sounds: Sounds {
-                    volume: sound["volume"].as_f64().unwrap_or(1.0) as f32,
-                    pitch: sound["pitch"].as_f64().unwrap_or(1.0) as f32,
-                    break_sound: intern(&sound_id("break")),
-                    step: intern(&sound_id("step")),
-                    place: intern(&sound_id("place")),
-                    hit: intern(&sound_id("hit")),
-                    fall: intern(&sound_id("fall")),
+                    volume: sound.volume as f32,
+                    pitch: sound.pitch as f32,
+                    break_sound: intern(sound.r#break.id.as_deref().unwrap_or("")),
+                    step: intern(sound.step.id.as_deref().unwrap_or("")),
+                    place: intern(sound.place.id.as_deref().unwrap_or("")),
+                    hit: intern(sound.hit.id.as_deref().unwrap_or("")),
+                    fall: intern(sound.fall.id.as_deref().unwrap_or("")),
                 },
                 fluid,
                 fluid_level,
                 fluid_falling,
                 waterlogged: prop("waterlogged") == Some("true"),
-                random_offset: flag("offset"),
-                outline_offset: entry["outline_offset"]
-                    .as_bool()
-                    .unwrap_or_else(|| flag("offset")),
+                random_offset: entry.offset,
+                outline_offset: entry.outline_offset.unwrap_or(entry.offset),
                 legacy_solid: behaviour_states[index][1].as_u64().unwrap_or(0) & 1 != 0,
                 sturdy_full: (behaviour_states[index][0].as_u64().unwrap_or(0) & 63) as u8,
                 classes: classes
