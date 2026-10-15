@@ -207,9 +207,8 @@ fn choose_splash(text: &str, index: usize, date: (u32, u32)) -> Option<String> {
     let splashes: Vec<_> = text
         .lines()
         .map(str::trim)
-        .filter(|s| {
-            !s.is_empty() && horizon_core::random::java_string_hash(s.encode_utf16()) != 125780783
-        })
+        // SplashManager.prepare keeps blank lines: only the hidden splash is dropped.
+        .filter(|s| horizon_core::random::java_string_hash(s.encode_utf16()) != 125780783)
         .collect();
     splashes
         .get(index.checked_rem(splashes.len())?)
@@ -1593,10 +1592,11 @@ mod classic_tests {
         for index in 0..6 {
             assert_eq!(
                 choose_splash(&text, index, (10, 15)).as_deref(),
-                Some(if index % 2 == 0 { "First!" } else { "Second!" })
+                Some(["", "First!", "Second!"][index % 3])
             );
         }
-        for text in ["", " \r\n", hidden] {
+        assert_eq!(choose_splash(" \r\n", 42, (10, 15)).as_deref(), Some(""));
+        for text in ["", hidden] {
             assert_eq!(choose_splash(text, 42, (10, 15)), None);
         }
     }
