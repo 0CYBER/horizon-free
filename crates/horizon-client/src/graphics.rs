@@ -140,6 +140,9 @@ pub struct Graphics {
     /// or behind other windows, and half the worker threads. Off by default;
     /// it changes when frames are drawn, never what they show or the ticks.
     pub battery: bool,
+    /// The Horizon shader pack in `shaderpacks/` (its folder name); empty:
+    /// none, the vanilla picture (docs/shader-packs.md).
+    pub shader_pack: String,
 }
 impl Default for Graphics {
     fn default() -> Self {
@@ -160,6 +163,7 @@ impl Default for Graphics {
             fxaa: false,
             advanced: false,
             battery: false,
+            shader_pack: String::new(),
         }
     }
 }
@@ -207,6 +211,7 @@ impl Graphics {
                 "fxaa" => g.fxaa = flag(g.fxaa),
                 "level" => g.advanced = value == "advanced",
                 "batteryMode" => g.battery = flag(g.battery),
+                "shaderPack" => g.shader_pack = value.to_string(),
                 "overlay" => {
                     g.overlay = match value {
                         "fps" => Overlay::Fps,
@@ -221,7 +226,7 @@ impl Graphics {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "preset:{}\ncaveCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nlevel:{}\nbatteryMode:{}\n",
+            "preset:{}\ncaveCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nlevel:{}\nbatteryMode:{}\nshaderPack:{}\n",
             self.preset.name(),
             bool_text(self.cave_culling),
             self.chunk_updates,
@@ -245,6 +250,7 @@ impl Graphics {
             bool_text(self.fxaa),
             if self.advanced { "advanced" } else { "simple" },
             bool_text(self.battery),
+            self.shader_pack,
         )
     }
     pub fn save(&self, dir: &Path) {
@@ -329,6 +335,7 @@ mod tests {
             fxaa: true,
             advanced: true,
             battery: true,
+            shader_pack: "horizon-sample".into(),
         };
         assert_eq!(Graphics::parse(&g.serialize()), g);
         assert_eq!(Graphics::parse(""), Graphics::default());

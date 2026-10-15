@@ -1,7 +1,8 @@
 //! Resolution scale and FXAA (Horizon settings): the world renders into its
 //! own target at the scaled size, then one full-screen pass copies or
-//! anti-aliases it onto the screen, under the hand and HUD. With neither
-//! setting on, the world renders straight to the screen as before.
+//! anti-aliases it onto the screen, under the hand and HUD. A shader pack
+//! also needs the target (its stages read the world's colour and depth).
+//! With none of them on, the world renders straight to the screen as before.
 
 struct WorldTarget {
     size: [u32; 2],
@@ -99,13 +100,14 @@ impl Post {
         }
     }
     /// The world's colour and depth targets this frame, or `None` to draw
-    /// it straight to the screen.
+    /// it straight to the screen. `pack`: a shader pack runs this frame.
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
         window: [u32; 2],
+        pack: bool,
     ) -> Option<(wgpu::TextureView, wgpu::TextureView)> {
-        if self.scale == 1.0 && !self.antialias {
+        if self.scale == 1.0 && !self.antialias && !pack {
             self.target = None;
             return None;
         }
@@ -138,22 +140,9 @@ impl Post {
             let depth = texture(
                 "Scaled world depth",
                 wgpu::TextureFormat::Depth32Float,
-                wgpu::TextureUsages::RENDER_ATTACHMENT,
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             );
-            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Horizon post"),
-                layout: &self.layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&color),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler),
-                    },
-                ],
-            });
+            let group = self.bind(device, &color);
             self.target = Some(WorldTarget {
                 size,
                 color,
@@ -165,9 +154,39 @@ impl Post {
             .as_ref()
             .map(|t| (t.color.clone(), t.depth.clone()))
     }
+    /// The world target's size, once `prepare` made one.
+    pub fn size(&self) -> Option<[u32; 2]> {
+        self.target.as_ref().map(|t| t.size)
+    }
+    /// Bindings that copy (or anti-alias) `view` onto the screen in `finish_with`.
+    pub fn bind(&self, device: &wgpu::Device, view: &wgpu::TextureView) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Horizon post"),
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        })
+    }
     /// Draw the scaled world onto `screen`.
     pub fn finish(&self, encoder: &mut wgpu::CommandEncoder, screen: &wgpu::TextureView) {
         let Some(target) = &self.target else { return };
+        self.finish_with(encoder, screen, &target.group);
+    }
+    /// Draw what `group` binds (`bind`) onto `screen`.
+    pub fn finish_with(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        screen: &wgpu::TextureView,
+        group: &wgpu::BindGroup,
+    ) {
         let attachments = [Some(wgpu::RenderPassColorAttachment {
             view: screen,
             resolve_target: None,
@@ -187,7 +206,7 @@ impl Post {
         } else {
             &self.copy
         });
-        pass.set_bind_group(0, &target.group, &[]);
+        pass.set_bind_group(0, group, &[]);
         pass.draw(0..3, 0..1);
     }
 }

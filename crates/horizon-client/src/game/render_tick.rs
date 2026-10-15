@@ -97,6 +97,39 @@ impl Game<'_> {
             boss_world_fog: self.dragon_bar_shown(),
         })
     }
+    /// What a shader pack's `Frame` uniform reads of the game this frame.
+    pub(super) fn shader_inputs(
+        &self,
+        camera: glam::DVec3,
+        partial_tick: f32,
+    ) -> horizon_client::gfx::ShaderInputs {
+        let (rain, thunder) = if self.dim == Dim::Overworld {
+            self.world.weather.levels(self.clock.fraction() as f32)
+        } else {
+            (0.0, 0.0)
+        };
+        let at = [camera.x, camera.y, camera.z];
+        let day = self.world.day_time;
+        horizon_client::gfx::ShaderInputs {
+            rain,
+            thunder,
+            submerged: match fog_type(&self.world, &self.res.facts, at, self.forward()) {
+                FogType::Atmospheric => 0,
+                FogType::Water => 1,
+                FogType::Lava => 2,
+                FogType::PowderSnow => 3,
+            },
+            dimension: match self.dim {
+                Dim::Overworld => 0,
+                Dim::Nether => -1,
+                Dim::End => 1,
+            },
+            has_sky_light: self.dim == Dim::Overworld,
+            moon_phase: day.div_euclid(24_000).rem_euclid(8) as u8,
+            day_fraction: (day.rem_euclid(24_000) as f32 + partial_tick) / 24_000.0,
+            partial_tick,
+        }
+    }
     /// `SkyRenderer.shouldRenderDarkDisc`: eye below the horizon (y 63) and not under water.
     pub(super) fn dark_disc(&self, camera: glam::DVec3) -> bool {
         camera.y < 63.0

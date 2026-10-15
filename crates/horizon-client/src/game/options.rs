@@ -204,6 +204,14 @@ impl Game<'_> {
             font.reset_cache();
             self.ui.chat.rescale(&self.res.atlas);
         }
+        // A new renderer (resource reload, first window) takes the loaded pack.
+        let stale = self
+            .renderer
+            .as_ref()
+            .is_some_and(|r| r.shader_pack_id() != self.shader_packs.id());
+        if stale && let Err(e) = self.apply_shader_pack() {
+            log::warn!("Horizon: shader pack: {e}");
+        }
     }
     /// `Window.updateFullscreenState`: a fullscreen change made by the window
     /// system is adopted by the option (`Minecraft.fullscreenStateChanged`).

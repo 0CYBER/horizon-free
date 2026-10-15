@@ -375,6 +375,7 @@ impl Game<'_> {
             DebugAction::ReloadResourcePacks => {
                 self.debug_translated("debug.reload_resourcepacks.message");
                 self.reload_packs();
+                self.load_shader_pack();
                 true
             }
             DebugAction::CopyLocation if player => {
