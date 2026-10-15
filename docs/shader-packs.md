@@ -15,7 +15,7 @@ Both are off by default. With no pack selected the renderer draws exactly what i
 | Renderer layout (below) | today's code |
 | Horizon shader packs: `composite` stage, uniforms, hot reload, Shader Packs screen | first slice planned |
 | Horizon shader packs: `deferred`, `gbuffer`, `shadow` stages, custom textures | planned |
-| Java shader packs: preprocessing + GLSL parse coverage | spike (results below once run) |
+| Java shader packs: preprocessing + GLSL parse coverage | spike done: 450 of 470 programs reach valid WGSL (below) |
 | Java shader packs: Iris pipeline emulation | planned |
 
 ## How the renderer draws a frame today
@@ -265,4 +265,67 @@ players bring their own, as with Iris.
 
 ## Spike results
 
-Not run yet: the counts of programs that parse, the failures and their causes go here.
+Run on 2026-10-15 with naga 30.0.1 over Complementary Reimagined r5.9.3, BSL v10.1.8 and Sildur's Vibrant v2.02
+Extreme (the 26.3 builds from Modrinth, kept outside the repository). Every program of the overworld, Nether and End
+folders and the shared root was counted; the `dh_*`, `clrwl_*` and `voxy*` programs, which Iris only loads with
+Distant Horizons, Colorwheel or Voxy installed, were left out.
+
+| Pack | Programs | naga as is | Preprocessed + legalised: parse | validate | WGSL written |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Complementary Reimagined | 183 | 0 | 180 | 180 | 180 |
+| BSL | 173 | 0 | 170 | 165 | 165 |
+| Sildur's Vibrant | 114 | 0 | 114 | 105 | 105 |
+| **Total** | **470** | **0** | **464** | **450** | **450 (96%)** |
+
+"As is" is naga's GLSL front end on the files with `#include` inlined and Iris's macros defined: it accepts only
+`#version 440`–`460` with Vulkan-style bindings, and every pack is written for `#version 120`–`330` compatibility
+profiles. "Preprocessed + legalised" is the translation of steps 1–3 above, done by a throwaway token-level tool:
+Iris's `#include`, its macros (`MC_VERSION`, `MC_RENDER_STAGE_*`, ...) and the packs' `#if`s expanded with naga's own
+preprocessor (`pp-rs`), then:
+
+- `#version 450 core`; `attribute`/`varying` to `in`/`out` with locations, one per declarator;
+- loose uniforms into one `std140` block (`bool`s stored as `int`);
+- `sampler2D` & co. split into texture + sampler bindings, uses rebuilt as `sampler2D(t, s)`, also through function
+  parameters, and not where a local of the same name hides the uniform;
+- compatibility built-ins (`gl_Vertex`, `gl_MultiTexCoord*`, `gl_Color`, `gl_ModelViewMatrix`, `gl_Fog`, `ftransform()`,
+  `gl_FragColor`, `gl_FragData[n]`) and Iris's core-profile names (`vaPosition`, `modelViewMatrix`, ...) declared;
+  `texture2D`, `shadow2D`, `texture2DLod`, ... renamed;
+- global variables with non-constant initialisers (accepted by NVIDIA and AMD drivers, used throughout
+  Complementary) declared at global scope and assigned at the start of `main`; unsized global arrays sized from
+  their initialiser;
+- `texture(shadowSampler, ..).x`: the float widened to `vec4` first (naga has no scalar swizzle);
+- `isnan`, `isinf` and `modf` replaced by helper functions (WGSL has no `isnan`/`isinf`).
+
+What is left, by cause:
+
+| Programs | Cause | Fix |
+| ---: | --- | --- |
+| 9 | Sildur's passes a `mat3` between stages (`tbnMatrix`); WGSL can't | split matrix varyings into columns |
+| 6 | `writeonly image2D` without a format (`shadowcomp.csh` in Complementary and BSL) | take the format from the pack's image declaration (`shaders.properties` / `const int` format) |
+| 5 | naga GLSL front-end bug: a call result inside a constructor (`vec3(TAAJitter(..), z)`) leaves an unvisited expression (BSL) | spill call results to temporaries; report to naga |
+
+So the GLSL side is feasible: naga's front end plus a legaliser reaches 96% on the three packs, and every remaining
+failure has a mechanical fix. Valid WGSL isn't a working pack yet: the output still has to be bound to Horizon's
+pipeline (render targets, the uniforms' values, vertex attributes for `gbuffers_*`), which is the emulation work.
+The spike also showed what the real translator needs that a token rewriter does badly: scopes (a local named like a
+uniform), types (which `texture` call returns a float) and declarations split across `#if`s, so it should rewrite a
+GLSL syntax tree after preprocessing, not tokens.
+
+### Order to implement
+
+1. **Translator crate** (`horizon-shaderpack`): the preprocessor (includes, option `#define`s with the player's
+   values, Iris macros) and a syntax-tree legaliser covering every rewrite above plus the three fixes in the table;
+   a test running it over the user's own copies of the three packs when they're present (never committed), and
+   small hand-written GLSL fixtures in the repo.
+2. **`shaders.properties`** and option screens: the option list, sliders, profiles, `program.*.enabled`, blend modes.
+3. **Full-screen programs**: `deferred*`, `composite*`, `final` with `colortex0..15` (formats from the pack),
+   `depthtex0..2`, `noisetex` and the uniforms (most are already computed for the world shaders). This alone runs
+   Sildur's and BSL post-processing over Horizon's own world.
+4. **`gbuffers_terrain`, `gbuffers_water`, `gbuffers_sky*`**: Horizon's terrain vertices extended with Iris's
+   attributes (`mc_Entity` from `block.properties`, `mc_midTexCoord`, `at_tangent`, lightmap), a second set of
+   terrain pipelines writing the pack's render targets.
+5. **Entities, block entities, hand, weather, clouds, particles** `gbuffers_*`.
+6. **Shadow pass**: terrain and entities from the sun into `shadowtex0/1` and `shadowcolor0/1`, culled from the
+   light's view, with the pack's distortion.
+7. **The rest**: custom uniforms (`uniform.*` expressions), custom textures, compute programs and images, per-dimension
+   folders, `entity.properties`/`item.properties`.
