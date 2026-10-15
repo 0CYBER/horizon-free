@@ -10,6 +10,7 @@ use crate::{
     world::World,
 };
 use horizon_core::biome::BiomeZoom;
+use horizon_world::block_render::FaceVisibility;
 use horizon_world::worldgen::decoration_order::DecorationOrder;
 use std::{
     collections::{BinaryHeap, HashSet},
@@ -342,6 +343,10 @@ impl Streaming {
                     .name(format!("horizon-worker-{i}"))
                     .spawn(move || {
                         let mut worker = generator.worker();
+                        // The face visibility table and its occlusion cache stay with
+                        // the worker across mesh jobs, like vanilla's per-thread cache:
+                        // cloning it per job copied every state and face shape.
+                        let mut faces: Option<(Arc<MeshTables>, FaceVisibility)> = None;
                         loop {
                             let job = {
                                 let mut queue = shared.queue.lock().unwrap();
@@ -374,6 +379,14 @@ impl Streaming {
                                 }
                                 Job::Mesh(x, sy, z, region, seq, settings) => {
                                     let context = shared.context.read().unwrap().clone();
+                                    let visibility = match faces.take() {
+                                        Some((tables, visibility))
+                                            if Arc::ptr_eq(&tables, &context.tables) =>
+                                        {
+                                            visibility
+                                        }
+                                        _ => context.tables.visibility.clone(),
+                                    };
                                     let mut mesher = Mesher {
                                         nether_shading: settings.nether,
                                         zoom: settings.zoom,
@@ -383,9 +396,11 @@ impl Streaming {
                                         assets: &context.assets,
                                         tables: &context.tables,
                                         biomes: &context.biomes,
-                                        visibility: context.tables.visibility.clone(),
+                                        visibility,
                                     };
-                                    Done::Meshed(x, sy, z, mesher.mesh(&borrow(&region), sy), seq)
+                                    let mesh = mesher.mesh(&borrow(&region), sy);
+                                    faces = Some((context.tables.clone(), mesher.visibility));
+                                    Done::Meshed(x, sy, z, mesh, seq)
                                 }
                             };
                             if send.send(done).is_err() {
@@ -571,6 +586,22 @@ impl Streaming {
     }
     pub fn pending(&self) -> usize {
         self.shared.queue.lock().unwrap().len()
+    }
+    /// How much work each stage holds: queued jobs, then what is in flight or
+    /// waiting at each step from generation to meshing.
+    pub fn stages(&self) -> [(&'static str, usize); 7] {
+        [
+            ("queued", self.pending()),
+            ("generating", self.generating.len()),
+            (
+                "protos",
+                self.protos.values().filter(|p| p.is_some()).count(),
+            ),
+            ("decorating", self.decorating),
+            ("finishing", self.finishing.len()),
+            ("lighting", self.lighting.len()),
+            ("meshing", self.meshing.len()),
+        ]
     }
     /// Advance streaming: collect finished work, then schedule more.
     /// Returns meshes ready for upload and columns that were unloaded.
