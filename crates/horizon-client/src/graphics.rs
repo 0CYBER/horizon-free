@@ -136,6 +136,10 @@ pub struct Graphics {
     pub fxaa: bool,
     /// The settings level last shown: Advanced, or Simple.
     pub advanced: bool,
+    /// Battery mode: at most 60 frames per second in a world and 30 in menus
+    /// or behind other windows, and half the worker threads. Off by default;
+    /// it changes when frames are drawn, never what they show or the ticks.
+    pub battery: bool,
 }
 impl Default for Graphics {
     fn default() -> Self {
@@ -155,6 +159,7 @@ impl Default for Graphics {
             resolution_scale: 100,
             fxaa: false,
             advanced: false,
+            battery: false,
         }
     }
 }
@@ -201,6 +206,7 @@ impl Graphics {
                 "resolutionScale" => g.resolution_scale = number(g.resolution_scale).clamp(50, 200),
                 "fxaa" => g.fxaa = flag(g.fxaa),
                 "level" => g.advanced = value == "advanced",
+                "batteryMode" => g.battery = flag(g.battery),
                 "overlay" => {
                     g.overlay = match value {
                         "fps" => Overlay::Fps,
@@ -215,7 +221,7 @@ impl Graphics {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "preset:{}\ncaveCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nlevel:{}\n",
+            "preset:{}\ncaveCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nlevel:{}\nbatteryMode:{}\n",
             self.preset.name(),
             bool_text(self.cave_culling),
             self.chunk_updates,
@@ -238,6 +244,7 @@ impl Graphics {
             self.resolution_scale,
             bool_text(self.fxaa),
             if self.advanced { "advanced" } else { "simple" },
+            bool_text(self.battery),
         )
     }
     pub fn save(&self, dir: &Path) {
@@ -248,10 +255,22 @@ impl Graphics {
         if self.workers > 0 {
             return self.workers as usize;
         }
-        std::thread::available_parallelism()
+        let auto = std::thread::available_parallelism()
             .map_or(2, |n| n.get())
             .saturating_sub(1)
-            .max(1)
+            .max(1);
+        if self.battery { auto.div_ceil(2) } else { auto }
+    }
+    /// The frame cap battery mode adds: 60 in a world, 30 in menus without a
+    /// world or while another window has focus.
+    pub fn battery_limit(&self, limit: i32, in_world: bool, focused: bool) -> i32 {
+        if !self.battery {
+            limit
+        } else if in_world && focused {
+            limit.min(60)
+        } else {
+            limit.min(30)
+        }
     }
 }
 
@@ -309,6 +328,7 @@ mod tests {
             resolution_scale: 75,
             fxaa: true,
             advanced: true,
+            battery: true,
         };
         assert_eq!(Graphics::parse(&g.serialize()), g);
         assert_eq!(Graphics::parse(""), Graphics::default());
@@ -316,5 +336,17 @@ mod tests {
             Graphics::parse("workers:abc\nsky:maybe\n"),
             Graphics::default()
         );
+    }
+
+    #[test]
+    fn battery_mode_only_lowers_the_frame_cap() {
+        let mut g = Graphics::default();
+        assert_eq!(g.battery_limit(260, true, true), 260);
+        g.battery = true;
+        assert_eq!(g.battery_limit(260, true, true), 60);
+        assert_eq!(g.battery_limit(30, true, true), 30);
+        assert_eq!(g.battery_limit(260, false, true), 30);
+        assert_eq!(g.battery_limit(260, true, false), 30);
+        assert_eq!(g.battery_limit(10, true, false), 10);
     }
 }

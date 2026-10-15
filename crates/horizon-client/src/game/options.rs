@@ -243,7 +243,10 @@ impl Game<'_> {
             has_screen: self.title.is_some() || self.screen != super::Screen::Playing,
             has_overlay: false,
         };
-        framerate_limit(self.settings.max_fps as i32, context)
+        let limit = framerate_limit(self.settings.max_fps as i32, context);
+        self.settings
+            .horizon
+            .battery_limit(limit, self.title.is_none(), self.focused)
     }
     /// `Minecraft.runTick`'s frame limiter: `FramerateLimiter.limitDisplayFPS`
     /// below 260 frames per second, sleeping then spin-waiting until the
