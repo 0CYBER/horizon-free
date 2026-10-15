@@ -200,6 +200,9 @@ pub struct Renderer {
     gpu_timer: Option<timing::GpuTimer>,
     /// GPU frame times (ms) read back since the caller last drained them.
     pub gpu_times: Vec<f32>,
+    /// The last lightmap written, RGBA rows of sky level by block level
+    /// (F3+4 shows it).
+    pub lightmap_pixels: [u8; 16 * 16 * 4],
     /// Time the last `render` spent blocked on the GPU or the display
     /// (acquiring, presenting, offscreen pacing), excluded from CPU time.
     pub last_wait: std::time::Duration,
@@ -1368,6 +1371,7 @@ impl Renderer {
             in_flight: std::collections::VecDeque::new(),
             gpu_timer,
             gpu_times: Vec::new(),
+            lightmap_pixels: [0; 16 * 16 * 4],
             last_wait: std::time::Duration::ZERO,
             last_encode: std::time::Duration::ZERO,
             window,
@@ -1734,7 +1738,7 @@ impl Renderer {
         world_projection(fov_degrees, aspect, far) * bob * crate::camera::view_matrix(yaw, pitch)
     }
     fn update_lightmap(
-        &self,
+        &mut self,
         sky: &Sky,
         darkness: f32,
         gamma: f32,
@@ -1790,6 +1794,7 @@ impl Renderer {
                 depth_or_array_layers: 1,
             },
         );
+        self.lightmap_pixels = pixels;
     }
     fn animate(&mut self, tick: u64) {
         animate_sprites(

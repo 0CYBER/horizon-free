@@ -248,7 +248,7 @@ impl Game<'_> {
                     if remote { "Bandwidth + Ping" } else { "Ping" },
                     c.network
                 ),
-                chart("key.debug.lightmapTexture", "Lightmap", false),
+                chart("key.debug.lightmapTexture", "Lightmap", c.lightmap),
             ),
             format!("To edit: press {}", key("key.debug.debugOptions")),
         ]
@@ -420,14 +420,17 @@ impl Game<'_> {
                 self.debug_charts.toggle_network(&mut self.debug);
                 true
             }
+            DebugAction::LightmapTexture => {
+                self.debug_charts.toggle_lightmap(&mut self.debug);
+                true
+            }
             // Screens and overlays Horizon does not draw yet (the debug
-            // options screen, the profiler and its chart, the lightmap, the
-            // texture dump): the keys are used up as in vanilla.
+            // options screen, the profiler and its chart, the texture dump):
+            // the keys are used up as in vanilla.
             DebugAction::DebugOptions
             | DebugAction::DumpDynamicTextures
             | DebugAction::Profiling
-            | DebugAction::ProfilingChart
-            | DebugAction::LightmapTexture => true,
+            | DebugAction::ProfilingChart => true,
             DebugAction::ShowHitboxes
             | DebugAction::ShowChunkBorders
             | DebugAction::SwitchGameMode

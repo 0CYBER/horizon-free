@@ -3736,6 +3736,13 @@ impl Game<'_> {
                 self.remote.is_some(),
             );
             hud_layout::paint(&mut batch, atlas, &charts);
+            if self.debug_charts.lightmap
+                && let Some(r) = &self.renderer
+            {
+                let view =
+                    horizon_client::debug_chart::lightmap(&r.lightmap_pixels, w as i32, h as i32);
+                hud_layout::paint(&mut batch, atlas, &view);
+            }
         }
         if !self.ui.hide_gui
             && let Some((text, at)) = &self.message
