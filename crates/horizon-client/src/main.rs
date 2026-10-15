@@ -5,6 +5,7 @@ mod game;
 use horizon_client::{crash, logging};
 
 fn main() {
+    horizon_client::telemetry::mark_start();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let game_args = args.iter().take_while(|a| *a != "--dedicated");
     let help = game_args.clone().any(|a| a == "--help" || a == "-h");

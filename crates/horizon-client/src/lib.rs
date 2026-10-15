@@ -143,6 +143,7 @@ pub mod stopwatches;
 pub mod streaming;
 pub mod structure_blocks;
 pub mod tab_list;
+pub mod telemetry;
 pub mod testgen;
 pub mod text;
 pub mod title;

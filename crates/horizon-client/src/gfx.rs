@@ -432,6 +432,13 @@ impl Renderer {
             info.backend,
             info.device_type
         );
+        crate::telemetry::set_gpu(
+            &info.name,
+            format!("{} {}", info.driver, info.driver_info)
+                .trim()
+                .to_owned(),
+            format!("{:?}", info.backend),
+        );
         crate::crash::set_detail(
             "Graphics Adapter",
             format!(

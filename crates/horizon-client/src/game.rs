@@ -903,6 +903,8 @@ struct Game<'a> {
     creative_screen: Creative,
     control: Option<horizon_client::control::Server>,
     frame_stats: horizon_client::control::FrameStats,
+    /// This play session's frame and tick times, for opt-in performance statistics.
+    perf: horizon_client::telemetry::Session,
     /// Control replies waiting for a rendered frame or a benchmark deadline.
     pending_screenshot: Option<std::sync::mpsc::Sender<String>>,
     pending_bench: Option<(Instant, std::sync::mpsc::Sender<String>)>,
@@ -5708,6 +5710,7 @@ impl Game<'_> {
         seed: Option<i64>,
         creative: bool,
     ) -> Result<()> {
+        self.perf.world_opening();
         let save_root = std::env::current_dir()?.join("saves").join(folder);
         horizon_client::save::upgrade_older_world(&save_root)?;
         horizon_client::save::migrate_legacy(&save_root)?;
@@ -6132,6 +6135,27 @@ impl Game<'_> {
     /// Leaving the game with a world open (window closed, Quit, `quit`):
     /// menu items go back (Player.closeContainer), then the world is saved,
     /// once.
+    /// Keeps this play session's performance summary for the launcher to send, if the player
+    /// allows performance statistics (`horizon_client::telemetry`), and starts the next one.
+    pub(super) fn finish_perf(&mut self) {
+        let s = &self.settings;
+        let settings = horizon_telemetry::payload::Settings {
+            render_distance: s.render_distance.clamp(0, 255) as u8,
+            simulation_distance: s.simulation_distance.clamp(0, 255) as u8,
+            // 260 is the slider's "unlimited".
+            max_fps: if s.max_fps >= 260 {
+                0
+            } else {
+                s.max_fps.min(u32::from(u16::MAX)) as u16
+            },
+            vsync: s.vsync,
+            fullscreen: s.fullscreen,
+            graphics: s.graphics_preset.clone(),
+        };
+        self.perf
+            .finish(&horizon_client::logging::game_home(), settings);
+    }
+
     pub(super) fn save_for_exit(&mut self) -> Result<()> {
         if self.title.is_some() || self.saved_for_exit {
             return Ok(());
@@ -6153,6 +6177,7 @@ impl Game<'_> {
         if self.remote.is_some() {
             return self.leave_server(None);
         }
+        self.finish_perf();
         self.stats.custom("leave_game", 1);
         self.save_game()?;
         self.lan_close(false);
@@ -8877,7 +8902,12 @@ impl ApplicationHandler for Game<'_> {
                     for _ in 0..steps {
                         let started = Instant::now();
                         if self.title.is_none() && !self.pause {
+                            let tick = Instant::now();
                             horizon_client::spans::time("tick", || self.tick())?;
+                            // In single player the tick is the integrated server's.
+                            if self.remote.is_none() {
+                                self.perf.tick(tick.elapsed().as_secs_f32() * 1000.0);
+                            }
                             self.tick_ambience();
                             self.tick_fov();
                         } else if self.title.is_some() {
@@ -8963,6 +8993,11 @@ impl ApplicationHandler for Game<'_> {
                     }
                     if rendered {
                         self.frame_stats.record(elapsed.as_secs_f32() * 1000.0);
+                        if self.title.is_some() {
+                            self.perf.title_shown();
+                        } else if self.screen == Screen::Playing && self.player.is_some() {
+                            self.perf.frame(elapsed.as_secs_f32() * 1000.0);
+                        }
                         self.frames += 1;
                         self.fps_frames += 1;
                         horizon_client::crash::debug_crash_tick();
@@ -9017,6 +9052,7 @@ impl ApplicationHandler for Game<'_> {
         if let Err(e) = self.save_for_exit() {
             log::warn!("Horizon: failed to save the world on exit: {e}");
         }
+        self.finish_perf();
     }
 }
 /// clouds.png as filled cells (`CloudRenderer.prepare`: alpha 10 or more).
@@ -9396,6 +9432,7 @@ pub fn run() -> Result<()> {
         creative_screen: Creative::load(&game_root)?,
         control: None,
         frame_stats: Default::default(),
+        perf: Default::default(),
         pending_screenshot: None,
         pending_bench: None,
         flight: None,
