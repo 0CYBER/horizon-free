@@ -9,6 +9,7 @@ To play, use [the launcher](../launcher/README.md); the project site is [playhor
 - [Graphics](graphics.md): the Simple and Advanced graphics settings, the graphics benchmark and what it measured.
 - [Benchmark](benchmark.md): Horizon against vanilla 26.3 and vanilla with performance mods, on the same machine, world, path and settings: what is measured, how it is kept fair, how to reproduce it.
 - [Extras](extras.md): optional zoom, minimap, FPS and keystroke overlays and auto-reconnect, all off by default.
+- [Mods](mods.md): Horizon's own mod system (Rust, sandboxed WebAssembly), how to make and install mods, and [what carries over from Java mods](research/java-mod-compat.md).
 - [Launcher](../launcher/README.md): installs, updates and starts builds; its CLI and MCP server; releasing it.
 - [Opt-in data collection](telemetry.md): the consent, exactly what is sent, how it is stored and sent.
 - [Benchmark report format](benchmark-report.md): the versioned JSON every benchmark writes (game, launcher, `tools/perf_bench.py`), the local log and, with consent, the upload.
