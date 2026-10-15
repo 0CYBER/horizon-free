@@ -33,7 +33,7 @@ class GenVersionConstsTests(unittest.TestCase):
             jar = Path(directory) / "client.jar"
             with zipfile.ZipFile(jar, "w") as archive:
                 archive.writestr("version.json", json.dumps(INFO))
-            self.assertEqual(gen.jar_info(jar), INFO)
+            self.assertEqual(lab.version_info(jar), INFO)
 
     def test_committed_file_is_the_pinned_version(self):
         """A pin bump regenerates version.rs: the lock and the constants never disagree."""

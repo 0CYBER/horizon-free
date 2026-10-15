@@ -15,7 +15,6 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sys
-import zipfile
 
 try:
     from . import lab
@@ -23,11 +22,6 @@ except ImportError:
     import lab
 
 OUT = lab.ROOT / "crates/horizon-core/src/version.rs"
-
-
-def jar_info(client_jar):
-    with zipfile.ZipFile(client_jar) as archive:
-        return json.loads(archive.read("version.json"))
 
 
 def java_date(iso):
@@ -69,8 +63,8 @@ def main():
     parser.add_argument("--out", type=Path, default=OUT)
     parser.add_argument("--check", action="store_true", help="exit 1 if --out differs instead of writing it")
     args = parser.parse_args()
-    jar = args.jar or lab.config()[1] / "jars" / "client.jar"
-    text = render(jar_info(jar))
+    jar = args.jar or lab.GAME / "jars" / "client.jar"
+    text = render(lab.version_info(jar))
     if args.check:
         if not args.out.exists() or args.out.read_text() != text:
             print(f"{args.out} does not match {jar}; run tools/gen_version_consts.py", file=sys.stderr)
