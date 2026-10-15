@@ -8611,17 +8611,26 @@ impl Game<'_> {
                     self.use_delay = 4;
                 }
             }
-            MouseButton::Middle if pressed && self.creative => {
+            MouseButton::Middle if pressed => {
+                // Minecraft.pickBlockOrEntity -> the server's handlePickItemFromBlock:
+                // the block's clone item, picked from the inventory (`pick_item`).
                 if let Some(hit) = self.pick() {
                     let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
                     let item = self.res.facts.get(state).item.clone();
                     if &*item != "minecraft:air" {
-                        self.inventory[self.selected] = Some(ItemStack {
+                        let stack = ItemStack {
                             item,
                             count: 1,
                             damage: 0,
                             extra: None,
-                        });
+                        };
+                        let infinite = self.creative;
+                        horizon_client::pick_item::pick(
+                            &mut self.inventory[..36],
+                            &mut self.selected,
+                            &stack,
+                            infinite,
+                        );
                     }
                 }
             }
