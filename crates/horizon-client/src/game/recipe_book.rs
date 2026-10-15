@@ -197,28 +197,59 @@ impl Game<'_> {
         search.reset_blink();
     }
 
-    /// The toast for newly unlocked recipes: one for a burst of unlocks.
+    /// `RecipeToast.addOrUpdate` for each display of the recipes just
+    /// unlocked: its crafting station and result join the toast still
+    /// queued or shown, or a new one.
     pub(super) fn recipe_toast(&mut self, recipes: &[String]) {
         if recipes.is_empty() || self.adv.quiet {
             return;
         }
         self.ensure_book();
-        let icon = self
-            .recipe_ui
-            .book
-            .as_ref()
-            .and_then(|b| recipes.iter().find_map(|id| b.entry(id)))
-            .map(|e| e.result.item.to_string());
-        let Some(icon) = icon else { return };
-        let fresh = self
-            .adv
-            .toasts
-            .back()
-            .is_some_and(|t| t.is_recipe() && !t.was_shown());
-        if !fresh {
-            self.adv
+        let index = &self.res.stations.recipe_index;
+        let book = self.recipe_ui.book.as_ref();
+        // SmithingTrimDemoSlotDisplay draws from a random of its own.
+        let mut random = super::dispenser::entity_random();
+        let mut items = Vec::new();
+        for id in recipes {
+            let Some(station) = index.toast_station(id) else {
+                continue;
+            };
+            for display in index.display_ids(id) {
+                // The book's displays carry their resolved results; the
+                // other recipe types name theirs, and trims are demos.
+                let result = book
+                    .and_then(|b| {
+                        b.entry_of_display(display)
+                            .map(|i| b.entries[i].result.clone())
+                    })
+                    .or_else(|| index.result(id).map(|r| ItemStack::new(r, 1)))
+                    .or_else(|| {
+                        self.res.stations.recipes.trim_demo(
+                            &self.res.stations.enchantments,
+                            id,
+                            &mut |n| {
+                                horizon_core::random::RandomSource::next_int_bound(
+                                    &mut random,
+                                    n as i32,
+                                )
+                                .unwrap_or(0) as usize
+                            },
+                        )
+                    });
+                if let Some(result) = result {
+                    items.push((station.to_owned(), result));
+                }
+            }
+        }
+        if items.is_empty() {
+            return;
+        }
+        match self.adv.toasts.iter_mut().find(|t| t.is_recipe()) {
+            Some(toast) => toast.add_recipes(items),
+            None => self
+                .adv
                 .toasts
-                .push_back(super::advancements::Toast::recipe(&icon));
+                .push_back(super::advancements::Toast::recipe(items)),
         }
     }
 
