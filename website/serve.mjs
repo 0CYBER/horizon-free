@@ -12,6 +12,8 @@ const port = Number(process.env.PORT) || 4173;
 createServer(async (req, res) => {
   let path = normalize(decodeURIComponent(new URL(req.url, "http://x").pathname)).replace(/^(\.\.[/\\])+/, "");
   if (path.endsWith("/")) path += "index.html";
+  // /privacy is privacy.html, as the Caddyfile rewrites it.
+  if (!extname(path)) path += ".html";
   let file = join(root, path);
   let status = 200;
   try {

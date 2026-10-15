@@ -109,9 +109,11 @@ impl PlayerMotion {
     pub fn is_eye_in_fluid(&self, tag: FluidTagId) -> bool {
         self.fluids.interaction.is_eye_in_fluid(&Membership, tag)
     }
-    /// `Player.isUnderWater`: the eye sample from the start of the base tick.
+    /// `LocalPlayer.isUnderWater`: `wasUnderwater`, the eye sample `Player.tick`
+    /// takes before the base tick (`Entity.isUnderWater` also needs the body
+    /// still in water).
     pub fn is_under_water(&self) -> bool {
-        self.fluids.was_eye_in_water && self.fluids.was_touching_water
+        self.fluids.was_eye_in_water
     }
     /// `Entity.isInLava`.
     pub fn is_in_lava(&self) -> bool {

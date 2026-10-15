@@ -53,23 +53,35 @@ impl StateModels {
         blocks: &[&str],
         sprites: &mut Sprites,
     ) -> Result<Self> {
-        Self::load_with_models(
-            root,
-            registry,
-            blocks,
-            sprites,
-            &crate::model_library::ParsedModels::default(),
-        )
+        let facts: BTreeMap<String, Value> =
+            serde_json::from_slice(&fs::read(root.join("model-states.json"))?)?;
+        Self::from_facts(root, registry, blocks, sprites, &facts)
     }
-    pub(crate) fn load_with_models(
+    /// Bind and bake models using an already parsed model-state document.
+    pub fn from_facts(
         root: &Path,
         registry: &BlockRegistry,
         blocks: &[&str],
         sprites: &mut Sprites,
+        facts: &BTreeMap<String, Value>,
+    ) -> Result<Self> {
+        Self::from_facts_with_models(
+            root,
+            registry,
+            blocks,
+            sprites,
+            facts,
+            &crate::model_library::ParsedModels::default(),
+        )
+    }
+    pub(crate) fn from_facts_with_models(
+        root: &Path,
+        registry: &BlockRegistry,
+        blocks: &[&str],
+        sprites: &mut Sprites,
+        facts: &BTreeMap<String, Value>,
         models: &crate::model_library::ParsedModels,
     ) -> Result<Self> {
-        let facts: BTreeMap<String, Value> =
-            serde_json::from_slice(&fs::read(root.join("model-states.json"))?)?;
         let mut choices = Vec::new();
         let mut states = BTreeMap::new();
         let mut variants = BTreeSet::new();

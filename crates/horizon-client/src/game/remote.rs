@@ -151,13 +151,14 @@ fn number_format(f: &play::NumberFormat) -> horizon_client::scoreboard::NumberFo
 impl Game<'_> {
     /// Leave the title for a server (ConnectScreen): an empty world fed by the connection.
     pub(super) fn connect_server(&mut self, address: &str, name: &str) -> Result<()> {
+        self.perf.world_opening();
         let root = self.options.resources.clone();
         let builtin = Builtin::find(&root)
             .and_then(|p| Builtin::load(&p).ok())
             .ok_or("registries.json not found next to the resources; run the data generator reports (horizon-prepare)")?;
         let lang = Arc::new(horizon_client::net::load_language(&root));
         let view = self.settings.render_distance.clamp(2, 32) as i8;
-        horizon_client::crash::set_detail("Server", address.to_owned());
+        horizon_client::crash::set_detail("Server", horizon_client::net::shown_address(address));
         // A signed-in account always plays under its own name.
         let auth = horizon_client::auth::current();
         let name = auth.as_ref().map_or(name, |a| a.name.as_str());
@@ -262,6 +263,7 @@ impl Game<'_> {
 
     /// Disconnect and return to the multiplayer screen (DisconnectedScreen).
     pub(super) fn leave_server(&mut self, reason: Option<String>) -> Result<()> {
+        self.finish_perf();
         if reason.is_none() {
             // Leaving on purpose: nothing for auto-reconnect to retry.
             self.extras_left();
@@ -270,6 +272,7 @@ impl Game<'_> {
             r.session.disconnect();
         }
         horizon_client::crash::clear_detail("Server");
+        self.debug_charts.reset();
         self.tab_list.reset();
         self.score.board = Default::default();
         self.streaming = Streaming::new(Arc::new(NoTerrain), self.res.context.clone(), 1);
@@ -289,7 +292,7 @@ impl Game<'_> {
             r.clear_sections();
         }
         let saves = std::env::current_dir()?.join("saves");
-        let mut title = horizon_client::title::Title::new(saves.clone());
+        let mut title = horizon_client::title::Title::new(saves.clone(), &self.options.resources);
         title.mode = horizon_client::title::Mode::Multiplayer(match reason {
             Some(reason) => horizon_client::multiplayer::Screen::Disconnected {
                 reason,
@@ -734,6 +737,11 @@ impl Game<'_> {
 
     fn handle_packet(&mut self, packet: C) -> Result<()> {
         match packet {
+            // PingDebugMonitor.onPongReceived.
+            C::PongResponse(p) => {
+                let delay = self.debug_millis() - p.time;
+                self.debug_charts.ping.log(delay);
+            }
             C::Login(p) => {
                 if let Some(r) = self.remote.as_mut() {
                     r.online_mode = p.online_mode;
@@ -1754,12 +1762,24 @@ impl Game<'_> {
         let crouching = player.pose == horizon_client::pose::Pose::Crouching;
         let feet = [player.position.x, player.position.y, player.position.z];
         for event in events {
-            if let horizon_client::motion::MotionEvent::Emission { state, .. } = event
-                && !crouching
-            {
-                let sounds = self.res.facts.get(state).sounds.clone();
-                self.audio
-                    .play(&sounds.step, Some(feet), sounds.volume * 0.15, sounds.pitch);
+            match event {
+                horizon_client::motion::MotionEvent::Emission {
+                    state, in_water, ..
+                } if !crouching => {
+                    let sounds = self.res.facts.get(state).sounds.clone();
+                    // Player.playStepSound: muffled under the swim sound in water.
+                    let (volume, pitch) = if in_water {
+                        (sounds.volume * 0.05, sounds.pitch * 0.8)
+                    } else {
+                        (sounds.volume * 0.15, sounds.pitch)
+                    };
+                    self.audio.play(&sounds.step, Some(feet), volume, pitch);
+                }
+                horizon_client::motion::MotionEvent::Swim { volume, pitch } => {
+                    self.audio
+                        .play("minecraft:entity.player.swim", Some(feet), volume, pitch);
+                }
+                _ => {}
             }
         }
         // The server owns health and hunger: undo local food/fall changes.
@@ -2286,7 +2306,7 @@ impl Game<'_> {
     }
     /// ChatScreen: typing, Enter to send, Escape to cancel.
     pub(super) fn remote_chat_key(&mut self, event: &winit::event::KeyEvent) {
-        use winit::keyboard::{Key, NamedKey};
+        use winit::keyboard::Key;
         if event.state != winit::event::ElementState::Pressed {
             return;
         }
@@ -2311,23 +2331,44 @@ impl Game<'_> {
             return;
         }
         // Logical keys: the text, not the scancode, decides (layouts, virtual keyboards).
-        match &event.logical_key {
-            Key::Named(NamedKey::Escape) => {
+        let named = match &event.logical_key {
+            Key::Named(n) => Some(*n),
+            _ => None,
+        };
+        self.remote_chat_input(named, event.text.as_deref());
+    }
+    /// A named key or typed text in the chat input (the keyboard, or a
+    /// controller's on-screen keyboard).
+    pub(super) fn remote_chat_input(
+        &mut self,
+        named: Option<winit::keyboard::NamedKey>,
+        text: Option<&str>,
+    ) {
+        use winit::keyboard::NamedKey;
+        const INPUT: horizon_client::clipboard::FieldId = ("remote.chat", 0);
+        let Some(r) = self.remote.as_mut() else {
+            return;
+        };
+        let Some(input) = r.chat_input.as_mut() else {
+            return;
+        };
+        match named {
+            Some(NamedKey::Escape) => {
                 r.chat_input = None;
                 self.capture(true);
             }
-            Key::Named(NamedKey::Backspace) => {
+            Some(NamedKey::Backspace) => {
                 if !self.text_selection.take(INPUT, input) {
                     input.pop();
                 }
             }
-            Key::Named(NamedKey::Enter) => {
+            Some(NamedKey::Enter) => {
                 let message = r.chat_input.take().unwrap_or_default();
                 self.send_chat(&message);
                 self.capture(true);
             }
             _ => {
-                if let Some(text) = &event.text {
+                if let Some(text) = text {
                     self.text_selection.take(INPUT, input);
                     for c in text.chars().filter(|c| !c.is_control()) {
                         if input.chars().count() < 256 {
@@ -2595,10 +2636,8 @@ impl Game<'_> {
         let atlas = &self.res.atlas;
         let (w, h) = (batch.width, batch.height);
         batch.fill(atlas, 0.0, 0.0, w, h, rgba(20, 20, 20, 255));
-        for (i, line) in [r.status.as_str(), r.session.address.as_str()]
-            .iter()
-            .enumerate()
-        {
+        let shown = horizon_client::net::shown_address(&r.session.address);
+        for (i, line) in [r.status.as_str(), shown.as_str()].iter().enumerate() {
             let tw = HudBatch::text_width(atlas, line);
             batch.text(
                 atlas,
@@ -2680,7 +2719,7 @@ impl Game<'_> {
     pub(super) fn remote_status(&self) -> Option<serde_json::Value> {
         let r = self.remote.as_ref()?;
         Some(serde_json::json!({
-            "address": r.session.address,
+            "address": horizon_client::net::shown_address(&r.session.address),
             "name": r.session.name,
             "joined": r.joined,
             "status": r.status,
@@ -2693,6 +2732,13 @@ impl Game<'_> {
                 m
             }),
             "players": r.players.values().collect::<Vec<_>>(),
+            // Where the other players' entities are (harnesses check movement).
+            "player_positions": r
+                .entities
+                .values()
+                .filter(|t| t.kind == "minecraft:player")
+                .map(|t| t.position)
+                .collect::<Vec<_>>(),
             "health": r.health.0,
             "food": r.health.1,
             "decode_errors": r.decode_errors,

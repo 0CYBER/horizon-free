@@ -3,6 +3,7 @@
 //! and High Contrast packs, `pack.mcmeta` metadata and format compatibility,
 //! and an overlay resource root that layers the enabled packs over the
 //! vanilla resources (later packs win), so every loader sees one tree.
+mod cache;
 pub mod pattern;
 use crate::text::Style;
 use crate::{text::Text, zip::Zip};
@@ -381,6 +382,15 @@ fn link(target: &Path, at: &Path) -> io::Result<()> {
 /// Build `out` as `vanilla` with the packs' files layered on top (packs in
 /// load order, last wins). Untouched directories are symlinks into vanilla.
 pub fn build_overlay(vanilla: &Path, packs: &[Pack], out: &Path) -> io::Result<()> {
+    cache::build(vanilla, packs, out)
+}
+
+fn build_overlay_uncached(
+    vanilla: &Path,
+    packs: &[Pack],
+    out: &Path,
+    dependencies: &mut cache::Dependencies,
+) -> io::Result<()> {
     if out.exists() {
         fs::remove_dir_all(out)?;
     }
@@ -426,6 +436,7 @@ pub fn build_overlay(vanilla: &Path, packs: &[Pack], out: &Path) -> io::Result<(
     let mut merged: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     for (name, stack) in &stacks {
         let mut layers = Vec::new();
+        dependencies.file(&vanilla.join(name));
         if !filters.iter().any(|f| f.blocks(name))
             && let Ok(bytes) = fs::read(vanilla.join(name))
         {
@@ -457,6 +468,7 @@ pub fn build_overlay(vanilla: &Path, packs: &[Pack], out: &Path) -> io::Result<(
         merged: &BTreeMap<String, Vec<u8>>,
         filters: &[&Filter],
         zips: &[Option<Zip>],
+        dependencies: &mut cache::Dependencies,
     ) -> io::Result<()> {
         let src = if rel.is_empty() {
             vanilla.to_path_buf()
@@ -469,6 +481,7 @@ pub fn build_overlay(vanilla: &Path, packs: &[Pack], out: &Path) -> io::Result<(
             out.join(rel)
         };
         fs::create_dir_all(&dst)?;
+        dependencies.directory(&src);
         let mut names: BTreeSet<String> = BTreeSet::new();
         if let Ok(entries) = fs::read_dir(&src) {
             names.extend(
@@ -502,10 +515,24 @@ pub fn build_overlay(vanilla: &Path, packs: &[Pack], out: &Path) -> io::Result<(
             } else if touched.contains(&child)
                 || (vanilla.join(&child).is_dir() && !filters.is_empty())
             {
-                mirror(&child, vanilla, out, touched, files, merged, filters, zips)?;
+                mirror(
+                    &child,
+                    vanilla,
+                    out,
+                    touched,
+                    files,
+                    merged,
+                    filters,
+                    zips,
+                    dependencies,
+                )?;
             } else if filters.iter().any(|f| f.blocks(&child)) {
                 // Hidden by a pack's filter.
             } else {
+                #[cfg(not(unix))]
+                if vanilla.join(&child).is_file() {
+                    dependencies.file(&vanilla.join(&child));
+                }
                 link(&vanilla.join(&child), &out.join(&child))?;
             }
         }
@@ -520,6 +547,7 @@ pub fn build_overlay(vanilla: &Path, packs: &[Pack], out: &Path) -> io::Result<(
         &merged,
         &filters,
         &zips,
+        dependencies,
     )
 }
 /// Files vanilla loads from every pack in turn (`getResourceStack`) rather

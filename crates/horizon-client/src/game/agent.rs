@@ -368,6 +368,7 @@ impl Game<'_> {
         }
         match self.screen {
             Screen::Playing => "playing",
+            Screen::GameModeSwitcher => "gamemode-switcher",
             Screen::Paused => "paused",
             Screen::Options => "options",
             Screen::Inventory if self.station.is_some() => "station",
@@ -484,11 +485,19 @@ impl Game<'_> {
                 seed,
                 creative,
                 focus,
+                options,
             } => json!({
                 "mode": "create-world",
+                "tab": (["game", "world", "more"][options.tab.min(2)]),
                 "fields": { "name": name, "seed": seed },
                 "focus": match focus { 0 => "name", 1 => "seed", _ => "none" },
                 "creative": creative,
+                "hardcore": options.hardcore,
+                "difficulty": horizon_client::title::DIFFICULTIES[options.difficulty()],
+                "allow_commands": options.commands(*creative),
+                "superflat": options.flat,
+                "generate_structures": options.structures,
+                "bonus_chest": options.bonus_chest(),
             }),
             Mode::Edit {
                 world,
@@ -1321,10 +1330,17 @@ impl Game<'_> {
                 let title = self.title.as_mut().ok_or("no title screen")?;
                 if let Some(field) = &field {
                     match &mut title.mode {
-                        horizon_client::title::Mode::Create { focus, .. } => {
+                        horizon_client::title::Mode::Create { focus, options, .. } => {
+                            // Each box is on its own tab.
                             *focus = match field.as_str() {
-                                "name" => 0,
-                                "seed" => 1,
+                                "name" => {
+                                    options.tab = 0;
+                                    0
+                                }
+                                "seed" => {
+                                    options.tab = 1;
+                                    1
+                                }
                                 other => {
                                     return Err(format!(
                                         "the create-world fields are name and seed, not {other}"

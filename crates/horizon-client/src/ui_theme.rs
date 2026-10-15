@@ -71,7 +71,30 @@ pub fn save_preferences(dir: &Path) {
         MenuStyle::Horizon => "horizon",
         MenuStyle::Classic => "classic",
     };
-    let _ = std::fs::write(dir.join("horizon.txt"), format!("menuStyle:{value}\n"));
+    set_preference(dir, "menuStyle", Some(value));
+}
+/// A Horizon-only preference from `horizon.txt` (`key:value` lines).
+pub fn preference(dir: &Path, key: &str) -> Option<String> {
+    let text = std::fs::read_to_string(dir.join("horizon.txt")).ok()?;
+    text.lines().find_map(|l| {
+        let (k, v) = l.split_once(':')?;
+        (k.trim() == key).then(|| v.trim().to_owned())
+    })
+}
+/// Set (or with None remove) one preference, keeping the others.
+pub fn set_preference(dir: &Path, key: &str, value: Option<&str>) {
+    let text = std::fs::read_to_string(dir.join("horizon.txt")).unwrap_or_default();
+    let mut lines: Vec<String> = text
+        .lines()
+        .filter(|l| l.split_once(':').is_none_or(|(k, _)| k.trim() != key))
+        .map(str::to_owned)
+        .collect();
+    if let Some(v) = value {
+        lines.push(format!("{key}:{v}"));
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    let _ = std::fs::write(dir.join("horizon.txt"), out);
 }
 
 /// The dark palette (`horizon_theme::DARK`) in the HUD's colour encoding, plus the
@@ -477,6 +500,10 @@ impl<'a> Ui<'a> {
         ui.real = false;
         ui
     }
+    /// A drawn frame, not a hit-testing pass.
+    pub fn is_real(&self) -> bool {
+        self.real
+    }
     /// Move rasterized glyphs into the batch's atlas uploads (real frames only).
     pub fn finish(self) {
         if self.real {
@@ -556,11 +583,28 @@ impl<'a> Ui<'a> {
     /// Register an interactive rectangle; returns its hover layer (0..1,
     /// eased over `QUICK` like the launcher's `hover_layer`).
     pub fn interact(&mut self, id: u64, x: f32, y: f32, w: f32, h: f32, enabled: bool) -> f32 {
+        self.interact_as(id, [x, y, w, h], enabled, crate::widgets::Kind::Button)
+    }
+    /// [`Ui::interact`] for a controller focus target of a given kind.
+    pub fn interact_as(
+        &mut self,
+        id: u64,
+        [x, y, w, h]: [f32; 4],
+        enabled: bool,
+        kind: crate::widgets::Kind,
+    ) -> f32 {
         if enabled && self.real {
-            // Where a controller's D-pad can move focus, in GUI pixels.
+            // Where a controller can move focus, in GUI pixels.
             let k = self.density / self.scale;
             let (ox, oy) = self.offset;
-            crate::widgets::target([(x + ox) * k, (y + oy) * k, w * k, h * k]);
+            let kind = match kind {
+                crate::widgets::Kind::Slider { value, track } => crate::widgets::Kind::Slider {
+                    value,
+                    track: [(track[0] + ox) * k, track[1] * k],
+                },
+                other => other,
+            };
+            crate::widgets::target_as([(x + ox) * k, (y + oy) * k, w * k, h * k], kind);
         }
         if enabled {
             let (ox, oy) = self.offset;
@@ -999,7 +1043,12 @@ impl<'a> Ui<'a> {
         for (i, label) in labels.iter().enumerate() {
             let iy = y + i as f32 * STEP;
             let active = i == selected;
-            let hover = self.interact(base + i as u64, x, iy, w, CONTROL, true);
+            let hover = self.interact_as(
+                base + i as u64,
+                [x, iy, w, CONTROL],
+                true,
+                crate::widgets::Kind::Tab(active),
+            );
             if !active {
                 self.rounded(
                     x,
@@ -1168,8 +1217,16 @@ impl<'a> Ui<'a> {
     /// filled with ink, an ink 14px knob that grows under the pointer.
     /// Dragging is the screen's job (see [`slider_value`]).
     pub fn slider(&mut self, id: u64, x: f32, cy: f32, w: f32, value: f32) {
-        let hover = self.interact(id, x - 8.0, cy - 12.0, w + 16.0, 24.0, true);
         let v = value.clamp(0.0, 1.0);
+        let hover = self.interact_as(
+            id,
+            [x - 8.0, cy - 12.0, w + 16.0, 24.0],
+            true,
+            crate::widgets::Kind::Slider {
+                value: v,
+                track: [x, w],
+            },
+        );
         self.rounded(x, cy - 1.0, w, 2.0, 1.0, color::BORDER);
         self.rounded(x, cy - 1.0, w * v, 2.0, 1.0, color::TEXT);
         let r = 7.0 + hover;
@@ -1186,7 +1243,7 @@ impl<'a> Ui<'a> {
         focused: bool,
         caret: bool,
     ) {
-        let hover = self.interact(id, x, y, w, h, true);
+        let hover = self.interact_as(id, [x, y, w, h], true, crate::widgets::Kind::Field);
         let focus = self.tween(id ^ 0xf0c05ed, if focused { 1.0 } else { 0.0 }, quick());
         self.rounded(x, y, w, h, RADIUS, color::RAISED);
         self.rounded(

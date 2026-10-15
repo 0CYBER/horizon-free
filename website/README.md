@@ -17,6 +17,7 @@ build.mjs          renders dist/ (no dependencies)
 serve.mjs          a tiny static server for local checks
 src/index.html     the page, with {{placeholders}} build.mjs fills
 src/404.html       the not-found page
+src/privacy.html   what the launcher can send when players allow it, retention, deletion (/privacy)
 src/tokens.css     the design tokens, generated from crates/horizon-theme (do not edit)
 src/style.css      every style, on top of the tokens
 src/main.js        download buttons, patch notes, links, contributors, nav and menu, tabs, lightbox, motion

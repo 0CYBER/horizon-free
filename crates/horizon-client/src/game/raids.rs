@@ -1224,11 +1224,11 @@ impl Game<'_> {
         self.audio
             .play("minecraft:item.ominous_bottle.dispose", Some(eye), 1.0, 1.0);
         if !self.creative
-            && let Some(s) = self.inventory[slot].as_mut()
+            && let Some(s) = self.stack_in_mut(slot).as_mut()
         {
             s.count -= 1;
             if s.count == 0 {
-                self.inventory[slot] = None;
+                *self.stack_in_mut(slot) = None;
             }
         }
     }

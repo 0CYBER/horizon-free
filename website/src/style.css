@@ -426,3 +426,8 @@ figcaption span { font-family: var(--mono); font-size: var(--text-micro); letter
   .row > a { grid-template-columns: 28px 1fr auto; padding: 16px 0; }
   :root { --index: 28px; }
 }
+
+/* The privacy page: one long read under the hero type. */
+.privacy h1 { margin-bottom: 16px; }
+.privacy .prose { margin: 40px 0; }
+.privacy .disclaimer { margin-top: 32px; }

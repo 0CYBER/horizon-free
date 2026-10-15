@@ -25,9 +25,7 @@
   }
  },
  "local_only": {
-  "save_roundtrip": "runs the game on a virtual screen (vscreen) with a null ALSA device"
+  "save_roundtrip": "runs the game on a virtual screen (vscreen) with a null ALSA device, or offscreen in the logged-in macOS session"
  },
- "linux_only": {
-  "save_roundtrip": "runs the game on a virtual screen (vscreen), which only the Linux desktop has"
- }
+ "linux_only": {}
 }

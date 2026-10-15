@@ -19,7 +19,7 @@ impl Fixture {
         ));
         fs::create_dir_all(root.join("saves")).unwrap();
         Self {
-            title: Title::new(root.join("saves")),
+            title: Title::new(root.join("saves"), &root),
             root,
         }
     }
@@ -414,7 +414,7 @@ fn recreate_uses_existing_name_seed_and_mode_and_scroll_reaches_later_rows() {
     f.click("Cancel");
     f.title
         .scroll_worlds(-100.0, (240.0, 100.0), (480.0, 262.0));
-    assert!(f.title.scroll.get() > 0.0);
+    assert!(f.title.scroll.get().amount > 0.0);
     let Mode::Select { worlds, .. } = &f.title.mode else {
         panic!()
     };
@@ -447,8 +447,15 @@ fn classic_navigation_buttons_sound_even_without_a_game_action() {
         f.title.click(240.0, 55.0, (480.0, 262.0)),
         (Action::None, false)
     );
+    // The Game tab's game mode cycle button.
+    let mode = f
+        .title
+        .buttons(480.0, 262.0)
+        .into_iter()
+        .find(|b| b.id == 20)
+        .unwrap();
     assert_eq!(
-        f.click_with_sound("Game Mode: Survival"),
+        f.title.click(mode.x + 1.0, mode.y + 1.0, (480.0, 262.0)),
         (Action::None, true)
     );
     assert_eq!(f.click_with_sound("Cancel"), (Action::None, true));
@@ -560,4 +567,116 @@ fn delete_removes_links_without_following_them() {
     world_management::delete(&f.title.saves, "World").unwrap();
     assert!(!f.title.saves.join("World").exists());
     assert!(outside.join("keep.txt").is_file());
+}
+
+#[test]
+fn scrolled_world_list_draws_inside_the_list_and_drags_its_scroller() {
+    let mut f = Fixture::new();
+    for i in 0..10 {
+        f.world(&format!("World{i}"), &format!("World {i}"));
+    }
+    f.select();
+    let size = (480.0, 262.0);
+    // SelectWorldScreen's list: 49 to h - 60, scroller at the row's right + 8.
+    let bar = (480.0 / 2.0 - ROW_WIDTH / 2.0 + ROW_WIDTH + 8.0 + 3.0, 60.0);
+    f.title.click(bar.0, bar.1, size);
+    f.title.drag((bar.0, 120.0), size);
+    let moved = f.title.scroll.get().amount;
+    assert!(moved > 0.0);
+    f.title.release();
+    f.title.drag((bar.0, 60.0), size);
+    assert_eq!(f.title.scroll.get().amount, moved);
+    let atlas = crate::hud::HudAtlas::build(Path::new("/nonexistent/horizon-test-assets")).unwrap();
+    let mut batch = HudBatch::new([480, 262]);
+    f.title.draw(&atlas, &mut batch, (0.0, 0.0), true);
+    assert!(!batch.vertices.is_empty());
+}
+
+#[test]
+fn create_world_tabs_follow_vanilla_and_their_choices_reach_the_action() {
+    let mut f = Fixture::new();
+    f.click("Singleplayer");
+    let size = (480.0, 262.0);
+    let labels = |f: &Fixture| -> Vec<(String, f32, f32, bool)> {
+        f.title
+            .buttons(size.0, size.1)
+            .into_iter()
+            .map(|b| (b.label, b.x, b.y, b.enabled))
+            .collect()
+    };
+    // Game tab: the grid (210 × 117) at (0.5, 1/6) of 24..h-33, footer centred.
+    let game = labels(&f);
+    assert_eq!(game[0].1, 135.0);
+    assert_eq!(game[0].2, 24.0 + 14.0 + 41.0);
+    assert_eq!((game[3].1, game[3].2), (86.0, 235.0));
+    assert_eq!((game[4].1, game[4].2), (244.0, 235.0));
+    // Survival, Hardcore (Hard, no cheats, both locked), Creative (cheats on).
+    f.title.click(240.0, game[0].2 + 10.0, size);
+    let Mode::Create { options, .. } = &f.title.mode else {
+        panic!()
+    };
+    assert!(options.hardcore && options.difficulty() == 3 && !options.commands(false));
+    assert!(!labels(&f)[1].3 && !labels(&f)[2].3);
+    f.title.click(240.0, game[0].2 + 10.0, size);
+    let Mode::Create {
+        creative, options, ..
+    } = &f.title.mode
+    else {
+        panic!()
+    };
+    assert!(*creative && !options.hardcore && options.commands(true));
+    // The World tab (second of three 124-wide tabs from x 54): its seed box
+    // takes the focus, Superflat and the switches toggle.
+    let (action, sound) = f.title.click(54.0 + 124.0 + 10.0, 10.0, size);
+    assert!(sound && action == Action::None);
+    let world = labels(&f);
+    assert_eq!((world[0].1, world[0].2), (85.0, 38.0));
+    assert_eq!((world[2].1, world[2].2), (85.0 + 266.0, 38.0 + 73.0));
+    f.title.click(world[0].1 + 10.0, world[0].2 + 10.0, size);
+    f.title.click(world[3].1 + 10.0, world[3].2 + 10.0, size);
+    f.title.click(100.0, 38.0 + 41.0 + 10.0, size);
+    let Mode::Create { focus, options, .. } = &f.title.mode else {
+        panic!()
+    };
+    assert_eq!(*focus, 1);
+    assert!(options.flat && options.bonus_chest());
+    let Action::Create { options, .. } = f.title.create_action() else {
+        panic!()
+    };
+    assert_eq!(
+        options.world_gen(),
+        crate::save::WorldGen {
+            flat: true,
+            structures: true,
+            bonus_chest: true
+        }
+    );
+    // The More tab's screens don't exist yet.
+    f.title.click(54.0 + 248.0 + 10.0, 10.0, size);
+    assert!(labels(&f)[..3].iter().all(|b| !b.3));
+}
+
+#[test]
+fn new_world_generation_settings_round_trip() {
+    let f = Fixture::new();
+    let dir = f.root.join("flat");
+    let options = crate::save::WorldGen {
+        flat: true,
+        structures: false,
+        bonus_chest: true,
+    };
+    crate::save::write_world_gen_settings(&dir, 42, options).unwrap();
+    assert_eq!(crate::save::WorldGen::read(&dir), Some(options));
+    let settings = crate::save::world_gen_settings(&dir).unwrap();
+    assert_eq!(
+        crate::save::text(
+            settings
+                .get("dimensions")
+                .and_then(|d| d.get("minecraft:overworld"))
+                .and_then(|o| o.get("generator"))
+                .and_then(|g| g.get("type"))
+        )
+        .as_deref(),
+        Some("minecraft:flat")
+    );
 }

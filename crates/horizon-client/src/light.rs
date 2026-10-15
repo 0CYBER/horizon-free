@@ -16,7 +16,7 @@
 //! directly to resident chunks after a block change.
 use crate::{
     blocks::BlockFacts,
-    chunk::{Chunk, HEIGHT, Light, MIN_Y, SECTIONS, Section, index},
+    chunk::{Chunk, HEIGHT, Light, MIN_Y, SECTIONS, index},
 };
 use horizon_core::geometry::{Direction, ShapeOp, VoxelShape};
 use horizon_world::registry::{BlockRegistry, BlockStateId};
@@ -195,8 +195,8 @@ pub fn light_chunk(
     region: &[[Option<&Chunk>; 3]; 3],
     tables: &LightTables,
     sky_light: bool,
-) -> Vec<Arc<Section>> {
-    let center = region[1][1].expect("centre chunk");
+) -> Vec<Light> {
+    region[1][1].expect("centre chunk");
     // Highest occupied section in the region bounds the work.
     let mut top_section = 0;
     for chunk in region.iter().flatten().flatten() {
@@ -321,20 +321,22 @@ pub fn light_chunk(
     };
     spread(&mut sky, &mut sky_queue);
     spread(&mut block, &mut queue);
-    let mut sections = Vec::with_capacity(SECTIONS);
-    for (si, section) in center.sections.iter().enumerate() {
-        let mut out = (**section).clone();
-        let open = if sky_light { 0xF0 } else { 0x00 };
-        if si * 16 >= h {
-            out.light = Light::Uniform(open);
-        } else {
-            let mut data = Box::new([0u8; 4096]);
+    pack_lighting(h, &sky, &block, sky_light)
+}
+
+/// Extract just the centre column's light; never copy worker snapshot sections.
+fn pack_lighting(h: usize, sky: &[u8], block: &[u8], sky_light: bool) -> Vec<Light> {
+    let at = |x: usize, y: usize, z: usize| (y * W + z) * W + x;
+    let open = if sky_light { 0xF0 } else { 0x00 };
+    (0..SECTIONS)
+        .map(|si| {
+            if si * 16 >= h {
+                return Light::Uniform(open);
+            }
+            let mut data = Box::new([open; 4096]);
             for ly in 0..16 {
                 let y = si * 16 + ly;
                 if y >= h {
-                    for i in 0..256 {
-                        data[ly << 8 | i] = open;
-                    }
                     continue;
                 }
                 for lz in 0..16 {
@@ -344,12 +346,21 @@ pub fn light_chunk(
                     }
                 }
             }
-            out.light = Light::Full(data);
-        }
-        out.compact();
-        sections.push(Arc::new(out));
+            if data.iter().all(|&v| v == data[0]) {
+                Light::Uniform(data[0])
+            } else {
+                Light::Full(data)
+            }
+        })
+        .collect()
+}
+
+/// Move a worker's light into current sections, preserving later block/biome
+/// edits and immutable snapshots retained by other workers.
+pub fn apply_lighting(chunk: &mut Chunk, lights: Vec<Light>) {
+    for (section, light) in chunk.sections.iter_mut().zip(lights) {
+        Arc::make_mut(section).light = light;
     }
-    sections
 }
 
 /// Resident chunks the incremental relighter reads and writes.
@@ -622,7 +633,7 @@ mod tests {
                     std::array::from_fn(|dx| chunks.get(&(x + dx as i32 - 1, z + dz as i32 - 1)))
                 });
                 let mut c = chunks[&(x, z)].clone();
-                c.sections = light_chunk(&region, &tables(), true);
+                apply_lighting(&mut c, light_chunk(&region, &tables(), true));
                 c.lit = true;
                 ((x, z), Arc::new(c))
             })
@@ -691,11 +702,198 @@ mod tests {
         for (si, s) in full.iter().enumerate() {
             for i in 0..4096 {
                 assert_eq!(
-                    s.light(i),
+                    s.get(i),
                     w[&(0, 0)].sections[si].light(i),
                     "section {si} index {i}"
                 );
             }
         }
+    }
+    #[test]
+    fn lighting_result_preserves_current_edits_and_snapshots() {
+        let mut current = Chunk::empty(0, 0);
+        current.set(8, MIN_Y, 8, TORCH);
+        let region = [[None; 3], [None, Some(&current), None], [None; 3]];
+        let lights = light_chunk(&region, &tables(), true);
+        let Light::Full(data) = &lights[0] else {
+            panic!("torch light varies");
+        };
+        let result_storage = data.as_ptr();
+        let snapshot = current.clone();
+        current.set(8, MIN_Y, 8, STONE);
+        Arc::make_mut(&mut current.sections[0]).biomes.set(0, 3);
+        let edited_snapshot = current.clone();
+        apply_lighting(&mut current, lights);
+        let Light::Full(data) = &current.sections[0].light else {
+            panic!("torch light varies");
+        };
+        assert_eq!(
+            result_storage,
+            data.as_ptr(),
+            "returned light storage moves without cloning"
+        );
+        current.lit = true;
+        assert_eq!(current.get(8, MIN_Y, 8), STONE);
+        assert_eq!(current.sections[0].biomes.get(0), 3);
+        assert_eq!(snapshot.get(8, MIN_Y, 8), TORCH);
+        assert_eq!(edited_snapshot.sections[0].light(index(8, MIN_Y, 8)), 0xF0);
+        let mut world = HashMap::from([((0, 0), Arc::new(current))]);
+        // Streaming replays edits made after the job snapshot with force=true.
+        relight(&mut world, &tables(), true, &[(8, MIN_Y, 8)], true);
+        let region = [[None; 3], [None, Some(&*world[&(0, 0)]), None], [None; 3]];
+        let fresh = light_chunk(&region, &tables(), true);
+        for (section, light) in world[&(0, 0)].sections.iter().zip(fresh) {
+            for i in 0..4096 {
+                assert_eq!(section.light(i), light.get(i));
+            }
+        }
+    }
+
+    #[test]
+    fn empty_chunk_missing_neighbours_and_no_sky() {
+        let mut chunk = Chunk::empty(0, 0);
+        for sky in [false, true] {
+            let region = [[None; 3], [None, Some(&chunk), None], [None; 3]];
+            let lights = light_chunk(&region, &tables(), sky);
+            assert_eq!(lights.len(), SECTIONS);
+            assert!(
+                lights
+                    .iter()
+                    .all(|v| matches!(v, Light::Uniform(n) if *n == if sky { 0xF0 } else { 0 }))
+            );
+            let section = Arc::as_ptr(&chunk.sections[0]);
+            apply_lighting(&mut chunk, lights);
+            assert_eq!(section, Arc::as_ptr(&chunk.sections[0]));
+        }
+    }
+
+    // Original main's worker packaging and streaming application. Kept here
+    // so the benchmark compares the real former copy/compaction work.
+    fn baseline_pack(
+        center: &Chunk,
+        h: usize,
+        sky: &[u8],
+        block: &[u8],
+    ) -> Vec<Arc<crate::chunk::Section>> {
+        let at = |x: usize, y: usize, z: usize| (y * W + z) * W + x;
+        let mut sections = Vec::with_capacity(SECTIONS);
+        for (si, section) in center.sections.iter().enumerate() {
+            let mut out = (**section).clone();
+            if si * 16 >= h {
+                out.light = Light::Uniform(0xF0);
+            } else {
+                let mut data = Box::new([0u8; 4096]);
+                for ly in 0..16 {
+                    let y = si * 16 + ly;
+                    if y >= h {
+                        for i in 0..256 {
+                            data[ly << 8 | i] = 0xF0;
+                        }
+                        continue;
+                    }
+                    for lz in 0..16 {
+                        for lx in 0..16 {
+                            let p = at(16 + lx, y, 16 + lz);
+                            data[index(lx as i32, ly as i32, lz as i32)] = sky[p] << 4 | block[p];
+                        }
+                    }
+                }
+                out.light = Light::Full(data);
+            }
+            out.compact();
+            sections.push(Arc::new(out));
+        }
+        sections
+    }
+    fn baseline_apply(chunk: &mut Chunk, sections: Vec<Arc<crate::chunk::Section>>) {
+        for (target, lit) in chunk.sections.iter_mut().zip(sections) {
+            let mut section = (**target).clone();
+            section.light = lit.light.clone();
+            *target = Arc::new(section);
+        }
+    }
+
+    #[test]
+    #[ignore = "microbenchmark; run with --ignored --nocapture"]
+    fn benchmark_worker_light_results() {
+        use std::{hint::black_box, time::Instant};
+        let mut fixture = Chunk::empty(0, 0);
+        for (si, s) in fixture.sections.iter_mut().enumerate() {
+            let section = Arc::make_mut(s);
+            for i in 0..4096 {
+                section.set(i, ((i + si) % 16) as u16);
+            }
+            for i in 0..64 {
+                section.biomes.set(i, (i % 4) as u32);
+            }
+            section.light = Light::Full(Box::new([0x87; 4096]));
+        }
+        let h = HEIGHT as usize;
+        let sky: Vec<_> = (0..W * W * h).map(|i| (i % 16) as u8).collect();
+        let block: Vec<_> = (0..W * W * h).map(|i| ((i / 16) % 16) as u8).collect();
+        let mut old = fixture.clone();
+        let mut new = fixture.clone();
+        baseline_apply(&mut old, baseline_pack(&fixture, h, &sky, &block));
+        apply_lighting(&mut new, pack_lighting(h, &sky, &block, true));
+        for (a, b) in old.sections.iter().zip(&new.sections) {
+            for i in 0..4096 {
+                assert_eq!(a.light(i), b.light(i));
+                assert_eq!(a.get(i), b.get(i));
+            }
+            for i in 0..64 {
+                assert_eq!(a.biomes.get(i), b.biomes.get(i));
+            }
+        }
+        for shared in [false, true] {
+            let mut times = [Vec::new(), Vec::new()];
+            for round in 0..11 {
+                for optimized in [round % 2 == 0, round % 2 != 0] {
+                    let mut current = fixture.clone();
+                    let held = shared.then(|| current.clone());
+                    // Warm up and detach for the uniquely-owned scenario.
+                    apply_lighting(&mut current, pack_lighting(h, &sky, &block, true));
+                    let started = Instant::now();
+                    for _ in 0..500 {
+                        let retained = shared.then(|| current.clone());
+                        if optimized {
+                            apply_lighting(
+                                black_box(&mut current),
+                                pack_lighting(h, black_box(&sky), black_box(&block), true),
+                            );
+                        } else {
+                            baseline_apply(
+                                black_box(&mut current),
+                                baseline_pack(
+                                    black_box(&fixture),
+                                    h,
+                                    black_box(&sky),
+                                    black_box(&block),
+                                ),
+                            );
+                        }
+                        black_box(retained);
+                        black_box(&current);
+                    }
+                    if round > 0 {
+                        times[usize::from(optimized)]
+                            .push(started.elapsed().as_secs_f64() * 1e6 / 500.0);
+                    }
+                    black_box(held);
+                }
+            }
+            for values in &mut times {
+                values.sort_by(f64::total_cmp);
+            }
+            println!(
+                "pack+apply shared={shared}: baseline {:.3} us optimized {:.3} us speedup {:.2}x",
+                times[0][5],
+                times[1][5],
+                times[0][5] / times[1][5]
+            );
+        }
+        let payload: usize = fixture.sections.iter().map(|s| s.heap_bytes()).sum();
+        println!(
+            "fixture heap payload {payload} bytes; old worker clones it plus 24 section Arcs; old application clones current payload and 98304 returned light bytes. New worker clones zero section payload; new application clones current payload only when shared."
+        );
     }
 }

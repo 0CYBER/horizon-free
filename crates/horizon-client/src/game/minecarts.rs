@@ -13,6 +13,7 @@ use horizon_client::{
     mesher::Vertex,
     mobs::{Part, anim::Poses},
     particles::{ParticleOptions, ParticleType},
+    sound_engine::{CartSound, SoundEngine, SoundInstance, Sounds},
 };
 use horizon_core::{
     geometry::{Aabb, Vec3},
@@ -191,7 +192,7 @@ pub(super) struct CartModels {
     pub models: HashMap<CartKind, Part>,
 }
 impl CartModels {
-    pub fn load(root: &std::path::Path) -> Self {
+    pub fn load(document: Option<&horizon_client::mobs::EntityModelDocument>) -> Self {
         let kinds = [
             CartKind::Rideable,
             CartKind::Chest,
@@ -202,9 +203,7 @@ impl CartModels {
         ];
         let models = kinds
             .into_iter()
-            .filter_map(|k| {
-                horizon_client::mobs::load_model(root, &format!("{}#main", k.id())).map(|m| (k, m))
-            })
+            .filter_map(|k| document?.model(&format!("{}#main", k.id())).map(|m| (k, m)))
             .collect();
         Self { models }
     }
@@ -788,6 +787,42 @@ impl Game<'_> {
             }
         }
     }
+    /// `ClientPacketListener.postAddEntitySoundInstance` for the carts that
+    /// joined the level since the last tick, and `LocalPlayer.startRiding`'s
+    /// two inside sounds when the player got in one; then what the sound
+    /// instances read this tick (the ridden cart and every cart).
+    pub(super) fn start_cart_sounds(&mut self) -> (Option<u32>, Vec<CartSound>) {
+        let carts: Vec<CartSound> = self
+            .carts
+            .iter()
+            .map(|c| CartSound {
+                id: c.id,
+                position: [c.position.x, c.position.y, c.position.z],
+                // Vec3.horizontalDistance.
+                speed: (c.velocity.x * c.velocity.x + c.velocity.z * c.velocity.z).sqrt(),
+            })
+            .collect();
+        self.cart_sounds
+            .retain(|id| carts.iter().any(|c| c.id == *id));
+        for cart in &carts {
+            if self.cart_sounds.insert(cart.id) {
+                let instance = SoundInstance::minecart(cart, SoundEngine::unseeded());
+                self.audio.play_instance(instance, false);
+            }
+        }
+        let vehicle = self.riding.filter(|id| carts.iter().any(|c| c.id == *id));
+        if vehicle != self.riding_cart_sounds
+            && let Some(cart) = carts.iter().find(|c| Some(c.id) == vehicle)
+        {
+            for underwater in [true, false] {
+                let instance =
+                    SoundInstance::riding_minecart(cart, underwater, SoundEngine::unseeded());
+                self.audio.play_instance(instance, false);
+            }
+        }
+        self.riding_cart_sounds = vehicle;
+        (vehicle, carts)
+    }
     /// The rider's tick: the cart moves with the rider's input as its push.
     pub(super) fn tick_cart_riding(&mut self, keys: Keys) -> bool {
         let Some(i) = self.carts.iter().position(|c| Some(c.id) == self.riding) else {
@@ -1046,6 +1081,7 @@ impl Game<'_> {
         let burning = self
             .held()
             .is_some_and(|s| s.enchantment_level("minecraft:fire_aspect") > 0);
+        self.vehicle_attack_sounds();
         self.hurt_cart(i, damage, self.creative, burning);
         self.swing_arm();
         true

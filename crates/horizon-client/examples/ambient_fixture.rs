@@ -131,6 +131,7 @@ fn main() {
                 let tick = TickContext {
                     player_underwater: ambience.was_underwater(),
                     player_removed: removed,
+                    ..TickContext::default()
                 };
                 engine.tick(false, &tick, &mut backend);
             }

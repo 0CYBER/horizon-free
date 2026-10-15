@@ -552,6 +552,31 @@ impl LootData {
         *random = c.random;
         items
     }
+    /// LootTable.getRandomItems with an empty context (a trial spawner's
+    /// reward): the stacks after the stack splitter. `random` is the table's
+    /// random sequence (or the level random) and is advanced.
+    pub fn roll_split<R: RandomSource + Clone>(
+        &self,
+        table: &str,
+        random: &mut R,
+    ) -> Vec<LootStack> {
+        let Some(json) = self.tables.get(table) else {
+            return Vec::new();
+        };
+        let mut c = Context {
+            data: self,
+            random: random.clone(),
+            biome: None,
+            visited: Vec::new(),
+            luck: 0.0,
+            open_water: None,
+            entity: None,
+        };
+        let mut items = Vec::new();
+        c.table_raw(table, json, &mut |c, stack| c.data.split(stack, &mut items));
+        *random = c.random;
+        items
+    }
     /// LootTable.createStackSplitter (every item is enabled).
     fn split(&self, stack: LootStack, items: &mut Vec<LootStack>) {
         let max = self.facts(&stack.item).max_stack.max(1);

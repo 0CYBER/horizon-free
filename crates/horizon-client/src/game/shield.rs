@@ -23,7 +23,7 @@ impl Game<'_> {
             self.inventory.get(slot)?.as_ref()
         }
     }
-    fn stack_in_mut(&mut self, slot: usize) -> &mut Option<ItemStack> {
+    pub(super) fn stack_in_mut(&mut self, slot: usize) -> &mut Option<ItemStack> {
         if slot == OFFHAND_SLOT {
             &mut self.offhand
         } else {
@@ -46,10 +46,6 @@ impl Game<'_> {
             self.using = Some((slot, 0));
         }
         true
-    }
-    /// Main-hand use fell through: try the off hand (Minecraft.startUseItem).
-    pub(super) fn use_offhand(&mut self) -> bool {
-        self.raise_shield(OFFHAND_SLOT)
     }
     /// `LivingEntity.getItemBlockingWith` and the inputs of `applyItemBlocking`
     /// for an attack from `from` (`DamageSource.getSourcePosition`).

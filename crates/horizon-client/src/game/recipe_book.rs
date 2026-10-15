@@ -197,28 +197,59 @@ impl Game<'_> {
         search.reset_blink();
     }
 
-    /// The toast for newly unlocked recipes: one for a burst of unlocks.
+    /// `RecipeToast.addOrUpdate` for each display of the recipes just
+    /// unlocked: its crafting station and result join the toast still
+    /// queued or shown, or a new one.
     pub(super) fn recipe_toast(&mut self, recipes: &[String]) {
         if recipes.is_empty() || self.adv.quiet {
             return;
         }
         self.ensure_book();
-        let icon = self
-            .recipe_ui
-            .book
-            .as_ref()
-            .and_then(|b| recipes.iter().find_map(|id| b.entry(id)))
-            .map(|e| e.result.item.to_string());
-        let Some(icon) = icon else { return };
-        let fresh = self
-            .adv
-            .toasts
-            .back()
-            .is_some_and(|t| t.is_recipe() && !t.was_shown());
-        if !fresh {
-            self.adv
+        let index = &self.res.stations.recipe_index;
+        let book = self.recipe_ui.book.as_ref();
+        // SmithingTrimDemoSlotDisplay draws from a random of its own.
+        let mut random = super::dispenser::entity_random();
+        let mut items = Vec::new();
+        for id in recipes {
+            let Some(station) = index.toast_station(id) else {
+                continue;
+            };
+            for display in index.display_ids(id) {
+                // The book's displays carry their resolved results; the
+                // other recipe types name theirs, and trims are demos.
+                let result = book
+                    .and_then(|b| {
+                        b.entry_of_display(display)
+                            .map(|i| b.entries[i].result.clone())
+                    })
+                    .or_else(|| index.result(id).map(|r| ItemStack::new(r, 1)))
+                    .or_else(|| {
+                        self.res.stations.recipes.trim_demo(
+                            &self.res.stations.enchantments,
+                            id,
+                            &mut |n| {
+                                horizon_core::random::RandomSource::next_int_bound(
+                                    &mut random,
+                                    n as i32,
+                                )
+                                .unwrap_or(0) as usize
+                            },
+                        )
+                    });
+                if let Some(result) = result {
+                    items.push((station.to_owned(), result));
+                }
+            }
+        }
+        if items.is_empty() {
+            return;
+        }
+        match self.adv.toasts.iter_mut().find(|t| t.is_recipe()) {
+            Some(toast) => toast.add_recipes(items),
+            None => self
+                .adv
                 .toasts
-                .push_back(super::advancements::Toast::recipe(&icon));
+                .push_back(super::advancements::Toast::recipe(items)),
         }
     }
 
@@ -628,6 +659,66 @@ impl Game<'_> {
             }
         }
         false
+    }
+    /// The recipe book's buttons a controller can focus: the book button,
+    /// recipes, page arrows, the craftable filter and the tabs (GUI pixels;
+    /// the search box registers itself as a field).
+    pub(super) fn recipe_book_targets(&self) -> Vec<horizon_client::widgets::Target> {
+        use horizon_client::widgets::{Kind, Target};
+        let (Some(book_type), Some(batch)) = (self.active_book(), self.batch_for_size()) else {
+            return Vec::new();
+        };
+        let button = |rect| Target {
+            rect,
+            kind: Kind::Button,
+        };
+        let (ox, _) = self.inventory_origin(&batch);
+        let (bx, by) = self.book_button_pos(book_type, ox, &batch);
+        let mut out = vec![button([bx, by, 20.0, 18.0])];
+        if !self.book_open(book_type) || self.spectator() {
+            return out;
+        }
+        let (xo, yo) = self.book_origin(&batch);
+        if let Some(overlay) = &self.recipe_ui.overlay {
+            // The alternatives overlay takes every click while open.
+            let maxrow = if overlay.entries.len() <= 16 { 4 } else { 5 };
+            return (0..overlay.entries.len())
+                .map(|n| {
+                    let x = overlay.x + 4.0 + 25.0 * (n % maxrow) as f32;
+                    let y = overlay.y + 5.0 + 25.0 * (n / maxrow) as f32;
+                    button([x, y, 24.0, 24.0])
+                })
+                .collect();
+        }
+        let first = self.recipe_ui.page * 20;
+        let shown = self
+            .recipe_ui
+            .view
+            .buttons
+            .len()
+            .saturating_sub(first)
+            .min(20);
+        out.extend((0..shown).map(|n| {
+            let (x, y) = Self::button_pos(xo, yo, n);
+            button([x, y, 25.0, 25.0])
+        }));
+        let pages = self.recipe_ui.view.buttons.len().div_ceil(20);
+        if pages > 1 && self.recipe_ui.page + 1 < pages {
+            out.push(button([xo + 93.0, yo + 137.0, 12.0, 17.0]));
+        }
+        if pages > 1 && self.recipe_ui.page > 0 {
+            out.push(button([xo + 38.0, yo + 137.0, 12.0, 17.0]));
+        }
+        out.push(button([xo + 110.0, yo + 12.0, 26.0, 16.0]));
+        let selected = self.recipe_ui.tab.unwrap_or(Tab::Search);
+        for (n, tab) in self.recipe_ui.view.tabs.iter().enumerate() {
+            let (x, y) = self.tab_pos(xo, yo, n);
+            out.push(Target {
+                rect: [x, y, 35.0, 27.0],
+                kind: Kind::Tab(*tab == selected),
+            });
+        }
+        out
     }
     fn shift_down(&self) -> bool {
         self.has_shift_down()

@@ -4,6 +4,7 @@
 mod cli;
 mod markdown;
 mod mcp;
+mod perf;
 mod theme;
 
 use gpui::{
@@ -138,10 +139,23 @@ struct Launcher {
     input: String,
     input_focused: bool,
     focus: FocusHandle,
+    /// Join a friend: the code typed on the Play page, and the one the game
+    /// starting now joins.
+    friend_code: String,
+    friend_focused: bool,
+    friend_focus: FocusHandle,
+    joining: Option<String>,
     console_scroll: ScrollHandle,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
     _appearance: Subscription,
+    /// The session's measurements (`perf.rs`), and when the steps they time began.
+    perf: perf::Perf,
+    install_started: Option<Instant>,
+    prepare_started: Option<Instant>,
+    play_pressed: Option<Instant>,
+    /// `horizon-launcher benchmark` started this window to measure it.
+    bench: Option<perf::Bench>,
 }
 
 impl Launcher {
@@ -233,11 +247,23 @@ impl Launcher {
             input: String::new(),
             input_focused: false,
             focus: cx.focus_handle(),
+            friend_code: String::new(),
+            friend_focused: false,
+            friend_focus: cx.focus_handle(),
+            joining: None,
             console_scroll: ScrollHandle::new(),
             tx,
             rx,
             _appearance: appearance,
+            perf: perf::Perf::new("session"),
+            install_started: None,
+            prepare_started: None,
+            play_pressed: None,
+            bench: perf::Bench::from_env(),
         };
+        if this.bench.is_some() {
+            this.perf.keep_local_log(false);
+        }
         let tx = this.tx.clone();
         let keychain_tx = this.tx.clone();
         // Asking the keychain can block (D-Bus), so not on this thread.
@@ -338,10 +364,24 @@ impl Launcher {
 
     fn drain(&mut self, cx: &mut Context<Self>) {
         let mut changed = false;
+        self.perf.tick();
+        match self.bench.as_mut().map(|b| b.tick(&self.perf)) {
+            Some(perf::Step::Go(page)) => {
+                self.go(Page::ALL[page % Page::ALL.len()].0);
+                changed = true;
+            }
+            Some(perf::Step::Quit) => cx.quit(),
+            Some(perf::Step::Wait) | None => {}
+        }
         while let Ok(msg) = self.rx.try_recv() {
             changed = true;
             match msg {
-                Msg::Releases(r) => self.releases = r.map_or_else(Load::Failed, Load::Ready),
+                Msg::Releases(r) => {
+                    if let (Ok(_), Some(checked)) = (&r, self.checked) {
+                        self.perf.record_since("launcher.release_list_ms", checked);
+                    }
+                    self.releases = r.map_or_else(Load::Failed, Load::Ready)
+                }
                 Msg::Links(links) => self.links = links,
                 // The page reads is_prepared when drawn; `changed` redraws it.
                 Msg::Reused(_) => self.installed = backend::installed(),
@@ -358,6 +398,11 @@ impl Launcher {
                             Err(e) => self.client_error = Some(format!("Playing offline: {e}")),
                         }
                         self.accounts = Accounts::load();
+                        if let Some(code) = self.joining.take() {
+                            if let Err(e) = backend::join_friend(&mut cmd, &code) {
+                                self.client_error = Some(e);
+                            }
+                        }
                         match backend::spawn(Job::Client, cmd, self.tx.clone()) {
                             Ok(r) => self.client = Some(r),
                             Err(e) => self.client_error = Some(e),
@@ -373,6 +418,14 @@ impl Launcher {
                     self.bar = (0., 0.);
                     self.installed = backend::installed();
                     let as_update = self.update_install.take().filter(|(t, _)| *t == tag);
+                    if let (Ok(()), Some(started)) = (&result, self.install_started.take()) {
+                        let name = if as_update.is_some() {
+                            "launcher.update_ms"
+                        } else {
+                            "launcher.install_ms"
+                        };
+                        self.perf.record_since(name, started);
+                    }
                     match result {
                         Ok(()) => {
                             if self.updates.horizon.as_ref().is_some_and(|r| r.tag == tag) {
@@ -413,6 +466,12 @@ impl Launcher {
                     };
                 }
                 Msg::Line(job, line) => {
+                    if job == Job::Client && line.starts_with(perf::GAME_FIRST_FRAME) {
+                        if let Some(pressed) = self.play_pressed.take() {
+                            self.perf
+                                .record_since("launcher.play_to_game_frame_ms", pressed);
+                        }
+                    }
                     let log = if job == Job::Server {
                         &mut self.server_log
                     } else {
@@ -431,6 +490,9 @@ impl Launcher {
                     match job {
                         Job::Prepare => {
                             self.preparing = false;
+                            if let (None, Some(started)) = (&error, self.prepare_started.take()) {
+                                self.perf.record_since("launcher.prepare_ms", started);
+                            }
                             self.prepare_error = error.map(|e| {
                                 let tail =
                                     self.prepare_log.iter().rev().find(|l| !l.trim().is_empty());
@@ -519,6 +581,7 @@ impl Launcher {
         };
         let (tag, tx) = (release.tag.clone(), self.tx.clone());
         self.installing = Some((tag.clone(), 0.0));
+        self.install_started = Some(Instant::now());
         self.bar = (0., 0.);
         self.install_error = None;
         std::thread::spawn(move || {
@@ -582,6 +645,7 @@ impl Launcher {
             }
         });
         self.preparing = true;
+        self.prepare_started = Some(Instant::now());
     }
 
     fn play(&mut self) {
@@ -602,6 +666,7 @@ impl Launcher {
                 // The session (a network round trip when the token needs renewing) comes first;
                 // `drain` starts the game when it arrives.
                 self.starting_client = Some(tag);
+                self.play_pressed = Some(Instant::now());
                 let tx = self.tx.clone();
                 std::thread::spawn(move || {
                     let session = (|| {
@@ -1404,8 +1469,9 @@ impl Launcher {
                 Some(a) => format!("{} (Microsoft account)", a.name),
                 None => "Offline: online servers need a Microsoft account.".to_string(),
             };
+            rows = rows.child(self.join_friend_row(prepared && !running, cx));
             rows = rows.child(index_row(
-                3,
+                4,
                 "Playing as",
                 Some(div().child(who).into_any_element()),
                 Some(
@@ -2120,6 +2186,109 @@ impl Launcher {
         (rows, n)
     }
 
+    /// Join a friend: a code field and Join, which starts the game straight
+    /// into the friend's world (errors show in the game).
+    fn join_friend_row(&self, can_play: bool, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let focused = self.friend_focused;
+        let field = div()
+            .id("friend-code")
+            .track_focus(&self.friend_focus)
+            .flex()
+            .items_center()
+            .w(px(260.))
+            .h(px(30.))
+            .px(px(12.))
+            .overflow_hidden()
+            .rounded(px(6.))
+            .border_1()
+            .border_color(if focused { t.accent } else { t.rule })
+            .bg(t.surface)
+            .font_family(theme::MONO)
+            .text_size(px(12.))
+            .cursor_text()
+            .child(if self.friend_code.is_empty() && !focused {
+                div().text_color(t.muted).child("Paste an invite code")
+            } else {
+                // The end of a long code stays in view while typing.
+                let shown: String = {
+                    let chars: Vec<char> = self.friend_code.chars().collect();
+                    chars[chars.len().saturating_sub(30)..].iter().collect()
+                };
+                div().text_color(t.ink).child(shown)
+            })
+            .when(focused, |d| d.child(div().w(px(1.)).h(px(14.)).bg(t.ink)))
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                window.focus(&this.friend_focus);
+                cx.notify();
+            }))
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| {
+                let k = &ev.keystroke;
+                let paste = k.key == "v" && (k.modifiers.control || k.modifiers.platform);
+                match k.key.as_str() {
+                    "enter" => this.join_friend(),
+                    "backspace" => {
+                        this.friend_code.pop();
+                    }
+                    _ if paste => {
+                        if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
+                            this.friend_code.push_str(text.trim());
+                        }
+                    }
+                    _ if !k.modifiers.control && !k.modifiers.platform => {
+                        if let Some(ch) = &k.key_char {
+                            this.friend_code.push_str(ch);
+                        }
+                    }
+                    _ => return,
+                }
+                this.friend_code.truncate(256);
+                cx.stop_propagation();
+                cx.notify();
+            }));
+        let valid = horizon_friends::invite::parse(&self.friend_code).is_some();
+        let mut join = button("join-friend", "Join", Kind::Secondary, &t);
+        if can_play && valid {
+            join = join.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.join_friend();
+                cx.notify();
+            }));
+        } else {
+            join = disabled(join);
+        }
+        index_row(
+            3,
+            "Join a friend",
+            Some(
+                div()
+                    .child("Paste the code a friend shows when they invite you.")
+                    .into_any_element(),
+            ),
+            Some(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(field)
+                    .child(join)
+                    .into_any_element(),
+            ),
+            &t,
+        )
+    }
+
+    fn join_friend(&mut self) {
+        if self.mode != Mode::Client || horizon_friends::invite::parse(&self.friend_code).is_none()
+        {
+            return;
+        }
+        self.joining = Some(self.friend_code.clone());
+        self.play();
+        if self.starting_client.is_none() {
+            self.joining = None;
+        }
+    }
+
     fn console(&self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let running = self.server.is_some();
@@ -2584,7 +2753,9 @@ fn progress_bar(fraction: Option<(f32, f32)>, t: &Theme) -> Div {
 impl Render for Launcher {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = self.theme;
+        self.perf.frame();
         self.input_focused = self.focus.is_focused(window);
+        self.friend_focused = self.friend_focus.is_focused(window);
         let content = match self.page {
             Page::Play => self.play_page(cx),
             Page::Versions => self.versions_page(cx),
@@ -2730,6 +2901,7 @@ impl Launcher {
 }
 
 fn main() {
+    perf::process_started();
     backend::exe_path();
     if let Some(code) = cli::run() {
         std::process::exit(code);

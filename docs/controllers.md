@@ -70,25 +70,128 @@ hold-to-sneak.
 
 ## Menus and inventories
 
-Vanilla's screens are all mouse-driven, and Horizon draws them 1:1, so a pad
-drives them through a **virtual cursor** (as Bedrock's classic inventory UI
-and Java's controller mods do), not focus navigation:
+Vanilla's screens are all mouse-driven, and Horizon draws them 1:1. A pad
+drives them in one of two ways, picked in the controller options ("Menu
+Navigation: Focus / Pointer", `menuNavigation:focus|pointer`):
+
+- **Focus** (the default): a console-style highlight that the D-pad and the
+  left stick move between buttons, sliders, switches, text fields, list
+  rows, tabs and inventory slots.
+- **Pointer**: a virtual cursor the left stick moves, as Bedrock's classic
+  inventory UI and Java's controller mods do.
+
+Focus is the default because it is what a pad player expects from a console
+game, it needs no aiming (every widget is one D-pad press away, which also
+suits the Steam Deck's small screen), and it works from the couch. The
+pointer stays one option away, and a **right stick click swaps the two for
+the open screen**, for the few places a pointer is better (dragging the
+advancements map, painting a crafting grid with a held stack).
+
+Both modes feed the screens the same pointer events a mouse sends: in focus
+mode the (hidden) pointer sits on the focused widget. So every screen keeps
+its mouse behaviour (drags, sliders, scrollbars, hover highlights) with no
+controller code of its own, and both modes reach every screen. Moving the
+real mouse hands control back at once.
+
+### Focus navigation
+
+Every interactive rectangle a screen draws registers itself as a focus
+target with its kind (`widgets::target_as`): classic buttons, sliders, edit
+boxes and list rows (worlds, servers, languages), every Horizon-style widget
+(`ui_theme::Ui::interact`: sidebar items, switches, segments, sliders,
+fields, buttons), inventory and container slots, creative and recipe-book
+tabs, and the stations' own buttons (trades, loom patterns, beacon effects,
+enchantments, stonecutter recipes, the recipe book's recipes, pages and
+filter). A screen that registers nothing falls back to the pointer.
+
+The step itself is **vanilla's arrow-key navigation**
+(`ContainerEventHandler.nextFocusPathInDirection`, 26.3), applied to every
+target of the screen at once: from a strip one pixel past the focused edge,
+the nearest target that overlaps it on the other axis wins (ties go to the
+leftmost or topmost); without one, the target whose facing edge's centre is
+nearest the focused edge's centre (`nextFocusPathVaguelyInDirection`). That
+gives vanilla-like jumps in containers too: hotbar to inventory, the grid to
+the crafting result, armour to the player's grid.
+
+| Input | Focus mode |
+|---|---|
+| D-pad, left stick | move focus (held: repeats after 0.35 s, every 0.09 s) |
+| A | press the focused widget (held: drag); on a text field, type with the on-screen keyboard |
+| B, Menu | back (Escape) |
+| X | right click (inventories: take half, place one) |
+| Y | quick move (shift-click) in inventories |
+| View | throw one item from the focused slot (Q) |
+| Left stick click | throw the focused stack (Ctrl+Q) |
+| LB / RB | previous / next tab (creative, recipe book, the Horizon options' sections) |
+| Right stick | scroll |
+| Right stick click | swap focus and pointer for this screen |
+
+- **Sliders**: left and right move the value (one pixel per press like
+  vanilla's arrow keys, faster while held); A does nothing on a slider, as a
+  click would jump the handle.
+- **Lists** follow focus: a step past the last visible row scrolls the list
+  and lands on the next row once it is drawn.
+- **Inventories**: the carried stack is drawn on the focused slot (vanilla
+  draws it under the pointer). A takes or places, X splits or places one, Y
+  quick-moves, View and the left stick click throw.
+- **Where focus lands** when a screen opens: the held hotbar slot in an
+  inventory, else the first button.
+
+How it looks follows the menu style:
+
+- **Classic screens** look as vanilla's own keyboard focus does: buttons,
+  sliders and slots show their highlighted sprite (`isHoveredOrFocused`,
+  drawn because the hidden pointer is over them), and list rows and text
+  fields get vanilla's white one-pixel outline (`AbstractSelectionList`'s
+  focused selection, `EditBox`'s highlighted border).
+- **Horizon-style screens** get the design system's focus colour: a two-dp
+  ring in the accent colour around the focused widget, pill-shaped on
+  buttons, tabs and sliders.
+
+### Pointer
 
 - Left stick moves the cursor with acceleration; in container screens the
   cursor is gently pulled toward the nearest slot centre.
-- D-pad steps one slot (18 GUI pixels in containers) or one widget row in
-  menus and snaps to it.
-- A = left click (take / place stack, press a button), X = right click
-  (half stack / place one), Y = quick move (shift-click), B = back / close.
-- LB / RB switch creative tabs and recipe book pages; right stick scrolls
-  (creative grid, lists, chat).
+- D-pad steps to the nearest target that way (a slot, a button) and snaps to
+  it.
+- A = left click, X = right click, Y = quick move, B = back; View and the left
+  stick click throw, as in focus mode.
+- LB / RB switch tabs; right stick scrolls.
 - Sliders: hold A on the slider and move the stick, or nudge with the D-pad.
-- Text fields: the Steam Deck's keyboard (Steam + X) types into them like a
-  real keyboard. Other platforms have no on-screen keyboard yet; text input
-  needs a keyboard.
 
-The cursor is drawn only while the pad is the last-used input; moving the
-mouse hands control back immediately.
+The cursor is drawn only while the pad is the last-used input.
+
+### Text fields
+
+A on a focused text field (A in pointer mode clicks into it) opens the
+**on-screen keyboard**: a QWERTY grid and a symbols grid in Horizon's design
+language, at the bottom of the screen (at the top when the field is in the
+lower half, as chat is). D-pad or stick to move, A types, X deletes, Y is a
+space, LT is Shift (twice: caps lock), RB switches to symbols and accents,
+Menu is Enter, B closes it. It opens by itself when the pad opens chat or a
+sign. It types into every field the keyboard reaches: chat (local and
+server), signs, books, the title screens' fields, the options' searches, the
+creative and recipe-book searches, the anvil, the LAN port.
+
+On a Steam Deck under Steam (`SteamDeck=1`), A asks Steam for its own
+keyboard instead (`steam://open/keyboard`), which types like a real keyboard;
+Steam + X opens it at any time. "On-Screen Keyboard: Auto / Horizon / Steam"
+(`keyboard:`) picks one.
+
+### Screens covered
+
+Both modes reach every screen through the pointer events. Focus mode
+registers targets on: the title menus (main, world list and its search, create
+and edit world, delete, multiplayer list and its edit screens), every options
+page (classic pages and the Horizon-style sections, key and controller binds,
+language list), pause, death, chat, signs and books (their buttons), the
+survival and creative inventories, every container and station (chests,
+furnaces, brewing, crafter, crafting table with its recipe book, anvil,
+grindstone, smithing, stonecutter, loom, cartography, enchanting, beacon,
+villager and wandering-trader trades, mount inventories), and the LAN /
+world options. Where a screen draws something clickable no target names
+(the advancements map, the statistics lists, the pack screen's rows, the
+book's page text), the right stick click gives the pointer for that screen.
 
 ## Glyphs
 
@@ -161,14 +264,18 @@ no force feedback, so it is silently skipped there.
 
 ## PR plan
 
-1. **Input layer and gameplay** (this note, gilrs, defaults, movement,
-   camera, actions, hotbar, B/Start to leave screens, `horizon-ctl pad`,
-   `horizon-controller.txt` with the look/deadzone settings).
-2. **Menus and inventories**: virtual cursor, slot snapping, clicks, quick
-   move, tabs, scrolling, sliders.
-3. **Glyphs and the Controller options page**: glyph drawing per pad type,
-   the options page, remapping UI.
-4. **Rumble**.
+The first round (input layer, menus, glyphs and options, rumble) shipped in
+PRs #120, #129, #145 and #149. The second round, each shippable alone:
 
-Each is shippable alone. Testing is with unit tests, the injected pad and
-vscreen screenshots; each PR says what still needs a real controller.
+1. **Focus navigation** (this section above): the menu navigation option,
+   focus targets and vanilla's arrow-key step, the focus highlight in both
+   menu styles, the on-screen keyboard.
+2. **Button prompts**: contextual hints with the pad's glyphs in menus and
+   optionally in game, and rebinding from them.
+3. **DualSense output**: adaptive triggers, lightbar, player LEDs and richer
+   rumble over HID, off-safe.
+4. **Launcher**: the same focus navigation in the gpui launcher.
+
+Each is tested with unit tests (focus steps, prompt contexts, report bytes),
+the injected pad and vscreen screenshots; each PR says what still needs a
+real controller.

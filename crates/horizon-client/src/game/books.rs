@@ -59,7 +59,7 @@ impl Game<'_> {
                     pages.push(String::new());
                 }
                 BookScreen::Edit {
-                    slot: self.selected,
+                    slot: self.held_slot(),
                     pages,
                     page: 0,
                     signing: false,
@@ -104,7 +104,7 @@ impl Game<'_> {
         while pages.len() > 1 && pages.last().is_some_and(String::is_empty) {
             pages.pop();
         }
-        if let Some(stack) = self.inventory.get_mut(slot).and_then(Option::as_mut)
+        if let Some(stack) = self.stack_in_mut(slot).as_mut()
             && &*stack.item == "minecraft:writable_book"
         {
             if sign {
@@ -139,6 +139,11 @@ impl Game<'_> {
             PhysicalKey::Code(k) => Some(k),
             _ => None,
         };
+        self.book_input(key, event.text.as_deref());
+    }
+    /// A key and the text it typed in the open book (the keyboard, or a
+    /// controller's on-screen keyboard).
+    pub(super) fn book_input(&mut self, key: Option<KeyCode>, text: Option<&str>) {
         match self.book.as_mut() {
             Some(BookScreen::View { .. }) => match key {
                 Some(KeyCode::Escape) => self.close_book(),
@@ -167,7 +172,7 @@ impl Game<'_> {
                     }
                 }
                 _ => {
-                    if let Some(typed) = event.text.as_ref() {
+                    if let Some(typed) = text {
                         self.text_selection.take(BOOK_TITLE, title);
                         for c in typed.chars().filter(|c| !c.is_control()) {
                             if title.chars().count() < 15 {
@@ -193,7 +198,7 @@ impl Game<'_> {
                     self.type_into_page("\n")
                 }
                 _ => {
-                    if let Some(typed) = event.text.as_ref().map(|t| t.to_string()) {
+                    if let Some(typed) = text {
                         let typed: String = typed.chars().filter(|c| !c.is_control()).collect();
                         if !typed.is_empty() {
                             self.take_page_selection();

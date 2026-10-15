@@ -470,7 +470,7 @@ public final class VanillaDispenserOracle {
     static final class Clicker extends net.minecraft.server.level.ServerPlayer {
         VanillaBlockUpdateOracle.World world;
         boolean creative, sneaking;
-        ItemStack hand;
+        ItemStack hand, offhand;
         List<String> stats;
         String using;
         Clicker() {
@@ -485,12 +485,14 @@ public final class VanillaDispenserOracle {
         @Override public boolean isDescending() { return sneaking; }
         @Override public EntityType<?> getType() { return EntityTypes.PLAYER; }
         @Override public net.minecraft.core.Holder<EntityType<?>> typeHolder() { return EntityTypes.PLAYER.builtInRegistryHolder(); }
-        @Override public ItemStack getItemBySlot(EquipmentSlot slot) { return slot == EquipmentSlot.MAINHAND ? hand : ItemStack.EMPTY; }
+        @Override public ItemStack getItemBySlot(EquipmentSlot slot) {
+            return slot == EquipmentSlot.MAINHAND ? hand : slot == EquipmentSlot.OFFHAND ? offhand : ItemStack.EMPTY;
+        }
         @Override public ItemStack getItemInHand(net.minecraft.world.InteractionHand h) {
-            return h == net.minecraft.world.InteractionHand.MAIN_HAND ? hand : ItemStack.EMPTY;
+            return h == net.minecraft.world.InteractionHand.MAIN_HAND ? hand : offhand;
         }
         @Override public void setItemInHand(net.minecraft.world.InteractionHand h, ItemStack stack) {
-            if (h == net.minecraft.world.InteractionHand.MAIN_HAND) hand = stack;
+            if (h == net.minecraft.world.InteractionHand.MAIN_HAND) hand = stack; else offhand = stack;
         }
         @Override public void startUsingItem(net.minecraft.world.InteractionHand h) {
             using = BuiltInRegistries.ITEM.getKey(getItemInHand(h).getItem()).toString();
@@ -515,9 +517,9 @@ public final class VanillaDispenserOracle {
      * A right click on the top of the block at `pos` (`ServerPlayerGameMode.useItemOn`
      * of the real game mode, survival or creative): the block's `useItemOn` and
      * `useWithoutItem`, then the item's `useOn` (`BlockItem.place`, falling back
-     * to eating a consumable), and `useItem` when that passes, as
-     * `Minecraft.startUseItem` goes on to. The statistics, the held stack and
-     * the item the player started using follow.
+     * to eating a consumable), and `useItem` when that passes, for the main
+     * hand and then the off hand, as `Minecraft.startUseItem` goes on to. The
+     * statistics, the held stacks and the item the player started using follow.
      */
     static List<String> useItem(VanillaBlockUpdateOracle.World w, BlockPos pos, JsonObject use) throws Exception {
         if (VanillaBlockUpdateOracle.Server.players == null) {
@@ -528,6 +530,7 @@ public final class VanillaDispenserOracle {
         player.creative = use.get("creative").getAsBoolean();
         player.sneaking = use.get("sneaking").getAsBoolean();
         player.hand = stack(use.get("item").getAsString());
+        player.offhand = use.has("offhand") ? stack(use.get("offhand").getAsString()) : ItemStack.EMPTY;
         player.stats = new ArrayList<>();
         var abilities = new net.minecraft.world.entity.player.Abilities();
         abilities.invulnerable = abilities.instabuild = abilities.mayfly = player.creative;
@@ -556,16 +559,18 @@ public final class VanillaDispenserOracle {
             player.creative ? net.minecraft.world.level.GameType.CREATIVE : net.minecraft.world.level.GameType.SURVIVAL);
         var hit = new net.minecraft.world.phys.BlockHitResult(net.minecraft.world.phys.Vec3.atCenterOf(pos).add(0, 0.5, 0),
             net.minecraft.core.Direction.UP, pos, false);
-        var hand = net.minecraft.world.InteractionHand.MAIN_HAND;
-        var result = gameMode.useItemOn(player, w, player.getItemInHand(hand), hand, hit);
-        // Minecraft.startUseItem: a click on a block that neither succeeded nor
-        // failed goes on to use the item in the same hand.
-        if (!(result instanceof net.minecraft.world.InteractionResult.Success)
-            && !(result instanceof net.minecraft.world.InteractionResult.Fail) && !player.hand.isEmpty()) {
-            gameMode.useItem(player, w, player.getItemInHand(hand), hand);
+        // Minecraft.startUseItem: each hand in turn clicks the block, then uses
+        // its item unless the click succeeded or failed; a success ends it.
+        for (var hand : net.minecraft.world.InteractionHand.values()) {
+            ItemStack held = player.getItemInHand(hand);
+            var result = gameMode.useItemOn(player, w, held, hand, hit);
+            if (result instanceof net.minecraft.world.InteractionResult.Success
+                || result instanceof net.minecraft.world.InteractionResult.Fail) break;
+            if (!held.isEmpty() && gameMode.useItem(player, w, held, hand) instanceof net.minecraft.world.InteractionResult.Success) break;
         }
         List<String> out = new ArrayList<>(player.stats);
-        out.add("held " + ParityData.canon(player.hand) + " using " + (player.using == null ? "-" : player.using));
+        out.add("held " + ParityData.canon(player.hand) + " offhand " + ParityData.canon(player.offhand)
+            + " using " + (player.using == null ? "-" : player.using));
         var respawn = player.getRespawnConfig();
         out.add("respawn " + (respawn == null ? "-" : respawn.respawnData().dimension().identifier() + " " + VanillaBlockUpdateOracle.pos(respawn.respawnData().pos())));
         return out;

@@ -393,6 +393,10 @@ impl FixedStep {
     pub fn frozen(&self) -> bool {
         self.manager.base.is_frozen()
     }
+    /// `runsNormally` as of the last `world_runs`.
+    pub fn runs_normally(&self) -> bool {
+        self.manager.base.runs_normally()
+    }
     pub fn set_frozen(&mut self, frozen: bool) {
         self.manager.base.set_frozen(frozen);
     }

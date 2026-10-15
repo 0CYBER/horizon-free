@@ -4,7 +4,8 @@
 use horizon_client::{
     Result,
     arrows::{
-        self, ArrowEvent, ArrowParticle, ArrowScene, ArrowSound, BlockReaction, Pickup, Touch,
+        self, ArrowEvent, ArrowParticle, ArrowScene, ArrowSound, BlockReaction, EntityHit, Pickup,
+        Touch,
     },
     assets::Assets,
     blocks::BlockFacts,
@@ -12,11 +13,11 @@ use horizon_client::{
     items::ItemStack,
     mobs::Who,
     motion::{LAVA, MotionResources, WATER},
-    projectiles::{Projectile, ProjectileKind},
+    projectiles::{Hit, Projectile, ProjectileKind},
     world::World,
 };
 use horizon_core::{
-    geometry::Vec3,
+    geometry::{Aabb, Vec3},
     random::{LegacyRandom, RandomSource},
 };
 use serde_json::Value;
@@ -89,11 +90,16 @@ fn main() -> Result<()> {
             &ItemStack::new("minecraft:arrow", 1),
             f["intangible"].as_bool().unwrap(),
         ));
+        // The entity in the way: its box and whether it takes the damage.
+        let mut target: Option<(Aabb, bool)> = None;
         for op in f["ops"].as_array().unwrap() {
             let mut events = Vec::new();
             let mut touched = "-".to_string();
             match op["mode"].as_str().unwrap() {
                 "tick" => {
+                    // The game's part of an entity hit: the damage it deals
+                    // (recorded after the tick's own events).
+                    let mut hurt = None;
                     if !arrow.arrow.as_ref().unwrap().removed {
                         let no_rain = |_| false;
                         let view = ArrowScene {
@@ -106,9 +112,35 @@ fn main() -> Result<()> {
                             mob_griefing: true,
                             tnt_explodes: true,
                         };
-                        arrows::tick(&mut arrow, &view, &[]);
+                        let targets: Vec<_> = target.iter().map(|t| (Who::Mob(2), t.0)).collect();
+                        let (_, hit) = arrows::tick(&mut arrow, &view, &targets);
+                        if let (Hit::Entity { .. }, Some((_, takes))) = (hit, target) {
+                            let mut st = arrow.arrow.take().unwrap();
+                            let damage = arrow.arrow_damage(&mut st.random);
+                            hurt = Some((st.events.len(), damage));
+                            arrow.arrow = Some(st);
+                            let outcome = if takes {
+                                EntityHit::Hurt
+                            } else {
+                                EntityHit::Refused
+                            };
+                            arrows::finish_entity_hit(&mut arrow, &view, outcome);
+                        }
                     }
-                    for event in arrow.arrow.as_mut().unwrap().events.drain(..) {
+                    let a = arrow.arrow.as_mut().unwrap();
+                    let (drop_at, dropped) = (arrow.position, a.pickup_item.count);
+                    let raised = std::mem::take(&mut a.events);
+                    let count = raised.len();
+                    for (i, event) in raised.into_iter().map(Some).chain([None]).enumerate() {
+                        if let Some((at, damage)) = hurt
+                            && at == i
+                        {
+                            events.push(format!("hurt {:08x}", damage.to_bits()));
+                        }
+                        let Some(event) = event else {
+                            debug_assert_eq!(i, count);
+                            break;
+                        };
                         match event {
                             ArrowEvent::Particle {
                                 kind,
@@ -191,8 +223,27 @@ fn main() -> Result<()> {
                             },
                             ArrowEvent::SplashEvent => events.push("splash-event".into()),
                             ArrowEvent::ShootEvent => events.push("shoot-event".into()),
+                            ArrowEvent::Drop => events.push(format!(
+                                "drop {} {dropped}",
+                                bits(Vec3::new(
+                                    drop_at.x,
+                                    drop_at.y + f64::from(0.1f32),
+                                    drop_at.z
+                                ))
+                            )),
                         }
                     }
+                }
+                "target" => {
+                    // EntityDimensions.scalable(0.6, 1.8).makeBoundingBox.
+                    let at = vector(&op["position"]);
+                    let w = f64::from(0.6f32) / 2.0;
+                    let h = f64::from(1.8f32);
+                    let b = Aabb::new(
+                        Vec3::new(at.x - w, at.y, at.z - w),
+                        Vec3::new(at.x + w, at.y + h, at.z + w),
+                    );
+                    target = Some((b, op["takes"].as_bool().unwrap()));
                 }
                 "block" => {
                     let p = &op["position"];
@@ -262,7 +313,7 @@ fn main() -> Result<()> {
             let a = arrow.arrow.as_ref().unwrap();
             writeln!(
                 out,
-                "arrow {} {} {:08x} {:08x} {} {} {} {} {} {} {} {} {} {:016x} {:016x} {} {} {:016x}",
+                "arrow {} {} {:08x} {:08x} {} {} {} {} {} {} {} {} {} {:016x} {:016x} {} {} {:016x} {}",
                 bits(arrow.position),
                 bits(arrow.velocity),
                 arrow.pitch.to_bits(),
@@ -280,7 +331,8 @@ fn main() -> Result<()> {
                 a.fluids.fluid_height(&Tags, LAVA).to_bits(),
                 a.removed,
                 arrow.critical(),
-                a.fall_distance.to_bits()
+                a.fall_distance.to_bits(),
+                bits(arrow.previous)
             )?;
             writeln!(out, "events {}", events.join(" | "))?;
             let a = arrow.arrow.as_ref().unwrap();

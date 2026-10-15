@@ -21,6 +21,11 @@ self-replace = "1"
 clap = { version = "4", features = ["derive"] }
 horizon-theme = { path = "../crates/horizon-theme" }
 horizon-prepare = { path = "../crates/horizon-prepare" }
+# Join a friend: invite codes (the game does the joining).
+horizon-friends = { path = "../crates/horizon-friends" }
+horizon-bench = { path = "../crates/horizon-bench" }
+# Opt-in data collection: the consent, the outbox and its upload (docs/telemetry.md).
+horizon-telemetry = { path = "../crates/horizon-telemetry" }
 # The session file's random name.
 getrandom = "0.3"
 

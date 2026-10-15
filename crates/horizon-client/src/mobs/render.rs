@@ -263,6 +263,24 @@ pub fn body(m: &Mob) -> (String, String) {
                 "entity/strider/strider"
             }),
         ),
+        // BeeRenderer.getTextureLocation: angry, carrying nectar, or both.
+        S::Bee => {
+            let angry = super::bee::get(m).is_some_and(|b| b.anger_end > 0);
+            let nectar = super::bee::has_nectar(m);
+            let texture = match (angry, nectar) {
+                (true, true) => "entity/bee/bee_angry_nectar",
+                (true, false) => "entity/bee/bee_angry",
+                (false, true) => "entity/bee/bee_nectar",
+                (false, false) => "entity/bee/bee",
+            };
+            let layer = baby_or(m, "bee#main", "bee_baby#main");
+            let texture = if layer.starts_with("bee_baby") {
+                b(texture)
+            } else {
+                texture.to_owned()
+            };
+            (layer, texture)
+        }
         S::Squid => (
             baby_or(m, "squid#main", "squid_baby#main"),
             b("entity/squid/squid"),

@@ -5,7 +5,7 @@
 mod common;
 use common::{Fake, d, describe, f, flush, result_name};
 use horizon_client::sound_engine::{
-    Attenuation, Backend, InstanceId, SoundEngine, SoundInstance, TickContext,
+    Attenuation, Backend, CartSound, InstanceId, SoundEngine, SoundInstance, TickContext,
 };
 use horizon_client::sound_events::SoundRegistry;
 use horizon_core::random::LegacyRandom;
@@ -19,6 +19,9 @@ fn main() {
     let mut backend = Fake::default();
     let mut ctx = TickContext::default();
     let mut instances: BTreeMap<String, InstanceId> = BTreeMap::new();
+    // Script cart names to entity ids (a removed cart leaves the level).
+    let mut cart_ids: BTreeMap<String, u32> = BTreeMap::new();
+    let mut removed: BTreeMap<u32, CartSound> = BTreeMap::new();
     let input = std::fs::read_to_string(&args[2]).expect("input");
     let mut out = std::io::BufWriter::new(std::fs::File::create(&args[3]).expect("output"));
     for line in input.lines() {
@@ -49,6 +52,21 @@ fn main() {
                     "loop" => SoundInstance::biome_loop(&event, random),
                     "uloop" => SoundInstance::under_liquid_loop(&event, random),
                     "usub" => SoundInstance::under_liquid_sub(&event, random),
+                    "cart" | "rcart" | "rcartu" => {
+                        let id = cart_ids[a[3]];
+                        let cart = ctx
+                            .carts
+                            .iter()
+                            .find(|c| c.id == id)
+                            .or_else(|| removed.get(&id))
+                            .copied()
+                            .expect("cart");
+                        if a[2] == "cart" {
+                            SoundInstance::minecart(&cart, random)
+                        } else {
+                            SoundInstance::riding_minecart(&cart, a[2] == "rcartu", random)
+                        }
+                    }
                     _ => panic!("{line}"),
                 };
                 if let Some(old) = instances.remove(a[1]) {
@@ -92,6 +110,26 @@ fn main() {
                 ctx.player_underwater = a[1] == "1";
                 ctx.player_removed = a[2] == "1";
             }
+            "cart" => {
+                let next = cart_ids.len() as u32 + 1;
+                let id = *cart_ids.entry(a[1].to_owned()).or_insert(next);
+                ctx.carts.retain(|c| c.id != id);
+                let cart = CartSound {
+                    id,
+                    position: [d(a[2]), d(a[3]), d(a[4])],
+                    // Vec3.horizontalDistance.
+                    speed: (d(a[5]) * d(a[5]) + d(a[7]) * d(a[7])).sqrt(),
+                };
+                if a[8] == "1" {
+                    // Out of the level, still there for a later play.
+                    removed.insert(id, cart);
+                } else {
+                    removed.remove(&id);
+                    ctx.carts.push(cart);
+                }
+            }
+            "ride" => ctx.vehicle = cart_ids.get(a[1]).copied(),
+            "freeze" => ctx.frozen = a[1] == "1",
             "tick" => engine.tick(a[1] == "1", &ctx, &mut backend),
             "forget" => {
                 if let Some(id) = instances.remove(a[1]) {

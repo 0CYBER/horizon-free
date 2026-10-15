@@ -108,6 +108,8 @@ pub const SECTIONS: &[Section] = &[
                     Opt::PadMoveDeadzone,
                     Opt::PadLookDeadzone,
                     Opt::PadGlyphs,
+                    Opt::PadMenuNav,
+                    Opt::PadKeyboard,
                 ]
                 .map(HRow::Opt),
             );
@@ -306,6 +308,7 @@ impl OptionsUi {
         y -= self.hscroll;
         let vstart = ui.batch.vertices.len();
         let hstart = ui.hits.len();
+        let tstart = crate::widgets::targets_mark();
         let mut sliders = Vec::new();
         ui.divider(x, y, cw);
         let control_x = x + cw;
@@ -456,6 +459,9 @@ impl OptionsUi {
         let k = ui.density / scale;
         let (y0, y1) = ((top - 1.0 + oy) * k, (bottom + oy) * k);
         ui.batch.clip_since(vstart, 0.0, y0, ui.batch.width, y1);
+        if ui.is_real() {
+            crate::widgets::clip_targets(tstart, y0, y1);
+        }
         let (cy0, cy1) = (top - 1.0 + oy, bottom + oy);
         let kept: Vec<_> = ui
             .hits

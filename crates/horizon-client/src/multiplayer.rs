@@ -34,6 +34,7 @@ pub enum Screen {
         pings: Pings,
         /// Worlds announced on the local network, listed after the servers.
         lan: Scanner,
+        scroll: crate::ui::Scroll,
     },
     /// Add (index None) or edit a server entry.
     Edit {
@@ -44,6 +45,14 @@ pub enum Screen {
     },
     Direct {
         address: String,
+    },
+    /// Join a friend's world with its invite code (Horizon's own, reached
+    /// from Horizon's multiplayer page).
+    Friend {
+        code: String,
+        /// The relay for short codes (optional; saved on Join).
+        relay: String,
+        focus: u8,
     },
     Disconnected {
         reason: String,
@@ -109,6 +118,60 @@ fn entry_address(servers: &[ServerEntry], lan: &Scanner, index: usize) -> Option
     }
 }
 
+/// JoinMultiplayerScreen's `HeaderAndFooterLayout(33, 60)`.
+const HEADER: f32 = 33.0;
+const FOOTER: f32 = 60.0;
+/// ServerSelectionList: rows 305 wide and 36 high.
+const ROW_WIDTH: f32 = 305.0;
+const ROW_HEIGHT: f32 = 36.0;
+/// One row of the list: the saved servers, the LAN header, the LAN games.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Row {
+    Server(usize),
+    LanHeader,
+    Lan(usize),
+}
+/// The list's top and bottom and its rows' left edge (`getRowLeft`).
+fn list_area(w: f32, h: f32) -> (f32, f32, f32) {
+    (
+        HEADER,
+        h - FOOTER,
+        (w / 2.0).floor() - (ROW_WIDTH / 2.0).floor(),
+    )
+}
+fn rows(servers: usize, lan: usize) -> impl Iterator<Item = Row> {
+    (0..servers)
+        .map(Row::Server)
+        .chain(std::iter::once(Row::LanHeader))
+        .chain((0..lan).map(Row::Lan))
+}
+/// `contentHeight`: the rows and 4 pixels of padding.
+fn content_height(servers: usize, lan: usize) -> f32 {
+    (servers + 1 + lan) as f32 * ROW_HEIGHT + 4.0
+}
+/// The row under `(x, y)` (`getEntryAtPosition`), scrolled by `scroll`.
+fn row_at(
+    servers: usize,
+    lan: usize,
+    (x, y): (f32, f32),
+    size: (f32, f32),
+    scroll: f32,
+) -> Option<Row> {
+    let (top, bottom, left) = list_area(size.0, size.1);
+    if y < top || y >= bottom || x < left || x >= left + ROW_WIDTH {
+        return None;
+    }
+    let index = ((y - top - 2.0 + scroll.trunc()) / ROW_HEIGHT).floor();
+    if index < 0.0 {
+        return None;
+    }
+    rows(servers, lan).nth(index as usize)
+}
+/// `LoadingDotsText.get`.
+fn loading_dots(millis: u128) -> &'static str {
+    ["O o o", "o O o", "o o O", "o O o"][(millis / 300 % 4) as usize]
+}
+
 impl Screen {
     /// The address of list row `row` (saved servers, then LAN games).
     pub fn address_of(&self, row: usize) -> Option<String> {
@@ -126,6 +189,7 @@ impl Screen {
             selected: None,
             pings,
             lan: Scanner::start(),
+            scroll: crate::ui::Scroll::default(),
         }
     }
     pub fn buttons(&self, w: f32, h: f32) -> Vec<ButtonSpec> {
@@ -133,44 +197,75 @@ impl Screen {
             (x, y, bw, label.to_owned(), enabled, id)
         };
         match self {
-            // JoinMultiplayerScreen's two button rows.
-            Self::List { selected, .. } => vec![
-                b(
-                    w / 2.0 - 154.0,
-                    h - 52.0,
-                    100.0,
-                    "Join Server",
-                    selected.is_some(),
-                    40,
-                ),
-                b(
-                    w / 2.0 - 50.0,
-                    h - 52.0,
-                    100.0,
-                    "Direct Connection",
-                    true,
-                    41,
-                ),
-                b(w / 2.0 + 54.0, h - 52.0, 100.0, "Add Server", true, 42),
-                b(
-                    w / 2.0 - 154.0,
-                    h - 28.0,
-                    74.0,
-                    "Edit",
-                    selected.is_some(),
-                    43,
-                ),
-                b(
-                    w / 2.0 - 76.0,
-                    h - 28.0,
-                    74.0,
-                    "Delete",
-                    selected.is_some(),
-                    44,
-                ),
-                b(w / 2.0 + 2.0, h - 28.0, 74.0, "Refresh", true, 45),
-                b(w / 2.0 + 80.0, h - 28.0, 74.0, "Back", true, 46),
-            ],
+            // JoinMultiplayerScreen's footer: two rows of buttons, 4 apart,
+            // centred in the 60-pixel footer. Join needs a server or LAN game
+            // selected (onSelectedChange), Edit and Delete a saved server.
+            Self::List {
+                servers, selected, ..
+            } => {
+                let (w, h) = (w.ceil(), h.ceil());
+                let x = ((w - 308.0) / 2.0).floor();
+                let saved = selected.is_some_and(|i| i < servers.len());
+                let label = |key: &str, fallback: &str| crate::lang::get_or(key, fallback);
+                vec![
+                    b(
+                        x,
+                        h - 52.0,
+                        100.0,
+                        &label("selectServer.select", "Join Server"),
+                        selected.is_some(),
+                        40,
+                    ),
+                    b(
+                        x + 104.0,
+                        h - 52.0,
+                        100.0,
+                        &label("selectServer.direct", "Direct Connection"),
+                        true,
+                        41,
+                    ),
+                    b(
+                        x + 208.0,
+                        h - 52.0,
+                        100.0,
+                        &label("selectServer.add", "Add Server"),
+                        true,
+                        42,
+                    ),
+                    b(
+                        x,
+                        h - 28.0,
+                        74.0,
+                        &label("selectServer.edit", "Edit"),
+                        saved,
+                        43,
+                    ),
+                    b(
+                        x + 78.0,
+                        h - 28.0,
+                        74.0,
+                        &label("selectServer.delete", "Delete"),
+                        saved,
+                        44,
+                    ),
+                    b(
+                        x + 156.0,
+                        h - 28.0,
+                        74.0,
+                        &label("selectServer.refresh", "Refresh"),
+                        true,
+                        45,
+                    ),
+                    b(
+                        x + 234.0,
+                        h - 28.0,
+                        74.0,
+                        &label("gui.back", "Back"),
+                        true,
+                        46,
+                    ),
+                ]
+            }
             Self::Edit { address, .. } => vec![
                 b(
                     w / 2.0 - 100.0,
@@ -207,6 +302,24 @@ impl Screen {
                     53,
                 ),
             ],
+            Self::Friend { code, .. } => vec![
+                b(
+                    w / 2.0 - 100.0,
+                    h / 4.0 + 96.0 + 18.0,
+                    200.0,
+                    "Join",
+                    horizon_friends::invite::parse(code).is_some(),
+                    56,
+                ),
+                b(
+                    w / 2.0 - 100.0,
+                    h / 4.0 + 120.0 + 18.0,
+                    200.0,
+                    "Cancel",
+                    true,
+                    57,
+                ),
+            ],
             Self::Disconnected { retry, .. } => {
                 let mut v = vec![b(
                     w / 2.0 - 100.0,
@@ -240,6 +353,10 @@ impl Screen {
         blink: bool,
     ) {
         let w = batch.width;
+        crate::widgets::target_as(
+            [w / 2.0 - 100.0, y + 11.0, 200.0, 20.0],
+            crate::widgets::Kind::Field,
+        );
         batch.text(
             atlas,
             label,
@@ -284,7 +401,7 @@ impl Screen {
     }
     pub fn draw(&self, atlas: &HudAtlas, batch: &mut HudBatch, blink: bool) {
         let (w, h) = (batch.width, batch.height);
-        batch.fill(atlas, 0.0, 0.0, w, h, rgba(0, 0, 0, 120));
+        crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
         let centered = |batch: &mut HudBatch, text: &str, y: f32, color: u32| {
             let tw = HudBatch::text_width(atlas, text);
             batch.text(atlas, text, (w - tw) / 2.0, y, color, true);
@@ -295,113 +412,205 @@ impl Screen {
                 selected,
                 pings,
                 lan,
+                scroll,
             } => {
-                centered(batch, "Play Multiplayer", 8.0, u32::MAX);
-                batch.fill(atlas, 0.0, 32.0, w, h - 32.0 - 64.0, rgba(0, 0, 0, 100));
+                let (w, h) = (w.ceil(), h.ceil());
+                let title = crate::lang::get_or("multiplayer.title", "Play Multiplayer");
+                // The header's StringWidget, centred in its 33 pixels.
+                let tw = HudBatch::text_width(atlas, &title);
+                let tx = ((w - tw.ceil()) / 2.0).floor();
+                batch.text(
+                    atlas,
+                    &title,
+                    tx,
+                    ((HEADER - 9.0) / 2.0).floor(),
+                    u32::MAX,
+                    true,
+                );
+                let games = lan.games();
+                let (top, bottom, left) = list_area(w, h);
+                let content = content_height(servers.len(), games.len());
+                let mut scroll = *scroll;
+                scroll.clamp(top, bottom, content);
+                // AbstractSelectionList.extractWidgetRenderState: background,
+                // the rows clipped to the list, separators, scrollbar.
+                crate::ui::list_background(batch, atlas, top, bottom, false);
+                let first = batch.vertices.len();
                 let pings = pings.lock().unwrap();
-                for (i, server) in servers.iter().enumerate() {
-                    let y = 36.0 + i as f32 * 36.0;
-                    if y + 36.0 > h - 64.0 {
-                        break;
+                let millis = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_millis());
+                let gray = rgba(128, 128, 128, 255);
+                for (i, row) in rows(servers.len(), games.len()).enumerate() {
+                    let y = top + 2.0 - scroll.amount.trunc() + i as f32 * ROW_HEIGHT;
+                    if y + ROW_HEIGHT < top || y > bottom {
+                        continue;
                     }
-                    let x = w / 2.0 - 152.0;
-                    if *selected == Some(i) {
-                        batch.fill(
-                            atlas,
-                            x - 2.0,
-                            y - 2.0,
-                            306.0,
-                            36.0,
-                            rgba(128, 128, 128, 255),
-                        );
-                        batch.fill(atlas, x - 1.0, y - 1.0, 304.0, 34.0, rgba(0, 0, 0, 255));
-                    }
-                    batch.sprite_scaled(atlas, "misc/unknown_server", x, y, 32.0, 32.0, u32::MAX);
-                    batch.text(atlas, &server.name, x + 35.0, y + 1.0, u32::MAX, false);
-                    let (line, right, color) = match pings.get(&server.ip) {
-                        Some(Ping::Ok {
-                            motd, players, ms, ..
-                        }) => (
-                            motd.lines().next().unwrap_or("").to_owned(),
-                            format!("{players}  {ms} ms"),
-                            rgba(128, 128, 128, 255),
-                        ),
-                        Some(Ping::Failed(_)) => (
-                            "Can't connect to server".to_owned(),
-                            String::new(),
-                            rgba(170, 0, 0, 255),
-                        ),
-                        _ => (
-                            "Pinging...".to_owned(),
-                            String::new(),
-                            rgba(128, 128, 128, 255),
-                        ),
+                    let index = match row {
+                        Row::Server(k) => Some(k),
+                        Row::Lan(k) => Some(servers.len() + k),
+                        Row::LanHeader => None,
                     };
-                    batch.text(atlas, &line, x + 35.0, y + 12.0, color, false);
-                    batch.text(
-                        atlas,
-                        &server.ip,
-                        x + 35.0,
-                        y + 22.0,
-                        rgba(96, 96, 96, 255),
-                        false,
-                    );
-                    if !right.is_empty() {
-                        let tw = HudBatch::text_width(atlas, &right);
-                        batch.text(
-                            atlas,
-                            &right,
-                            x + 300.0 - tw,
-                            y + 1.0,
-                            rgba(128, 128, 128, 255),
-                            false,
+                    if index.is_some()
+                        && y + ROW_HEIGHT / 2.0 > top
+                        && y + ROW_HEIGHT / 2.0 < bottom
+                    {
+                        crate::widgets::target_as(
+                            [left, y, ROW_WIDTH, ROW_HEIGHT],
+                            crate::widgets::Kind::Row,
                         );
                     }
-                }
-                for (k, game) in lan.games().iter().enumerate() {
-                    let i = servers.len() + k;
-                    let y = 36.0 + i as f32 * 36.0;
-                    if y + 36.0 > h - 64.0 {
-                        break;
-                    }
-                    let x = w / 2.0 - 152.0;
-                    if *selected == Some(i) {
+                    // extractSelection: a white outline round black (the list
+                    // has focus once a row is clicked).
+                    if index.is_some() && *selected == index {
+                        batch.fill(atlas, left, y, ROW_WIDTH, ROW_HEIGHT, u32::MAX);
                         batch.fill(
                             atlas,
-                            x - 2.0,
-                            y - 2.0,
-                            306.0,
-                            36.0,
-                            rgba(128, 128, 128, 255),
+                            left + 1.0,
+                            y + 1.0,
+                            ROW_WIDTH - 2.0,
+                            ROW_HEIGHT - 2.0,
+                            rgba(0, 0, 0, 255),
                         );
-                        batch.fill(atlas, x - 1.0, y - 1.0, 304.0, 34.0, rgba(0, 0, 0, 255));
                     }
-                    batch.text(atlas, "LAN World", x + 35.0, y + 1.0, u32::MAX, false);
-                    batch.text(
-                        atlas,
-                        &game.motd,
-                        x + 35.0,
-                        y + 12.0,
-                        rgba(128, 128, 128, 255),
-                        false,
-                    );
-                    batch.text(
-                        atlas,
-                        &game.address,
-                        x + 35.0,
-                        y + 22.0,
-                        rgba(96, 96, 96, 255),
-                        false,
-                    );
+                    // Entry content: 2 pixels in from the row.
+                    let (cx, cy) = (left + 2.0, y + 2.0);
+                    match row {
+                        Row::Server(k) => {
+                            let server = &servers[k];
+                            batch.sprite_scaled(
+                                atlas,
+                                "misc/unknown_server",
+                                cx,
+                                cy,
+                                32.0,
+                                32.0,
+                                u32::MAX,
+                            );
+                            batch.text(atlas, &server.name, cx + 35.0, cy + 1.0, u32::MAX, false);
+                            // OnlineServerEntry: up to two lines of MOTD, the
+                            // player count left of the status icon.
+                            let (motd, status, motd_color, icon) = match pings.get(&server.ip) {
+                                Some(Ping::Ok {
+                                    motd, players, ms, ..
+                                }) => (
+                                    motd.clone(),
+                                    players.clone(),
+                                    gray,
+                                    format!(
+                                        "server_list/ping_{}",
+                                        match ms {
+                                            0..150 => 5,
+                                            150..300 => 4,
+                                            300..600 => 3,
+                                            600..1000 => 2,
+                                            _ => 1,
+                                        }
+                                    ),
+                                ),
+                                Some(Ping::Failed(_)) => (
+                                    crate::lang::get_or(
+                                        "multiplayer.status.cannot_connect",
+                                        "Can't connect to server",
+                                    ),
+                                    String::new(),
+                                    rgba(255, 0, 0, 255),
+                                    "server_list/unreachable".to_owned(),
+                                ),
+                                _ => {
+                                    // The pinging bars bounce, offset by the row.
+                                    let frame = (millis / 100 + i as u128 * 2) & 7;
+                                    let frame = if frame > 4 { 8 - frame } else { frame };
+                                    (
+                                        crate::lang::get_or(
+                                            "multiplayer.status.pinging",
+                                            "Pinging...",
+                                        ),
+                                        String::new(),
+                                        gray,
+                                        format!("server_list/pinging_{}", frame + 1),
+                                    )
+                                }
+                            };
+                            for (n, line) in wrap(&motd, ROW_WIDTH - 4.0 - 34.0, atlas)
+                                .iter()
+                                .take(2)
+                                .enumerate()
+                            {
+                                batch.text(
+                                    atlas,
+                                    line,
+                                    cx + 35.0,
+                                    cy + 12.0 + 9.0 * n as f32,
+                                    motd_color,
+                                    false,
+                                );
+                            }
+                            let icon_x = cx + ROW_WIDTH - 4.0 - 15.0;
+                            batch.sprite_scaled(
+                                atlas,
+                                &format!("gui/sprites/{icon}"),
+                                icon_x,
+                                cy,
+                                10.0,
+                                8.0,
+                                u32::MAX,
+                            );
+                            if !status.is_empty() {
+                                let sw = HudBatch::text_width(atlas, &status).ceil();
+                                batch.text(
+                                    atlas,
+                                    &status,
+                                    icon_x - sw - 5.0,
+                                    cy + 1.0,
+                                    gray,
+                                    false,
+                                );
+                            }
+                        }
+                        Row::LanHeader => {
+                            // LANHeader's LoadingDotsWidget: the label, then
+                            // the dots on its last line, both centred.
+                            let label = crate::lang::get_or(
+                                "lanServer.scanning",
+                                "Scanning for games on your local network",
+                            );
+                            let middle = cx + ((ROW_WIDTH - 4.0) / 2.0).floor();
+                            let lw = HudBatch::text_width(atlas, &label).ceil();
+                            let lx = middle - (lw / 2.0).floor();
+                            let centre = lx + (lw / 2.0).floor();
+                            batch.text(atlas, &label, lx, cy + 2.0, u32::MAX, false);
+                            let dots = loading_dots(millis);
+                            let dw = HudBatch::text_width(atlas, dots).ceil();
+                            batch.text(
+                                atlas,
+                                dots,
+                                centre - (dw / 2.0).floor(),
+                                cy + 28.0 - 9.0 - 2.0,
+                                gray,
+                                false,
+                            );
+                        }
+                        Row::Lan(k) => {
+                            let game = &games[k];
+                            let header = crate::lang::get_or("lanServer.title", "LAN World");
+                            batch.text(atlas, &header, cx + 35.0, cy + 1.0, u32::MAX, false);
+                            batch.text(atlas, &game.motd, cx + 35.0, cy + 12.0, gray, false);
+                            batch.text(atlas, &game.address, cx + 35.0, cy + 23.0, gray, false);
+                        }
+                    }
                 }
-                if servers.is_empty() {
-                    centered(
-                        batch,
-                        "No servers yet: add one or use Direct Connection",
-                        h / 2.0 - 20.0,
-                        rgba(160, 160, 160, 255),
-                    );
-                }
+                batch.clip_since(first, 0.0, top, w, bottom);
+                crate::ui::separators(batch, atlas, top, bottom, false);
+                crate::ui::scrollbar(
+                    batch,
+                    atlas,
+                    left + ROW_WIDTH + 8.0,
+                    top,
+                    bottom,
+                    content,
+                    scroll.amount,
+                );
             }
             Self::Edit {
                 index,
@@ -439,6 +648,19 @@ impl Screen {
                     address,
                     100.0 - 11.0,
                     true,
+                    blink,
+                );
+            }
+            Self::Friend { code, relay, focus } => {
+                centered(batch, "Join a Friend", 20.0, u32::MAX);
+                Self::field(atlas, batch, "Invite Code", code, 53.0, *focus == 0, blink);
+                Self::field(
+                    atlas,
+                    batch,
+                    "Relay (optional)",
+                    relay,
+                    94.0,
+                    *focus == 1,
                     blink,
                 );
             }
@@ -487,6 +709,7 @@ impl Screen {
                     address: String::new(),
                 }
             }
+            (Self::List { .. }, Some(47)) => *self = Self::friend(),
             (Self::List { .. }, Some(42)) => {
                 *self = Self::Edit {
                     index: None,
@@ -531,19 +754,36 @@ impl Screen {
                     servers,
                     selected,
                     lan,
+                    scroll,
                     ..
                 },
                 None,
             ) => {
-                let index = ((y - 36.0) / 36.0).floor();
-                if y >= 36.0 && y < h - 64.0 && (x - w / 2.0).abs() < 154.0 {
-                    let index = index as usize;
-                    if let Some(address) = entry_address(servers, lan, index) {
-                        if *selected == Some(index) {
-                            return Outcome::Connect(address);
-                        }
-                        *selected = Some(index);
+                let (w, h) = (w.ceil(), h.ceil());
+                let games = lan.games().len();
+                let (top, bottom, left) = list_area(w, h);
+                let content = content_height(servers.len(), games);
+                if scroll.press((x, y), left + ROW_WIDTH + 8.0, top, bottom, content) {
+                    return Outcome::None;
+                }
+                // Clicking a selected row again joins it; the LAN header
+                // takes the click without anything to join.
+                let index = match row_at(servers.len(), games, (x, y), (w, h), scroll.amount) {
+                    Some(Row::Server(k)) => Some(k),
+                    Some(Row::Lan(k)) => Some(servers.len() + k),
+                    Some(Row::LanHeader) => {
+                        *selected = None;
+                        None
                     }
+                    None => None,
+                };
+                if let Some(index) = index
+                    && let Some(address) = entry_address(servers, lan, index)
+                {
+                    if *selected == Some(index) {
+                        return Outcome::Connect(address);
+                    }
+                    *selected = Some(index);
                 }
             }
             (
@@ -568,14 +808,24 @@ impl Screen {
                 *self = Self::list(saves);
             }
             (
-                Self::Edit { .. } | Self::Direct { .. } | Self::Disconnected { .. },
-                Some(51 | 53 | 54),
+                Self::Edit { .. }
+                | Self::Direct { .. }
+                | Self::Friend { .. }
+                | Self::Disconnected { .. },
+                Some(51 | 53 | 54 | 57),
             ) => *self = Self::list(saves),
             (Self::Disconnected { retry, .. }, Some(55)) => *retry = None,
             (Self::Direct { address }, Some(52)) => {
                 return Outcome::Connect(address.trim().to_owned());
             }
-            (Self::Edit { focus, .. }, None) => {
+            (Self::Friend { code, relay, .. }, Some(56)) => {
+                if horizon_friends::invite::parse(code).is_some() {
+                    crate::net::save_friends_relay(relay.trim());
+                    let code: String = code.chars().filter(|c| !c.is_whitespace()).collect();
+                    return Outcome::Connect(format!("{}{code}", crate::net::FRIEND));
+                }
+            }
+            (Self::Edit { focus, .. } | Self::Friend { focus, .. }, None) => {
                 for (i, fy) in [(0u8, 53.0 + 11.0), (1, 94.0 + 11.0)] {
                     if y >= fy && y < fy + 20.0 && (x - w / 2.0).abs() < 100.0 {
                         *focus = i;
@@ -586,6 +836,45 @@ impl Screen {
         }
         Outcome::None
     }
+    /// The mouse wheel over the server list (`scrollRate`: half a row).
+    pub fn wheel(&mut self, delta: f32, cursor: (f32, f32), size: (f32, f32)) {
+        if let Self::List {
+            servers,
+            lan,
+            scroll,
+            ..
+        } = self
+        {
+            let (top, bottom, _) = list_area(size.0.ceil(), size.1.ceil());
+            if cursor.1 >= top && cursor.1 < bottom {
+                let content = content_height(servers.len(), lan.games().len());
+                scroll.wheel(delta, ROW_HEIGHT / 2.0, top, bottom, content);
+            }
+        }
+    }
+    /// The pointer moved: a held scrollbar follows it.
+    pub fn drag(&mut self, y: f32, size: (f32, f32)) {
+        if let Self::List {
+            servers,
+            lan,
+            scroll,
+            ..
+        } = self
+        {
+            let (top, bottom, _) = list_area(size.0.ceil(), size.1.ceil());
+            scroll.drag(
+                y,
+                top,
+                bottom,
+                content_height(servers.len(), lan.games().len()),
+            );
+        }
+    }
+    pub fn release(&mut self) {
+        if let Self::List { scroll, .. } = self {
+            scroll.release();
+        }
+    }
     fn focused_field(&mut self) -> Option<&mut String> {
         match self {
             Self::Edit {
@@ -595,7 +884,18 @@ impl Screen {
                 ..
             } => Some(if *focus == 0 { name } else { address }),
             Self::Direct { address } => Some(address),
+            Self::Friend {
+                code, relay, focus, ..
+            } => Some(if *focus == 0 { code } else { relay }),
             _ => None,
+        }
+    }
+    /// Join a friend, with the relay the player set before.
+    pub fn friend() -> Self {
+        Self::Friend {
+            code: String::new(),
+            relay: crate::net::friends_relay_setting().unwrap_or_default(),
+            focus: 0,
         }
     }
     /// Auto-reconnect's attempt, once its countdown is over.
@@ -614,14 +914,26 @@ impl Screen {
             Self::Edit { focus: 0, .. } => ("server.name", 0),
             Self::Edit { .. } => ("server.address", 0),
             Self::Direct { .. } => ("server.direct", 0),
+            Self::Friend { focus: 0, .. } => ("friend.code", 0),
+            Self::Friend { .. } => ("friend.relay", 0),
             _ => return None,
         };
-        self.focused_field().map(|f| (id, f, 128))
+        let max = self.max_length();
+        self.focused_field().map(|f| (id, f, max))
+    }
+    /// Invite codes with IPv6 and a relay run past a server address's 128.
+    fn max_length(&self) -> usize {
+        if matches!(self, Self::Friend { .. }) {
+            256
+        } else {
+            128
+        }
     }
     pub fn type_text(&mut self, text: &str) {
+        let max = self.max_length();
         if let Some(field) = self.focused_field() {
             for c in text.chars().filter(|c| !c.is_control()) {
-                if field.chars().count() < 128 {
+                if field.chars().count() < max {
                     field.push(c);
                 }
             }
@@ -633,7 +945,7 @@ impl Screen {
         }
     }
     pub fn tab(&mut self) {
-        if let Self::Edit { focus, .. } = self {
+        if let Self::Edit { focus, .. } | Self::Friend { focus, .. } = self {
             *focus = (*focus + 1) % 2;
         }
     }
@@ -670,4 +982,50 @@ pub fn wrap(text: &str, width: f32, atlas: &HudAtlas) -> Vec<String> {
         lines.push(line);
     }
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_lan_header_follows_the_saved_servers() {
+        let all: Vec<Row> = rows(2, 1).collect();
+        assert_eq!(
+            all,
+            [Row::Server(0), Row::Server(1), Row::LanHeader, Row::Lan(0)]
+        );
+        // No saved servers: the list is the scanning header alone.
+        assert_eq!(rows(0, 0).collect::<Vec<_>>(), [Row::LanHeader]);
+        assert_eq!(content_height(0, 0), 40.0);
+    }
+
+    #[test]
+    fn rows_sit_two_pixels_under_the_header_and_scroll_with_the_list() {
+        // 427x240 GUI: the list spans 33..180, rows 305 wide from x 61.
+        let size = (427.0, 240.0);
+        assert_eq!(list_area(size.0, size.1), (33.0, 180.0, 61.0));
+        assert_eq!(row_at(3, 0, (100.0, 35.0), size, 0.0), Some(Row::Server(0)));
+        assert_eq!(row_at(3, 0, (100.0, 70.9), size, 0.0), Some(Row::Server(0)));
+        assert_eq!(row_at(3, 0, (100.0, 71.0), size, 0.0), Some(Row::Server(1)));
+        assert_eq!(
+            row_at(3, 0, (100.0, 35.0), size, 36.0),
+            Some(Row::Server(1))
+        );
+        assert_eq!(
+            row_at(3, 0, (100.0, 143.0), size, 0.0),
+            Some(Row::LanHeader)
+        );
+        assert_eq!(row_at(3, 0, (60.0, 40.0), size, 0.0), None);
+        assert_eq!(row_at(3, 0, (100.0, 32.0), size, 0.0), None);
+    }
+
+    #[test]
+    fn loading_dots_step_every_300_ms() {
+        let frames: Vec<&str> = [0, 299, 300, 600, 900, 1200].map(loading_dots).to_vec();
+        assert_eq!(
+            frames,
+            ["O o o", "O o o", "o O o", "o o O", "o O o", "O o o"]
+        );
+    }
 }

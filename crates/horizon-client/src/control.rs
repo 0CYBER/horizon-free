@@ -150,6 +150,7 @@ pub struct Request {
 pub struct Server {
     path: PathBuf,
     requests: mpsc::Receiver<Request>,
+    sender: mpsc::Sender<Request>,
 }
 
 /// `$HORIZON_CONTROL`, else `horizon-control.sock` in the user's runtime
@@ -172,6 +173,7 @@ impl Server {
             std::fs::remove_file(path)?;
         }
         let (sender, requests) = mpsc::channel();
+        let local = sender.clone();
         if uses_tcp(path) {
             let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
             let token = random_token();
@@ -204,7 +206,21 @@ impl Server {
         Ok(Self {
             path: path.to_owned(),
             requests,
+            sender: local,
         })
+    }
+    /// Commands from inside the process only (`--benchmark` without `--control`).
+    pub fn local() -> Self {
+        let (sender, requests) = mpsc::channel();
+        Self {
+            path: PathBuf::new(),
+            requests,
+            sender,
+        }
+    }
+    /// Sends commands as a socket client would, from another thread.
+    pub fn sender(&self) -> mpsc::Sender<Request> {
+        self.sender.clone()
     }
     pub fn path(&self) -> &Path {
         &self.path
@@ -423,6 +439,18 @@ impl FrameStats {
         if self.gpu.len() < Self::LIMIT {
             self.gpu.extend_from_slice(millis);
         }
+    }
+    /// Every recorded frame time, in milliseconds, in order.
+    pub fn frame_millis(&self) -> &[f32] {
+        &self.millis
+    }
+    /// CPU time of every recorded frame, in milliseconds.
+    pub fn cpu_millis(&self) -> &[f32] {
+        &self.cpu
+    }
+    /// GPU time of every frame the GPU timed, in milliseconds.
+    pub fn gpu_millis(&self) -> &[f32] {
+        &self.gpu
     }
     pub fn reset(&mut self) {
         self.millis.clear();

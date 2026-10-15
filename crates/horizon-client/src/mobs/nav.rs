@@ -562,6 +562,13 @@ impl Mob {
     }
     /// PathNavigation.isStableDestination for the mob's navigation.
     pub fn stable_destination(&self, w: &MobWorld, p: [i32; 3]) -> bool {
+        if self.species() == super::Species::Bee {
+            return super::bee::stable_destination(w, p);
+        }
+        // StriderPathNavigation: lava too.
+        if self.kind.flags.lava_walker && w.block_name(p[0], p[1], p[2]) == "minecraft:lava" {
+            return true;
+        }
         match self.ai.nav.kind {
             NavKind::Ground | NavKind::WallClimber => {
                 w.facts

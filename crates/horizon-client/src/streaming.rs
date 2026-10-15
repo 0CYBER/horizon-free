@@ -5,11 +5,12 @@
 use crate::fast_hash::{FxHashMap, FxHashSet};
 use crate::{
     chunk::{Chunk, SECTIONS},
-    light::{LightTables, light_chunk},
+    light::{LightTables, apply_lighting, light_chunk},
     mesher::{MeshTables, Mesher, Region, SectionMesh, borrow},
     world::World,
 };
 use horizon_core::biome::BiomeZoom;
+use horizon_world::block_render::FaceVisibility;
 use horizon_world::worldgen::decoration_order::DecorationOrder;
 use std::{
     collections::{BinaryHeap, HashSet},
@@ -42,6 +43,35 @@ pub trait ChunkGenerator: Send + Sync + 'static {
     /// Decorate `region[4]`; the region is row-major (dz, dx) around it.
     fn decorate(&self, _worker: &mut Self::Worker, _region: &mut [Proto; 9]) {}
     fn finish(&self, proto: Proto) -> Chunk;
+    /// Whether `proto` has been decorated (a saved one can come back decorated).
+    fn is_decorated(&self, _proto: &Proto) -> bool {
+        false
+    }
+    /// What to save of a proto chunk dropped before it became final.
+    fn saved_proto(&self, _proto: &Proto) -> Option<crate::save::SavedProto> {
+        None
+    }
+    /// Put a saved proto chunk's state back onto `proto`, generated again.
+    fn restore_proto(&self, _proto: &mut Proto, _saved: crate::save::SavedProto) {}
+    /// Save proto chunks decoration wrote to, so that they come back as they
+    /// were: generating them again would lose those writes.
+    fn save_protos(&self, _protos: &[&Proto]) {}
+    /// Save a column that finished after the player moved away: its
+    /// neighbours' decoration is done, so it can't be generated again.
+    fn save_finished(&self, _chunk: Chunk) {}
+}
+/// The generator's saving, for the streamer (which doesn't know its type).
+trait Saves: Send + Sync {
+    fn save_protos(&self, protos: &[&Proto]);
+    fn save_finished(&self, chunk: Chunk);
+}
+impl<G: ChunkGenerator> Saves for G {
+    fn save_protos(&self, protos: &[&Proto]) {
+        ChunkGenerator::save_protos(self, protos);
+    }
+    fn save_finished(&self, chunk: Chunk) {
+        ChunkGenerator::save_finished(self, chunk);
+    }
 }
 /// Per-job mesher inputs that change with the dimension or the options.
 #[derive(Clone, Copy)]
@@ -61,9 +91,10 @@ enum Job {
 }
 pub enum Done {
     Generated(Chunk),
-    Proto(i32, i32, Proto),
+    /// A proto chunk, and whether it was decorated (loaded so from the save).
+    Proto(i32, i32, Proto, bool),
     Decorated(i32, i32, Box<[Proto; 9]>),
-    Lit(i32, i32, Vec<Arc<crate::chunk::Section>>, u64),
+    Lit(i32, i32, Vec<crate::chunk::Light>, u64),
     Meshed(i32, i32, i32, SectionMesh, u64),
 }
 struct Queued {
@@ -104,6 +135,7 @@ pub struct Streaming {
     threads: Vec<thread::JoinHandle<()>>,
     order: u64,
     generating: FxHashSet<(i32, i32)>,
+    generation_scan: GenerationScan,
     /// Proto chunks: `None` while checked out to a decoration job.
     protos: FxHashMap<(i32, i32), Option<Proto>>,
     decorated: FxHashSet<(i32, i32)>,
@@ -120,6 +152,15 @@ pub struct Streaming {
     lit: FxHashSet<(i32, i32)>,
     /// Columns whose sections have been meshed at least once.
     meshed: FxHashSet<(i32, i32)>,
+    /// Dirty sections of loaded columns past the render distance, meshed once
+    /// the player comes closer, and the area they were set aside for.
+    waiting: FxHashSet<(i32, i32, i32)>,
+    waiting_area: ((i32, i32), i32, usize),
+    /// Proto chunks decoration wrote to since they were generated or saved.
+    written: FxHashSet<(i32, i32)>,
+    saves: Arc<dyn Saves>,
+    /// Results received while `save` waited, for the next `update`.
+    deferred: Vec<Done>,
     sequence: u64,
     pub center: (i32, i32),
     pub radius: i32,
@@ -152,6 +193,122 @@ pub struct Streaming {
     /// of a world open to the network. They are generated and kept but not meshed.
     pub extra: Vec<((i32, i32), i32)>,
 }
+/// Snapshot only after a scan found no missing candidates. Public range fields
+/// and `World::chunks` can change without going through Streaming, so compare
+/// their values and structural membership token rather than a frame timeout.
+#[derive(Default)]
+struct GenerationScan {
+    exhausted: bool,
+    center: (i32, i32),
+    radius: i32,
+    extra: Vec<((i32, i32), i32)>,
+    forced: HashSet<(i32, i32)>,
+    chunk_revision: u64,
+}
+impl GenerationScan {
+    fn unchanged(&self, ranges: &Ranges<'_>, world: &World) -> bool {
+        self.exhausted
+            && self.center == ranges.center
+            && self.radius == ranges.radius
+            && self.extra == ranges.extra
+            && self.forced == *ranges.forced
+            && self.chunk_revision == world.chunks.membership_revision()
+    }
+    fn remember(&mut self, ranges: Ranges<'_>, world: &World) {
+        self.exhausted = true;
+        self.center = ranges.center;
+        self.radius = ranges.radius;
+        self.extra.clear();
+        self.extra.extend_from_slice(ranges.extra);
+        self.forced.clone_from(ranges.forced);
+        self.chunk_revision = world.chunks.membership_revision();
+    }
+}
+struct GenerationInputs<'a> {
+    ranges: Ranges<'a>,
+    world: &'a World,
+    generating: &'a FxHashSet<(i32, i32)>,
+    protos: &'a FxHashMap<(i32, i32), Option<Proto>>,
+    finishing: &'a FxHashSet<(i32, i32)>,
+    decorates: bool,
+    remote: bool,
+}
+impl GenerationScan {
+    /// None means the scan was skipped; Some preserves the original candidate
+    /// ordering and bounded batch, including an empty exhausted scan.
+    fn candidates(
+        &mut self,
+        input: GenerationInputs<'_>,
+        capacity: usize,
+    ) -> Option<Vec<(i64, i32, i32)>> {
+        // Generation (load or proto), closest first, bounded in flight.
+        let (margin, reach) = Ranges::margins(input.decorates);
+        if input.remote
+            || input.generating.len() >= capacity
+            || self.unchanged(&input.ranges, input.world)
+        {
+            return None;
+        }
+        {
+            let mut wanted = Vec::new();
+            let areas: Vec<((i32, i32), i32)> =
+                std::iter::once((input.ranges.center, input.ranges.radius))
+                    .chain(input.ranges.extra.iter().copied())
+                    .collect();
+            for (center, radius) in areas {
+                let r = radius + margin.max(reach + 1);
+                for dz in -r..=r {
+                    for dx in -r..=r {
+                        let (x, z) = (center.0 + dx, center.1 + dz);
+                        if !input.ranges.requested(x, z, input.decorates)
+                            || input.world.chunks.contains_key(&(x, z))
+                            || input.generating.contains(&(x, z))
+                            || input.protos.contains_key(&(x, z))
+                            || input.finishing.contains(&(x, z))
+                        {
+                            continue;
+                        }
+                        wanted.push((input.ranges.distance(x, z), x, z));
+                    }
+                }
+            }
+            // Forced chunks and their generation neighbourhood.
+            let reach = margin - 1;
+            for &(fx, fz) in input.ranges.forced {
+                for dz in -reach..=reach {
+                    for dx in -reach..=reach {
+                        let (x, z) = (fx + dx, fz + dz);
+                        if input.world.chunks.contains_key(&(x, z))
+                            || input.generating.contains(&(x, z))
+                            || input.protos.contains_key(&(x, z))
+                            || input.finishing.contains(&(x, z))
+                        {
+                            continue;
+                        }
+                        wanted.push((input.ranges.distance(x, z), x, z));
+                    }
+                }
+            }
+            if wanted.is_empty() {
+                let ranges = Ranges {
+                    center: input.ranges.center,
+                    radius: input.ranges.radius,
+                    extra: input.ranges.extra,
+                    forced: input.ranges.forced,
+                };
+                self.remember(ranges, input.world);
+            } else {
+                // A bounded batch may leave candidates behind. Keep scanning
+                // as capacity opens, even if no range or membership changed.
+                self.exhausted = false;
+            }
+            wanted.sort_unstable();
+            wanted.dedup();
+            wanted.truncate(capacity - input.generating.len());
+            Some(wanted)
+        }
+    }
+}
 pub struct WorkerContext {
     pub assets: Arc<crate::assets::Assets>,
     pub tables: Arc<MeshTables>,
@@ -172,6 +329,7 @@ impl Streaming {
         });
         let (send, results) = mpsc::channel();
         let light_tables = context.light.clone();
+        let saves: Arc<dyn Saves> = generator.clone();
         let threads = (0..threads.max(1))
             .map(|i| {
                 let shared = shared.clone();
@@ -182,6 +340,10 @@ impl Streaming {
                     .name(format!("horizon-worker-{i}"))
                     .spawn(move || {
                         let mut worker = generator.worker();
+                        // The face visibility table and its occlusion cache stay with
+                        // the worker across mesh jobs, like vanilla's per-thread cache:
+                        // cloning it per job copied every state and face shape.
+                        let mut faces: Option<(Arc<MeshTables>, FaceVisibility)> = None;
                         loop {
                             let job = {
                                 let mut queue = shared.queue.lock().unwrap();
@@ -198,7 +360,11 @@ impl Streaming {
                             let done = match job {
                                 Job::Generate(x, z) => match generator.load(x, z) {
                                     Some(chunk) => Done::Generated(chunk),
-                                    None => Done::Proto(x, z, generator.proto(&mut worker, x, z)),
+                                    None => {
+                                        let proto = generator.proto(&mut worker, x, z);
+                                        let decorated = generator.is_decorated(&proto);
+                                        Done::Proto(x, z, proto, decorated)
+                                    }
                                 },
                                 Job::Decorate(x, z, mut region) => {
                                     generator.decorate(&mut worker, &mut region);
@@ -210,6 +376,14 @@ impl Streaming {
                                 }
                                 Job::Mesh(x, sy, z, region, seq, settings) => {
                                     let context = shared.context.read().unwrap().clone();
+                                    let visibility = match faces.take() {
+                                        Some((tables, visibility))
+                                            if Arc::ptr_eq(&tables, &context.tables) =>
+                                        {
+                                            visibility
+                                        }
+                                        _ => context.tables.visibility.clone(),
+                                    };
                                     let mut mesher = Mesher {
                                         nether_shading: settings.nether,
                                         zoom: settings.zoom,
@@ -219,9 +393,11 @@ impl Streaming {
                                         assets: &context.assets,
                                         tables: &context.tables,
                                         biomes: &context.biomes,
-                                        visibility: context.tables.visibility.clone(),
+                                        visibility,
                                     };
-                                    Done::Meshed(x, sy, z, mesher.mesh(&borrow(&region), sy), seq)
+                                    let mesh = mesher.mesh(&borrow(&region), sy);
+                                    faces = Some((context.tables.clone(), mesher.visibility));
+                                    Done::Meshed(x, sy, z, mesh, seq)
                                 }
                             };
                             if send.send(done).is_err() {
@@ -238,6 +414,7 @@ impl Streaming {
             threads,
             order: 0,
             generating: Default::default(),
+            generation_scan: GenerationScan::default(),
             protos: Default::default(),
             decorated: Default::default(),
             decorating: 0,
@@ -249,6 +426,11 @@ impl Streaming {
             meshing: Default::default(),
             lit: Default::default(),
             meshed: Default::default(),
+            waiting: Default::default(),
+            waiting_area: ((0, 0), 0, 0),
+            written: Default::default(),
+            saves,
+            deferred: Vec::new(),
             sequence: 0,
             center: (0, 0),
             radius: 8,
@@ -303,6 +485,7 @@ impl Streaming {
         self.meshed.remove(&(x, z));
         self.lighting.remove(&(x, z));
         self.meshing.retain(|k, _| (k.0, k.2) != (x, z));
+        self.waiting.retain(|k| (k.0, k.2) != (x, z));
         world.dirty_sections.retain(|k| (k.0, k.2) != (x, z));
         world.chunks.remove(&(x, z))
     }
@@ -315,15 +498,71 @@ impl Streaming {
         });
         self.shared.ready.notify_one();
     }
+    fn receive_decorated(&mut self, x: i32, z: i32, region: Box<[Proto; 9]>) {
+        self.generation_scan.exhausted = false;
+        self.decorating -= 1;
+        self.decorated.insert((x, z));
+        for (i, proto) in region.into_iter().enumerate() {
+            let key = (x + (i % 3) as i32 - 1, z + (i / 3) as i32 - 1);
+            self.protos.insert(key, Some(proto));
+            self.written.insert(key);
+        }
+    }
+    fn receive_generated(&mut self, mut chunk: Chunk, world: &mut World) {
+        self.generation_scan.exhausted = false;
+        let key = (chunk.x, chunk.z);
+        self.generating.remove(&key);
+        self.finishing.remove(&key);
+        self.decorated.insert(key);
+        // A column that finished after the player moved away is dropped
+        // whole: its block entities and saved entities too, or they would
+        // stay in the world (and the entities spawn again, duplicated, when
+        // the column loads later). A generated one is saved first: its
+        // neighbours were decorated around it, so generating it again would
+        // not give it back.
+        if !self.ranges().chunk_kept(key.0, key.1, self.decorates) {
+            if chunk.fresh {
+                self.saves.save_finished(chunk);
+            }
+            return;
+        }
+        // Generated columns are saved like edited ones, as vanilla saves
+        // every chunk it generates.
+        if chunk.fresh {
+            world.modified.insert(key);
+        }
+        world
+            .block_entities
+            .extend(std::mem::take(&mut chunk.block_entities));
+        world
+            .block_names
+            .extend(std::mem::take(&mut chunk.block_names));
+        let entities = std::mem::take(&mut chunk.entities);
+        if !entities.is_empty() {
+            world.loaded_entities.push(((chunk.x, chunk.z), entities));
+        }
+        self.generated_total += 1;
+        // A chunk saved with its light needs no light job; its unlit
+        // neighbours still light themselves from it.
+        let loaded = chunk.light_loaded;
+        world.chunks.insert(key, Arc::new(chunk));
+        if loaded {
+            self.lit.insert(key);
+            for sy in 0..SECTIONS as i32 {
+                world.dirty_sections.insert((key.0, sy, key.1));
+            }
+        }
+        for dz in -1..=1 {
+            for dx in -1..=1 {
+                let n = (key.0 + dx, key.1 + dz);
+                if !loaded || world.chunks.get(&n).is_some_and(|c| !c.light_loaded) {
+                    world.dirty_light.insert(n);
+                }
+            }
+        }
+    }
     fn distance(&self, x: i32, z: i32) -> i64 {
-        let d = |c: (i32, i32)| {
-            let (dx, dz) = (i64::from(x - c.0), i64::from(z - c.1));
-            dx * dx + dz * dz
-        };
-        self.extra
-            .iter()
-            .map(|(c, _)| d(*c))
-            .fold(d(self.center), i64::min)
+        self.ranges().distance(x, z)
     }
     fn region(world: &World, x: i32, z: i32) -> Option<Box<Region>> {
         let mut region: Region = Default::default();
@@ -345,6 +584,22 @@ impl Streaming {
     pub fn pending(&self) -> usize {
         self.shared.queue.lock().unwrap().len()
     }
+    /// How much work each stage holds: queued jobs, then what is in flight or
+    /// waiting at each step from generation to meshing.
+    pub fn stages(&self) -> [(&'static str, usize); 7] {
+        [
+            ("queued", self.pending()),
+            ("generating", self.generating.len()),
+            (
+                "protos",
+                self.protos.values().filter(|p| p.is_some()).count(),
+            ),
+            ("decorating", self.decorating),
+            ("finishing", self.finishing.len()),
+            ("lighting", self.lighting.len()),
+            ("meshing", self.meshing.len()),
+        ]
+    }
     /// Advance streaming: collect finished work, then schedule more.
     /// Returns meshes ready for upload and columns that were unloaded.
     pub fn update(
@@ -356,67 +611,22 @@ impl Streaming {
             return (uploads, Vec::new());
         }
         self.relight_edits(world);
-        while let Ok(done) = self.results.try_recv() {
+        let deferred = std::mem::take(&mut self.deferred);
+        let received = std::iter::from_fn(|| self.results.try_recv().ok());
+        for done in deferred.into_iter().chain(received.collect::<Vec<_>>()) {
             match done {
-                Done::Proto(x, z, proto) => {
+                Done::Proto(x, z, proto, decorated) => {
+                    self.generation_scan.exhausted = false;
                     self.generating.remove(&(x, z));
                     if self.in_range(x, z, 4) || self.near_finished(x, z, 2) {
                         self.protos.insert((x, z), Some(proto));
-                        if !self.decorates {
+                        if decorated || !self.decorates {
                             self.decorated.insert((x, z));
                         }
                     }
                 }
-                Done::Decorated(x, z, region) => {
-                    self.decorating -= 1;
-                    self.decorated.insert((x, z));
-                    for (i, proto) in region.into_iter().enumerate() {
-                        let key = (x + (i % 3) as i32 - 1, z + (i / 3) as i32 - 1);
-                        self.protos.insert(key, Some(proto));
-                    }
-                }
-                Done::Generated(mut chunk) => {
-                    let key = (chunk.x, chunk.z);
-                    self.generating.remove(&key);
-                    self.finishing.remove(&key);
-                    self.decorated.insert(key);
-                    // A column that finished after the player moved away is
-                    // dropped whole: its block entities and saved entities
-                    // too, or they would stay in the world (and the entities
-                    // spawn again, duplicated, when the column loads later).
-                    if self.in_range(key.0, key.1, 2) || self.near_finished(key.0, key.1, 1) {
-                        world
-                            .block_entities
-                            .extend(std::mem::take(&mut chunk.block_entities));
-                        world
-                            .block_names
-                            .extend(std::mem::take(&mut chunk.block_names));
-                        let entities = std::mem::take(&mut chunk.entities);
-                        if !entities.is_empty() {
-                            world.loaded_entities.push(((chunk.x, chunk.z), entities));
-                        }
-                        self.generated_total += 1;
-                        // A chunk saved with its light needs no light job; its
-                        // unlit neighbours still light themselves from it.
-                        let loaded = chunk.light_loaded;
-                        world.chunks.insert(key, Arc::new(chunk));
-                        if loaded {
-                            self.lit.insert(key);
-                            for sy in 0..SECTIONS as i32 {
-                                world.dirty_sections.insert((key.0, sy, key.1));
-                            }
-                        }
-                        for dz in -1..=1 {
-                            for dx in -1..=1 {
-                                let n = (key.0 + dx, key.1 + dz);
-                                if !loaded || world.chunks.get(&n).is_some_and(|c| !c.light_loaded)
-                                {
-                                    world.dirty_light.insert(n);
-                                }
-                            }
-                        }
-                    }
-                }
+                Done::Decorated(x, z, region) => self.receive_decorated(x, z, region),
+                Done::Generated(chunk) => self.receive_generated(chunk, world),
                 Done::Lit(x, z, sections, seq) => {
                     if self.lighting.get(&(x, z)) != Some(&seq) {
                         continue;
@@ -426,11 +636,7 @@ impl Streaming {
                     if let Some(chunk) = world.chunks.get_mut(&(x, z)) {
                         let chunk = Arc::make_mut(chunk);
                         // Keep blocks edited since the snapshot; take only light.
-                        for (target, lit) in chunk.sections.iter_mut().zip(sections) {
-                            let mut section = (**target).clone();
-                            section.light = lit.light.clone();
-                            *target = Arc::new(section);
-                        }
+                        apply_lighting(chunk, sections);
                         chunk.lit = true;
                         self.lit.insert((x, z));
                         self.replay_light_edits(world, x, z, snapshot);
@@ -464,9 +670,7 @@ impl Streaming {
             .chunks
             .keys()
             .copied()
-            .filter(|&(x, z)| {
-                !self.remote && !self.in_range(x, z, 3) && !self.near_finished(x, z, 1)
-            })
+            .filter(|&(x, z)| !self.remote && self.ranges().unloaded(x, z, self.decorates))
             .collect();
         for key in &far {
             self.decorated.remove(key);
@@ -484,6 +688,7 @@ impl Streaming {
         if !far.is_empty() {
             let far: HashSet<(i32, i32)> = far.iter().copied().collect();
             self.meshing.retain(|k, _| !far.contains(&(k.0, k.2)));
+            self.waiting.retain(|k| !far.contains(&(k.0, k.2)));
             world.dirty_sections.retain(|k| !far.contains(&(k.0, k.2)));
         }
         // Drop far proto chunks that are not checked out.
@@ -492,15 +697,34 @@ impl Streaming {
                 .chain(self.extra.iter().map(|&(c, r)| (c, i64::from(r + 4))))
                 .collect();
         let forced = &self.forced;
-        self.protos.retain(|&(x, z), p| {
-            p.is_none()
-                || areas.iter().any(|&((cx, cz), r4)| {
-                    i64::from(x - cx).pow(2) + i64::from(z - cz).pow(2) <= r4 * r4
-                })
-                || forced
-                    .iter()
-                    .any(|f| (x - f.0).abs() <= 3 && (z - f.1).abs() <= 3)
-        });
+        let far: Vec<(i32, i32)> = self
+            .protos
+            .iter()
+            .filter(|&(&(x, z), p)| {
+                p.is_some()
+                    && !areas.iter().any(|&((cx, cz), r4)| {
+                        i64::from(x - cx).pow(2) + i64::from(z - cz).pow(2) <= r4 * r4
+                    })
+                    && !forced
+                        .iter()
+                        .any(|f| (x - f.0).abs() <= 3 && (z - f.1).abs() <= 3)
+            })
+            .map(|(k, _)| *k)
+            .collect();
+        if !far.is_empty() {
+            self.generation_scan.exhausted = false;
+        }
+        // Those decoration wrote to are saved (see `ChunkGenerator::save_protos`).
+        let written: Vec<Proto> = far
+            .iter()
+            .filter_map(|k| {
+                let proto = self.protos.remove(k).flatten();
+                if self.written.remove(k) { proto } else { None }
+            })
+            .collect();
+        if !written.is_empty() {
+            self.saves.save_protos(&written.iter().collect::<Vec<_>>());
+        }
         let (protos, finishing) = (&self.protos, &self.finishing);
         self.decorated.retain(|k| {
             protos.contains_key(k) || finishing.contains(k) || world.chunks.contains_key(k)
@@ -527,6 +751,7 @@ impl Streaming {
                     .flatten()
                     .expect("present proto");
                 self.finishing.insert((x, z));
+                self.written.remove(&(x, z));
                 self.submit(self.distance(x, z) * 4, Job::Finish(proto));
             }
         }
@@ -557,8 +782,6 @@ impl Streaming {
             });
         }
         if self.decorates && self.decorating < workers * 2 {
-            // The generation margins below.
-            let (margin, reach) = (3, 2);
             let wants = |s: &Self, x: i32, z: i32| {
                 !s.decorated.contains(&(x, z))
                     && !world.chunks.contains_key(&(x, z))
@@ -575,8 +798,7 @@ impl Streaming {
                             !world.chunks.contains_key(&n)
                                 && (s.protos.contains_key(&n)
                                     || s.generating.contains(&n)
-                                    || s.in_range(n.0, n.1, margin)
-                                    || s.near_finished(n.0, n.1, reach))
+                                    || s.ranges().requested(n.0, n.1, true))
                         })
                     })
             };
@@ -608,7 +830,9 @@ impl Streaming {
                 }
                 let keys: Vec<(i32, i32)> =
                     (0..9).map(|i| (x + (i % 3) - 1, z + (i / 3) - 1)).collect();
-                // A final (saved) neighbour cannot receive writes: skip decoration.
+                // A final neighbour cannot receive writes: skip decoration. Only
+                // worlds saved before proto chunks were saved get here (their
+                // final chunks' neighbours are generated again).
                 if keys.iter().any(|k| world.chunks.contains_key(k)) {
                     self.decorated.insert((x, z));
                     continue;
@@ -636,56 +860,7 @@ impl Streaming {
                 self.submit(d * 4 + 1, Job::Decorate(x, z, region));
             }
         }
-        // Generation (load or proto), closest first, bounded in flight.
-        let margin = if self.decorates { 3 } else { 1 };
-        // Neighbours a finished chunk needs generated: decorated ones need theirs.
-        let reach = if self.decorates { 2 } else { 1 };
-        if !self.remote && self.generating.len() < workers * 3 {
-            let mut wanted = Vec::new();
-            let areas: Vec<((i32, i32), i32)> = std::iter::once((self.center, self.radius))
-                .chain(self.extra.iter().copied())
-                .collect();
-            for (center, radius) in areas {
-                let r = radius + margin.max(reach + 1);
-                for dz in -r..=r {
-                    for dx in -r..=r {
-                        let (x, z) = (center.0 + dx, center.1 + dz);
-                        if !(self.in_range(x, z, margin) || self.near_finished(x, z, reach))
-                            || world.chunks.contains_key(&(x, z))
-                            || self.generating.contains(&(x, z))
-                            || self.protos.contains_key(&(x, z))
-                            || self.finishing.contains(&(x, z))
-                        {
-                            continue;
-                        }
-                        wanted.push((self.distance(x, z), x, z));
-                    }
-                }
-            }
-            // Forced chunks and their generation neighbourhood.
-            let reach = margin - 1;
-            for &(fx, fz) in &self.forced {
-                for dz in -reach..=reach {
-                    for dx in -reach..=reach {
-                        let (x, z) = (fx + dx, fz + dz);
-                        if world.chunks.contains_key(&(x, z))
-                            || self.generating.contains(&(x, z))
-                            || self.protos.contains_key(&(x, z))
-                            || self.finishing.contains(&(x, z))
-                        {
-                            continue;
-                        }
-                        wanted.push((self.distance(x, z), x, z));
-                    }
-                }
-            }
-            wanted.sort_unstable();
-            wanted.dedup();
-            for (d, x, z) in wanted.into_iter().take(workers * 3 - self.generating.len()) {
-                self.generating.insert((x, z));
-                self.submit(d * 4, Job::Generate(x, z));
-            }
-        }
+        self.schedule_generation(world, workers);
         // Lighting once all neighbours exist.
         let light: Vec<_> = world.dirty_light.iter().copied().collect();
         for (x, z) in light {
@@ -706,22 +881,57 @@ impl Streaming {
                 Job::Light(x, z, region, self.sequence, self.sky_light),
             );
         }
-        // Meshing once the column and its neighbours are lit.
+        // Meshing once the column and its neighbours are lit, and the column
+        // is within the render distance. Sections set aside past it come back
+        // when the player moves: a column that loads with its light gets no
+        // other request (#228).
+        let area = (self.center, self.radius, self.forced.len());
+        if self.waiting_area != area {
+            self.waiting_area = area;
+            let ranges = Ranges {
+                center: self.center,
+                radius: self.radius,
+                extra: &self.extra,
+                forced: &self.forced,
+            };
+            self.waiting.retain(|&(x, sy, z)| {
+                let back = ranges.in_main_range(x, z, 0);
+                if back {
+                    world.dirty_sections.insert((x, sy, z));
+                }
+                !back
+            });
+        }
         let dirty: Vec<_> = world.dirty_sections.iter().copied().collect();
         let mut columns: FxHashMap<(i32, i32), Option<Box<Region>>> = FxHashMap::default();
         let mut ready_columns: FxHashMap<(i32, i32), bool> = FxHashMap::default();
         for (x, sy, z) in dirty {
-            if !world.chunks.contains_key(&(x, z)) || !self.in_main_range(x, z, 0) {
+            if !world.chunks.contains_key(&(x, z)) {
                 world.dirty_sections.remove(&(x, sy, z));
                 continue;
             }
-            // Once per column: the 3x3 lit check would otherwise repeat for
-            // each of its sections every frame.
-            let lit = &self.lit;
+            if !self.in_main_range(x, z, 0) {
+                world.dirty_sections.remove(&(x, sy, z));
+                self.waiting.insert((x, sy, z));
+                continue;
+            }
+            // Once per column: the 3x3 check would otherwise repeat for each
+            // of its sections every frame. A neighbour being lit dirties this
+            // column again when its light job finishes (new chunks relight
+            // their eight neighbours), so wait for it rather than mesh once
+            // per neighbour. Columns still in `dirty_light` here can't be lit
+            // yet (a neighbour of theirs is missing): waiting for them could
+            // last until the player comes back.
+            let (lit, lighting) = (&self.lit, &self.lighting);
             let ready = *ready_columns.entry((x, z)).or_insert_with(|| {
-                (-1..=1).all(|dz| (-1..=1).all(|dx| lit.contains(&(x + dx, z + dz))))
+                (-1..=1).all(|dz| {
+                    (-1..=1).all(|dx| {
+                        let n = (x + dx, z + dz);
+                        lit.contains(&n) && !lighting.contains_key(&n)
+                    })
+                })
             });
-            if !ready || self.lighting.contains_key(&(x, z)) {
+            if !ready {
                 continue;
             }
             let region = columns
@@ -753,6 +963,28 @@ impl Streaming {
             );
         }
         (uploads, removed)
+    }
+    fn schedule_generation(&mut self, world: &World, workers: usize) {
+        let input = GenerationInputs {
+            ranges: Ranges {
+                center: self.center,
+                radius: self.radius,
+                extra: &self.extra,
+                forced: &self.forced,
+            },
+            world,
+            generating: &self.generating,
+            protos: &self.protos,
+            finishing: &self.finishing,
+            decorates: self.decorates,
+            remote: self.remote,
+        };
+        if let Some(wanted) = self.generation_scan.candidates(input, workers * 3) {
+            for (d, x, z) in wanted {
+                self.generating.insert((x, z));
+                self.submit(d * 4, Job::Generate(x, z));
+            }
+        }
     }
     /// Relight block edits on lit chunks in place (vanilla's incremental light
     /// engine) instead of recomputing the 3x3 chunks around each edit.
@@ -845,6 +1077,35 @@ impl Streaming {
     fn near_finished(&self, x: i32, z: i32, reach: i32) -> bool {
         self.ranges().near_finished(x, z, reach)
     }
+    /// Save what generation holds outside the world, before the world's
+    /// chunks: the proto chunks decoration wrote to. With `wait`, the
+    /// decorations and columns in flight are waited for first (their proto
+    /// chunks are out in the jobs); otherwise they are saved later, as they
+    /// unload or at the next save.
+    pub fn save(&mut self, world: &mut World, wait: bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while wait && (self.decorating > 0 || !self.finishing.is_empty()) {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            match self.results.recv_timeout(left) {
+                Ok(Done::Decorated(x, z, region)) => self.receive_decorated(x, z, region),
+                Ok(Done::Generated(chunk)) => self.receive_generated(chunk, world),
+                Ok(other) => self.deferred.push(other),
+                Err(_) => {
+                    log::warn!("Horizon: chunk generation did not finish before saving");
+                    break;
+                }
+            }
+        }
+        let protos: Vec<&Proto> = self
+            .written
+            .iter()
+            .filter_map(|k| self.protos.get(k)?.as_ref())
+            .collect();
+        if !protos.is_empty() {
+            self.saves.save_protos(&protos);
+        }
+        self.written.clear();
+    }
     fn in_range(&self, x: i32, z: i32, margin: i32) -> bool {
         self.ranges().in_range(x, z, margin)
     }
@@ -860,6 +1121,39 @@ struct Ranges<'a> {
     forced: &'a HashSet<(i32, i32)>,
 }
 impl Ranges<'_> {
+    fn distance(&self, x: i32, z: i32) -> i64 {
+        let d = |c: (i32, i32)| {
+            let (dx, dz) = (i64::from(x - c.0), i64::from(z - c.1));
+            dx * dx + dz * dz
+        };
+        self.extra
+            .iter()
+            .map(|(c, _)| d(*c))
+            .fold(d(self.center), i64::min)
+    }
+
+    /// How far past the view distance chunks are generated, and how far around
+    /// a finished chunk (`near_finished`): decorated chunks need their
+    /// neighbours generated too.
+    fn margins(decorates: bool) -> (i32, i32) {
+        if decorates { (3, 2) } else { (1, 1) }
+    }
+    /// Chunks generation asks for: loaded from the save, or generated as protos.
+    fn requested(&self, x: i32, z: i32, decorates: bool) -> bool {
+        let (margin, reach) = Self::margins(decorates);
+        self.in_range(x, z, margin) || self.near_finished(x, z, reach)
+    }
+    /// Finished columns kept when they arrive: within two of the view distance
+    /// or next to a finished chunk, and every column generation asked for (a
+    /// saved one loads finished; dropping it had it asked for and loaded again
+    /// every frame).
+    fn chunk_kept(&self, x: i32, z: i32, decorates: bool) -> bool {
+        self.in_range(x, z, 2) || self.near_finished(x, z, 1) || self.requested(x, z, decorates)
+    }
+    /// Columns unloaded: past every column kept.
+    fn unloaded(&self, x: i32, z: i32, decorates: bool) -> bool {
+        !self.in_range(x, z, 3) && !self.near_finished(x, z, Self::margins(decorates).1)
+    }
     /// Whether a chunk finished here (`in_range(_, _, 1)`) lies within `reach`
     /// chunks of (x, z) on both axes: its decoration needs its 3x3 neighbours
     /// decorated, which need their own 3x3 neighbours generated. The ranges are
@@ -907,6 +1201,303 @@ impl Drop for Streaming {
 mod tests {
     use super::*;
 
+    struct GenerationFixture {
+        world: World,
+        center: (i32, i32),
+        radius: i32,
+        extra: Vec<((i32, i32), i32)>,
+        forced: HashSet<(i32, i32)>,
+        generating: FxHashSet<(i32, i32)>,
+        protos: FxHashMap<(i32, i32), Option<Proto>>,
+        finishing: FxHashSet<(i32, i32)>,
+        decorates: bool,
+        remote: bool,
+    }
+    impl GenerationFixture {
+        fn new(radius: i32, decorates: bool) -> Self {
+            Self {
+                world: World::new(horizon_world::registry::BlockStateId(0), 0),
+                center: (0, 0),
+                radius,
+                extra: Vec::new(),
+                forced: HashSet::new(),
+                generating: Default::default(),
+                protos: Default::default(),
+                finishing: Default::default(),
+                decorates,
+                remote: false,
+            }
+        }
+        fn input(&self) -> GenerationInputs<'_> {
+            GenerationInputs {
+                ranges: Ranges {
+                    center: self.center,
+                    radius: self.radius,
+                    extra: &self.extra,
+                    forced: &self.forced,
+                },
+                world: &self.world,
+                generating: &self.generating,
+                protos: &self.protos,
+                finishing: &self.finishing,
+                decorates: self.decorates,
+                remote: self.remote,
+            }
+        }
+        fn fill(&mut self) {
+            // Scheduler only reads membership. Share one real empty column to
+            // keep a radius-32 fixture small; chunk content is never consulted.
+            let chunk = Arc::new(Chunk::empty(0, 0));
+            for (_, x, z) in baseline_candidates(self.input(), usize::MAX) {
+                self.world.chunks.insert((x, z), chunk.clone());
+            }
+        }
+        fn fill_steady(&mut self) {
+            let chunk = Arc::new(Chunk::empty(0, 0));
+            for (_, x, z) in baseline_candidates(self.input(), usize::MAX) {
+                if self.input().ranges.in_range(x, z, 1) {
+                    self.world.chunks.insert((x, z), chunk.clone());
+                } else {
+                    // Generation's outer neighbour margin remains proto;
+                    // only columns in the finish range become resident.
+                    self.protos.insert((x, z), Some(Box::new(())));
+                }
+            }
+        }
+        fn assert_same(&self, gate: &mut GenerationScan, capacity: usize) -> bool {
+            let expected = baseline_candidates(self.input(), capacity);
+            let result = gate.candidates(self.input(), capacity);
+            assert_eq!(result.as_deref().unwrap_or(&[]), expected);
+            result.is_some()
+        }
+    }
+
+    // Original scheduling scan, without snapshot bookkeeping, for differential
+    // correctness and timing. Keep this independent of the production gate.
+    fn baseline_candidates(input: GenerationInputs<'_>, capacity: usize) -> Vec<(i64, i32, i32)> {
+        if input.remote || input.generating.len() >= capacity {
+            return Vec::new();
+        }
+        let margin: i32 = if input.decorates { 3 } else { 1 };
+        let reach = if input.decorates { 2 } else { 1 };
+        let mut wanted = Vec::new();
+        let areas: Vec<_> = std::iter::once((input.ranges.center, input.ranges.radius))
+            .chain(input.ranges.extra.iter().copied())
+            .collect();
+        let missing = |x, z| {
+            !input.world.chunks.contains_key(&(x, z))
+                && !input.generating.contains(&(x, z))
+                && !input.protos.contains_key(&(x, z))
+                && !input.finishing.contains(&(x, z))
+        };
+        for (center, radius) in areas {
+            let r = radius + margin.max(reach + 1);
+            for dz in -r..=r {
+                for dx in -r..=r {
+                    let (x, z) = (center.0 + dx, center.1 + dz);
+                    if (input.ranges.in_range(x, z, margin)
+                        || input.ranges.near_finished(x, z, reach))
+                        && missing(x, z)
+                    {
+                        wanted.push((input.ranges.distance(x, z), x, z));
+                    }
+                }
+            }
+        }
+        for &(fx, fz) in input.ranges.forced {
+            for dz in -(margin - 1)..=(margin - 1) {
+                for dx in -(margin - 1)..=(margin - 1) {
+                    let (x, z) = (fx + dx, fz + dz);
+                    if missing(x, z) {
+                        wanted.push((input.ranges.distance(x, z), x, z));
+                    }
+                }
+            }
+        }
+        wanted.sort_unstable();
+        wanted.dedup();
+        wanted.truncate(capacity - input.generating.len());
+        wanted
+    }
+
+    #[test]
+    fn generation_gate_tracks_public_ranges_and_exact_membership() {
+        for decorates in [false, true] {
+            let mut f = GenerationFixture::new(2, decorates);
+            f.fill();
+            let mut gate = GenerationScan::default();
+            assert!(f.assert_same(&mut gate, 6));
+            assert!(!f.assert_same(&mut gate, 6));
+            // Light/mesh state and block content do not affect generation.
+            f.world.dirty_light.insert((0, 0));
+            f.world.dirty_sections.insert((0, 0, 0));
+            Arc::make_mut(f.world.chunks.get_mut(&(0, 0)).unwrap()).lit = true;
+            assert!(!f.assert_same(&mut gate, 6));
+            // Same-count removal/replacement must not leave a hole unnoticed.
+            let chunk = f.world.chunks.remove(&(0, 0)).unwrap();
+            f.world.chunks.insert((100, 100), chunk.clone());
+            assert!(f.assert_same(&mut gate, 6));
+            f.world.chunks.remove(&(100, 100));
+            f.world.chunks.insert((0, 0), chunk);
+            assert!(f.assert_same(&mut gate, 6));
+            assert!(!f.assert_same(&mut gate, 6));
+            f.center = (1, -1);
+            assert!(f.assert_same(&mut gate, 6));
+            f.fill();
+            f.assert_same(&mut gate, 6);
+            f.radius += 1;
+            assert!(f.assert_same(&mut gate, 6));
+            f.fill();
+            f.assert_same(&mut gate, 6);
+            f.extra.push(((20, -20), 2));
+            assert!(f.assert_same(&mut gate, 6));
+            f.fill();
+            f.assert_same(&mut gate, 6);
+            f.forced.insert((40, 40));
+            assert!(f.assert_same(&mut gate, 6));
+            f.fill();
+            f.assert_same(&mut gate, 6);
+            f.extra.clear();
+            f.forced.clear();
+            assert!(f.assert_same(&mut gate, 6));
+            f.remote = true;
+            assert!(!f.assert_same(&mut gate, 6));
+            f.world.chunks.clear();
+            f.remote = false;
+            assert!(f.assert_same(&mut gate, 6));
+            f.fill();
+            f.assert_same(&mut gate, 6);
+            f.world = World::new(horizon_world::registry::BlockStateId(0), 1);
+            assert!(f.assert_same(&mut gate, 6));
+        }
+    }
+
+    #[test]
+    fn generation_gate_preserves_batches_stage_transitions_and_retries() {
+        for decorates in [false, true] {
+            let mut f = GenerationFixture::new(2, decorates);
+            let mut gate = GenerationScan::default();
+            let mut scheduled = FxHashSet::default();
+            loop {
+                let expected = baseline_candidates(f.input(), 3);
+                let batch = gate.candidates(f.input(), 3).unwrap_or_default();
+                assert_eq!(batch, expected);
+                if batch.is_empty() {
+                    break;
+                }
+                for (_, x, z) in batch {
+                    assert!(scheduled.insert((x, z)), "duplicate scheduling");
+                    f.generating.insert((x, z));
+                }
+                if f.generating.len() == 3 {
+                    assert!(!f.assert_same(&mut gate, 3)); // capacity pressure
+                } else {
+                    f.assert_same(&mut gate, 3);
+                }
+                for key in std::mem::take(&mut f.generating) {
+                    // load miss -> proto -> checked out decoration -> finish.
+                    f.protos.insert(key, None);
+                }
+                gate.exhausted = false; // Done::Proto/Decorated invalidation
+            }
+            assert!(!scheduled.is_empty());
+            assert!(!f.assert_same(&mut gate, 3));
+            let key = (0, 0);
+            f.protos.remove(&key);
+            f.finishing.insert(key);
+            assert!(!f.assert_same(&mut gate, 3)); // eligibility unchanged
+            f.finishing.remove(&key);
+            f.world.chunks.insert(key, Arc::new(Chunk::empty(0, 0)));
+            gate.exhausted = false; // Done::Generated
+            assert!(f.assert_same(&mut gate, 3));
+            assert!(!f.assert_same(&mut gate, 3));
+            // A discarded/pruned proto must be requested again, even without
+            // any range or loaded-membership change.
+            let key = scheduled.iter().copied().find(|k| *k != (0, 0)).unwrap();
+            f.protos.remove(&key);
+            gate.exhausted = false;
+            assert!(f.assert_same(&mut gate, 3));
+            assert_eq!(baseline_candidates(f.input(), 3).len(), 1);
+        }
+    }
+
+    #[test]
+    #[ignore = "reproducible actual generation scheduler benchmark; run with --ignored --nocapture"]
+    fn generation_scan_benchmark() {
+        use std::{hint::black_box, time::Instant};
+        let mut f = GenerationFixture::new(32, true);
+        f.fill_steady();
+        let mut gate = GenerationScan::default();
+        f.assert_same(&mut gate, 12);
+        assert!(!f.assert_same(&mut gate, 12));
+        const FRAMES: usize = 2000;
+        let measure = |optimized: bool, dynamic: bool| {
+            let mut samples = Vec::new();
+            let mut scans = 0;
+            let mut jobs = 0;
+            for repetition in 0..9 {
+                let mut fixture = GenerationFixture::new(32, true);
+                fixture.fill_steady();
+                let saved = fixture.world.chunks.get(&(0, 0)).unwrap().clone();
+                let mut gate = GenerationScan::default();
+                gate.candidates(fixture.input(), 12);
+                let start = Instant::now();
+                let mut count = 0;
+                let mut scheduled = 0;
+                for frame in 0..FRAMES {
+                    // Remove a column, queue generation, then accept a saved
+                    // load completion. Both schedulers see identical events.
+                    if dynamic && frame % 32 == 0 {
+                        fixture.world.chunks.remove(&(0, 0));
+                    }
+                    if dynamic && frame % 32 == 1 {
+                        fixture.generating.remove(&(0, 0));
+                        fixture.world.chunks.insert((0, 0), saved.clone());
+                        gate.exhausted = false; // Done::Generated
+                    }
+                    let result = if optimized {
+                        let result = gate.candidates(black_box(fixture.input()), 12);
+                        count += usize::from(result.is_some());
+                        result.unwrap_or_default()
+                    } else {
+                        count += 1;
+                        baseline_candidates(black_box(fixture.input()), 12)
+                    };
+                    let expected_jobs = usize::from(dynamic && frame % 32 == 0);
+                    assert_eq!(result.len(), expected_jobs);
+                    for (_, x, z) in black_box(result) {
+                        assert_eq!((x, z), (0, 0));
+                        fixture.generating.insert((x, z));
+                        scheduled += 1;
+                    }
+                }
+                if repetition != 0 {
+                    samples.push(start.elapsed().as_secs_f64() * 1e9 / FRAMES as f64);
+                }
+                assert!(fixture.generating.is_empty());
+                assert_eq!(fixture.world.chunks.len(), f.world.chunks.len());
+                scans = count;
+                jobs = scheduled;
+            }
+            samples.sort_by(f64::total_cmp);
+            (samples[samples.len() / 2], scans, jobs)
+        };
+        println!(
+            "radius=32 decorates=true positions/frame=5041 loaded_keys={} proto_keys={} frames/sample={FRAMES} warmup=1 measured=8",
+            f.world.chunks.len(),
+            f.protos.len()
+        );
+        for dynamic in [false, true] {
+            let (before, baseline_scans, before_jobs) = measure(false, dynamic);
+            let (after, optimized_scans, after_jobs) = measure(true, dynamic);
+            assert_eq!(before_jobs, after_jobs);
+            println!(
+                "dynamic={dynamic}: baseline={before:.1}ns/frame optimized={after:.1}ns/frame speedup={:.2}x scans={baseline_scans}/{optimized_scans} jobs={before_jobs}/{after_jobs}",
+                before / after
+            );
+        }
+    }
+
     /// The ranges `Streaming::update` checks at each step, from generation to
     /// light, must let every chunk the player spawns on finish and light: the
     /// 3x3 columns around the player need their own 3x3 neighbours finished,
@@ -916,7 +1507,7 @@ mod tests {
     fn spawn_neighbourhood_completes_at_every_distance() {
         let forced = HashSet::new();
         for decorates in [true, false] {
-            let (margin, reach) = if decorates { (3, 2) } else { (1, 1) };
+            let (margin, reach) = Ranges::margins(decorates);
             for radius in 2..=32 {
                 let r = Ranges {
                     center: (5, -7),
@@ -928,15 +1519,15 @@ mod tests {
                     (-n..=n).flat_map(move |dz| (-n..=n).map(move |dx| (x + dx, z + dz)))
                 };
                 let generated = |x, z| {
-                    (r.in_range(x, z, margin) || r.near_finished(x, z, reach))
+                    r.requested(x, z, decorates)
                         && (x - r.center.0).abs() <= radius + margin.max(reach + 1)
                         && (z - r.center.1).abs() <= radius + margin.max(reach + 1)
                 };
                 let proto_kept = |x, z| r.in_range(x, z, 4) || r.near_finished(x, z, 2);
                 let decorated =
                     |x, z| !decorates || r.in_range(x, z, 2) || r.near_finished(x, z, 1);
-                let chunk_kept = |x, z| r.in_range(x, z, 2) || r.near_finished(x, z, 1);
-                let unloaded = |x, z| !r.in_range(x, z, 3) && !r.near_finished(x, z, 1);
+                let chunk_kept = |x, z| r.chunk_kept(x, z, decorates);
+                let unloaded = |x, z| r.unloaded(x, z, decorates);
                 let finishes = |x: i32, z: i32| {
                     r.in_range(x, z, 1)
                         && chunk_kept(x, z)
@@ -957,6 +1548,42 @@ mod tests {
                             finishes(nx, nz),
                             "radius {radius} (decorates: {decorates}): ({nx}, {nz}) never finishes"
                         );
+                    }
+                }
+            }
+        }
+    }
+
+    /// A column generation asks for is kept when it arrives finished (loaded
+    /// from the save) and is not unloaded right after: either way it would be
+    /// asked for and loaded again on the next frame, forever (8 such columns
+    /// after a teleport at render distance 16 held 8 of the in-flight slots).
+    #[test]
+    fn requested_columns_stay_loaded() {
+        let forced = HashSet::new();
+        for decorates in [true, false] {
+            for radius in 2..=32 {
+                let r = Ranges {
+                    center: (5, -7),
+                    radius,
+                    extra: &[((radius * 2 + 9, 3), 4)],
+                    forced: &forced,
+                };
+                let span = radius * 3 + 20;
+                for x in -span..=span {
+                    for z in -span..=span {
+                        if r.requested(x, z, decorates) {
+                            assert!(
+                                r.chunk_kept(x, z, decorates),
+                                "radius {radius} (decorates: {decorates}): ({x}, {z}) is asked for but dropped"
+                            );
+                        }
+                        if r.chunk_kept(x, z, decorates) {
+                            assert!(
+                                !r.unloaded(x, z, decorates),
+                                "radius {radius} (decorates: {decorates}): ({x}, {z}) is kept then unloaded"
+                            );
+                        }
                     }
                 }
             }

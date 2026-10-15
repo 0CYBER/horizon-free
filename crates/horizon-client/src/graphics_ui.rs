@@ -34,6 +34,7 @@ pub enum H {
     Overlay,
     ResolutionScale,
     Antialiasing,
+    BatteryMode,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -220,6 +221,11 @@ pub fn rows(level: Level) -> Vec<Row> {
             v(Opt::AttackIndicator, None, "Shows attack cooldown."),
             Row::Header("Performance"),
             h(
+                H::BatteryMode,
+                None,
+                "60 FPS cap (30 in menus or unfocused), half the workers: less power.",
+            ),
+            h(
                 H::Workers,
                 None,
                 "Threads that generate, light and mesh chunks. Next start.",
@@ -297,6 +303,7 @@ impl H {
             },
             H::ResolutionScale => labelled("Resolution Scale", format!("{}%", g.resolution_scale)),
             H::Antialiasing => labelled("Anti-aliasing", if g.fxaa { "FXAA" } else { "Off" }),
+            H::BatteryMode => labelled("Battery Mode", on_off(g.battery)),
             H::Overlay => labelled(
                 "Performance Overlay",
                 match g.overlay {
@@ -341,6 +348,7 @@ impl H {
             H::AnimatedTextures => g.animated_textures = !g.animated_textures,
             H::PresentMode => g.present_mode = step(&PresentMode::ALL, g.present_mode, back),
             H::Antialiasing => g.fxaa = !g.fxaa,
+            H::BatteryMode => g.battery = !g.battery,
             H::Pacing => {
                 g.pacing = match g.pacing {
                     Pacing::Efficient => Pacing::Precise,
@@ -373,6 +381,7 @@ impl Item {
             Item::Horizon(H::Weather) => g.weather,
             Item::Horizon(H::AnimatedTextures) => g.animated_textures,
             Item::Horizon(H::Antialiasing) => g.fxaa,
+            Item::Horizon(H::BatteryMode) => g.battery,
             Item::Vanilla(Opt::ViewBobbing) => s.view_bobbing,
             Item::Vanilla(Opt::Vsync) => s.vsync,
             Item::Vanilla(Opt::Fullscreen) => s.fullscreen,
@@ -423,21 +432,22 @@ impl Item {
     fn touched(self, s: &mut Settings) {
         let presetless = matches!(
             self,
-            Item::Horizon(H::Preset | H::Overlay | H::Pacing | H::PresentMode | H::Workers)
-                | Item::Vanilla(
-                    Opt::GuiScale
-                        | Opt::Fullscreen
-                        | Opt::Vsync
-                        | Opt::MaxFps
-                        | Opt::Fov
-                        | Opt::Gamma
-                        | Opt::InactivityFps
-                        | Opt::ViewBobbing
-                        | Opt::ChunkFade
-                        | Opt::Vignette
-                        | Opt::Autosave
-                        | Opt::AttackIndicator
-                )
+            Item::Horizon(
+                H::Preset | H::Overlay | H::Pacing | H::PresentMode | H::Workers | H::BatteryMode
+            ) | Item::Vanilla(
+                Opt::GuiScale
+                    | Opt::Fullscreen
+                    | Opt::Vsync
+                    | Opt::MaxFps
+                    | Opt::Fov
+                    | Opt::Gamma
+                    | Opt::InactivityFps
+                    | Opt::ViewBobbing
+                    | Opt::ChunkFade
+                    | Opt::Vignette
+                    | Opt::Autosave
+                    | Opt::AttackIndicator
+            )
         );
         if !presetless {
             s.horizon.preset = Preset::Custom;

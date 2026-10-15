@@ -18,8 +18,9 @@
   test_save_roundtrip_parity.py [--keep] [--skip-horizon] [--bin-dir DIR] [--stage gen|resave|compare|all]
                                 [--world DIR] (compare an existing V0/H pair: --vanilla DIR --horizon DIR)
 
-Run files stay under .local/save-roundtrip/run. The Horizon client runs on the virtual
-screen (`vscreen`), never on a real monitor, with a null ALSA device.
+Run files stay under .local/save-roundtrip/run. On Linux the Horizon client runs on the
+virtual screen (`vscreen`), never on a real monitor, with a null ALSA device; on macOS it
+renders offscreen (`--offscreen`, no window) without audio, from the logged-in session.
 """
 import argparse
 import collections
@@ -326,15 +327,20 @@ def horizon_resave(source, destination, bin_dir):
     saves = destination / 'saves'
     saves.mkdir(parents=True)
     shutil.copytree(source, saves / 'world')
-    alsa = destination / 'null-asound.conf'
-    alsa.write_text('pcm.!default { type null }\nctl.!default { type null }\n')
-    env = vscreen_env()
-    env['ALSA_CONFIG_PATH'] = str(alsa)
     socket = Path(tempfile.mkdtemp(prefix='hzrt')) / 'control.sock'  # sockets need short paths
     ctl = [str(bin_dir / 'horizon-ctl'), '--socket', str(socket)]
-    subprocess.run(['vscreen', 'up'], check=False, capture_output=True)
+    extra = []
+    if sys.platform == 'darwin':
+        env = dict(os.environ, HORIZON_NO_AUDIO='1')
+        extra = ['--offscreen']
+    else:
+        alsa = destination / 'null-asound.conf'
+        alsa.write_text('pcm.!default { type null }\nctl.!default { type null }\n')
+        env = vscreen_env()
+        env['ALSA_CONFIG_PATH'] = str(alsa)
+        subprocess.run(['vscreen', 'up'], check=False, capture_output=True)
     launch = subprocess.run(
-        ctl + ['launch', '--resources', str(RESOURCES), '--world', 'world', '--render-distance', '6'],
+        ctl + ['launch', '--resources', str(RESOURCES), '--world', 'world', '--render-distance', '6'] + extra,
         cwd=destination, env=env, capture_output=True, text=True)
     print(launch.stdout.strip())
     if launch.returncode:
@@ -608,7 +614,7 @@ def main():
     if args.horizon:
         h = Path(args.horizon)
     else:
-        bin_dir = Path(args.bin_dir) if args.bin_dir else None
+        bin_dir = Path(args.bin_dir).resolve() if args.bin_dir else None
         if bin_dir is None:
             subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-client', '--bins'], cwd=ROOT, check=True)
             bin_dir = ROOT / os.environ.get('CARGO_TARGET_DIR', 'target') / 'fast'

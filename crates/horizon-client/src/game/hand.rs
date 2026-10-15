@@ -42,9 +42,9 @@ impl Game<'_> {
             self.swings_started += 1;
         }
     }
-    /// `swing(InteractionHand.MAIN_HAND)` with the default animation.
+    /// `swing(hand)` for the hand that acts, with the default animation.
     pub(super) fn swing_arm(&mut self) {
-        self.swing_hand(Hand::Main, SwingAnimation::DEFAULT);
+        self.swing_hand(self.hand, SwingAnimation::DEFAULT);
     }
     /// `Player.resetAttackStrengthTicker`.
     pub(super) fn reset_attack_strength(&mut self) {
@@ -166,18 +166,23 @@ impl Game<'_> {
         if self.clicks.destroying.active || self.hands_busy() {
             return Ok(());
         }
-        let before = self.held().cloned();
+        let before = [self.stack_in(self.selected).cloned(), self.offhand.clone()];
         let swings = self.swings_started;
         let using = self.using.is_some();
-        self.use_item()?;
+        let Some(hand) = self.use_item()? else {
+            return Ok(());
+        };
+        let (before, after) = match hand {
+            Hand::Main => (&before[0], self.stack_in(self.selected).cloned()),
+            Hand::Off => (&before[1], self.offhand.clone()),
+        };
         let swung = self.swings_started != swings;
-        let after = self.held().cloned();
-        let spent = match (&before, &after) {
+        let spent = match (before, &after) {
             (Some(a), Some(b)) => a.count != b.count || a.item != b.item || self.creative,
             _ => false,
         };
         if (swung && spent) || (!using && self.using.is_some() && after.is_some()) {
-            self.heights.item_used(Hand::Main);
+            self.heights.item_used(hand);
         }
         Ok(())
     }
@@ -271,6 +276,22 @@ impl Game<'_> {
                 .held()
                 .and_then(|h| self.res.items.get(&h.item))
                 .map_or(0.0, |i| f64::from(i.attack_speed))
+    }
+    /// `evaluateWhichHandsToRender`: which of the main and off hand show.
+    pub(super) fn hands_to_render(&self) -> [bool; 2] {
+        let held = |slot| {
+            self.stack_in(slot)
+                .map(|s: &ItemStack| (&*s.item, s.data().is_some_and(|d| !d.charged.is_empty())))
+        };
+        let using = self.used_hand().zip(
+            self.using
+                .and_then(|(slot, _)| self.stack_in(slot))
+                .map(|s| &*s.item),
+        );
+        horizon_client::first_person::hands_to_render(
+            [held(self.selected), held(super::shield::OFFHAND_SLOT)],
+            using,
+        )
     }
     /// The visible main- and off-hand items.
     pub(super) fn visible_hand_items(&self) -> [Option<ItemStack>; 2] {

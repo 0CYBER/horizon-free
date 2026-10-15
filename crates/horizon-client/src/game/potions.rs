@@ -7,7 +7,7 @@ use horizon_client::{
     brewing,
     effects::{EffectAction, EffectInstance, PlayerEffects},
     hud::HudBatch,
-    hud_layout, hud_overlays,
+    hud_layout, hud_overlays, inventory_effects,
     items::ItemStack,
 };
 use horizon_core::{geometry::Vec3, random::RandomSource};
@@ -89,7 +89,7 @@ impl Game<'_> {
         match &*stack.item {
             "minecraft:potion" | "minecraft:ominous_bottle" => {
                 if self.using.is_none() {
-                    self.using = Some((self.selected, 0));
+                    self.using = Some((self.held_slot(), 0));
                 }
                 Ok(true)
             }
@@ -177,8 +177,8 @@ impl Game<'_> {
             return;
         }
         self.consume_held();
-        if self.inventory[self.selected].is_none() {
-            self.inventory[self.selected] = Some(filled);
+        if self.held().is_none() {
+            *self.held_mut() = Some(filled);
         } else if let Some(rest) = self.give(filled)
             && let Some(eye) = self.eye_position()
         {
@@ -218,15 +218,15 @@ impl Game<'_> {
             self.apply_effect_action(a);
         }
         if !self.creative {
-            if let Some(s) = self.inventory[slot].as_mut() {
+            if let Some(s) = self.stack_in_mut(slot).as_mut() {
                 s.count -= 1;
                 if s.count == 0 {
-                    self.inventory[slot] = None;
+                    *self.stack_in_mut(slot) = None;
                 }
             }
             let bottle = ItemStack::new("minecraft:glass_bottle", 1);
-            if self.inventory[slot].is_none() {
-                self.inventory[slot] = Some(bottle);
+            if self.stack_in(slot).is_none() {
+                *self.stack_in_mut(slot) = Some(bottle);
             } else if let Some(rest) = self.give(bottle) {
                 self.spawn_item(rest, eye, [0.0, 0.1, 0.0], 40);
             }
@@ -573,21 +573,35 @@ impl Game<'_> {
             .effects
             .list
             .iter()
-            .map(|e| {
-                let def = brewing::effect(e.id);
-                hud_overlays::EffectIcon {
-                    id: e.id.to_owned(),
-                    beneficial: def.is_some_and(|d| d.category == brewing::Category::Beneficial),
-                    color: def.map_or(0, |d| d.color as i32),
-                    ambient: e.ambient,
-                    duration: e.duration,
-                    // Horizon keeps no showIcon flag: every effect shows its icon.
-                    show_icon: true,
-                }
-            })
+            .map(hud_overlays::EffectIcon::from)
             .collect();
         let draws = hud_overlays::effects(batch.width as i32, false, &icons);
         hud_layout::paint(batch, &self.res.atlas, &draws);
+    }
+    /// `EffectsInInventory`: panels to the right of survival/creative inventory.
+    pub(super) fn draw_inventory_effects(
+        &self,
+        batch: &mut HudBatch,
+        origin: (f32, f32),
+        image_width: i32,
+    ) {
+        let panels = inventory_effects::panels(
+            batch.width as i32,
+            [origin.0 as i32, origin.1 as i32],
+            image_width,
+            &self.potions.effects.list,
+            self.clock.rate(),
+            &|key| self.res.names.get(key).map(str::to_owned),
+            &|text| self.res.atlas.font.width(text).ceil() as i32,
+        );
+        if let Some(lines) = inventory_effects::paint(
+            batch,
+            &self.res.atlas,
+            &panels,
+            [self.cursor.0 as i32, self.cursor.1 as i32],
+        ) {
+            self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
+        }
     }
     /// Effects saved in level.dat (`Player.active_effects`).
     pub(super) fn restore_effects(&mut self) {

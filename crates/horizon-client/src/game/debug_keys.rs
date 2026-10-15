@@ -49,6 +49,7 @@ impl DebugHost for Host<'_, '_> {
 impl Game<'_> {
     fn open_screen(&self) -> OpenScreen {
         match self.screen {
+            Screen::GameModeSwitcher => OpenScreen::GameModeSwitcher,
             Screen::Playing if self.book.is_none() && self.sign_edit.is_none() => OpenScreen::None,
             Screen::Paused if !self.pause_menu => OpenScreen::PauseWithoutMenu,
             _ => OpenScreen::Other,
@@ -62,6 +63,19 @@ impl Game<'_> {
             return false;
         };
         let pressed = action != KeyAction::Release;
+        let switcher_open = self.screen == Screen::GameModeSwitcher;
+        if switcher_open && pressed {
+            if name == self.settings.keys.get("key.debug.switchGameMode") {
+                if let Some(switcher) = &mut self.gamemode_switcher {
+                    switcher.cycle();
+                }
+            } else if key == KeyCode::Escape {
+                self.close_gamemode_switcher(false);
+            } else if matches!(key, KeyCode::F2 | KeyCode::F11) {
+                return false;
+            }
+            return true;
+        }
         // Screens with a text box take every key press first
         // (EditBox.keyPressed); releases still reach KeyboardHandler.
         let typing = matches!(
@@ -116,6 +130,13 @@ impl Game<'_> {
             now,
         );
         self.debug_keys = keys;
+        if switcher_open {
+            if name == binds.get("key.debug.modifier") {
+                self.close_gamemode_switcher(true);
+                return true;
+            }
+            return false;
+        }
         if !pressed {
             return false;
         }
@@ -130,7 +151,7 @@ impl Game<'_> {
         }
     }
     /// `Util.getMillis` (positive: KeyboardHandler treats 0 as unset).
-    fn debug_millis(&self) -> i64 {
+    pub(super) fn debug_millis(&self) -> i64 {
         self.started.elapsed().as_millis() as i64 + 1_000_000
     }
     /// `KeyboardHandler.tick`: the debug crash countdown.
@@ -158,6 +179,79 @@ impl Game<'_> {
             }
         }
         Ok(())
+    }
+    /// The network charts' samples each tick: `PingDebugMonitor.tick` while
+    /// they show, `BandwidthDebugMonitor.tick` always.
+    pub(super) fn tick_debug_charts(&mut self) {
+        let shown = self.debug && self.debug_charts.network;
+        let Some(r) = &self.remote else {
+            // The integrated server answers within the tick.
+            if shown {
+                self.debug_charts.ping.log(0);
+            }
+            return;
+        };
+        let received = r
+            .session
+            .counters
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|c| c.bytes_in.load(std::sync::atomic::Ordering::Relaxed));
+        if let Some(total) = received {
+            self.debug_charts.log_bandwidth(total);
+        }
+        if shown {
+            use horizon_protocol::packets::{play::Serverbound, status::Ping};
+            let time = self.debug_millis();
+            self.send(Serverbound::PingRequest(Ping { time }));
+        }
+    }
+    /// The overlay's chart lines (`DebugScreenOverlay`'s "Debug charts").
+    pub(super) fn debug_chart_lines(&self) -> [String; 3] {
+        let keys = &self.settings.keys;
+        let modifier = keys.get("key.debug.modifier");
+        let key = |mapping: &str| {
+            let prefix = if modifier == "key.keyboard.unknown" {
+                String::new()
+            } else {
+                format!("{}+", keybinds::display_name(modifier).plain())
+            };
+            format!(
+                "[{prefix}{}]",
+                keybinds::display_name(keys.get(mapping)).plain()
+            )
+        };
+        let chart = |mapping: &str, name: &str, on: bool| {
+            format!(
+                "{} {name} {}",
+                key(mapping),
+                if on { "visible" } else { "hidden" }
+            )
+        };
+        let remote = self.remote.is_some();
+        let c = &self.debug_charts;
+        [
+            format!(
+                "Debug charts: {}; {};",
+                chart("key.debug.profilingChart", "Profiler", false),
+                chart(
+                    "key.debug.fpsCharts",
+                    if remote { "fps" } else { "fps + tps" },
+                    c.fps
+                ),
+            ),
+            format!(
+                "{}; {}",
+                chart(
+                    "key.debug.networkCharts",
+                    if remote { "Bandwidth + Ping" } else { "Ping" },
+                    c.network
+                ),
+                chart("key.debug.lightmapTexture", "Lightmap", c.lightmap),
+            ),
+            format!("To edit: press {}", key("key.debug.debugOptions")),
+        ]
     }
     /// `KeyMapping.getTranslatedKeyMessage`.
     fn key_text(&self, mapping: &str) -> Text {
@@ -190,7 +284,7 @@ impl Game<'_> {
         self.settings.reduced_debug_info || self.ui.rules.bool("reduced_debug_info")
     }
     /// `Permissions.COMMANDS_GAMEMASTER` (`GameModeCommand.PERMISSION_CHECK`).
-    fn gamemaster(&self) -> bool {
+    pub(super) fn gamemaster(&self) -> bool {
         self.ui.registries.permission >= 2
     }
     fn toggle_option(&mut self, key: &str) -> bool {
@@ -206,13 +300,7 @@ impl Game<'_> {
         let player = self.player.is_some() && !self.reduced_debug_info();
         match action {
             DebugAction::ReloadChunks => {
-                // LevelExtractor.allChanged: every section is rebuilt.
-                let keys: Vec<(i32, i32)> = self.world.chunks.keys().copied().collect();
-                for (x, z) in keys {
-                    for sy in 0..horizon_client::chunk::HEIGHT / 16 {
-                        self.world.dirty_sections.insert((x, sy, z));
-                    }
-                }
+                self.all_sections_changed();
                 self.debug_translated("debug.reload_chunks.message");
                 true
             }
@@ -268,10 +356,10 @@ impl Game<'_> {
                 true
             }
             DebugAction::SwitchGameMode if self.open_screen() == OpenScreen::None => {
-                // Minecraft.canSwitchGameMode and the permission; the
-                // GameModeSwitcherScreen itself is not drawn yet.
                 if self.player.is_none() || !self.gamemaster() {
                     self.debug_translated("debug.gamemodes.error");
+                } else {
+                    self.open_gamemode_switcher();
                 }
                 true
             }
@@ -324,16 +412,25 @@ impl Game<'_> {
                 });
                 true
             }
+            DebugAction::FpsCharts => {
+                self.debug_charts.toggle_fps(&mut self.debug);
+                true
+            }
+            DebugAction::NetworkCharts => {
+                self.debug_charts.toggle_network(&mut self.debug);
+                true
+            }
+            DebugAction::LightmapTexture => {
+                self.debug_charts.toggle_lightmap(&mut self.debug);
+                true
+            }
             // Screens and overlays Horizon does not draw yet (the debug
-            // options screen, the profiler and its charts, the lightmap, the
-            // texture dump): the keys are used up as in vanilla.
+            // options screen, the profiler and its chart, the texture dump):
+            // the keys are used up as in vanilla.
             DebugAction::DebugOptions
             | DebugAction::DumpDynamicTextures
             | DebugAction::Profiling
-            | DebugAction::ProfilingChart
-            | DebugAction::FpsCharts
-            | DebugAction::NetworkCharts
-            | DebugAction::LightmapTexture => true,
+            | DebugAction::ProfilingChart => true,
             DebugAction::ShowHitboxes
             | DebugAction::ShowChunkBorders
             | DebugAction::SwitchGameMode
@@ -343,8 +440,15 @@ impl Game<'_> {
     /// `ServerboundChangeGameModePacket` handled by the integrated server:
     /// `GameModeCommand.setGameMode` with its feedback.
     pub(super) fn change_game_mode(&mut self, mode: GameMode) {
-        // On a server the packet decides; Horizon's client does not send it yet.
         if self.remote.is_some() {
+            use horizon_protocol::packets::play::{ChangeGameMode, Serverbound};
+            let mode = match mode {
+                GameMode::Survival => 0,
+                GameMode::Creative => 1,
+                GameMode::Adventure => 2,
+                GameMode::Spectator => 3,
+            };
+            self.send(Serverbound::ChangeGameMode(ChangeGameMode { mode }));
             return;
         }
         if self.set_game_mode(mode) {

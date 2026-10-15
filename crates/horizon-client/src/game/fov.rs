@@ -146,7 +146,7 @@ impl Game<'_> {
     /// `SpyglassItem.use`: start scoping.
     pub(super) fn use_spyglass(&mut self) {
         if self.using.is_none() {
-            self.using = Some((self.selected, 0));
+            self.using = Some((self.held_slot(), 0));
             let at = self.eye_position();
             self.audio.play("minecraft:item.spyglass.use", at, 1.0, 1.0);
         }

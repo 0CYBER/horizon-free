@@ -123,7 +123,7 @@ impl Game<'_> {
         {
             log::info!(
                 "Horizon: reconnecting to {} in {} s",
-                retry.address,
+                horizon_client::net::shown_address(&retry.address),
                 retry.seconds_left(std::time::Instant::now())
             );
             *slot = Some(retry);

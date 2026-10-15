@@ -1,0 +1,11 @@
+{
+  "required": true,
+  "package": "dev.horizonlab.bench.mixin",
+  "compatibilityLevel": "JAVA_25",
+  "client": [
+    "FrameHookMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

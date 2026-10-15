@@ -27,8 +27,11 @@ pub(super) struct ArmorStandAssets {
     pub equipment: HashMap<String, HashMap<String, (String, Option<u32>)>>,
 }
 impl ArmorStandAssets {
-    pub fn load(root: &std::path::Path) -> Self {
-        let load = |key: &str| horizon_client::mobs::load_model(root, key);
+    pub fn load(
+        root: &std::path::Path,
+        document: Option<&horizon_client::mobs::EntityModelDocument>,
+    ) -> Self {
+        let load = |key: &str| document.and_then(|document| document.model(key));
         let mut layers = HashMap::new();
         let mut player = HashMap::new();
         for slot in ["helmet", "chestplate", "leggings", "boots"] {
@@ -562,9 +565,9 @@ impl Game<'_> {
             held.count -= 1;
             if held.count == 0 {
                 // The worn piece comes back to the hand.
-                self.inventory[self.selected] = current;
+                *self.held_mut() = current;
             } else {
-                self.inventory[self.selected] = Some(held);
+                *self.held_mut() = Some(held);
                 if let Some(old) = current
                     && let Some(rest) = self.give(old)
                     && let Some(eye) = self.eye_position()

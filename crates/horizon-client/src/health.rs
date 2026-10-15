@@ -95,6 +95,8 @@ pub enum HealthEvent {
     FreezeDamage(f32),
     /// `SweetBerryBushBlock.entityInside` pricking a moving entity.
     SweetBerryBushDamage(f32),
+    /// `LivingEntity.baseTick` drowning an entity out of air.
+    DrownDamage(f32),
     Updated {
         id: u8,
         value: f32,
@@ -128,6 +130,7 @@ impl HealthEvent {
             Self::SweetBerryBushDamage(amount) => {
                 format!("damage sweet_berry_bush {:08x}", amount.to_bits())
             }
+            Self::DrownDamage(amount) => format!("damage drown {:08x}", amount.to_bits()),
             Self::Updated { id, value, dirty } => {
                 format!("updated {id} {:08x} {dirty}", value.to_bits())
             }
@@ -580,6 +583,10 @@ impl HurtWorld for Environment<'_> {
         self.event(HealthEvent::DamageBroadcast {
             source: self.source.type_id(),
         });
+        // The player hears its own hurt sound from handleDamageEvent; a
+        // blocked hit sends the block sound (onBlocked) instead.
+        let sound = hurt_sound(&self.source.definition().effects);
+        self.events.push(MotionEvent::HurtSound(sound));
         Ok(())
     }
     fn mark_hurt(&mut self, _: &mut State) -> io::Result<()> {
@@ -616,11 +623,9 @@ impl HurtWorld for Environment<'_> {
         *self.dead = true;
         self.phase("death-request")
     }
+    /// `Player.playSound` leaves the player itself out: others hear this one.
     fn hurt_sound(&mut self, _: &mut State) -> io::Result<()> {
-        self.phase("hurt-sound")?;
-        let sound = hurt_sound(&self.source.definition().effects);
-        self.events.push(MotionEvent::HurtSound(sound));
-        Ok(())
+        self.phase("hurt-sound")
     }
     fn game_time(&mut self, _: &mut State) -> io::Result<i64> {
         Ok(self.game_time)
