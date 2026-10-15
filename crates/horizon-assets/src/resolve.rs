@@ -50,29 +50,47 @@ impl ModelLibrary {
     /// A library that also knows `builtin/generated`, the parent of every
     /// flat item model; the native client registers it as a special model.
     pub fn with_item_generator(mut models: BTreeMap<String, CuboidModel>) -> Result<Self> {
-        models.insert(
-            GENERATED_MODEL.to_owned(),
-            CuboidModel {
-                parent: None,
-                ambient_occlusion: None,
-                gui_light: Some(GuiLight::Front),
-                textures: BTreeMap::from([(
-                    "particle".to_owned(),
-                    TextureSlot::Reference("layer0".to_owned()),
-                )]),
-                elements: None,
-                display: None,
-            },
-        );
+        models.insert(GENERATED_MODEL.to_owned(), Self::item_generator_model());
         Self::new(models)
     }
+    /// Register the item built-in while reusing already decoded resources.
+    pub fn with_shared_item_generator(
+        mut models: BTreeMap<String, Arc<CuboidModel>>,
+    ) -> Result<Self> {
+        models.insert(
+            GENERATED_MODEL.to_owned(),
+            Arc::new(Self::item_generator_model()),
+        );
+        Self::from_shared(models)
+    }
+    fn item_generator_model() -> CuboidModel {
+        CuboidModel {
+            parent: None,
+            ambient_occlusion: None,
+            gui_light: Some(GuiLight::Front),
+            textures: BTreeMap::from([(
+                "particle".to_owned(),
+                TextureSlot::Reference("layer0".to_owned()),
+            )]),
+            elements: None,
+            display: None,
+        }
+    }
     pub fn new(models: BTreeMap<String, CuboidModel>) -> Result<Self> {
+        Self::from_models(
+            models
+                .into_iter()
+                .map(|(name, model)| (name, Arc::new(model))),
+        )
+    }
+    /// Build an immutable resolution view without copying model geometry.
+    pub fn from_shared(models: BTreeMap<String, Arc<CuboidModel>>) -> Result<Self> {
+        Self::from_models(models)
+    }
+    fn from_models(models: impl IntoIterator<Item = (String, Arc<CuboidModel>)>) -> Result<Self> {
         let mut decoded = BTreeMap::new();
         for (name, model) in models {
-            if decoded
-                .insert(identifier(&name)?, Arc::new(model))
-                .is_some()
-            {
+            if decoded.insert(identifier(&name)?, model).is_some() {
                 return Err(error("duplicate normalized model identifier"));
             }
         }

@@ -59,6 +59,8 @@ pub struct Assets {
     pub pixels: Vec<u8>,
     pub texture_layers: u32,
     pub model_catalog: crate::models::StateModels,
+    /// Shared parsed resources; item-only validation errors surface at item preparation.
+    pub model_library: std::result::Result<Arc<horizon_assets::resolve::ModelLibrary>, String>,
     pub model_placements: Vec<(horizon_core::position::BlockPos, BlockStateId)>,
     pub model_gallery: Vec<Value>,
     pub animations: Vec<crate::sprites::SpriteAnimation>,
@@ -219,7 +221,9 @@ impl Assets {
         for name in MATERIALS {
             sprites.insert(root, &format!("minecraft:block/{name}"))?;
         }
-        let models = crate::models::prepare(root, registry, &mut sprites)?;
+        let parsed = crate::model_library::ParsedModels::load(root);
+        let models = crate::models::prepare_with_models(root, registry, &mut sprites, &parsed)?;
+        let model_library = parsed.into_item_library();
         // Fluids are drawn by the fluid renderer, not block models; breaking
         // progress uses the destroy-stage overlays.
         for name in [
@@ -244,6 +248,7 @@ impl Assets {
             texture_layers: u32::try_from(sprites.layers.len())?,
             pixels: sprites.pixels,
             model_catalog: models.catalog,
+            model_library,
             model_placements: models.placements,
             model_gallery: models.states,
             animations: sprites.animations,

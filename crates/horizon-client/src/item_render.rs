@@ -22,7 +22,7 @@ use horizon_assets::{
         ClientItem, Components, Context, DisplayContext, FoilType, ItemEnv, ItemModels,
         LayerContent, LevelState, OwnerState, SpecialModel, StackView,
     },
-    model::{CuboidModel, Direction},
+    model::Direction,
     palette::PalettedPermutations,
     resolve::{MISSING_MODEL, ModelLibrary},
 };
@@ -370,7 +370,7 @@ impl FileSprites {
 /// The baked item models and everything resolution needs.
 pub struct ItemRenderer {
     pub models: ItemModels,
-    library: ModelLibrary,
+    library: Arc<ModelLibrary>,
     sprites: FileSprites,
     baked: Mutex<HashMap<String, Arc<BakedItemModel>>>,
     extents: Mutex<HashMap<String, Arc<Vec<Vec3>>>>,
@@ -382,37 +382,6 @@ pub struct ItemRenderer {
     item_ids: HashMap<String, i32>,
 }
 
-/// Every `models/**.json` of a namespace directory, by identifier.
-fn load_models(root: &Path) -> BTreeMap<String, CuboidModel> {
-    let mut out = BTreeMap::new();
-    let Ok(namespaces) = fs::read_dir(root.join("assets")) else {
-        return out;
-    };
-    for ns in namespaces.flatten() {
-        let namespace = ns.file_name().to_string_lossy().into_owned();
-        let base = ns.path().join("models");
-        let mut stack = vec![base.clone()];
-        while let Some(dir) = stack.pop() {
-            let Ok(entries) = fs::read_dir(&dir) else {
-                continue;
-            };
-            for e in entries.flatten() {
-                let path = e.path();
-                if path.is_dir() {
-                    stack.push(path);
-                } else if path.extension().is_some_and(|x| x == "json")
-                    && let Ok(rel) = path.strip_prefix(&base)
-                    && let Ok(text) = fs::read_to_string(&path)
-                    && let Ok(model) = CuboidModel::from_json(&text)
-                {
-                    let rel = rel.with_extension("").to_string_lossy().replace('\\', "/");
-                    out.insert(format!("{namespace}:{rel}"), model);
-                }
-            }
-        }
-    }
-    out
-}
 /// Every `items/*.json` client item definition, by identifier.
 fn load_definitions(root: &Path) -> BTreeMap<String, ClientItem> {
     let mut out = BTreeMap::new();
@@ -445,14 +414,24 @@ impl ItemRenderer {
     /// Load item definitions, item prototypes (`items.json`), every model,
     /// the special renderers' entity models and the grass colormap.
     pub fn load(root: &Path) -> crate::Result<Self> {
+        Self::load_with_library(
+            root,
+            crate::model_library::ParsedModels::load(root).into_item_library(),
+        )
+    }
+    /// Reuse the immutable models prepared with the block resources at `root`.
+    /// Defer item-only validation failures until after item definitions are loaded.
+    pub fn load_with_library(
+        root: &Path,
+        library: std::result::Result<Arc<ModelLibrary>, String>,
+    ) -> crate::Result<Self> {
         let prototypes: BTreeMap<String, Components> =
             serde_json::from_slice(&fs::read(root.join("items.json"))?)?;
         let models = ItemModels {
             definitions: load_definitions(root),
             prototypes,
         };
-        let library = ModelLibrary::with_item_generator(load_models(root))
-            .map_err(|e| format!("item models: {e:?}"))?;
+        let library = library?;
         let permutations = PalettedPermutations::from_atlas(
             &fs::read_to_string(root.join("assets/minecraft/atlases/items.json"))
                 .unwrap_or_default(),
