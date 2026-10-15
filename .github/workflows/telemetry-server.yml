@@ -1,0 +1,34 @@
+name: telemetry-server
+# The ingest server is its own workspace (crates/horizon-telemetry-server), so the checks job doesn't build
+# it: this one does, when it or the crate it shares with the launcher and the game changes.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/horizon-telemetry/**'
+      - 'crates/horizon-telemetry-server/**'
+      - '.github/workflows/telemetry-server.yml'
+  pull_request:
+    paths:
+      - 'crates/horizon-telemetry/**'
+      - 'crates/horizon-telemetry-server/**'
+      - '.github/workflows/telemetry-server.yml'
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: crates/horizon-telemetry-server
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/horizon-telemetry-server
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo +stable fmt --check
+      - run: cargo +stable clippy --all-targets --locked -- -D warnings
+      - run: cargo +stable test --locked

@@ -1,0 +1,31 @@
+[package]
+name = "horizon-telemetry-server"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.90"
+publish = false
+description = "Receives opt-in data collection batches, keeps them compactly in SQLite and serves anonymous totals"
+
+# Its own workspace, as the launcher's: the game's workspace never builds a web server.
+[workspace]
+
+[dependencies]
+horizon-telemetry = { path = "../horizon-telemetry", default-features = false }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
+# SQLite built in: one file on a small volume is the whole database.
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ruzstd = "0.9"
+
+[dev-dependencies]
+# The uploader the launcher uses, against this server, end to end.
+horizon-telemetry = { path = "../horizon-telemetry" }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+
+[profile.release]
+strip = true
+lto = "thin"
