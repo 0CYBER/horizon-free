@@ -132,7 +132,11 @@ fn run(control: &Control, setup: Setup) -> Result<PathBuf, String> {
     let renderer = &title["renderer"];
     report.hardware.gpu = Some(horizon_bench::Gpu {
         name: text(&renderer["gpu"]),
-        vendor: text(&renderer["vendor"]),
+        vendor: match text(&renderer["vendor"]) {
+            // Metal reports no vendor ID.
+            v if v.is_empty() && text(&renderer["gpu"]).starts_with("Apple") => "apple".into(),
+            v => v,
+        },
         driver: text(&renderer["driver"]),
         backend: text(&renderer["backend"]).to_lowercase(),
         kind: text(&renderer["device_type"]),
@@ -297,8 +301,8 @@ const QUIET_MESHES_PER_S: f64 = 100.0;
 /// the last of these happened (`tools/perf_bench.py`'s `wait_loaded`).
 fn wait_loaded(control: &Control, near: impl Fn(&Value) -> bool) -> Result<Instant, String> {
     let deadline = Instant::now() + LOAD_LIMIT;
-    let (mut last, mut changed, mut previous, mut meshing) =
-        (None, Instant::now(), None, Instant::now());
+    let (mut last, mut changed, mut meshing) = (None, Instant::now(), Instant::now());
+    let mut previous: Option<(Instant, f64)> = None;
     while Instant::now() < deadline {
         let s = control.status();
         let now = Instant::now();
@@ -315,10 +319,10 @@ fn wait_loaded(control: &Control, near: impl Fn(&Value) -> bool) -> Result<Insta
                 (last, changed) = (Some(counts), now);
             }
             let meshed = s["meshed_sections"].as_f64().unwrap_or(0.0);
-            if let Some((at, before)) = previous {
-                if meshed - before > QUIET_MESHES_PER_S * (now - at).as_secs_f64() {
-                    meshing = now;
-                }
+            if let Some((at, before)) = previous
+                && meshed - before > QUIET_MESHES_PER_S * (now - at).as_secs_f64()
+            {
+                meshing = now;
             }
             previous = Some((now, meshed));
             let done = changed.max(meshing);
