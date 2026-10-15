@@ -425,8 +425,8 @@ impl Game<'_> {
                         self.recipe_text(Some(text), false)
                     }
                     Screen::Creative if self.creative_screen.tab().search => {
-                        self.creative_screen.search.push_str(text);
-                        self.creative_screen.scroll = 0.0;
+                        // As typed: replaces a selected query, keeps the length limit.
+                        self.creative_search_edit(Some(text), false)
                     }
                     _ => {
                         return Err(

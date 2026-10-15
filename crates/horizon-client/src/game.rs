@@ -4375,6 +4375,12 @@ impl Game<'_> {
         input: horizon_client::menu::Input,
     ) {
         use horizon_client::creative::{DisplayClick, click_display};
+        if self.creative_screen.tab().search {
+            // CreativeModeInventoryScreen.slotClicked: moveCursorToEnd, then
+            // setHighlightPos(0), so typing replaces the whole query.
+            let search = &self.creative_screen.search;
+            self.text_selection.select(("creative.search", 0), search);
+        }
         let items = self.creative_screen.items(&self.res.names);
         let first = self.creative_screen.first_row(&self.res.names);
         let shown = items.get(first * 9 + slot - Creative::DISPLAY);

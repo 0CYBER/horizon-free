@@ -223,6 +223,10 @@ impl AppendSelection {
     pub fn covers(&self, id: FieldId, value: &str) -> bool {
         self.0.as_ref().is_some_and(|(i, v)| *i == id && v == value)
     }
+    /// Select the whole `value` of field `id`, as Select All does.
+    pub fn select(&mut self, id: FieldId, value: &str) {
+        self.0 = Some((id, value.to_owned()));
+    }
     /// Before typing or a backspace: an all-selected value is cleared (true).
     pub fn take(&mut self, id: FieldId, value: &mut String) -> bool {
         let covered = self.covers(id, value);
@@ -247,7 +251,7 @@ impl AppendSelection {
         let covered = self.covers(id, value);
         match shortcut {
             EditShortcut::SelectAll => {
-                self.0 = Some((id, value.clone()));
+                self.select(id, value);
                 false
             }
             EditShortcut::Copy => {
