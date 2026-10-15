@@ -1,0 +1,16 @@
+[package]
+name = "horizon-dualsense"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version = "1.85"
+description = "The DualSense's output over HID: rumble, adaptive triggers, lightbar and player LEDs"
+
+[dependencies]
+# MIT; bundles the C hidapi under its BSD licence option. hidraw on Linux (libudev, as gilrs),
+# IOKit on macOS (opened shared, so gilrs keeps reading the pad), the HID API on Windows.
+hidapi = { version = "2.6.7", default-features = false, features = ["linux-static-hidraw", "macos-shared-device"] }
+log = "0.4"
+
+[lints]
+workspace = true
