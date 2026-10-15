@@ -7,6 +7,7 @@
 //! and as report 0x31 over Bluetooth, where a sequence tag leads it and a CRC-32 (seeded with
 //! the byte 0xA2) closes it.
 pub mod device;
+pub mod trigger;
 
 pub use device::{Link, Transport};
 

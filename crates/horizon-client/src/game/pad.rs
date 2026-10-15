@@ -6,7 +6,7 @@
 use super::{Game, Screen};
 use horizon_client::{
     Result,
-    gamepad::{self, Button, Edges, GlyphStyle, HealthWatch, PadState, Rumble},
+    gamepad::{self, Button, Edges, GlyphStyle, HealthWatch, PadState, Rumble, TriggerFeel},
     keybinds::{KeyBinds, key_code, mouse_button},
     mouse::Rotation,
 };
@@ -59,6 +59,8 @@ pub(super) struct Pads {
     /// Its own output over HID (rumble here; gilrs only reads it), started once this window
     /// has the pad in hand; dropped, it releases the pad.
     output: Option<horizon_dualsense::Link>,
+    /// What it was last told to show.
+    shown: Option<horizon_dualsense::device::State>,
 }
 
 fn gilrs_button(button: Button) -> gilrs::Button {
@@ -188,6 +190,9 @@ impl Game<'_> {
     pub(super) fn poll_pads(&mut self, event_loop: &ActiveEventLoop) {
         let settings = &self.settings.controller;
         if !settings.enabled {
+            // Dropping the output frees the triggers.
+            self.pad.output = None;
+            self.pad.shown = None;
             if self.pad.state != PadState::default() {
                 self.pad.state = PadState::default();
                 for (button, down) in self.pad.edges.release_all() {
@@ -214,6 +219,7 @@ impl Game<'_> {
         if self.pad.dualsense && self.pad.in_use && self.focused && self.pad.output.is_none() {
             self.pad.output = Some(horizon_dualsense::Link::start());
         }
+        self.pad_show();
         // Damage from any source, here or on a server; nothing counts on
         // the title screen.
         let health = self
@@ -407,6 +413,99 @@ impl Game<'_> {
         (self.pad.dualsense && self.focused && output.open().is_some()).then_some(output)
     }
 
+    /// What the DualSense shows: while playing, its triggers feel what their actions do; in
+    /// menus, paused, unfocused or with another pad active, they are free.
+    fn pad_show(&mut self) {
+        if self.pad.output.is_none() {
+            return;
+        }
+        let playing = self.pad.dualsense
+            && self.focused
+            && self.title.is_none()
+            && self.screen == Screen::Playing
+            && !self.pause;
+        let (using, attacking) = if playing {
+            self.trigger_feels()
+        } else {
+            (TriggerFeel::Free, TriggerFeel::Free)
+        };
+        let state = horizon_dualsense::device::State {
+            triggers: self.settings.controller.trigger_effects(using, attacking),
+            ..Default::default()
+        };
+        if self.pad.shown != Some(state)
+            && let Some(output) = &self.pad.output
+        {
+            output.set(state);
+            self.pad.shown = Some(state);
+        }
+    }
+
+    /// What `key.use` and `key.attack` are doing, for the triggers bound to them.
+    fn trigger_feels(&self) -> (TriggerFeel, TriggerFeel) {
+        let using = match self.using {
+            Some((slot, ticks)) => match self.stack_in(slot) {
+                Some(s) if &*s.item == "minecraft:bow" => {
+                    TriggerFeel::Draw(gamepad::bow_power(ticks))
+                }
+                // TridentItem.THROW_THRESHOLD_TIME.
+                Some(s) if &*s.item == "minecraft:trident" => {
+                    TriggerFeel::Draw(ticks as f32 / 10.0)
+                }
+                Some(s) if &*s.item == "minecraft:crossbow" => {
+                    TriggerFeel::Draw(ticks as f32 / Self::charge_ticks(s).max(1) as f32)
+                }
+                Some(s) if self.blocks_attacks(s).is_some() => TriggerFeel::Brace,
+                _ => TriggerFeel::Free,
+            },
+            None => self.idle_use_feel(),
+        };
+        // Creative breaks at once; blocks that can't be broken have a negative hardness.
+        let attacking = match &self.mining {
+            Some(m) if !self.creative => {
+                let state = self.world.block(m.pos[0], m.pos[1], m.pos[2]);
+                TriggerFeel::Texture(self.res.facts.get(state).hardness)
+            }
+            _ => TriggerFeel::Free,
+        };
+        (using, attacking)
+    }
+
+    /// The use trigger while nothing is in use: a loaded crossbow clicks, an item that boosts (a
+    /// rocket while gliding, the stick of the mount being ridden) catches, a shield weighs, and
+    /// locks while an axe has disabled it.
+    fn idle_use_feel(&self) -> TriggerFeel {
+        let gliding = self.player.as_ref().is_some_and(|p| p.fall_flying);
+        let mount = self
+            .riding
+            .and_then(|id| self.mobs.iter().find(|m| m.id == id));
+        let mount = mount.map_or("", |m| m.kind.id.as_str());
+        let feel = |stack: Option<&horizon_client::items::ItemStack>| match stack
+            .map(|s| (s, &*s.item))
+        {
+            Some((s, "minecraft:crossbow")) if s.data().is_some_and(|d| !d.charged.is_empty()) => {
+                TriggerFeel::Click
+            }
+            Some((_, "minecraft:firework_rocket")) if gliding => TriggerFeel::Boost,
+            Some((_, "minecraft:carrot_on_a_stick")) if mount == "minecraft:pig" => {
+                TriggerFeel::Boost
+            }
+            Some((_, "minecraft:warped_fungus_on_a_stick")) if mount == "minecraft:strider" => {
+                TriggerFeel::Boost
+            }
+            Some((s, _)) if self.blocks_attacks(s).is_some() => match self.shield_cooldown {
+                0 => TriggerFeel::Brace,
+                _ => TriggerFeel::Locked,
+            },
+            _ => TriggerFeel::Free,
+        };
+        // Use tries the main hand first.
+        match feel(self.stack_in(self.selected)) {
+            TriggerFeel::Free => feel(self.offhand.as_ref()),
+            main => main,
+        }
+    }
+
     /// Release the DualSense's output (the game is quitting).
     pub(super) fn pad_close_output(&mut self) {
         self.pad.output = None;
@@ -513,6 +612,7 @@ impl Game<'_> {
                     "glyphs": self.pad.style.name(),
                     "dualsense_output": self.pad.output.as_ref().and_then(|o| o.open())
                         .map(|t| format!("{t:?}")),
+                    "trigger_effects": self.pad.shown.map(|s| s.triggers),
                     "last_rumble": self.pad.last_rumble.map(|(why, p)| json!({
                         "reason": why, "strong": p.strong, "weak": p.weak, "ms": p.millis,
                     })),

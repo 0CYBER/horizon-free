@@ -219,6 +219,7 @@ exactly vanilla's, so a vanilla client can share the game folder.
 ```
 enabled:true
 vibration:true
+adaptiveTriggers:true
 lookSensitivity:0.5
 invertX:false
 invertY:false
@@ -232,7 +233,7 @@ bind_pad.hotbarNext:rb
 ```
 
 Only bindings that differ from the defaults are written. The controls
-options get a Controller page: on/off, vibration, look sensitivity, invert
+options get a Controller page: on/off, vibration, adaptive triggers, look sensitivity, invert
 X/Y, deadzones, glyph style, sneak toggle, and a binding list like the key
 binds screen (pick an action, press a button; conflicts marked as vanilla
 does; reset).
@@ -323,6 +324,75 @@ shared, so gilrs keeps reading the same pad), the HID API on Windows.
   shake while the motors run (`watch` logs the shake while the game drives
   the pad).
 
+### Adaptive triggers
+
+On by default with a DualSense ("Adaptive Triggers" in the controller
+options, `adaptiveTriggers:`). Each trigger feels the action bound to it, so
+rebinding moves the feel along: with the default mapping that is L2 for
+`key.use` and R2 for `key.attack`.
+
+| While | Trigger | Effect (zones 0..9, strength 1..8) | Feel |
+|---|---|---|---|
+| Drawing a bow | use | feedback from zone 2, strength 1 rising to 6 with the draw (`BowItem.getPowerForTime`) | the string's tension builds; letting go frees the trigger at once |
+| Charging a trident | use | the same, at 6 after the 10 ticks a throw needs | |
+| Loading a crossbow | use | the same, at 6 when it is loaded | |
+| Holding a loaded crossbow | use | weapon: from two zones before the press zone to the press zone, strength 8 | a gun trigger: a hard catch that breaks with a click as it fires |
+| Gliding with a rocket, riding a pig or a strider with its stick | use | weapon, the same zones, strength 5 | a lighter catch: pulling through it is the boost |
+| A shield in the use hand (raised or ready) | use | feedback from zone 2, strength 3 | its weight |
+| That shield disabled by an axe | use | feedback from zone 1, strength 8 | the trigger locks until the shield recovers |
+| Mining (survival) | attack | vibration from zone 1: amplitude 2 (dirt) to 5 (obsidian) of 8, 40 Hz on sand and dirt, 30 on stone, 20 on wood, deepslate and ores, 10 on obsidian | a grit that gets heavier and slower on harder blocks; none on blocks that break at once |
+
+The press zone is where Horizon presses the trigger's action: the trigger
+threshold (0.4 by default) times ten, kept between 3 and 8, so with the
+defaults a crossbow catches from zone 2 and breaks at zone 4, as its bolt
+leaves. This assumes the ten zones split the travel evenly, as dualsensectl
+documents them (0 at rest, 9 fully pressed); it is not measured.
+
+Everything else, and every menu, the pause screen, a window without focus,
+another pad being the active one, and controllers turned off, leaves the
+triggers free; quitting frees them too. `pad status` shows the effects in
+use.
+
+Why these values, from what shipped games do and what the community
+documents (none of it measured on Horizon's pad yet):
+
+- **Only the official modes.** Off 0x05, feedback 0x21, weapon 0x25 and
+  vibration 0x26 are the modes Nielk1's notes call official and expected in
+  future firmware; bow 0x22, galloping 0x23 and machine 0x27 "might be
+  removed", and the low "simple" modes (0x01, 0x02) that pydualsense and
+  DualSense-Windows send are leftovers. The bow mode's snap-back would suit a
+  bow, but a firmware update could take it away.
+- **Bows build tension.** Kena: Bridge of Spirits and Astro's Playroom use
+  the triggers to make you feel the bow being drawn (PlayStation Blog's
+  DualSense round-up, as reported by
+  [GameSpot](https://www.gamespot.com/articles/sony-reveals-how-ps5s-dualsense-controller-works-with-ratchet-clank-returnal-scarlet-nexus-and-more/1100-6491469/)). Minecraft holds the draw for
+  as long as you like, so the tension stops at 6 of 8 (dualsensectl: 1 is
+  "almost no resistance", 8 the maximum), and starts after the first two
+  zones so the press that starts the draw stays light.
+- **A loaded crossbow is a gun trigger.** The developer note GameSpot quotes
+  describes a bazooka whose resistance "will cause the trigger to catch at the
+  input position just before the bullet is fired, and as you continue to pull
+  the trigger, the bullet will fire and release the tension": the weapon
+  effect does exactly that, and Horizon moves its breaking point onto the
+  threshold so the click is the shot. DSX community presets use the same
+  shape (DSX++'s example `Weapon {2, 6, 8}`; dualsensectl's
+  `weapon 2 3 8` "resists strongly and lets go almost immediately").
+  Returnal and Ratchet & Clank: Rift Apart use a half-press stop to split two
+  actions on one trigger; Minecraft has one action per trigger, so Horizon
+  doesn't.
+- **Boosts click lighter.** A rocket or a pig's carrot fires on the pull, so
+  it gets a catch that gives way rather than a wall that never does (strength
+  5, below the crossbow's 8).
+- **A disabled shield locks the trigger**, as Deathloop locks R2 halfway
+  when a gun jams, "to give to the player an immediate feedback even before
+  the animation plays out" (its director, Dinga Bakaba, in
+  [Destructoid's report](https://www.destructoid.com/when-a-gun-jams-in-deathloop-the-ps5-controllers-triggers-will-lock-up/)):
+  the shield can't be raised, and the finger feels why.
+- **Mining is a texture.** The vibration mode buzzes the trigger at a given
+  rate; reWASD's preset uses 30 Hz and its "rifle" 2..20 Hz. Softer blocks
+  get a finer, faster grit, harder ones a slower, heavier chug, never above
+  5 of 8, since the attack trigger is held for seconds.
+
 Byte layout from public references, read for facts; no code is copied from
 them (the kernel and dualsensectl are GPL):
 
@@ -331,6 +401,7 @@ them (the kernel and dualsensectl are GPL):
 | SDL [`SDL_hidapi_ps5.c`](https://github.com/libsdl-org/SDL/blob/6defbc0129b5ba90bab3f6c67bbc1e9329e24ff1/src/joystick/hidapi/SDL_hidapi_ps5.c) and [`SDL_hints.h`](https://github.com/libsdl-org/SDL/blob/6defbc0129b5ba90bab3f6c67bbc1e9329e24ff1/include/SDL3/SDL_hints.h) (zlib) | `6defbc0` | the 47-byte block, rumble flags and stop, 0x0224, legacy at half, LED reset and the Bluetooth animation clock, USB report length 48, the enhanced-mode switch |
 | Linux [`hid-playstation.c`](https://github.com/torvalds/linux/blob/045958acaa75205b31578cb22c4345e28dd2e4bf/drivers/hid/hid-playstation.c) (GPL) | `045958a` | valid flags, the Bluetooth sequence and tag 0x10, CRC seed 0xA2, `dualsense_reset_leds`, `use_vibration_v2` from 2.21, player LED patterns, the default blue |
 | [dualsensectl](https://github.com/nowrep/dualsensectl/blob/d3ae2fa272e1bf9a5c08a0ded3f374b40f7c73ac/main.c) (GPL) | `d3ae2fa` | trigger valid bits (flags 0 bits 2, 3), `reduce_motor_power` (byte 36) and its flag, the trigger effect packing |
+| Nielk1's [TriggerEffectGenerator](https://gist.github.com/Nielk1/6d54cc2c00d2201ccb8c2720ad7538db/f73a299fdc52f43be84d39e62734192ad82bb393) (MIT) | rev. `f73a299` | the trigger modes (official 0x05, 0x21, 0x25, 0x26) and their zone packing |
 | [pydualsense](https://github.com/flok/pydualsense/blob/01445f5ed6ba/pydualsense/pydualsense.py) (MIT) | `01445f5` | sets the attenuation flag with 0 on every report |
 | [nondebug/dualsense](https://github.com/nondebug/dualsense) | `b87450e` | an all-zero report 0x02 leaves rumble emulation for the audio haptics |
 
