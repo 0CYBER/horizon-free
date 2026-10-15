@@ -866,13 +866,16 @@ impl Game<'_> {
     /// Steam's on a Steam Deck (`steam://open/keyboard`, which types into
     /// the window like a real keyboard).
     fn pad_open_keyboard(&mut self) {
-        if gamepad::steam_keyboard(self.settings.controller.keyboard) {
-            let _ = std::process::Command::new("xdg-open")
+        // Without xdg-open (macOS, Windows), Horizon's keyboard instead.
+        if gamepad::steam_keyboard(self.settings.controller.keyboard)
+            && std::process::Command::new("xdg-open")
                 .arg("steam://open/keyboard")
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
-                .spawn();
+                .spawn()
+                .is_ok()
+        {
             return;
         }
         self.pad.menu.osk = Some(Keyboard::default());
