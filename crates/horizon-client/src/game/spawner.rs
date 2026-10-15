@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 type Pos = (i32, i32, i32);
 
 /// What a spawner tick decided to add, created once the level is free.
-enum Planned {
+pub(super) enum Planned {
     /// `finalizeSpawn` ran on a fresh mob.
     Finalized(Mob),
     /// A mob loaded from the spawn data (with its passengers).
@@ -113,7 +113,12 @@ impl Game<'_> {
             spawner.server_tick(&level, &mut random, pos, &mut spawn, &mut events);
         }
         self.world.random = random;
-        // Provisional ids (counting down from u32::MAX) become the mobs' ids.
+        let ids = self.add_planned(planned);
+        self.apply_spawner_events(key, events, &ids)
+    }
+    /// Creates the mobs a spawner tick planned; their provisional ids
+    /// (counting down from u32::MAX) map to the mobs' ids.
+    pub(super) fn add_planned(&mut self, planned: Vec<Planned>) -> HashMap<u32, u32> {
         let mut ids = HashMap::new();
         for (i, plan) in planned.into_iter().enumerate() {
             let provisional = u32::MAX - i as u32;
@@ -133,11 +138,11 @@ impl Game<'_> {
                 ids.insert(provisional, id);
             }
         }
-        self.apply_spawner_events(key, events, &ids)
+        ids
     }
     /// The spawner's `loadEntityRecursive` and `tryAddFreshEntityWithPassengers`:
     /// the mob it will add (created after the tick) and its box.
-    fn plan_spawner_mob(
+    pub(super) fn plan_spawner_mob(
         &self,
         l: &super::natural_spawning::GameLevel,
         r: &SpawnerSpawn,
@@ -151,6 +156,8 @@ impl Game<'_> {
             let facts = self.biome_facts(x.floor() as i32, y.floor() as i32, z.floor() as i32);
             let difficulty = self.local_difficulty(r.position);
             spawning::finalize(&mut mob, &facts, &difficulty);
+            // TrialSpawner.spawnMob: setPersistenceRequired.
+            mob.persistent = r.trial;
             horizon_client::mobs::raider::finalize(
                 &mut mob,
                 horizon_client::mobs::raider::Reason::Other,
@@ -187,6 +194,9 @@ impl Game<'_> {
                     Tag::Float(0f32.to_bits()),
                 ]),
             );
+            if r.trial {
+                tag.insert("PersistenceRequired".into(), Tag::Byte(1));
+            }
             let tag = Tag::Compound(tag);
             let mob = horizon_client::entity_nbt::mob_from_nbt(&tag, &self.res.mob_types, 0)?;
             let bounds = mob.bounds();
