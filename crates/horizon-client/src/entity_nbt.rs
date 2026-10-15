@@ -389,6 +389,7 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             crate::mobs::nautilus::to_nbt(m, map);
         }
         "minecraft:sulfur_cube" => crate::mobs::sulfur_cube::to_nbt(m, map),
+        "minecraft:bee" => crate::mobs::bee::to_nbt(m, map),
         "minecraft:sniffer" => crate::mobs::sniffer::to_nbt(m, map),
         "minecraft:wither" => {
             map.insert("Invul".into(), Tag::Int(m.extra.counter));
@@ -767,6 +768,9 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     }
     if m.species() == crate::mobs::Species::SulfurCube {
         crate::mobs::sulfur_cube::from_nbt(&mut m, tag);
+    }
+    if m.species() == crate::mobs::Species::Bee {
+        crate::mobs::bee::from_nbt(&mut m, tag);
     }
     if m.species() == crate::mobs::Species::Creaking
         && let Some(Tag::IntArray(home)) = tag.get("home_pos")

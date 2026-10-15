@@ -615,6 +615,20 @@ public final class VanillaMobAiOracle {
                     if (cooldown > 0) brain.setMemory(MemoryModuleType.TRANSPORT_ITEMS_COOLDOWN_TICKS, cooldown);
                     else brain.eraseMemory(MemoryModuleType.TRANSPORT_ITEMS_COOLDOWN_TICKS);
                 }
+                if (mob instanceof net.minecraft.world.entity.animal.bee.Bee bee) {
+                    // The constructor's draws, made again with the seeded random: the validate
+                    // goals' cooldowns (registerGoals), then the flower cooldown's initialiser.
+                    var rnd = bee.getRandom();
+                    int hive = net.minecraft.util.Mth.nextInt(rnd, 20, 40);
+                    int flower = net.minecraft.util.Mth.nextInt(rnd, 20, 40);
+                    for (WrappedGoal g : ((GoalSelector) get(bee, "goalSelector")).getAvailableGoals()) {
+                        String n = g.getGoal().getClass().getSimpleName();
+                        if (n.equals("ValidateHiveGoal")) field(g.getGoal().getClass(), "VALIDATE_HIVE_COOLDOWN").setInt(g.getGoal(), hive);
+                        if (n.equals("ValidateFlowerGoal")) field(g.getGoal().getClass(), "validateFlowerCooldown").setInt(g.getGoal(), flower);
+                    }
+                    field(net.minecraft.world.entity.animal.bee.Bee.class, "remainingCooldownBeforeLocatingNewFlower")
+                        .setInt(bee, net.minecraft.util.Mth.nextInt(rnd, 20, 60));
+                }
                 @SuppressWarnings("unchecked")
                 Map<Object, Sensor<?>> sensors = (Map<Object, Sensor<?>>) get(brain, "sensors");
                 for (Sensor<?> sensor : sensors.values()) sensor.randomlyDelayStart(mob.getRandom());
@@ -985,6 +999,18 @@ public final class VanillaMobAiOracle {
                 Object opened = get(golem, "openedChestPos");
                 sb.append("\tcg ").append(golem.getState().ordinal()).append(' ').append(stack(golem.getMainHandItem())).append(' ')
                     .append(opened == null ? "-" : pos((BlockPos) opened));
+            }
+            if (m instanceof net.minecraft.world.entity.animal.bee.Bee bee) {
+                // Flags (roll 2, stung 4, nectar 8), anger left, ticks without nectar, flower cooldown, flower.
+                Object acc = field(net.minecraft.world.entity.animal.bee.Bee.class, "DATA_FLAGS_ID").get(null);
+                @SuppressWarnings("unchecked")
+                byte flags = bee.getEntityData().get((net.minecraft.network.syncher.EntityDataAccessor<Byte>) acc);
+                long end = bee.getPersistentAngerEndTime();
+                BlockPos flower = bee.getSavedFlowerPos();
+                sb.append("\tbee ").append(flags).append(' ').append(end > 0 ? end - bee.level().getGameTime() : -1).append(' ')
+                    .append(field(net.minecraft.world.entity.animal.bee.Bee.class, "ticksWithoutNectarSinceExitingHive").getInt(bee)).append(' ')
+                    .append(field(net.minecraft.world.entity.animal.bee.Bee.class, "remainingCooldownBeforeLocatingNewFlower").getInt(bee)).append(' ')
+                    .append(flower == null ? "-" : pos(flower));
             }
             out.println(sb);
         }

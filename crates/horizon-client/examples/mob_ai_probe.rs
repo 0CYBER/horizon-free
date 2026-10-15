@@ -470,7 +470,7 @@ fn player_hurt(player: Option<&PlayerView>, e: &MobEvent) -> bool {
 
 /// `player_down`: the scenario's player is no valid target (creative, or
 /// killed this tick).
-fn print(out: &mut String, t: i32, i: usize, m: &Mob, player_down: bool) {
+fn print(out: &mut String, t: i32, i: usize, m: &Mob, player_down: bool, now: i64) {
     let _ = write!(out, "{t} {i}");
     if m.removed {
         // Entity.RemovalReason: the end of the death animation, else a discard.
@@ -588,6 +588,21 @@ fn print(out: &mut String, t: i32, i: usize, m: &Mob, player_down: bool) {
             .opened_chest
             .map_or("-".into(), |p| format!("{},{},{}", p[0], p[1], p[2]));
         let _ = write!(out, "\tcg {} {held} {opened}", m.extra.variant3);
+    }
+    if let Some(b) = horizon_client::mobs::bee::get(m) {
+        let anger = if b.anger_end > 0 {
+            b.anger_end - now
+        } else {
+            -1
+        };
+        let flower = b
+            .flower
+            .map_or("-".into(), |p| format!("{},{},{}", p[0], p[1], p[2]));
+        let _ = write!(
+            out,
+            "\tbee {} {anger} {} {} {flower}",
+            b.flags, b.ticks_without_nectar, b.flower_cooldown
+        );
     }
     out.push('\n');
 }
@@ -835,6 +850,10 @@ fn main() -> horizon_client::Result<()> {
                 }
             }
             m.random = LegacyRandom::new(spec.seed);
+            if m.species() == Species::Bee {
+                // The oracle draws the constructor's cooldowns again once seeded.
+                horizon_client::mobs::bee::draw_cooldowns(&mut m);
+            }
             if horizon_client::mobs::monster_brain::has_brain(m.species()) {
                 // The oracle delays the sensors again with the seeded random
                 // and seeds RunOne's shuffles with the mob's seed.
@@ -902,7 +921,7 @@ fn main() -> horizon_client::Result<()> {
         // from it, and the scenarios feed neither.
         let mut level_random = LegacyRandom::new(0);
         for (i, m) in mobs.iter().enumerate() {
-            print(&mut out, 0, i, m, s.creative);
+            print(&mut out, 0, i, m, s.creative, world.game_time);
         }
         // The MobWorld every step sees, over a snapshot of the mobs.
         macro_rules! mob_world {
@@ -1152,7 +1171,14 @@ fn main() -> horizon_client::Result<()> {
                 .iter()
                 .any(|e| player_hurt(player.as_ref(), e) && player_damage(e) >= 20.0);
             for (i, m) in mobs.iter().enumerate() {
-                print(&mut out, t, i, m, s.creative || player_killed);
+                print(
+                    &mut out,
+                    t,
+                    i,
+                    m,
+                    s.creative || player_killed,
+                    world.game_time,
+                );
             }
             for e in &events {
                 if let MobEvent::Sound(name, _, volume, pitch) = e {

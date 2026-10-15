@@ -174,6 +174,26 @@ impl GoalSelector {
 
 // --- random positions (DefaultRandomPos / LandRandomPos / RandomPos) -------
 
+/// RandomPos.moveUpToAboveSolid: out of the solid blocks, then up to
+/// `above` more blocks of air.
+fn move_up_to_above_solid(w: &MobWorld, mut p: [i32; 3], above: i32) -> [i32; 3] {
+    if !w.solid(p[0], p[1], p[2]) {
+        return p;
+    }
+    p[1] += 1;
+    while p[1] <= 319 && w.solid(p[0], p[1], p[2]) {
+        p[1] += 1;
+    }
+    let first = p[1];
+    while p[1] <= 319 && p[1] - first < above {
+        p[1] += 1;
+        if w.solid(p[0], p[1], p[2]) {
+            p[1] -= 1;
+            break;
+        }
+    }
+    p
+}
 /// `Mob.isWithinHome(BlockPos)`.
 pub fn within_home(c: [i32; 3], r: i32, p: [i32; 3]) -> bool {
     let d = |i: usize| i64::from(c[i] - p[i]);
@@ -371,29 +391,89 @@ impl Mob {
         xd: f64,
         zd: f64,
     ) -> Option<[f64; 3]> {
+        // Every caller passes `(float) (Math.PI / 2)`.
+        let max_rad = f64::from(std::f32::consts::FRAC_PI_2);
         self.pick_best(w, |m| {
-            let d = m.random_direction_within(
-                0.0,
-                f64::from(h),
-                v,
-                fly_height,
-                xd,
-                zd,
-                // Every caller passes `(float) (Math.PI / 2)`.
-                f64::from(std::f32::consts::FRAC_PI_2),
-            )?;
-            let mut p = m.toward(f64::from(h), d);
-            if p[1] < crate::chunk::MIN_Y || p[1] >= 320 || m.restricted(f64::from(h), p) {
+            m.air_and_water_pos(w, h, v, fly_height, xd, zd, max_rad)
+        })
+    }
+    /// AirAndWaterRandomPos.generateRandomPos.
+    #[allow(clippy::too_many_arguments)]
+    fn air_and_water_pos(
+        &mut self,
+        w: &MobWorld,
+        h: i32,
+        v: i32,
+        fly_height: i32,
+        xd: f64,
+        zd: f64,
+        max_rad: f64,
+    ) -> Option<[i32; 3]> {
+        let d = self.random_direction_within(0.0, f64::from(h), v, fly_height, xd, zd, max_rad)?;
+        let mut p = self.toward(f64::from(h), d);
+        if p[1] < crate::chunk::MIN_Y || p[1] >= 320 || self.restricted(f64::from(h), p) {
+            return None;
+        }
+        // RandomPos.moveUpOutOfSolid
+        if w.solid(p[0], p[1], p[2]) {
+            p[1] += 1;
+            while p[1] <= 319 && w.solid(p[0], p[1], p[2]) {
+                p[1] += 1;
+            }
+        }
+        (self.malus(w.path_type_static(p[0], p[1], p[2])) == 0.0).then_some(p)
+    }
+    /// AirRandomPos.getPosTowards: an AirAndWaterRandomPos towards a point,
+    /// out of water.
+    pub fn air_random_pos_towards(
+        &mut self,
+        w: &MobWorld,
+        h: i32,
+        v: i32,
+        fly_height: i32,
+        to: [f64; 3],
+        max_rad: f64,
+    ) -> Option<[f64; 3]> {
+        let (xd, zd) = (to[0] - self.position.x, to[2] - self.position.z);
+        self.pick_best(w, |m| {
+            let p = m.air_and_water_pos(w, h, v, fly_height, xd, zd, max_rad)?;
+            (w.fluid(p[0], p[1], p[2]) != crate::blocks::Fluid::Water).then_some(p)
+        })
+    }
+    /// HoverRandomPos.getPos: a stable spot within the radians of a
+    /// direction, raised a random `hover_min..=hover_max` blocks above the
+    /// solid ground it is in, out of water and free of path maluses.
+    #[allow(clippy::too_many_arguments)]
+    pub fn hover_random_pos(
+        &mut self,
+        w: &MobWorld,
+        h: i32,
+        v: i32,
+        xd: f64,
+        zd: f64,
+        max_rad: f64,
+        hover_max: i32,
+        hover_min: i32,
+    ) -> Option<[f64; 3]> {
+        self.pick_best(w, |m| {
+            let d = m.random_direction_within(0.0, f64::from(h), v, 0, xd, zd, max_rad)?;
+            // LandRandomPos.generateRandomPosTowardDirection
+            let p = m.toward(f64::from(h), d);
+            if p[1] < crate::chunk::MIN_Y
+                || p[1] >= 320
+                || m.restricted(f64::from(h), p)
+                || !m.stable_destination(w, p)
+            {
                 return None;
             }
-            // RandomPos.moveUpOutOfSolid
-            if w.solid(p[0], p[1], p[2]) {
-                p[1] += 1;
-                while p[1] <= 319 && w.solid(p[0], p[1], p[2]) {
-                    p[1] += 1;
-                }
-            }
-            (m.malus(w.path_type_static(p[0], p[1], p[2])) == 0.0).then_some(p)
+            let above = m
+                .random
+                .next_int_bound(hover_max - hover_min + 1)
+                .unwrap_or(0)
+                + hover_min;
+            let p = move_up_to_above_solid(w, p, above);
+            let water = w.fluid(p[0], p[1], p[2]) == crate::blocks::Fluid::Water;
+            (!water && m.malus(w.path_type_static(p[0], p[1], p[2])) == 0.0).then_some(p)
         })
     }
     /// LandRandomPos.getPos
@@ -1340,6 +1420,9 @@ pub struct HurtByTarget {
     pub alert_except: Vec<Species>,
     /// Attackers ignored (e.g. zombified piglins ignore other zombified piglins).
     pub ignore: Vec<Species>,
+    /// `Bee.BeeHurtByOtherGoal`: kept only while angry, and alerting others
+    /// only when the attacker is in sight.
+    pub bee: bool,
     timestamp: i32,
     st: TargetState,
 }
@@ -1349,6 +1432,7 @@ impl HurtByTarget {
             alert: false,
             alert_except: vec![],
             ignore: vec![],
+            bee: false,
             timestamp: 0,
             st: TargetState {
                 unseen_memory: 300,
@@ -1364,6 +1448,10 @@ impl HurtByTarget {
         self.ignore = s.to_vec();
         self
     }
+    pub fn bee(mut self) -> Self {
+        self.bee = true;
+        self
+    }
 }
 impl Default for HurtByTarget {
     fn default() -> Self {
@@ -1372,6 +1460,13 @@ impl Default for HurtByTarget {
 }
 impl Goal for HurtByTarget {
     goal_clone!();
+    fn name(&self) -> &'static str {
+        if self.bee {
+            "BeeHurtByOtherGoal"
+        } else {
+            "HurtByTarget"
+        }
+    }
     fn flags(&self) -> u8 {
         TARGET
     }
@@ -1396,6 +1491,9 @@ impl Goal for HurtByTarget {
         t.alive && t.can_be_seen_as_enemy && !(t.is_player && t.creative)
     }
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if self.bee && !super::bee::angry(m, cx.w) {
+            return false;
+        }
         target_continue(&mut self.st, true, m, cx)
     }
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
@@ -1426,6 +1524,10 @@ impl Goal for HurtByTarget {
                     .filter(|s| Who::Mob(s.id) != by)
                     .map(|s| s.id)
                     .collect();
+            // Bee.BeeHurtByOtherGoal.alertOther: only with the attacker in sight.
+            if self.bee && !ids.is_empty() && !m.sees(cx.w, by) {
+                return;
+            }
             for other in ids {
                 cx.events.push(MobEvent::SetTarget {
                     mob: other,

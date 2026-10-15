@@ -12,6 +12,7 @@ pub mod animal_brain;
 pub mod aquatic;
 pub mod axolotl;
 pub mod bat;
+pub mod bee;
 pub mod body_anim;
 pub mod brain;
 pub mod breeze;
@@ -755,6 +756,8 @@ pub struct Extra {
     pub lone: bool,
     /// A breeze's or creaking's brain (`monster_brain`).
     pub brain: Option<Box<monster_brain::Brain>>,
+    /// A bee's nectar, anger, flower and hive state.
+    pub bee: Option<Box<bee::Bee>>,
 }
 #[derive(Clone, Debug)]
 pub struct Mob {

@@ -237,6 +237,19 @@ def scenarios():
     CAVE = ['fill -5 -60 -5 5 -54 5 minecraft:stone', 'fill -4 -60 -4 4 -55 4 minecraft:air']
     for i, seed in enumerate([144, 145, 146]):
         add(f'bat_cave_{i}', 400, CAVE + [f'mob minecraft:bat 0.5 -58 0.5 {90 * i} {seed} persistent'])
+    # Bees: wandering over grass (HoverRandomPos), pollinating a flower bed until they carry nectar,
+    # drawn to a player holding a flower, staying home at night and in the rain (no hive to find),
+    # drowning in a pool, and angered by a hit: they chase and sting the player once, then die of it.
+    FLOWERS = 'fill 3 -60 2 5 -60 4 minecraft:dandelion'
+    for i, seed in enumerate([151, 152]):
+        add(f'bee_alone_{i}', 400, [f'mob minecraft:bee 0.5 -58 0.5 {90 * i} {seed} persistent'])
+    for i, seed in enumerate([153, 154]):
+        add(f'bee_flowers_{i}', 700, [FLOWERS, f'mob minecraft:bee 0.5 -58 0.5 {180 * i} {seed} persistent'])
+    add('bee_tempted', 200, ['player 6.5 -60 0.5 hand=minecraft:dandelion', 'mob minecraft:bee 0.5 -58 0.5 0 155 persistent'])
+    add('bee_night', 300, [FLOWERS, 'mob minecraft:bee 0.5 -58 0.5 0 156 persistent'], 'time=18000')
+    add('bee_rain', 300, [FLOWERS, 'mob minecraft:bee 0.5 -58 0.5 0 157 persistent'], 'rain')
+    add('bee_pool', 200, ['fill -3 -63 -3 3 -61 3 minecraft:water', 'mob minecraft:bee 0.5 -62 0.5 0 158 persistent'])
+    add('bee_sting', 400, ['player 4.5 -60 0.5', 'mob minecraft:bee 0.5 -58 0.5 0 159 persistent', 'hurt 20 0'])
     return s
 
 

@@ -346,10 +346,10 @@ impl Mob {
         self.vertical_collision_below = vertical && wanted.y < 0.0;
         self.on_ground = self.vertical_collision_below;
         // Strider.checkFallDamage: lava breaks any fall, and the fluid state
-        // waits for the next baseTick; Bat.checkFallDamage does nothing.
+        // waits for the next baseTick; Bat and Bee.checkFallDamage do nothing.
         if self.kind.flags.lava_walker && self.fluids.in_lava {
             self.fall_distance = 0.0;
-        } else if self.kind.species != super::Species::Bat {
+        } else if !matches!(self.kind.species, super::Species::Bat | super::Species::Bee) {
             self.check_fall_damage(w, moved, events);
         }
         // restituteMovementAfterCollisions with no bounciness: the colliding
@@ -782,9 +782,15 @@ impl Mob {
             self.ai.no_jump_delay = 0;
         }
     }
-    /// Mob.jumpInLiquid: floaters rise 0.04 per tick, others 0.3.
+    /// Mob.jumpInLiquid: floaters rise 0.04 per tick, others 0.3; bees 0.01.
     fn jump_in_liquid(&mut self) {
-        self.velocity.y += if self.ai.nav.can_float { 0.04 } else { 0.3 };
+        self.velocity.y += if self.species() == super::Species::Bee {
+            0.01
+        } else if self.ai.nav.can_float {
+            0.04
+        } else {
+            0.3
+        };
     }
     pub fn jump_from_ground(&mut self, w: &MobWorld) {
         if self.species() == super::Species::Rabbit {
