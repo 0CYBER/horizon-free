@@ -7957,7 +7957,7 @@ impl Game<'_> {
         if wait {
             self.save.flush();
         }
-        self.save_entities()?;
+        self.save_entities(wait)?;
         self.save_maps();
         self.save_random_sequences();
         self.save_raids();
