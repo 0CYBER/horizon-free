@@ -831,6 +831,18 @@ impl Game<'_> {
                 }
             }
             C::BlockChangedAck(_) => {}
+            // ClientLevel.blockEvent: BlockEntity.triggerEvent (chest lids,
+            // shulker boxes, bells) when the block is still the one it names.
+            C::BlockEvent(p) => {
+                let state = self.world.block(p.pos[0], p.pos[1], p.pos[2]);
+                let block = &self.res.facts.get(state).name;
+                let named = self.remote.as_ref().and_then(|r| {
+                    r.builtin.get("minecraft:block")?.name(p.block).map(str::to_owned)
+                });
+                if named.as_deref() == Some(&**block) {
+                    self.block_entity_event(p.pos, i32::from(p.b0), i32::from(p.b1));
+                }
+            }
             C::LevelEvent(p) if p.kind == 2015 => {
                 self.dragon_egg_particles(p.pos, p.data);
             }
@@ -1694,6 +1706,8 @@ impl Game<'_> {
         // ClientLevel.tick: the border's size change.
         self.border.tick();
         self.tick_remote_entities();
+        // ClientLevel.tickBlockEntities: chest lids, shulker boxes, bells.
+        self.tick_block_entity_anims();
         self.tick_hand();
         self.tick_particles();
         let Some(player) = self.player.as_mut() else {

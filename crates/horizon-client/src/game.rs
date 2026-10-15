@@ -988,6 +988,9 @@ struct Game<'a> {
     /// position) for the guests.
     lan_block_events: Vec<([i32; 3], i32, i32, u16)>,
     lan_entity_events: Vec<(i32, i8, [f64; 3])>,
+    /// `ContainerOpenersCounter`: how many players (the host and the guests)
+    /// have each chest open.
+    lid_openers: HashMap<(i32, i32, i32), i32>,
     lan_acting: Option<u32>,
     /// Command feedback to forward to a guest.
     chat_capture: Option<Vec<horizon_client::text::Text>>,
@@ -9848,6 +9851,7 @@ pub fn run() -> Result<()> {
         lan_events: Vec::new(),
         lan_block_events: Vec::new(),
         lan_entity_events: Vec::new(),
+        lid_openers: HashMap::new(),
         lan_acting: None,
         chat_capture: None,
         cmds: Default::default(),
