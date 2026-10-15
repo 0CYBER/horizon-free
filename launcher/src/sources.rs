@@ -1,0 +1,407 @@
+//! Where the player's own Minecraft files are: the folder they chose, the official launcher's,
+//! or another launcher's (Prism Launcher, MultiMC, Modrinth App, ATLauncher, GDLauncher), #434.
+//! horizon-prepare reads the official launcher's layout and pins the version JSON's own sha1, so
+//! files found elsewhere are linked into that layout in the launcher's data folder, with the
+//! pinned version JSON from Mojang when the other launcher keeps its own rewrite of it.
+
+use serde_json::Value;
+use sha1::{Digest, Sha1};
+use std::fs;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+
+/// What a version's research-lock.json pins about the game files.
+pub struct Pins {
+    pub version: String,
+    pub client_sha1: String,
+    /// The version JSON's sha1, then the earlier ones Mojang republished.
+    pub manifests: Vec<String>,
+}
+
+impl Pins {
+    pub fn read(lock: &Value) -> Option<Pins> {
+        let game = &lock["minecraft"];
+        let text = |key: &str| game[key].as_str().map(String::from);
+        let mut manifests = vec![text("manifest_sha1")?];
+        if let Some(list) = game["accepted_manifest_sha1"].as_array() {
+            manifests.extend(list.iter().filter_map(Value::as_str).map(String::from));
+        }
+        Some(Pins {
+            version: text("version")?,
+            client_sha1: text("client_sha1")?,
+            manifests,
+        })
+    }
+
+    fn manifest_accepted(&self, path: &Path) -> bool {
+        sha1_file(path).is_some_and(|sha1| self.manifests.contains(&sha1))
+    }
+}
+
+/// A launcher's copy of the pinned version.
+#[derive(Debug, PartialEq)]
+pub struct Found {
+    /// The folder holding the launcher's `libraries` and `assets`.
+    pub base: PathBuf,
+    /// The client jar, checked against the pin.
+    pub client: PathBuf,
+    /// The launcher's version JSON when it is one Horizon pins.
+    pub manifest: Option<PathBuf>,
+}
+
+impl Found {
+    /// Whether `base` is in the official launcher's layout, so horizon-prepare reads it as is.
+    fn official_layout(&self, version: &str) -> bool {
+        let dir = self.base.join("versions").join(version);
+        self.client == dir.join(format!("{version}.jar"))
+            && self.manifest == Some(dir.join(format!("{version}.json")))
+    }
+}
+
+pub struct Folders {
+    pub home: PathBuf,
+    /// `dirs::data_dir()`: ~/.local/share (XDG_DATA_HOME), ~/Library/Application Support,
+    /// %APPDATA%.
+    pub data: PathBuf,
+    /// `dirs::config_dir()`: ~/.config (XDG_CONFIG_HOME), the same as `data` elsewhere.
+    pub config: PathBuf,
+}
+
+impl Folders {
+    pub fn current() -> Option<Folders> {
+        Some(Folders {
+            home: dirs::home_dir()?,
+            data: dirs::data_dir()?,
+            config: dirs::config_dir()?,
+        })
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum Os {
+    Linux,
+    MacOs,
+    Windows,
+}
+
+impl Os {
+    pub fn current() -> Os {
+        if cfg!(target_os = "macos") {
+            Os::MacOs
+        } else if cfg!(windows) {
+            Os::Windows
+        } else {
+            Os::Linux
+        }
+    }
+}
+
+const OFFICIAL: &str = "the official launcher";
+
+/// Every launcher's default game folder on `os`, the official launcher's first. MultiMC on
+/// macOS and Windows has none (it lives where it was unzipped): it is chosen by hand.
+pub fn known_folders(os: Os, f: &Folders) -> Vec<(&'static str, PathBuf)> {
+    let flatpak = |app: &str, rest: &str| f.home.join(".var/app").join(app).join(rest);
+    let mut list = match os {
+        Os::Linux => vec![
+            (OFFICIAL, f.home.join(".minecraft")),
+            (OFFICIAL, flatpak("com.mojang.Minecraft", ".minecraft")),
+            ("Prism Launcher", f.data.join("PrismLauncher")),
+            (
+                "Prism Launcher",
+                flatpak("org.prismlauncher.PrismLauncher", "data/PrismLauncher"),
+            ),
+            ("MultiMC", f.data.join("multimc")),
+            ("Modrinth App", f.data.join("ModrinthApp")),
+            (
+                "Modrinth App",
+                flatpak("com.modrinth.ModrinthApp", "data/ModrinthApp"),
+            ),
+            ("ATLauncher", f.data.join("atlauncher")),
+            (
+                "ATLauncher",
+                flatpak("com.atlauncher.ATLauncher", "data/atlauncher"),
+            ),
+        ],
+        Os::MacOs => vec![
+            (OFFICIAL, f.data.join("minecraft")),
+            ("Prism Launcher", f.data.join("PrismLauncher")),
+            ("MultiMC", f.data.join("MultiMC")),
+            ("Modrinth App", f.data.join("ModrinthApp")),
+            ("ATLauncher", f.data.join("ATLauncher")),
+        ],
+        Os::Windows => vec![
+            (OFFICIAL, f.data.join(".minecraft")),
+            ("Prism Launcher", f.data.join("PrismLauncher")),
+            ("Modrinth App", f.data.join("ModrinthApp")),
+            ("ATLauncher", f.data.join("ATLauncher")),
+        ],
+    };
+    // Names every system shares: the Modrinth App before its rename, GDLauncher and its
+    // previous version (GDLauncher Next).
+    list.extend([
+        ("Modrinth App", f.data.join("com.modrinth.theseus")),
+        ("GDLauncher", f.data.join("gdlauncher_carbon")),
+        ("GDLauncher", f.config.join("gdlauncher_next")),
+    ]);
+    list
+}
+
+/// The client jar's path in a Maven repository: `com.mojang:minecraft:26.3:client` is
+/// `com/mojang/minecraft/26.3/minecraft-26.3-client.jar`.
+pub fn maven_path(name: &str) -> Option<String> {
+    let (name, extension) = name.split_once('@').unwrap_or((name, "jar"));
+    let parts: Vec<&str> = name.split(':').collect();
+    let (group, artifact, version) = match parts[..] {
+        [group, artifact, version] | [group, artifact, version, _] => (group, artifact, version),
+        _ => return None,
+    };
+    let classifier = parts.get(3).map(|c| format!("-{c}")).unwrap_or_default();
+    let unsafe_part = |p: &str| p.is_empty() || p.contains(['/', '\\']) || p.contains("..");
+    if parts.iter().any(|p| unsafe_part(p)) || unsafe_part(extension) {
+        return None;
+    }
+    Some(format!(
+        "{}/{artifact}/{version}/{artifact}-{version}{classifier}.{extension}",
+        group.replace('.', "/")
+    ))
+}
+
+/// The client jar Prism Launcher's and MultiMC's metadata name (`meta/net.minecraft/<v>.json`,
+/// their own format, `mainJar` a Maven name in `libraries`).
+fn meta_client_jar(base: &Path, version: &str) -> Option<String> {
+    let meta = fs::read_to_string(base.join(format!("meta/net.minecraft/{version}.json"))).ok()?;
+    let meta: Value = serde_json::from_str(&meta).ok()?;
+    maven_path(meta["mainJar"]["name"].as_str()?).map(|path| format!("libraries/{path}"))
+}
+
+/// Where launchers keep the client jar, relative to the folder holding their `libraries`.
+fn client_jars(base: &Path, version: &str) -> Vec<String> {
+    let v = version;
+    let mut jars: Vec<String> = meta_client_jar(base, v).into_iter().collect();
+    for jar in [
+        // The official launcher; the Modrinth App, in meta/.
+        format!("versions/{v}/{v}.jar"),
+        // Prism Launcher and MultiMC.
+        format!("libraries/com/mojang/minecraft/{v}/minecraft-{v}-client.jar"),
+        // ATLauncher and GDLauncher.
+        format!("libraries/net/minecraft/client/{v}/client-{v}.jar"),
+    ] {
+        if !jars.contains(&jar) {
+            jars.push(jar);
+        }
+    }
+    jars
+}
+
+fn sha1_file(path: &Path) -> Option<String> {
+    let mut file = fs::File::open(path).ok()?;
+    let mut hash = Sha1::new();
+    let mut buffer = vec![0; 1 << 20];
+    loop {
+        match file.read(&mut buffer).ok()? {
+            0 => break,
+            n => hash.update(&buffer[..n]),
+        }
+    }
+    Some(hash.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// The pinned version in one launcher folder, or what the folder lacks. The folder holding
+/// `libraries` is the folder itself or its `meta` (Modrinth App), `data` (GDLauncher) or
+/// `datastore` (GDLauncher Next).
+pub fn find(dir: &Path, pins: &Pins) -> Result<Found, String> {
+    if !dir.is_dir() {
+        return Err("the folder doesn't exist".into());
+    }
+    let v = &pins.version;
+    let mut other = None;
+    let bases = [dir.to_path_buf()]
+        .into_iter()
+        .chain(["meta", "data", "datastore"].map(|sub| dir.join(sub)));
+    for base in bases {
+        for jar in client_jars(&base, v) {
+            let client = base.join(&jar);
+            if !client.is_file() {
+                continue;
+            }
+            if sha1_file(&client).as_ref() != Some(&pins.client_sha1) {
+                other.get_or_insert(client);
+                continue;
+            }
+            let manifest = base.join(format!("versions/{v}/{v}.json"));
+            let manifest = pins.manifest_accepted(&manifest).then_some(manifest);
+            return Ok(Found {
+                base,
+                client,
+                manifest,
+            });
+        }
+    }
+    Err(match other {
+        Some(jar) => format!(
+            "{} is not the {v} release Horizon was made for",
+            jar.strip_prefix(dir).unwrap_or(&jar).display()
+        ),
+        None => format!("no Minecraft {v} client jar"),
+    })
+}
+
+/// The error when no folder has the pinned version: every folder looked in with what it
+/// lacks, and what the player can do about it (#419).
+pub fn not_found(version: &str, checked: &[(PathBuf, String)]) -> String {
+    let mut text = format!("Minecraft {version} was not found. Horizon looked in:");
+    for (dir, missing) in checked {
+        text += &format!("\n  {} ({missing})", dir.display());
+    }
+    text += &format!(
+        "\nTo fix it:\n  \
+         • Play {version} once in the official Minecraft launcher, or in Prism Launcher, MultiMC, \
+         the Modrinth App, ATLauncher or GDLauncher, then prepare again.\n  \
+         • Or choose the folder where your launcher keeps Minecraft {version} (Minecraft folder › \
+         Choose… in the launcher, --minecraft on the command line)."
+    );
+    text
+}
+
+/// Fetches a URL's body.
+pub type Fetch<'a> = &'a dyn Fn(&str) -> Result<Vec<u8>, String>;
+
+/// A Minecraft folder in the official launcher's layout holding the pinned version: the
+/// chosen folder when it is one, else the files found in the chosen folder (or a folder above
+/// it: a launcher's instance folder may be chosen) or any launcher's default folder, linked into
+/// `linked`.
+pub fn resolve(
+    chosen: &Path,
+    pins: &Pins,
+    known: &[(&'static str, PathBuf)],
+    linked: &Path,
+    fetch: Fetch,
+    log: &dyn Fn(String),
+) -> Result<PathBuf, String> {
+    let mut checked = Vec::new();
+    let mut found = None;
+    for dir in chosen.ancestors().take(4) {
+        match find(dir, pins) {
+            Ok(f) => {
+                found = Some(("the chosen folder", f));
+                break;
+            }
+            Err(missing) if dir == chosen => checked.push((dir.to_path_buf(), missing)),
+            Err(_) => {}
+        }
+    }
+    let same = |a: &Path, b: &Path| a == b || fs::canonicalize(a).ok() == fs::canonicalize(b).ok();
+    for (name, dir) in known.iter().filter(|(_, d)| d.is_dir() && !same(d, chosen)) {
+        if found.is_some() {
+            break;
+        }
+        match find(dir, pins) {
+            Ok(f) => found = Some((name, f)),
+            Err(missing) => checked.push((dir.clone(), format!("{name}: {missing}"))),
+        }
+    }
+    let Some((name, found)) = found else {
+        return Err(not_found(&pins.version, &checked));
+    };
+    log(format!(
+        "Using Minecraft {} from {name} ({})",
+        pins.version,
+        found.base.display()
+    ));
+    if found.official_layout(&pins.version) {
+        return Ok(found.base);
+    }
+    link_official_layout(&found, pins, linked, fetch, log)?;
+    Ok(linked.to_path_buf())
+}
+
+/// Links a launcher's files into the official layout in `linked`: the client jar as
+/// `versions/<v>/<v>.jar`, its `libraries` and `assets`, and the pinned version JSON, the
+/// launcher's own when it keeps it, else Mojang's.
+fn link_official_layout(
+    found: &Found,
+    pins: &Pins,
+    linked: &Path,
+    fetch: Fetch,
+    log: &dyn Fn(String),
+) -> Result<(), String> {
+    let v = &pins.version;
+    let versions = linked.join("versions").join(v);
+    fs::create_dir_all(&versions).map_err(|e| format!("{}: {e}", versions.display()))?;
+    let manifest = versions.join(format!("{v}.json"));
+    if let Some(source) = &found.manifest {
+        fs::copy(source, &manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
+    } else if !pins.manifest_accepted(&manifest) {
+        let sha1 = &pins.manifests[0];
+        log(format!("Downloading the {v} version file from Mojang"));
+        let body = fetch(&format!(
+            "https://piston-meta.mojang.com/v1/packages/{sha1}/{v}.json"
+        ))?;
+        let actual: String = Sha1::digest(&body)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        if &actual != sha1 {
+            return Err(format!(
+                "Mojang's {v} version file is not the one Horizon pins (sha1 {actual})"
+            ));
+        }
+        fs::write(&manifest, body).map_err(|e| format!("{}: {e}", manifest.display()))?;
+    }
+    link(&found.client, &versions.join(format!("{v}.jar")))?;
+    for dir in ["libraries", "assets"] {
+        let source = found.base.join(dir);
+        let target = linked.join(dir);
+        if source.is_dir() {
+            link(&source, &target)?;
+        } else {
+            unlink(&target)?;
+        }
+    }
+    Ok(())
+}
+
+/// Removes a link left by an earlier preparation; never a real folder's contents.
+fn unlink(path: &Path) -> Result<(), String> {
+    if fs::symlink_metadata(path).is_err() {
+        return Ok(());
+    }
+    // A Windows junction, or a directory symlink, is removed as a directory.
+    fs::remove_file(path)
+        .or_else(|_| fs::remove_dir(path))
+        .map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// `link` pointing at `target`, replacing an earlier one.
+fn link(target: &Path, link: &Path) -> Result<(), String> {
+    unlink(link)?;
+    make_link(target, link).map_err(|e| format!("{} → {}: {e}", link.display(), target.display()))
+}
+
+#[cfg(unix)]
+fn make_link(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+/// Symlinks need developer mode on Windows: a junction for a folder, a hard link for a file.
+#[cfg(windows)]
+fn make_link(target: &Path, link: &Path) -> std::io::Result<()> {
+    if !target.is_dir() {
+        return fs::hard_link(target, link).or_else(|_| fs::copy(target, link).map(|_| ()));
+    }
+    let status = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .stdout(std::process::Stdio::null())
+        .status()?;
+    match status.success() {
+        true => Ok(()),
+        false => Err(std::io::Error::other("mklink /J failed")),
+    }
+}
+
+#[cfg(test)]
+#[path = "sources_tests.rs"]
+mod tests;
