@@ -5472,28 +5472,22 @@ impl Game<'_> {
         }
         Ok(())
     }
-    /// A copy of a chunk carrying its block entities, for saving.
-    fn with_entities(
+    /// Copies of a save batch carrying its live block entities and save data.
+    fn with_entities<'a>(
         &self,
-        chunk: &Arc<horizon_client::chunk::Chunk>,
-    ) -> Arc<horizon_client::chunk::Chunk> {
-        let mut c = (**chunk).clone();
-        c.block_entities = self
-            .world
-            .block_entities
-            .iter()
-            .filter(|(p, _)| p.0 >> 4 == c.x && p.2 >> 4 == c.z)
-            .map(|(p, e)| (*p, e.clone()))
-            .collect();
-        c.block_names = self
-            .world
-            .block_names
-            .iter()
-            .filter(|(p, _)| p.0 >> 4 == c.x && p.2 >> 4 == c.z)
-            .map(|(p, n)| (*p, n.clone()))
-            .collect();
-        self.attach_save_data(&mut c);
-        Arc::new(c)
+        chunks: impl IntoIterator<Item = &'a Arc<horizon_client::chunk::Chunk>>,
+    ) -> Vec<Arc<horizon_client::chunk::Chunk>> {
+        horizon_client::save::chunks_with_block_entities(
+            chunks,
+            &self.world.block_entities,
+            &self.world.block_names,
+        )
+        .into_iter()
+        .map(|mut c| {
+            self.attach_save_data(&mut c);
+            Arc::new(c)
+        })
+        .collect()
     }
     fn tick_mobs(&mut self) -> Result<()> {
         self.tick_creatures()?;
@@ -5974,11 +5968,7 @@ impl Game<'_> {
         };
         // Save the departing dimension's changed chunks.
         let keys: Vec<_> = self.world.modified.drain().collect();
-        let chunks: Vec<_> = keys
-            .iter()
-            .filter_map(|k| self.world.chunks.get(k))
-            .map(|c| self.with_entities(c))
-            .collect();
+        let chunks = self.with_entities(keys.iter().filter_map(|k| self.world.chunks.get(k)));
         self.save
             .save(&chunks, self.res.assets.registry, &self.res.biomes)?;
         self.save_dimension_entities()?;
@@ -7792,11 +7782,7 @@ impl Game<'_> {
             return Ok(());
         }
         let keys: Vec<_> = self.world.modified.drain().collect();
-        let chunks: Vec<_> = keys
-            .iter()
-            .filter_map(|k| self.world.chunks.get(k))
-            .map(|c| self.with_entities(c))
-            .collect();
+        let chunks = self.with_entities(keys.iter().filter_map(|k| self.world.chunks.get(k)));
         self.save
             .save(&chunks, self.res.assets.registry, &self.res.biomes)?;
         self.save_entities()?;
@@ -8296,9 +8282,7 @@ impl Game<'_> {
             .filter(|c| self.world.modified.remove(&(c.x, c.z)))
             .cloned()
             .collect();
-        let modified: Vec<_> = horizon_client::spans::time("with_entities", || {
-            dirty.iter().map(|c| self.with_entities(c)).collect()
-        });
+        let modified = horizon_client::spans::time("with_entities", || self.with_entities(&dirty));
         horizon_client::spans::time("unload_entities", || self.unload_entities(&unloaded));
         if !unloaded.is_empty() {
             let gone: horizon_client::fast_hash::FxHashSet<(i32, i32)> =
