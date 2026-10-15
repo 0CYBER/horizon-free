@@ -223,7 +223,7 @@ pub fn rows(level: Level) -> Vec<Row> {
             h(
                 H::BatteryMode,
                 None,
-                "At most 60 FPS (30 in menus or behind other windows), half the worker threads: less power, slower loading.",
+                "60 FPS cap (30 in menus or unfocused), half the workers: less power.",
             ),
             h(
                 H::Workers,
