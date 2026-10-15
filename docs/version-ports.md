@@ -169,20 +169,35 @@ neither, is reported as such.
 
 ### Regenerate
 
-Each generated output has a generator entry in `version_port.py` (`regen`): its command, its input in the version
-store, the files it writes. On a candidate worktree (`port/NEW` from `origin/main`, with `.local/` linking to the
-new version), `regen` runs them all and records, per generator: unchanged, regenerated (with the `--stat`), or
-failed (the generator's own error: a source pattern no longer matches, a report changed shape). Two additions make
-this complete:
+`version_port.py regen NEW` (`tools/port_regen.py`) makes the candidate and regenerates every table in it:
 
-- `version_consts`: a generator for the version facts table above, from `facts.json`. Before it, a small refactor
-  makes every Rust site use the `horizon-core` / `horizon-protocol` constants instead of its own copy, so the pin
-  bump touches one generated file.
-- `horizon-prepare` against the new version: its Java exporters compile and run against the new jar, or fail to
-  compile, which names exactly the vanilla API they used that changed.
+1. **The candidate**: a worktree of the branch `port/NEW` (from `--base`, default `origin/main`) in
+   `~/code/horizon-parity/ports/NEW` (`HORIZON_PORTS`), with `research-lock.json` pinned to NEW: version, the
+   version JSON's sha1, the jars' sha1s, Java. Every tool reads the version from the lock (`lab.VERSION`,
+   `lab.GAME`, `lab.RESOURCES`), so nothing else in the tree names the old one.
+2. **Its `.local/`**, a real directory: `minecraft/NEW` is prepared by `tools/lab.py prepare` itself, from a
+   launcher-shaped copy of the download in the version store (`versions/NEW/launcher`: the version JSON, the client
+   jar and its libraries, verified by sha1) into `versions/NEW/game`, so the candidate's jars, libraries and
+   manifest are exactly what a player's install gives. `datagen/out/reports` links to NEW's reports, `tools` to the
+   shared tools. Nothing is written into `shared-local/`.
+3. **Decompiled sources**: only the classes a generator parses (`EntityTypes`, `BlockStateData`), each decompiled
+   alone with the full jar and its libraries on Vineflower's path, into `versions/NEW/sources/` (seconds instead of
+   a 10-minute full run). The source is not the full run's text (inner classes of the jar's other classes are
+   imported, chained calls are not wrapped), but what the generators read from it is: from 26.3's they write the
+   committed tables byte for byte.
+4. **The generators**, every row of the table above, each recorded in `diff-OLD-NEW/regen.json` as unchanged,
+   regenerated (with its `--numstat`) or failed (with the end of its output and, when an exporter or oracle no
+   longer compiles, javac's errors one per line: they name the vanilla API that changed). Rust outputs are
+   rustfmt'ed. The pin and what regenerated are committed on `port/NEW`, locally; nothing is pushed.
 
-Generators that read decompiled sources (`EntityTypes`, `BlockStateData`) get those two files from the changed-class
-decompilation, so no full Vineflower run is needed for them either.
+The report then lists what was regenerated in its summary and makes each failed generator a rank-1 item, instead of
+guessing which tables the diff made stale. `--only NAME...` reruns some generators; `port NEW` runs `regen` after
+`diff` (`--no-regen` for snapshots).
+
+Three generators run vanilla through Horizon's Java oracles (`VanillaCommandSuggestionsExporter`,
+`VanillaCommandParseOracle`) and one builds `command_parse_fixture` (Horizon's command tree in its own registration
+order, before `vanilla_order.rs` reorders it), so `regen` needs Java and Cargo. `horizon-prepare` (the resources the
+harnesses read) is the next stage's first step.
 
 ### Run every harness against the new version
 
@@ -276,6 +291,27 @@ name. The rest are classes whose changed methods Horizon doesn't name. Many of t
 `--results`) is what turns a rank-2 lead into a confirmed failure; the replay cannot do that, because the oracles are
 written against 26.3.
 
+### `regen`
+
+`regen 26.2` from a branch pinned to 26.3, then `regen 26.3 --base port/26.2`, both from versions downloaded from
+Mojang (`prepare --download`):
+
+| Generator | 26.3 → 26.2 | 26.2 → 26.3 |
+| --- | --- | --- |
+| `version_consts` | regenerated (+8 -8: protocol 776, data version 4903, packs 88.0 / 107.1, build time) | regenerated, back to the committed file |
+| `packet_ids` | regenerated (+134 -142) | regenerated (+142 -134), back to the committed file |
+| `entity_tracking` | regenerated (+10 -13) | regenerated (+13 -10), back to the committed file |
+| `block_state_data` | regenerated (+1 -1: the version in its header; `BlockStateData` is unchanged) | regenerated, back to the committed file |
+| `lan_command_order`, `vanilla_command_order` | failed: `VanillaCommandParseOracle.java:81: no suitable constructor found for CommandSourceStack(...)` and 2 more | unchanged |
+| `command_suggestions` | failed: `ParityData.java:45: cannot find symbol: variable WORLD (class RegistryLayer)`, `WORLD_REGISTRIES` | unchanged |
+
+After the round trip, `port/26.3` equals the branch it started from except `research-lock.json`'s five lines of
+republished 26.3 version JSONs it accepts (which a port cannot know). So every table Horizon commits is what the
+generators make from vanilla's data, and going 26.3 → 26.2 fails exactly where Horizon's oracles use 26.3-only API,
+with javac naming it. The report for 26.2 → 26.3 then has 5 rank-1 items instead of 10: the 5 "regenerate" guesses
+are replaced by the generators' results in its summary. Both regens took under three minutes, most of it building
+`command_parse_fixture`.
+
 ## Implementation status
 
 ```sh
@@ -283,8 +319,9 @@ python3 tools/version_port.py detect --snapshots     # exit 10: new release, 11:
 python3 tools/version_port.py prepare 26.3           # the pinned version: indexes .local, downloads nothing
 python3 tools/version_port.py prepare 26.4           # downloads, verifies, runs the data generator (about 10 s)
 python3 tools/version_port.py diff 26.3 26.4         # summary; the full diff in versions/diff-26.3-26.4/diff.json
+python3 tools/version_port.py regen 26.4            # ports/26.4 on port/26.4: pinned, every table regenerated
 python3 tools/version_port.py report 26.3 26.4 [--results .local/parity-runner/state.json]   # report.md, report.json
-python3 tools/version_port.py port 26.4             # prepare both, diff, report
+python3 tools/version_port.py port 26.4             # prepare both, diff, regen, report
 python3 tools/version_port.py gc                     # keep the pinned version and the newest two others
 python3 tools/vanilla_map.py versions/26.3/classes.json net.minecraft.world.food.FoodData   # its Rust files and harnesses
 ```
@@ -296,4 +333,6 @@ python3 tools/vanilla_map.py versions/26.3/classes.json net.minecraft.world.food
 | Class index (`tools/class_index.py`), class diff with moves, `vanilla_map.json` (`tools/vanilla_map.py`) | done |
 | Port report (`tools/port_report.py`, `report`), `port` | done |
 | `version_consts`: one generated file for the version facts (`tools/gen_version_consts.py`) | done |
-| Changed-class decompilation, `regen`, candidate harness run, `publish`, launchd agent | later |
+| Tools read the version from the lock (`lab.VERSION`, `lab.GAME`, `lab.RESOURCES`, `lab.version_info()`) | done |
+| `regen` (`tools/port_regen.py`): candidate worktree, its `.local/`, the generators' classes decompiled alone, every generator, `regen.json` in the report | done |
+| Candidate harness run, `publish`, launchd agent | later |
