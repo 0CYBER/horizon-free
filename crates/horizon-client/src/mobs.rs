@@ -11,6 +11,8 @@ pub mod anim;
 pub mod animal_brain;
 pub mod aquatic;
 pub mod axolotl;
+pub mod bat;
+pub mod bee;
 pub mod body_anim;
 pub mod brain;
 pub mod breeze;
@@ -58,6 +60,7 @@ pub mod spawn_selection;
 pub mod spawner;
 pub mod spawning;
 pub mod species;
+pub mod strider;
 pub mod sulfur_cube;
 pub mod tame;
 pub mod trader;
@@ -293,7 +296,7 @@ pub struct Flags {
     pub climber: bool,
     /// Striders stand on lava.
     pub lava_walker: bool,
-    /// LivingEntity.omnidirectionalAirMover (bees, parrots, bats, allays).
+    /// LivingEntity.omnidirectionalAirMover (bees and parrots).
     pub omnidirectional: bool,
     pub fire_immune: bool,
     /// EntityTypeTags.BURN_IN_DAYLIGHT
@@ -753,6 +756,8 @@ pub struct Extra {
     pub lone: bool,
     /// A breeze's or creaking's brain (`monster_brain`).
     pub brain: Option<Box<monster_brain::Brain>>,
+    /// A bee's nectar, anger, flower and hive state.
+    pub bee: Option<Box<bee::Bee>>,
 }
 #[derive(Clone, Debug)]
 pub struct Mob {
@@ -798,6 +803,9 @@ pub struct Mob {
     /// update (`isUnderWater` reads it).
     pub was_eye_in_water: bool,
     pub no_gravity: bool,
+    /// `Entity.mainSupportingBlockPos`: the block it stood on after its last
+    /// move.
+    pub supporting: Option<[i32; 3]>,
     /// `NoAI`: no goals and no movement.
     pub no_ai: bool,
     /// `Silent`.
@@ -838,6 +846,12 @@ pub enum MobEvent {
     ChestOpen {
         chest: [i32; 3],
         open: bool,
+    },
+    /// `BeeEnterHiveGoal.start`: the bee goes into its hive (the host stores
+    /// its tag with `BeehiveBlockEntity.addOccupant` and discards it).
+    EnterHive {
+        mob: u32,
+        hive: [i32; 3],
     },
     /// `CopperGolem.turnToStatue`.
     BecomeStatue {
@@ -1174,6 +1188,8 @@ pub struct Seen {
     pub player_rep: i32,
     /// `isPushable` and pushed by others (`Entity.push(Entity)` moves it).
     pub pushable: bool,
+    /// A cold strider (`Strider.isSuffocating`).
+    pub cold_strider: bool,
     /// `MobCategory` (`monster`, `creature`, ...).
     pub category: &'static str,
     /// A villager's `POTENTIAL_JOB_SITE` and `MEETING_POINT`.
@@ -1248,6 +1264,7 @@ impl Mob {
                 _ => 0,
             },
             pushable: m.pushable(),
+            cold_strider: strider::suffocating(m),
             category: m.category(),
             potential_job: villager_brain::potential_job_site(m),
             meeting: villager.then_some(m.extra.meeting).flatten(),
@@ -1461,6 +1478,7 @@ impl Mob {
             fluids: living::Fluids::default(),
             was_eye_in_water: false,
             no_gravity: false,
+            supporting: None,
             no_ai: false,
             silent: false,
             invulnerable_flag: false,
@@ -1707,7 +1725,7 @@ impl Mob {
     /// Movement speed attribute bonus (baby zombies, sprinting modifiers).
     /// MOVEMENT_SPEED including effects (speed +20%/level, slowness -15%/level).
     pub fn movement_speed(&self) -> f64 {
-        let mut v = self.attrs.speed * self.speed_bonus();
+        let mut v = strider::movement_speed(self, self.attrs.speed) * self.speed_bonus();
         for (e, _, amp) in &self.extra.effects {
             match *e {
                 "minecraft:speed" => v *= 1.0 + 0.2 * f64::from(amp + 1),
@@ -1744,8 +1762,14 @@ impl Mob {
     }
     /// LivingEntity.getVoicePitch.
     pub fn voice_pitch(&mut self) -> f32 {
-        (self.random.next_float() - self.random.next_float()) * 0.2
-            + if self.is_baby() { 1.5 } else { 1.0 }
+        let pitch = (self.random.next_float() - self.random.next_float()) * 0.2
+            + if self.is_baby() { 1.5 } else { 1.0 };
+        // Bat.getVoicePitch: a little lower.
+        if self.species() == Species::Bat {
+            pitch * 0.95
+        } else {
+            pitch
+        }
     }
     /// Mob.playSound with LivingEntity.getVoicePitch.
     pub fn voice(&mut self, event: &'static str, events: &mut Vec<MobEvent>) {
@@ -1767,11 +1791,33 @@ pub fn render(
 ) {
     render::render_single(mob, alpha, camera, uv, light, out);
 }
+/// A parsed `entity-models.json` document, shared while loading model batches.
+/// Each lookup still constructs an independent part tree for the caller.
+pub struct EntityModelDocument(Value);
+
+impl EntityModelDocument {
+    pub fn load(root: &Path) -> crate::Result<Self> {
+        Ok(Self(serde_json::from_slice(&fs::read(
+            root.join("entity-models.json"),
+        )?)?))
+    }
+
+    pub fn model(&self, key: &str) -> Option<Part> {
+        self.0.get(key).map(|m| Part::parse("root", m))
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &str> {
+        self.0
+            .as_object()
+            .into_iter()
+            .flat_map(|all| all.keys().map(String::as_str))
+    }
+}
+
 /// Load one baked model layer from `entity-models.json` (e.g. `minecraft:chest#main`).
+/// Batch loaders should share an `EntityModelDocument` instead.
 pub fn load_model(root: &Path, key: &str) -> Option<Part> {
-    let models: Value =
-        serde_json::from_slice(&fs::read(root.join("entity-models.json")).ok()?).ok()?;
-    models.get(key).map(|m| Part::parse("root", m))
+    EntityModelDocument::load(root).ok()?.model(key)
 }
 /// ModelPart.render: translate, rotate ZYX, scale, then children.
 pub fn render_model(

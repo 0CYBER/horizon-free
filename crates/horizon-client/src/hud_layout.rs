@@ -790,8 +790,14 @@ pub fn paint(batch: &mut crate::hud::HudBatch, atlas: &crate::hud::HudAtlas, dra
                 color,
                 blend,
             } => {
-                let Some(mut r) = atlas.sprites.get(&format!("gui/sprites/{sprite}")).copied()
-                else {
+                // Effect sprites belong to the mob_effect atlas directory;
+                // the other blitSprite ids refer to GUI sprites.
+                let name = if sprite.starts_with("mob_effect/") {
+                    sprite.to_string()
+                } else {
+                    format!("gui/sprites/{sprite}")
+                };
+                let Some(mut r) = atlas.sprites.get(&name).copied() else {
                     continue;
                 };
                 if let Some([sw, sh, u, v]) = *region {

@@ -135,6 +135,8 @@ public final class VanillaStructurePlacementOracle {
                 int[] center={cx,cz};
                 var heightRef=new Object(){LevelHeightAccessor value=height;};
                 BiomeManager[] zoom=new BiomeManager[1];
+                // WorldGenRegion's static attribute layers (lava's tick delay reads FAST_LAVA).
+                net.minecraft.world.attribute.EnvironmentAttributeSystem[] attributes=new net.minecraft.world.attribute.EnvironmentAttributeSystem[1];
                 var uncached=biomeSource;
                 Object[] self=new Object[1];
                 var level=(WorldGenLevel)Proxy.newProxyInstance(WorldGenLevel.class.getClassLoader(),new Class<?>[]{WorldGenLevel.class},(proxy,method,values)->{
@@ -185,6 +187,7 @@ public final class VanillaStructurePlacementOracle {
                         }
                         case "hasChunk":return true;
                         case "getBiomeManager":return zoom[0];
+                        case "environmentAttributes":return attributes[0];
                         case "getBiome":return zoom[0].getBiome((BlockPos)values[0]);
                         case "getNoiseBiome":{int qx=(Integer)values[0],qy=(Integer)values[1],qz=(Integer)values[2];return chunkAt.apply(qx>>2,qz>>2).getNoiseBiome(qx,qy,qz);}
                         case "getUncachedNoiseBiome":return uncached.createResolver(climate).getNoiseBiome((Integer)values[0],(Integer)values[1],(Integer)values[2]);
@@ -204,6 +207,7 @@ public final class VanillaStructurePlacementOracle {
                 });
                 self[0]=randomState.getOrCreateRandomFactory(Identifier.withDefaultNamespace("worldgen_region_random")).at(new ChunkPos(cx,cz).getWorldPosition());
                 zoom[0]=new BiomeManager(level,BiomeManager.obfuscateSeed(seed));
+                attributes[0]=net.minecraft.world.attribute.EnvironmentAttributeSystem.builder().addStaticLayers(level).build();
                 var manager=new StructureManager(level,new WorldOptions(seed,true,false),null);
                 // BIOMES for the 5x5 area, then TERRAIN for the 3x3 region.
                 for(int x=cx-2;x<=cx+2;x++)for(int z=cz-2;z<=cz+2;z++){generator.createBiomes(randomState,Blender.empty(),manager,chunkAt.apply(x,z)).join();chunkAt.apply(x,z).setPersistedStatus(ChunkStatus.BIOMES);}

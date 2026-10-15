@@ -78,6 +78,8 @@ pub enum Opt {
     PadMoveDeadzone,
     PadLookDeadzone,
     PadGlyphs,
+    PadMenuNav,
+    PadKeyboard,
 }
 fn tr(key: &str) -> Text {
     Text::translate(key, &[])
@@ -174,6 +176,8 @@ impl Opt {
             Opt::PadMoveDeadzone => "Move Deadzone",
             Opt::PadLookDeadzone => "Look Deadzone",
             Opt::PadGlyphs => "Button Glyphs",
+            Opt::PadMenuNav => "Menu Navigation",
+            Opt::PadKeyboard => "On-Screen Keyboard",
         }
     }
     pub(crate) fn kind(self, s: &Settings) -> Kind {
@@ -432,6 +436,15 @@ impl Opt {
                 GlyphStyle::PlayStation => "PlayStation",
                 GlyphStyle::Nintendo => "Nintendo",
             }),
+            Opt::PadMenuNav => Text::literal(match s.controller.menu_nav {
+                gamepad::MenuNav::Focus => "Focus",
+                gamepad::MenuNav::Pointer => "Pointer",
+            }),
+            Opt::PadKeyboard => Text::literal(match s.controller.keyboard {
+                gamepad::TextKeyboard::Auto => "Auto",
+                gamepad::TextKeyboard::Horizon => "Horizon",
+                gamepad::TextKeyboard::Steam => "Steam",
+            }),
             _ => Text::empty(),
         }
     }
@@ -563,6 +576,20 @@ impl Opt {
                     .unwrap_or(0) as u8;
                 s.controller.glyphs = GlyphStyle::ALL[usize::from(next(i, 4))];
             }
+            Opt::PadMenuNav => {
+                s.controller.menu_nav = match s.controller.menu_nav {
+                    gamepad::MenuNav::Focus => gamepad::MenuNav::Pointer,
+                    gamepad::MenuNav::Pointer => gamepad::MenuNav::Focus,
+                }
+            }
+            Opt::PadKeyboard => {
+                let all = gamepad::TextKeyboard::ALL;
+                let i = all
+                    .iter()
+                    .position(|k| *k == s.controller.keyboard)
+                    .unwrap_or(0) as u8;
+                s.controller.keyboard = all[usize::from(next(i, 3))];
+            }
             _ => {}
         }
         if self.affects_preset() {
@@ -691,6 +718,7 @@ pub struct OptionsUi {
     pub stack: Vec<Page>,
     scroll: f32,
     pub(crate) dragging: Option<Opt>,
+    scrollbar_drag_y: Option<f32>,
     /// Horizon style: the selected sidebar section, the one last drawn and
     /// the rows' scroll in dp (`options_horizon`).
     pub section: usize,
@@ -727,6 +755,7 @@ impl Default for OptionsUi {
             stack: vec![Page::Main],
             scroll: 0.0,
             dragging: None,
+            scrollbar_drag_y: None,
             section: 0,
             section_shown: None,
             hscroll: 0.0,
@@ -807,8 +836,12 @@ impl OptionsUi {
         }
     }
     pub fn open(&mut self, in_world: bool) {
-        self.stack = vec![Page::Main];
-        self.scroll = 0.0;
+        self.open_at(in_world, Page::Main);
+    }
+    /// Open a page whose Done/Escape returns directly to the calling screen.
+    pub fn open_at(&mut self, in_world: bool, page: Page) {
+        self.stack.clear();
+        self.push(page);
         self.in_world = in_world;
         self.selected_key = None;
     }
@@ -819,6 +852,7 @@ impl OptionsUi {
     fn push(&mut self, page: Page) {
         self.stack.push(page);
         self.scroll = 0.0;
+        self.scrollbar_drag_y = None;
         if page == Page::Language {
             self.language_choice = None;
             self.language_search.set_value("");
@@ -856,6 +890,14 @@ impl OptionsUi {
             Page::Controller => "Controller Settings",
             Page::PadBinds => "Controller Binds",
         }
+    }
+    fn scrollbar_x(&self, width: f32) -> f32 {
+        (width / 2.0).floor()
+            + match self.page() {
+                Page::KeyBinds | Page::PadBinds => 178.0,
+                Page::Language => 118.0,
+                _ => 163.0,
+            }
     }
     fn list_rows(&self, s: &Settings) -> Vec<Row> {
         match self.page() {
@@ -993,6 +1035,8 @@ impl OptionsUi {
                     Opt::PadMoveDeadzone,
                     Opt::PadLookDeadzone,
                     Opt::PadGlyphs,
+                    Opt::PadMenuNav,
+                    Opt::PadKeyboard,
                 ]));
                 rows
             }
@@ -1490,12 +1534,13 @@ impl OptionsUi {
         if list {
             ui::list_background(batch, atlas, top, bottom, in_world);
         }
-        let visible = |wd: &Widget| !wd.list || (wd.y >= top && wd.y + wd.h <= bottom);
+        let visible = |wd: &Widget| !wd.list || (wd.y < bottom && wd.y + wd.h > top);
         let mut tooltip = None;
         for wd in &widgets {
             if !visible(wd) {
                 continue;
             }
+            let start = batch.vertices.len();
             let hover = ui::hovered(cursor, wd.x, wd.y, wd.w, wd.h)
                 && (!wd.list || cursor.1 >= top && cursor.1 < bottom);
             match &wd.kind {
@@ -1560,6 +1605,7 @@ impl OptionsUi {
                 WKind::LanguageRow {
                     label, selected, ..
                 } => {
+                    crate::widgets::target_as([wd.x, wd.y, wd.w, wd.h], crate::widgets::Kind::Row);
                     if *selected {
                         batch.fill(atlas, wd.x, wd.y, wd.w, wd.h, u32::MAX);
                         batch.fill(
@@ -1582,14 +1628,13 @@ impl OptionsUi {
                     );
                 }
             }
+            if wd.list && (wd.y < top || wd.y + wd.h > bottom) {
+                batch.clip_since(start, 0.0, top, w, bottom);
+            }
         }
         if list {
             ui::separators(batch, atlas, top, bottom, in_world);
-            let sx = match self.page() {
-                Page::KeyBinds | Page::PadBinds => (w / 2.0).floor() + 170.0 + 8.0,
-                Page::Language => (w / 2.0).floor() + 110.0 + 8.0,
-                _ => (w / 2.0).floor() + 155.0 + 8.0,
-            };
+            let sx = self.scrollbar_x(w);
             ui::scrollbar(batch, atlas, sx, top, bottom, content, self.scroll);
         }
         if self.page() == Page::Language {
@@ -1654,7 +1699,11 @@ impl OptionsUi {
         }
         if self.page() == Page::Packs {
             let mut events = Vec::new();
-            if drag || right {
+            if drag {
+                self.packs(atlas, size).drag(y as f64);
+                return events;
+            }
+            if right {
                 return events;
             }
             let m = crate::screen_draw::Measure(&atlas.font);
@@ -1674,9 +1723,26 @@ impl OptionsUi {
             }
             return events;
         }
-        let (widgets, top, bottom, _) = self.layout(s, size.0, size.1);
+        let (widgets, top, bottom, content) = self.layout(s, size.0, size.1);
         let mut events = Vec::new();
         if drag {
+            if let Some(previous_y) = self.scrollbar_drag_y {
+                if let Some((_, thumb)) = ui::scrollbar_thumb(top, bottom, content, self.scroll) {
+                    let max = content - (bottom - top);
+                    self.scroll = if y < top {
+                        0.0
+                    } else if y > bottom {
+                        max
+                    } else {
+                        self.scroll + (y - previous_y) * max / (bottom - top - thumb)
+                    };
+                    self.clamp_scroll(top, bottom, content);
+                    self.scrollbar_drag_y = Some(y);
+                } else {
+                    self.scrollbar_drag_y = None;
+                }
+                return events;
+            }
             if let Some(opt) = self.dragging
                 && let Some(wd) = widgets
                     .iter()
@@ -1707,11 +1773,17 @@ impl OptionsUi {
         if right {
             return events;
         }
+        if ui::scrollbar_thumb(top, bottom, content, self.scroll).is_some()
+            && ui::hovered((x, y), self.scrollbar_x(size.0), top, 6.0, bottom - top)
+        {
+            self.scrollbar_drag_y = Some(y);
+            return events;
+        }
         for wd in widgets {
             if !ui::hovered((x, y), wd.x, wd.y, wd.w, wd.h) {
                 continue;
             }
-            if wd.list && (y < top || y >= bottom || wd.y < top || wd.y + wd.h > bottom) {
+            if wd.list && (y < top || y >= bottom) {
                 continue;
             }
             match wd.kind {
@@ -1784,6 +1856,7 @@ impl OptionsUi {
         crate::ui_theme::set_style(crate::ui_theme::MenuStyle::Horizon);
         self.stack.truncate(1);
         self.scroll = 0.0;
+        self.scrollbar_drag_y = None;
         self.section = crate::options_horizon::SECTIONS
             .iter()
             .position(|section| section.name == "Interface")
@@ -1792,6 +1865,10 @@ impl OptionsUi {
         self.hscroll = 0.0;
     }
     pub fn release(&mut self) -> Vec<Event> {
+        self.scrollbar_drag_y = None;
+        if let Some(p) = &mut self.pack_screen {
+            p.release();
+        }
         // AbstractSliderButton suppresses the press sound and plays once on
         // release, even if the pointer has left the widget or its value stayed.
         let slider = self.dragging.take().is_some();
@@ -1854,6 +1931,7 @@ impl OptionsUi {
         let mut events = Vec::new();
         let page = self.stack.pop().unwrap_or(Page::Main);
         self.scroll = 0.0;
+        self.scrollbar_drag_y = None;
         self.dragging = None;
         self.selected_key = None;
         self.selected_pad_action = None;
@@ -2271,6 +2349,210 @@ mod tests {
     }
 
     #[test]
+    fn partially_visible_keybind_rows_are_clipped_and_clickable() {
+        let mut atlas = atlas();
+        let button = crate::hud::Rect {
+            u0: 0.25,
+            v0: 0.25,
+            u1: 0.5,
+            v1: 0.5,
+            w: 20,
+            h: 20,
+        };
+        for name in ["button", "button_disabled", "button_highlighted"] {
+            atlas
+                .sprites
+                .insert(format!("gui/sprites/widget/{name}"), button);
+        }
+        for above in [true, false] {
+            let mut s = Settings::default();
+            let mut ui = OptionsUi::default();
+            ui.show(Page::KeyBinds);
+            let mut batch = HudBatch::new([480, 240]);
+            let size = (batch.width, batch.height);
+            let (widgets, top, bottom, _) = ui.layout(&s, size.0, size.1);
+            let row = widgets
+                .iter()
+                .filter(|w| {
+                    matches!(
+                        w.kind,
+                        WKind::Button {
+                            act: Act::Key(_),
+                            ..
+                        }
+                    )
+                })
+                .nth(10)
+                .unwrap();
+            let WKind::Button {
+                act: Act::Key(key), ..
+            } = row.kind
+            else {
+                unreachable!()
+            };
+            let row_y = if above { top - 5.0 } else { bottom - 16.0 };
+            ui.scroll = row.y - row_y;
+            let (x, width, height) = (row.x, row.w, row.h);
+            ui.draw(&s, &mut batch, &atlas, (-1.0, -1.0));
+            let vertices: Vec<_> = batch
+                .vertices
+                .iter()
+                .filter(|v| {
+                    (0.25..=0.5).contains(&v.uv[0])
+                        && (0.25..=0.5).contains(&v.uv[1])
+                        && v.pos[0] >= x
+                        && v.pos[0] <= x + width
+                        && v.pos[1] >= row_y
+                        && v.pos[1] <= row_y + height
+                })
+                .collect();
+            assert!(!vertices.is_empty());
+            let lo = vertices
+                .iter()
+                .map(|v| v.pos[1])
+                .fold(f32::INFINITY, f32::min);
+            let hi = vertices
+                .iter()
+                .map(|v| v.pos[1])
+                .fold(f32::NEG_INFINITY, f32::max);
+            assert_eq!(lo, row_y.max(top));
+            assert_eq!(hi, (row_y + height).min(bottom));
+            let hidden_y = if above {
+                row_y + 1.0
+            } else {
+                row_y + height - 1.0
+            };
+            assert!(
+                ui.click(
+                    &mut s,
+                    &atlas,
+                    x + 1.0,
+                    hidden_y,
+                    size,
+                    [480, 240],
+                    false,
+                    false
+                )
+                .is_empty()
+            );
+            assert_eq!(ui.selected_key, None);
+            assert_eq!(
+                ui.click(
+                    &mut s,
+                    &atlas,
+                    x + 1.0,
+                    (lo + hi) / 2.0,
+                    size,
+                    [480, 240],
+                    false,
+                    false
+                ),
+                vec![Event::ButtonClick]
+            );
+            assert_eq!(ui.selected_key, Some(key));
+        }
+    }
+
+    #[test]
+    fn classic_scrollbar_drag_is_bounded_silent_and_stops_on_release() {
+        let atlas = atlas();
+        let size = (480.0, 160.0);
+        for page in [Page::KeyBinds, Page::PadBinds, Page::Language, Page::Chat] {
+            let mut s = Settings::default();
+            let mut ui = OptionsUi {
+                languages: languages(),
+                ..Default::default()
+            };
+            ui.show(page);
+            let (_, top, bottom, content) = ui.layout(&s, size.0, size.1);
+            let max = content - (bottom - top);
+            assert!(max > 0.0, "{page:?}");
+            let x = ui.scrollbar_x(size.0) + 2.0;
+            let (_, thumb) = ui::scrollbar_thumb(top, bottom, content, ui.scroll).unwrap();
+            let y = top + thumb / 2.0;
+            assert!(
+                ui.click(&mut s, &atlas, x, y, size, [960, 480], false, true)
+                    .is_empty()
+            );
+            assert_eq!(ui.scrollbar_drag_y, None);
+            assert!(
+                ui.click(&mut s, &atlas, x, y, size, [960, 480], false, false)
+                    .is_empty()
+            );
+            assert_eq!(ui.scrollbar_drag_y, Some(y));
+            let delta = 5.0;
+            assert!(
+                ui.click(
+                    &mut s,
+                    &atlas,
+                    x - 100.0,
+                    y + delta,
+                    size,
+                    [960, 480],
+                    true,
+                    false
+                )
+                .is_empty()
+            );
+            assert!((ui.scroll - delta * max / (bottom - top - thumb)).abs() < 0.001);
+            for (y, expected) in [(bottom + 100.0, max), (top - 100.0, 0.0)] {
+                assert!(
+                    ui.click(&mut s, &atlas, x, y, size, [960, 480], true, false)
+                        .is_empty()
+                );
+                assert!((ui.scroll - expected).abs() < 0.001, "{page:?}");
+            }
+            assert!(ui.release().is_empty());
+            assert_eq!(ui.scrollbar_drag_y, None);
+            assert!(
+                ui.click(
+                    &mut s,
+                    &atlas,
+                    x,
+                    bottom + 100.0,
+                    size,
+                    [960, 480],
+                    true,
+                    false
+                )
+                .is_empty()
+            );
+            assert_eq!(ui.scroll, 0.0);
+            assert_eq!(s.keys, Settings::default().keys);
+            ui.click(&mut s, &atlas, x, top + 1.0, size, [960, 480], false, false);
+            assert!(ui.scrollbar_drag_y.is_some());
+            ui.show(Page::Mouse);
+            assert_eq!(ui.scrollbar_drag_y, None);
+        }
+    }
+
+    #[test]
+    fn key_rebinding_takes_precedence_over_scrollbar_dragging() {
+        let atlas = atlas();
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        ui.show(Page::KeyBinds);
+        ui.selected_key = Some("key.jump");
+        let x = ui.scrollbar_x(480.0) + 2.0;
+        assert_eq!(
+            ui.click(
+                &mut s,
+                &atlas,
+                x,
+                50.0,
+                (480.0, 240.0),
+                [960, 480],
+                false,
+                false
+            ),
+            vec![Event::Changed]
+        );
+        assert_eq!(s.keys.get("key.jump"), "key.mouse.left");
+        assert_eq!(ui.scrollbar_drag_y, None);
+        assert!(ui.release().is_empty());
+    }
+
+    #[test]
     fn classic_pages_without_overflow_do_not_scroll() {
         let s = Settings::default();
         for page in [Page::Main, Page::Font, Page::Mouse] {
@@ -2321,6 +2603,36 @@ mod tests {
         let (widgets, top, _, _) = ui.layout(&s, 480.0, 240.0);
         assert_eq!(ui.scroll, 0.0);
         assert_eq!(widgets.iter().find(|w| w.list).unwrap().y, top + 2.0);
+    }
+
+    #[test]
+    fn title_shortcuts_initialize_pages_and_return_directly_to_the_title() {
+        let mut ui = OptionsUi::default();
+        let mut s = Settings::default();
+        for page in [Page::Accessibility, Page::Language] {
+            ui.language_choice = Some("de_de".into());
+            ui.language_search.set_value("old query");
+            ui.open_at(false, page);
+            assert_eq!(ui.page(), page);
+            assert!(!ui.in_world);
+            if page == Page::Language {
+                assert_eq!(ui.language_choice, None);
+                assert!(ui.language_search.value.is_empty());
+                assert!(ui.center_language);
+            }
+            assert!(ui.back(&mut s).contains(&Event::Close));
+            assert_eq!(s.language, "en_us");
+            ui.open(false);
+            ui.show(page);
+            assert!(!ui.back(&mut s).contains(&Event::Close));
+            assert_eq!(ui.page(), Page::Main);
+        }
+        ui.open_at(false, Page::Language);
+        ui.language_choice = Some("de_de".into());
+        let events = ui.back(&mut s);
+        assert!(events.contains(&Event::Language("de_de".into())));
+        assert!(events.contains(&Event::Close));
+        assert_eq!(s.language, "de_de");
     }
 
     #[test]

@@ -32,7 +32,7 @@ const HELP: &[&str] = &[
     "options [PAGE]                 open the options (video sound controls keybinds mouse chat accessibility language font packs graphics graphics-advanced)",
     "stats [reset]                  frame-time summary since the last reset",
     "bench SECONDS                  reset stats, wait, then reply with the summary",
-    "fly X1 Y1 Z1 X2 Y2 Z2 SECONDS [PITCH]  fly the camera along a line at constant speed, then reply with the frame summary",
+    "fly X1 Y1 Z1 X2 Y2 Z2 SECONDS [PITCH [raw]]  fly the camera along a line at constant speed, then reply with the frame summary (raw: every frame time too)",
     "open WORLD [SEED] [creative]   open or create a world from the title screen",
     "save                           save the world",
     "save-all                       save the world, rewriting every resident chunk",
@@ -51,6 +51,8 @@ pub struct Flight {
     pitch: f32,
     started: Instant,
     seconds: f64,
+    /// Reply with every frame time too (`fly ... PITCH raw`).
+    raw: bool,
     reply: Sender<String>,
 }
 
@@ -76,7 +78,13 @@ impl Game<'_> {
         if t >= 1.0
             && let Some(flight) = self.flight.take()
         {
-            let _ = flight.reply.send(self.frame_stats.summary().to_string());
+            let mut summary = self.frame_stats.summary();
+            if flight.raw {
+                summary["frame_ms"] = self.frame_stats.frame_millis().into();
+                summary["cpu_ms"] = self.frame_stats.cpu_millis().into();
+                summary["gpu_ms"] = self.frame_stats.gpu_millis().into();
+            }
+            let _ = flight.reply.send(summary.to_string());
         }
     }
     pub(super) fn poll_control(&mut self, event_loop: &ActiveEventLoop) {
@@ -120,6 +128,9 @@ impl Game<'_> {
         if let Some(value) = self.lan_control(&words)? {
             return Ok(Some(value));
         }
+        if let Some(value) = self.friends_control(&words)? {
+            return Ok(Some(value));
+        }
         match self.agent_command(&words, line, reply, event_loop)? {
             super::agent::Handled::Reply(value) => return Ok(Some(value)),
             super::agent::Handled::Deferred => return Ok(None),
@@ -131,6 +142,7 @@ impl Game<'_> {
                 .chain(super::station_control::HELP)
                 .chain(super::blockctl::HELP)
                 .chain(super::lan::HELP)
+                .chain(super::friends::HELP)
                 .chain(super::render_control::HELP)
                 .chain(super::sculk::HELP)
                 .chain(super::agent::HELP)
@@ -464,6 +476,7 @@ impl Game<'_> {
                     pitch,
                     started: Instant::now(),
                     seconds: n(7)?.max(0.1),
+                    raw: words.get(9) == Some(&"raw"),
                     reply: reply.clone(),
                 });
                 Ok(None)
@@ -475,7 +488,7 @@ impl Game<'_> {
                 let folder = arg(1)?;
                 let seed = words.get(2).map(|s| s.parse::<i64>()).transpose()?;
                 let creative = words.get(3) == Some(&"creative");
-                self.open_world(folder, Some(folder), seed, creative)?;
+                self.open_world(folder, Some(folder), seed, creative, None)?;
                 ok()
             }
             "connect" => {
@@ -562,6 +575,7 @@ impl Game<'_> {
         }
         match self.screen {
             Screen::Playing => "playing",
+            Screen::GameModeSwitcher => "gamemode-switcher",
             Screen::Paused => "paused",
             Screen::Options => "options",
             Screen::Inventory => "inventory",
@@ -594,6 +608,15 @@ impl Game<'_> {
             let memory = r.device.generate_allocator_report();
             json!({
                 "gpu": r.info.name,
+                "vendor": vendor_name(r.info.vendor),
+                "driver": format!("{} {}", r.info.driver, r.info.driver_info).trim(),
+                "device_type": match r.info.device_type {
+                    wgpu::DeviceType::IntegratedGpu => "integrated",
+                    wgpu::DeviceType::DiscreteGpu => "discrete",
+                    wgpu::DeviceType::VirtualGpu => "virtual",
+                    wgpu::DeviceType::Cpu => "cpu",
+                    wgpu::DeviceType::Other => "other",
+                },
                 "backend": format!("{:?}", r.info.backend),
                 "size": [r.config.width, r.config.height],
                 "present_mode": format!("{:?}", r.config.present_mode),
@@ -647,10 +670,33 @@ impl Game<'_> {
             "pending_chunks": self.streaming.pending() + self.pending_uploads.len(),
             "generated_chunks": self.streaming.generated_total,
             "meshed_sections": self.streaming.meshed_total,
+            "streaming": self.streaming.stages().into_iter().map(|(k, v)| (k.to_string(), v.into())).collect::<serde_json::Map<_, _>>(),
+            "dirty_light": self.world.dirty_light.len(),
             "renderer": renderer,
+            "display": self.window.as_ref().and_then(|w| w.current_monitor()).map(|m| json!({
+                "width": m.size().width,
+                "height": m.size().height,
+                "scale": m.scale_factor(),
+                "refresh_hz": m.refresh_rate_millihertz().map(|r| r.div_ceil(1000)),
+            })),
             "uptime_seconds": self.started.elapsed().as_secs_f64(),
             "server": self.remote_status(),
         })
+    }
+}
+
+/// PCI vendor IDs of the GPU makers players have (Apple's is wgpu's Metal value).
+fn vendor_name(id: u32) -> String {
+    match id {
+        0x10de => "nvidia".into(),
+        0x1002 | 0x1022 => "amd".into(),
+        0x8086 => "intel".into(),
+        0x106b => "apple".into(),
+        0x5143 => "qualcomm".into(),
+        0x13b5 => "arm".into(),
+        0x10005 => "mesa".into(),
+        0 => String::new(),
+        other => format!("{other:#06x}"),
     }
 }
 
@@ -713,6 +759,7 @@ fn key_code(name: &str) -> Option<KeyCode> {
         "f1" => KeyCode::F1,
         "f2" => KeyCode::F2,
         "f3" => KeyCode::F3,
+        "f4" => KeyCode::F4,
         "f5" => KeyCode::F5,
         "f11" => KeyCode::F11,
         "slash" | "/" => KeyCode::Slash,

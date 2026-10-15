@@ -151,6 +151,8 @@ public final class VanillaArrowOracle {
                 var a=new Arrow(level,0,0,0,ammo,null);
                 random.set(a,net.minecraft.util.RandomSource.create(seed(row.get("seed"))));
                 a.setPos(VanillaSceneCollisionOracle.vector(row.get("position")));a.setDeltaMovement(VanillaSceneCollisionOracle.vector(row.get("velocity")));
+                // The client's recreateFromPacket snaps a spawned arrow, old position included.
+                a.setOldPosAndRot();
                 a.setCritArrow(row.get("crit").getAsBoolean());a.setNoPhysics(row.get("no_physics").getAsBoolean());
                 String touched="-";
                 for(var value:row.getAsJsonArray("ops")){
@@ -187,9 +189,9 @@ public final class VanillaArrowOracle {
                         default->throw new AssertionError(op);
                     }
                     var state=(BlockState)lastState.get(a);
-                    out.printf("arrow %s %s %08x %08x %s %d %d %d %s %d %s %s %s %016x %016x %s %s %016x%n",bits(a.position()),bits(a.getDeltaMovement()),Float.floatToIntBits(a.getXRot()),Float.floatToIntBits(a.getYRot()),
+                    out.printf("arrow %s %s %08x %08x %s %d %d %d %s %d %s %s %s %016x %016x %s %s %016x %s%n",bits(a.position()),bits(a.getDeltaMovement()),Float.floatToIntBits(a.getXRot()),Float.floatToIntBits(a.getYRot()),
                         inGround.invoke(a),inGroundTime.getInt(a),life.getInt(a),a.shakeTime,state==null?"none":Block.getId(state),a.getRemainingFireTicks(),touching.getBoolean(a),eyes.getBoolean(a),first.getBoolean(a),
-                        Double.doubleToLongBits(a.getFluidHeight(net.minecraft.tags.FluidTags.WATER)),Double.doubleToLongBits(a.getFluidHeight(net.minecraft.tags.FluidTags.LAVA)),a.isRemoved(),a.isCritArrow(),Double.doubleToLongBits(a.fallDistance));
+                        Double.doubleToLongBits(a.getFluidHeight(net.minecraft.tags.FluidTags.WATER)),Double.doubleToLongBits(a.getFluidHeight(net.minecraft.tags.FluidTags.LAVA)),a.isRemoved(),a.isCritArrow(),Double.doubleToLongBits(a.fallDistance),bits(new Vec3(a.xo,a.yo,a.zo)));
                     out.println("events "+String.join(" | ",level.events));level.events.clear();
                     out.printf("pickup %d %s %s%n",a.pickup.ordinal(),a.getPickupItemStackOrigin().has(net.minecraft.core.component.DataComponents.INTANGIBLE_PROJECTILE),touched);touched="-";
                 }

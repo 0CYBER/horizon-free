@@ -71,11 +71,12 @@ public final class VanillaSceneMotionOracle {
     static String vectorBits(Vec3 p){return String.format("%016x,%016x,%016x",Double.doubleToLongBits(p.x),Double.doubleToLongBits(p.y),Double.doubleToLongBits(p.z));}
     static String soundName(SoundEvent s){
         if(s==SoundEvents.PLAYER_SMALL_FALL)return "small";if(s==SoundEvents.PLAYER_BIG_FALL)return "big";
-        if(s==SoundEvents.PLAYER_SPLASH)return "splash";if(s==SoundEvents.PLAYER_SPLASH_HIGH_SPEED)return "splash-high";
+        if(s==SoundEvents.PLAYER_SPLASH)return "splash";if(s==SoundEvents.PLAYER_SPLASH_HIGH_SPEED)return "splash-high";if(s==SoundEvents.PLAYER_SWIM)return "swim";
         return VanillaBlockLandingOracle.sound(s);
     }
     static final class Sources extends DamageSources {
-        DamageSource fall,stalagmite,starve,freeze,sweetBerryBush;Sources(){super(null);}
+        DamageSource fall,stalagmite,starve,freeze,sweetBerryBush,drown;Sources(){super(null);}
+        @Override public DamageSource drown(){return drown;}
         @Override public DamageSource freeze(){return freeze;}
         @Override public DamageSource sweetBerryBush(){return sweetBerryBush;}
         @Override public DamageSource starve(){return starve;}
@@ -104,6 +105,13 @@ public final class VanillaSceneMotionOracle {
         @Override public long getGameTime(){return time;}
         @Override public void broadcastDamageEvent(Entity actor,DamageSource source){this.actor.events.add("broadcast-damage");}
         Level(){super(null,null,null,null,null,null,false,0L,List.of(),false);}
+        // LevelReader.containsAnyLiquid over the scene chunks (its section scan
+        // needs level chunks): any fluid from the box's minimum block to its
+        // maximum block, both included.
+        @Override public boolean containsAnyLiquid(AABB b){
+            for(var p:BlockPos.betweenClosed(BlockPos.containing(b.minX,b.minY,b.minZ),BlockPos.containing(b.maxX,b.maxY,b.maxZ)))if(!getBlockState(p).getFluidState().isEmpty())return true;
+            return false;
+        }
         @Override public boolean isClientSide(){return false;}
         @Override public BlockGetter getChunkForCollisions(int x,int z){return chunks.get(key(x,z));}
         @Override public BlockState getBlockState(BlockPos p){var c=chunks.get(key(p.getX()>>4,p.getZ()>>4));return c==null?Blocks.AIR.defaultBlockState():c.getBlockState(p);}
@@ -132,6 +140,10 @@ public final class VanillaSceneMotionOracle {
             actor.events.add("snowflake "+vectorBits(new Vec3(x,y,z))+" "+vectorBits(new Vec3(xs,ys,zs)));return 0;
         }
         @Override public <T extends net.minecraft.core.particles.ParticleOptions> int sendParticles(T particle,double x,double y,double z,int count,double dx,double dy,double dz,double speed){
+            // Entity.sendBubbleColumnParticles.
+            if(particle==net.minecraft.core.particles.ParticleTypes.SPLASH||particle==net.minecraft.core.particles.ParticleTypes.BUBBLE){
+                actor.events.add(String.format("column-particle %s %s %d %s %016x",particle==net.minecraft.core.particles.ParticleTypes.BUBBLE?"bubble":"splash",vectorBits(new Vec3(x,y,z)),count,vectorBits(new Vec3(dx,dy,dz)),Double.doubleToLongBits(speed)));return 0;
+            }
             var b=(net.minecraft.core.particles.BlockParticleOption)particle;if(dx!=0||dy!=0||dz!=0)throw new AssertionError();
             actor.events.add(String.format("particles %d %s %d %016x",Block.getId(b.getState()),vectorBits(new Vec3(x,y,z)),count,Double.doubleToLongBits(speed)));return 0;
         }
@@ -186,7 +198,14 @@ public final class VanillaSceneMotionOracle {
         @Override public BlockState getInBlockState(){return level().getBlockState(blockPosition());}
         @Override public ItemStack getMainHandItem(){return ItemStack.EMPTY;}
         @Override public boolean isPassenger(){return statisticsFlags!=null&&statFlag(0);}
-        @Override public boolean isSwimming(){return statisticsFlags!=null&&statFlag(1);}
+        @Override public boolean isSwimming(){return statisticsFlags!=null?statFlag(1):super.isSwimming();}
+        // LocalPlayer.isUnderWater: the resident player is the local one.
+        @Override public boolean isUnderWater(){return wasUnderwater;}
+        // The synchronized air supply as a plain field (no data item here).
+        int air;
+        @Override public int getAirSupply(){return air;}
+        @Override public void setAirSupply(int value){air=value;}
+        String swimState(){return "swim "+getSharedFlag(4)+" "+wasUnderwater+" air "+air;}
         @Override public boolean isEyeInFluid(net.minecraft.tags.TagKey<net.minecraft.world.level.material.Fluid> tag){return statisticsFlags!=null?statFlag(2):super.isEyeInFluid(tag);}
         @Override public boolean isInWater(){return statisticsFlags!=null?statFlag(3):super.isInWater();}
         @Override public boolean onClimbable(){return statisticsFlags!=null?statFlag(4):super.onClimbable();}
@@ -197,14 +216,15 @@ public final class VanillaSceneMotionOracle {
         @Override public boolean isAutoSpinAttack(){return false;}
         @Override public boolean isSpectator(){return false;}
         @Override public boolean isNoGravity(){return false;}
-        // No effects but Weaving (WebBlock.entityInside), set without the effect's callbacks.
-        boolean weaving;
-        @Override public boolean hasEffect(Holder<MobEffect> effect){return weaving&&effect==net.minecraft.world.effect.MobEffects.WEAVING;}
+        // Effects as flags (Weaving for WebBlock.entityInside, water effects for
+        // travel and breathing), set without the effects' callbacks.
+        boolean weaving;Set<Holder<MobEffect>> effectFlags;
+        @Override public boolean hasEffect(Holder<MobEffect> effect){return weaving&&effect==net.minecraft.world.effect.MobEffects.WEAVING||effectFlags.contains(effect);}
         @Override public MobEffectInstance getEffect(Holder<MobEffect> effect){return null;}
         @Override public MoveSimulationType getMoveSimulationType(){return MoveSimulationType.SERVER_AND_CLIENT;}
         @Override public boolean isClientAuthoritative(){return false;}
         @Override public void recordMovement(MoverType mover,Vec3 movement){}
-        @Override public void playSound(SoundEvent sound,float volume,float pitch){events.add(String.format("sound %s entity %08x %08x",soundName(sound),Float.floatToIntBits(volume),Float.floatToIntBits(pitch)));}
+        @Override public void playSound(SoundEvent sound,float volume,float pitch){if(stepping!=null&&sound!=SoundEvents.PLAYER_SWIM){events.add("muffled-step "+Block.getId(stepping));return;}events.add(String.format("sound %s entity %08x %08x",soundName(sound),Float.floatToIntBits(volume),Float.floatToIntBits(pitch)));}
         @Override protected void playBlockFallSound(){events.add("block-fall-sound");}
         @Override public void awardStat(net.minecraft.stats.Stat<?> stat,int value){
             if(stat.getValue()!=net.minecraft.stats.Stats.JUMP)throw new AssertionError(stat);
@@ -215,12 +235,14 @@ public final class VanillaSceneMotionOracle {
             String name=stat==net.minecraft.stats.Stats.DAMAGE_ABSORBED?"absorbed":stat==net.minecraft.stats.Stats.DAMAGE_TAKEN?"taken":stat==net.minecraft.stats.Stats.DAMAGE_RESISTED?"resisted":null;
             if(name==null){name=stat.getPath();if(!Set.of("swim_one_cm","walk_under_water_one_cm","walk_on_water_one_cm","climb_one_cm","sprint_one_cm","crouch_one_cm","walk_one_cm","aviate_one_cm","fly_one_cm").contains(name))throw new AssertionError(stat);}events.add("health-stat "+name+" "+value);
         }
-        @Override public boolean hurtServer(net.minecraft.server.level.ServerLevel level,DamageSource source,float damage){var sources=((Level)level).sources;events.add(String.format("damage %s %08x",source==sources.fall?"fall":source==sources.stalagmite?"stalagmite":source==sources.starve?"starve":source==sources.freeze?"freeze":source==sources.sweetBerryBush?"sweet_berry_bush":"unknown",Float.floatToIntBits(damage)));return super.hurtServer(level,source,damage);}
+        @Override public boolean hurtServer(net.minecraft.server.level.ServerLevel level,DamageSource source,float damage){var sources=((Level)level).sources;events.add(String.format("damage %s %08x",source==sources.fall?"fall":source==sources.stalagmite?"stalagmite":source==sources.starve?"starve":source==sources.freeze?"freeze":source==sources.sweetBerryBush?"sweet_berry_bush":source==sources.drown?"drown":"unknown",Float.floatToIntBits(damage)));return super.hurtServer(level,source,damage);}
         @Override public void teleportRelative(double x,double y,double z){setPos(getX()+x,getY()+y,getZ()+z);}
-        @Override protected void playStepSound(BlockPos p,BlockState state){}
+        // Footsteps stay a controlled consumer; in water Player.playStepSound
+        // swims (its sound is compared) and muffles the step (marked here).
+        BlockState stepping;
+        @Override protected void playStepSound(BlockPos p,BlockState state){if(isInWater()){stepping=state;try{super.playStepSound(p,state);}finally{stepping=null;}}}
         @Override public void gameEvent(Holder<GameEvent> event,Entity source){}
         @Override public LivingEntity getControllingPassenger(){return null;}
-        @Override public double getFluidJumpThreshold(){return .4;}
         // Block-inside effects and frozen ticks run only in "snow_tick" operations.
         boolean effects;int frozen;Vec3 tickStart;
         @Override public int getTicksFrozen(){return frozen;}
@@ -251,10 +273,28 @@ public final class VanillaSceneMotionOracle {
         void clock()throws Exception{sceneLevel.time++;tickCount++;if(cooldown.getInt(this)>0)cooldown.setInt(this,cooldown.getInt(this)-1);if(hurtTime>0)hurtTime--;}
         // Entity.baseTick's fluid phase: wasEyeInWater, the real
         // updateFluidInteraction, lava's fall halving and the first tick's end.
-        void fluidTick(){wasEyeInWater=isEyeInFluid(net.minecraft.tags.FluidTags.WATER);updateFluidInteraction();if(isInLava())fallDistance*=0.5;firstTick=false;}
+        // Player.tick's updateIsUnderwater, then Entity.baseTick's fluid phase:
+        // wasEyeInWater, the real updateFluidInteraction and updateSwimming,
+        // lava's fall halving and the first tick's end.
+        void fluidTick(){updateIsUnderwater();wasEyeInWater=isEyeInFluid(net.minecraft.tags.FluidTags.WATER);updateFluidInteraction();updateSwimming();if(isInLava())fallDistance*=0.5;firstTick=false;}
+        // LivingEntity.baseTick's air supply (server): the real decrease /
+        // increase / drowning methods in its order.
+        void airTick(){
+            if(!isAlive())return;
+            if(isEyeInFluid(net.minecraft.tags.FluidTags.WATER)&&!level().getBlockState(BlockPos.containing(getX(),getEyeY(),getZ())).is(Blocks.BUBBLE_COLUMN)){
+                boolean canDrown=!canBreatheUnderwater()&&!MobEffectUtil.hasWaterBreathing(this)&&!getAbilities().invulnerable;
+                if(canDrown){
+                    setAirSupply(decreaseAirSupply(getAirSupply()));
+                    if(shouldTakeDrowningDamage()){setAirSupply(0);level().broadcastEntityEvent(this,(byte)67);hurtServer((net.minecraft.server.level.ServerLevel)level(),damageSources().drown(),2.0F);}
+                }else if(getAirSupply()<getMaxAirSupply()&&MobEffectUtil.shouldEffectsRefillAirsupply(this))setAirSupply(increaseAirSupply(getAirSupply()));
+            }else if(getAirSupply()<getMaxAirSupply())setAirSupply(increaseAirSupply(getAirSupply()));
+        }
         String fluidState(){return wasTouchingWater+" "+wasEyeInWater+" "+isEyeInFluid(net.minecraft.tags.FluidTags.WATER)+" "+firstTick+String.format(" %016x %016x",Double.doubleToLongBits(getFluidHeight(net.minecraft.tags.FluidTags.WATER)),Double.doubleToLongBits(getFluidHeight(net.minecraft.tags.FluidTags.LAVA)));}
         void playerMovementTick(Vec3 input,boolean jumping){
             fluidTick();
+            aiStepWith(input,jumping);
+        }
+        void aiStepWith(Vec3 input,boolean jumping){
             preparedInput=true;xxa=(float)input.x;yya=0;zza=(float)input.z;setJumping(jumping);
             try{aiStep();}finally{preparedInput=false;}
         }
@@ -282,7 +322,7 @@ public final class VanillaSceneMotionOracle {
         out.printf("%s %s %s %s %s %s %s %016x %s %s %s %08x %d %08x %d %d %s | %s%n",p.horizontalCollision,p.verticalCollision,p.verticalCollisionBelow,p.minorHorizontalCollision,
             p.onGround(),noBlocks.getBoolean(p),pos(support.get(p)),Double.doubleToLongBits(p.fallDistance),pos(last.get(p)),p.needsSync,p.syncPosition,Float.floatToIntBits(storedSpeed.getFloat(p)),delay.getInt(p),Float.floatToIntBits(p.yHeadRot),trigger.getInt(p),grace.getInt(p),impact.get(p)==null?"none":vectorBits((Vec3)impact.get(p)),String.join(";",attributes));
         out.println("events "+String.join(" | ",p.events));p.events.clear();
-        out.println("block "+Block.getId(p.level().getBlockState(new BlockPos(25,3,25)))+" frozen "+p.frozen+" "+p.isInPowderSnow+" "+p.wasInPowderSnow+" "+vectorBits((Vec3)stuck.get(p))+" fluid "+p.fluidState());
+        out.println("block "+Block.getId(p.level().getBlockState(new BlockPos(25,3,25)))+" frozen "+p.frozen+" "+p.isInPowderSnow+" "+p.wasInPowderSnow+" "+vectorBits((Vec3)stuck.get(p))+" fluid "+p.fluidState()+" "+p.swimState());
         var pp=p.portalProcess;
         out.println("portal "+p.getPortalCooldown()+" "+(pp==null?"none":pp.getEntryPosition().getX()+","+pp.getEntryPosition().getY()+","+pp.getEntryPosition().getZ()+" "+pp.getPortalTime()+" "+pp.isInsidePortalThisTick())+" "+(p.travel==null?"-":p.travel));p.travel=null;
         out.printf("health %08x %08x %08x %d %d %08x %d %d %s %d %s %s %s %s %s %d%n",
@@ -318,14 +358,16 @@ public final class VanillaSceneMotionOracle {
         var trace=new Trace();trace.out=new PrintWriter(OutputStream.nullOutputStream());trace.fail=-1;
         var level=(Level)allocate.invoke(unsafe,Level.class);level.chunks=VanillaSceneCollisionOracle.scene(description,trace);level.border=new Border();
         level.rng=net.minecraft.util.RandomSource.create(0);level.sources=(Sources)allocate.invoke(unsafe,Sources.class);
-        level.sources.fall=damageSources.get("minecraft:fall");level.sources.stalagmite=damageSources.get("minecraft:stalagmite");level.sources.starve=damageSources.get("minecraft:starve");level.sources.freeze=damageSources.get("minecraft:freeze");level.sources.sweetBerryBush=damageSources.get("minecraft:sweet_berry_bush");
+        level.sources.fall=damageSources.get("minecraft:fall");level.sources.stalagmite=damageSources.get("minecraft:stalagmite");level.sources.starve=damageSources.get("minecraft:starve");level.sources.freeze=damageSources.get("minecraft:freeze");level.sources.sweetBerryBush=damageSources.get("minecraft:sweet_berry_bush");level.sources.drown=damageSources.get("minecraft:drown");
         level.waypoints=(Waypoints)allocate.invoke(unsafe,Waypoints.class);level.waypoints.level=level;
         level.rules=new Rules();level.difficulty=net.minecraft.world.Difficulty.NORMAL;
         var server=(VanillaBlockLandingOracle.Server)allocate.invoke(unsafe,VanillaBlockLandingOracle.Server.class);
         server.d=new VanillaBlockLandingOracle.Data();server.d.out=new PrintWriter(OutputStream.nullOutputStream());server.d.f=JsonParser.parseString("{\"fail\":-1,\"protected\":false}").getAsJsonObject();level.server=server;write(field(net.minecraft.server.MinecraftServer.class,"debugSubscribers"),server,new net.minecraft.util.debug.ServerDebugSubscribers(server));
         try(var out=new PrintWriter(Files.newBufferedWriter(dir.resolve(args[0]+".txt")));var enriched=new PrintWriter(Files.newBufferedWriter(dir.resolve("inputs-"+args[0]+".txt")));var lines=Files.lines(dir.resolve("inputs.txt"))){
             for(var line:(Iterable<String>)lines::iterator){
-                var row=JsonParser.parseString(line).getAsJsonObject();var p=(Actor)allocate.invoke(unsafe,Actor.class);p.configure(level);p.events=new ArrayList<>();level.actor=p;
+                var row=JsonParser.parseString(line).getAsJsonObject();var p=(Actor)allocate.invoke(unsafe,Actor.class);p.configure(level);p.events=new ArrayList<>();level.actor=p;p.effectFlags=new HashSet<>();p.air=300;
+                // Entity.nextStep's initializer (allocation skips it): the first footstep or swim sound after a metre.
+                field(Entity.class,"nextStep").setFloat(p,1.0F);
                 write(field(Entity.class,"type"),p,EntityTypes.PLAYER);
                 p.scenePose=Pose.STANDING;
                 write(field(Entity.class,"passengers"),p,com.google.common.collect.ImmutableList.of());write(field(Entity.class,"dimensions"),p,p.getDefaultDimensions(Pose.STANDING));write(field(Entity.class,"eyeHeight"),p,1.62f);
@@ -357,9 +399,12 @@ public final class VanillaSceneMotionOracle {
                         case "refresh_attributes"->p.attributeTick();
                         case "pose"->p.setPose(Pose.valueOf(op.get("value").getAsString()));
                         case "controlled_tick"->{
+                            // Player.tick: the base tick (fluids, swimming, air supply),
+                            // then LocalPlayer.aiStep's prefix and the actor's aiStep.
                             if(p.sprintController==null)p.sprintController=Class.forName("dev.horizonlab.parity.VanillaSprintInputOracle$Controller").getConstructor(ServerPlayer.class).newInstance(p);
+                            p.clock();var before=p.position();p.fluidTick();p.airTick();
                             int mask=op.get("value").getAsInt();var direction=(net.minecraft.world.phys.Vec2)p.sprintController.getClass().getMethod("step",int.class).invoke(p.sprintController,mask);
-                            p.clock();var before=p.position();p.playerMovementTick(new Vec3(direction.x,0,direction.y),(mask&16)!=0);p.attributeTick();p.poseTick();p.checkMovementStatistics(p.getX()-before.x,p.getY()-before.y,p.getZ()-before.z);p.getFoodData().tick(p);
+                            p.aiStepWith(new Vec3(direction.x,0,direction.y),(mask&16)!=0);p.attributeTick();p.poseTick();p.checkMovementStatistics(p.getX()-before.x,p.getY()-before.y,p.getZ()-before.z);p.getFoodData().tick(p);
                         }
                         case "health"->p.setHealth(single(op.get("value")));
                         case "absorption"->p.setAbsorptionAmount(single(op.get("value")));
@@ -372,7 +417,7 @@ public final class VanillaSceneMotionOracle {
                         case "eat"->p.getFoodData().eat(op.get("nutrition").getAsInt(),single(op.get("value")));
                         case "food_tick"->p.getFoodData().tick(p);
                         case "peaceful"->p.peaceful();
-                        case "simulation_tick"->{p.clock();var before=p.position();p.playerMovementTick(VanillaSceneCollisionOracle.vector(op.get("value")),op.get("jumping").getAsBoolean());p.attributeTick();p.poseTick();p.checkMovementStatistics(p.getX()-before.x,p.getY()-before.y,p.getZ()-before.z);p.getFoodData().tick(p);}
+                        case "simulation_tick"->{p.clock();var before=p.position();p.fluidTick();p.airTick();p.aiStepWith(VanillaSceneCollisionOracle.vector(op.get("value")),op.get("jumping").getAsBoolean());p.attributeTick();p.poseTick();p.checkMovementStatistics(p.getX()-before.x,p.getY()-before.y,p.getZ()-before.z);p.getFoodData().tick(p);}
                         case "movement_statistics"->{var delta=VanillaSceneCollisionOracle.vector(op.get("value"));p.checkMovementStatistics(delta.x,delta.y,delta.z);}
                         case "statistics_context"->{
                             p.statisticsFlags=op.get("flags").getAsInt();p.getAbilities().invulnerable=op.get("invulnerable").getAsBoolean();
@@ -381,9 +426,15 @@ public final class VanillaSceneMotionOracle {
                         }
                         case "seed"->level.rng.setSeed(op.get("value").getAsLong());
                         case "impulse"->p.setIgnoreFallDamageFromCurrentImpulse(op.get("ignore").getAsBoolean(),op.get("value").isJsonNull()?null:VanillaSceneCollisionOracle.vector(op.get("value")));
-                        case "block"->{var v=op.getAsJsonArray("position");var pos=new BlockPos(v.get(0).getAsInt(),v.get(1).getAsInt(),v.get(2).getAsInt());var state=VanillaSceneCollisionOracle.state(op.get("name").getAsString());if(op.has("properties"))for(var property:op.getAsJsonObject("properties").entrySet())state=VanillaSceneCollisionOracle.property(state,state.getBlock().getStateDefinition().getProperty(property.getKey()),property.getValue().getAsString());level.chunks.get(key(pos.getX()>>4,pos.getZ()>>4)).write(pos,Block.getId(state));}
+                        case "block","fill"->{var v=op.getAsJsonArray("position");var to=op.has("to")?op.getAsJsonArray("to"):v;var state=VanillaSceneCollisionOracle.state(op.get("name").getAsString());if(op.has("properties"))for(var property:op.getAsJsonObject("properties").entrySet())state=VanillaSceneCollisionOracle.property(state,state.getBlock().getStateDefinition().getProperty(property.getKey()),property.getValue().getAsString());
+                            for(int x=v.get(0).getAsInt();x<=to.get(0).getAsInt();x++)for(int y=v.get(1).getAsInt();y<=to.get(1).getAsInt();y++)for(int z=v.get(2).getAsInt();z<=to.get(2).getAsInt();z++){var pos=new BlockPos(x,y,z);level.chunks.get(key(pos.getX()>>4,pos.getZ()>>4)).write(pos,Block.getId(state));}}
                         case "landing"->{var v=op.getAsJsonArray("position");p.land(number(op.get("value")),op.get("ground").getAsBoolean(),new BlockPos(v.get(0).getAsInt(),v.get(1).getAsInt(),v.get(2).getAsInt()));}
                         case "fluid_tick"->p.fluidTick();
+                        case "air_tick"->p.airTick();
+                        case "air"->p.air=op.get("value").getAsInt();
+                        case "pitch"->p.setXRot(single(op.get("value")));
+                        case "swimming"->p.setSwimming(op.get("value").getAsBoolean());
+                        case "effect"->{var e=BuiltInRegistries.MOB_EFFECT.wrapAsHolder(BuiltInRegistries.MOB_EFFECT.getValue(Identifier.parse(op.get("name").getAsString())));if(op.get("value").getAsBoolean())p.effectFlags.add(e);else p.effectFlags.remove(e);}
                         case "travel"->p.travel(VanillaSceneCollisionOracle.vector(op.get("value")));
                         case "tick"->p.movementTick(VanillaSceneCollisionOracle.vector(op.get("value")));
                         case "player_tick"->p.playerMovementTick(VanillaSceneCollisionOracle.vector(op.get("value")),op.get("jumping").getAsBoolean());

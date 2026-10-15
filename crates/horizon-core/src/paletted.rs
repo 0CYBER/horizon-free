@@ -151,6 +151,36 @@ fn write(words: &mut [u64], bits: u8, i: usize, value: u32) {
     let (word, shift) = locate(bits, i);
     words[word] = (words[word] & !(mask(bits) << shift)) | (u64::from(value) << shift);
 }
+/// The distinct `values` in first-occurrence order and each value's index in
+/// them. Up to 16 distinct values a scan finds them faster than hashing.
+fn palette_ids(values: &[u32]) -> (Vec<u32>, Vec<u32>) {
+    let mut palette: Vec<u32> = Vec::new();
+    let mut small = true;
+    let mut lookup: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+    let mut ids = Vec::with_capacity(values.len());
+    for &value in values {
+        let id = if small {
+            match palette.iter().position(|&v| v == value) {
+                Some(id) => id as u32,
+                None => {
+                    palette.push(value);
+                    if palette.len() > 16 {
+                        small = false;
+                        lookup.extend(palette.iter().enumerate().map(|(i, &v)| (v, i as u32)));
+                    }
+                    palette.len() as u32 - 1
+                }
+            }
+        } else {
+            *lookup.entry(value).or_insert_with(|| {
+                palette.push(value);
+                palette.len() as u32 - 1
+            })
+        };
+        ids.push(id);
+    }
+    (palette, ids)
+}
 /// Words holding `ids` in `bits`-wide slots.
 fn pack_words(bits: u8, entries: usize, ids: impl Iterator<Item = u32>) -> Vec<u64> {
     let mut words = vec![0u64; storage_len(bits, entries)];
@@ -403,31 +433,7 @@ impl PalettedContainer {
     /// container unpacked from disk.
     pub fn from_values(strategy: Strategy, values: &[u32]) -> Self {
         assert_eq!(values.len(), strategy.entries());
-        let mut palette: Vec<u32> = Vec::new();
-        let mut small = true;
-        let mut lookup: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
-        let mut ids = Vec::with_capacity(values.len());
-        for &value in values {
-            let id = if small {
-                match palette.iter().position(|&v| v == value) {
-                    Some(id) => id as u32,
-                    None => {
-                        palette.push(value);
-                        if palette.len() > 16 {
-                            small = false;
-                            lookup.extend(palette.iter().enumerate().map(|(i, &v)| (v, i as u32)));
-                        }
-                        palette.len() as u32 - 1
-                    }
-                }
-            } else {
-                *lookup.entry(value).or_insert_with(|| {
-                    palette.push(value);
-                    palette.len() as u32 - 1
-                })
-            };
-            ids.push(id);
-        }
+        let (palette, ids) = palette_ids(values);
         Self::build(strategy, palette, &ids)
     }
     /// A container over a distinct-value `palette` and an id per entry.
@@ -530,18 +536,9 @@ impl PalettedContainer {
     /// re-encoded for the saved bit width.
     pub fn pack(&self) -> Packed {
         let entries = self.strategy.entries();
-        let mut palette: Vec<u32> = Vec::new();
-        let mut ids = Vec::with_capacity(entries);
         let mut values = vec![0u32; entries];
         self.unpack(&mut values);
-        let mut lookup: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
-        for &value in &values {
-            let id = *lookup.entry(value).or_insert_with(|| {
-                palette.push(value);
-                palette.len() as u32 - 1
-            });
-            ids.push(id);
-        }
+        let (palette, ids) = palette_ids(&values);
         let bits = match self.strategy.config(ceil_log2(palette.len())) {
             Config::Single => 0,
             Config::List(bits) => bits,

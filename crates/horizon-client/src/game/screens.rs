@@ -76,8 +76,10 @@ impl Game<'_> {
         if horizon_client::ui_theme::horizon() {
             let opened = *self.pause_since.get_or_insert_with(std::time::Instant::now);
             let (world, quit) = self.pause_labels();
+            self.tick_friends();
+            let friends = self.friends_view();
             let mut ui = horizon_client::ui_theme::Ui::new(&self.res.atlas, batch, self.cursor);
-            horizon_client::front::pause::draw(&mut ui, &world, quit, opened);
+            horizon_client::front::pause::draw(&mut ui, &world, quit, opened, &friends);
             ui.finish();
             return;
         }
@@ -144,6 +146,7 @@ impl Game<'_> {
                 self.cursor.1,
                 &world,
                 quit,
+                &self.friends_view(),
             )
         } else {
             pause_buttons(w, h)
@@ -163,6 +166,13 @@ impl Game<'_> {
             Some(3) => self.open_stats(),
             Some(4) => self.open_advancements(true),
             Some(9) => self.open_world_options(),
+            Some(10) => {
+                if let Err(e) = self.friends_start() {
+                    self.system_message(Text::literal(format!("Couldn't share the world: {e}")));
+                }
+            }
+            Some(11) => self.friends_copy(),
+            Some(12) => self.friends_stop(),
             Some(2) => self.close_world()?,
             _ => {}
         }

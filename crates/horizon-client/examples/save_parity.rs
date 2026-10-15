@@ -10,7 +10,7 @@ use horizon_client::{
     biome::Biomes,
     blocks::BlockFacts,
     chunk::{Chunk, MIN_Y, SECTIONS},
-    light::{LightTables, light_chunk},
+    light::{LightTables, apply_lighting, light_chunk},
     save::{self, SaveTables},
 };
 use horizon_core::position::ChunkPos;
@@ -157,7 +157,7 @@ fn main() -> horizon_client::Result<()> {
             std::array::from_fn(|dx| chunks.get(&(x + dx as i32 - 1, z + dz as i32 - 1)))
         });
         let mut chunk = chunks[&(x, z)].clone();
-        chunk.sections = light_chunk(&region, &lights, sky_light);
+        apply_lighting(&mut chunk, light_chunk(&region, &lights, sky_light));
         chunk.lit = true;
         let ours = save::encode_with(&chunk, assets.registry, &biomes, Some(&tables), sky_light);
         let theirs = &originals[&(x, z)];

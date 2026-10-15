@@ -830,7 +830,10 @@ impl Game<'_> {
         out.into_iter().collect()
     }
     /// Write the entities of every resident chunk (an autosave or quit).
-    pub(super) fn save_entities(&mut self) -> Result<()> {
+    /// Without `wait` (the autosave) they are written on the region writer
+    /// meanwhile: `PersistentEntitySectionManager.autoSave` stores them
+    /// without `saveAll`'s flush.
+    pub(super) fn save_entities(&mut self, wait: bool) -> Result<()> {
         self.spawn_loaded_entities();
         let keys: HashSet<(i32, i32)> = self.world.chunks.keys().copied().collect();
         let chunks = self.entity_chunks(&keys, false);
@@ -849,7 +852,11 @@ impl Game<'_> {
             .collect();
         self.persist.uuids.retain(|id, _| alive.contains(id));
         self.persist.raw.retain(|id, _| alive.contains(id));
-        self.save.save_entities(chunks)
+        if wait {
+            self.save.save_entities(chunks)
+        } else {
+            self.save.save_entities_later(chunks)
+        }
     }
     /// Save and remove the entities of chunks that unloaded.
     pub(super) fn unload_entities(&mut self, unloaded: &[Arc<Chunk>]) {

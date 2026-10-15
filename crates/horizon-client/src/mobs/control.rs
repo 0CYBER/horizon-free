@@ -167,7 +167,9 @@ impl Mob {
                     let sd = (xd * xd + zd * zd).sqrt();
                     if yd.abs() > EPSILON || sd.abs() > EPSILON {
                         let x_rot = -trig::atan2_degrees(yd, sd);
-                        self.head_pitch = rotlerp(self.head_pitch, x_rot, max_turn);
+                        // Entity.setXRot clamps: a pitch rotlerp wraps to 359 becomes 90.
+                        self.head_pitch =
+                            (rotlerp(self.head_pitch, x_rot, max_turn) % 360.0).clamp(-90.0, 90.0);
                         self.ai.yya = if yd > 0.0 { speed } else { -speed };
                     }
                 } else {

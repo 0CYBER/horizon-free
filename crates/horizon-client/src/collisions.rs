@@ -10,10 +10,10 @@ use horizon_world::{
     block_collision::{BlockCollisionRegistry, DynamicCollisionWorld, ShulkerCollisionState},
     block_collision_scan::{BlockCollisionWorld, CollisionBlock},
     collision::CachedCollisionRegistry,
-    collision_context::CollisionContext,
+    collision_context::{CollisionContext, CollisionEntity, CollisionItem},
     dynamic_support::DynamicSupportWorld,
     entity_obstruction::EntityIdentity,
-    fluid::FluidState,
+    fluid::{FluidKind, FluidState},
     liquid_collision::LiquidCollisionWorld,
     nbt::{self, Limits},
     powder_snow_collision::{PowderSnowEntity, PowderSnowWorld},
@@ -39,8 +39,8 @@ pub fn load<'r>(root: &Path, registry: &'r BlockRegistry) -> Result<BlockCollisi
     Ok(BlockCollisionRegistry::new(Arc::new(cached))?)
 }
 
-/// What powder snow's contextual collision asks of the colliding entity
-/// (`PowderSnowBlock.getCollisionShape`).
+/// What powder snow's and liquids' contextual collisions ask of the colliding
+/// entity (`PowderSnowBlock` and `LiquidBlock.getCollisionShape`).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PowderSnowSubject {
     pub fall_distance: f64,
@@ -50,6 +50,13 @@ pub struct PowderSnowSubject {
     pub leather_boots: bool,
     /// `EntityTypeTags.POWDER_SNOW_WALKABLE_MOBS`.
     pub walkable_type: bool,
+    /// A strider: lava sources hold it up (`canStandOnFluid`), on its
+    /// `getLiquidCollisionShape`.
+    pub lava_walker: bool,
+}
+/// `Strider.getLiquidCollisionShape`: `Block.column(16.0, 0.0, 8.0)`.
+fn strider_liquid_shape() -> VoxelShape {
+    VoxelShape::from_cube([1, 2, 1], &[true, false]).expect("a valid half-block column")
 }
 
 pub struct SceneCollisions<'w, 'r> {
@@ -60,7 +67,8 @@ pub struct SceneCollisions<'w, 'r> {
 }
 impl SceneCollisions<'_, '_> {
     /// Position contexts permit geometric movement probes without inventing a
-    /// player, inventory, effects or fluid-standing behavior.
+    /// player, inventory, effects or fluid-standing behavior; a lava walker
+    /// collides as the living entity it is, empty-handed.
     pub fn resolve(
         &mut self,
         bounds: Aabb,
@@ -72,7 +80,7 @@ impl SceneCollisions<'_, '_> {
             self,
             MovementRequest {
                 entity: EntityIdentity(0),
-                context: CollisionContext::position(bounds.min_position().y),
+                context: self.context(bounds),
                 bounds,
                 movement,
                 max_step,
@@ -80,6 +88,21 @@ impl SceneCollisions<'_, '_> {
                 candidate_budget: 1_000_000,
             },
         )?)
+    }
+    fn context(&self, bounds: Aabb) -> CollisionContext<'static> {
+        let y = bounds.min_position().y;
+        if !self.subject.is_some_and(|s| s.lava_walker) {
+            return CollisionContext::position(y);
+        }
+        CollisionContext::for_entity(
+            CollisionEntity {
+                identity: EntityIdentity(0),
+                y,
+                descending: false,
+                main_hand: Some(CollisionItem::EMPTY),
+            },
+            false,
+        )
     }
     pub fn unobstructed(&mut self, bounds: Aabb) -> Result<bool> {
         Ok(no_world_collision(
@@ -180,9 +203,13 @@ impl DynamicCollisionWorld for SceneCollisions<'_, '_> {
 }
 impl LiquidCollisionWorld for SceneCollisions<'_, '_> {
     type Error = io::Error;
-    /// Players and the supported mobs cannot stand on fluids (no striders).
+    /// Only striders stand on fluids.
     fn entity_liquid_shape(&mut self, _: EntityIdentity) -> io::Result<VoxelShape> {
-        Ok(VoxelShape::empty())
+        Ok(if self.subject.is_some_and(|s| s.lava_walker) {
+            strider_liquid_shape()
+        } else {
+            VoxelShape::empty()
+        })
     }
     fn fluid(&mut self, p: BlockPos) -> io::Result<FluidState> {
         FluidState::from_block(
@@ -192,8 +219,10 @@ impl LiquidCollisionWorld for SceneCollisions<'_, '_> {
                 .ok_or_else(|| io::Error::other("scene fluid state outside registry"))?,
         )
     }
-    fn entity_can_stand(&mut self, _: EntityIdentity, _: FluidState) -> io::Result<bool> {
-        Ok(false)
+    /// `Strider.canStandOnFluid`: lava.
+    fn entity_can_stand(&mut self, _: EntityIdentity, fluid: FluidState) -> io::Result<bool> {
+        Ok(self.subject.is_some_and(|s| s.lava_walker)
+            && matches!(fluid.kind(), FluidKind::Lava | FluidKind::FlowingLava))
     }
 }
 impl PowderSnowWorld for SceneCollisions<'_, '_> {

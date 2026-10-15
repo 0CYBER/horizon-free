@@ -12,12 +12,15 @@ horizon-assets = { path = "../horizon-assets" }
 horizon-core = { path = "../horizon-core" }
 horizon-world = { path = "../horizon-world" }
 horizon-protocol = { path = "../horizon-protocol" }
+horizon-friends = { path = "../horizon-friends" }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "vulkan", "metal", "wgsl"] }
 winit = "0.30.13"
 pollster = "0.4"
 bytemuck = { version = "1.24", features = ["derive"] }
 glam = "0.30"
 png = "0.18"
+sha2 = "0.10.9"
+serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["raw_value"] }
 cpal = "0.16"
 symphonia = { version = "0.5", default-features = false, features = ["ogg", "vorbis"] }
@@ -27,6 +30,9 @@ log = "0.4"
 chrono = { version = "0.4.42", default-features = false, features = ["clock", "std"] }
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
 horizon-theme = { path = "../horizon-theme" }
+# Opt-in data collection: the game keeps, the launcher sends (docs/telemetry.md).
+horizon-telemetry = { path = "../horizon-telemetry", default-features = false }
+horizon-bench = { path = "../horizon-bench" }
 arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 # Controllers (evdev + libudev on Linux, IOKit on macOS, Windows.Gaming.Input).

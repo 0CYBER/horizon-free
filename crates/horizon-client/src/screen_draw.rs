@@ -736,6 +736,15 @@ impl TextField {
         blink_ms: u64,
         format: Option<&dyn Fn(&str, usize) -> Text>,
     ) {
+        crate::widgets::target_as(
+            [
+                self.x as f32,
+                self.y as f32,
+                self.width as f32,
+                self.height as f32,
+            ],
+            crate::widgets::Kind::Field,
+        );
         if self.bordered {
             let s = if self.focused {
                 "widget/text_field_highlighted"

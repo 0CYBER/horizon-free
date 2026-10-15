@@ -2,8 +2,10 @@
 //! from a block face, boosting a gliding player, the 1.15 horizontal
 //! acceleration and 0.04 lift, the flight-duration lifetime, explosion
 //! damage with line of sight, and the client explosion (`createFireworks`).
-use super::{Game, Hit, view_vector};
+use super::{Game, Hit, item_draw::owner_at, view_vector};
+use horizon_assets::item_model::DisplayContext;
 use horizon_client::{
+    block_entity_render::vertex_light,
     collisions::SceneCollisions,
     items::ItemStack,
     mesher::Vertex,
@@ -27,7 +29,8 @@ pub(super) struct Rocket {
     /// `DATA_SHOT_AT_ANGLE` (dispensers): constant velocity, exploding on
     /// the first block it hits.
     angled: bool,
-    icon: Option<String>,
+    /// `DATA_ID_FIREWORKS_ITEM`: the stack it was launched from.
+    item: ItemStack,
 }
 impl Rocket {
     /// Position and motion (the dispenser parity fixture).
@@ -61,7 +64,7 @@ impl Game<'_> {
             explosions,
             attached,
             angled: false,
-            icon: Some("item/firework_rocket".into()),
+            item: stack.clone(),
         }
     }
     /// `FireworkRocketItem.useOn`: launch from the clicked point.
@@ -244,44 +247,35 @@ impl Game<'_> {
         self.particles
             .fireworks(at, v, r.explosions.clone(), camera);
     }
+    /// `FireworkEntityRenderer.submit`: the item (GROUND) facing the camera,
+    /// lit at the rocket's light probe.
     pub(super) fn rocket_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
-        let forward = glam::DVec3::from_array(view_vector(self.yaw, self.pitch));
-        let right = forward.cross(glam::DVec3::Y).normalize_or_zero();
-        let up = right.cross(forward).normalize_or_zero();
+        let orientation = glam::Mat4::from_quat(self.camera_orientation());
         for r in self.rockets.iter().filter(|r| !r.attached) {
-            let Some(s) = r
-                .icon
-                .as_ref()
-                .and_then(|n| self.res.atlas.sprites.get(n))
-                .copied()
-            else {
-                continue;
-            };
             let p = glam::DVec3::new(
                 r.previous.x + (r.position.x - r.previous.x) * alpha,
                 r.previous.y + (r.position.y - r.previous.y) * alpha,
                 r.previous.z + (r.position.z - r.previous.z) * alpha,
-            ) - camera;
-            let h = 0.25;
-            let c = [
-                p - right * h - up * h,
-                p + right * h - up * h,
-                p + right * h + up * h,
-                p - right * h + up * h,
-            ];
-            for (v, uv) in c
-                .iter()
-                .zip([[s.u0, s.v1], [s.u1, s.v1], [s.u1, s.v0], [s.u0, s.v0]])
-            {
-                out.push(Vertex {
-                    normal: [0; 4],
-                    pos: v.as_vec3().to_array(),
-                    uv,
-                    layer: 0,
-                    color: 0xFFFF_FFFF,
-                    light: 240 | 240 << 8,
-                });
+            );
+            // `updateForNonLiving`: GROUND, owned by the rocket.
+            let owner = owner_at(p.to_array(), 0.0, "minecraft:firework_rocket");
+            let state = self.resolve_item(&r.item, DisplayContext::Ground, Some(&owner), 0);
+            if state.is_empty() {
+                continue;
             }
+            let mut pose = glam::Mat4::from_translation((p - camera).as_vec3()) * orientation;
+            if r.angled {
+                pose *= glam::Mat4::from_rotation_z(std::f32::consts::PI)
+                    * glam::Mat4::from_rotation_y(std::f32::consts::PI)
+                    * glam::Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2);
+            }
+            // getLightProbePosition: the eye, 0.85 of its 0.25 height.
+            let light = self.world.light(
+                p.x.floor() as i32,
+                (p.y + 0.2125).floor() as i32,
+                p.z.floor() as i32,
+            );
+            self.submit_item_world(&state, pose, vertex_light(light), out);
         }
     }
 }

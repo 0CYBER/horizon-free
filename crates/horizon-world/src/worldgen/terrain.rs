@@ -444,6 +444,10 @@ impl<'r, B: TerrainBlockStates> TerrainChunk<'r, B> {
             .set_raw_data(&self.blocks, words)?;
         Ok(())
     }
+    /// Before replaying a saved chunk's `PostProcessing` lists.
+    pub fn clear_postprocessing(&mut self) {
+        self.postprocessing.iter_mut().for_each(Vec::clear);
+    }
     /// Preserves duplicates and insertion order, as ProtoChunk does.
     pub fn mark_postprocessing(&mut self, x: i32, y: i32, z: i32) {
         if let Some(section) = self.blocks.section_index(y) {

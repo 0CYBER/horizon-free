@@ -1,7 +1,8 @@
 //! Crash reports, laid out like vanilla's CrashReport.getFriendlyReport: a comment, the time,
 //! a description, the error with its stack, then the details of the game and the machine.
 //! Written to `crash-reports/crash-<yyyy-MM-dd_HH.mm.ss>-client.txt` in the game folder when
-//! the main thread panics or `main` gets an error back. Nothing is sent anywhere.
+//! the main thread panics or `main` gets an error back. It leaves the machine only scrubbed, and
+//! only if the player allows crash reports (`telemetry`).
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -104,8 +105,18 @@ impl Report {
     }
 }
 
+/// The release tag (the launcher installs each build in a folder named after it) and the client's
+/// own version, or just the latter.
+pub fn version() -> String {
+    let version = env!("CARGO_PKG_VERSION");
+    match release_tag() {
+        Some(tag) => format!("{tag} (client {version})"),
+        None => version.to_owned(),
+    }
+}
+
 /// The release this binary came with: launcher installs live in a folder named after the tag.
-fn release_tag() -> Option<String> {
+pub fn release_tag() -> Option<String> {
     let exe = std::env::current_exe().ok()?;
     let folder = exe.parent()?.file_name()?.to_str()?;
     (folder.starts_with('v') && folder[1..].starts_with(|c: char| c.is_ascii_digit()))
@@ -227,12 +238,8 @@ fn memory() -> String {
 
 /// The report's details: Horizon's and the machine's, then what the game set as it ran.
 pub fn system_details() -> Vec<(String, String)> {
-    let mut version = env!("CARGO_PKG_VERSION").to_owned();
-    if let Some(tag) = release_tag() {
-        version = format!("{tag} (client {version})");
-    }
     let mut out = vec![
-        ("Horizon Version".to_owned(), version),
+        ("Horizon Version".to_owned(), version()),
         ("Minecraft Version".to_owned(), "26.3".to_owned()),
         ("Operating System".to_owned(), operating_system()),
         ("CPU".to_owned(), cpu()),
@@ -270,6 +277,7 @@ fn deliver(home: &Path, report: Report) -> Option<PathBuf> {
         ),
     );
     crate::logging::flush();
+    crate::telemetry::keep_crash(home, &report);
     match report.save(home) {
         Ok(path) => {
             eprintln!("Horizon: crash report saved to {}", path.display());

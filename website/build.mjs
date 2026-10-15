@@ -200,7 +200,7 @@ const values = {
   YEAR: String(new Date().getUTCFullYear()),
 };
 
-for (const page of ["index.html", "404.html"]) {
+for (const page of ["index.html", "404.html", "privacy.html"]) {
   let html = await readFile(join(site, "src", page), "utf8");
   html = html.replace(/\{\{(\w+)\}\}/g, (all, key) => {
     if (!(key in values)) throw new Error(`${page}: unknown placeholder ${all}`);

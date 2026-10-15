@@ -3,7 +3,10 @@
 //! fluid slowdown and falling adjustment), fluid immersion heights, fall
 //! damage, fire and the walk animation.
 use super::{Mob, MobEvent, MobWorld};
-use crate::{blocks::Fluid, collisions::SceneCollisions};
+use crate::{
+    blocks::Fluid,
+    collisions::{PowderSnowSubject, SceneCollisions},
+};
 use horizon_core::{
     geometry::{Aabb, Vec3, trig},
     random::RandomSource,
@@ -313,7 +316,11 @@ impl Mob {
         let mut scene = SceneCollisions {
             world: w.world,
             binding: w.collision,
-            subject: None,
+            subject: self.kind.flags.lava_walker.then(|| PowderSnowSubject {
+                fall_distance: self.fall_distance,
+                lava_walker: true,
+                ..Default::default()
+            }),
         };
         let moved = scene
             .resolve(self.bounds(), wanted, step, self.on_ground)
@@ -338,23 +345,12 @@ impl Mob {
         let vertical = wanted.y != moved.y;
         self.vertical_collision_below = vertical && wanted.y < 0.0;
         self.on_ground = self.vertical_collision_below;
-        // LivingEntity.checkFallDamage refreshes the fluid state out of water
-        // (touching water resets the fall).
-        if !self.fluids.in_water {
-            self.fluids = w.fluids(self.bounds(), self.eye_y());
-            if self.fluids.in_water {
-                self.fall_distance = 0.0;
-            }
-        }
-        // Entity.checkFallDamage
-        if !self.fluids.in_water && moved.y < 0.0 {
-            self.fall_distance -= f64::from(moved.y as f32);
-        }
-        if self.on_ground {
-            if self.fall_distance > 0.0 {
-                self.cause_fall_damage(events);
-            }
+        // Strider.checkFallDamage: lava breaks any fall, and the fluid state
+        // waits for the next baseTick; Bat and Bee.checkFallDamage do nothing.
+        if self.kind.flags.lava_walker && self.fluids.in_lava {
             self.fall_distance = 0.0;
+        } else if !matches!(self.kind.species, super::Species::Bat | super::Species::Bee) {
+            self.check_fall_damage(w, moved, events);
         }
         // restituteMovementAfterCollisions with no bounciness: the colliding
         // components become (signed) zero.
@@ -370,7 +366,28 @@ impl Mob {
                 self.velocity.y = (0.0 - v.y) * 1.0 * 0.0;
             }
         }
+        // Entity.checkSupportingBlock
+        self.supporting = self.supporting_block(w, moved);
         self.movement_emission(w, moved, events);
+    }
+    /// LivingEntity.checkFallDamage: the fluid state refreshed out of water
+    /// (touching water resets the fall), then Entity.checkFallDamage.
+    fn check_fall_damage(&mut self, w: &MobWorld, moved: Vec3, events: &mut Vec<MobEvent>) {
+        if !self.fluids.in_water {
+            self.fluids = w.fluids(self.bounds(), self.eye_y());
+            if self.fluids.in_water {
+                self.fall_distance = 0.0;
+            }
+        }
+        if !self.fluids.in_water && moved.y < 0.0 {
+            self.fall_distance -= f64::from(moved.y as f32);
+        }
+        if self.on_ground {
+            if self.fall_distance > 0.0 {
+                self.cause_fall_damage(events);
+            }
+            self.fall_distance = 0.0;
+        }
     }
     /// Entity.applyMovementEmissionAndPlaySound: walked distance, footsteps
     /// and swimming sounds.
@@ -381,7 +398,7 @@ impl Mob {
         let full = (moved.length() * f64::from(0.6_f32)) as f32;
         let horizontal =
             ((moved.x * moved.x + moved.z * moved.z).sqrt() * f64::from(0.6_f32)) as f32;
-        let supporting = self.supporting_block(w, moved);
+        let supporting = self.supporting;
         let on = self.supported_on_pos(w, supporting, 1.0e-5);
         let state = w.world.block(on[0], on[1], on[2]);
         let climbable = w.facts.get(state).name.as_ref() == "minecraft:powder_snow"
@@ -439,11 +456,13 @@ impl Mob {
         }
     }
     /// `Entity.nextStep`: the next whole metre walked; a warden's steps come
-    /// every 0.55.
+    /// every 0.55, a strider's every 0.6.
     fn next_step(&self) -> f32 {
         let walked = self.ai.steps.move_dist;
         if self.kind.species == super::Species::Warden {
             walked + 0.55
+        } else if self.kind.species == super::Species::Strider {
+            walked + 0.6
         } else {
             (walked as i32).wrapping_add(1) as f32
         }
@@ -481,6 +500,11 @@ impl Mob {
             );
             w.supporting_block(shifted, self.position)
         })
+    }
+    /// `Entity.getBlockStateOnLegacy`'s position: 0.2 below the feet, or the
+    /// supporting block.
+    pub(super) fn block_on_legacy(&self, w: &MobWorld) -> [i32; 3] {
+        self.supported_on_pos(w, self.supporting, 0.2)
     }
     /// `Entity.getOnPos(offset)` with a supporting block: its column (its
     /// own position for fences, walls and gates up to half a block down).
@@ -575,7 +599,13 @@ impl Mob {
         if self.kind.flags.flying {
             return self.travel_flying(w, input, events);
         }
-        let stands_on_fluid = self.kind.flags.lava_walker && self.fluids.in_lava;
+        // shouldTravelInFluid: not where the fluid at its feet holds it up.
+        let (x, y, z) = (
+            self.position.x.floor() as i32,
+            self.position.y.floor() as i32,
+            self.position.z.floor() as i32,
+        );
+        let stands_on_fluid = self.kind.flags.lava_walker && w.fluid(x, y, z) == Fluid::Lava;
         if self.is_in_liquid() && self.affected_by_fluids() && !stands_on_fluid {
             self.travel_in_fluid(w, input, events);
         } else {
@@ -752,9 +782,15 @@ impl Mob {
             self.ai.no_jump_delay = 0;
         }
     }
-    /// Mob.jumpInLiquid: floaters rise 0.04 per tick, others 0.3.
+    /// Mob.jumpInLiquid: floaters rise 0.04 per tick, others 0.3; bees 0.01.
     fn jump_in_liquid(&mut self) {
-        self.velocity.y += if self.ai.nav.can_float { 0.04 } else { 0.3 };
+        self.velocity.y += if self.species() == super::Species::Bee {
+            0.01
+        } else if self.ai.nav.can_float {
+            0.04
+        } else {
+            0.3
+        };
     }
     pub fn jump_from_ground(&mut self, w: &MobWorld) {
         if self.species() == super::Species::Rabbit {

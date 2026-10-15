@@ -9,7 +9,7 @@ use horizon_client::{
     biome::Biomes,
     blocks::BlockFacts,
     chunk::{Chunk, MIN_Y, SECTIONS},
-    light::{LightTables, light_chunk},
+    light::{LightTables, apply_lighting, light_chunk},
     mesher::{MeshTables, Mesher},
     models,
     streaming::{ChunkGenerator, Proto},
@@ -105,7 +105,7 @@ fn main() -> Result<()> {
     );
     let mut chunks: Vec<Chunk> = chunks.iter().map(|c| (**c).clone()).collect();
     for ((x, z), sections) in lit {
-        chunks[((z - 1) * inner + x - 1) as usize].sections = sections;
+        apply_lighting(&mut chunks[((z - 1) * inner + x - 1) as usize], sections);
     }
     let chunks: Vec<Arc<Chunk>> = chunks.into_iter().map(Arc::new).collect();
     let at = |x: i32, z: i32| chunks[((z - 1) * inner + x - 1) as usize].clone();

@@ -83,9 +83,10 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher account sign-out <name>
     horizon-launcher account select <name>          play as this account
     horizon-launcher account offline                play without an account
+    horizon-launcher benchmark [--repeats N]        measure the launcher (see Performance log)
 
 `--json` prints JSON where there is something to report (`versions`, `install`, `notes`,
-`next`, `links`, `menu-style`, `update --check`, `logs`, `account`). Errors go to stderr with exit code 1. `server` runs in the terminal,
+`next`, `links`, `menu-style`, `update --check`, `logs`, `account`, `benchmark`). Errors go to stderr with exit code 1. `server` runs in the terminal,
 so lines you type reach its console. `HORIZON_LAUNCHER_HOME` replaces the data folder (for
 scripts and tests).
 
@@ -129,6 +130,20 @@ crashes it writes `crash-reports/crash-<date>_<time>-client.txt` beside them. Wh
 launcher started crashes, the Play page says so, with buttons to open or copy the report, open the
 logs folder and report it on Discord; Settings has the logs folder too. Nothing is ever sent
 anywhere by itself.
+
+## Performance log
+
+Each session writes its own measurements to `benchmarks/launcher-<time>-session.json` in the
+launcher's data folder, in the [benchmark report format](../docs/benchmark-report.md): start to the
+first frame, the release list fetch, installs and updates (download and unpack), preparing, Play to
+the game's first frame, memory, UI frame times and the binary's size, with the machine's CPU, RAM
+and OS. Attach it to an issue about the launcher being slow. `horizon-launcher benchmark` measures
+on purpose: it starts the launcher `--repeats` times (5; the first start is the cold one, as far
+as the OS's file cache allows), switches pages for a few seconds in each, rests 3 seconds to
+measure idle CPU, fetches the release list 3 times, and writes one report there with means and
+95% confidence intervals. Its window has to be on a screen that is awake. Session logs stay on
+your machine; a `benchmark` report is uploaded, dated to the day, only if you allowed benchmark
+uploads ([data collection](../docs/telemetry.md)).
 
 ## Building
 

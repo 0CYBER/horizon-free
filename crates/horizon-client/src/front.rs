@@ -33,6 +33,7 @@ const MAKE: u64 = id("create.make", 0);
 const SERVER: u64 = id("mp.row", 0);
 const JOIN: u64 = id("mp.join", 0);
 const DIRECT: u64 = id("mp.direct", 0);
+const FRIEND: u64 = id("mp.friend", 0);
 const ADD: u64 = id("mp.add", 0);
 const EDIT: u64 = id("mp.edit", 0);
 const DELETE: u64 = id("mp.delete", 0);
@@ -108,7 +109,7 @@ impl Title {
     /// live backdrop is visible (0 shows the plain cold background).
     pub fn draw_horizon(&self, ui: &mut Ui, backdrop: f32) {
         if classic(&self.mode) {
-            self.draw(ui.atlas, ui.batch, ui.cursor);
+            self.draw(ui.atlas, ui.batch, ui.cursor, false);
             return;
         }
         let reveal = self.opening_phase(backdrop >= 1.0);
@@ -153,6 +154,7 @@ impl Title {
                     seed,
                     creative,
                     focus,
+                    ..
                 } => {
                     let caret = (self.started.elapsed().as_millis() / 500).is_multiple_of(2);
                     create_page(ui, x, w, name, seed, *creative, *focus, caret);
@@ -378,14 +380,7 @@ impl Title {
                         };
                     }
                 }
-                CREATE => {
-                    self.mode = Mode::Create {
-                        name: "New World".into(),
-                        seed: String::new(),
-                        creative: false,
-                        focus: 0,
-                    }
-                }
+                CREATE => self.mode = Title::new_world(),
                 DELETE_WORLD => {
                     if let Some(world) = selected.and_then(|i| worlds.get(i)).cloned() {
                         self.mode = Mode::Delete { world };
@@ -435,6 +430,7 @@ impl Title {
                 let id = match hit {
                     JOIN => Some(40),
                     DIRECT => Some(41),
+                    FRIEND => Some(47),
                     ADD => Some(42),
                     EDIT => Some(43),
                     DELETE => Some(44),
@@ -443,15 +439,17 @@ impl Title {
                         Screen::List { .. } => 46,
                         Screen::Edit { .. } => 51,
                         Screen::Direct { .. } => 53,
+                        Screen::Friend { .. } => 57,
                         Screen::Disconnected { .. } => 54,
                     }),
                     CANCEL_RETRY => Some(55),
                     DONE => Some(match screen {
                         Screen::Direct { .. } => 52,
+                        Screen::Friend { .. } => 56,
                         _ => 50,
                     }),
                     FIELD_A | FIELD_B => {
-                        if let Screen::Edit { focus, .. } = screen {
+                        if let Screen::Edit { focus, .. } | Screen::Friend { focus, .. } = screen {
                             *focus = u8::from(hit == FIELD_B);
                         }
                         None
@@ -482,6 +480,25 @@ impl Title {
         }
         Action::None
     }
+}
+
+/// The end of `text` that fits `width`, led by an ellipsis when cut.
+fn tail_fit(ui: &Ui, text: &str, width: f32) -> String {
+    if ui.measure(Face::Regular, BODY, text) <= width {
+        return text.to_owned();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut start = 0;
+    while start < chars.len() {
+        let tail: String = std::iter::once('…')
+            .chain(chars[start..].iter().copied())
+            .collect();
+        if ui.measure(Face::Regular, BODY, &tail) <= width {
+            return tail;
+        }
+        start += 1;
+    }
+    String::new()
 }
 
 /// The page header plus a row of actions under it; returns the y below.
@@ -791,6 +808,7 @@ fn multiplayer_page(ui: &mut Ui, x: f32, w: f32, screen: &Screen, caret: bool) {
             selected,
             pings,
             lan,
+            ..
         } => {
             let games = lan.games();
             let sub = match servers.len() {
@@ -803,6 +821,7 @@ fn multiplayer_page(ui: &mut Ui, x: f32, w: f32, screen: &Screen, caret: bool) {
             let saved = selected.is_some_and(|i| i < servers.len());
             let mut items = vec![
                 (JOIN, "Join", Kind::Primary, has),
+                (FRIEND, "Join a friend", Kind::Secondary, true),
                 (ADD, "Add server", Kind::Secondary, true),
                 (DIRECT, "Direct connect", Kind::Secondary, true),
                 (REFRESH, "Refresh", Kind::Ghost, true),
@@ -955,6 +974,67 @@ fn multiplayer_page(ui: &mut Ui, x: f32, w: f32, screen: &Screen, caret: bool) {
             );
             ui.divider(x, y + rh, w);
         }
+        Screen::Friend { code, relay, focus } => {
+            let y = header(
+                ui,
+                x,
+                "Join a friend",
+                "Paste the invite code your friend sees in their pause menu.",
+            );
+            let parsed = horizon_friends::invite::parse_detailed(code);
+            let ok = parsed.is_ok();
+            actions_right(
+                ui,
+                x + w,
+                y - 24.0 - 58.0,
+                &[
+                    (DONE, "Join", Kind::Primary, ok),
+                    (BACK, "Cancel", Kind::Ghost, true),
+                ],
+            );
+            ui.divider(x, y, w);
+            let rh = 12.0 + CONTROL + 12.0;
+            let fx = x + t::ROW_LABEL + 16.0;
+            let fw = w - t::ROW_LABEL - 16.0;
+            let rows = [
+                (FIELD_A, "Invite code", code, "Paste the code here", fw),
+                (
+                    FIELD_B,
+                    "Relay (optional)",
+                    relay,
+                    "host:port, for short codes",
+                    fw.min(360.0),
+                ),
+            ];
+            let mut ry = y;
+            for (i, (fid, label, value, hint, width)) in rows.into_iter().enumerate() {
+                ui.text_line(Face::Regular, BODY, rh, x, ry, color::MUTED, label);
+                // A long code shows its end, where the typing is.
+                let shown = tail_fit(ui, value, width - 28.0);
+                ui.field(
+                    fid,
+                    [fx, ry + 12.0, width, CONTROL],
+                    &shown,
+                    hint,
+                    usize::from(*focus) == i,
+                    caret,
+                );
+                ry += rh;
+                ui.divider(x, ry, w);
+            }
+            let note = match parsed {
+                _ if code.trim().is_empty() => None,
+                Err(e) => Some(e.to_string()),
+                Ok(horizon_friends::invite::Parsed::Short(_)) if relay.trim().is_empty() => Some(
+                    "This is a relay's short code: fill in your friend's relay above, or ask for the full code."
+                        .to_owned(),
+                ),
+                Ok(_) => None,
+            };
+            if let Some(note) = note {
+                ui.text(Face::Regular, SMALL, x, ry + 12.0, color::MUTED, &note);
+            }
+        }
         Screen::Disconnected { reason, retry } => {
             let mut y = header(
                 ui,
@@ -1018,12 +1098,39 @@ pub fn wrap(ui: &Ui, text: &str, width: f32) -> Vec<String> {
 /// blurred world, with the game's actions as a page. Ids match
 /// `game/screens.rs`'s PauseScreen actions: 0 back to game, 1 options,
 /// 2 save and quit, 3 statistics, 4 advancements, 9 world options.
+/// Play with friends as the pause menu shows it (game/friends.rs fills it).
+#[derive(Clone, Debug, Default)]
+pub struct FriendsView {
+    /// A singleplayer world (not a server): the button is offered.
+    pub shown: bool,
+    pub sharing: bool,
+    pub code: Option<String>,
+    /// Who can join and what to do when friends on the internet can't (or,
+    /// before the code, what the game is doing).
+    pub status: String,
+    /// Friends on the internet can reach the host.
+    pub reachable: bool,
+    /// Where the troubleshooting is, when they can't.
+    pub help: Option<String>,
+    /// The players in the world besides the host.
+    pub guests: Vec<String>,
+    pub notice: Option<String>,
+    /// The code was just copied.
+    pub copied: bool,
+}
+
 pub mod pause {
     use super::*;
     fn act(a: u8) -> u64 {
         id("pause", u64::from(a))
     }
-    pub fn draw(ui: &mut Ui, world: &str, quit_label: &str, opened: Instant) {
+    pub fn draw(
+        ui: &mut Ui,
+        world: &str,
+        quit_label: &str,
+        opened: Instant,
+        friends: &FriendsView,
+    ) {
         let (w, h) = (ui.w, ui.h);
         let p = t::ease_out_quint(opened.elapsed().as_secs_f32() / t::move_());
         ui.opacity = p;
@@ -1065,8 +1172,21 @@ pub mod pause {
             Kind::Secondary,
             true,
         );
+        if friends.shown {
+            let iw = ui.button_width("Invite friends", true);
+            ui.button(
+                act(10),
+                [x + bw + lw + 16.0, y, iw, CONTROL_LARGE],
+                "Invite friends",
+                Kind::Secondary,
+                !friends.sharing,
+            );
+        }
         y += CONTROL_LARGE + 32.0;
         ui.row_index = 0;
+        if friends.sharing {
+            y = invite(ui, x, y, cw, friends);
+        }
         ui.divider(x, y, cw);
         let rh = ui.row(
             x,
@@ -1088,6 +1208,109 @@ pub mod pause {
         ui.opacity = 1.0;
         ui.offset = (0.0, 0.0);
     }
+    /// The invite section while sharing: the code with Copy and Stop
+    /// sharing, who is here, and what changed. Returns the y below it.
+    /// The code's groups packed into lines of at most `width`.
+    fn code_lines(ui: &Ui, code: &str, width: f32) -> Vec<String> {
+        let mut lines: Vec<String> = Vec::new();
+        for group in code.split('-') {
+            match lines.last_mut() {
+                Some(l) if ui.measure(Face::Mono, BODY, &format!("{l}-{group}")) <= width => {
+                    l.push('-');
+                    l.push_str(group);
+                }
+                _ => lines.push(group.to_owned()),
+            }
+        }
+        lines
+    }
+    fn invite(ui: &mut Ui, x: f32, mut y: f32, cw: f32, f: &FriendsView) -> f32 {
+        ui.divider(x, y, cw);
+        let top = y + 12.0;
+        ui.text(
+            Face::Regular,
+            BODY,
+            x,
+            top + 6.0,
+            color::MUTED,
+            "Invite code",
+        );
+        let vx = x + t::ROW_LABEL + 16.0;
+        let stop = "Stop sharing";
+        let sw = ui.button_width(stop, false);
+        ui.button(
+            act(12),
+            [x + cw - sw, top, sw, CONTROL],
+            stop,
+            Kind::Danger,
+            true,
+        );
+        let copy = if f.copied { "Copied" } else { "Copy" };
+        let copy_w = ui.button_width("Copied", false);
+        let buttons = sw + 8.0 + copy_w;
+        ui.button(
+            act(11),
+            [x + cw - buttons, top, copy_w, CONTROL],
+            copy,
+            Kind::Secondary,
+            f.code.is_some(),
+        );
+        let line = (BODY * 1.45).round();
+        let value_w = (cw - t::ROW_LABEL - 16.0 - buttons - 16.0).max(120.0);
+        y = top + 6.0;
+        match &f.code {
+            Some(code) => {
+                for l in code_lines(ui, code, value_w) {
+                    ui.text(Face::Mono, BODY, vx, y, color::TEXT, &l);
+                    y += line;
+                }
+            }
+            None => {
+                for l in wrap(ui, &f.status, value_w) {
+                    ui.text(Face::Regular, BODY, vx, y, color::MUTED, &l);
+                    y += line;
+                }
+            }
+        }
+        y = y.max(top + CONTROL) + 10.0;
+        let small = (SMALL * 1.45).round();
+        if f.code.is_some() {
+            // Who can join: plain when friends anywhere can, in the text
+            // colour (it asks for something) when only the LAN and VPNs can.
+            let tint = if f.reachable {
+                color::MUTED
+            } else {
+                color::TEXT
+            };
+            for l in wrap(ui, &f.status, cw) {
+                ui.text(Face::Regular, SMALL, x, y, tint, &l);
+                y += small;
+            }
+            if let Some(help) = &f.help {
+                let l = ui.fit(Face::Regular, SMALL, &format!("Help: {help}"), cw);
+                ui.text(Face::Regular, SMALL, x, y, color::FAINT, &l);
+                y += small;
+            }
+        }
+        let here = if f.guests.is_empty() {
+            "No friends here yet.".to_owned()
+        } else {
+            format!("Here now: {}", f.guests.join(", "))
+        };
+        let hint =
+            "Friends paste the code in Multiplayer, Join a friend, or on the launcher's Play page.";
+        let lines = [
+            Some((here, color::MUTED)),
+            f.notice.clone().map(|n| (n, color::MUTED)),
+            Some((hint.to_owned(), color::FAINT)),
+        ];
+        for (line, tint) in lines.into_iter().flatten() {
+            let line = ui.fit(Face::Regular, SMALL, &line, cw);
+            ui.text(Face::Regular, SMALL, x, y, tint, &line);
+            y += small;
+        }
+        y + 12.0
+    }
     /// The PauseScreen action under a click, if any.
     pub fn click(
         atlas: &HudAtlas,
@@ -1096,6 +1319,7 @@ pub mod pause {
         y: f32,
         world: &str,
         quit_label: &str,
+        friends: &FriendsView,
     ) -> Option<u8> {
         let mut ui = Ui::dry(atlas, batch, (x, y));
         draw(
@@ -1103,6 +1327,7 @@ pub mod pause {
             world,
             quit_label,
             Instant::now() - std::time::Duration::from_secs(5),
+            friends,
         );
         let hit = ui.hit((x, y))?;
         let nav = id("pause.nav", 0);
@@ -1111,7 +1336,9 @@ pub mod pause {
             h if h == nav + 1 => Some(4),
             h if h == nav + 2 => Some(3),
             h if h == nav + 3 => Some(1),
-            h => [0u8, 1, 2, 3, 4, 9].into_iter().find(|&a| act(a) == h),
+            h => [0u8, 1, 2, 3, 4, 9, 10, 11, 12]
+                .into_iter()
+                .find(|&a| act(a) == h),
         }
     }
 }
@@ -1173,7 +1400,7 @@ mod tests {
         for (i, folder) in ["C", "B", "A"].iter().enumerate() {
             world(&saves, folder, 1000 * (i as i64 + 1));
         }
-        let mut title = Title::new(saves.clone());
+        let mut title = Title::new(saves.clone(), &saves);
         title.mode = Mode::Select {
             worlds: list_worlds(&saves),
             selected: None,

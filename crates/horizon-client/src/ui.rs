@@ -285,7 +285,13 @@ pub fn slider(
 ) {
     if active {
         // A controller's D-pad can focus it (Horizon's controller support).
-        crate::widgets::target([x, y, w, 20.0]);
+        crate::widgets::target_as(
+            [x, y, w, 20.0],
+            crate::widgets::Kind::Slider {
+                value,
+                track: [x + 4.0, w - 8.0],
+            },
+        );
     }
     let track = if hover && active {
         "gui/sprites/widget/slider_highlighted"
@@ -406,6 +412,85 @@ pub fn list_background(
         u32::MAX,
     );
 }
+/// The visible scrollbar thumb, shared by painting and pointer input.
+pub(crate) fn scrollbar_thumb(
+    top: f32,
+    bottom: f32,
+    content: f32,
+    scroll: f32,
+) -> Option<(f32, f32)> {
+    let height = bottom - top;
+    if content <= height {
+        return None;
+    }
+    let bar = (height * height / content)
+        .clamp(32.0, height - 8.0)
+        .floor();
+    let y = top + ((scroll / (content - height)) * (height - bar)).floor();
+    Some((y, bar))
+}
+
+/// `AbstractScrollArea`'s scrolling of a list `top..bottom` holding `content`
+/// pixels: the amount, the mouse wheel and the held scrollbar.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Scroll {
+    pub amount: f32,
+    /// The pointer's last y while the scrollbar is held (`scrolling`).
+    held: Option<f32>,
+}
+impl Scroll {
+    fn max(top: f32, bottom: f32, content: f32) -> f32 {
+        (content - (bottom - top)).max(0.0)
+    }
+    /// `setScrollAmount`: kept within the content.
+    pub fn clamp(&mut self, top: f32, bottom: f32, content: f32) {
+        self.amount = self.amount.clamp(0.0, Self::max(top, bottom, content));
+    }
+    /// `mouseScrolled`: `rate` pixels per wheel step.
+    pub fn wheel(&mut self, delta: f32, rate: f32, top: f32, bottom: f32, content: f32) {
+        self.amount -= delta * rate;
+        self.clamp(top, bottom, content);
+    }
+    /// `updateScrolling`: a press on the scrollbar column at `bar_x` (when
+    /// there is something to scroll) holds it.
+    pub fn press(
+        &mut self,
+        (x, y): (f32, f32),
+        bar_x: f32,
+        top: f32,
+        bottom: f32,
+        content: f32,
+    ) -> bool {
+        let over = x >= bar_x && x <= bar_x + 6.0 && y >= top && y < bottom;
+        self.held = (over && Self::max(top, bottom, content) > 0.0).then_some(y);
+        self.held.is_some()
+    }
+    pub fn held(&self) -> bool {
+        self.held.is_some()
+    }
+    /// `mouseDragged` while held: above or below the list jumps to an end,
+    /// otherwise the thumb follows the pointer.
+    pub fn drag(&mut self, y: f32, top: f32, bottom: f32, content: f32) {
+        let Some(last) = self.held else { return };
+        let max = Self::max(top, bottom, content);
+        if y < top {
+            self.amount = 0.0;
+        } else if y > bottom {
+            self.amount = max;
+        } else {
+            let height = bottom - top;
+            let bar = ((height * height / content).trunc()).clamp(32.0, height - 8.0);
+            self.amount += (y - last) * (max.max(1.0) / (height - bar)).max(1.0);
+        }
+        self.clamp(top, bottom, content);
+        self.held = Some(y);
+    }
+    /// `onRelease`.
+    pub fn release(&mut self) {
+        self.held = None;
+    }
+}
+
 /// Vertical scroll bar (AbstractScrollArea): background and scroller sprites.
 pub fn scrollbar(
     batch: &mut HudBatch,
@@ -416,15 +501,10 @@ pub fn scrollbar(
     content: f32,
     scroll: f32,
 ) {
-    let height = bottom - top;
-    if content <= height {
+    let Some((y, bar)) = scrollbar_thumb(top, bottom, content, scroll) else {
         return;
-    }
-    let bar = (height * height / content)
-        .clamp(32.0, height - 8.0)
-        .floor();
-    let max = content - height;
-    let y = top + ((scroll / max) * (height - bar)).floor();
+    };
+    let height = bottom - top;
     nine_slice(
         batch,
         atlas,
@@ -556,6 +636,10 @@ impl EditBox {
             suggestion: None,
             text_color: rgba(224, 224, 224, 255),
         }
+    }
+    /// When the field gained focus, for the cursor's blink.
+    pub fn focused_since(&mut self, at: Instant) {
+        self.focused_at = at;
     }
     pub fn inner_width(&self) -> f32 {
         if self.bordered {
@@ -737,6 +821,10 @@ impl EditBox {
     /// Draw the field; `format` styles the visible text (command colouring).
     pub fn draw(&mut self, batch: &mut HudBatch, atlas: &HudAtlas, format: Option<&Text>) {
         self.layout(atlas);
+        crate::widgets::target_as(
+            [self.x, self.y, self.width, self.height],
+            crate::widgets::Kind::Field,
+        );
         if self.bordered {
             let sprite = if self.focused {
                 "gui/sprites/widget/text_field_highlighted"
@@ -850,6 +938,28 @@ impl EditBox {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn held_scrollbars_follow_the_pointer_and_stop_at_the_ends() {
+        // A 100-pixel list holding 400: the thumb is 25 -> 32 high, so a
+        // pixel of drag scrolls 300 / 68 pixels (AbstractScrollArea.mouseDragged).
+        let (top, bottom, content) = (0.0, 100.0, 400.0);
+        let mut s = Scroll::default();
+        assert!(!s.press((50.0, 10.0), 100.0, top, bottom, content));
+        assert!(s.press((103.0, 10.0), 100.0, top, bottom, content));
+        s.drag(20.0, top, bottom, content);
+        assert!((s.amount - 10.0 * 300.0 / 68.0).abs() < 1e-3);
+        s.drag(150.0, top, bottom, content);
+        assert_eq!(s.amount, 300.0);
+        s.drag(-5.0, top, bottom, content);
+        assert_eq!(s.amount, 0.0);
+        s.release();
+        s.drag(50.0, top, bottom, content);
+        assert_eq!(s.amount, 0.0);
+        // Nothing to scroll: the column doesn't take the press.
+        assert!(!s.press((103.0, 10.0), 100.0, top, bottom, 90.0));
+        s.wheel(-2.0, 18.0, top, bottom, content);
+        assert_eq!(s.amount, 36.0);
+    }
     #[test]
     fn edit_box_editing() {
         let mut e = EditBox::new(0.0, 0.0, 100.0, 20.0);

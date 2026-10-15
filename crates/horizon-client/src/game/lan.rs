@@ -450,6 +450,7 @@ impl Game<'_> {
 
     /// IntegratedServer.unpublishServer: the guests are sent away.
     pub(super) fn lan_close(&mut self, announce: bool) {
+        self.friends_lan_closed();
         let Some(mut host) = self.lan.take() else {
             return;
         };

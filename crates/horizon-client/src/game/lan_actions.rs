@@ -412,6 +412,32 @@ impl Game<'_> {
                 }
             }
             S::ChatCommand(c) => self.guest_command(host, conn, &c.command),
+            S::ChangeGameMode(p) if host.hub.guests[gi].permission >= 2 => {
+                if let Some(mode) = usize::try_from(p.mode)
+                    .ok()
+                    .and_then(|index| horizon_client::command::args::GameMode::ALL.get(index))
+                {
+                    let lines = self.as_guest(host, conn, |g| {
+                        g.chat_capture = Some(Vec::new());
+                        g.change_game_mode(*mode);
+                        g.chat_capture
+                            .take()
+                            .unwrap_or_default()
+                            .iter()
+                            .map(|t| horizon_client::lan::data::component_nbt(&t.component()))
+                            .collect::<Vec<_>>()
+                    });
+                    for content in lines.unwrap_or_default() {
+                        host.hub.send_to(
+                            conn,
+                            &C::SystemChat(play::SystemChat {
+                                content,
+                                overlay: false,
+                            }),
+                        );
+                    }
+                }
+            }
             S::Unknown(8, payload) => {
                 // A signed command: the text comes first.
                 if let Ok(text) = horizon_protocol::buf::Reader::new(&payload).string(32767) {

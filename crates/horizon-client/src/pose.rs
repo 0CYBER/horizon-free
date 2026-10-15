@@ -98,16 +98,17 @@ impl MotionWorld<'_, '_, '_> {
         if !self.can_fit_pose(Pose::Swimming)? {
             return Ok(());
         }
-        let desired = if self.player.fall_flying {
-            Pose::FallFlying
-        } else if self.player.swimming {
+        // Player.getDesiredPose: swimming before gliding.
+        let desired = if self.player.swimming {
             Pose::Swimming
+        } else if self.player.fall_flying {
+            Pose::FallFlying
         } else if self.player.shift_key_down && !self.player.flying {
             Pose::Crouching
         } else {
             Pose::Standing
         };
-        let pose = if self.can_fit_pose(desired)? {
+        let pose = if self.player.spectator || self.can_fit_pose(desired)? {
             desired
         } else if self.can_fit_pose(Pose::Crouching)? {
             Pose::Crouching

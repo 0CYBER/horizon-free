@@ -262,7 +262,7 @@ fn main() -> Result<()> {
             let a = arrow.arrow.as_ref().unwrap();
             writeln!(
                 out,
-                "arrow {} {} {:08x} {:08x} {} {} {} {} {} {} {} {} {} {:016x} {:016x} {} {} {:016x}",
+                "arrow {} {} {:08x} {:08x} {} {} {} {} {} {} {} {} {} {:016x} {:016x} {} {} {:016x} {}",
                 bits(arrow.position),
                 bits(arrow.velocity),
                 arrow.pitch.to_bits(),
@@ -280,7 +280,8 @@ fn main() -> Result<()> {
                 a.fluids.fluid_height(&Tags, LAVA).to_bits(),
                 a.removed,
                 arrow.critical(),
-                a.fall_distance.to_bits()
+                a.fall_distance.to_bits(),
+                bits(arrow.previous)
             )?;
             writeln!(out, "events {}", events.join(" | "))?;
             let a = arrow.arrow.as_ref().unwrap();

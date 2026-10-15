@@ -372,7 +372,13 @@ impl Game<'_> {
         let world_dir = std::env::current_dir()?.join(&universe).join(&level_name);
         let folder = world_dir.to_string_lossy().into_owned();
         let new_world = !world_dir.join("level.dat").exists();
-        self.open_world(&folder, Some(&level_name), Some(props.seed), game_mode == 1)?;
+        self.open_world(
+            &folder,
+            Some(&level_name),
+            Some(props.seed),
+            game_mode == 1,
+            None,
+        )?;
         if new_world {
             self.level.hardcore = props.hardcore;
         }

@@ -1015,6 +1015,38 @@ impl Game<'_> {
         self.station_changed();
     }
     /// Mouse click while a station or the brewing stand is open. True when handled.
+    /// A station's own buttons a controller can focus besides its slots
+    /// (GUI origin relative): offers, patterns, effects, enchantments and
+    /// stonecutter recipes.
+    pub(super) fn station_targets(&self) -> Vec<[f32; 4]> {
+        let Some(s) = self.station.as_ref() else {
+            return Vec::new();
+        };
+        match s.kind {
+            Kind::Merchant => self.merchant_targets(),
+            Kind::Loom => self.loom_targets(),
+            Kind::Beacon => self.beacon_targets(),
+            Kind::Enchanting => (0..3)
+                .map(|i| {
+                    let (x, y, w, h) = enchant_button(i);
+                    [x, y, w, h]
+                })
+                .collect(),
+            Kind::Stonecutter if s.inputs[0].is_some() => (s.start
+                ..(s.start + 12).min(s.recipes.len()))
+                .map(|index| {
+                    let p = index - s.start;
+                    [
+                        52.0 + (p % 4) as f32 * 16.0,
+                        14.0 + (p / 4) as f32 * 18.0,
+                        16.0,
+                        18.0,
+                    ]
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
     pub(super) fn station_click(&mut self, right: bool) -> bool {
         if self.station.is_none() && !self.brewing_open() {
             return false;

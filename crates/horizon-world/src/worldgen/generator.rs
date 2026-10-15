@@ -552,7 +552,8 @@ impl ProtoChunk {
     pub fn is_decorated(&self) -> bool {
         self.decorated
     }
-    pub(super) fn set_decorated(&mut self) {
+    /// Also restores a saved proto chunk that was decorated before it was saved.
+    pub fn set_decorated(&mut self) {
         self.decorated = true;
     }
     /// Highest non-air block + 1 in the column (WORLD_SURFACE).

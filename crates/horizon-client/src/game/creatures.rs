@@ -884,6 +884,7 @@ impl Game<'_> {
                     self.golem_chest_slot(chest, slot, stack)
                 }
                 MobEvent::BecomeStatue { mob } => self.golem_become_statue(mob),
+                MobEvent::EnterHive { mob, hive } => self.bee_enter_hive(mob, hive),
                 MobEvent::Gift { target, item } => {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == target)
                         && m.saddle_item().is_none()
@@ -2441,7 +2442,9 @@ impl Game<'_> {
                         consume = true;
                         eat = sound;
                     }
-                    None => handled = false,
+                    // Animal.mobInteract still consumes the client click when
+                    // an adult cannot breed, without swinging or taking food.
+                    None => return Ok(true),
                 }
             }
             _ => handled = false,

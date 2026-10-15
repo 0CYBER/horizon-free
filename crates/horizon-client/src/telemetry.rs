@@ -1,0 +1,420 @@
+//! The game's part in opt-in data collection (`horizon_telemetry`, docs/telemetry.md). When the
+//! player allows it, the game keeps a scrubbed crash report, or a play session's performance
+//! summary, in the outbox. It never sends anything itself: the launcher does, at its next start.
+//! Without the player's yes for that kind nothing is kept, and crash-reports/ stays local.
+use std::path::Path;
+use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
+
+use horizon_telemetry::payload::{Crash, Perf, Settings, System, Timings};
+use horizon_telemetry::scrub::Scrubber;
+use horizon_telemetry::{Item, Payload, Source, outbox};
+
+/// A session shorter than this says too little to keep.
+const MIN_SECONDS: f32 = 60.0;
+
+/// The details of a crash report that say what the game was doing, and only those: not the
+/// world, the server or the resource packs.
+const CRASH_DETAILS: [&str; 3] = ["Horizon Version", "Graphics Adapter", "Render Settings"];
+
+static STARTED: OnceLock<Instant> = OnceLock::new();
+/// The GPU's name, driver and backend, once the renderer has its adapter.
+static GPU: Mutex<Option<(String, String, String)>> = Mutex::new(None);
+
+/// When the game started, for the time to the title screen. Call first thing in `main`.
+pub fn mark_start() {
+    STARTED.get_or_init(Instant::now);
+}
+
+pub fn set_gpu(name: &str, driver: String, backend: String) {
+    *GPU.lock().unwrap_or_else(|e| e.into_inner()) = Some((name.to_owned(), driver, backend));
+}
+
+/// This machine, with the GPU once the renderer knows it.
+pub fn system() -> System {
+    let mut system = System::detect();
+    if let Some((gpu, driver, backend)) = GPU.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        system.gpu = gpu;
+        system.driver = driver;
+        system.backend = backend;
+    }
+    system
+}
+
+/// The release (`v2026.10.15`), or the client's crate version for a build from source.
+pub fn version() -> String {
+    crate::crash::release_tag().unwrap_or_else(|| format!("dev {}", env!("CARGO_PKG_VERSION")))
+}
+
+/// What a crash report becomes when it may leave: the error and stack, the thread, and the
+/// details in [`CRASH_DETAILS`], with the world's name and folder and the server's address
+/// scrubbed wherever they appear. No log lines.
+pub fn crash_item(report: &crate::crash::Report) -> Item {
+    let mut scrubber = Scrubber::new();
+    for (key, value) in &report.details {
+        match key.as_str() {
+            // `Name (saves/folder)`, as game.rs sets it.
+            "World" => {
+                let (name, folder) = value.rsplit_once(" (saves/").unwrap_or((value, ""));
+                scrubber = scrubber.term(name).term(folder.trim_end_matches(')'));
+            }
+            "Server" => {
+                let host = value.rsplit_once(':').map_or(value.as_str(), |(h, _)| h);
+                scrubber = scrubber.term(value.as_str()).term(host);
+            }
+            _ => {}
+        }
+    }
+    let crash = Crash {
+        system: system(),
+        error: scrubber.scrub(&report.error),
+        stack: scrubber.scrub(&report.stack),
+        thread: report.thread.clone(),
+        details: report
+            .details
+            .iter()
+            .filter(|(k, _)| CRASH_DETAILS.contains(&k.as_str()))
+            .map(|(k, v)| (k.clone(), scrubber.scrub(v)))
+            .collect(),
+    };
+    let mut item = Item::new(Source::Game, version(), Payload::Crash(crash));
+    // A huge stack keeps its top, where the error is.
+    while item.validate().is_err() {
+        let Payload::Crash(crash) = &mut item.payload else {
+            break;
+        };
+        let keep = crash.stack.lines().count() * 3 / 4;
+        if keep == 0 {
+            crash.stack.clear();
+            break;
+        }
+        crash.stack = crash
+            .stack
+            .lines()
+            .take(keep)
+            .map(|l| format!("{l}\n"))
+            .collect();
+    }
+    item
+}
+
+/// Keeps the crash for the launcher to send, if the player allows crash reports.
+pub fn keep_crash(home: &Path, report: &crate::crash::Report) {
+    if let Err(e) = outbox::push(home, &crash_item(report)) {
+        log::warn!("Horizon: could not keep the crash report to send: {e}");
+    }
+}
+
+/// Keeps a benchmark report (`--benchmark`) for the launcher to send, if the player allows
+/// benchmark uploads: the report as docs/benchmark-report.md defines it, dated to the day.
+pub fn keep_benchmark(home: &Path, report: &horizon_bench::Report) {
+    let Ok(data) = serde_json::to_value(report.for_upload()) else {
+        return;
+    };
+    if let Err(e) = outbox::push(
+        home,
+        &Item::new(Source::Game, version(), Payload::Benchmark(data)),
+    ) {
+        log::warn!("Horizon: could not keep the benchmark report to send: {e}");
+    }
+}
+
+/// One play session's performance, from entering a world to leaving it: frame and tick
+/// times as [`Timings`] (fixed size whatever the length), never the frames themselves.
+#[derive(Default)]
+pub struct Session {
+    frames: Timings,
+    ticks: Timings,
+    played_ms: f32,
+    to_title_ms: Option<u32>,
+    /// The start was measured: only the first session carries it.
+    title_measured: bool,
+    to_world_ms: Option<u32>,
+    opening: Option<Instant>,
+}
+
+impl Session {
+    /// The title screen drew a frame: the first time, how long the start took.
+    pub fn title_shown(&mut self) {
+        if !self.title_measured {
+            self.title_measured = true;
+            self.to_title_ms = STARTED.get().map(|s| s.elapsed().as_millis() as u32);
+        }
+    }
+
+    /// A world starts loading.
+    pub fn world_opening(&mut self) {
+        self.opening.get_or_insert_with(Instant::now);
+    }
+
+    /// A frame drawn while playing (not in menus or loading).
+    pub fn frame(&mut self, ms: f32) {
+        if let Some(opening) = self.opening.take()
+            && self.to_world_ms.is_none()
+        {
+            self.to_world_ms = Some(opening.elapsed().as_millis() as u32);
+        }
+        self.frames.record(ms);
+        self.played_ms += ms;
+    }
+
+    /// One tick of the integrated server, in single player.
+    pub fn tick(&mut self, ms: f32) {
+        self.ticks.record(ms);
+    }
+
+    /// The session's summary, if it was long enough to say something.
+    pub fn summary(&self, settings: Settings) -> Option<Perf> {
+        let seconds = self.played_ms / 1000.0;
+        (seconds >= MIN_SECONDS).then(|| Perf {
+            system: system(),
+            settings,
+            seconds: seconds as u32,
+            frames: self.frames.summary(),
+            ticks: (self.ticks.count() > 0).then(|| self.ticks.summary()),
+            peak_ram_mb: peak_ram_mb(),
+            to_title_ms: self.to_title_ms,
+            to_world_ms: self.to_world_ms,
+        })
+    }
+
+    /// Keeps the session's summary for the launcher to send, if the player allows performance
+    /// statistics, and starts the next session (the time to the title goes with the first).
+    pub fn finish(&mut self, home: &Path, settings: Settings) {
+        if horizon_telemetry::Consent::load(home).allows(horizon_telemetry::Kind::Perf)
+            && let Some(perf) = self.summary(settings)
+        {
+            let item = Item::new(Source::Game, version(), Payload::Perf(perf));
+            if let Err(e) = outbox::push(home, &item) {
+                log::warn!("Horizon: could not keep the session's performance summary: {e}");
+            }
+        }
+        *self = Self {
+            title_measured: self.title_measured,
+            ..Self::default()
+        };
+    }
+}
+
+/// The game's resident memory: the peak on Linux, what it uses now elsewhere.
+fn peak_ram_mb() -> u32 {
+    let kib = if cfg!(target_os = "linux") {
+        std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|t| {
+                t.lines()
+                    .find(|l| l.starts_with("VmHWM:"))?
+                    .split_whitespace()
+                    .nth(1)?
+                    .parse::<u64>()
+                    .ok()
+            })
+    } else if cfg!(target_os = "macos") {
+        std::process::Command::new("ps")
+            .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+            .output()
+            .ok()
+            .and_then(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .trim()
+                    .parse::<u64>()
+                    .ok()
+            })
+    } else {
+        None
+    };
+    kib.map_or(0, |k| (k / 1024) as u32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_telemetry::{Choices, Consent, Kind};
+
+    fn home(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "horizon-client-telemetry-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn allow(home: &Path, choices: Choices) {
+        let mut consent = Consent::load(home);
+        consent.answer(choices);
+        consent.save(home).unwrap();
+    }
+
+    fn report() -> crate::crash::Report {
+        crate::crash::Report {
+            time: chrono::Local::now(),
+            description: "Unexpected error".into(),
+            error:
+                "panicked at src/save.rs:10:5:\nno level.dat in /Users/ana/horizon/saves/Ana's Base"
+                    .into(),
+            stack: "horizon_client::save::load (crates/horizon-client/src/save.rs:10:5)\n".into(),
+            thread: "Render thread".into(),
+            side: "client",
+            details: vec![
+                (
+                    "Horizon Version".into(),
+                    "v2026.10.15 (client 0.1.0)".into(),
+                ),
+                (
+                    "Operating System".into(),
+                    "macos (aarch64) version macOS 26.0".into(),
+                ),
+                ("World".into(), "Castle Ana (saves/Ana's Base)".into()),
+                ("Server".into(), "play.example.net:25565".into()),
+                ("Resource Packs".into(), "Ana's pack".into()),
+            ],
+            log: vec!["[CHAT] <Ana> hi".into()],
+        }
+    }
+
+    #[test]
+    fn a_crash_keeps_only_what_says_what_happened() {
+        let item = crash_item(&report());
+        let Payload::Crash(crash) = &item.payload else {
+            panic!("a crash item");
+        };
+        assert_eq!(
+            crash.error,
+            "panicked at src/save.rs:10:5:\nno level.dat in /Users/<user>/horizon/saves/<private>"
+        );
+        assert_eq!(
+            crash.details,
+            [(
+                "Horizon Version".to_owned(),
+                "v2026.10.15 (client 0.1.0)".to_owned()
+            )]
+        );
+        let json = serde_json::to_string(&item).unwrap();
+        for private in [
+            "Castle Ana",
+            "Ana's Base",
+            "example.net",
+            "Ana's pack",
+            "CHAT",
+        ] {
+            assert!(!json.contains(private), "{private} in {json}");
+        }
+        assert!(item.validate().is_ok());
+    }
+
+    #[test]
+    fn a_huge_stack_is_cut_to_fit() {
+        let mut report = report();
+        report.stack =
+            "horizon_client::game::deep (crates/horizon-client/src/game.rs:1:1)\n".repeat(2000);
+        let item = crash_item(&report);
+        assert!(item.validate().is_ok());
+        let Payload::Crash(crash) = item.payload else {
+            panic!("a crash item");
+        };
+        assert!(crash.stack.lines().count() > 100);
+    }
+
+    #[test]
+    fn benchmark_reports_need_their_own_consent_and_go_dated_to_the_day() {
+        let home = home("benchmark");
+        let mut report = horizon_bench::Report::new(horizon_bench::Kind::Game, Default::default());
+        report.created = "2026-10-15T14:03:27Z".into();
+        report.label = Some("my machine".into());
+        keep_benchmark(&home, &report);
+        allow(
+            &home,
+            Choices {
+                performance: true,
+                ..Choices::NONE
+            },
+        );
+        keep_benchmark(&home, &report);
+        assert!(outbox::pending(&home).is_empty());
+        allow(
+            &home,
+            Choices {
+                benchmarks: true,
+                ..Choices::NONE
+            },
+        );
+        keep_benchmark(&home, &report);
+        let pending = outbox::pending(&home);
+        assert_eq!(pending.len(), 1);
+        let text = serde_json::to_string(&pending[0].1).unwrap();
+        assert!(
+            text.contains("2026-10-15T00:00:00Z") && !text.contains("my machine"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn crashes_stay_local_without_consent() {
+        let home = home("crash");
+        keep_crash(&home, &report());
+        assert!(outbox::pending(&home).is_empty());
+        allow(
+            &home,
+            Choices {
+                performance: true,
+                ..Choices::NONE
+            },
+        );
+        keep_crash(&home, &report());
+        assert!(outbox::pending(&home).is_empty());
+        allow(
+            &home,
+            Choices {
+                crashes: true,
+                ..Choices::NONE
+            },
+        );
+        keep_crash(&home, &report());
+        let pending = outbox::pending(&home);
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].1.kind(), Kind::Crash);
+    }
+
+    #[test]
+    fn a_session_is_kept_only_with_consent_and_once_long_enough() {
+        let home = home("session");
+        let mut session = Session::default();
+        session.world_opening();
+        (0..2000).for_each(|_| session.frame(16.6));
+        session.finish(&home, Settings::default());
+        assert!(outbox::pending(&home).is_empty(), "33 s, and no consent");
+        allow(
+            &home,
+            Choices {
+                performance: true,
+                ..Choices::NONE
+            },
+        );
+        (0..2000).for_each(|_| session.frame(16.6));
+        session.finish(&home, Settings::default());
+        assert!(outbox::pending(&home).is_empty(), "33 s is too short");
+        session.world_opening();
+        (0..4000).for_each(|_| session.frame(16.6));
+        (0..1200).for_each(|_| session.tick(4.0));
+        session.finish(
+            &home,
+            Settings {
+                render_distance: 12,
+                ..Settings::default()
+            },
+        );
+        let pending = outbox::pending(&home);
+        assert_eq!(pending.len(), 1);
+        let Payload::Perf(perf) = &pending[0].1.payload else {
+            panic!("a perf item");
+        };
+        assert_eq!(perf.seconds, 66);
+        assert_eq!(perf.frames.count, 4000);
+        assert_eq!(perf.ticks.as_ref().unwrap().p50_ms, 4.0);
+        assert_eq!(perf.settings.render_distance, 12);
+        assert!(perf.to_world_ms.is_some());
+        assert!(serde_json::to_vec(&pending[0].1).unwrap().len() < 1024);
+    }
+}

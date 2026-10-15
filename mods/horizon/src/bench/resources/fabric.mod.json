@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "horizon_bench",
+  "version": "1.0.0",
+  "name": "Horizon benchmark driver",
+  "description": "Dev-only: flies the vanilla client along tools/perf_bench.py's paths and records frame times. Never shipped.",
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "dev.horizonlab.bench.VanillaBench"
+    ]
+  },
+  "mixins": [
+    "horizon_bench.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "minecraft": "26.3"
+  }
+}

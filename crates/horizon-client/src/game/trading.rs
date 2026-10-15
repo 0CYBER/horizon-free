@@ -507,6 +507,16 @@ impl Game<'_> {
         }
         false
     }
+    /// The offer buttons a controller can focus (GUI origin relative).
+    pub(super) fn merchant_targets(&self) -> Vec<[f32; 4]> {
+        let Some(m) = self.station.as_ref().and_then(|s| s.merchant.as_ref()) else {
+            return Vec::new();
+        };
+        (0..7)
+            .filter(|i| i + m.scroll < m.session.offers.len())
+            .map(|i| [5.0 + SHIFT, 18.0 + 20.0 * i as f32, 88.0, 20.0])
+            .collect()
+    }
     pub(super) fn merchant_scroll(&mut self, d: f32) {
         let Some(m) = self.station.as_mut().and_then(|s| s.merchant.as_mut()) else {
             return;

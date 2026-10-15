@@ -387,6 +387,9 @@ pub fn tick(p: &mut Projectile, scene: &ArrowScene, targets: &[(Who, Aabb)]) -> 
     let Some(mut st) = p.arrow.take() else {
         return (false, Hit::None);
     };
+    // Entity.setOldPosAndRot: the renderer interpolates from here, in flight
+    // and stuck alike.
+    p.previous = p.position;
     let hit = Ticker {
         p,
         st: &mut st,

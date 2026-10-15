@@ -63,6 +63,9 @@ enum Cmd {
     Play {
         #[arg(long)]
         version: Option<String>,
+        /// Join a friend's world with its invite code
+        #[arg(long)]
+        join: Option<String>,
     },
     /// Run a dedicated server here; type commands into its console
     Server {
@@ -115,6 +118,13 @@ enum Cmd {
     },
     /// Serve the Model Context Protocol on stdin and stdout, for AI agents
     Mcp,
+    /// Measure the launcher: starts (the first is the cold one), page switching, idle CPU and
+    /// memory, the release list fetch; writes a benchmark report to benchmarks/ in its data folder
+    Benchmark {
+        /// How many times to start it
+        #[arg(long, default_value_t = 5)]
+        repeats: usize,
+    },
 }
 
 /// Runs a subcommand and returns the exit code, or None when the window should open.
@@ -255,9 +265,13 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             }
             println!("{tag} is prepared.");
         }
-        Cmd::Play { version } => attached(backend::client(&backend::resolve_version(
-            version.as_deref(),
-        )?)?)?,
+        Cmd::Play { version, join } => {
+            let mut cmd = backend::client(&backend::resolve_version(version.as_deref())?)?;
+            if let Some(code) = join {
+                backend::join_friend(&mut cmd, &code)?;
+            }
+            attached(cmd)?
+        }
         Cmd::Server {
             dir,
             version,
@@ -285,6 +299,14 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             }
         }
         Cmd::Account { action } => account_command(action.unwrap_or(AccountCmd::List), as_json)?,
+        Cmd::Benchmark { repeats } => {
+            let path = crate::perf::benchmark(repeats.max(1))?;
+            if as_json {
+                json(serde_json::json!({ "report": path }));
+            } else {
+                println!("{}", path.display());
+            }
+        }
         Cmd::Links => {
             let links = backend::links();
             if as_json {

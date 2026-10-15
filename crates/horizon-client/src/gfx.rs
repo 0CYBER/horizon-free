@@ -31,32 +31,8 @@ fn entity_shader() -> String {
     crate::overlay::wgsl_constants() + include_str!("entity.wgsl")
 }
 
-// Separate special materials without changing entity order or their overlays.
-fn batch_entities(
-    entities: &[Vertex],
-    additive: &[Vertex],
-    hand: &[Vertex],
-) -> (Vec<Vertex>, [u32; 4]) {
-    let mut combined = Vec::with_capacity(entities.len() + additive.len() + hand.len());
-    let mut counts = [0u32; 4];
-    for (i, layer) in [0, 11, 12, 4].into_iter().enumerate() {
-        for quad in entities.as_chunks::<4>().0 {
-            let material = match quad[0].layer {
-                11 => 11,
-                12 => 12,
-                4 => 4,
-                _ => 0,
-            };
-            if material == layer {
-                combined.extend_from_slice(quad);
-                counts[i] += 1;
-            }
-        }
-    }
-    combined.extend_from_slice(additive);
-    combined.extend_from_slice(hand);
-    (combined, counts)
-}
+mod entity_batch;
+use entity_batch::EntityBatch;
 
 /// Window.getAppropriateLineWidth, in framebuffer pixels.
 pub fn outline_width(width: u32) -> f32 {
@@ -193,6 +169,9 @@ pub struct Frame<'a> {
     pub block_flicker: f32,
     /// Blur and grade the frame under a Horizon-style menu (`post`).
     pub post: Option<crate::post::PostGrade>,
+    /// `Screen.extractBlurredBackground`: blur the frame by this radius
+    /// (`menuBackgroundBlurriness`) before the screen is drawn over it.
+    pub menu_blur: Option<f32>,
 }
 /// One frame of the world border wall (`WorldBorderRenderer.render`).
 #[derive(Clone, Debug)]
@@ -221,6 +200,9 @@ pub struct Renderer {
     gpu_timer: Option<timing::GpuTimer>,
     /// GPU frame times (ms) read back since the caller last drained them.
     pub gpu_times: Vec<f32>,
+    /// The last lightmap written, RGBA rows of sky level by block level
+    /// (F3+4 shows it).
+    pub lightmap_pixels: [u8; 16 * 16 * 4],
     /// Time the last `render` spent blocked on the GPU or the display
     /// (acquiring, presenting, offscreen pacing), excluded from CPU time.
     pub last_wait: std::time::Duration,
@@ -263,6 +245,7 @@ pub struct Renderer {
     hand_globals: wgpu::Buffer,
     entity_buffer: wgpu::Buffer,
     entity_capacity: u64,
+    entity_batch: EntityBatch,
     group: wgpu::BindGroup,
     globals: wgpu::Buffer,
     lightmap: wgpu::Texture,
@@ -310,6 +293,8 @@ pub struct Renderer {
     pub hud: HudRenderer,
     /// The menus' backdrop blur, made on first use.
     post: Option<crate::post::Post>,
+    /// Vanilla's menu background blur, made on first use.
+    menu_blur: Option<crate::menu_blur::MenuBlur>,
     pub info: wgpu::AdapterInfo,
     pub suspended: bool,
     pub drawn_sections: usize,
@@ -431,6 +416,13 @@ impl Renderer {
             info.name,
             info.backend,
             info.device_type
+        );
+        crate::telemetry::set_gpu(
+            &info.name,
+            format!("{} {}", info.driver, info.driver_info)
+                .trim()
+                .to_owned(),
+            format!("{:?}", info.backend),
         );
         crate::crash::set_detail(
             "Graphics Adapter",
@@ -612,7 +604,7 @@ impl Renderer {
                     format: wgpu::TextureFormat::Depth32Float,
                     depth_write_enabled: Some(depth_write),
                     depth_compare: Some(if depth_test {
-                        wgpu::CompareFunction::LessEqual
+                        wgpu::CompareFunction::GreaterEqual
                     } else {
                         wgpu::CompareFunction::Always
                     }),
@@ -979,7 +971,7 @@ impl Renderer {
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth32Float,
                     depth_write_enabled: Some(depth_write),
-                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                    depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
                     stencil: Default::default(),
                     bias,
                 }),
@@ -1003,8 +995,8 @@ impl Renderer {
             Some(wgpu::Face::Back),
             false,
             wgpu::DepthBiasState {
-                constant: -10,
-                slope_scale: -1.0,
+                constant: 10,
+                slope_scale: 1.0,
                 clamp: 0.0,
             },
             CRUMBLING_BLEND,
@@ -1035,7 +1027,7 @@ impl Renderer {
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
                 depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
@@ -1243,11 +1235,11 @@ impl Renderer {
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
                 depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
                 stencil: Default::default(),
                 bias: wgpu::DepthBiasState {
-                    constant: -3,
-                    slope_scale: -3.0,
+                    constant: 3,
+                    slope_scale: 3.0,
                     clamp: 0.0,
                 },
             }),
@@ -1379,6 +1371,7 @@ impl Renderer {
             in_flight: std::collections::VecDeque::new(),
             gpu_timer,
             gpu_times: Vec::new(),
+            lightmap_pixels: [0; 16 * 16 * 4],
             last_wait: std::time::Duration::ZERO,
             last_encode: std::time::Duration::ZERO,
             window,
@@ -1413,6 +1406,7 @@ impl Renderer {
             hand_globals,
             entity_buffer,
             entity_capacity,
+            entity_batch: EntityBatch::default(),
             group,
             globals,
             lightmap,
@@ -1447,6 +1441,7 @@ impl Renderer {
             world_post,
             hud,
             post: None,
+            menu_blur: None,
             info,
             suspended: size.width == 0 || size.height == 0,
             drawn_sections: 0,
@@ -1740,12 +1735,10 @@ impl Renderer {
     }
     fn projection(&self, fov_degrees: f32, yaw: f32, pitch: f32, bob: Mat4, far: f32) -> Mat4 {
         let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
-        Mat4::perspective_rh(fov_degrees.to_radians(), aspect, 0.05, far)
-            * bob
-            * crate::camera::view_matrix(yaw, pitch)
+        world_projection(fov_degrees, aspect, far) * bob * crate::camera::view_matrix(yaw, pitch)
     }
     fn update_lightmap(
-        &self,
+        &mut self,
         sky: &Sky,
         darkness: f32,
         gamma: f32,
@@ -1801,6 +1794,7 @@ impl Renderer {
                 depth_or_array_layers: 1,
             },
         );
+        self.lightmap_pixels = pixels;
     }
     fn animate(&mut self, tick: u64) {
         animate_sprites(
@@ -2117,18 +2111,17 @@ impl Renderer {
             self.queue
                 .write_buffer(&self.outline, 0, bytemuck::cast_slice(&lines));
         }
-        let (
-            combined,
-            [
-                entity_quads,
-                crumbling_quads,
-                translucent_crumbling_quads,
-                cloud_quads,
-            ],
-        ) = batch_entities(frame.entities, frame.additive, frame.hand);
+        let [
+            entity_quads,
+            crumbling_quads,
+            translucent_crumbling_quads,
+            cloud_quads,
+        ] = self
+            .entity_batch
+            .update(frame.entities, frame.additive, frame.hand);
         let world_quads =
             entity_quads + crumbling_quads + translucent_crumbling_quads + cloud_quads;
-        let all_entities = &combined;
+        let all_entities = &self.entity_batch.combined;
         let hand_quads = (frame.hand.len() / 4) as u32;
         let additive_quads = (frame.additive.len() / 4) as u32;
         let entity_vertices = all_entities.len() as u64;
@@ -2225,7 +2218,7 @@ impl Renderer {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: world_depth,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
+                        load: wgpu::LoadOp::Clear(0.0),
                         store: wgpu::StoreOp::Discard,
                     }),
                     stencil_ops: None,
@@ -2355,7 +2348,7 @@ impl Renderer {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
+                        load: wgpu::LoadOp::Clear(0.0),
                         store: wgpu::StoreOp::Discard,
                     }),
                     stencil_ops: None,
@@ -2412,6 +2405,23 @@ impl Renderer {
                 pass.set_pipeline(pipeline);
                 pass.draw_indexed(0..6, (i * 4) as i32, 0..1);
             }
+        }
+        if let Some(radius) = frame.menu_blur
+            && self.config.usage.contains(wgpu::TextureUsages::COPY_SRC)
+        {
+            let format = self.config.format;
+            let device = &self.device;
+            self.menu_blur
+                .get_or_insert_with(|| crate::menu_blur::MenuBlur::new(device, format))
+                .apply(
+                    &self.device,
+                    &self.queue,
+                    &mut encoder,
+                    &target_texture,
+                    &view_target,
+                    [self.config.width, self.config.height],
+                    radius,
+                );
         }
         if let Some(grade) = &frame.post
             && self.config.usage.contains(wgpu::TextureUsages::COPY_SRC)
@@ -2581,6 +2591,13 @@ impl Frustum {
         })
     }
 }
+/// Vanilla's `Projection`: reversed depth (near maps to 1, far to 0, tests
+/// are GREATER_THAN_OR_EQUAL), which keeps far faces a hair apart, like
+/// fire_side's 0.01 pixel in front of its block, from z-fighting.
+fn world_projection(fov_degrees: f32, aspect: f32, far: f32) -> Mat4 {
+    Mat4::perspective_rh(fov_degrees.to_radians(), aspect, far, 0.05)
+}
+
 fn frustum(m: Mat4) -> [Vec4; 6] {
     let r = |i| m.row(i);
     let planes = [
@@ -2612,7 +2629,9 @@ mod tests {
             .into_iter()
             .flat_map(|(layer, id)| quad(layer, id))
             .collect();
-        let (vertices, counts) = super::batch_entities(&entities, &quad(3, 5), &quad(0, 6));
+        let mut batch = super::EntityBatch::default();
+        let counts = batch.update(&entities, &quad(3, 5), &quad(0, 6));
+        let vertices = &batch.combined;
         assert_eq!(counts, [2, 1, 1, 2]);
         assert_eq!(
             vertices
@@ -2682,6 +2701,19 @@ mod tests {
         }
         assert_eq!(super::outline_width(2560), 2560.0 / 1920.0 * 2.5);
         assert_eq!(super::outline_width(3840), 5.0);
+    }
+    #[test]
+    fn far_faces_a_hair_apart_keep_their_depth_order() {
+        let m = super::world_projection(70.0, 16.0 / 9.0, 768.0);
+        let depth = |distance: f32| {
+            let clip = m * glam::Vec4::new(0.0, 0.0, -distance, 1.0);
+            clip.z / clip.w
+        };
+        // fire_side at 150 blocks, 0.01 pixel in front of the block it burns on.
+        let (block, fire) = (depth(150.0), depth(150.0 - 0.01 / 16.0));
+        assert!(fire > block, "{fire} {block}");
+        assert!((0.0..=1.0).contains(&block));
+        assert!((depth(0.05) - 1.0).abs() < 1e-6);
     }
     #[test]
     fn selection_outline_has_vanilla_perspective_layering() {

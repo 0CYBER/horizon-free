@@ -26,13 +26,16 @@ impl Game<'_> {
     }
     /// Open the options screens (OptionsScreen) from the title or pause menu.
     pub(super) fn open_options(&mut self, from_title: bool) {
+        self.open_options_at(from_title, Page::Main);
+    }
+    pub(super) fn open_options_at(&mut self, from_title: bool, page: Page) {
         // Gameplay keys must not stay held behind the options screen, where
         // bindings can also change before the physical key is released.
         self.keys.clear();
         self.screen = Screen::Options;
         self.options_from_title = from_title;
         let ui = &mut self.ui.options;
-        ui.open(!from_title && self.title.is_none());
+        ui.open_at(!from_title && self.title.is_none(), page);
         let root = self.options.resources.clone();
         ui.languages = lang::available(&[&root]);
         self.refresh_pack_lists();
@@ -240,7 +243,10 @@ impl Game<'_> {
             has_screen: self.title.is_some() || self.screen != super::Screen::Playing,
             has_overlay: false,
         };
-        framerate_limit(self.settings.max_fps as i32, context)
+        let limit = framerate_limit(self.settings.max_fps as i32, context);
+        self.settings
+            .horizon
+            .battery_limit(limit, self.title.is_none(), self.focused)
     }
     /// `Minecraft.runTick`'s frame limiter: `FramerateLimiter.limitDisplayFPS`
     /// below 260 frames per second, sleeping then spin-waiting until the

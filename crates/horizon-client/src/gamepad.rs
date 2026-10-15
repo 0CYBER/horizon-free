@@ -313,6 +313,73 @@ impl GlyphStyle {
     }
 }
 
+/// How a controller drives menus (docs/controllers.md, "Menus and
+/// inventories").
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum MenuNav {
+    /// A console-style highlight moved between widgets and slots.
+    #[default]
+    Focus,
+    /// A virtual mouse pointer.
+    Pointer,
+}
+impl MenuNav {
+    pub fn name(self) -> &'static str {
+        match self {
+            MenuNav::Focus => "focus",
+            MenuNav::Pointer => "pointer",
+        }
+    }
+    pub fn parse(name: &str) -> Self {
+        match name {
+            "pointer" => MenuNav::Pointer,
+            _ => MenuNav::Focus,
+        }
+    }
+}
+
+/// The on-screen keyboard A opens on a text field in focus mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum TextKeyboard {
+    /// Steam's on a Steam Deck under Steam, else Horizon's.
+    #[default]
+    Auto,
+    Horizon,
+    Steam,
+}
+impl TextKeyboard {
+    pub const ALL: [TextKeyboard; 3] = [
+        TextKeyboard::Auto,
+        TextKeyboard::Horizon,
+        TextKeyboard::Steam,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            TextKeyboard::Auto => "auto",
+            TextKeyboard::Horizon => "horizon",
+            TextKeyboard::Steam => "steam",
+        }
+    }
+    pub fn parse(name: &str) -> Self {
+        match name {
+            "horizon" => TextKeyboard::Horizon,
+            "steam" => TextKeyboard::Steam,
+            _ => TextKeyboard::Auto,
+        }
+    }
+}
+
+/// Whether A on a text field asks Steam for its keyboard
+/// (`steam://open/keyboard`) instead of opening Horizon's: chosen, or `Auto`
+/// on a Steam Deck (Steam sets `SteamDeck=1` for the games it starts).
+pub fn steam_keyboard(choice: TextKeyboard) -> bool {
+    match choice {
+        TextKeyboard::Steam => true,
+        TextKeyboard::Horizon => false,
+        TextKeyboard::Auto => std::env::var("SteamDeck").is_ok_and(|v| v == "1"),
+    }
+}
+
 /// The controller settings (`horizon-controller.txt`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct PadSettings {
@@ -329,6 +396,9 @@ pub struct PadSettings {
     /// holding it, unless vanilla's toggle crouch is on already.
     pub toggle_sneak: bool,
     pub glyphs: GlyphStyle,
+    /// How the pad drives menus: a focus highlight or a virtual pointer.
+    pub menu_nav: MenuNav,
+    pub keyboard: TextKeyboard,
     /// Action name -> button, `None` for unbound; missing means the default.
     bindings: BTreeMap<&'static str, Option<Button>>,
 }
@@ -345,6 +415,8 @@ impl Default for PadSettings {
             trigger_threshold: 0.4,
             toggle_sneak: true,
             glyphs: GlyphStyle::Auto,
+            menu_nav: MenuNav::Focus,
+            keyboard: TextKeyboard::Auto,
             bindings: BTreeMap::new(),
         }
     }
@@ -398,6 +470,8 @@ impl PadSettings {
                 }
                 "toggleSneak" => s.toggle_sneak = flag(s.toggle_sneak),
                 "glyphs" => s.glyphs = GlyphStyle::parse(value),
+                "menuNavigation" => s.menu_nav = MenuNav::parse(value),
+                "keyboard" => s.keyboard = TextKeyboard::parse(value),
                 other => {
                     if let Some(action) = other.strip_prefix("bind_") {
                         let button = if value == "none" {
@@ -416,7 +490,7 @@ impl PadSettings {
     }
     pub fn serialize(&self) -> String {
         let mut text = format!(
-            "enabled:{}\nvibration:{}\nlookSensitivity:{}\ninvertX:{}\ninvertY:{}\nmoveDeadzone:{}\nlookDeadzone:{}\ntriggerThreshold:{}\ntoggleSneak:{}\nglyphs:{}\n",
+            "enabled:{}\nvibration:{}\nlookSensitivity:{}\ninvertX:{}\ninvertY:{}\nmoveDeadzone:{}\nlookDeadzone:{}\ntriggerThreshold:{}\ntoggleSneak:{}\nglyphs:{}\nmenuNavigation:{}\nkeyboard:{}\n",
             bool_text(self.enabled),
             bool_text(self.vibration),
             self.look_sensitivity,
@@ -427,6 +501,8 @@ impl PadSettings {
             self.trigger_threshold,
             bool_text(self.toggle_sneak),
             self.glyphs.name(),
+            self.menu_nav.name(),
+            self.keyboard.name(),
         );
         for (action, button) in &self.bindings {
             text.push_str(&format!(
@@ -575,6 +651,202 @@ pub fn focus_step(from: (f32, f32), button: Button, targets: &[(f32, f32)]) -> O
         })
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(i, _)| i)
+}
+
+/// A rectangle `[x, y, w, h]` in GUI pixels.
+pub type Rect = [f32; 4];
+
+/// The D-pad direction a stick points to, when pushed past `threshold`
+/// mostly along one axis (focus steps like the D-pad).
+pub fn stick_direction(stick: [f32; 2], threshold: f32) -> Option<Button> {
+    let [x, y] = stick;
+    if length(stick) < threshold {
+        return None;
+    }
+    Some(if x.abs() > y.abs() {
+        if x > 0.0 {
+            Button::DPadRight
+        } else {
+            Button::DPadLeft
+        }
+    } else if y > 0.0 {
+        Button::DPadUp
+    } else {
+        Button::DPadDown
+    })
+}
+
+/// Arrow-key focus navigation as vanilla does it
+/// (`ContainerEventHandler.nextFocusPathInDirection`), over every target of
+/// the screen at once: from a strip one pixel past the focused edge, the
+/// nearest target overlapping it on the other axis wins (ties: leftmost or
+/// topmost); without one, the target whose facing edge's centre is nearest
+/// the focused edge's centre (`nextFocusPathVaguelyInDirection`). Bounds are
+/// inclusive as in `ScreenRectangle` (a right edge is `x + w - 1`).
+pub fn focus_step_rect(from: Rect, button: Button, targets: &[Rect]) -> Option<usize> {
+    focus_step_strict(from, button, targets).or_else(|| focus_step_vague(from, button, targets))
+}
+
+/// The direction as (axis: 0 = x, 1 = y; positive).
+fn direction(button: Button) -> Option<(usize, bool)> {
+    match button {
+        Button::DPadUp => Some((1, false)),
+        Button::DPadDown => Some((1, true)),
+        Button::DPadLeft => Some((0, false)),
+        Button::DPadRight => Some((0, true)),
+        _ => None,
+    }
+}
+
+/// The first pass of [`focus_step_rect`]: targets overlapping the focused
+/// one on the other axis (a row, a column).
+pub fn focus_step_strict(from: Rect, button: Button, targets: &[Rect]) -> Option<usize> {
+    let (axis, positive) = direction(button)?;
+    let other = 1 - axis;
+    let lo = |r: &Rect, a: usize| r[a];
+    let hi = |r: &Rect, a: usize| r[a] + r[a + 2] - 1.0;
+    // Bound in a direction (`getBoundInDirection`).
+    let bound = |r: &Rect, a: usize, pos: bool| if pos { hi(r, a) } else { lo(r, a) };
+    let after = |a: f32, b: f32| if positive { a > b + 1e-3 } else { b > a + 1e-3 };
+    // `getBorder(direction)`: the strip one pixel past the focused edge.
+    let mut strip = from;
+    strip[axis] = bound(&from, axis, positive) + if positive { 1.0 } else { -1.0 };
+    strip[axis + 2] = 1.0;
+    let first = bound(&strip, axis, !positive);
+    let same = |a: &Rect, b: &Rect| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.5);
+    let mut strict: Vec<(usize, f32, f32)> = targets
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| !same(r, &from))
+        .filter(|(_, r)| lo(r, other).max(lo(&strip, other)) <= hi(r, other).min(hi(&strip, other)))
+        .filter(|(_, r)| {
+            let child_first = bound(r, axis, !positive);
+            after(child_first, first)
+                || ((child_first - first).abs() < 1e-3
+                    && after(bound(r, axis, positive), bound(&strip, axis, positive)))
+        })
+        .map(|(i, r)| (i, bound(r, axis, !positive), lo(r, other)))
+        .collect();
+    strict.sort_by(|a, b| {
+        let primary = if positive {
+            a.1.total_cmp(&b.1)
+        } else {
+            b.1.total_cmp(&a.1)
+        };
+        primary.then(a.2.total_cmp(&b.2))
+    });
+    strict.first().map(|s| s.0)
+}
+
+/// The second pass of [`focus_step_rect`]: the target whose facing edge's
+/// centre is nearest the focused edge's centre.
+pub fn focus_step_vague(from: Rect, button: Button, targets: &[Rect]) -> Option<usize> {
+    let (axis, positive) = direction(button)?;
+    let other = 1 - axis;
+    let lo = |r: &Rect, a: usize| r[a];
+    let hi = |r: &Rect, a: usize| r[a] + r[a + 2] - 1.0;
+    let bound = |r: &Rect, a: usize, pos: bool| if pos { hi(r, a) } else { lo(r, a) };
+    let after = |a: f32, b: f32| if positive { a > b + 1e-3 } else { b > a + 1e-3 };
+    let same = |a: &Rect, b: &Rect| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.5);
+    let mut strip = from;
+    strip[axis] = bound(&from, axis, positive) + if positive { 1.0 } else { -1.0 };
+    strip[axis + 2] = 1.0;
+    let centre = |r: &Rect, a: usize| (hi(r, a) + lo(r, a)) / 2.0;
+    let edge = bound(&strip, axis, positive);
+    let mid = centre(&strip, other);
+    targets
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| !same(r, &from))
+        .filter_map(|(i, r)| {
+            let facing = bound(r, axis, !positive);
+            after(facing, edge).then(|| {
+                let (d1, d2) = (facing - edge, centre(r, other) - mid);
+                (i, d1 * d1 + d2 * d2)
+            })
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(i, _)| i)
+}
+
+/// How far a list scrolled between two frames' targets: the vertical shift
+/// most targets of the same position and size agree on (targets that didn't
+/// move, outside the list, don't count). `None` when nothing moved.
+pub fn scroll_shift(before: &[Rect], after: &[Rect]) -> Option<f32> {
+    let same = |a: &Rect, b: &Rect| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.5);
+    if before.len() == after.len() && before.iter().zip(after).all(|(a, b)| same(a, b)) {
+        return None;
+    }
+    let mut votes: Vec<(f32, usize)> = Vec::new();
+    for b in before {
+        for a in after {
+            let dy = a[1] - b[1];
+            if (a[0] - b[0]).abs() < 0.5
+                && (a[2] - b[2]).abs() < 0.5
+                && (a[3] - b[3]).abs() < 0.5
+                && dy.abs() >= 0.5
+            {
+                match votes.iter_mut().find(|v| (v.0 - dy).abs() < 0.5) {
+                    Some(v) => v.1 += 1,
+                    None => votes.push((dy, 1)),
+                }
+            }
+        }
+    }
+    // Most votes; among equals the smallest move (the next row, not a far one).
+    votes
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then(b.0.abs().total_cmp(&a.0.abs())))
+        .map(|v| v.0)
+}
+
+/// The target a remembered focus rectangle stands for in a new frame: the
+/// same rectangle, else the nearest centre within `radius` (the screen
+/// moved it a little: a scrolled list, a resized window).
+pub fn refind(focus: Rect, targets: &[Rect], radius: f32) -> Option<usize> {
+    let same = |r: &Rect| r.iter().zip(&focus).all(|(a, b)| (a - b).abs() < 0.5);
+    if let Some(i) = targets.iter().position(same) {
+        return Some(i);
+    }
+    let c = |r: &Rect| (r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+    let centres: Vec<(f32, f32)> = targets.iter().map(c).collect();
+    nearest(c(&focus), &centres, radius)
+}
+
+/// The next tab after a bumper among tab targets (left to right, then top
+/// to bottom), wrapping; `None` with fewer than two tabs.
+pub fn tab_step(tabs: &[(Rect, bool)], forward: bool) -> Option<usize> {
+    if tabs.len() < 2 {
+        return None;
+    }
+    let mut order: Vec<usize> = (0..tabs.len()).collect();
+    order.sort_by(|&a, &b| {
+        let (ra, rb) = (tabs[a].0, tabs[b].0);
+        // A vertical strip of tabs (a sidebar) reads top to bottom.
+        ra[1].total_cmp(&rb[1]).then(ra[0].total_cmp(&rb[0]))
+    });
+    let n = order.len();
+    let at = order.iter().position(|&i| tabs[i].1).unwrap_or(0);
+    Some(
+        order[if forward {
+            (at + 1) % n
+        } else {
+            (at + n - 1) % n
+        }],
+    )
+}
+
+/// A slider nudge: the pointer x that sets `value` (0..1) on a track
+/// `[start, width]` (for vanilla's sliders `x + 4` and `w - 8`:
+/// `AbstractSliderButton.setValueFromMouse` inverted).
+pub fn slider_x(track: [f32; 2], value: f32) -> f32 {
+    track[0] + value.clamp(0.0, 1.0) * track[1]
+}
+
+/// Pixels a held left/right moves a slider handle per step: one pixel (a
+/// vanilla arrow key press) at first, faster while held.
+pub fn slider_step(repeats: u32) -> f32 {
+    [1.0, 1.0, 2.0, 2.0, 4.0, 4.0, 8.0][repeats.min(6) as usize]
 }
 
 /// The target within `radius` of `at`, nearest first (the cursor settles
@@ -817,6 +1089,97 @@ mod tests {
         let (x, y) = cursor_delta([0.0, 1.0], 0.15, 0.1);
         assert!(x == 0.0 && y < -30.0, "up moves up the screen");
         assert_eq!(cursor_delta([0.1, 0.0], 0.15, 0.1), (0.0, 0.0));
+    }
+
+    #[test]
+    fn focus_follows_vanilla_arrow_navigation() {
+        // An options screen: two columns of 150-wide buttons 20 high with
+        // 4 pixels between rows, a full-width Done button under them.
+        let mut rects: Vec<Rect> = (0..6)
+            .map(|i| {
+                let (col, row) = (i % 2, i / 2);
+                [
+                    5.0 + col as f32 * 160.0,
+                    40.0 + row as f32 * 24.0,
+                    150.0,
+                    20.0,
+                ]
+            })
+            .collect();
+        rects.push([85.0, 120.0, 150.0, 20.0]);
+        assert_eq!(
+            focus_step_rect(rects[0], Button::DPadRight, &rects),
+            Some(1)
+        );
+        assert_eq!(focus_step_rect(rects[1], Button::DPadRight, &rects), None);
+        assert_eq!(focus_step_rect(rects[0], Button::DPadDown, &rects), Some(2));
+        assert_eq!(focus_step_rect(rects[3], Button::DPadUp, &rects), Some(1));
+        assert_eq!(focus_step_rect(rects[0], Button::DPadUp, &rects), None);
+        // Done overlaps both columns: down from either bottom button lands
+        // on it, up from it picks the leftmost overlapping one.
+        assert_eq!(focus_step_rect(rects[5], Button::DPadDown, &rects), Some(6));
+        assert_eq!(focus_step_rect(rects[4], Button::DPadDown, &rects), Some(6));
+        assert_eq!(focus_step_rect(rects[6], Button::DPadUp, &rects), Some(4));
+        // Nothing overlaps on the other axis: the vague pass takes the
+        // nearest facing edge (a crafting result right of the grid).
+        let grid: Vec<Rect> = vec![
+            [10.0, 10.0, 16.0, 16.0],
+            [28.0, 10.0, 16.0, 16.0],
+            [10.0, 28.0, 16.0, 16.0],
+            [28.0, 28.0, 16.0, 16.0],
+            [80.0, 50.0, 16.0, 16.0],
+        ];
+        assert_eq!(focus_step_rect(grid[1], Button::DPadRight, &grid), Some(4));
+        assert_eq!(focus_step_rect(grid[4], Button::DPadLeft, &grid), Some(3));
+        assert_eq!(focus_step_rect(grid[0], Button::DPadDown, &grid), Some(2));
+        // The focused rectangle itself is never a step, even listed twice.
+        let dup = vec![grid[0], grid[0]];
+        assert_eq!(focus_step_rect(grid[0], Button::DPadRight, &dup), None);
+        assert_eq!(focus_step_rect(grid[0], Button::South, &grid), None);
+    }
+
+    #[test]
+    fn refind_tabs_sliders_and_stick_steps() {
+        let rects: Vec<Rect> = vec![[0.0, 0.0, 10.0, 10.0], [0.0, 20.0, 10.0, 10.0]];
+        assert_eq!(refind([0.0, 20.0, 10.0, 10.0], &rects, 8.0), Some(1));
+        // A list scrolled by 4 pixels keeps the row.
+        assert_eq!(refind([0.0, 24.0, 10.0, 10.0], &rects, 8.0), Some(1));
+        assert_eq!(refind([90.0, 90.0, 10.0, 10.0], &rects, 8.0), None);
+        // Rows 24 apart scrolled up by 24 under a fixed button.
+        let before: Vec<Rect> = (0..5)
+            .map(|i| [10.0, 40.0 + 24.0 * i as f32, 100.0, 20.0])
+            .chain([[10.0, 200.0, 50.0, 20.0]])
+            .collect();
+        let after: Vec<Rect> = (0..5)
+            .map(|i| [10.0, 16.0 + 24.0 * i as f32, 100.0, 20.0])
+            .chain([[10.0, 200.0, 50.0, 20.0]])
+            .collect();
+        assert_eq!(scroll_shift(&before, &after), Some(-24.0));
+        assert_eq!(scroll_shift(&before, &before), None);
+        let tabs = [
+            ([60.0, 0.0, 26.0, 32.0], false),
+            ([0.0, 0.0, 26.0, 32.0], true),
+            ([30.0, 0.0, 26.0, 32.0], false),
+        ];
+        assert_eq!(tab_step(&tabs, true), Some(2));
+        assert_eq!(tab_step(&tabs, false), Some(0), "wraps to the last");
+        assert_eq!(tab_step(&tabs[..1], true), None);
+        assert_eq!(slider_x([14.0, 142.0], 0.0), 14.0);
+        assert_eq!(slider_x([14.0, 142.0], 1.0), 156.0);
+        assert!(slider_step(0) == 1.0 && slider_step(99) == 8.0);
+        assert_eq!(stick_direction([0.9, 0.2], 0.5), Some(Button::DPadRight));
+        assert_eq!(stick_direction([-0.2, -0.8], 0.5), Some(Button::DPadDown));
+        assert_eq!(stick_direction([0.3, 0.3], 0.5), None);
+        let mut s = PadSettings::default();
+        assert_eq!(s.menu_nav, MenuNav::Focus);
+        s.menu_nav = MenuNav::Pointer;
+        s.keyboard = TextKeyboard::Horizon;
+        let back = PadSettings::parse(&s.serialize());
+        assert_eq!(
+            (back.menu_nav, back.keyboard),
+            (MenuNav::Pointer, TextKeyboard::Horizon)
+        );
+        assert!(steam_keyboard(TextKeyboard::Steam) && !steam_keyboard(TextKeyboard::Horizon));
     }
 
     #[test]

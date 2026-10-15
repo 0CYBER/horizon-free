@@ -49,18 +49,27 @@ impl Game<'_> {
             self.sign_shortcut(shortcut);
             return;
         }
+        let key = match event.physical_key {
+            PhysicalKey::Code(k) => Some(k),
+            _ => None,
+        };
+        self.sign_input(key, event.text.as_deref());
+    }
+    /// A key and the text it typed on the sign being edited (the keyboard,
+    /// or a controller's on-screen keyboard).
+    pub(super) fn sign_input(&mut self, key: Option<KeyCode>, typed: Option<&str>) {
         let Some(edit) = self.sign_edit.as_mut() else {
             return;
         };
         let front = edit.front;
         let id = sign_line_id(front, edit.line);
-        match event.physical_key {
-            PhysicalKey::Code(KeyCode::Escape) => self.close_sign_editor(),
-            PhysicalKey::Code(KeyCode::ArrowUp) => edit.line = (edit.line + 3) & 3,
-            PhysicalKey::Code(KeyCode::ArrowDown | KeyCode::Enter | KeyCode::NumpadEnter) => {
+        match key {
+            Some(KeyCode::Escape) => self.close_sign_editor(),
+            Some(KeyCode::ArrowUp) => edit.line = (edit.line + 3) & 3,
+            Some(KeyCode::ArrowDown | KeyCode::Enter | KeyCode::NumpadEnter) => {
                 edit.line = (edit.line + 1) & 3
             }
-            PhysicalKey::Code(KeyCode::Backspace) => {
+            Some(KeyCode::Backspace) => {
                 let (line, key) = (edit.line, edit.pos);
                 if let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get_mut(&key) {
                     let text = if front {
@@ -75,7 +84,7 @@ impl Game<'_> {
                 }
             }
             _ => {
-                let Some(typed) = event.text.as_ref().map(|t| t.to_string()) else {
+                let Some(typed) = typed else {
                     return;
                 };
                 let line = edit.line;
