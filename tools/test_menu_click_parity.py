@@ -5,7 +5,9 @@ The Java oracle (VanillaMenuOracle) runs each case's clicks on the real menu
 class with a stand-in player and level; the Rust example (menu_fixture) runs
 horizon_client::menu. Cases are randomized slot contents with random click
 sequences covering every ContainerInput (pickup, quick move, swap, clone,
-throw, the three quick craft drags, pickup all) over the player inventory,
+throw, the three quick craft drags, pickup all, and the screens' Shift double
+click: QUICK_MOVE on every slot of the clicked slot's container holding the
+item the first click moved) over the player inventory,
 crafting table, chests, hopper, dispenser, shulker box, the furnaces, the
 brewing stand, the crafter (the client's menu, and the server's over the block
 entity with slot state packets), the loom (with its pattern buttons) and the
@@ -109,7 +111,7 @@ class Gen:
             for x, name in enumerate(row):
                 slots[start + x + y * width] = snbt('minecraft:' + name, amount() if name != 'milk_bucket' else 1)
 
-    def ops(self, size, menu=None):
+    def ops(self, size, menu, slots):
         rng = self.rng
         out = []
         for _ in range(rng.randrange(1, 9)):
@@ -124,9 +126,15 @@ class Gen:
             if menu == 'crafter_be' and rng.random() < 0.2:
                 out.append([rng.choice([0, 1, 4, 8, 8, 9, -1]), rng.randrange(0, 2), 'SLOT_STATE'])
                 continue
-            kind = rng.choices(['PICKUP', 'QUICK_MOVE', 'SWAP', 'CLONE', 'THROW', 'DRAG', 'PICKUP_ALL', 'JUNK'],
-                               [30, 20, 8, 3, 6, 14, 6, 2])[0]
+            kind = rng.choices(['PICKUP', 'QUICK_MOVE', 'SWAP', 'CLONE', 'THROW', 'DRAG', 'PICKUP_ALL', 'JUNK',
+                                'QUICK_MOVE_ALL'], [30, 20, 8, 3, 6, 14, 6, 2, 0 if menu.endswith('_be') else 6])[0]
             slot = 0 if rng.random() < 0.2 and size in (46,) else rng.randrange(size)
+            if kind == 'QUICK_MOVE_ALL':
+                # A Shift double click: lastQuickMoved is mostly what a slot of the menu holds.
+                held = [s for s in slots if s != '-']
+                moved = rng.choice(held) if held and rng.random() < 0.85 else self.stack()
+                out.append([slot, 0, kind, moved])
+                continue
             if kind == 'PICKUP':
                 out.append([rng.choice([slot, slot, slot, -999, -1]), rng.randrange(0, 3), kind])
             elif kind == 'QUICK_MOVE':
@@ -208,7 +216,7 @@ def main():
             carried = carried_food
         cases.append({'menu': menu, 'creative': rng.random() < 0.25, 'slots': slots,
                       'carried': carried, 'data': [datum(i) for i in range(DATA.get(menu, 0))],
-                      'ops': g.ops(size, menu)})
+                      'ops': g.ops(size, menu, slots)})
     (work / 'cases.jsonl').write_text(''.join(json.dumps(c) + '\n' for c in cases))
     vanilla.run('VanillaMenuOracle', work / 'cases.jsonl', work / 'native.txt')
     lib.cargo_example('horizon-client', 'menu_fixture', lib.RESOURCES, work / 'cases.jsonl', work / 'rust.txt')

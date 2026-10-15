@@ -246,6 +246,22 @@ public final class VanillaMenuOracle {
                             out.println(state(menu, inv));
                             continue;
                         }
+                        if (kind.equals("QUICK_MOVE_ALL")) {
+                            // AbstractContainerScreen.mouseReleased on a Shift double click, lastQuickMoved
+                            // being the op's fourth field.
+                            var clicked = menu.getSlot(slot);
+                            var moved = ParityData.stack(op.get(3).getAsString());
+                            if (menu.canTakeItemForPickAll(ItemStack.EMPTY, clicked) && !moved.isEmpty()) {
+                                for (var target : menu.slots) {
+                                    if (target.mayPickup(player) && target.hasItem() && target.container == clicked.container
+                                        && AbstractContainerMenu.canItemQuickReplace(target, moved, true)) {
+                                        menu.clicked(target.index, 0, ContainerInput.QUICK_MOVE, player);
+                                    }
+                                }
+                            }
+                            out.println(state(menu, inv));
+                            continue;
+                        }
                         var input = ContainerInput.valueOf(kind);
                         try {
                             menu.clicked(slot, button, input, player);

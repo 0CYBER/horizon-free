@@ -103,8 +103,17 @@ fn main() -> horizon_client::Result<()> {
                 }
                 _ => {}
             }
-            let kind = Input::parse(op[2].as_str().unwrap_or_default()).ok_or("input")?;
-            let clicked = menu.click(&env, slot, button, kind);
+            let clicked = if op[2] == "QUICK_MOVE_ALL" {
+                // A Shift double click: lastQuickMoved is the op's fourth field.
+                let moved = parse_stack(op[3].as_str().unwrap_or("-"))?;
+                match moved {
+                    Some(moved) => menu.quick_move_all(&env, slot as usize, &moved),
+                    None => Ok(()),
+                }
+            } else {
+                let kind = Input::parse(op[2].as_str().unwrap_or_default()).ok_or("input")?;
+                menu.click(&env, slot, button, kind)
+            };
             if let Some(f) = furnace.as_mut() {
                 let before = f.items[0].clone();
                 f.items = [0, 1, 2].map(|i| menu.slot(i).cloned());

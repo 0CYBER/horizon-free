@@ -688,6 +688,9 @@ struct Game<'a> {
     inv_clicks: horizon_client::container_screen::Clicks,
     /// The last inventory click, for the double click that gathers a stack.
     last_inv_click: Option<(std::time::Instant, usize, bool)>,
+    /// `lastQuickMoved`: what the last Shift click moved, which a Shift
+    /// double click moves every stack of.
+    last_quick_moved: Option<ItemStack>,
     /// Open container block entity, if any.
     container: Option<(i32, i32, i32)>,
     /// Open workstation menu (enchanting table, anvil, ...).
@@ -4701,6 +4704,41 @@ impl Game<'_> {
                 None => {}
             }
             return;
+        }
+        if let Some(slot) = slot
+            && shift
+            && slot != 200
+        {
+            let now = std::time::Instant::now();
+            let double = self.last_inv_click.is_some_and(|(at, last, was_right)| {
+                last == slot && was_right == right && now.duration_since(at).as_millis() < 250
+            });
+            self.last_inv_click = Some((now, slot, right));
+            // mouseClicked's QUICK_MOVE (and Horizon's at-press QUICK_MOVE
+            // of a carried stack, mouseReleased's in vanilla) remember the
+            // stack it moves.
+            if input == Some(Input::QuickMove) || (self.carried.is_some() && !double) {
+                self.last_quick_moved = self.slot_view(slot);
+            }
+            if double && !right {
+                // mouseReleased: every stack of lastQuickMoved's item in the
+                // clicked slot's container is quick-moved.
+                if let Some(input) = input
+                    && !self.menu_click(Some(slot), 0, input)
+                {
+                    // A screen the menu engine doesn't model: its own click.
+                    self.click_inventory(right);
+                    return;
+                }
+                if let Some(moved) = self.last_quick_moved.clone() {
+                    self.menu_session(|menu, env, to_menu| {
+                        Some(menu.quick_move_all(env, to_menu(slot)?, &moved).is_ok())
+                    });
+                }
+                self.last_inv_click = None;
+                self.inv_clicks.skip_release();
+                return;
+            }
         }
         if let Some(slot) = slot
             && !shift
@@ -9668,6 +9706,7 @@ pub fn run() -> Result<()> {
         inv_drag: None,
         inv_clicks: Default::default(),
         last_inv_click: None,
+        last_quick_moved: None,
         container: None,
         station: None,
         potions: Default::default(),
