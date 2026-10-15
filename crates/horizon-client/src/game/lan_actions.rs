@@ -12,13 +12,14 @@ use horizon_client::{
     entities::Experience,
     items::ItemStack,
     lan::{guest::SPECTATOR, menu::Rules},
-    motion::PlayerMotion,
+    motion::{MotionWorld, PlayerMotion},
 };
 use horizon_core::geometry::Vec3;
 use horizon_protocol::{
     packets::play::{self, Clientbound as C, Serverbound as S},
     text::literal,
 };
+use horizon_world::entity_move::EntityMoveWorld;
 use winit::keyboard::KeyCode;
 
 /// Per-guest state of the gameplay code that lives outside `Guest`.
@@ -743,6 +744,7 @@ impl Game<'_> {
                     }
                 });
             }
+            self.guest_server_tick(host, conn);
             self.guest_dig_feedback(host, conn);
             self.guest_pickups(host, gi);
             let g = &mut host.hub.guests[gi];
@@ -758,6 +760,51 @@ impl Game<'_> {
                 );
             }
         }
+    }
+
+    /// The guest's body on the server each tick: ServerPlayer.tick's damage
+    /// clock and Entity.baseTick's fluid phase, then
+    /// ServerPlayer.doCheckFallDamage for each move the guest made (the fall
+    /// distance grows while they go down and hurts them where they land, as
+    /// the host's own landing does; water resets it, lava halves it), then
+    /// regeneration and the food tick (ServerPlayer.doTick).
+    fn guest_server_tick(&mut self, host: &mut LanHost, conn: u32) {
+        let Some(g) = host.hub.guest_mut(conn) else {
+            return;
+        };
+        let moves = std::mem::take(&mut g.moves);
+        if g.spectator() {
+            return;
+        }
+        self.as_guest(host, conn, |game| {
+            let (rules, health) = (game.world.health_rules, &game.motion.health);
+            let Some(player) = game.player.as_mut() else {
+                return;
+            };
+            let mut w = MotionWorld {
+                player,
+                scene: &mut game.world,
+                assets: &game.res.assets,
+                collision_binding: game.collision,
+                resources: game.motion,
+            };
+            w.player.health.advance_clock();
+            let _ = w.fluid_base_tick();
+            for (moved, on_ground) in moves {
+                let movement = Vec3::new(moved[0], moved[1], moved[2]);
+                let landed = (|| -> horizon_client::Result<()> {
+                    w.set_on_ground_with_movement(on_ground, false, movement)?;
+                    let pos = w.legacy_on_position()?;
+                    let state = w.block_state(pos)?;
+                    w.check_fall_damage(moved[1], on_ground, state, pos)
+                })();
+                if landed.is_err() {
+                    break;
+                }
+            }
+            let _ = w.player.peaceful_regeneration(rules);
+            let _ = w.player.food_tick(health, rules);
+        });
     }
 
     /// The crack animation other players see.
