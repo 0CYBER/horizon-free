@@ -45,6 +45,27 @@ fn loot_item(s: &horizon_world::loot::LootStack) -> ItemStack {
     item
 }
 
+/// A rolled stack as an item with its enchantments (stored ones on a
+/// book), potion and ominous bottle level.
+pub fn loot_item_with_components(s: &horizon_world::loot::LootStack) -> ItemStack {
+    let mut item = loot_item(s);
+    for (id, level) in &s.enchantments {
+        let level = (*level).max(0) as u32;
+        if &*item.item == "minecraft:enchanted_book" {
+            crate::item_data::set_level(&mut item.data_mut().stored_enchantments, id, level);
+        } else {
+            item.enchant(id, level);
+        }
+    }
+    if let Some(potion) = &s.potion {
+        item = item.with_potion(potion);
+    }
+    if let Some(level) = s.ominous_amplifier.filter(|l| *l > 0) {
+        item.data_mut().ominous_amplifier = Some(level.clamp(0, 4) as u8);
+    }
+    item
+}
+
 /// The exploration map search an item still waits for, removed from it.
 pub fn take_pending_map(item: &mut ItemStack) -> Option<horizon_world::loot::ExplorationMap> {
     let data = item.extra.as_deref_mut()?;
@@ -122,6 +143,9 @@ pub fn block_entities(
         // MonsterRoomFeature and the structures' setEntityId.
         if let BlockEntity::Spawner(s) = &mut entity {
             **s = crate::mobs::spawner::Spawner::load(&Tag::Compound(nbt.clone()));
+        }
+        if let BlockEntity::TrialSpawner(s) = &mut entity {
+            **s = crate::mobs::trial_spawner::TrialSpawner::load(&Tag::Compound(nbt.clone()));
         }
         if let (BlockEntity::Chest(slots), Some(table), Some(loot)) =
             (&mut entity, text(nbt, "LootTable"), loot)

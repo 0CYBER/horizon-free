@@ -116,6 +116,7 @@ mod titles;
 mod tnt;
 mod totem;
 mod trading;
+mod trial_spawner;
 mod trident;
 mod villagers;
 mod wandering_trader;
@@ -3872,6 +3873,7 @@ impl Game<'_> {
                 | BlockEntity::Banner(_)
                 | BlockEntity::CreakingHeart(_)
                 | BlockEntity::Spawner(_)
+                | BlockEntity::TrialSpawner(_)
                 | BlockEntity::Beehive(_),
             ) => {}
             None => {
@@ -4122,6 +4124,7 @@ impl Game<'_> {
                     | BlockEntity::Banner(_)
                     | BlockEntity::CreakingHeart(_)
                     | BlockEntity::Spawner(_)
+                    | BlockEntity::TrialSpawner(_)
                     | BlockEntity::Beehive(_),
                 ) => {}
                 None if self.mount_active() => self.draw_mount_background(batch, ox, oy),
@@ -5652,6 +5655,7 @@ impl Game<'_> {
         self.tick_beacons();
         self.tick_creaking_hearts()?;
         self.tick_spawners()?;
+        self.tick_trial_spawners()?;
         self.tick_beehives();
         let mut lit_changes = Vec::new();
         for (pos, entity) in self.world.block_entities.iter_mut() {
@@ -9459,6 +9463,7 @@ pub fn run() -> Result<()> {
     log::info!("load assets: {:.2}s", started.elapsed().as_secs_f32());
     let facts = BlockFacts::load(&root, assets.registry)?;
     let mob_data = horizon_client::mobs::MobData::load(&root, &facts);
+    horizon_client::mobs::trial_spawner::load_registry(&root);
     log::info!("load facts: {:.2}s", started.elapsed().as_secs_f32());
     let items = Items::load(&root, assets.registry, &facts)?;
     log::info!("load items: {:.2}s", started.elapsed().as_secs_f32());

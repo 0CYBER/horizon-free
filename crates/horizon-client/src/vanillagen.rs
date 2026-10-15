@@ -79,6 +79,9 @@ impl VanillaTerrain {
             }
         }
         let loot = dir.parent().and_then(crate::structure_blocks::loot_data);
+        if let Some(root) = dir.parent() {
+            crate::mobs::trial_spawner::load_registry(root);
+        }
         let mut tick_blocks = Vec::with_capacity(registry.len());
         let mut tick_states = Vec::new();
         let mut last: Option<&str> = None;
