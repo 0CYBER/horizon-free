@@ -99,6 +99,8 @@ pub struct Chat {
     pub options: ChatOptions,
     /// Messages printed to stdout as `[CHAT]` (vanilla logs them).
     pub log: bool,
+    /// Messages added since the start, for the control socket's events.
+    pub received: u64,
 }
 impl Chat {
     pub fn lines_per_page(&self, focused: bool) -> usize {
@@ -130,6 +132,7 @@ impl Chat {
         self.add_lines(atlas, &message, focused);
         self.messages.insert(0, message);
         self.messages.truncate(100);
+        self.received += 1;
     }
     fn add_lines(&mut self, atlas: &HudAtlas, message: &Message, focused: bool) {
         let width = self.max_width();

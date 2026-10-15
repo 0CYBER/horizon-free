@@ -6,7 +6,8 @@ checks the inventory, crafts planks in the inventory screen, places one and read
 runs through the CLI (one horizon-ctl process per command) and through `horizon-ctl mcp` with a
 small JSON-RPC client, and saves a screenshot of each run. The ui scenario drives the menus by
 widget id instead: the title screen, the options (a slider set by id) and the inventory's slots;
-the options scenario reads and sets options.txt values by key.
+the options scenario reads and sets options.txt values by key; the events scenario waits for
+states (wait-for) and reads the event log.
 
     python3 tools/agent_control_e2e.py                 # both modes
     python3 tools/agent_control_e2e.py --mode mcp      # one of them
@@ -41,6 +42,7 @@ POSITIONAL = {
     'click_button': ['label'], 'type': ['text'], 'wait': ['ticks'], 'wait_ready': ['seconds'],
     'command': ['command'], 'look_at_block': ['x', 'y', 'z'], 'click': ['id'], 'set': ['id', 'value'],
     'give': ['item', 'count'], 'options_get': ['keys'], 'options_set': ['key', 'value'],
+    'wait_for': ['condition', 'value'],
 }
 # Booleans the game takes as bare words.
 BARE = {'click_slot': ['right', 'shift'], 'click': ['right', 'shift']}
@@ -337,7 +339,46 @@ def options_scenario(d, out):
     return {'options': len(options)}
 
 
-SCENARIOS = {'survival': scenario, 'ui': ui_scenario, 'options': options_scenario}
+def events_scenario(d, out):
+    # Waits instead of polling, and the event log of what happened meanwhile.
+    start = d('events')['last']
+    d('click', id='singleplayer')
+    if 'game' not in widgets(d):
+        d('click', id='create-new-world')
+    d('type', field='name', replace=True, text='Events')
+    d('click', id='create-new-world')
+    d('wait_for', condition='loaded', timeout=400)
+    seq = d('events')['last']  # an event can happen before the wait starts
+    d('give', item='oak_log', count=3)
+    d('wait_for', condition='event', value='item', timeout=5, since=seq)
+    seq = d('events')['last']
+    d('command', command='say hello agents')
+    d('wait_for', condition='chat', value='hello agents', timeout=5, since=seq)
+    d('open_inventory')
+    d('wait_for', condition='screen', value='inventory', timeout=5)
+    d('close')
+    seq = d('events')['last']
+    d('command', command='kill @s')
+    d('wait_for', condition='event', value='death', timeout=10, since=seq)
+    d('wait', ticks=25)  # the death screen's buttons wake after 20 ticks
+    d('respawn')
+    d('wait_for', condition='event', value='respawn', timeout=10, since=seq)
+    try:
+        d('wait_for', condition='screen', value='advancements', timeout=0.5)
+        raise AssertionError('the wait did not time out')
+    except Failed as e:
+        assert 'timed out' in str(e) and 'timeout' in str(e), e
+    events = d('events', since=start)['events']
+    kinds = [e['event'] for e in events]
+    for kind in ['world', 'screen', 'item', 'chat', 'death', 'respawn']:
+        assert kind in kinds, f'no {kind} event in {kinds}'
+    logs = next(e for e in events if e['event'] == 'item' and e['item'] == 'minecraft:oak_log')
+    assert logs['delta'] == 3, logs
+    assert all(b['seq'] > a['seq'] for a, b in zip(events, events[1:]))
+    return {'events': len(events)}
+
+
+SCENARIOS = {'survival': scenario, 'ui': ui_scenario, 'options': options_scenario, 'events': events_scenario}
 
 
 def run(mode, ctl, out, resources, which='survival'):

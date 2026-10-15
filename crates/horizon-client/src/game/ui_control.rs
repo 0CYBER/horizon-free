@@ -52,7 +52,7 @@ impl UiWait {
 impl Game<'_> {
     /// The open screen's widgets: those the last frame drew, then the slots
     /// of an open inventory or menu (`slot-ID`, the ids of `click-slot`).
-    fn ui_nodes(&self) -> Vec<Node> {
+    pub(super) fn ui_nodes(&self) -> Vec<Node> {
         let size = self.gui_scale().map(|b| [b.width, b.height]);
         let mut nodes = widgets::tree(&widgets::last_labelled(), &widgets::last_targets(), size);
         if self.screen == Screen::Inventory
