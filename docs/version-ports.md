@@ -266,12 +266,13 @@ python3 tools/version_port.py prepare 26.3           # the pinned version: index
 python3 tools/version_port.py prepare 26.4           # downloads, verifies, runs the data generator (about 10 s)
 python3 tools/version_port.py diff 26.3 26.4         # summary; the full diff in versions/diff-26.3-26.4/diff.json
 python3 tools/version_port.py gc                     # keep the pinned version and the newest two others
+python3 tools/vanilla_map.py versions/26.3/classes.json net.minecraft.world.food.FoodData   # its Rust files and harnesses
 ```
 
 | Slice | Status |
 | --- | --- |
 | This design | this page |
 | `detect`, `prepare`, `diff` (facts, packets, registries, blocks, items, commands, data, assets), `gc` | done |
-| Class index, class diff, `vanilla_map.json` | next PR |
+| Class index (`tools/class_index.py`), class diff with moves, `vanilla_map.json` (`tools/vanilla_map.py`) | done |
 | Port report (`report`), `port` | next PR |
 | Changed-class decompilation, `regen`, `version_consts` refactor, candidate harness run, `publish`, launchd agent | later |
