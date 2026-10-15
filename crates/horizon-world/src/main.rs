@@ -51,7 +51,7 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
     };
     match command {
         "--help" | "-h" if args.len() == 1 => println!(
-            "Horizon world data tools — Java Edition 26.3\n\
+            "Horizon world data tools — Java Edition {}\n\
              inspect <region.mca>\n\
              copy-region <source.mca> <new-directory/r.x.z.mca> [gzip|zlib|none|lz4]\n\
              get-block <region.mca> <x> <y> <z>\n\
@@ -59,7 +59,8 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
              nbt-copy <input> <new-output> <input-codec> <output-codec>\n\
              nbt-network-copy <input> <new-output> <input-codec> <output-codec>\n\
              Existing output files are refused. edit-block-data changes saved block data only;\n\
-             it does not run lighting, heightmaps, ticks or neighbor updates."
+             it does not run lighting, heightmaps, ticks or neighbor updates.",
+            horizon_core::VANILLA_VERSION
         ),
         "nbt-copy" | "nbt-network-copy" if args.len() == 5 => {
             let bytes =

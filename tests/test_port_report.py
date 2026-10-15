@@ -72,12 +72,13 @@ class PortReportTests(unittest.TestCase):
         built = self.build()
         kinds = [(i["rank"], i["kind"]) for i in built["items"]]
         self.assertEqual(sorted(k for r, k in kinds if r == 1),
-                         ["components", "facts", "protocol", "regenerate", "regenerate", "report-format",
-                          "save-format"])
+                         ["components", "facts", "protocol", "regenerate", "regenerate", "regenerate",
+                          "report-format", "save-format"])
         self.assertEqual([i["id"] for i in built["items"]], list(range(1, len(kinds) + 1)))
         self.assertEqual(kinds, sorted(kinds, key=lambda k: k[0]))
         regenerated = {i["files"][0] for i in built["items"] if i["kind"] == "regenerate"}
-        self.assertEqual(regenerated, {"crates/horizon-protocol/src/ids.rs", "crates/horizon-client/src/lan/tracking.rs"})
+        self.assertEqual(regenerated, {"crates/horizon-core/src/version.rs", "crates/horizon-protocol/src/ids.rs",
+                                       "crates/horizon-client/src/lan/tracking.rs"})
 
     def test_save_format_lists_new_schemas_and_fixes(self):
         save = next(i for i in self.build()["items"] if i["kind"] == "save-format")

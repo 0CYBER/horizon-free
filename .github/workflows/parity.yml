@@ -33,6 +33,8 @@ jobs:
         run: bash tools/ci/runner-env.sh
       - name: Vanilla data, and resources prepared by this preparer
         run: bash tools/ci/vanilla-data.sh
+      - name: The version constants are the pinned jar's
+        run: python3 tools/gen_version_consts.py --check
       - name: The harnesses this change can affect
         env:
           PARITY_HOSTS: ''

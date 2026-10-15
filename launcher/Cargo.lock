@@ -2638,6 +2638,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-core"
+version = "0.1.0"
+dependencies = [
+ "libm",
+]
+
+[[package]]
 name = "horizon-friends"
 version = "0.1.0"
 dependencies = [
@@ -2663,6 +2670,7 @@ dependencies = [
  "getrandom 0.3.4",
  "gpui",
  "horizon-bench",
+ "horizon-core",
  "horizon-friends",
  "horizon-port-pack",
  "horizon-prepare",

@@ -137,7 +137,7 @@ fn world(assets: &Assets, facts: &BlockFacts, floor: bool) -> Result<World> {
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let root = Path::new(".local/horizon-client/26.3");
+    let root = &Path::new(".local/horizon-client").join(horizon_core::VANILLA_VERSION);
     let assets = Assets::load(root)?;
     let facts = BlockFacts::load(root, assets.registry)?;
     let collision = collisions::load(root, assets.registry)?;

@@ -1761,7 +1761,8 @@ mod axolotl_nbt_tests {
     #[test]
     fn bucket_cooldown_and_brain_memories_survive_and_expired_cooldown_is_removed() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../.local/horizon-client/26.3");
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
         if !root.join("items.json").exists() {
             return;
         }

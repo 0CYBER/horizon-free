@@ -326,7 +326,10 @@ fn serve_legacy(mut stream: TcpStream, shared: &Shared) -> Result<(), String> {
                 return Ok(());
             }
         }
-        format!("\u{a7}1\0127\026.3\0{motd}\0{online}\0{max}")
+        format!(
+            "\u{a7}1\0127\0{}\0{motd}\0{online}\0{max}",
+            horizon_core::VANILLA_VERSION
+        )
     };
     let units: Vec<u16> = body.encode_utf16().collect();
     let mut out = vec![0xFF];

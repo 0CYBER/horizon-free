@@ -1,4 +1,4 @@
-//! The Minecraft Java Edition 26.3 network protocol (protocol version 777):
+//! The Minecraft Java Edition network protocol (of the version in `horizon_core::version`):
 //! primitive codecs, framing, compression, encryption, and typed packets for
 //! every connection state, shared by the Horizon client and (later) server.
 #![forbid(unsafe_code)]
@@ -17,10 +17,10 @@ pub mod secure_chat;
 pub mod servers;
 pub mod text;
 
-/// SharedConstants.getProtocolVersion() for 26.3.
-pub const PROTOCOL_VERSION: i32 = 777;
+/// SharedConstants.getProtocolVersion().
+pub const PROTOCOL_VERSION: i32 = horizon_core::version::PROTOCOL_VERSION;
 /// The game version servers report in their status.
-pub const GAME_VERSION: &str = "26.3";
+pub const GAME_VERSION: &str = horizon_core::VANILLA_VERSION;
 
 /// Connection protocol states (ConnectionProtocol).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

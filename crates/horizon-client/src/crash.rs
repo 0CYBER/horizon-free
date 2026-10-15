@@ -241,7 +241,10 @@ fn memory() -> String {
 pub fn system_details() -> Vec<(String, String)> {
     let mut out = vec![
         ("Horizon Version".to_owned(), version()),
-        ("Minecraft Version".to_owned(), "26.3".to_owned()),
+        (
+            "Minecraft Version".to_owned(),
+            horizon_core::VANILLA_VERSION.to_owned(),
+        ),
         ("Operating System".to_owned(), operating_system()),
         ("CPU".to_owned(), cpu()),
         ("Memory".to_owned(), memory()),
@@ -605,7 +608,10 @@ mod tests {
         assert!(first.contains("crash.rs"), "{}", report.stack);
         let text = report.text();
         assert!(text.contains("Description: Unexpected error"));
-        assert!(text.contains("\tMinecraft Version: 26.3\n"));
+        assert!(text.contains(&format!(
+            "\tMinecraft Version: {}\n",
+            horizon_core::VANILLA_VERSION
+        )));
         assert!(text.contains("\tOperating System: "));
         assert!(text.contains("\tCPU: "));
         let home = std::env::temp_dir().join(format!("horizon-crash-save-{}", std::process::id()));
