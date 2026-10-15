@@ -9,7 +9,7 @@ use horizon_client::{
     biome::Biomes,
     blocks::BlockFacts,
     chunk::{Chunk, MIN_Y, SECTIONS, index},
-    light::{LightTables, light_chunk},
+    light::{LightTables, apply_lighting, light_chunk},
     save,
 };
 use horizon_core::position::ChunkPos;
@@ -101,7 +101,7 @@ fn main() -> horizon_client::Result<()> {
                 .unwrap_or((None, None));
             let nib = |a: &Option<Vec<u8>>| a.as_ref().map(|a| (a[i >> 1] >> ((i & 1) * 4)) & 15);
             let id = chunks[&(x, z)].get(wx & 15, wy, wz & 15);
-            let packed = lit[si].light(i);
+            let packed = lit[si].get(i);
             println!(
                 "{wy}: {} horizon sky {} block {} vanilla sky {:?} block {:?}",
                 facts.states[id as usize].name,
@@ -157,7 +157,7 @@ fn main() -> horizon_client::Result<()> {
                         .map_or(15, |a| (a[(i & 255) >> 1] >> ((i & 1) * 4)) & 15),
                 };
                 let vb = nibble(&block, 0);
-                let packed = section.light(i);
+                let packed = section.get(i);
                 let (hs, hb) = (packed >> 4, packed & 15);
                 total += 1;
                 if hs != vs {
@@ -228,7 +228,7 @@ fn incremental(
             std::array::from_fn(|dx| chunks.get(&(x + dx as i32 - 1, z + dz as i32 - 1)))
         });
         let mut c = chunks[&(x, z)].clone();
-        c.sections = light_chunk(&region, tables, sky_light);
+        apply_lighting(&mut c, light_chunk(&region, tables, sky_light));
         c.lit = true;
         world.insert((x, z), Arc::new(c));
     }
@@ -299,7 +299,7 @@ fn incremental(
                 let full = light_chunk(&region, tables, sky_light);
                 for (si, s) in full.iter().enumerate() {
                     for i in 0..4096 {
-                        let (a, b) = (s.light(i), world[&(kx, kz)].sections[si].light(i));
+                        let (a, b) = (s.get(i), world[&(kx, kz)].sections[si].light(i));
                         if a != b {
                             bad += 1;
                             if bad < 20 {
