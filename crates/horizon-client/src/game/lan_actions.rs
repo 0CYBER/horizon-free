@@ -200,8 +200,12 @@ impl Game<'_> {
             host.hub.set_game_mode(conn, new_mode);
         }
         host.play.insert(conn, play);
-        if let Some(pos) = opened {
-            self.lan_open_container(host, conn, pos);
+        if let Some(pos) = opened
+            && !self.lan_open_container(host, conn, pos)
+            && !host.hub.guests[i].spectator()
+        {
+            // Nothing the guest can use opened: its lid closes again.
+            self.container_openers_changed(pos, false);
         }
         if let Some(station) = opened_station {
             self.lan_station_opened(host, conn, station);
@@ -221,19 +225,20 @@ impl Game<'_> {
         self.creative = self.mode == GameMode::Creative;
     }
 
-    /// Hand a container the guest opened over (ServerPlayer.openMenu).
-    fn lan_open_container(&mut self, host: &mut LanHost, conn: u32, pos: (i32, i32, i32)) {
+    /// Hand a container the guest opened over (ServerPlayer.openMenu);
+    /// false when it is not one a guest can open.
+    fn lan_open_container(&mut self, host: &mut LanHost, conn: u32, pos: (i32, i32, i32)) -> bool {
         let Some(entity) = self.world.block_entities.get(&pos) else {
-            return;
+            return false;
         };
         let (menu, title) = match entity {
             BlockEntity::Chest(items) => match items.len() {
                 27 => ("minecraft:generic_9x3", "container.chest"),
                 9 => ("minecraft:generic_3x3", "container.dispenser"),
                 5 => ("minecraft:hopper", "container.hopper"),
-                _ => return,
+                _ => return false,
             },
-            _ => return,
+            _ => return false,
         };
         let name = &self
             .res
@@ -247,6 +252,8 @@ impl Game<'_> {
             _ => title,
         };
         let items = entity.slots().to_vec();
+        // ServerPlayer.openMenu closes the menu that was open.
+        self.guest_container_closed(host, conn);
         host.hub.open_container(
             conn,
             menu,
@@ -254,6 +261,18 @@ impl Game<'_> {
             pos,
             items,
         );
+        true
+    }
+
+    /// The guest's open container is closing (`AbstractContainerMenu.removed`):
+    /// it no longer counts among the openers of the lid.
+    pub(super) fn guest_container_closed(&mut self, host: &mut LanHost, conn: u32) {
+        if let Some(g) = host.hub.guest(conn)
+            && let Some(pos) = g.menu.as_ref().and_then(|m| m.pos)
+            && !g.spectator()
+        {
+            self.container_openers_changed(pos, false);
+        }
     }
 
     /// A packet from a guest that the hub does not handle itself.
@@ -405,6 +424,13 @@ impl Game<'_> {
                 self.drop_guest_items(host, gi, drops);
             }
             S::ContainerClose(p) => {
+                if host.hub.guests[gi]
+                    .menu
+                    .as_ref()
+                    .is_some_and(|m| m.window == p.container)
+                {
+                    self.guest_container_closed(host, conn);
+                }
                 host.hub.container_closed(conn, p.container);
                 let g = &mut host.hub.guests[gi];
                 if let Some(c) = g.carried.take() {

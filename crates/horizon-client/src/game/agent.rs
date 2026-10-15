@@ -4,7 +4,7 @@
 //! take time run as a task advanced every frame and reply when they finish or
 //! time out, so `horizon-ctl break 10 64 3` returns what the block dropped.
 use super::{Game, Screen};
-use horizon_client::{Result, items::ItemStack, widgets};
+use horizon_client::{Result, block_entity_anim::Ticker, items::ItemStack, widgets};
 use horizon_core::geometry::Vec3;
 use horizon_world::registry::BlockStateId;
 use serde_json::{Value, json};
@@ -309,12 +309,19 @@ impl Game<'_> {
     }
     fn block_json(&self, pos: [i32; 3]) -> Value {
         let state = self.world.block(pos[0], pos[1], pos[2]);
-        json!({
+        let mut v = json!({
             "pos": pos,
             "block": &*self.res.facts.get(state).name,
             "state": self.state_string(state),
             "loaded": self.world.chunks.contains_key(&(pos[0] >> 4, pos[2] >> 4)),
-        })
+        });
+        // How far a chest's or a shulker box's lid is open, 0..1, as drawn.
+        match self.be_anims.ticker(state.0) {
+            Some(Ticker::Lid) => v["lid"] = json!(self.chest_lid(pos, 1.0)),
+            Some(Ticker::Shulker { .. }) => v["lid"] = json!(self.block_anim(pos, 1.0).shulker.0),
+            _ => {}
+        }
+        v
     }
     pub(super) fn stack_value(&self, s: &ItemStack) -> Value {
         let mut v = json!({ "item": &*s.item, "count": s.count });
