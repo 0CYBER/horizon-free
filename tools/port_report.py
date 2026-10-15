@@ -104,7 +104,7 @@ def item(rank, kind, title, **details):
     return {"rank": rank, "kind": kind, "title": title, **details}
 
 
-def blocking_items(diff, mapping, pinned_facts, root):
+def blocking_items(diff, mapping, pinned_facts, root, regen=None):
     items = []
     if diff["facts"]:
         changes = ", ".join(f"{k} {a} -> {b}" for k, (a, b) in diff["facts"].items())
@@ -147,9 +147,15 @@ def blocking_items(diff, mapping, pinned_facts, root):
         items.append(item(1, "report-format", f"blocks.json format: {', '.join(diff['blocks']['format'])}",
                           files=files_containing("blocks.json", root),
                           details={"fields": diff["blocks"]["format"]}))
-    for output, command, stale in GENERATORS:
-        if stale(diff):
-            items.append(item(1, "regenerate", f"Regenerate {output}", files=[output], command=command))
+    if regen is None:
+        for output, command, stale in GENERATORS:
+            if stale(diff):
+                items.append(item(1, "regenerate", f"Regenerate {output}", files=[output], command=command))
+    else:
+        for name, entry in regen["generators"].items():
+            if entry["status"] == "failed":
+                items.append(item(1, "regen-failed", f"Generator {name} failed on {regen['new']}",
+                                  files=entry["outputs"], error=entry["error"]))
     return items
 
 
@@ -237,10 +243,11 @@ def content_items(diff, mapping):
     return items
 
 
-def build(diff, mapping, old, new, pinned_facts, results=None, root=ROOT):
+def build(diff, mapping, old, new, pinned_facts, results=None, root=ROOT, regen=None):
     """The report: summary, ranked items and what came out clean. pinned_facts: the facts of the version the
-    code states today (to find where it states them); results: {harness: "pass" | "fail"} against NEW."""
-    items = blocking_items(diff, mapping, pinned_facts, root)
+    code states today (to find where it states them); results: {harness: "pass" | "fail"} against NEW; regen:
+    version_port.py regen's result (without it, the tables a diff makes stale are listed to regenerate)."""
+    items = blocking_items(diff, mapping, pinned_facts, root, regen)
     items += code_items(diff, mapping, results) + content_items(diff, mapping)
     items.sort(key=lambda i: (i["rank"], -i.get("score", 0), i["title"]))
     for number, entry in enumerate(items, 1):
@@ -256,8 +263,12 @@ def build(diff, mapping, old, new, pinned_facts, results=None, root=ROOT):
             "classes": {"added": len(classes["added"]), "removed": len(classes["removed"]),
                         "moved": len(classes["moved"]), "changed": len(classes["changed"]),
                         "horizon": len(classes["horizon"])},
-            "generators": [i["files"][0] for i in items if i["kind"] == "regenerate"],
+            "generators": ({name: e["status"] for name, e in regen["generators"].items()} if regen
+                           else {i["files"][0]: "stale" for i in items if i["kind"] == "regenerate"}),
         },
+        "regen": {"candidate": regen["candidate"], "commit": regen["commit"],
+                  "stat": {p: s for e in regen["generators"].values() for p, s in e.get("stat", {}).items()}}
+        if regen else None,
         "items": items, "clean": clean,
     }
 
@@ -278,6 +289,13 @@ def markdown(report, limit=12):
     lines.append(f"- work items by rank: " + ", ".join(f"{r}: {n}" for r, n in summary["ranks"].items()))
     if report["clean"]:
         lines.append(f"- unchanged: {', '.join(report['clean'])}")
+    if report.get("regen"):
+        generators = summary["generators"]
+        lines.append(f"- generators in `{report['regen']['candidate']}` at {report['regen']['commit'][:10]}: "
+                     + ", ".join(f"{s} {sum(1 for v in generators.values() if v == s)}"
+                                 for s in ("regenerated", "unchanged", "failed")))
+        for path, (added, removed) in report["regen"]["stat"].items():
+            lines.append(f"  - regenerated `{path}` (+{added} -{removed})")
     names = {1: "Blocks the switch", 2: "Proved by a harness: rerun it", 3: "Ported, no harness",
              4: "New content", 5: "Not ported"}
     for rank in sorted({i["rank"] for i in report["items"]}):
@@ -286,6 +304,8 @@ def markdown(report, limit=12):
             lines.append(f"### #{entry['id']} {entry['title']}")
             if entry.get("command"):
                 lines.append(f"- run: `{entry['command']}`")
+            if entry.get("error"):
+                lines.append("- error: `" + entry["error"].strip().splitlines()[-1][:300] + "`")
             if entry.get("failed"):
                 lines.append(f"- failing harnesses: {', '.join(entry['failed'])}")
             if entry.get("harnesses"):
