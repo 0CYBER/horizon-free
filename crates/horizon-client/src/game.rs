@@ -8767,7 +8767,9 @@ impl Game<'_> {
             | KeyCode::Digit6
             | KeyCode::Digit7
             | KeyCode::Digit8
-            | KeyCode::Digit9 => {
+            | KeyCode::Digit9
+                if self.screen == Screen::Playing =>
+            {
                 self.selected = match key {
                     KeyCode::Digit1 => 0,
                     KeyCode::Digit2 => 1,
