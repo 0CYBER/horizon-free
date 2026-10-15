@@ -58,6 +58,7 @@ pub mod spawn_selection;
 pub mod spawner;
 pub mod spawning;
 pub mod species;
+pub mod strider;
 pub mod sulfur_cube;
 pub mod tame;
 pub mod trader;
@@ -798,6 +799,9 @@ pub struct Mob {
     /// update (`isUnderWater` reads it).
     pub was_eye_in_water: bool,
     pub no_gravity: bool,
+    /// `Entity.mainSupportingBlockPos`: the block it stood on after its last
+    /// move.
+    pub supporting: Option<[i32; 3]>,
     /// `NoAI`: no goals and no movement.
     pub no_ai: bool,
     /// `Silent`.
@@ -1174,6 +1178,8 @@ pub struct Seen {
     pub player_rep: i32,
     /// `isPushable` and pushed by others (`Entity.push(Entity)` moves it).
     pub pushable: bool,
+    /// A cold strider (`Strider.isSuffocating`).
+    pub cold_strider: bool,
     /// `MobCategory` (`monster`, `creature`, ...).
     pub category: &'static str,
     /// A villager's `POTENTIAL_JOB_SITE` and `MEETING_POINT`.
@@ -1248,6 +1254,7 @@ impl Mob {
                 _ => 0,
             },
             pushable: m.pushable(),
+            cold_strider: strider::suffocating(m),
             category: m.category(),
             potential_job: villager_brain::potential_job_site(m),
             meeting: villager.then_some(m.extra.meeting).flatten(),
@@ -1461,6 +1468,7 @@ impl Mob {
             fluids: living::Fluids::default(),
             was_eye_in_water: false,
             no_gravity: false,
+            supporting: None,
             no_ai: false,
             silent: false,
             invulnerable_flag: false,
@@ -1707,7 +1715,7 @@ impl Mob {
     /// Movement speed attribute bonus (baby zombies, sprinting modifiers).
     /// MOVEMENT_SPEED including effects (speed +20%/level, slowness -15%/level).
     pub fn movement_speed(&self) -> f64 {
-        let mut v = self.attrs.speed * self.speed_bonus();
+        let mut v = strider::movement_speed(self, self.attrs.speed) * self.speed_bonus();
         for (e, _, amp) in &self.extra.effects {
             match *e {
                 "minecraft:speed" => v *= 1.0 + 0.2 * f64::from(amp + 1),

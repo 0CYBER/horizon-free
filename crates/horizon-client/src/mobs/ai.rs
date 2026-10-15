@@ -103,6 +103,7 @@ pub enum Family {
     Creaking,
     /// Nautili and zombie nautili.
     Nautilus,
+    Strider,
 }
 pub fn family(s: Species) -> Family {
     use Species as S;
@@ -161,6 +162,7 @@ pub fn family(s: Species) -> Family {
         S::Guardian | S::ElderGuardian => Family::Guardian,
         S::Warden => Family::Warden,
         S::Shulker => Family::Shulker,
+        S::Strider => Family::Strider,
         _ => Family::Generic,
     }
 }
@@ -215,6 +217,7 @@ pub fn register(m: &mut Mob) {
         Family::Warden => super::warden::register(m),
         Family::Creaking => super::creaking::register(m),
         Family::Nautilus => super::nautilus::register(m),
+        Family::Strider => super::strider::register(m),
     }
 }
 /// Mob.tick additions that run before the entity tick (creeper fuse, puffing).
@@ -358,6 +361,9 @@ pub fn tick(
         return false;
     }
     super::warden::pre_tick(m, w, events);
+    if m.species() == Species::Strider {
+        super::strider::pre_tick(m, w, events);
+    }
     base_tick(m, w, events);
     if m.species() == Species::Rabbit {
         super::rabbit::base_tick(m);
@@ -388,6 +394,9 @@ pub fn tick(
     if m.species() == Species::CopperGolem {
         // CopperGolem.tick: updateWeathering after the living tick.
         super::copper_golem::update_weathering(m, w, level_random, events);
+    }
+    if m.species() == Species::Strider {
+        super::strider::float(m, w);
     }
     true
 }
@@ -555,6 +564,8 @@ fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::Axolotl if !m.fluids.in_water => "entity.axolotl.idle_air",
         Species::Bat if m.extra.flag && m.random.next_int_bound(4).unwrap_or(1) != 0 => return,
         Species::Allay if m.extra.main_hand.is_some() => "entity.allay.ambient_with_item",
+        // Strider.getAmbientSound: quiet while panicking or tempted.
+        Species::Strider if m.ai.panicking || m.ai.goals.is_running("Tempt") => return,
         // HappyGhast: its own voice, never pitched up.
         Species::HappyGhast => {
             let sound = super::happy_ghast::sounds(m)[0];
@@ -1161,6 +1172,9 @@ pub fn walk_target_value(m: &Mob, w: &MobWorld, p: [i32; 3]) -> f32 {
         } else {
             5.0
         };
+    }
+    if m.species() == Species::Strider {
+        return super::strider::walk_target_value(m, w, p);
     }
     // AbstractNautilus and Creaking.getWalkTargetValue: everywhere alike.
     if matches!(

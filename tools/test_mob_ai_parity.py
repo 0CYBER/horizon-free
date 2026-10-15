@@ -218,6 +218,16 @@ def scenarios():
                 f'mob minecraft:{species} 0.5 -60 0.5 0 {seed} persistent{baby}',
                 f'feed 20 0 minecraft:{food}', f'feed 40 0 minecraft:{food}',
             ])
+    # Striders: standing on a lava pool (floatStrider), walking from cold grass to it
+    # (StriderGoToLavaGoal, suffocating), and drawn by a player holding warped fungus.
+    LAVA = 'fill -5 -63 -5 5 -61 5 minecraft:lava'
+    add('strider_lava', 200, [LAVA, 'mob minecraft:strider 0.5 -61 0.5 0 131 persistent'])
+    add('strider_lava_player', 200, [LAVA, 'player 8.5 -60 0.5',
+                                     'mob minecraft:strider -1.5 -61 0.5 90 132 persistent'])
+    add('strider_shore', 300, [LAVA, 'mob minecraft:strider 9.5 -60 0.5 90 133 persistent'])
+    add('strider_cold', 200, ['mob minecraft:strider 0.5 -60 0.5 0 134 persistent'])
+    add('strider_tempted', 200, [LAVA, 'player 9.5 -60 0.5 hand=minecraft:warped_fungus',
+                                 'mob minecraft:strider 0.5 -61 0.5 0 135 persistent'])
     return s
 
 

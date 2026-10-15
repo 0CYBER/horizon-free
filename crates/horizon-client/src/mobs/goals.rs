@@ -796,6 +796,8 @@ pub struct LookAtPlayer {
     pub only_horizontal: bool,
     /// `LookAtPlayerGoal(Mob.class, ...)`: the nearest mob, not the player.
     pub mobs: bool,
+    /// `LookAtPlayerGoal(Strider.class, ...)`: only mobs of this species.
+    pub only: Option<Species>,
     /// InteractGoal: LOOK and MOVE.
     pub interact: bool,
     look_at: Option<Who>,
@@ -808,6 +810,7 @@ impl LookAtPlayer {
             probability: 0.02,
             only_horizontal: false,
             mobs: false,
+            only: None,
             interact: false,
             look_at: None,
             look_time: 0,
@@ -818,6 +821,13 @@ impl LookAtPlayer {
         Self {
             mobs: true,
             ..Self::new(range)
+        }
+    }
+    /// `LookAtPlayerGoal(this, <species class>, range)`.
+    pub fn species(species: Species, range: f32) -> Self {
+        Self {
+            only: Some(species),
+            ..Self::mobs(range)
         }
     }
     /// `InteractGoal(this, Player.class, range, probability)`.
@@ -873,12 +883,13 @@ impl Goal for LookAtPlayer {
         }
         // level.getNearestEntity(mobs in the box inflated by (range, 3, range)).
         let area = m.bounds().inflate(Vec3::new(range, 3.0, range));
-        let id = m.id;
+        let (id, only) = (m.id, self.only);
         let at = Vec3::new(m.position.x, m.eye_y(), m.position.z);
         let candidates: Vec<(u32, Vec3)> =
             cx.w.others
                 .iter()
                 .filter(|s| s.id != id && s.alive && s.bounds.intersects(area))
+                .filter(|s| only.is_none_or(|o| s.species == o))
                 .map(|s| (s.id, s.position))
                 .collect();
         let mut best: Option<(u32, f64)> = None;
