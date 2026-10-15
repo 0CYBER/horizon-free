@@ -1685,6 +1685,60 @@ impl Menu {
         Ok(())
     }
 
+    /// `AbstractContainerScreen.shouldAddSlotToQuickCraft`: whether a drag
+    /// of type `ty` over `dragged` slots so far takes slot `s` too.
+    pub fn quick_craft_accepts(&self, env: &Env, s: usize, ty: i32, dragged: usize) -> bool {
+        let Some(carried) = self.carried.as_ref() else {
+            return false;
+        };
+        s < self.slots.len()
+            && (carried.count as usize > dragged || ty == 2)
+            && self.quick_replace(s, carried, env)
+            && self.may_place(env, s, carried)
+            && self.can_drag_to(s)
+    }
+
+    /// What a quick craft drag of type `ty` over `slots` shows
+    /// (`AbstractContainerScreen.extractSlot` and
+    /// `recalculateQuickCraftRemaining`): each slot's would-be count and
+    /// whether the slot caps it (a yellow count), then the count left in
+    /// hand. Nothing while the drag spans a single slot.
+    pub fn quick_craft_preview(
+        &self,
+        env: &Env,
+        ty: i32,
+        slots: &[usize],
+    ) -> Option<(Vec<Option<(u32, bool)>>, u32)> {
+        let carried = self.carried.as_ref()?;
+        if slots.len() < 2 {
+            return None;
+        }
+        let carried_max = Self::max_stack(env, carried);
+        // AbstractContainerMenu.getQuickCraftPlaceCount.
+        let place = match ty {
+            0 => carried.count / slots.len() as u32,
+            1 => 1,
+            2 => carried_max,
+            _ => carried.count,
+        };
+        let mut left = i64::from(if ty == 2 { carried_max } else { carried.count });
+        let mut shown = Vec::with_capacity(slots.len());
+        for &s in slots {
+            let carry = self.slot(s).map_or(0, |i| i.count);
+            let max = carried_max.min(self.slot_max(env, s, carried));
+            if ty != 2 {
+                left -= i64::from((place + carry).min(max)) - i64::from(carry);
+            }
+            shown.push(
+                (s < self.slots.len()
+                    && self.quick_replace(s, carried, env)
+                    && self.can_drag_to(s))
+                .then(|| ((place + carry).min(max), place + carry > max)),
+            );
+        }
+        Some((shown, left.max(0) as u32))
+    }
+
     /// `canDragTo`: ItemPickerMenu keeps drags off its display slots.
     fn can_drag_to(&self, s: usize) -> bool {
         self.slots[s].role != Role::CreativeDisplay
@@ -1889,6 +1943,16 @@ mod tests {
 
     /// An item tab's ItemPickerMenu: the 45 display slots show `shown`.
     fn with_picker(shown: &str, test: impl FnOnce(&Env, &mut Menu)) {
+        with_menu(Kind::ItemPicker, |env, menu| {
+            assert_eq!(menu.slot_count(), 54);
+            for i in 0..45 {
+                menu.set_slot(env, i, stack(shown, 1));
+            }
+            test(env, menu);
+        });
+    }
+
+    fn with_menu(kind: Kind, test: impl FnOnce(&Env, &mut Menu)) {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../.local/horizon-client/26.3");
         if !root.join("items.json").exists() {
@@ -1905,13 +1969,40 @@ mod tests {
             banners: &banners,
             trade: None,
         };
-        let mut menu = Menu::new(Kind::ItemPicker);
+        let mut menu = Menu::new(kind);
         menu.creative = true;
-        assert_eq!(menu.slot_count(), 54);
-        for i in 0..45 {
-            menu.set_slot(&env, i, stack(shown, 1));
-        }
         test(&env, &mut menu);
+    }
+
+    #[test]
+    fn a_quick_craft_drag_previews_each_slot_and_the_rest_in_hand() {
+        with_menu(Kind::Inventory, |env, menu| {
+            // 9 + 36 player slots: 9 is the first main inventory slot.
+            menu.set_slot(env, 10, stack("stone", 60));
+            menu.set_slot(env, 11, stack("dirt", 1));
+            menu.carried = stack("stone", 20);
+            // shouldAddSlotToQuickCraft: same item or empty, placeable, not the result.
+            assert!(menu.quick_craft_accepts(env, 9, 0, 0));
+            assert!(menu.quick_craft_accepts(env, 10, 0, 1));
+            assert!(!menu.quick_craft_accepts(env, 11, 0, 1));
+            assert!(!menu.quick_craft_accepts(env, 0, 0, 1));
+            // Stone has no place in an armor slot (5).
+            assert!(!menu.quick_craft_accepts(env, 5, 0, 1));
+            // A right drag stops once every carried item has a slot.
+            assert!(!menu.quick_craft_accepts(env, 12, 1, 20));
+            // A left drag over three slots: 6 each, the 60 capped at 64 (yellow), 2 + 4 left.
+            assert_eq!(menu.quick_craft_preview(env, 0, &[9]), None);
+            let (shown, left) = menu.quick_craft_preview(env, 0, &[9, 10, 12]).unwrap();
+            assert_eq!(
+                shown,
+                vec![Some((6, false)), Some((64, true)), Some((6, false))]
+            );
+            assert_eq!(left, 20 - 6 - 4 - 6);
+            // A right drag: one each.
+            let (shown, left) = menu.quick_craft_preview(env, 1, &[9, 10]).unwrap();
+            assert_eq!(shown, vec![Some((1, false)), Some((61, false))]);
+            assert_eq!(left, 18);
+        });
     }
 
     #[test]
