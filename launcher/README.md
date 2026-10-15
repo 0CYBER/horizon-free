@@ -104,6 +104,14 @@ finishes in the background), `sign_out` and `select_account`.
 A server started through MCP stops (cleanly, with `stop`) when the session ends. Starting one
 needs `accept_eula`, which an agent should only pass with the player's consent.
 
+The same server also plays the game: `launch_client` starts it with a local control socket
+(`world`, `creative` and `offscreen` are optional), and every `horizon-ctl` tool of the selected
+version is offered as `game_<name>`: `game_state`, `game_ui` (every widget of the open screen),
+`game_click`, `game_goto`, `game_break`, `game_inventory`, `game_screenshot` (an image) and the
+rest of [horizon-ctl's commands](../docs/agent-control.md). The launcher runs that version's
+`horizon-ctl mcp` and passes the calls through; while no game runs, they answer with an error
+saying to call `launch_client`.
+
 The window, the command line and the MCP server all call the same core, `src/backend.rs`.
 
 ## Microsoft accounts

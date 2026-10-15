@@ -1,6 +1,8 @@
 //! `horizon-launcher mcp`: the Model Context Protocol over stdin and stdout (JSON-RPC 2.0, one
 //! message per line), so AI agents can install, prepare and run Horizon. Every tool goes through
-//! `backend`. A server started here lives as long as the session.
+//! `backend`. A server started here lives as long as the session. The running game's own tools
+//! come from its `horizon-ctl` as `game_*` (game_tools.rs).
+use crate::game_tools::{self, GameTools};
 use horizon_launcher::account::{self, Accounts, SignIn, SignInState};
 use horizon_launcher::backend::{self, Job, Logged};
 use serde_json::{json, Value};
@@ -8,12 +10,14 @@ use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
-const PROTOCOL: &str = "2025-06-18";
+pub const PROTOCOL: &str = "2025-06-18";
 
 struct Session {
     server: Option<Logged>,
     client: Option<Logged>,
     sign_in: Option<SignIn>,
+    /// The selected version's `horizon-ctl mcp`, once a version is installed.
+    game: Option<GameTools>,
 }
 
 fn tools() -> Value {
@@ -28,8 +32,11 @@ fn tools() -> Value {
           "inputSchema": { "type": "object", "properties": { "tag": { "type": "string" } }, "required": ["tag"] } },
         { "name": "prepare_resources", "description": "Prepare a version's resources from the player's own Minecraft install (needs Minecraft 26.3 played once in the official launcher and Java 25; versions before horizon-prepare also need Python 3.10+). Can take several minutes; returns the end of the log.",
           "inputSchema": { "type": "object", "properties": { "version": version, "minecraft_dir": { "type": "string", "description": "The official launcher's game folder. Default: the launcher's setting, else the platform default." } } } },
-        { "name": "launch_client", "description": "Start the Horizon client (a game window on the player's screen). Returns once it has started.",
-          "inputSchema": { "type": "object", "properties": { "version": version } } },
+        { "name": "launch_client", "description": "Start the Horizon client (a game window on the player's screen) under agent control: the game_* tools then play it. Returns once it has started; game_wait_ready waits for the world.",
+          "inputSchema": { "type": "object", "properties": { "version": version,
+            "world": { "type": "string", "description": "Open or create this world (a folder under saves) at once." },
+            "creative": { "type": "boolean", "description": "Creative mode for a new world." },
+            "offscreen": { "type": "boolean", "description": "Render without showing a window (game_screenshot still works)." } } } },
         { "name": "start_server", "description": "Start a Horizon dedicated server. It runs until stop_server or the end of this MCP session. Requires agreeing to the Minecraft EULA.",
           "inputSchema": { "type": "object", "properties": { "version": version, "dir": { "type": "string", "description": "The server's folder. Default: the launcher's server folder." }, "accept_eula": { "type": "boolean", "description": "Agree to the Minecraft EULA (https://aka.ms/MinecraftEULA) on the player's behalf. Only with their consent." } } } },
         { "name": "server_command", "description": "Send a console command to the running server (for example \"list\" or \"say hello\"), and return the lines it printed in reply.",
@@ -141,13 +148,39 @@ impl Session {
                     return Err("The client is already running.".into());
                 }
                 let tag = backend::resolve_version(arg_str(args, "version"))?;
-                let client = Logged::start(Job::Client, backend::client(&tag)?)?;
-                std::thread::sleep(Duration::from_secs(2));
-                if let Some(Err(e)) = client.finished() {
-                    return Err(format!("{e}\n{}", client.tail(20).join("\n")));
+                let mut cmd = backend::client(&tag)?;
+                cmd.args(game_tools::control_args());
+                if let Some(world) = arg_str(args, "world") {
+                    cmd.arg("--world").arg(world);
+                }
+                for flag in ["creative", "offscreen"] {
+                    if args.get(flag).and_then(Value::as_bool).unwrap_or(false) {
+                        cmd.arg(format!("--{flag}"));
+                    }
+                }
+                let client = Logged::start(Job::Client, cmd)?;
+                // Started once its control socket answers, as horizon-ctl launch waits.
+                let deadline = std::time::Instant::now() + Duration::from_secs(120);
+                while !game_tools::listening() {
+                    if let Some(result) = client.finished() {
+                        return Err(format!(
+                            "The client stopped: {}\n{}",
+                            result.err().unwrap_or_default(),
+                            client.tail(20).join("\n")
+                        ));
+                    }
+                    if std::time::Instant::now() > deadline {
+                        return Err(format!(
+                            "The client did not open its control socket within 2 minutes.\n{}",
+                            client.tail(20).join("\n")
+                        ));
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
                 }
                 self.client = Some(client);
-                Ok(format!("Started the {tag} client."))
+                Ok(format!(
+                    "Started the {tag} client. The game_* tools play it; game_wait_ready waits until the world is ready."
+                ))
             }
             "start_server" => {
                 if self.server.as_ref().is_some_and(|s| s.finished().is_none()) {
@@ -318,6 +351,16 @@ impl Session {
         }
     }
 
+    /// The game's tools, starting the selected version's horizon-ctl the first time.
+    fn game(&mut self) -> Option<&mut GameTools> {
+        if self.game.is_none() {
+            self.game = backend::resolve_version(None)
+                .and_then(|tag| GameTools::start(&tag))
+                .ok();
+        }
+        self.game.as_mut()
+    }
+
     fn running_server(&mut self) -> Result<&mut Logged, String> {
         match &mut self.server {
             Some(s) if s.finished().is_none() => Ok(s),
@@ -331,15 +374,32 @@ impl Session {
                 "protocolVersion": params.get("protocolVersion").and_then(Value::as_str).unwrap_or(PROTOCOL),
                 "capabilities": { "tools": {} },
                 "serverInfo": { "name": "horizon-launcher", "version": backend::VERSION },
-                "instructions": "Manage Horizon, a Rust reimplementation of Minecraft Java Edition: install versions, prepare them from the player's own Minecraft, start the client or a dedicated server.",
+                "instructions": "Manage Horizon, a Rust reimplementation of Minecraft Java Edition: install versions, prepare them from the player's own Minecraft, start the client or a dedicated server. Once launch_client started the game, the game_* tools play it: game_state, game_ui (every widget of the open screen), game_click, game_goto, game_screenshot...",
             })),
             "ping" => Ok(json!({})),
-            "tools/list" => Ok(json!({ "tools": tools() })),
+            "tools/list" => {
+                let mut list = tools().as_array().cloned().unwrap_or_default();
+                if let Some(game) = self.game() {
+                    list.extend(game.tools().iter().cloned());
+                }
+                Ok(json!({ "tools": list }))
+            }
             "tools/call" => {
                 let name = params
                     .get("name")
                     .and_then(Value::as_str)
                     .ok_or((-32602, "name is required".to_string()))?;
+                if name.starts_with(game_tools::PREFIX) {
+                    let args = params.get("arguments").cloned().unwrap_or(json!({}));
+                    let game = self.game().ok_or((
+                        -32602,
+                        "No installed version with horizon-ctl: install one first".to_string(),
+                    ))?;
+                    if !game.tools().iter().any(|t| t["name"] == name) {
+                        return Err((-32602, format!("Unknown tool {name}")));
+                    }
+                    return game.call(name, &args).map_err(|e| (-32603, e));
+                }
                 if !tools()
                     .as_array()
                     .unwrap()
@@ -365,6 +425,7 @@ pub fn serve() -> Result<(), String> {
         server: None,
         client: None,
         sign_in: None,
+        game: None,
     };
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
