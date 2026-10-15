@@ -255,6 +255,7 @@ fn run(control: &Control, setup: Setup) -> Result<PathBuf, String> {
     if let Ok(meta) = std::env::current_exe().and_then(std::fs::metadata) {
         report.metric("game.binary_bytes", &[meta.len() as f64]);
     }
+    crate::telemetry::keep_benchmark(&crate::logging::game_home(), &report);
     report
         .write_to(&setup.game_dir.join("benchmarks"))
         .map_err(|e| e.to_string())
