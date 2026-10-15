@@ -40,6 +40,8 @@ arboard = { version = "3.6.1", default-features = false, features = ["wayland-da
 zip = { version = "2", default-features = false, features = ["deflate"] }
 # Controllers (evdev + libudev on Linux, IOKit on macOS, Windows.Gaming.Input).
 gilrs = "0.11"
+# The DualSense's rumble, adaptive triggers and lights over HID (gilrs only reads it).
+horizon-dualsense = { path = "../horizon-dualsense" }
 # HTTPS to the Minecraft services (online-mode session join).
 ureq = { version = "2", default-features = false, features = ["tls"] }
 

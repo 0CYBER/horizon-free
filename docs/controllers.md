@@ -244,12 +244,102 @@ sensitivity, slower while scoping with a spyglass.
 
 ## Rumble
 
-Vibration (on by default, off in the options) through gilrs force feedback:
-taking damage (stronger with the damage), a block broken, an explosion nearby
-(scaled by distance), a totem of undying, an elytra boost, a fish biting.
-Short, low-intensity pulses, as on Bedrock. Linux (evdev force feedback,
-including Steam Input's virtual pad) and Windows support it; macOS gilrs has
-no force feedback, so it is silently skipped there.
+Vibration (on by default, off in the options): taking damage (stronger with
+the damage), a block broken, an explosion nearby (scaled by distance), a totem
+of undying. Short, low-intensity pulses, as on Bedrock. A DualSense gets them
+through its own output report (below), on every OS. Other pads go through
+gilrs force feedback: Linux (evdev force feedback, including Steam Input's
+virtual pad) and Windows support it; macOS gilrs has no force feedback, so it
+is silently skipped there.
+
+## DualSense output
+
+Gilrs only reads the pads. A DualSense (054c:0ce6, the Edge 054c:0df2) is also
+written to directly, over HID: the `horizon-dualsense` crate builds its output
+report and [hidapi](https://crates.io/crates/hidapi) (MIT, bundling the C
+hidapi under its BSD option) sends it: hidraw on Linux, IOKit on macOS (opened
+shared, so gilrs keeps reading the same pad), the HID API on Windows.
+
+- **Report.** One 47-byte block carries everything: which parts to apply
+  (three flag bytes), the two compatible-vibration motors, both adaptive
+  triggers' effects, the lightbar colour and the player LEDs. Over USB it is
+  report 0x02; over Bluetooth report 0x31, led by a sequence number and a tag
+  and closed by a CRC-32 of the seed byte 0xA2 and the report. Unit tests pin
+  the bytes to the references below (the CRC to zlib's, the LED reset to the
+  kernel's).
+- **Rumble.** Every report carries the motors: a report without the rumble
+  flags ends the motors' emulation and hands the actuators back to the audio
+  haptics (that is how SDL stops rumble, and how the HD haptics are re-armed),
+  so a trigger change mid-rumble would otherwise cut it. A pad with update
+  version 0x0224 or later (feature report 0x20), and every Edge, takes the
+  newer emulation (flags 2, bit 2); older or unknown firmware the legacy one
+  (flags 0, bit 0), at half strength as SDL does. The kernel takes the newer
+  one from 0x0215; between the two, legacy works on every firmware. The first
+  report after opening clears the motor and trigger attenuation another host
+  (a PS5's intensity settings) may have left (flags 1, bit 6, byte 36 = 0).
+- **Lights.** Before the first colour, a report of its own resets the lights
+  (flags 1 bit 3, and the lightbar setup "light out"; the kernel does the
+  same). Over Bluetooth the pad plays a connection animation that paints over
+  the lightbar: like SDL, the colour waits until the pad's sensor clock
+  (input report 0x31) passes 10 200 000.
+- **Bluetooth.** Any output report, even reading a feature report, switches a
+  pad on Bluetooth to its full input report (0x31) until it is turned off. On
+  Linux `hid-playstation` has done that already and gilrs reads its events,
+  so output goes ahead. Gilrs on macOS and Windows parses the simple report
+  0x01 instead and would stop seeing the pad (SDL's
+  `SDL_HINT_JOYSTICK_ENHANCED_REPORTS`: "break Windows DirectInput for other
+  applications"), so there a pad on Bluetooth gets no output unless
+  `HORIZON_DUALSENSE_BT=1`. Doing it for everyone means reading the pad's
+  input ourselves over HID, as SDL does (a later PR). A pad on both cables is
+  written over USB.
+- **Writer thread.** Writes block (a Bluetooth write can take milliseconds),
+  so a thread owns the pad: the game hands it the state to show and timed
+  vibrations, and it sends only what changed, and everything again when the
+  pad reconnects. It opens the pad once this window has the pad in hand (the
+  pad is active and the window has focus), and looks again whenever gilrs
+  sees a controller come or go.
+- **Off-safe.** Quitting (and the thread ending any other way) frees the
+  triggers and stops the motors before the pad is closed. Another game on the
+  same pad is left alone: nothing is written while this window is unfocused.
+- **Fallback.** If the pad can't be opened (Linux without access to its
+  hidraw node), vibration silently stays with gilrs, as before.
+- **Linux access.** `/dev/hidraw*` is root-only by default. Steam's udev rules
+  (`60-steam-input.rules`, installed with Steam or the `steam-devices`
+  package) already give the logged-in user the DualSense, over USB and
+  Bluetooth. Without Steam, this rule does the same (the launcher could
+  install it):
+
+  ```
+  # /etc/udev/rules.d/70-horizon-dualsense.rules
+  KERNEL=="hidraw*", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0ce6|0df2", TAG+="uaccess"
+  KERNEL=="hidraw*", KERNELS=="*054C:0CE6*|*054C:0DF2*", TAG+="uaccess"
+  ```
+
+  The kernel's own `hid-playstation` driver keeps working alongside: its
+  reports set only the parts their flags name.
+- **Trying it without the game:** `cargo run -p horizon-dualsense --example
+  dualsense -- all` plays each output on a connected pad and reads back what
+  the pad reports: the triggers' active effect, and the accelerometer's
+  shake while the motors run (`watch` logs the shake while the game drives
+  the pad).
+
+Byte layout from public references, read for facts; no code is copied from
+them (the kernel and dualsensectl are GPL):
+
+| Reference | Read at | What it settles |
+| --- | --- | --- |
+| SDL [`SDL_hidapi_ps5.c`](https://github.com/libsdl-org/SDL/blob/6defbc0129b5ba90bab3f6c67bbc1e9329e24ff1/src/joystick/hidapi/SDL_hidapi_ps5.c) and [`SDL_hints.h`](https://github.com/libsdl-org/SDL/blob/6defbc0129b5ba90bab3f6c67bbc1e9329e24ff1/include/SDL3/SDL_hints.h) (zlib) | `6defbc0` | the 47-byte block, rumble flags and stop, 0x0224, legacy at half, LED reset and the Bluetooth animation clock, USB report length 48, the enhanced-mode switch |
+| Linux [`hid-playstation.c`](https://github.com/torvalds/linux/blob/045958acaa75205b31578cb22c4345e28dd2e4bf/drivers/hid/hid-playstation.c) (GPL) | `045958a` | valid flags, the Bluetooth sequence and tag 0x10, CRC seed 0xA2, `dualsense_reset_leds`, `use_vibration_v2` from 2.21, player LED patterns, the default blue |
+| [dualsensectl](https://github.com/nowrep/dualsensectl/blob/d3ae2fa272e1bf9a5c08a0ded3f374b40f7c73ac/main.c) (GPL) | `d3ae2fa` | trigger valid bits (flags 0 bits 2, 3), `reduce_motor_power` (byte 36) and its flag, the trigger effect packing |
+| [pydualsense](https://github.com/flok/pydualsense/blob/01445f5ed6ba/pydualsense/pydualsense.py) (MIT) | `01445f5` | sets the attenuation flag with 0 on every report |
+| [nondebug/dualsense](https://github.com/nondebug/dualsense) | `b87450e` | an all-zero report 0x02 leaves rumble emulation for the audio haptics |
+
+Verified on hardware (USB, dualsense-1, Mac mini): the motors with the V2
+flags (the IMU shook, and settled after a stop that then still sent the
+flags), the pad reporting a feedback and a weapon trigger effect as active,
+and the writer thread. Verified against the references only: everything
+else, the flag-less stop, the attenuation and LED reset reports, and all of
+Bluetooth.
 
 ## Steam Deck
 
@@ -272,8 +362,9 @@ PRs #120, #129, #145 and #149. The second round, each shippable alone:
    menu styles, the on-screen keyboard.
 2. **Button prompts**: contextual hints with the pad's glyphs in menus and
    optionally in game, and rebinding from them.
-3. **DualSense output**: adaptive triggers, lightbar, player LEDs and richer
-   rumble over HID, off-safe.
+3. **DualSense output** (above): the HID output layer and rumble through it
+   first, then adaptive triggers, shaped vibration and the lightbar and
+   player LEDs.
 4. **Launcher**: the same focus navigation in the gpui launcher.
 
 Each is tested with unit tests (focus steps, prompt contexts, report bytes),

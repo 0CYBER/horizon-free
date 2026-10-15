@@ -54,6 +54,11 @@ pub(super) struct Pads {
     last_rumble: Option<(&'static str, gamepad::Pulse)>,
     /// The player's health between polls (a drop is damage taken).
     health: HealthWatch,
+    /// The active pad is a DualSense.
+    dualsense: bool,
+    /// Its own output over HID (rumble here; gilrs only reads it), started once this window
+    /// has the pad in hand; dropped, it releases the pad.
+    output: Option<horizon_dualsense::Link>,
 }
 
 fn gilrs_button(button: Button) -> gilrs::Button {
@@ -76,6 +81,11 @@ fn gilrs_button(button: Button) -> gilrs::Button {
         Button::DPadLeft => G::DPadLeft,
         Button::DPadRight => G::DPadRight,
     }
+}
+
+fn is_dualsense(pad: &gilrs::Gamepad) -> bool {
+    matches!((pad.vendor_id(), pad.product_id()),
+        (Some(vendor), Some(product)) if horizon_dualsense::is_dualsense(vendor, product))
 }
 
 impl Pads {
@@ -116,11 +126,17 @@ impl Pads {
             match event {
                 E::Connected => {
                     log::info!("Controller connected: {}", gilrs.gamepad(id).name());
+                    if let Some(output) = &self.output {
+                        output.scan();
+                    }
                 }
                 E::Disconnected => {
                     log::info!("Controller disconnected: {}", gilrs.gamepad(id).name());
                     if self.active == Some(id) {
                         self.active = None;
+                    }
+                    if let Some(output) = &self.output {
+                        output.scan();
                     }
                 }
                 E::ButtonPressed(..) => self.active = Some(id),
@@ -133,9 +149,12 @@ impl Pads {
             }
         }
         let Some(pad) = self.active.and_then(|id| gilrs.connected_gamepad(id)) else {
+            // Before any pad is touched (the virtual pad playing), a DualSense still shows it.
+            self.dualsense = gilrs.gamepads().any(|(_, pad)| is_dualsense(&pad));
             return PadState::default();
         };
         self.style = GlyphStyle::of_vendor(pad.vendor_id());
+        self.dualsense = is_dualsense(&pad);
         let mut state = PadState::default();
         for button in Button::ALL {
             if !matches!(button, Button::LeftTrigger | Button::RightTrigger) {
@@ -192,6 +211,9 @@ impl Game<'_> {
             self.pad.in_use = true;
         }
         self.pad.state = state;
+        if self.pad.dualsense && self.pad.in_use && self.focused && self.pad.output.is_none() {
+            self.pad.output = Some(horizon_dualsense::Link::start());
+        }
         // Damage from any source, here or on a server; nothing counts on
         // the title screen.
         let health = self
@@ -378,9 +400,22 @@ impl Game<'_> {
         self.pitch = rotation.x_rot;
     }
 
+    /// The DualSense's HID output, while it is the active pad, open, and this window has focus
+    /// (another game on the same pad keeps it otherwise).
+    fn pad_output(&self) -> Option<&horizon_dualsense::Link> {
+        let output = self.pad.output.as_ref()?;
+        (self.pad.dualsense && self.focused && output.open().is_some()).then_some(output)
+    }
+
+    /// Release the DualSense's output (the game is quitting).
+    pub(super) fn pad_close_output(&mut self) {
+        self.pad.output = None;
+    }
+
     /// Vibrate the active pad, when vibration is on and the pad is the one
-    /// playing (a pad lying idle while the mouse plays stays still).
-    /// Platforms without force feedback (gilrs on macOS) skip it.
+    /// playing (a pad lying idle while the mouse plays stays still): a
+    /// DualSense through its own report, else gilrs' force feedback, which
+    /// platforms without it (gilrs on macOS) skip.
     pub(super) fn pad_rumble(&mut self, rumble: Rumble) {
         let settings = &self.settings.controller;
         if !settings.enabled || !settings.vibration || !self.pad.in_use {
@@ -390,6 +425,12 @@ impl Game<'_> {
             return;
         };
         self.pad.last_rumble = Some((rumble.name(), pulse));
+        let level = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        if let Some(output) = self.pad_output() {
+            let length = Duration::from_millis(u64::from(pulse.millis));
+            output.rumble(vec![([level(pulse.strong), level(pulse.weak)], length)]);
+            return;
+        }
         let (Some(gilrs), Some(id)) = (self.pad.gilrs.as_mut(), self.pad.active) else {
             return;
         };
@@ -470,6 +511,8 @@ impl Game<'_> {
                     "backend": self.pad.gilrs.is_some(),
                     "controllers": pads,
                     "glyphs": self.pad.style.name(),
+                    "dualsense_output": self.pad.output.as_ref().and_then(|o| o.open())
+                        .map(|t| format!("{t:?}")),
                     "last_rumble": self.pad.last_rumble.map(|(why, p)| json!({
                         "reason": why, "strong": p.strong, "weak": p.weak, "ms": p.millis,
                     })),

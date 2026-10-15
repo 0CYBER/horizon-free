@@ -9625,6 +9625,7 @@ impl ApplicationHandler for Game<'_> {
     /// applicationWillTerminate without a CloseRequested; vanilla's GLFW
     /// window turns it into a window close, so Minecraft.stop saves the world.
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.pad_close_output();
         if let Err(e) = self.save_for_exit() {
             log::warn!("Horizon: failed to save the world on exit: {e}");
         }
