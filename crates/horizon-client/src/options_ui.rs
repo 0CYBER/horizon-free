@@ -1502,12 +1502,13 @@ impl OptionsUi {
         if list {
             ui::list_background(batch, atlas, top, bottom, in_world);
         }
-        let visible = |wd: &Widget| !wd.list || (wd.y >= top && wd.y + wd.h <= bottom);
+        let visible = |wd: &Widget| !wd.list || (wd.y < bottom && wd.y + wd.h > top);
         let mut tooltip = None;
         for wd in &widgets {
             if !visible(wd) {
                 continue;
             }
+            let start = batch.vertices.len();
             let hover = ui::hovered(cursor, wd.x, wd.y, wd.w, wd.h)
                 && (!wd.list || cursor.1 >= top && cursor.1 < bottom);
             match &wd.kind {
@@ -1593,6 +1594,9 @@ impl OptionsUi {
                         true,
                     );
                 }
+            }
+            if wd.list && (wd.y < top || wd.y + wd.h > bottom) {
+                batch.clip_since(start, 0.0, top, w, bottom);
             }
         }
         if list {
@@ -1742,7 +1746,7 @@ impl OptionsUi {
             if !ui::hovered((x, y), wd.x, wd.y, wd.w, wd.h) {
                 continue;
             }
-            if wd.list && (y < top || y >= bottom || wd.y < top || wd.y + wd.h > bottom) {
+            if wd.list && (y < top || y >= bottom) {
                 continue;
             }
             match wd.kind {
@@ -2301,6 +2305,111 @@ mod tests {
             ui.scroll_at(&s, size, (240.0, 60.0), 1000.0);
             ui.scroll_at(&s, size, (240.0, 60.0), -0.25);
             assert_eq!(ui.scroll, 4.5, "{page:?}");
+        }
+    }
+
+    #[test]
+    fn partially_visible_keybind_rows_are_clipped_and_clickable() {
+        let mut atlas = atlas();
+        let button = crate::hud::Rect {
+            u0: 0.25,
+            v0: 0.25,
+            u1: 0.5,
+            v1: 0.5,
+            w: 20,
+            h: 20,
+        };
+        for name in ["button", "button_disabled", "button_highlighted"] {
+            atlas
+                .sprites
+                .insert(format!("gui/sprites/widget/{name}"), button);
+        }
+        for above in [true, false] {
+            let mut s = Settings::default();
+            let mut ui = OptionsUi::default();
+            ui.show(Page::KeyBinds);
+            let mut batch = HudBatch::new([480, 240]);
+            let size = (batch.width, batch.height);
+            let (widgets, top, bottom, _) = ui.layout(&s, size.0, size.1);
+            let row = widgets
+                .iter()
+                .filter(|w| {
+                    matches!(
+                        w.kind,
+                        WKind::Button {
+                            act: Act::Key(_),
+                            ..
+                        }
+                    )
+                })
+                .nth(10)
+                .unwrap();
+            let WKind::Button {
+                act: Act::Key(key), ..
+            } = row.kind
+            else {
+                unreachable!()
+            };
+            let row_y = if above { top - 5.0 } else { bottom - 16.0 };
+            ui.scroll = row.y - row_y;
+            let (x, width, height) = (row.x, row.w, row.h);
+            ui.draw(&s, &mut batch, &atlas, (-1.0, -1.0));
+            let vertices: Vec<_> = batch
+                .vertices
+                .iter()
+                .filter(|v| {
+                    (0.25..=0.5).contains(&v.uv[0])
+                        && (0.25..=0.5).contains(&v.uv[1])
+                        && v.pos[0] >= x
+                        && v.pos[0] <= x + width
+                        && v.pos[1] >= row_y
+                        && v.pos[1] <= row_y + height
+                })
+                .collect();
+            assert!(!vertices.is_empty());
+            let lo = vertices
+                .iter()
+                .map(|v| v.pos[1])
+                .fold(f32::INFINITY, f32::min);
+            let hi = vertices
+                .iter()
+                .map(|v| v.pos[1])
+                .fold(f32::NEG_INFINITY, f32::max);
+            assert_eq!(lo, row_y.max(top));
+            assert_eq!(hi, (row_y + height).min(bottom));
+            let hidden_y = if above {
+                row_y + 1.0
+            } else {
+                row_y + height - 1.0
+            };
+            assert!(
+                ui.click(
+                    &mut s,
+                    &atlas,
+                    x + 1.0,
+                    hidden_y,
+                    size,
+                    [480, 240],
+                    false,
+                    false
+                )
+                .is_empty()
+            );
+            assert_eq!(ui.selected_key, None);
+            assert_eq!(
+                ui.click(
+                    &mut s,
+                    &atlas,
+                    x + 1.0,
+                    (lo + hi) / 2.0,
+                    size,
+                    [480, 240],
+                    false,
+                    false
+                ),
+                vec![Event::ButtonClick]
+            );
+            assert_eq!(ui.selected_key, Some(key));
         }
     }
 
