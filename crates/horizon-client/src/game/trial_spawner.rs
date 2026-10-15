@@ -64,32 +64,45 @@ impl Game<'_> {
             .filter(|(_, e)| matches!(e, BlockEntity::TrialSpawner(_)))
             .map(|(k, _)| *k)
             .collect();
-        for key in keys {
-            let state = self.world.block(key.0, key.1, key.2);
-            let Some(block) = self.res.assets.registry.state(state).cloned() else {
+        for &key in &keys {
+            let Some((current, ominous)) = self.trial_spawner_block(key) else {
                 continue;
             };
-            if block.name != "minecraft:trial_spawner" {
-                continue;
-            }
             let Some(BlockEntity::TrialSpawner(mut spawner)) =
                 self.world.block_entities.remove(&key)
             else {
                 continue;
             };
-            let current = block
-                .properties
-                .get("trial_spawner_state")
-                .and_then(|s| TrialState::from_name(s))
-                .unwrap_or_default();
-            let ominous = block.properties.get("ominous").is_some_and(|v| v == "true");
             let result = self.server_tick_trial_spawner(key, &mut spawner, current, ominous);
             self.world
                 .block_entities
                 .insert(key, BlockEntity::TrialSpawner(spawner));
             result?;
         }
+        for key in keys {
+            self.client_tick_trial_spawner(key);
+        }
         Ok(())
+    }
+    /// The trial spawner block at `key`: its state and ominous flag.
+    pub(super) fn trial_spawner_block(&self, key: Pos) -> Option<(TrialState, bool)> {
+        let block = self
+            .res
+            .assets
+            .registry
+            .state(self.world.block(key.0, key.1, key.2))?;
+        if block.name != "minecraft:trial_spawner" {
+            return None;
+        }
+        let state = block
+            .properties
+            .get("trial_spawner_state")
+            .and_then(|s| TrialState::from_name(s))
+            .unwrap_or_default();
+        Some((
+            state,
+            block.properties.get("ominous").is_some_and(|v| v == "true"),
+        ))
     }
     fn server_tick_trial_spawner(
         &mut self,
