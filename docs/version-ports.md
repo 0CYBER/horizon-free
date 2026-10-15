@@ -100,7 +100,8 @@ latest release (and, with `--snapshots`, the latest snapshot) with the pin and w
 - **Mac mini, launchd (chosen):** the agent `dev.horizon.version-port` (`tools/ci/dev.horizon.version-port.plist`)
   runs `tools/ci/version-port-daily.sh` daily at 16:00 Zurich time (14:00 UTC in summer, 15:00 in winter; Mojang
   publishes on weekdays around 10:00-14:00 UTC), in a dedicated worktree of `origin/main`
-  (`~/code/horizon-parity/port-main`), at `~/fleet/load prio low`, nice 10. The whole port runs where the vanilla
+  (`~/code/horizon-parity/port-main`), at nice 10 with low-priority I/O (the plist's `Nice` and
+  `LowPriorityIO`; `~/fleet/load prio low` would lower the calling agent session instead). The whole port runs where the vanilla
   data, Java and the harnesses are. See "Turning on the daily agent" below.
 - **GitHub Actions:** a scheduled job could run `detect` alone and open a "Minecraft X is out" issue; the Mac mini
   would still have to do the rest, so it adds a hop for nothing. Kept as the fallback if the Mac mini is down for

@@ -34,7 +34,6 @@ if [ ! -d .local ]; then
 fi
 # shellcheck disable=SC1091
 source "$HOME/code/horizon-parity/env.sh"
-"$HOME/fleet/load" prio low --for 12h >/dev/null 2>&1 || true
 
 # --dry-run: what is new is remembered (versions/detect-state.json) only once its port went through, so a port
 # that fails is tried again the next day.
