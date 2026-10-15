@@ -406,6 +406,24 @@ pub fn list_background(
         u32::MAX,
     );
 }
+/// The visible scrollbar thumb, shared by painting and pointer input.
+pub(crate) fn scrollbar_thumb(
+    top: f32,
+    bottom: f32,
+    content: f32,
+    scroll: f32,
+) -> Option<(f32, f32)> {
+    let height = bottom - top;
+    if content <= height {
+        return None;
+    }
+    let bar = (height * height / content)
+        .clamp(32.0, height - 8.0)
+        .floor();
+    let y = top + ((scroll / (content - height)) * (height - bar)).floor();
+    Some((y, bar))
+}
+
 /// Vertical scroll bar (AbstractScrollArea): background and scroller sprites.
 pub fn scrollbar(
     batch: &mut HudBatch,
@@ -416,15 +434,10 @@ pub fn scrollbar(
     content: f32,
     scroll: f32,
 ) {
-    let height = bottom - top;
-    if content <= height {
+    let Some((y, bar)) = scrollbar_thumb(top, bottom, content, scroll) else {
         return;
-    }
-    let bar = (height * height / content)
-        .clamp(32.0, height - 8.0)
-        .floor();
-    let max = content - height;
-    let y = top + ((scroll / max) * (height - bar)).floor();
+    };
+    let height = bottom - top;
     nine_slice(
         batch,
         atlas,

@@ -691,6 +691,7 @@ pub struct OptionsUi {
     pub stack: Vec<Page>,
     scroll: f32,
     pub(crate) dragging: Option<Opt>,
+    scrollbar_drag_y: Option<f32>,
     /// Horizon style: the selected sidebar section, the one last drawn and
     /// the rows' scroll in dp (`options_horizon`).
     pub section: usize,
@@ -727,6 +728,7 @@ impl Default for OptionsUi {
             stack: vec![Page::Main],
             scroll: 0.0,
             dragging: None,
+            scrollbar_drag_y: None,
             section: 0,
             section_shown: None,
             hscroll: 0.0,
@@ -809,6 +811,7 @@ impl OptionsUi {
     pub fn open(&mut self, in_world: bool) {
         self.stack = vec![Page::Main];
         self.scroll = 0.0;
+        self.scrollbar_drag_y = None;
         self.in_world = in_world;
         self.selected_key = None;
     }
@@ -819,6 +822,7 @@ impl OptionsUi {
     fn push(&mut self, page: Page) {
         self.stack.push(page);
         self.scroll = 0.0;
+        self.scrollbar_drag_y = None;
         if page == Page::Language {
             self.language_choice = None;
             self.language_search.set_value("");
@@ -856,6 +860,14 @@ impl OptionsUi {
             Page::Controller => "Controller Settings",
             Page::PadBinds => "Controller Binds",
         }
+    }
+    fn scrollbar_x(&self, width: f32) -> f32 {
+        (width / 2.0).floor()
+            + match self.page() {
+                Page::KeyBinds | Page::PadBinds => 178.0,
+                Page::Language => 118.0,
+                _ => 163.0,
+            }
     }
     fn list_rows(&self, s: &Settings) -> Vec<Row> {
         match self.page() {
@@ -1585,11 +1597,7 @@ impl OptionsUi {
         }
         if list {
             ui::separators(batch, atlas, top, bottom, in_world);
-            let sx = match self.page() {
-                Page::KeyBinds | Page::PadBinds => (w / 2.0).floor() + 170.0 + 8.0,
-                Page::Language => (w / 2.0).floor() + 110.0 + 8.0,
-                _ => (w / 2.0).floor() + 155.0 + 8.0,
-            };
+            let sx = self.scrollbar_x(w);
             ui::scrollbar(batch, atlas, sx, top, bottom, content, self.scroll);
         }
         if self.page() == Page::Language {
@@ -1674,9 +1682,26 @@ impl OptionsUi {
             }
             return events;
         }
-        let (widgets, top, bottom, _) = self.layout(s, size.0, size.1);
+        let (widgets, top, bottom, content) = self.layout(s, size.0, size.1);
         let mut events = Vec::new();
         if drag {
+            if let Some(previous_y) = self.scrollbar_drag_y {
+                if let Some((_, thumb)) = ui::scrollbar_thumb(top, bottom, content, self.scroll) {
+                    let max = content - (bottom - top);
+                    self.scroll = if y < top {
+                        0.0
+                    } else if y > bottom {
+                        max
+                    } else {
+                        self.scroll + (y - previous_y) * max / (bottom - top - thumb)
+                    };
+                    self.clamp_scroll(top, bottom, content);
+                    self.scrollbar_drag_y = Some(y);
+                } else {
+                    self.scrollbar_drag_y = None;
+                }
+                return events;
+            }
             if let Some(opt) = self.dragging
                 && let Some(wd) = widgets
                     .iter()
@@ -1705,6 +1730,12 @@ impl OptionsUi {
         // AbstractWidget accepts only the primary button. Rebinding above
         // accepts other mouse buttons, but is not a widget activation.
         if right {
+            return events;
+        }
+        if ui::scrollbar_thumb(top, bottom, content, self.scroll).is_some()
+            && ui::hovered((x, y), self.scrollbar_x(size.0), top, 6.0, bottom - top)
+        {
+            self.scrollbar_drag_y = Some(y);
             return events;
         }
         for wd in widgets {
@@ -1784,6 +1815,7 @@ impl OptionsUi {
         crate::ui_theme::set_style(crate::ui_theme::MenuStyle::Horizon);
         self.stack.truncate(1);
         self.scroll = 0.0;
+        self.scrollbar_drag_y = None;
         self.section = crate::options_horizon::SECTIONS
             .iter()
             .position(|section| section.name == "Interface")
@@ -1792,6 +1824,7 @@ impl OptionsUi {
         self.hscroll = 0.0;
     }
     pub fn release(&mut self) -> Vec<Event> {
+        self.scrollbar_drag_y = None;
         // AbstractSliderButton suppresses the press sound and plays once on
         // release, even if the pointer has left the widget or its value stayed.
         let slider = self.dragging.take().is_some();
@@ -1854,6 +1887,7 @@ impl OptionsUi {
         let mut events = Vec::new();
         let page = self.stack.pop().unwrap_or(Page::Main);
         self.scroll = 0.0;
+        self.scrollbar_drag_y = None;
         self.dragging = None;
         self.selected_key = None;
         self.selected_pad_action = None;
@@ -2268,6 +2302,105 @@ mod tests {
             ui.scroll_at(&s, size, (240.0, 60.0), -0.25);
             assert_eq!(ui.scroll, 4.5, "{page:?}");
         }
+    }
+
+    #[test]
+    fn classic_scrollbar_drag_is_bounded_silent_and_stops_on_release() {
+        let atlas = atlas();
+        let size = (480.0, 160.0);
+        for page in [Page::KeyBinds, Page::PadBinds, Page::Language, Page::Chat] {
+            let mut s = Settings::default();
+            let mut ui = OptionsUi {
+                languages: languages(),
+                ..Default::default()
+            };
+            ui.show(page);
+            let (_, top, bottom, content) = ui.layout(&s, size.0, size.1);
+            let max = content - (bottom - top);
+            assert!(max > 0.0, "{page:?}");
+            let x = ui.scrollbar_x(size.0) + 2.0;
+            let (_, thumb) = ui::scrollbar_thumb(top, bottom, content, ui.scroll).unwrap();
+            let y = top + thumb / 2.0;
+            assert!(
+                ui.click(&mut s, &atlas, x, y, size, [960, 480], false, true)
+                    .is_empty()
+            );
+            assert_eq!(ui.scrollbar_drag_y, None);
+            assert!(
+                ui.click(&mut s, &atlas, x, y, size, [960, 480], false, false)
+                    .is_empty()
+            );
+            assert_eq!(ui.scrollbar_drag_y, Some(y));
+            let delta = 5.0;
+            assert!(
+                ui.click(
+                    &mut s,
+                    &atlas,
+                    x - 100.0,
+                    y + delta,
+                    size,
+                    [960, 480],
+                    true,
+                    false
+                )
+                .is_empty()
+            );
+            assert!((ui.scroll - delta * max / (bottom - top - thumb)).abs() < 0.001);
+            for (y, expected) in [(bottom + 100.0, max), (top - 100.0, 0.0)] {
+                assert!(
+                    ui.click(&mut s, &atlas, x, y, size, [960, 480], true, false)
+                        .is_empty()
+                );
+                assert!((ui.scroll - expected).abs() < 0.001, "{page:?}");
+            }
+            assert!(ui.release().is_empty());
+            assert_eq!(ui.scrollbar_drag_y, None);
+            assert!(
+                ui.click(
+                    &mut s,
+                    &atlas,
+                    x,
+                    bottom + 100.0,
+                    size,
+                    [960, 480],
+                    true,
+                    false
+                )
+                .is_empty()
+            );
+            assert_eq!(ui.scroll, 0.0);
+            assert_eq!(s.keys, Settings::default().keys);
+            ui.click(&mut s, &atlas, x, top + 1.0, size, [960, 480], false, false);
+            assert!(ui.scrollbar_drag_y.is_some());
+            ui.show(Page::Mouse);
+            assert_eq!(ui.scrollbar_drag_y, None);
+        }
+    }
+
+    #[test]
+    fn key_rebinding_takes_precedence_over_scrollbar_dragging() {
+        let atlas = atlas();
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        ui.show(Page::KeyBinds);
+        ui.selected_key = Some("key.jump");
+        let x = ui.scrollbar_x(480.0) + 2.0;
+        assert_eq!(
+            ui.click(
+                &mut s,
+                &atlas,
+                x,
+                50.0,
+                (480.0, 240.0),
+                [960, 480],
+                false,
+                false
+            ),
+            vec![Event::Changed]
+        );
+        assert_eq!(s.keys.get("key.jump"), "key.mouse.left");
+        assert_eq!(ui.scrollbar_drag_y, None);
+        assert!(ui.release().is_empty());
     }
 
     #[test]
