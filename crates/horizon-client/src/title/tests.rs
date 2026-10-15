@@ -414,7 +414,7 @@ fn recreate_uses_existing_name_seed_and_mode_and_scroll_reaches_later_rows() {
     f.click("Cancel");
     f.title
         .scroll_worlds(-100.0, (240.0, 100.0), (480.0, 262.0));
-    assert!(f.title.scroll.get() > 0.0);
+    assert!(f.title.scroll.get().amount > 0.0);
     let Mode::Select { worlds, .. } = &f.title.mode else {
         panic!()
     };
@@ -560,4 +560,27 @@ fn delete_removes_links_without_following_them() {
     world_management::delete(&f.title.saves, "World").unwrap();
     assert!(!f.title.saves.join("World").exists());
     assert!(outside.join("keep.txt").is_file());
+}
+
+#[test]
+fn scrolled_world_list_draws_inside_the_list_and_drags_its_scroller() {
+    let mut f = Fixture::new();
+    for i in 0..10 {
+        f.world(&format!("World{i}"), &format!("World {i}"));
+    }
+    f.select();
+    let size = (480.0, 262.0);
+    // SelectWorldScreen's list: 49 to h - 60, scroller at the row's right + 8.
+    let bar = (480.0 / 2.0 - ROW_WIDTH / 2.0 + ROW_WIDTH + 8.0 + 3.0, 60.0);
+    f.title.click(bar.0, bar.1, size);
+    f.title.drag((bar.0, 120.0), size);
+    let moved = f.title.scroll.get().amount;
+    assert!(moved > 0.0);
+    f.title.release();
+    f.title.drag((bar.0, 60.0), size);
+    assert_eq!(f.title.scroll.get().amount, moved);
+    let atlas = crate::hud::HudAtlas::build(Path::new("/nonexistent/horizon-test-assets")).unwrap();
+    let mut batch = HudBatch::new([480, 262]);
+    f.title.draw(&atlas, &mut batch, (0.0, 0.0), true);
+    assert!(!batch.vertices.is_empty());
 }
