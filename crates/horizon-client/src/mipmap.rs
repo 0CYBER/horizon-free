@@ -31,6 +31,9 @@ impl Strategy {
 /// it has a fully transparent pixel and whether it is an `item/` sprite.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Settings {
+    /// Original square frame edge, before fitting the sprite into the array.
+    /// Zero means the supplied image is already at its native size.
+    pub native_size: u32,
     pub strategy: Strategy,
     pub alpha_cutoff_bias: f32,
     pub has_transparent: bool,
@@ -45,6 +48,15 @@ pub struct Image {
     pub pixels: Vec<[u8; 4]>,
 }
 impl Image {
+    fn resized(&self, size: u32) -> Self {
+        Self {
+            width: size,
+            height: size,
+            pixels: (0..size * size)
+                .map(|i| self.get(i % size * self.width / size, i / size * self.height / size))
+                .collect(),
+        }
+    }
     fn get(&self, x: u32, y: u32) -> [u8; 4] {
         self.pixels[(x + y * self.width) as usize]
     }
@@ -263,17 +275,37 @@ fn darkened_alpha_blend(c: [[u8; 4]; 4]) -> [u8; 4] {
 }
 
 /// `MipmapGenerator.generateMipLevels` from the base image (`levels` mips
-/// below it): `has_transparent` is `Transparency.hasTransparent` (a pixel
-/// with zero alpha), `item` whether the sprite is under `item/` (its base
-/// is left as is).
-pub fn generate(
-    mut base: Image,
-    levels: u32,
-    strategy: Strategy,
-    alpha_cutoff_bias: f32,
-    has_transparent: bool,
-    item: bool,
-) -> Vec<Image> {
+/// below it). Array-only enlargement must not run extra alpha-coverage steps
+/// before the sprite's native mip chain.
+pub fn generate(base: Image, levels: u32, settings: Settings) -> Vec<Image> {
+    let native = settings.native_size;
+    if native.is_power_of_two()
+        && native < base.width
+        && base.width == base.height
+        && base.width.is_power_of_two()
+    {
+        let extra = (base.width / native).ilog2();
+        let mut mips =
+            generate_native(base.resized(native), levels.saturating_sub(extra), settings);
+        let mut out: Vec<_> = (0..extra.min(levels + 1))
+            .map(|level| mips[0].resized(base.width >> level))
+            .collect();
+        if levels >= extra {
+            out.append(&mut mips);
+        }
+        return out;
+    }
+    generate_native(base, levels, settings)
+}
+
+fn generate_native(mut base: Image, levels: u32, settings: Settings) -> Vec<Image> {
+    let Settings {
+        strategy,
+        alpha_cutoff_bias,
+        has_transparent,
+        item,
+        ..
+    } = settings;
     let strategy = match strategy {
         Strategy::Auto if has_transparent => Strategy::Cutout,
         Strategy::Auto => Strategy::Mean,

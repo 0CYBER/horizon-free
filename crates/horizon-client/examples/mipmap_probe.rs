@@ -31,14 +31,7 @@ fn main() -> horizon_client::Result<()> {
         };
         let s = sprites.mips[layer as usize];
         writeln!(out, "== {name}")?;
-        for mip in horizon_client::mipmap::generate(
-            base,
-            size.trailing_zeros(),
-            s.strategy,
-            s.alpha_cutoff_bias,
-            s.has_transparent,
-            s.item,
-        ) {
+        for mip in horizon_client::mipmap::generate(base, size.trailing_zeros(), s) {
             write!(out, "{}x{}", mip.width, mip.height)?;
             for row in mip.pixels.chunks(mip.width as usize) {
                 out.push(' ');
