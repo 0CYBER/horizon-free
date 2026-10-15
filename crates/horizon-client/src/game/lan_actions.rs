@@ -564,7 +564,10 @@ impl Game<'_> {
             );
             return;
         }
-        if !host.settings.guest_commands || !self.allow_commands() {
+        // A LAN world follows its Allow Commands; a dedicated server leaves
+        // it to the ops list (the guest's permission level).
+        let allowed = self.options.dedicated.is_some() || self.allow_commands();
+        if !host.settings.guest_commands || !allowed {
             host.hub.send_to(
                 conn,
                 &C::SystemChat(play::SystemChat {
