@@ -39,8 +39,13 @@ class ReleaseTrainTests(unittest.TestCase):
     def test_game_tags_count_up_within_a_day(self):
         today = dt.date(2026, 10, 15)
         self.assertEqual(train.next_game_tag(["v2026.10.14", "launcher-v0.1.4"], today), "v2026.10.15")
-        self.assertEqual(train.next_game_tag(["v2026.10.15"], today), "v2026.10.15.1")
-        self.assertEqual(train.next_game_tag(["v2026.10.15", "v2026.10.15.1", "v2026.10.15.2"], today), "v2026.10.15.3")
+        self.assertEqual(train.next_game_tag(["v2026.10.15"], today), "v2026.10.15.01")
+        self.assertEqual(train.next_game_tag(["v2026.10.15", "v2026.10.15.01", "v2026.10.15.02"], today), "v2026.10.15.03")
+        # Unpadded tags from before the change still count, and the next one sorts after them as text too.
+        self.assertEqual(train.next_game_tag(["v2026.10.15", "v2026.10.15.9", "v2026.10.15.20"], today), "v2026.10.15.21")
+        self.assertEqual(train.next_game_tag(["v2026.10.15", "v2026.10.15.08"], today), "v2026.10.15.09")
+        tags = ["v2026.10.15.09", "v2026.10.15.10", "v2026.10.15"]
+        self.assertEqual(sorted(tags), sorted(tags, key=train.tag_key))
 
     def test_launcher_tags_bump_the_patch_or_the_minor(self):
         tags = ["launcher-v0.1.3", "launcher-v0.1.10", "v2026.10.15", "launcher-v0.1.4"]
