@@ -37,6 +37,8 @@ pub(super) struct GuestPlay {
     swung: bool,
     /// The trading screen the guest has open.
     pub(super) merchant: Option<super::lan_trading::GuestMerchant>,
+    /// The inventory menu and the crafting table the guest crafts in.
+    pub(super) crafting: super::lan_crafting::GuestCrafting,
 }
 
 struct ItemRules<'a>(&'a horizon_client::items::Items);
@@ -126,6 +128,10 @@ impl Game<'_> {
             self.keys.remove(&KeyCode::ShiftLeft);
         }
         let screen = std::mem::replace(&mut self.screen, Screen::Playing);
+        // The host's crafting grid stays theirs; a crafting table the guest
+        // opens shows as the 3x3 size.
+        let craft_size = std::mem::replace(&mut self.craft_size, 2);
+        let craft_grid = std::mem::replace(&mut self.craft_grid, vec![None; 9]);
         let container = self.container.take();
         let mining = std::mem::replace(&mut self.mining, play.mining.take());
         let destroy_delay = std::mem::replace(&mut self.destroy_delay, play.destroy_delay);
@@ -145,6 +151,8 @@ impl Game<'_> {
 
         // What the action opened: handed to the guest instead of the host.
         let opened = self.container.take();
+        let opened_table = std::mem::replace(&mut self.craft_size, craft_size) == 3;
+        self.craft_grid = craft_grid;
         let opened_station = std::mem::replace(&mut self.station, host_station);
         self.riding = riding;
         self.left = left;
@@ -209,6 +217,9 @@ impl Game<'_> {
         }
         if let Some(station) = opened_station {
             self.lan_station_opened(host, conn, station);
+        }
+        if opened_table {
+            self.lan_open_crafting(host, conn);
         }
         Some(result)
     }
@@ -411,6 +422,8 @@ impl Game<'_> {
                 host.hub.guests[gi].set_menu_slot(p.slot as usize, item);
             }
             S::ContainerClick(p) if self.lan_merchant_click(host, conn, &p) => {}
+            S::ContainerClick(p) if self.lan_inventory_click(host, conn, &p) => {}
+            S::ContainerClick(p) if self.lan_crafting_click(host, conn, &p) => {}
             S::SelectTrade(p) => self.lan_select_trade(host, conn, p.item),
             S::ContainerClose(p) if self.lan_merchant_closed(host, conn, Some(p.container)) => {
                 let g = &mut host.hub.guests[gi];
@@ -418,9 +431,15 @@ impl Game<'_> {
                     self.drop_guest_items(host, gi, vec![c]);
                 }
             }
+            S::ContainerClose(p) if self.lan_crafting_closed(host, conn, Some(p.container)) => {
+                let g = &mut host.hub.guests[gi];
+                if let Some(c) = g.carried.take() {
+                    self.drop_guest_items(host, gi, vec![c]);
+                }
+            }
             S::ContainerClick(p) => {
                 let rules = ItemRules(&self.res.items);
-                let drops = host.hub.container_click(conn, p, &mut self.world, &rules);
+                let drops = host.hub.container_click(conn, &p, &mut self.world, &rules);
                 self.drop_guest_items(host, gi, drops);
             }
             S::ContainerClose(p) => {

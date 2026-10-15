@@ -634,13 +634,14 @@ impl Game<'_> {
                             );
                         }
                     }
-                    HostEvent::Left(guest) => {
+                    HostEvent::Left(mut guest) => {
                         // The container they had open loses an opener.
                         if let Some(pos) = guest.menu.as_ref().and_then(|m| m.pos)
                             && !guest.spectator()
                         {
                             self.container_openers_changed(pos, false);
                         }
+                        self.lan_crafting_left(&mut host, &mut guest);
                         playerdata::save(&guest, &self.world_root);
                         host.models.remove(&guest.conn);
                         if self.options.dedicated.is_some() && guest.placed {
