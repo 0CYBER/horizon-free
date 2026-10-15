@@ -23,7 +23,7 @@ impl Game<'_> {
             self.inventory.get(slot)?.as_ref()
         }
     }
-    fn stack_in_mut(&mut self, slot: usize) -> &mut Option<ItemStack> {
+    pub(super) fn stack_in_mut(&mut self, slot: usize) -> &mut Option<ItemStack> {
         if slot == OFFHAND_SLOT {
             &mut self.offhand
         } else {

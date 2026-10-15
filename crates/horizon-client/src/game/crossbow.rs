@@ -1,8 +1,10 @@
 //! Crossbows (`CrossbowItem`): charging with the start/middle/end sounds
-//! (Quick Charge), loading arrows into `charged_projectiles` (Multishot
-//! loads three), and shooting critical arrows at power 3.15 with the fanned
-//! Multishot angles and their shot pitches.
-use super::{Game, view_vector};
+//! (Quick Charge), loading arrows or a held firework rocket into
+//! `charged_projectiles` (Multishot loads three), and shooting critical
+//! arrows at power 3.15, or rockets at 1.6 for three durability, with the
+//! fanned Multishot angles and their shot pitches. `Player.getProjectile`
+//! finds the ammo for bows and crossbows.
+use super::{Game, shield::OFFHAND_SLOT, view_vector};
 use horizon_client::{
     items::ItemStack,
     mobs::Who,
@@ -11,6 +13,31 @@ use horizon_client::{
 use horizon_core::{geometry::Vec3, random::RandomSource};
 
 const CROSSBOW: &str = "minecraft:crossbow";
+const FIREWORK_ROCKET: &str = "minecraft:firework_rocket";
+
+/// `ProjectileWeaponItem.ARROW_ONLY`, for the arrows Horizon shoots.
+fn is_arrow(stack: &ItemStack) -> bool {
+    &*stack.item == "minecraft:arrow"
+}
+
+/// `Player.getProjectile`: what `weapon` supports in the off hand, then in
+/// the main hand (`getHeldProjectile`; crossbows also take firework rockets
+/// there), else the first arrows in the inventory. The slot of the stack.
+fn projectile_slot(
+    weapon: &str,
+    hands: [(usize, Option<&ItemStack>); 2],
+    inventory: &[Option<ItemStack>],
+) -> Option<usize> {
+    let held = |s: &ItemStack| is_arrow(s) || weapon == CROSSBOW && &*s.item == FIREWORK_ROCKET;
+    hands
+        .into_iter()
+        .find_map(|(slot, s)| s.is_some_and(held).then_some(slot))
+        .or_else(|| {
+            inventory
+                .iter()
+                .position(|s| s.as_ref().is_some_and(is_arrow))
+        })
+}
 
 impl Game<'_> {
     pub(super) fn charge_ticks(stack: &ItemStack) -> u32 {
@@ -42,10 +69,10 @@ impl Game<'_> {
             ],
         }
     }
-    pub(super) fn arrow_slot(&self) -> Option<usize> {
-        self.inventory
-            .iter()
-            .position(|s| s.as_ref().is_some_and(|s| &*s.item == "minecraft:arrow"))
+    /// `Player.getProjectile` for `weapon` (`projectile_slot`).
+    pub(super) fn projectile_slot(&self, weapon: &str) -> Option<usize> {
+        let hands = [OFFHAND_SLOT, self.selected].map(|slot| (slot, self.stack_in(slot)));
+        projectile_slot(weapon, hands, &self.inventory)
     }
     /// `CrossbowItem.use`: shoot when charged, else start charging.
     pub(super) fn use_crossbow(&mut self, stack: &ItemStack) -> bool {
@@ -58,7 +85,9 @@ impl Game<'_> {
         }
         if stack.data().is_some_and(|d| !d.charged.is_empty()) {
             self.shoot_crossbow();
-        } else if (self.arrow_slot().is_some() || self.creative) && self.using.is_none() {
+        } else if (self.projectile_slot(CROSSBOW).is_some() || self.creative)
+            && self.using.is_none()
+        {
             self.using = Some((self.selected, 0));
         }
         true
@@ -88,16 +117,17 @@ impl Game<'_> {
             } else {
                 1
             };
-            let slot_ammo = self.arrow_slot();
+            let slot_ammo = self.projectile_slot(CROSSBOW);
             let ammo = slot_ammo
-                .and_then(|i| self.inventory[i].clone())
+                .and_then(|i| self.stack_in(i).cloned())
                 .unwrap_or_else(|| ItemStack::new("minecraft:arrow", 1));
             if !self.creative {
                 let Some(i) = slot_ammo else { return };
-                if let Some(s) = self.inventory[i].as_mut() {
+                let cell = self.stack_in_mut(i);
+                if let Some(s) = cell.as_mut() {
                     s.count -= 1;
                     if s.count == 0 {
-                        self.inventory[i] = None;
+                        *cell = None;
                     }
                 }
             }
@@ -123,6 +153,12 @@ impl Game<'_> {
         let charged = std::mem::take(&mut bow.data_mut().charged);
         bow.tidy();
         let count = charged.len();
+        // getShootingPower: a rocket among them slows every shot.
+        let power = if charged.iter().any(|s| &*s.item == FIREWORK_ROCKET) {
+            1.6
+        } else {
+            3.15
+        };
         // ProjectileWeaponItem.shoot: angles fanned 10 degrees apart.
         let spread = if count > 1 { 10.0 } else { 0.0 };
         let view = glam::DVec3::from_array(view_vector(self.yaw, self.pitch));
@@ -140,22 +176,38 @@ impl Game<'_> {
             };
             let dir =
                 glam::DQuat::from_axis_angle(up.normalize_or_zero(), angle.to_radians()) * view;
-            let kind = ProjectileKind::Arrow {
-                base_damage: 2.0,
-                critical: true,
-                effect: None,
-            };
-            let mut arrow = Projectile::new(
-                kind,
-                Vec3::new(eye[0], eye[1] - 0.1, eye[2]),
-                Some(Who::Player),
-            );
-            if let Some(a) = arrow.arrow.as_mut() {
-                a.set_item(ammo);
-                a.set_owner(Some(Who::Player));
+            // createProjectile: a rocket shot at an angle from 0.15 under the
+            // eyes, spread by its own random; three durability.
+            let rocket = &*ammo.item == FIREWORK_ROCKET;
+            if rocket {
+                let at = Vec3::new(eye[0], eye[1] - f64::from(0.15f32), eye[2]);
+                let mut shot = Projectile::new(ProjectileKind::Snowball, at, None);
+                shot.shoot(
+                    &mut super::dispenser::entity_random(),
+                    dir.to_array(),
+                    power,
+                    1.0,
+                );
+                self.launch_angled_rocket(at, shot.velocity, ammo);
             }
-            arrow.shoot(&mut self.world.random, dir.to_array(), 3.15, 1.0);
-            self.creatures.projectiles.push(arrow);
+            if !rocket {
+                let kind = ProjectileKind::Arrow {
+                    base_damage: 2.0,
+                    critical: true,
+                    effect: None,
+                };
+                let mut arrow = Projectile::new(
+                    kind,
+                    Vec3::new(eye[0], eye[1] - 0.1, eye[2]),
+                    Some(Who::Player),
+                );
+                if let Some(a) = arrow.arrow.as_mut() {
+                    a.set_item(ammo);
+                    a.set_owner(Some(Who::Player));
+                }
+                arrow.shoot(&mut self.world.random, dir.to_array(), power, 1.0);
+                self.creatures.projectiles.push(arrow);
+            }
             self.player_projectile_shot();
             let pitch = if index == 0 {
                 1.0
@@ -165,7 +217,43 @@ impl Game<'_> {
             };
             self.audio
                 .play("minecraft:item.crossbow.shoot", Some(eye), 1.0, pitch);
-            self.damage_held(1);
+            self.damage_held(if rocket { 3 } else { 1 });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn held_projectiles_come_before_the_inventory() {
+        let stack = |item: &str| Some(ItemStack::new(item, 1));
+        let (crossbow, rocket, arrow) = (
+            stack(CROSSBOW),
+            stack(FIREWORK_ROCKET),
+            stack("minecraft:arrow"),
+        );
+        let mut inventory = vec![None; 36];
+        inventory[5] = arrow.clone();
+        // The weapon in hotbar slot 0, `off` in the off hand.
+        let slot = |weapon, off: &Option<ItemStack>, inventory: &[Option<ItemStack>]| {
+            let hands = [(OFFHAND_SLOT, off.as_ref()), (0, crossbow.as_ref())];
+            projectile_slot(weapon, hands, inventory)
+        };
+        // The off hand's rocket loads a crossbow; a bow only takes arrows.
+        assert_eq!(slot(CROSSBOW, &rocket, &inventory), Some(OFFHAND_SLOT));
+        assert_eq!(slot("minecraft:bow", &rocket, &inventory), Some(5));
+        assert_eq!(
+            slot("minecraft:bow", &arrow, &inventory),
+            Some(OFFHAND_SLOT)
+        );
+        assert_eq!(slot(CROSSBOW, &None, &inventory), Some(5));
+        // A rocket in the inventory is not ammo.
+        inventory[5] = rocket.clone();
+        assert_eq!(slot(CROSSBOW, &None, &inventory), None);
+        // The main hand's rocket, with the crossbow in the off hand.
+        let hands = [(OFFHAND_SLOT, crossbow.as_ref()), (3, rocket.as_ref())];
+        assert_eq!(projectile_slot(CROSSBOW, hands, &inventory), Some(3));
     }
 }
