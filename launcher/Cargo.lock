@@ -2630,6 +2630,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-bench"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "horizon-friends"
 version = "0.1.0"
 dependencies = [
@@ -2654,6 +2662,7 @@ dependencies = [
  "futures-lite 2.6.1",
  "getrandom 0.3.4",
  "gpui",
+ "horizon-bench",
  "horizon-friends",
  "horizon-prepare",
  "horizon-theme",

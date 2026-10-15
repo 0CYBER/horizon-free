@@ -23,6 +23,7 @@ horizon-theme = { path = "../crates/horizon-theme" }
 horizon-prepare = { path = "../crates/horizon-prepare" }
 # Join a friend: invite codes (the game does the joining).
 horizon-friends = { path = "../crates/horizon-friends" }
+horizon-bench = { path = "../crates/horizon-bench" }
 # The session file's random name.
 getrandom = "0.3"
 
