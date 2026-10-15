@@ -1805,14 +1805,13 @@ impl Game<'_> {
                 }
             }
         }
+        let drag = self.drag_view();
         for i in self.station_slots().unwrap_or_default() {
             let Some((sx, sy)) = self.slot_position_any(i) else {
                 continue;
             };
             let stack = self.slot_mut(i).clone();
-            if let Some(stack) = stack {
-                self.draw_item(batch, &stack, ox + sx, oy + sy);
-            }
+            self.draw_slot_item(batch, drag.as_ref(), i, stack, ox + sx, oy + sy);
         }
         if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
             let (sx, sy) = self.slot_position(slot);
@@ -1831,8 +1830,8 @@ impl Game<'_> {
                 tooltip = Some(self.stack_tooltip(&stack));
             }
         }
-        if let Some(stack) = self.carried.clone() {
-            self.draw_item(batch, &stack, self.cursor.0 - 8.0, self.cursor.1 - 8.0);
+        if self.carried.is_some() {
+            self.draw_carried(batch);
         } else if let Some(lines) = tooltip {
             self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
         }

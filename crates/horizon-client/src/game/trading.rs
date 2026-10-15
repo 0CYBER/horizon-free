@@ -761,11 +761,11 @@ impl Game<'_> {
         }
         // Slots, hover highlight, carried stack, tooltip.
         let slots: Vec<usize> = (0..36).chain([INPUT, INPUT + 1, RESULT]).collect();
+        let drag = self.drag_view();
         for i in slots {
             let (sx, sy) = self.slot_position(i);
-            if let Some(stack) = self.slot_mut(i).clone() {
-                self.draw_item(batch, &stack, ox + sx, oy + sy);
-            }
+            let stack = self.slot_mut(i).clone();
+            self.draw_slot_item(batch, drag.as_ref(), i, stack, ox + sx, oy + sy);
         }
         if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
             let (sx, sy) = self.slot_position(slot);
@@ -789,8 +789,8 @@ impl Game<'_> {
             && local.0 < 186.0 + SHIFT + 22.0 + 1.0
             && local.1 >= 35.0 - 1.0
             && local.1 < 35.0 + 21.0 + 1.0;
-        if let Some(stack) = self.carried.clone() {
-            self.draw_item(batch, &stack, self.cursor.0 - 8.0, self.cursor.1 - 8.0);
+        if self.carried.is_some() {
+            self.draw_carried(batch);
         } else if deprecated {
             let text = self
                 .res

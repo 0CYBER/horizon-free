@@ -512,8 +512,8 @@ impl Game<'_> {
             );
             stack_tip = self.slot_mut(slot).clone();
         }
-        if let Some(stack) = self.carried.clone() {
-            self.draw_item(batch, &stack, self.cursor.0 - 8.0, self.cursor.1 - 8.0);
+        if self.carried.is_some() {
+            self.draw_carried(batch);
         } else if let Some(stack) = stack_tip {
             let lines = self.stack_tooltip(&stack);
             self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);

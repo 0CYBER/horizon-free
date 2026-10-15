@@ -646,6 +646,12 @@ pub struct Resources {
     /// Enchantments, workstation recipes and brewing (game/stations.rs).
     stations: horizon_client::stations::StationData,
 }
+/// A quick craft drag as the screen draws it: each dragged slot's count and
+/// whether the slot caps it (None: hidden), and what stays in hand.
+struct DragView {
+    slots: HashMap<usize, Option<(u32, bool)>>,
+    left: Option<u32>,
+}
 /// Ctrl+Q reads the physical keyboard, independently of sprint key mappings.
 fn drop_whole_stack(physical_keys: &HashSet<KeyCode>) -> bool {
     physical_keys.contains(&KeyCode::ControlLeft) || physical_keys.contains(&KeyCode::ControlRight)
@@ -3471,10 +3477,99 @@ impl Game<'_> {
         // `GuiGraphics.renderItem`: the resolved item model (tints, foil and
         // special renderers included), then the decorations.
         self.draw_item_model(batch, stack, x, y);
-        self.draw_item_decorations(batch, stack, x, y);
+        self.draw_item_decorations(batch, stack, x, y, None);
     }
-    /// `GuiGraphicsExtractor.itemDecorations`: the count and damage bar.
-    fn draw_item_decorations(&mut self, batch: &mut HudBatch, stack: &ItemStack, x: f32, y: f32) {
+    /// `extractSlot` of slot `slot` holding `stack` at (x, y): during a quick
+    /// craft drag a dragged slot shows what it would hold over a white
+    /// highlight (its count yellow when the slot caps it), and hides while
+    /// it is the drag's only slot.
+    fn draw_slot_item(
+        &mut self,
+        batch: &mut HudBatch,
+        drag: Option<&DragView>,
+        slot: usize,
+        stack: Option<ItemStack>,
+        x: f32,
+        y: f32,
+    ) {
+        let (stack, capped) = match drag.and_then(|d| d.slots.get(&slot)) {
+            Some(None) => return,
+            Some(Some((count, capped))) => {
+                batch.fill(&self.res.atlas, x, y, 16.0, 16.0, rgba(255, 255, 255, 128));
+                let carried = self
+                    .carried
+                    .clone()
+                    .map(|c| ItemStack { count: *count, ..c });
+                (carried, *capped)
+            }
+            None => (stack, false),
+        };
+        if let Some(stack) = stack {
+            self.draw_item_model(batch, &stack, x, y);
+            let text = capped.then(|| format!("\u{a7}e{}", stack.count));
+            self.draw_item_decorations(batch, &stack, x, y, text);
+        }
+    }
+    /// `extractCarriedItem`: the carried stack at the cursor, showing what a
+    /// quick craft drag over several slots leaves in hand.
+    fn draw_carried(&mut self, batch: &mut HudBatch) {
+        let Some(mut stack) = self.carried.clone() else {
+            return;
+        };
+        if let Some(left) = self.drag_view().and_then(|d| d.left) {
+            if left == 0 {
+                return;
+            }
+            stack.count = left;
+        }
+        self.draw_item(batch, &stack, self.cursor.0 - 8.0, self.cursor.1 - 8.0);
+    }
+    /// The quick craft drag in progress, as the menu engine previews it.
+    fn drag_view(&mut self) -> Option<DragView> {
+        let (ty, slots) = self.inv_drag.clone()?;
+        let mut view = None;
+        self.menu_session(|menu, env, to_menu| {
+            let menu_slots: Option<Vec<usize>> = slots.iter().map(|&g| to_menu(g)).collect();
+            let shown = match menu.quick_craft_preview(env, ty, &menu_slots?) {
+                Some((shown, left)) => {
+                    let slots = slots.iter().copied().zip(shown).collect();
+                    DragView {
+                        slots,
+                        left: Some(left),
+                    }
+                }
+                // A single dragged slot is hidden.
+                None => DragView {
+                    slots: slots.iter().map(|&g| (g, None)).collect(),
+                    left: None,
+                },
+            };
+            view = Some(shown);
+            Some(false)
+        });
+        view
+    }
+    /// Whether a quick craft drag takes `slot`
+    /// (`shouldAddSlotToQuickCraft`); screens the menu engine doesn't
+    /// model take every slot.
+    fn quick_craft_accepts(&mut self, slot: usize, ty: i32, dragged: usize) -> bool {
+        let mut accepts = true;
+        self.menu_session(|menu, env, to_menu| {
+            accepts = to_menu(slot).is_some_and(|s| menu.quick_craft_accepts(env, s, ty, dragged));
+            Some(false)
+        });
+        accepts
+    }
+    /// `GuiGraphicsExtractor.itemDecorations`: the count (or `count_text`)
+    /// and damage bar.
+    fn draw_item_decorations(
+        &mut self,
+        batch: &mut HudBatch,
+        stack: &ItemStack,
+        x: f32,
+        y: f32,
+        count_text: Option<String>,
+    ) {
         // GuiGraphicsExtractor.itemDecorations, laid out at the origin and
         // moved to (x, y). Horizon tracks no item cooldowns to shade yet.
         let max_damage = self
@@ -3484,7 +3579,7 @@ impl Game<'_> {
             .map_or(0, |info| info.max_damage as i32);
         let decorations = hud_overlays::ItemDecorations {
             count: stack.count,
-            count_text: None,
+            count_text,
             bar: hud_overlays::damage_bar(stack.damage as i32, max_damage),
             cooldown: 0.0,
         };
@@ -4017,6 +4112,7 @@ impl Game<'_> {
             .map(|(name, result)| (name.to_owned(), result))
     }
     fn draw_inventory_slots(&mut self, batch: &mut HudBatch, ox: f32, oy: f32) {
+        let drag = self.drag_view();
         for i in self.slots() {
             let (sx, sy) = self.slot_position(i);
             if i == 504 && self.offhand.is_none() {
@@ -4037,9 +4133,7 @@ impl Game<'_> {
                 );
             }
             let stack = self.slot_view(i);
-            if let Some(stack) = stack {
-                self.draw_item(batch, &stack, ox + sx, oy + sy);
-            }
+            self.draw_slot_item(batch, drag.as_ref(), i, stack, ox + sx, oy + sy);
         }
     }
     fn draw_inventory(&mut self, batch: &mut HudBatch) {
@@ -4184,9 +4278,7 @@ impl Game<'_> {
                 rgba(255, 255, 255, 128),
             );
         }
-        if let Some(stack) = self.carried.clone() {
-            self.draw_item(batch, &stack, self.cursor.0 - 8.0, self.cursor.1 - 8.0);
-        }
+        self.draw_carried(batch);
         self.draw_slot_tooltip(batch);
         if self.container.is_none() && self.craft_size == 2 && !self.mount_active() {
             self.draw_inventory_effects(batch, (ox, oy), 176);
@@ -4761,8 +4853,13 @@ impl Game<'_> {
                 return;
             }
             if self.carried.is_some() {
-                let first = if display { Vec::new() } else { vec![slot] };
-                self.inv_drag = Some((i32::from(right), first));
+                let ty = i32::from(right);
+                let first = if !display && self.quick_craft_accepts(slot, ty, 0) {
+                    vec![slot]
+                } else {
+                    Vec::new()
+                };
+                self.inv_drag = Some((ty, first));
                 return;
             }
         }
@@ -4784,7 +4881,7 @@ impl Game<'_> {
     }
     /// Mouse movement while a quick craft drag is running.
     fn inventory_drag_move(&mut self) {
-        let Some((_, slots)) = self.inv_drag.as_ref() else {
+        let Some((ty, slots)) = self.inv_drag.clone() else {
             return;
         };
         let Some(r) = self.renderer.as_ref() else {
@@ -4795,6 +4892,7 @@ impl Game<'_> {
             && slot != 200
             && slot < Creative::DISPLAY
             && !slots.contains(&slot)
+            && self.quick_craft_accepts(slot, ty, slots.len())
             && let Some((_, slots)) = self.inv_drag.as_mut()
         {
             slots.push(slot);
@@ -7973,17 +8071,18 @@ impl Game<'_> {
                     }
                 }
             }
+            let drag = self.drag_view();
             for c in 0..9 {
                 let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 112.0);
-                if let Some(stack) = self.inventory[c].clone() {
-                    self.draw_item(batch, &stack, x, y);
-                    if self.cursor.0 >= x
-                        && self.cursor.0 < x + 16.0
-                        && self.cursor.1 >= y
-                        && self.cursor.1 < y + 16.0
-                    {
-                        hovered = Some(stack.item.to_string());
-                    }
+                let stack = self.inventory[c].clone();
+                self.draw_slot_item(batch, drag.as_ref(), c, stack.clone(), x, y);
+                if let Some(stack) = stack
+                    && self.cursor.0 >= x
+                    && self.cursor.0 < x + 16.0
+                    && self.cursor.1 >= y
+                    && self.cursor.1 < y + 16.0
+                {
+                    hovered = Some(stack.item.to_string());
                 }
             }
             let scrollable = self.creative_screen.rows(&self.res.names) > 5;
@@ -8009,9 +8108,7 @@ impl Game<'_> {
                 self.tooltip(batch, &t.title, self.cursor.0, self.cursor.1);
             }
         }
-        if let Some(stack) = self.carried.clone() {
-            self.draw_item(batch, &stack, self.cursor.0 - 8.0, self.cursor.1 - 8.0);
-        }
+        self.draw_carried(batch);
         if tab.inventory {
             if Self::creative_trash_hovered(batch, self.cursor) {
                 self.tooltip(batch, "Destroy Item", self.cursor.0, self.cursor.1);
