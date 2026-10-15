@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 
@@ -88,7 +89,18 @@ def prepare_resources(root, version, store):
         return {"status": "ok"}
     except (RuntimeError, OSError, ValueError, KeyError) as error:
         output = getattr(error, "output", str(error))
-        return {"status": "failed", "error": str(error)[-2500:], "compile_errors": port_regen.compile_errors(output)}
+        return {"status": "failed", "error": str(error)[-2500:],
+                "compile_errors": port_regen.compile_errors(output + named_logs(output))}
+
+
+def named_logs(output):
+    """The logs horizon-prepare's errors point to ("…; see /path/export.log"): its javac errors are there."""
+    text = ""
+    for name in sorted(set(re.findall(r"see (/\S+\.log)", output))):
+        path = Path(name)
+        if path.is_file():
+            text += path.read_text(errors="replace")[-(1 << 20):]
+    return text
 
 
 def run_harnesses(root, names=None, timeout=None):
@@ -159,7 +171,9 @@ def harnesses(version, store, root, baseline=None, names=None, timeout=None, pre
     if pinned != version:
         raise SystemExit(f"{root} pins {pinned}, not {version}")
     if previous:
-        prepared, names = previous["prepare"], names or list(previous["harnesses"])
+        prepared, names = dict(previous["prepare"]), names or list(previous["harnesses"])
+        if prepared["status"] == "failed" and not prepared.get("compile_errors"):
+            prepared["compile_errors"] = port_regen.compile_errors(named_logs(prepared.get("error", "")))
         state = json.loads((root / ".local" / "parity-runner" / "state.json").read_text())
     else:
         print(f"horizon-prepare in {root}", flush=True)

@@ -51,6 +51,14 @@ class ClassifyTests(unittest.TestCase):
 
 
 class AssetTests(unittest.TestCase):
+    def test_javac_errors_from_the_log_horizon_prepare_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "export.log"
+            log.write_text("Oracle.java:33: error: cannot find symbol\n")
+            output = f"error: javac failed (exit status: 1) while exporting block states; see {log}\n"
+            self.assertIn("Oracle.java:33: error", harness.named_logs(output))
+            self.assertEqual(harness.named_logs("error: see /nonexistent/x.log"), "")
+
     def test_the_reports_link_goes_before_horizon_prepare(self):
         with tempfile.TemporaryDirectory() as tmp:
             root, store = Path(tmp) / "candidate", Path(tmp) / "store-reports"
