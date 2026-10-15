@@ -111,7 +111,9 @@ Bucket *i* counts frames from edge *i* (included) to edge *i* + 1; the last buck
 ## Local only
 
 `label` (a name the person running it chose) and `local` (paths of the logs the run wrote next to the
-report) stay on the machine: the upload removes them (`Report::for_upload`). Nothing in a report
+report) stay on the machine: the upload removes them and dates the report to the day only, as every
+telemetry item is (`Report::for_upload`). The upload is `horizon-telemetry`'s `benchmark` item: this
+report, as it is, only with the player's consent to benchmark uploads (docs/telemetry.md). Nothing in a report
 identifies the player, the machine's name or the world: no host name, user name, path or address.
 
 ## Where reports go

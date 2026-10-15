@@ -285,11 +285,13 @@ impl Report {
         Ok(report)
     }
 
-    /// The report without its local-only fields: what an upload sends.
+    /// The report without its local-only fields, dated to the day: what an upload sends.
     pub fn for_upload(&self) -> Report {
+        let day = self.created.get(..10).unwrap_or_default();
         Report {
             label: None,
             local: Vec::new(),
+            created: format!("{day}T00:00:00Z"),
             ..self.clone()
         }
     }
@@ -416,7 +418,10 @@ mod tests {
         r.local.push("/home/someone/logs/latest.log".into());
         let back = Report::parse(&r.to_json()).unwrap();
         assert_eq!(back, r);
-        let upload = r.for_upload().to_json();
+        r.created = "2026-10-15T14:03:27Z".into();
+        let upload = r.for_upload();
+        assert_eq!(upload.created, "2026-10-15T00:00:00Z", "the day only");
+        let upload = upload.to_json();
         assert!(
             !upload.contains("my run") && !upload.contains("someone"),
             "{upload}"

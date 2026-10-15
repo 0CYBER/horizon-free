@@ -994,6 +994,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-bench"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "horizon-client"
 version = "0.1.0"
 dependencies = [
