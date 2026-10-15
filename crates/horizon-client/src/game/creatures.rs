@@ -2441,7 +2441,9 @@ impl Game<'_> {
                         consume = true;
                         eat = sound;
                     }
-                    None => handled = false,
+                    // Animal.mobInteract still consumes the client click when
+                    // an adult cannot breed, without swinging or taking food.
+                    None => return Ok(true),
                 }
             }
             _ => handled = false,

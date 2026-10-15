@@ -2229,11 +2229,17 @@ impl Game<'_> {
         {
             return Ok(());
         }
+        // An EntityHitResult may fall through to Item.use, never to useItemOn.
+        let block_hit = if self.entity_targeted() {
+            None
+        } else {
+            self.pick()
+        };
         let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
         let mut anchor_passed = None;
         // MultiPlayerGameMode.useItemOn: blocks react first unless sneaking with an item.
         if !(sneaking && self.held().is_some())
-            && let Some(hit) = self.pick()
+            && let Some(hit) = block_hit.as_ref()
         {
             let held = self.held().cloned();
             if self.use_lectern(hit.pos, held.as_ref()) {
@@ -2312,12 +2318,12 @@ impl Game<'_> {
         let Some(info) = self.res.items.get(&stack.item).cloned() else {
             return Ok(());
         };
-        if self.use_bone_meal(&stack)? || self.ignite_tnt(&stack)? {
+        if block_hit.is_some() && (self.use_bone_meal(&stack)? || self.ignite_tnt(&stack)?) {
             return Ok(());
         }
         use horizon_client::first_person::UseResult;
         let swings = self.swings_started;
-        match self.use_tool(&stack)? {
+        match self.use_tool(&stack, block_hit.is_some())? {
             UseResult::Success { swing } => {
                 if (UseResult::Success { swing }).should_swing(swings, self.swings_started) {
                     self.swing_arm();
@@ -2327,7 +2333,10 @@ impl Game<'_> {
             UseResult::Fail => return Ok(()),
             UseResult::Pass => {}
         }
-        if self.use_potion_item(&stack)? || self.throw_item(&stack)? {
+        if self.use_potion_item(&stack)?
+            || ((block_hit.is_some() || !stack.item.ends_with("_spawn_egg"))
+                && self.throw_item(&stack)?)
+        {
             return Ok(());
         }
         if self.raise_shield(self.selected)
@@ -2339,7 +2348,7 @@ impl Game<'_> {
             || self.use_book(&stack)
             // Block items (heads, carved pumpkins) aimed at a block are
             // placed first (useItemOn before useItem).
-            || (!(info.block.is_some() && self.pick().is_some()) && self.equip_from_hand(&stack))
+            || (!(info.block.is_some() && block_hit.is_some()) && self.equip_from_hand(&stack))
         {
             return Ok(());
         }
@@ -2354,26 +2363,28 @@ impl Game<'_> {
             return Ok(());
         }
         // Block foods attempt placement before starting consumption.
-        if !(info.block.is_some() && self.pick().is_some()) && self.start_eating(&info) {
+        if !(info.block.is_some() && block_hit.is_some()) && self.start_eating(&info) {
             return Ok(());
         }
+        // BoatItem.use also performs its own fluid/block raycast.
         if self.place_boat(&stack) {
             return Ok(());
         }
-        if let Some(hit) = self.pick()
-            && (self.launch_firework(&hit, &stack)
-                || self.place_minecart(&hit, &stack)
-                || self.place_painting(&hit, &stack)
-                || self.place_item_frame(&hit, &stack)
-                || self.place_armor_stand(&hit, &stack)
-                || self.place_end_crystal(&hit, &stack))
+        if let Some(hit) = block_hit.as_ref()
+            && (self.launch_firework(hit, &stack)
+                || self.place_minecart(hit, &stack)
+                || self.place_painting(hit, &stack)
+                || self.place_item_frame(hit, &stack)
+                || self.place_armor_stand(hit, &stack)
+                || self.place_end_crystal(hit, &stack))
         {
             return Ok(());
         }
-        if self.use_ender_eye(&stack)? {
+        if self.use_ender_eye(&stack, block_hit.is_some())? {
             return Ok(());
         }
-        let Some(hit) = self.pick() else {
+        let Some(hit) = block_hit else {
+            self.use_offhand();
             return Ok(());
         };
         if info.block.is_none() {
@@ -6593,7 +6604,11 @@ impl Game<'_> {
         }
     }
     /// Block tool use: distinguish success, failure and fall-through for hand feedback.
-    fn use_tool(&mut self, stack: &ItemStack) -> Result<horizon_client::first_person::UseResult> {
+    fn use_tool(
+        &mut self,
+        stack: &ItemStack,
+        allow_block_actions: bool,
+    ) -> Result<horizon_client::first_person::UseResult> {
         use horizon_client::first_person::UseResult;
         let item = stack.item.trim_start_matches("minecraft:").to_owned();
         let at = |p: [i32; 3]| {
@@ -6603,7 +6618,8 @@ impl Game<'_> {
                 f64::from(p[2]) + 0.5,
             ]
         };
-        if let Some(hit) = self.pick()
+        if allow_block_actions
+            && let Some(hit) = self.pick()
             && self.use_on_cauldron(hit.pos)?
         {
             return Ok(UseResult::Success { swing: true });
@@ -6665,11 +6681,16 @@ impl Game<'_> {
             }
             return Ok(UseResult::Success { swing: true });
         }
+        // BucketItem.use has its own ray, even when the crosshair hits an entity.
+        let bucket = horizon_client::items::bucket_contents(&stack.item);
+        if !allow_block_actions && bucket.is_none() {
+            return Ok(UseResult::Pass);
+        }
         let Some(hit) = self.pick() else {
             return Ok(UseResult::Pass);
         };
         let clicked = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-        if let Some((content, sound, mob)) = horizon_client::items::bucket_contents(&stack.item) {
+        if let Some((content, sound, mob)) = bucket {
             if !self.may_build() {
                 return Ok(UseResult::Fail);
             }
