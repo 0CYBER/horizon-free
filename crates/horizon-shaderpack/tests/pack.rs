@@ -221,3 +221,58 @@ fn real_packs_preprocess() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// The `shaders.properties` of the packs in `HORIZON_TEST_SHADERPACKS` read
+/// with their defaults. Skipped when the variable isn't set.
+#[test]
+fn real_packs_properties() {
+    let Some(dir) = std::env::var_os("HORIZON_TEST_SHADERPACKS") else {
+        return;
+    };
+    for entry in std::fs::read_dir(dir).unwrap().flatten() {
+        let Ok(pack) = JavaPack::open(&entry.path()) else {
+            continue;
+        };
+        let values = pack.values(&BTreeMap::new());
+        let properties = pack.properties(&values, &env()).unwrap();
+        let profiles = properties.profiles(&pack.options).unwrap();
+        let current = horizon_shaderpack::properties::ShaderProperties::current_profile(
+            &profiles,
+            &pack.options,
+            &values,
+        );
+        let disabled: std::collections::BTreeSet<&str> = pack
+            .programs
+            .iter()
+            .map(|p| horizon_shaderpack::program_name(p))
+            .filter(|p| !properties.program_enabled(p, &pack.options, &values))
+            .collect();
+        let main = properties.screen(None).unwrap();
+        println!(
+            "{}: {} main screen elements, {} sub-screens, {} sliders, profiles {:?} (current {:?}), off: {}",
+            entry.file_name().to_string_lossy(),
+            main.len(),
+            properties.screens().len(),
+            properties.sliders().len(),
+            profiles.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+            current.map(|p| p.name.as_str()),
+            disabled.into_iter().collect::<Vec<_>>().join(" ")
+        );
+        // Screens name the pack's options (a few stale names are tolerated:
+        // Iris shows them as empty cells).
+        let mut unknown = Vec::new();
+        for screen in std::iter::once(None).chain(properties.screens().into_iter().map(Some)) {
+            for e in properties.screen(screen).unwrap() {
+                if let horizon_shaderpack::properties::MenuElement::Option(o) = e {
+                    if !pack.options.bools.contains_key(&o)
+                        && !pack.options.strings.contains_key(&o)
+                    {
+                        unknown.push(o);
+                    }
+                }
+            }
+        }
+        println!("  unknown screen options: {unknown:?}");
+        assert!(unknown.len() <= 2, "{unknown:?}");
+    }
+}

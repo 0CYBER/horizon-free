@@ -2,17 +2,20 @@
 //! "Java shader packs"). This crate does the part that needs no GPU: open a
 //! pack, find its programs and options, and turn a program into plain GLSL
 //! the way Iris does before compiling it (`#include`s inlined, the player's
-//! option values written into the source, Iris's macros expanded).
+//! option values written into the source, Iris's macros expanded), read its
+//! `shaders.properties`, and translate programs to WGSL.
 
 pub mod include;
 pub mod options;
 pub mod preprocess;
+pub mod properties;
 pub mod source;
 pub mod translate;
 
 use include::{IncludeGraph, Inlined};
 use options::{Annotated, OptionSet, OptionValues};
 use preprocess::{Environment, Preprocessed};
+use properties::ShaderProperties;
 use source::PackFiles;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -137,4 +140,22 @@ impl JavaPack {
         translate::translate(stage, &pre.text, link, &|line| source.locate(line))
             .map_err(|e| format!("{program}: {e}"))
     }
+
+    /// The pack's `shaders.properties` with `values` (empty when it has none).
+    pub fn properties(
+        &self,
+        values: &OptionValues,
+        env: &Environment,
+    ) -> Result<ShaderProperties, String> {
+        match self.files.read("shaders.properties") {
+            Some(text) => ShaderProperties::new(&text, env, &self.options, values),
+            None => Ok(ShaderProperties::default()),
+        }
+    }
+}
+
+/// A program's name in `shaders.properties` (`world-1/composite1.fsh` is
+/// `world-1/composite1`).
+pub fn program_name(program: &str) -> &str {
+    program.rsplit_once('.').map_or(program, |(name, _)| name)
 }

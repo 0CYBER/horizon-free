@@ -6,6 +6,7 @@ use horizon_shaderpack::{
     JavaPack, Stage,
     include::Inlined,
     preprocess::{Environment, preprocess},
+    program_name,
     translate::{Link, Translated, translate},
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -295,6 +296,7 @@ fn reparse(wgsl: &str) -> Result<(), String> {
 }
 
 /// Every program the packs in `HORIZON_TEST_SHADERPACKS` enable by default
+/// (`program.*.enabled` in their shaders.properties)
 /// translates to WGSL that reads back (each pass's `.vsh` before its `.fsh`). Skipped when the
 /// variable isn't set. Distant Horizons, Colorwheel and Voxy programs are
 /// left out: Iris loads them only with those mods.
@@ -303,21 +305,20 @@ fn real_packs_translate() {
     let Some(dir) = std::env::var_os("HORIZON_TEST_SHADERPACKS") else {
         return;
     };
-    // Off by default (`program.*/shadowcomp.enabled` in shaders.properties).
-    let disabled = ["shadowcomp.csh"];
     let mut failures = Vec::new();
     for entry in std::fs::read_dir(dir).unwrap().flatten() {
         let Ok(pack) = JavaPack::open(&entry.path()) else {
             continue;
         };
         let values = pack.values(&BTreeMap::new());
+        let properties = pack.properties(&values, &env()).unwrap();
         let mut passes: BTreeMap<&str, Vec<&String>> = BTreeMap::new();
         for p in &pack.programs {
             let file = p.rsplit('/').next().unwrap();
             if ["dh_", "clrwl_", "voxy"]
                 .iter()
                 .any(|m| file.starts_with(m))
-                || disabled.contains(&file)
+                || !properties.program_enabled(program_name(p), &pack.options, &values)
             {
                 continue;
             }
@@ -329,7 +330,10 @@ fn real_packs_translate() {
         let (mut ok, mut total) = (0, 0);
         for programs in passes.values_mut() {
             programs.sort_by_key(|p| !p.ends_with(".vsh"));
-            let mut link = Link::default();
+            let mut link = Link {
+                image_formats: properties.image_formats(),
+                ..Link::default()
+            };
             for p in programs.iter() {
                 total += 1;
                 match pack

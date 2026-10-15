@@ -18,6 +18,7 @@ Both are off by default. With no pack selected the renderer draws exactly what i
 | Java shader packs: preprocessing + GLSL parse coverage | spike done: 450 of 470 programs reach valid WGSL (below) |
 | Java shader packs: preprocessor (`crates/horizon-shaderpack`: includes, options, Iris's macros) | done: every program of the three test packs preprocesses |
 | Java shader packs: GLSL → WGSL (`horizon_shaderpack::translate`: syntax-tree legaliser, naga) | done: the 464 programs the three test packs enable by default translate (below) |
+| Java shader packs: `shaders.properties` (`horizon_shaderpack::properties`: screens, sliders, profiles, `program.*.enabled`, image formats, blend modes) | done, no screen yet: read like Iris for the three test packs |
 | Java shader packs: Iris pipeline emulation | planned |
 
 ## How the renderer draws a frame today
@@ -311,6 +312,13 @@ the WGSL read back and validated): matrix varyings are split into columns; the f
 but dead code after a `discard;` (how BSL turns its clouds and weather off), which the legaliser drops; the six
 `shadowcomp.csh` are off by default (`program.*/shadowcomp.enabled` in `shaders.properties`) and use images and arrays
 that only exist with their options on, so they wait for `shaders.properties`.
+
+With `shaders.properties` read (`program.*.enabled` evaluated like Iris, image formats taken from `image.*`), the
+programs the packs enable translate: 180 of 180 for Complementary, 114 of 114 for Sildur's and 154 of 154 for BSL with
+its profile (it turns `composite2`/`composite3` off). With their colored lighting on, BSL's `shadowcomp.csh` translates
+too, and so do all 183 of Complementary's on Linux once `IRIS_FEATURE_CUSTOM_IMAGES` is defined: without it, the pack
+declares no voxel images but its `shaders.properties` still turns `shadowcomp` on. Which `IRIS_FEATURE_*` Horizon
+defines is decided when the stage that backs them exists.
 
 So the GLSL side is feasible: naga's front end plus a legaliser reaches 96% on the three packs, and every remaining
 failure has a mechanical fix. Valid WGSL isn't a working pack yet: the output still has to be bound to Horizon's
