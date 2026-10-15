@@ -241,9 +241,7 @@ impl GenerationScan {
         capacity: usize,
     ) -> Option<Vec<(i64, i32, i32)>> {
         // Generation (load or proto), closest first, bounded in flight.
-        let margin = if input.decorates { 3 } else { 1 };
-        // Neighbours a finished chunk needs generated: decorated ones need theirs.
-        let reach = if input.decorates { 2 } else { 1 };
+        let (margin, reach) = Ranges::margins(input.decorates);
         if input.remote
             || input.generating.len() >= capacity
             || self.unchanged(&input.ranges, input.world)
@@ -261,8 +259,7 @@ impl GenerationScan {
                 for dz in -r..=r {
                     for dx in -r..=r {
                         let (x, z) = (center.0 + dx, center.1 + dz);
-                        if !(input.ranges.in_range(x, z, margin)
-                            || input.ranges.near_finished(x, z, reach))
+                        if !input.ranges.requested(x, z, input.decorates)
                             || input.world.chunks.contains_key(&(x, z))
                             || input.generating.contains(&(x, z))
                             || input.protos.contains_key(&(x, z))
@@ -508,7 +505,7 @@ impl Streaming {
         // the column loads later). A generated one is saved first: its
         // neighbours were decorated around it, so generating it again would
         // not give it back.
-        if !(self.in_range(key.0, key.1, 2) || self.near_finished(key.0, key.1, 1)) {
+        if !self.ranges().chunk_kept(key.0, key.1, self.decorates) {
             if chunk.fresh {
                 self.saves.save_finished(chunk);
             }
@@ -642,9 +639,7 @@ impl Streaming {
             .chunks
             .keys()
             .copied()
-            .filter(|&(x, z)| {
-                !self.remote && !self.in_range(x, z, 3) && !self.near_finished(x, z, 1)
-            })
+            .filter(|&(x, z)| !self.remote && self.ranges().unloaded(x, z, self.decorates))
             .collect();
         for key in &far {
             self.decorated.remove(key);
@@ -756,8 +751,6 @@ impl Streaming {
             });
         }
         if self.decorates && self.decorating < workers * 2 {
-            // The generation margins below.
-            let (margin, reach) = (3, 2);
             let wants = |s: &Self, x: i32, z: i32| {
                 !s.decorated.contains(&(x, z))
                     && !world.chunks.contains_key(&(x, z))
@@ -774,8 +767,7 @@ impl Streaming {
                             !world.chunks.contains_key(&n)
                                 && (s.protos.contains_key(&n)
                                     || s.generating.contains(&n)
-                                    || s.in_range(n.0, n.1, margin)
-                                    || s.near_finished(n.0, n.1, reach))
+                                    || s.ranges().requested(n.0, n.1, true))
                         })
                     })
             };
@@ -1099,6 +1091,28 @@ impl Ranges<'_> {
             .fold(d(self.center), i64::min)
     }
 
+    /// How far past the view distance chunks are generated, and how far around
+    /// a finished chunk (`near_finished`): decorated chunks need their
+    /// neighbours generated too.
+    fn margins(decorates: bool) -> (i32, i32) {
+        if decorates { (3, 2) } else { (1, 1) }
+    }
+    /// Chunks generation asks for: loaded from the save, or generated as protos.
+    fn requested(&self, x: i32, z: i32, decorates: bool) -> bool {
+        let (margin, reach) = Self::margins(decorates);
+        self.in_range(x, z, margin) || self.near_finished(x, z, reach)
+    }
+    /// Finished columns kept when they arrive: within two of the view distance
+    /// or next to a finished chunk, and every column generation asked for (a
+    /// saved one loads finished; dropping it had it asked for and loaded again
+    /// every frame).
+    fn chunk_kept(&self, x: i32, z: i32, decorates: bool) -> bool {
+        self.in_range(x, z, 2) || self.near_finished(x, z, 1) || self.requested(x, z, decorates)
+    }
+    /// Columns unloaded: past every column kept.
+    fn unloaded(&self, x: i32, z: i32, decorates: bool) -> bool {
+        !self.in_range(x, z, 3) && !self.near_finished(x, z, Self::margins(decorates).1)
+    }
     /// Whether a chunk finished here (`in_range(_, _, 1)`) lies within `reach`
     /// chunks of (x, z) on both axes: its decoration needs its 3x3 neighbours
     /// decorated, which need their own 3x3 neighbours generated. The ranges are
@@ -1452,7 +1466,7 @@ mod tests {
     fn spawn_neighbourhood_completes_at_every_distance() {
         let forced = HashSet::new();
         for decorates in [true, false] {
-            let (margin, reach) = if decorates { (3, 2) } else { (1, 1) };
+            let (margin, reach) = Ranges::margins(decorates);
             for radius in 2..=32 {
                 let r = Ranges {
                     center: (5, -7),
@@ -1464,15 +1478,15 @@ mod tests {
                     (-n..=n).flat_map(move |dz| (-n..=n).map(move |dx| (x + dx, z + dz)))
                 };
                 let generated = |x, z| {
-                    (r.in_range(x, z, margin) || r.near_finished(x, z, reach))
+                    r.requested(x, z, decorates)
                         && (x - r.center.0).abs() <= radius + margin.max(reach + 1)
                         && (z - r.center.1).abs() <= radius + margin.max(reach + 1)
                 };
                 let proto_kept = |x, z| r.in_range(x, z, 4) || r.near_finished(x, z, 2);
                 let decorated =
                     |x, z| !decorates || r.in_range(x, z, 2) || r.near_finished(x, z, 1);
-                let chunk_kept = |x, z| r.in_range(x, z, 2) || r.near_finished(x, z, 1);
-                let unloaded = |x, z| !r.in_range(x, z, 3) && !r.near_finished(x, z, 1);
+                let chunk_kept = |x, z| r.chunk_kept(x, z, decorates);
+                let unloaded = |x, z| r.unloaded(x, z, decorates);
                 let finishes = |x: i32, z: i32| {
                     r.in_range(x, z, 1)
                         && chunk_kept(x, z)
@@ -1493,6 +1507,42 @@ mod tests {
                             finishes(nx, nz),
                             "radius {radius} (decorates: {decorates}): ({nx}, {nz}) never finishes"
                         );
+                    }
+                }
+            }
+        }
+    }
+
+    /// A column generation asks for is kept when it arrives finished (loaded
+    /// from the save) and is not unloaded right after: either way it would be
+    /// asked for and loaded again on the next frame, forever (8 such columns
+    /// after a teleport at render distance 16 held 8 of the in-flight slots).
+    #[test]
+    fn requested_columns_stay_loaded() {
+        let forced = HashSet::new();
+        for decorates in [true, false] {
+            for radius in 2..=32 {
+                let r = Ranges {
+                    center: (5, -7),
+                    radius,
+                    extra: &[((radius * 2 + 9, 3), 4)],
+                    forced: &forced,
+                };
+                let span = radius * 3 + 20;
+                for x in -span..=span {
+                    for z in -span..=span {
+                        if r.requested(x, z, decorates) {
+                            assert!(
+                                r.chunk_kept(x, z, decorates),
+                                "radius {radius} (decorates: {decorates}): ({x}, {z}) is asked for but dropped"
+                            );
+                        }
+                        if r.chunk_kept(x, z, decorates) {
+                            assert!(
+                                !r.unloaded(x, z, decorates),
+                                "radius {radius} (decorates: {decorates}): ({x}, {z}) is kept then unloaded"
+                            );
+                        }
                     }
                 }
             }
