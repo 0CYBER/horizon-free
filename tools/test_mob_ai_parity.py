@@ -250,6 +250,13 @@ def scenarios():
     add('bee_rain', 300, [FLOWERS, 'mob minecraft:bee 0.5 -58 0.5 0 157 persistent'], 'rain')
     add('bee_pool', 200, ['fill -3 -63 -3 3 -61 3 minecraft:water', 'mob minecraft:bee 0.5 -62 0.5 0 158 persistent'])
     add('bee_sting', 400, ['player 4.5 -60 0.5', 'mob minecraft:bee 0.5 -58 0.5 0 159 persistent', 'hurt 20 0'])
+    # Bees and their hive: home at night and in the rain (BeeLocateHiveGoal, BeeGoToHiveGoal,
+    # BeeEnterHiveGoal), out again once the morning comes, and nectar turned into honey.
+    HIVE = 'block 4 -60 0 minecraft:beehive[facing=west,honey_level=0]'
+    add('bee_hive_night', 300, [HIVE, 'mob minecraft:bee 0.5 -58 0.5 0 161 persistent'], 'time=13000')
+    add('bee_hive_rain', 300, [HIVE, 'mob minecraft:bee 0.5 -58 0.5 0 162 persistent'], 'rain')
+    add('bee_hive_morning', 1000, [HIVE, 'mob minecraft:bee 0.5 -58 0.5 0 163 persistent'], 'time=22900 daycycle')
+    add('bee_hive_honey', 2600, [HIVE, 'mob minecraft:bee 0.5 -58 0.5 0 164 persistent nectar'])
     return s
 
 
@@ -303,6 +310,9 @@ def parse(path):
             continue
         if parts[1] == 'heart':
             cur.setdefault('hearts', {}).setdefault(t, []).append(line.split(' ', 2)[2])
+            continue
+        if parts[1] == 'hive':
+            cur.setdefault('hives', {}).setdefault(t, []).append(parts[2])
             continue
         if parts[1] == 'chest':
             cur.setdefault('chests', {}).setdefault(t, []).append(parts[2])
@@ -400,8 +410,8 @@ def compare(vanilla, rust, fields=None):
                 report.append(f'{name}: hearts differ at tick {t}: vanilla {v.get("hearts", {}).get(t)} | horizon {r.get("hearts", {}).get(t)}')
                 clean = False
                 break
-        # Sounds, watched block changes and chest contents: first differing tick.
-        for kind in ('sounds', 'blocks', 'chests'):
+        # Sounds, watched block changes, chest contents and hives: first differing tick.
+        for kind in ('sounds', 'blocks', 'chests', 'hives'):
             va, ra = v.get(kind, {}), r.get(kind, {})
             for t in sorted(set(va) | set(ra)):
                 if va.get(t, []) != ra.get(t, []):

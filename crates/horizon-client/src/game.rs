@@ -8,6 +8,7 @@ mod armor_stands;
 mod backdrop;
 mod banners;
 mod beacon;
+mod beehives;
 mod block_entity_anims;
 mod blockctl;
 mod boats;
@@ -2150,6 +2151,10 @@ impl Game<'_> {
             self.pending.record_saved(pos, &tag);
         }
         self.creaking_heart_broken(pos);
+        let hive = match self.world.block_entities.get(&key) {
+            Some(BlockEntity::Beehive(h)) => self.hive_state(pos).map(|s| ((**h).clone(), s)),
+            _ => None,
+        };
         // playerWillDestroy and Level.removeBlock through the vanilla behaviour
         // library: the block entity's side effects (containers spill), neighbour
         // and shape updates, and the destroy event (particles, sound).
@@ -2198,6 +2203,12 @@ impl Game<'_> {
                     if &*d.item != "minecraft:air" {
                         self.pop_resource(pos, d);
                     }
+                }
+                // BeehiveBlock.playerDestroy: silk touch keeps the bees in.
+                if let Some((hive, (honey, facing))) = hive
+                    && !silk
+                {
+                    self.hive_broken_by_player(pos, hive, honey, facing);
                 }
                 // SpawnerBlock.spawnAfterBreak pops its experience whatever the tool.
                 let xp = if silk && &*facts.name != "minecraft:spawner" {
@@ -3793,7 +3804,8 @@ impl Game<'_> {
                 | BlockEntity::Sculk(_)
                 | BlockEntity::Banner(_)
                 | BlockEntity::CreakingHeart(_)
-                | BlockEntity::Spawner(_),
+                | BlockEntity::Spawner(_)
+                | BlockEntity::Beehive(_),
             ) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
@@ -4042,7 +4054,8 @@ impl Game<'_> {
                     | BlockEntity::Sculk(_)
                     | BlockEntity::Banner(_)
                     | BlockEntity::CreakingHeart(_)
-                    | BlockEntity::Spawner(_),
+                    | BlockEntity::Spawner(_)
+                    | BlockEntity::Beehive(_),
                 ) => {}
                 None if self.mount_active() => self.draw_mount_background(batch, ox, oy),
                 None => {
@@ -5549,6 +5562,7 @@ impl Game<'_> {
         self.tick_beacons();
         self.tick_creaking_hearts()?;
         self.tick_spawners()?;
+        self.tick_beehives();
         let mut lit_changes = Vec::new();
         for (pos, entity) in self.world.block_entities.iter_mut() {
             if let BlockEntity::Furnace(f) = entity

@@ -5,6 +5,7 @@
 //! usage: mob_ai_probe RESOURCES SCENARIOS OUTPUT
 use horizon_client::{
     assets::Assets,
+    beehive::HiveHost,
     biome::Biomes,
     blocks::BlockFacts,
     chunk::{Chunk, HEIGHT, MIN_Y},
@@ -27,7 +28,13 @@ use horizon_core::{
     random::LegacyRandom,
 };
 use horizon_world::{chunk::BlockState, registry::BlockRegistry, registry::BlockStateId};
-use std::{collections::BTreeMap, fmt::Write as _, fs, path::Path, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt::Write as _,
+    fs,
+    path::Path,
+    sync::Arc,
+};
 
 struct MobSpec {
     kind: String,
@@ -54,6 +61,8 @@ struct Scenario {
     hearts: Vec<Vec<String>>,
     /// `ServerLevel.isSpawningMonsters`.
     spawning: bool,
+    /// The day time moves on with every tick.
+    daycycle: bool,
     /// The player hits a mob for 1 at the start of a tick: (tick, mob index).
     hurts: Vec<(i32, usize)>,
     /// The player feeds an animal at the start of a tick (Animal.mobInteract):
@@ -85,6 +94,7 @@ fn parse(text: &str) -> Vec<Scenario> {
                         "thunder" => s.thunder = true,
                         "levelseed" => {}
                         "spawning" => s.spawning = true,
+                        "daycycle" => s.daycycle = true,
                         _ => panic!("unknown scenario option {kv}"),
                     }
                 }
@@ -407,6 +417,65 @@ impl HeartHost for Host<'_> {
         self.spawning
     }
 }
+/// A scenario's beehives as `BeehiveBlockEntity.serverTick` sees the level:
+/// the bees let out are newcomers seeded as the oracle seeds them.
+struct ProbeHive<'a, 'w> {
+    w: &'a MobWorld<'w>,
+    random: &'a mut LegacyRandom,
+    types: &'a HashMap<String, Arc<MobType>>,
+    /// The index of the first newcomer of this tick.
+    first: usize,
+    added: &'a mut Vec<Mob>,
+    honey: &'a mut Vec<([i32; 3], i32)>,
+    events: &'a mut Vec<MobEvent>,
+}
+impl HiveHost for ProbeHive<'_, '_> {
+    fn random(&mut self) -> &mut LegacyRandom {
+        self.random
+    }
+    fn bees_stay_in_hive(&self, _at: [i32; 3]) -> bool {
+        horizon_client::mobs::bee::bees_stay_in_hive(self.w)
+    }
+    fn blocked(&self, at: [i32; 3]) -> bool {
+        !self.w.block_collision_boxes(at[0], at[1], at[2]).is_empty()
+    }
+    fn set_honey_level(&mut self, at: [i32; 3], level: i32) {
+        self.honey.push((at, level));
+    }
+    fn load(&mut self, tag: &horizon_world::nbt::Tag) -> Option<Mob> {
+        let index = self.first + self.added.len();
+        let mut m =
+            horizon_client::entity_nbt::mob_from_nbt(tag, self.types, 100_000 + index as u32)?;
+        if m.species() != Species::Bee {
+            return None;
+        }
+        m.random = LegacyRandom::new(spawn_seed(index));
+        horizon_client::mobs::bee::draw_cooldowns(&mut m);
+        Some(m)
+    }
+    fn add(&mut self, m: Mob) -> bool {
+        self.added.push(m);
+        true
+    }
+    fn sound(&mut self, name: &'static str, at: [f64; 3]) {
+        self.events.push(MobEvent::Sound(name, at, 1.0, 1.0));
+    }
+}
+/// The hive's honey level and front from its block state.
+fn hive_state(registry: &BlockRegistry, world: &World, at: [i32; 3]) -> (Option<i32>, [i32; 2]) {
+    let props = registry
+        .state(world.block(at[0], at[1], at[2]))
+        .map(|s| s.properties.clone())
+        .unwrap_or_default();
+    let honey = props.get("honey_level").and_then(|v| v.parse().ok());
+    let facing = horizon_client::beehive::facing_step(props.get("facing").map(String::as_str));
+    (honey, facing)
+}
+fn is_hive(b: &[String]) -> bool {
+    b[0] == "block"
+        && (b[4].starts_with("minecraft:beehive") || b[4].starts_with("minecraft:bee_nest"))
+}
+
 /// The heart's state, block entity and the level random, as the oracle
 /// prints them.
 fn print_heart(
@@ -702,6 +771,12 @@ fn main() -> horizon_client::Result<()> {
     let motion = horizon_client::motion::MotionResources::load(root, &assets)?;
     let data = MobData::load(root, &facts);
     let types = MobTypes::load(root)?;
+    // The types a bee leaving its hive is loaded with (EntityType.loadEntityRecursive).
+    let arc_types: HashMap<String, Arc<MobType>> = types
+        .types
+        .iter()
+        .map(|(k, v)| (k.clone(), Arc::new(v.clone())))
+        .collect();
     let biomes = Biomes::load(root)?;
     let items = Items::load(root, registry, &facts)?;
     let tables = LightTables::load(root, registry, &facts)?;
@@ -744,6 +819,11 @@ fn main() -> horizon_client::Result<()> {
             let n = |i: usize| b[i].parse::<i32>().unwrap();
             if b[0] == "block" || b[0] == "chest" {
                 world.set(n(1), n(2), n(3), state(registry, &b[4]))?;
+                if is_hive(b) {
+                    world
+                        .block_entities
+                        .insert((n(1), n(2), n(3)), BlockEntity::Beehive(Box::default()));
+                }
                 if b[0] == "chest" {
                     // chest X Y Z STATE SLOTS: item*count or - per slot.
                     let mut slots = vec![None; 27];
@@ -830,6 +910,7 @@ fn main() -> horizon_client::Result<()> {
                         &mut Vec::new(),
                     ),
                     "inlove" => m.extra.in_love = 600,
+                    "nectar" => horizon_client::mobs::bee::set_has_nectar(&mut m, true),
                     "tame" => m.extra.tame = true,
                     x if x.starts_with("age=") => m.extra.age = x[4..].parse().unwrap(),
                     x if x.starts_with("strength=") => m.extra.variant2 = x[9..].parse().unwrap(),
@@ -936,7 +1017,7 @@ fn main() -> horizon_client::Result<()> {
                     data: &data,
                     player: player.clone(),
                     others: $snapshot,
-                    daylight: (s.time.rem_euclid(24000)) < 12000,
+                    daylight: (world.day_time.rem_euclid(24000)) < 12000,
                     game_time: world.game_time,
                     day_time: world.day_time,
                     raining: s.rain,
@@ -956,6 +1037,9 @@ fn main() -> horizon_client::Result<()> {
         }
         for t in 1..=s.ticks {
             world.game_time += 1;
+            if s.daycycle {
+                world.day_time = s.time + i64::from(t);
+            }
             let mut heart_events_later: Vec<HeartEvent> = Vec::new();
             // Creaking.tick reads the heart's block entity.
             for (at, h) in &hearts {
@@ -1121,6 +1205,41 @@ fn main() -> horizon_client::Result<()> {
                         _ => {}
                     }
                 }
+                // BeeEnterHiveGoal.start: BeehiveBlockEntity.addOccupant.
+                let entering: Vec<[i32; 3]> = events[from.min(events.len())..]
+                    .iter()
+                    .filter_map(|e| match e {
+                        MobEvent::EnterHive { hive, .. } => Some(*hive),
+                        _ => None,
+                    })
+                    .collect();
+                for at in entering {
+                    let key = (at[0], at[1], at[2]);
+                    let Some(BlockEntity::Beehive(mut hive)) = world.block_entities.remove(&key)
+                    else {
+                        continue;
+                    };
+                    let tag = horizon_client::entity_nbt::mob_to_nbt(&mobs[i], [0; 4], None);
+                    let flower = horizon_client::mobs::bee::get(&mobs[i]).and_then(|b| b.flower);
+                    let mut honey = Vec::new();
+                    let stored = {
+                        let w = mob_world!(&snapshot);
+                        let mut host = ProbeHive {
+                            w: &w,
+                            random: &mut scratch,
+                            types: &arc_types,
+                            first: 0,
+                            added: &mut Vec::new(),
+                            honey: &mut honey,
+                            events: &mut events,
+                        };
+                        hive.add_occupant(at, tag, flower, &mut host)
+                    };
+                    world.block_entities.insert(key, BlockEntity::Beehive(hive));
+                    if stored {
+                        mobs[i].removed = true;
+                    }
+                }
                 // ServerLevel ticks entities one after another: the ones
                 // after this mob see it as it is now.
                 if let Some(e) = snapshot.iter_mut().find(|e| e.id == mobs[i].id) {
@@ -1153,6 +1272,43 @@ fn main() -> horizon_client::Result<()> {
                 added.append(&mut host.added);
             }
             drop(w);
+            // Then the hives (BeehiveBlockEntity.serverTick).
+            let mut hive_keys: Vec<(i32, i32, i32)> = world
+                .block_entities
+                .iter()
+                .filter(|(_, e)| matches!(e, BlockEntity::Beehive(_)))
+                .map(|(k, _)| *k)
+                .collect();
+            hive_keys.sort_unstable();
+            let mut honey = Vec::new();
+            for key in hive_keys {
+                let at = [key.0, key.1, key.2];
+                let (level, facing) = hive_state(registry, &world, at);
+                let Some(BlockEntity::Beehive(mut hive)) = world.block_entities.remove(&key) else {
+                    continue;
+                };
+                {
+                    let w = mob_world!(&snapshot);
+                    let mut host = ProbeHive {
+                        w: &w,
+                        random: &mut scratch,
+                        types: &arc_types,
+                        first: mobs.len() + born.len(),
+                        added: &mut added,
+                        honey: &mut honey,
+                        events: &mut events,
+                    };
+                    hive.server_tick(at, facing, level, &mut host);
+                }
+                world.block_entities.insert(key, BlockEntity::Beehive(hive));
+            }
+            for (at, level) in honey {
+                if let Some(mut st) = registry.state(world.block(at[0], at[1], at[2])).cloned() {
+                    st.properties
+                        .insert("honey_level".to_owned(), level.to_string());
+                    world.set(at[0], at[1], at[2], registry.resolve(&st)?)?;
+                }
+            }
             mobs.append(&mut born);
             mobs.append(&mut added);
             for e in &heart_events {
@@ -1233,6 +1389,35 @@ fn main() -> horizon_client::Result<()> {
                     } else {
                         slots.join(",")
                     }
+                );
+            }
+            for b in s.blocks.iter().filter(|b| is_hive(b)) {
+                let n = |i: usize| b[i].parse::<i32>().unwrap();
+                let Some(BlockEntity::Beehive(hive)) =
+                    world.block_entities.get(&(n(1), n(2), n(3)))
+                else {
+                    continue;
+                };
+                let (level, _) = hive_state(registry, &world, [n(1), n(2), n(3)]);
+                let bees: Vec<String> = hive
+                    .bees
+                    .iter()
+                    .map(|b| format!("{}/{}", b.ticks_in_hive, b.min_ticks_in_hive))
+                    .collect();
+                let _ = writeln!(
+                    out,
+                    "{t} hive {},{},{} honey {} bees {} flower {}",
+                    b[1],
+                    b[2],
+                    b[3],
+                    level.unwrap_or(-1),
+                    if bees.is_empty() {
+                        "-".into()
+                    } else {
+                        bees.join(",")
+                    },
+                    hive.flower
+                        .map_or("-".into(), |f| format!("{},{},{}", f[0], f[1], f[2]))
                 );
             }
             for line in traces {

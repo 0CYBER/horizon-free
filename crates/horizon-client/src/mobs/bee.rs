@@ -1,9 +1,11 @@
 //! Bees (`Bee`): flying about (`FlyingMoveControl`, `BeeWanderGoal`), finding
 //! flowers and hovering over them until they carry nectar
 //! (`BeePollinateGoal`), `NeutralMob` anger at whoever hurts them, stinging
-//! once and dying of it, and the hive and flower bookkeeping. Beehive block
-//! entities are not simulated yet: no hive is ever valid, so bees never find,
-//! enter or leave one, nor grow crops on the way home.
+//! once and dying of it, and the hive and flower bookkeeping: finding a hive
+//! with room nearby (`BeeLocateHiveGoal`), flying home at night, in the rain
+//! or with nectar (`BeeGoToHiveGoal`) and going in (`BeeEnterHiveGoal`, done
+//! by the host: [`MobEvent::EnterHive`]); the hive lets them out
+//! (`crate::beehive`).
 use super::{
     Damage, DamageKind, Mob, MobEvent, MobWorld, Species, Who,
     control::{LookKind, MoveKind},
@@ -47,6 +49,8 @@ pub struct Bee {
     /// The cooldowns `ValidateHiveGoal` and `ValidateFlowerGoal` draw when built.
     pub validate_hive_cooldown: i32,
     pub validate_flower_cooldown: i32,
+    /// `BeeGoToHiveGoal.blacklistedTargets`: the last three hives it gave up on.
+    pub hive_blacklist: Vec<[i32; 3]>,
 }
 impl Default for Bee {
     fn default() -> Self {
@@ -68,6 +72,7 @@ impl Default for Bee {
             pollinating: false,
             validate_hive_cooldown: 0,
             validate_flower_cooldown: 0,
+            hive_blacklist: Vec::new(),
         }
     }
 }
@@ -361,12 +366,33 @@ fn closer_than(m: &Mob, p: [i32; 3], dist: i32) -> bool {
 fn too_far(m: &Mob, p: [i32; 3]) -> bool {
     !closer_than(m, p, 48)
 }
-/// `Bee.getBeehiveBlockEntity() != null`: hives are not simulated yet.
-fn hive_valid(_m: &Mob, _w: &MobWorld) -> bool {
-    false
+/// `Bee.getBeehiveBlockEntity`: the hive's block entity, unless too far.
+fn hive_entity<'a>(m: &Mob, w: &'a MobWorld) -> Option<&'a crate::beehive::Beehive> {
+    let h = get(m)?.hive?;
+    if too_far(m, h) {
+        return None;
+    }
+    match w.world.block_entities.get(&(h[0], h[1], h[2])) {
+        Some(crate::containers::BlockEntity::Beehive(hive)) => Some(hive),
+        _ => None,
+    }
+}
+fn hive_valid(m: &Mob, w: &MobWorld) -> bool {
+    hive_entity(m, w).is_some()
+}
+/// `BeehiveBlockEntity.isFireNearby`: fire (not soul fire) next to the hive.
+fn hive_near_fire(m: &Mob, w: &MobWorld) -> bool {
+    let Some(h) = get(m).and_then(|b| b.hive).filter(|_| hive_valid(m, w)) else {
+        return false;
+    };
+    (-1..=1).any(|dx| {
+        (-1..=1).any(|dy| {
+            (-1..=1).any(|dz| w.block_name(h[0] + dx, h[1] + dy, h[2] + dz) == "minecraft:fire")
+        })
+    })
 }
 /// `EnvironmentAttributes.BEES_STAY_IN_HIVE`: the overworld's night, or rain.
-fn bees_stay_in_hive(w: &MobWorld) -> bool {
+pub fn bees_stay_in_hive(w: &MobWorld) -> bool {
     let night = !w.nether && !w.end && (12542..23460).contains(&w.day_time.rem_euclid(24000));
     night || w.raining
 }
@@ -379,8 +405,26 @@ fn wants_to_enter_hive(m: &Mob, w: &MobWorld) -> bool {
     if b.stay_out_of_hive > 0 || b.pollinating || has_stung(m) || m.ai.target.is_some() {
         return false;
     }
-    // ... && !isHiveNearFire(): no hive, no fire.
-    has_nectar(m) || tired_of_looking_for_nectar(m) || bees_stay_in_hive(w)
+    (has_nectar(m) || tired_of_looking_for_nectar(m) || bees_stay_in_hive(w))
+        && !hive_near_fire(m, w)
+}
+/// `Bee.setHivePos`.
+pub fn set_hive(m: &mut Mob, hive: Option<[i32; 3]>) {
+    st(m).hive = hive;
+}
+/// `Bee.setSavedFlowerPos`.
+pub fn set_flower(m: &mut Mob, flower: Option<[i32; 3]>) {
+    st(m).flower = flower;
+}
+/// `Bee.dropOffNectar`.
+pub fn drop_off_nectar(m: &mut Mob) {
+    set_has_nectar(m, false);
+    st(m).crops_grown = 0;
+}
+/// `Bee.setStayOutOfHiveCountdown`, which in 26.3 only resets the time
+/// without nectar.
+pub fn set_stay_out_of_hive_countdown(m: &mut Mob) {
+    st(m).ticks_without_nectar = 0;
 }
 fn drop_hive(m: &mut Mob) {
     let b = st(m);
@@ -527,7 +571,7 @@ impl Goal for BecomeAngryTarget {
     }
 }
 
-/// `BeeEnterHiveGoal`: into the hive beside it (none is ever valid yet).
+/// `BeeEnterHiveGoal`: into the hive beside it, or forget it when full.
 #[derive(Clone, Debug)]
 struct EnterHive;
 impl Goal for EnterHive {
@@ -544,11 +588,23 @@ impl Goal for EnterHive {
             let (x, y, z) = (d(0, m.position.x), d(1, m.position.y), d(2, m.position.z));
             x * x + y * y + z * z < 4.0
         });
-        let enter = close && wants_to_enter_hive(m, cx.w) && hive_valid(m, cx.w);
+        let mut enter = false;
+        if close && wants_to_enter_hive(m, cx.w) {
+            match hive_entity(m, cx.w).map(|h| h.full()) {
+                Some(false) => enter = true,
+                Some(true) => st(m).hive = None,
+                None => {}
+            }
+        }
         enter && calm(m, cx.w)
     }
     fn can_continue(&mut self, _m: &mut Mob, _cx: &mut Cx) -> bool {
         false
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        if let Some(hive) = get(m).and_then(|b| b.hive).filter(|_| hive_valid(m, cx.w)) {
+            cx.events.push(MobEvent::EnterHive { mob: m.id, hive });
+        }
     }
 }
 
@@ -771,7 +827,8 @@ impl Goal for Pollinate {
     }
 }
 
-/// `BeeLocateHiveGoal`: the nearest bee home with room (none yet).
+/// `BeeLocateHiveGoal`: the nearest bee home with room within 20 blocks,
+/// skipping the ones `BeeGoToHiveGoal` gave up on (unless that is all).
 #[derive(Clone, Debug)]
 struct LocateHive;
 impl Goal for LocateHive {
@@ -791,17 +848,49 @@ impl Goal for LocateHive {
     fn can_continue(&mut self, _m: &mut Mob, _cx: &mut Cx) -> bool {
         false
     }
-    fn start(&mut self, m: &mut Mob, _cx: &mut Cx) {
-        // findNearbyHivesWithSpace finds no beehive block entity.
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         st(m).hive_cooldown = 200;
+        let hives = hives_with_space(m, cx.w);
+        let b = st(m);
+        let pick = hives
+            .iter()
+            .find(|h| !b.hive_blacklist.contains(h))
+            .copied();
+        if pick.is_none() && !hives.is_empty() {
+            b.hive_blacklist.clear();
+        }
+        b.hive = pick.or_else(|| hives.first().copied()).or(b.hive);
     }
+}
+
+/// `findNearbyHivesWithSpace`: the bee homes (`PoiTypeTags.BEE_HOME`)
+/// within 20 blocks whose hive has room, nearest first.
+fn hives_with_space(m: &Mob, w: &MobWorld) -> Vec<[i32; 3]> {
+    let here = block_pos(m);
+    let dist = |p: &[i32; 3]| {
+        let d = |i: usize| i64::from(p[i] - here[i]);
+        d(0) * d(0) + d(1) * d(1) + d(2) * d(2)
+    };
+    let mut hives: Vec<[i32; 3]> = w
+        .world
+        .block_entities
+        .iter()
+        .filter_map(|(&(x, y, z), e)| match e {
+            crate::containers::BlockEntity::Beehive(h) if !h.full() => Some([x, y, z]),
+            _ => None,
+        })
+        .filter(|p| {
+            dist(p) <= 20 * 20 && w.has_tag("minecraft:beehives", w.block_name(p[0], p[1], p[2]))
+        })
+        .collect();
+    hives.sort_by_key(|p| (dist(p), *p));
+    hives
 }
 
 /// `BeeGoToHiveGoal`: home when it wants to go in.
 #[derive(Clone, Debug, Default)]
 struct GoToHive {
     travelling: i32,
-    blacklist: Vec<[i32; 3]>,
     last_path: Option<super::path::Path>,
     stuck: i32,
 }
@@ -815,10 +904,11 @@ impl GoToHive {
                 .is_some_and(|path| path.target == p && path.reached && path.is_done())
     }
     fn drop_and_blacklist(&mut self, m: &mut Mob) {
-        if let Some(h) = get(m).and_then(|b| b.hive) {
-            self.blacklist.push(h);
-            while self.blacklist.len() > 3 {
-                self.blacklist.remove(0);
+        let b = st(m);
+        if let Some(h) = b.hive {
+            b.hive_blacklist.push(h);
+            while b.hive_blacklist.len() > 3 {
+                b.hive_blacklist.remove(0);
             }
         }
         drop_hive(m);
@@ -1037,8 +1127,27 @@ impl Goal for Wander {
         m.ai.nav.is_in_progress()
     }
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
-        // isHiveValid() is false: wander the way it looks.
-        let dir = m.view_vector();
+        // Back towards a valid hive farther than 24 blocks, else ahead.
+        let far_hive = get(m)
+            .and_then(|b| b.hive)
+            .filter(|&h| hive_valid(m, cx.w) && !closer_than(m, h, 24));
+        let dir = match far_hive {
+            Some(h) => {
+                let v = [
+                    f64::from(h[0]) + 0.5 - m.position.x,
+                    f64::from(h[1]) + 0.5 - m.position.y,
+                    f64::from(h[2]) + 0.5 - m.position.z,
+                ];
+                // Vec3.normalize.
+                let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                if len < 1.0E-5 {
+                    [0.0; 3]
+                } else {
+                    v.map(|c| c / len)
+                }
+            }
+            None => m.view_vector(),
+        };
         let max_rad = f64::from(std::f32::consts::FRAC_PI_2);
         let at = m
             .hover_random_pos(cx.w, 8, 7, dir[0], dir[2], max_rad, 3, 1)

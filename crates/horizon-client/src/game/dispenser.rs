@@ -1552,10 +1552,11 @@ impl Game<'_> {
             && let Some(level) = honey
             && level >= 5
         {
-            // releaseBeesAndResetHoneyLevel (the bees themselves are not modelled).
+            // releaseBeesAndResetHoneyLevel.
             if let Some(reset) = self.with_props(state, &[("honey_level", "0")]) {
                 self.level_set([target.0, target.1, target.2], reset)?;
             }
+            self.dispenser_empty_hive(target, state);
             let bottle = ItemStack::new("minecraft:honey_bottle", 1);
             self.post_block_game_event("minecraft:fluid_pickup", [pos.0, pos.1, pos.2], None, None);
             return Ok((
@@ -1624,6 +1625,16 @@ impl Game<'_> {
         }
         Ok((Some(stack), FAIL))
     }
+    /// The bees of a hive a dispenser harvested come out (`BEE_RELEASED`:
+    /// not at night nor in the rain), through the front of its old state.
+    fn dispenser_empty_hive(&mut self, target: Pos, old: BlockStateId) {
+        let facing = self.prop(old, "facing");
+        self.empty_hive(
+            [target.0, target.1, target.2],
+            horizon_client::beehive::facing_step(facing.as_deref()),
+            horizon_client::beehive::Release::BeeReleased,
+        );
+    }
     fn shear_beehive(&mut self, target: Pos) -> Result<bool> {
         let state = self.block_at(target);
         let name = self.dispenser_block_name(target);
@@ -1652,6 +1663,7 @@ impl Game<'_> {
         if let Some(reset) = self.with_props(state, &[("honey_level", "0")]) {
             self.level_set(p, reset)?;
         }
+        self.dispenser_empty_hive(target, state);
         self.post_block_game_event("minecraft:shear", p, None, None);
         Ok(true)
     }
