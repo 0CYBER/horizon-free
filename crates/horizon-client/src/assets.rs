@@ -9,7 +9,7 @@ use horizon_world::{
 use serde_json::Value;
 use std::{
     collections::BTreeSet,
-    fs::File,
+    fs::{self, File},
     io::{self, BufReader},
     path::Path,
     sync::Arc,
@@ -55,6 +55,7 @@ pub struct Assets {
     pub properties: Properties,
     pub material_states: [BlockStateId; 6],
     pub sprite_size: u32,
+    pub sprite_minimum_size: u32,
     pub pixels: Vec<u8>,
     pub texture_layers: u32,
     pub model_catalog: crate::models::StateModels,
@@ -97,8 +98,7 @@ impl Assets {
         if manifest["data_version"].as_i64() != Some(i64::from(DATA_VERSION)) {
             return Err(invalid("resources do not match Horizon's pinned data version").into());
         }
-        let facts: Value =
-            serde_json::from_reader(BufReader::new(File::open(root.join("facts.json"))?))?;
+        let facts: Value = serde_json::from_slice(&fs::read(root.join("facts.json"))?)?;
         let states = facts["states"]
             .as_array()
             .ok_or_else(|| invalid("missing registry state facts"))?;
@@ -240,6 +240,7 @@ impl Assets {
             properties,
             material_states,
             sprite_size: sprites.size,
+            sprite_minimum_size: sprites.minimum_size,
             texture_layers: u32::try_from(sprites.layers.len())?,
             pixels: sprites.pixels,
             model_catalog: models.catalog,

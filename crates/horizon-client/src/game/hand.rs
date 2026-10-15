@@ -14,6 +14,21 @@ use horizon_client::{
 /// The off hand's place in `visible_hands` (the main hand uses its hotbar slot).
 const OFFHAND: usize = usize::MAX;
 
+/// `AttackRange.isInRange`: float bounds, then inclusive double comparison.
+fn attack_range_contains(range: &serde_json::Value, distance: f64, creative: bool) -> bool {
+    let value = |key: &str, default: f32| range[key].as_f64().map_or(default, |v| v as f32);
+    let (min, max) = if creative {
+        (
+            value("min_creative_reach", 0.0),
+            value("max_creative_reach", 5.0),
+        )
+    } else {
+        (value("min_reach", 0.0), value("max_reach", 3.0))
+    };
+    let margin = value("hitbox_margin", 0.3);
+    distance >= f64::from(min - margin) && distance <= f64::from(max + margin)
+}
+
 impl Game<'_> {
     /// `LivingEntity.swing` with `getModifiedSwingDuration`.
     pub(super) fn swing_hand(&mut self, hand: Hand, animation: SwingAnimation) {
@@ -219,16 +234,35 @@ impl Game<'_> {
         let living = nearest(&[
             self.mob_hit().map(|h| h.1),
             self.armor_stand_hit().map(|h| h.1),
-            self.dragon_hit().map(|h| h.1),
         ])?;
         let other = nearest(&[
             self.painting_hit().map(|h| h.1),
             self.frame_hit().map(|h| h.1),
             self.boat_hit().map(|h| h.1),
             self.cart_hit().map(|h| h.1),
+            self.dragon_hit().map(|h| h.1),
         ]);
+        if !self.before_block(living) || other.is_some_and(|o| o <= living) {
+            return None;
+        }
+        let active = self
+            .using
+            .and_then(|(slot, _)| self.inventory.get(slot).and_then(Option::as_ref))
+            .or_else(|| self.held());
+        if let Some(stack) = active {
+            let components = self
+                .res
+                .item_renderer
+                .models
+                .components(&horizon_client::item_render::stack_view(stack));
+            if let Some(range) = components.get("minecraft:attack_range")
+                && !attack_range_contains(range, living, self.creative)
+            {
+                return None;
+            }
+        }
         // Only alive mobs are hit, so a picked living entity is alive.
-        (self.before_block(living) && other.is_none_or(|o| living <= o)).then_some(true)
+        Some(true)
     }
     /// `Attributes.ATTACK_SPEED` with the main-hand item's modifier.
     pub(super) fn main_hand_attack_speed(&self) -> f64 {
@@ -391,4 +425,32 @@ impl HandWorld for GameHands<'_, '_> {
         self.game.heights.item_used(hand);
     }
     fn release_using(&mut self) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attack_range_uses_inclusive_float_bounds() {
+        let range = serde_json::json!({
+            "min_reach": 2.0, "max_reach": 4.5,
+            "min_creative_reach": 2.0, "max_creative_reach": 6.5,
+            "hitbox_margin": 0.125,
+        });
+        for (creative, min, max) in [(false, 1.875, 4.625), (true, 1.875, 6.625)] {
+            for distance in [min, max] {
+                assert!(attack_range_contains(&range, distance, creative));
+            }
+            for distance in [min - 0.0001, max + 0.0001] {
+                assert!(!attack_range_contains(&range, distance, creative));
+            }
+        }
+        let defaults = serde_json::json!({});
+        for (creative, reach) in [(false, 3.0f32), (true, 5.0f32)] {
+            let max = f64::from(reach + 0.3f32);
+            assert!(attack_range_contains(&defaults, max, creative));
+            assert!(!attack_range_contains(&defaults, max + 1e-8, creative));
+        }
+    }
 }

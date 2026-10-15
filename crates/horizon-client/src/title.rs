@@ -245,6 +245,26 @@ impl Title {
         self.mode = Mode::Select { worlds, selected };
         *self.recent.borrow_mut() = None;
     }
+    /// Deletes the world `Mode::Delete` asks about and goes back to the
+    /// refreshed list; a failure (the world is open elsewhere, say) shows the
+    /// error instead and leaves the world. Returns the deleted world's row in
+    /// the list before it went, for a layout that moves the selection there.
+    pub(crate) fn confirm_delete(&mut self) -> Option<usize> {
+        let Mode::Delete { world } = &self.mode else {
+            return None;
+        };
+        let folder = world.folder.clone();
+        let row = list_worlds(&self.saves)
+            .iter()
+            .position(|w| w.folder == folder);
+        if let Err(error) = world_management::delete(&self.saves, &folder) {
+            self.failed(error);
+            return None;
+        }
+        self.return_to_list(None);
+        self.icons.borrow_mut().clear();
+        row
+    }
     fn cancel_create(&mut self) {
         if self.create_return_to_main {
             self.mode = Mode::Main;
@@ -652,24 +672,21 @@ impl Title {
         let (w, h) = (batch.width.ceil(), batch.height.ceil());
         match &self.mode {
             Mode::Main => {
-                // Logo: minecraft.png is a 1024x256 sheet drawn at 256x64.
-                batch.sprite_scaled(
+                // LogoRenderer: the logo's top 44 of 64 rows, then the edition
+                // banner's top 14 of 16 rows overlapping its bottom by 7.
+                batch.sprite_region(
                     atlas,
                     "gui/title/minecraft",
-                    (w / 2.0).floor() - 128.0,
-                    30.0,
+                    [(w / 2.0).floor() - 128.0, 30.0, 256.0, 44.0],
                     256.0,
                     64.0,
-                    u32::MAX,
                 );
-                batch.sprite_scaled(
+                batch.sprite_region(
                     atlas,
-                    "gui/title/edition",
-                    (w / 2.0).floor() - 64.0,
-                    30.0 + 64.0 - 7.0,
+                    crate::title_edition::SPRITE,
+                    [(w / 2.0).floor() - 64.0, 30.0 + 44.0 - 7.0, 128.0, 14.0],
                     128.0,
-                    14.0,
-                    u32::MAX,
+                    16.0,
                 );
                 let version = "Horizon 26.3 (Rust)";
                 batch.text(atlas, version, 2.0, h - 10.0, u32::MAX, true);
@@ -1176,16 +1193,12 @@ impl Title {
                     && (x - (w / 2.0).floor()).abs() < 100.0;
                 Action::None
             }
-            (Mode::Delete { world }, Some(id @ (37 | 38))) => {
-                let folder = world.folder.clone();
-                if id == 37
-                    && let Err(error) = world_management::delete(&self.saves, &folder)
-                {
-                    self.failed(error);
-                    return Action::None;
-                }
-                self.return_to_list(Some(&folder));
-                self.icons.borrow_mut().clear();
+            (Mode::Delete { .. }, Some(37)) => {
+                self.confirm_delete();
+                Action::None
+            }
+            (Mode::Delete { .. }, Some(38)) => {
+                self.escape();
                 Action::None
             }
             (Mode::Error { return_to, .. }, Some(39)) => {

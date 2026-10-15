@@ -38,8 +38,51 @@ pub(super) fn reset_icon(saves: &Path, folder: &str) -> crate::Result<()> {
     Ok(())
 }
 
+/// `LevelStorageAccess.deleteLevel`, shared by both menu styles. The world's
+/// session lock is taken first, so a world open in this or another instance is
+/// refused rather than pulled from under it; everything but the lock goes,
+/// then the lock is released and removed with the folder. A failed pass (a
+/// file briefly held by a virus scanner, say) is retried up to five times,
+/// half a second apart, as vanilla does. Only the named folder directly in
+/// `saves` is touched: symbolic links inside it are removed, never followed.
 pub(super) fn delete(saves: &Path, folder: &str) -> crate::Result<()> {
-    fs::remove_dir_all(world_path(saves, folder)?)?;
+    let world = world_path(saves, folder)?;
+    let lock = crate::save::SessionLock::acquire(&world)?;
+    let lock_path = world.join("session.lock");
+    log::info!("Deleting level {folder}");
+    for attempt in 1.. {
+        match remove_contents(&world, &lock_path) {
+            Ok(()) => break,
+            Err(e) if attempt >= 5 => return Err(e.into()),
+            Err(e) => {
+                log::warn!("Failed to delete {}: {e}", world.display());
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        }
+    }
+    drop(lock);
+    match fs::remove_file(&lock_path) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e.into()),
+        _ => {}
+    }
+    fs::remove_dir(&world)?;
+    Ok(())
+}
+
+fn remove_contents(world: &Path, lock: &Path) -> io::Result<()> {
+    for entry in fs::read_dir(world)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path == lock {
+            continue;
+        }
+        // `file_type` does not follow links, and `remove_dir_all` never does.
+        if entry.file_type()?.is_dir() {
+            fs::remove_dir_all(&path)?;
+        } else {
+            fs::remove_file(&path)?;
+        }
+    }
     Ok(())
 }
 

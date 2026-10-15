@@ -112,6 +112,7 @@ impl Game<'_> {
     fn reload_resources(&mut self, root: &Path) -> horizon_client::Result<()> {
         let assets = std::sync::Arc::new(self.res.assets.reload(root)?);
         let mut atlas = HudAtlas::build(root)?;
+        let panorama = horizon_client::gfx::panorama::Faces::load(root);
         atlas.font.uniform = self.settings.force_unicode;
         atlas.font.japanese = self.settings.japanese_glyphs;
         let item_renderer = horizon_client::item_render::ItemRenderer::load(root)?;
@@ -137,6 +138,7 @@ impl Game<'_> {
         self.res.assets = assets;
         self.res.context = context.clone();
         self.res.atlas = atlas;
+        self.res.panorama = panorama;
         self.res.item_renderer = std::sync::Arc::new(item_renderer);
         self.res.clouds = super::load_clouds(root);
         self.res.forcefield = super::load_forcefield(root);

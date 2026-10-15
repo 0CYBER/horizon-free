@@ -770,6 +770,7 @@ impl Game<'_> {
             .map(|(i, e)| (i, e.position))
             .collect();
         let mut taken: Vec<usize> = Vec::new();
+        let mut collectors: Vec<(usize, u32)> = Vec::new();
         let mut recruit: Vec<(i32, Vec3)> = Vec::new();
         let mut joins: Vec<(u32, i32, f32)> = Vec::new();
         let mut new_leaders: Vec<(i32, i32, u32)> = Vec::new();
@@ -868,6 +869,7 @@ impl Game<'_> {
                     if p.distance_squared(position) < 1.414 * 1.414 {
                         // pickUpItem: the banner becomes the wave's leader.
                         taken.push(*i);
+                        collectors.push((*i, m.id));
                         leaders.insert((id, s.wave));
                         new_leaders.push((id, s.wave, m.id));
                         s.banner_at = None;
@@ -877,6 +879,13 @@ impl Game<'_> {
                     }
                 }
             }
+        }
+        for (i, mob) in collectors {
+            let item = self.dropped[i].clone();
+            self.add_pickup(
+                super::pickups::Taken::Item(Box::new(item)),
+                super::pickups::Collector::Mob(mob),
+            );
         }
         taken.sort_unstable();
         for i in taken.into_iter().rev() {

@@ -24,6 +24,8 @@ const BACK: u64 = id("front.back", 0);
 const PLAY_WORLD: u64 = id("worlds.play", 0);
 const CREATE: u64 = id("worlds.create", 0);
 const WORLD: u64 = id("worlds.row", 0);
+const DELETE_WORLD: u64 = id("worlds.delete", 0);
+const CONFIRM_DELETE: u64 = id("delete.confirm", 0);
 const NAME: u64 = id("create.name", 0);
 const SEED: u64 = id("create.seed", 0);
 const MODE: u64 = id("create.mode", 0);
@@ -91,15 +93,21 @@ fn page(mode: &Mode) -> usize {
     }
 }
 const PAGES: [&str; 4] = ["Home", "Singleplayer", "Multiplayer", "Options"];
+/// World editing and backups still use the classic screens, and so do their
+/// errors; the rest of the singleplayer flow has Horizon pages.
+fn classic(mode: &Mode) -> bool {
+    match mode {
+        Mode::Edit { .. } | Mode::Backup { .. } => true,
+        Mode::Error { return_to, .. } => classic(return_to),
+        _ => false,
+    }
+}
 
 impl Title {
     /// Horizon's layout for every title mode. `backdrop` is how much of the
     /// live backdrop is visible (0 shows the plain cold background).
     pub fn draw_horizon(&self, ui: &mut Ui, backdrop: f32) {
-        if matches!(
-            self.mode,
-            Mode::Edit { .. } | Mode::Backup { .. } | Mode::Delete { .. } | Mode::Error { .. }
-        ) {
+        if classic(&self.mode) {
             self.draw(ui.atlas, ui.batch, ui.cursor);
             return;
         }
@@ -149,11 +157,15 @@ impl Title {
                     let caret = (self.started.elapsed().as_millis() / 500).is_multiple_of(2);
                     create_page(ui, x, w, name, seed, *creative, *focus, caret);
                 }
+                Mode::Delete { world } => delete_page(ui, x, w, world),
+                Mode::Error { message, .. } => error_page(ui, x, w, message),
                 Mode::Multiplayer(screen) => {
                     let caret = (self.started.elapsed().as_millis() / 500).is_multiple_of(2);
                     multiplayer_page(ui, x, w, screen, caret);
                 }
-                _ => unreachable!("World-management screens use the classic layout"),
+                Mode::Edit { .. } | Mode::Backup { .. } => {
+                    unreachable!("World editing uses the classic layout")
+                }
             }
         }
         ui.opacity = 1.0;
@@ -307,10 +319,7 @@ impl Title {
         if self.skip_opening() {
             return Action::None;
         }
-        if matches!(
-            self.mode,
-            Mode::Edit { .. } | Mode::Backup { .. } | Mode::Delete { .. } | Mode::Error { .. }
-        ) {
+        if classic(&self.mode) {
             return self.click(x, y, (batch.width, batch.height)).0;
         }
         let hit = {
@@ -377,6 +386,11 @@ impl Title {
                         focus: 0,
                     }
                 }
+                DELETE_WORLD => {
+                    if let Some(world) = selected.and_then(|i| worlds.get(i)).cloned() {
+                        self.mode = Mode::Delete { world };
+                    }
+                }
                 h if (WORLD..WORLD + 10_000).contains(&h) => {
                     let i = (h - WORLD) as usize;
                     if *selected == Some(i) {
@@ -398,7 +412,25 @@ impl Title {
                 MAKE => return self.create_action(),
                 _ => {}
             },
-            Mode::Edit { .. } | Mode::Backup { .. } | Mode::Delete { .. } | Mode::Error { .. } => {}
+            Mode::Delete { .. } => match hit {
+                // The selection stays in place: on the world that moved up
+                // into the deleted one's row, or the new last one.
+                CONFIRM_DELETE => {
+                    if let Some(row) = self.confirm_delete()
+                        && let Mode::Select { worlds, selected } = &mut self.mode
+                    {
+                        *selected = worlds.len().checked_sub(1).map(|last| row.min(last));
+                    }
+                }
+                BACK => self.escape(),
+                _ => {}
+            },
+            Mode::Error { return_to, .. } => {
+                if hit == BACK {
+                    self.mode = *return_to.clone();
+                }
+            }
+            Mode::Edit { .. } | Mode::Backup { .. } => {}
             Mode::Multiplayer(screen) => {
                 let id = match hit {
                     JOIN => Some(40),
@@ -564,15 +596,14 @@ fn worlds_page(
         n => format!("{n} worlds in the saves folder."),
     };
     let mut y = header(ui, x, "Singleplayer", &count);
-    actions_right(
-        ui,
-        x + w,
-        y - 24.0 - 58.0,
-        &[
-            (PLAY_WORLD, "Play", Kind::Primary, selected.is_some()),
-            (CREATE, "Create world", Kind::Secondary, true),
-        ],
-    );
+    let mut items = vec![
+        (PLAY_WORLD, "Play", Kind::Primary, selected.is_some()),
+        (CREATE, "Create world", Kind::Secondary, true),
+    ];
+    if selected.is_some() {
+        items.push((DELETE_WORLD, "Delete", Kind::Danger, true));
+    }
+    actions_right(ui, x + w, y - 24.0 - 58.0, &items);
     ui.divider(x, y, w);
     if worlds.is_empty() {
         empty(ui, x, y, "A blank map.", "Create a world to begin.");
@@ -606,6 +637,100 @@ fn worlds_page(
             None,
         );
     }
+}
+
+/// The launcher's notice: a plate led by a danger dot, the first line in
+/// medium type, wrapped lines under it. Returns its height.
+fn notice(ui: &mut Ui, x: f32, y: f32, w: f32, title: Option<&str>, text: &str) -> f32 {
+    let lines = wrap(ui, text, w - 48.0);
+    let title_h = if title.is_some() { 26.0 } else { 0.0 };
+    let h = 32.0 + title_h + lines.len() as f32 * 19.0;
+    ui.rounded(x, y, w, h, t::RADIUS_PLATE, color::RAISED);
+    ui.rounded(x + 16.0, y + 22.0, 6.0, 6.0, 3.0, color::DANGER);
+    let mut ty = y + 16.0;
+    if let Some(title) = title {
+        let title = ui.fit(Face::Medium, t::LARGE + 2.0, title, w - 48.0);
+        ui.text_line(
+            Face::Medium,
+            t::LARGE + 2.0,
+            19.0,
+            x + 32.0,
+            ty,
+            color::TEXT,
+            &title,
+        );
+        ty += title_h;
+    }
+    for (i, line) in lines.iter().enumerate() {
+        let tint = if title.is_some() {
+            color::MUTED
+        } else {
+            color::TEXT
+        };
+        ui.text_line(
+            Face::Regular,
+            BODY,
+            19.0,
+            x + 32.0,
+            ty + i as f32 * 19.0,
+            tint,
+            line,
+        );
+    }
+    h
+}
+
+/// `ConfirmScreen` for a world: what goes, that it can't come back, then
+/// Delete (danger) and Cancel under it.
+fn delete_page(ui: &mut Ui, x: f32, w: f32, world: &crate::title::WorldEntry) {
+    let mut y = header(
+        ui,
+        x,
+        "Delete this world?",
+        "It will be lost forever. This can't be undone.",
+    );
+    ui.divider(x, y, w);
+    y += 16.0;
+    let secs = world
+        .modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let text = format!(
+        "Last played {}. The folder saves/{} and everything built in it will be removed.",
+        crate::title::date_label(secs),
+        world.folder
+    );
+    y += notice(ui, x, y, w, Some(&world.name), &text) + 16.0;
+    let dw = ui.button_width("Delete world", false);
+    ui.button(
+        CONFIRM_DELETE,
+        [x, y, dw, CONTROL],
+        "Delete world",
+        Kind::Danger,
+        true,
+    );
+    let cw = ui.button_width("Cancel", false);
+    ui.button(
+        BACK,
+        [x + dw + 8.0, y, cw, CONTROL],
+        "Cancel",
+        Kind::Ghost,
+        true,
+    );
+}
+
+fn error_page(ui: &mut Ui, x: f32, w: f32, message: &str) {
+    let mut y = header(
+        ui,
+        x,
+        "Something went wrong",
+        "Horizon couldn't finish that.",
+    );
+    ui.divider(x, y, w);
+    y += 16.0;
+    y += notice(ui, x, y, w, None, message) + 16.0;
+    let bw = ui.button_width("Back", false);
+    ui.button(BACK, [x, y, bw, CONTROL], "Back", Kind::Secondary, true);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -839,23 +964,7 @@ fn multiplayer_page(ui: &mut Ui, x: f32, w: f32, screen: &Screen, caret: bool) {
             );
             ui.divider(x, y, w);
             y += 16.0;
-            // The launcher's error note: a danger dot beside the message.
-            let lines = wrap(ui, reason, w - 40.0);
-            let box_h = 24.0 + lines.len() as f32 * 19.0;
-            ui.rounded(x, y, w, box_h, t::RADIUS_PLATE, color::RAISED);
-            ui.rounded(x + 12.0, y + 18.0, 6.0, 6.0, 3.0, color::DANGER);
-            for (i, line) in lines.iter().enumerate() {
-                ui.text_line(
-                    Face::Regular,
-                    BODY,
-                    19.0,
-                    x + 28.0,
-                    y + 12.0 + i as f32 * 19.0,
-                    color::TEXT,
-                    line,
-                );
-            }
-            y += box_h + 16.0;
+            y += notice(ui, x, y, w, None, reason) + 16.0;
             if let Some(r) = retry {
                 // Auto-reconnect's countdown, with a way out.
                 let text = r.text(std::time::Instant::now());
@@ -1004,5 +1113,107 @@ pub mod pause {
             h if h == nav + 3 => Some(1),
             h => [0u8, 1, 2, 3, 4, 9].into_iter().find(|&a| act(a) == h),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_world::nbt::Tag;
+
+    fn world(saves: &std::path::Path, folder: &str, last_played: i64) {
+        crate::save::write_dat(
+            &saves.join(folder).join("level.dat"),
+            Tag::compound([(
+                "Data",
+                Tag::compound([
+                    ("LevelName", Tag::String(folder.into())),
+                    ("GameType", Tag::Int(0)),
+                    ("LastPlayed", Tag::Long(last_played)),
+                    ("WorldGenSettings", Tag::compound([("seed", Tag::Long(1))])),
+                ]),
+            )]),
+        )
+        .unwrap();
+    }
+    /// Clicks the middle of button `bid` as the game would; panics if the
+    /// page does not show it.
+    fn press(title: &mut Title, atlas: &HudAtlas, bid: u64) -> Action {
+        let mut batch = HudBatch::new([1280, 720]);
+        let (rect, density) = {
+            let mut ui = Ui::dry(atlas, &mut batch, (0.0, 0.0));
+            title.draw_horizon(&mut ui, 1.0);
+            let hit = ui.hits.iter().rev().find(|h| h.id == bid);
+            (hit.expect("button on the page").rect, ui.density)
+        };
+        let k = density / batch.scale;
+        let (x, y) = ((rect[0] + rect[2]) / 2.0 * k, (rect[1] + rect[3]) / 2.0 * k);
+        title.click_horizon(atlas, &mut batch, x, y)
+    }
+    fn shows(title: &Title, atlas: &HudAtlas, bid: u64) -> bool {
+        let mut batch = HudBatch::new([1280, 720]);
+        let mut ui = Ui::dry(atlas, &mut batch, (0.0, 0.0));
+        title.draw_horizon(&mut ui, 1.0);
+        ui.hits.iter().any(|h| h.id == bid)
+    }
+    fn selected(title: &Title) -> Option<String> {
+        match &title.mode {
+            Mode::Select { worlds, selected } => selected.map(|i| worlds[i].folder.clone()),
+            _ => panic!("not on the world list"),
+        }
+    }
+
+    #[test]
+    fn horizon_world_delete_confirms_and_keeps_the_selection_in_place() {
+        let atlas =
+            HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets")).unwrap();
+        let root =
+            std::env::temp_dir().join(format!("horizon-front-delete-{}", std::process::id()));
+        let saves = root.join("saves");
+        for (i, folder) in ["C", "B", "A"].iter().enumerate() {
+            world(&saves, folder, 1000 * (i as i64 + 1));
+        }
+        let mut title = Title::new(saves.clone());
+        title.mode = Mode::Select {
+            worlds: list_worlds(&saves),
+            selected: None,
+        };
+        assert!(!shows(&title, &atlas, DELETE_WORLD));
+        press(&mut title, &atlas, WORLD + 1);
+        assert_eq!(selected(&title).as_deref(), Some("B"));
+
+        // Cancel leaves the world and its selection.
+        press(&mut title, &atlas, DELETE_WORLD);
+        assert!(matches!(&title.mode, Mode::Delete { world } if world.folder == "B"));
+        press(&mut title, &atlas, BACK);
+        assert_eq!(selected(&title).as_deref(), Some("B"));
+        assert!(saves.join("B/level.dat").is_file());
+
+        // Deleting selects the world that moved up into the row.
+        press(&mut title, &atlas, DELETE_WORLD);
+        press(&mut title, &atlas, CONFIRM_DELETE);
+        assert!(!saves.join("B").exists());
+        assert_eq!(selected(&title).as_deref(), Some("C"));
+
+        // A world open elsewhere is refused on a Horizon page; Back returns
+        // to the question.
+        let open = crate::save::SessionLock::acquire(&saves.join("C")).unwrap();
+        press(&mut title, &atlas, DELETE_WORLD);
+        press(&mut title, &atlas, CONFIRM_DELETE);
+        assert!(matches!(title.mode, Mode::Error { .. }));
+        assert!(!classic(&title.mode));
+        press(&mut title, &atlas, BACK);
+        assert!(matches!(title.mode, Mode::Delete { .. }));
+        drop(open);
+
+        // The last row: the selection moves to the new last world.
+        press(&mut title, &atlas, CONFIRM_DELETE);
+        assert_eq!(selected(&title).as_deref(), Some("A"));
+        press(&mut title, &atlas, DELETE_WORLD);
+        press(&mut title, &atlas, CONFIRM_DELETE);
+        assert!(
+            matches!(&title.mode, Mode::Select { worlds, selected: None } if worlds.is_empty())
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 }

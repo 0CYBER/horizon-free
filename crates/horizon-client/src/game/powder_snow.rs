@@ -42,7 +42,7 @@ impl Game<'_> {
         };
         let entered = std::mem::take(&mut player.powder_snow_entered);
         let at = [player.position.x, player.position.y, player.position.z];
-        if entered.is_empty() || self.creatures.player_fire <= 0 {
+        if entered.is_empty() || player.fire_ticks <= 0 {
             return Ok(());
         }
         for pos in entered {
@@ -50,7 +50,9 @@ impl Game<'_> {
             self.world.modified.insert((pos.x >> 4, pos.z >> 4));
         }
         self.process_level_events()?;
-        self.creatures.player_fire = 0;
+        if let Some(player) = self.player.as_mut() {
+            player.fire_ticks = 0;
+        }
         // Entity.playEntityOnFireExtinguishedSound
         let r = self.particles.random();
         let pitch = 1.6 + (r.next_float() - r.next_float()) * 0.4;

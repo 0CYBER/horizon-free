@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 #[derive(Default)]
 pub(super) struct Stats {
     pub(super) values: BTreeMap<String, BTreeMap<String, i32>>,
-    loaded: bool,
+    pub(super) loaded: bool,
     /// Ticks until the phantom spawner runs again.
     phantom_tick: i32,
     /// Statistic changes (type, key, amount; `None` = reset) for the

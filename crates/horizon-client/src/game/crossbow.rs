@@ -13,7 +13,7 @@ use horizon_core::{geometry::Vec3, random::RandomSource};
 const CROSSBOW: &str = "minecraft:crossbow";
 
 impl Game<'_> {
-    fn charge_ticks(stack: &ItemStack) -> u32 {
+    pub(super) fn charge_ticks(stack: &ItemStack) -> u32 {
         // crossbow_charge_time: 1.25 s, minus 0.25 s per Quick Charge level.
         let seconds = 1.25 - 0.25 * stack.enchantment_level("minecraft:quick_charge") as f32;
         (seconds.max(0.0) * 20.0).floor() as u32
@@ -42,7 +42,7 @@ impl Game<'_> {
             ],
         }
     }
-    fn arrow_slot(&self) -> Option<usize> {
+    pub(super) fn arrow_slot(&self) -> Option<usize> {
         self.inventory
             .iter()
             .position(|s| s.as_ref().is_some_and(|s| &*s.item == "minecraft:arrow"))

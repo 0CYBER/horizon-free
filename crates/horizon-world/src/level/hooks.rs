@@ -424,7 +424,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if !creative && data.is(Class::Tnt) && b.table.bool(state, p.unstable) {
             self.prime_tnt(pos);
         }
-        self.level_event(2001, pos, state.0 as i32);
+        // BaseFireBlock emits extinguish and suppresses generic destroy particles/sound.
+        if data.is(Class::BaseFire) {
+            self.level_event(1009, pos, 0);
+        } else {
+            self.level_event(2001, pos, state.0 as i32);
+        }
         self.game_event(pos, "minecraft:block_destroy");
         self.remove_block(pos, false)
     }

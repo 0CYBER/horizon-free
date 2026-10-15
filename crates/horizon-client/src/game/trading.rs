@@ -89,8 +89,8 @@ impl merchant::MapMaker for GameMaps<'_> {
         self.made
             .borrow_mut()
             .push((id, at, map.zoom, map.decoration.clone()));
+        // The trade's own map item (woodland_mansion_map, ...) keeps its id.
         let mut out = stack;
-        out.item = std::sync::Arc::from("minecraft:filled_map");
         let d = out.data_mut();
         d.map_id = Some(id);
         d.other.push((

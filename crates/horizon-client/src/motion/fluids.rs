@@ -109,6 +109,10 @@ impl PlayerMotion {
     pub fn is_eye_in_fluid(&self, tag: FluidTagId) -> bool {
         self.fluids.interaction.is_eye_in_fluid(&Membership, tag)
     }
+    /// `Player.isUnderWater`: the eye sample from the start of the base tick.
+    pub fn is_under_water(&self) -> bool {
+        self.fluids.was_eye_in_water && self.fluids.was_touching_water
+    }
     /// `Entity.isInLava`.
     pub fn is_in_lava(&self) -> bool {
         !self.fluids.first_tick && self.fluids.interaction.is_in_fluid(&Membership, LAVA)
@@ -121,14 +125,27 @@ impl FluidMembership for Membership {
     }
 }
 impl MotionWorld<'_, '_, '_> {
-    fn fluid_at(&self, p: BlockPos) -> FluidState {
+    pub(super) fn fluid_at(&self, p: BlockPos) -> FluidState {
         self.resources.fluids.fluid(self.block(p))
     }
     /// `Entity.baseTick`'s fluid phase: `wasEyeInWater`, `updateFluidInteraction`,
-    /// the lava's fall halving, and the end of the first tick.
+    /// swimming and remaining fire, lava's fall halving, then the first-tick clear.
     pub fn fluid_base_tick(&mut self) -> Result<()> {
         self.player.fluids.was_eye_in_water = self.player.is_eye_in_fluid(WATER);
         self.update_fluids()?;
+        self.player.swimming = !self.player.flying
+            && self.player.sprinting
+            && if self.player.swimming {
+                self.player.fluids.was_touching_water
+            } else {
+                self.player.is_under_water()
+                    && is_tagged(
+                        self.fluid_at(BlockPos::containing(self.player.position))
+                            .kind(),
+                        WATER,
+                    )
+            };
+        self.tick_remaining_fire()?;
         if self.player.is_in_lava() {
             self.player.fall_distance *= 0.5;
         }

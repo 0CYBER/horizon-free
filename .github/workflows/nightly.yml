@@ -76,4 +76,4 @@ jobs:
           name: nightly-parity-logs
           path: .local/parity-runner/logs/
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: 7

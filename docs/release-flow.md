@@ -73,7 +73,7 @@ blocks a fork's pull request; the maintainer decides whether to run it.
 ## Game releases
 
 `.github/workflows/release.yml` releases the game by itself. It starts after every green `checks` run of a push
-to main, every hour at :17 (so a release the cooldown held goes out without another merge), and by hand.
+to main, every 10 minutes (so a release waiting for merges to settle goes out without another merge), and by hand.
 
 ```mermaid
 flowchart LR
@@ -83,7 +83,7 @@ flowchart LR
     main --> mainchecks{"checks on main"}
     mainchecks -- green --> decide{"decide<br/>tools/release_train.py"}
     cron(["every hour :17"]) --> decide
-    decide -- "player-facing PRs, 3 h since the last release,<br/>or release-now" --> build
+    decide -- "player-facing PRs settled 15 min<br/>(or waiting 1 h), or release-now" --> build
     decide -- otherwise --> wait(["wait"])
     subgraph build["build, in parallel"]
         linux["Linux x86_64<br/>GitHub ubuntu-22.04"]
@@ -104,8 +104,10 @@ commits) since the last **published** game release:
   `xtask/`, `packaging/`, `Cargo.toml`, `Cargo.lock`, `research-lock.json`, or an exporter `horizon-prepare`
   compiles (the `mods/horizon/src/test/java/dev/horizonlab/parity/*.java` files its sources name). Markdown never
   counts.
-- It releases when at least one pull request counts and the last game release is at least 3 hours old.
-- A pull request labelled `release-now` (a crash or a blocker) releases at once, cooldown or not.
+- It releases when at least one pull request counts and the newest of them merged at least 15 minutes ago, so a burst
+  of merges becomes one release; if merges never pause, it releases once the oldest has waited an hour. There is no
+  minimum time between releases: every settled player-facing change ships.
+- A pull request labelled `release-now` (a crash or a blocker) releases at once.
 - A pull request labelled `skip-release` (work players don't see) doesn't count and isn't listed in the notes.
 - One release at a time (concurrency group `game-release`); a run that finds nothing new does nothing.
 - A scheduled or hand-started run releases main's newest commit whose `checks` passed; after `checks`, the commit
@@ -116,7 +118,7 @@ commits) since the last **published** game release:
 | Label | Effect |
 | --- | --- |
 | `feature` | Listed under **New** (Kira pings the releases role); makes the next launcher release a minor one |
-| `release-now` | Releases as soon as main's checks pass, without the cooldown |
+| `release-now` | Releases as soon as main's checks pass, without waiting for merges to settle |
 | `skip-release` | Doesn't trigger a release and isn't listed in the notes |
 | `run-parity` | Runs the parity job once on a fork's pull request |
 | `parity-regression` | Opened by the nightly audit for a harness that fails on main |
@@ -193,7 +195,7 @@ and by hand; pushes to `launcher` and `launcher-*` branches only build.
 
 - `tools/release_train.py decide --kind launcher` counts the pull requests merged since the last published
   launcher release that changed those paths (not `launcher/links.json`, which the launcher reads from main, nor
-  tests or Markdown), with the same 3-hour cooldown, `release-now`, `skip-release` and `RELEASES_PAUSED`.
+  tests or Markdown), with the same settling rule (15 minutes, at most an hour), `release-now`, `skip-release` and `RELEASES_PAUSED`.
 - The tag is `launcher-vX.Y.Z`: the patch after the last launcher tag, or the next minor (`X.Y+1.0`) when one of
   those pull requests is labelled `feature`.
 - No version-bump commits: the build gets the version in `HORIZON_LAUNCHER_VERSION`, which
@@ -227,3 +229,16 @@ time, on the Mac mini's runner, after preparing the resources again if the prepa
 The bugs session picks the issues up. The audit's logs are the run's `nightly-parity-logs` artifact; harnesses
 listed `linux_only` are skipped there (see above). By hand: `gh workflow run "nightly audit"` (add
 `-f dry_run=true` to leave issues alone).
+
+## Disk
+
+Releases ship often, so nothing they leave behind may grow without bound.
+
+- **Artifacts:** every upload keeps 3 days (nightly parity logs 7); a release's assets live on the release itself.
+- **Mac runners:** `tools/ci/runner-gc.sh` runs every 6 hours from launchd on the Mac mini, as a copy taken from main
+  (`~/.actions-runners/runner-gc.sh`, plist `dev.horizon.runner-gc`), never from a pull request's checkout. It skips a
+  runner in a job, removes a checkout's cargo build folders past 12 GB (`MAX_TARGET_GB`) and harness work folders
+  under `.local/` untouched for 3 days (`STALE_DAYS`), and keeps the 2 newest shared preparations (`KEEP_PREPARED`)
+  while no runner works. Runner builds go through the machine's sccache (`tools/ci/runner-env.sh`), so what it removes
+  comes back from the cache. Update the copy after changing the script:
+  `ssh macmini 'curl -fsSL https://raw.githubusercontent.com/ludovic111/horizon/main/tools/ci/runner-gc.sh -o ~/.actions-runners/runner-gc.sh'`.

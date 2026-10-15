@@ -175,6 +175,41 @@ impl Projectile {
             *critical = value;
         }
     }
+    /// `AbstractArrow.tick`: critical streaks and submerged bubble trails.
+    pub fn arrow_trail(
+        &self,
+        water: bool,
+    ) -> Vec<(crate::particles::ParticleType, [f64; 3], [f64; 3])> {
+        use crate::particles::ParticleType;
+        let mut trail = Vec::new();
+        if self.stuck || !self.is_arrow() {
+            return trail;
+        }
+        let (p, v) = (self.position, self.velocity);
+        if water {
+            let drag = f64::from(0.6f32);
+            let speed = [v.x * drag, v.y * drag, v.z * drag];
+            let at = [
+                p.x - speed[0] * 0.25,
+                p.y - speed[1] * 0.25,
+                p.z - speed[2] * 0.25,
+            ];
+            for _ in 0..4 {
+                trail.push((ParticleType::Bubble, at, speed));
+            }
+        }
+        if matches!(self.kind, ProjectileKind::Arrow { critical: true, .. }) {
+            for i in 0..4 {
+                let t = i as f64 / 4.0;
+                trail.push((
+                    ParticleType::Crit,
+                    [p.x + v.x * t, p.y + v.y * t, p.z + v.z * t],
+                    [-v.x, -v.y + 0.2, -v.z],
+                ));
+            }
+        }
+        trail
+    }
     pub fn is_arrow(&self) -> bool {
         matches!(self.kind, ProjectileKind::Arrow { .. })
     }
@@ -741,5 +776,55 @@ mod tests {
         p.tick(&w);
         // (0.1 + 0.1) * 0.95
         assert!((p.velocity.x - 0.19).abs() < 1e-9);
+    }
+}
+
+#[cfg(test)]
+mod trail_tests {
+    use super::*;
+    use crate::particles::ParticleType;
+    fn arrow(critical: bool) -> Projectile {
+        let mut p = Projectile::new(
+            ProjectileKind::Arrow {
+                base_damage: 2.0,
+                critical,
+                effect: None,
+            },
+            Vec3::new(1.0, 2.0, 3.0),
+            None,
+        );
+        p.velocity = Vec3::new(4.0, 2.0, -1.0);
+        p
+    }
+    #[test]
+    fn critical_arrow_emits_four_native_streak_samples() {
+        let trail = arrow(true).arrow_trail(false);
+        assert_eq!(trail.len(), 4);
+        for (i, (ty, pos, speed)) in trail.iter().enumerate() {
+            assert_eq!(*ty, ParticleType::Crit);
+            assert_eq!(
+                *pos,
+                [1.0 + i as f64, 2.0 + i as f64 * 0.5, 3.0 - i as f64 * 0.25]
+            );
+            assert_eq!(*speed, [-4.0, -1.8, 1.0]);
+        }
+    }
+    #[test]
+    fn submerged_arrow_emits_four_bubbles_after_water_inertia() {
+        let trail = arrow(false).arrow_trail(true);
+        assert_eq!(trail.len(), 4);
+        let drag = f64::from(0.6f32);
+        for (ty, pos, speed) in trail {
+            assert_eq!(ty, ParticleType::Bubble);
+            assert_eq!(speed, [4.0 * drag, 2.0 * drag, -drag]);
+            assert_eq!(pos, [1.0 - drag, 2.0 - drag * 0.5, 3.0 + drag * 0.25]);
+        }
+    }
+    #[test]
+    fn ordinary_and_stuck_arrows_do_not_emit_critical_trails() {
+        assert!(arrow(false).arrow_trail(false).is_empty());
+        let mut p = arrow(true);
+        p.stuck = true;
+        assert!(p.arrow_trail(true).is_empty());
     }
 }

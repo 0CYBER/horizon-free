@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Check LAN shutdown when leaving a singleplayer world through the pause menu.
+"""Check LAN shutdown when leaving a singleplayer world through the pause menu,
+and that offline guests joining with their default names are not refused as the
+host's profile (#195: everyone was "Player").
 
 Requires a built horizon-client, prepared resources and a display on Unix:
     xvfb-run -a python3 tools/test_lan_lifecycle.py --client target/fast/horizon-client
@@ -101,6 +103,45 @@ def scenario(endpoint, scanner):
     command(endpoint, 'quit')
 
 
+def start_client(client, resources, home, endpoint, log, *extra):
+    return subprocess.Popen([
+        str(client), '--resources', str(resources), '--render-distance', '2',
+        '--test-terrain', '--control-socket', str(endpoint), '--timeout-seconds', '180', *extra,
+    ], cwd=home, env=dict(os.environ, HORIZON_HOME=str(home), HORIZON_NO_AUDIO='1',
+                         HORIZON_MENU_STYLE='classic', HORIZON_PLAYER_NAME=''),
+        stdout=log, stderr=subprocess.STDOUT)
+
+
+def guest_names(endpoint, port, guests):
+    """Two guests with default names join together; a guest named like the host is refused."""
+    names = []
+    for home, guest in guests:
+        wait_for(guest, 'screen', lambda value: value['screen'] == 'title')
+        command(guest, f'connect 127.0.0.1:{port}')
+        wait_for(guest, 'status', lambda value: (value.get('server') or {}).get('joined'))
+        kept = (home / 'horizon-player.txt').read_text()
+        assert kept.startswith('name:Player') and kept.strip() != 'name:Player', kept
+        names.append(kept.strip().removeprefix('name:'))
+    assert names[0] != names[1], names
+    status = wait_for(endpoint, 'lan status', lambda value: len(value['guests']) == 2)
+    assert sorted(g['name'] for g in status['guests']) == sorted(names), status
+    # The same home keeps its name: leave and join again as the same profile.
+    home, guest = guests[0]
+    command(guest, 'disconnect')
+    wait_for(endpoint, 'lan status', lambda value: len(value['guests']) == 1)
+    command(guest, f'connect 127.0.0.1:{port}')
+    wait_for(guest, 'status', lambda value: (value.get('server') or {}).get('joined'))
+    assert (home / 'horizon-player.txt').read_text().strip() == f'name:{names[0]}'
+    # A guest that really is the host's offline profile is refused, the others stay.
+    command(guest, 'disconnect')
+    command(guest, f'connect 127.0.0.1:{port} Player')
+    refused = wait_for(guest, 'screen', lambda value: (value.get('menu') or {}).get('disconnected'))
+    assert 'another location' in refused['menu']['disconnected'], refused
+    status = command(endpoint, 'lan status')
+    assert [g['name'] for g in status['guests']] == [names[1]], status
+    return names
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--client', type=Path, required=True)
@@ -116,12 +157,7 @@ def main():
             scanner.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
                               socket.inet_aton(GROUP) + socket.inet_aton('0.0.0.0'))
             with (work / 'client.log').open('w+') as log:
-                process = subprocess.Popen([
-                    str(client), '--resources', str(resources), '--render-distance', '2',
-                    '--test-terrain', '--control-socket', str(endpoint), '--timeout-seconds', '180',
-                ], cwd=work, env=dict(os.environ, HORIZON_HOME=str(work), HORIZON_NO_AUDIO='1',
-                                     HORIZON_MENU_STYLE='classic'),
-                    stdout=log, stderr=subprocess.STDOUT)
+                process = start_client(client, resources, work, endpoint, log)
                 try:
                     scenario(endpoint, scanner)
                     assert process.wait(timeout=20) == 0, 'client exited unsuccessfully'
@@ -130,14 +166,51 @@ def main():
                     print('\n'.join(log.read().splitlines()[-20:]))
                     raise
                 finally:
-                    if process.poll() is None:
-                        process.terminate()
-                        try:
-                            process.wait(timeout=10)
-                        except subprocess.TimeoutExpired:
-                            process.kill()
-                            process.wait(timeout=10)
+                    stop(process)
+        names = guests_scenario(client, resources, work)
     print('LAN lifecycle passed: leaving stops hosting and discovery; reopening stays private')
+    print(f'LAN guests passed: default names {names[0]} and {names[1]} joined together and kept; '
+          '"Player" refused as the host\'s profile')
+
+
+def stop(process):
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=10)
+
+
+def guests_scenario(client, resources, work):
+    host_home = work / 'host'
+    homes = [work / 'guest-a', work / 'guest-b']
+    processes, logs = [], []
+    try:
+        for home in [host_home, *homes]:
+            home.mkdir()
+            log = (home / 'client.log').open('w+')
+            logs.append(log)
+            processes.append(start_client(client, resources, home, home / 'control.sock', log))
+        endpoint = host_home / 'control.sock'
+        wait_for(endpoint, 'screen', lambda value: value['screen'] == 'title')
+        command(endpoint, 'open LanGuests 0 creative')
+        wait_for(endpoint, 'status', lambda value: value['player'] is not None
+                 and value['pending_chunks'] == 0)
+        port = command(endpoint, 'lan open 0')['port']
+        return guest_names(endpoint, port, [(home, home / 'control.sock') for home in homes])
+    except Exception:
+        for log in logs:
+            log.seek(0)
+            print(f'--- {log.name}')
+            print('\n'.join(log.read().splitlines()[-20:]))
+        raise
+    finally:
+        for process in processes:
+            stop(process)
+        for log in logs:
+            log.close()
 
 
 if __name__ == '__main__':

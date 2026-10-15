@@ -186,6 +186,7 @@ impl Game<'_> {
         self.creatures.projectiles.clear();
         self.dropped.clear();
         self.particles.clear();
+        self.pickups.clear();
         self.orbs.clear();
         self.falling.clear();
         self.travelling = None;
@@ -278,6 +279,7 @@ impl Game<'_> {
         self.mobs.clear();
         self.dropped.clear();
         self.particles.clear();
+        self.pickups.clear();
         self.score.board = Default::default();
         self.tab_list = Default::default();
         self.border = Default::default();
@@ -469,6 +471,7 @@ impl Game<'_> {
             self.mobs.clear();
             self.dropped.clear();
             self.particles.clear();
+            self.pickups.clear();
             if let Some(r) = self.remote.as_mut() {
                 r.entities.clear();
                 r.lerps.clear();
@@ -981,6 +984,19 @@ impl Game<'_> {
                         * 2.0;
                     self.audio
                         .play("minecraft:entity.item.pickup", Some(eye), 0.2, pitch);
+                }
+                // ItemPickupParticle toward the collector (this player, another one or a mob).
+                if let Some(item) = self.dropped.iter().find(|d| d.id == p.item as u32).cloned() {
+                    let collector = if self
+                        .remote
+                        .as_ref()
+                        .is_some_and(|r| r.entity_id == p.player)
+                    {
+                        super::pickups::Collector::Player
+                    } else {
+                        super::pickups::Collector::Mob(p.player as u32)
+                    };
+                    self.add_pickup(super::pickups::Taken::Item(Box::new(item)), collector);
                 }
                 self.remove_entity(p.item);
             }
@@ -1555,6 +1571,8 @@ impl Game<'_> {
         let at = Vec3::new(p[0], p[1], p[2]);
         let bob_offset = self.world.random.next_float() * std::f32::consts::PI * 2.0;
         self.dropped.push(ItemEntity {
+            health: 5,
+            fire_ticks: 0,
             id: id as u32,
             stack,
             position: at,

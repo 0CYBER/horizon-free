@@ -126,7 +126,8 @@ pub fn family(s: Species) -> Family {
         | S::Salmon
         | S::TropicalFish
         | S::Pufferfish
-        | S::Dolphin => Family::Aquatic,
+        | S::Dolphin
+        | S::Axolotl => Family::Aquatic,
         S::Giant => Family::Inert,
         S::Witch => Family::Witch,
         S::Wolf | S::Cat => Family::Tame,
@@ -381,6 +382,7 @@ pub fn tick(
     }
     events.append(&mut m.outbox);
     m.update_walk_animation();
+    super::axolotl::tick_animation(m);
     m.anim.end_tick(m.ai.swinging);
     tick_swing(m);
     if m.species() == Species::CopperGolem {
@@ -409,6 +411,20 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if m.fluids.in_water {
         m.fall_distance = 0.0;
     }
+    let fire = crate::motion::environment::fire_contact(w.world, w.registry, m.bounds());
+    if fire > 0.0 {
+        m.ticks_frozen = 0;
+    }
+    if fire > 0.0 && !m.kind.flags.fire_immune {
+        let multiplier = m.burning_time();
+        m.fire_ticks = crate::motion::environment::ignite_contact(
+            m.fire_ticks,
+            false,
+            &mut m.random,
+            multiplier,
+        );
+        m.damage(fire, Damage::of(DamageKind::InFire));
+    }
     // Fire: water extinguishes, lava ignites, burning hurts every second.
     if m.fluids.in_water && m.fire_ticks > 0 {
         m.fire_ticks = 0;
@@ -420,12 +436,12 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         ));
     }
     if m.fluids.in_lava && !m.kind.flags.fire_immune {
-        m.fire_ticks = m.fire_ticks.max(300);
+        m.ignite_for_ticks(300);
         m.damage(4.0, Damage::of(DamageKind::Lava));
     }
     if m.fire_ticks > 0 {
         if m.kind.flags.fire_immune {
-            m.fire_ticks = (m.fire_ticks - 4).max(0);
+            m.fire_ticks = 0;
         } else {
             if m.fire_ticks % 20 == 0 && !m.fluids.in_lava {
                 m.damage(1.0, Damage::of(DamageKind::OnFire));
@@ -508,6 +524,9 @@ pub fn ambient_sound(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     play_ambient(m, w, events);
 }
 fn play_ambient(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    if super::axolotl::is_playing_dead(m) {
+        return;
+    }
     let sound = match m.species() {
         // Warden.getAmbientSound: by anger, silent while roaring or digging.
         Species::Warden => match super::warden::ambient_sound(m) {
@@ -686,7 +705,7 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
     }
     // Mob.aiStep: undead burn in daylight.
     if m.kind.flags.burns_in_day && m.alive() && sun_burn_tick(m, w) && m.extra.head.is_none() {
-        m.fire_ticks = m.fire_ticks.max(160);
+        m.ignite_for_ticks(160);
     }
     species_ai_step(m, w, events);
 }
@@ -844,6 +863,7 @@ fn server_ai_step(
     if m.species() == Species::Sniffer
         || m.species() == Species::HappyGhast && m.is_baby()
         || m.species() == Species::CopperGolem
+        || m.species() == Species::Axolotl
     {
         super::animal_brain::tick(m, w, level_random, events);
     }
@@ -855,8 +875,10 @@ fn server_ai_step(
         m.ai.jumping = false;
         return;
     }
-    m.move_control_tick(w, events);
-    m.look_control_tick();
+    if !super::axolotl::is_playing_dead(m) {
+        m.move_control_tick(w, events);
+        m.look_control_tick();
+    }
     m.jump_control_tick();
 }
 fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
@@ -1472,5 +1494,14 @@ pub fn swim_sound(m: &Mob) -> &'static str {
         Species::ZombieNautilus => "entity.zombie_nautilus.swim",
         Species::Turtle => "entity.turtle.swim",
         _ => "entity.generic.swim",
+    }
+}
+
+#[cfg(test)]
+mod bucket_axolotl_tests {
+    use super::*;
+    #[test]
+    fn bucket_axolotl_uses_aquatic_not_generic_land_ai() {
+        assert_eq!(family(Species::Axolotl), Family::Aquatic);
     }
 }

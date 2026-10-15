@@ -56,7 +56,7 @@ impl StateModels {
         sprites: &mut Sprites,
     ) -> Result<Self> {
         let facts: BTreeMap<String, Value> =
-            serde_json::from_reader(fs::File::open(root.join("model-states.json"))?)?;
+            serde_json::from_slice(&fs::read(root.join("model-states.json"))?)?;
         let mut choices = Vec::new();
         let mut states = BTreeMap::new();
         let mut variants = BTreeSet::new();

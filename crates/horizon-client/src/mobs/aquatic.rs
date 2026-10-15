@@ -35,6 +35,19 @@ pub fn register(m: &mut Mob) {
             let speed = 1.0 / (m.random.next_float() + 1.0) * 0.2;
             m.anim.v[TENTACLE_SPEED] = speed;
         }
+        S::Axolotl => {
+            // Native controller scaling is essential: the base speed attribute is 1.0.
+            m.ai.mov.kind = MoveKind::SmoothSwimming {
+                max_turn_x: 85.0,
+                max_turn_y: 10.0,
+                in_water: 0.1,
+                outside: 0.5,
+                gravity: false,
+            };
+            m.ai.look.kind = super::control::LookKind::SmoothSwimming(20.0);
+            m.ai.nav.kind = NavKind::Amphibious;
+            super::animal_brain::init(m, i64::from(m.id));
+        }
         S::Tadpole => {
             // TadpoleAi: panic, swim around and look about.
             let g = &mut m.ai.goals;
@@ -265,6 +278,13 @@ pub fn travel(m: &mut Mob, w: &MobWorld, input: Vec3, events: &mut Vec<MobEvent>
         // Squid.travel: move by the current velocity only.
         S::Squid | S::GlowSquid => {
             m.do_move(w, events);
+            true
+        }
+        // Axolotl.travelInWater: no fish sinking or generic water gravity.
+        S::Axolotl if m.fluids.in_water => {
+            m.move_relative(m.ai.speed, input);
+            m.do_move(w, events);
+            m.velocity = Vec3::new(m.velocity.x * 0.9, m.velocity.y * 0.9, m.velocity.z * 0.9);
             true
         }
         // AbstractFish.travelInWater / Dolphin.travelInWater.

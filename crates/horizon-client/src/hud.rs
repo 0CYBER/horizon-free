@@ -23,6 +23,7 @@ pub struct HudAtlas {
     pub width: u32,
     pub height: u32,
     pub sprites: HashMap<String, Rect>,
+    pub fire_animations: Vec<(Rect, crate::sprites::SpriteAnimation)>,
     /// The default font (bitmap sheets in this atlas, unifont rasterized on demand).
     pub font: crate::font::Font,
     white: Rect,
@@ -151,9 +152,7 @@ impl HudAtlas {
         walk(&textures.join("map"), &mut files);
         files.retain(|p| {
             let s = p.to_string_lossy();
-            (!s.contains("title/background") || s.contains("panorama_"))
-                && !s.contains("realms")
-                && !s.contains("presets")
+            !s.contains("title/background") && !s.contains("realms") && !s.contains("presets")
         });
         let decode_one = |path: &PathBuf| -> Option<(String, u32, u32, Vec<u8>)> {
             let name = path
@@ -170,18 +169,6 @@ impl HudAtlas {
             } else {
                 pixels
             };
-            // Title panorama faces are downsampled to 256 for the shared atlas.
-            if name.contains("panorama_") && w >= 512 && w == h {
-                let step = (w / 256) as usize;
-                let mut small = Vec::with_capacity(256 * 256 * 4);
-                for y in 0..256usize {
-                    for x in 0..256usize {
-                        let i = ((y * step) * w as usize + x * step) * 4;
-                        small.extend_from_slice(&pixels[i..i + 4]);
-                    }
-                }
-                return Some((name, 256, 256, small));
-            }
             (w <= 1024 && (h <= 512 || name.starts_with("font/"))).then_some((name, w, h, pixels))
         };
         let threads = std::thread::available_parallelism().map_or(2, |n| n.get());
@@ -199,6 +186,15 @@ impl HudAtlas {
                 .collect()
         });
         images.extend(atlas_sprites(root, &images));
+        // The title screen's "JAVA EDITION" banner reads "RUST EDITION".
+        if let Some(edition) = images
+            .iter_mut()
+            .find(|i| i.0 == crate::title_edition::SPRITE)
+            && let Some(pixels) =
+                crate::title_edition::rust_edition(edition.1, edition.2, &edition.3)
+        {
+            edition.3 = pixels;
+        }
         images.push(("horizon/white".into(), 4, 4, vec![255; 64]));
         // Map textures (game/maps.rs) are written into these slots at run time.
         for i in 0..MAP_SLOTS {
@@ -266,6 +262,35 @@ impl HudAtlas {
                 },
             );
         }
+        let mut fire_sprites = crate::sprites::Sprites::default();
+        let mut fire_animations = Vec::new();
+        for name in [
+            "block/fire_0",
+            "block/fire_1",
+            "block/soul_fire_0",
+            "block/soul_fire_1",
+        ] {
+            if let Some(rect) = sprites.get(name).copied() {
+                let layer = fire_sprites.insert(root, &format!("minecraft:{name}"))?;
+                if let Some(animation) = fire_sprites
+                    .animations
+                    .iter()
+                    .find(|a| a.layer == layer)
+                    .cloned()
+                {
+                    let image = animation.resized_pixels(animation.frame(0), rect.w, rect.h);
+                    let x = (rect.u0 * width as f32).round() as usize;
+                    let y = (rect.v0 * height as f32).round() as usize;
+                    for row in 0..rect.h as usize {
+                        let dst = ((y + row) * width as usize + x) * 4;
+                        let src = row * rect.w as usize * 4;
+                        pixels[dst..dst + rect.w as usize * 4]
+                            .copy_from_slice(&image[src..src + rect.w as usize * 4]);
+                    }
+                    fire_animations.push((rect, animation));
+                }
+            }
+        }
         let white = sprites["horizon/white"];
         let font = crate::font::Font::load(
             root,
@@ -280,6 +305,7 @@ impl HudAtlas {
             width,
             height,
             sprites,
+            fire_animations,
             font,
             white,
         })
@@ -643,6 +669,7 @@ struct HudUniform {
     size: [f32; 4],
 }
 pub struct HudRenderer {
+    pub fire_animations: Vec<(Rect, crate::sprites::SpriteAnimation, usize)>,
     /// The shared atlas texture, for run-time glyph uploads.
     pub atlas_texture: Option<wgpu::Texture>,
     pipeline: wgpu::RenderPipeline,
@@ -728,7 +755,7 @@ impl HudRenderer {
             ..Default::default()
         });
         let attributes = wgpu::vertex_attr_array![0=>Float32x2,1=>Float32x2,2=>Unorm8x4];
-        let create = |label, blend| {
+        let create = |label, blend, fragment_entry| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&pipeline_layout),
@@ -747,7 +774,7 @@ impl HudRenderer {
                 multisample: Default::default(),
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
-                    entry_point: Some("fs_main"),
+                    entry_point: Some(fragment_entry),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
@@ -759,7 +786,7 @@ impl HudRenderer {
                 cache: None,
             })
         };
-        let pipeline = create("HUD", wgpu::BlendState::ALPHA_BLENDING);
+        let pipeline = create("HUD", wgpu::BlendState::ALPHA_BLENDING, "fs_main");
         // BlendFunction.INVERT: ONE_MINUS_DST_COLOR, ONE_MINUS_SRC_COLOR,
         // ONE, ZERO.
         let invert_pipeline = create(
@@ -776,6 +803,7 @@ impl HudRenderer {
                     operation: wgpu::BlendOperation::Add,
                 },
             },
+            "fs_crosshair",
         );
         let capacity = 1 << 16;
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -786,6 +814,7 @@ impl HudRenderer {
         });
         Ok(Self {
             atlas_texture: None,
+            fire_animations: Vec::new(),
             pipeline,
             invert_pipeline,
             group,
@@ -793,6 +822,42 @@ impl HudRenderer {
             buffer,
             capacity,
         })
+    }
+    pub fn animate_fire(&mut self, queue: &wgpu::Queue, tick: u64) {
+        let Some(texture) = &self.atlas_texture else {
+            return;
+        };
+        for (rect, animation, previous) in &mut self.fire_animations {
+            let frame = animation.frame(tick);
+            if frame == *previous {
+                continue;
+            }
+            let pixels = animation.resized_pixels(frame, rect.w, rect.h);
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: (rect.u0 * texture.width() as f32).round() as u32,
+                        y: (rect.v0 * texture.height() as f32).round() as u32,
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &pixels,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(rect.w * 4),
+                    rows_per_image: Some(rect.h),
+                },
+                wgpu::Extent3d {
+                    width: rect.w,
+                    height: rect.h,
+                    depth_or_array_layers: 1,
+                },
+            );
+            *previous = frame;
+        }
     }
     pub fn draw(
         &mut self,
@@ -949,6 +1014,17 @@ mod tests {
                 < 1e-6
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn hud_shader_validates_both_fragment_entries() {
+        let module = naga::front::wgsl::parse_str(include_str!("hud.wgsl")).unwrap();
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap();
     }
 
     #[test]

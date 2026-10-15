@@ -41,6 +41,7 @@ pub struct ToolRule {
 }
 #[derive(Clone, Debug)]
 pub struct ItemInfo {
+    pub fire_resistant: bool,
     pub id: Arc<str>,
     pub max_stack: u32,
     pub max_damage: u32,
@@ -48,6 +49,7 @@ pub struct ItemInfo {
     pub tool: Vec<ToolRule>,
     pub tool_default_speed: f32,
     pub food: Option<(u32, f32)>,
+    pub consumable: bool,
     pub model: String,
     /// Main-hand `attack_damage` / `attack_speed` modifier amounts.
     pub attack_damage: f32,
@@ -331,6 +333,26 @@ fn entity_spec(tags: &HashMap<String, HashSet<String>>, spec: &str) -> HashSet<S
     }
 }
 impl Items {
+    pub fn resists_fire(&self, stack: &ItemStack, source: &str) -> bool {
+        if let Some(data) = stack.data()
+            && let Some((_, v)) = data
+                .other
+                .iter()
+                .find(|(key, _)| key == "minecraft:damage_resistant")
+        {
+            return match v.get("types") {
+                Some(horizon_world::nbt::Tag::String(tag)) => {
+                    tag.to_string().is_ok_and(|id|id=="#minecraft:is_fire" || id==source)
+                }
+                Some(horizon_world::nbt::Tag::List(tags)) => tags.iter().any(
+                    |t| matches!(t,horizon_world::nbt::Tag::String(id) if id.to_string().is_ok_and(|id|id==source)),
+                ),
+                _ => false,
+            };
+        }
+        self.get(&stack.item).is_some_and(|i| i.fire_resistant)
+    }
+
     pub fn load(root: &Path, registry: &BlockRegistry, facts: &BlockFacts) -> Result<Self> {
         let mut block_for_item: HashMap<&str, BlockStateId> = HashMap::new();
         for (i, s) in facts.states.iter().enumerate() {
@@ -394,6 +416,8 @@ impl Items {
             items.insert(
                 id.clone(),
                 ItemInfo {
+                    fire_resistant: c["minecraft:damage_resistant"]["types"].as_str()
+                        == Some("#minecraft:is_fire"),
                     id: id.clone(),
                     max_stack: c["minecraft:max_stack_size"].as_u64().unwrap_or(64) as u32,
                     max_damage: c["minecraft:max_damage"].as_u64().unwrap_or(0) as u32,
@@ -403,6 +427,7 @@ impl Items {
                         .as_f64()
                         .unwrap_or(1.0) as f32,
                     food,
+                    consumable: c.get("minecraft:consumable").is_some(),
                     model: c["minecraft:item_model"]
                         .as_str()
                         .unwrap_or(name)
@@ -1264,6 +1289,94 @@ impl LootContext<'_> {
     }
 }
 
+/// `DispensibleContainerItem`: shared contents for hand use and dispensers.
+pub fn bucket_contents(
+    item: &str,
+) -> Option<(horizon_world::level::BucketContent, &str, Option<&str>)> {
+    use horizon_world::{fluid::FluidKind, level::BucketContent as C};
+    Some(match item {
+        "minecraft:water_bucket" => (
+            C::Fluid(FluidKind::Water),
+            "minecraft:item.bucket.empty",
+            None,
+        ),
+        "minecraft:lava_bucket" => (
+            C::Fluid(FluidKind::Lava),
+            "minecraft:item.bucket.empty_lava",
+            None,
+        ),
+        "minecraft:powder_snow_bucket" => {
+            (C::Powder, "minecraft:item.bucket.empty_powder_snow", None)
+        }
+        "minecraft:cod_bucket" => (C::MobWater, "minecraft:item.bucket.empty_fish", Some("cod")),
+        "minecraft:salmon_bucket" => (
+            C::MobWater,
+            "minecraft:item.bucket.empty_fish",
+            Some("salmon"),
+        ),
+        "minecraft:pufferfish_bucket" => (
+            C::MobWater,
+            "minecraft:item.bucket.empty_fish",
+            Some("pufferfish"),
+        ),
+        "minecraft:tropical_fish_bucket" => (
+            C::MobWater,
+            "minecraft:item.bucket.empty_fish",
+            Some("tropical_fish"),
+        ),
+        "minecraft:axolotl_bucket" => (
+            C::MobWater,
+            "minecraft:item.bucket.empty_axolotl",
+            Some("axolotl"),
+        ),
+        "minecraft:tadpole_bucket" => (
+            C::MobWater,
+            "minecraft:item.bucket.empty_tadpole",
+            Some("tadpole"),
+        ),
+        "minecraft:sulfur_cube_bucket" => (
+            C::Nothing,
+            "minecraft:item.bucket.empty_sulfur_cube",
+            Some("sulfur_cube"),
+        ),
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod bucket_use_tests {
+    use super::*;
+    #[test]
+    fn every_filled_bucket_has_the_native_content_and_sound() {
+        use horizon_world::level::BucketContent as C;
+        assert_eq!(
+            bucket_contents("minecraft:powder_snow_bucket"),
+            Some((C::Powder, "minecraft:item.bucket.empty_powder_snow", None))
+        );
+        assert_eq!(
+            bucket_contents("minecraft:tadpole_bucket"),
+            Some((
+                C::MobWater,
+                "minecraft:item.bucket.empty_tadpole",
+                Some("tadpole")
+            ))
+        );
+        assert_eq!(
+            bucket_contents("minecraft:sulfur_cube_bucket"),
+            Some((
+                C::Nothing,
+                "minecraft:item.bucket.empty_sulfur_cube",
+                Some("sulfur_cube")
+            ))
+        );
+        for id in ["cod", "salmon", "pufferfish", "tropical_fish", "axolotl"] {
+            assert!(bucket_contents(&format!("minecraft:{id}_bucket")).is_some());
+        }
+        assert!(bucket_contents("minecraft:bucket").is_none());
+        assert!(bucket_contents("minecraft:milk_bucket").is_none());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1356,5 +1469,35 @@ mod tests {
                 .evaluate(&leaves, &mut random)
                 .is_empty()
         );
+    }
+}
+
+pub fn take_held_drop(slot: &mut Option<ItemStack>, all: bool) -> Option<ItemStack> {
+    let stack = slot.as_mut()?;
+    if stack.count == 0 {
+        return None;
+    }
+    let count = if all { stack.count } else { 1 };
+    let thrown = ItemStack {
+        count,
+        ..stack.clone()
+    };
+    stack.count -= count;
+    if stack.count == 0 {
+        *slot = None;
+    }
+    Some(thrown)
+}
+#[cfg(test)]
+mod held_drop_tests {
+    use super::*;
+    #[test]
+    fn one_all_and_empty_drop() {
+        let mut slot = Some(ItemStack::new("minecraft:stone", 4));
+        assert_eq!(take_held_drop(&mut slot, false).unwrap().count, 1);
+        assert_eq!(slot.as_ref().unwrap().count, 3);
+        assert_eq!(take_held_drop(&mut slot, true).unwrap().count, 3);
+        assert!(slot.is_none());
+        assert!(take_held_drop(&mut slot, false).is_none());
     }
 }

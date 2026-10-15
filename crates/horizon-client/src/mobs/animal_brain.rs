@@ -194,11 +194,21 @@ pub struct Memories {
     pub sniff_cooldown: Slot<()>,
     pub gaze_cooldown_ticks: Slot<i32>,
     pub transport_items_cooldown_ticks: Slot<i32>,
+    pub nearest_attackable: Slot<Who>,
+    pub attack_target: Slot<Who>,
+    pub attack_cooling_down: Slot<bool>,
+    pub hunting_cooldown: Slot<bool>,
+    pub play_dead_ticks: Slot<i32>,
     pub visited_block_positions: Slot<Vec<[i32; 3]>>,
     pub unreachable_transport_block_positions: Slot<Vec<[i32; 3]>>,
 }
 impl Memories {
     fn tick(&mut self) {
+        self.nearest_attackable.tick();
+        self.attack_target.tick();
+        self.attack_cooling_down.tick();
+        self.hunting_cooldown.tick();
+        self.play_dead_ticks.tick();
         self.mobs.tick();
         self.visible_mobs.tick();
         self.nearest_players.tick();
@@ -231,6 +241,8 @@ impl Memories {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Act {
     Core,
+    Fight,
+    PlayDead,
     Idle,
     Sniff,
     Dig,
@@ -240,6 +252,8 @@ impl Act {
     pub fn name(self) -> &'static str {
         match self {
             Act::Core => "core",
+            Act::Fight => "fight",
+            Act::PlayDead => "play_dead",
             Act::Idle => "idle",
             Act::Sniff => "sniff",
             Act::Dig => "dig",
@@ -251,6 +265,7 @@ impl Act {
 /// Which brain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
+    Axolotl,
     Sniffer,
     /// A happy ghast (the brain ticks while it is a ghastling).
     Ghastling,
@@ -261,6 +276,8 @@ pub enum Kind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Sensor {
     Living,
+    AxolotlAttackables,
+    AdultSameType,
     HurtBy,
     Players,
     Tempting,
@@ -270,6 +287,13 @@ impl Kind {
     /// `BRAIN_PROVIDER`'s sensors, in order (all scan every 20 ticks).
     fn sensors(self) -> &'static [Sensor] {
         match self {
+            Kind::Axolotl => &[
+                Sensor::Living,
+                Sensor::AdultSameType,
+                Sensor::HurtBy,
+                Sensor::AxolotlAttackables,
+                Sensor::Tempting,
+            ],
             Kind::Sniffer => &[
                 Sensor::Living,
                 Sensor::HurtBy,
@@ -322,7 +346,11 @@ pub(super) fn mem_ref(m: &Mob) -> Option<&Memories> {
 
 /// The brain kind a mob has, if any.
 pub fn kind_of(m: &Mob) -> Option<Kind> {
-    match m.species() {
+    kind_for_species(m.species())
+}
+fn kind_for_species(species: Species) -> Option<Kind> {
+    match species {
+        Species::Axolotl => Some(Kind::Axolotl),
         Species::Sniffer => Some(Kind::Sniffer),
         // Every happy ghast has the brain; only the ghastling's ticks.
         Species::HappyGhast => Some(Kind::Ghastling),
@@ -353,6 +381,7 @@ pub fn init(m: &mut Mob, shuffle_seed: i64) {
         list: Vec::new(),
     };
     b.list = match kind {
+        Kind::Axolotl => axolotl_package(shuffle_seed),
         Kind::Sniffer => sniffer_package(shuffle_seed),
         Kind::Ghastling => ghastling_package(shuffle_seed),
         Kind::CopperGolem => copper_golem_package(shuffle_seed),
@@ -399,7 +428,16 @@ pub fn set_breed_partner(m: &mut Mob, partner: u32) {
     }
     let who = Who::Mob(partner);
     mem(m).breed_target.set(who);
-    lock_gaze_and_walk(m, who, 1.0, 2);
+    lock_gaze_and_walk(
+        m,
+        who,
+        if m.species() == Species::Axolotl {
+            0.2
+        } else {
+            1.0
+        },
+        2,
+    );
 }
 
 /// `AnimalMakeLove.tick` after the birth: the partner forgets this mob.
@@ -413,7 +451,16 @@ pub fn lock_gaze(m: &mut Mob, partner: u32) {
     if m.extra.animal_brain.is_none() {
         return;
     }
-    lock_gaze_and_walk(m, Who::Mob(partner), 1.0, 2);
+    lock_gaze_and_walk(
+        m,
+        Who::Mob(partner),
+        if m.species() == Species::Axolotl {
+            0.2
+        } else {
+            1.0
+        },
+        2,
+    );
 }
 
 /// What behaviours read and emit during a brain tick.
@@ -457,6 +504,13 @@ pub fn tick(m: &mut Mob, w: &MobWorld, lr: &mut LegacyRandom, events: &mut Vec<M
     brain_mut(m).list = list;
     update_activity(m);
     m.ai.panicking = is_panicking(m);
+    if m.species() == Species::Axolotl {
+        m.extra.axolotl.playing_dead = mem(m)
+            .play_dead_ticks
+            .value()
+            .is_some_and(|ticks| ticks > 0);
+        m.ai.target = mem(m).attack_target.value();
+    }
 }
 
 /// `SnifferAi.updateActivity` / `HappyGhastAi.updateActivity`:
@@ -464,10 +518,15 @@ pub fn tick(m: &mut Mob, w: &MobWorld, lr: &mut LegacyRandom, events: &mut Vec<M
 fn update_activity(m: &mut Mob) {
     let b = brain_mut(m);
     let mm = &b.mem;
+    if b.kind == Kind::Axolotl {
+        update_axolotl_activity(b);
+        return;
+    }
     let order: &[Act] = match b.kind {
         Kind::Sniffer => &[Act::Dig, Act::Sniff, Act::Idle],
         Kind::Ghastling => &[Act::Panic, Act::Idle],
         Kind::CopperGolem => &[Act::Idle],
+        Kind::Axolotl => unreachable!(),
     };
     for &a in order {
         let ok = match a {
@@ -484,6 +543,7 @@ fn update_activity(m: &mut Mob) {
             Act::Idle => b.kind != Kind::Sniffer || !mm.sniffer_digging.present(),
             Act::Panic => mm.is_panicking.present(),
             Act::Core => true,
+            Act::Fight | Act::PlayDead => false,
         };
         if ok {
             b.activity = a;
@@ -523,6 +583,16 @@ fn tick_sensors(m: &mut Mob, w: &MobWorld) {
         }
         match sensor {
             Sensor::Living => sense_living(m, w),
+            Sensor::AxolotlAttackables => sense_axolotl_attackables(m, w),
+            Sensor::AdultSameType => {
+                let found = find_closest(m, w, |m, who| match who {
+                    Who::Mob(id) => w
+                        .seen(id)
+                        .is_some_and(|s| !s.baby && s.species == m.species()),
+                    _ => false,
+                });
+                mem(m).nearest_visible_adult.set_opt(found);
+            }
             Sensor::HurtBy => sense_hurt(m, w),
             Sensor::Players => sense_players(m, w),
             Sensor::Tempting => sense_tempting(m, w),
@@ -759,6 +829,8 @@ impl Timed {
 #[derive(Clone, Debug)]
 struct Gate {
     running: bool,
+    shuffle: bool,
+    try_all: bool,
     random: LegacyRandom,
     kids: Vec<(B, i32, f64)>,
     /// The gate's memory requirements.
@@ -768,6 +840,8 @@ impl Gate {
     fn run_one(seed: i64, kids: Vec<(B, i32)>) -> Self {
         Self {
             running: false,
+            shuffle: true,
+            try_all: false,
             random: LegacyRandom::new(seed),
             kids: kids.into_iter().map(|(b, w)| (b, w, 0.0)).collect(),
             when: None,
@@ -786,13 +860,15 @@ impl Gate {
         self.running = true;
         // ShufflingList.shuffle: a fresh weight for each entry in the
         // current order, then a stable sort.
-        for k in &mut self.kids {
-            let r = self.random.next_float();
-            k.2 = -horizon_core::jmath::pow(f64::from(r), f64::from(1.0_f32 / k.1 as f32));
+        if self.shuffle {
+            for k in &mut self.kids {
+                let r = self.random.next_float();
+                k.2 = -horizon_core::jmath::pow(f64::from(r), f64::from(1.0_f32 / k.1 as f32));
+            }
+            self.kids.sort_by(|a, b| a.2.total_cmp(&b.2));
         }
-        self.kids.sort_by(|a, b| a.2.total_cmp(&b.2));
         for k in &mut self.kids {
-            if !k.0.running() && k.0.try_start(m, cx) {
+            if !k.0.running() && k.0.try_start(m, cx) && !self.try_all {
                 break;
             }
         }
@@ -820,6 +896,12 @@ impl Gate {
 
 #[derive(Clone, Debug)]
 enum B {
+    AxolotlAction {
+        action: AxolotlAction,
+        running: bool,
+        until: i64,
+    },
+    PlayDead(Timed),
     Swim(Timed),
     /// `AnimalPanic`: flying (`AirAndWaterRandomPos`) or on land, and
     /// whether the sniffer's override resets its sniffing first.
@@ -890,7 +972,8 @@ enum B {
 impl B {
     fn running(&self) -> bool {
         match self {
-            B::Swim(t)
+            B::PlayDead(t)
+            | B::Swim(t)
             | B::AnimalPanic { t, .. }
             | B::MoveToTargetSink { t, .. }
             | B::CountDownTemptation(t)
@@ -908,7 +991,8 @@ impl B {
             | B::CountDownTransport(t) => t.running,
             B::Transport(x) => x.running,
             B::LookAtPlayerSometimes(running, _) => *running,
-            B::WalkToLookTarget { running, .. }
+            B::AxolotlAction { running, .. }
+            | B::WalkToLookTarget { running, .. }
             | B::LookAtPlayer(running)
             | B::Stroll { running, .. }
             | B::FollowAdult { running, .. } => *running,
@@ -919,7 +1003,8 @@ impl B {
     /// cleared with the rest).
     fn reset(&mut self) {
         match self {
-            B::Swim(t)
+            B::PlayDead(t)
+            | B::Swim(t)
             | B::AnimalPanic { t, .. }
             | B::CountDownTemptation(t)
             | B::MakeLove { t, .. }
@@ -952,7 +1037,8 @@ impl B {
     fn one_shot(&self) -> bool {
         matches!(
             self,
-            B::WalkToLookTarget { .. }
+            B::AxolotlAction { .. }
+                | B::WalkToLookTarget { .. }
                 | B::LookAtPlayer(_)
                 | B::LookAtPlayerSometimes(..)
                 | B::Stroll { .. }
@@ -961,7 +1047,8 @@ impl B {
     }
     fn set_one_shot(&mut self, on: bool) {
         match self {
-            B::WalkToLookTarget { running, .. }
+            B::AxolotlAction { running, .. }
+            | B::WalkToLookTarget { running, .. }
             | B::LookAtPlayer(running)
             | B::LookAtPlayerSometimes(running, _)
             | B::Stroll { running, .. }
@@ -982,6 +1069,19 @@ impl B {
         let now = cx.now;
         match self {
             B::Gate(g) => g.try_start(m, cx),
+            B::PlayDead(t) => {
+                if !m.fluids.in_water
+                    || !mem(m).play_dead_ticks.present()
+                    || !mem(m).hurt_by_entity.present()
+                {
+                    return false;
+                }
+                t.begin(cx);
+                mem(m).walk_target.clear();
+                mem(m).look_target.clear();
+                m.add_effect("minecraft:regeneration", 200, 0);
+                true
+            }
             B::Swim(t) => {
                 if !swim_condition(m) {
                     return false;
@@ -1082,7 +1182,12 @@ impl B {
                         partner: m.id,
                     });
                 }
-                lock_gaze_and_walk(m, partner, 1.0, 2);
+                let speed = if m.species() == Species::Axolotl {
+                    0.2
+                } else {
+                    1.0
+                };
+                lock_gaze_and_walk(m, partner, speed, 2);
                 *spawn_at = now + 60 + i64::from(m.random.next_int_bound(50).unwrap_or(0));
                 true
             }
@@ -1196,7 +1301,8 @@ impl B {
                 t.begin(cx);
                 true
             }
-            B::WalkToLookTarget { .. }
+            B::AxolotlAction { .. }
+            | B::WalkToLookTarget { .. }
             | B::LookAtPlayer(_)
             | B::LookAtPlayerSometimes(..)
             | B::Stroll { .. }
@@ -1207,6 +1313,11 @@ impl B {
     /// A one-shot's trigger.
     fn trigger(&mut self, m: &mut Mob, cx: &mut Bx) -> bool {
         match *self {
+            B::AxolotlAction {
+                action,
+                ref mut until,
+                ..
+            } => axolotl_action(m, cx, action, until),
             B::WalkToLookTarget { speed, close, .. } => {
                 let mm = mem(m);
                 if mm.walk_target.present() {
@@ -1252,7 +1363,11 @@ impl B {
                 let Some(t) = found else { return false };
                 // Ticker.tickDownAndCheck (UniformInt 40..80 on the level random).
                 if *ticks == 0 {
-                    *ticks = 40 + cx.lr.next_int_bound(41).unwrap_or(0) - 1;
+                    *ticks = if m.species() == Species::Axolotl {
+                        30 + cx.lr.next_int_bound(31).unwrap_or(0) - 1
+                    } else {
+                        40 + cx.lr.next_int_bound(41).unwrap_or(0) - 1
+                    };
                     return false;
                 }
                 *ticks -= 1;
@@ -1265,6 +1380,9 @@ impl B {
             B::Stroll {
                 fly, speed, range, ..
             } => {
+                if m.species() == Species::Axolotl && m.fluids.in_water {
+                    return false;
+                }
                 if mem(m).walk_target.present() {
                     return false;
                 }
@@ -1295,23 +1413,39 @@ impl B {
                 };
                 // closerThan(adult, 17) && !closerThan(adult, 3)
                 let d = m.distance_sqr(at.position);
-                if !(3.0 * 3.0..17.0 * 17.0).contains(&d) {
+                let min = if m.species() == Species::Axolotl {
+                    5.0
+                } else {
+                    3.0
+                };
+                if !(min * min..17.0 * 17.0).contains(&d) {
                     return false;
                 }
+                let speed = if m.species() == Species::Axolotl {
+                    axolotl_speed(m, true)
+                } else {
+                    1.1
+                };
+                let close = if m.species() == Species::Axolotl {
+                    4
+                } else {
+                    2
+                };
+                let eyes = m.species() != Species::Axolotl;
                 let mm = mem(m);
                 mm.walk_target.set(WalkTarget {
                     target: Tracker::Entity {
                         who: adult,
-                        eye: true,
-                        block_eye: true,
+                        eye: eyes,
+                        block_eye: eyes,
                     },
-                    speed: 1.1,
-                    close: 2,
+                    speed,
+                    close,
                 });
                 mm.look_target.set(Tracker::Entity {
                     who: adult,
                     eye: true,
-                    block_eye: true,
+                    block_eye: eyes,
                 });
                 true
             }
@@ -1327,6 +1461,12 @@ impl B {
         }
         let now = cx.now;
         match self {
+            B::AxolotlAction { .. } => {}
+            B::PlayDead(t) => {
+                if t.timed_out(now) || !m.fluids.in_water || !mem(m).play_dead_ticks.present() {
+                    self.do_stop(m, cx);
+                }
+            }
             B::Gate(g) => g.tick_or_stop(m, cx),
             B::Swim(t) => {
                 if t.timed_out(now) || !swim_condition(m) {
@@ -1419,7 +1559,16 @@ impl B {
                     self.do_stop(m, cx);
                     return;
                 }
-                lock_gaze_and_walk(m, partner, 1.0, 2);
+                lock_gaze_and_walk(
+                    m,
+                    partner,
+                    if m.species() == Species::Axolotl {
+                        0.2
+                    } else {
+                        1.0
+                    },
+                    2,
+                );
                 if let Who::Mob(id) = partner {
                     cx.events.push(MobEvent::LockGaze {
                         mob: id,
@@ -1476,7 +1625,11 @@ impl B {
                 let near =
                     cx.w.target_info(player)
                         .is_some_and(|t| m.distance_sqr(t.position) < close * close);
-                let speed = 1.25;
+                let speed = if m.species() == Species::Axolotl {
+                    axolotl_speed(m, false)
+                } else {
+                    1.25
+                };
                 let mm = mem(m);
                 if near {
                     mm.walk_target.clear();
@@ -1560,6 +1713,8 @@ impl B {
         }
         let now = cx.now;
         match self {
+            B::AxolotlAction { .. } => {}
+            B::PlayDead(t) => t.running = false,
             B::Gate(g) => g.do_stop(m, cx),
             B::Swim(t) | B::DoNothing(t) => t.running = false,
             B::AnimalPanic { t, .. } => {
@@ -1788,6 +1943,7 @@ fn follow_temptation_close(m: &mut Mob) -> f64 {
                 3.5
             }
         }
+        Kind::Axolotl => 2.5,
         Kind::Ghastling | Kind::CopperGolem => 3.0,
     }
 }
@@ -1797,8 +1953,8 @@ fn can_mate_with(m: &Mob, w: &MobWorld, partner: Who) -> bool {
     s.species == m.species()
         && s.in_love
         && m.extra.in_love > 0
-        && sniffer::can_mate_state(sniffer::state(m))
-        && sniffer::can_mate_state(s.variant)
+        && (m.species() != Species::Sniffer
+            || sniffer::can_mate_state(sniffer::state(m)) && sniffer::can_mate_state(s.variant))
 }
 fn partner_panicking(_w: &MobWorld, _partner: Who) -> bool {
     false
@@ -2093,6 +2249,438 @@ fn move_to_target_sink(min: i32, max: i32) -> B {
     }
 }
 
+// ---- AxolotlAi -----------------------------------------------------------
+
+#[derive(Clone, Copy, Debug)]
+enum AxolotlAction {
+    ValidateDead,
+    StartAttack,
+    StopAttack,
+    Chase,
+    Bite,
+    EraseAttackBreeding,
+    EraseDeadBreeding,
+    FindLiquid,
+    SwimStroll,
+    WalkFromLook,
+    StayWater,
+    StayGround,
+}
+fn axolotl_speed(m: &Mob, chase: bool) -> f32 {
+    if m.fluids.in_water {
+        if chase { 0.6 } else { 0.5 }
+    } else {
+        0.15
+    }
+}
+pub fn set_play_dead(m: &mut Mob) {
+    if m.extra.animal_brain.is_none() {
+        init(m, i64::from(m.id));
+    }
+    mem(m).play_dead_ticks.set(super::axolotl::PLAY_DEAD_TICKS);
+}
+pub fn hunting_cooldown(m: &Mob) -> Option<i64> {
+    mem_ref(m).and_then(|mm| {
+        mm.hunting_cooldown
+            .get()
+            .and_then(|_| (mm.hunting_cooldown.ttl > 0).then_some(mm.hunting_cooldown.ttl))
+    })
+}
+pub fn set_hunting_cooldown(m: &mut Mob, ticks: i64) {
+    if m.extra.animal_brain.is_none() {
+        init(m, i64::from(m.id));
+    }
+    if ticks > 0 {
+        mem(m).hunting_cooldown.set_ttl(true, ticks);
+    } else {
+        mem(m).hunting_cooldown.clear();
+    }
+}
+fn validate_play_dead(b: &mut Brain) -> bool {
+    let Some(ticks) = b.mem.play_dead_ticks.value() else {
+        return false;
+    };
+    if ticks <= 0 {
+        b.mem.play_dead_ticks.clear();
+        b.mem.hurt_by_entity.clear();
+        b.activity = Act::Idle;
+    } else {
+        b.mem.play_dead_ticks.set(ticks - 1);
+    }
+    true
+}
+fn update_axolotl_activity(b: &mut Brain) {
+    let old = b.activity;
+    // PLAY_DEAD remains active until ValidatePlayDead resets to default IDLE.
+    if old == Act::PlayDead {
+        return;
+    }
+    b.activity = if b.mem.play_dead_ticks.present() {
+        Act::PlayDead
+    } else if b.mem.attack_target.present() {
+        Act::Fight
+    } else {
+        Act::Idle
+    };
+    if old != b.activity && old == Act::Fight {
+        b.mem
+            .hunting_cooldown
+            .set_ttl(true, super::axolotl::HUNTING_COOLDOWN);
+        b.mem.attack_target.clear();
+    }
+}
+fn sense_axolotl_attackables(m: &mut Mob, w: &MobWorld) {
+    let cooldown = mem(m).hunting_cooldown.present();
+    let target = find_closest(m, w, |m, who| {
+        let Who::Mob(id) = who else { return false };
+        let Some(s) = w.seen(id) else { return false };
+        let id = format!("minecraft:{}", super::species::def(s.species).name);
+        super::axolotl::prey_eligible(
+            m.distance_sqr(s.position),
+            s.in_water,
+            w.data.entity_has("minecraft:axolotl_always_hostiles", &id),
+            w.data.entity_has("minecraft:axolotl_hunt_targets", &id),
+            cooldown,
+            s.alive && !s.playing_dead,
+        )
+    });
+    mem(m).nearest_attackable.set_opt(target);
+}
+fn axolotl_action(m: &mut Mob, cx: &mut Bx, action: AxolotlAction, until: &mut i64) -> bool {
+    use AxolotlAction::*;
+    match action {
+        ValidateDead => validate_play_dead(brain_mut(m)),
+        StartAttack => {
+            let mm = mem(m);
+            if mm.attack_target.present() || mm.breed_target.present() {
+                return false;
+            }
+            let Some(target) = mm.nearest_attackable.value() else {
+                return false;
+            };
+            if !cx
+                .w
+                .target_info(target)
+                .is_some_and(|t| t.alive && !t.creative)
+            {
+                return false;
+            }
+            mem(m).attack_target.set(target);
+            mem(m).cant_reach_walk_target_since.clear();
+            m.ai.target = Some(target);
+            true
+        }
+        StopAttack => {
+            let Some(target) = mem(m).attack_target.value() else {
+                return false;
+            };
+            let tired = mem(m)
+                .cant_reach_walk_target_since
+                .value()
+                .is_some_and(|t| cx.now - t > 200);
+            let valid =
+                cx.w.target_info(target)
+                    .is_some_and(|t| t.alive && !t.creative)
+                    && match target {
+                        Who::Mob(id) => cx.w.seen(id).is_some_and(|s| !s.playing_dead),
+                        Who::Player => true,
+                    };
+            if tired || !valid {
+                super::axolotl::on_stop_attacking(m, cx.w, target, cx.events);
+                mem(m).attack_target.clear();
+                m.ai.target = None;
+            }
+            true
+        }
+        Chase => {
+            let Some(target) = mem(m).attack_target.value() else {
+                return false;
+            };
+            let speed = axolotl_speed(m, true);
+            if cx
+                .w
+                .target_info(target)
+                .is_some_and(|t| m.within_melee_range(&t))
+                && visible_contains(m, cx.w, target)
+            {
+                mem(m).walk_target.clear();
+            } else {
+                let tracker = Tracker::entity(target, true);
+                mem(m).look_target.set(tracker);
+                mem(m).walk_target.set(WalkTarget {
+                    target: Tracker::entity(target, false),
+                    speed,
+                    close: 0,
+                });
+            }
+            true
+        }
+        Bite => {
+            let mm = mem(m);
+            if mm.attack_cooling_down.present() {
+                return false;
+            }
+            let Some(target) = mm.attack_target.value() else {
+                return false;
+            };
+            if !visible_contains(m, cx.w, target)
+                || !cx
+                    .w
+                    .target_info(target)
+                    .is_some_and(|t| m.within_melee_range(&t))
+            {
+                return false;
+            }
+            mem(m).look_target.set(Tracker::entity(target, true));
+            m.swing();
+            super::ai::do_hurt_target(
+                m,
+                target,
+                &mut super::goals::Cx {
+                    w: cx.w,
+                    events: cx.events,
+                },
+            );
+            mem(m).attack_cooling_down.set_ttl(true, 20);
+            true
+        }
+        EraseAttackBreeding | EraseDeadBreeding => {
+            if !mem(m).breed_target.present() {
+                return false;
+            }
+            if matches!(action, EraseAttackBreeding) {
+                mem(m).attack_target.clear();
+            } else {
+                mem(m).play_dead_ticks.clear();
+            }
+            true
+        }
+        FindLiquid => {
+            if mem(m).walk_target.present() || mem(m).attack_target.present() {
+                return false;
+            }
+            let p = [
+                m.position.x.floor() as i32,
+                m.position.y.floor() as i32,
+                m.position.z.floor() as i32,
+            ];
+            if cx.w.fluid(p[0], p[1], p[2]) == crate::blocks::Fluid::Water {
+                return false;
+            }
+            if cx.now < *until {
+                *until = cx.now + 22;
+                return true;
+            }
+            let mut positions = Vec::new();
+            // BlockPos.withinManhattan: distance, x, y, then positive/negative z.
+            for distance in 0..=18i32 {
+                for x in -6..=6i32 {
+                    for y in -6..=6i32 {
+                        let z = distance - x.abs() - y.abs();
+                        if !(0..=6).contains(&z) {
+                            continue;
+                        }
+                        positions.push([p[0] + x, p[1] + y, p[2] + z]);
+                        if z != 0 {
+                            positions.push([p[0] + x, p[1] + y, p[2] - z]);
+                        }
+                    }
+                }
+            }
+            let mut found = None;
+            for q in positions {
+                if (q[0] == p[0] && q[2] == p[2])
+                    || cx.w.fluid(q[0], q[1], q[2]) != crate::blocks::Fluid::Water
+                {
+                    continue;
+                }
+                let name = cx.w.block_name(q[0], q[1], q[2]);
+                if name != "minecraft:water" {
+                    continue;
+                }
+                if cx.w.block_name(q[0], q[1] + 1, q[2]).ends_with("air") {
+                    found = Some(q);
+                    break;
+                }
+                let v = Vec3::new(
+                    f64::from(q[0]) + 0.5,
+                    f64::from(q[1]) + 0.5,
+                    f64::from(q[2]) + 0.5,
+                );
+                if found.is_none() && m.distance_sqr(v) >= 2.25 {
+                    found = Some(q);
+                }
+            }
+            if let Some(q) = found {
+                mem(m).look_target.set(Tracker::Block(q));
+                mem(m).walk_target.set(WalkTarget {
+                    target: Tracker::Block(q),
+                    speed: 0.15,
+                    close: 0,
+                });
+            }
+            *until = cx.now + 40;
+            true
+        }
+        SwimStroll => {
+            if mem(m).walk_target.present() || !m.fluids.in_water {
+                return false;
+            }
+            let mut fallback: Option<Vec3> = None;
+            for (h, v) in [(1, 1), (3, 3), (5, 5), (6, 5), (7, 7), (10, 7)] {
+                let point = if let Some(p) = fallback {
+                    let delta =
+                        Vec3::new(p.x - m.position.x, p.y - m.position.y, p.z - m.position.z);
+                    let length = (delta.x * delta.x + delta.y * delta.y + delta.z * delta.z).sqrt();
+                    let n = if length < 1.0e-5 {
+                        Vec3::ZERO
+                    } else {
+                        Vec3::new(delta.x / length, delta.y / length, delta.z / length)
+                    };
+                    Some(Vec3::new(
+                        m.position.x + n.x * f64::from(h),
+                        m.position.y + n.y * f64::from(v),
+                        m.position.z + n.z * f64::from(h),
+                    ))
+                } else {
+                    let mut p = m.default_random_pos(cx.w, h, v);
+                    let mut count = 0;
+                    while let Some(q) = p {
+                        let state = cx.w.world.block(
+                            q[0].floor() as i32,
+                            q[1].floor() as i32,
+                            q[2].floor() as i32,
+                        );
+                        if cx.w.data.state(state).flags & super::data::WATER != 0 || count >= 10 {
+                            break;
+                        }
+                        count += 1;
+                        p = m.default_random_pos(cx.w, h, v);
+                    }
+                    p.map(|q| Vec3::new(q[0], q[1], q[2]))
+                };
+                let Some(point) = point else { break };
+                let q = [
+                    point.x.floor() as i32,
+                    point.y.floor() as i32,
+                    point.z.floor() as i32,
+                ];
+                let restricted = m.restricted(f64::from(h), q);
+                if cx.w.fluid(q[0], q[1], q[2]) == crate::blocks::Fluid::None || restricted {
+                    break;
+                }
+                fallback = Some(point);
+            }
+            mem(m)
+                .walk_target
+                .set_opt(fallback.map(|p| WalkTarget::point([p.x, p.y, p.z], 0.5, 0)));
+            true
+        }
+        WalkFromLook => {
+            if mem(m).walk_target.present() {
+                return false;
+            }
+            let Some(t) = mem(m).look_target.value() else {
+                return false;
+            };
+            let Some(p) = t.block(cx.w) else { return false };
+            if (cx.w.fluid(p[0], p[1], p[2]) == crate::blocks::Fluid::Water) != m.fluids.in_water {
+                return false;
+            }
+            let speed = axolotl_speed(m, false);
+            mem(m).walk_target.set(WalkTarget {
+                target: t,
+                speed,
+                close: 3,
+            });
+            true
+        }
+        StayWater => m.fluids.in_water,
+        StayGround => m.on_ground,
+    }
+}
+fn axolotl_package(seed: i64) -> Vec<Entry> {
+    use Act::*;
+    use AxolotlAction::*;
+    let e = |act, b| Entry { act, b };
+    let action = |action| B::AxolotlAction {
+        action,
+        running: false,
+        until: 0,
+    };
+    vec![
+        // Native activity slots, merged by behavior priority.
+        e(Core, B::LookAtTargetSink(Timed::new(45, 90))),
+        e(Idle, B::LookAtPlayerSometimes(false, 0)),
+        e(Fight, action(StopAttack)),
+        e(PlayDead, B::PlayDead(Timed::new(200, 200))),
+        e(Core, move_to_target_sink(150, 250)),
+        e(
+            Idle,
+            B::MakeLove {
+                t: Timed::new(110, 110),
+                spawn_at: 0,
+            },
+        ),
+        e(Fight, action(Chase)),
+        e(PlayDead, action(EraseDeadBreeding)),
+        e(Core, action(ValidateDead)),
+        e(
+            Idle,
+            B::Gate(Box::new(Gate::run_one(
+                seed,
+                vec![
+                    (
+                        B::FollowTemptation {
+                            t: Timed::new(60, 60),
+                            look_in_the_eyes: false,
+                        },
+                        1,
+                    ),
+                    (
+                        B::FollowAdult {
+                            running: false,
+                            player: false,
+                        },
+                        1,
+                    ),
+                ],
+            ))),
+        ),
+        e(Fight, action(Bite)),
+        e(Core, B::CountDownTemptation(Timed::new(60, 60))),
+        e(Idle, action(StartAttack)),
+        e(Idle, action(FindLiquid)),
+        e(Fight, action(EraseAttackBreeding)),
+        e(
+            Idle,
+            B::Gate(Box::new(Gate {
+                running: false,
+                shuffle: false,
+                try_all: true,
+                random: horizon_core::random::LegacyRandom::new(seed),
+                kids: vec![
+                    (action(SwimStroll), 2, 0.0),
+                    (
+                        B::Stroll {
+                            running: false,
+                            fly: false,
+                            speed: 0.15,
+                            range: (10, 7),
+                        },
+                        2,
+                        0.0,
+                    ),
+                    (action(WalkFromLook), 3, 0.0),
+                    (action(StayWater), 5, 0.0),
+                    (action(StayGround), 5, 0.0),
+                ],
+                when: Some(|mm| !mm.walk_target.present()),
+            })),
+        ),
+    ]
+}
+
 // ---- Debug output (the mob AI harness) ------------------------------------
 
 fn pos(p: [i32; 3]) -> String {
@@ -2134,6 +2722,16 @@ pub fn describe(m: &Mob) -> Option<(String, String)> {
         };
     }
     let n = |l: &Vec<Who>| format!("n{}", l.len());
+    slot!("nearest_attackable", mm.nearest_attackable, |v: &Who| who(
+        *v
+    ));
+    slot!("attack_target", mm.attack_target, |v: &Who| who(*v));
+    slot!("attack_cooling_down", mm.attack_cooling_down, |v: &bool| v
+        .to_string());
+    slot!("has_hunting_cooldown", mm.hunting_cooldown, |v: &bool| v
+        .to_string());
+    slot!("play_dead_ticks", mm.play_dead_ticks, |v: &i32| v
+        .to_string());
     slot!("mobs", mm.mobs, n);
     slot!("visible_mobs", mm.visible_mobs, |_: &Visible| {
         "NearestVisibleLivingEntities".to_string()
@@ -2218,4 +2816,76 @@ pub fn describe(m: &Mob) -> Option<(String, String)> {
     }
     out.sort();
     Some((acts.join("|"), out.join(" ")))
+}
+
+#[cfg(test)]
+mod axolotl_parity_tests {
+    use super::*;
+    fn empty_brain() -> Brain {
+        Brain {
+            kind: Kind::Axolotl,
+            mem: Memories::default(),
+            sensors: Vec::new(),
+            activity: Act::Idle,
+            list: Vec::new(),
+        }
+    }
+    #[test]
+    fn fight_exit_sets_hunting_cooldown_and_play_dead_has_priority() {
+        let mut b = empty_brain();
+        b.mem.attack_target.set(Who::Mob(1));
+        update_axolotl_activity(&mut b);
+        assert_eq!(b.activity, Act::Fight);
+        b.mem.play_dead_ticks.set(200);
+        update_axolotl_activity(&mut b);
+        assert_eq!(b.activity, Act::PlayDead);
+        assert_eq!(b.mem.hunting_cooldown.ttl, 2400);
+        assert!(!b.mem.attack_target.present());
+        for _ in 0..2400 {
+            b.mem.hunting_cooldown.tick();
+        }
+        assert!(b.mem.hunting_cooldown.present());
+        b.mem.hunting_cooldown.tick();
+        assert!(!b.mem.hunting_cooldown.present());
+    }
+    #[test]
+    fn play_dead_flag_ends_at_zero_before_memory_is_erased() {
+        let mut b = empty_brain();
+        b.activity = Act::PlayDead;
+        b.mem.play_dead_ticks.set(200);
+        b.mem.hurt_by_entity.set(Who::Mob(7));
+        for _ in 0..200 {
+            assert!(validate_play_dead(&mut b));
+        }
+        assert_eq!(b.mem.play_dead_ticks.value(), Some(0));
+        assert_eq!(b.activity, Act::PlayDead);
+        assert!(validate_play_dead(&mut b));
+        assert!(!b.mem.play_dead_ticks.present());
+        assert!(!b.mem.hurt_by_entity.present());
+        assert_eq!(b.activity, Act::Idle);
+    }
+    #[test]
+    fn axolotl_has_native_activity_brain_not_fallback_goals() {
+        assert!(kind_for_species(Species::Axolotl).is_some());
+    }
+}
+
+#[cfg(test)]
+mod breeding_duration_tests {
+    use super::*;
+    #[test]
+    fn axolotl_breeding_uses_native_110_tick_timeout() {
+        let package = axolotl_package(1);
+        let timed = package
+            .iter()
+            .find_map(|e| {
+                if let B::MakeLove { t, .. } = &e.b {
+                    Some(t)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        assert_eq!((timed.min, timed.max), (110, 110));
+    }
 }

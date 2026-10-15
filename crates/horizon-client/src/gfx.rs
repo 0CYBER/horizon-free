@@ -83,6 +83,7 @@ pub fn outline_vertices(edges: &[[f64; 6]], camera: glam::DVec3) -> Vec<[f32; 6]
 
 mod arena;
 mod occlusion;
+pub mod panorama;
 mod timing;
 mod world_post;
 
@@ -137,7 +138,7 @@ pub struct Frame<'a> {
     /// Skip sections the camera cannot see through open faces (vanilla's
     /// occlusion graph; off in spectator-like views inside blocks).
     pub cave_culling: bool,
-    /// Title screen: only the panorama (in `celestial`) and the HUD.
+    /// Title screen: only the dedicated panorama cube map and the HUD.
     pub title: bool,
     /// Dimensions without a skybox (the Nether) clear to the fog colour.
     pub skybox: bool,
@@ -246,6 +247,7 @@ pub struct Renderer {
     additive_pipeline: wgpu::RenderPipeline,
     celestial_pipeline: wgpu::RenderPipeline,
     celestial_buffer: wgpu::Buffer,
+    panorama: panorama::Panorama,
     /// `RenderPipelines.WORLD_BORDER` and its buffers.
     border_pipeline: wgpu::RenderPipeline,
     border_group: wgpu::BindGroup,
@@ -277,6 +279,7 @@ pub struct Renderer {
     sprite_mips: Vec<crate::mipmap::Settings>,
     /// Edge length of the block sprite array's layers.
     sprite_size: u32,
+    sprite_minimum_size: u32,
     indices: wgpu::Buffer,
     index_quads: u32,
     instances: wgpu::Buffer,
@@ -396,11 +399,13 @@ impl Renderer {
         offscreen: bool,
         sprite_pixels: &[u8],
         sprite_size: u32,
+        sprite_minimum_size: u32,
         layers: u32,
         sprite_mips: &[crate::mipmap::Settings],
         animations: &[SpriteAnimation],
         hud_atlas: (&[u8], u32, u32),
         forcefield: (&[u8], u32),
+        panorama_faces: &panorama::Faces,
     ) -> Result<Self> {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
@@ -1361,6 +1366,12 @@ impl Renderer {
             .features()
             .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE);
         let world_post = world_post::Post::new(&device, config.format.remove_srgb_suffix());
+        let panorama = panorama::Panorama::new(
+            &device,
+            &queue,
+            config.format.remove_srgb_suffix(),
+            panorama_faces,
+        );
         Ok(Self {
             instance,
             surface,
@@ -1389,6 +1400,7 @@ impl Renderer {
             additive_pipeline,
             celestial_pipeline,
             celestial_buffer,
+            panorama,
             border_pipeline,
             border_group,
             border_uniform,
@@ -1414,6 +1426,7 @@ impl Renderer {
             animations: animations.iter().map(|a| (a.clone(), usize::MAX)).collect(),
             sprite_mips: sprite_mips.to_vec(),
             sprite_size,
+            sprite_minimum_size,
             indices,
             index_quads,
             instances,
@@ -1658,7 +1671,12 @@ impl Renderer {
     /// The Mipmap Levels option: block textures sample at most `levels`
     /// reduced copies (0: none).
     pub fn set_mipmap_levels(&mut self, levels: u32) {
-        let levels = levels.min(self.mip_levels - 1);
+        let levels = sprite_mipmap_limit(
+            levels,
+            self.sprite_texture.width(),
+            self.sprite_minimum_size,
+            self.mip_levels,
+        );
         if levels == self.mipmaps {
             return;
         }
@@ -1785,23 +1803,13 @@ impl Renderer {
         );
     }
     fn animate(&mut self, tick: u64) {
-        for (animation, previous) in &mut self.animations {
-            let frame = animation.frame(tick);
-            if frame == *previous {
-                continue;
-            }
-            *previous = frame;
-            let (mips, levels) = mip_chain(
-                animation.pixels(frame),
-                self.sprite_size,
-                &self.sprite_mips,
-                animation.layer,
-                1,
-            );
-            let mut offset = 0;
-            for level in 0..levels.min(self.mip_levels) {
-                let size = self.sprite_size >> level;
-                let bytes = (size * size * 4) as usize;
+        animate_sprites(
+            &mut self.animations,
+            tick,
+            self.sprite_size,
+            self.mip_levels,
+            &self.sprite_mips,
+            |layer, level, size, pixels| {
                 self.queue.write_texture(
                     wgpu::TexelCopyTextureInfo {
                         texture: &self.sprite_texture,
@@ -1809,11 +1817,11 @@ impl Renderer {
                         origin: wgpu::Origin3d {
                             x: 0,
                             y: 0,
-                            z: animation.layer,
+                            z: layer,
                         },
                         aspect: wgpu::TextureAspect::All,
                     },
-                    &mips[offset..offset + bytes],
+                    pixels,
                     wgpu::TexelCopyBufferLayout {
                         offset: 0,
                         bytes_per_row: Some(size * 4),
@@ -1825,9 +1833,8 @@ impl Renderer {
                         depth_or_array_layers: 1,
                     },
                 );
-                offset += bytes;
-            }
-        }
+            },
+        );
     }
     pub fn render(&mut self, frame: &Frame) -> Result<bool> {
         if self.suspended {
@@ -1866,6 +1873,7 @@ impl Renderer {
         };
         if self.animated_textures {
             self.animate(frame.ticks);
+            self.hud.animate_fire(&self.queue, frame.ticks);
         }
         self.update_lightmap(
             &frame.sky,
@@ -1875,6 +1883,15 @@ impl Renderer {
             frame.block_flicker,
         );
         let view_proj = self.view_projection(frame);
+        if frame.title {
+            self.panorama.prepare(
+                &self.queue,
+                self.config.width,
+                self.config.height,
+                frame.yaw,
+                frame.pitch,
+            );
+        }
         let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
         let view = crate::camera::view_matrix(frame.yaw, frame.pitch);
         let sun_angle = frame.sky.sun_angle.to_radians();
@@ -2221,12 +2238,15 @@ impl Renderer {
                 Some(f) => f.sky_end > 2.0,
                 None => !frame.underwater,
             };
-            if sky_visible && (frame.skybox || frame.end_sky) {
+            if frame.title || (sky_visible && (frame.skybox || frame.end_sky)) {
                 if !frame.title && frame.skybox {
                     pass.set_pipeline(&self.sky);
                     pass.draw(0..3, 0..1);
                 }
-                if celestial_vertices > 0 {
+                if frame.title {
+                    self.panorama.draw(&mut pass);
+                    pass.set_bind_group(0, &self.group, &[]);
+                } else if celestial_vertices > 0 {
                     pass.set_pipeline(&self.celestial_pipeline);
                     pass.set_bind_group(0, &self.entity_group, &[]);
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -2689,5 +2709,69 @@ mod tests {
             ]]
         );
         assert!(super::outline_vertices(&[], glam::DVec3::ZERO).is_empty());
+    }
+}
+
+pub(crate) fn sprite_mipmap_limit(requested: u32, size: u32, minimum: u32, available: u32) -> u32 {
+    // Only the atlas native minimum determines how many resampling-only mips to skip.
+    let upscale = (size / minimum.max(1)).max(1).ilog2();
+    requested.saturating_add(upscale).min(available - 1)
+}
+fn animate_sprites(
+    animations: &mut [(crate::sprites::SpriteAnimation, usize)],
+    tick: u64,
+    size: u32,
+    max_levels: u32,
+    settings: &[crate::mipmap::Settings],
+    mut write: impl FnMut(u32, u32, u32, &[u8]),
+) {
+    for (animation, previous) in animations {
+        let frame = animation.frame(tick);
+        if frame == *previous {
+            continue;
+        }
+        *previous = frame;
+        let (mips, levels) = mip_chain(animation.pixels(frame), size, settings, animation.layer, 1);
+        let mut offset = 0;
+        for level in 0..levels.min(max_levels) {
+            let edge = size >> level;
+            let bytes = (edge * edge * 4) as usize;
+            write(animation.layer, level, edge, &mips[offset..offset + bytes]);
+            offset += bytes;
+        }
+    }
+}
+#[cfg(test)]
+mod sprite_upload_tests {
+    use super::*;
+    #[test]
+    fn mipmap_option_keeps_real_16px_reductions() {
+        for levels in 0..=4 {
+            assert_eq!(sprite_mipmap_limit(levels, 32, 16, 6), levels + 1);
+            assert_eq!(sprite_mipmap_limit(levels, 16, 16, 5), levels);
+        }
+    }
+    #[test]
+    fn animation_updates_entire_layer_every_mip_once() {
+        for size in [16, 32] {
+            let animation = crate::sprites::test_animation(size, 7);
+            let pixels = animation.pixels(animation.frame(1)).to_vec();
+            let settings = [];
+            let (expected, levels) = mip_chain(&pixels, size, &settings, 7, 1);
+            let mut animations = vec![(animation, 0)];
+            let mut writes = Vec::new();
+            let mut record = |layer, level, edge, data: &[u8]| {
+                assert_eq!(layer, 7);
+                assert_eq!(edge, size >> level);
+                assert_eq!(data.len(), (edge * edge * 4) as usize);
+                writes.push(data.to_vec());
+            };
+            animate_sprites(&mut animations, 0, size, levels, &settings, &mut record);
+            animate_sprites(&mut animations, 1, size, levels, &settings, &mut record);
+            animate_sprites(&mut animations, 1, size, levels, &settings, &mut record);
+            assert_eq!(writes.len(), levels as usize);
+            assert_eq!(writes[0], pixels);
+            assert_eq!(writes.concat(), expected);
+        }
     }
 }
