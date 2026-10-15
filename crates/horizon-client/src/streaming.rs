@@ -360,6 +360,22 @@ impl Streaming {
     pub fn pending(&self) -> usize {
         self.shared.queue.lock().unwrap().len()
     }
+    /// How much work each stage holds: queued jobs, then what is in flight or
+    /// waiting at each step from generation to meshing.
+    pub fn stages(&self) -> [(&'static str, usize); 7] {
+        [
+            ("queued", self.pending()),
+            ("generating", self.generating.len()),
+            (
+                "protos",
+                self.protos.values().filter(|p| p.is_some()).count(),
+            ),
+            ("decorating", self.decorating),
+            ("finishing", self.finishing.len()),
+            ("lighting", self.lighting.len()),
+            ("meshing", self.meshing.len()),
+        ]
+    }
     /// Advance streaming: collect finished work, then schedule more.
     /// Returns meshes ready for upload and columns that were unloaded.
     pub fn update(
