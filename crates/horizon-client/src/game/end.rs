@@ -233,7 +233,7 @@ impl Game<'_> {
 
     /// EnderEyeItem.useOn: fill an empty End portal frame, then light the
     /// portal when the ring of twelve filled frames is complete.
-    pub(super) fn use_ender_eye(&mut self, stack: &ItemStack) -> Result<bool> {
+    pub(super) fn use_ender_eye(&mut self, stack: &ItemStack, use_on_block: bool) -> Result<bool> {
         if &*stack.item != "minecraft:ender_eye" {
             return Ok(false);
         }
@@ -247,6 +247,10 @@ impl Game<'_> {
             self.throw_ender_eye();
             return Ok(true);
         };
+        if !use_on_block {
+            // EnderEyeItem.use passes on a frame; only useOn can insert an eye.
+            return Ok(false);
+        }
         if state.properties.get("eye").map(String::as_str) == Some("true") {
             // Both useOn and use pass on a filled frame.
             return Ok(true);
