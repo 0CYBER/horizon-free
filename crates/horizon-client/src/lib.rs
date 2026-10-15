@@ -168,6 +168,7 @@ pub mod title_edition;
 pub mod ui;
 pub mod ui_theme;
 pub mod vanillagen;
+pub mod vault;
 pub mod weather;
 pub mod widgets;
 pub mod window;
