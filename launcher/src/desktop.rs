@@ -152,9 +152,15 @@ pub fn remove_in(data: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Registers the launcher, using a distributor's wrapper when one is configured.
+/// Both GUI registration (including the settings switch) and the CLI use this path.
 pub fn install(exe: &Path) -> Result<bool, String> {
     let data = data_home().ok_or("No home folder to put the menu entry in.")?;
-    install_in(&data, exe).map_err(|e| format!("{}: {e}", data.display()))
+    let wrapper = std::env::var_os("HORIZON_LAUNCHER_DESKTOP_EXEC")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from);
+    install_in(&data, wrapper.as_deref().unwrap_or(exe))
+        .map_err(|e| format!("{}: {e}", data.display()))
 }
 
 pub fn remove() -> Result<(), String> {
