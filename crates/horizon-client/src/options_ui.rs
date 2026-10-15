@@ -78,6 +78,8 @@ pub enum Opt {
     PadMoveDeadzone,
     PadLookDeadzone,
     PadGlyphs,
+    PadMenuNav,
+    PadKeyboard,
 }
 fn tr(key: &str) -> Text {
     Text::translate(key, &[])
@@ -174,6 +176,8 @@ impl Opt {
             Opt::PadMoveDeadzone => "Move Deadzone",
             Opt::PadLookDeadzone => "Look Deadzone",
             Opt::PadGlyphs => "Button Glyphs",
+            Opt::PadMenuNav => "Menu Navigation",
+            Opt::PadKeyboard => "On-Screen Keyboard",
         }
     }
     pub(crate) fn kind(self, s: &Settings) -> Kind {
@@ -432,6 +436,15 @@ impl Opt {
                 GlyphStyle::PlayStation => "PlayStation",
                 GlyphStyle::Nintendo => "Nintendo",
             }),
+            Opt::PadMenuNav => Text::literal(match s.controller.menu_nav {
+                gamepad::MenuNav::Focus => "Focus",
+                gamepad::MenuNav::Pointer => "Pointer",
+            }),
+            Opt::PadKeyboard => Text::literal(match s.controller.keyboard {
+                gamepad::TextKeyboard::Auto => "Auto",
+                gamepad::TextKeyboard::Horizon => "Horizon",
+                gamepad::TextKeyboard::Steam => "Steam",
+            }),
             _ => Text::empty(),
         }
     }
@@ -562,6 +575,20 @@ impl Opt {
                     .position(|g| *g == s.controller.glyphs)
                     .unwrap_or(0) as u8;
                 s.controller.glyphs = GlyphStyle::ALL[usize::from(next(i, 4))];
+            }
+            Opt::PadMenuNav => {
+                s.controller.menu_nav = match s.controller.menu_nav {
+                    gamepad::MenuNav::Focus => gamepad::MenuNav::Pointer,
+                    gamepad::MenuNav::Pointer => gamepad::MenuNav::Focus,
+                }
+            }
+            Opt::PadKeyboard => {
+                let all = gamepad::TextKeyboard::ALL;
+                let i = all
+                    .iter()
+                    .position(|k| *k == s.controller.keyboard)
+                    .unwrap_or(0) as u8;
+                s.controller.keyboard = all[usize::from(next(i, 3))];
             }
             _ => {}
         }
@@ -1005,6 +1032,8 @@ impl OptionsUi {
                     Opt::PadMoveDeadzone,
                     Opt::PadLookDeadzone,
                     Opt::PadGlyphs,
+                    Opt::PadMenuNav,
+                    Opt::PadKeyboard,
                 ]));
                 rows
             }
@@ -1573,6 +1602,7 @@ impl OptionsUi {
                 WKind::LanguageRow {
                     label, selected, ..
                 } => {
+                    crate::widgets::target_as([wd.x, wd.y, wd.w, wd.h], crate::widgets::Kind::Row);
                     if *selected {
                         batch.fill(atlas, wd.x, wd.y, wd.w, wd.h, u32::MAX);
                         batch.fill(

@@ -266,6 +266,10 @@ impl Screen {
         blink: bool,
     ) {
         let w = batch.width;
+        crate::widgets::target_as(
+            [w / 2.0 - 100.0, y + 11.0, 200.0, 20.0],
+            crate::widgets::Kind::Field,
+        );
         batch.text(
             atlas,
             label,
@@ -331,6 +335,10 @@ impl Screen {
                         break;
                     }
                     let x = w / 2.0 - 152.0;
+                    crate::widgets::target_as(
+                        [x - 2.0, y - 2.0, 306.0, 36.0],
+                        crate::widgets::Kind::Row,
+                    );
                     if *selected == Some(i) {
                         batch.fill(
                             atlas,
@@ -391,6 +399,10 @@ impl Screen {
                         break;
                     }
                     let x = w / 2.0 - 152.0;
+                    crate::widgets::target_as(
+                        [x - 2.0, y - 2.0, 306.0, 36.0],
+                        crate::widgets::Kind::Row,
+                    );
                     if *selected == Some(i) {
                         batch.fill(
                             atlas,

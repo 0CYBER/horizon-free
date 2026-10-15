@@ -738,6 +738,13 @@ impl Title {
                     if y + 32.0 <= LIST_TOP || y >= bottom {
                         continue;
                     }
+                    let mid = y - 2.0 + ROW_HEIGHT / 2.0;
+                    if mid > LIST_TOP && mid < bottom {
+                        crate::widgets::target_as(
+                            [x - 2.0, y - 2.0, ROW_WIDTH, ROW_HEIGHT],
+                            crate::widgets::Kind::Row,
+                        );
+                    }
                     if *selected == Some(i) {
                         batch.fill(
                             atlas,
@@ -847,6 +854,10 @@ impl Title {
                 .enumerate()
                 {
                     let y = 40.0 + i as f32 * 40.0;
+                    crate::widgets::target_as(
+                        [(w / 2.0).floor() - 100.0, y + 11.0, 200.0, 20.0],
+                        crate::widgets::Kind::Field,
+                    );
                     batch.text(
                         atlas,
                         label,
@@ -1388,6 +1399,7 @@ fn text_field(
     blink: bool,
 ) {
     let (x, y) = pos;
+    crate::widgets::target_as([x, y, 200.0, 20.0], crate::widgets::Kind::Field);
     batch.fill(
         atlas,
         x,

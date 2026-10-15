@@ -333,13 +333,26 @@ impl Game<'_> {
             o.port.shortcut(shortcut, &mut self.clipboard);
             return;
         }
-        if !o.port.key(key, ctrl, false)
-            && !ctrl
-            && let Some(text) = &event.text
-        {
-            let digits: String = text.chars().filter(char::is_ascii_digit).collect();
-            if !digits.is_empty() {
-                o.port.insert_text(&digits);
+        if !o.port.key(key, ctrl, false) && !ctrl {
+            self.world_options_text(event.text.as_deref());
+        }
+    }
+    /// Digits typed into the port field (the keyboard, or a controller's
+    /// on-screen keyboard), and its backspace.
+    pub(super) fn world_options_text(&mut self, text: Option<&str>) {
+        let Some(o) = self.world_options.as_mut().filter(|o| o.port.focused) else {
+            return;
+        };
+        match text {
+            Some(text) => {
+                let digits: String = text.chars().filter(char::is_ascii_digit).collect();
+                if !digits.is_empty() {
+                    o.port.insert_text(&digits);
+                }
+            }
+            None => {
+                o.port
+                    .key(winit::keyboard::KeyCode::Backspace, false, false);
             }
         }
     }

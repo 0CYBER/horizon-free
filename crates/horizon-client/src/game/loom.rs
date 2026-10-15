@@ -128,6 +128,24 @@ impl Game<'_> {
         }
         false
     }
+    /// The pattern buttons a controller can focus (GUI origin relative).
+    pub(super) fn loom_targets(&self) -> Vec<[f32; 4]> {
+        let Some(loom) = self.station.as_ref().map(|s| &s.loom).filter(|l| l.display) else {
+            return Vec::new();
+        };
+        (0..16)
+            .filter(|i| (i / 4 + loom.start_row) * 4 + i % 4 < loom.patterns.len())
+            .map(|i| {
+                let (row, column) = (i / 4, i % 4);
+                [
+                    60.0 + column as f32 * BUTTON,
+                    13.0 + row as f32 * BUTTON,
+                    BUTTON,
+                    BUTTON,
+                ]
+            })
+            .collect()
+    }
     /// `LoomScreen.mouseDragged` on the scroller.
     pub(super) fn loom_drag(&mut self) {
         let Some(size) = self

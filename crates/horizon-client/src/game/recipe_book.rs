@@ -629,6 +629,66 @@ impl Game<'_> {
         }
         false
     }
+    /// The recipe book's buttons a controller can focus: the book button,
+    /// recipes, page arrows, the craftable filter and the tabs (GUI pixels;
+    /// the search box registers itself as a field).
+    pub(super) fn recipe_book_targets(&self) -> Vec<horizon_client::widgets::Target> {
+        use horizon_client::widgets::{Kind, Target};
+        let (Some(book_type), Some(batch)) = (self.active_book(), self.batch_for_size()) else {
+            return Vec::new();
+        };
+        let button = |rect| Target {
+            rect,
+            kind: Kind::Button,
+        };
+        let (ox, _) = self.inventory_origin(&batch);
+        let (bx, by) = self.book_button_pos(book_type, ox, &batch);
+        let mut out = vec![button([bx, by, 20.0, 18.0])];
+        if !self.book_open(book_type) || self.spectator() {
+            return out;
+        }
+        let (xo, yo) = self.book_origin(&batch);
+        if let Some(overlay) = &self.recipe_ui.overlay {
+            // The alternatives overlay takes every click while open.
+            let maxrow = if overlay.entries.len() <= 16 { 4 } else { 5 };
+            return (0..overlay.entries.len())
+                .map(|n| {
+                    let x = overlay.x + 4.0 + 25.0 * (n % maxrow) as f32;
+                    let y = overlay.y + 5.0 + 25.0 * (n / maxrow) as f32;
+                    button([x, y, 24.0, 24.0])
+                })
+                .collect();
+        }
+        let first = self.recipe_ui.page * 20;
+        let shown = self
+            .recipe_ui
+            .view
+            .buttons
+            .len()
+            .saturating_sub(first)
+            .min(20);
+        out.extend((0..shown).map(|n| {
+            let (x, y) = Self::button_pos(xo, yo, n);
+            button([x, y, 25.0, 25.0])
+        }));
+        let pages = self.recipe_ui.view.buttons.len().div_ceil(20);
+        if pages > 1 && self.recipe_ui.page + 1 < pages {
+            out.push(button([xo + 93.0, yo + 137.0, 12.0, 17.0]));
+        }
+        if pages > 1 && self.recipe_ui.page > 0 {
+            out.push(button([xo + 38.0, yo + 137.0, 12.0, 17.0]));
+        }
+        out.push(button([xo + 110.0, yo + 12.0, 26.0, 16.0]));
+        let selected = self.recipe_ui.tab.unwrap_or(Tab::Search);
+        for (n, tab) in self.recipe_ui.view.tabs.iter().enumerate() {
+            let (x, y) = self.tab_pos(xo, yo, n);
+            out.push(Target {
+                rect: [x, y, 35.0, 27.0],
+                kind: Kind::Tab(*tab == selected),
+            });
+        }
+        out
+    }
     fn shift_down(&self) -> bool {
         self.has_shift_down()
     }

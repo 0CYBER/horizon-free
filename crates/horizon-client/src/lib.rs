@@ -107,6 +107,7 @@ pub mod options_file;
 pub mod options_fixes;
 pub mod options_horizon;
 pub mod options_ui;
+pub mod osk;
 pub mod overlay;
 pub mod pack_screen;
 pub mod packs;
