@@ -93,6 +93,26 @@ impl Creative {
             _ => None,
         }
     }
+    /// Game slot id of an item tab's first display slot (ItemPickerMenu's
+    /// `CustomCreativeSlot`s, 9 by 5); its hotbar row keeps ids 0..9.
+    pub const DISPLAY: usize = 900;
+
+    /// Visible slots of an item tab (game slot ids).
+    pub fn tab_slots() -> impl Iterator<Item = usize> {
+        (Self::DISPLAY..Self::DISPLAY + 45).chain(0..9)
+    }
+
+    /// ItemPickerMenu's slot positions.
+    pub fn tab_slot_position(slot: usize) -> Option<(f32, f32)> {
+        match slot {
+            0..9 => Some((9.0 + slot as f32 * 18.0, 112.0)),
+            _ if (Self::DISPLAY..Self::DISPLAY + 45).contains(&slot) => {
+                let i = slot - Self::DISPLAY;
+                Some((9.0 + (i % 9) as f32 * 18.0, 18.0 + (i / 9) as f32 * 18.0))
+            }
+            _ => None,
+        }
+    }
     /// The scrollbar track (insideScrollbar), relative to the screen origin.
     pub const SCROLL_X: f32 = 175.0;
     pub const SCROLL_Y: f32 = 18.0;
@@ -380,9 +400,171 @@ fn split_id(id: &str) -> (String, String) {
         None => ("minecraft".to_owned(), id.to_owned()),
     }
 }
+/// What a click on an item tab's display slot does besides changing the
+/// carried stack.
+#[derive(Clone, PartialEq, Debug)]
+pub enum DisplayClick {
+    Nothing,
+    /// SWAP: the hotbar slot gets a full stack of the item.
+    Hotbar(usize, ItemStack),
+    /// THROW: a copy of the item is dropped.
+    Drop(ItemStack),
+}
+
+/// `CreativeModeInventoryScreen.slotClicked` on a display slot
+/// (`slot.container == CONTAINER`): `shown` is the slot's item (None past
+/// the tab's end) and `max` gives an item's max stack size. The tab's items
+/// are never changed: clicks make copies.
+pub fn click_display(
+    carried: &mut Option<ItemStack>,
+    shown: Option<&ItemStack>,
+    max: impl Fn(&ItemStack) -> u32,
+    button: i32,
+    input: crate::menu::Input,
+) -> DisplayClick {
+    use crate::menu::Input;
+    let copy = |s: &ItemStack, count: u32| ItemStack { count, ..s.clone() };
+    let quick_key = input == Input::QuickMove;
+    match input {
+        Input::Swap => {
+            return match shown {
+                Some(s) => DisplayClick::Hotbar(button as usize, copy(s, max(s))),
+                None => DisplayClick::Nothing,
+            };
+        }
+        Input::Clone => {
+            if carried.is_none()
+                && let Some(s) = shown
+            {
+                *carried = Some(copy(s, max(s)));
+            }
+            return DisplayClick::Nothing;
+        }
+        Input::Throw => {
+            return match shown {
+                Some(s) => DisplayClick::Drop(copy(s, if button == 0 { 1 } else { max(s) })),
+                None => DisplayClick::Nothing,
+            };
+        }
+        _ => {}
+    }
+    match (carried.as_mut(), shown) {
+        (Some(c), Some(s)) if c.item == s.item && c.extra == s.extra && c.damage == s.damage => {
+            // isSameItemSameComponents: grow, fill or shrink what is carried.
+            if button == 0 {
+                if quick_key {
+                    c.count = max(c);
+                } else if c.count < max(c) {
+                    c.count += 1;
+                }
+            } else {
+                c.count -= 1;
+            }
+        }
+        (None, Some(s)) => {
+            *carried = Some(copy(s, if quick_key { max(s) } else { s.count }));
+        }
+        (Some(c), _) => {
+            if button == 0 {
+                *carried = None;
+            } else {
+                c.count -= 1;
+            }
+        }
+        (None, None) => {}
+    }
+    if carried.as_ref().is_some_and(|c| c.count == 0) {
+        *carried = None;
+    }
+    DisplayClick::Nothing
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn stack(item: &str, count: u32) -> ItemStack {
+        ItemStack {
+            item: format!("minecraft:{item}").into(),
+            count,
+            damage: 0,
+            extra: None,
+        }
+    }
+
+    /// One click on a display slot showing one stone (max 64; pearls 16).
+    fn display(
+        carried: Option<ItemStack>,
+        button: i32,
+        input: crate::menu::Input,
+    ) -> (Option<ItemStack>, DisplayClick) {
+        let mut carried = carried;
+        let max = |s: &ItemStack| if s.item.ends_with("pearl") { 16 } else { 64 };
+        let effect = click_display(&mut carried, Some(&stack("stone", 1)), max, button, input);
+        (carried, effect)
+    }
+
+    #[test]
+    fn display_slot_clicks_follow_slot_clicked() {
+        use crate::menu::Input::*;
+        // An empty hand takes the shown stack, or a full one with Shift.
+        assert_eq!(display(None, 0, Pickup).0, Some(stack("stone", 1)));
+        assert_eq!(display(None, 1, Pickup).0, Some(stack("stone", 1)));
+        assert_eq!(display(None, 0, QuickMove).0, Some(stack("stone", 64)));
+        // The same item grows by one (left), fills (Shift) or shrinks (right).
+        assert_eq!(
+            display(Some(stack("stone", 5)), 0, Pickup).0,
+            Some(stack("stone", 6))
+        );
+        assert_eq!(
+            display(Some(stack("stone", 64)), 0, Pickup).0,
+            Some(stack("stone", 64))
+        );
+        assert_eq!(
+            display(Some(stack("stone", 5)), 0, QuickMove).0,
+            Some(stack("stone", 64))
+        );
+        assert_eq!(
+            display(Some(stack("stone", 5)), 1, Pickup).0,
+            Some(stack("stone", 4))
+        );
+        assert_eq!(display(Some(stack("stone", 1)), 1, QuickMove).0, None);
+        // Another item is deleted (left) or loses one (right).
+        assert_eq!(display(Some(stack("ender_pearl", 9)), 0, Pickup).0, None);
+        assert_eq!(display(Some(stack("ender_pearl", 9)), 0, QuickMove).0, None);
+        assert_eq!(
+            display(Some(stack("ender_pearl", 9)), 1, Pickup).0,
+            Some(stack("ender_pearl", 8))
+        );
+        // Number keys fill a hotbar slot, Q drops copies, pick block clones.
+        assert_eq!(
+            display(None, 3, Swap).1,
+            DisplayClick::Hotbar(3, stack("stone", 64))
+        );
+        assert_eq!(
+            display(None, 0, Throw).1,
+            DisplayClick::Drop(stack("stone", 1))
+        );
+        assert_eq!(
+            display(None, 1, Throw).1,
+            DisplayClick::Drop(stack("stone", 64))
+        );
+        assert_eq!(display(None, 2, Clone).0, Some(stack("stone", 64)));
+        assert_eq!(
+            display(Some(stack("dirt", 2)), 2, Clone).0,
+            Some(stack("dirt", 2))
+        );
+    }
+
+    #[test]
+    fn an_empty_display_slot_deletes_or_shrinks_the_carried_stack() {
+        use crate::menu::Input::Pickup;
+        let mut carried = Some(stack("dirt", 3));
+        click_display(&mut carried, None, |_| 64, 1, Pickup);
+        assert_eq!(carried, Some(stack("dirt", 2)));
+        click_display(&mut carried, None, |_| 64, 0, Pickup);
+        assert_eq!(carried, None);
+    }
 
     fn creative(items: usize) -> Creative {
         let mut stacks: Vec<String> = ["anvil", "crafting_table", "wooden_hoe"]
