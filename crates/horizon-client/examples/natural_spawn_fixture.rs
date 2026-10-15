@@ -13,6 +13,10 @@
 //! `mobs::spawner::Spawner` loaded from the case's SNBT on the same world and
 //! print its events tick by tick.
 //!
+//! Trial spawner cases (`mode=trial`, tools/test_trial_spawner_parity.py) tick
+//! a `mobs::trial_spawner::TrialSpawner` with the game time advancing and
+//! print its states, events, spawns and ejected items.
+//!
 //! usage: natural_spawn_fixture RESOURCES INPUT OUTPUT
 use horizon_client::{
     assets::Assets,
@@ -31,6 +35,7 @@ use horizon_client::{
         },
         spawner::{Spawner, SpawnerAdded, SpawnerEvent, SpawnerLevel, SpawnerSpawn},
         species::{self, Baby},
+        trial_spawner::{TrialEvent, TrialPlayer, TrialSpawner, TrialSpawnerLevel, TrialState},
     },
 };
 use horizon_core::{
@@ -38,11 +43,11 @@ use horizon_core::{
     random::{LegacyRandom, RandomSource},
 };
 use horizon_world::{
-    block_collision::BlockCollisionRegistry, chunk::BlockState, registry::BlockStateId,
+    block_collision::BlockCollisionRegistry, chunk::BlockState, nbt::Tag, registry::BlockStateId,
 };
 use serde_json::Value;
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::{BTreeMap, HashMap, HashSet},
     fmt::Write as _,
     fs,
@@ -106,6 +111,12 @@ struct World<'a> {
     spawners_work: bool,
     /// Types and boxes of living entities (case entities, then spawned mobs).
     entities: RefCell<Vec<(String, Aabb)>>,
+    /// Blocks set since the case started (a trial spawner's states).
+    placed: RefCell<Vec<([i32; 3], BlockStateId)>>,
+    /// The game time (trial cases advance it).
+    time: Cell<i64>,
+    /// The mobs a trial spawner added: UUID, position and box.
+    trial_mobs: RefCell<Vec<([i32; 4], [f64; 3], Aabb)>>,
 }
 impl World<'_> {
     fn biome_at(&self, x: i32, y: i32, z: i32) -> &str {
@@ -129,6 +140,15 @@ impl World<'_> {
 }
 impl SpawnLevel for World<'_> {
     fn state(&self, x: i32, y: i32, z: i32) -> BlockStateId {
+        if let Some((_, s)) = self
+            .placed
+            .borrow()
+            .iter()
+            .rev()
+            .find(|(p, _)| *p == [x, y, z])
+        {
+            return *s;
+        }
         self.blocks
             .iter()
             .rev()
@@ -341,6 +361,50 @@ impl SpawnerLevel for World<'_> {
     }
 }
 
+impl TrialSpawnerLevel for World<'_> {
+    fn game_time(&self) -> i64 {
+        self.time.get()
+    }
+    fn mob_spawning(&self) -> bool {
+        self.spawn_mobs
+    }
+    fn players(&self) -> Vec<TrialPlayer> {
+        self.players
+            .iter()
+            .enumerate()
+            .map(|(i, (p, mode))| TrialPlayer {
+                uuid: [0, 0, 0, i as i32 + 1],
+                block: p.map(|v| v.floor() as i32),
+                eye: [p[0], p[1] + f64::from(1.62f32), p[2]],
+                creative: mode == "creative",
+                spectator: mode == "spectator",
+            })
+            .collect()
+    }
+    fn visual_hit(&self, from: [f64; 3], to: [f64; 3]) -> Option<[i32; 3]> {
+        let lookup = |x: i32, y: i32, z: i32| self.state(x, y, z);
+        let mut scene = LookupCollisions {
+            block: &lookup,
+            binding: self.s.collision,
+        };
+        let v = |p: [f64; 3]| horizon_core::geometry::Vec3::new(p[0], p[1], p[2]);
+        horizon_client::mobs::visual_clip(
+            self.s.facts,
+            self.s.collision,
+            &mut scene,
+            &lookup,
+            v(from),
+            v(to),
+        )
+        .flatten()
+    }
+    fn entity_block(&self, uuid: [i32; 4]) -> Option<[i32; 3]> {
+        let mobs = self.trial_mobs.borrow();
+        let (_, p, _) = mobs.iter().find(|(u, ..)| *u == uuid)?;
+        Some(p.map(|v| v.floor() as i32))
+    }
+}
+
 /// The box a mob is left with by `finalizeSpawn` under the oracle's fixed random.
 fn neutral_box(l: &World, r: &SpawnRequest) -> Aabb {
     let t = &l.s.types.types[r.entity];
@@ -407,6 +471,13 @@ fn main() -> horizon_client::Result<()> {
     let facts = BlockFacts::load(root, registry)?;
     let data = MobData::load(root, &facts);
     let items = Items::tags_only(root)?;
+    // Trial spawner rewards: the loot tables and the configs.
+    let loot = if input.contains("mode=trial") {
+        horizon_client::mobs::trial_spawner::load_registry(root);
+        horizon_client::structure_blocks::loot_data(root)
+    } else {
+        None
+    };
     let types = MobTypes::load(root)?;
     let biomes = Biomes::load(root)?;
     let structures = StructureSpawns::load(root);
@@ -593,6 +664,9 @@ fn main() -> horizon_client::Result<()> {
             unloaded,
             spawn_mobs: get("rules", "1") != "0",
             spawners_work: get("spawners", "1") != "0",
+            placed: RefCell::new(Vec::new()),
+            time: Cell::new(0),
+            trial_mobs: RefCell::new(Vec::new()),
             entities: RefCell::new(
                 case_entities
                     .iter()
@@ -629,6 +703,9 @@ fn main() -> horizon_client::Result<()> {
         let mode = get("mode", "chunk");
         if mode == "spawner" {
             spawner_case(&world, &get, &mut random, &mut log)?;
+        } else if mode == "trial" {
+            let loot = loot.as_ref().ok_or("no loot tables")?;
+            trial_case(&world, registry, loot, &get, &mut random, &mut log)?;
         } else if mode == "gen" {
             let mut gen_random = LegacyRandom::new(get("gseed", "0").parse()?);
             // The level random of the spawn predicates: no creature's predicate
@@ -827,6 +904,199 @@ fn spawner_case(
         "end delay={} next={next} pots={}",
         spawner.spawn_delay as i16,
         pots.join(",")
+    ));
+    log.push(format!("next {}", random.next_int_bound(1000).unwrap_or(0)));
+    Ok(())
+}
+
+/// `TrialSpawner.tickServer` `ticks` times from game time `t0` at `spos` on a
+/// trial spawner block in state `state` (ominous with `ominous=1`) loaded from
+/// `snbt` (base64 SNBT), as the oracle logs it. Every `kill` ticks the mobs it
+/// spawned die.
+fn trial_case(
+    world: &World,
+    registry: &horizon_world::registry::BlockRegistry,
+    loot: &horizon_world::loot::LootData,
+    get: &dyn Fn(&str, &'static str) -> String,
+    random: &mut LegacyRandom,
+    log: &mut Vec<String>,
+) -> horizon_client::Result<()> {
+    let v: Vec<i32> = get("spos", "0,0,0")
+        .split(',')
+        .map(|n| n.parse().unwrap_or(0))
+        .collect();
+    let pos = [v[0], v[1], v[2]];
+    let block_state = |state: TrialState, ominous: bool| {
+        parse_state(&format!(
+            "minecraft:trial_spawner[trial_spawner_state={},ominous={ominous}]",
+            state.name()
+        ))
+    };
+    let mut state =
+        TrialState::from_name(&get("state", "waiting_for_players")).ok_or("bad state")?;
+    let mut ominous = get("ominous", "0") == "1";
+    world
+        .placed
+        .borrow_mut()
+        .push((pos, registry.resolve(&block_state(state, ominous))?));
+    let text = horizon_client::skins::base64_decode(&get("snbt", "")).ok_or("bad snbt")?;
+    let tag = horizon_world::nbt::parse_snbt(&String::from_utf8(text)?)?.0;
+    let mut spawner = TrialSpawner::load(&tag);
+    let ticks: i64 = get("ticks", "1").parse()?;
+    let t0: i64 = get("t0", "0").parse()?;
+    let kill: i64 = get("kill", "0").parse()?;
+    let seed = world.seed;
+    let mut sequences = horizon_client::random_sequences::RandomSequences::default();
+    let center = pos.map(|v| f64::from(v) + 0.5);
+    for tick in 0..ticks {
+        world.time.set(t0 + tick);
+        let mut events = Vec::new();
+        let mut spawned = std::collections::VecDeque::new();
+        let mut items = Vec::new();
+        let mut spawn = |l: &World, r: &SpawnerSpawn| {
+            let t = l.s.types.types.get(r.id)?;
+            // Slime.readAdditionalSaveData: size Size + 1, clamped to 1..=127.
+            let size = match r.entity.get(&horizon_world::nbt::JavaString::from("Size")) {
+                Some(Tag::Byte(v)) => i32::from(*v),
+                Some(Tag::Short(v)) => i32::from(*v),
+                Some(Tag::Int(v)) => *v,
+                Some(Tag::Long(v)) => *v as i32,
+                _ => 0,
+            };
+            let size = if matches!(r.id, "minecraft:slime" | "minecraft:magma_cube") {
+                size.saturating_add(1).clamp(1, 127)
+            } else {
+                1
+            };
+            let [x, y, z] = r.position;
+            let scale = size as f32;
+            let bounds = spawn_box(x, y, z, t.width as f32 * scale, t.height as f32 * scale);
+            l.entities.borrow_mut().push((r.id.to_owned(), bounds));
+            let uuid = [1, 0, 0, l.trial_mobs.borrow().len() as i32];
+            l.trial_mobs.borrow_mut().push((uuid, r.position, bounds));
+            spawned.push_back(format!(
+                "{tick} spawn {} {} {} {} {}",
+                r.id,
+                bits(x),
+                bits(y),
+                bits(z),
+                if size == 1 {
+                    yaw_text(r.id, r.yaw)
+                } else {
+                    "head".to_owned()
+                }
+            ));
+            Some(uuid)
+        };
+        let mut eject = |table: &str, random: &mut LegacyRandom| {
+            let drops = match loot.random_sequence(table) {
+                Some(s) => loot.roll_split(table, sequences.get(s, seed)),
+                None => loot.roll_split(table, random),
+            };
+            for stack in &drops {
+                random.next_double();
+                let spread = 0.017_227_5 * 2.0;
+                let v = [
+                    random.triangle(0.0, spread),
+                    random.triangle(0.2, spread),
+                    random.triangle(0.0, spread),
+                ];
+                items.push(format!(
+                    "{tick} item {} {} {} {} {} {} {} {}",
+                    stack.item,
+                    stack.count,
+                    bits(center[0]),
+                    bits(center[1] + 0.7 - 0.125),
+                    bits(center[2]),
+                    bits(v[0]),
+                    bits(v[1]),
+                    bits(v[2])
+                ));
+            }
+            !drops.is_empty()
+        };
+        let next = spawner.server_tick(
+            world,
+            random,
+            pos,
+            state,
+            ominous,
+            &mut spawn,
+            &mut eject,
+            &mut events,
+        );
+        for e in events {
+            match e {
+                TrialEvent::BlockUpdated => log.push(format!("{tick} update")),
+                TrialEvent::LevelEvent(id, _, data) => {
+                    // A spawn's events follow its tryAddFreshEntityWithPassengers,
+                    // a reward's its items.
+                    match id {
+                        3011 => log.extend(spawned.pop_front()),
+                        3014 => log.append(&mut items),
+                        _ => {}
+                    }
+                    log.push(format!("{tick} levent {id} {data}"));
+                }
+                TrialEvent::Sound(name) => log.push(format!(
+                    "{tick} sound minecraft:{name} {} {} {} 1.0 1.0",
+                    bits(center[0]),
+                    bits(center[1]),
+                    bits(center[2])
+                )),
+                TrialEvent::EntityPlace(_, p) => log.push(format!(
+                    "{tick} gevent minecraft:entity_place {} {} {}",
+                    p[0], p[1], p[2]
+                )),
+                TrialEvent::OminousSet(set) => {
+                    ominous = set;
+                    world
+                        .placed
+                        .borrow_mut()
+                        .push((pos, registry.resolve(&block_state(state, ominous))?));
+                    log.push(format!("{tick} state {} {ominous}", state.name()));
+                }
+            }
+        }
+        if next != state || spawner.is_ominous != ominous {
+            state = next;
+            ominous = spawner.is_ominous;
+            world
+                .placed
+                .borrow_mut()
+                .push((pos, registry.resolve(&block_state(state, ominous))?));
+            log.push(format!("{tick} state {} {ominous}", state.name()));
+        }
+        if kill > 0 && tick % kill == kill - 1 {
+            let dead: Vec<Aabb> = world
+                .trial_mobs
+                .borrow_mut()
+                .drain(..)
+                .map(|(.., b)| b)
+                .collect();
+            world
+                .entities
+                .borrow_mut()
+                .retain(|(_, b)| !dead.iter().any(|d| d == b));
+            if !dead.is_empty() {
+                log.push(format!("{tick} kill {}", dead.len()));
+            }
+        }
+    }
+    log.push(format!(
+        "end state={} players={} mobs={} cooldown={} next_spawn={} total={} data={} eject={}",
+        state.name(),
+        spawner.detected_players.len(),
+        spawner.current_mobs.len(),
+        spawner.cooldown_ends_at,
+        spawner.next_mob_spawns_at,
+        spawner.total_mobs_spawned,
+        spawner
+            .next_spawn_data
+            .as_ref()
+            .and_then(|d| d.id())
+            .unwrap_or_else(|| "-".into()),
+        spawner.ejecting_loot_table.as_deref().unwrap_or("-")
     ));
     log.push(format!("next {}", random.next_int_bound(1000).unwrap_or(0)));
     Ok(())

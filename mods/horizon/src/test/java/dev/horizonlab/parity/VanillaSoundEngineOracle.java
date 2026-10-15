@@ -4,13 +4,19 @@ import java.io.PrintWriter;
 import java.lang.reflect.Constructor;
 import java.nio.file.*;
 import java.util.*;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.resources.sounds.*;
 import net.minecraft.resources.Identifier;
 import net.minecraft.sounds.SoundEvent;
+import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.TickRateManager;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.vehicle.minecart.Minecart;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * Drives the real SoundEngine (see VanillaSoundRig) with a script of plays,
@@ -30,6 +36,18 @@ public final class VanillaSoundEngineOracle {
         @Override
         public boolean isUnderWater() {
             return underwater;
+        }
+    }
+
+    /** A minecart the minecart sound instances follow. */
+    public static final class Cart extends Minecart {
+        Cart() {
+            super(null, null);
+        }
+
+        @Override
+        public boolean isSilent() {
+            return false;
         }
     }
 
@@ -53,6 +71,10 @@ public final class VanillaSoundEngineOracle {
         Constructor<UnderLiquidSubSound> sub = UnderLiquidSubSound.class.getDeclaredConstructor(LocalPlayer.class, SoundEvent.class);
         sub.setAccessible(true);
         var instances = new TreeMap<String, SoundInstance>();
+        var carts = new TreeMap<String, Cart>();
+        var level = VanillaSoundRig.make(ClientLevel.class);
+        var tickRate = new TickRateManager();
+        VanillaSoundRig.set(level, ClientLevel.class, "tickRateManager", tickRate);
         var manager = rig.manager;
         try (var out = new PrintWriter(Files.newBufferedWriter(Path.of(args[2])))) {
             for (String line : Files.readAllLines(Path.of(args[1]))) {
@@ -72,6 +94,9 @@ public final class VanillaSoundEngineOracle {
                             case "loop" -> new BiomeAmbientSoundsHandler.LoopSoundInstance(event);
                             case "uloop" -> new UnderLiquidAmbientSoundInstance(event, actor, LocalPlayer::isUnderWater);
                             case "usub" -> sub.newInstance(actor, event);
+                            case "cart" -> new MinecartSoundInstance(carts.get(a[3]));
+                            case "rcart", "rcartu" -> new RidingMinecartSoundInstance(actor, carts.get(a[3]), a[2].equals("rcartu"),
+                                a[2].equals("rcartu") ? SoundEvents.MINECART_INSIDE_UNDERWATER : SoundEvents.MINECART_INSIDE, 0.0F, 0.75F, 1.0F);
                             default -> throw new IllegalArgumentException(line);
                         };
                         if (!a[2].equals("simple")) seed(instance, seed);
@@ -98,6 +123,23 @@ public final class VanillaSoundEngineOracle {
                     case "player" -> {
                         actor.underwater = a[1].equals("1");
                         VanillaSoundRig.set(actor, Entity.class, "removalReason", a[2].equals("1") ? Entity.RemovalReason.DISCARDED : null);
+                    }
+                    case "cart" -> {
+                        // cart name x y z dx dy dz removed
+                        Cart cart = carts.get(a[1]);
+                        if (cart == null) {
+                            cart = VanillaSoundRig.make(Cart.class);
+                            VanillaSoundRig.set(cart, Entity.class, "level", level);
+                            carts.put(a[1], cart);
+                        }
+                        VanillaSoundRig.set(cart, Entity.class, "position", new Vec3(d(a[2]), d(a[3]), d(a[4])));
+                        VanillaSoundRig.set(cart, Entity.class, "deltaMovement", new Vec3(d(a[5]), d(a[6]), d(a[7])));
+                        VanillaSoundRig.set(cart, Entity.class, "removalReason", a[8].equals("1") ? Entity.RemovalReason.DISCARDED : null);
+                    }
+                    case "ride" -> VanillaSoundRig.set(actor, Entity.class, "vehicle", a[1].equals("-") ? null : carts.get(a[1]));
+                    case "freeze" -> {
+                        tickRate.setFrozen(a[1].equals("1"));
+                        tickRate.tick();
                     }
                     case "tick" -> manager.tick(a[1].equals("1"));
                     case "forget" -> instances.remove(a[1]);

@@ -71,11 +71,11 @@ impl Game<'_> {
         self.stats.add("used", "minecraft:wind_charge", 1);
         self.swing_arm();
         if !self.creative
-            && let Some(s) = self.inventory[self.selected].as_mut()
+            && let Some(s) = self.held_mut().as_mut()
         {
             s.count -= 1;
             if s.count == 0 {
-                self.inventory[self.selected] = None;
+                *self.held_mut() = None;
             }
         }
         Ok(true)

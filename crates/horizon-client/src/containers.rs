@@ -68,6 +68,8 @@ pub enum BlockEntity {
     Crafter(Crafter),
     /// `SpawnerBlockEntity` (`crate::mobs::spawner`).
     Spawner(Box<crate::mobs::spawner::Spawner>),
+    /// `TrialSpawnerBlockEntity` (`crate::mobs::trial_spawner`).
+    TrialSpawner(Box<crate::mobs::trial_spawner::TrialSpawner>),
     /// `BeehiveBlockEntity` of beehives and bee nests (`crate::beehive`).
     Beehive(Box<crate::beehive::Beehive>),
 }
@@ -187,6 +189,9 @@ impl BlockEntity {
         if name == "minecraft:spawner" {
             return Some(Self::Spawner(Box::default()));
         }
+        if name == "minecraft:trial_spawner" {
+            return Some(Self::TrialSpawner(Box::default()));
+        }
         if name == "minecraft:beehive" || name == "minecraft:bee_nest" {
             return Some(Self::Beehive(Box::default()));
         }
@@ -266,6 +271,7 @@ impl BlockEntity {
             Self::Crafter(_) => "minecraft:crafter",
             Self::CreakingHeart(_) => "minecraft:creaking_heart",
             Self::Spawner(_) => "minecraft:mob_spawner",
+            Self::TrialSpawner(_) => "minecraft:trial_spawner",
             Self::Beehive(_) => "minecraft:beehive",
         }
     }
@@ -276,9 +282,11 @@ impl BlockEntity {
             Self::Brewing(b) => b.items.iter().flatten().cloned().collect(),
             Self::Sign(_) => Vec::new(),
             Self::Jukebox(j) => j.record.iter().cloned().collect(),
-            Self::Beacon(_) | Self::CreakingHeart(_) | Self::Spawner(_) | Self::Beehive(_) => {
-                Vec::new()
-            }
+            Self::Beacon(_)
+            | Self::CreakingHeart(_)
+            | Self::Spawner(_)
+            | Self::TrialSpawner(_)
+            | Self::Beehive(_) => Vec::new(),
             Self::Lectern(l) => l.book.iter().cloned().collect(),
             Self::Sculk(_) => Vec::new(),
             Self::Banner(_) => Vec::new(),
@@ -297,7 +305,10 @@ impl BlockEntity {
             | Self::Sculk(_)
             | Self::Banner(_) => &[],
             Self::Crafter(c) => &c.items,
-            Self::CreakingHeart(_) | Self::Spawner(_) | Self::Beehive(_) => &[],
+            Self::CreakingHeart(_)
+            | Self::Spawner(_)
+            | Self::TrialSpawner(_)
+            | Self::Beehive(_) => &[],
         }
     }
     pub fn slots_mut(&mut self) -> &mut [Option<ItemStack>] {
@@ -312,7 +323,10 @@ impl BlockEntity {
             | Self::Sculk(_)
             | Self::Banner(_) => &mut [],
             Self::Crafter(c) => &mut c.items,
-            Self::CreakingHeart(_) | Self::Spawner(_) | Self::Beehive(_) => &mut [],
+            Self::CreakingHeart(_)
+            | Self::Spawner(_)
+            | Self::TrialSpawner(_)
+            | Self::Beehive(_) => &mut [],
         }
     }
 }

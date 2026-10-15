@@ -17,6 +17,7 @@ use std::collections::HashMap;
 pub const MASTER: usize = 0;
 pub const MUSIC: usize = 1;
 pub const RECORDS: usize = 2;
+pub const NEUTRAL: usize = 6;
 pub const PLAYERS: usize = 7;
 pub const AMBIENT: usize = 8;
 pub const UI: usize = 10;
@@ -48,12 +49,30 @@ pub enum Ticking {
     UnderLiquidLoop { fade: i32 },
     /// `UnderLiquidSubSound`.
     UnderLiquidSub,
+    /// `MinecartSoundInstance` following a minecart.
+    Minecart { cart: u32 },
+    /// `RidingMinecartSoundInstance` for the player riding a minecart.
+    RidingMinecart { cart: u32, underwater: bool },
 }
-/// What tickable instances read about the player.
-#[derive(Clone, Copy, Debug, Default)]
+/// What a minecart's sound instances read about it.
+#[derive(Clone, Copy, Debug)]
+pub struct CartSound {
+    pub id: u32,
+    pub position: [f64; 3],
+    /// `getDeltaMovement().horizontalDistance()`.
+    pub speed: f64,
+}
+/// What tickable instances read about the player and the entities they follow.
+#[derive(Clone, Debug, Default)]
 pub struct TickContext {
     pub player_underwater: bool,
     pub player_removed: bool,
+    /// The minecart the player rides.
+    pub vehicle: Option<u32>,
+    /// The minecarts in the level (a missing one has been removed).
+    pub carts: Vec<CartSound>,
+    /// `!tickRateManager().runsNormally()`.
+    pub frozen: bool,
 }
 /// `AbstractSoundInstance` and its subclasses' fields.
 #[derive(Clone, Debug)]
@@ -247,6 +266,55 @@ impl SoundInstance {
     pub fn under_liquid_sub(id: &str, random: LegacyRandom) -> Self {
         Self::ambient_loop(id, random, false, Ticking::UnderLiquidSub)
     }
+    /// `new MinecartSoundInstance(minecart)`: silent until the cart rolls.
+    pub fn minecart(cart: &CartSound, random: LegacyRandom) -> Self {
+        let [x, y, z] = cart.position;
+        let mut s = Self::new(
+            "minecraft:entity.minecart.riding",
+            NEUTRAL,
+            0.0,
+            1.0,
+            random,
+            true,
+            0,
+            Attenuation::Linear,
+            [
+                f64::from(x as f32),
+                f64::from(y as f32),
+                f64::from(z as f32),
+            ],
+            false,
+        );
+        s.can_start_silent = true;
+        s.ticking = Ticking::Minecart { cart: cart.id };
+        s
+    }
+    /// `new RidingMinecartSoundInstance(player, minecart, underwater, event, 0, 0.75, 1)`.
+    pub fn riding_minecart(cart: &CartSound, underwater: bool, random: LegacyRandom) -> Self {
+        let id = if underwater {
+            "minecraft:entity.minecart.inside.underwater"
+        } else {
+            "minecraft:entity.minecart.inside"
+        };
+        let mut s = Self::new(
+            id,
+            NEUTRAL,
+            0.0,
+            1.0,
+            random,
+            true,
+            0,
+            Attenuation::None,
+            cart.position,
+            false,
+        );
+        s.can_start_silent = true;
+        s.ticking = Ticking::RidingMinecart {
+            cart: cart.id,
+            underwater,
+        };
+        s
+    }
     pub fn tickable(&self) -> bool {
         self.ticking != Ticking::No
     }
@@ -299,6 +367,46 @@ impl SoundInstance {
             Ticking::UnderLiquidSub => {
                 if ctx.player_removed || !ctx.player_underwater {
                     self.stop();
+                }
+            }
+            Ticking::Minecart { cart } => {
+                let id = *cart;
+                let Some(cart) = ctx.carts.iter().find(|c| c.id == id) else {
+                    self.stop();
+                    return;
+                };
+                let [x, y, z] = cart.position;
+                self.position = [
+                    f64::from(x as f32),
+                    f64::from(y as f32),
+                    f64::from(z as f32),
+                ];
+                // Its own `pitch` field shadows the instance's, which stays 1.
+                let speed = cart.speed as f32;
+                self.volume = if speed >= 0.01 && !ctx.frozen {
+                    speed.clamp(0.0, 0.5) * 0.7
+                } else {
+                    0.0
+                };
+            }
+            Ticking::RidingMinecart { cart, underwater } => {
+                let (id, underwater) = (*cart, *underwater);
+                let found = ctx.carts.iter().find(|c| c.id == id);
+                let Some(cart) = found.filter(|c| ctx.vehicle == Some(c.id)) else {
+                    self.stop();
+                    return;
+                };
+                if underwater != ctx.player_underwater {
+                    self.volume = 0.0;
+                } else {
+                    // Mth.clampedLerp(speed, 0, 0.75), amplified by 1.
+                    let speed = cart.speed as f32;
+                    self.volume = if speed >= 0.01 {
+                        if speed > 1.0 { 0.75 } else { speed * 0.75 }
+                    } else {
+                        0.0
+                    };
+                    self.position = cart.position;
                 }
             }
         }

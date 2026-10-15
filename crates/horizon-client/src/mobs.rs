@@ -65,6 +65,7 @@ pub mod sulfur_cube;
 pub mod tame;
 pub mod trader;
 pub mod transport_items;
+pub mod trial_spawner;
 pub mod undead;
 pub mod vex;
 pub mod villager;
@@ -74,6 +75,7 @@ pub mod warden_brain;
 pub mod witch;
 pub mod wither;
 mod world;
+pub use world::visual_clip;
 pub mod zombie_villager;
 
 use crate::{blocks::BlockFacts, mesher::Vertex, world::World};

@@ -488,7 +488,7 @@ impl Game<'_> {
                 let folder = arg(1)?;
                 let seed = words.get(2).map(|s| s.parse::<i64>()).transpose()?;
                 let creative = words.get(3) == Some(&"creative");
-                self.open_world(folder, Some(folder), seed, creative)?;
+                self.open_world(folder, Some(folder), seed, creative, None)?;
                 ok()
             }
             "connect" => {

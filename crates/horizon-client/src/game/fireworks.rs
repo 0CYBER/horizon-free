@@ -85,8 +85,9 @@ impl Game<'_> {
         self.swing_arm();
         true
     }
-    /// `FireworkRocketItem.asProjectile` shot out of a dispenser.
-    pub(super) fn launch_dispensed_rocket(&mut self, at: Vec3, velocity: Vec3, stack: &ItemStack) {
+    /// A rocket shot at an angle (`DATA_SHOT_AT_ANGLE`): out of a dispenser
+    /// (`FireworkRocketItem.asProjectile`) or a crossbow.
+    pub(super) fn launch_angled_rocket(&mut self, at: Vec3, velocity: Vec3, stack: &ItemStack) {
         let mut rocket = self.new_rocket(at, stack, false);
         rocket.velocity = velocity;
         rocket.angled = true;

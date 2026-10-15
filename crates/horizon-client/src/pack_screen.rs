@@ -136,6 +136,8 @@ struct List {
     selected: Option<usize>,
     /// The list has a focused child (possibly an entry it no longer holds).
     focused: bool,
+    /// The pointer's last y while the scrollbar is held (`scrolling`).
+    held: Option<f64>,
 }
 impl List {
     fn new(selected_side: bool, height: i32) -> Self {
@@ -149,6 +151,7 @@ impl List {
             entries: Vec::new(),
             selected: None,
             focused: false,
+            held: None,
         }
     }
     fn bottom(&self) -> i32 {
@@ -243,6 +246,21 @@ impl List {
     }
     fn scroller_height(&self) -> i32 {
         ((self.height * self.height) as f32 / self.content_height() as f32) as i32
+    }
+    /// `AbstractScrollArea.mouseDragged` while the scrollbar is held.
+    fn drag(&mut self, y: f64) {
+        let Some(last) = self.held else { return };
+        if y < self.y as f64 {
+            self.set_scroll(0.0);
+        } else if y > self.bottom() as f64 {
+            self.set_scroll(self.max_scroll() as f64);
+        } else {
+            let max = self.max_scroll().max(1) as f64;
+            let bar = self.scroller_height().clamp(32, self.height - 8);
+            let scale = (max / (self.height - bar) as f64).max(1.0);
+            self.set_scroll(self.scroll + (y - last) * scale);
+        }
+        self.held = Some(y);
     }
 }
 
@@ -490,6 +508,13 @@ impl PackScreen {
                 && x <= (l.scroll_bar_x() + 6) as f64
                 && y >= l.y as f64
                 && y < l.bottom() as f64;
+            // updateScrolling: a press on the scroller holds it.
+            if scrolling {
+                self.lists[side].held = Some(y);
+                self.set_focus(Focus::List(side));
+                return Action::None;
+            }
+            let l = &self.lists[side];
             let hit = l.entry_at(x as i32, y as i32);
             let mut took = false;
             if let Some(i) = hit {
@@ -516,7 +541,7 @@ impl PackScreen {
                     }
                 }
             }
-            if took || scrolling {
+            if took {
                 self.set_focus(Focus::List(side));
             }
             return Action::None;
@@ -669,6 +694,18 @@ impl PackScreen {
         false
     }
     /// The mouse wheel (`AbstractScrollArea.mouseScrolled`).
+    /// The pointer moved with the button held: a held scrollbar follows it.
+    pub fn drag(&mut self, y: f64) {
+        for l in &mut self.lists {
+            l.drag(y);
+        }
+    }
+    /// `onRelease`.
+    pub fn release(&mut self) {
+        for l in &mut self.lists {
+            l.held = None;
+        }
+    }
     pub fn scroll(&mut self, x: f64, y: f64, amount: f64) {
         if self.confirm.is_some() || self.search.contains(x, y) {
             return;

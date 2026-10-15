@@ -12,12 +12,15 @@ use std::{
     sync::mpsc,
 };
 
+mod create_world;
 #[cfg(test)]
 mod tests;
 mod world_management;
+pub use create_world::{DIFFICULTIES, WorldOptions};
 
-const LIST_TOP: f32 = 48.0;
-const LIST_BOTTOM: f32 = 58.0;
+/// SelectWorldScreen's `HeaderAndFooterLayout(8 + 9 + 8 + 20 + 4, 60)`.
+const LIST_TOP: f32 = 49.0;
+const LIST_BOTTOM: f32 = 60.0;
 const ROW_HEIGHT: f32 = 36.0;
 const ROW_WIDTH: f32 = 270.0;
 
@@ -80,6 +83,7 @@ pub enum Mode {
         seed: String,
         creative: bool,
         focus: u8,
+        options: WorldOptions,
     },
     Edit {
         world: WorldEntry,
@@ -113,6 +117,7 @@ pub enum Action {
         name: String,
         seed: Option<i64>,
         creative: bool,
+        options: WorldOptions,
     },
     Connect {
         address: String,
@@ -124,7 +129,7 @@ pub struct Title {
     pub started: std::time::Instant,
     search: String,
     search_focused: bool,
-    scroll: Cell<f32>,
+    scroll: Cell<crate::ui::Scroll>,
     create_return_to_main: bool,
     message_lines: Cell<usize>,
     backup: Option<mpsc::Receiver<Result<u64, String>>>,
@@ -139,7 +144,7 @@ pub struct Title {
     /// The saves listed for Home, re-read every couple of seconds.
     recent: std::cell::RefCell<Option<(std::time::Instant, Vec<WorldEntry>)>>,
 }
-struct Button {
+pub(crate) struct Button {
     x: f32,
     y: f32,
     w: f32,
@@ -228,7 +233,7 @@ impl Title {
             started: now,
             search: String::new(),
             search_focused: false,
-            scroll: Cell::new(0.0),
+            scroll: Cell::default(),
             create_return_to_main: false,
             message_lines: Cell::new(1),
             backup: None,
@@ -252,7 +257,7 @@ impl Title {
     pub fn enter_singleplayer(&mut self) {
         self.search.clear();
         self.search_focused = true;
-        self.scroll.set(0.0);
+        self.scroll.set(crate::ui::Scroll::default());
         let worlds = list_worlds(&self.saves);
         self.create_return_to_main = worlds.is_empty();
         self.mode = if worlds.is_empty() {
@@ -264,12 +269,13 @@ impl Title {
             }
         };
     }
-    fn new_world() -> Mode {
+    pub(crate) fn new_world() -> Mode {
         Mode::Create {
             name: "New World".into(),
             seed: String::new(),
             creative: false,
             focus: 0,
+            options: WorldOptions::default(),
         }
     }
     fn return_to_list(&mut self, folder: Option<&str>) {
@@ -324,19 +330,48 @@ impl Title {
             .collect::<Vec<_>>()
             .into_iter()
     }
-    /// Mouse wheel over the classic world list.
+    /// The world list's top, bottom, rows' left edge and content height.
+    fn world_list(&self, worlds: &[WorldEntry], (w, h): (f32, f32)) -> (f32, f32, f32, f32) {
+        let (w, h) = (w.ceil(), h.ceil());
+        let content = self.visible_worlds(worlds).count() as f32 * ROW_HEIGHT + 4.0;
+        let left = (w / 2.0).floor() - ROW_WIDTH / 2.0;
+        (LIST_TOP, h - LIST_BOTTOM, left, content)
+    }
+    /// The pointer moved with the button held (`mouseDragged`).
+    pub fn drag(&mut self, cursor: (f32, f32), size: (f32, f32)) {
+        if let Mode::Multiplayer(screen) = &mut self.mode {
+            return screen.drag(cursor.1, size);
+        }
+        if let Mode::Select { worlds, .. } = &self.mode {
+            let (top, bottom, _, content) = self.world_list(worlds, size);
+            let mut scroll = self.scroll.get();
+            scroll.drag(cursor.1, top, bottom, content);
+            self.scroll.set(scroll);
+        }
+    }
+    /// The button was released (`onRelease`).
+    pub fn release(&mut self) {
+        if let Mode::Multiplayer(screen) = &mut self.mode {
+            screen.release();
+        }
+        self.scroll.get_mut().release();
+    }
+    /// Mouse wheel over the classic world and server lists.
     pub fn scroll_worlds(&mut self, delta: f32, cursor: (f32, f32), size: (f32, f32)) {
+        if let Mode::Multiplayer(screen) = &mut self.mode {
+            screen.wheel(delta, cursor, size);
+            return;
+        }
         let Mode::Select { worlds, .. } = &self.mode else {
             return;
         };
-        if cursor.1 < LIST_TOP || cursor.1 >= size.1 - LIST_BOTTOM {
+        let (top, bottom, _, content) = self.world_list(worlds, size);
+        if cursor.1 < top || cursor.1 >= bottom {
             return;
         }
-        let max = (self.visible_worlds(worlds).count() as f32 * ROW_HEIGHT + 4.0
-            - (size.1 - LIST_TOP - LIST_BOTTOM))
-            .max(0.0);
-        self.scroll
-            .set((self.scroll.get() - delta * ROW_HEIGHT / 2.0).clamp(0.0, max));
+        let mut scroll = self.scroll.get();
+        scroll.wheel(delta, ROW_HEIGHT / 2.0, top, bottom, content);
+        self.scroll.set(scroll);
     }
     fn failed(&mut self, error: impl std::fmt::Display) {
         let return_to = Box::new(self.mode.clone());
@@ -453,11 +488,22 @@ impl Title {
             name,
             seed,
             creative,
+            options,
             ..
         } = &self.mode
         else {
             return Action::None;
         };
+        Action::Create {
+            folder: self.target_folder(name),
+            name: name.clone(),
+            seed: parse_seed(seed),
+            creative: *creative,
+            options: options.clone(),
+        }
+    }
+    /// The folder a new world named `name` gets (`findResultFolder`).
+    fn target_folder(&self, name: &str) -> String {
         let base: String = name
             .chars()
             .map(|c| {
@@ -480,12 +526,7 @@ impl Title {
             folder = format!("{base} ({n})");
             n += 1;
         }
-        Action::Create {
-            folder,
-            name: name.clone(),
-            seed: parse_seed(seed),
-            creative: *creative,
-        }
+        folder
     }
     fn buttons(&self, w: f32, h: f32) -> Vec<Button> {
         let (w, h) = (w.ceil(), h.ceil());
@@ -579,29 +620,9 @@ impl Title {
                 ),
                 b((w / 2.0).floor() + 83.0, h - 28.0, 71.0, "Back", true, 12),
             ],
-            Mode::Create { creative, .. } => vec![
-                b(
-                    (w / 2.0).floor() - 75.0,
-                    120.0,
-                    150.0,
-                    if *creative {
-                        "Game Mode: Creative"
-                    } else {
-                        "Game Mode: Survival"
-                    },
-                    true,
-                    20,
-                ),
-                b(
-                    (w / 2.0).floor() - 155.0,
-                    h - 28.0,
-                    150.0,
-                    "Create New World",
-                    true,
-                    21,
-                ),
-                b((w / 2.0).floor() + 5.0, h - 28.0, 150.0, "Cancel", true, 22),
-            ],
+            Mode::Create {
+                creative, options, ..
+            } => create_world::buttons(w, h, *creative, options),
             Mode::Edit { world, name, .. } => {
                 let x = (w / 2.0).floor() - 100.0;
                 let top = edit_top(h);
@@ -765,7 +786,7 @@ impl Title {
                 batch.text(atlas, notice, w - tw - 2.0, h - 10.0, u32::MAX, true);
             }
             Mode::Select { worlds, selected } => {
-                batch.fill(atlas, 0.0, 0.0, w, h, rgba(0, 0, 0, 120));
+                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
                 centered(atlas, batch, "Select World", 8.0, u32::MAX);
                 text_field(
                     atlas,
@@ -786,44 +807,33 @@ impl Title {
                         true,
                     );
                 }
-                let bottom = h - LIST_BOTTOM;
-                batch.fill(
-                    atlas,
-                    0.0,
-                    LIST_TOP,
-                    w,
-                    bottom - LIST_TOP,
-                    rgba(0, 0, 0, 100),
-                );
-                batch.fill(atlas, 0.0, LIST_TOP - 1.0, w, 1.0, rgba(160, 160, 160, 255));
-                batch.fill(atlas, 0.0, bottom, w, 1.0, rgba(160, 160, 160, 255));
-                let count = self.visible_worlds(worlds).count();
-                let max = (count as f32 * ROW_HEIGHT + 4.0 - (bottom - LIST_TOP)).max(0.0);
-                self.scroll.set(self.scroll.get().clamp(0.0, max));
+                let (top, bottom, left, content) = self.world_list(worlds, (w, h));
+                let mut scroll = self.scroll.get();
+                scroll.clamp(top, bottom, content);
+                self.scroll.set(scroll);
+                let offset = scroll.amount.trunc();
+                // AbstractSelectionList: background, rows clipped to the
+                // list, separators, scrollbar.
+                crate::ui::list_background(batch, atlas, top, bottom, false);
                 let first = batch.vertices.len();
-                let x = ((w - ROW_WIDTH) / 2.0).floor() + 2.0;
+                // Entry content sits 2 pixels inside its row.
+                let x = left + 2.0;
                 let mut slot = 0;
                 for (row, (i, world)) in self.visible_worlds(worlds).enumerate() {
-                    let y = LIST_TOP + 5.0 + row as f32 * ROW_HEIGHT - self.scroll.get();
-                    if y + 32.0 <= LIST_TOP || y >= bottom {
+                    let y = top + 4.0 + row as f32 * ROW_HEIGHT - offset;
+                    if y + 32.0 <= top || y >= bottom {
                         continue;
                     }
                     let mid = y - 2.0 + ROW_HEIGHT / 2.0;
-                    if mid > LIST_TOP && mid < bottom {
+                    if mid > top && mid < bottom {
                         crate::widgets::target_as(
                             [x - 2.0, y - 2.0, ROW_WIDTH, ROW_HEIGHT],
                             crate::widgets::Kind::Row,
                         );
                     }
+                    // extractSelection: white once the list has focus.
                     if *selected == Some(i) {
-                        batch.fill(
-                            atlas,
-                            x - 2.0,
-                            y - 2.0,
-                            ROW_WIDTH,
-                            ROW_HEIGHT,
-                            rgba(128, 128, 128, 255),
-                        );
+                        batch.fill(atlas, x - 2.0, y - 2.0, ROW_WIDTH, ROW_HEIGHT, u32::MAX);
                         batch.fill(
                             atlas,
                             x - 1.0,
@@ -872,8 +882,8 @@ impl Title {
                 }
                 // Clip list quads, including their UVs, to the content area.
                 for quad in batch.vertices[first..].as_chunks_mut::<6>().0 {
-                    let top = quad.iter().map(|v| v.pos[1]).fold(f32::INFINITY, f32::min);
-                    let bot = quad
+                    let low = quad.iter().map(|v| v.pos[1]).fold(f32::INFINITY, f32::min);
+                    let high = quad
                         .iter()
                         .map(|v| v.pos[1])
                         .fold(f32::NEG_INFINITY, f32::max);
@@ -883,96 +893,32 @@ impl Title {
                         .map(|v| v.uv[1])
                         .fold(f32::NEG_INFINITY, f32::max);
                     for v in quad {
-                        v.pos[1] = v.pos[1].clamp(LIST_TOP, bottom);
-                        if bot > top {
-                            v.uv[1] = uv_top + (uv_bot - uv_top) * (v.pos[1] - top) / (bot - top);
+                        v.pos[1] = v.pos[1].clamp(top, bottom);
+                        if high > low {
+                            v.uv[1] = uv_top + (uv_bot - uv_top) * (v.pos[1] - low) / (high - low);
                         }
                     }
                 }
-                if max > 0.0 {
-                    let track = bottom - LIST_TOP;
-                    let thumb =
-                        (track * track / (count as f32 * ROW_HEIGHT + 4.0)).clamp(32.0, track);
-                    let sx = (w / 2.0).floor() + ROW_WIDTH / 2.0 + 6.0;
-                    batch.fill(atlas, sx, LIST_TOP, 6.0, track, rgba(0, 0, 0, 255));
-                    batch.fill(
-                        atlas,
-                        sx,
-                        LIST_TOP + self.scroll.get() / max * (track - thumb),
-                        6.0,
-                        thumb,
-                        rgba(128, 128, 128, 255),
-                    );
-                }
+                crate::ui::separators(batch, atlas, top, bottom, false);
+                crate::ui::scrollbar(
+                    batch,
+                    atlas,
+                    left + ROW_WIDTH + 8.0,
+                    top,
+                    bottom,
+                    content,
+                    scroll.amount,
+                );
             }
             Mode::Create {
-                name, seed, focus, ..
-            } => {
-                batch.fill(atlas, 0.0, 0.0, w, h, rgba(0, 0, 0, 120));
-                let title = "Create New World";
-                let tw = HudBatch::text_width(atlas, title);
-                batch.text(atlas, title, (w - tw) / 2.0, 8.0, u32::MAX, true);
-                let blink = (self.started.elapsed().as_millis() / 300).is_multiple_of(2);
-                for (i, (label, value)) in [
-                    ("World Name", name),
-                    (
-                        "Seed for the World Generator (leave blank for random)",
-                        seed,
-                    ),
-                ]
-                .iter()
-                .enumerate()
-                {
-                    let y = 40.0 + i as f32 * 40.0;
-                    crate::widgets::target_as(
-                        [(w / 2.0).floor() - 100.0, y + 11.0, 200.0, 20.0],
-                        crate::widgets::Kind::Field,
-                    );
-                    batch.text(
-                        atlas,
-                        label,
-                        (w / 2.0).floor() - 100.0,
-                        y,
-                        rgba(160, 160, 160, 255),
-                        true,
-                    );
-                    batch.fill(
-                        atlas,
-                        (w / 2.0).floor() - 100.0,
-                        y + 11.0,
-                        200.0,
-                        20.0,
-                        if *focus == i as u8 {
-                            u32::MAX
-                        } else {
-                            rgba(160, 160, 160, 255)
-                        },
-                    );
-                    batch.fill(
-                        atlas,
-                        (w / 2.0).floor() - 99.0,
-                        y + 12.0,
-                        198.0,
-                        18.0,
-                        rgba(0, 0, 0, 255),
-                    );
-                    let shown = if *focus == i as u8 && blink {
-                        format!("{value}_")
-                    } else {
-                        value.to_string()
-                    };
-                    batch.text(
-                        atlas,
-                        &shown,
-                        (w / 2.0).floor() - 96.0,
-                        y + 17.0,
-                        rgba(224, 224, 224, 255),
-                        true,
-                    );
-                }
-            }
+                name,
+                seed,
+                focus,
+                options,
+                ..
+            } => self.draw_create(atlas, batch, cursor, name, seed, *focus, options),
             Mode::Edit { name, focused, .. } => {
-                batch.fill(atlas, 0.0, 0.0, w, h, rgba(0, 0, 0, 120));
+                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
                 centered(
                     atlas,
                     batch,
@@ -999,7 +945,7 @@ impl Title {
                 );
             }
             Mode::Delete { world } => {
-                batch.fill(atlas, 0.0, 0.0, w, h, rgba(0, 0, 0, 120));
+                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
                 let message = translate(
                     "selectWorld.deleteWarning",
                     "'%s' will be lost forever! (A long time!)",
@@ -1024,7 +970,7 @@ impl Title {
             }
             Mode::Backup { .. } => {
                 self.backup_shown.set(true);
-                batch.fill(atlas, 0.0, 0.0, w, h, rgba(0, 0, 0, 120));
+                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
                 centered(
                     atlas,
                     batch,
@@ -1050,7 +996,7 @@ impl Title {
                 }
             }
             Mode::Error { message, .. } => {
-                batch.fill(atlas, 0.0, 0.0, w, h, rgba(0, 0, 0, 120));
+                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
                 let lines = wrapped(atlas, message, w - 50.0);
                 self.message_lines.set(lines.len());
                 let top = confirm_top(h, lines.len());
@@ -1124,6 +1070,15 @@ impl Title {
                 true,
             );
         }
+        if let Mode::Create {
+            name,
+            creative,
+            options,
+            ..
+        } = &self.mode
+        {
+            self.create_tooltip(atlas, batch, cursor, name, *creative, options);
+        }
         if let Some((at, toast)) = &self.toast
             && at.elapsed().as_secs() < 5
         {
@@ -1149,6 +1104,17 @@ impl Title {
     /// Navigation buttons can return `Action::None` while still sounding.
     pub fn click(&mut self, x: f32, y: f32, size: (f32, f32)) -> (Action, bool) {
         let (w, h) = (size.0.ceil(), size.1.ceil());
+        // MenuTabBar: a new tab clears the focus and clicks.
+        if let Mode::Create { focus, options, .. } = &mut self.mode
+            && let Some(tab) = create_world::tab_at(w, (x, y))
+        {
+            let changed = options.tab != tab;
+            if changed {
+                options.tab = tab;
+                *focus = 2;
+            }
+            return (Action::None, changed);
+        }
         let hit = self
             .buttons(w, h)
             .into_iter()
@@ -1212,11 +1178,17 @@ impl Title {
                     _ => {
                         if let Some(level) = Level::read(&self.saves.join(&world.folder)) {
                             self.create_return_to_main = false;
+                            let options = WorldOptions::of_world(
+                                &level,
+                                world.commands,
+                                &self.saves.join(&world.folder),
+                            );
                             self.mode = Mode::Create {
                                 name: level.name,
                                 seed: level.seed.to_string(),
                                 creative: level.creative,
                                 focus: 0,
+                                options,
                             };
                         }
                     }
@@ -1230,11 +1202,20 @@ impl Title {
             (Mode::Select { .. }, None) => {
                 self.search_focused =
                     (21.0..41.0).contains(&y) && (x - (w / 2.0).floor()).abs() < 100.0;
-                if y >= LIST_TOP
-                    && y < h - LIST_BOTTOM
-                    && (x - (w / 2.0).floor()).abs() < ROW_WIDTH / 2.0
+                let Mode::Select { worlds, .. } = &self.mode else {
+                    unreachable!()
+                };
+                let (top, bottom, left, content) = self.world_list(worlds, (w, h));
+                if self
+                    .scroll
+                    .get_mut()
+                    .press((x, y), left + ROW_WIDTH + 8.0, top, bottom, content)
                 {
-                    let row = ((y - LIST_TOP - 5.0 + self.scroll.get()) / ROW_HEIGHT).floor();
+                    return Action::None;
+                }
+                if y >= top && y < bottom && x >= left && x < left + ROW_WIDTH {
+                    let offset = self.scroll.get().amount.trunc();
+                    let row = ((y - top - 2.0 + offset) / ROW_HEIGHT).floor();
                     if row >= 0.0 {
                         let Mode::Select { worlds, selected } = &self.mode else {
                             unreachable!()
@@ -1302,8 +1283,13 @@ impl Title {
                 self.mode = *return_to.clone();
                 Action::None
             }
-            (Mode::Create { creative, .. }, Some(20)) => {
-                *creative = !*creative;
+            (
+                Mode::Create {
+                    creative, options, ..
+                },
+                Some(id),
+            ) if id != 21 && id != 22 => {
+                options.press(id, creative);
                 Action::None
             }
             (Mode::Create { .. }, Some(21)) => self.create_action(),
@@ -1311,13 +1297,8 @@ impl Title {
                 self.cancel_create();
                 Action::None
             }
-            (Mode::Create { focus, .. }, None) => {
-                for i in 0..2u8 {
-                    let fy = 40.0 + f32::from(i) * 40.0 + 11.0;
-                    if y >= fy && y < fy + 20.0 && (x - (w / 2.0).floor()).abs() < 100.0 {
-                        *focus = i;
-                    }
-                }
+            (Mode::Create { focus, options, .. }, None) => {
+                *focus = create_world::field_at(w, h, options.tab, (x, y)).unwrap_or(2);
                 Action::None
             }
             _ => Action::None,
@@ -1367,7 +1348,7 @@ impl Title {
             && let Mode::Select { selected, .. } = &mut self.mode
         {
             *selected = None;
-            self.scroll.set(0.0);
+            self.scroll.set(crate::ui::Scroll::default());
         }
     }
     pub fn confirm_edit(&mut self) {
@@ -1398,8 +1379,14 @@ impl Title {
         if let Mode::Multiplayer(screen) = &mut self.mode {
             screen.tab();
         }
-        if let Mode::Create { focus, .. } = &mut self.mode {
-            *focus = (*focus + 1) % 2;
+        // The open tab's one text box, then nothing.
+        if let Mode::Create { focus, options, .. } = &mut self.mode {
+            let field = if options.tab == 1 { 1 } else { 0 };
+            *focus = if *focus == field || options.tab == 2 {
+                2
+            } else {
+                field
+            };
         }
     }
     /// The server auto-reconnect retries now, once its countdown is over.

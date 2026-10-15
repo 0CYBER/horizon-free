@@ -116,6 +116,7 @@ mod titles;
 mod tnt;
 mod totem;
 mod trading;
+mod trial_spawner;
 mod trident;
 mod villagers;
 mod wandering_trader;
@@ -136,6 +137,7 @@ use horizon_client::{
     creative::{Creative, Names},
     entities::{Experience, ExperienceOrb, ItemEntity},
     environment::Environment,
+    first_person::Hand,
     gfx::{Frame, Renderer},
     hud::{HudAtlas, HudBatch, rgba},
     hud_layout, hud_overlays,
@@ -751,6 +753,10 @@ struct Game<'a> {
     ambience: horizon_client::ambience::Ambience,
     /// The sound engine was told the game paused (pauseAllExcept).
     sound_paused: bool,
+    /// Minecarts whose `MinecartSoundInstance` is playing.
+    cart_sounds: HashSet<u32>,
+    /// The minecart the riding sounds were started for (`LocalPlayer.startRiding`).
+    riding_cart_sounds: Option<u32>,
     dropped: Vec<ItemEntity>,
     next_entity: u32,
     particles: horizon_client::particles::ParticleEngine,
@@ -796,6 +802,9 @@ struct Game<'a> {
     armor: [Option<ItemStack>; 4],
     /// The off hand (Inventory slot 40, saved as slot 150; menu slot 504 here).
     offhand: Option<ItemStack>,
+    /// The hand an item use acts with (`InteractionHand`): the off hand only
+    /// for its turn in `use_item` and while its item is being used.
+    hand: Hand,
     /// The shield's item cooldown after an axe disabled it (ticks).
     shield_cooldown: u32,
     /// The source of a command run through /execute (the player otherwise).
@@ -949,6 +958,8 @@ struct Game<'a> {
     /// KeyboardHandler's debug key state (game/debug_keys.rs), the physical
     /// keys held, and the debug renderers F3+B and F3+G switch on.
     debug_keys: horizon_client::debug_keys::DebugKeys,
+    /// The F3 overlay's charts (F3+2, F3+3).
+    debug_charts: horizon_client::debug_chart::DebugCharts,
     show_hitboxes: bool,
     show_chunk_borders: bool,
     /// PauseScreen.showPauseMenu (false after F3+Escape).
@@ -1192,8 +1203,36 @@ impl Game<'_> {
         }
         None
     }
+    /// The stack in the hand that acts (`getItemInHand(hand)`).
     fn held(&self) -> Option<&ItemStack> {
-        self.inventory[self.selected].as_ref()
+        self.stack_in(self.held_slot())
+    }
+    fn held_mut(&mut self) -> &mut Option<ItemStack> {
+        self.stack_in_mut(self.held_slot())
+    }
+    /// The slot of the hand that acts: the selected one, or `OFFHAND_SLOT`.
+    fn held_slot(&self) -> usize {
+        match self.hand {
+            Hand::Main => self.selected,
+            Hand::Off => shield::OFFHAND_SLOT,
+        }
+    }
+    /// `LivingEntity.getUsedItemHand`: the hand of the item in use.
+    fn used_hand(&self) -> Option<Hand> {
+        self.using.map(|(slot, _)| {
+            if slot == shield::OFFHAND_SLOT {
+                Hand::Off
+            } else {
+                Hand::Main
+            }
+        })
+    }
+    /// Run `f` with `hand` acting (`held`, `consume_held`, `swing_arm`).
+    fn with_hand<T>(&mut self, hand: Hand, f: impl FnOnce(&mut Self) -> T) -> T {
+        let prior = std::mem::replace(&mut self.hand, hand);
+        let out = f(self);
+        self.hand = prior;
+        out
     }
     /// Inventory.add: returns the stack that did not fit.
     fn give(&mut self, mut stack: ItemStack) -> Option<ItemStack> {
@@ -2232,20 +2271,22 @@ impl Game<'_> {
         self.process_level_events()?;
         Ok(())
     }
-    fn use_item(&mut self) -> Result<()> {
+    /// The hand whose use ended the click, if any.
+    fn use_item(&mut self) -> Result<Option<Hand>> {
         self.with_player_actor(|game| game.use_item_as_player())
     }
-    fn use_item_as_player(&mut self) -> Result<()> {
+    /// `Minecraft.startUseItem`: the main hand, then the off hand.
+    fn use_item_as_player(&mut self) -> Result<Option<Hand>> {
         // Spectators only look (MultiPlayerGameMode.useItemOn/useItem pass).
         if self.spectator() {
-            return Ok(());
+            return Ok(None);
         }
         // A carrot or warped fungus on a stick boosts the ridden pig or strider.
         if self.riding.is_some()
             && let Some(item) = self.held().map(|s| s.item.clone())
             && self.use_steering_stick(&item)
         {
-            return Ok(());
+            return Ok(Some(Hand::Main));
         }
         if self.interact_frame()
             || self.interact_armor_stand()
@@ -2254,7 +2295,7 @@ impl Game<'_> {
             || self.interact_mob()?
             || self.interact_knot()
         {
-            return Ok(());
+            return Ok(Some(Hand::Main));
         }
         // An EntityHitResult may fall through to Item.use, never to useItemOn.
         let block_hit = if self.entity_targeted() {
@@ -2262,59 +2303,72 @@ impl Game<'_> {
         } else {
             self.pick()
         };
+        for hand in Hand::BOTH {
+            if self.with_hand(hand, |game| game.use_hand(block_hit.as_ref()))? {
+                return Ok(Some(hand));
+            }
+        }
+        Ok(None)
+    }
+    /// One hand's turn in `startUseItem`: `useItemOn` the block aimed at,
+    /// then `useItem`. Whether the click ends here (it acted or failed).
+    fn use_hand(&mut self, block_hit: Option<&Hit>) -> Result<bool> {
+        // isSecondaryUseActive with something in either hand keeps blocks
+        // from reacting.
         let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
-        let mut anchor_passed = None;
-        // MultiPlayerGameMode.useItemOn: blocks react first unless sneaking with an item.
-        if !(sneaking && self.held().is_some())
-            && let Some(hit) = block_hit.as_ref()
+        let hands_full = self.stack_in(self.selected).is_some() || self.offhand.is_some();
+        let mut anchor_passed = false;
+        // MultiPlayerGameMode.useItemOn: blocks react first.
+        if !(sneaking && hands_full)
+            && let Some(hit) = block_hit
         {
             let held = self.held().cloned();
             if self.use_lectern(hit.pos, held.as_ref()) {
                 self.swing_arm();
-                return Ok(());
+                return Ok(true);
             }
             if self.use_jukebox(hit.pos, held.as_ref()) {
                 self.swing_arm();
-                return Ok(());
+                return Ok(true);
             }
             if self.use_composter(hit.pos, held.as_ref()) {
                 self.swing_arm();
-                return Ok(());
+                return Ok(true);
             }
             match self.use_respawn_anchor(hit.pos, held.as_ref())? {
                 respawn_anchor::AnchorUse::Charged => {
                     self.swing_arm();
-                    return Ok(());
+                    return Ok(true);
                 }
                 // The main hand passes; its item is used, then the off hand's glowstone.
-                respawn_anchor::AnchorUse::Pass => anchor_passed = Some(hit.pos),
+                respawn_anchor::AnchorUse::Pass => anchor_passed = true,
                 respawn_anchor::AnchorUse::Other => {}
             }
-            let face = match hit.face {
-                [0, 1, 0] => Direction::Up,
-                [0, -1, 0] => Direction::Down,
-                [0, 0, -1] => Direction::North,
-                [0, 0, 1] => Direction::South,
-                [-1, 0, 0] => Direction::West,
-                _ => Direction::East,
-            };
-            let player = PlayerContext {
-                yaw: self.yaw,
-                pitch: self.pitch,
-                may_build: self.may_build(),
-                can_eat: self.creative
-                    || self
-                        .player
-                        .as_ref()
-                        .is_some_and(|p| p.health.food.food < 20),
-                game_master: false,
-            };
-            let at = Vec3::new(hit.point[0], hit.point[1], hit.point[2]);
-            let item = held.as_ref().map(|s| s.item.to_string());
-            let result = if anchor_passed.is_some() {
-                horizon_world::level::InteractionResult::Pass
-            } else {
-                self.with_level(|b, level, ticks| {
+            // TRY_WITH_EMPTY_HAND: only the main hand's turn uses the block
+            // itself (useWithoutItem).
+            if !anchor_passed && self.hand == Hand::Main {
+                let face = match hit.face {
+                    [0, 1, 0] => Direction::Up,
+                    [0, -1, 0] => Direction::Down,
+                    [0, 0, -1] => Direction::North,
+                    [0, 0, 1] => Direction::South,
+                    [-1, 0, 0] => Direction::West,
+                    _ => Direction::East,
+                };
+                let player = PlayerContext {
+                    yaw: self.yaw,
+                    pitch: self.pitch,
+                    may_build: self.may_build(),
+                    can_eat: self.creative
+                        || self
+                            .player
+                            .as_ref()
+                            .is_some_and(|p| p.health.food.food < 20),
+                    game_master: false,
+                };
+                let at = Vec3::new(hit.point[0], hit.point[1], hit.point[2]);
+                let item = held.as_ref().map(|s| s.item.to_string());
+                let result = self.with_level(|b, level, ticks| {
                     b.use_item_on(
                         level,
                         ticks,
@@ -2324,29 +2378,22 @@ impl Game<'_> {
                         player,
                         item.as_deref(),
                     )
-                })
-            };
-            self.process_level_events()?;
-            if result.consumes_action() {
-                self.swing_arm();
-                return Ok(());
+                });
+                self.process_level_events()?;
+                if result.consumes_action() {
+                    self.swing_arm();
+                    return Ok(true);
+                }
             }
         }
         let Some(stack) = self.held().cloned() else {
-            // Minecraft.startUseItem goes on to the off hand.
-            if let Some(pos) = anchor_passed
-                && self.charge_anchor_from_offhand(pos)?
-            {
-                return Ok(());
-            }
-            self.use_offhand();
-            return Ok(());
+            return Ok(false);
         };
         let Some(info) = self.res.items.get(&stack.item).cloned() else {
-            return Ok(());
+            return Ok(false);
         };
         if block_hit.is_some() && (self.use_bone_meal(&stack)? || self.ignite_tnt(&stack)?) {
-            return Ok(());
+            return Ok(true);
         }
         use horizon_client::first_person::UseResult;
         let swings = self.swings_started;
@@ -2355,18 +2402,18 @@ impl Game<'_> {
                 if (UseResult::Success { swing }).should_swing(swings, self.swings_started) {
                     self.swing_arm();
                 }
-                return Ok(());
+                return Ok(true);
             }
-            UseResult::Fail => return Ok(()),
+            UseResult::Fail => return Ok(true),
             UseResult::Pass => {}
         }
         if self.use_potion_item(&stack)?
             || ((block_hit.is_some() || !stack.item.ends_with("_spawn_egg"))
                 && self.throw_item(&stack)?)
         {
-            return Ok(());
+            return Ok(true);
         }
-        if self.raise_shield(self.selected)
+        if self.raise_shield(self.held_slot())
             || self.use_fishing_rod(&stack)
             || self.use_crossbow(&stack)
             || self.use_trident(&stack)
@@ -2377,27 +2424,29 @@ impl Game<'_> {
             // placed first (useItemOn before useItem).
             || (!(info.block.is_some() && block_hit.is_some()) && self.equip_from_hand(&stack))
         {
-            return Ok(());
+            return Ok(true);
         }
         if &*stack.item == "minecraft:spyglass" {
             self.use_spyglass();
-            return Ok(());
+            return Ok(true);
         }
         if &*stack.item == "minecraft:bow" {
-            if self.using.is_none() && (self.creative || self.arrow_slot().is_some()) {
-                self.using = Some((self.selected, 0));
+            if self.using.is_none()
+                && (self.creative || self.projectile_slot("minecraft:bow").is_some())
+            {
+                self.using = Some((self.held_slot(), 0));
             }
-            return Ok(());
+            return Ok(true);
         }
         // Block foods attempt placement before starting consumption.
         if !(info.block.is_some() && block_hit.is_some()) && self.start_eating(&info) {
-            return Ok(());
+            return Ok(true);
         }
         // BoatItem.use also performs its own fluid/block raycast.
         if self.place_boat(&stack) {
-            return Ok(());
+            return Ok(true);
         }
-        if let Some(hit) = block_hit.as_ref()
+        if let Some(hit) = block_hit
             && (self.launch_firework(hit, &stack)
                 || self.place_minecart(hit, &stack)
                 || self.place_painting(hit, &stack)
@@ -2405,28 +2454,20 @@ impl Game<'_> {
                 || self.place_armor_stand(hit, &stack)
                 || self.place_end_crystal(hit, &stack))
         {
-            return Ok(());
+            return Ok(true);
         }
         if self.use_ender_eye(&stack, block_hit.is_some())? {
-            return Ok(());
+            return Ok(true);
         }
         let Some(hit) = block_hit else {
-            self.use_offhand();
-            return Ok(());
+            return Ok(false);
         };
         if info.block.is_none() {
-            if let Some(pos) = anchor_passed
-                && self.charge_anchor_from_offhand(pos)?
-            {
-                return Ok(());
-            }
-            self.use_offhand();
-            return Ok(());
+            return Ok(false);
         }
         if !self.may_build() {
             // ItemStack.useOn passes in adventure mode; useItem eats.
-            self.start_eating(&info);
-            return Ok(());
+            return Ok(self.start_eating(&info));
         }
         let face = match hit.face {
             [0, 1, 0] => Direction::Up,
@@ -2456,7 +2497,7 @@ impl Game<'_> {
             if self.start_eating(&info) {
                 self.stats.add("used", &stack.item, 1);
             }
-            return Ok(());
+            return Ok(true);
         };
         let target = [pos.x, pos.y, pos.z];
         if let Some(entity) = BlockEntity::for_block(&self.res.facts.get(state).name) {
@@ -2493,9 +2534,9 @@ impl Game<'_> {
         self.consume_held();
         // SolidBucketItem.useOn: BucketItem.getEmptySuccessItem in hand.
         if solid_bucket && !self.creative {
-            self.inventory[self.selected] = Some(ItemStack::new("minecraft:bucket", 1));
+            *self.held_mut() = Some(ItemStack::new("minecraft:bucket", 1));
         }
-        Ok(())
+        Ok(true)
     }
     /// `Consumable.startConsuming` for held food the player can eat
     /// (`Player.canEat`): the right click is held for `consume_seconds`.
@@ -2510,7 +2551,7 @@ impl Game<'_> {
             return false;
         }
         if self.using.is_none() {
-            self.using = Some((self.selected, 0));
+            self.using = Some((self.held_slot(), 0));
         }
         true
     }
@@ -2518,16 +2559,24 @@ impl Game<'_> {
         if self.creative {
             return;
         }
-        if let Some(s) = self.inventory[self.selected].as_mut() {
+        let cell = self.held_mut();
+        if let Some(s) = cell.as_mut() {
             s.count -= 1;
             if s.count == 0 {
-                self.inventory[self.selected] = None;
+                *cell = None;
             }
         }
     }
     fn tick_using(&mut self) {
         // ItemCooldowns.tick for the shield.
         self.shield_cooldown = self.shield_cooldown.saturating_sub(1);
+        let Some(hand) = self.used_hand() else {
+            return;
+        };
+        self.with_hand(hand, Self::tick_used_item);
+    }
+    /// `LivingEntity.updatingUsingItem` for the item in use, its hand acting.
+    fn tick_used_item(&mut self) {
         let Some((slot, ticks)) = self.using else {
             return;
         };
@@ -2538,13 +2587,13 @@ impl Game<'_> {
         // Switching hotbar slots only ends a main-hand use.
         let hand_changed = slot != self.selected && slot != shield::OFFHAND_SLOT;
         if !self.right || hand_changed || self.screen != Screen::Playing {
-            if &*stack.item == "minecraft:bow" && slot == self.selected {
+            if &*stack.item == "minecraft:bow" && !hand_changed {
                 self.release_bow(ticks);
             }
             if &*stack.item == "minecraft:spyglass" {
                 self.stop_spyglass();
             }
-            if &*stack.item == "minecraft:trident" && slot == self.selected {
+            if &*stack.item == "minecraft:trident" && !hand_changed {
                 self.release_trident(ticks);
             }
             self.using = None;
@@ -2866,6 +2915,7 @@ impl Game<'_> {
     }
     fn tick(&mut self) -> Result<()> {
         self.tick_debug_keys()?;
+        self.tick_debug_charts();
         if self.remote.is_some() {
             return self.tick_remote();
         }
@@ -3656,7 +3706,7 @@ impl Game<'_> {
                 2 => "north (Towards negative Z)",
                 _ => "east (Towards positive X)",
             };
-            let lines = [
+            let mut lines = vec![
                 format!("Horizon 26.3 (Rust) {:.0} fps", self.fps),
                 format!(
                     "C: {} chunks, {} sections drawn / {}",
@@ -3699,7 +3749,9 @@ impl Game<'_> {
                     self.world.day_time / 24000,
                     self.world.day_time % 24000
                 ),
+                String::new(),
             ];
+            lines.extend(self.debug_chart_lines());
             for (i, line) in lines.iter().enumerate() {
                 if line.is_empty() {
                     continue;
@@ -3721,6 +3773,22 @@ impl Game<'_> {
                     rgba(224, 224, 224, 255),
                     false,
                 );
+            }
+            let charts = self.debug_charts.draw(
+                &atlas.font,
+                w as i32,
+                h as i32,
+                self.settings.max_fps,
+                1000.0 / self.clock.rate(),
+                self.remote.is_some(),
+            );
+            hud_layout::paint(&mut batch, atlas, &charts);
+            if self.debug_charts.lightmap
+                && let Some(r) = &self.renderer
+            {
+                let view =
+                    horizon_client::debug_chart::lightmap(&r.lightmap_pixels, w as i32, h as i32);
+                hud_layout::paint(&mut batch, atlas, &view);
             }
         }
         if !self.ui.hide_gui
@@ -3805,6 +3873,7 @@ impl Game<'_> {
                 | BlockEntity::Banner(_)
                 | BlockEntity::CreakingHeart(_)
                 | BlockEntity::Spawner(_)
+                | BlockEntity::TrialSpawner(_)
                 | BlockEntity::Beehive(_),
             ) => {}
             None => {
@@ -4055,6 +4124,7 @@ impl Game<'_> {
                     | BlockEntity::Banner(_)
                     | BlockEntity::CreakingHeart(_)
                     | BlockEntity::Spawner(_)
+                    | BlockEntity::TrialSpawner(_)
                     | BlockEntity::Beehive(_),
                 ) => {}
                 None if self.mount_active() => self.draw_mount_background(batch, ox, oy),
@@ -5400,6 +5470,33 @@ impl Game<'_> {
         }
         best
     }
+    /// `Player.getAttackStrengthScale(0.5)`.
+    fn attack_strength_scale(&self) -> f32 {
+        let speed = self
+            .held()
+            .and_then(|h| self.res.items.get(&h.item))
+            .map_or(0.0, |i| i.attack_speed);
+        let delay = 20.0 / (4.0 + speed).max(0.1);
+        ((self.attack_ticks as f32 + 0.5) / delay).clamp(0.0, 1.0)
+    }
+    /// `Player.attack`'s sounds when a vehicle takes the hit (it always does,
+    /// and can't be hit critically): knockback when sprinting at full
+    /// strength, then strong or weak. Before `swing_arm` resets the charge.
+    pub(super) fn vehicle_attack_sounds(&mut self) {
+        let full = self.attack_strength_scale() > 0.9;
+        let player = self.player.as_ref();
+        let from = player.map(|p| [p.position.x, p.position.y, p.position.z]);
+        if full && player.is_some_and(|p| p.sprinting) {
+            self.audio
+                .play("minecraft:entity.player.attack.knockback", from, 1.0, 1.0);
+        }
+        let sound = if full {
+            "minecraft:entity.player.attack.strong"
+        } else {
+            "minecraft:entity.player.attack.weak"
+        };
+        self.audio.play(sound, from, 1.0, 1.0);
+    }
     /// Player.attack with the attack-strength charge, crits and knockback.
     fn attack(&mut self) -> bool {
         if self.spectator() {
@@ -5446,16 +5543,8 @@ impl Game<'_> {
                 return false;
             }
         }
-        let held = self.held().cloned();
-        let modifiers = held
-            .as_ref()
-            .and_then(|h| self.res.items.get(&h.item))
-            .map(|i| (i.attack_damage, i.attack_speed))
-            .unwrap_or((0.0, 0.0));
-        let damage = 1.0 + modifiers.0 + self.effect_attack_bonus();
-        let speed = (4.0 + modifiers.1).max(0.1);
-        let delay = 20.0 / speed;
-        let scale = ((self.attack_ticks as f32 + 0.5) / delay).clamp(0.0, 1.0);
+        let damage = hand_damage + self.effect_attack_bonus();
+        let scale = self.attack_strength_scale();
         let mut amount = damage * (0.2 + scale * scale * 0.8);
         let target_kind = self.mobs[index].kind.id.clone();
         let target_kind = format!("minecraft:{}", target_kind.trim_start_matches("minecraft:"));
@@ -5566,6 +5655,7 @@ impl Game<'_> {
         self.tick_beacons();
         self.tick_creaking_hearts()?;
         self.tick_spawners()?;
+        self.tick_trial_spawners()?;
         self.tick_beehives();
         let mut lit_changes = Vec::new();
         for (pos, entity) in self.world.block_entities.iter_mut() {
@@ -5823,6 +5913,7 @@ impl Game<'_> {
         name: Option<&str>,
         seed: Option<i64>,
         creative: bool,
+        create: Option<&horizon_client::title::WorldOptions>,
     ) -> Result<()> {
         self.perf.world_opening();
         let save_root = std::env::current_dir()?.join("saves").join(folder);
@@ -5843,7 +5934,9 @@ impl Game<'_> {
                 .map(|d| horizon_client::random_sequences::RandomSequences::from_nbt(&d))
                 .unwrap_or_default();
         self.border = Default::default();
-        let level = Level::read(&save_root).unwrap_or_else(|| Level {
+        let existing = Level::read(&save_root);
+        let created = existing.is_none();
+        let level = existing.unwrap_or_else(|| Level {
             name: name.unwrap_or(folder).to_owned(),
             // WorldOptions.randomSeed when no seed was given.
             seed: seed.unwrap_or_else(|| {
@@ -5860,6 +5953,13 @@ impl Game<'_> {
             ..Level::default()
         });
         let mut level = level;
+        // CreateWorldScreen's choices, before streaming reads the generator.
+        if created && let Some(o) = create {
+            level.hardcore = o.hardcore;
+            level.difficulty = horizon_client::title::DIFFICULTIES[o.difficulty()].into();
+            level.allow_commands = Some(o.commands(creative));
+            horizon_client::save::write_world_gen_settings(&save_root, level.seed, o.world_gen())?;
+        }
         horizon_client::crash::set_detail("World", format!("{} (saves/{folder})", level.name));
         if let Some(d) = &self.options.dimension {
             level.dimension = d.clone();
@@ -6301,6 +6401,7 @@ impl Game<'_> {
         self.save.flush();
         self.session_lock = None;
         horizon_client::crash::clear_detail("World");
+        self.debug_charts.reset();
         self.streaming.paused = true;
         self.world = World::new(self.res.facts.air, 0);
         self.player = None;
@@ -6445,8 +6546,7 @@ impl Game<'_> {
                 self.0.creative
             }
             fn hand(&mut self) -> &mut Option<ItemStack> {
-                let selected = self.0.selected;
-                &mut self.0.inventory[selected]
+                self.0.held_mut()
             }
             fn add(&mut self, stack: &mut ItemStack) -> bool {
                 let before = stack.count;
@@ -6478,7 +6578,7 @@ impl Game<'_> {
         else {
             return Ok(false);
         };
-        let Some(held) = self.inventory[self.selected].as_ref() else {
+        let Some(held) = self.held() else {
             return Ok(false);
         };
         let removes_dye = cauldron::removes_dye(&self.res.items, &held.item);
@@ -6543,6 +6643,16 @@ impl Game<'_> {
         else {
             return Ok(false);
         };
+        // playerHasBlockingItemUseIntent: a shield in the off hand is raised
+        // instead, unless sneaking.
+        let shield = self
+            .offhand
+            .as_ref()
+            .and_then(|s| self.res.items.get(&s.item))
+            .is_some_and(|i| i.blocks_attacks.is_some());
+        if shield && !self.keys.contains(&KeyCode::ShiftLeft) {
+            return Ok(false);
+        }
         let face_name = match face {
             [0, -1, 0] => "down",
             [0, 1, 0] => "up",
@@ -6601,6 +6711,7 @@ impl Game<'_> {
             1.0,
         );
         self.damage_held(damage);
+        self.post_block_game_event("minecraft:block_change", pos, self.sculk_actor(), Some(new));
         Ok(true)
     }
     fn set_state_named(&mut self, pos: [i32; 3], name: &str, keep: &[&str]) -> Result<bool> {
@@ -6625,19 +6736,23 @@ impl Game<'_> {
         if self.creative {
             return;
         }
-        let amount = match self.inventory[self.selected].clone() {
+        let amount = match self.held().cloned() {
             Some(held) => self.durability_loss(&held, amount),
             None => amount,
         };
-        if let Some(stack) = self.inventory[self.selected].as_mut()
-            && let Some(info) = self.res.items.get(&stack.item)
-            && info.max_damage > 0
+        let max = self
+            .held()
+            .and_then(|s| self.res.items.get(&s.item))
+            .map_or(0, |i| i.max_damage);
+        let cell = self.held_mut();
+        if let Some(stack) = cell.as_mut()
+            && max > 0
         {
             stack.damage += amount;
-            if stack.damage >= info.max_damage {
+            if stack.damage >= max {
                 let broken = stack.item.clone();
+                *cell = None;
                 self.stats.add("broken", &broken, 1);
-                self.inventory[self.selected] = None;
                 if let Some(eye) = self.eye_position() {
                     self.audio.play(
                         "minecraft:entity.item.break",
@@ -6717,8 +6832,8 @@ impl Game<'_> {
                     damage: 0,
                     extra: None,
                 };
-                if self.inventory[self.selected].is_none() {
-                    self.inventory[self.selected] = Some(filled);
+                if self.held().is_none() {
+                    *self.held_mut() = Some(filled);
                 } else if let Some(rest) = self.give(filled)
                     && let Some(eye) = self.eye_position()
                 {
@@ -6772,7 +6887,7 @@ impl Game<'_> {
             }
             self.trigger_block("minecraft:placed_block", target, stack);
             if !self.creative {
-                self.inventory[self.selected] = Some(ItemStack::new("minecraft:bucket", 1));
+                *self.held_mut() = Some(ItemStack::new("minecraft:bucket", 1));
             }
             return Ok(UseResult::Success { swing: true });
         }
@@ -7014,10 +7129,7 @@ impl Game<'_> {
         if power < 0.1 {
             return;
         }
-        let arrow_slot = self
-            .inventory
-            .iter()
-            .position(|s| s.as_ref().is_some_and(|s| &*s.item == "minecraft:arrow"));
+        let arrow_slot = self.projectile_slot("minecraft:bow");
         if arrow_slot.is_none() && !self.creative {
             return;
         }
@@ -7041,7 +7153,7 @@ impl Game<'_> {
         // using the ammo, so the arrow is CREATIVE_ONLY; else setOwner(player)
         // lets it be picked up.
         let ammo = arrow_slot
-            .and_then(|i| self.inventory[i].clone())
+            .and_then(|i| self.stack_in(i).cloned())
             .unwrap_or_else(|| ItemStack::new("minecraft:arrow", 1));
         if let Some(a) = arrow.arrow.as_mut() {
             a.set_item(&horizon_client::arrows::drawn_ammo(
@@ -7078,17 +7190,19 @@ impl Game<'_> {
         if !self.creative
             && !infinity
             && let Some(i) = arrow_slot
-            && let Some(s) = self.inventory[i].as_mut()
         {
-            s.count -= 1;
-            if s.count == 0 {
-                self.inventory[i] = None;
+            let cell = self.stack_in_mut(i);
+            if let Some(s) = cell.as_mut() {
+                s.count -= 1;
+                if s.count == 0 {
+                    *cell = None;
+                }
             }
         }
         self.damage_held(1);
     }
-    /// FirstPersonHandsAndItemsRenderer: the right arm or held item in view
-    /// space, converted to camera-relative world space.
+    /// FirstPersonHandsAndItemsRenderer: the right arm or the held items of
+    /// both hands in view space, converted to camera-relative world space.
     fn hand_geometry(&mut self, alpha: f64) -> Vec<Vertex> {
         let mut out = Vec::new();
         // GameRenderer.renderItemInHand: F1 hides the hand with the HUD.
@@ -7104,15 +7218,18 @@ impl Game<'_> {
             return out;
         }
         let a = alpha as f32;
-        // FirstPersonHandsAndItemsRenderer: the swing of the hand that
-        // swings, and its inverse arm height (the swap scale is 1 for every
-        // item but spears).
-        let attack = if self.swing.attack_hand() == horizon_client::first_person::Hand::Main {
-            self.swing.animation(a)
-        } else {
-            0.0
-        };
-        let inverse_height = 1.0 - self.heights.interpolated(a)[0];
+        // FirstPersonHandsAndItemsRenderer: the swing goes to the hand that
+        // swings; each hand has its inverse arm height (the swap scale is 1
+        // for every item but spears).
+        let swing = self.swing.animation(a);
+        let attacks = Hand::BOTH.map(|h| {
+            if self.swing.attack_hand() == h {
+                swing
+            } else {
+                0.0
+            }
+        });
+        let inverse_heights = self.heights.interpolated(a).map(|h| 1.0 - h);
         let view = horizon_client::camera::view_matrix(self.yaw, self.pitch);
         // The hand sway: both hands turn by a tenth of the bobs' lag.
         let [sway_x, sway_y] = self.sway.rotation(a, self.pitch, self.yaw);
@@ -7127,15 +7244,30 @@ impl Game<'_> {
         );
         let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
         let deg = |d: f32| d.to_radians();
-        let sqrt_attack = attack.sqrt();
-        if self.held_map_geometry(to_world, attack, inverse_height, packed, &mut out) {
+        if self.held_map_geometry(to_world, attacks[0], inverse_heights[0], packed, &mut out) {
             return out;
         }
-        let [main_item, _] = self.visible_hand_items();
-        match main_item {
-            None => {
+        let shown = self.hands_to_render();
+        let used_hand = self.used_hand();
+        for (i, (hand, item)) in Hand::BOTH
+            .into_iter()
+            .zip(self.visible_hand_items())
+            .enumerate()
+        {
+            if !shown[i] {
+                continue;
+            }
+            let (attack, inverse_height) = (attacks[i], inverse_heights[i]);
+            let sqrt_attack = attack.sqrt();
+            // The main hand on its arm, the off hand on the other one.
+            let left = self.settings.main_hand_left != (hand == Hand::Off);
+            let Some(stack) = item else {
+                // Only the main hand's empty arm shows.
+                if hand == Hand::Off {
+                    continue;
+                }
                 let Some(arm) = self.res.player_arm.clone() else {
-                    return out;
+                    continue;
                 };
                 let Some(r) = self
                     .res
@@ -7144,7 +7276,7 @@ impl Game<'_> {
                     .get("entity/player/wide/steve")
                     .copied()
                 else {
-                    return out;
+                    continue;
                 };
                 // renderPlayerArm (right arm)
                 let x_swing = -0.3 * (sqrt_attack * std::f32::consts::PI).sin();
@@ -7182,75 +7314,88 @@ impl Game<'_> {
                     0,
                     &mut out,
                 );
+                continue;
+            };
+            let mut owner = self.player_owner(Some(&stack));
+            // The other hand may hold an equal stack: only the used
+            // hand's item is in use, only the main hand's selected.
+            owner.using_this_item &= used_hand == Some(hand);
+            if hand == Hand::Off {
+                owner.is_selected = false;
+                owner.is_carried = false;
             }
-            Some(stack) => {
-                let mut owner = self.player_owner(Some(&stack));
-                // The hand renderer's copy of the main hand stack.
-                owner.fishing_cast_with_this_item =
-                    self.main_hand_rod() && self.cast_rod() == Some(&stack);
-                let using = owner.using_this_item && owner.use_item_remaining_ticks > 0;
-                let ticks_used =
-                    owner.use_duration as f32 - (owner.use_item_remaining_ticks as f32 - a + 1.0);
-                use horizon_client::first_person::ItemPose;
-                let pose = match &*stack.item {
-                    "minecraft:bow" if using => ItemPose::Bow { ticks_used },
-                    "minecraft:crossbow" => {
-                        let charged = stack.data().is_some_and(|d| !d.charged.is_empty());
-                        ItemPose::Crossbow {
-                            ticks_used: (using && !charged).then_some(ticks_used),
-                            charge_duration: owner.crossbow_charge_duration as f32,
-                            charged,
-                        }
+            // The hand renderer's copy of the main hand stack.
+            owner.fishing_cast_with_this_item =
+                self.main_hand_rod() && self.cast_rod() == Some(&stack);
+            let using = owner.using_this_item && owner.use_item_remaining_ticks > 0;
+            let ticks_used =
+                owner.use_duration as f32 - (owner.use_item_remaining_ticks as f32 - a + 1.0);
+            use horizon_client::first_person::ItemPose;
+            let pose = match &*stack.item {
+                "minecraft:bow" if using => ItemPose::Bow { ticks_used },
+                "minecraft:crossbow" => {
+                    let charged = stack.data().is_some_and(|d| !d.charged.is_empty());
+                    ItemPose::Crossbow {
+                        ticks_used: (using && !charged).then_some(ticks_used),
+                        charge_duration: owner.crossbow_charge_duration as f32,
+                        // Only the main hand turns a charged crossbow aside.
+                        charged: charged && hand == Hand::Main,
                     }
-                    "minecraft:trident" if using => ItemPose::Trident { ticks_used },
-                    _ if using => {
-                        let components = self
-                            .res
-                            .item_renderer
-                            .models
-                            .components(&horizon_client::item_render::stack_view(&stack));
-                        let animation = components
-                            .get("minecraft:consumable")
-                            .map(horizon_client::first_person::consumable_animation);
-                        if matches!(
-                            animation,
-                            Some(
-                                horizon_world::consumable::UseAnimation::Eat
-                                    | horizon_world::consumable::UseAnimation::Drink
-                            )
-                        ) {
-                            ItemPose::Eat {
-                                remaining: owner.use_item_remaining_ticks as f32,
-                                duration: owner.use_duration as f32,
-                                partial: a,
-                            }
-                        } else {
-                            ItemPose::Using
+                }
+                "minecraft:trident" if using => ItemPose::Trident { ticks_used },
+                _ if using => {
+                    let components = self
+                        .res
+                        .item_renderer
+                        .models
+                        .components(&horizon_client::item_render::stack_view(&stack));
+                    let animation = components
+                        .get("minecraft:consumable")
+                        .map(horizon_client::first_person::consumable_animation);
+                    if matches!(
+                        animation,
+                        Some(
+                            horizon_world::consumable::UseAnimation::Eat
+                                | horizon_world::consumable::UseAnimation::Drink
+                        )
+                    ) {
+                        ItemPose::Eat {
+                            remaining: owner.use_item_remaining_ticks as f32,
+                            duration: owner.use_duration as f32,
+                            partial: a,
                         }
+                    } else {
+                        ItemPose::Using
                     }
-                    _ => ItemPose::Swing,
-                };
-                let left = self.settings.main_hand_left;
-                let m = to_world
-                    * horizon_client::first_person::item_pose(left, inverse_height, attack, pose);
-                let context = if left {
-                    horizon_assets::item_model::DisplayContext::FirstPersonLeftHand
-                } else {
-                    horizon_assets::item_model::DisplayContext::FirstPersonRightHand
-                };
-                let state = self.resolve_item(&stack, context, Some(&owner), 4);
-                let light = self.world.light(
-                    eye[0].floor() as i32,
-                    eye[1].floor() as i32,
-                    eye[2].floor() as i32,
-                );
-                self.submit_item_world(
-                    &state,
-                    m,
-                    horizon_client::block_entity_render::vertex_light(light),
-                    &mut out,
-                );
-            }
+                }
+                _ => ItemPose::Swing,
+            };
+            let m = to_world
+                * horizon_client::first_person::item_pose(left, inverse_height, attack, pose);
+            // Seeded by the player id plus the context ordinal.
+            let (context, seed) = if left {
+                (
+                    horizon_assets::item_model::DisplayContext::FirstPersonLeftHand,
+                    3,
+                )
+            } else {
+                (
+                    horizon_assets::item_model::DisplayContext::FirstPersonRightHand,
+                    4,
+                )
+            };
+            let state = self.resolve_item(&stack, context, Some(&owner), seed);
+            let light = self.world.light(
+                eye[0].floor() as i32,
+                eye[1].floor() as i32,
+                eye[2].floor() as i32,
+            );
+            self.submit_item_world(
+                &state,
+                m,
+                horizon_client::block_entity_render::vertex_light(light),
+                &mut out,
+            );
         }
         out
     }
@@ -8264,6 +8409,7 @@ impl Game<'_> {
             } else {
                 None
             },
+            menu_blur: self.menu_blur(),
         };
         let result = match self.renderer.as_mut() {
             Some(renderer) => horizon_client::spans::time("renderer", || renderer.render(&frame)),
@@ -8272,6 +8418,18 @@ impl Game<'_> {
         // Restore storage even when rendering fails (for example, a lost surface).
         self.entity_vertices = entities;
         result
+    }
+    /// `Screen.extractBlurredBackground` over the panorama: every classic
+    /// screen of the title menus but the title itself (`TitleScreen`
+    /// doesn't blur), when `menuBackgroundBlurriness` is at least 1.
+    fn menu_blur(&self) -> Option<f32> {
+        let blurred = !horizon_client::ui_theme::horizon()
+            && self.title.as_ref().is_some_and(|t| {
+                self.screen == Screen::Options
+                    || !matches!(t.mode, horizon_client::title::Mode::Main)
+            });
+        let radius = self.settings.menu_blur as f32;
+        (blurred && radius >= 1.0).then_some(radius)
     }
     /// `LevelExtractor` / `LevelRenderer`: the world border wall this frame.
     fn border_draw(
@@ -8698,6 +8856,11 @@ impl ApplicationHandler for Game<'_> {
                         if self.screen == Screen::Inventory || self.creative_inventory_open() {
                             self.inventory_drag_move();
                         }
+                        if let Some(title) = &mut self.title
+                            && !horizon_client::ui_theme::horizon()
+                        {
+                            title.drag(self.cursor, (b.width, b.height));
+                        }
                         if self.dragging && self.screen == Screen::Options {
                             let _ = b;
                             self.options_drag()?;
@@ -8774,6 +8937,15 @@ impl ApplicationHandler for Game<'_> {
                     }
                 }
                 WindowEvent::MouseInput {
+                    state: ElementState::Released,
+                    button: MouseButton::Left,
+                    ..
+                } if self.title.is_some() && self.screen != Screen::Options => {
+                    if let Some(title) = &mut self.title {
+                        title.release();
+                    }
+                }
+                WindowEvent::MouseInput {
                     state,
                     button: MouseButton::Left,
                     ..
@@ -8806,13 +8978,18 @@ impl ApplicationHandler for Game<'_> {
                         Action::Language => {
                             self.open_options_at(true, horizon_client::options_ui::Page::Language)
                         }
-                        Action::Play { folder } => self.open_world(&folder, None, None, false)?,
+                        Action::Play { folder } => {
+                            self.open_world(&folder, None, None, false, None)?
+                        }
                         Action::Create {
                             folder,
                             name,
                             seed,
                             creative,
-                        } => self.open_world(&folder, Some(&name), seed, creative)?,
+                            options,
+                        } => {
+                            self.open_world(&folder, Some(&name), seed, creative, Some(&options))?
+                        }
                         Action::Connect { address } => {
                             self.connect_server(&address, &self.options.player_name())?
                         }
@@ -9074,6 +9251,7 @@ impl ApplicationHandler for Game<'_> {
                             // In single player the tick is the integrated server's.
                             if self.remote.is_none() {
                                 self.perf.tick(tick.elapsed().as_secs_f32() * 1000.0);
+                                self.debug_charts.log_tick(tick, tick.elapsed());
                             }
                             self.tick_ambience();
                             self.tick_fov();
@@ -9160,6 +9338,7 @@ impl ApplicationHandler for Game<'_> {
                     }
                     if rendered {
                         self.frame_stats.record(elapsed.as_secs_f32() * 1000.0);
+                        self.debug_charts.frame_times.log(elapsed.as_nanos() as i64);
                         if self.frames == 0 {
                             // The launcher times Play to this line (launcher/src/perf.rs).
                             log::info!(
@@ -9288,6 +9467,7 @@ pub fn run() -> Result<()> {
     log::info!("load assets: {:.2}s", started.elapsed().as_secs_f32());
     let facts = BlockFacts::load(&root, assets.registry)?;
     let mob_data = horizon_client::mobs::MobData::load(&root, &facts);
+    horizon_client::mobs::trial_spawner::load_registry(&root);
     log::info!("load facts: {:.2}s", started.elapsed().as_secs_f32());
     let items = Items::load(&root, assets.registry, &facts)?;
     log::info!("load items: {:.2}s", started.elapsed().as_secs_f32());
@@ -9502,6 +9682,8 @@ pub fn run() -> Result<()> {
         music: Default::default(),
         ambience: Default::default(),
         sound_paused: false,
+        cart_sounds: HashSet::new(),
+        riding_cart_sounds: None,
         dropped: Vec::new(),
         next_entity: 0,
         particles,
@@ -9534,6 +9716,7 @@ pub fn run() -> Result<()> {
         title: None,
         armor: [None, None, None, None],
         offhand: None,
+        hand: Hand::Main,
         shield_cooldown: 0,
         command_source: None,
         titles: Default::default(),
@@ -9638,6 +9821,7 @@ pub fn run() -> Result<()> {
         world_options: None,
         friends: None,
         debug_keys: Default::default(),
+        debug_charts: Default::default(),
         show_hitboxes: false,
         show_chunk_borders: false,
         pause_menu: true,
@@ -9737,7 +9921,7 @@ pub fn run() -> Result<()> {
         }
         Some(folder) => {
             let (seed, creative) = (game.options.seed, game.options.creative);
-            game.open_world(&folder, None, Some(seed), creative)?;
+            game.open_world(&folder, None, Some(seed), creative, None)?;
         }
         None => {
             let title = Title::new(

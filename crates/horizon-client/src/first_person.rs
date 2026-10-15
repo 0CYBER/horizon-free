@@ -31,7 +31,9 @@ pub enum ItemPose {
     },
 }
 
-/// `submitArmWithItem`: the main-hand item pose, before the model transform.
+/// `submitArmWithItem`: the pose of an item in the hand on the `left` or
+/// right arm, before the model transform. Only the main hand's charged
+/// crossbow is turned aside.
 pub fn item_pose(left: bool, inverse_height: f32, attack: f32, pose: ItemPose) -> glam::Mat4 {
     use glam::{Mat4, Vec3};
     use horizon_core::geometry::trig::Mth;
@@ -125,6 +127,25 @@ pub fn item_pose(left: bool, inverse_height: f32, attack: f32, pose: ItemPose) -
         }
     }
     m
+}
+
+/// `FirstPersonHandsAndItems.evaluateWhichHandsToRender`: whether the main
+/// and the off hand show, from what each holds (item and whether it is a
+/// charged crossbow) and the item in use with its hand. A bow or crossbow
+/// being drawn hides the other hand, and a charged crossbow in the main hand
+/// hides the off hand unless the off hand is the one in use.
+pub fn hands_to_render(held: [Option<(&str, bool)>; 2], using: Option<(Hand, &str)>) -> [bool; 2] {
+    let bow_like = |id: &str| matches!(id, "minecraft:bow" | "minecraft:crossbow");
+    let charged_crossbow =
+        |h: Option<(&str, bool)>| h.is_some_and(|(id, c)| c && id == "minecraft:crossbow");
+    if !held.iter().flatten().any(|&(id, _)| bow_like(id)) {
+        return [true, true];
+    }
+    match using {
+        None => [true, !charged_crossbow(held[0])],
+        Some((hand, id)) if bow_like(id) => [hand == Hand::Main, hand == Hand::Off],
+        Some((hand, _)) => [true, !(hand == Hand::Main && charged_crossbow(held[1]))],
+    }
 }
 
 /// `InteractionHand`.
@@ -718,6 +739,36 @@ impl Clicks {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn drawing_a_bow_or_holding_a_charged_crossbow_hides_a_hand() {
+        let (bow, apple) = (
+            Some(("minecraft:bow", false)),
+            Some(("minecraft:apple", false)),
+        );
+        let charged = Some(("minecraft:crossbow", true));
+        assert_eq!(hands_to_render([apple, apple], None), [true, true]);
+        assert_eq!(hands_to_render([bow, apple], None), [true, true]);
+        assert_eq!(hands_to_render([charged, apple], None), [true, false]);
+        assert_eq!(hands_to_render([apple, charged], None), [true, true]);
+        let drawing = |hand| Some((hand, "minecraft:bow"));
+        assert_eq!(
+            hands_to_render([bow, apple], drawing(Hand::Main)),
+            [true, false]
+        );
+        assert_eq!(
+            hands_to_render([apple, bow], drawing(Hand::Off)),
+            [false, true]
+        );
+        let eating = |hand| Some((hand, "minecraft:apple"));
+        assert_eq!(
+            hands_to_render([apple, charged], eating(Hand::Main)),
+            [true, false]
+        );
+        assert_eq!(
+            hands_to_render([charged, apple], eating(Hand::Off)),
+            [true, true]
+        );
+    }
     #[test]
     fn a_swing_lasts_its_duration_and_restarts_after_half() {
         let mut s = SwingState::default();

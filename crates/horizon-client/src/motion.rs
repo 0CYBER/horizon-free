@@ -113,6 +113,7 @@ pub enum MotionEvent {
         enabled: bool,
     },
     Health(crate::health::HealthEvent),
+    /// `LivingEntity.handleDamageEvent`: the hurt sound the player hears.
     HurtSound(&'static str),
     Fall(crate::landing::FallEvent),
     Recorded {
@@ -2108,6 +2109,47 @@ mod tests {
                 .filter(|e| matches!(e, MotionEvent::HurtSound("minecraft:entity.player.hurt")))
                 .count(),
             1
+        );
+        // A shield that takes the whole arrow: onBlocked's sound, no damage
+        // event, so the player hears no hurt sound.
+        use horizon_world::blocking_rules::{BlockingRules, DamageReduction, ItemDamageFunction};
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
+        let source = resources.health.damage.id("minecraft:arrow").unwrap();
+        let shield = crate::health::Blocking {
+            rules: BlockingRules {
+                delay_seconds: 0.25,
+                disable_scale: 1.0,
+                reductions: vec![DamageReduction {
+                    horizontal_angle: 90.0,
+                    types: None,
+                    base: 0.0,
+                    factor: 1.0,
+                }],
+                item_damage: ItemDamageFunction {
+                    threshold: 3.0,
+                    base: 1.0,
+                    factor: 1.0,
+                },
+            },
+            bypassed: false,
+            pierce: false,
+            angle: 0.0,
+        };
+        let outcome = player
+            .hurt_blocking(
+                &resources.health,
+                Default::default(),
+                source,
+                4.0,
+                Some(shield),
+            )
+            .unwrap();
+        assert!(!outcome.hurt && outcome.sound && outcome.blocked == 4.0);
+        assert!(
+            !player
+                .events
+                .iter()
+                .any(|e| matches!(e, MotionEvent::HurtSound(_)))
         );
     }
 

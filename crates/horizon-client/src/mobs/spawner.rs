@@ -107,11 +107,17 @@ impl SpawnData {
     }
     /// The entity compound is only its `id` (`hasNoConfiguration`): the
     /// spawned mob is finalized.
-    fn unconfigured(&self) -> bool {
+    pub(crate) fn unconfigured(&self) -> bool {
         self.entity.len() == 1 && self.id().is_some()
     }
     /// `CustomSpawnRules.isValidPosition`.
-    fn valid_position<L: SpawnerLevel>(r: CustomSpawnRules, l: &L, x: i32, y: i32, z: i32) -> bool {
+    pub(crate) fn valid_position<L: SpawnerLevel>(
+        r: CustomSpawnRules,
+        l: &L,
+        x: i32,
+        y: i32,
+        z: i32,
+    ) -> bool {
         let block = l.block_light(x, y, z);
         let sky = (l.sky_light(x, y, z) - l.sky_darken()).max(0);
         (r.block.0..=r.block.1).contains(&block) && (r.sky.0..=r.sky.1).contains(&sky)
@@ -135,8 +141,19 @@ pub fn normalize_id(s: &str) -> Option<String> {
         .then(|| format!("{ns}:{path}"))
 }
 
+/// How much a slime's or magma cube's box is scaled by the size its data
+/// loads (`Slime.readAdditionalSaveData`: Size + 1, kept in 1..=127), which
+/// the obstruction test sees before `finalizeSpawn` picks one.
+pub(crate) fn cube_scale(id: &str, entity: &Compound) -> f32 {
+    if !matches!(id, "minecraft:slime" | "minecraft:magma_cube") {
+        return 1.0;
+    }
+    number(entity.get(&JavaString::from("Size")))
+        .map_or(1, |size| (size as i32).saturating_add(1).clamp(1, 127)) as f32
+}
+
 /// A whole number from any numeric tag (`NumericTag.intValue`: floats floor).
-fn number(tag: Option<&Tag>) -> Option<i64> {
+pub(crate) fn number(tag: Option<&Tag>) -> Option<i64> {
     Some(match tag? {
         Tag::Byte(v) => i64::from(*v),
         Tag::Short(v) => i64::from(*v),
@@ -255,6 +272,9 @@ pub struct SpawnerSpawn<'a> {
     /// `finalizeSpawn(SPAWNER)` runs (the data is just an id).
     pub finalize: bool,
     pub equipment: Option<&'a Tag>,
+    /// A trial spawner's mob (`EntitySpawnReason.TRIAL_SPAWNER`): it is
+    /// always persistent.
+    pub trial: bool,
 }
 /// An entity the level added: its id, box and whether it is a mob.
 #[derive(Clone, Copy, Debug)]
@@ -370,25 +390,8 @@ impl Spawner {
             Next::Potential(i) => self.potentials.get_mut(*i).map(|(d, _)| d),
         }
     }
-    /// `WeightedList.getRandom`: one draw over the total weight, none when
-    /// the list weighs nothing.
     fn random_potential(&self, random: &mut impl RandomSource) -> Option<usize> {
-        let total: i64 = self.potentials.iter().map(|(_, w)| i64::from(*w)).sum();
-        if total == 0 {
-            return None;
-        }
-        let mut pick = i64::from(
-            random
-                .next_int_bound(total.min(i64::from(i32::MAX)) as i32)
-                .unwrap_or(0),
-        );
-        for (i, (_, w)) in self.potentials.iter().enumerate() {
-            pick -= i64::from(*w);
-            if pick < 0 {
-                return Some(i);
-            }
-        }
-        None
+        weighted_index(self.potentials.iter().map(|(_, w)| *w), random)
     }
     /// `getOrCreateNextSpawnData`: a potential at random, or empty data.
     fn next_or_create(&mut self, random: &mut impl RandomSource, events: &mut Vec<SpawnerEvent>) {
@@ -555,7 +558,14 @@ impl Spawner {
                 placed[1].floor() as i32,
                 placed[2].floor() as i32,
             ];
-            let bounds = spawn_selection::spawn_box(placed[0], placed[1], placed[2], width, height);
+            let scale = cube_scale(&id, &data.entity);
+            let bounds = spawn_selection::spawn_box(
+                placed[0],
+                placed[1],
+                placed[2],
+                width * scale,
+                height * scale,
+            );
             let rules_ok = data.custom_spawn_rules.is_some()
                 || spawn_selection::mob_spawn_rules(s, l, own[0], own[1], own[2]);
             if !rules_ok
@@ -570,6 +580,7 @@ impl Spawner {
                 yaw,
                 finalize: data.unconfigured(),
                 equipment: data.equipment.as_ref(),
+                trial: false,
             };
             let Some(result) = spawn(l, &request) else {
                 self.delay(random, events);
@@ -643,6 +654,30 @@ impl Spawner {
     }
 }
 
+/// `WeightedList.getRandom`: one draw over the total weight, none when the
+/// list weighs nothing.
+pub fn weighted_index(
+    weights: impl Iterator<Item = i32> + Clone,
+    random: &mut impl RandomSource,
+) -> Option<usize> {
+    let total: i64 = weights.clone().map(i64::from).sum();
+    if total == 0 {
+        return None;
+    }
+    let mut pick = i64::from(
+        random
+            .next_int_bound(total.min(i64::from(i32::MAX)) as i32)
+            .unwrap_or(0),
+    );
+    for (i, w) in weights.enumerate() {
+        pick -= i64::from(w);
+        if pick < 0 {
+            return Some(i);
+        }
+    }
+    None
+}
+
 /// `Entity.setPos` of a fresh mob: a shulker sits at the centre of its block.
 pub fn entity_position(s: Species, at: [f64; 3]) -> [f64; 3] {
     if s == Species::Shulker {
@@ -657,7 +692,7 @@ pub fn entity_position(s: Species, at: [f64; 3]) -> [f64; 3] {
 }
 
 /// `Vec3.CODEC`: a list of three doubles.
-fn read_pos(tag: Option<&Tag>) -> Option<[f64; 3]> {
+pub(crate) fn read_pos(tag: Option<&Tag>) -> Option<[f64; 3]> {
     let Tag::List(v) = tag? else {
         return None;
     };

@@ -170,6 +170,9 @@ pub struct Frame<'a> {
     pub block_flicker: f32,
     /// Blur and grade the frame under a Horizon-style menu (`post`).
     pub post: Option<crate::post::PostGrade>,
+    /// `Screen.extractBlurredBackground`: blur the frame by this radius
+    /// (`menuBackgroundBlurriness`) before the screen is drawn over it.
+    pub menu_blur: Option<f32>,
 }
 /// One frame of the world border wall (`WorldBorderRenderer.render`).
 #[derive(Clone, Debug)]
@@ -198,6 +201,9 @@ pub struct Renderer {
     gpu_timer: Option<timing::GpuTimer>,
     /// GPU frame times (ms) read back since the caller last drained them.
     pub gpu_times: Vec<f32>,
+    /// The last lightmap written, RGBA rows of sky level by block level
+    /// (F3+4 shows it).
+    pub lightmap_pixels: [u8; 16 * 16 * 4],
     /// Time the last `render` spent blocked on the GPU or the display
     /// (acquiring, presenting, offscreen pacing), excluded from CPU time.
     pub last_wait: std::time::Duration,
@@ -288,6 +294,8 @@ pub struct Renderer {
     pub hud: HudRenderer,
     /// The menus' backdrop blur, made on first use.
     post: Option<crate::post::Post>,
+    /// Vanilla's menu background blur, made on first use.
+    menu_blur: Option<crate::menu_blur::MenuBlur>,
     pub info: wgpu::AdapterInfo,
     pub suspended: bool,
     pub drawn_sections: usize,
@@ -1364,6 +1372,7 @@ impl Renderer {
             in_flight: std::collections::VecDeque::new(),
             gpu_timer,
             gpu_times: Vec::new(),
+            lightmap_pixels: [0; 16 * 16 * 4],
             last_wait: std::time::Duration::ZERO,
             last_encode: std::time::Duration::ZERO,
             window,
@@ -1433,6 +1442,7 @@ impl Renderer {
             world_post,
             hud,
             post: None,
+            menu_blur: None,
             info,
             suspended: size.width == 0 || size.height == 0,
             drawn_sections: 0,
@@ -1729,7 +1739,7 @@ impl Renderer {
         world_projection(fov_degrees, aspect, far) * bob * crate::camera::view_matrix(yaw, pitch)
     }
     fn update_lightmap(
-        &self,
+        &mut self,
         sky: &Sky,
         darkness: f32,
         gamma: f32,
@@ -1785,6 +1795,7 @@ impl Renderer {
                 depth_or_array_layers: 1,
             },
         );
+        self.lightmap_pixels = pixels;
     }
     fn animate(&mut self, tick: u64) {
         animate_sprites(
@@ -2395,6 +2406,23 @@ impl Renderer {
                 pass.set_pipeline(pipeline);
                 pass.draw_indexed(0..6, (i * 4) as i32, 0..1);
             }
+        }
+        if let Some(radius) = frame.menu_blur
+            && self.config.usage.contains(wgpu::TextureUsages::COPY_SRC)
+        {
+            let format = self.config.format;
+            let device = &self.device;
+            self.menu_blur
+                .get_or_insert_with(|| crate::menu_blur::MenuBlur::new(device, format))
+                .apply(
+                    &self.device,
+                    &self.queue,
+                    &mut encoder,
+                    &target_texture,
+                    &view_target,
+                    [self.config.width, self.config.height],
+                    radius,
+                );
         }
         if let Some(grade) = &frame.post
             && self.config.usage.contains(wgpu::TextureUsages::COPY_SRC)

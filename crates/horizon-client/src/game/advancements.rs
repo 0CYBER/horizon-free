@@ -19,26 +19,98 @@ pub(super) struct Toast {
     icon: String,
     frame: Frame,
     title: Text,
-    shown: Option<Instant>,
-    /// A `RecipeToast`: the icon is a recipe result.
-    recipe: bool,
+    slide: Slide,
+    /// A `RecipeToast`: the crafting station and result of each display
+    /// unlocked while it lasts (`recipeItems`); empty for an advancement.
+    recipes: Vec<(String, ItemStack)>,
+    /// `RecipeToast.changed` and `lastChanged`.
+    changed: bool,
+    last_changed: i64,
 }
 impl Toast {
-    pub(super) fn is_recipe(&self) -> bool {
-        self.recipe
-    }
-    pub(super) fn was_shown(&self) -> bool {
-        self.shown.is_some()
-    }
-    /// `RecipeToast`: "New Recipe(s) Unlocked!" with the recipe's result.
-    pub(super) fn recipe(icon: &str) -> Self {
+    /// `RecipeToast.addOrUpdate` on a new toast.
+    pub(super) fn recipe(items: Vec<(String, ItemStack)>) -> Self {
         Self {
-            icon: icon.to_owned(),
+            icon: String::new(),
             frame: Frame::Task,
             title: Text::literal(""),
-            shown: None,
-            recipe: true,
+            slide: Slide::default(),
+            recipes: items,
+            changed: true,
+            last_changed: 0,
         }
+    }
+    pub(super) fn is_recipe(&self) -> bool {
+        !self.recipes.is_empty()
+    }
+    /// `RecipeToast.addItem`: more displays on a toast still queued or shown.
+    pub(super) fn add_recipes(&mut self, items: Vec<(String, ItemStack)>) {
+        self.recipes.extend(items);
+        self.changed = true;
+    }
+    /// `Toast.update` with `fullyVisibleForMs`: whether it wants to be shown.
+    fn wants_show(&mut self, fully_for: i64, multiplier: f64) -> bool {
+        let time = 5000.0 * multiplier;
+        if self.recipes.is_empty() {
+            // AdvancementToast.
+            return (fully_for as f64) < time;
+        }
+        if self.changed {
+            self.last_changed = fully_for;
+            self.changed = false;
+        }
+        ((fully_for - self.last_changed) as f64) < time
+    }
+    /// `RecipeToast.displayedRecipeIndex`: the displays take turns over the
+    /// toast's display time.
+    fn displayed_recipe(&self, fully_for: i64, multiplier: f64) -> usize {
+        let n = self.recipes.len() as f64;
+        (fully_for as f64 / (5000.0 * multiplier / n).max(1.0) % n) as usize
+    }
+}
+/// `ToastManager.ToastInstance`: slides a toast in and out over 600 ms,
+/// eased by the square, and counts how long it has been fully shown.
+#[derive(Default)]
+struct Slide {
+    /// When it first updated; the times below are milliseconds since.
+    origin: Option<Instant>,
+    begun: bool,
+    /// `animationStartTime`.
+    start: i64,
+    /// `becameFullyVisibleAt`.
+    fully_at: i64,
+    show: bool,
+    /// `visiblePortion`: 0 off screen, 1 fully in.
+    portion: f32,
+    /// `fullyVisibleFor`.
+    fully_for: i64,
+}
+impl Slide {
+    const MS: i64 = 600;
+    /// `ToastInstance.update` at `now`; `wants_show` is the toast's own
+    /// update. The visibility it switched to (the sound to play), and whether
+    /// it has finished sliding out.
+    fn update(&mut self, now: i64, wants_show: impl FnOnce(i64) -> bool) -> (Option<bool>, bool) {
+        let was = self.show;
+        if !self.begun {
+            self.begun = true;
+            self.start = now;
+            self.show = true;
+        }
+        if self.show && now - self.start <= Self::MS {
+            self.fully_at = now;
+        }
+        self.fully_for = now - self.fully_at;
+        let progress = ((now - self.start) as f32 / Self::MS as f32).clamp(0.0, 1.0);
+        let progress = progress * progress;
+        self.portion = if self.show { progress } else { 1.0 - progress };
+        let wanted = wants_show(self.fully_for);
+        if wanted != self.show {
+            self.start = now - ((1.0 - self.portion) * Self::MS as f32) as i64;
+            self.show = wanted;
+        }
+        let finished = !self.show && now - self.start > Self::MS;
+        ((self.show != was).then_some(self.show), finished)
     }
 }
 #[derive(Default)]
@@ -430,8 +502,10 @@ impl Game<'_> {
                     icon: d.icon.clone(),
                     frame: d.frame,
                     title: text_of(&d.title),
-                    shown: None,
-                    recipe: false,
+                    slide: Slide::default(),
+                    recipes: Vec::new(),
+                    changed: false,
+                    last_changed: 0,
                 });
             }
             if d.announce && self.ui.rules.bool("show_advancement_messages") {
@@ -679,45 +753,57 @@ impl Game<'_> {
             c["from"].as_str().is_none_or(|f| f == from) && c["to"].as_str().is_none_or(|t| t == to)
         });
     }
-    /// `ToastManager` with the `AdvancementToast`.
+    /// `ToastManager` with the `AdvancementToast` and the `RecipeToast`,
+    /// one at a time.
     pub(super) fn draw_toasts(&mut self, batch: &mut HudBatch) {
+        let multiplier = f64::from(self.settings.notification_display_time);
         let Some(t) = self.adv.toasts.front_mut() else {
             return;
         };
-        let shown = *t.shown.get_or_insert_with(Instant::now);
-        let ms = shown.elapsed().as_millis() as f32;
-        // AdvancementToast.DISPLAY_TIME: 5 s, sliding 600 ms in and out.
-        if ms > 5600.0 {
+        let first = t.slide.origin.is_none();
+        let origin = *t.slide.origin.get_or_insert_with(Instant::now);
+        let now = origin.elapsed().as_millis() as i64;
+        let mut slide = std::mem::take(&mut t.slide);
+        let (sound, finished) = slide.update(now, |fully| t.wants_show(fully, multiplier));
+        t.slide = slide;
+        if finished {
             self.adv.toasts.pop_front();
             return;
         }
-        let slide = if ms < 600.0 {
-            ms / 600.0
-        } else if ms > 5000.0 {
-            1.0 - (ms - 5000.0) / 600.0
-        } else {
-            1.0
-        };
-        let (title, frame, icon, recipe) = (t.title.clone(), t.frame, t.icon.clone(), t.recipe);
-        if recipe {
-            // RecipeToast: black description under a purple title.
+        let x = batch.width - 160.0 * t.slide.portion;
+        let fully_for = t.slide.fully_for;
+        let (title, frame, icon) = (t.title.clone(), t.frame, t.icon.clone());
+        let recipe = t
+            .is_recipe()
+            .then(|| t.recipes[t.displayed_recipe(fully_for, multiplier)].clone());
+        // ToastManager.update: the sound of the new visibility, and a
+        // challenge's own sound as it leaves the queue.
+        if let Some(show) = sound {
+            let event = if show { "ui.toast.in" } else { "ui.toast.out" };
+            self.audio
+                .play(&format!("minecraft:{event}"), None, 1.0, 1.0);
+        }
+        if first && recipe.is_none() && frame == Frame::Challenge {
+            self.audio
+                .play("minecraft:ui.toast.challenge_complete", None, 1.0, 1.0);
+        }
+        if let Some((station, item)) = recipe {
+            // RecipeToast: black description under a purple title, the
+            // station at 0.6 scale in the corner over the cycling result.
             let atlas = &self.res.atlas;
-            let x = batch.width - 160.0 * slide;
             batch.sprite(atlas, "gui/sprites/toast/recipe", x, 0.0);
             let title = self.translate("recipe.toast.title", "New Recipe(s) Unlocked!");
             let description = self.translate("recipe.toast.description", "Check your recipe book");
             let atlas = &self.res.atlas;
             batch.text(atlas, &title, x + 30.0, 7.0, 0xFF50_0050, false);
             batch.text(atlas, &description, x + 30.0, 18.0, 0xFF00_0000, false);
-            self.draw_item(batch, &ItemStack::new(&icon, 1), x + 8.0, 8.0);
+            let start = batch.vertices.len();
+            self.draw_item_model(batch, &ItemStack::new(&station, 1), x + 3.0, 3.0);
+            batch.scale_since(start, x, 0.0, 0.6, 0.6);
+            self.draw_item_model(batch, &item, x + 8.0, 8.0);
             return;
         }
-        if frame == Frame::Challenge && ms < 50.0 {
-            self.audio
-                .play("minecraft:ui.toast.challenge_complete", None, 1.0, 1.0);
-        }
         let atlas = &self.res.atlas;
-        let x = batch.width - 160.0 * slide;
         batch.sprite(atlas, "gui/sprites/toast/advancement", x, 0.0);
         let (key, color) = match frame {
             Frame::Task => ("advancements.toast.task", 0xFF00_FFFF),
@@ -811,5 +897,96 @@ pub(super) fn text_of(v: &Value) -> Text {
         Text::literal(s)
     } else {
         Text::empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn recipes(n: usize) -> Toast {
+        Toast::recipe(
+            (0..n)
+                .map(|i| {
+                    let item = ItemStack::new(&format!("minecraft:item_{i}"), 1);
+                    ("minecraft:crafting_table".to_owned(), item)
+                })
+                .collect(),
+        )
+    }
+    /// Drives a toast frame by frame (every `step` ms) and returns the slide
+    /// portions at the given times and when it finished.
+    fn run(toast: &mut Toast, step: i64, until: i64, at: &[i64]) -> (Vec<f32>, Option<i64>) {
+        let mut slide = Slide::default();
+        let mut seen = Vec::new();
+        for now in (0..=until).step_by(step as usize) {
+            let (_, finished) = slide.update(now, |f| toast.wants_show(f, 1.0));
+            if finished {
+                return (seen, Some(now));
+            }
+            if at.contains(&now) {
+                seen.push(slide.portion);
+            }
+        }
+        (seen, None)
+    }
+
+    #[test]
+    fn toasts_slide_in_squared_and_out_after_five_seconds() {
+        let mut toast = recipes(1);
+        let (portions, finished) = run(&mut toast, 10, 10_000, &[0, 300, 600, 3000]);
+        // (300 / 600)² = 0.25: ToastInstance.calculateVisiblePortion.
+        assert_eq!(portions, [0.0, 0.25, 1.0, 1.0]);
+        // Fully in at 600, shown 5000 ms, out over 600 more.
+        assert!(
+            finished.is_some_and(|t| (6200..=6220).contains(&t)),
+            "{finished:?}"
+        );
+    }
+
+    #[test]
+    fn the_first_update_plays_the_show_sound_and_the_hide_sound_follows() {
+        let mut toast = recipes(1);
+        let mut slide = Slide::default();
+        assert_eq!(slide.update(0, |f| toast.wants_show(f, 1.0)).0, Some(true));
+        assert_eq!(slide.update(100, |f| toast.wants_show(f, 1.0)).0, None);
+        assert_eq!(
+            slide.update(5600, |f| toast.wants_show(f, 1.0)).0,
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn recipe_toasts_cycle_through_their_displays_over_the_display_time() {
+        let toast = recipes(4);
+        let shown: Vec<usize> = [0, 1249, 1250, 2500, 3750, 4999, 5000]
+            .iter()
+            .map(|&t| toast.displayed_recipe(t, 1.0))
+            .collect();
+        assert_eq!(shown, [0, 0, 1, 2, 3, 3, 0]);
+        // notificationDisplayTime doubles each turn.
+        assert_eq!(toast.displayed_recipe(2500, 2.0), 1);
+    }
+
+    #[test]
+    fn unlocking_more_recipes_keeps_the_toast_up_five_more_seconds() {
+        let mut toast = recipes(1);
+        let mut slide = Slide::default();
+        let mut finished = None;
+        for now in (0..=20_000).step_by(10) {
+            if now == 4000 {
+                toast.add_recipes(recipes(1).recipes);
+            }
+            if slide.update(now, |f| toast.wants_show(f, 1.0)).1 {
+                finished = Some(now);
+                break;
+            }
+        }
+        assert_eq!(toast.recipes.len(), 2);
+        // lastChanged moved to 3400 ms fully shown: hidden at 8400 + 600.
+        assert!(
+            finished.is_some_and(|t| (9600..=9620).contains(&t)),
+            "{finished:?}"
+        );
     }
 }

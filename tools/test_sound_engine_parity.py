@@ -3,9 +3,10 @@
 
 The oracle runs the real `SoundManager`/`SoundEngine` on OpenAL Soft's "No
 Output" device (see VanillaSoundRig) and replays scripts of plays (simple,
-biome loop, underwater loop and sub-sound instances), stops (by instance, by
-sound and/or source, all), category gains, source volume options and
-refreshes, channel ends, delayed and queued sounds, pauses and client ticks.
+biome loop, underwater loop, sub-sound, minecart and riding-minecart
+instances), stops (by instance, by sound and/or source, all), category gains,
+source volume options and refreshes, channel ends, delayed and queued sounds,
+pauses, minecart states and client ticks.
 After every step it prints each instance's `isActive` and the AL source the
 engine configured (state, gain, pitch, position, relative, looping, distance
 model, max distance, rolloff, reference distance), the subtitle notifications
@@ -13,6 +14,7 @@ and the channel pool counts. Horizon's `SoundEngine` replays the scripts
 against a backend that records the same AL source fields.
 """
 import json
+import math
 import random
 
 try:
@@ -37,6 +39,9 @@ class Script:
     def play(self, name, event, source=4, volume=1.0, pitch=1.0, at=(0.0, 0.0, 0.0), looping=0, delay=0, linear=True, relative=0, seed=0, kind='simple'):
         self.add('play', name, kind, event, source, h.bits(volume), h.bits(pitch), *map(dbits, at), looping, delay,
                  'linear' if linear else 'none', relative, seed)
+
+    def cart(self, name, at, delta, removed=0):
+        self.add('cart', name, *map(dbits, at), *map(dbits, delta), removed)
 
     def tick(self, n=1, paused=0):
         for _ in range(n):
@@ -117,6 +122,30 @@ def scripted(s):
     s.tick(3)
     s.add('player', 0, 0)
     s.reset()
+    # Minecarts: the rolling sound and the two riding sounds, by speed,
+    # underwater, frozen ticks, getting out and the cart's removal.
+    s.cart('k', (10.3, 64.0, 5.7), (0.0, 0.0, 0.0))
+    s.play('m', 'k', kind='cart', seed=61)
+    s.tick(2)
+    for i, v in enumerate([0.005, 0.0099, 0.01, 0.1, 0.3, 0.5, 0.51, 0.8, 1.0, 1.2, 2.0, 0.0]):
+        s.cart('k', (10.3 + i * 0.37123, 64.0625, 5.7 - i * 0.1), (v * 0.6, -0.04, v * 0.8))
+        s.tick(2)
+        if i == 4:
+            s.add('freeze', 1)
+            s.tick(3)
+            s.add('freeze', 0)
+            s.add('ride', 'k')
+            s.play('r', 'k', kind='rcartu', seed=62)
+            s.play('i', 'k', kind='rcart', seed=63)
+        if i == 8:
+            s.add('player', 1, 0)
+            s.tick(3)
+            s.add('player', 0, 0)
+    s.add('ride', '-')
+    s.tick(3)
+    s.cart('k', (1.0, 2.0, 3.0), (0.2, 0.0, 0.0), removed=1)
+    s.tick(3)
+    s.reset()
     # Queued tickables, delayed and manually looped sounds.
     s.play('q', loop, kind='loop', seed=31)
     s.add('stop', 'q')
@@ -173,6 +202,10 @@ def scripted(s):
 def fuzz(s, rng, steps):
     names = ['f0', 'f1', 'f2', 'f3', 'f4', 'f5']
     live = set()
+    for cart in ('k0', 'k1'):
+        s.cart(cart, (0.0, 64.0, 0.0), (0.0, 0.0, 0.0))
+    s.add('ride', '-')
+    s.add('freeze', 0)
     for _ in range(steps):
         op = rng.random()
         name = rng.choice(names)
@@ -210,6 +243,18 @@ def fuzz(s, rng, steps):
         elif op < 0.57:
             s.add('forget', name)
             live.discard(name)
+        elif op < 0.62:
+            speed = rng.choice([0.0, 0.005, 0.01, 0.3, 0.5, 1.0, rng.uniform(0, 1.5)])
+            angle = rng.uniform(0, 6.3)
+            at = (rng.uniform(-50, 50), rng.uniform(0, 80), rng.uniform(-50, 50))
+            s.cart(rng.choice(['k0', 'k1']), at, (speed * math.cos(angle), rng.uniform(-0.1, 0.1), speed * math.sin(angle)), int(rng.random() < 0.08))
+        elif op < 0.65:
+            s.add('ride', rng.choice(['k0', 'k1', '-']))
+        elif op < 0.66:
+            s.add('freeze', int(rng.random() < 0.5))
+        elif op < 0.70:
+            s.play(name, rng.choice(['k0', 'k1']), kind=rng.choice(['cart', 'rcart', 'rcartu']), seed=rng.getrandbits(63))
+            live.add(name)
         else:
             s.tick(rng.randrange(1, 6))
 
@@ -238,7 +283,8 @@ def main():
               'AL source parameters set by play/tickInGameSound/refreshCategoryVolume (gain from calculateVolume, clamped pitch, linear '
               'attenuation distance, looping, position, relative), isActive, the 20-tick minimum lifetime, channel ends, stop by instance/sound/source/all, '
               'pauseAllExcept/resume, tickMusicWhenPaused, queued tickables, playDelayed and manual looping, LoopSoundInstance, '
-              'UnderLiquidAmbientSoundInstance and UnderLiquidSubSound ticks, subtitle notifications and ranges, and the 247/8 channel pools. '
+              'UnderLiquidAmbientSoundInstance and UnderLiquidSubSound ticks, MinecartSoundInstance and RidingMinecartSoundInstance ticks (speed, '
+              'riding, underwater, frozen ticks, removal), subtitle notifications and ranges, and the 247/8 channel pools. '
               'Not compared: decoded sample output, OpenAL panning/HRTF and distance gain inside the mixer, asset loading timing.')
     print(f'{matched:,} sound engine lines match the pinned client ({len(lines):,} steps): {report}', flush=True)
 
