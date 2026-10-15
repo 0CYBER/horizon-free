@@ -10,7 +10,7 @@ use std::{
 
 pub struct World {
     pub fast_lava: bool,
-    pub chunks: crate::fast_hash::FxHashMap<(i32, i32), Arc<Chunk>>,
+    pub chunks: crate::chunk_map::ChunkMap,
     pub random: LegacyRandom,
     pub revision: u64,
     pub health_rules: crate::health::HealthRules,

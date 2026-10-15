@@ -840,7 +840,7 @@ struct Game<'a> {
     end_portal_travel: bool,
     end: end::EndState,
     block_ticks: Ticks,
-    tick_chunks: HashSet<(i32, i32)>,
+    tick_chunks: horizon_client::tick_chunk_membership::TickChunkMembership,
     level_events: Vec<LevelEvent>,
     falling: Vec<FallingBlock>,
     paintings: Vec<horizon_client::entities::Painting>,
@@ -1557,15 +1557,19 @@ impl Game<'_> {
     }
     /// Track which chunks are ticking (Ticks needs chunk load/unload).
     fn sync_tick_chunks(&mut self) {
-        let loaded: HashSet<(i32, i32)> = self.world.chunks.keys().copied().collect();
-        for k in loaded.difference(&self.tick_chunks.clone()) {
-            self.register_chunk_ticks(*k);
+        if !self.tick_chunks.synchronize(&self.world.chunks) {
+            return;
         }
-        for k in self.tick_chunks.difference(&loaded) {
+        // Move only the added keys out so registration can borrow all of Game.
+        let added = self.tick_chunks.take_added();
+        for &key in &added {
+            self.register_chunk_ticks(key);
+        }
+        for &key in self.tick_chunks.removed() {
             self.block_ticks
-                .remove_chunk(horizon_core::position::ChunkPos::new(k.0, k.1));
+                .remove_chunk(horizon_core::position::ChunkPos::new(key.0, key.1));
         }
-        self.tick_chunks = loaded;
+        self.tick_chunks.recycle_added(added);
     }
     /// ServerLevel.tick block phases: scheduled ticks, random ticks within the
     /// simulation distance, block events and moving pistons.
@@ -9495,7 +9499,7 @@ pub fn run() -> Result<()> {
         end_portal_travel: false,
         end: Default::default(),
         block_ticks: Ticks::new(0),
-        tick_chunks: HashSet::new(),
+        tick_chunks: Default::default(),
         level_events: Vec::new(),
         falling: Vec::new(),
         paintings: Vec::new(),
