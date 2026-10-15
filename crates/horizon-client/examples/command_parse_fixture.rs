@@ -135,7 +135,7 @@ fn tree(d: &Dispatcher, node: usize) -> Value {
 fn main() -> horizon_client::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("tree") {
-        let d = vanilla::release_dispatcher();
+        let d = &vanilla::registered(false);
         let mut v = tree(d, 0);
         v["type"] = json!("root");
         fs::write(&args[2], v.to_string())?;

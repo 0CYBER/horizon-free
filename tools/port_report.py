@@ -154,8 +154,10 @@ def blocking_items(diff, mapping, pinned_facts, root, regen=None):
     else:
         for name, entry in regen["generators"].items():
             if entry["status"] == "failed":
-                items.append(item(1, "regen-failed", f"Generator {name} failed on {regen['new']}",
-                                  files=entry["outputs"], error=entry["error"]))
+                errors = entry.get("compile_errors", [])
+                what = "its vanilla exporter no longer compiles" if errors else "failed"
+                items.append(item(1, "regen-failed", f"Generator {name}: {what} on {regen['new']}",
+                                  files=entry["outputs"], error=entry["error"], compile_errors=errors))
     return items
 
 
@@ -304,7 +306,9 @@ def markdown(report, limit=12):
             lines.append(f"### #{entry['id']} {entry['title']}")
             if entry.get("command"):
                 lines.append(f"- run: `{entry['command']}`")
-            if entry.get("error"):
+            if entry.get("compile_errors"):
+                lines += [f"- javac: `{e}`" for e in entry["compile_errors"][:limit]]
+            elif entry.get("error"):
                 lines.append("- error: `" + entry["error"].strip().splitlines()[-1][:300] + "`")
             if entry.get("failed"):
                 lines.append(f"- failing harnesses: {', '.join(entry['failed'])}")

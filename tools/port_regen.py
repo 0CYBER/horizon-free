@@ -20,6 +20,7 @@ it reads.
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -127,15 +128,39 @@ def python():
     return shutil.which("python3") or "python3"
 
 
+class Failed(RuntimeError):
+    """A command that exited non-zero, with all it printed."""
+
+    def __init__(self, command, code, output):
+        super().__init__(f"{' '.join(map(str, command))[:300]} exited {code}:\n{output[-2500:]}")
+        self.output = output
+
+
 def run(command, cwd, log=None, env=None):
-    """Run a command; on failure raise with the end of its output."""
+    """Run a command; on failure raise Failed."""
     result = subprocess.run([str(c) for c in command], cwd=cwd, capture_output=True, text=True, env=env)
     if log:
         log.write_text(result.stdout + result.stderr)
     if result.returncode:
-        raise RuntimeError(f"{' '.join(map(str, command))[:300]} exited {result.returncode}:\n"
-                           + (result.stdout + result.stderr)[-2500:])
+        raise Failed(command, result.returncode, result.stdout + result.stderr)
     return result.stdout
+
+
+def compile_errors(output, limit=12):
+    """javac's errors, one line each: "ParityData.java:45: cannot find symbol: variable WORLD (class
+    RegistryLayer)" names the vanilla API an oracle used that the new version changed."""
+    lines = output.splitlines()
+    found = []
+    for index, line in enumerate(lines):
+        match = re.match(r".*?([\w$]+\.java):(\d+): error: (.*)", line)
+        if not match:
+            continue
+        entry = f"{match[1]}:{match[2]}: {match[3]}"
+        after = [text.strip() for text in lines[index + 1:index + 6]]
+        symbol = next((text.split(":", 1)[1].strip() for text in after if text.startswith("symbol:")), None)
+        where = next((text.split(":", 1)[1].strip() for text in after if text.startswith("location:")), None)
+        found.append(entry + (f": {symbol}" if symbol else "") + (f" ({where})" if where else ""))
+    return found[:limit]
 
 
 # --- decompiling the classes the generators parse ------------------------------------------------------------
@@ -257,7 +282,8 @@ def run_generators(root, version, store, names=None):
             results[name] = {"status": state, "outputs": outputs, "stat": stat}
         except (RuntimeError, OSError, subprocess.CalledProcessError, KeyError, ValueError) as error:
             git("checkout", "HEAD", "--", *outputs, cwd=root, check=False)
-            results[name] = {"status": "failed", "outputs": outputs, "error": str(error)[-2500:]}
+            results[name] = {"status": "failed", "outputs": outputs, "error": str(error)[-2500:],
+                             "compile_errors": compile_errors(getattr(error, "output", str(error)))}
         print(f"  {name}: {results[name]['status']}", flush=True)
     return results
 
