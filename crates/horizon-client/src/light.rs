@@ -363,6 +363,32 @@ pub fn apply_lighting(chunk: &mut Chunk, lights: Vec<Light>) {
     }
 }
 
+/// `apply_lighting` for a chunk lit before: writes only the sections whose
+/// light changed and returns the block positions that changed.
+pub fn apply_relighting(chunk: &mut Chunk, lights: Vec<Light>) -> Vec<(i32, i32, i32)> {
+    let mut changed = Vec::new();
+    let (bx, bz) = (chunk.x * 16, chunk.z * 16);
+    for (sy, (section, light)) in chunk.sections.iter_mut().zip(lights).enumerate() {
+        let old = &section.light;
+        if let (Light::Uniform(a), Light::Uniform(b)) = (old, &light)
+            && a == b
+        {
+            continue;
+        }
+        let before = changed.len();
+        for i in 0..4096 {
+            if old.get(i) != light.get(i) {
+                let y = MIN_Y + sy as i32 * 16 + (i >> 8) as i32;
+                changed.push((bx + (i & 15) as i32, y, bz + (i >> 4 & 15) as i32));
+            }
+        }
+        if changed.len() > before {
+            Arc::make_mut(section).light = light;
+        }
+    }
+    changed
+}
+
 /// Resident chunks the incremental relighter reads and writes.
 pub trait LightWorld {
     fn state(&self, x: i32, y: i32, z: i32) -> Option<u16>;
@@ -747,6 +773,48 @@ mod tests {
                 assert_eq!(section.light(i), light.get(i));
             }
         }
+    }
+
+    #[test]
+    fn relighting_reports_exactly_the_changed_positions() {
+        let mut chunk = Chunk::empty(1, -1);
+        chunk.set(3, MIN_Y + 20, 5, TORCH);
+        let lit = |c: &Chunk| {
+            let region = [[None; 3], [None, Some(c), None], [None; 3]];
+            light_chunk(&region, &tables(), true)
+        };
+        let light = lit(&chunk);
+        apply_lighting(&mut chunk, light);
+        let sections: Vec<_> = chunk.sections.iter().map(Arc::as_ptr).collect();
+        // The same light again: nothing changes and no section is copied.
+        let light = lit(&chunk);
+        assert!(apply_relighting(&mut chunk, light).is_empty());
+        assert_eq!(
+            sections,
+            chunk.sections.iter().map(Arc::as_ptr).collect::<Vec<_>>()
+        );
+        let before = chunk.clone();
+        chunk.set(3, MIN_Y + 20, 5, STONE);
+        let light = lit(&chunk);
+        let changed = apply_relighting(&mut chunk, light);
+        let mut expected = Vec::new();
+        for (sy, (old, new)) in before.sections.iter().zip(&chunk.sections).enumerate() {
+            for i in 0..4096 {
+                if old.light(i) != new.light(i) {
+                    let (x, y, z) = (i as i32 & 15, (i >> 8) as i32, (i >> 4) as i32 & 15);
+                    expected.push((16 + x, MIN_Y + sy as i32 * 16 + y, -16 + z));
+                }
+            }
+        }
+        assert!(!expected.is_empty());
+        assert_eq!(changed, expected);
+        // Only the torch's section and the two it lights into are copied.
+        let copied = sections
+            .iter()
+            .zip(&chunk.sections)
+            .filter(|(old, new)| **old != Arc::as_ptr(new))
+            .count();
+        assert!(copied <= 3, "{copied} sections copied");
     }
 
     #[test]
