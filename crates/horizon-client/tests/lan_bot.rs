@@ -307,7 +307,10 @@ fn status_and_join() {
         Ok(r.json)
     });
     let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(v["version"]["protocol"], 777);
+    assert_eq!(
+        v["version"]["protocol"],
+        horizon_core::version::PROTOCOL_VERSION
+    );
     // ServerStatus.CODEC writes a plain literal MOTD as a bare string.
     assert_eq!(v["description"], "Test - World");
 
