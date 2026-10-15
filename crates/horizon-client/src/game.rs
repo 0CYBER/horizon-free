@@ -752,6 +752,10 @@ struct Game<'a> {
     ambience: horizon_client::ambience::Ambience,
     /// The sound engine was told the game paused (pauseAllExcept).
     sound_paused: bool,
+    /// Minecarts whose `MinecartSoundInstance` is playing.
+    cart_sounds: HashSet<u32>,
+    /// The minecart the riding sounds were started for (`LocalPlayer.startRiding`).
+    riding_cart_sounds: Option<u32>,
     dropped: Vec<ItemEntity>,
     next_entity: u32,
     particles: horizon_client::particles::ParticleEngine,
@@ -5463,6 +5467,33 @@ impl Game<'_> {
         }
         best
     }
+    /// `Player.getAttackStrengthScale(0.5)`.
+    fn attack_strength_scale(&self) -> f32 {
+        let speed = self
+            .held()
+            .and_then(|h| self.res.items.get(&h.item))
+            .map_or(0.0, |i| i.attack_speed);
+        let delay = 20.0 / (4.0 + speed).max(0.1);
+        ((self.attack_ticks as f32 + 0.5) / delay).clamp(0.0, 1.0)
+    }
+    /// `Player.attack`'s sounds when a vehicle takes the hit (it always does,
+    /// and can't be hit critically): knockback when sprinting at full
+    /// strength, then strong or weak. Before `swing_arm` resets the charge.
+    pub(super) fn vehicle_attack_sounds(&mut self) {
+        let full = self.attack_strength_scale() > 0.9;
+        let player = self.player.as_ref();
+        let from = player.map(|p| [p.position.x, p.position.y, p.position.z]);
+        if full && player.is_some_and(|p| p.sprinting) {
+            self.audio
+                .play("minecraft:entity.player.attack.knockback", from, 1.0, 1.0);
+        }
+        let sound = if full {
+            "minecraft:entity.player.attack.strong"
+        } else {
+            "minecraft:entity.player.attack.weak"
+        };
+        self.audio.play(sound, from, 1.0, 1.0);
+    }
     /// Player.attack with the attack-strength charge, crits and knockback.
     fn attack(&mut self) -> bool {
         if self.spectator() {
@@ -5509,16 +5540,8 @@ impl Game<'_> {
                 return false;
             }
         }
-        let held = self.held().cloned();
-        let modifiers = held
-            .as_ref()
-            .and_then(|h| self.res.items.get(&h.item))
-            .map(|i| (i.attack_damage, i.attack_speed))
-            .unwrap_or((0.0, 0.0));
-        let damage = 1.0 + modifiers.0 + self.effect_attack_bonus();
-        let speed = (4.0 + modifiers.1).max(0.1);
-        let delay = 20.0 / speed;
-        let scale = ((self.attack_ticks as f32 + 0.5) / delay).clamp(0.0, 1.0);
+        let damage = hand_damage + self.effect_attack_bonus();
+        let scale = self.attack_strength_scale();
         let mut amount = damage * (0.2 + scale * scale * 0.8);
         let target_kind = self.mobs[index].kind.id.clone();
         let target_kind = format!("minecraft:{}", target_kind.trim_start_matches("minecraft:"));
@@ -9639,6 +9662,8 @@ pub fn run() -> Result<()> {
         music: Default::default(),
         ambience: Default::default(),
         sound_paused: false,
+        cart_sounds: HashSet::new(),
+        riding_cart_sounds: None,
         dropped: Vec::new(),
         next_entity: 0,
         particles,

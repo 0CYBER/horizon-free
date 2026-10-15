@@ -666,6 +666,7 @@ impl Game<'_> {
         if !self.before_block(d) || self.mob_hit().is_some_and(|m| m.1 < d) {
             return false;
         }
+        self.vehicle_attack_sounds();
         let b = &mut self.boats[i];
         b.hurt_dir = -b.hurt_dir;
         b.hurt_time = 10;

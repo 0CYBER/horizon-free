@@ -28,9 +28,13 @@ impl Game<'_> {
             }
             self.sound_paused = self.pause;
         }
+        let (vehicle, carts) = self.start_cart_sounds();
         let ctx = TickContext {
             player_underwater: self.ambience.was_underwater(),
             player_removed: self.player.is_none(),
+            vehicle,
+            carts,
+            frozen: !self.clock.runs_normally(),
         };
         self.audio.tick(self.pause, &ctx);
     }
