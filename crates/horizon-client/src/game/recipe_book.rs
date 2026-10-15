@@ -173,12 +173,12 @@ impl Game<'_> {
     }
     /// A key press while the search box has focus.
     pub(super) fn recipe_key(&mut self, event: &winit::event::KeyEvent) {
-        use winit::keyboard::{KeyCode, PhysicalKey};
+        use winit::keyboard::PhysicalKey;
         if let Some(shortcut) = self.edit_shortcut(event) {
             self.recipe_shortcut(shortcut);
             return;
         }
-        let ctrl = self.keys.contains(&KeyCode::ControlLeft);
+        let ctrl = self.has_control_down();
         let shift = self.has_shift_down();
         let Some(search) = self.recipe_ui.search.as_mut() else {
             return;
@@ -888,8 +888,7 @@ impl Game<'_> {
         self.draw_book_panel(batch, book_type);
     }
     fn shift_down_or_ctrl(&self) -> bool {
-        use winit::keyboard::KeyCode;
-        self.keys.contains(&KeyCode::ControlLeft) || self.keys.contains(&KeyCode::ControlRight)
+        self.has_control_down()
     }
     /// `GhostSlots.extractRenderState`, among the container's slots.
     fn draw_ghost(&mut self, batch: &mut HudBatch, book_type: BookType) {
