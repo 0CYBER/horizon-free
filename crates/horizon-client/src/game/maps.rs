@@ -482,7 +482,7 @@ impl Game<'_> {
         if self.creative {
             self.give_or_drop_stack(filled);
         } else if stack.count == 1 {
-            self.inventory[self.selected] = Some(filled);
+            *self.held_mut() = Some(filled);
         } else {
             self.consume_held();
             self.give_or_drop_stack(filled);

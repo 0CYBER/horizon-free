@@ -59,7 +59,7 @@ impl Game<'_> {
                     pages.push(String::new());
                 }
                 BookScreen::Edit {
-                    slot: self.selected,
+                    slot: self.held_slot(),
                     pages,
                     page: 0,
                     signing: false,
@@ -104,7 +104,7 @@ impl Game<'_> {
         while pages.len() > 1 && pages.last().is_some_and(String::is_empty) {
             pages.pop();
         }
-        if let Some(stack) = self.inventory.get_mut(slot).and_then(Option::as_mut)
+        if let Some(stack) = self.stack_in_mut(slot).as_mut()
             && &*stack.item == "minecraft:writable_book"
         {
             if sign {

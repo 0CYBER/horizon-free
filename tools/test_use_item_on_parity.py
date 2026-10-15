@@ -6,7 +6,9 @@ for beds in the Nether and the End.
 
 Every case has a block at the origin, something above it, and a player three
 blocks south, survival or creative, hungry or full, sneaking or not, who
-right-clicks the top face of the origin holding an item. Vanilla runs the real
+right-clicks the top face of the origin holding an item, sometimes with
+another (or nothing) in the main hand and the item in the off hand, the
+main hand trying first. Vanilla runs the real
 `ServerPlayerGameMode.useItemOn` over the headless level of the dispenser
 harness (`VanillaDispenserOracle.useItem`): the block's `useItemOn` and
 `useWithoutItem` (picking a bush's berries, `SweetBerryBushBlock.useItemOn`
@@ -26,6 +28,7 @@ or fall apart (`AbstractBedBlock.useWithoutItem` under the dimension's
 (`HORIZON_DISPENSE_FIXTURE`). Both print block changes, dropped items, level
 events, sounds, game events, the used statistic, the held stack, the item the
 player started using, spawners' next spawn data, potentials and delay, the
+off hand's stack,
 player's respawn point, system messages and the level random afterwards.
 """
 import json
@@ -144,6 +147,9 @@ def anchor_case(rng, states, case):
            'distance': 3 if nether else 12}
     if rng.random() < 0.3:
         use['respawn'] = rng.choice([[0, 0, 0], [5, 0, 5]])
+    if rng.random() < 0.4:
+        # Glowstone in the off hand: the main hand passes it on (PASS).
+        use['offhand'] = d_plain(rng.choice(['glowstone', 'glowstone', 'apple']), rng.choice([1, 16]))
     if rng.random() < 0.2:
         case['rules'] = {'block_explosion_drop_decay': False}
     case['use_item'] = use
@@ -206,6 +212,10 @@ def cases(facts, count, seed):
         held = '-' if item == '-' else d.plain(item, rng.choice([1, 1, 2, 16, 64]))
         case['use_item'] = {'item': held, 'creative': rng.random() < 0.2, 'sneaking': rng.random() < 0.2,
                             'food': rng.choice([20, 20, 19, 10, 0])}
+        if rng.random() < 0.3:
+            # The item in the off hand, something else or nothing in the main hand.
+            main = rng.choice(['-', '-', 'stick', 'apple', 'stone', 'bone_meal', 'shield'])
+            case['use_item'].update(offhand=held, item='-' if main == '-' else d.plain(main, rng.choice([1, 16])))
         case['cells'] = cells
         case['items'] = []
         case['mode'] = 'dispense'

@@ -89,7 +89,7 @@ impl Game<'_> {
         match &*stack.item {
             "minecraft:potion" | "minecraft:ominous_bottle" => {
                 if self.using.is_none() {
-                    self.using = Some((self.selected, 0));
+                    self.using = Some((self.held_slot(), 0));
                 }
                 Ok(true)
             }
@@ -177,8 +177,8 @@ impl Game<'_> {
             return;
         }
         self.consume_held();
-        if self.inventory[self.selected].is_none() {
-            self.inventory[self.selected] = Some(filled);
+        if self.held().is_none() {
+            *self.held_mut() = Some(filled);
         } else if let Some(rest) = self.give(filled)
             && let Some(eye) = self.eye_position()
         {
@@ -218,15 +218,15 @@ impl Game<'_> {
             self.apply_effect_action(a);
         }
         if !self.creative {
-            if let Some(s) = self.inventory[slot].as_mut() {
+            if let Some(s) = self.stack_in_mut(slot).as_mut() {
                 s.count -= 1;
                 if s.count == 0 {
-                    self.inventory[slot] = None;
+                    *self.stack_in_mut(slot) = None;
                 }
             }
             let bottle = ItemStack::new("minecraft:glass_bottle", 1);
-            if self.inventory[slot].is_none() {
-                self.inventory[slot] = Some(bottle);
+            if self.stack_in(slot).is_none() {
+                *self.stack_in_mut(slot) = Some(bottle);
             } else if let Some(rest) = self.give(bottle) {
                 self.spawn_item(rest, eye, [0.0, 0.1, 0.0], 40);
             }

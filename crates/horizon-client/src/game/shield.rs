@@ -47,10 +47,6 @@ impl Game<'_> {
         }
         true
     }
-    /// Main-hand use fell through: try the off hand (Minecraft.startUseItem).
-    pub(super) fn use_offhand(&mut self) -> bool {
-        self.raise_shield(OFFHAND_SLOT)
-    }
     /// `LivingEntity.getItemBlockingWith` and the inputs of `applyItemBlocking`
     /// for an attack from `from` (`DamageSource.getSourcePosition`).
     pub(super) fn player_blocking(

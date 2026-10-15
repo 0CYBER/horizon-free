@@ -4,6 +4,7 @@
 //! (`ServerPlayer.findRespawnAndUseSpawnBlock`, `PlayerList.respawn`),
 //! using a charge.
 use super::{Dim, Game};
+use horizon_client::first_person::Hand;
 use horizon_client::{
     Result,
     blocks::Fluid,
@@ -104,7 +105,7 @@ impl Game<'_> {
             .play("minecraft:block.respawn_anchor.charge", Some(at), 1.0, 1.0);
         Ok(())
     }
-    /// `RespawnAnchorBlock.useItemOn` with `held` in the main hand.
+    /// `RespawnAnchorBlock.useItemOn` with `held` in the hand that acts.
     pub(super) fn use_respawn_anchor(
         &mut self,
         pos: [i32; 3],
@@ -126,36 +127,10 @@ impl Game<'_> {
             }
             return Ok(AnchorUse::Charged);
         }
-        if fuel(self.offhand.as_ref()) && chargeable {
+        if self.hand == Hand::Main && fuel(self.offhand.as_ref()) && chargeable {
             return Ok(AnchorUse::Pass);
         }
         Ok(AnchorUse::Other)
-    }
-    /// The off hand's glowstone on an anchor the main hand passed on.
-    pub(super) fn charge_anchor_from_offhand(&mut self, pos: [i32; 3]) -> Result<bool> {
-        let state = self.world.block(pos[0], pos[1], pos[2]);
-        let fuel = self
-            .offhand
-            .as_ref()
-            .is_some_and(|s| &*s.item == "minecraft:glowstone");
-        if !self.is_anchor(state) || !fuel || self.anchor_charges(state) >= 4 {
-            return Ok(false);
-        }
-        let used = self.offhand.clone();
-        self.charge_anchor(pos, state, Some(Who::Player))?;
-        if !self.creative
-            && let Some(s) = self.offhand.as_mut()
-        {
-            s.count -= 1;
-            if s.count == 0 {
-                self.offhand = None;
-            }
-        }
-        if let Some(stack) = used {
-            self.trigger_block("minecraft:item_used_on_block", pos, &stack);
-        }
-        self.swing_arm();
-        Ok(true)
     }
     /// `RespawnAnchorBlock.useWithoutItem` on a charged anchor: outside the
     /// Nether it explodes; inside, it becomes the respawn point.
