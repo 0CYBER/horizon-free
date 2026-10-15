@@ -1012,6 +1012,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     MerchantOffers(MerchantOffers) = MERCHANT_OFFERS,
     OpenScreen(OpenScreen) = OPEN_SCREEN,
     Ping(Ping) = PING,
+    PongResponse(crate::packets::status::Ping) = PONG_RESPONSE,
     PlayerAbilities(PlayerAbilities) = PLAYER_ABILITIES,
     PlayerChat(PlayerChat) = PLAYER_CHAT,
     PlayerCombatKill(PlayerCombatKill) = PLAYER_COMBAT_KILL,
@@ -1199,6 +1200,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     MovePlayerRot(MovePlayerRot) = MOVE_PLAYER_ROT,
     MovePlayerStatus(MovePlayerStatus) = MOVE_PLAYER_STATUS_ONLY,
     PickItemFromBlock(PickItemFromBlock) = PICK_ITEM_FROM_BLOCK,
+    PingRequest(crate::packets::status::Ping) = PING_REQUEST,
     PlayerAction(PlayerAction) = PLAYER_ACTION,
     PlayerCommand(PlayerCommand) = PLAYER_COMMAND,
     PlayerInput(PlayerInput) = PLAYER_INPUT,
@@ -1240,6 +1242,7 @@ mod tests {
     fn clientbound_round_trips() {
         let packets = vec![
             Clientbound::BundleDelimiter(Empty),
+            Clientbound::PongResponse(crate::packets::status::Ping { time: 1_234_567 }),
             Clientbound::SetBorderCenter(SetBorderCenter { x: 1.5, z: -2.0 }),
             Clientbound::SetBorderLerpSize(SetBorderLerpSize {
                 old_size: 10.0,
@@ -1529,6 +1532,7 @@ mod tests {
     #[test]
     fn serverbound_round_trips() {
         let packets = vec![
+            Serverbound::PingRequest(crate::packets::status::Ping { time: -7 }),
             Serverbound::AcceptTeleportation(AcceptTeleportation {
                 id: 1,
                 x: 0.5,
