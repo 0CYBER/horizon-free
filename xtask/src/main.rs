@@ -192,12 +192,6 @@ fn icons() -> Result<(), String> {
             500,
             "docs/media/brand/social/github-avatar-500.png",
         ),
-        (&avatar, 512, "docs/media/brand/social/discord-icon-512.png"),
-        (
-            &brand.join("avatar-kira.svg"),
-            512,
-            "docs/media/brand/social/kira-avatar-512.png",
-        ),
         (&avatar, 180, "website/public/apple-touch-icon.png"),
         (&square, 32, "website/public/favicon-32.png"),
         (&square, 1024, "docs/media/brand/icon-1024.png"),
