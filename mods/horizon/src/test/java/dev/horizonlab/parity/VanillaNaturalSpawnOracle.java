@@ -77,6 +77,11 @@ import net.minecraft.world.phys.Vec3;
  * here is a fixed "neutral" source (nextInt 0, nextFloat and nextDouble 0.75),
  * so finalizeSpawn's own outcomes stay out of scope while its effect on later
  * attempts (the finalized mob's box obstructs them) is deterministic.
+ *
+ * Spawner cases tick a SpawnerBlockEntity; trial cases tick a
+ * TrialSpawnerBlockEntity with the game time advancing, its block's state
+ * changes, sounds, ejected items (loot tables and random sequences of the
+ * vanilla data) and, when asked, the death of every mob it spawned.
  */
 public final class VanillaNaturalSpawnOracle {
     static Object unsafe;
@@ -167,7 +172,10 @@ public final class VanillaNaturalSpawnOracle {
         int next = 1;
         @Override public RegistryAccess registryAccess() { return registries; }
         @Override public Difficulty getDifficulty() { return difficulty; }
-        @Override public long getGameTime() { return 0L; }
+        /** The game time (trial cases advance it). */
+        long time;
+        net.minecraft.world.level.block.entity.BlockEntity trial;
+        @Override public long getGameTime() { return time; }
         @Override public int getNextEntityId() { return next++; }
         @Override public net.minecraft.world.flag.FeatureFlagSet enabledFeatures() { return net.minecraft.world.flag.FeatureFlags.REGISTRY.allFlags(); }
         @Override public BlockState getBlockState(BlockPos pos) {
@@ -215,6 +223,23 @@ public final class VanillaNaturalSpawnOracle {
             log.add(tick + " spawn " + BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()) + " " + bits(entity.getX()) + " " + bits(entity.getY()) + " " + bits(entity.getZ()) + " " + yaw(entity));
             return true;
         }
+        @Override public boolean setBlock(BlockPos pos, BlockState state, int flags, int recursionLeft) {
+            blocks.add(Map.entry(new Box(pos.getX(), pos.getY(), pos.getZ(), pos.getX(), pos.getY(), pos.getZ()), state));
+            if (trial != null && trial.getBlockPos().equals(pos)) trial.setBlockState(state);
+            if (tick >= 0) log.add(tick + " state " + state.getOptionalValue(net.minecraft.world.level.block.TrialSpawnerBlock.STATE).map(v -> v.getSerializedName()).orElse("-")
+                + " " + state.getOptionalValue(net.minecraft.world.level.block.TrialSpawnerBlock.OMINOUS).orElse(false));
+            return true;
+        }
+        @Override public void blockEntityChanged(BlockPos pos) {}
+        @Override public void updateNeighbourForOutputSignal(BlockPos pos, net.minecraft.world.level.block.Block block) {}
+        @Override public Entity getEntity(UUID uuid) {
+            for (Entity e : entities) if (e.getUUID().equals(uuid)) return e;
+            for (Entity e : playerList) if (e.getUUID().equals(uuid)) return e;
+            return null;
+        }
+        @Override public void playSound(Entity except, double x, double y, double z, net.minecraft.sounds.SoundEvent sound, net.minecraft.sounds.SoundSource source, float volume, float pitch) {
+            if (tick >= 0) log.add(tick + " sound " + sound.location() + " " + bits(x) + " " + bits(y) + " " + bits(z) + " " + volume + " " + pitch);
+        }
         @Override public void blockEvent(BlockPos pos, net.minecraft.world.level.block.Block block, int b0, int b1) { if (tick >= 0) log.add(tick + " bevent " + b0 + " " + b1); }
         @Override public void sendBlockUpdated(BlockPos pos, BlockState old, BlockState current, int flags) { if (tick >= 0) log.add(tick + " update"); }
         @Override public void levelEvent(Entity source, int type, BlockPos pos, int data) { if (tick >= 0) log.add(tick + " levent " + type + " " + data); }
@@ -249,12 +274,29 @@ public final class VanillaNaturalSpawnOracle {
             }
             return out;
         }
-        @Override public boolean addFreshEntity(Entity entity) { entities.add(entity); return true; }
+        @Override public boolean addFreshEntity(Entity entity) {
+            if (entity instanceof net.minecraft.world.entity.item.ItemEntity item && tick >= 0) {
+                Vec3 v = item.getDeltaMovement();
+                log.add(tick + " item " + BuiltInRegistries.ITEM.getKey(item.getItem().getItem()) + " " + item.getItem().getCount() + " " + bits(item.getX()) + " " + bits(item.getY()) + " " + bits(item.getZ()) + " " + bits(v.x) + " " + bits(v.y) + " " + bits(v.z));
+            }
+            entities.add(entity);
+            return true;
+        }
         @Override public void addFreshEntityWithPassengers(Entity entity) { entity.getSelfAndPassengers().forEach(this::addFreshEntity); }
         @Override public Player getNearestPlayer(double x, double y, double z, double maxDist, boolean filter) {
             if (maxDist == -1.0 && !filter) log.add("try " + (int) Math.floor(x) + " " + (int) Math.floor(z));
             return super.getNearestPlayer(x, y, z, maxDist, filter);
         }
+    }
+
+    /** The server: loot tables and random sequences for trial spawner rewards. */
+    static final class OracleServer extends net.minecraft.server.dedicated.DedicatedServer {
+        OracleServer() { super(null, null, null, null, null, null, null, null, null, null); }
+        net.minecraft.server.ReloadableServerRegistries.Holder registries;
+        net.minecraft.world.RandomSequences sequences;
+        long seed;
+        @Override public net.minecraft.server.ReloadableServerRegistries.Holder reloadableRegistries() { return registries; }
+        @Override public RandomSource getRandomSequence(Identifier key) { return sequences.get(key, seed); }
     }
 
     static final class Chunk extends LevelChunk {
@@ -352,6 +394,58 @@ public final class VanillaNaturalSpawnOracle {
     }
     static String bits(float v) { return Integer.toHexString(Float.floatToRawIntBits(v)); }
 
+    /**
+     * TrialSpawner.tickServer `ticks` times from game time `t0` at `spos`, on a
+     * trial spawner block in state `state` (ominous when `ominous=1`) loaded
+     * from `snbt` (base64 SNBT). Every `kill` ticks the mobs it spawned die.
+     */
+    static void trialCase(Lvl level, Map<String, String> c, RegistryAccess access, HolderLookup<net.minecraft.world.level.block.Block> blockLookup,
+                          RandomSource mainRandom, List<String> log) throws Exception {
+        level.spawnerRandom = mainRandom;
+        level.tick = -1;
+        String[] sp = c.get("spos").split(",");
+        BlockPos at = new BlockPos(Integer.parseInt(sp[0]), Integer.parseInt(sp[1]), Integer.parseInt(sp[2]));
+        BlockState block = net.minecraft.commands.arguments.blocks.BlockStateParser.parseForBlock(blockLookup,
+            "minecraft:trial_spawner[trial_spawner_state=" + c.getOrDefault("state", "waiting_for_players") + ",ominous=" + c.getOrDefault("ominous", "0").equals("1") + "]", false).blockState();
+        level.blocks.add(Map.entry(new Box(at.getX(), at.getY(), at.getZ(), at.getX(), at.getY(), at.getZ()), block));
+        var nbt = net.minecraft.nbt.TagParser.parseCompoundFully(new String(Base64.getDecoder().decode(c.get("snbt")), StandardCharsets.UTF_8));
+        var entity = new net.minecraft.world.level.block.entity.TrialSpawnerBlockEntity(at, block);
+        entity.setLevel(level);
+        level.trial = entity;
+        entity.getTrialSpawner().load(net.minecraft.world.level.storage.TagValueInput.create(net.minecraft.util.ProblemReporter.DISCARDING, access, nbt));
+        int ticks = Integer.parseInt(c.getOrDefault("ticks", "1"));
+        long t0 = Long.parseLong(c.getOrDefault("t0", "0"));
+        int kill = Integer.parseInt(c.getOrDefault("kill", "0"));
+        int before = level.entities.size();
+        try {
+            for (int t = 0; t < ticks; t++) {
+                level.tick = t;
+                level.time = t0 + t;
+                BlockState state = level.getBlockState(at);
+                entity.getTrialSpawner().tickServer(level, at, state.getValue(net.minecraft.world.level.block.TrialSpawnerBlock.OMINOUS));
+                if (kill > 0 && t % kill == kill - 1) {
+                    int n = 0;
+                    for (Iterator<Entity> it = level.entities.subList(before, level.entities.size()).iterator(); it.hasNext(); ) {
+                        if (it.next() instanceof Mob) { it.remove(); n++; }
+                    }
+                    if (n > 0) log.add(t + " kill " + n);
+                }
+            }
+        } finally {
+            level.tick = -1;
+            level.spawnerRandom = null;
+        }
+        var out = net.minecraft.world.level.storage.TagValueOutput.createWithContext(net.minecraft.util.ProblemReporter.DISCARDING, access);
+        entity.getTrialSpawner().store(out);
+        CompoundTag saved = out.buildResult();
+        String next = saved.getCompound("spawn_data").flatMap(d -> d.getCompound("entity")).flatMap(e -> e.getString("id")).orElse("-");
+        log.add("end state=" + level.getBlockState(at).getValue(net.minecraft.world.level.block.TrialSpawnerBlock.STATE).getSerializedName()
+            + " players=" + saved.getListOrEmpty("registered_players").size() + " mobs=" + saved.getListOrEmpty("current_mobs").size()
+            + " cooldown=" + saved.getLongOr("cooldown_ends_at", 0L) + " next_spawn=" + saved.getLongOr("next_mob_spawns_at", 0L)
+            + " total=" + saved.getIntOr("total_mobs_spawned", 0) + " data=" + next + " eject=" + saved.getString("ejecting_loot_table").orElse("-"));
+        log.add("next " + mainRandom.nextInt(1000));
+    }
+
     public static void main(String[] args) throws Exception {
         SharedConstants.tryDetectVersion();
         Bootstrap.bootStrap();
@@ -382,7 +476,8 @@ public final class VanillaNaturalSpawnOracle {
         var structureLookup = access.lookupOrThrow(Registries.STRUCTURE);
 
         // A server that only answers debug subscribers (path navigation asks).
-        var server = (net.minecraft.server.MinecraftServer) alloc(net.minecraft.server.dedicated.DedicatedServer.class);
+        var server = (OracleServer) alloc(OracleServer.class);
+        server.registries = new net.minecraft.server.ReloadableServerRegistries.Holder(lookup);
         put(server, net.minecraft.server.MinecraftServer.class, "debugSubscribers", alloc(net.minecraft.util.debug.ServerDebugSubscribers.class));
         Lvl level = (Lvl) alloc(Lvl.class);
         level.fake = server;
@@ -423,6 +518,8 @@ public final class VanillaNaturalSpawnOracle {
         randomPos.setAccessible(true);
         Field entityId = Entity.class.getDeclaredField("id");
         entityId.setAccessible(true);
+        Field eyeHeight = Entity.class.getDeclaredField("eyeHeight");
+        eyeHeight.setAccessible(true);
 
         List<String> lines = Files.readAllLines(Path.of(args[0]));
         try (var w = new PrintWriter(Files.newBufferedWriter(Path.of(args[1]), StandardCharsets.UTF_8))) {
@@ -497,7 +594,12 @@ public final class VanillaNaturalSpawnOracle {
                         OraclePlayer player = (OraclePlayer) alloc(OraclePlayer.class);
                         player.mode = GameType.byName(p.length > 1 ? p[1] : "survival");
                         entityId.setInt(player, 100000 + i);
-                        put(player, Entity.class, "position", new Vec3(Double.parseDouble(v[0]), Double.parseDouble(v[1]), Double.parseDouble(v[2])));
+                        Vec3 at = new Vec3(Double.parseDouble(v[0]), Double.parseDouble(v[1]), Double.parseDouble(v[2]));
+                        put(player, Entity.class, "position", at);
+                        put(player, Entity.class, "blockPosition", BlockPos.containing(at));
+                        put(player, Entity.class, "uuid", new UUID(0L, i + 1));
+                        eyeHeight.setFloat(player, 1.62F);
+                        put(player, LivingEntity.class, "activeEffects", new HashMap<>());
                         level.playerList.add(player);
                     }
                     level.entities.clear();
@@ -510,6 +612,11 @@ public final class VanillaNaturalSpawnOracle {
                         if (p.length > 2 && p[2].equals("p") && e instanceof Mob mob) mob.setPersistenceRequired();
                         level.entities.add(e);
                     }
+                    put(level, ServerLevel.class, "players", level.playerList);
+                    server.sequences = new net.minecraft.world.RandomSequences();
+                    server.seed = level.seed;
+                    level.time = 0L;
+                    level.trial = null;
                     RandomSource mainRandom = RandomSource.create(Long.parseLong(c.getOrDefault("seed", "0")));
                     put(level, Level.class, "random", mainRandom);
                     String mode = c.getOrDefault("mode", "chunk");
@@ -547,6 +654,8 @@ public final class VanillaNaturalSpawnOracle {
                         }
                         log.add("end delay=" + saved.getShortOr("Delay", (short) 0) + " next=" + next + " pots=" + pots);
                         log.add("next " + mainRandom.nextInt(1000));
+                    } else if (mode.equals("trial")) {
+                        trialCase(level, c, access, blockLookup, mainRandom, log);
                     } else if (mode.equals("gen")) {
                         level.logColumns = true;
                         int n = level.entities.size();
