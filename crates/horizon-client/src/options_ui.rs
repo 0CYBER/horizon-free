@@ -1699,7 +1699,11 @@ impl OptionsUi {
         }
         if self.page() == Page::Packs {
             let mut events = Vec::new();
-            if drag || right {
+            if drag {
+                self.packs(atlas, size).drag(y as f64);
+                return events;
+            }
+            if right {
                 return events;
             }
             let m = crate::screen_draw::Measure(&atlas.font);
@@ -1862,6 +1866,9 @@ impl OptionsUi {
     }
     pub fn release(&mut self) -> Vec<Event> {
         self.scrollbar_drag_y = None;
+        if let Some(p) = &mut self.pack_screen {
+            p.release();
+        }
         // AbstractSliderButton suppresses the press sound and plays once on
         // release, even if the pointer has left the widget or its value stayed.
         let slider = self.dragging.take().is_some();

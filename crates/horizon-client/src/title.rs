@@ -16,8 +16,9 @@ use std::{
 mod tests;
 mod world_management;
 
-const LIST_TOP: f32 = 48.0;
-const LIST_BOTTOM: f32 = 58.0;
+/// SelectWorldScreen's `HeaderAndFooterLayout(8 + 9 + 8 + 20 + 4, 60)`.
+const LIST_TOP: f32 = 49.0;
+const LIST_BOTTOM: f32 = 60.0;
 const ROW_HEIGHT: f32 = 36.0;
 const ROW_WIDTH: f32 = 270.0;
 
@@ -124,7 +125,7 @@ pub struct Title {
     pub started: std::time::Instant,
     search: String,
     search_focused: bool,
-    scroll: Cell<f32>,
+    scroll: Cell<crate::ui::Scroll>,
     create_return_to_main: bool,
     message_lines: Cell<usize>,
     backup: Option<mpsc::Receiver<Result<u64, String>>>,
@@ -228,7 +229,7 @@ impl Title {
             started: now,
             search: String::new(),
             search_focused: false,
-            scroll: Cell::new(0.0),
+            scroll: Cell::default(),
             create_return_to_main: false,
             message_lines: Cell::new(1),
             backup: None,
@@ -252,7 +253,7 @@ impl Title {
     pub fn enter_singleplayer(&mut self) {
         self.search.clear();
         self.search_focused = true;
-        self.scroll.set(0.0);
+        self.scroll.set(crate::ui::Scroll::default());
         let worlds = list_worlds(&self.saves);
         self.create_return_to_main = worlds.is_empty();
         self.mode = if worlds.is_empty() {
@@ -324,10 +325,23 @@ impl Title {
             .collect::<Vec<_>>()
             .into_iter()
     }
+    /// The world list's top, bottom, rows' left edge and content height.
+    fn world_list(&self, worlds: &[WorldEntry], (w, h): (f32, f32)) -> (f32, f32, f32, f32) {
+        let (w, h) = (w.ceil(), h.ceil());
+        let content = self.visible_worlds(worlds).count() as f32 * ROW_HEIGHT + 4.0;
+        let left = (w / 2.0).floor() - ROW_WIDTH / 2.0;
+        (LIST_TOP, h - LIST_BOTTOM, left, content)
+    }
     /// The pointer moved with the button held (`mouseDragged`).
     pub fn drag(&mut self, cursor: (f32, f32), size: (f32, f32)) {
         if let Mode::Multiplayer(screen) = &mut self.mode {
-            screen.drag(cursor.1, size);
+            return screen.drag(cursor.1, size);
+        }
+        if let Mode::Select { worlds, .. } = &self.mode {
+            let (top, bottom, _, content) = self.world_list(worlds, size);
+            let mut scroll = self.scroll.get();
+            scroll.drag(cursor.1, top, bottom, content);
+            self.scroll.set(scroll);
         }
     }
     /// The button was released (`onRelease`).
@@ -335,6 +349,7 @@ impl Title {
         if let Mode::Multiplayer(screen) = &mut self.mode {
             screen.release();
         }
+        self.scroll.get_mut().release();
     }
     /// Mouse wheel over the classic world and server lists.
     pub fn scroll_worlds(&mut self, delta: f32, cursor: (f32, f32), size: (f32, f32)) {
@@ -345,14 +360,13 @@ impl Title {
         let Mode::Select { worlds, .. } = &self.mode else {
             return;
         };
-        if cursor.1 < LIST_TOP || cursor.1 >= size.1 - LIST_BOTTOM {
+        let (top, bottom, _, content) = self.world_list(worlds, size);
+        if cursor.1 < top || cursor.1 >= bottom {
             return;
         }
-        let max = (self.visible_worlds(worlds).count() as f32 * ROW_HEIGHT + 4.0
-            - (size.1 - LIST_TOP - LIST_BOTTOM))
-            .max(0.0);
-        self.scroll
-            .set((self.scroll.get() - delta * ROW_HEIGHT / 2.0).clamp(0.0, max));
+        let mut scroll = self.scroll.get();
+        scroll.wheel(delta, ROW_HEIGHT / 2.0, top, bottom, content);
+        self.scroll.set(scroll);
     }
     fn failed(&mut self, error: impl std::fmt::Display) {
         let return_to = Box::new(self.mode.clone());
@@ -802,44 +816,33 @@ impl Title {
                         true,
                     );
                 }
-                let bottom = h - LIST_BOTTOM;
-                batch.fill(
-                    atlas,
-                    0.0,
-                    LIST_TOP,
-                    w,
-                    bottom - LIST_TOP,
-                    rgba(0, 0, 0, 100),
-                );
-                batch.fill(atlas, 0.0, LIST_TOP - 1.0, w, 1.0, rgba(160, 160, 160, 255));
-                batch.fill(atlas, 0.0, bottom, w, 1.0, rgba(160, 160, 160, 255));
-                let count = self.visible_worlds(worlds).count();
-                let max = (count as f32 * ROW_HEIGHT + 4.0 - (bottom - LIST_TOP)).max(0.0);
-                self.scroll.set(self.scroll.get().clamp(0.0, max));
+                let (top, bottom, left, content) = self.world_list(worlds, (w, h));
+                let mut scroll = self.scroll.get();
+                scroll.clamp(top, bottom, content);
+                self.scroll.set(scroll);
+                let offset = scroll.amount.trunc();
+                // AbstractSelectionList: background, rows clipped to the
+                // list, separators, scrollbar.
+                crate::ui::list_background(batch, atlas, top, bottom, false);
                 let first = batch.vertices.len();
-                let x = ((w - ROW_WIDTH) / 2.0).floor() + 2.0;
+                // Entry content sits 2 pixels inside its row.
+                let x = left + 2.0;
                 let mut slot = 0;
                 for (row, (i, world)) in self.visible_worlds(worlds).enumerate() {
-                    let y = LIST_TOP + 5.0 + row as f32 * ROW_HEIGHT - self.scroll.get();
-                    if y + 32.0 <= LIST_TOP || y >= bottom {
+                    let y = top + 4.0 + row as f32 * ROW_HEIGHT - offset;
+                    if y + 32.0 <= top || y >= bottom {
                         continue;
                     }
                     let mid = y - 2.0 + ROW_HEIGHT / 2.0;
-                    if mid > LIST_TOP && mid < bottom {
+                    if mid > top && mid < bottom {
                         crate::widgets::target_as(
                             [x - 2.0, y - 2.0, ROW_WIDTH, ROW_HEIGHT],
                             crate::widgets::Kind::Row,
                         );
                     }
+                    // extractSelection: white once the list has focus.
                     if *selected == Some(i) {
-                        batch.fill(
-                            atlas,
-                            x - 2.0,
-                            y - 2.0,
-                            ROW_WIDTH,
-                            ROW_HEIGHT,
-                            rgba(128, 128, 128, 255),
-                        );
+                        batch.fill(atlas, x - 2.0, y - 2.0, ROW_WIDTH, ROW_HEIGHT, u32::MAX);
                         batch.fill(
                             atlas,
                             x - 1.0,
@@ -888,8 +891,8 @@ impl Title {
                 }
                 // Clip list quads, including their UVs, to the content area.
                 for quad in batch.vertices[first..].as_chunks_mut::<6>().0 {
-                    let top = quad.iter().map(|v| v.pos[1]).fold(f32::INFINITY, f32::min);
-                    let bot = quad
+                    let low = quad.iter().map(|v| v.pos[1]).fold(f32::INFINITY, f32::min);
+                    let high = quad
                         .iter()
                         .map(|v| v.pos[1])
                         .fold(f32::NEG_INFINITY, f32::max);
@@ -899,27 +902,22 @@ impl Title {
                         .map(|v| v.uv[1])
                         .fold(f32::NEG_INFINITY, f32::max);
                     for v in quad {
-                        v.pos[1] = v.pos[1].clamp(LIST_TOP, bottom);
-                        if bot > top {
-                            v.uv[1] = uv_top + (uv_bot - uv_top) * (v.pos[1] - top) / (bot - top);
+                        v.pos[1] = v.pos[1].clamp(top, bottom);
+                        if high > low {
+                            v.uv[1] = uv_top + (uv_bot - uv_top) * (v.pos[1] - low) / (high - low);
                         }
                     }
                 }
-                if max > 0.0 {
-                    let track = bottom - LIST_TOP;
-                    let thumb =
-                        (track * track / (count as f32 * ROW_HEIGHT + 4.0)).clamp(32.0, track);
-                    let sx = (w / 2.0).floor() + ROW_WIDTH / 2.0 + 6.0;
-                    batch.fill(atlas, sx, LIST_TOP, 6.0, track, rgba(0, 0, 0, 255));
-                    batch.fill(
-                        atlas,
-                        sx,
-                        LIST_TOP + self.scroll.get() / max * (track - thumb),
-                        6.0,
-                        thumb,
-                        rgba(128, 128, 128, 255),
-                    );
-                }
+                crate::ui::separators(batch, atlas, top, bottom, false);
+                crate::ui::scrollbar(
+                    batch,
+                    atlas,
+                    left + ROW_WIDTH + 8.0,
+                    top,
+                    bottom,
+                    content,
+                    scroll.amount,
+                );
             }
             Mode::Create {
                 name, seed, focus, ..
@@ -1246,11 +1244,20 @@ impl Title {
             (Mode::Select { .. }, None) => {
                 self.search_focused =
                     (21.0..41.0).contains(&y) && (x - (w / 2.0).floor()).abs() < 100.0;
-                if y >= LIST_TOP
-                    && y < h - LIST_BOTTOM
-                    && (x - (w / 2.0).floor()).abs() < ROW_WIDTH / 2.0
+                let Mode::Select { worlds, .. } = &self.mode else {
+                    unreachable!()
+                };
+                let (top, bottom, left, content) = self.world_list(worlds, (w, h));
+                if self
+                    .scroll
+                    .get_mut()
+                    .press((x, y), left + ROW_WIDTH + 8.0, top, bottom, content)
                 {
-                    let row = ((y - LIST_TOP - 5.0 + self.scroll.get()) / ROW_HEIGHT).floor();
+                    return Action::None;
+                }
+                if y >= top && y < bottom && x >= left && x < left + ROW_WIDTH {
+                    let offset = self.scroll.get().amount.trunc();
+                    let row = ((y - top - 2.0 + offset) / ROW_HEIGHT).floor();
                     if row >= 0.0 {
                         let Mode::Select { worlds, selected } = &self.mode else {
                             unreachable!()
@@ -1383,7 +1390,7 @@ impl Title {
             && let Mode::Select { selected, .. } = &mut self.mode
         {
             *selected = None;
-            self.scroll.set(0.0);
+            self.scroll.set(crate::ui::Scroll::default());
         }
     }
     pub fn confirm_edit(&mut self) {
