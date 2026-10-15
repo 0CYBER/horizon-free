@@ -80,6 +80,10 @@ pub struct Guest {
     pub offhand: Option<ItemStack>,
     pub selected: usize,
     pub carried: Option<ItemStack>,
+    /// The inventory menu's crafting grid (2x2) and its result
+    /// (`InventoryMenu.craftSlots`, `resultSlots`), which the game computes.
+    pub craft_grid: [Option<ItemStack>; 4],
+    pub craft_result: Option<ItemStack>,
     pub health: f32,
     pub food: i32,
     pub saturation: f32,
@@ -154,6 +158,8 @@ impl Guest {
             offhand: None,
             selected: 0,
             carried: None,
+            craft_grid: Default::default(),
+            craft_result: None,
             health: 20.0,
             food: 20,
             saturation: 5.0,
@@ -221,7 +227,8 @@ impl Guest {
     /// 45 off hand.
     pub fn menu_slot(&self, slot: usize) -> Option<ItemStack> {
         match slot {
-            0..=4 => None,
+            0 => self.craft_result.clone(),
+            1..=4 => self.craft_grid[slot - 1].clone(),
             5..=8 => self.armor[slot - 5].clone(),
             9..=35 => self.inventory.get(slot).cloned().flatten(),
             36..=44 => self.inventory.get(slot - 36).cloned().flatten(),
@@ -231,6 +238,8 @@ impl Guest {
     }
     pub fn set_menu_slot(&mut self, slot: usize, item: Option<ItemStack>) {
         match slot {
+            0 => self.craft_result = item,
+            1..=4 => self.craft_grid[slot - 1] = item,
             5..=8 => self.armor[slot - 5] = item,
             9..=35 => self.inventory[slot] = item,
             36..=44 => self.inventory[slot - 36] = item,
