@@ -23,6 +23,7 @@ pub enum H {
     Preset,
     CaveCulling,
     CullLeaves,
+    EntityCulling,
     ChunkUpdates,
     UploadBudget,
     Sky,
@@ -122,6 +123,11 @@ pub fn rows(level: Level) -> Vec<Row> {
                 H::CullLeaves,
                 None,
                 "Hides shared leaf and mangrove root faces; foliage can look less dense.",
+            ),
+            h(
+                H::EntityCulling,
+                None,
+                "Skips drawing entities hidden behind opaque terrain; they still update. Inactive with custom resource packs.",
             ),
             h(
                 H::ChunkUpdates,
@@ -289,6 +295,7 @@ impl H {
             H::Preset => labelled("Preset", g.preset.label()),
             H::CaveCulling => labelled("Cave Culling", on_off(g.cave_culling)),
             H::CullLeaves => labelled("Cull Leaves", on_off(g.cull_leaves)),
+            H::EntityCulling => labelled("Entity Culling", on_off(g.entity_culling)),
             H::ChunkUpdates => match g.chunk_updates {
                 0 => labelled("Chunk Updates", "Unlimited"),
                 n => labelled("Chunk Updates", format!("{n} per frame")),
@@ -360,6 +367,7 @@ impl H {
         match self {
             H::CaveCulling => g.cave_culling = !g.cave_culling,
             H::CullLeaves => g.cull_leaves = !g.cull_leaves,
+            H::EntityCulling => g.entity_culling = !g.entity_culling,
             H::Sky => g.sky = !g.sky,
             H::Fog => g.fog = !g.fog,
             H::Weather => g.weather = !g.weather,
@@ -406,6 +414,7 @@ impl Item {
         Some(match self {
             Item::Horizon(H::CaveCulling) => g.cave_culling,
             Item::Horizon(H::CullLeaves) => g.cull_leaves,
+            Item::Horizon(H::EntityCulling) => g.entity_culling,
             Item::Horizon(H::Sky) => g.sky,
             Item::Horizon(H::Fog) => g.fog,
             Item::Horizon(H::Weather) => g.weather,
@@ -946,5 +955,47 @@ mod tests {
             assert_eq!(s.horizon.preset, Preset::Custom);
         }
         assert_eq!(item.label(&s).plain(), "Cull Leaves: On");
+    }
+
+    #[test]
+    fn entity_culling_is_opt_in_and_toggles_from_advanced_graphics() {
+        let mut s = Settings::default();
+        let item = Item::Horizon(H::EntityCulling);
+        assert_eq!(item.switch(&s), Some(false));
+        assert_eq!(item.label(&s).plain(), "Entity Culling: Off");
+        for enabled in [false, true] {
+            s.horizon.entity_culling = enabled;
+            for preset in Preset::ALL {
+                crate::graphics::apply_preset(preset, &mut s);
+                assert_eq!(s.horizon.entity_culling, enabled);
+            }
+        }
+
+        let mut ui = GraphicsUi::default();
+        let size = (480.0, 4000.0);
+        let (widgets, _, _) = ui.layout(Level::Advanced, size.0, size.1);
+        let switch = widgets
+            .iter()
+            .find(|w| matches!(w.target, Target::Item(i) if i == item))
+            .unwrap();
+        let point = (switch.x + 1.0, switch.y + 1.0);
+        for enabled in [false, true] {
+            s.horizon.preset = Preset::Balanced;
+            assert_eq!(
+                ui.click(
+                    Level::Advanced,
+                    &mut s,
+                    point,
+                    size,
+                    [854, 480],
+                    false,
+                    false
+                ),
+                vec![Action::ButtonClick, Action::Changed]
+            );
+            assert_eq!(item.switch(&s), Some(enabled));
+            assert_eq!(s.horizon.preset, Preset::Custom);
+        }
+        assert_eq!(item.label(&s).plain(), "Entity Culling: On");
     }
 }

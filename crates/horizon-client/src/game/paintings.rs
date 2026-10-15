@@ -254,6 +254,7 @@ impl Game<'_> {
             return;
         };
         for p in &self.paintings {
+            let entity_start = out.len();
             let Some(v) = self.painting_variants.get(&p.variant) else {
                 continue;
             };
@@ -366,6 +367,7 @@ impl Game<'_> {
                 strip,
                 0.6,
             );
+            self.cull_entity_vertices(out, entity_start);
         }
     }
 }

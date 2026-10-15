@@ -878,6 +878,7 @@ impl Game<'_> {
         let atlas = &self.res.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         for m in host.models.values() {
+            let entity_start = out.len();
             let light = self.world.light(
                 m.position.x.floor() as i32,
                 (m.position.y + 1.62).floor() as i32,
@@ -895,6 +896,9 @@ impl Game<'_> {
                 out,
             );
             self.held_item_geometry(m, camera, alpha, packed, true, out);
+            if !m.glowing {
+                self.cull_entity_vertices(out, entity_start);
+            }
         }
     }
 

@@ -619,6 +619,9 @@ impl Streaming {
     pub fn is_lit(&self, x: i32, z: i32) -> bool {
         self.lit.contains(&(x, z))
     }
+    pub fn is_meshing(&self, section: (i32, i32, i32)) -> bool {
+        self.meshing.contains_key(&section)
+    }
     pub fn pending(&self) -> usize {
         self.shared.queue.lock().unwrap().len()
     }

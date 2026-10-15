@@ -34,6 +34,7 @@ mod dispenser;
 mod dragon;
 mod enchant_effects;
 mod end;
+mod entity_culling;
 mod events;
 mod explosion;
 mod extras;
@@ -967,6 +968,7 @@ struct Game<'a> {
     pending_uploads: Vec<((i32, i32, i32), horizon_client::mesher::SectionMesh)>,
     /// This frame's view frustum, for culling entities and block entities.
     view_frustum: Option<horizon_client::gfx::Frustum>,
+    entity_culler: Option<horizon_client::entity_culling::Culler>,
     /// A scripted flight from the control socket (`fly`).
     flight: Option<control::Flight>,
     /// The running agent action from the control socket (game/agent.rs).
@@ -5300,6 +5302,7 @@ impl Game<'_> {
         alpha: f64,
         mut out: Vec<Vertex>,
     ) -> Vec<Vertex> {
+        self.prepare_entity_culling(camera);
         let fire_yaw = if self.camera_type == perspective::CameraType::ThirdPersonFront {
             self.yaw + 180.0
         } else {
@@ -5487,9 +5490,21 @@ impl Game<'_> {
                         v.intersects(o - glam::Vec3::ONE, o + glam::Vec3::splat(2.0))
                     })
             });
-            self.res
-                .block_entity_render
-                .render(&scene, visible, &mut out);
+            if self.entity_culler.is_some() {
+                for block in visible {
+                    let start = out.len();
+                    self.res
+                        .block_entity_render
+                        .render(&scene, std::iter::once(block), &mut out);
+                    if !off_screen(block.1) {
+                        self.cull_entity_vertices(&mut out, start);
+                    }
+                }
+            } else {
+                self.res
+                    .block_entity_render
+                    .render(&scene, visible, &mut out);
+            }
         }
         // Experience orbs (ExperienceOrbRenderer): pulsing billboards from a 4x4 icon sheet.
         if let Some(r) = self
@@ -10069,6 +10084,7 @@ pub fn run() -> Result<()> {
         events: Default::default(),
         agent: agent::Agent::default(),
         view_frustum: None,
+        entity_culler: None,
         pending_uploads: Vec::new(),
         frame_graph: Default::default(),
         extras: Default::default(),

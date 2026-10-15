@@ -701,6 +701,7 @@ impl Game<'_> {
     pub(super) fn boat_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
         let a = alpha as f32;
         for b in &self.boats {
+            let entity_start = out.len();
             let models = if b.chest {
                 &self.boat_models.chest_models
             } else {
@@ -768,6 +769,7 @@ impl Game<'_> {
                 0,
                 out,
             );
+            self.cull_entity_vertices(out, entity_start);
         }
     }
 }

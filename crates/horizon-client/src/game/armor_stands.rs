@@ -409,6 +409,7 @@ impl Game<'_> {
             return;
         };
         for a in &self.armor_stands {
+            let entity_start = out.len();
             if a.invisible {
                 continue;
             }
@@ -524,6 +525,7 @@ impl Game<'_> {
                     out,
                 );
             }
+            self.cull_entity_vertices(out, entity_start);
         }
     }
 }
