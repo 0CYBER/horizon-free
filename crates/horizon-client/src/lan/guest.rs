@@ -95,6 +95,9 @@ pub struct Guest {
     pub inbox: VecDeque<play::Serverbound>,
     pub joined_tick: u64,
     pub ticks: u64,
+    /// The moves accepted since the game last looked (movement, on ground),
+    /// for ServerPlayer.doCheckFallDamage.
+    pub moves: Vec<([f64; 3], bool)>,
     pub dead: bool,
     /// The join packets were sent (PlayerList.placeNewPlayer ran).
     pub placed: bool,
@@ -168,6 +171,7 @@ impl Guest {
             inbox: VecDeque::new(),
             joined_tick: 0,
             ticks: 0,
+            moves: Vec::new(),
             dead: false,
             placed: false,
             menu: None,
