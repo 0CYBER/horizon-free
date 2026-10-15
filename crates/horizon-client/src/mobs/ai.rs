@@ -104,6 +104,7 @@ pub enum Family {
     /// Nautili and zombie nautili.
     Nautilus,
     Strider,
+    Bat,
 }
 pub fn family(s: Species) -> Family {
     use Species as S;
@@ -163,6 +164,7 @@ pub fn family(s: Species) -> Family {
         S::Warden => Family::Warden,
         S::Shulker => Family::Shulker,
         S::Strider => Family::Strider,
+        S::Bat => Family::Bat,
         _ => Family::Generic,
     }
 }
@@ -218,6 +220,7 @@ pub fn register(m: &mut Mob) {
         Family::Creaking => super::creaking::register(m),
         Family::Nautilus => super::nautilus::register(m),
         Family::Strider => super::strider::register(m),
+        Family::Bat => super::bat::register(m),
     }
 }
 /// Mob.tick additions that run before the entity tick (creeper fuse, puffing).
@@ -397,6 +400,9 @@ pub fn tick(
     }
     if m.species() == Species::Strider {
         super::strider::float(m, w);
+    }
+    if m.species() == Species::Bat {
+        super::bat::tick(m);
     }
     true
 }
@@ -912,6 +918,7 @@ fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
         Species::Wither if m.alive() => super::wither::custom_server_ai_step(m, cx.w, cx.events),
         // SpellcasterIllager.customServerAiStep.
         Species::Evoker if m.extra.counter > 0 => m.extra.counter -= 1,
+        Species::Bat => super::bat::server_ai_step(m, cx.w, cx.events),
         _ => {}
     }
 }
@@ -1209,6 +1216,11 @@ pub fn accepts_damage(m: &mut Mob, source: &Damage, _amount: f32) -> bool {
         Species::Warden => super::warden::accepts_damage(m, source),
         Species::Shulker => super::shulker::accepts(m, source),
         Species::SulfurCube => super::sulfur_cube::accepts_damage(m, source, _amount),
+        // Bat.hurtServer: a hit wakes it.
+        Species::Bat => {
+            super::bat::hurt(m);
+            true
+        }
         Species::Enderman => super::enderman::on_damage(m, source),
         Species::WitherSkeleton | Species::Blaze | Species::MagmaCube | Species::Strider
             if source.is_fire() =>
@@ -1414,6 +1426,7 @@ pub fn step_sound(
     match m.species() {
         // Silent footsteps, or only movement events.
         S::Allay
+        | S::Bat
         | S::Bee
         | S::Cod
         | S::Salmon
