@@ -336,10 +336,10 @@ fn mip_chain(
         for image in crate::mipmap::generate(
             base,
             levels - 1,
-            s.strategy,
-            s.alpha_cutoff_bias,
-            has_transparent,
-            s.item,
+            crate::mipmap::Settings {
+                has_transparent,
+                ..s
+            },
         ) {
             out.extend(image.pixels.iter().flatten());
         }
@@ -2828,6 +2828,61 @@ fn animate_sprites(
 #[cfg(test)]
 mod sprite_upload_tests {
     use super::*;
+    #[test]
+    fn real_rail_mips_do_not_change_with_larger_array_layers() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root
+            .join("assets/minecraft/textures/block/rail.png")
+            .exists()
+        {
+            return;
+        }
+        let mut sprites = crate::sprites::Sprites::default();
+        let layers: Vec<_> = [
+            "rail",
+            "powered_rail",
+            "powered_rail_on",
+            "detector_rail",
+            "activator_rail",
+        ]
+        .map(|name| {
+            sprites
+                .insert(&root, &format!("minecraft:block/{name}"))
+                .unwrap()
+        })
+        .into();
+        sprites.finish();
+        assert_eq!(sprites.size, 16);
+        let native: Vec<_> = layers
+            .iter()
+            .map(|&layer| {
+                let start = layer as usize * 16 * 16 * 4;
+                mip_chain(
+                    &sprites.pixels[start..start + 16 * 16 * 4],
+                    16,
+                    &sprites.mips,
+                    layer,
+                    1,
+                )
+                .0
+            })
+            .collect();
+        sprites.insert(&root, "minecraft:block/oak_sign").unwrap();
+        sprites.finish();
+        assert_eq!(sprites.size, 32);
+        for (&layer, expected) in layers.iter().zip(native) {
+            let start = layer as usize * 32 * 32 * 4;
+            let (actual, _) = mip_chain(
+                &sprites.pixels[start..start + 32 * 32 * 4],
+                32,
+                &sprites.mips,
+                layer,
+                1,
+            );
+            assert_eq!(&actual[32 * 32 * 4..], expected, "rail layer {layer}");
+        }
+    }
     #[test]
     fn mipmap_option_keeps_real_16px_reductions() {
         for levels in 0..=4 {

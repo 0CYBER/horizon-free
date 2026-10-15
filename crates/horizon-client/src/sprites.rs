@@ -223,6 +223,7 @@ impl Sprites {
             .and_then(|v| v.get("texture"))
             .and_then(|v| serde_json::from_str::<serde_json::Value>(v.get()).ok());
         self.mips.push(crate::mipmap::Settings {
+            native_size: side,
             strategy: texture
                 .as_ref()
                 .and_then(|t| t["mipmap_strategy"].as_str())
