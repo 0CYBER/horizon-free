@@ -1212,6 +1212,16 @@ impl Game<'_> {
             Hand::Off => shield::OFFHAND_SLOT,
         }
     }
+    /// `LivingEntity.getUsedItemHand`: the hand of the item in use.
+    fn used_hand(&self) -> Option<Hand> {
+        self.using.map(|(slot, _)| {
+            if slot == shield::OFFHAND_SLOT {
+                Hand::Off
+            } else {
+                Hand::Main
+            }
+        })
+    }
     /// Run `f` with `hand` acting (`held`, `consume_held`, `swing_arm`).
     fn with_hand<T>(&mut self, hand: Hand, f: impl FnOnce(&mut Self) -> T) -> T {
         let prior = std::mem::replace(&mut self.hand, hand);
@@ -2555,13 +2565,8 @@ impl Game<'_> {
     fn tick_using(&mut self) {
         // ItemCooldowns.tick for the shield.
         self.shield_cooldown = self.shield_cooldown.saturating_sub(1);
-        let Some((slot, _)) = self.using else {
+        let Some(hand) = self.used_hand() else {
             return;
-        };
-        let hand = if slot == shield::OFFHAND_SLOT {
-            Hand::Off
-        } else {
-            Hand::Main
         };
         self.with_hand(hand, Self::tick_used_item);
     }
@@ -7158,8 +7163,8 @@ impl Game<'_> {
         }
         self.damage_held(1);
     }
-    /// FirstPersonHandsAndItemsRenderer: the right arm or held item in view
-    /// space, converted to camera-relative world space.
+    /// FirstPersonHandsAndItemsRenderer: the right arm or the held items of
+    /// both hands in view space, converted to camera-relative world space.
     fn hand_geometry(&mut self, alpha: f64) -> Vec<Vertex> {
         let mut out = Vec::new();
         // GameRenderer.renderItemInHand: F1 hides the hand with the HUD.
@@ -7175,15 +7180,18 @@ impl Game<'_> {
             return out;
         }
         let a = alpha as f32;
-        // FirstPersonHandsAndItemsRenderer: the swing of the hand that
-        // swings, and its inverse arm height (the swap scale is 1 for every
-        // item but spears).
-        let attack = if self.swing.attack_hand() == Hand::Main {
-            self.swing.animation(a)
-        } else {
-            0.0
-        };
-        let inverse_height = 1.0 - self.heights.interpolated(a)[0];
+        // FirstPersonHandsAndItemsRenderer: the swing goes to the hand that
+        // swings; each hand has its inverse arm height (the swap scale is 1
+        // for every item but spears).
+        let swing = self.swing.animation(a);
+        let attacks = Hand::BOTH.map(|h| {
+            if self.swing.attack_hand() == h {
+                swing
+            } else {
+                0.0
+            }
+        });
+        let inverse_heights = self.heights.interpolated(a).map(|h| 1.0 - h);
         let view = horizon_client::camera::view_matrix(self.yaw, self.pitch);
         // The hand sway: both hands turn by a tenth of the bobs' lag.
         let [sway_x, sway_y] = self.sway.rotation(a, self.pitch, self.yaw);
@@ -7198,15 +7206,30 @@ impl Game<'_> {
         );
         let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
         let deg = |d: f32| d.to_radians();
-        let sqrt_attack = attack.sqrt();
-        if self.held_map_geometry(to_world, attack, inverse_height, packed, &mut out) {
+        if self.held_map_geometry(to_world, attacks[0], inverse_heights[0], packed, &mut out) {
             return out;
         }
-        let [main_item, _] = self.visible_hand_items();
-        match main_item {
-            None => {
+        let shown = self.hands_to_render();
+        let used_hand = self.used_hand();
+        for (i, (hand, item)) in Hand::BOTH
+            .into_iter()
+            .zip(self.visible_hand_items())
+            .enumerate()
+        {
+            if !shown[i] {
+                continue;
+            }
+            let (attack, inverse_height) = (attacks[i], inverse_heights[i]);
+            let sqrt_attack = attack.sqrt();
+            // The main hand on its arm, the off hand on the other one.
+            let left = self.settings.main_hand_left != (hand == Hand::Off);
+            let Some(stack) = item else {
+                // Only the main hand's empty arm shows.
+                if hand == Hand::Off {
+                    continue;
+                }
                 let Some(arm) = self.res.player_arm.clone() else {
-                    return out;
+                    continue;
                 };
                 let Some(r) = self
                     .res
@@ -7215,7 +7238,7 @@ impl Game<'_> {
                     .get("entity/player/wide/steve")
                     .copied()
                 else {
-                    return out;
+                    continue;
                 };
                 // renderPlayerArm (right arm)
                 let x_swing = -0.3 * (sqrt_attack * std::f32::consts::PI).sin();
@@ -7253,72 +7276,85 @@ impl Game<'_> {
                     0,
                     &mut out,
                 );
+                continue;
+            };
+            let mut owner = self.player_owner(Some(&stack));
+            // The other hand may hold an equal stack: only the used
+            // hand's item is in use, only the main hand's selected.
+            owner.using_this_item &= used_hand == Some(hand);
+            if hand == Hand::Off {
+                owner.is_selected = false;
+                owner.is_carried = false;
             }
-            Some(stack) => {
-                let owner = self.player_owner(Some(&stack));
-                let using = owner.using_this_item && owner.use_item_remaining_ticks > 0;
-                let ticks_used =
-                    owner.use_duration as f32 - (owner.use_item_remaining_ticks as f32 - a + 1.0);
-                use horizon_client::first_person::ItemPose;
-                let pose = match &*stack.item {
-                    "minecraft:bow" if using => ItemPose::Bow { ticks_used },
-                    "minecraft:crossbow" => {
-                        let charged = stack.data().is_some_and(|d| !d.charged.is_empty());
-                        ItemPose::Crossbow {
-                            ticks_used: (using && !charged).then_some(ticks_used),
-                            charge_duration: owner.crossbow_charge_duration as f32,
-                            charged,
-                        }
+            let using = owner.using_this_item && owner.use_item_remaining_ticks > 0;
+            let ticks_used =
+                owner.use_duration as f32 - (owner.use_item_remaining_ticks as f32 - a + 1.0);
+            use horizon_client::first_person::ItemPose;
+            let pose = match &*stack.item {
+                "minecraft:bow" if using => ItemPose::Bow { ticks_used },
+                "minecraft:crossbow" => {
+                    let charged = stack.data().is_some_and(|d| !d.charged.is_empty());
+                    ItemPose::Crossbow {
+                        ticks_used: (using && !charged).then_some(ticks_used),
+                        charge_duration: owner.crossbow_charge_duration as f32,
+                        // Only the main hand turns a charged crossbow aside.
+                        charged: charged && hand == Hand::Main,
                     }
-                    "minecraft:trident" if using => ItemPose::Trident { ticks_used },
-                    _ if using => {
-                        let components = self
-                            .res
-                            .item_renderer
-                            .models
-                            .components(&horizon_client::item_render::stack_view(&stack));
-                        let animation = components
-                            .get("minecraft:consumable")
-                            .map(horizon_client::first_person::consumable_animation);
-                        if matches!(
-                            animation,
-                            Some(
-                                horizon_world::consumable::UseAnimation::Eat
-                                    | horizon_world::consumable::UseAnimation::Drink
-                            )
-                        ) {
-                            ItemPose::Eat {
-                                remaining: owner.use_item_remaining_ticks as f32,
-                                duration: owner.use_duration as f32,
-                                partial: a,
-                            }
-                        } else {
-                            ItemPose::Using
+                }
+                "minecraft:trident" if using => ItemPose::Trident { ticks_used },
+                _ if using => {
+                    let components = self
+                        .res
+                        .item_renderer
+                        .models
+                        .components(&horizon_client::item_render::stack_view(&stack));
+                    let animation = components
+                        .get("minecraft:consumable")
+                        .map(horizon_client::first_person::consumable_animation);
+                    if matches!(
+                        animation,
+                        Some(
+                            horizon_world::consumable::UseAnimation::Eat
+                                | horizon_world::consumable::UseAnimation::Drink
+                        )
+                    ) {
+                        ItemPose::Eat {
+                            remaining: owner.use_item_remaining_ticks as f32,
+                            duration: owner.use_duration as f32,
+                            partial: a,
                         }
+                    } else {
+                        ItemPose::Using
                     }
-                    _ => ItemPose::Swing,
-                };
-                let left = self.settings.main_hand_left;
-                let m = to_world
-                    * horizon_client::first_person::item_pose(left, inverse_height, attack, pose);
-                let context = if left {
-                    horizon_assets::item_model::DisplayContext::FirstPersonLeftHand
-                } else {
-                    horizon_assets::item_model::DisplayContext::FirstPersonRightHand
-                };
-                let state = self.resolve_item(&stack, context, Some(&owner), 4);
-                let light = self.world.light(
-                    eye[0].floor() as i32,
-                    eye[1].floor() as i32,
-                    eye[2].floor() as i32,
-                );
-                self.submit_item_world(
-                    &state,
-                    m,
-                    horizon_client::block_entity_render::vertex_light(light),
-                    &mut out,
-                );
-            }
+                }
+                _ => ItemPose::Swing,
+            };
+            let m = to_world
+                * horizon_client::first_person::item_pose(left, inverse_height, attack, pose);
+            // Seeded by the player id plus the context ordinal.
+            let (context, seed) = if left {
+                (
+                    horizon_assets::item_model::DisplayContext::FirstPersonLeftHand,
+                    3,
+                )
+            } else {
+                (
+                    horizon_assets::item_model::DisplayContext::FirstPersonRightHand,
+                    4,
+                )
+            };
+            let state = self.resolve_item(&stack, context, Some(&owner), seed);
+            let light = self.world.light(
+                eye[0].floor() as i32,
+                eye[1].floor() as i32,
+                eye[2].floor() as i32,
+            );
+            self.submit_item_world(
+                &state,
+                m,
+                horizon_client::block_entity_render::vertex_light(light),
+                &mut out,
+            );
         }
         out
     }

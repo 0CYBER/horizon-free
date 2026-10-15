@@ -277,6 +277,22 @@ impl Game<'_> {
                 .and_then(|h| self.res.items.get(&h.item))
                 .map_or(0.0, |i| f64::from(i.attack_speed))
     }
+    /// `evaluateWhichHandsToRender`: which of the main and off hand show.
+    pub(super) fn hands_to_render(&self) -> [bool; 2] {
+        let held = |slot| {
+            self.stack_in(slot)
+                .map(|s: &ItemStack| (&*s.item, s.data().is_some_and(|d| !d.charged.is_empty())))
+        };
+        let using = self.used_hand().zip(
+            self.using
+                .and_then(|(slot, _)| self.stack_in(slot))
+                .map(|s| &*s.item),
+        );
+        horizon_client::first_person::hands_to_render(
+            [held(self.selected), held(super::shield::OFFHAND_SLOT)],
+            using,
+        )
+    }
     /// The visible main- and off-hand items.
     pub(super) fn visible_hand_items(&self) -> [Option<ItemStack>; 2] {
         [
