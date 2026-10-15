@@ -140,6 +140,8 @@ pub(super) struct Station {
     input_item: Option<Arc<str>>,
     /// Anvil: the input the rename box was last filled from.
     anvil_last: Option<ItemStack>,
+    /// When the screen opened: the rename box has the focus from then.
+    opened: std::time::Instant,
     pub(super) last_sound: u64,
     /// Villager trading state.
     pub(super) merchant: Option<Box<super::trading::MerchantState>>,
@@ -164,6 +166,7 @@ impl Station {
             start: 0,
             input_item: None,
             anvil_last: None,
+            opened: std::time::Instant::now(),
             last_sound: 0,
             merchant: None,
             beacon: [None; 2],
@@ -1645,18 +1648,17 @@ impl Game<'_> {
                         );
                     }
                     if s.inputs[0].is_some() {
-                        let blink = if (self.ticks / 6).is_multiple_of(2) {
-                            "_"
-                        } else {
-                            ""
-                        };
-                        batch.text(
+                        // AnvilScreen's name box: white, 103 wide, no inverted highlight.
+                        horizon_client::ui::append_field(
+                            batch,
                             atlas,
-                            &format!("{}{blink}", s.name),
-                            ox + 62.0,
-                            oy + 24.0,
+                            &s.name,
+                            (ox + 62.0, oy + 24.0, 103.0),
                             u32::MAX,
-                            true,
+                            ANVIL_NAME_CHARS,
+                            self.text_selection.covers(ANVIL_NAME, &s.name),
+                            false,
+                            s.opened.elapsed().as_millis(),
                         );
                     }
                     let cost = s.anvil.cost;

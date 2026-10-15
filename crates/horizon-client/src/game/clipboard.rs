@@ -85,7 +85,7 @@ impl Game<'_> {
         if Self::append_shortcut(
             &mut self.text_selection,
             &mut self.clipboard,
-            ("creative.search", 0),
+            CREATIVE_SEARCH,
             &mut self.creative_screen.search,
             shortcut,
             CREATIVE_SEARCH_CHARS,
@@ -96,7 +96,7 @@ impl Game<'_> {
     /// Typing or a backspace in the creative search box.
     pub(super) fn creative_search_edit(&mut self, typed: Option<&str>, backspace: bool) {
         let search = &mut self.creative_screen.search;
-        let cleared = self.text_selection.take(("creative.search", 0), search);
+        let cleared = self.text_selection.take(CREATIVE_SEARCH, search);
         if backspace {
             if !cleared {
                 search.pop();
@@ -109,4 +109,5 @@ impl Game<'_> {
 }
 
 /// `CreativeModeInventoryScreen`'s search box: `setMaxLength(50)`.
-const CREATIVE_SEARCH_CHARS: usize = 50;
+pub(super) const CREATIVE_SEARCH_CHARS: usize = 50;
+pub(super) const CREATIVE_SEARCH: horizon_client::clipboard::FieldId = ("creative.search", 0);
