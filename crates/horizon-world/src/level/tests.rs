@@ -1,5 +1,5 @@
 //! Behaviour tests over an in-memory level. They need the prepared client
-//! resources (`HORIZON_RESOURCES`, or `.local/horizon-client/26.3` at the
+//! resources (`HORIZON_RESOURCES`, or `.local/horizon-client/<version>` at the
 //! repository root) and are skipped when those are absent.
 use super::*;
 use crate::chunk::BlockState;
