@@ -1652,6 +1652,39 @@ impl Menu {
     }
 
     /// The PICKUP_ALL branch (double click).
+    /// `canTakeItemForPickAll`: never the result slots (the loom's is a
+    /// plain slot), MerchantMenu's or an item tab's display slots.
+    fn can_take_for_pick_all(&self, t: usize) -> bool {
+        self.kind != Kind::Merchant
+            && self.slots[t].role != Role::CreativeDisplay
+            && (self.slots[t].container != RESULT || self.kind == Kind::Loom)
+    }
+
+    /// `AbstractContainerScreen.mouseReleased` on a Shift double click:
+    /// QUICK_MOVE on every slot of `clicked`'s container that holds
+    /// `moved`'s item (`lastQuickMoved`, the stack the first click moved).
+    pub fn quick_move_all(
+        &mut self,
+        env: &Env,
+        clicked: usize,
+        moved: &ItemStack,
+    ) -> Result<(), &'static str> {
+        if clicked >= self.slots.len() || !self.can_take_for_pick_all(clicked) {
+            return Ok(());
+        }
+        let container = self.slots[clicked].container;
+        for t in 0..self.slots.len() {
+            if self.may_pickup(env, t)
+                && self.has_item(t)
+                && self.slots[t].container == container
+                && self.quick_replace(t, moved, env)
+            {
+                self.click(env, t as i32, 0, Input::QuickMove)?;
+            }
+        }
+        Ok(())
+    }
+
     /// `canDragTo`: ItemPickerMenu keeps drags off its display slots.
     fn can_drag_to(&self, s: usize) -> bool {
         self.slots[s].role != Role::CreativeDisplay
@@ -1674,13 +1707,10 @@ impl Menu {
                 let t = i as usize;
                 i += step;
                 let have = self.carried.clone().expect("some");
-                // MerchantMenu.canTakeItemForPickAll is always false.
-                if self.kind != Kind::Merchant
-                    && self.slots[t].role != Role::CreativeDisplay
-                    && self.has_item(t)
+                if self.has_item(t)
                     && self.quick_replace(t, &have, env)
                     && self.may_pickup(env, t)
-                    && (self.slots[t].container != RESULT || self.kind == Kind::Loom)
+                    && self.can_take_for_pick_all(t)
                 {
                     let item = self.slot(t).expect("has item").clone();
                     if pass != 0 || item.count != Self::max_stack(env, &item) {
