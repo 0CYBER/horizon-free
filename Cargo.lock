@@ -321,6 +321,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cargo-horizon-mod"
+version = "0.1.0"
+dependencies = [
+ "horizon-mods",
+ "serde_json",
+]
+
+[[package]]
 name = "cc"
 version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1290,6 +1298,7 @@ dependencies = [
  "toml",
  "wasmtime",
  "wit-component 0.239.0",
+ "wit-parser 0.239.0",
  "zip",
 ]
 
