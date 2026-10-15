@@ -72,6 +72,7 @@ pub enum Opt {
     PadEnabled,
     PadVibration,
     PadAdaptiveTriggers,
+    PadLightbar,
     PadLookSensitivity,
     PadInvertX,
     PadInvertY,
@@ -171,6 +172,7 @@ impl Opt {
             Opt::PadEnabled => "Controller",
             Opt::PadVibration => "Vibration",
             Opt::PadAdaptiveTriggers => "Adaptive Triggers",
+            Opt::PadLightbar => "Lightbar",
             Opt::PadLookSensitivity => "Look Sensitivity",
             Opt::PadInvertX => "Invert Look X",
             Opt::PadInvertY => "Invert Look Y",
@@ -433,6 +435,11 @@ impl Opt {
             } else {
                 "options.key.hold"
             }),
+            Opt::PadLightbar => Text::literal(match s.controller.lightbar {
+                gamepad::Lightbar::Health => "Health",
+                gamepad::Lightbar::Dimension => "Dimension",
+                gamepad::Lightbar::Off => "Off",
+            }),
             Opt::PadGlyphs => Text::literal(match s.controller.glyphs {
                 GlyphStyle::Auto => "Auto",
                 GlyphStyle::Xbox => "Xbox",
@@ -575,6 +582,14 @@ impl Opt {
             Opt::PadInvertX => s.controller.invert_x = !s.controller.invert_x,
             Opt::PadInvertY => s.controller.invert_y = !s.controller.invert_y,
             Opt::PadToggleSneak => s.controller.toggle_sneak = !s.controller.toggle_sneak,
+            Opt::PadLightbar => {
+                let all = gamepad::Lightbar::ALL;
+                let i = all
+                    .iter()
+                    .position(|l| *l == s.controller.lightbar)
+                    .unwrap_or(0) as u8;
+                s.controller.lightbar = all[usize::from(next(i, 3))];
+            }
             Opt::PadGlyphs => {
                 let i = GlyphStyle::ALL
                     .iter()
@@ -1035,6 +1050,7 @@ impl OptionsUi {
                     Opt::PadEnabled,
                     Opt::PadVibration,
                     Opt::PadAdaptiveTriggers,
+                    Opt::PadLightbar,
                     Opt::PadLookSensitivity,
                     Opt::PadToggleSneak,
                     Opt::PadInvertX,

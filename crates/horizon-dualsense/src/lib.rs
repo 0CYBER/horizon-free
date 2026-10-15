@@ -61,6 +61,10 @@ const FLAG2_VIBRATION_V2: u8 = 1 << 2;
 const LIGHTBAR_LIGHT_OUT: u8 = 1 << 1;
 /// Player LEDs: switch at once instead of fading.
 pub const PLAYER_LEDS_INSTANT: u8 = 1 << 5;
+/// The middle LED: player 1.
+pub const PLAYER_1: u8 = 1 << 2;
+/// The blue a host gives a first pad (`hid-playstation.c`), restored when Horizon lets go.
+pub const DEFAULT_LIGHTBAR: [u8; 3] = [0, 0, 128];
 
 /// An adaptive trigger's effect: a mode byte and ten parameters.
 pub type TriggerEffect = [u8; 11];
@@ -340,6 +344,15 @@ mod tests {
         assert_eq!(crc, crc32(&[&[0xa2], &r[..74]].concat()));
         // The sequence number changes the CRC.
         assert_ne!(out.bluetooth(Vibration::V2, 1)[74..], r[74..]);
+    }
+
+    #[test]
+    fn host_defaults() {
+        // hid-playstation.c: player 1 is BIT(2) ("--x--"), as SDL's first pattern 0x04; the
+        // blue it gives a pad; SDL's 0x20 switches LEDs without fading.
+        assert_eq!(PLAYER_1, 0x04);
+        assert_eq!(DEFAULT_LIGHTBAR, [0, 0, 128]);
+        assert_eq!(PLAYER_LEDS_INSTANT, 0x20);
     }
 
     #[test]

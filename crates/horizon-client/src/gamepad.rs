@@ -387,6 +387,7 @@ pub struct PadSettings {
     pub vibration: bool,
     /// A DualSense's triggers push back (Horizon's; docs/controllers.md).
     pub adaptive_triggers: bool,
+    pub lightbar: Lightbar,
     /// 0..1; 0.5 is the default speed, 1 twice that.
     pub look_sensitivity: f32,
     pub invert_x: bool,
@@ -410,6 +411,7 @@ impl Default for PadSettings {
             enabled: true,
             vibration: true,
             adaptive_triggers: true,
+            lightbar: Lightbar::Health,
             look_sensitivity: 0.5,
             invert_x: false,
             invert_y: false,
@@ -464,6 +466,7 @@ impl PadSettings {
                 "enabled" => s.enabled = flag(s.enabled),
                 "vibration" => s.vibration = flag(s.vibration),
                 "adaptiveTriggers" => s.adaptive_triggers = flag(s.adaptive_triggers),
+                "lightbar" => s.lightbar = Lightbar::parse(value),
                 "lookSensitivity" => s.look_sensitivity = unit(s.look_sensitivity),
                 "invertX" => s.invert_x = flag(s.invert_x),
                 "invertY" => s.invert_y = flag(s.invert_y),
@@ -494,10 +497,11 @@ impl PadSettings {
     }
     pub fn serialize(&self) -> String {
         let mut text = format!(
-            "enabled:{}\nvibration:{}\nadaptiveTriggers:{}\nlookSensitivity:{}\ninvertX:{}\ninvertY:{}\nmoveDeadzone:{}\nlookDeadzone:{}\ntriggerThreshold:{}\ntoggleSneak:{}\nglyphs:{}\nmenuNavigation:{}\nkeyboard:{}\n",
+            "enabled:{}\nvibration:{}\nadaptiveTriggers:{}\nlightbar:{}\nlookSensitivity:{}\ninvertX:{}\ninvertY:{}\nmoveDeadzone:{}\nlookDeadzone:{}\ntriggerThreshold:{}\ntoggleSneak:{}\nglyphs:{}\nmenuNavigation:{}\nkeyboard:{}\n",
             bool_text(self.enabled),
             bool_text(self.vibration),
             bool_text(self.adaptive_triggers),
+            self.lightbar.name(),
             self.look_sensitivity,
             bool_text(self.invert_x),
             bool_text(self.invert_y),
@@ -1063,6 +1067,62 @@ impl PadSettings {
         })
     }
 }
+/// What a DualSense's lightbar shows (`lightbar:`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lightbar {
+    /// Green at full health through amber to red.
+    Health,
+    /// A colour per dimension.
+    Dimension,
+    /// The pad's own.
+    Off,
+}
+impl Lightbar {
+    pub const ALL: [Lightbar; 3] = [Lightbar::Health, Lightbar::Dimension, Lightbar::Off];
+    pub fn name(self) -> &'static str {
+        match self {
+            Lightbar::Health => "health",
+            Lightbar::Dimension => "dimension",
+            Lightbar::Off => "off",
+        }
+    }
+    pub fn parse(name: &str) -> Self {
+        match name.trim() {
+            "dimension" => Lightbar::Dimension,
+            "off" => Lightbar::Off,
+            _ => Lightbar::Health,
+        }
+    }
+    /// The colour for a player with this share of their health in this dimension; at half
+    /// brightness, as the pad's full light is glaring.
+    pub fn colour(self, health: f32, dimension: &str) -> Option<[u8; 3]> {
+        let rgb = match self {
+            Lightbar::Off => return None,
+            Lightbar::Health => {
+                // Green to amber over the top half, amber to red below it.
+                let (green, amber, red) = (
+                    [34.0, 197.0, 94.0],
+                    [245.0, 158.0, 11.0],
+                    [239.0, 68.0, 68.0],
+                );
+                let h = health.clamp(0.0, 1.0);
+                let (from, to, k) = if h >= 0.5 {
+                    (amber, green, (h - 0.5) * 2.0)
+                } else {
+                    (red, amber, h * 2.0)
+                };
+                [0, 1, 2].map(|i| from[i] + (to[i] - from[i]) * k)
+            }
+            Lightbar::Dimension => match dimension {
+                "minecraft:the_nether" => [234.0, 88.0, 12.0],
+                "minecraft:the_end" => [139.0, 92.0, 246.0],
+                _ => [14.0, 165.0, 233.0],
+            },
+        };
+        Some(rgb.map(|v| (v * 0.5).round() as u8))
+    }
+}
+
 /// `BowItem.getPowerForTime`: a bow's draw after this many ticks, 0..1.
 pub fn bow_power(ticks: u32) -> f32 {
     let f = ticks as f32 / 20.0;
@@ -1387,6 +1447,23 @@ mod tests {
             [TRIGGER_OFF; 2]
         );
         assert!(!PadSettings::parse(&s.serialize()).adaptive_triggers);
+    }
+
+    #[test]
+    fn lightbar_colours() {
+        let full = Lightbar::Health.colour(1.0, "minecraft:overworld").unwrap();
+        let empty = Lightbar::Health.colour(0.0, "minecraft:overworld").unwrap();
+        assert!(full[1] > full[0], "green at full health: {full:?}");
+        assert!(empty[0] > empty[1], "red when dying: {empty:?}");
+        assert_eq!(Lightbar::Health.colour(0.5, ""), Some([123, 79, 6]));
+        assert_ne!(
+            Lightbar::Dimension.colour(1.0, "minecraft:the_nether"),
+            Lightbar::Dimension.colour(1.0, "minecraft:overworld")
+        );
+        assert_eq!(Lightbar::Off.colour(1.0, ""), None);
+        for l in Lightbar::ALL {
+            assert_eq!(Lightbar::parse(l.name()), l);
+        }
     }
 
     #[test]

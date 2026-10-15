@@ -433,9 +433,24 @@ impl Game<'_> {
         } else {
             (TriggerFeel::Free, TriggerFeel::Free)
         };
+        // The lightbar follows the player; menus keep the last colour.
+        let in_world = self.title.is_none();
+        let lightbar = match self.player.as_mut().filter(|_| in_world) {
+            Some(p) => {
+                let max = p.attribute("minecraft:max_health").unwrap_or(20.0) as f32;
+                let health = p.health.health() / max.max(1.0);
+                self.settings
+                    .controller
+                    .lightbar
+                    .colour(health, self.dim.id())
+            }
+            None => self.pad.shown.and_then(|s| s.lightbar),
+        };
+        let lights = self.settings.controller.lightbar != gamepad::Lightbar::Off;
         let state = horizon_dualsense::device::State {
             triggers: self.settings.controller.trigger_effects(using, attacking),
-            ..Default::default()
+            lightbar: lightbar.filter(|_| lights),
+            player_leds: lights.then_some(horizon_dualsense::PLAYER_1),
         };
         if self.pad.shown != Some(state)
             && let Some(output) = &self.pad.output

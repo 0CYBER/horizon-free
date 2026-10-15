@@ -104,6 +104,7 @@ pub const SECTIONS: &[Section] = &[
                     Opt::PadEnabled,
                     Opt::PadVibration,
                     Opt::PadAdaptiveTriggers,
+                    Opt::PadLightbar,
                     Opt::PadLookSensitivity,
                     Opt::PadToggleSneak,
                     Opt::PadInvertX,
