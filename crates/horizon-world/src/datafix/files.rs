@@ -15,7 +15,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 /// The name `SharedConstants.getCurrentVersion().name()` writes in level.dat.
-pub const VERSION_NAME: &str = horizon_core::VANILLA_VERSION;
+pub const VERSION_NAME: &str = horizon_core::version::VANILLA_VERSION;
 
 const FILE_FIXER_INTRODUCTION: i32 = 4772;
 /// The versions of the file fixes, in order.
