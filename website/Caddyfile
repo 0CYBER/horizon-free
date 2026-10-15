@@ -27,7 +27,8 @@
 	header @assets Cache-Control "public, max-age=31536000, immutable"
 	@media path /media/* /fonts/* /og.png /favicon* /apple-touch-icon.png
 	header @media Cache-Control "public, max-age=604800"
-	@pages path / /index.html /404.html
+	rewrite /privacy /privacy.html
+	@pages path / /index.html /404.html /privacy.html
 	header @pages Cache-Control "no-cache"
 	@legal path /LEGAL.md /fonts/*.txt
 	header @legal Content-Type "text/plain; charset=utf-8"
