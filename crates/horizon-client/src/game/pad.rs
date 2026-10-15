@@ -455,6 +455,7 @@ impl Game<'_> {
                 Some(s) if &*s.item == "minecraft:crossbow" => {
                     TriggerFeel::Draw(ticks as f32 / Self::charge_ticks(s).max(1) as f32)
                 }
+                Some(s) if self.blocks_attacks(s).is_some() => TriggerFeel::Brace,
                 _ => TriggerFeel::Free,
             },
             None => self.idle_use_feel(),
@@ -470,8 +471,9 @@ impl Game<'_> {
         (using, attacking)
     }
 
-    /// The use trigger while nothing is in use: a loaded crossbow clicks, and an item that
-    /// boosts (a rocket while gliding, the stick of the mount being ridden) has a wall.
+    /// The use trigger while nothing is in use: a loaded crossbow clicks, an item that boosts (a
+    /// rocket while gliding, the stick of the mount being ridden) catches, a shield weighs, and
+    /// locks while an axe has disabled it.
     fn idle_use_feel(&self) -> TriggerFeel {
         let gliding = self.player.as_ref().is_some_and(|p| p.fall_flying);
         let mount = self
@@ -491,6 +493,10 @@ impl Game<'_> {
             Some((_, "minecraft:warped_fungus_on_a_stick")) if mount == "minecraft:strider" => {
                 TriggerFeel::Boost
             }
+            Some((s, _)) if self.blocks_attacks(s).is_some() => match self.shield_cooldown {
+                0 => TriggerFeel::Brace,
+                _ => TriggerFeel::Locked,
+            },
             _ => TriggerFeel::Free,
         };
         // Use tries the main hand first.

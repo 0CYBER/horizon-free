@@ -1,8 +1,10 @@
 //! The adaptive triggers' effects in the pad's own encoding. A trigger's travel is cut into ten
 //! zones (0 at rest, 9 fully pulled); an effect names the zones it acts in and a strength, 1..8,
-//! for each, three bits per zone. Modes as documented by Nielk1's trigger effect notes and
-//! DualSenseX; [`crate::TRIGGER_OFF`] frees the trigger.
-use crate::TriggerEffect;
+//! for each, three bits per zone. Modes and packing as in Nielk1's TriggerEffectGenerator
+//! (gist.github.com/Nielk1/6d54cc2c00d2201ccb8c2720ad7538db, rev. f73a299) and dualsensectl;
+//! only the modes it calls official, which later firmware keeps. [`crate::TRIGGER_OFF`] frees
+//! the trigger.
+use crate::{TRIGGER_OFF, TriggerEffect};
 
 const FEEDBACK: u8 = 0x21;
 const WEAPON: u8 = 0x25;
@@ -58,8 +60,12 @@ pub fn weapon(start: u8, end: u8, strength: u8) -> TriggerEffect {
     e
 }
 
-/// A buzz from zone `start` (0..9) on, at `amplitude` (1..8) and `frequency` Hz.
+/// A buzz from zone `start` (0..9) on, at `amplitude` (1..8) and `frequency` Hz; at 0 Hz,
+/// nothing (as Nielk1's factory).
 pub fn vibration(start: u8, amplitude: u8, frequency: u8) -> TriggerEffect {
+    if frequency == 0 {
+        return TRIGGER_OFF;
+    }
     let mut e = zoned(
         VIBRATION,
         std::array::from_fn(|i| {
@@ -120,5 +126,23 @@ mod tests {
             1 << 24 | 1 << 27
         );
         assert_eq!(e[9], 30);
+    }
+
+    #[test]
+    fn reference_examples() {
+        // DSX++'s README, Weapon {2, 6, 8}: zones 2 and 6, strength 8 stored as 7.
+        assert_eq!(
+            weapon(2, 6, 8),
+            [0x25, 0x44, 0x00, 0x07, 0, 0, 0, 0, 0, 0, 0]
+        );
+        // dualsensectl's wiki, `weapon 2 3 8`.
+        assert_eq!(weapon(2, 3, 8)[1..4], [0x0c, 0x00, 0x07]);
+        // DSX++'s README, Vibration {2, 8, 20}: zones 2..9, amplitude 8 (stored 7) in each
+        // zone's three bits, the frequency in byte 9.
+        assert_eq!(
+            vibration(2, 8, 20),
+            [0x26, 0xfc, 0x03, 0xc0, 0xff, 0xff, 0x3f, 0, 0, 20, 0]
+        );
+        assert_eq!(vibration(2, 8, 0), TRIGGER_OFF);
     }
 }

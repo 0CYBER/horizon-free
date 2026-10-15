@@ -952,37 +952,59 @@ impl Rumble {
     }
 }
 
-/// What a trigger feels like on a DualSense, from what its action is doing.
+/// What a trigger feels like on a DualSense, from what its action is doing (docs/controllers.md
+/// "Adaptive triggers" for the choices). Only the pad's official modes: Nielk1's notes warn the
+/// others may leave the firmware.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TriggerFeel {
     Free,
     /// Drawing a bow, charging a trident, loading a crossbow: resistance that grows with the
     /// charge, 0..1.
     Draw(f32),
-    /// A loaded crossbow: a gun trigger's click.
+    /// A loaded crossbow: a gun trigger's catch that gives way where it fires.
     Click,
-    /// Mining a block of this hardness: a light buzz, stronger on harder blocks.
-    Texture(f32),
     /// Pulling it boosts (a rocket while gliding, the stick while riding a pig or a strider):
-    /// a firm wall halfway.
+    /// a lighter catch that gives way where it fires.
     Boost,
+    /// A shield in the use hand, raised or ready: its weight.
+    Brace,
+    /// That shield disabled by an axe: the trigger locks until it recovers.
+    Locked,
+    /// Mining a block of this hardness: a buzz, stronger and slower on harder blocks.
+    Texture(f32),
 }
 impl TriggerFeel {
-    pub fn effect(self) -> horizon_dualsense::TriggerEffect {
+    /// The effect, for a trigger that presses its action at `threshold` (0..1) of its travel.
+    pub fn effect(self, threshold: f32) -> horizon_dualsense::TriggerEffect {
         use horizon_dualsense::trigger;
+        // The zone (of ten along the travel) where the action presses: a catch gives way there,
+        // so the click and the shot coincide.
+        let press = ((threshold.clamp(0.0, 1.0) * 10.0) as u8).clamp(3, 8);
         match self {
             TriggerFeel::Free => horizon_dualsense::TRIGGER_OFF,
+            // From the third zone, so the press itself stays light; at most 6 of 8, as the
+            // draw is held.
             TriggerFeel::Draw(charge) => {
-                trigger::feedback(1, 1 + (7.0 * charge.clamp(0.0, 1.0)).round() as u8)
+                trigger::feedback(2, 1 + (5.0 * charge.clamp(0.0, 1.0)).round() as u8)
             }
-            TriggerFeel::Click => trigger::weapon(3, 6, 8),
+            TriggerFeel::Click => trigger::weapon((press - 2).max(2), press, 8),
+            TriggerFeel::Boost => trigger::weapon((press - 2).max(2), press, 5),
+            TriggerFeel::Brace => trigger::feedback(2, 3),
+            TriggerFeel::Locked => trigger::feedback(1, 8),
             TriggerFeel::Texture(hardness) if hardness > 0.0 => {
                 // Dirt 2, stone 3, deepslate 4, obsidian 5 of 8.
                 let amplitude = (1.0 + 1.6 * hardness.sqrt()).round().clamp(1.0, 5.0);
-                trigger::vibration(1, amplitude as u8, 30)
+                // Sand and dirt a fine 40 Hz grit; stone 30; wood, deepslate and ores 20;
+                // obsidian a 10 Hz chisel.
+                let hertz = match hardness {
+                    h if h < 1.0 => 40,
+                    h if h < 2.0 => 30,
+                    h if h < 5.0 => 20,
+                    _ => 10,
+                };
+                trigger::vibration(1, amplitude as u8, hertz)
             }
             TriggerFeel::Texture(_) => horizon_dualsense::TRIGGER_OFF,
-            TriggerFeel::Boost => trigger::feedback(4, 6),
         }
     }
 }
@@ -1005,7 +1027,7 @@ impl PadSettings {
             } else {
                 TriggerFeel::Free
             };
-            feel.effect()
+            feel.effect(self.trigger_threshold)
         })
     }
 }
@@ -1292,18 +1314,41 @@ mod tests {
 
     #[test]
     fn triggers_feel_their_action() {
-        use horizon_dualsense::TRIGGER_OFF;
+        use horizon_dualsense::{TRIGGER_OFF, trigger};
         let mut s = PadSettings::default();
         // Use is LT, attack RT by default.
         let [left, right] = s.trigger_effects(TriggerFeel::Draw(1.0), TriggerFeel::Texture(1.5));
-        assert_eq!(left, horizon_dualsense::trigger::feedback(1, 8));
-        assert_eq!(right, horizon_dualsense::trigger::vibration(1, 3, 30));
+        assert_eq!(left, trigger::feedback(2, 6));
+        assert_eq!(right, trigger::vibration(1, 3, 30));
         assert_eq!(
             s.trigger_effects(TriggerFeel::Draw(0.0), TriggerFeel::Free),
-            [horizon_dualsense::trigger::feedback(1, 1), TRIGGER_OFF]
+            [trigger::feedback(2, 1), TRIGGER_OFF]
         );
-        // Instant-break blocks don't buzz.
-        assert_eq!(TriggerFeel::Texture(0.0).effect(), TRIGGER_OFF);
+        // The catch gives way in the zone where the default threshold (0.4) presses: weapon
+        // 0x25, zones 2 and 4, strength 8 (stored 7) or 5 (stored 4).
+        let catch = |strength| [0x25, 0x14, 0x00, strength, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(TriggerFeel::Click.effect(0.4), catch(7));
+        assert_eq!(TriggerFeel::Boost.effect(0.4), catch(4));
+        // A deeper threshold moves it: zones 5 and 7.
+        assert_eq!(TriggerFeel::Click.effect(0.7)[1..3], [0xa0, 0x00]);
+        assert_eq!(TriggerFeel::Click.effect(0.1), trigger::weapon(2, 3, 8));
+        assert_eq!(TriggerFeel::Brace.effect(0.4), trigger::feedback(2, 3));
+        assert_eq!(TriggerFeel::Locked.effect(0.4), trigger::feedback(1, 8));
+        // Harder blocks buzz harder and slower; instant-break blocks don't.
+        assert_eq!(
+            TriggerFeel::Texture(0.5).effect(0.4),
+            trigger::vibration(1, 2, 40)
+        );
+        assert_eq!(
+            TriggerFeel::Texture(3.0).effect(0.4),
+            trigger::vibration(1, 4, 20)
+        );
+        assert_eq!(
+            TriggerFeel::Texture(50.0).effect(0.4),
+            trigger::vibration(1, 5, 10)
+        );
+        assert_eq!(TriggerFeel::Texture(0.0).effect(0.4), TRIGGER_OFF);
+        assert_eq!(TriggerFeel::Texture(-1.0).effect(0.4), TRIGGER_OFF);
         s.adaptive_triggers = false;
         assert_eq!(
             s.trigger_effects(TriggerFeel::Click, TriggerFeel::Boost),
