@@ -8,9 +8,67 @@ use horizon_client::{
     options_ui::{Event, Page},
     window::{FrameContext, InactivityFpsLimit, framerate_limit},
 };
+use serde_json::{Value, json};
 use winit::{event::MouseButton, keyboard::KeyCode, window::Fullscreen};
 
+pub(super) const CONTROL_HELP: &[&str] = &[
+    "options-get [KEY...]           options.txt values by key, with their type, range or choices",
+    "options-set KEY VALUE          set an option (enums by name, keys as key.keyboard.w, lists as JSON), apply and save it",
+];
+
 impl Game<'_> {
+    /// `options-get` and `options-set`; None for other commands.
+    pub(super) fn options_control(&mut self, words: &[&str], line: &str) -> Result<Option<Value>> {
+        match words[0] {
+            "options-get" => {
+                let file = self.settings.to_file();
+                let wanted: Vec<&str> = if words.len() > 1 {
+                    words[1..].to_vec()
+                } else {
+                    horizon_client::options_file::keys()
+                };
+                let mut options = serde_json::Map::new();
+                for key in wanted {
+                    let described = file.describe(key).ok_or_else(|| {
+                        format!("unknown option {key}; options-get lists them all")
+                    })?;
+                    options.insert(key.to_owned(), described);
+                }
+                Ok(Some(json!({ "options": options })))
+            }
+            "options-set" => {
+                let key = words.get(1).ok_or("options-set KEY VALUE")?;
+                // The value runs to the end of the line (lists, server names).
+                let value = line
+                    .trim_start()
+                    .strip_prefix("options-set")
+                    .and_then(|rest| rest.trim_start().strip_prefix(key))
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                    .ok_or("options-set KEY VALUE: missing the value")?;
+                let mut file = self.settings.to_file();
+                file.set_text(key, value)?;
+                let mut settings = horizon_client::settings::Settings::from_file(file);
+                // Horizon's own files are not in options.txt.
+                std::mem::swap(&mut settings.horizon, &mut self.settings.horizon);
+                std::mem::swap(&mut settings.controller, &mut self.settings.controller);
+                std::mem::swap(&mut settings.extras, &mut self.settings.extras);
+                self.settings = settings;
+                // As the options screen applies a change.
+                self.handle_option_events(vec![Event::Changed])?;
+                match *key {
+                    "lang" => self.load_language(&self.settings.language.clone()),
+                    "resourcePacks" | "incompatibleResourcePacks" => self.reload_packs(),
+                    _ => {}
+                }
+                // Labels change (a language, a value): `ui` reads the redrawn screen.
+                self.ui_wait.clicked();
+                let now = self.settings.to_file().describe(key);
+                Ok(Some(json!({ "ok": true, "key": key, "option": now })))
+            }
+            _ => Ok(None),
+        }
+    }
     pub(super) fn options_path() -> std::path::PathBuf {
         std::env::current_dir()
             .unwrap_or_default()

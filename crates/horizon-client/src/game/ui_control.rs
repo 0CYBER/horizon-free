@@ -43,7 +43,8 @@ impl UiWait {
         self.after = None;
         std::mem::take(&mut self.waiting)
     }
-    fn clicked(&mut self) {
+    /// The screen changed: widget commands wait for it to be drawn again.
+    pub(super) fn clicked(&mut self) {
         self.after = Some((widgets::generation(), Instant::now()));
     }
 }
