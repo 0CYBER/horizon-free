@@ -97,9 +97,11 @@ latest release (and, with `--snapshots`, the latest snapshot) with the pin and w
 `versions/detect-state.json`, and prints what is new; exit status 0 means "nothing new", 10 "new release",
 11 "new snapshot". It needs only the network, so it can run anywhere:
 
-- **Mac mini, launchd (chosen):** a `~/fleet` launchd agent runs `version_port.py detect --then port` daily at
-  14:00 UTC (Mojang publishes on weekdays around 10:00-14:00 UTC), in a dedicated worktree of `origin/main`,
-  at `~/fleet/load prio low`. The whole port runs where the vanilla data, Java and the harnesses are.
+- **Mac mini, launchd (chosen):** the agent `dev.horizon.version-port` (`tools/ci/dev.horizon.version-port.plist`)
+  runs `tools/ci/version-port-daily.sh` daily at 16:00 Zurich time (14:00 UTC in summer, 15:00 in winter; Mojang
+  publishes on weekdays around 10:00-14:00 UTC), in a dedicated worktree of `origin/main`
+  (`~/code/horizon-parity/port-main`), at `~/fleet/load prio low`, nice 10. The whole port runs where the vanilla
+  data, Java and the harnesses are. See "Turning on the daily agent" below.
 - **GitHub Actions:** a scheduled job could run `detect` alone and open a "Minecraft X is out" issue; the Mac mini
   would still have to do the rest, so it adds a hop for nothing. Kept as the fallback if the Mac mini is down for
   long.
@@ -281,6 +283,45 @@ title. Its `research-lock.json` makes `horizon-prepare` ask for NEW, so players 
 official launcher; the launcher already reads each release's game version from its `research-lock.json`, so players
 who haven't can keep the previous Horizon release. Supporting two Minecraft versions in one build is out of scope.
 
+## Turning on the daily agent
+
+Not installed: it runs Mojang downloads, Cargo, Java and every harness on the Mac mini unattended, and its
+`publish` dry run prepares issues under a new `version-port` label, so both need Ludovic's approval. What it does
+on each run (`tools/ci/version-port-daily.sh`):
+
+1. update its worktree of `origin/main` (`~/code/horizon-parity/port-main`, made on the first run, `.local/` linking
+   the shared data as a parity worktree does);
+2. `version_port.py detect --dry-run` (`--snapshots` with `HORIZON_PORT_SNAPSHOTS=1`): nothing new ends the run;
+3. for a new release: `port NEW` (prepare both, diff, regen into `ports/NEW` on the local branch `port/NEW`, report),
+   `tools/parity.py` on main as the baseline (only what never passed or changed reruns), `harnesses NEW` against
+   that baseline, `report OLD NEW`, and `publish OLD NEW --check-github` (the dry run: the log lists the issues it
+   would file). A snapshot is only prepared, diffed and reported;
+4. `detect` again, so the version is remembered only once its port went through (a failed run retries the next day),
+   and a note on Kira card 28 (`HORIZON_PORT_KIRA_CARD`) saying the report is ready.
+
+It never runs `publish --yes`, never pushes and never changes `shared-local/`. `HORIZON_PORT_VERSION=V` ports V at
+once (by hand, or to replay a version); `HORIZON_PORT_REF` checks out another ref than `origin/main`.
+
+To turn it on, on the Mac mini (as Ludovic, once approved):
+
+```sh
+# 1. The label publish files issues under (once):
+gh label create version-port --repo ludovic111/horizon --color 5319e7 \
+  --description "Work to port Horizon to a new Minecraft release (tools/version_port.py publish)"
+# 2. The script, as a copy from main (it updates its own worktree, so it never runs from a checkout):
+curl -fsSL https://raw.githubusercontent.com/ludovic111/horizon/main/tools/ci/version-port-daily.sh \
+  -o ~/code/horizon-parity/version-port-daily.sh
+# 3. The agent:
+curl -fsSL https://raw.githubusercontent.com/ludovic111/horizon/main/tools/ci/dev.horizon.version-port.plist \
+  | sed "s|@HOME@|$HOME|g" > ~/Library/LaunchAgents/dev.horizon.version-port.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.horizon.version-port.plist
+# A run now, to see it work (log: ~/Library/Logs/horizon-version-port.log):
+launchctl kickstart gui/$(id -u)/dev.horizon.version-port
+```
+
+To turn it off: `launchctl bootout gui/$(id -u)/dev.horizon.version-port` and delete the plist. When the report is
+in, publishing is still by hand: `python3 tools/version_port.py publish OLD NEW` (dry run), then `--yes`.
+
 ## What stays manual, and how small it gets
 
 Automatic: detecting, downloading, verifying, the data generator, every diff, the class-to-module map, regenerating
@@ -390,4 +431,4 @@ python3 tools/vanilla_map.py versions/26.3/classes.json net.minecraft.world.food
 | `regen` (`tools/port_regen.py`): candidate worktree, its `.local/`, the generators' classes decompiled alone, every generator, `regen.json` in the report | done |
 | Candidate harness run (`tools/port_harness.py`, `harnesses`): horizon-prepare with sounds, every harness, pass / oracle / fail, newly failing against a baseline, in the report | done |
 | `publish` (`tools/port_publish.py`): dry run by default, issues, tracking issue, Kira card | done (never run with `--yes`) |
-| launchd agent | later |
+| Daily launchd agent (`tools/ci/version-port-daily.sh`, `tools/ci/dev.horizon.version-port.plist`) | written, not installed: needs Ludovic's approval |
