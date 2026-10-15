@@ -2,10 +2,17 @@
 //! sight (`ClipContext.Block.COLLIDER`), sky visibility, light-dependent
 //! values and the positions of other entities.
 use super::{MobWorld, Seen, Species, Who, data};
-use crate::{blocks::Fluid, collisions::SceneCollisions};
+use crate::{
+    blocks::{BlockFacts, Fluid},
+    collisions::SceneCollisions,
+};
 use horizon_core::{
     geometry::{Aabb, Vec3, traverse_blocks},
     position::BlockPos,
+};
+use horizon_world::{
+    block_collision::{BlockCollisionRegistry, DynamicCollisionWorld},
+    registry::BlockStateId,
 };
 
 /// Where a target entity is this tick.
@@ -81,38 +88,23 @@ impl MobWorld<'_> {
         });
         matches!(result, Ok(None))
     }
-    /// Level.clip with VISUAL shapes and no fluids: true on a miss. Glass
-    /// (`TransparentBlock`) and bars and panes (`IronBarsBlock`) have no
-    /// visual shape; mud, soul sand and powder snow look like full blocks.
+    /// Level.clip with VISUAL shapes and no fluids: true on a miss.
     pub fn visual_clear_between(&self, from: Vec3, to: Vec3) -> bool {
+        self.visual_clip(from, to) == Some(None)
+    }
+    /// Level.clip with VISUAL shapes and no fluids: the block the segment
+    /// first hits, if it does.
+    pub fn visual_hit(&self, from: Vec3, to: Vec3) -> Option<[i32; 3]> {
+        self.visual_clip(from, to).flatten()
+    }
+    fn visual_clip(&self, from: Vec3, to: Vec3) -> Option<Option<[i32; 3]>> {
         let mut scene = SceneCollisions {
             world: self.world,
             binding: self.collision,
             subject: None,
         };
-        let full = horizon_core::geometry::Aabb::new(Vec3::ZERO, Vec3::new(1.0, 1.0, 1.0));
-        let result = traverse_blocks(from, to, 512, |p: BlockPos| {
-            let state = self.world.block(p.x, p.y, p.z);
-            if self.facts.is_air(state) {
-                return None;
-            }
-            let name = self.facts.get(state).name.trim_start_matches("minecraft:");
-            if name.ends_with("glass") || name.ends_with("glass_pane") || name.ends_with("_bars") {
-                return None;
-            }
-            if matches!(name, "mud" | "soul_sand" | "powder_snow") {
-                return full
-                    .move_by(Vec3::new(f64::from(p.x), f64::from(p.y), f64::from(p.z)))
-                    .clip(from, to)
-                    .map(|_| ());
-            }
-            let shape = self
-                .collision
-                .collision_shape(&mut scene, state, [p.x, p.y, p.z])
-                .ok()?;
-            shape.clip(from, to, p).map(|_| ())
-        });
-        matches!(result, Ok(None))
+        let state = |x, y, z| self.world.block(x, y, z);
+        visual_clip(self.facts, self.collision, &mut scene, &state, from, to)
     }
     /// Level.clip with COLLIDER shapes and no fluids: where the segment
     /// first hits a block, if it does.
@@ -259,4 +251,43 @@ impl MobWorld<'_> {
             .filter(|s| s.species == species && s.alive)
             .count()
     }
+}
+
+/// Level.clip with VISUAL shapes and no fluids: the block the segment first
+/// hits, None inside when it hits nothing and outside when the segment is
+/// too long to walk. Glass and copper grates (`TransparentBlock`) and bars and panes
+/// (`IronBarsBlock`) have no visual shape; mud, soul sand and powder snow
+/// look like full blocks.
+pub fn visual_clip<W: DynamicCollisionWorld>(
+    facts: &BlockFacts,
+    collision: &BlockCollisionRegistry,
+    scene: &mut W,
+    state: &dyn Fn(i32, i32, i32) -> BlockStateId,
+    from: Vec3,
+    to: Vec3,
+) -> Option<Option<[i32; 3]>> {
+    let full = Aabb::new(Vec3::ZERO, Vec3::new(1.0, 1.0, 1.0));
+    let result = traverse_blocks(from, to, 512, |p: BlockPos| {
+        let id = state(p.x, p.y, p.z);
+        if facts.is_air(id) {
+            return None;
+        }
+        let name = facts.get(id).name.trim_start_matches("minecraft:");
+        if name.ends_with("glass")
+            || name.ends_with("glass_pane")
+            || name.ends_with("_bars")
+            || name.ends_with("copper_grate")
+        {
+            return None;
+        }
+        if matches!(name, "mud" | "soul_sand" | "powder_snow") {
+            return full
+                .move_by(Vec3::new(f64::from(p.x), f64::from(p.y), f64::from(p.z)))
+                .clip(from, to)
+                .map(|_| [p.x, p.y, p.z]);
+        }
+        let shape = collision.collision_shape(scene, id, [p.x, p.y, p.z]).ok()?;
+        shape.clip(from, to, p).map(|_| [p.x, p.y, p.z])
+    });
+    result.ok()
 }

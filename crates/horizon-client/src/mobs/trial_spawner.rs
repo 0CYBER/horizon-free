@@ -1,0 +1,886 @@
+//! The trial spawner (`TrialSpawner` as `TrialSpawnerBlockEntity` runs it):
+//! its configs, saved state (`TrialSpawnerStateData`) and the server tick that
+//! walks `TrialSpawnerState`: waiting for players, spawning its waves while
+//! they fight, ejecting a reward per player, then cooling down.
+//!
+//! The state lives in the block (`trial_spawner_state`); the tick reads it and
+//! reports the next one. The level's random drives the tick in vanilla's draw
+//! order; what the spawner asks of the level goes through
+//! [`TrialSpawnerLevel`], so the game and a differential test world answer the
+//! same questions.
+use super::{
+    spawn_rules::{self, Reason},
+    spawn_selection,
+    spawner::{self, SpawnData, SpawnerLevel, SpawnerSpawn},
+};
+use horizon_core::{position::BlockPos, random::RandomSource};
+use horizon_world::nbt::{Compound, JavaString, Tag};
+use std::{collections::HashMap, path::Path, sync::OnceLock};
+
+/// An entity's UUID as its four ints (`UUIDUtil.CODEC`).
+pub type Uuid = [i32; 4];
+
+/// `MAX_MOB_TRACKING_DISTANCE`: a spawned mob further than this stops
+/// counting as one of the spawner's.
+const MAX_MOB_TRACKING_DISTANCE: i64 = 47;
+/// `DELAY_BEFORE_EJECT_AFTER_KILLING_LAST_MOB` and `TIME_BETWEEN_EACH_EJECTION`.
+const DELAY_BEFORE_EJECT: f32 = 40.0;
+const TIME_BETWEEN_EJECTIONS: f32 = 30.0;
+
+/// `TrialSpawnerConfig`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TrialConfig {
+    pub spawn_range: i32,
+    pub total_mobs: f32,
+    pub simultaneous_mobs: f32,
+    pub total_mobs_added_per_player: f32,
+    pub simultaneous_mobs_added_per_player: f32,
+    pub ticks_between_spawn: i32,
+    pub spawn_potentials: Vec<(SpawnData, i32)>,
+    pub loot_tables_to_eject: Vec<(String, i32)>,
+    pub items_to_drop_when_ominous: String,
+}
+impl Default for TrialConfig {
+    /// `TrialSpawnerConfig.Builder`'s defaults.
+    fn default() -> Self {
+        Self {
+            spawn_range: 4,
+            total_mobs: 6.0,
+            simultaneous_mobs: 2.0,
+            total_mobs_added_per_player: 2.0,
+            simultaneous_mobs_added_per_player: 1.0,
+            ticks_between_spawn: 40,
+            spawn_potentials: Vec::new(),
+            loot_tables_to_eject: vec![
+                ("minecraft:spawners/trial_chamber/consumables".into(), 1),
+                ("minecraft:spawners/trial_chamber/key".into(), 1),
+            ],
+            items_to_drop_when_ominous:
+                "minecraft:spawners/trial_chamber/items_to_drop_when_ominous".into(),
+        }
+    }
+}
+impl TrialConfig {
+    /// `TrialSpawnerConfig.DIRECT_CODEC`; None when the tag is not a
+    /// compound. Read as `TagValueInput` does, keeping the partial result:
+    /// a field that fails to decode takes its default, and the list entries
+    /// that fail are dropped.
+    pub fn decode(tag: &Tag) -> Option<Self> {
+        let Tag::Compound(_) = tag else {
+            return None;
+        };
+        let d = Self::default();
+        let float = |k: &str, default: f32| {
+            tag.get(k)
+                .and_then(float)
+                .filter(|v| *v >= 0.0)
+                .unwrap_or(default)
+        };
+        let int = |k: &str, default: i32, lo: i32, hi: i32| {
+            spawner::number(tag.get(k))
+                .filter(|v| (i64::from(lo)..=i64::from(hi)).contains(v))
+                .map_or(default, |v| v as i32)
+        };
+        let list = |k: &str| match tag.get(k) {
+            Some(Tag::List(list)) => Some(list.iter()),
+            _ => None,
+        };
+        let spawn_potentials = list("spawn_potentials").map_or_else(Vec::new, |l| {
+            l.filter_map(|e| Some((SpawnData::decode(e.get("data")?)?, weight(e.get("weight"))?)))
+                .collect()
+        });
+        let loot_tables_to_eject =
+            list("loot_tables_to_eject").map_or(d.loot_tables_to_eject, |l| {
+                l.filter_map(|e| Some((identifier(e.get("data"))?, weight(e.get("weight"))?)))
+                    .collect()
+            });
+        Some(Self {
+            spawn_range: int("spawn_range", d.spawn_range, 1, 128),
+            total_mobs: float("total_mobs", d.total_mobs),
+            simultaneous_mobs: float("simultaneous_mobs", d.simultaneous_mobs),
+            total_mobs_added_per_player: float(
+                "total_mobs_added_per_player",
+                d.total_mobs_added_per_player,
+            ),
+            simultaneous_mobs_added_per_player: float(
+                "simultaneous_mobs_added_per_player",
+                d.simultaneous_mobs_added_per_player,
+            ),
+            ticks_between_spawn: int("ticks_between_spawn", d.ticks_between_spawn, 0, i32::MAX),
+            spawn_potentials,
+            loot_tables_to_eject,
+            items_to_drop_when_ominous: identifier(tag.get("items_to_drop_when_ominous"))
+                .unwrap_or(d.items_to_drop_when_ominous),
+        })
+    }
+    /// `calculateTargetTotalMobs`.
+    pub fn target_total_mobs(&self, additional_players: i32) -> i32 {
+        (self.total_mobs + self.total_mobs_added_per_player * additional_players as f32).floor()
+            as i32
+    }
+    /// `calculateTargetSimultaneousMobs`.
+    pub fn target_simultaneous_mobs(&self, additional_players: i32) -> i32 {
+        (self.simultaneous_mobs
+            + self.simultaneous_mobs_added_per_player * additional_players as f32)
+            .floor() as i32
+    }
+}
+
+static REGISTRY: OnceLock<HashMap<String, TrialConfig>> = OnceLock::new();
+
+/// `Registries.TRIAL_SPAWNER_CONFIG`: the configs under the resources'
+/// `data/<namespace>/trial_spawner`, read once per process.
+pub fn load_registry(root: &Path) {
+    REGISTRY.get_or_init(|| {
+        let mut out = HashMap::new();
+        let Ok(namespaces) = std::fs::read_dir(root.join("data")) else {
+            return out;
+        };
+        for ns in namespaces.flatten() {
+            let base = ns.path().join("trial_spawner");
+            let mut stack = vec![base.clone()];
+            while let Some(dir) = stack.pop() {
+                for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        stack.push(path);
+                        continue;
+                    }
+                    let (Ok(rel), Some(ns)) = (
+                        path.with_extension("")
+                            .strip_prefix(&base)
+                            .map(Path::to_path_buf),
+                        ns.file_name().to_str().map(str::to_owned),
+                    ) else {
+                        continue;
+                    };
+                    let config = std::fs::read(&path)
+                        .ok()
+                        .and_then(|b| serde_json::from_slice(&b).ok())
+                        .and_then(|v| TrialConfig::decode(&crate::scoreboard::json_to_tag(&v)));
+                    match config {
+                        Some(c) => {
+                            let id = rel.to_string_lossy().replace('\\', "/");
+                            out.insert(format!("{ns}:{id}"), c);
+                        }
+                        None => log::warn!("Horizon: bad trial spawner config {}", path.display()),
+                    }
+                }
+            }
+        }
+        out
+    });
+}
+/// A config of the registry by id.
+pub fn registry_config(id: &str) -> Option<TrialConfig> {
+    REGISTRY.get()?.get(id).cloned()
+}
+
+fn float(t: &Tag) -> Option<f32> {
+    Some(match t {
+        Tag::Float(b) => f32::from_bits(*b),
+        Tag::Double(b) => f64::from_bits(*b) as f32,
+        t => spawner::number(Some(t))? as f32,
+    })
+}
+/// `Weighted.CODEC`'s weight: a non-negative int.
+fn weight(t: Option<&Tag>) -> Option<i32> {
+    spawner::number(t)
+        .filter(|w| (0..=i64::from(i32::MAX)).contains(w))
+        .map(|w| w as i32)
+}
+/// An `Identifier` (`minecraft` when the namespace is left out).
+fn identifier(t: Option<&Tag>) -> Option<String> {
+    match t? {
+        Tag::String(s) => spawner::normalize_id(&s.to_string_lossy()),
+        _ => None,
+    }
+}
+
+/// A `Holder<TrialSpawnerConfig>` as saved: a registry id
+/// (`minecraft:trial_chamber/breeze/normal`) or an inline config.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ConfigSlot {
+    /// The value as loaded, written back as is; None for the default.
+    pub saved: Option<Tag>,
+    pub config: TrialConfig,
+}
+
+/// `TrialSpawnerState`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TrialState {
+    #[default]
+    Inactive,
+    WaitingForPlayers,
+    Active,
+    WaitingForRewardEjection,
+    EjectingReward,
+    Cooldown,
+}
+impl TrialState {
+    pub const ALL: [Self; 6] = [
+        Self::Inactive,
+        Self::WaitingForPlayers,
+        Self::Active,
+        Self::WaitingForRewardEjection,
+        Self::EjectingReward,
+        Self::Cooldown,
+    ];
+    /// The `trial_spawner_state` block property.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Inactive => "inactive",
+            Self::WaitingForPlayers => "waiting_for_players",
+            Self::Active => "active",
+            Self::WaitingForRewardEjection => "waiting_for_reward_ejection",
+            Self::EjectingReward => "ejecting_reward",
+            Self::Cooldown => "cooldown",
+        }
+    }
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|s| s.name() == name)
+    }
+    /// The spin speed of the mob shown inside, None when it shows none.
+    pub fn spinning_mob_speed(self) -> Option<f64> {
+        match self {
+            Self::WaitingForPlayers => Some(200.0),
+            Self::Active => Some(1000.0),
+            _ => None,
+        }
+    }
+    pub fn capable_of_spawning(self) -> bool {
+        matches!(self, Self::WaitingForPlayers | Self::Active)
+    }
+}
+
+/// A player the spawner can detect (`PlayerDetector.NO_CREATIVE_PLAYERS`).
+#[derive(Clone, Copy, Debug)]
+pub struct TrialPlayer {
+    pub uuid: Uuid,
+    pub block: [i32; 3],
+    pub eye: [f64; 3],
+    pub creative: bool,
+    pub spectator: bool,
+}
+
+/// What a trial spawner did that the level shows or sends.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TrialEvent {
+    /// `markUpdated`: `sendBlockUpdated` with the new update tag.
+    BlockUpdated,
+    /// `levelEvent(id, pos, data)`.
+    LevelEvent(i32, [i32; 3], i32),
+    /// `playSound(null, spawner, sound, BLOCKS)` at volume and pitch 1.
+    Sound(&'static str),
+    /// `gameEvent(entity, ENTITY_PLACE, block)` for the mob just added.
+    EntityPlace(Uuid, [i32; 3]),
+    /// `setBlockAndUpdate` of the `ominous` property alone, even when it
+    /// does not change (`removeOminous`).
+    OminousSet(bool),
+}
+
+/// What a trial spawner reads from the level besides the spawn rules.
+pub trait TrialSpawnerLevel: SpawnerLevel {
+    fn game_time(&self) -> i64;
+    /// `canSpawnInLevel`'s `spawn_mobs` game rule.
+    fn mob_spawning(&self) -> bool;
+    /// `level.getPlayers()`, in the server's order.
+    fn players(&self) -> Vec<TrialPlayer>;
+    /// The block a VISUAL clip from `from` to `to` (no fluids) first hits.
+    fn visual_hit(&self, from: [f64; 3], to: [f64; 3]) -> Option<[i32; 3]>;
+    /// The block position of a living entity of this dimension, if any.
+    fn entity_block(&self, uuid: Uuid) -> Option<[i32; 3]>;
+}
+
+/// `TrialSpawner` with its `TrialSpawnerStateData`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TrialSpawner {
+    pub normal: ConfigSlot,
+    pub ominous: ConfigSlot,
+    pub target_cooldown_length: i32,
+    pub required_player_range: i32,
+    pub detected_players: Vec<Uuid>,
+    pub current_mobs: Vec<Uuid>,
+    pub cooldown_ends_at: i64,
+    pub next_mob_spawns_at: i64,
+    pub total_mobs_spawned: i32,
+    pub next_spawn_data: Option<SpawnData>,
+    pub ejecting_loot_table: Option<String>,
+    /// `isOminous`, set from the block on every server tick.
+    pub is_ominous: bool,
+    /// The server's display entity exists (`getOrCreateDisplayEntity`): it is
+    /// made once per loaded block entity and kept.
+    pub has_display: bool,
+    pub spin: f64,
+    pub o_spin: f64,
+}
+impl Default for TrialSpawner {
+    fn default() -> Self {
+        Self {
+            normal: ConfigSlot::default(),
+            ominous: ConfigSlot::default(),
+            target_cooldown_length: 36000,
+            required_player_range: 14,
+            detected_players: Vec::new(),
+            current_mobs: Vec::new(),
+            cooldown_ends_at: 0,
+            next_mob_spawns_at: 0,
+            total_mobs_spawned: 0,
+            next_spawn_data: None,
+            ejecting_loot_table: None,
+            is_ominous: false,
+            has_display: false,
+            spin: 0.0,
+            o_spin: 0.0,
+        }
+    }
+}
+
+fn uuids(tag: Option<&Tag>) -> Vec<Uuid> {
+    let Some(Tag::List(list)) = tag else {
+        return Vec::new();
+    };
+    let mut out: Vec<Uuid> = Vec::new();
+    for t in list {
+        if let Tag::IntArray(v) = t
+            && let Ok(u) = <Uuid>::try_from(v.as_slice())
+            && !out.contains(&u)
+        {
+            out.push(u);
+        }
+    }
+    out
+}
+fn encode_uuids(list: &[Uuid]) -> Tag {
+    Tag::List(list.iter().map(|u| Tag::IntArray(u.to_vec())).collect())
+}
+
+impl TrialSpawner {
+    /// `TrialSpawner.load`, with the configs of [`load_registry`].
+    pub fn load(tag: &Tag) -> Self {
+        Self::load_with(tag, &registry_config)
+    }
+    /// `TrialSpawner.load`. `registry` resolves a config id.
+    pub fn load_with(tag: &Tag, registry: &dyn Fn(&str) -> Option<TrialConfig>) -> Self {
+        let long = |k: &str| match tag.get(k) {
+            Some(Tag::Long(v)) => *v,
+            t => spawner::number(t).unwrap_or(0),
+        };
+        let mut s = Self {
+            detected_players: uuids(tag.get("registered_players")),
+            current_mobs: uuids(tag.get("current_mobs")),
+            cooldown_ends_at: long("cooldown_ends_at"),
+            next_mob_spawns_at: long("next_mob_spawns_at"),
+            total_mobs_spawned: spawner::number(tag.get("total_mobs_spawned"))
+                .filter(|v| (0..=i64::from(i32::MAX)).contains(v))
+                .map_or(0, |v| v as i32),
+            next_spawn_data: tag.get("spawn_data").and_then(SpawnData::decode),
+            ejecting_loot_table: identifier(tag.get("ejecting_loot_table")),
+            ..Self::default()
+        };
+        // FullConfig.MAP_CODEC, partial result kept: a field that fails to
+        // decode takes its default.
+        let slot = |k: &str| -> ConfigSlot {
+            let config = match tag.get(k) {
+                Some(Tag::String(id)) => {
+                    spawner::normalize_id(&id.to_string_lossy()).and_then(|id| registry(&id))
+                }
+                Some(t) => TrialConfig::decode(t),
+                None => None,
+            };
+            config.map_or_else(ConfigSlot::default, |config| ConfigSlot {
+                saved: tag.get(k).cloned(),
+                config,
+            })
+        };
+        let int = |k: &str, default: i32, lo: i32, hi: i32| {
+            spawner::number(tag.get(k))
+                .filter(|v| (i64::from(lo)..=i64::from(hi)).contains(v))
+                .map_or(default, |v| v as i32)
+        };
+        s.normal = slot("normal_config");
+        s.ominous = slot("ominous_config");
+        s.target_cooldown_length = int("target_cooldown_length", 36000, 0, i32::MAX);
+        s.required_player_range = int("required_player_range", 14, 1, 128);
+        s
+    }
+    /// `TrialSpawner.store`: the state data's fields that differ from their
+    /// defaults, then the configs.
+    pub fn save(&self) -> Vec<(&'static str, Tag)> {
+        let mut out = Vec::new();
+        if !self.detected_players.is_empty() {
+            out.push(("registered_players", encode_uuids(&self.detected_players)));
+        }
+        if !self.current_mobs.is_empty() {
+            out.push(("current_mobs", encode_uuids(&self.current_mobs)));
+        }
+        if self.cooldown_ends_at != 0 {
+            out.push(("cooldown_ends_at", Tag::Long(self.cooldown_ends_at)));
+        }
+        if self.next_mob_spawns_at != 0 {
+            out.push(("next_mob_spawns_at", Tag::Long(self.next_mob_spawns_at)));
+        }
+        if self.total_mobs_spawned != 0 {
+            out.push(("total_mobs_spawned", Tag::Int(self.total_mobs_spawned)));
+        }
+        if let Some(d) = &self.next_spawn_data {
+            out.push(("spawn_data", d.encode()));
+        }
+        if let Some(t) = &self.ejecting_loot_table {
+            out.push(("ejecting_loot_table", Tag::String(t.as_str().into())));
+        }
+        for (key, slot) in [
+            ("normal_config", &self.normal),
+            ("ominous_config", &self.ominous),
+        ] {
+            if let Some(t) = &slot.saved {
+                out.push((key, t.clone()));
+            }
+        }
+        if self.target_cooldown_length != 36000 {
+            out.push((
+                "target_cooldown_length",
+                Tag::Int(self.target_cooldown_length),
+            ));
+        }
+        if self.required_player_range != 14 {
+            out.push((
+                "required_player_range",
+                Tag::Int(self.required_player_range),
+            ));
+        }
+        out
+    }
+    /// `TrialSpawnerStateData.getUpdateTag`.
+    pub fn update_tag(&self, state: TrialState) -> Tag {
+        let mut out = Compound::new();
+        if state == TrialState::Active {
+            out.insert(
+                "next_mob_spawns_at".into(),
+                Tag::Long(self.next_mob_spawns_at),
+            );
+        }
+        if let Some(d) = &self.next_spawn_data {
+            out.insert("spawn_data".into(), d.encode());
+        }
+        Tag::Compound(out)
+    }
+    /// `activeConfig`.
+    pub fn active_config(&self) -> &TrialConfig {
+        if self.is_ominous {
+            &self.ominous.config
+        } else {
+            &self.normal.config
+        }
+    }
+    /// `resetStatistics`.
+    fn reset_statistics(&mut self) {
+        self.detected_players.clear();
+        self.total_mobs_spawned = 0;
+        self.next_mob_spawns_at = 0;
+        self.cooldown_ends_at = 0;
+    }
+    /// `reset`.
+    fn reset(&mut self) {
+        self.current_mobs.clear();
+        self.next_spawn_data = None;
+        self.reset_statistics();
+    }
+    /// `getOrCreateNextSpawnData`: a potential at random, else empty data.
+    fn next_or_create(
+        &mut self,
+        random: &mut impl RandomSource,
+        events: &mut Vec<TrialEvent>,
+    ) -> &SpawnData {
+        if self.next_spawn_data.is_none() {
+            let potentials = &self.active_config().spawn_potentials;
+            let picked = spawner::weighted_index(potentials.iter().map(|(_, w)| *w), random)
+                .map(|i| potentials[i].0.clone());
+            self.next_spawn_data = Some(picked.unwrap_or_default());
+            events.push(TrialEvent::BlockUpdated);
+        }
+        self.next_spawn_data.get_or_insert_default()
+    }
+    /// `hasMobToSpawn`.
+    fn has_mob_to_spawn(
+        &mut self,
+        random: &mut impl RandomSource,
+        events: &mut Vec<TrialEvent>,
+    ) -> bool {
+        self.next_or_create(random, events).id().is_some()
+            // WeightedList.isEmpty: a total weight of 0.
+            || self.active_config().spawn_potentials.iter().any(|(_, w)| *w > 0)
+    }
+    /// `canSpawnInLevel`.
+    fn can_spawn_in_level<L: TrialSpawnerLevel>(l: &L) -> bool {
+        l.spawner_blocks_work() && !l.peaceful() && l.mob_spawning()
+    }
+    /// `PlayerDetector.NO_CREATIVE_PLAYERS.detect`.
+    fn detect<L: TrialSpawnerLevel>(&self, l: &L, pos: [i32; 3], line_of_sight: bool) -> Vec<Uuid> {
+        let range = f64::from(self.required_player_range);
+        l.players()
+            .into_iter()
+            .filter(|p| {
+                let d = [0, 1, 2].map(|i| f64::from(p.block[i] - pos[i]));
+                d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < range * range
+                    && !p.creative
+                    && !p.spectator
+            })
+            .filter(|p| !line_of_sight || in_line_of_sight(l, center(pos), p.eye))
+            .map(|p| p.uuid)
+            .collect()
+    }
+    /// `tryDetectPlayers`, every 20 ticks.
+    fn try_detect_players<L: TrialSpawnerLevel>(
+        &mut self,
+        l: &L,
+        pos: [i32; 3],
+        state: TrialState,
+        events: &mut Vec<TrialEvent>,
+    ) {
+        let packed = BlockPos::new(pos[0], pos[1], pos[2]).pack();
+        if packed.wrapping_add(l.game_time()) % 20 != 0 {
+            return;
+        }
+        if state == TrialState::Cooldown {
+            return;
+        }
+        let in_sight = self.detect(l, pos, true);
+        let found = if self.detected_players.is_empty() {
+            in_sight
+        } else {
+            self.detect(l, pos, false)
+        };
+        let mut added = false;
+        for uuid in found {
+            if !self.detected_players.contains(&uuid) {
+                self.detected_players.push(uuid);
+                added = true;
+            }
+        }
+        if added {
+            self.next_mob_spawns_at = (l.game_time() + 40).max(self.next_mob_spawns_at);
+            let id = if self.is_ominous { 3019 } else { 3013 };
+            events.push(TrialEvent::LevelEvent(
+                id,
+                pos,
+                self.detected_players.len() as i32,
+            ));
+        }
+    }
+    /// `TrialSpawner.tickServer`: the next state of the block.
+    #[allow(clippy::too_many_arguments)]
+    pub fn server_tick<L: TrialSpawnerLevel, R: RandomSource>(
+        &mut self,
+        l: &L,
+        random: &mut R,
+        pos: [i32; 3],
+        state: TrialState,
+        ominous: bool,
+        spawn: &mut dyn FnMut(&L, &SpawnerSpawn) -> Option<Uuid>,
+        eject: &mut dyn FnMut(&str, &mut R) -> bool,
+        events: &mut Vec<TrialEvent>,
+    ) -> TrialState {
+        self.is_ominous = ominous;
+        let before = self.current_mobs.len();
+        let max = MAX_MOB_TRACKING_DISTANCE * MAX_MOB_TRACKING_DISTANCE;
+        self.current_mobs.retain(|id| {
+            l.entity_block(*id).is_some_and(|b| {
+                let d = [0, 1, 2].map(|i| i64::from(b[i] - pos[i]));
+                d[0] * d[0] + d[1] * d[1] + d[2] * d[2] <= max
+            })
+        });
+        if self.current_mobs.len() != before {
+            self.next_mob_spawns_at =
+                l.game_time() + i64::from(self.active_config().ticks_between_spawn);
+        }
+        self.tick_and_get_next(l, random, pos, state, spawn, eject, events)
+    }
+    /// `TrialSpawnerState.tickAndGetNext`.
+    #[allow(clippy::too_many_arguments)]
+    fn tick_and_get_next<L: TrialSpawnerLevel, R: RandomSource>(
+        &mut self,
+        l: &L,
+        random: &mut R,
+        pos: [i32; 3],
+        state: TrialState,
+        spawn: &mut dyn FnMut(&L, &SpawnerSpawn) -> Option<Uuid>,
+        eject: &mut dyn FnMut(&str, &mut R) -> bool,
+        events: &mut Vec<TrialEvent>,
+    ) -> TrialState {
+        use TrialState as S;
+        let now = l.game_time();
+        match state {
+            S::Inactive => {
+                // getOrCreateDisplayEntity: made once, from the next data's id.
+                if !self.has_display {
+                    let id = self.next_or_create(random, events).id();
+                    self.has_display = id.is_some_and(|id| l.entity_exists(&id));
+                }
+                if self.has_display {
+                    S::WaitingForPlayers
+                } else {
+                    state
+                }
+            }
+            S::WaitingForPlayers => {
+                if !Self::can_spawn_in_level(l) {
+                    self.reset_statistics();
+                    state
+                } else if !self.has_mob_to_spawn(random, events) {
+                    S::Inactive
+                } else {
+                    self.try_detect_players(l, pos, state, events);
+                    if self.detected_players.is_empty() {
+                        state
+                    } else {
+                        S::Active
+                    }
+                }
+            }
+            S::Active => {
+                if !Self::can_spawn_in_level(l) {
+                    self.reset_statistics();
+                    return S::WaitingForPlayers;
+                }
+                if !self.has_mob_to_spawn(random, events) {
+                    return S::Inactive;
+                }
+                let config = self.active_config().clone();
+                let additional = (self.detected_players.len() as i32 - 1).max(0);
+                self.try_detect_players(l, pos, state, events);
+                if self.total_mobs_spawned >= config.target_total_mobs(additional) {
+                    if self.current_mobs.is_empty() {
+                        self.cooldown_ends_at = now + i64::from(self.target_cooldown_length);
+                        self.total_mobs_spawned = 0;
+                        self.next_mob_spawns_at = 0;
+                        return S::WaitingForRewardEjection;
+                    }
+                } else if now >= self.next_mob_spawns_at
+                    && (self.current_mobs.len() as i32)
+                        < config.target_simultaneous_mobs(additional)
+                    && let Some(uuid) = self.spawn_mob(l, random, pos, spawn, events)
+                {
+                    self.current_mobs.push(uuid);
+                    self.total_mobs_spawned += 1;
+                    self.next_mob_spawns_at = now + i64::from(config.ticks_between_spawn);
+                    let potentials = &config.spawn_potentials;
+                    if let Some(i) =
+                        spawner::weighted_index(potentials.iter().map(|(_, w)| *w), random)
+                    {
+                        self.next_spawn_data = Some(potentials[i].0.clone());
+                        events.push(TrialEvent::BlockUpdated);
+                    }
+                }
+                state
+            }
+            S::WaitingForRewardEjection => {
+                let started = self.cooldown_ends_at - i64::from(self.target_cooldown_length);
+                if now as f32 >= started as f32 + DELAY_BEFORE_EJECT {
+                    events.push(TrialEvent::Sound("block.trial_spawner.open_shutter"));
+                    S::EjectingReward
+                } else {
+                    state
+                }
+            }
+            S::EjectingReward => {
+                let started = self.cooldown_ends_at - i64::from(self.target_cooldown_length);
+                if (now - started) as f32 % TIME_BETWEEN_EJECTIONS != 0.0 {
+                    return state;
+                }
+                if self.detected_players.is_empty() {
+                    events.push(TrialEvent::Sound("block.trial_spawner.close_shutter"));
+                    self.ejecting_loot_table = None;
+                    return S::Cooldown;
+                }
+                if self.ejecting_loot_table.is_none() {
+                    let tables = &self.active_config().loot_tables_to_eject;
+                    self.ejecting_loot_table =
+                        spawner::weighted_index(tables.iter().map(|(_, w)| *w), random)
+                            .map(|i| tables[i].0.clone());
+                }
+                if let Some(table) = self.ejecting_loot_table.clone()
+                    && eject(&table, random)
+                {
+                    events.push(TrialEvent::LevelEvent(3014, pos, 0));
+                }
+                self.detected_players.remove(0);
+                state
+            }
+            S::Cooldown => {
+                self.try_detect_players(l, pos, state, events);
+                if !self.detected_players.is_empty() {
+                    self.total_mobs_spawned = 0;
+                    self.next_mob_spawns_at = 0;
+                    S::Active
+                } else if now >= self.cooldown_ends_at {
+                    self.is_ominous = false;
+                    events.push(TrialEvent::OminousSet(false));
+                    self.reset();
+                    S::WaitingForPlayers
+                } else {
+                    state
+                }
+            }
+        }
+    }
+    /// `TrialSpawner.spawnMob`: the UUID of the mob added, if one was.
+    fn spawn_mob<L: TrialSpawnerLevel, R: RandomSource>(
+        &mut self,
+        l: &L,
+        random: &mut R,
+        pos: [i32; 3],
+        spawn: &mut dyn FnMut(&L, &SpawnerSpawn) -> Option<Uuid>,
+        events: &mut Vec<TrialEvent>,
+    ) -> Option<Uuid> {
+        let data = self.next_or_create(random, events).clone();
+        // EntityType.by: an unknown type spawns nothing.
+        let id = data.id().filter(|id| l.entity_exists(id))?;
+        let at = match spawner::read_pos(data.entity.get(&JavaString::from("Pos"))) {
+            Some(p) => p,
+            None => {
+                let range = f64::from(self.active_config().spawn_range);
+                let x =
+                    f64::from(pos[0]) + (random.next_double() - random.next_double()) * range + 0.5;
+                let y = f64::from(pos[1] + random.next_int_bound(3).unwrap_or(0) - 1);
+                let z =
+                    f64::from(pos[2]) + (random.next_double() - random.next_double()) * range + 0.5;
+                [x, y, z]
+            }
+        };
+        // Entity types Horizon cannot create spawn nothing.
+        let (species, width, height, _) = l.mob_type(&id)?;
+        let spawn_box = spawn_selection::spawn_aabb(species, at[0], at[1], at[2], width, height);
+        if !l.no_collision(spawn_box) || !in_line_of_sight(l, center(pos), at) {
+            return None;
+        }
+        let block = at.map(|v| v.floor() as i32);
+        if !spawn_rules::check_spawn_rules(
+            species,
+            l,
+            Reason::TrialSpawner,
+            random,
+            block[0],
+            block[1],
+            block[2],
+        ) {
+            return None;
+        }
+        if let Some(rules) = data.custom_spawn_rules
+            && !SpawnData::valid_position(rules, l, block[0], block[1], block[2])
+        {
+            return None;
+        }
+        let yaw = random.next_float() * 360.0;
+        let placed = spawner::entity_position(species, at);
+        let own = placed.map(|v| v.floor() as i32);
+        let scale = spawner::cube_scale(&id, &data.entity);
+        let bounds = spawn_selection::spawn_box(
+            placed[0],
+            placed[1],
+            placed[2],
+            width * scale,
+            height * scale,
+        );
+        if !spawn_selection::spawn_obstruction(species, l, bounds, &[], own[0], own[1], own[2]) {
+            return None;
+        }
+        let request = SpawnerSpawn {
+            entity: &data.entity,
+            id: &id,
+            position: placed,
+            yaw,
+            finalize: data.unconfigured(),
+            equipment: data.equipment.as_ref(),
+            trial: true,
+        };
+        let uuid = spawn(l, &request)?;
+        let flame = i32::from(self.is_ominous);
+        events.push(TrialEvent::LevelEvent(3011, pos, flame));
+        events.push(TrialEvent::LevelEvent(3012, block, flame));
+        events.push(TrialEvent::EntityPlace(uuid, block));
+        Some(uuid)
+    }
+}
+
+/// `Vec3.atCenterOf`.
+fn center(pos: [i32; 3]) -> [f64; 3] {
+    pos.map(|v| f64::from(v) + 0.5)
+}
+/// `TrialSpawner.inLineOfSight`: a VISUAL clip from `to` back to the spawner
+/// hits nothing, or the spawner's own block.
+fn in_line_of_sight<L: TrialSpawnerLevel>(l: &L, origin: [f64; 3], to: [f64; 3]) -> bool {
+    match l.visual_hit(to, origin) {
+        None => true,
+        Some(b) => b == origin.map(|v| v.floor() as i32),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tag(snbt: &str) -> Tag {
+        horizon_world::nbt::parse_snbt(snbt).expect("snbt").0
+    }
+
+    #[test]
+    fn defaults_load_and_save_to_nothing() {
+        let s = TrialSpawner::load_with(&tag("{}"), &|_| None);
+        assert_eq!(s, TrialSpawner::default());
+        assert!(s.save().is_empty());
+    }
+
+    #[test]
+    fn registry_configs_resolve_and_are_saved_by_id() {
+        let breeze = TrialConfig {
+            total_mobs: 2.0,
+            ..TrialConfig::default()
+        };
+        let registry =
+            |id: &str| (id == "minecraft:trial_chamber/breeze/normal").then(|| breeze.clone());
+        let s = TrialSpawner::load_with(
+            &tag(
+                r#"{normal_config:"minecraft:trial_chamber/breeze/normal",required_player_range:10}"#,
+            ),
+            &registry,
+        );
+        assert_eq!(s.normal.config.total_mobs, 2.0);
+        assert_eq!(s.required_player_range, 10);
+        let saved: Vec<_> = s.save().into_iter().map(|(k, _)| k).collect();
+        assert_eq!(saved, ["normal_config", "required_player_range"]);
+    }
+
+    #[test]
+    fn an_invalid_field_takes_its_default_alone() {
+        let s = TrialSpawner::load_with(
+            &tag(
+                r#"{normal_config:"minecraft:nope",required_player_range:200,target_cooldown_length:5}"#,
+            ),
+            &|_| None,
+        );
+        assert_eq!(s.normal, ConfigSlot::default());
+        assert_eq!(s.required_player_range, 14);
+        assert_eq!(s.target_cooldown_length, 5);
+        let c = TrialConfig::decode(&tag(
+            r#"{spawn_range:0,total_mobs:3.0f,spawn_potentials:[{data:{entity:{id:"minecraft:zombie"}},weight:-1},{data:{entity:{id:"minecraft:husk"}},weight:2}]}"#,
+        ))
+        .expect("config");
+        assert_eq!(c.spawn_range, 4);
+        assert_eq!(c.total_mobs, 3.0);
+        assert_eq!(c.spawn_potentials.len(), 1);
+    }
+
+    #[test]
+    fn targets_floor_the_per_player_additions() {
+        let c = TrialConfig {
+            simultaneous_mobs: 1.0,
+            simultaneous_mobs_added_per_player: 0.5,
+            ..TrialConfig::default()
+        };
+        assert_eq!(c.target_simultaneous_mobs(0), 1);
+        assert_eq!(c.target_simultaneous_mobs(1), 1);
+        assert_eq!(c.target_simultaneous_mobs(2), 2);
+        assert_eq!(c.target_total_mobs(3), 12);
+    }
+}
