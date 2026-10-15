@@ -596,7 +596,7 @@ impl Renderer {
                     format: wgpu::TextureFormat::Depth32Float,
                     depth_write_enabled: Some(depth_write),
                     depth_compare: Some(if depth_test {
-                        wgpu::CompareFunction::LessEqual
+                        wgpu::CompareFunction::GreaterEqual
                     } else {
                         wgpu::CompareFunction::Always
                     }),
@@ -963,7 +963,7 @@ impl Renderer {
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth32Float,
                     depth_write_enabled: Some(depth_write),
-                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                    depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
                     stencil: Default::default(),
                     bias,
                 }),
@@ -987,8 +987,8 @@ impl Renderer {
             Some(wgpu::Face::Back),
             false,
             wgpu::DepthBiasState {
-                constant: -10,
-                slope_scale: -1.0,
+                constant: 10,
+                slope_scale: 1.0,
                 clamp: 0.0,
             },
             CRUMBLING_BLEND,
@@ -1019,7 +1019,7 @@ impl Renderer {
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
                 depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
@@ -1227,11 +1227,11 @@ impl Renderer {
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
                 depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
                 stencil: Default::default(),
                 bias: wgpu::DepthBiasState {
-                    constant: -3,
-                    slope_scale: -3.0,
+                    constant: 3,
+                    slope_scale: 3.0,
                     clamp: 0.0,
                 },
             }),
@@ -1725,9 +1725,7 @@ impl Renderer {
     }
     fn projection(&self, fov_degrees: f32, yaw: f32, pitch: f32, bob: Mat4, far: f32) -> Mat4 {
         let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
-        Mat4::perspective_rh(fov_degrees.to_radians(), aspect, 0.05, far)
-            * bob
-            * crate::camera::view_matrix(yaw, pitch)
+        world_projection(fov_degrees, aspect, far) * bob * crate::camera::view_matrix(yaw, pitch)
     }
     fn update_lightmap(
         &self,
@@ -2209,7 +2207,7 @@ impl Renderer {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: world_depth,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
+                        load: wgpu::LoadOp::Clear(0.0),
                         store: wgpu::StoreOp::Discard,
                     }),
                     stencil_ops: None,
@@ -2339,7 +2337,7 @@ impl Renderer {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
+                        load: wgpu::LoadOp::Clear(0.0),
                         store: wgpu::StoreOp::Discard,
                     }),
                     stencil_ops: None,
@@ -2565,6 +2563,13 @@ impl Frustum {
         })
     }
 }
+/// Vanilla's `Projection`: reversed depth (near maps to 1, far to 0, tests
+/// are GREATER_THAN_OR_EQUAL), which keeps far faces a hair apart, like
+/// fire_side's 0.01 pixel in front of its block, from z-fighting.
+fn world_projection(fov_degrees: f32, aspect: f32, far: f32) -> Mat4 {
+    Mat4::perspective_rh(fov_degrees.to_radians(), aspect, far, 0.05)
+}
+
 fn frustum(m: Mat4) -> [Vec4; 6] {
     let r = |i| m.row(i);
     let planes = [
@@ -2668,6 +2673,19 @@ mod tests {
         }
         assert_eq!(super::outline_width(2560), 2560.0 / 1920.0 * 2.5);
         assert_eq!(super::outline_width(3840), 5.0);
+    }
+    #[test]
+    fn far_faces_a_hair_apart_keep_their_depth_order() {
+        let m = super::world_projection(70.0, 16.0 / 9.0, 768.0);
+        let depth = |distance: f32| {
+            let clip = m * glam::Vec4::new(0.0, 0.0, -distance, 1.0);
+            clip.z / clip.w
+        };
+        // fire_side at 150 blocks, 0.01 pixel in front of the block it burns on.
+        let (block, fire) = (depth(150.0), depth(150.0 - 0.01 / 16.0));
+        assert!(fire > block, "{fire} {block}");
+        assert!((0.0..=1.0).contains(&block));
+        assert!((depth(0.05) - 1.0).abs() < 1e-6);
     }
     #[test]
     fn selection_outline_has_vanilla_perspective_layering() {

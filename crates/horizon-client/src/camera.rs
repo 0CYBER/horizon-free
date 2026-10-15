@@ -598,8 +598,8 @@ pub fn depth_far(render_distance_chunks: i32, cloud_range_chunks: i32) -> f32 {
 
 /// `Projection.getMatrix` for a perspective set up by `setupPerspective`:
 /// JOML's `Matrix4f.setPerspective(fov * DEG_TO_RAD, width / height, near,
-/// far, zZeroToOne)`, column-major. Vanilla passes its planes reversed
-/// (`near` is `zFar`); the hand pass here keeps them in order.
+/// far, zZeroToOne)`, column-major. Vanilla's `Projection` passes its planes
+/// reversed (`near` is `zFar`) for reversed depth.
 pub fn perspective(
     fov_degrees: f32,
     width: f32,
@@ -632,7 +632,7 @@ pub fn perspective(
 /// death and fluids), never the FOV option or the sprint, speed and bow
 /// modifier.
 pub fn hand_projection(hud_fov: f32, width: f32, height: f32, far: f32) -> [f32; 16] {
-    perspective(hud_fov, width, height, 0.05, far, true)
+    perspective(hud_fov, width, height, far, 0.05, true)
 }
 /// `Camera.modifyFovBasedOnDeathOrFluid`. `dead` is the camera entity's
 /// `deathTime` while it is a living entity that is dead or dying.
