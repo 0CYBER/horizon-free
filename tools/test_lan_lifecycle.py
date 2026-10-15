@@ -16,6 +16,11 @@ import subprocess
 import tempfile
 import time
 
+try:
+    from . import lab
+except ImportError:
+    import lab
+
 ROOT = Path(__file__).resolve().parents[1]
 GROUP = '224.0.2.60'
 DISCOVERY_PORT = 4445
@@ -145,7 +150,7 @@ def guest_names(endpoint, port, guests):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--client', type=Path, required=True)
-    parser.add_argument('--resources', type=Path, default=ROOT / '.local/horizon-client/26.3')
+    parser.add_argument('--resources', type=Path, default=lab.RESOURCES)
     args = parser.parse_args()
     client, resources = args.client.resolve(), args.resources.resolve()
     with tempfile.TemporaryDirectory(prefix='horizon-lan-') as directory:

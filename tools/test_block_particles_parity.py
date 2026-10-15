@@ -10,7 +10,7 @@ except ImportError:
 
 def main():
     lock, jars, _ = base.verify_artifacts()
-    resources = lab.LOCAL / "horizon-client/26.3"
+    resources = lab.RESOURCES
     build = lab.LOCAL / "block-particles-parity"
     build.mkdir(exist_ok=True)
     paths = [lab.ROOT / p for p in ["tools/test_block_particles_parity.py", "tools/test_breaking_model_parity.py", "tools/oracle_harness.py", "tools/lab.py", "crates/horizon-client/src/particles.rs", "crates/horizon-client/src/game.rs", "crates/horizon-client/src/blocks.rs", "crates/horizon-client/src/mesher.rs", "crates/horizon-client/examples/block_particles_fixture.rs", "mods/horizon/src/test/java/dev/horizonlab/parity/VanillaBlockParticlesOracle.java", "crates/horizon-core/src/random.rs", "Cargo.lock", "mods/horizon/src/test/java/dev/horizonlab/parity/VanillaGameplayFactsExporter.java"]]

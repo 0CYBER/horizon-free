@@ -342,7 +342,7 @@ def horizon_client_joins(vanilla_server, binary, world, build, reference):
         server.wait_for(r'Done \(')
         env = dict(os.environ, HORIZON_NO_AUDIO='1', HORIZON_NET_REPORT=str(report))
         with (build / 'horizon-client-run.log').open('w') as log:
-            subprocess.run([str(c) for c in [binary, '--resources', lab.LOCAL / 'horizon-client/26.3', '--render-distance', 2,
+            subprocess.run([str(c) for c in [binary, '--resources', lab.RESOURCES, '--render-distance', 2,
                                              '--server', f'127.0.0.1:{port}', '--name', PLAYER]],
                            cwd=client_dir, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=300, check=True)
         server.wait_for(r'left the game', timeout=30)
@@ -394,7 +394,7 @@ def main():
                                                   cwd=lab.ROOT, text=True))
     binary = Path(metadata['target_directory']) / 'release' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
     vanilla_server = ['java', '-Xmx2g', '-Duser.timezone=UTC', '-cp', dependencies, 'net.minecraft.server.Main', 'nogui']
-    horizon_server = [binary, '--resources', lab.LOCAL / 'horizon-client/26.3', '--dedicated', '--nogui']
+    horizon_server = [binary, '--resources', lab.RESOURCES, '--dedicated', '--nogui']
 
     # The world, generated once by vanilla.
     generate = build / 'generate'

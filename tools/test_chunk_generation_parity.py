@@ -40,7 +40,7 @@ SEEDS = [12345, -7046029254386353131, 987654321987, 4242, -1, 0x5DEECE66D, 20260
 REGRESSIONS = [
     (-1860902098141295193, 'the_nether', '-1,6,3,9', 'bastion_remnant across 20 chunks (#249)'),
 ]
-RESOURCES = lab.LOCAL / 'horizon-client/26.3'
+RESOURCES = lab.RESOURCES
 ORACLE = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaChunkGenerationOracle.java'
 
 

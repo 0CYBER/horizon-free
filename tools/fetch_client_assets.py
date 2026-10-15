@@ -21,8 +21,8 @@ def wanted(name):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--target', type=Path, default=lab.LOCAL / 'horizon-client/26.3',
-                        help='prepared resource directory (default: .local/horizon-client/26.3)')
+    parser.add_argument('--target', type=Path, default=lab.RESOURCES,
+                        help='prepared resource directory (default: .local/horizon-client/<pinned version>)')
     parser.add_argument('--minecraft-dir', type=Path,
                         help="official launcher game directory (default: the launcher's own)")
     args = parser.parse_args()

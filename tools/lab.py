@@ -24,6 +24,28 @@ LOCAL = ROOT / ".local"
 LOCK = ROOT / "research-lock.json"
 
 
+def pinned_version():
+    """The Minecraft version research-lock.json pins: every tool reads it from there, never by hand."""
+    version = json.loads(LOCK.read_text(encoding="utf-8"))["minecraft"]["version"]
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", version) or version in {".", ".."}:
+        raise ValueError("Unsafe version identifier in lock file")
+    return version
+
+
+VERSION = pinned_version()
+# The pinned version's imported jars, libraries and sources (tools/lab.py prepare), and the resources
+# horizon-prepare made from them.
+GAME = LOCAL / "minecraft" / VERSION
+RESOURCES = LOCAL / "horizon-client" / VERSION
+
+
+def version_info(client_jar=None):
+    """What the pinned client jar states about itself in its version.json (protocol_version, world_version,
+    pack_version, java_version...)."""
+    with zipfile.ZipFile(client_jar or GAME / "jars" / "client.jar") as archive:
+        return json.loads(archive.read("version.json"))
+
+
 def cargo_target():
     """Cargo's target directory, honouring CARGO_TARGET_DIR (tools/parity.py sets it)."""
     return ROOT / os.environ.get("CARGO_TARGET_DIR", "target")
@@ -260,10 +282,7 @@ def launcher_object(assets, checksum):
 
 def config():
     lock = json.loads(LOCK.read_text(encoding="utf-8"))
-    version = lock["minecraft"]["version"]
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+", version) or version in {".", ".."}:
-        raise ValueError("Unsafe version identifier in lock file")
-    return lock, LOCAL / "minecraft" / version
+    return lock, LOCAL / "minecraft" / pinned_version()
 
 
 def bundle_entries(archive, name):

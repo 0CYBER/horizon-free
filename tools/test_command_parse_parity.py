@@ -67,7 +67,7 @@ def main():
     run(['cargo', 'build', '--release', '-p', 'horizon-client', '--example', 'command_parse_fixture'], 'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'], cwd=lab.ROOT, text=True))
     binary = Path(metadata['target_directory']) / 'release/examples' / ('command_parse_fixture.exe' if os.name == 'nt' else 'command_parse_fixture')
-    resources = lab.LOCAL / 'horizon-client/26.3'
+    resources = lab.RESOURCES
     total_failures = 0
     summary = []
     for permission in args.permission:

@@ -83,7 +83,7 @@ def main():
     shutil.rmtree(rust_dir, ignore_errors=True)
     rust_dir.mkdir()
     env = dict(os.environ, HORIZON_NO_AUDIO='1', HORIZON_COMMAND_SCRIPT=str(script_path), HORIZON_COMMAND_OUTPUT=str(build / 'rust.jsonl'))
-    run([binary, '--resources', lab.LOCAL / 'horizon-client/26.3', '--world', 'harness', '--seed', SEED, '--radius', 4], 'rust', cwd=rust_dir, env=env)
+    run([binary, '--resources', lab.RESOURCES, '--world', 'harness', '--seed', SEED, '--radius', 4], 'rust', cwd=rust_dir, env=env)
 
     vanilla = [json.loads(l) for l in (build / 'vanilla.jsonl').open(encoding='utf-8')]
     rust = [json.loads(l) for l in (build / 'rust.jsonl').open(encoding='utf-8')]

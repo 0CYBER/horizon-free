@@ -41,10 +41,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import anvil_dump  # noqa: E402
 import save_roundtrip_scene as scene  # noqa: E402
 
+try:
+    from . import lab
+except ImportError:
+    import lab
+
 ROOT = Path(__file__).resolve().parent.parent
 LOCAL = ROOT / '.local'
-RESOURCES = LOCAL / 'horizon-client' / '26.3'
-SERVER = LOCAL / 'minecraft' / '26.3' / 'jars' / 'server.jar'
+RESOURCES = lab.RESOURCES
+SERVER = lab.GAME / 'jars' / 'server.jar'
 RUN = LOCAL / 'save-roundtrip' / 'run'
 
 # Game rules Horizon's player changes before saving: rule -> (vanilla's value, Horizon's).

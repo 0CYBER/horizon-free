@@ -28,7 +28,7 @@ def canonical(quads):
 
 def main():
     lock,jars,_=base.verify_artifacts();libraries=baking.client_libraries()
-    resources=lab.LOCAL/"horizon-client/26.3";build=lab.LOCAL/"breaking-model-parity";build.mkdir(exist_ok=True)
+    resources=lab.RESOURCES;build=lab.LOCAL/"breaking-model-parity";build.mkdir(exist_ok=True)
     paths=[lab.ROOT/"tools/test_breaking_model_parity.py",lab.ROOT/"crates/horizon-client/src/breaking.rs",lab.ROOT/"crates/horizon-client/src/game.rs",lab.ROOT/"crates/horizon-client/src/gfx.rs",lab.ROOT/"crates/horizon-client/src/entity.wgsl",lab.ROOT/"crates/horizon-client/src/models/catalog.rs",lab.ROOT/"crates/horizon-client/src/mesher.rs",lab.ROOT/"crates/horizon-client/src/camera.rs",lab.ROOT/"crates/horizon-client/examples/breaking_fixture.rs",lab.ROOT/"mods/horizon/src/test/java/dev/horizonlab/parity/VanillaBreakingModelOracle.java",lab.ROOT/"mods/horizon/src/test/java/dev/horizonlab/parity/VanillaSectionMeshOracle.java",lab.ROOT/"Cargo.lock"]
     tested=base.source_hashes(paths)
     rows=[dict(case=i,**row) for i,row in enumerate(cases(resources))]

@@ -36,7 +36,7 @@ try:
 except ImportError:
     import lab, test_rust_parity as base, test_model_baking_parity as baking
 
-CLIENT = lab.LOCAL / 'minecraft' / '26.3' / 'sources' / 'client' / 'net' / 'minecraft' / 'client'
+CLIENT = lab.GAME / 'sources' / 'client' / 'net' / 'minecraft' / 'client'
 
 # Models that no renderer builds with a plain `new Model(context.bakeLayer(CONSTANT))`.
 EXTRAS = [
@@ -341,7 +341,7 @@ def main():
     lock, jars, _ = base.verify_artifacts()
     libraries = baking.client_libraries()
     build = lab.LOCAL / 'rust-entity-model-parity'; build.mkdir(parents=True, exist_ok=True)
-    resources = lab.LOCAL / 'horizon-client' / '26.3'
+    resources = lab.RESOURCES
     models = json.loads((resources / 'entity-models.json').read_text())
     chosen = {k: v for k, v in layers(models).items() if args.filter in k}
     extra_cases = json.loads((Path(__file__).with_suffix('.cases.json')).read_text()) \

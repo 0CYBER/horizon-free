@@ -112,7 +112,7 @@ def main():
     args = parser.parse_args()
     lock, jars, _ = base.verify_artifacts()
     libraries = baking.client_libraries()
-    resources = lab.LOCAL / 'horizon-client' / '26.3'
+    resources = lab.RESOURCES
     build = lab.LOCAL / 'subtitle-parity'
     build.mkdir(parents=True, exist_ok=True)
     classes = build / 'classes'

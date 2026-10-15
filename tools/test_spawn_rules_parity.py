@@ -134,7 +134,7 @@ def main():
     if args.prepare:
         lab.prepare()
     lock, jars, libraries = base.verify_artifacts()
-    resources = lab.LOCAL / 'horizon-client/26.3'
+    resources = lab.RESOURCES
     entity_types = json.loads((resources / 'entity-types.json').read_text())
     types = sorted(t for t, v in entity_types.items() if 'attributes' in v and t.split(':')[1] not in SKIPPED)
     oracle = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaSpawnRulesOracle.java'

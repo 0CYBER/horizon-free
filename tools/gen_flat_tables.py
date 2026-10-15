@@ -11,8 +11,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+try:
+    from . import lab
+except ImportError:
+    import lab
+
 ROOT = Path(__file__).resolve().parent.parent
-FIXES = ROOT / '.local' / 'minecraft' / '26.3' / 'sources' / 'server' / 'net' / 'minecraft' / 'util' / 'datafix' / 'fixes'
+FIXES = lab.GAME / 'sources' / 'server' / 'net' / 'minecraft' / 'util' / 'datafix' / 'fixes'
 OUT = ROOT / 'crates' / 'horizon-world' / 'src' / 'datafix' / 'flat_tables.rs'
 
 STR = r'"((?:[^"\\]|\\.)*)"'

@@ -182,7 +182,7 @@ def main():
     if args.prepare:
         lab.prepare()
     lock, jars, libraries = base.verify_artifacts()
-    resources = lab.LOCAL / 'horizon-client/26.3'
+    resources = lab.RESOURCES
     oracle = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaTradingOracle.java'
     sources = [oracle, Path(__file__), lab.ROOT / 'crates/horizon-client/examples/trading_fixture.rs',
                lab.ROOT / 'crates/horizon-client/src/merchant.rs', lab.ROOT / 'crates/horizon-client/src/menu.rs']

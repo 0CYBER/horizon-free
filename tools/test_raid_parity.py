@@ -314,7 +314,7 @@ def main():
     if args.prepare:
         lab.prepare()
     lock, jars, libraries = base.verify_artifacts()
-    resources = lab.LOCAL / 'horizon-client/26.3'
+    resources = lab.RESOURCES
     oracle = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaRaidOracle.java'
     sources = [oracle, Path(__file__), lab.ROOT / 'crates/horizon-client/examples/raid_fixture.rs',
                lab.ROOT / 'crates/horizon-client/src/raid.rs', lab.ROOT / 'crates/horizon-client/src/patrol.rs']

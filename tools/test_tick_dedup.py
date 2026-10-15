@@ -10,6 +10,11 @@ import subprocess
 import sys
 
 try:
+    from . import lab
+except ImportError:
+    import lab
+
+try:
     from . import build_mod, build_pack
 except ImportError:
     import build_mod
@@ -50,7 +55,7 @@ def main():
         raise AssertionError("Membership hook did not remove repeated entry allocation")
     output = root / "dist/tick-dedup-integration.json"
     output.write_text(json.dumps({"schema": 1, "platform": platform.platform(), "architecture": platform.machine(),
-        "minecraft": "26.3", "distant_horizons": "3.3.4", "results": results,
+        "minecraft": lab.VERSION, "distant_horizons": "3.3.4", "results": results,
         "notes": ["Actual publisher tick holder under Fabric, warmed with preallocated nodes and a reused action list.",
                   "Checks duplicate/null membership, enable/disable precedence, published iteration order and clear boundaries.",
                   "Only private membership checks change; action collections and traversal remain upstream.",

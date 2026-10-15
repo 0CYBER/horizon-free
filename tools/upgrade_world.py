@@ -15,8 +15,13 @@ import sys
 import tempfile
 from pathlib import Path
 
+try:
+    from . import lab
+except ImportError:
+    import lab
+
 ROOT = Path(__file__).resolve().parent.parent
-SERVER = ROOT / '.local' / 'minecraft' / '26.3' / 'jars' / 'server.jar'
+SERVER = lab.GAME / 'jars' / 'server.jar'
 
 
 def free_port():

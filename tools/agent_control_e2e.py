@@ -32,6 +32,11 @@ import tempfile
 import time
 from pathlib import Path
 
+try:
+    from . import lab
+except ImportError:
+    import lab
+
 ROOT = Path(__file__).resolve().parents[1]
 LAVAPIPE = Path('/run/opengl-driver/share/vulkan/icd.d/lvp_icd.x86_64.json')
 LOG_KINDS = ['oak_log', 'birch_log', 'spruce_log', 'jungle_log', 'acacia_log', 'dark_oak_log',
@@ -431,7 +436,7 @@ def run(mode, ctl, out, resources, which='survival'):
     work = Path(tempfile.mkdtemp(prefix=f'hzac-{mode}-'))
     (work / '.local').mkdir()
     (work / '.local/horizon-client').mkdir()
-    os.symlink(resources, work / '.local/horizon-client/26.3')
+    os.symlink(resources, work / '.local/horizon-client' / lab.VERSION)
     socket = work / 'c.sock'
     env = game_env(os.environ.get('VSCREEN', 'agent-control'))
     driver = (Cli if mode == 'cli' else Mcp)(ctl, socket, work, env)
@@ -472,7 +477,7 @@ def main():
         meta = json.loads(subprocess.run(['cargo', 'metadata', '--format-version', '1', '--no-deps'], cwd=ROOT,
                                          capture_output=True, text=True, check=True).stdout)
         bins = Path(meta['target_directory']) / 'fast'
-    resources = (ROOT / '.local/horizon-client/26.3').resolve()
+    resources = (lab.RESOURCES).resolve()
     if not (resources / 'horizon-resources.json').exists():
         sys.exit(f'no prepared resources in {resources}')
     out = Path(args.out)

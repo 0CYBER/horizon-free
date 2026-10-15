@@ -11,6 +11,11 @@ import subprocess
 import sys
 
 try:
+    from . import lab
+except ImportError:
+    import lab
+
+try:
     from . import build_mod, build_pack
 except ImportError:
     import build_mod
@@ -54,7 +59,7 @@ def main():
         print(json.dumps(report), flush=True)
     output = root / "dist/terrain-read-integration.json"
     output.write_text(json.dumps({"schema": 1, "platform": platform.platform(), "architecture": platform.machine(),
-        "minecraft": "26.3", "distant_horizons": "3.3.4", "original_mod_sha256": original_sha256, "results": results,
+        "minecraft": lab.VERSION, "distant_horizons": "3.3.4", "original_mod_sha256": original_sha256, "results": results,
         "notes": ["Actual game IOWorker under Fabric, with controlled cached blending-read futures.",
                   "DH worker interruption releases only its waiter; the shared future remains consumable.",
                   "Ordinary callers retain join behavior; completed values, cancellation and exception identity are checked.",

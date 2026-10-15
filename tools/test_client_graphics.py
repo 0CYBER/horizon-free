@@ -11,6 +11,11 @@ import shutil
 import sys
 
 try:
+    from . import lab
+except ImportError:
+    import lab
+
+try:
     from . import build_mod, build_pack
     from .test_culling_rays import FixtureTimeout, run_fixture
     from .test_dispatch import failure_summary
@@ -179,7 +184,7 @@ def main():
         print(json.dumps(report), flush=True)
     output = root / 'dist/client-graphics-smoke.json'
     output.write_text(json.dumps({'schema': 1, 'platform': platform.platform(),
-        'architecture': platform.machine(), 'minecraft': '26.3',
+        'architecture': platform.machine(), 'minecraft': lab.VERSION,
         'original_mod_sha256': original_hash, 'results': results,
         'limits': ['Short scene startup and nonuniform framebuffer readback only.',
                   'World mode uses the ordinary limited demo; world files remain private.',

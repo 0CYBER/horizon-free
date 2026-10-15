@@ -26,7 +26,7 @@ def size(png):
 
 
 def make_input(build):
-    root = oh.lab.LOCAL / 'horizon-client' / '26.3'
+    root = oh.lab.RESOURCES
     textures = root / 'assets/minecraft/textures'
     names = []
     for folder, every in (('block', 1), ('item', 7)):

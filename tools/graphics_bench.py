@@ -25,6 +25,11 @@ import sys
 import time
 from pathlib import Path
 
+try:
+    from . import lab
+except ImportError:
+    import lab
+
 ROOT = Path(__file__).resolve().parent.parent
 SEED = "1234"
 WORLD = "GraphicsBench"
@@ -153,7 +158,7 @@ def main():
     p.add_argument("--seconds", type=float, default=12.0, help="flight duration per scene")
     p.add_argument("--settle", type=float, default=2.0, help="seconds to wait before each flight")
     p.add_argument("--offscreen", action="store_true", help="render offscreen on the discrete GPU")
-    p.add_argument("--resources", default=str(ROOT / ".local/horizon-client/26.3"))
+    p.add_argument("--resources", default=str(lab.RESOURCES))
     p.add_argument("--build", default=str(ROOT / "target/release"))
     p.add_argument("--out", help="JSON file (default benchmarks/graphics/<label>.json)")
     p.add_argument("--compare", nargs=2, metavar=("BEFORE", "AFTER"),
