@@ -260,10 +260,18 @@ The replay of 26.2 → 26.3 below measures how much that is for one release.
 
 ## Implementation status
 
+```sh
+python3 tools/version_port.py detect --snapshots     # exit 10: new release, 11: new snapshot
+python3 tools/version_port.py prepare 26.3           # the pinned version: indexes .local, downloads nothing
+python3 tools/version_port.py prepare 26.4           # downloads, verifies, runs the data generator (about 10 s)
+python3 tools/version_port.py diff 26.3 26.4         # summary; the full diff in versions/diff-26.3-26.4/diff.json
+python3 tools/version_port.py gc                     # keep the pinned version and the newest two others
+```
+
 | Slice | Status |
 | --- | --- |
 | This design | this page |
-| `detect`, `prepare`, `diff` (facts, packets, registries, blocks, items, commands, data, assets) | next PR |
+| `detect`, `prepare`, `diff` (facts, packets, registries, blocks, items, commands, data, assets), `gc` | done |
 | Class index, class diff, `vanilla_map.json` | next PR |
 | Port report (`report`), `port` | next PR |
 | Changed-class decompilation, `regen`, `version_consts` refactor, candidate harness run, `publish`, launchd agent | later |
