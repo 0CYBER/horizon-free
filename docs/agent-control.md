@@ -233,4 +233,6 @@ is not under control.
 Each PR adds its tests: unit tests next to the code, and scenarios in
 `tools/agent_control_e2e.py` (`survival`, `ui`, `options`, `events`; CLI and MCP) and
 `tools/launcher_mcp_e2e.py`, which drive the real game offscreen on macOS or on a virtual
-screen on Linux.
+screen on Linux. `tools/lan_e2e.py` runs two games at once, a host that opens its world to LAN
+and a guest that joins it, and checks from both sides what a guest sees and can do (player
+list, own model, armour, name tags, chest lids, crafting, fall damage).
