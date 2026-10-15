@@ -437,6 +437,7 @@ pub enum Smithing {
         result: String,
     },
     Trim {
+        id: String,
         template: Ingredient,
         base: Ingredient,
         addition: Ingredient,
@@ -510,6 +511,7 @@ impl StationRecipes {
                         .to_owned(),
                 }),
                 "minecraft:smithing_trim" => smithing.push(Smithing::Trim {
+                    id,
                     template: ingredient(&v["template"], items),
                     base: ingredient(&v["base"], items),
                     addition: ingredient(&v["addition"], items),
@@ -614,25 +616,64 @@ impl StationRecipes {
                     base: b,
                     addition: a,
                     pattern,
+                    ..
                 } => {
                     if t.test(template) && b.test(base) && a.test(addition) {
-                        let material = e.props(&addition.item)?.trim_material.clone()?;
-                        let trim = (Arc::from(material.as_str()), Arc::from(pattern.as_str()));
-                        if base.data().and_then(|d| d.trim.as_ref()) == Some(&trim) {
-                            return None;
-                        }
-                        let mut out = ItemStack {
-                            count: 1,
-                            ..base.clone()
-                        };
-                        out.data_mut().trim = Some(trim);
-                        return Some(out);
+                        return apply_trim(e, base, addition, pattern);
                     }
                 }
             }
         }
         None
     }
+    /// `SmithingTrimDemoSlotDisplay.resolveForFirstStack` of a trim recipe:
+    /// a random base trimmed with a random material (`pick(n)` draws below n).
+    pub fn trim_demo(
+        &self,
+        e: &Enchantments,
+        id: &str,
+        pick: &mut dyn FnMut(usize) -> usize,
+    ) -> Option<ItemStack> {
+        let (base, addition, pattern) = self.smithing.iter().find_map(|r| match r {
+            Smithing::Trim {
+                id: i,
+                base,
+                addition,
+                pattern,
+                ..
+            } if i == id => Some((&base.1, &addition.1, pattern)),
+            _ => None,
+        })?;
+        if base.is_empty() || addition.is_empty() {
+            return None;
+        }
+        // applyDemoTransformation: up to 256 draws, the first that isn't empty.
+        (0..256).find_map(|_| {
+            let base = ItemStack::new(&base[pick(base.len())], 1);
+            let material = ItemStack::new(&addition[pick(addition.len())], 1);
+            apply_trim(e, &base, &material, pattern)
+        })
+    }
+}
+/// `SmithingTrimRecipe.applyTrim`: none when the material provides no trim
+/// or the base already has this one.
+fn apply_trim(
+    e: &Enchantments,
+    base: &ItemStack,
+    material: &ItemStack,
+    pattern: &str,
+) -> Option<ItemStack> {
+    let material = e.props(&material.item)?.trim_material.clone()?;
+    let trim = (Arc::from(material.as_str()), Arc::from(pattern));
+    if base.data().and_then(|d| d.trim.as_ref()) == Some(&trim) {
+        return None;
+    }
+    let mut out = ItemStack {
+        count: 1,
+        ..base.clone()
+    };
+    out.data_mut().trim = Some(trim);
+    Some(out)
 }
 
 #[cfg(test)]

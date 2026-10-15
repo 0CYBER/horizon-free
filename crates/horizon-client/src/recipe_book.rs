@@ -646,8 +646,31 @@ impl ClientBook {
 /// displays it has (`RecipeManager.listDisplaysForRecipe`).
 #[derive(Clone, Debug, Default)]
 pub struct RecipeIndex {
-    /// Recipe id -> (special, display count, first display id).
-    recipes: std::collections::BTreeMap<String, (bool, usize, i32)>,
+    recipes: std::collections::BTreeMap<String, Known>,
+}
+#[derive(Clone, Debug)]
+struct Known {
+    special: bool,
+    displays: usize,
+    first_display: i32,
+    /// `RecipeDisplay.craftingStation`: the workstation item of its displays.
+    station: &'static str,
+    /// `Recipe.showNotification`: unlocking it shows the `RecipeToast`.
+    notify: bool,
+    /// `result.id`, for the recipes the book doesn't list.
+    result: Option<String>,
+}
+/// `RecipeDisplay.craftingStation` of a recipe type.
+fn crafting_station(kind: &str) -> &'static str {
+    match kind {
+        "minecraft:smelting" => "minecraft:furnace",
+        "minecraft:blasting" => "minecraft:blast_furnace",
+        "minecraft:smoking" => "minecraft:smoker",
+        "minecraft:campfire_cooking" => "minecraft:campfire",
+        "minecraft:stonecutting" => "minecraft:stonecutter",
+        "minecraft:smithing_transform" | "minecraft:smithing_trim" => "minecraft:smithing_table",
+        _ => "minecraft:crafting_table",
+    }
 }
 impl RecipeIndex {
     /// Reads `data/minecraft/recipe/*.json` under `root`.
@@ -685,13 +708,23 @@ impl RecipeIndex {
             } else {
                 1
             };
-            recipes.insert(format!("minecraft:{stem}"), (special, displays, 0));
+            recipes.insert(
+                format!("minecraft:{stem}"),
+                Known {
+                    special,
+                    displays,
+                    first_display: 0,
+                    station: crafting_station(kind),
+                    notify: v["show_notification"].as_bool().unwrap_or(true),
+                    result: v["result"]["id"].as_str().map(str::to_owned),
+                },
+            );
         }
         // RecipeManager keeps its recipes sorted by id and numbers the displays in that order.
         let mut next = 0;
         for r in recipes.values_mut() {
-            r.2 = next;
-            next += r.1 as i32;
+            r.first_display = next;
+            next += r.displays as i32;
         }
         Self { recipes }
     }
@@ -699,10 +732,19 @@ impl RecipeIndex {
         self.recipes.contains_key(id)
     }
     pub fn special(&self, id: &str) -> bool {
-        self.recipes.get(id).is_some_and(|r| r.0)
+        self.recipes.get(id).is_some_and(|r| r.special)
     }
     pub fn displays(&self, id: &str) -> usize {
-        self.recipes.get(id).map_or(0, |r| r.1)
+        self.recipes.get(id).map_or(0, |r| r.displays)
+    }
+    /// The crafting station shown on its displays' toast, when unlocking it
+    /// shows one (`Recipe.showNotification`).
+    pub fn toast_station(&self, id: &str) -> Option<&'static str> {
+        self.recipes.get(id).filter(|r| r.notify).map(|r| r.station)
+    }
+    /// The result item id its file names (none for trims).
+    pub fn result(&self, id: &str) -> Option<&str> {
+        self.recipes.get(id).and_then(|r| r.result.as_deref())
     }
     /// Every recipe id, in id order.
     pub fn ids(&self) -> impl Iterator<Item = &String> {
@@ -710,10 +752,15 @@ impl RecipeIndex {
     }
     /// The display ids of a recipe (none for a special one).
     pub fn display_ids(&self, id: &str) -> std::ops::Range<i32> {
-        self.recipes.get(id).map_or(0..0, |r| r.2..r.2 + r.1 as i32)
+        self.recipes.get(id).map_or(0..0, |r| {
+            r.first_display..r.first_display + r.displays as i32
+        })
     }
     pub fn first_display(&self, id: &str) -> Option<i32> {
-        self.recipes.get(id).filter(|r| r.1 > 0).map(|r| r.2)
+        self.recipes
+            .get(id)
+            .filter(|r| r.displays > 0)
+            .map(|r| r.first_display)
     }
 }
 
@@ -834,6 +881,57 @@ mod tests {
 
     fn ing(items: &[&str]) -> Ingredient {
         Ingredient::of(items.iter().map(|s| (*s).to_owned()).collect())
+    }
+    #[test]
+    fn the_index_knows_each_recipes_toast_station_and_result() {
+        let root = std::env::temp_dir().join(format!("horizon-toast-index-{}", std::process::id()));
+        let dir = root.join("data/minecraft/recipe");
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, json) in [
+            (
+                "stick",
+                r#"{"type":"minecraft:crafting_shaped","result":{"id":"minecraft:stick"}}"#,
+            ),
+            (
+                "crafting_table",
+                r#"{"type":"minecraft:crafting_shaped","show_notification":false,"result":{"id":"minecraft:crafting_table"}}"#,
+            ),
+            (
+                "cooked_beef_from_campfire_cooking",
+                r#"{"type":"minecraft:campfire_cooking","result":{"id":"minecraft:cooked_beef"}}"#,
+            ),
+            (
+                "stone_slab_from_stonecutting",
+                r#"{"type":"minecraft:stonecutting","result":{"id":"minecraft:stone_slab"}}"#,
+            ),
+            (
+                "coast_trim",
+                r#"{"type":"minecraft:smithing_trim","pattern":"minecraft:coast"}"#,
+            ),
+        ] {
+            std::fs::write(dir.join(format!("{name}.json")), json).unwrap();
+        }
+        let index = RecipeIndex::load(&root);
+        std::fs::remove_dir_all(&root).unwrap();
+        let toast = |id: &str| (index.toast_station(id), index.result(id));
+        assert_eq!(
+            toast("minecraft:stick"),
+            (Some("minecraft:crafting_table"), Some("minecraft:stick"))
+        );
+        // show_notification: false unlocks silently.
+        assert_eq!(toast("minecraft:crafting_table").0, None);
+        assert_eq!(
+            toast("minecraft:cooked_beef_from_campfire_cooking"),
+            (Some("minecraft:campfire"), Some("minecraft:cooked_beef"))
+        );
+        assert_eq!(
+            toast("minecraft:stone_slab_from_stonecutting").0,
+            Some("minecraft:stonecutter")
+        );
+        assert_eq!(
+            toast("minecraft:coast_trim"),
+            (Some("minecraft:smithing_table"), None)
+        );
     }
     #[test]
     fn small_recipes_are_centred_in_the_grid() {
