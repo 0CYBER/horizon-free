@@ -62,5 +62,7 @@ The cache adds a weak handle and mask per cached resident chunk: about 13 KiB of
 hash-table storage for 289 entries on this platform, including capacity slack.
 It retains no unloaded block data. A first edit after caching can allocate/move
 the 176-byte chunk wrapper (plus Arc bookkeeping); it does not force a deep
-copy. The edit rows include this cost. Unloads remove entries; resource reload
-clears the cache. The original outer tick-vector allocation remains.
+copy. Its old Arc allocation can remain until the next query or removal (about
+54 KiB for 289 edited chunks, including Arc bookkeeping). The edit rows include
+the allocation cost. Unloads remove entries; resource reload clears the cache.
+The original outer tick-vector allocation remains.
