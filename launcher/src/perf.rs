@@ -304,6 +304,15 @@ pub fn benchmark(repeats: usize) -> Result<PathBuf, String> {
     if let Some(bytes) = binary_bytes() {
         report.metric("launcher.binary_bytes", &[bytes]);
     }
+    // Kept for upload only if the player allows benchmark uploads (the outbox checks).
+    if let Ok(data) = serde_json::to_value(report.for_upload()) {
+        let item = horizon_telemetry::Item::new(
+            horizon_telemetry::Source::Launcher,
+            env!("CARGO_PKG_VERSION"),
+            horizon_telemetry::Payload::Benchmark(data),
+        );
+        let _ = horizon_telemetry::outbox::push(&crate::backend::game_home(), &item);
+    }
     report
         .write_to(&crate::backend::data_dir().join("benchmarks"))
         .map_err(|e| e.to_string())
@@ -319,4 +328,47 @@ fn app() -> App {
 
 fn binary_bytes() -> Option<f64> {
     Some(std::fs::metadata(std::env::current_exe().ok()?).ok()?.len() as f64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_first_frame_is_the_start_and_close_frames_are_ui_frames() {
+        let mut perf = Perf::new("test");
+        perf.keep_local_log(false);
+        assert!(perf.frame(), "the first frame");
+        assert!(!perf.frame());
+        std::thread::sleep(IDLE_GAP + Duration::from_millis(20));
+        perf.frame();
+        assert_eq!(
+            perf.ui_frame_times().len(),
+            1,
+            "a resting UI is not a slow frame"
+        );
+        perf.record("launcher.release_list_ms", 120.0);
+        perf.record("launcher.release_list_ms", 80.0);
+        let report = perf.report();
+        assert!(report.metrics.contains_key("launcher.start_ms"));
+        assert!(report.metrics.contains_key("launcher.binary_bytes"));
+        assert_eq!(report.metrics["launcher.release_list_ms"].mean, 100.0);
+        assert_eq!(report.frames[0].phase, "ui");
+    }
+
+    #[test]
+    fn a_bench_window_waits_for_its_first_frame_then_switches_pages() {
+        let mut perf = Perf::new("test");
+        perf.keep_local_log(false);
+        let mut bench = Bench {
+            out: std::env::temp_dir().join("unused"),
+            began: None,
+            page: 0,
+            idle_cpu: None,
+        };
+        assert!(matches!(bench.tick(&perf), Step::Wait));
+        perf.frame();
+        assert!(matches!(bench.tick(&perf), Step::Go(1)));
+        assert!(matches!(bench.tick(&perf), Step::Go(2)));
+    }
 }

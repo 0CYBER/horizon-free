@@ -24,6 +24,8 @@ horizon-prepare = { path = "../crates/horizon-prepare" }
 # Join a friend: invite codes (the game does the joining).
 horizon-friends = { path = "../crates/horizon-friends" }
 horizon-bench = { path = "../crates/horizon-bench" }
+# Opt-in data collection: the consent, the outbox and its upload (docs/telemetry.md).
+horizon-telemetry = { path = "../crates/horizon-telemetry" }
 # The session file's random name.
 getrandom = "0.3"
 
