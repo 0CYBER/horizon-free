@@ -948,6 +948,75 @@ mod tests {
     use super::*;
 
     #[test]
+    fn effect_icons_are_painted_from_the_mob_effect_directory() {
+        use crate::{effects::EffectInstance, hud_layout, hud_overlays, inventory_effects};
+        // A synthetic resource tree exercises loading and painting together.
+        // No Minecraft installation or GPU is needed for this regression test.
+        let root =
+            std::env::temp_dir().join(format!("horizon-effect-icons-{}", std::process::id()));
+        for (name, size) in [
+            ("mob_effect/levitation", 18),
+            ("gui/sprites/hud/effect_background", 24),
+            ("gui/sprites/container/inventory/effect_background", 32),
+        ] {
+            let path = root.join(format!("assets/minecraft/textures/{name}.png"));
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let mut encoder = png::Encoder::new(fs::File::create(path).unwrap(), size, size);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&vec![255; (size * size * 4) as usize])
+                .unwrap();
+        }
+        let atlas = HudAtlas::build(&root).unwrap();
+        let effect = EffectInstance::new("levitation", -1, 0);
+        let icon = hud_overlays::EffectIcon::from(&effect);
+        let draws = hud_overlays::effects(320, false, &[icon]);
+        let mut batch = HudBatch::new([320, 240]);
+        hud_layout::paint(&mut batch, &atlas, &draws);
+        // Both the background and the 18x18 effect icon must reach the batch.
+        assert_eq!(batch.vertices.len(), 12);
+        let rect = atlas.sprites["mob_effect/levitation"];
+        assert_eq!(batch.vertices[6].pos, [298.0, 30.0]);
+        assert_eq!(batch.vertices[6].uv, [rect.u0, rect.v0]);
+        assert_eq!(batch.vertices[8].uv, [rect.u1, rect.v1]);
+
+        let panels = inventory_effects::panels(
+            320,
+            [72, 37],
+            176,
+            std::slice::from_ref(&effect),
+            20.0,
+            &|_| None,
+            &|_| 60,
+        );
+        batch.vertices.clear();
+        let tooltip = inventory_effects::paint(&mut batch, &atlas, &panels, [257, 44]);
+        assert_eq!(tooltip.unwrap()[0].0, "levitation");
+        assert_eq!(batch.vertices.len(), 24);
+        assert_eq!(batch.vertices[18].pos, [257.0, 44.0]);
+        assert_eq!(batch.vertices[18].uv, [rect.u0, rect.v0]);
+        assert_eq!(batch.vertices[20].uv, [rect.u1, rect.v1]);
+
+        // Wide panels retain the four-pixel border instead of stretching it.
+        let panels =
+            inventory_effects::panels(480, [72, 37], 176, &[effect], 20.0, &|_| None, &|_| 60);
+        batch.vertices.clear();
+        assert!(inventory_effects::paint(&mut batch, &atlas, &panels, [0, 0]).is_none());
+        assert!(batch.vertices.iter().any(|v| v.color == 0xff808080));
+        assert_eq!(batch.vertices[0].pos, [250.0, 37.0]);
+        assert_eq!(batch.vertices[1].pos, [254.0, 37.0]);
+        let background = atlas.sprites["gui/sprites/container/inventory/effect_background"];
+        assert!(
+            (batch.vertices[1].uv[0] - background.u0 - (background.u1 - background.u0) / 8.0).abs()
+                < 1e-6
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn hud_shader_validates_both_fragment_entries() {
         let module = naga::front::wgsl::parse_str(include_str!("hud.wgsl")).unwrap();
         naga::valid::Validator::new(
