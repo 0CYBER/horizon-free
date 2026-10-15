@@ -7803,8 +7803,20 @@ impl Game<'_> {
             );
         }
         if tab.search {
-            let shown = format!("{}_", self.creative_screen.search);
-            batch.text(atlas, &shown, ox + 82.0, oy + 6.0, u32::MAX, true);
+            // The search box: an unbordered EditBox of 80 at (82, 6), white.
+            let search = &self.creative_screen.search;
+            horizon_client::ui::append_field(
+                batch,
+                atlas,
+                search,
+                (ox + 82.0, oy + 6.0, 80.0),
+                u32::MAX,
+                clipboard::CREATIVE_SEARCH_CHARS,
+                self.text_selection
+                    .covers(clipboard::CREATIVE_SEARCH, search),
+                true,
+                self.creative_screen.search_focused.elapsed().as_millis(),
+            );
         }
         let mut hovered: Option<String> = None;
         if tab.inventory {

@@ -227,6 +227,14 @@ impl Game<'_> {
             let x = cx - (lw as i32 / 2) as f32;
             let ly = y + i as f32 * line_height - midpoint;
             batch.text(atlas, line, x, ly, color, false);
+            if i == edit.line
+                && self
+                    .text_selection
+                    .covers(sign_line_id(edit.front, i), line)
+            {
+                // AbstractSignEditScreen: the selection from its start to its end.
+                batch.text_highlight(atlas, (x, ly, lw, line_height), true);
+            }
             if i == edit.line && blink {
                 // TextCursorUtils.extractAppendCursor: an underscore after the text.
                 batch.text(atlas, "_", x + lw, ly, color, false);

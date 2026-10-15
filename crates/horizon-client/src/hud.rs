@@ -328,9 +328,18 @@ pub struct HudBatch {
     pub height: f32,
     /// Glyph pixels to upload into the atlas before drawing.
     pub patches: Vec<crate::font::Patch>,
-    /// Vertex ranges drawn with `RenderPipelines.CROSSHAIR`'s
-    /// `BlendFunction.INVERT` instead of alpha blending.
-    pub invert: Vec<std::ops::Range<u32>>,
+    /// Vertex ranges drawn with another blend than alpha blending, in order.
+    pub blends: Vec<(std::ops::Range<u32>, Blend)>,
+}
+/// How a run of HUD vertices blends with what is under it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Blend {
+    /// `BlendFunction.TRANSLUCENT`.
+    Alpha,
+    /// `BlendFunction.INVERT` (`RenderPipelines.CROSSHAIR`, `GUI_INVERT`).
+    Invert,
+    /// `BlendFunction.ADDITIVE` (`RenderPipelines.GUI_TEXT_HIGHLIGHT`).
+    Additive,
 }
 pub fn rgba(r: u8, g: u8, b: u8, a: u8) -> u32 {
     u32::from(a) << 24 | u32::from(b) << 16 | u32::from(g) << 8 | u32::from(r)
@@ -353,34 +362,56 @@ impl HudBatch {
             width: (window[0] as f32 / scale as f32).ceil(),
             height: (window[1] as f32 / scale as f32).ceil(),
             patches: Vec::new(),
-            invert: Vec::new(),
+            blends: Vec::new(),
         }
     }
     /// Draw the vertices added since `start` with the inverting blend.
     pub fn invert_since(&mut self, start: usize) {
+        self.blend_since(start, Blend::Invert);
+    }
+    /// Draw the vertices added since `start` with `blend`.
+    pub fn blend_since(&mut self, start: usize, blend: Blend) {
         let range = start as u32..self.vertices.len() as u32;
-        if range.is_empty() {
+        if range.is_empty() || blend == Blend::Alpha {
             return;
         }
-        match self.invert.last_mut() {
-            Some(last) if last.end == range.start => last.end = range.end,
-            _ => self.invert.push(range),
+        match self.blends.last_mut() {
+            Some((last, b)) if last.end == range.start && *b == blend => last.end = range.end,
+            _ => self.blends.push((range, blend)),
         }
     }
-    /// The vertex ranges in order, each with whether it inverts.
-    pub fn runs(&self) -> Vec<(std::ops::Range<u32>, bool)> {
+    /// `GuiGraphicsExtractor.textHighlight`: with `invert_text` the area's
+    /// colours are inverted first (white text on a dark field turns blue on
+    /// white), then blue is added.
+    pub fn text_highlight(
+        &mut self,
+        atlas: &HudAtlas,
+        (x, y, w, h): (f32, f32, f32, f32),
+        invert_text: bool,
+    ) {
+        if invert_text {
+            let start = self.vertices.len();
+            self.fill(atlas, x, y, w, h, rgba(255, 255, 255, 255));
+            self.invert_since(start);
+        }
+        let start = self.vertices.len();
+        self.fill(atlas, x, y, w, h, rgba(0, 0, 255, 255));
+        self.blend_since(start, Blend::Additive);
+    }
+    /// The vertex ranges in order, each with its blend.
+    pub fn runs(&self) -> Vec<(std::ops::Range<u32>, Blend)> {
         let mut out = Vec::new();
         let mut at = 0;
-        for r in &self.invert {
+        for (r, blend) in &self.blends {
             if r.start > at {
-                out.push((at..r.start, false));
+                out.push((at..r.start, Blend::Alpha));
             }
-            out.push((r.clone(), true));
+            out.push((r.clone(), *blend));
             at = r.end;
         }
         let end = self.vertices.len() as u32;
         if end > at {
-            out.push((at..end, false));
+            out.push((at..end, Blend::Alpha));
         }
         out
     }
@@ -675,6 +706,7 @@ pub struct HudRenderer {
     pipeline: wgpu::RenderPipeline,
     /// `RenderPipelines.CROSSHAIR`.
     invert_pipeline: wgpu::RenderPipeline,
+    additive_pipeline: wgpu::RenderPipeline,
     group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
     buffer: wgpu::Buffer,
@@ -805,6 +837,20 @@ impl HudRenderer {
             },
             "fs_crosshair",
         );
+        // BlendFunction.ADDITIVE: ONE, ONE.
+        let add = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        };
+        let additive_pipeline = create(
+            "HUD text highlight",
+            wgpu::BlendState {
+                color: add,
+                alpha: add,
+            },
+            "fs_main",
+        );
         let capacity = 1 << 16;
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("HUD vertices"),
@@ -817,6 +863,7 @@ impl HudRenderer {
             fire_animations: Vec::new(),
             pipeline,
             invert_pipeline,
+            additive_pipeline,
             group,
             uniform,
             buffer,
@@ -932,11 +979,11 @@ impl HudRenderer {
         });
         pass.set_bind_group(0, &self.group, &[]);
         pass.set_vertex_buffer(0, self.buffer.slice(..));
-        for (range, invert) in batch.runs() {
-            pass.set_pipeline(if invert {
-                &self.invert_pipeline
-            } else {
-                &self.pipeline
+        for (range, blend) in batch.runs() {
+            pass.set_pipeline(match blend {
+                Blend::Alpha => &self.pipeline,
+                Blend::Invert => &self.invert_pipeline,
+                Blend::Additive => &self.additive_pipeline,
             });
             pass.draw(range, 0..1);
         }
@@ -1039,11 +1086,22 @@ mod tests {
         quad(&mut batch);
         batch.invert_since(start);
         batch.invert_since(batch.vertices.len());
+        let start = batch.vertices.len();
         quad(&mut batch);
-        assert_eq!(batch.invert, vec![6..18]);
+        batch.blend_since(start, Blend::Additive);
+        quad(&mut batch);
+        assert_eq!(
+            batch.blends,
+            vec![(6..18, Blend::Invert), (18..24, Blend::Additive)]
+        );
         assert_eq!(
             batch.runs(),
-            vec![(0..6, false), (6..18, true), (18..24, false)]
+            vec![
+                (0..6, Blend::Alpha),
+                (6..18, Blend::Invert),
+                (18..24, Blend::Additive),
+                (24..30, Blend::Alpha)
+            ]
         );
     }
     #[test]
@@ -1056,7 +1114,7 @@ mod tests {
                 width: width as f32,
                 height: height as f32,
                 patches: Vec::new(),
-                invert: Vec::new(),
+                blends: Vec::new(),
             };
             for (image_width, image_height) in [(195, 136), (176, 166), (176, 222)] {
                 assert_eq!(

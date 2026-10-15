@@ -920,13 +920,10 @@ pub fn paint(batch: &mut HudBatch, atlas: &HudAtlas, draws: &[Draw]) {
             ),
             Draw::Highlight { x0, y0, x1, y1 } => {
                 let (a, b) = ((*x0).min(*x1), (*x0).max(*x1));
-                batch.fill(
+                batch.text_highlight(
                     atlas,
-                    a as f32,
-                    *y0 as f32,
-                    (b - a) as f32,
-                    (y1 - y0) as f32,
-                    crate::hud::rgba(0, 0, 255, 128),
+                    (a as f32, *y0 as f32, (b - a) as f32, (y1 - y0) as f32),
+                    true,
                 );
             }
             Draw::Text {

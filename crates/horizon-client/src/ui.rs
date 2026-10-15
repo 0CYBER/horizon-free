@@ -598,6 +598,46 @@ pub struct EditBox {
     pub suggestion: Option<String>,
     pub text_color: u32,
 }
+/// `EditBox.extractWidgetRenderState` for Horizon's append-only fields,
+/// unbordered and with the cursor at the end: the text from (x, y), the
+/// highlight when Select All covers the value (`invert_text` as
+/// `setInvertHighlightedTextColor`), and the cursor, blinking from when the
+/// field took the focus (`TextCursorUtils.isCursorVisible`): an underscore,
+/// or a bar once the value is `max_chars` long.
+#[allow(clippy::too_many_arguments)]
+pub fn append_field(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    value: &str,
+    (x, y, width): (f32, f32, f32),
+    color: u32,
+    max_chars: usize,
+    selected: bool,
+    invert_text: bool,
+    focused_ms: u128,
+) {
+    let mut cursor_x = x;
+    if !value.is_empty() {
+        batch.text(atlas, value, x, y, color, true);
+        cursor_x += HudBatch::text_width(atlas, value) + 1.0;
+    }
+    let insert = char_len(value) >= max_chars;
+    if insert {
+        cursor_x -= 1.0;
+    }
+    if selected && !value.is_empty() {
+        let right = x + width;
+        let (x0, x1) = (cursor_x.min(right), (x - 1.0).min(right));
+        batch.text_highlight(atlas, (x1, y - 1.0, x0 - x1, 11.0), invert_text);
+    }
+    if (focused_ms / 300).is_multiple_of(2) {
+        if insert {
+            batch.fill(atlas, cursor_x, y - 1.0, 1.0, 11.0, color);
+        } else {
+            batch.text(atlas, "_", cursor_x, y, color, true);
+        }
+    }
+}
 fn byte_index(s: &str, chars: usize) -> usize {
     s.char_indices().nth(chars).map_or(s.len(), |(i, _)| i)
 }
@@ -904,8 +944,11 @@ impl EditBox {
                 + atlas
                     .font
                     .width(&displayed.chars().take(rel_highlight).collect::<String>());
-            let (a, b) = (cursor_x.min(hx - 1.0), cursor_x.max(hx - 1.0));
-            batch.fill(atlas, a, ty - 1.0, b - a, 11.0, rgba(0, 0, 255, 128));
+            // textHighlight between the cursor and the anchor, clipped at the right edge.
+            let right = self.x + self.width;
+            let (x0, x1) = (cursor_x.min(right), (hx - 1.0).min(right));
+            let (a, b) = (x0.min(x1), x0.max(x1));
+            batch.text_highlight(atlas, (a, ty - 1.0, b - a, 11.0), true);
         }
         if show_cursor {
             if insert {
@@ -938,6 +981,88 @@ impl EditBox {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn append_fields_highlight_the_whole_value_and_blink_their_cursor() {
+        use crate::hud::Blend;
+        let atlas = HudAtlas::build(Path::new("/nonexistent/horizon-test-assets")).unwrap();
+        let end = 10.0 + HudBatch::text_width(&atlas, "abc") + 1.0;
+        let span = |b: &HudBatch, r: &std::ops::Range<u32>| {
+            let v = &b.vertices[r.start as usize..r.end as usize];
+            let xs = v.iter().map(|v| v.pos[0]);
+            let ys = v.iter().map(|v| v.pos[1]);
+            (
+                xs.clone().fold(f32::MAX, f32::min),
+                xs.fold(f32::MIN, f32::max),
+                ys.clone().fold(f32::MAX, f32::min),
+                ys.fold(f32::MIN, f32::max),
+            )
+        };
+        // Select All in the creative search: inverted white, then blue added,
+        // from one pixel before the text to the cursor, 11 high.
+        let mut b = HudBatch::new([854, 480]);
+        append_field(
+            &mut b,
+            &atlas,
+            "abc",
+            (10.0, 20.0, 80.0),
+            u32::MAX,
+            50,
+            true,
+            true,
+            0,
+        );
+        let blends: Vec<_> = b.blends.iter().map(|(_, blend)| *blend).collect();
+        assert_eq!(blends, vec![Blend::Invert, Blend::Additive]);
+        for (r, _) in &b.blends {
+            assert_eq!(span(&b, r), (9.0, end, 19.0, 30.0));
+        }
+        // The anvil keeps its text colour; 300 ms later the cursor is hidden.
+        let mut b = HudBatch::new([854, 480]);
+        append_field(
+            &mut b,
+            &atlas,
+            "abc",
+            (10.0, 20.0, 103.0),
+            u32::MAX,
+            50,
+            true,
+            false,
+            300,
+        );
+        let blends: Vec<_> = b.blends.iter().map(|(_, blend)| *blend).collect();
+        assert_eq!(blends, vec![Blend::Additive]);
+        let quads = |ms| {
+            let mut b = HudBatch::new([854, 480]);
+            append_field(
+                &mut b,
+                &atlas,
+                "abc",
+                (10.0, 20.0, 103.0),
+                0,
+                50,
+                false,
+                false,
+                ms,
+            );
+            b.vertices.len()
+        };
+        assert!(quads(300) < quads(600));
+        // A full field shows a bar on its last pixel instead of an underscore.
+        let mut b = HudBatch::new([854, 480]);
+        append_field(
+            &mut b,
+            &atlas,
+            "abc",
+            (10.0, 20.0, 80.0),
+            u32::MAX,
+            3,
+            false,
+            true,
+            0,
+        );
+        let bar = b.vertices.len() as u32 - 6..b.vertices.len() as u32;
+        assert_eq!(span(&b, &bar), (end - 1.0, end, 19.0, 30.0));
+    }
     #[test]
     fn held_scrollbars_follow_the_pointer_and_stop_at_the_ends() {
         // A 100-pixel list holding 400: the thumb is 25 -> 32 high, so a
