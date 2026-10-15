@@ -347,6 +347,15 @@ mod tests {
     }
 
     #[test]
+    fn host_defaults() {
+        // hid-playstation.c: player 1 is BIT(2) ("--x--"), as SDL's first pattern 0x04; the
+        // blue it gives a pad; SDL's 0x20 switches LEDs without fading.
+        assert_eq!(PLAYER_1, 0x04);
+        assert_eq!(DEFAULT_LIGHTBAR, [0, 0, 128]);
+        assert_eq!(PLAYER_LEDS_INSTANT, 0x20);
+    }
+
+    #[test]
     fn dualsense_ids() {
         assert!(is_dualsense(0x054c, 0x0ce6));
         assert!(is_dualsense(0x054c, 0x0df2));

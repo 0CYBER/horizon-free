@@ -446,7 +446,12 @@ Nether, violet in the End. Both at half brightness (the pad's full light is
 glaring); menus keep the last colour. The player LEDs show player 1 (the
 middle LED). Off leaves both to the pad. When Horizon lets go of the pad, a
 lightbar or LEDs it changed go back to a host's defaults: blue (0, 0, 128)
-and the middle LED, as Linux's driver gives a first pad.
+and the middle LED, as Linux's driver gives a first pad (neither SDL nor
+the kernel resets anything when it lets go; Horizon does, so the pad never
+keeps a game's colour or a stiff trigger). The microphone's mute LED is
+never touched (flags 1, bit 0 stays clear): whatever the system set
+stays. Over Bluetooth the colour waits for the pad's connection
+animation (see "DualSense output"). Verified against the references only.
 
 Byte layout from public references, read for facts; no code is copied from
 them (the kernel and dualsensectl are GPL):
