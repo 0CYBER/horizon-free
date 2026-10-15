@@ -287,27 +287,43 @@ fn poll(
     Err(format!("not ready after {} s", limit.as_secs()))
 }
 
-/// Waits until the player is spawned where `near` says, nothing is queued and the resident and
-/// generated chunk counts have not changed for a second; returns the time of the last change
-/// (`tools/perf_bench.py`'s `wait_loaded`).
+/// Fewer section meshes than this in a second is the game remeshing blocks that change (random
+/// ticks), not loading.
+const QUIET_MESHES_PER_S: f64 = 100.0;
+
+/// Waits until the player is spawned where `near` says, nothing is queued, the resident and
+/// generated chunk counts have not changed for a second and meshing has gone quiet (sections wait
+/// for their neighbours' light, so the last ones are drawn after the counts settle); returns when
+/// the last of these happened (`tools/perf_bench.py`'s `wait_loaded`).
 fn wait_loaded(control: &Control, near: impl Fn(&Value) -> bool) -> Result<Instant, String> {
     let deadline = Instant::now() + LOAD_LIMIT;
-    let (mut last, mut changed) = (None, Instant::now());
+    let (mut last, mut changed, mut previous, mut meshing) =
+        (None, Instant::now(), None, Instant::now());
     while Instant::now() < deadline {
         let s = control.status();
+        let now = Instant::now();
         let position = &s["player"]["position"];
         if position.is_null()
             || !near(position)
             || s["pending_chunks"] != 0
             || s["screen"] == "title"
         {
-            (last, changed) = (None, Instant::now());
+            (last, changed, previous, meshing) = (None, now, None, now);
         } else {
             let counts = (s["chunks"].as_u64(), s["generated_chunks"].as_u64());
             if last != Some(counts) {
-                (last, changed) = (Some(counts), Instant::now());
-            } else if changed.elapsed() >= Duration::from_secs(1) {
-                return Ok(changed);
+                (last, changed) = (Some(counts), now);
+            }
+            let meshed = s["meshed_sections"].as_f64().unwrap_or(0.0);
+            if let Some((at, before)) = previous {
+                if meshed - before > QUIET_MESHES_PER_S * (now - at).as_secs_f64() {
+                    meshing = now;
+                }
+            }
+            previous = Some((now, meshed));
+            let done = changed.max(meshing);
+            if now - done >= Duration::from_secs(1) {
+                return Ok(done);
             }
         }
         thread::sleep(Duration::from_millis(50));
