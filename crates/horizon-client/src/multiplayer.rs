@@ -455,10 +455,15 @@ impl Screen {
                         && y + ROW_HEIGHT / 2.0 > top
                         && y + ROW_HEIGHT / 2.0 < bottom
                     {
-                        crate::widgets::target_as(
-                            [left, y, ROW_WIDTH, ROW_HEIGHT],
-                            crate::widgets::Kind::Row,
-                        );
+                        let rect = [left, y, ROW_WIDTH, ROW_HEIGHT];
+                        // The control socket's widget tree names the row.
+                        let name = match row {
+                            Row::Server(k) => servers[k].name.as_str(),
+                            Row::Lan(k) => games[k].motd.as_str(),
+                            Row::LanHeader => "",
+                        };
+                        crate::widgets::record_as(name, rect, true, crate::widgets::Kind::Row);
+                        crate::widgets::target_as(rect, crate::widgets::Kind::Row);
                     }
                     // extractSelection: a white outline round black (the list
                     // has focus once a row is clicked).

@@ -283,15 +283,15 @@ pub fn slider(
     hover: bool,
     active: bool,
 ) {
+    let kind = crate::widgets::Kind::Slider {
+        value,
+        track: [x + 4.0, w - 8.0],
+    };
+    // The control socket's widget tree (`ui`): its label and value.
+    crate::widgets::record_as(&label.plain(), [x, y, w, 20.0], active, kind);
     if active {
         // A controller's D-pad can focus it (Horizon's controller support).
-        crate::widgets::target_as(
-            [x, y, w, 20.0],
-            crate::widgets::Kind::Slider {
-                value,
-                track: [x + 4.0, w - 8.0],
-            },
-        );
+        crate::widgets::target_as([x, y, w, 20.0], kind);
     }
     let track = if hover && active {
         "gui/sprites/widget/slider_highlighted"

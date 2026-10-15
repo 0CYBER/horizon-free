@@ -56,7 +56,7 @@ impl Game<'_> {
         }
         self.cursor = saved;
     }
-    fn gui_origin(&self) -> Result<(f32, f32)> {
+    pub(super) fn gui_origin(&self) -> Result<(f32, f32)> {
         let size = self
             .renderer
             .as_ref()

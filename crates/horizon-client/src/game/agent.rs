@@ -314,7 +314,7 @@ impl Game<'_> {
             "loaded": self.world.chunks.contains_key(&(pos[0] >> 4, pos[2] >> 4)),
         })
     }
-    fn stack_value(&self, s: &ItemStack) -> Value {
+    pub(super) fn stack_value(&self, s: &ItemStack) -> Value {
         let mut v = json!({ "item": &*s.item, "count": s.count });
         if s.damage > 0 {
             v["damage"] = json!(s.damage);
@@ -356,7 +356,7 @@ impl Game<'_> {
         }
         Ok(())
     }
-    fn screen_label(&self) -> &'static str {
+    pub(super) fn screen_label(&self) -> &'static str {
         if self.title.is_some() {
             return "title";
         }
@@ -782,7 +782,7 @@ impl Game<'_> {
     }
 
     /// Synthesize the pointer moving to GUI pixel (x, y) and a click there.
-    fn synth_click(
+    pub(super) fn synth_click(
         &mut self,
         event_loop: &ActiveEventLoop,
         x: f32,

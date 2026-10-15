@@ -1605,7 +1605,14 @@ impl OptionsUi {
                 WKind::LanguageRow {
                     label, selected, ..
                 } => {
-                    crate::widgets::target_as([wd.x, wd.y, wd.w, wd.h], crate::widgets::Kind::Row);
+                    let rect = [wd.x, wd.y, wd.w, wd.h];
+                    crate::widgets::record_as(
+                        &label.plain(),
+                        rect,
+                        true,
+                        crate::widgets::Kind::Row,
+                    );
+                    crate::widgets::target_as(rect, crate::widgets::Kind::Row);
                     if *selected {
                         batch.fill(atlas, wd.x, wd.y, wd.w, wd.h, u32::MAX);
                         batch.fill(
