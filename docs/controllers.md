@@ -248,7 +248,7 @@ sensitivity, slower while scoping with a spyglass.
 Vibration (on by default, off in the options): taking damage (stronger with
 the damage), a block broken, an explosion nearby (scaled by distance), a totem
 of undying. Short, low-intensity pulses, as on Bedrock. A DualSense gets them
-through its own output report (below), on every OS. Other pads go through
+shaped, through its own output report (below), on every OS. Other pads go through
 gilrs force feedback: Linux (evdev force feedback, including Steam Input's
 virtual pad) and Windows support it; macOS gilrs has no force feedback, so it
 is silently skipped there.
@@ -392,6 +392,34 @@ documents (none of it measured on Horizon's pad yet):
   rate; reWASD's preset uses 30 Hz and its "rifle" 2..20 Hz. Softer blocks
   get a finer, faster grit, harder ones a slower, heavier chug, never above
   5 of 8, since the attack trigger is held for seconds.
+
+### Vibration shapes and HD haptics
+
+Each event plays a short shape rather than one flat block: a hit opens at
+full strength for 50 ms and dies away in two steps, an explosion rolls on for
+half a second, a totem swells, a broken block is a 35 ms tick. Over HID they
+drive the motors' emulation (the compatible-vibration bytes). Measured on the
+pad, that emulation has inertia: after a full-strength step it takes about
+half a second to settle, so short shapes blur.
+
+The DualSense has no motors, but two voice-coil actuators, and on USB it is
+also a four-channel 48 kHz audio device whose channels 3 and 4 drive them
+(1 and 2 are its speaker and headset). Played there as waveforms (an 80 Hz
+tone for the heavy part, 200 Hz for the light one, 4 ms ramps between steps,
+channels 1 and 2 silent), the same shapes come out crisp. Per OS:
+
+| | USB | Bluetooth |
+|---|---|---|
+| macOS | the pad lists as a 4-channel CoreAudio output ("DualSense Wireless Controller", seen on the Mac mini); cpal opens it by name | no audio device |
+| Linux | snd-usb-audio exposes it as the card "Controller" with 4 channels; cpal (ALSA) opens it | no audio device |
+| Windows | a 4-channel WASAPI endpoint named after the pad | no audio device |
+
+Over Bluetooth the haptics' samples travel inside vendor output reports
+whose format is only partly reverse-engineered; Horizon doesn't do it, and
+keeps the motors' emulation there. HD haptics are opt-in for now
+(`HORIZON_DUALSENSE_HAPTICS=1`) until they are confirmed on a real pad; games
+started for tests (`HORIZON_NO_AUDIO`) never open them, and the pad's audio
+device is only ever opened by name, never the system's default output.
 
 Byte layout from public references, read for facts; no code is copied from
 them (the kernel and dualsensectl are GPL):

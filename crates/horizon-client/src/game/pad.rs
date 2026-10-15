@@ -59,6 +59,9 @@ pub(super) struct Pads {
     /// Its own output over HID (rumble here; gilrs only reads it), started once this window
     /// has the pad in hand; dropped, it releases the pad.
     output: Option<horizon_dualsense::Link>,
+    /// Its HD haptics, on USB: looked for once each time the output opens.
+    haptics: Option<horizon_dualsense::haptics::Haptics>,
+    haptics_tried: bool,
     /// What it was last told to show.
     shown: Option<horizon_dualsense::device::State>,
 }
@@ -219,6 +222,7 @@ impl Game<'_> {
         if self.pad.dualsense && self.pad.in_use && self.focused && self.pad.output.is_none() {
             self.pad.output = Some(horizon_dualsense::Link::start());
         }
+        self.pad_haptics();
         self.pad_show();
         // Damage from any source, here or on a server; nothing counts on
         // the title screen.
@@ -506,8 +510,28 @@ impl Game<'_> {
         }
     }
 
+    /// Open the pad's haptics once its output is open over USB (its audio device is there
+    /// only then); close them when it goes. Opt-in with `HORIZON_DUALSENSE_HAPTICS=1` until
+    /// they are proven on a pad (docs/controllers.md); never for games without sound (tests).
+    fn pad_haptics(&mut self) {
+        let usb = self.pad.output.as_ref().and_then(|o| o.open())
+            == Some(horizon_dualsense::Transport::Usb);
+        if !usb {
+            self.pad.haptics = None;
+            self.pad.haptics_tried = false;
+        } else if !self.pad.haptics_tried {
+            self.pad.haptics_tried = true;
+            if std::env::var_os("HORIZON_DUALSENSE_HAPTICS").is_some_and(|v| v == "1")
+                && std::env::var_os("HORIZON_NO_AUDIO").is_none()
+            {
+                self.pad.haptics = horizon_dualsense::haptics::Haptics::open();
+            }
+        }
+    }
+
     /// Release the DualSense's output (the game is quitting).
     pub(super) fn pad_close_output(&mut self) {
+        self.pad.haptics = None;
         self.pad.output = None;
     }
 
@@ -525,9 +549,28 @@ impl Game<'_> {
         };
         self.pad.last_rumble = Some((rumble.name(), pulse));
         let level = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        if let Some(haptics) = self
+            .pad
+            .haptics
+            .as_ref()
+            .filter(|_| self.pad_output().is_some())
+        {
+            let steps = rumble.shape().into_iter().map(|step| {
+                (
+                    step.strong,
+                    step.weak,
+                    Duration::from_millis(u64::from(step.millis)),
+                )
+            });
+            haptics.play(&steps.collect::<Vec<_>>());
+            return;
+        }
         if let Some(output) = self.pad_output() {
-            let length = Duration::from_millis(u64::from(pulse.millis));
-            output.rumble(vec![([level(pulse.strong), level(pulse.weak)], length)]);
+            let steps = rumble.shape().into_iter().map(|step| {
+                let length = Duration::from_millis(u64::from(step.millis));
+                ([level(step.strong), level(step.weak)], length)
+            });
+            output.rumble(steps.collect());
             return;
         }
         let (Some(gilrs), Some(id)) = (self.pad.gilrs.as_mut(), self.pad.active) else {
