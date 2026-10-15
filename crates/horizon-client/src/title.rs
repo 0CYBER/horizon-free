@@ -1084,6 +1084,9 @@ impl Title {
         {
             self.create_tooltip(atlas, batch, cursor, name, *creative, options);
         }
+        if let Mode::Multiplayer(screen) = &self.mode {
+            screen.draw_tooltip(atlas, batch, cursor);
+        }
         if let Some((at, toast)) = &self.toast
             && at.elapsed().as_secs() < 5
         {
