@@ -892,13 +892,23 @@ impl Streaming {
                 self.waiting.insert((x, sy, z));
                 continue;
             }
-            // Once per column: the 3x3 lit check would otherwise repeat for
-            // each of its sections every frame.
-            let lit = &self.lit;
+            // Once per column: the 3x3 check would otherwise repeat for each
+            // of its sections every frame. A neighbour being lit dirties this
+            // column again when its light job finishes (new chunks relight
+            // their eight neighbours), so wait for it rather than mesh once
+            // per neighbour. Columns still in `dirty_light` here can't be lit
+            // yet (a neighbour of theirs is missing): waiting for them could
+            // last until the player comes back.
+            let (lit, lighting) = (&self.lit, &self.lighting);
             let ready = *ready_columns.entry((x, z)).or_insert_with(|| {
-                (-1..=1).all(|dz| (-1..=1).all(|dx| lit.contains(&(x + dx, z + dz))))
+                (-1..=1).all(|dz| {
+                    (-1..=1).all(|dx| {
+                        let n = (x + dx, z + dz);
+                        lit.contains(&n) && !lighting.contains_key(&n)
+                    })
+                })
             });
-            if !ready || self.lighting.contains_key(&(x, z)) {
+            if !ready {
                 continue;
             }
             let region = columns
