@@ -123,6 +123,7 @@ impl Game<'_> {
             visibility,
         )?);
         // Everything loaded: switch over.
+        self.random_tick_sections.clear();
         self.options.resources = root.to_path_buf();
         let context = std::sync::Arc::new(horizon_client::streaming::WorkerContext {
             assets: assets.clone(),
