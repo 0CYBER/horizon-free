@@ -52,4 +52,4 @@ Never sent: account names or UUIDs, world names, server or LAN addresses, chat, 
 - `DELETE /v1/installs/<install_id>`: deletes everything sent under that ID.
 - `GET /v1/aggregate`: the anonymous totals the website's results page reads.
 
-Retention, rate limits and storage are described with the server.
+`crates/horizon-telemetry-server` is the server. Its [README](../crates/horizon-telemetry-server/README.md) covers storage (about 190 bytes per play session), retention (180 days of raw rows, anonymous daily totals kept), rate limits and hosting.
