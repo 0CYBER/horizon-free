@@ -204,11 +204,92 @@ pub struct Preprocessed {
     pub version: Vec<String>,
     /// `#extension` lines' words (`["GL_ARB_gpu_shader5", ":", "enable"]`).
     pub extensions: Vec<Vec<String>>,
+    /// The comments Iris reads directives from (`/* DRAWBUFFERS:01 */`,
+    /// `const int colortex0Format = RGBA16F;`) that are outside `#if`'d out
+    /// blocks, with their output line. Iris keeps comments through its
+    /// preprocessor; pp-rs drops them.
+    pub comments: Vec<(u32, String)>,
+}
+
+impl Preprocessed {
+    /// The text with its kept comments put back at the start of their
+    /// lines: what Iris's directive parsers read.
+    pub fn with_comments(&self) -> String {
+        let mut comments = self.comments.iter().peekable();
+        let mut out = String::new();
+        for (i, line) in self.text.lines().enumerate() {
+            while let Some((_, comment)) = comments.next_if(|(at, _)| *at as usize <= i + 1) {
+                out.push_str(comment);
+                out.push(' ');
+            }
+            out.push_str(line);
+            out.push('\n');
+        }
+        out
+    }
+}
+
+/// What a comment must hold for Iris to read a directive from it.
+const DIRECTIVE_WORDS: &[&str] = &["DRAWBUFFERS:", "RENDERTARGETS:", "const"];
+/// The identifier a kept comment is replaced by while pp-rs runs.
+const COMMENT_MARK: &str = "iris_comment_";
+
+/// Replace the comments holding [`DIRECTIVE_WORDS`] with an identifier
+/// (and their line breaks), so the ones in `#if`'d out blocks disappear with
+/// them. Comments on directive lines are left alone: there the identifier
+/// would end up in a macro or an `#if`.
+fn mark_comments(text: &str) -> (String, Vec<String>) {
+    let mut out = String::with_capacity(text.len());
+    let mut comments = Vec::new();
+    let (mut directive, mut line_start, mut continued) = (false, true, false);
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
+        let comment_len = if rest.starts_with("//") {
+            rest.find('\n').unwrap_or(rest.len())
+        } else if let Some(body) = rest.strip_prefix("/*") {
+            body.find("*/").map_or(rest.len(), |i| i + 4)
+        } else {
+            0
+        };
+        if comment_len > 0 {
+            let comment = &rest[..comment_len];
+            if !directive && DIRECTIVE_WORDS.iter().any(|w| comment.contains(w)) {
+                out.push_str(&format!(" {COMMENT_MARK}{} ", comments.len()));
+                out.extend(std::iter::repeat_n('\n', comment.matches('\n').count()));
+                comments.push(comment.to_owned());
+            } else {
+                out.push_str(comment);
+            }
+            if comment.contains('\n') {
+                // A comment spanning lines ends a directive like a line break.
+                directive = false;
+            }
+            line_start = false;
+            rest = &rest[comment_len..];
+            continue;
+        }
+        match c {
+            '\n' => {
+                directive = directive && continued;
+                line_start = !directive;
+            }
+            '#' if line_start => directive = true,
+            c if c.is_whitespace() => {}
+            _ => line_start = false,
+        }
+        if c != '\r' && !c.is_whitespace() || c == '\n' {
+            continued = c == '\\';
+        }
+        out.push(c);
+        rest = &rest[c.len_utf8()..];
+    }
+    (out, comments)
 }
 
 /// Expand `source` with `env`'s macros. Errors name the file and line.
 pub fn preprocess(source: &Inlined, env: &Environment) -> Result<Preprocessed, String> {
-    let text = &source.text;
+    let (marked, comments) = mark_comments(&source.text);
+    let text = &marked;
     let line_starts: Vec<usize> = std::iter::once(0)
         .chain(text.match_indices('\n').map(|(i, _)| i + 1))
         .collect();
@@ -222,6 +303,7 @@ pub fn preprocess(source: &Inlined, env: &Environment) -> Result<Preprocessed, S
         text: String::new(),
         version: Vec::new(),
         extensions: Vec::new(),
+        comments: Vec::new(),
     };
     let mut line = 1;
     for item in pp {
@@ -239,6 +321,16 @@ pub fn preprocess(source: &Inlined, env: &Environment) -> Result<Preprocessed, S
                 continue;
             }
             TokenValue::Pragma(_) => continue,
+            TokenValue::Ident(ref name) if name.starts_with(COMMENT_MARK) => {
+                if let Some(comment) = name[COMMENT_MARK.len()..]
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|i| comments.get(i))
+                {
+                    out.comments.push((at, comment.clone()));
+                }
+                continue;
+            }
             value => spelling(value),
         };
         if at > line {

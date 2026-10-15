@@ -7,6 +7,7 @@
 
 pub mod include;
 pub mod options;
+pub mod pipeline;
 pub mod preprocess;
 pub mod properties;
 pub mod source;

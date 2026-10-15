@@ -19,6 +19,7 @@ Both are off by default. With no pack selected the renderer draws exactly what i
 | Java shader packs: preprocessor (`crates/horizon-shaderpack`: includes, options, Iris's macros) | done: every program of the three test packs preprocesses |
 | Java shader packs: GLSL → WGSL (`horizon_shaderpack::translate`: syntax-tree legaliser, naga) | done: the 464 programs the three test packs enable by default translate (below) |
 | Java shader packs: `shaders.properties` (`horizon_shaderpack::properties`: screens, sliders, profiles, `program.*.enabled`, image formats, blend modes) | done, no screen yet: read like Iris for the three test packs |
+| Java shader packs: full-screen pass plan (`horizon_shaderpack::pipeline`: `DRAWBUFFERS`/`RENDERTARGETS`, `colortexN` formats and clearing, buffer flips) | done, not drawn yet: planned for the three test packs |
 | Java shader packs: Iris pipeline emulation | planned |
 
 ## How the renderer draws a frame today
