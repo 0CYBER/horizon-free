@@ -19,6 +19,7 @@ To play, use [the launcher](../launcher/README.md); the project site is [playhor
 - [Rust rewrite status](rust-parity.md): completion criteria, how to reproduce the validation, and per-area scope.
 - [Parity workflow](parity-workflow.md): `tools/parity.py`, the gate, other machines, merging.
 - Area notes: [block behaviours and ticking](parity/blocks.md), [section meshing](parity/meshing.md).
+- [Version ports](version-ports.md): how a new Minecraft release is detected, diffed against the pinned one and ported, and what stays manual.
 - [Decompilation and research lab](research-lab.md) and [decompilation status](decompilation-status.md): the local game inspection workspace the harnesses build on.
 
 ## Architecture: world generation
