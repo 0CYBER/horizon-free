@@ -1,6 +1,7 @@
 //! Everything that is not UI: GitHub, installs, resource preparation, the game's processes and
 //! updates. The GUI, the CLI and the MCP server all go through this module. Functions here
 //! block; the GUI runs them on threads and reads their messages.
+use crate::sources;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -594,17 +595,14 @@ fn reuse_prepared_in(versions: &Path) -> Vec<(String, String)> {
         .collect()
 }
 
-/// The official launcher's game directory, where horizon-prepare looks by default.
+/// The official launcher's game directory, else the first other launcher's found
+/// (sources.rs); preparing looks in all of them anyway.
 pub fn default_minecraft_dir() -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
-    let dir = if cfg!(target_os = "macos") {
-        home.join("Library/Application Support/minecraft")
-    } else if cfg!(windows) {
-        dirs::config_dir()?.join(".minecraft")
-    } else {
-        home.join(".minecraft")
-    };
-    dir.is_dir().then_some(dir)
+    let folders = sources::Folders::current()?;
+    sources::known_folders(sources::Os::current(), &folders)
+        .into_iter()
+        .map(|(_, dir)| dir)
+        .find(|dir| dir.is_dir())
 }
 
 fn found(program: &str, arg: &str) -> bool {
@@ -644,59 +642,43 @@ fn preparer_binary(dir: &Path) -> Option<PathBuf> {
     binary.is_file().then_some(binary)
 }
 
-/// What a Minecraft folder lacks of `version`'s files in the official launcher's layout, or
-/// None when it has them.
-fn missing_game_files(minecraft: &Path, version: &str) -> Option<String> {
-    if !minecraft.is_dir() {
-        return Some("the folder doesn't exist".into());
-    }
-    let files = [format!("{version}.json"), format!("{version}.jar")];
-    let missing: Vec<String> = files
-        .iter()
-        .filter(|file| {
-            !minecraft
-                .join("versions")
-                .join(version)
-                .join(file)
-                .is_file()
-        })
-        .map(|file| format!("versions/{version}/{file}"))
-        .collect();
-    (!missing.is_empty()).then(|| format!("no {}", missing.join(" or ")))
-}
-
-/// The error when no folder has Minecraft `version`: every folder looked in with what it
-/// lacks, and what the player can do about it (#419).
-fn not_found(version: &str, checked: &[(PathBuf, String)]) -> String {
-    let mut text = format!("Minecraft {version} was not found. Horizon looked in:");
-    for (dir, missing) in checked {
-        text += &format!("\n  {} ({missing})", dir.display());
-    }
-    text += &format!(
-        "\nTo fix it:\n  \
-         • Play {version} once in the official Minecraft launcher, then prepare again.\n  \
-         • Or choose the folder where your launcher keeps Minecraft {version} (Minecraft folder › \
-         Choose… in the launcher, --minecraft on the command line)."
-    );
-    text
-}
-
 /// Checks what the preparation needs and picks how to run it. PLAY.txt describes the same
 /// steps: the player's own launcher install, the server jar from that version's own json, and
-/// Java (and Python, for versions before horizon-prepare).
-pub fn preparer(tag: &str, minecraft: &Path, log: &dyn Fn(String)) -> Result<Preparer, String> {
+/// Java (and Python, for versions before horizon-prepare). Also returns the Minecraft folder
+/// to prepare from: `minecraft`, or the files another launcher keeps, linked into the official
+/// launcher's layout (sources.rs).
+pub fn preparer(
+    tag: &str,
+    minecraft: &Path,
+    log: &dyn Fn(String),
+) -> Result<(Preparer, PathBuf), String> {
     let version = game_version(tag);
     let dir = version_dir(tag);
     let reused = horizon_prepare::artifacts::reuse_imported(&dir, &|line| log(line.to_string()))?;
+    let minecraft = if reused {
+        minecraft.to_path_buf()
+    } else {
+        let pins = read_json(&dir.join("research-lock.json"))
+            .and_then(|lock| sources::Pins::read(&lock))
+            .ok_or("The version's research-lock.json doesn't pin the Minecraft files")?;
+        let known = sources::Folders::current()
+            .map(|f| sources::known_folders(sources::Os::current(), &f))
+            .unwrap_or_default();
+        let fetch = |url: &str| -> Result<Vec<u8>, String> {
+            let mut body = Vec::new();
+            get(url)?
+                .into_reader()
+                .read_to_end(&mut body)
+                .map_err(|e| e.to_string())?;
+            Ok(body)
+        };
+        let linked = data_dir().join("linked-minecraft");
+        sources::resolve(minecraft, &pins, &known, &linked, &fetch, log)?
+    };
     let manifest = minecraft
         .join("versions")
         .join(&version)
         .join(format!("{version}.json"));
-    if !reused {
-        if let Some(missing) = missing_game_files(minecraft, &version) {
-            return Err(not_found(&version, &[(minecraft.to_path_buf(), missing)]));
-        }
-    }
     let binary = preparer_binary(&dir);
     let python = if binary.is_some() {
         // The JDK the version pins, found as horizon-prepare finds it, so a missing one is
@@ -743,20 +725,21 @@ pub fn preparer(tag: &str, minecraft: &Path, log: &dyn Fn(String)) -> Result<Pre
         if horizon_prepare::sources_sha256(&dir.join(PREPARER_CRATE)).as_deref()
             == Some(horizon_prepare::SOURCES_SHA256)
         {
-            return Ok(Preparer::InProcess(horizon_prepare::Options {
+            let options = horizon_prepare::Options {
                 root: dir,
                 import: !reused,
-                minecraft_dir: Some(minecraft.to_path_buf()),
+                minecraft_dir: Some(minecraft.clone()),
                 server_jar: (!reused).then_some(jar),
-            }));
+            };
+            return Ok((Preparer::InProcess(options), minecraft));
         }
         let mut cmd = Command::new(binary);
         cmd.current_dir(&dir).arg("--root").arg(&dir);
         if !reused {
             cmd.args(["--prepare", "--server-jar"]).arg(&jar);
         }
-        cmd.arg("--minecraft-dir").arg(minecraft);
-        return Ok(Preparer::Process(cmd));
+        cmd.arg("--minecraft-dir").arg(&minecraft);
+        return Ok((Preparer::Process(cmd), minecraft));
     }
     let mut cmd = Command::new(python.unwrap());
     cmd.current_dir(&dir)
@@ -764,8 +747,8 @@ pub fn preparer(tag: &str, minecraft: &Path, log: &dyn Fn(String)) -> Result<Pre
     if !reused {
         cmd.args(["--prepare", "--server-jar"]).arg(&jar);
     }
-    cmd.arg("--minecraft-dir").arg(minecraft);
-    Ok(Preparer::Process(cmd))
+    cmd.arg("--minecraft-dir").arg(&minecraft);
+    Ok((Preparer::Process(cmd), minecraft))
 }
 
 /// Copies the pinned version's sounds from the player's own launcher install into the version's
@@ -1719,32 +1702,6 @@ mod release_loading_tests;
 mod tests {
     use super::*;
     use std::cmp::Ordering::*;
-
-    #[test]
-    fn a_folder_without_the_game_says_what_it_lacks_and_what_to_do() {
-        let dir = std::env::temp_dir().join(format!("horizon-missing-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        assert_eq!(
-            missing_game_files(&dir, "26.3").as_deref(),
-            Some("the folder doesn't exist")
-        );
-        fs::create_dir_all(dir.join("versions/26.3")).unwrap();
-        assert_eq!(
-            missing_game_files(&dir, "26.3").as_deref(),
-            Some("no versions/26.3/26.3.json or versions/26.3/26.3.jar")
-        );
-        fs::write(dir.join("versions/26.3/26.3.json"), "{}").unwrap();
-        let missing = missing_game_files(&dir, "26.3").unwrap();
-        assert_eq!(missing, "no versions/26.3/26.3.jar");
-        let error = not_found("26.3", &[(dir.clone(), missing)]);
-        assert!(error.starts_with("Minecraft 26.3 was not found. Horizon looked in:\n"));
-        assert!(error.contains(&format!("{} (no versions/26.3/26.3.jar)", dir.display())));
-        assert!(error.contains("Play 26.3 once in the official Minecraft launcher"));
-        assert!(error.contains("--minecraft on the command line"));
-        fs::write(dir.join("versions/26.3/26.3.jar"), "jar").unwrap();
-        assert_eq!(missing_game_files(&dir, "26.3"), None);
-        fs::remove_dir_all(&dir).unwrap();
-    }
 
     #[test]
     fn the_game_plays_under_its_own_audio_stream_name() {

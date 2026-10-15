@@ -638,8 +638,8 @@ impl Launcher {
                 let _ = tx.send(Msg::Line(Job::Prepare, line));
             };
             let result = backend::preparer(&tag, &minecraft, &log)
-                .inspect(|_| backend::sounds(&tag, &minecraft, &log))
-                .and_then(|p| match p {
+                .inspect(|(_, minecraft)| backend::sounds(&tag, minecraft, &log))
+                .and_then(|(p, _)| match p {
                     backend::Preparer::Process(cmd) => {
                         backend::spawn(Job::Prepare, cmd, tx.clone()).map(|_running| false)
                     }

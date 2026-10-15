@@ -90,7 +90,8 @@ enum Cmd {
     Remove { tag: String },
     /// Prepare a version's resources from your own Minecraft install
     Prepare {
-        /// The official launcher's game folder (default: the one the launcher uses)
+        /// The game folder of the official launcher, Prism Launcher, MultiMC, the Modrinth App,
+        /// ATLauncher or GDLauncher (default: the launcher's, then every launcher's default)
         #[arg(long)]
         minecraft: Option<PathBuf>,
         /// The installed version (default: the selected one)
@@ -299,7 +300,8 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
         Cmd::Prepare { minecraft, version } => {
             let tag = backend::resolve_version(version.as_deref())?;
             let minecraft = backend::minecraft_dir(minecraft)?;
-            let preparer = backend::preparer(&tag, &minecraft, &|line| eprintln!("{line}"))?;
+            let (preparer, minecraft) =
+                backend::preparer(&tag, &minecraft, &|line| eprintln!("{line}"))?;
             backend::sounds(&tag, &minecraft, &|line| println!("{line}"));
             match preparer {
                 backend::Preparer::Process(cmd) => attached(cmd)?,

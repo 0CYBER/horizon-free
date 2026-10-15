@@ -2673,6 +2673,7 @@ dependencies = [
  "self-replace",
  "serde",
  "serde_json",
+ "sha1",
  "tar",
  "ureq",
  "winresource",
