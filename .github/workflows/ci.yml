@@ -36,7 +36,7 @@ jobs:
       - name: Install Rust toolchain and the ALSA and udev headers the client links against
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
-          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy --target wasm32-unknown-unknown
       # Dependencies and the workspace's own build, saved from main's runs (pull requests read main's cache).
       - uses: Swatinem/rust-cache@v2
         with:
