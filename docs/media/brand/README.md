@@ -12,9 +12,8 @@ places it in the design system; `candidates/` keeps the two alternatives that we
 | `icon.svg` | the app icon on the 16 grid: the full square with 22 % corners (Windows, Linux, favicons) |
 | `icon-macos.svg` | the same tile on Apple's 1024 grid (824 px tile, 185 px corners, transparent margin) |
 | `avatar.svg` | full-bleed square for services that round or crop the image (GitHub, Discord) |
-| `avatar-kira.svg` | the bot's avatar: the mark on violet, so Kira reads apart from the project |
 | `mark.svg`, `mark-dark.svg` | the mark alone, for light and for dark backgrounds |
-| `social/card.html`, `social/banner.html` | the GitHub social preview and the Discord banner, as pages |
+| `social/card.html` | the GitHub social preview, as a page |
 
 ## Generated (don't edit)
 
@@ -30,15 +29,13 @@ places it in the design system; `candidates/` keeps the two alternatives that we
 | `website/public/favicon.svg`, `favicon-32.png`, `apple-touch-icon.png` | the website |
 | `icon-1024.png`, `icon-macos-1024.png` | previews, store listings |
 | `social/github-avatar-500.png` | GitHub: the organisation or account avatar |
-| `social/discord-icon-512.png` | Discord: the server icon |
-| `social/kira-avatar-512.png` | Discord: Kira's avatar |
 
-The two pages in `social/` are screenshots, at their exact size, with Playwright from the
+The page in `social/` is a screenshot, at their exact size, with Playwright from the
 website's dev dependencies:
 
 ```sh
 cd website && npm install
-node -e 'const {chromium}=require("playwright");(async()=>{const b=await chromium.launch();for(const[f,w,h,o]of[["card",1280,640,"github-social-1280x640"],["banner",960,540,"discord-banner-960x540"]]){const p=await b.newPage({viewport:{width:w,height:h}});await p.goto("file://"+require("path").resolve("../docs/media/brand/social/"+f+".html"));await p.waitForTimeout(300);await p.screenshot({path:"../docs/media/brand/social/"+o+".png"})}await b.close()})()'
+node -e 'const {chromium}=require("playwright");(async()=>{const b=await chromium.launch();for(const[f,w,h,o]of[["card",1280,640,"github-social-1280x640"]]){const p=await b.newPage({viewport:{width:w,height:h}});await p.goto("file://"+require("path").resolve("../docs/media/brand/social/"+f+".html"));await p.waitForTimeout(300);await p.screenshot({path:"../docs/media/brand/social/"+o+".png"})}await b.close()})()'
 ```
 
 ## Drawn in code
@@ -53,8 +50,5 @@ node -e 'const {chromium}=require("playwright");(async()=>{const b=await chromiu
   picture, upload `social/github-avatar-500.png`.
 - **GitHub social preview**: the repository's *Settings › General › Social preview › Edit*,
   upload `social/github-social-1280x640.png`.
-- **Discord server icon and banner**: *Server Settings › Server Profile*: icon
-  `social/discord-icon-512.png`; banner `social/discord-banner-960x540.png` (the banner needs
-  boost level 2).
-- **Kira's avatar**: discord.com/developers/applications › Kira › *Bot* › icon, upload
-  `social/kira-avatar-512.png` (or *General Information › App Icon* for the application too).
+- **Discord** (the server icon and banner, Kira's avatar): they live in the private kira repo since 2026-10-15
+  (`assets/`, its README's "Discord brand assets"): this repo holds only the game, the launcher and the website.

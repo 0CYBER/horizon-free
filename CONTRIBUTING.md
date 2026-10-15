@@ -4,6 +4,9 @@ Thanks for helping. Horizon is Minecraft: Java Edition 26.3 rewritten in Rust, a
 everything is that **it plays exactly like vanilla**. This page is the short version of how we work; questions are
 welcome on [Discord](https://discord.gg/HcTeMZxe5E).
 
+This repository holds the game, the launcher and the website, plus the tools, tests and docs that build, check and
+release them. Anything else (videos, Discord and other community material) lives elsewhere.
+
 ## Build it
 
 You need Rust (stable), Python 3.10+, JDK 25, and on Linux the ALSA and udev headers (`libasound2-dev libudev-dev`).
