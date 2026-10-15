@@ -11,7 +11,7 @@ block entity (canonical NBT) of each target chunk is compared.
 Cases: terrain sites for several seeds across the overworld, the Nether and the
 End, plus rectangles around vanilla structure starts found by scanning each
 seed (villages, mineshafts, strongholds, ancient cities, trial chambers,
-monuments, mansions, ...).
+monuments, mansions, ...), and the fixed sites of REGRESSIONS.
 
 usage: test_chunk_generation_parity.py [--seeds N] [--per-structure K]
        [--filter REGEX] [--dimension overworld|the_nether|the_end] [--keep]
@@ -35,6 +35,11 @@ except ImportError:
     import test_rust_parity as base
 
 SEEDS = [12345, -7046029254386353131, 987654321987, 4242, -1, 0x5DEECE66D, 20260607, 777]
+# Sites from bug reports, compared on every run: seed, dimension, chunk
+# rectangle x0,z0,x1,z1 and label.
+REGRESSIONS = [
+    (-1860902098141295193, 'the_nether', '-1,6,3,9', 'bastion_remnant across 20 chunks (#249)'),
+]
 RESOURCES = lab.LOCAL / 'horizon-client/26.3'
 ORACLE = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaChunkGenerationOracle.java'
 
@@ -304,20 +309,29 @@ def main():
     biome_seen = set()
     structure_seen = Counter()
     started = time.time()
-    for seed in args.seed or SEEDS[:args.seeds]:
+    seeds = list(args.seed or SEEDS[:args.seeds])
+    sampled = set(seeds)
+    if not args.seed and not args.rect:
+        seeds += [s for s, *_ in REGRESSIONS if s not in sampled]
+    for seed in seeds:
         rng = random.Random(seed)
         for dimension in dimensions:
             rects, labels = [], []
             if args.rect:
                 rects, labels = list(args.rect), [f'rect {r}' for r in args.rect]
+            else:
+                for s, d, rect, label in REGRESSIONS:
+                    if (s, d) == (seed, dimension) and not (args.filter and not re.search(args.filter, label)):
+                        rects.append(rect)
+                        labels.append(label)
             r = args.radius
-            if not args.structures_only and not args.rect:
+            if seed in sampled and not args.structures_only and not args.rect:
                 spread = {'overworld': 5000, 'the_nether': 1500, 'the_end': 1800}[dimension]
                 sites = [(0, 0)] + [(rng.randint(-spread, spread) // 16, rng.randint(-spread, spread) // 16) for _ in range(args.sites if dimension == 'overworld' else 2)]
                 for cx, cz in sites:
                     rects.append(f'{cx - r},{cz - r},{cx + r},{cz + r}')
                     labels.append(f'terrain {cx},{cz}')
-            if not args.terrain_only and not args.rect:
+            if seed in sampled and not args.terrain_only and not args.rect:
                 starts = scan(oracle, binary, seed, dimension, args.scan_radius if dimension == 'overworld' else 80)
                 for kind, cx, cz, box in pick_structures(starts, args.per_structure, rng):
                     if args.filter and not re.search(args.filter, kind):

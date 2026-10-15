@@ -3,12 +3,22 @@
 use crate::{
     biome::Biomes,
     chunk::{BIOME_STRATEGY, Chunk, HEIGHT, MIN_Y, SECTIONS, Section},
+    save::SavedProto,
     streaming::{ChunkGenerator, Proto},
 };
-use horizon_core::{paletted::PalettedContainer, position::ChunkPos};
+use horizon_core::{
+    paletted::PalettedContainer,
+    position::ChunkPos,
+    ticks::{ProtoChunkTicks, SavedTick, TickTypeId},
+};
 use horizon_world::{
+    heightmap::HeightmapType,
+    nbt::Tag,
     registry::BlockRegistry,
-    worldgen::generator::{GeneratorData, GeneratorWorker, OverworldGenerator, ProtoChunk},
+    worldgen::{
+        generator::{GeneratorData, GeneratorWorker, OverworldGenerator, ProtoChunk},
+        terrain::PreLightChunkStage,
+    },
 };
 use std::{path::Path, sync::Arc};
 
@@ -23,6 +33,8 @@ pub struct VanillaTerrain {
     /// Block state id -> block index, the game's block tick type: worldgen
     /// schedules block ticks by default state id.
     tick_blocks: Vec<u32>,
+    /// Block index -> default state id: `tick_blocks` the other way.
+    tick_states: Vec<u32>,
 }
 /// A proto chunk, or the position of one whose generation failed.
 enum VanillaProto {
@@ -68,6 +80,7 @@ impl VanillaTerrain {
         }
         let loot = dir.parent().and_then(crate::structure_blocks::loot_data);
         let mut tick_blocks = Vec::with_capacity(registry.len());
+        let mut tick_states = Vec::new();
         let mut last: Option<&str> = None;
         let mut index = 0u32;
         for id in 0..registry.len() {
@@ -76,6 +89,9 @@ impl VanillaTerrain {
                 .map_or("", |s| s.name.as_str());
             if last.is_some_and(|l| l != name) {
                 index += 1;
+            }
+            if last != Some(name) {
+                tick_states.push(registry.default_state(name).map_or(id as u32, |s| s.0));
             }
             last = Some(name);
             tick_blocks.push(index);
@@ -86,7 +102,90 @@ impl VanillaTerrain {
             loot,
             query: std::sync::Mutex::new(None),
             tick_blocks,
+            tick_states,
         })
+    }
+    /// A proto chunk's blocks, biomes, scheduled ticks and post-processing
+    /// marks as a column.
+    fn column(&self, chunk: &ProtoChunk) -> Chunk {
+        let pos = chunk.position();
+        let mut out = Chunk::empty(pos.x, pos.z);
+        let (bx, bz) = (pos.x * 16, pos.z * 16);
+        // Only the generated range (the Nether is 0..256) is copied.
+        let (lo, hi) = (
+            chunk.terrain.min_y().max(MIN_Y),
+            (chunk.terrain.min_y() + chunk.terrain.height()).min(MIN_Y + HEIGHT),
+        );
+        let mut values = Box::new([0u16; 4096]);
+        for si in 0..SECTIONS as i32 {
+            let base = MIN_Y + si * 16;
+            if base + 16 <= lo || base >= hi {
+                continue;
+            }
+            values.fill(0);
+            let mut any = false;
+            for y in base.max(lo)..(base + 16).min(hi) {
+                for z in 0..16 {
+                    for x in 0..16 {
+                        let id = chunk.block(bx + x, y, bz + z).0 as u16;
+                        values[((y & 15) << 8 | z << 4 | x) as usize] = id;
+                        any |= id != 0;
+                    }
+                }
+            }
+            if any {
+                Arc::make_mut(&mut out.sections[si as usize]).blocks =
+                    Section::from_blocks(&values);
+            }
+        }
+        // Ticks the features scheduled (leaves reshaped at a tree's edge,
+        // fluids of lakes and springs) run once the chunk is live, as
+        // LevelChunk takes over ProtoChunk's ticks.
+        let block_ticks: Vec<_> = chunk
+            .terrain
+            .block_ticks()
+            .pack(0)
+            .iter()
+            .filter_map(|t| {
+                let kind = *self.tick_blocks.get(t.kind.0 as usize)?;
+                Some(horizon_core::ticks::SavedTick {
+                    kind: horizon_core::ticks::TickTypeId(kind),
+                    ..*t
+                })
+            })
+            .collect();
+        let fluid_ticks = chunk.terrain.fluid_ticks().pack(0).to_vec();
+        if !block_ticks.is_empty() || !fluid_ticks.is_empty() {
+            out.saved = Some(Arc::new(crate::save::ChunkExtras {
+                block_ticks,
+                fluid_ticks,
+                ..Default::default()
+            }));
+        }
+        let base_section = chunk.terrain.min_y() >> 4;
+        for (i, marks) in chunk.terrain.postprocessing().iter().enumerate() {
+            let sy = (base_section + i as i32) * 16;
+            for &packed in marks {
+                let p = i32::from(packed);
+                let y = sy + ((p >> 4) & 15);
+                if (lo..hi).contains(&y) {
+                    out.postprocess
+                        .push([bx + (p & 15), y, bz + ((p >> 8) & 15)]);
+                }
+            }
+        }
+        for si in 0..SECTIONS as i32 {
+            let mut cells = [0u32; 64];
+            for (j, cell) in cells.iter_mut().enumerate() {
+                let (qx, qz, qy) = (j as i32 & 3, (j as i32 >> 2) & 3, si * 4 + (j as i32 >> 4));
+                let y = (MIN_Y + qy * 4).clamp(lo, hi - 1);
+                let id = chunk.biome_id_at(bx + qx * 4, y, bz + qz * 4);
+                *cell = u32::from(self.biome_map.get(id.0 as usize).copied().unwrap_or(0));
+            }
+            Arc::make_mut(&mut out.sections[si as usize]).biomes =
+                PalettedContainer::from_values(BIOME_STRATEGY, &cells);
+        }
+        out
     }
     /// The structure starts owned by a chunk (cached by the generator).
     pub fn starts_at(
@@ -209,89 +308,115 @@ impl ChunkGenerator for VanillaTerrain {
             }
         }
     }
+    fn is_decorated(&self, proto: &Proto) -> bool {
+        matches!(proto.downcast_ref::<VanillaProto>(), Some(VanillaProto::Ready(c)) if c.is_decorated())
+    }
+    fn saved_proto(&self, proto: &Proto) -> Option<SavedProto> {
+        let Some(VanillaProto::Ready(chunk)) = proto.downcast_ref::<VanillaProto>() else {
+            return None;
+        };
+        let block_entities = chunk
+            .block_entities
+            .iter()
+            .map(|(pos, nbt)| {
+                let mut nbt = nbt.clone();
+                for (key, v) in ["x", "y", "z"].into_iter().zip(pos) {
+                    nbt.insert(key.into(), Tag::Int(*v));
+                }
+                Tag::Compound(nbt)
+            })
+            .collect();
+        Some(SavedProto {
+            column: self.column(chunk),
+            decorated: chunk.is_decorated(),
+            block_entities,
+            entities: chunk.entities.iter().cloned().map(Tag::Compound).collect(),
+        })
+    }
+    /// The saved state replaces what decoration can change; biomes, structure
+    /// starts and references are generated again as they were.
+    fn restore_proto(&self, proto: &mut Proto, saved: SavedProto) {
+        let Some(VanillaProto::Ready(chunk)) = proto.downcast_mut::<VanillaProto>() else {
+            return;
+        };
+        let column = &saved.column;
+        let (bx, bz) = (column.x * 16, column.z * 16);
+        let (lo, hi) = (
+            chunk.terrain.min_y().max(MIN_Y),
+            (chunk.terrain.min_y() + chunk.terrain.height()).min(MIN_Y + HEIGHT),
+        );
+        for y in lo..hi {
+            for z in 0..16 {
+                for x in 0..16 {
+                    let state = column.block(x, y, z);
+                    if chunk.block(bx + x, y, bz + z) != state {
+                        let _ = chunk.terrain.set_block_raw(bx + x, y, bz + z, state);
+                    }
+                }
+            }
+        }
+        if saved.decorated {
+            chunk
+                .terrain
+                .set_generation_stage(PreLightChunkStage::Features);
+            chunk.set_decorated();
+        }
+        // Heightmaps follow the blocks (ProtoChunk primes missing ones on read).
+        let stage = chunk.terrain.generation_stage().heightmaps();
+        let kinds: Vec<HeightmapType> = HeightmapType::ALL
+            .into_iter()
+            .filter(|&k| chunk.terrain.heightmap(k).is_some() || stage.contains(&k))
+            .collect();
+        let _ = chunk.terrain.prime_heightmaps(&kinds);
+        let ticks = |ticks: &[SavedTick], kind: &dyn Fn(u32) -> Option<u32>| {
+            ProtoChunkTicks::from_saved(ticks.iter().filter_map(|t| {
+                Some(SavedTick {
+                    kind: TickTypeId(kind(t.kind.0)?),
+                    ..*t
+                })
+            }))
+        };
+        if let Some(extras) = column.saved.as_deref() {
+            *chunk.terrain.block_ticks_mut() = ticks(&extras.block_ticks, &|k| {
+                self.tick_states.get(k as usize).copied()
+            });
+            *chunk.terrain.fluid_ticks_mut() = ticks(&extras.fluid_ticks, &Some);
+        }
+        chunk.terrain.clear_postprocessing();
+        for &[x, y, z] in &column.postprocess {
+            chunk.terrain.mark_postprocessing(x, y, z);
+        }
+        chunk.block_entities = saved
+            .block_entities
+            .into_iter()
+            .filter_map(|tag| {
+                let Tag::Compound(mut nbt) = tag else {
+                    return None;
+                };
+                let mut coordinate = |key: &str| match nbt.remove(&key.into()) {
+                    Some(Tag::Int(v)) => Some(v),
+                    _ => None,
+                };
+                let pos = [coordinate("x")?, coordinate("y")?, coordinate("z")?];
+                Some((pos, nbt))
+            })
+            .collect();
+        chunk.entities = saved
+            .entities
+            .into_iter()
+            .filter_map(|tag| match tag {
+                Tag::Compound(nbt) => Some(nbt),
+                _ => None,
+            })
+            .collect();
+    }
     fn finish(&self, proto: Proto) -> Chunk {
         let proto = proto.downcast::<VanillaProto>().expect("vanilla proto");
         let mut chunk = match *proto {
             VanillaProto::Ready(c) => c,
             VanillaProto::Failed(x, z) => return Chunk::empty(x, z),
         };
-        let pos = chunk.position();
-        let mut out = Chunk::empty(pos.x, pos.z);
-        let (bx, bz) = (pos.x * 16, pos.z * 16);
-        // Only the generated range (the Nether is 0..256) is copied.
-        let (lo, hi) = (
-            chunk.terrain.min_y().max(MIN_Y),
-            (chunk.terrain.min_y() + chunk.terrain.height()).min(MIN_Y + HEIGHT),
-        );
-        let mut values = Box::new([0u16; 4096]);
-        for si in 0..SECTIONS as i32 {
-            let base = MIN_Y + si * 16;
-            if base + 16 <= lo || base >= hi {
-                continue;
-            }
-            values.fill(0);
-            let mut any = false;
-            for y in base.max(lo)..(base + 16).min(hi) {
-                for z in 0..16 {
-                    for x in 0..16 {
-                        let id = chunk.block(bx + x, y, bz + z).0 as u16;
-                        values[((y & 15) << 8 | z << 4 | x) as usize] = id;
-                        any |= id != 0;
-                    }
-                }
-            }
-            if any {
-                Arc::make_mut(&mut out.sections[si as usize]).blocks =
-                    Section::from_blocks(&values);
-            }
-        }
-        // Ticks the features scheduled (leaves reshaped at a tree's edge,
-        // fluids of lakes and springs) run once the chunk is live, as
-        // LevelChunk takes over ProtoChunk's ticks.
-        let block_ticks: Vec<_> = chunk
-            .terrain
-            .block_ticks()
-            .pack(0)
-            .iter()
-            .filter_map(|t| {
-                let kind = *self.tick_blocks.get(t.kind.0 as usize)?;
-                Some(horizon_core::ticks::SavedTick {
-                    kind: horizon_core::ticks::TickTypeId(kind),
-                    ..*t
-                })
-            })
-            .collect();
-        let fluid_ticks = chunk.terrain.fluid_ticks().pack(0).to_vec();
-        if !block_ticks.is_empty() || !fluid_ticks.is_empty() {
-            out.saved = Some(Arc::new(crate::save::ChunkExtras {
-                block_ticks,
-                fluid_ticks,
-                ..Default::default()
-            }));
-        }
-        let base_section = chunk.terrain.min_y() >> 4;
-        for (i, marks) in chunk.terrain.postprocessing().iter().enumerate() {
-            let sy = (base_section + i as i32) * 16;
-            for &packed in marks {
-                let p = i32::from(packed);
-                let y = sy + ((p >> 4) & 15);
-                if (lo..hi).contains(&y) {
-                    out.postprocess
-                        .push([bx + (p & 15), y, bz + ((p >> 8) & 15)]);
-                }
-            }
-        }
-        for si in 0..SECTIONS as i32 {
-            let mut cells = [0u32; 64];
-            for (j, cell) in cells.iter_mut().enumerate() {
-                let (qx, qz, qy) = (j as i32 & 3, (j as i32 >> 2) & 3, si * 4 + (j as i32 >> 4));
-                let y = (MIN_Y + qy * 4).clamp(lo, hi - 1);
-                let id = chunk.biome_id_at(bx + qx * 4, y, bz + qz * 4);
-                *cell = u32::from(self.biome_map.get(id.0 as usize).copied().unwrap_or(0));
-            }
-            Arc::make_mut(&mut out.sections[si as usize]).biomes =
-                PalettedContainer::from_values(BIOME_STRATEGY, &cells);
-        }
+        let mut out = self.column(&chunk);
         out.block_entities = crate::structure_blocks::block_entities(&chunk, self.loot.as_deref());
         out.structure_refs = chunk
             .structures()
