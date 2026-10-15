@@ -47,6 +47,62 @@ use std::{
 
 pub const VERSION_NAME: &str = "26.3";
 
+/// Snapshot live block entities and custom names for a save batch without
+/// mutating the world. Each map is visited once, retaining its iteration order
+/// within each chunk (including repeated chunk coordinates in the input).
+/// An empty batch skips both maps; one chunk uses the direct filter path.
+pub fn chunks_with_block_entities<'a>(
+    chunks: impl IntoIterator<Item = &'a Arc<Chunk>>,
+    entities: &HashMap<(i32, i32, i32), crate::containers::BlockEntity>,
+    names: &HashMap<(i32, i32, i32), String>,
+) -> Vec<Chunk> {
+    let chunks: Vec<_> = chunks.into_iter().collect();
+    if chunks.is_empty() {
+        return Vec::new();
+    }
+    if chunks.len() == 1 {
+        let mut c = (**chunks[0]).clone();
+        c.block_entities = entities
+            .iter()
+            .filter(|(p, _)| p.0 >> 4 == c.x && p.2 >> 4 == c.z)
+            .map(|(p, e)| (*p, e.clone()))
+            .collect();
+        c.block_names = names
+            .iter()
+            .filter(|(p, _)| p.0 >> 4 == c.x && p.2 >> 4 == c.z)
+            .map(|(p, n)| (*p, n.clone()))
+            .collect();
+        return vec![c];
+    }
+    // Index only requested chunks, borrowing their entries so unsaved entities
+    // are never cloned. Clone one chunk at a time for inventory cache locality.
+    let mut grouped = crate::fast_hash::FxHashMap::<_, (Vec<_>, Vec<_>)>::default();
+    grouped.reserve(chunks.len());
+    for c in &chunks {
+        grouped.entry((c.x, c.z)).or_default();
+    }
+    for (p, e) in entities {
+        if let Some((entries, _)) = grouped.get_mut(&(p.0 >> 4, p.2 >> 4)) {
+            entries.push((p, e));
+        }
+    }
+    for (p, n) in names {
+        if let Some((_, entries)) = grouped.get_mut(&(p.0 >> 4, p.2 >> 4)) {
+            entries.push((p, n));
+        }
+    }
+    chunks
+        .into_iter()
+        .map(|chunk| {
+            let mut c = (**chunk).clone();
+            let (entities, names) = &grouped[&(c.x, c.z)];
+            c.block_entities = entities.iter().map(|(p, e)| (**p, (*e).clone())).collect();
+            c.block_names = names.iter().map(|(p, n)| (**p, (*n).clone())).collect();
+            c
+        })
+        .collect()
+}
+
 fn string(s: &str) -> Tag {
     Tag::String(s.into())
 }
@@ -2498,6 +2554,74 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn save_batch_preserves_order_coordinates_and_ownership() {
+        use crate::containers::BlockEntity;
+        let mut entities = HashMap::new();
+        let mut names = HashMap::new();
+        for x in [i32::MIN, -17, -16, -1, 0, 15, 16, i32::MAX] {
+            for z in [-17, -16, -1, 0, 15, 16] {
+                let p = (x, 64, z);
+                entities.insert(p, BlockEntity::Chest(vec![None; 27]));
+                names.insert(p, format!("container {x},{z}"));
+            }
+        }
+        // Names without a modelled entity must also survive the snapshot.
+        names.insert((-2, 80, -3), "orphan name".into());
+        let mut source = Chunk::empty(-1, -1);
+        source
+            .block_entities
+            .push(((99, 0, 99), BlockEntity::Chest(vec![])));
+        source.block_names.push(((99, 0, 99), "stale".into()));
+        source.saved = Some(Arc::new(ChunkExtras::default()));
+        let source = Arc::new(source);
+        let batch = vec![
+            source.clone(),
+            Arc::new(Chunk::empty(1, 1)),
+            Arc::new(Chunk::empty(-2, 0)),
+            source.clone(), // Preserve input order and repeated coordinates.
+            Arc::new(Chunk::empty(i32::MIN >> 4, -2)),
+            Arc::new(Chunk::empty(i32::MAX >> 4, 1)),
+            Arc::new(Chunk::empty(100, 100)),
+        ];
+        let encode = |entries: &[((i32, i32, i32), BlockEntity)]| {
+            entries
+                .iter()
+                .map(|(p, e)| encode_block_entity(*p, e, "minecraft:chest"))
+                .collect::<Vec<_>>()
+        };
+        for input in [&batch[..0], &batch[..1], &batch[..]] {
+            let actual = chunks_with_block_entities(input, &entities, &names);
+            assert_eq!(actual.len(), input.len());
+            for (c, original) in actual.iter().zip(input) {
+                let expected: Vec<_> = entities
+                    .iter()
+                    .filter(|(p, _)| (p.0 >> 4, p.2 >> 4) == (c.x, c.z))
+                    .map(|(p, e)| (*p, e.clone()))
+                    .collect();
+                let expected_names: Vec<_> = names
+                    .iter()
+                    .filter(|(p, _)| (p.0 >> 4, p.2 >> 4) == (c.x, c.z))
+                    .map(|(p, n)| (*p, n.clone()))
+                    .collect();
+                assert_eq!((c.x, c.z), (original.x, original.z));
+                assert_eq!(encode(&c.block_entities), encode(&expected));
+                assert_eq!(c.block_names, expected_names);
+                assert!(Arc::ptr_eq(&c.sections[0], &original.sections[0]));
+                if let Some(saved) = &original.saved {
+                    assert!(Arc::ptr_eq(c.saved.as_ref().unwrap(), saved));
+                }
+            }
+        }
+        let snapshot = chunks_with_block_entities(&batch, &entities, &names);
+        entities.clear();
+        names.clear();
+        assert!(!snapshot[0].block_entities.is_empty());
+        assert!(!snapshot[0].block_names.is_empty());
+        assert_eq!(source.block_names[0].1, "stale");
+        assert_eq!(source.block_entities[0].0, (99, 0, 99));
+    }
+
     #[test]
     fn older_worlds_are_upgraded_on_opening() {
         let dir = std::env::temp_dir().join(format!("horizon-dv-{}", std::process::id()));
