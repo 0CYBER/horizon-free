@@ -256,7 +256,28 @@ Manual, by agents (and Ludovic's review):
 - **New JDK**: a fleet toolchain install, once per Java bump.
 - **Judgment on the switch**: merging the pin bump and releasing stay Ludovic's call.
 
-The replay of 26.2 → 26.3 below measures how much that is for one release.
+## Replay: 26.2 → 26.3
+
+Horizon was written against 26.3 from its first commit, so its code is the ground truth of what porting 26.2 to 26.3
+takes. On the Mac mini, `prepare 26.2` took 9 s (136 MB), `diff 26.2 26.3` 6 s and `report` under a second.
+
+| What 26.3 needed (in Horizon's code) | What the report found |
+| --- | --- |
+| Protocol 777, DataVersion 5023, pack formats | rank 1: protocol 776 → 777, world version 4903 → 5023, resource pack 88.0 → 97.1, data pack 107.1 → 121.0, with every site stating them (`PROTOCOL_VERSION`, both `DATA_VERSION`s, the `"26.3"` names) |
+| `ids.rs`: `ADD_TRANSIENT_BLOCK`, `POST_EFFECTS` (configuration and play), `SWING_ANIMATION`, serverbound `PUNCH` instead of `SWING`; handlers in `packets/play.rs`, `lan/hub.rs` | rank 1: exactly those packets, 131 renumbered, those files, and "regenerate `ids.rs`". Regenerating from 26.3's report reproduces the committed file byte for byte (after rustfmt); from 26.2's it differs by 274 lines |
+| DataFixers 4996-5016 in `datafix/fixes_c.rs` | rank 1: schemas V4996, V4996_1, V4997, V5000 and 16 new fixes (`MergeTerrainChunkStatusFix`, `ExplorerMapItemFix`, `SwingAnimationComponentSplitFix`...), with `datafix/` |
+| `swing_animation` split into `attack_animation` and `interact_animation` (`first_person.rs`, `game/hand.rs`, `item_model.rs`) | rank 1: data component types +13 -2, those files among the ones naming them; per component, 1,537 items affected |
+| `lan/tracking.rs` and the command tables | rank 1: regenerate `tracking.rs`, `command_suggestions.rs`, `command_order.rs`, `vanilla_order.rs` |
+| 133 methods that exist only in 26.3 and that Horizon's comments name (`Minecraft.startAttack`, `MultiPlayerGameMode.piercingAttack`, `SkyRenderer.buildEndSky`, `GameRenderer.render3dHud`...) | all 133: 132 in rank 2-3 items with the method named, on the file that ports it; 1 in the save-format item |
+| 49 classes that exist only in 26.3 and that Horizon names (`ComputeCommand`, `PostEffectCommand`, `LivingEntity.SwingState`, `BlockTransformer`, `StrawBedBlock`...) | all 49, in rank 4 "New in <package>" items |
+
+The report has 499 items: 10 of rank 1, 311 of rank 2, 96 of rank 3, 80 of rank 4, and 2 rank-5 summaries. Rank 1 is
+exact. Ranks 2 and 3 are leads, not all work: 173 of their 407 items have a changed method that Horizon's comments
+name. The rest are classes whose changed methods Horizon doesn't name. Many of those are mechanical (26.3 renamed
+`GuiGraphics` to `GuiGraphicsExtractor` and reworked the render pipeline), and 105 are "widely named" buckets
+(classes such as `Entity` that many files mention in passing). Running every harness against the new version (with
+`--results`) is what turns a rank-2 lead into a confirmed failure; the replay cannot do that, because the oracles are
+written against 26.3.
 
 ## Implementation status
 
@@ -265,6 +286,8 @@ python3 tools/version_port.py detect --snapshots     # exit 10: new release, 11:
 python3 tools/version_port.py prepare 26.3           # the pinned version: indexes .local, downloads nothing
 python3 tools/version_port.py prepare 26.4           # downloads, verifies, runs the data generator (about 10 s)
 python3 tools/version_port.py diff 26.3 26.4         # summary; the full diff in versions/diff-26.3-26.4/diff.json
+python3 tools/version_port.py report 26.3 26.4 [--results .local/parity-runner/state.json]   # report.md, report.json
+python3 tools/version_port.py port 26.4             # prepare both, diff, report
 python3 tools/version_port.py gc                     # keep the pinned version and the newest two others
 python3 tools/vanilla_map.py versions/26.3/classes.json net.minecraft.world.food.FoodData   # its Rust files and harnesses
 ```
@@ -274,5 +297,5 @@ python3 tools/vanilla_map.py versions/26.3/classes.json net.minecraft.world.food
 | This design | this page |
 | `detect`, `prepare`, `diff` (facts, packets, registries, blocks, items, commands, data, assets), `gc` | done |
 | Class index (`tools/class_index.py`), class diff with moves, `vanilla_map.json` (`tools/vanilla_map.py`) | done |
-| Port report (`report`), `port` | next PR |
+| Port report (`tools/port_report.py`, `report`), `port` | done |
 | Changed-class decompilation, `regen`, `version_consts` refactor, candidate harness run, `publish`, launchd agent | later |

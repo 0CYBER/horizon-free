@@ -8,6 +8,8 @@
     version_port.py diff OLD NEW                  facts, packets, registries, blocks, items, commands,
                                                   data packs, assets, lang and classes, with the Horizon
                                                   code each changed class concerns: diff-OLD-NEW/diff.json
+    version_port.py report OLD NEW [--results S]  the ranked port report: diff-OLD-NEW/report.md and .json
+    version_port.py port NEW [--old OLD]          prepare both, diff, report
     version_port.py gc [--keep VERSION...]        keep the pinned, the newest two others and --keep
 
 The downloads are for development only: they go to the version store (~/code/horizon-parity/versions,
@@ -31,10 +33,11 @@ import urllib.request
 import zipfile
 
 try:
-    from . import class_index, lab, vanilla_map
+    from . import class_index, lab, port_report, vanilla_map
 except ImportError:
     import class_index
     import lab
+    import port_report
     import vanilla_map
 
 MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
@@ -438,13 +441,17 @@ def read_reports(reports):
     }
 
 
-def diff_classes(old, new, mapping):
-    """The class diff, each changed or removed class with the Horizon files and harnesses that concern it
-    (looked up under its old name: Horizon's code names the pinned version's classes)."""
-    result = class_index.diff(old, new)
+def class_names(old, new, moved):
+    """Every class name of either version, but a moved class only under its new name, so that its simple
+    name stays unambiguous."""
+    return sorted(set(new) | (set(old) - set(moved)))
+
+
+def diff_classes(result, mapping):
+    """The class diff, each changed or removed class with the Horizon files and harnesses that concern it."""
     horizon = {}
-    for name, change in result["changed"].items():
-        entry = vanilla_map.lookup(mapping, change.get("moved_from", name))
+    for name in result["changed"]:
+        entry = vanilla_map.lookup(mapping, name)
         if entry["rust"] or entry["harnesses"]:
             horizon[name] = entry
     for name in result["removed"]:
@@ -455,9 +462,9 @@ def diff_classes(old, new, mapping):
     return result
 
 
-def diff_versions(old_paths, new_paths, old_facts, new_facts, old_classes=None, new_classes=None, mapping=None):
+def diff_versions(old_paths, new_paths, old_facts, new_facts, classes=None, mapping=None):
     a, b = read_reports(old_paths["reports"]), read_reports(new_paths["reports"])
-    classes = diff_classes(old_classes, new_classes, mapping) if old_classes is not None else None
+    classes = diff_classes(classes, mapping) if classes is not None else None
     return {
         "facts": diff_facts(old_facts, new_facts),
         "packets": diff_packets(a["packets"], b["packets"]),
@@ -526,14 +533,51 @@ def load(version, name):
 def diff(args):
     directory = diff_dir(args.old, args.new)
     old_classes, new_classes = load(args.old, "classes.json"), load(args.new, "classes.json")
-    mapping = vanilla_map.build(old_classes, dependencies=vanilla_map.recorded_dependencies(vanilla_map.default_shared()))
+    classes = class_index.diff(old_classes, new_classes)
+    mapping = vanilla_map.build(class_names(old_classes, new_classes, classes["moved"]),
+                                dependencies=vanilla_map.recorded_dependencies(vanilla_map.default_shared()))
     lab.write_json(directory / "vanilla_map.json", mapping)
     result = diff_versions(paths(args.old), paths(args.new), load(args.old, "facts.json"), load(args.new, "facts.json"),
-                           old_classes, new_classes, mapping)
+                           classes, mapping)
     lab.write_json(directory / "diff.json", result)
     print(summary(args.old, args.new, result))
     print(f"\n{directory / 'diff.json'}")
     return 0
+
+
+# --- report ------------------------------------------------------------------------------------------------
+
+def harness_results(state_path):
+    """{harness: "pass" | "fail"} from tools/parity.py's state; a harness fails if one of its shards does."""
+    found = {}
+    for name, record in json.loads(Path(state_path).read_text()).get("harnesses", {}).items():
+        harness = name.split("#")[0]
+        found[harness] = "fail" if record.get("status") != "pass" or found.get(harness) == "fail" else "pass"
+    return found
+
+
+def report(args):
+    directory = diff_dir(args.old, args.new)
+    if not (directory / "diff.json").exists():
+        raise SystemExit(f"No diff yet; run version_port.py diff {args.old} {args.new}")
+    result = json.loads((directory / "diff.json").read_text())
+    mapping = json.loads((directory / "vanilla_map.json").read_text())
+    results = harness_results(args.results) if args.results else None
+    built = port_report.build(result, mapping, args.old, args.new, load(pinned(), "facts.json"), results)
+    lab.write_json(directory / "report.json", built)
+    (directory / "report.md").write_text(port_report.markdown(built))
+    print("\n".join(port_report.markdown(built).splitlines()[:args.lines]))
+    print(f"\n{directory / 'report.md'} ({len(built['items'])} items)")
+    return 0
+
+
+def port(args):
+    """prepare both, diff, report."""
+    old = args.old or pinned()
+    for version in (old, args.new):
+        prepare(argparse.Namespace(version=version, download=False, jobs=args.jobs))
+    diff(argparse.Namespace(old=old, new=args.new))
+    return report(argparse.Namespace(old=old, new=args.new, results=args.results, lines=args.lines))
 
 
 # --- gc ----------------------------------------------------------------------------------------------------
@@ -579,12 +623,24 @@ def main():
     command = commands.add_parser("diff", help="diff two prepared versions")
     command.add_argument("old")
     command.add_argument("new")
+    command = commands.add_parser("report", help="the ranked port report of a diff")
+    command.add_argument("old")
+    command.add_argument("new")
+    command.add_argument("--results", help="tools/parity.py's state.json from a run against NEW")
+    command.add_argument("--lines", type=int, default=60, help="how much of report.md to print")
+    command = commands.add_parser("port", help="prepare, diff and report in one go")
+    command.add_argument("new")
+    command.add_argument("--old", help="default: the pinned version")
+    command.add_argument("--results", help="tools/parity.py's state.json from a run against NEW")
+    command.add_argument("--lines", type=int, default=60)
+    command.add_argument("-j", "--jobs", type=int, default=int(os.environ.get("FLEET_LOAD_JOBS", 0)) or None)
     command = commands.add_parser("gc", help="delete versions and scratch the store doesn't need")
     command.add_argument("--keep", nargs="*", default=[])
     command.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     STORE.mkdir(parents=True, exist_ok=True)
-    return {"detect": detect, "prepare": prepare, "diff": diff, "gc": gc}[args.command](args)
+    return {"detect": detect, "prepare": prepare, "diff": diff, "report": report, "port": port,
+            "gc": gc}[args.command](args)
 
 
 if __name__ == "__main__":
