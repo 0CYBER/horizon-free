@@ -236,6 +236,16 @@ impl Creative {
             search_index,
         }
     }
+    /// Where a stack comes in the creative tabs (the search tab lists them
+    /// all, in tab order): the same stack's place, else its item's first.
+    /// None for items the tabs don't show.
+    pub fn order_of(&self, stack: &ItemStack) -> Option<usize> {
+        let items = &self.search_items;
+        items
+            .iter()
+            .position(|s| s.same_item_same_components(stack))
+            .or_else(|| items.iter().position(|s| s.item == stack.item))
+    }
     pub fn tab(&self) -> &Tab {
         &self.tabs[self.selected.min(self.tabs.len() - 1)]
     }

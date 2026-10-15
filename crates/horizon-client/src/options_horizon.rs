@@ -424,13 +424,12 @@ impl OptionsUi {
                         ui.described_row(x, y, caption, "", 0.0, cost, text, cw - 60.0);
                         ui.switch(id, control_x, cy, on);
                     } else {
-                        let value = if item == extras::Item::ZoomKey
-                            && self.selected_key == Some(extras::ZOOM_KEY)
-                        {
-                            "Press a key".to_owned()
-                        } else {
-                            item.value(&s.extras)
-                        };
+                        let value =
+                            if item.key_name().is_some() && self.selected_key == item.key_name() {
+                                "Press a key".to_owned()
+                            } else {
+                                item.value(&s.extras)
+                            };
                         let bw = ui.button_width(&value, false).max(96.0);
                         ui.described_row(x, y, caption, "", 0.0, cost, text, cw - bw - 24.0);
                         ui.button(
@@ -557,8 +556,8 @@ impl OptionsUi {
             }
             return events;
         }
-        // A click anywhere stops waiting for the zoom key.
-        if self.selected_key == Some(extras::ZOOM_KEY) {
+        // A click anywhere stops waiting for an extra's key.
+        if matches!(self.selected_key, Some(extras::ZOOM_KEY | extras::SORT_KEY)) {
             self.selected_key = None;
         }
         match self.horizon_target(s, atlas, x, y) {
@@ -602,8 +601,8 @@ impl OptionsUi {
                         events.push(Event::Changed);
                     }
                     Some(HRow::Page(_, _, page)) => self.open_page(*page),
-                    Some(HRow::Extra(extras::Item::ZoomKey)) => {
-                        self.selected_key = Some(extras::ZOOM_KEY);
+                    Some(HRow::Extra(item)) if item.key_name().is_some() => {
+                        self.selected_key = item.key_name();
                     }
                     Some(HRow::Extra(item)) => {
                         item.cycle(&mut s.extras, right);

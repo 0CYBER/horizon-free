@@ -79,6 +79,7 @@ pub mod hud_layout;
 pub mod hud_overlays;
 pub mod hunger;
 pub mod input;
+pub mod inv_sort;
 pub mod inventory_effects;
 pub mod item_data;
 pub mod item_render;

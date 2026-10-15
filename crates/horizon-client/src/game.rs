@@ -4269,6 +4269,7 @@ impl Game<'_> {
             self.draw_inventory_player(batch, ox, oy);
         }
         self.draw_inventory_slots(batch, ox, oy);
+        self.draw_sort_buttons(batch, ox, oy);
         self.draw_recipe_book(batch);
         if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
             let (sx, sy) = self.slot_position(slot);
@@ -4784,6 +4785,9 @@ impl Game<'_> {
     fn inventory_press(&mut self, right: bool) {
         use horizon_client::container_screen::Target;
         use horizon_client::menu::Input;
+        if !right && self.sort_press() {
+            return;
+        }
         let (slot, outside) = self.inventory_target();
         let shift = self.has_shift_down();
         let target = Target::of(slot, outside);
@@ -8649,6 +8653,9 @@ impl Game<'_> {
     }
     /// A key press while a world is open (keyboard or control socket).
     fn key_pressed(&mut self, key: KeyCode) -> Result<()> {
+        if self.sort_key_press(key) {
+            return Ok(());
+        }
         if self.remote.is_some() && self.remote_key(key)? {
             return Ok(());
         }
