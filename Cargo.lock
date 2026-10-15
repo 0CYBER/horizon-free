@@ -911,6 +911,7 @@ dependencies = [
  "horizon-assets",
  "horizon-core",
  "horizon-protocol",
+ "horizon-telemetry",
  "horizon-theme",
  "horizon-world",
  "log",

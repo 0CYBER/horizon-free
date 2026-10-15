@@ -1,7 +1,8 @@
 //! Crash reports, laid out like vanilla's CrashReport.getFriendlyReport: a comment, the time,
 //! a description, the error with its stack, then the details of the game and the machine.
 //! Written to `crash-reports/crash-<yyyy-MM-dd_HH.mm.ss>-client.txt` in the game folder when
-//! the main thread panics or `main` gets an error back. Nothing is sent anywhere.
+//! the main thread panics or `main` gets an error back. It leaves the machine only scrubbed, and
+//! only if the player allows crash reports (`telemetry`).
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -105,7 +106,7 @@ impl Report {
 }
 
 /// The release this binary came with: launcher installs live in a folder named after the tag.
-fn release_tag() -> Option<String> {
+pub fn release_tag() -> Option<String> {
     let exe = std::env::current_exe().ok()?;
     let folder = exe.parent()?.file_name()?.to_str()?;
     (folder.starts_with('v') && folder[1..].starts_with(|c: char| c.is_ascii_digit()))
@@ -270,6 +271,7 @@ fn deliver(home: &Path, report: Report) -> Option<PathBuf> {
         ),
     );
     crate::logging::flush();
+    crate::telemetry::keep_crash(home, &report);
     match report.save(home) {
         Ok(path) => {
             eprintln!("Horizon: crash report saved to {}", path.display());
