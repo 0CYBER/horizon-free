@@ -324,8 +324,24 @@ impl Title {
             .collect::<Vec<_>>()
             .into_iter()
     }
-    /// Mouse wheel over the classic world list.
+    /// The pointer moved with the button held (`mouseDragged`).
+    pub fn drag(&mut self, cursor: (f32, f32), size: (f32, f32)) {
+        if let Mode::Multiplayer(screen) = &mut self.mode {
+            screen.drag(cursor.1, size);
+        }
+    }
+    /// The button was released (`onRelease`).
+    pub fn release(&mut self) {
+        if let Mode::Multiplayer(screen) = &mut self.mode {
+            screen.release();
+        }
+    }
+    /// Mouse wheel over the classic world and server lists.
     pub fn scroll_worlds(&mut self, delta: f32, cursor: (f32, f32), size: (f32, f32)) {
+        if let Mode::Multiplayer(screen) = &mut self.mode {
+            screen.wheel(delta, cursor, size);
+            return;
+        }
         let Mode::Select { worlds, .. } = &self.mode else {
             return;
         };

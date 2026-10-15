@@ -8707,6 +8707,11 @@ impl ApplicationHandler for Game<'_> {
                         if self.screen == Screen::Inventory || self.creative_inventory_open() {
                             self.inventory_drag_move();
                         }
+                        if let Some(title) = &mut self.title
+                            && !horizon_client::ui_theme::horizon()
+                        {
+                            title.drag(self.cursor, (b.width, b.height));
+                        }
                         if self.dragging && self.screen == Screen::Options {
                             let _ = b;
                             self.options_drag()?;
@@ -8780,6 +8785,15 @@ impl ApplicationHandler for Game<'_> {
                             state == ElementState::Pressed,
                             button == MouseButton::Right,
                         )?;
+                    }
+                }
+                WindowEvent::MouseInput {
+                    state: ElementState::Released,
+                    button: MouseButton::Left,
+                    ..
+                } if self.title.is_some() && self.screen != Screen::Options => {
+                    if let Some(title) = &mut self.title {
+                        title.release();
                     }
                 }
                 WindowEvent::MouseInput {
