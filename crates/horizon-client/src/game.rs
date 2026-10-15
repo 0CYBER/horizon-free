@@ -3673,7 +3673,8 @@ impl Game<'_> {
             let indicator = self.settings.attack_indicator;
             let delay = horizon_client::attack_strength::delay(self.main_hand_attack_speed());
             let strength = self.hand_strength.scale(0.0, self.main_hand_attack_speed());
-            if self.camera_type.first_person() && !spectator {
+            // The 3D crosshair (F3) takes the 2D one's place.
+            if self.camera_type.first_person() && !spectator && !self.debug_crosshair() {
                 let attack = (indicator == 1).then_some(strength);
                 let full = attack.is_some_and(|a| {
                     hud_layout::full_attack_indicator(a, delay, self.crosshair_living())
@@ -8416,6 +8417,13 @@ impl Game<'_> {
         }
         let view = horizon_client::camera::view_matrix(view_yaw, view_pitch);
         let at = camera.to_array();
+        // GameRenderer.renderLevel: the debug crosshair, first person with the HUD shown.
+        if self.debug_crosshair() && self.camera_type.first_person() && !self.ui.hide_gui {
+            let mut g = horizon_client::gizmos::Gizmos::default();
+            let scale = HudBatch::new(size).scale;
+            g.debug_crosshair(at, view_pitch, view_yaw, scale);
+            on_top.extend(g.on_top);
+        }
         let debug_lines = horizon_client::gizmos::camera_relative(&lines, at, view);
         let debug_lines_on_top = horizon_client::gizmos::camera_relative(&on_top, at, view);
         // LevelRenderer.renderHitOutline: the outline shape's edges.

@@ -283,6 +283,11 @@ impl Game<'_> {
     fn reduced_debug_info(&self) -> bool {
         self.settings.reduced_debug_info || self.ui.rules.bool("reduced_debug_info")
     }
+    /// The default profile's `3d_crosshair` entry: on while the overlay is
+    /// open, unless debug info is reduced.
+    pub(super) fn debug_crosshair(&self) -> bool {
+        self.debug && !self.reduced_debug_info()
+    }
     /// `Permissions.COMMANDS_GAMEMASTER` (`GameModeCommand.PERMISSION_CHECK`).
     pub(super) fn gamemaster(&self) -> bool {
         self.ui.registries.permission >= 2
