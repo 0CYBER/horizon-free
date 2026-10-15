@@ -33,6 +33,7 @@ class PrReadyTests(unittest.TestCase):
         self.assertTrue(pr_ready.launcher_rust("launcher/src/main.rs"))
         self.assertTrue(pr_ready.launcher_rust("crates/horizon-prepare/src/lib.rs"))
         self.assertTrue(pr_ready.launcher_rust("crates/horizon-theme/src/lib.rs"))
+        self.assertTrue(pr_ready.launcher_rust("crates/horizon-telemetry/src/lib.rs"))
         self.assertFalse(pr_ready.launcher_rust("launcher/links.json"))
         self.assertFalse(pr_ready.launcher_rust("launcher/README.md"))
         self.assertFalse(pr_ready.launcher_rust("crates/horizon-client/src/game.rs"))

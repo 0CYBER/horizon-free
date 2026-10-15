@@ -2,6 +2,7 @@
 //! and starts the client or a dedicated server.
 
 mod cli;
+mod collection;
 mod game_tools;
 mod markdown;
 mod mcp;
@@ -16,6 +17,7 @@ use gpui::{
 };
 use horizon_launcher::account::{self, Accounts, SignIn, SignInState};
 use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Updates};
+use horizon_launcher::telemetry;
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -147,6 +149,8 @@ struct Launcher {
     friend_focus: FocusHandle,
     joining: Option<String>,
     console_scroll: ScrollHandle,
+    /// Opt-in data collection: the player's answer and Settings' section (`collection`).
+    collection: collection::Collection,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
     _appearance: Subscription,
@@ -253,6 +257,7 @@ impl Launcher {
             friend_focus: cx.focus_handle(),
             joining: None,
             console_scroll: ScrollHandle::new(),
+            collection: collection::Collection::load(),
             tx,
             rx,
             _appearance: appearance,
@@ -279,6 +284,8 @@ impl Launcher {
         });
         this.fetch_startup_releases();
         this.fetch_links();
+        // What the game and the launcher kept, if the player allows it and there is a server.
+        telemetry::send_in_background();
         this
     }
 
@@ -2020,6 +2027,7 @@ impl Launcher {
                         ))
                     }),
             )
+            .child(self.collection_section(cx))
             .child(agents)
     }
 
@@ -2814,6 +2822,9 @@ impl Render for Launcher {
                     )
                     .child(self.footer(cx)),
             );
+        if self.asking_consent() {
+            root = root.child(self.consent_screen(cx));
+        }
         if let Some(opening) = &self.opening {
             // The wordmark arrives letter by letter, then gives way to the launcher; a click or
             // a key skips ahead.
@@ -2931,7 +2942,11 @@ fn main() {
             |window, cx| cx.new(|cx| Launcher::new(window, cx)),
         )
         .expect("window");
-        cx.on_window_closed(|cx| cx.quit()).detach();
+        cx.on_window_closed(|cx| {
+            telemetry::send_before_exit();
+            cx.quit()
+        })
+        .detach();
         cx.activate(true);
     });
 }

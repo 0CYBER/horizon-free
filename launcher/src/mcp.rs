@@ -5,6 +5,7 @@
 use crate::game_tools::{self, GameTools};
 use horizon_launcher::account::{self, Accounts, SignIn, SignInState};
 use horizon_launcher::backend::{self, Job, Logged};
+use horizon_launcher::telemetry;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
@@ -58,6 +59,13 @@ fn tools() -> Value {
         { "name": "select_account", "description": "Choose the account the game plays as, or \"offline\" to play without one.",
           "inputSchema": { "type": "object", "properties": { "account": { "type": "string", "description": "A name or UUID, or \"offline\"." } }, "required": ["account"] } },
         { "name": "check_updates", "description": "Check GitHub for a Horizon release newer than every installed version, and for a newer launcher.", "inputSchema": none },
+        { "name": "data_collection", "description": "The player's opt-in data collection: which kinds they allow (performance, crashes, bugs, benchmarks; all off until they answer), the install ID, how many items wait, and the data server. Read-only.", "inputSchema": none },
+        { "name": "set_data_collection", "description": "Turn kinds of data collection on or off. Only when the player asks: it records their consent.",
+          "inputSchema": { "type": "object", "properties": { "kinds": { "type": "array", "items": { "type": "string", "enum": ["performance", "crashes", "bugs", "benchmarks", "all"] } }, "on": { "type": "boolean" } }, "required": ["kinds", "on"] } },
+        { "name": "data_preview", "description": "Exactly what would be sent (the JSON), or an example of each kind when nothing waits. Sends nothing.", "inputSchema": none },
+        { "name": "delete_my_data", "description": "Ask the server to delete everything sent from this install, remove what waits, and take a new install ID. Only when the player asks.", "inputSchema": none },
+        { "name": "report_bug", "description": "Send a bug report in the player's words, only once they have agreed to send it (bug reports must be allowed). With include_log the end of the game's log goes too, scrubbed and without chat: show it to the player first (the logs tool). Returns exactly what was kept.",
+          "inputSchema": { "type": "object", "properties": { "text": { "type": "string" }, "include_log": { "type": "boolean" } }, "required": ["text"] } },
     ])
 }
 
@@ -272,6 +280,45 @@ impl Session {
                     backend::set_menu_style(style)?;
                 }
                 Ok(format!("Menu style: {}", backend::menu_style().name()))
+            }
+            "data_collection" => Ok(serde_json::to_string_pretty(&telemetry::status_json())
+                .map_err(|e| e.to_string())?),
+            "set_data_collection" => {
+                let kinds: Vec<String> = args
+                    .get("kinds")
+                    .and_then(Value::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let on = args
+                    .get("on")
+                    .and_then(Value::as_bool)
+                    .ok_or("on is required")?;
+                telemetry::set(&telemetry::parse_kinds(&kinds)?, on)?;
+                Ok(serde_json::to_string_pretty(&telemetry::status_json())
+                    .map_err(|e| e.to_string())?)
+            }
+            "data_preview" => {
+                let (what, text) = telemetry::preview();
+                Ok(format!("{what}\n{text}"))
+            }
+            "delete_my_data" => telemetry::delete_my_data(),
+            "report_bug" => {
+                let text = arg_str(args, "text").ok_or("text is required")?;
+                let with_log = args
+                    .get("include_log")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let item = telemetry::bug_report(text, with_log)?;
+                let done = telemetry::submit(&item)?;
+                Ok(format!(
+                    "{done}\n{}",
+                    serde_json::to_string_pretty(&item).map_err(|e| e.to_string())?
+                ))
             }
             "check_updates" => {
                 let u = backend::check_updates()?;

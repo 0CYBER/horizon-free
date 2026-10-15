@@ -84,9 +84,15 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher account select <name>          play as this account
     horizon-launcher account offline                play without an account
     horizon-launcher benchmark [--repeats N]        measure the launcher (see Performance log)
+    horizon-launcher data [status]                  what data collection is allowed, the install ID, what waits
+    horizon-launcher data allow|deny <kinds|all>    performance, crashes, bugs, benchmarks
+    horizon-launcher data show                      exactly what would be sent
+    horizon-launcher data delete                    delete what was sent and what waits; new install ID
+    horizon-launcher data bug "<text>" [--log]      a bug report, printed for you to confirm first
+    horizon-launcher data benchmark <report.json>   upload a benchmark report, printed first
 
 `--json` prints JSON where there is something to report (`versions`, `install`, `notes`,
-`next`, `links`, `menu-style`, `update --check`, `logs`, `account`, `benchmark`). Errors go to stderr with exit code 1. `server` runs in the terminal,
+`next`, `links`, `menu-style`, `update --check`, `logs`, `account`, `benchmark`, `data`). Errors go to stderr with exit code 1. `server` runs in the terminal,
 so lines you type reach its console. `HORIZON_LAUNCHER_HOME` replaces the data folder (for
 scripts and tests).
 
@@ -100,7 +106,9 @@ scripts and tests).
 `install_version`, `remove_version`, `prepare_resources`, `launch_client`, `start_server`,
 `server_command`, `server_log`, `stop_server`, `patch_notes`, `links`, `menu_style`, `logs`,
 `check_updates`, `accounts`, `sign_in` (returns the link and code for the player; the sign-in
-finishes in the background), `sign_out` and `select_account`.
+finishes in the background), `sign_out`, `select_account`, and for data collection
+`data_collection`, `set_data_collection`, `data_preview`, `delete_my_data` and `report_bug`
+(only with the player's say-so).
 A server started through MCP stops (cleanly, with `stop`) when the session ends. Starting one
 needs `accept_eula`, which an agent should only pass with the player's consent.
 
@@ -136,8 +144,19 @@ The game writes its log to `logs/latest.log` in the game folder (`HORIZON_HOME`,
 archives the previous one at start as `logs/<date>-<n>.log.gz`, as Minecraft does. When it
 crashes it writes `crash-reports/crash-<date>_<time>-client.txt` beside them. When a game the
 launcher started crashes, the Play page says so, with buttons to open or copy the report, open the
-logs folder and report it on Discord; Settings has the logs folder too. Nothing is ever sent
-anywhere by itself.
+logs folder and report it on Discord; Settings has the logs folder too. A crash report leaves the
+machine only if you turn on crash reports (below).
+
+## Data collection
+
+The first time it opens, the launcher asks whether you want to send performance statistics,
+crash reports, bug reports and benchmark uploads, each on its own switch and all off until you
+turn one on ("Send nothing" is one click). Settings → Data collection changes them any time, shows
+exactly what would be sent (the JSON), and deletes everything sent from your install. It asks
+again only when what is collected changes. The game obeys the same answer, kept in
+`telemetry/consent.json` in the game folder. What waits is sent when the launcher starts and
+closes. Every field, the caps and the format: [docs/telemetry.md](../docs/telemetry.md).
+
 
 ## Performance log
 
