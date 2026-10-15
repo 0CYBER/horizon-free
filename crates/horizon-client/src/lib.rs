@@ -93,6 +93,7 @@ pub mod lang;
 pub mod light;
 pub mod logging;
 pub mod menu;
+pub mod menu_blur;
 pub mod merchant;
 pub mod mesher;
 pub mod minimap;
