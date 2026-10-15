@@ -297,9 +297,11 @@ fn poll(
 const QUIET_MESHES_PER_S: f64 = 100.0;
 
 /// Waits until the player is spawned where `near` says, nothing is queued, the resident and
-/// generated chunk counts have not changed for a second and meshing has gone quiet (sections wait
-/// for their neighbours' light, so the last ones are drawn after the counts settle); returns when
-/// the last of these happened (`tools/perf_bench.py`'s `wait_loaded`).
+/// generated chunk counts have not changed for a second and the last sections are drawn (they wait
+/// for their neighbours' light, so after the counts settle); returns when the last of these
+/// happened (`tools/perf_bench.py`'s `wait_loaded`). With `status.streaming`, the sections are
+/// drawn once no stage has held work for half a second: blocks changing after the load (fluids
+/// settling, random ticks) only remesh in bursts. Without it, meshing has to go quiet.
 fn wait_loaded(control: &Control, near: impl Fn(&Value) -> bool) -> Result<Instant, String> {
     let deadline = Instant::now() + LOAD_LIMIT;
     let (mut last, mut changed, mut meshing) = (None, Instant::now(), Instant::now());
@@ -320,15 +322,26 @@ fn wait_loaded(control: &Control, near: impl Fn(&Value) -> bool) -> Result<Insta
                 (last, changed) = (Some(counts), now);
             }
             let meshed = s["meshed_sections"].as_f64().unwrap_or(0.0);
-            if let Some((at, before)) = previous
-                && meshed - before > QUIET_MESHES_PER_S * (now - at).as_secs_f64()
-            {
-                meshing = now;
-            }
+            let quiet = if let Some(stages) = s["streaming"].as_object() {
+                // Protos outside the view distance wait for neighbours that are never generated.
+                if stages
+                    .iter()
+                    .any(|(k, v)| k != "protos" && v.as_u64().unwrap_or(0) > 0)
+                {
+                    meshing = now;
+                }
+                Duration::from_millis(500)
+            } else {
+                if let Some((at, before)) = previous
+                    && meshed - before > QUIET_MESHES_PER_S * (now - at).as_secs_f64()
+                {
+                    meshing = now;
+                }
+                Duration::from_secs(1)
+            };
             previous = Some((now, meshed));
-            let done = changed.max(meshing);
-            if now - done >= Duration::from_secs(1) {
-                return Ok(done);
+            if now - changed >= Duration::from_secs(1) && now - meshing >= quiet {
+                return Ok(changed.max(meshing));
             }
         }
         thread::sleep(Duration::from_millis(50));
