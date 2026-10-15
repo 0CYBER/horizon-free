@@ -30,7 +30,8 @@ for entry in "$shared"/*; do
   if [ -L ".local/$name" ] || [ ! -e ".local/$name" ]; then ln -sfn "$entry" ".local/$name"; fi
 done
 
-key=$(git ls-files -s crates/horizon-prepare mods/horizon/src/test/java research-lock.json | shasum -a 256 | cut -c1-16)
+# HORIZON_PREPARE_KEY: the same key, computed where the Git history is (tools/pr_ready.py on another machine).
+key=${HORIZON_PREPARE_KEY:-$(git ls-files -s crates/horizon-prepare mods/horizon/src/test/java research-lock.json | shasum -a 256 | cut -c1-16)}
 prepared="$shared/prepared/$key"
 # Two runners share the vanilla data (~/.actions-runners/horizon-2/_work/horizon/shared-local links to the first
 # one's): one preparation at a time. A lock older than 30 minutes belongs to a job that died.

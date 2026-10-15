@@ -186,18 +186,14 @@ Online-mode servers (Mojang's session servers) are not supported; skins served o
 
 ## Contributing
 
-Issues and pull requests are welcome. Before opening a pull request, run the offline checks:
+Issues and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) for how we work (vanilla first, small pull requests, labels). Before opening a pull request, run the self-check and paste the block it prints:
 
 ```sh
 git config core.hooksPath .githooks
-python3 -m unittest discover -s tests -v
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-python3 tools/check_public_tree.py --history
+python3 tools/pr_ready.py
 ```
 
-CI runs these checks on GitHub's Linux runners. The vanilla comparisons need the game, which Horizon never downloads, so they run only when started by hand on a self-hosted runner holding the maintainer's own copy. Never commit game files, decompiled source or prepared resources: `tools/check_public_tree.py` rejects them, and tracked Java is allowed only under the project's own `dev/horizonlab` namespace.
+It runs rustfmt, clippy with warnings denied, the tests of the crates you touched, the Python tests, the public-tree check, and the vanilla harnesses your change can affect. CI runs the same checks on GitHub's Linux runners; the vanilla harnesses need the game, which Horizon never downloads, so they run on a self-hosted runner holding the maintainer's own copy. Never commit game files, decompiled source or prepared resources: `tools/check_public_tree.py` rejects them, and tracked Java is allowed only under the project's own `dev/horizonlab` namespace.
 
 ## Licence
 
