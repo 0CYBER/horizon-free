@@ -20,19 +20,16 @@ Linux x86_64/ext4/NVMe, Ryzen 5 5600X, Rust 1.99.0, Cargo `fast`, measured 2026-
 
 Unchanged speedups are approximately 226x, 359x and 775x. Cold overhead on these ZIPs is 0.1–2.6%, replacing the original cache implementation's 73–79% synthetic overhead. This measures overlay assembly and cache validation, excluding scan, texture decoding, total startup and FPS.
 
+Mac mini (M4 Pro, APFS, Rust stable, Cargo `fast`), same harness and packs, measured 2026-10-15 during review while the machine ran other builds:
+
+| ZIP pack | Original rebuild | Cached cold | Unchanged hit | Saved per hit |
+| --- | ---: | ---: | ---: | ---: |
+| Faithful 32x, 26.3 September 2026 | 1,184.400 ms | 1,295.069 ms | 0.571 ms | 1,183.829 ms |
+| FPBR, 1.21.9 R1.3 | 5,292.149 ms | 5,503.965 ms | 0.391 ms | 5,291.758 ms |
+
+Creating thousands of files and links costs far more on macOS than on Linux, so the saving there is seconds per startup with a pack enabled.
+
 Pack downloads were verified against publisher SHA-512 metadata. Exact versions, URLs, sizes, asset counts, hashes and prepared-manifest identity are recorded in `benchmarks/overlay-real-packs-2026-10-15.json`. Sources: [Faithful](https://modrinth.com/resourcepack/faithful-32x/version/lDYpMiqk), [Default HD](https://modrinth.com/resourcepack/default-hd-128x/version/rErHu3BE), [FPBR](https://modrinth.com/resourcepack/fpbr/version/dynf82xk). FPBR targets older 1.21.9 snapshots; it is measured as a large real 128x archive over prepared 26.3 resources, without claiming visual/version compatibility. Default HD is the publisher's free demo. Downloaded pack contents are not committed.
-
-## Synthetic coverage
-
-The existing fixtures contain 8,192 vanilla textures (128 MiB), 2,048 overrides (32 MiB) and 32 merged language files; equivalent directory/ZIP payloads are incompressible bytes. Eleven median samples compare identical output outside timing:
-
-| Fixture | Original | Cached cold | Hit |
-| --- | ---: | ---: | ---: |
-| Directory | 108.487 ms | 126.438 ms | 7.438 ms |
-| Deflated ZIP, 32.45 MiB | 155.540 ms | 155.453 ms | 0.128 ms |
-| Directory, four 8 MiB files | 0.115 ms | 0.271 ms | 0.076 ms |
-
-Directory topology scans remain a cost: the larger directory fixture adds about 17% cold overhead and gains 14.6x on hits. Tiny cold overlays add about 0.16 ms. No overall startup gain is inferred from either table.
 
 ## Reproduce and validate
 
@@ -41,10 +38,9 @@ export CARGO_INCREMENTAL=0
 export HORIZON_OVERLAY_BENCH_VANILLA=/path/to/prepared/26.3
 export HORIZON_OVERLAY_BENCH_PACKS='["/path/to/Faithful.zip","/path/to/DefaultHD.zip","/path/to/FPBR.zip"]'
 cargo test -p horizon-client --lib --profile fast packs::cache::tests::benchmark_real_resource_root -- --ignored --nocapture --test-threads=1
-cargo test -p horizon-client --lib --profile fast packs::cache::tests::benchmark -- --ignored --nocapture --test-threads=1 --skip benchmark_real_resource_root
 cargo test -p horizon-client --lib --profile fast packs:: -- --nocapture
 cargo clippy -p horizon-client --lib --tests --profile fast -- -D warnings
 cargo fmt --all -- --check
 ```
 
-Thirteen focused tests pass, covering source edits/replacements, Unix preserved-mtime edits, pack order/removal, overlays/filters, vanilla membership, marker/output-root recovery, failed ZIP rebuilds, symlink aliases/cycles, contention and unchanged relative link targets. All three opt-in benchmarks pass; strict Clippy, formatting and whitespace checks pass. Each overlay retains a small marker and empty lock file; cache hits retain no archive byte buffer.
+Thirteen focused tests pass, covering source edits/replacements, Unix preserved-mtime edits, pack order/removal, overlays/filters, vanilla membership, marker/output-root recovery, failed ZIP rebuilds, symlink aliases/cycles, contention and unchanged relative link targets. The opt-in real-pack benchmark passes; strict Clippy, formatting and whitespace checks pass. Each overlay retains a small marker and empty lock file; cache hits retain no archive byte buffer.
