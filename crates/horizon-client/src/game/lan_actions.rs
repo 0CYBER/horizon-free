@@ -564,7 +564,7 @@ impl Game<'_> {
             );
             return;
         }
-        if !host.settings.guest_commands || !self.cheats {
+        if !host.settings.guest_commands || !self.allow_commands() {
             host.hub.send_to(
                 conn,
                 &C::SystemChat(play::SystemChat {

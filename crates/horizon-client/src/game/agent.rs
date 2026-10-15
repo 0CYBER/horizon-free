@@ -1465,7 +1465,7 @@ impl Game<'_> {
                     self.send_chat(&command);
                     return ok(json!({ "ok": true }));
                 }
-                self.handle_chat_input(&command);
+                self.as_console(|g| g.handle_chat_input(&command));
                 ok(json!({ "ok": true, "chat": self.ui.chat.recent_lines(5) }))
             }
             "respawn" if self.remote.is_none() => {

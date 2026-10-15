@@ -941,8 +941,12 @@ impl Dispatcher {
         let start = start.min(cursor);
         let truncated = &parse.input[..cursor.min(parse.input.len())];
         let mut all = Vec::new();
-        // Brigadier lists every child, whatever its requirement.
+        // Brigadier lists every child, but the client's tree only holds the
+        // nodes the player may use (Commands.sendCommands prunes by canUse).
         for &child in &self.nodes[parent].children {
+            if self.nodes[child].permission > reg.permission {
+                continue;
+            }
             let mut builder = SuggestionsBuilder::new(truncated, start);
             match &self.nodes[child].kind {
                 NodeKind::Literal(l) => {

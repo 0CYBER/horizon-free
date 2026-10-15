@@ -1005,8 +1005,6 @@ struct Game<'a> {
     chat_capture: Option<Vec<horizon_client::text::Text>>,
     /// State of `/spectate`, `/posteffect`, `/debug`, `/waypoint` and friends.
     cmds: commands::extra::CommandExtras,
-    /// Allow Cheats: whether guests may be given commands.
-    cheats: bool,
     ui: chat::UiState,
     combat: combat::CombatTracker,
     mount: mounts::MountState,
@@ -6184,6 +6182,11 @@ impl Game<'_> {
             level.allow_commands = Some(o.commands(creative));
             horizon_client::save::write_world_gen_settings(&save_root, level.seed, o.world_gen())?;
         }
+        // Worlds made without the Create New World screen (--world, the
+        // control socket) take its default: commands on for Creative only.
+        if created {
+            level.allow_commands.get_or_insert(creative);
+        }
         horizon_client::crash::set_detail("World", format!("{} (saves/{folder})", level.name));
         if let Some(d) = &self.options.dimension {
             level.dimension = d.clone();
@@ -10065,7 +10068,6 @@ pub fn run() -> Result<()> {
         lan_acting: None,
         chat_capture: None,
         cmds: Default::default(),
-        cheats: true,
         ui: Default::default(),
         combat: Default::default(),
         mount: Default::default(),
