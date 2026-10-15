@@ -32,7 +32,7 @@ const HELP: &[&str] = &[
     "options [PAGE]                 open the options (video sound controls keybinds mouse chat accessibility language font packs graphics graphics-advanced)",
     "stats [reset]                  frame-time summary since the last reset",
     "bench SECONDS                  reset stats, wait, then reply with the summary",
-    "fly X1 Y1 Z1 X2 Y2 Z2 SECONDS [PITCH]  fly the camera along a line at constant speed, then reply with the frame summary",
+    "fly X1 Y1 Z1 X2 Y2 Z2 SECONDS [PITCH [raw]]  fly the camera along a line at constant speed, then reply with the frame summary (raw: every frame time too)",
     "open WORLD [SEED] [creative]   open or create a world from the title screen",
     "save                           save the world",
     "save-all                       save the world, rewriting every resident chunk",
@@ -51,6 +51,8 @@ pub struct Flight {
     pitch: f32,
     started: Instant,
     seconds: f64,
+    /// Reply with every frame time too (`fly ... PITCH raw`).
+    raw: bool,
     reply: Sender<String>,
 }
 
@@ -76,7 +78,11 @@ impl Game<'_> {
         if t >= 1.0
             && let Some(flight) = self.flight.take()
         {
-            let _ = flight.reply.send(self.frame_stats.summary().to_string());
+            let mut summary = self.frame_stats.summary();
+            if flight.raw {
+                summary["frame_ms"] = self.frame_stats.frame_millis().into();
+            }
+            let _ = flight.reply.send(summary.to_string());
         }
     }
     pub(super) fn poll_control(&mut self, event_loop: &ActiveEventLoop) {
@@ -468,6 +474,7 @@ impl Game<'_> {
                     pitch,
                     started: Instant::now(),
                     seconds: n(7)?.max(0.1),
+                    raw: words.get(9) == Some(&"raw"),
                     reply: reply.clone(),
                 });
                 Ok(None)
