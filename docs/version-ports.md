@@ -207,8 +207,9 @@ made:
 1. **horizon-prepare**, built from the candidate and run there: `.local/horizon-client/NEW` and its exporters'
    outputs. Its `sounds` and `panorama` steps read the version store's launcher-shaped copy, whose asset index and the
    objects those steps copy (about 370 MB of sounds) are downloaded once per version from Mojang's resource server,
-   each checked against its sha1. When the exporters no longer compile against NEW, the stage goes on and the report
-   gets a rank-1 item with javac's errors.
+   each checked against its sha1. Regen's link to the version store's data generator reports is dropped first:
+   horizon-prepare runs the generator itself, into the candidate. When the exporters no longer compile against NEW,
+   the stage goes on and the report gets a rank-1 item with javac's errors (read from the log horizon-prepare names).
 2. **`tools/parity.py --all`** there (or the harnesses named), from scratch.
 3. **Each harness classified**:
    - **pass**: Horizon already matches NEW there;
@@ -300,9 +301,9 @@ The report has 499 items: 10 of rank 1, 311 of rank 2, 96 of rank 3, 80 of rank 
 exact. Ranks 2 and 3 are leads, not all work: 173 of their 407 items have a changed method that Horizon's comments
 name. The rest are classes whose changed methods Horizon doesn't name. Many of those are mechanical (26.3 renamed
 `GuiGraphics` to `GuiGraphicsExtractor` and reworked the render pipeline), and 105 are "widely named" buckets
-(classes such as `Entity` that many files mention in passing). Running every harness against the new version (with
-`--results`) is what turns a rank-2 lead into a confirmed failure; the replay cannot do that, because the oracles are
-written against 26.3.
+(classes such as `Entity` that many files mention in passing). Running every harness against the new version is what turns a
+rank-2 lead into a confirmed failure; since the oracles are written against 26.3, the replay runs that stage both ways
+(below).
 
 ### `regen`
 
@@ -324,6 +325,27 @@ generators make from vanilla's data, and going 26.3 → 26.2 fails exactly where
 with javac naming it. The report for 26.2 → 26.3 then has 5 rank-1 items instead of 10: the 5 "regenerate" guesses
 are replaced by the generators' results in its summary. Both regens took under three minutes, most of it building
 `command_parse_fixture`.
+
+### `harnesses`
+
+The 17 harnesses closest to what 26.3 changed (block_properties, chunk_generation, command_exec, command_parse,
+component_patch, datafix, entity_components, first_person, food, hotbar, item_model, lan, light, options,
+resource_pack, save_roundtrip, sound_event; 22 runs with datafix's 6 shards), on the Mac mini at 2 to 3 jobs while CI
+and other sessions ran:
+
+| | 26.3 → 26.2 (`ports/26.2`) | 26.2 → 26.3 (`ports/26.3`) |
+| --- | --- | --- |
+| horizon-prepare | failed: `VanillaHeightmapOracle.java:33: cannot find symbol: variable FULL_CODEC (class BlockState)` (rank 1) | ok, sounds and panorama from the downloaded assets |
+| pass | 1 (`food`) | 17 |
+| oracle no longer compiles | 4: `chunk_generation` (`ServerChunkCache` constructor), `command_exec` (`com.mojang.authlib.services`), `command_parse` and `hotbar` (`RegistryLayer.WORLD`) | 0 |
+| fail | 12 (Horizon's 26.3 packet tables and resources don't build or match 26.2) | 0 |
+| newly failing, against the other direction's run as baseline | 16 | 0 |
+| time | about an hour, most of it datafix's vanilla upgrades | about 85 min, 10 of them horizon-prepare |
+
+So on a real port the stage separates the three cases the report needs: what already works on NEW, oracles whose
+vanilla API moved (javac names the symbol, as for regen), and behaviour that changed; and a candidate that is right
+passes everything it ran. The 26.2 → 26.3 report's summary now reads "harnesses on 26.3: 17 pass, 0 whose oracle no
+longer compiles, 0 fail; 0 newly failing".
 
 ## Implementation status
 
