@@ -121,6 +121,7 @@ pub mod packs;
 pub mod particles;
 pub mod patrol;
 pub mod perf_overlay;
+pub mod pick_item;
 pub mod pose;
 pub mod post;
 pub mod projectiles;
