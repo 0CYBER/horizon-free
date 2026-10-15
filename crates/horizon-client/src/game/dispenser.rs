@@ -933,6 +933,21 @@ impl Game<'_> {
                 LAUNCH,
             ),
         };
+        self.shoot_projectile_item(at, dir, &stack, power, uncertainty);
+        (shrink(stack), event)
+    }
+
+    /// `ProjectileItem.asProjectile` and `Projectile.spawnProjectileUsingShoot`:
+    /// one of `stack` fired from `at` along `dir`.
+    pub(super) fn shoot_projectile_item(
+        &mut self,
+        at: Vec3,
+        dir: [f64; 3],
+        stack: &ItemStack,
+        power: f32,
+        uncertainty: f32,
+    ) {
+        let item = stack.item.to_string();
         let one = ItemStack {
             count: 1,
             ..stack.clone()
@@ -967,7 +982,7 @@ impl Game<'_> {
                     "minecraft:tipped_arrow" => ProjectileKind::Arrow {
                         base_damage: 2.0,
                         critical: false,
-                        effect: tipped_effect(&stack),
+                        effect: tipped_effect(stack),
                     },
                     "minecraft:fire_charge" | "minecraft:wind_charge" => {
                         // asProjectile aims with the level's random first; the
@@ -1000,7 +1015,6 @@ impl Game<'_> {
                 self.creatures.projectiles.push(shot);
             }
         }
-        (shrink(stack), event)
     }
 
     // ---- entities placed by items ----

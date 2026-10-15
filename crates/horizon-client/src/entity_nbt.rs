@@ -435,8 +435,8 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             });
         }
         "minecraft:zombie" => {
+            map.insert("IsBaby".into(), Tag::Byte(i8::from(m.is_baby())));
             for (key, value) in [
-                ("IsBaby", Tag::Byte(0)),
                 ("CanBreakDoors", Tag::Byte(0)),
                 ("DrownedConversionTime", Tag::Int(-1)),
                 ("InWaterTime", Tag::Int(-1)),
@@ -844,6 +844,11 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         crate::mobs::cube::set_size(&mut m, number(tag.get("Size")).unwrap_or(0) as i32 + 1);
         m.health = health;
         m.extra.flag2 = flag(tag, "wasOnGround");
+    }
+    // Zombie, Piglin and Zoglin.readAdditionalSaveData: IsBaby (the baby
+    // zombies of trial spawners).
+    if !crate::mobs::finalize::ageable(m.species()) && flag(tag, "IsBaby") {
+        crate::mobs::finalize::set_baby(&mut m, true);
     }
     crate::mobs::raider::read_nbt(&mut m, tag);
     crate::mobs::riders::read_nbt(&mut m, tag);

@@ -38,7 +38,10 @@ use horizon_client::{
         },
         spawner::{Spawner, SpawnerAdded, SpawnerEvent, SpawnerLevel, SpawnerSpawn},
         species::{self, Baby},
-        trial_spawner::{TrialEvent, TrialPlayer, TrialSpawner, TrialSpawnerLevel, TrialState},
+        trial_spawner::{
+            Omen, TRIAL_OMEN_TICKS_PER_LEVEL, TrialEvent, TrialPlayer, TrialSpawner,
+            TrialSpawnerLevel, TrialState,
+        },
     },
     vault::{Vault, VaultEvent, VaultLevel, VaultPlayer, VaultState},
 };
@@ -119,8 +122,14 @@ struct World<'a> {
     placed: RefCell<Vec<([i32; 3], BlockStateId)>>,
     /// The game time (trial cases advance it).
     time: Cell<i64>,
-    /// The mobs a trial spawner added: UUID, position and box.
-    trial_mobs: RefCell<Vec<([i32; 4], [f64; 3], Aabb)>>,
+    /// The mobs a trial spawner added: UUID, position, height and box.
+    trial_mobs: RefCell<Vec<([i32; 4], [f64; 3], f32, Aabb)>>,
+    /// How many mobs a trial spawner added (their UUIDs count up).
+    trial_count: Cell<i32>,
+    /// Each player's omen and its amplifier (`/trial_omen:A`, `/bad_omen:A`).
+    omens: RefCell<Vec<Option<(Omen, i32)>>>,
+    /// Loot tables (trial cases).
+    loot: Option<std::sync::Arc<horizon_world::loot::LootData>>,
 }
 impl World<'_> {
     fn biome_at(&self, x: i32, y: i32, z: i32) -> &str {
@@ -382,6 +391,16 @@ impl TrialSpawnerLevel for World<'_> {
                 eye: [p[0], p[1] + f64::from(1.62f32), p[2]],
                 creative: mode == "creative",
                 spectator: mode == "spectator",
+                position: *p,
+                height: 1.8,
+                alive: true,
+                omen: self
+                    .omens
+                    .borrow()
+                    .get(i)
+                    .copied()
+                    .flatten()
+                    .map(|(o, _)| o),
             })
             .collect()
     }
@@ -404,8 +423,37 @@ impl TrialSpawnerLevel for World<'_> {
     }
     fn entity_block(&self, uuid: [i32; 4]) -> Option<[i32; 3]> {
         let mobs = self.trial_mobs.borrow();
-        let (_, p, _) = mobs.iter().find(|(u, ..)| *u == uuid)?;
+        let (_, p, ..) = mobs.iter().find(|(u, ..)| *u == uuid)?;
         Some(p.map(|v| v.floor() as i32))
+    }
+    fn entity_box(&self, uuid: [i32; 4]) -> Option<([f64; 3], f32)> {
+        let mobs = self.trial_mobs.borrow();
+        let (_, p, h, _) = mobs.iter().find(|(u, ..)| *u == uuid)?;
+        Some((*p, *h))
+    }
+    fn no_block_collision(&self, block: [i32; 3]) -> bool {
+        let lookup = |x: i32, y: i32, z: i32| self.state(x, y, z);
+        let mut scene = LookupCollisions {
+            block: &lookup,
+            binding: self.s.collision,
+        };
+        let state = self.state(block[0], block[1], block[2]);
+        self.s
+            .collision
+            .collision_shape(&mut scene, state, block)
+            .map_or(true, |shape| shape.is_empty())
+    }
+    fn loot_items(&self, table: &str, seed: i64) -> Vec<horizon_client::items::ItemStack> {
+        let Some(loot) = &self.loot else {
+            return Vec::new();
+        };
+        loot.roll_split(table, &mut LegacyRandom::new(seed))
+            .iter()
+            .map(horizon_client::structure_blocks::loot_item_with_components)
+            .collect()
+    }
+    fn seed(&self) -> i64 {
+        self.seed
     }
 }
 
@@ -585,6 +633,19 @@ fn main() -> horizon_client::Result<()> {
                 bounds: Bx(b),
             });
         }
+        // A player's third field: an omen and its amplifier.
+        let omens = indexed("p")
+            .iter()
+            .map(|p| {
+                let (effect, amplifier) = p.split('/').nth(2)?.split_once(':')?;
+                let omen = if effect == "trial_omen" {
+                    Omen::Trial
+                } else {
+                    Omen::Bad
+                };
+                Some((omen, amplifier.parse().ok()?))
+            })
+            .collect();
         let players = indexed("p")
             .into_iter()
             .map(|p| {
@@ -671,6 +732,9 @@ fn main() -> horizon_client::Result<()> {
             placed: RefCell::new(Vec::new()),
             time: Cell::new(0),
             trial_mobs: RefCell::new(Vec::new()),
+            trial_count: Cell::new(0),
+            omens: RefCell::new(omens),
+            loot: loot.clone(),
             entities: RefCell::new(
                 case_entities
                     .iter()
@@ -979,8 +1043,22 @@ fn trial_case(
             let scale = size as f32;
             let bounds = spawn_box(x, y, z, t.width as f32 * scale, t.height as f32 * scale);
             l.entities.borrow_mut().push((r.id.to_owned(), bounds));
-            let uuid = [1, 0, 0, l.trial_mobs.borrow().len() as i32];
-            l.trial_mobs.borrow_mut().push((uuid, r.position, bounds));
+            let uuid = [1, 0, 0, l.trial_count.get()];
+            l.trial_count.set(l.trial_count.get() + 1);
+            // Zombie.readAdditionalSaveData: IsBaby halves the box
+            // (getAgeScale); finalizeSpawn's fixed random never makes one.
+            let baby = match r
+                .entity
+                .get(&horizon_world::nbt::JavaString::from("IsBaby"))
+            {
+                Some(Tag::Byte(v)) => *v != 0,
+                Some(Tag::Int(v)) => *v != 0,
+                _ => false,
+            };
+            let height = t.height as f32 * scale * if baby { 0.5 } else { 1.0 };
+            l.trial_mobs
+                .borrow_mut()
+                .push((uuid, r.position, height, bounds));
             spawned.push_back(format!(
                 "{tick} spawn {} {} {} {} {}",
                 r.id,
@@ -1035,7 +1113,7 @@ fn trial_case(
         for e in events {
             match e {
                 TrialEvent::BlockUpdated => log.push(format!("{tick} update")),
-                TrialEvent::LevelEvent(id, _, data) => {
+                TrialEvent::LevelEvent(id, p, data) => {
                     // A spawn's events follow its tryAddFreshEntityWithPassengers,
                     // a reward's its items.
                     match id {
@@ -1043,7 +1121,13 @@ fn trial_case(
                         3014 => log.append(&mut items),
                         _ => {}
                     }
-                    log.push(format!("{tick} levent {id} {data}"));
+                    match id {
+                        3020 | 3012 => log.push(format!(
+                            "{tick} levent {id} {data} at {},{},{}",
+                            p[0], p[1], p[2]
+                        )),
+                        _ => log.push(format!("{tick} levent {id} {data}")),
+                    }
                 }
                 TrialEvent::Sound(name) => log.push(format!(
                     "{tick} sound minecraft:{name} {} {} {} 1.0 1.0",
@@ -1054,6 +1138,44 @@ fn trial_case(
                 TrialEvent::EntityPlace(_, p) => log.push(format!(
                     "{tick} gevent minecraft:entity_place {} {} {}",
                     p[0], p[1], p[2]
+                )),
+                TrialEvent::TrialOmen(uuid) => {
+                    let i = (uuid[3] - 1) as usize;
+                    let mut omens = world.omens.borrow_mut();
+                    let amplifier = omens.get(i).copied().flatten().map_or(0, |(_, a)| a);
+                    log.push(format!("{tick} effect remove minecraft:bad_omen"));
+                    log.push(format!(
+                        "{tick} effect add minecraft:trial_omen {} 0",
+                        TRIAL_OMEN_TICKS_PER_LEVEL * (amplifier + 1)
+                    ));
+                    if let Some(o) = omens.get_mut(i) {
+                        *o = Some((Omen::Trial, 0));
+                    }
+                }
+                TrialEvent::Discard(uuid) => {
+                    let mut mobs = world.trial_mobs.borrow_mut();
+                    if let Some(i) = mobs.iter().position(|(u, ..)| *u == uuid) {
+                        let (.., b) = mobs.remove(i);
+                        world.entities.borrow_mut().retain(|(_, e)| *e != b);
+                    }
+                }
+                TrialEvent::SoundAt(name, b, pitch) => log.push(format!(
+                    "{tick} sound minecraft:{name} {} {} {} 1.0 {pitch:?}",
+                    bits(f64::from(b[0]) + 0.5),
+                    bits(f64::from(b[1]) + 0.5),
+                    bits(f64::from(b[2]) + 0.5)
+                )),
+                TrialEvent::ItemSpawner {
+                    item,
+                    position,
+                    delay,
+                } => log.push(format!(
+                    "{tick} ispawner {} {} {} {} {} {delay}",
+                    item.item,
+                    item.count,
+                    bits(position[0]),
+                    bits(position[1]),
+                    bits(position[2])
                 )),
                 TrialEvent::OminousSet(set) => {
                     ominous = set;

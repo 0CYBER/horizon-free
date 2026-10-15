@@ -22,9 +22,15 @@ state of the block, every difficulty and both game rules. Every so many ticks
 the case kills the mobs the spawner added, so waves finish, rewards are
 ejected and cooldowns run out.
 
+Some players carry Trial Omen or Bad Omen, which turn a spawner that sees them
+ominous (Bad Omen becoming Trial Omen, the spawner's mobs discarded, the
+ominous config starting over), and some spawners start ominous. Ominous
+spawners drop ominous item spawners above a player or a mob (item, exact
+position and delay compared); the item spawners themselves are not ticked.
+
 finalizeSpawn runs with a fixed random in the oracle; its own outcomes are not
-compared. Ominous spawners (which also drop ominous item spawners) are not in
-the corpus yet.
+compared. Spawned mobs get UUIDs in spawn order on both sides, so the
+spawner's HashSets iterate them alike.
 """
 import argparse
 import base64
@@ -145,7 +151,10 @@ def players(w, rng, spos, half, height):
         else:
             x, y, z = spos[0] + rng.uniform(-20, 21), spos[1] + rng.choice([0, 0, -8, 10]), spos[2] + rng.uniform(-20, 21)
         mode = rng.choice(['survival'] * 7 + ['creative', 'adventure', 'spectator'])
-        w.players.append(f'{x:.3f},{y:.3f},{z:.3f}/{mode}')
+        omen = ''
+        if rng.random() < 0.3:
+            omen = f'/{rng.choice(["bad_omen", "bad_omen", "trial_omen"])}:{rng.choice([0, 0, 1, 4])}'
+        w.players.append(f'{x:.3f},{y:.3f},{z:.3f}/{mode}{omen}')
 
 
 def corpus():
@@ -164,6 +173,8 @@ def corpus():
         t0 = rng.choice([0, 1, 19, 1000, rng.randrange(0, 10**6), rng.randrange(10**9, 10**12)])
         w.kv['spos'] = f'{spos[0]},{spos[1]},{spos[2]}'
         w.kv['state'] = rng.choices(STATES, [2, 6, 4, 1, 1, 1])[0]
+        if rng.random() < 0.15:
+            w.kv['ominous'] = 1
         w.kv['snbt'] = base64.b64encode(trial_snbt(rng, t0).encode()).decode()
         w.kv['t0'] = t0
         w.kv['ticks'] = rng.choice([1, 2, 20, 41, 100, 200, 400, 600])
@@ -219,7 +230,9 @@ def main():
     base.ensure_sources_unchanged(sources, tested)
     count = lambda text: sum(line.count(text) for line in vanilla)
     stats = {'spawns': count(' spawn minecraft:'), 'items': count(' item minecraft:'), 'states': count(' state '),
-             'detections': count(' levent 3013 '), 'rewards': count(' levent 3014 '), 'kills': count(' kill ')}
+             'detections': count(' levent 3013 '), 'rewards': count(' levent 3014 '), 'kills': count(' kill '),
+             'became_ominous': count(' levent 3020 1 '), 'trial_omens': count(' effect add minecraft:trial_omen'),
+             'item_spawners': count(' ispawner ')}
     for state in STATES:
         stats[f'reached_{state}'] = sum(f' state {state} ' in line for line in vanilla)
     lab.write_json(build / 'report.json', {
@@ -229,8 +242,9 @@ def main():
                  'tracking), TrialSpawnerState.tickAndGetNext for every state (display entity, canSpawnInLevel, '
                  'tryDetectPlayers with line of sight, waves and their targets per player, spawnMob with its '
                  'collision, line of sight, spawn rules, yaw and obstruction checks, next spawn data, reward '
-                 'ejection with the loot tables and spawnItem, shutter sounds, cooldown) with every level random '
-                 'draw. finalizeSpawn runs with a fixed random in the oracle; its own outcomes are not compared.'})
+                 'ejection with the loot tables and spawnItem, shutter sounds, cooldown, becoming ominous with Trial '
+                 'and Bad Omen, ominous item spawners with their items, positions and delays) with every level '
+                 'random draw. finalizeSpawn runs with a fixed random in the oracle; its own outcomes are not compared.'})
     print(f'{len(cases):,} trial spawner cases match vanilla (' + ', '.join(f'{v:,} {k}' for k, v in stats.items()) + ')')
 
 
