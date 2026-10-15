@@ -9,6 +9,7 @@ To play, use [the launcher](../launcher/README.md); the project site is [playhor
 - [Graphics](graphics.md): the Simple and Advanced graphics settings, the graphics benchmark and what it measured.
 - [Extras](extras.md): optional zoom, minimap, FPS and keystroke overlays and auto-reconnect, all off by default.
 - [Launcher](../launcher/README.md): installs, updates and starts builds; its CLI and MCP server; releasing it.
+- [Opt-in data collection](telemetry.md): the consent, exactly what is sent, how it is stored and sent.
 - Menus: the title, world list, create world, multiplayer, options and pause screens share the launcher's design tokens and fonts (`crates/horizon-theme`), drawn by `ui_theme` over a live frozen backdrop (`game/backdrop.rs`, blurred and graded by `post.rs`). Options → Interface → Menu style switches to vanilla's screens (Classic, kept in `horizon.txt`; `HORIZON_MENU_STYLE=horizon|classic` overrides it, and scripted runs default to Classic). [Title](media/menu-title.png) ([webm](media/menu-title.webm)), [worlds](media/menu-worlds.png), [options](media/menu-options.png), [pause](media/menu-pause.png).
 
 ## Parity
