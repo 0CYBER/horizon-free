@@ -637,6 +637,10 @@ impl EditBox {
             text_color: rgba(224, 224, 224, 255),
         }
     }
+    /// When the field gained focus, for the cursor's blink.
+    pub fn focused_since(&mut self, at: Instant) {
+        self.focused_at = at;
+    }
     pub fn inner_width(&self) -> f32 {
         if self.bordered {
             self.width - 8.0

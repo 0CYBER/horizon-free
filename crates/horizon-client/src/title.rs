@@ -12,9 +12,11 @@ use std::{
     sync::mpsc,
 };
 
+mod create_world;
 #[cfg(test)]
 mod tests;
 mod world_management;
+pub use create_world::{DIFFICULTIES, WorldOptions};
 
 /// SelectWorldScreen's `HeaderAndFooterLayout(8 + 9 + 8 + 20 + 4, 60)`.
 const LIST_TOP: f32 = 49.0;
@@ -81,6 +83,7 @@ pub enum Mode {
         seed: String,
         creative: bool,
         focus: u8,
+        options: WorldOptions,
     },
     Edit {
         world: WorldEntry,
@@ -114,6 +117,7 @@ pub enum Action {
         name: String,
         seed: Option<i64>,
         creative: bool,
+        options: WorldOptions,
     },
     Connect {
         address: String,
@@ -140,7 +144,7 @@ pub struct Title {
     /// The saves listed for Home, re-read every couple of seconds.
     recent: std::cell::RefCell<Option<(std::time::Instant, Vec<WorldEntry>)>>,
 }
-struct Button {
+pub(crate) struct Button {
     x: f32,
     y: f32,
     w: f32,
@@ -265,12 +269,13 @@ impl Title {
             }
         };
     }
-    fn new_world() -> Mode {
+    pub(crate) fn new_world() -> Mode {
         Mode::Create {
             name: "New World".into(),
             seed: String::new(),
             creative: false,
             focus: 0,
+            options: WorldOptions::default(),
         }
     }
     fn return_to_list(&mut self, folder: Option<&str>) {
@@ -483,11 +488,22 @@ impl Title {
             name,
             seed,
             creative,
+            options,
             ..
         } = &self.mode
         else {
             return Action::None;
         };
+        Action::Create {
+            folder: self.target_folder(name),
+            name: name.clone(),
+            seed: parse_seed(seed),
+            creative: *creative,
+            options: options.clone(),
+        }
+    }
+    /// The folder a new world named `name` gets (`findResultFolder`).
+    fn target_folder(&self, name: &str) -> String {
         let base: String = name
             .chars()
             .map(|c| {
@@ -510,12 +526,7 @@ impl Title {
             folder = format!("{base} ({n})");
             n += 1;
         }
-        Action::Create {
-            folder,
-            name: name.clone(),
-            seed: parse_seed(seed),
-            creative: *creative,
-        }
+        folder
     }
     fn buttons(&self, w: f32, h: f32) -> Vec<Button> {
         let (w, h) = (w.ceil(), h.ceil());
@@ -609,29 +620,9 @@ impl Title {
                 ),
                 b((w / 2.0).floor() + 83.0, h - 28.0, 71.0, "Back", true, 12),
             ],
-            Mode::Create { creative, .. } => vec![
-                b(
-                    (w / 2.0).floor() - 75.0,
-                    120.0,
-                    150.0,
-                    if *creative {
-                        "Game Mode: Creative"
-                    } else {
-                        "Game Mode: Survival"
-                    },
-                    true,
-                    20,
-                ),
-                b(
-                    (w / 2.0).floor() - 155.0,
-                    h - 28.0,
-                    150.0,
-                    "Create New World",
-                    true,
-                    21,
-                ),
-                b((w / 2.0).floor() + 5.0, h - 28.0, 150.0, "Cancel", true, 22),
-            ],
+            Mode::Create {
+                creative, options, ..
+            } => create_world::buttons(w, h, *creative, options),
             Mode::Edit { world, name, .. } => {
                 let x = (w / 2.0).floor() - 100.0;
                 let top = edit_top(h);
@@ -920,71 +911,12 @@ impl Title {
                 );
             }
             Mode::Create {
-                name, seed, focus, ..
-            } => {
-                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
-                let title = "Create New World";
-                let tw = HudBatch::text_width(atlas, title);
-                batch.text(atlas, title, (w - tw) / 2.0, 8.0, u32::MAX, true);
-                let blink = (self.started.elapsed().as_millis() / 300).is_multiple_of(2);
-                for (i, (label, value)) in [
-                    ("World Name", name),
-                    (
-                        "Seed for the World Generator (leave blank for random)",
-                        seed,
-                    ),
-                ]
-                .iter()
-                .enumerate()
-                {
-                    let y = 40.0 + i as f32 * 40.0;
-                    crate::widgets::target_as(
-                        [(w / 2.0).floor() - 100.0, y + 11.0, 200.0, 20.0],
-                        crate::widgets::Kind::Field,
-                    );
-                    batch.text(
-                        atlas,
-                        label,
-                        (w / 2.0).floor() - 100.0,
-                        y,
-                        rgba(160, 160, 160, 255),
-                        true,
-                    );
-                    batch.fill(
-                        atlas,
-                        (w / 2.0).floor() - 100.0,
-                        y + 11.0,
-                        200.0,
-                        20.0,
-                        if *focus == i as u8 {
-                            u32::MAX
-                        } else {
-                            rgba(160, 160, 160, 255)
-                        },
-                    );
-                    batch.fill(
-                        atlas,
-                        (w / 2.0).floor() - 99.0,
-                        y + 12.0,
-                        198.0,
-                        18.0,
-                        rgba(0, 0, 0, 255),
-                    );
-                    let shown = if *focus == i as u8 && blink {
-                        format!("{value}_")
-                    } else {
-                        value.to_string()
-                    };
-                    batch.text(
-                        atlas,
-                        &shown,
-                        (w / 2.0).floor() - 96.0,
-                        y + 17.0,
-                        rgba(224, 224, 224, 255),
-                        true,
-                    );
-                }
-            }
+                name,
+                seed,
+                focus,
+                options,
+                ..
+            } => self.draw_create(atlas, batch, cursor, name, seed, *focus, options),
             Mode::Edit { name, focused, .. } => {
                 crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
                 centered(
@@ -1138,6 +1070,15 @@ impl Title {
                 true,
             );
         }
+        if let Mode::Create {
+            name,
+            creative,
+            options,
+            ..
+        } = &self.mode
+        {
+            self.create_tooltip(atlas, batch, cursor, name, *creative, options);
+        }
         if let Some((at, toast)) = &self.toast
             && at.elapsed().as_secs() < 5
         {
@@ -1163,6 +1104,17 @@ impl Title {
     /// Navigation buttons can return `Action::None` while still sounding.
     pub fn click(&mut self, x: f32, y: f32, size: (f32, f32)) -> (Action, bool) {
         let (w, h) = (size.0.ceil(), size.1.ceil());
+        // MenuTabBar: a new tab clears the focus and clicks.
+        if let Mode::Create { focus, options, .. } = &mut self.mode
+            && let Some(tab) = create_world::tab_at(w, (x, y))
+        {
+            let changed = options.tab != tab;
+            if changed {
+                options.tab = tab;
+                *focus = 2;
+            }
+            return (Action::None, changed);
+        }
         let hit = self
             .buttons(w, h)
             .into_iter()
@@ -1226,11 +1178,17 @@ impl Title {
                     _ => {
                         if let Some(level) = Level::read(&self.saves.join(&world.folder)) {
                             self.create_return_to_main = false;
+                            let options = WorldOptions::of_world(
+                                &level,
+                                world.commands,
+                                &self.saves.join(&world.folder),
+                            );
                             self.mode = Mode::Create {
                                 name: level.name,
                                 seed: level.seed.to_string(),
                                 creative: level.creative,
                                 focus: 0,
+                                options,
                             };
                         }
                     }
@@ -1325,8 +1283,13 @@ impl Title {
                 self.mode = *return_to.clone();
                 Action::None
             }
-            (Mode::Create { creative, .. }, Some(20)) => {
-                *creative = !*creative;
+            (
+                Mode::Create {
+                    creative, options, ..
+                },
+                Some(id),
+            ) if id != 21 && id != 22 => {
+                options.press(id, creative);
                 Action::None
             }
             (Mode::Create { .. }, Some(21)) => self.create_action(),
@@ -1334,13 +1297,8 @@ impl Title {
                 self.cancel_create();
                 Action::None
             }
-            (Mode::Create { focus, .. }, None) => {
-                for i in 0..2u8 {
-                    let fy = 40.0 + f32::from(i) * 40.0 + 11.0;
-                    if y >= fy && y < fy + 20.0 && (x - (w / 2.0).floor()).abs() < 100.0 {
-                        *focus = i;
-                    }
-                }
+            (Mode::Create { focus, options, .. }, None) => {
+                *focus = create_world::field_at(w, h, options.tab, (x, y)).unwrap_or(2);
                 Action::None
             }
             _ => Action::None,
@@ -1421,8 +1379,14 @@ impl Title {
         if let Mode::Multiplayer(screen) = &mut self.mode {
             screen.tab();
         }
-        if let Mode::Create { focus, .. } = &mut self.mode {
-            *focus = (*focus + 1) % 2;
+        // The open tab's one text box, then nothing.
+        if let Mode::Create { focus, options, .. } = &mut self.mode {
+            let field = if options.tab == 1 { 1 } else { 0 };
+            *focus = if *focus == field || options.tab == 2 {
+                2
+            } else {
+                field
+            };
         }
     }
     /// The server auto-reconnect retries now, once its countdown is over.

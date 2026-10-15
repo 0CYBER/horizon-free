@@ -1924,6 +1924,145 @@ const INT_RULES: [&str; 11] = [
 
 /// World and player state stored in `level.dat`, the saved-data files and
 /// the player file.
+/// The world options CreateWorldScreen sets (`WorldOptions` and the world
+/// preset) that `world_gen_settings` keeps.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WorldGen {
+    /// The `minecraft:flat` preset (Superflat) instead of `normal`.
+    pub flat: bool,
+    pub structures: bool,
+    pub bonus_chest: bool,
+}
+impl WorldGen {
+    /// A saved world's choices, from its `world_gen_settings`.
+    pub fn read(world: &Path) -> Option<Self> {
+        let settings = world_gen_settings(world)?;
+        let flag = |key: &str, default: bool| number(settings.get(key)).map_or(default, |v| v != 0);
+        let generator = settings
+            .get("dimensions")
+            .and_then(|d| d.get("minecraft:overworld"))
+            .and_then(|o| o.get("generator"));
+        Some(Self {
+            flat: text(generator.and_then(|g| g.get("type")))
+                .is_some_and(|t| t.trim_start_matches("minecraft:") == "flat"),
+            structures: flag("generate_structures", true),
+            bonus_chest: flag("bonus_chest", false),
+        })
+    }
+}
+impl Default for WorldGen {
+    fn default() -> Self {
+        Self {
+            flat: false,
+            structures: true,
+            bonus_chest: false,
+        }
+    }
+}
+/// Writes a new world's `world_gen_settings` (seed, options and dimensions).
+pub fn write_world_gen_settings(dir: &Path, seed: i64, options: WorldGen) -> Result<()> {
+    fs::create_dir_all(dir)?;
+    // worldgen/world_preset/flat.json's overworld: the classic flat layers.
+    let layer = |block: &str, height: i32| {
+        Tag::compound([("block", string(block)), ("height", Tag::Int(height))])
+    };
+    let flat = Tag::compound([
+        ("type", string("minecraft:overworld")),
+        (
+            "generator",
+            Tag::compound([
+                ("type", string("minecraft:flat")),
+                (
+                    "settings",
+                    Tag::compound([
+                        ("biome", string("minecraft:plains")),
+                        ("features", Tag::Byte(0)),
+                        ("lakes", Tag::Byte(0)),
+                        (
+                            "layers",
+                            Tag::List(vec![
+                                layer("minecraft:bedrock", 1),
+                                layer("minecraft:dirt", 2),
+                                layer("minecraft:grass_block", 1),
+                            ]),
+                        ),
+                        (
+                            "structure_overrides",
+                            Tag::List(vec![
+                                string("minecraft:strongholds"),
+                                string("minecraft:villages"),
+                            ]),
+                        ),
+                    ]),
+                ),
+            ]),
+        ),
+    ]);
+    let dimension = |kind: &str, settings: &str, source: Tag| {
+        Tag::compound([
+            ("type", string(kind)),
+            (
+                "generator",
+                Tag::compound([
+                    ("type", string("minecraft:noise")),
+                    ("settings", string(settings)),
+                    ("biome_source", source),
+                ]),
+            ),
+        ])
+    };
+    let preset = |p: &str| {
+        Tag::compound([
+            ("type", string("minecraft:multi_noise")),
+            ("preset", string(p)),
+        ])
+    };
+    write_saved_data(
+        dir,
+        "world_gen_settings",
+        Tag::compound([
+            ("seed", Tag::Long(seed)),
+            (
+                "generate_structures",
+                Tag::Byte(i8::from(options.structures)),
+            ),
+            ("bonus_chest", Tag::Byte(i8::from(options.bonus_chest))),
+            (
+                "dimensions",
+                Tag::compound([
+                    (
+                        "minecraft:overworld",
+                        if options.flat {
+                            flat
+                        } else {
+                            dimension(
+                                "minecraft:overworld",
+                                "minecraft:overworld",
+                                preset("minecraft:overworld"),
+                            )
+                        },
+                    ),
+                    (
+                        "minecraft:the_nether",
+                        dimension(
+                            "minecraft:the_nether",
+                            "minecraft:nether",
+                            preset("minecraft:nether"),
+                        ),
+                    ),
+                    (
+                        "minecraft:the_end",
+                        dimension(
+                            "minecraft:the_end",
+                            "minecraft:end",
+                            Tag::compound([("type", string("minecraft:the_end"))]),
+                        ),
+                    ),
+                ]),
+            ),
+        ]),
+    )
+}
 #[derive(Clone, Debug, Default)]
 pub struct Level {
     pub name: String,
@@ -1966,6 +2105,9 @@ pub struct Level {
     pub world_spawn: Option<[i32; 3]>,
     pub difficulty: String,
     pub hardcore: bool,
+    /// `allowCommands` chosen on the Create New World screen; unset keeps
+    /// the saved value (off for a new world).
+    pub allow_commands: Option<bool>,
     /// Game rule values by name without namespace (`keep_inventory`, ...).
     pub game_rules: BTreeMap<String, i32>,
     pub player_uuid: Option<[i32; 4]>,
@@ -2526,6 +2668,9 @@ impl Level {
         }
         if let Tag::Compound(map) = &mut data {
             map.entry("allowCommands".into()).or_insert(Tag::Byte(0));
+            if let Some(allow) = self.allow_commands {
+                map.insert("allowCommands".into(), Tag::Byte(i8::from(allow)));
+            }
             map.entry("WasModded".into()).or_insert(Tag::Byte(0));
             map.entry("DataPacks".into()).or_insert_with(|| {
                 Tag::compound([
@@ -2569,63 +2714,7 @@ impl Level {
         }
         write_saved_data(dir, "world_clocks", clocks)?;
         if legacy || !saved_data_path(dir, "world_gen_settings").exists() {
-            let dimension = |kind: &str, settings: &str, source: Tag| {
-                Tag::compound([
-                    ("type", string(kind)),
-                    (
-                        "generator",
-                        Tag::compound([
-                            ("type", string("minecraft:noise")),
-                            ("settings", string(settings)),
-                            ("biome_source", source),
-                        ]),
-                    ),
-                ])
-            };
-            let preset = |p: &str| {
-                Tag::compound([
-                    ("type", string("minecraft:multi_noise")),
-                    ("preset", string(p)),
-                ])
-            };
-            write_saved_data(
-                dir,
-                "world_gen_settings",
-                Tag::compound([
-                    ("seed", Tag::Long(self.seed)),
-                    ("generate_structures", Tag::Byte(1)),
-                    ("bonus_chest", Tag::Byte(0)),
-                    (
-                        "dimensions",
-                        Tag::compound([
-                            (
-                                "minecraft:overworld",
-                                dimension(
-                                    "minecraft:overworld",
-                                    "minecraft:overworld",
-                                    preset("minecraft:overworld"),
-                                ),
-                            ),
-                            (
-                                "minecraft:the_nether",
-                                dimension(
-                                    "minecraft:the_nether",
-                                    "minecraft:nether",
-                                    preset("minecraft:nether"),
-                                ),
-                            ),
-                            (
-                                "minecraft:the_end",
-                                dimension(
-                                    "minecraft:the_end",
-                                    "minecraft:end",
-                                    Tag::compound([("type", string("minecraft:the_end"))]),
-                                ),
-                            ),
-                        ]),
-                    ),
-                ]),
-            )?;
+            write_world_gen_settings(dir, self.seed, WorldGen::default())?;
         }
         if !saved_data_path(dir, "game_rules").exists() || !self.game_rules.is_empty() {
             // Only rules vanilla knows: an unknown key makes it reject the file.
