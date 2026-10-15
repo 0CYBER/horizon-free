@@ -154,6 +154,7 @@ impl Title {
                     seed,
                     creative,
                     focus,
+                    ..
                 } => {
                     let caret = (self.started.elapsed().as_millis() / 500).is_multiple_of(2);
                     create_page(ui, x, w, name, seed, *creative, *focus, caret);
@@ -379,14 +380,7 @@ impl Title {
                         };
                     }
                 }
-                CREATE => {
-                    self.mode = Mode::Create {
-                        name: "New World".into(),
-                        seed: String::new(),
-                        creative: false,
-                        focus: 0,
-                    }
-                }
+                CREATE => self.mode = Title::new_world(),
                 DELETE_WORLD => {
                     if let Some(world) = selected.and_then(|i| worlds.get(i)).cloned() {
                         self.mode = Mode::Delete { world };

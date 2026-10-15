@@ -5805,6 +5805,7 @@ impl Game<'_> {
         name: Option<&str>,
         seed: Option<i64>,
         creative: bool,
+        create: Option<&horizon_client::title::WorldOptions>,
     ) -> Result<()> {
         self.perf.world_opening();
         let save_root = std::env::current_dir()?.join("saves").join(folder);
@@ -5825,7 +5826,9 @@ impl Game<'_> {
                 .map(|d| horizon_client::random_sequences::RandomSequences::from_nbt(&d))
                 .unwrap_or_default();
         self.border = Default::default();
-        let level = Level::read(&save_root).unwrap_or_else(|| Level {
+        let existing = Level::read(&save_root);
+        let created = existing.is_none();
+        let level = existing.unwrap_or_else(|| Level {
             name: name.unwrap_or(folder).to_owned(),
             // WorldOptions.randomSeed when no seed was given.
             seed: seed.unwrap_or_else(|| {
@@ -5842,6 +5845,13 @@ impl Game<'_> {
             ..Level::default()
         });
         let mut level = level;
+        // CreateWorldScreen's choices, before streaming reads the generator.
+        if created && let Some(o) = create {
+            level.hardcore = o.hardcore;
+            level.difficulty = horizon_client::title::DIFFICULTIES[o.difficulty()].into();
+            level.allow_commands = Some(o.commands(creative));
+            horizon_client::save::write_world_gen_settings(&save_root, level.seed, o.world_gen())?;
+        }
         horizon_client::crash::set_detail("World", format!("{} (saves/{folder})", level.name));
         if let Some(d) = &self.options.dimension {
             level.dimension = d.clone();
@@ -8795,13 +8805,18 @@ impl ApplicationHandler for Game<'_> {
                         Action::Language => {
                             self.open_options_at(true, horizon_client::options_ui::Page::Language)
                         }
-                        Action::Play { folder } => self.open_world(&folder, None, None, false)?,
+                        Action::Play { folder } => {
+                            self.open_world(&folder, None, None, false, None)?
+                        }
                         Action::Create {
                             folder,
                             name,
                             seed,
                             creative,
-                        } => self.open_world(&folder, Some(&name), seed, creative)?,
+                            options,
+                        } => {
+                            self.open_world(&folder, Some(&name), seed, creative, Some(&options))?
+                        }
                         Action::Connect { address } => {
                             self.connect_server(&address, &self.options.player_name())?
                         }
@@ -9726,7 +9741,7 @@ pub fn run() -> Result<()> {
         }
         Some(folder) => {
             let (seed, creative) = (game.options.seed, game.options.creative);
-            game.open_world(&folder, None, Some(seed), creative)?;
+            game.open_world(&folder, None, Some(seed), creative, None)?;
         }
         None => {
             let title = Title::new(
