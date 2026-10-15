@@ -51,6 +51,20 @@ class ClassifyTests(unittest.TestCase):
 
 
 class AssetTests(unittest.TestCase):
+    def test_the_reports_link_goes_before_horizon_prepare(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, store = Path(tmp) / "candidate", Path(tmp) / "store-reports"
+            (store / "minecraft").mkdir(parents=True)
+            reports = root / ".local" / "datagen" / "out" / "reports"
+            reports.parent.mkdir(parents=True)
+            reports.symlink_to(store)
+            harness.own_reports(root)
+            self.assertFalse(reports.exists() or reports.is_symlink())
+            self.assertTrue((store / "minecraft").is_dir())
+            reports.mkdir()  # its own reports, from an earlier horizon-prepare, stay
+            harness.own_reports(root)
+            self.assertTrue(reports.is_dir())
+
     def test_sounds_and_panorama_only(self):
         self.assertTrue(harness.wanted_asset("minecraft/sounds.json"))
         self.assertTrue(harness.wanted_asset("minecraft/sounds/mob/cow/say1.ogg"))

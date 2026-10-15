@@ -56,8 +56,18 @@ def launcher_assets(tree, manifest, jobs=8):
     return len(hashes)
 
 
+def own_reports(root):
+    """Replace the candidate's link to the store's data generator reports (regen reads them) by nothing:
+    horizon-prepare runs the data generator itself, and it must write into the candidate, not through the link
+    into the version store (the generator also deletes the link as stale)."""
+    reports = root / ".local" / "datagen" / "out" / "reports"
+    if reports.is_symlink():
+        reports.unlink()
+
+
 def prepare_resources(root, version, store):
     """horizon-prepare against the candidate's version: {status: ok | failed, error, compile_errors}."""
+    own_reports(root)
     log = root / ".local" / "port-regen" / "horizon-prepare.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, CARGO_TARGET_DIR=str(root / ".local" / "port-target"))
