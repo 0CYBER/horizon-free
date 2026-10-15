@@ -35,6 +35,7 @@ pub enum H {
     ResolutionScale,
     Antialiasing,
     BatteryMode,
+    ShaderPack,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -213,6 +214,11 @@ pub fn rows(level: Level) -> Vec<Row> {
                 None,
                 "Lowers the frame rate when minimised, or idle too.",
             ),
+            h(
+                H::ShaderPack,
+                High,
+                "Redraws the world with a pack from shaderpacks/. Off is vanilla.",
+            ),
             Row::Header("Preferences"),
             v(Opt::ViewBobbing, None, "Sways the view while walking."),
             v(Opt::ChunkFade, None, "Fades newly loaded chunks in."),
@@ -304,6 +310,10 @@ impl H {
             H::ResolutionScale => labelled("Resolution Scale", format!("{}%", g.resolution_scale)),
             H::Antialiasing => labelled("Anti-aliasing", if g.fxaa { "FXAA" } else { "Off" }),
             H::BatteryMode => labelled("Battery Mode", on_off(g.battery)),
+            H::ShaderPack => match g.shader_pack.as_str() {
+                "" => labelled("Shader Pack", "Off"),
+                id => labelled("Shader Pack", id),
+            },
             H::Overlay => labelled(
                 "Performance Overlay",
                 match g.overlay {
@@ -349,6 +359,17 @@ impl H {
             H::PresentMode => g.present_mode = step(&PresentMode::ALL, g.present_mode, back),
             H::Antialiasing => g.fxaa = !g.fxaa,
             H::BatteryMode => g.battery = !g.battery,
+            H::ShaderPack => {
+                // Off, then every pack in shaderpacks/ by folder name.
+                let dir = std::env::current_dir()
+                    .unwrap_or_default()
+                    .join(crate::shader_pack::DIR);
+                let mut all = vec![String::new()];
+                all.extend(crate::shader_pack::list(&dir).into_iter().map(|(id, _)| id));
+                let i = all.iter().position(|x| *x == g.shader_pack).unwrap_or(0);
+                let n = all.len();
+                g.shader_pack = all[if back { (i + n - 1) % n } else { (i + 1) % n }].clone();
+            }
             H::Pacing => {
                 g.pacing = match g.pacing {
                     Pacing::Efficient => Pacing::Precise,
@@ -433,7 +454,13 @@ impl Item {
         let presetless = matches!(
             self,
             Item::Horizon(
-                H::Preset | H::Overlay | H::Pacing | H::PresentMode | H::Workers | H::BatteryMode
+                H::Preset
+                    | H::Overlay
+                    | H::Pacing
+                    | H::PresentMode
+                    | H::Workers
+                    | H::BatteryMode
+                    | H::ShaderPack
             ) | Item::Vanilla(
                 Opt::GuiScale
                     | Opt::Fullscreen
@@ -823,6 +850,25 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_shader_pack_row_is_off_by_default_and_outside_presets() {
+        let mut s = Settings::default();
+        let row = Item::Horizon(H::ShaderPack);
+        assert_eq!(row.label(&s).plain(), "Shader Pack: Off");
+        assert!(
+            rows(Level::Advanced)
+                .iter()
+                .any(|r| matches!(r, Row::Setting(x) if x.item == row))
+        );
+        s.horizon.shader_pack = "horizon-sample".into();
+        assert_eq!(row.label(&s).plain(), "Shader Pack: horizon-sample");
+        // Picking a pack keeps the preset.
+        Item::Horizon(H::Preset).cycle(&mut s, false, [854, 480]);
+        let preset = s.horizon.preset;
+        row.cycle(&mut s, false, [854, 480]);
+        assert_eq!(s.horizon.preset, preset);
     }
 
     #[test]
