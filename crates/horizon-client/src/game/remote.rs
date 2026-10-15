@@ -1785,6 +1785,8 @@ impl Game<'_> {
         // The server owns health and hunger: undo local food/fall changes.
         self.apply_remote_health();
         self.tick_avatar(before, false);
+        // The player's own model (third person, the inventory's preview).
+        self.tick_player_model();
         if !dead {
             self.remote_mining();
             if self.right && self.use_delay == 0 && playing {
@@ -2739,6 +2741,8 @@ impl Game<'_> {
                 .filter(|t| t.kind == "minecraft:player")
                 .map(|t| t.position)
                 .collect::<Vec<_>>(),
+            // The player's own model exists (third person and the inventory draw it).
+            "player_model": self.player_model.is_some(),
             "health": r.health.0,
             "food": r.health.1,
             "decode_errors": r.decode_errors,
