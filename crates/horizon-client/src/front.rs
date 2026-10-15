@@ -33,6 +33,7 @@ const MAKE: u64 = id("create.make", 0);
 const SERVER: u64 = id("mp.row", 0);
 const JOIN: u64 = id("mp.join", 0);
 const DIRECT: u64 = id("mp.direct", 0);
+const FRIEND: u64 = id("mp.friend", 0);
 const ADD: u64 = id("mp.add", 0);
 const EDIT: u64 = id("mp.edit", 0);
 const DELETE: u64 = id("mp.delete", 0);
@@ -435,6 +436,7 @@ impl Title {
                 let id = match hit {
                     JOIN => Some(40),
                     DIRECT => Some(41),
+                    FRIEND => Some(47),
                     ADD => Some(42),
                     EDIT => Some(43),
                     DELETE => Some(44),
@@ -443,15 +445,17 @@ impl Title {
                         Screen::List { .. } => 46,
                         Screen::Edit { .. } => 51,
                         Screen::Direct { .. } => 53,
+                        Screen::Friend { .. } => 57,
                         Screen::Disconnected { .. } => 54,
                     }),
                     CANCEL_RETRY => Some(55),
                     DONE => Some(match screen {
                         Screen::Direct { .. } => 52,
+                        Screen::Friend { .. } => 56,
                         _ => 50,
                     }),
                     FIELD_A | FIELD_B => {
-                        if let Screen::Edit { focus, .. } = screen {
+                        if let Screen::Edit { focus, .. } | Screen::Friend { focus, .. } = screen {
                             *focus = u8::from(hit == FIELD_B);
                         }
                         None
@@ -482,6 +486,25 @@ impl Title {
         }
         Action::None
     }
+}
+
+/// The end of `text` that fits `width`, led by an ellipsis when cut.
+fn tail_fit(ui: &Ui, text: &str, width: f32) -> String {
+    if ui.measure(Face::Regular, BODY, text) <= width {
+        return text.to_owned();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut start = 0;
+    while start < chars.len() {
+        let tail: String = std::iter::once('…')
+            .chain(chars[start..].iter().copied())
+            .collect();
+        if ui.measure(Face::Regular, BODY, &tail) <= width {
+            return tail;
+        }
+        start += 1;
+    }
+    String::new()
 }
 
 /// The page header plus a row of actions under it; returns the y below.
@@ -803,6 +826,7 @@ fn multiplayer_page(ui: &mut Ui, x: f32, w: f32, screen: &Screen, caret: bool) {
             let saved = selected.is_some_and(|i| i < servers.len());
             let mut items = vec![
                 (JOIN, "Join", Kind::Primary, has),
+                (FRIEND, "Join a friend", Kind::Secondary, true),
                 (ADD, "Add server", Kind::Secondary, true),
                 (DIRECT, "Direct connect", Kind::Secondary, true),
                 (REFRESH, "Refresh", Kind::Ghost, true),
@@ -954,6 +978,67 @@ fn multiplayer_page(ui: &mut Ui, x: f32, w: f32, screen: &Screen, caret: bool) {
                 caret,
             );
             ui.divider(x, y + rh, w);
+        }
+        Screen::Friend { code, relay, focus } => {
+            let y = header(
+                ui,
+                x,
+                "Join a friend",
+                "Paste the invite code your friend sees in their pause menu.",
+            );
+            let parsed = horizon_friends::invite::parse_detailed(code);
+            let ok = parsed.is_ok();
+            actions_right(
+                ui,
+                x + w,
+                y - 24.0 - 58.0,
+                &[
+                    (DONE, "Join", Kind::Primary, ok),
+                    (BACK, "Cancel", Kind::Ghost, true),
+                ],
+            );
+            ui.divider(x, y, w);
+            let rh = 12.0 + CONTROL + 12.0;
+            let fx = x + t::ROW_LABEL + 16.0;
+            let fw = w - t::ROW_LABEL - 16.0;
+            let rows = [
+                (FIELD_A, "Invite code", code, "Paste the code here", fw),
+                (
+                    FIELD_B,
+                    "Relay (optional)",
+                    relay,
+                    "host:port, for short codes",
+                    fw.min(360.0),
+                ),
+            ];
+            let mut ry = y;
+            for (i, (fid, label, value, hint, width)) in rows.into_iter().enumerate() {
+                ui.text_line(Face::Regular, BODY, rh, x, ry, color::MUTED, label);
+                // A long code shows its end, where the typing is.
+                let shown = tail_fit(ui, value, width - 28.0);
+                ui.field(
+                    fid,
+                    [fx, ry + 12.0, width, CONTROL],
+                    &shown,
+                    hint,
+                    usize::from(*focus) == i,
+                    caret,
+                );
+                ry += rh;
+                ui.divider(x, ry, w);
+            }
+            let note = match parsed {
+                _ if code.trim().is_empty() => None,
+                Err(e) => Some(e.to_string()),
+                Ok(horizon_friends::invite::Parsed::Short(_)) if relay.trim().is_empty() => Some(
+                    "This is a relay's short code: fill in your friend's relay above, or ask for the full code."
+                        .to_owned(),
+                ),
+                Ok(_) => None,
+            };
+            if let Some(note) = note {
+                ui.text(Face::Regular, SMALL, x, ry + 12.0, color::MUTED, &note);
+            }
         }
         Screen::Disconnected { reason, retry } => {
             let mut y = header(

@@ -63,6 +63,9 @@ enum Cmd {
     Play {
         #[arg(long)]
         version: Option<String>,
+        /// Join a friend's world with its invite code
+        #[arg(long)]
+        join: Option<String>,
     },
     /// Run a dedicated server here; type commands into its console
     Server {
@@ -255,9 +258,13 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             }
             println!("{tag} is prepared.");
         }
-        Cmd::Play { version } => attached(backend::client(&backend::resolve_version(
-            version.as_deref(),
-        )?)?)?,
+        Cmd::Play { version, join } => {
+            let mut cmd = backend::client(&backend::resolve_version(version.as_deref())?)?;
+            if let Some(code) = join {
+                backend::join_friend(&mut cmd, &code)?;
+            }
+            attached(cmd)?
+        }
         Cmd::Server {
             dir,
             version,
