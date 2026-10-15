@@ -66,7 +66,11 @@ public final class VanillaSprintInputOracle {
         @Override public boolean isEyeInFluid(TagKey<Fluid> tag){return false;}
         @Override public boolean onClimbable(){return false;}
         @Override public boolean tryToStartFallFlying(){return false;}
-        @Override protected void goDownInWater(){}
+        // The controlled actor sinks (LivingEntity.goDownInWater on it).
+        @Override protected void goDownInWater(){
+            if(controlled==null)return;
+            try{var method=LivingEntity.class.getDeclaredMethod("goDownInWater");method.setAccessible(true);method.invoke(controlled);}catch(ReflectiveOperationException e){throw new AssertionError(e);}
+        }
         @Override protected boolean isControlledCamera(){return false;}
         @Override public void onUpdateAbilities(){}
         @Override public void jumpFromGround(){} // post-sprint ability-flight callback
@@ -95,7 +99,8 @@ public final class VanillaSprintInputOracle {
             modify=LocalPlayer.class.getDeclaredMethod("modifyInput",net.minecraft.world.phys.Vec2.class);modify.setAccessible(true);
         }
         public net.minecraft.world.phys.Vec2 step(int mask)throws Exception{
-            p.flags=(p.controlled.onGround()?1<<14:0)|(p.controlled.horizontalCollision?1<<15:0)|(p.controlled.minorHorizontalCollision?1<<16:0);
+            p.flags=(p.controlled.onGround()?1<<14:0)|(p.controlled.horizontalCollision?1<<15:0)|(p.controlled.minorHorizontalCollision?1<<16:0)
+                |(p.controlled.isInShallowWater()?1<<6:0)|(p.controlled.isUnderWater()?1<<10:0)|(p.controlled.isSwimming()?1<<12:0)|(p.controlled.isInWater()?1<<13:0);
             p.horizontalCollision=p.controlled.horizontalCollision;p.minorHorizontalCollision=p.controlled.minorHorizontalCollision;
             p.calls.clear();for(int i=0;i<keys.length;i++)down.setBoolean(keys[i],(mask&(1<<i))!=0);
             try{p.aiStep();throw new AssertionError("missing sprint boundary");}catch(Boundary expected){}

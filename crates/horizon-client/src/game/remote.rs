@@ -1756,12 +1756,24 @@ impl Game<'_> {
         let crouching = player.pose == horizon_client::pose::Pose::Crouching;
         let feet = [player.position.x, player.position.y, player.position.z];
         for event in events {
-            if let horizon_client::motion::MotionEvent::Emission { state, .. } = event
-                && !crouching
-            {
-                let sounds = self.res.facts.get(state).sounds.clone();
-                self.audio
-                    .play(&sounds.step, Some(feet), sounds.volume * 0.15, sounds.pitch);
+            match event {
+                horizon_client::motion::MotionEvent::Emission {
+                    state, in_water, ..
+                } if !crouching => {
+                    let sounds = self.res.facts.get(state).sounds.clone();
+                    // Player.playStepSound: muffled under the swim sound in water.
+                    let (volume, pitch) = if in_water {
+                        (sounds.volume * 0.05, sounds.pitch * 0.8)
+                    } else {
+                        (sounds.volume * 0.15, sounds.pitch)
+                    };
+                    self.audio.play(&sounds.step, Some(feet), volume, pitch);
+                }
+                horizon_client::motion::MotionEvent::Swim { volume, pitch } => {
+                    self.audio
+                        .play("minecraft:entity.player.swim", Some(feet), volume, pitch);
+                }
+                _ => {}
             }
         }
         // The server owns health and hunger: undo local food/fall changes.

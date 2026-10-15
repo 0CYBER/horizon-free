@@ -2972,6 +2972,7 @@ impl Game<'_> {
             elytra.damage += glider_wear;
         }
         let feet = [player.position.x, player.position.y, player.position.z];
+        let player_velocity = [player.velocity.x, player.velocity.y, player.velocity.z];
         self.previous_eye = self.eye;
         self.eye += (camera_eye.unwrap_or(player.dimensions.eye_height) - self.eye) * 0.5;
         let crouching = player.pose == horizon_client::pose::Pose::Crouching;
@@ -2981,13 +2982,59 @@ impl Game<'_> {
             match event {
                 MotionEvent::HurtSound(sound) => self.player_hurt_sound(sound, feet),
                 MotionEvent::Emission {
-                    position, state, ..
+                    state, in_water, ..
                 } if !crouching => {
-                    // Entity.playStepSound: the block's step sound at 0.15 volume.
                     let sounds = self.res.facts.get(state).sounds.clone();
+                    // Entity.playStepSound: the block's step sound at 0.15 volume,
+                    // muffled under the swim sound in water.
+                    let (volume, pitch) = if in_water {
+                        (sounds.volume * 0.05, sounds.pitch * 0.8)
+                    } else {
+                        (sounds.volume * 0.15, sounds.pitch)
+                    };
+                    self.audio.play(&sounds.step, Some(feet), volume, pitch);
+                }
+                MotionEvent::Swim { volume, pitch } => {
                     self.audio
-                        .play(&sounds.step, Some(feet), sounds.volume * 0.15, sounds.pitch);
-                    let _ = position;
+                        .play("minecraft:entity.player.swim", Some(feet), volume, pitch);
+                }
+                MotionEvent::Drown => {
+                    // LivingEntity.makeDrownParticles: eight bubbles moving
+                    // with the player.
+                    use horizon_client::particles::{ParticleOptions, ParticleType};
+                    for _ in 0..8 {
+                        let mut triangle = || {
+                            let r = self.particles.random();
+                            r.next_double() - r.next_double()
+                        };
+                        let p = [
+                            feet[0] + triangle(),
+                            feet[1] + triangle(),
+                            feet[2] + triangle(),
+                        ];
+                        self.particles.add(
+                            &ParticleOptions::simple(ParticleType::Bubble),
+                            p,
+                            player_velocity,
+                        );
+                    }
+                }
+                MotionEvent::BubbleColumnParticle { bubble, position } => {
+                    // ServerLevel.sendParticles: SPLASH (speed 1) or BUBBLE
+                    // (y spread 0.01, speed 0.2), one each.
+                    use horizon_client::particles::{ParticleOptions, ParticleType};
+                    let (kind, spread, speed) = if bubble {
+                        (ParticleType::Bubble, [0.0, 0.01, 0.0], 0.2)
+                    } else {
+                        (ParticleType::Splash, [0.0; 3], 1.0)
+                    };
+                    self.particles.send_particles(
+                        &ParticleOptions::simple(kind),
+                        [position.x, position.y, position.z],
+                        spread,
+                        speed,
+                        1,
+                    );
                 }
                 MotionEvent::Fall(horizon_client::landing::FallEvent::Sound {
                     sound,

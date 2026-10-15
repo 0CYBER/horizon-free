@@ -199,6 +199,28 @@ fn snapshot(out: &mut impl Write, player: &PlayerMotion) -> Result<()> {
                 velocity.z.to_bits()
             )),
             MotionEvent::SplashEvent => Some("splash-event".into()),
+            MotionEvent::Swim { volume, pitch } => Some(format!(
+                "sound swim entity {:08x} {:08x}",
+                volume.to_bits(),
+                pitch.to_bits()
+            )),
+            MotionEvent::Emission {
+                state,
+                in_water: true,
+                ..
+            } => Some(format!("muffled-step {}", state.0)),
+            MotionEvent::BubbleColumnParticle { bubble, position } => Some(format!(
+                "column-particle {} {:016x},{:016x},{:016x} 1 {:016x},{:016x},{:016x} {:016x}",
+                if *bubble { "bubble" } else { "splash" },
+                position.x.to_bits(),
+                position.y.to_bits(),
+                position.z.to_bits(),
+                0f64.to_bits(),
+                if *bubble { 0.01f64 } else { 0.0 }.to_bits(),
+                0f64.to_bits(),
+                if *bubble { 0.2f64 } else { 1.0 }.to_bits()
+            )),
+            MotionEvent::Drown => Some("broadcast 67".into()),
             // The oracle marks every getAdvancements call (ENTER_BLOCK.trigger) so.
             MotionEvent::EnterBlock { .. } => Some("hurt-criterion".into()),
             MotionEvent::Waypoint { receiver, enabled } => Some(format!(
@@ -399,7 +421,8 @@ fn main() -> Result<()> {
                         Some(vector(&op["value"]))
                     },
                 ),
-                "block" => {
+                // A block, or every block of the box from position to "to".
+                "block" | "fill" => {
                     let p = &op["position"];
                     let mut state = assets
                         .registry
@@ -417,12 +440,15 @@ fn main() -> Result<()> {
                             .id(&definition)
                             .ok_or("missing fixture state")?;
                     }
-                    world.scene.set(
-                        p[0].as_i64().unwrap() as i32,
-                        p[1].as_i64().unwrap() as i32,
-                        p[2].as_i64().unwrap() as i32,
-                        state,
-                    )?;
+                    let at = |v: &Value, i: usize| v[i].as_i64().unwrap() as i32;
+                    let to = if op["to"].is_array() { &op["to"] } else { p };
+                    for x in at(p, 0)..=at(to, 0) {
+                        for y in at(p, 1)..=at(to, 1) {
+                            for z in at(p, 2)..=at(to, 2) {
+                                world.scene.set(x, y, z, state)?;
+                            }
+                        }
+                    }
                 }
                 "landing" => {
                     let p = &op["position"];
@@ -443,6 +469,23 @@ fn main() -> Result<()> {
                 // Entity.baseTick's fluid phase alone (wasEyeInWater,
                 // updateFluidInteraction, lava fall halving, firstTick).
                 "fluid_tick" => world.fluid_base_tick()?,
+                // LivingEntity.baseTick's air supply alone.
+                "air_tick" => world.tick_environment_damage()?,
+                "air" => world.player.air = op["value"].as_i64().unwrap() as i32,
+                "pitch" => world.player.pitch = single(&op["value"]),
+                "swimming" => world.player.swimming = op["value"].as_bool().unwrap(),
+                "effect" => {
+                    let on = op["value"].as_bool().unwrap();
+                    let status = &mut world.player.status;
+                    match op["name"].as_str().unwrap() {
+                        "minecraft:dolphins_grace" => status.dolphins_grace = on,
+                        "minecraft:water_breathing" | "minecraft:conduit_power" => {
+                            status.water_breathing = on
+                        }
+                        "minecraft:breath_of_the_nautilus" => status.breath_of_the_nautilus = on,
+                        other => return Err(format!("unknown fixture effect {other}").into()),
+                    }
+                }
                 "travel" => world.travel_in_air(vector(&op["value"]))?,
                 "tick" => {
                     let v = vector(&op["value"]);
@@ -569,7 +612,7 @@ fn main() -> Result<()> {
             let stuck = player.stuck_multiplier;
             writeln!(
                 out,
-                "block {} frozen {} {} {} {:016x},{:016x},{:016x} fluid {} {} {} {} {:016x} {:016x}",
+                "block {} frozen {} {} {} {:016x},{:016x},{:016x} fluid {} {} {} {} {:016x} {:016x} swim {} {} air {}",
                 check_block.0,
                 player.ticks_frozen,
                 player.in_powder_snow,
@@ -582,7 +625,10 @@ fn main() -> Result<()> {
                 player.is_eye_in_fluid(WATER),
                 player.fluids.first_tick,
                 player.fluid_height(WATER).to_bits(),
-                player.fluid_height(LAVA).to_bits()
+                player.fluid_height(LAVA).to_bits(),
+                player.swimming,
+                player.fluids.was_eye_in_water,
+                player.air
             )?;
             writeln!(
                 out,

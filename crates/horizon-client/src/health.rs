@@ -95,6 +95,8 @@ pub enum HealthEvent {
     FreezeDamage(f32),
     /// `SweetBerryBushBlock.entityInside` pricking a moving entity.
     SweetBerryBushDamage(f32),
+    /// `LivingEntity.baseTick` drowning an entity out of air.
+    DrownDamage(f32),
     Updated {
         id: u8,
         value: f32,
@@ -128,6 +130,7 @@ impl HealthEvent {
             Self::SweetBerryBushDamage(amount) => {
                 format!("damage sweet_berry_bush {:08x}", amount.to_bits())
             }
+            Self::DrownDamage(amount) => format!("damage drown {:08x}", amount.to_bits()),
             Self::Updated { id, value, dirty } => {
                 format!("updated {id} {:08x} {dirty}", value.to_bits())
             }
