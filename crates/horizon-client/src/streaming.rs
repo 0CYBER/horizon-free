@@ -5,7 +5,7 @@
 use crate::fast_hash::{FxHashMap, FxHashSet};
 use crate::{
     chunk::{Chunk, SECTIONS},
-    light::{LightTables, apply_lighting, light_chunk},
+    light::{LightTables, apply_lighting, apply_relighting, light_chunk},
     mesher::{MeshTables, Mesher, Region, SectionMesh, borrow},
     world::World,
 };
@@ -636,17 +636,29 @@ impl Streaming {
                     if let Some(chunk) = world.chunks.get_mut(&(x, z)) {
                         let chunk = Arc::make_mut(chunk);
                         // Keep blocks edited since the snapshot; take only light.
-                        apply_lighting(chunk, sections);
+                        // A chunk relit (a neighbour loaded or changed) remeshes
+                        // only around the light that changed, as vanilla's light
+                        // updates dirty only their sections (#270).
+                        let first = self.lit.insert((x, z));
+                        let changed = if first {
+                            apply_lighting(chunk, sections);
+                            Vec::new()
+                        } else {
+                            apply_relighting(chunk, sections)
+                        };
                         chunk.lit = true;
-                        self.lit.insert((x, z));
-                        self.replay_light_edits(world, x, z, snapshot);
-                        for dz in -1..=1 {
-                            for dx in -1..=1 {
-                                for sy in 0..SECTIONS as i32 {
-                                    world.dirty_sections.insert((x + dx, sy, z + dz));
+                        if first {
+                            for dz in -1..=1 {
+                                for dx in -1..=1 {
+                                    for sy in 0..SECTIONS as i32 {
+                                        world.dirty_sections.insert((x + dx, sy, z + dz));
+                                    }
                                 }
                             }
+                        } else {
+                            Self::mark_light_changes(world, &changed);
                         }
+                        self.replay_light_edits(world, x, z, snapshot);
                     }
                 }
                 Done::Meshed(x, sy, z, mesh, seq) => {
