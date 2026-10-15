@@ -1073,6 +1073,10 @@ packet!(
 
 packet!(AcceptTeleportation { id: i32 => VarInt, x: f64 => Double, y: f64 => Double, z: f64 => Double, yaw: f32 => Float, pitch: f32 => Float });
 packet!(Attack { id: i32 => VarInt });
+packet!(
+    /// GameType ids: 0 survival, 1 creative, 2 adventure, 3 spectator.
+    ChangeGameMode { mode: i32 => VarInt }
+);
 packet!(LastSeenUpdate { offset: i32 => VarInt, acknowledged: [u8; 3] => Fixed3, checksum: i8 => Byte });
 /// LastSeenMessages.Update's fixed 20-bit BitSet (3 bytes).
 pub struct Fixed3;
@@ -1177,6 +1181,7 @@ impl Codec<[f32; 3]> for Cursor {
 packet_enum!(Serverbound, crate::ids::play::serverbound {
     AcceptTeleportation(AcceptTeleportation) = ACCEPT_TELEPORTATION,
     Attack(Attack) = ATTACK,
+    ChangeGameMode(ChangeGameMode) = CHANGE_GAME_MODE,
     Chat(Chat) = CHAT,
     ChatCommand(ChatCommand) = CHAT_COMMAND,
     ChunkBatchReceived(ChunkBatchReceived) = CHUNK_BATCH_RECEIVED,
@@ -1614,6 +1619,15 @@ mod tests {
             Serverbound::encode,
             Serverbound::decode,
         );
+    }
+
+    #[test]
+    fn change_game_mode_uses_the_game_type_varint() {
+        for mode in 0..=3 {
+            let packet = Serverbound::ChangeGameMode(ChangeGameMode { mode });
+            assert_eq!(packet.encode(), vec![5, mode as u8]);
+            round_trip(packet, Serverbound::encode, Serverbound::decode);
+        }
     }
 
     #[test]

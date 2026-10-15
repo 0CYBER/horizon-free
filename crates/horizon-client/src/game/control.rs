@@ -562,6 +562,7 @@ impl Game<'_> {
         }
         match self.screen {
             Screen::Playing => "playing",
+            Screen::GameModeSwitcher => "gamemode-switcher",
             Screen::Paused => "paused",
             Screen::Options => "options",
             Screen::Inventory => "inventory",
@@ -713,6 +714,7 @@ fn key_code(name: &str) -> Option<KeyCode> {
         "f1" => KeyCode::F1,
         "f2" => KeyCode::F2,
         "f3" => KeyCode::F3,
+        "f4" => KeyCode::F4,
         "f5" => KeyCode::F5,
         "f11" => KeyCode::F11,
         "slash" | "/" => KeyCode::Slash,
