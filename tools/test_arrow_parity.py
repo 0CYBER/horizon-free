@@ -5,11 +5,12 @@ Real vanilla `Arrow` entities tick in an independently built copy of the
 scene (`VanillaArrowOracle`, client and server jars); Horizon's
 `arrows::tick` runs over the scene itself (`examples/arrow_probe.rs`). Every
 operation prints the arrow's position, motion, rotation, ground state, life,
-shake, stuck block, fire ticks, water flags, fluid heights, removal, crit flag
-and fall distance by exact bits, then its sounds, particles and game events in
-order, then its pickup rule, whether its item is intangible and what a player
-touching it took. Cases: flights in the air with and without crits or physics, into and
-through water (inertia, bubbles, splashes, currents of flowing water, eyes),
+shake, stuck block, fire ticks, water flags, fluid heights, removal, crit flag,
+fall distance and old position (what rendering interpolates from) by exact
+bits, then its sounds, particles and game events in order, then its pickup
+rule, whether its item is intangible and what a player touching it took.
+Cases: flights in the air with and without crits or physics, into and through
+water (inertia, bubbles, splashes, currents of flowing water, eyes),
 kelp, seagrass and waterlogged blocks, bubble columns with and without drag
 and with air or water above, sticking in full and partial blocks, falling out
 when the block goes, starting inside a block, and despawning after 1200 ticks;
