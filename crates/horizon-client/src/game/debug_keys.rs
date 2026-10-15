@@ -227,13 +227,7 @@ impl Game<'_> {
         let player = self.player.is_some() && !self.reduced_debug_info();
         match action {
             DebugAction::ReloadChunks => {
-                // LevelExtractor.allChanged: every section is rebuilt.
-                let keys: Vec<(i32, i32)> = self.world.chunks.keys().copied().collect();
-                for (x, z) in keys {
-                    for sy in 0..horizon_client::chunk::HEIGHT / 16 {
-                        self.world.dirty_sections.insert((x, sy, z));
-                    }
-                }
+                self.all_sections_changed();
                 self.debug_translated("debug.reload_chunks.message");
                 true
             }
