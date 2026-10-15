@@ -1,0 +1,326 @@
+# Horizon mods
+
+Horizon gets its own mod system, written in Rust and run in a sandbox, plus
+two ways to bring over what Java players use: native Horizon ports of popular
+mods and the data-driven parts of packs and mods. Fabric and NeoForge jars do
+**not** run as they are: [research/java-mod-compat.md](research/java-mod-compat.md)
+explains why and what we do instead.
+
+Mods are **off and absent by default**. A fresh install has no `horizon-mods`
+folder, loads no runtime and plays exactly like vanilla 26.3.
+
+| Part | Where | State |
+|---|---|---|
+| The contract (WIT) | `crates/horizon-mod-sdk/wit/horizon.wit` | 0.1: log, game-read, chat, hud; tick, frame, chat and command hooks |
+| SDK for mod authors | `crates/horizon-mod-sdk` | 0.1 |
+| Example mod | `crates/horizon-mod-sdk/examples/coords-hud` | coordinates, facing and time HUD, `/where`, `/coords` |
+| Runtime | `crates/horizon-mods` | wasmtime 36 LTS, component model |
+| Authoring tool | `crates/cargo-horizon-mod` | `cargo horizon-mod new / build / run` |
+| In the game | `crates/horizon-client/src/game/mods.rs`, Options > Mods | client mods |
+| Launcher mod browser, signing, server mods, registries | this page, [Roadmap](#roadmap) | planned |
+
+## Design goals
+
+1. **Safe to install.** A mod is untrusted code. It runs in a WebAssembly
+   sandbox with no file, network, process or clock access, a memory cap and a
+   time budget per call. It can only do what its capabilities grant, and the
+   player sees those before turning it on.
+2. **One file for every platform.** The same `.hmod` runs on Windows, macOS
+   and Linux, x86-64 and ARM: authors build once, players never meet "wrong
+   build for my OS".
+3. **Free when unused.** No mod on: no engine, no thread, no compile, one
+   branch per hook. Measured below.
+4. **Vanilla stays vanilla.** Mods add; they cannot patch the game's code the
+   way Mixins do. What they may change is a list of hooks the game calls at
+   fixed points, so the parity harnesses keep testing the same game.
+5. **Stable for authors.** The contract is a versioned WIT package; a mod
+   built for API 0.1 keeps loading on later 0.1.x games.
+
+## How it works
+
+```
+ mod crate (Rust)                         Horizon
+ ───────────────                          ───────
+ impl Mod for MyMod { ... }               horizon-mods::Mods
+ export_mod!(MyMod)                         ├─ Engine (cranelift), made on first mod
+        │ cargo horizon-mod build           ├─ one Store per mod: 64 MiB, fuel per call
+        ▼                                   ├─ Linker: log, game, chat, hud (WIT imports)
+ my_mod.hmod = zip {                        └─ calls the events export: init, tick,
+   horizon-mod.toml,                             frame, command, chat
+   mod.wasm  (a WebAssembly component)
+ }
+```
+
+- **WebAssembly components.** Mods compile to `wasm32-unknown-unknown`;
+  `cargo horizon-mod build` wraps the module into a
+  [component](https://component-model.bytecodealliance.org/) for the
+  `horizon:mods/horizon-mod` world. The WIT file is the whole API: host
+  functions the mod imports (`log`, `game`, `chat`, `hud`) and the `events`
+  interface it exports. No WASI: the component cannot even name a file or a
+  socket.
+- **Capabilities are imports.** Every imported interface except `log` is a
+  capability. The manifest declares them; the game reads the component's
+  actual imports and refuses a mod whose code imports one its manifest does not
+  declare (`uses capability chat, missing from horizon-mod.toml`). So the list
+  the player reads is the truth, not a promise.
+- **Hooks on request.** `init` returns a `registration`: the commands the mod
+  owns and which of `tick`, `frame` and `chat` it wants. The game calls only
+  those. A mod that wants nothing per frame costs nothing per frame.
+- **Retained HUD.** A mod sets its panel (corner and coloured lines) when it
+  changes; the game draws it every frame with the extras' overlay code. Most
+  HUD mods need no frame hook at all.
+- **Snapshots, not callbacks into the world.** Once per tick (and before a
+  command) the game copies what mods may read (player position, look, health,
+  food, dimension, world clock) into a snapshot shared by all mods. Mods never
+  hold references into the game, so they cannot stall or corrupt it.
+
+### What a mod can do (API 0.1)
+
+| Interface | Capability | Functions |
+|---|---|---|
+| `log` | always | `write(level, message)`, in the game log as `[mod <id>]` |
+| `game` | `game-read` | `get-player()`: x y z, yaw, pitch, health, food, dimension; `get-clock()`: game time, day time |
+| `chat` | `chat` | `show(text)`: a line only the local player sees, after the mod's name (8 per call) |
+| `hud` | `hud` | `set-panel(corner, lines)`, `clear()`: up to 16 lines of 256 characters |
+
+| Hook (export) | When |
+|---|---|
+| `init() -> result<registration, string>` | once, after loading; an error keeps the mod off and is shown |
+| `tick(tick)` | each game tick while in a world (20 per second) |
+| `frame(seconds)` | each rendered frame |
+| `command(name, args) -> result<option<string>, string>` | `/name args` typed in chat, for a command the mod registered |
+| `chat(text)` | each chat line the player receives, as plain text |
+
+Commands: vanilla's command names win. A mod asking for `/give` does not get
+it (logged), and two mods cannot share a name (the first one loaded keeps it).
+
+### Planned interfaces
+
+Each is a new capability, added in a 0.x minor version so older mods keep
+loading. Ordered by what the first native ports need ([research](research/java-mod-compat.md#port-first)):
+
+| Interface | For | Notes |
+|---|---|---|
+| `keys` | keybinds | registered binds appear in Controls; press/release events |
+| `target` | the crosshair's block or entity, with its state and NBT summary | Jade/WTHIT-style tooltips |
+| `inventory-read` | the player's inventory, held item, open container | AppleSkin, recipe viewers |
+| `recipes` | the recipe registry and lookups | JEI/EMI-style viewers |
+| `ui` | widgets: text, item icons, lists, a screen the mod owns, a settings page in Options > Mods | built on `ui_theme` so it matches the menus |
+| `world-read` | blocks and biomes around the player, within the render distance | minimaps, schematics |
+| `render` | world-space lines, boxes and ghost blocks in a per-frame budget | Litematica-style placement, waypoints |
+| `storage` | a per-mod folder of key/value files, quota'd | settings, waypoints |
+| `registries` | new blocks, items, entities and recipes, mostly data: JSON models, textures, loot and recipes in the `.hmod`'s `assets/` and `data/` | server side; see [Multiplayer](#multiplayer) |
+| `server` | world events (block break/place, entity spawn/death, player join), game rules, server commands | runs where the world is simulated |
+| `net` | a mod's own client↔server channel (custom payloads) | only between the two halves of the same mod |
+
+There is no file, socket, process or raw-input interface, on purpose.
+
+## Choosing the runtime
+
+| Option | Sandbox | One file for all OSes | Typed API | Cost | Verdict |
+|---|---|---|---|---|---|
+| **wasmtime + component model** | yes: memory, fuel, no imports but ours | yes | WIT → Rust on both sides | 85 ns per empty hook call; 50 ms to compile a 64 KB mod on load | **chosen** |
+| wasmtime, core modules with a hand ABI | yes | yes | no: pointers and lengths by hand | a few ns less per call | not worth the fragile ABI |
+| wasmi (interpreter) | yes | yes | no components | no compile time, execution ~10-50x slower than cranelift code | kept in mind for a platform without JIT |
+| Lua (mlua) or another script | partial (strip the stdlib, hope) | yes | no | fast to write | not Rust; weak sandbox |
+| native `cdylib` plugins | none | no: per OS and arch, unstable Rust ABI | yes | none | unsafe for players |
+| an embedded JVM | none per mod | yes | Java | 100+ MB, seconds of startup | see the research |
+
+wasmtime 36 is a long-term-support line (security fixes until August 2027)
+that builds on the client's Rust 1.90. Only its `runtime`, `cranelift`,
+`component-model` and `std` features are on: no WASI, no async, no GC
+proposal, no profiling. Its cranelift backend generates native code for x86-64
+and ARM64 on Windows, macOS and Linux, which is why one `.hmod` serves them
+all.
+
+### Performance
+
+Measured on the Mac mini (M4 Pro), release build, `cargo test -p
+horizon-mods --release --test sandbox -- --ignored --nocapture`:
+
+| | per call |
+|---|---|
+| tick with no mod loaded | 1.2 ns (one check) |
+| empty `tick` hook (call into the sandbox and back, fuel on) | 85.5 ns |
+| empty `frame` hook | 87.5 ns |
+| coords-hud's `tick` (reads the player and clock, formats 3 lines, compares) | 2.3 µs |
+| loading coords-hud (read, compile with cranelift, instantiate, `init`) | 50 ms, once |
+
+In the game, same world and view, `horizon-ctl bench 10` three times each
+(4 other sessions shared the machine, so the tails are noisy; the median is
+the stable figure):
+
+| | median frame | mean FPS |
+|---|---|---|
+| no `horizon-mods` folder | 2.62-2.71 ms | 149-163 |
+| coords-hud on | 2.72-2.78 ms | 151-254 |
+
+At 20 ticks per second coords-hud costs 46 µs per second of game time: well
+under 0.01 ms per frame. The frame-time medians differ by less than the
+run-to-run spread.
+
+**Budgets.** Each call gets fuel (about one unit per WebAssembly instruction):
+2 billion for `init`, 50 million for `tick`, 10 million for `frame`, 100
+million for a command or chat line. A runaway loop ends in a fraction of a
+second (the sandbox test's endless `/spin` is cut well within its 5 s limit)
+instead of hanging the game. The target budgets a mod should stay under are
+tighter: **1 ms per tick and 0.1 ms per frame**. The runtime keeps each mod's
+average call time (`Entry::cost`); the Mods page will show it, and a mod over
+budget for long will be flagged, then paused.
+
+### Crash isolation
+
+A trap (panic, out-of-bounds access, `unreachable`), running out of fuel or
+hitting the 64 MiB memory cap stops **that mod only**. The game says so in
+chat (`Mod Test Guest stopped: it took too long (an endless loop?)`), marks it
+on the Mods page and carries on; the other mods keep running. Host functions
+clip what a mod hands back (chat lines per call, HUD lines and lengths). Tests:
+`crates/horizon-mods/tests/sandbox.rs` (an endless loop, a panic and a 1 GiB
+allocation, next to a healthy mod).
+
+## Playing with mods
+
+1. Put `.hmod` files (or mod folders holding `horizon-mod.toml` and
+   `mod.wasm`) in `horizon-mods/` beside `options.txt` (in the launcher's game
+   folder).
+2. Options > **Mods** lists them with what each may do ("May see your
+   position, health and the time, draw text on your screen, ...") and a
+   switch. They start off; the choice is kept in `horizon-mods.txt`
+   (`mod.<id>:true`).
+3. A mod that failed to load or stopped shows why, in red, on its row.
+
+Benchmarks (`--benchmark`) never load mods.
+
+## Making a mod
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install --git https://github.com/ludovic111/horizon cargo-horizon-mod
+cargo horizon-mod new my-mod        # Cargo.toml, horizon-mod.toml, src/lib.rs
+cd my-mod
+cargo horizon-mod run               # build, then start the game with it
+cargo horizon-mod build             # again after an edit: the running game reloads it
+```
+
+`run` starts `horizon-client` (on `PATH`, or `--game PATH`, or
+`HORIZON_CLIENT`) with `--dev-mod target/horizon-mod/<id>.hmod`. A dev mod is
+always on, and the game checks its file once a second: rebuild and it restarts
+with "Mods reloaded" in chat. Its state starts over (persisted state comes with
+`storage`).
+
+### Template layout
+
+```
+my-mod/
+├── Cargo.toml           # cdylib, horizon-mod-sdk, release: opt-level "s", LTO
+├── horizon-mod.toml     # the manifest
+└── src/lib.rs           # impl Mod, export_mod!
+```
+
+A mod is a type implementing `horizon_mod_sdk::Mod`; its state lives in the
+type:
+
+```rust
+use horizon_mod_sdk::{Mod, Registration, chat};
+
+struct Hello { greeted: u32 }
+
+impl Mod for Hello {
+    fn init() -> Result<(Self, Registration), String> {
+        Ok((Hello { greeted: 0 }, Registration::new().command("hello")))
+    }
+    fn command(&mut self, _name: &str, args: &str) -> Result<Option<String>, String> {
+        self.greeted += 1;
+        chat::show(&format!("Hello {args}! ({} so far)", self.greeted));
+        Ok(None)
+    }
+}
+horizon_mod_sdk::export_mod!(Hello);
+```
+
+Hooks not asked for keep their default bodies. The full example is
+[`coords-hud`](../crates/horizon-mod-sdk/examples/coords-hud/src/lib.rs). Logic
+that does not touch the API (formatting, maths) is ordinary Rust and unit-tests
+on the host with `cargo test`.
+
+### The manifest
+
+```toml
+id = "coords_hud"            # [a-z0-9_]{1,64}: settings key, log name
+name = "Coordinates HUD"
+version = "0.1.0"
+description = "..."
+authors = ["..."]
+api = "0.1"                  # the API the SDK targets
+side = "client"              # client | server | both
+capabilities = ["game-read", "hud", "chat"]
+```
+
+Unknown keys are refused, so a typo is an error, not a silently ignored
+permission.
+
+## Versions and compatibility
+
+- The API is the WIT package `horizon:mods@0.1.0`. New functions and
+  interfaces arrive in patch versions (0.1.1, ...); a game serving 0.1.N loads
+  mods built for 0.1.0 to 0.1.N. A breaking change makes `0.2` (and later
+  `1.0`); the game then links both versions side by side for at least one
+  release cycle, so existing mods keep working while authors move.
+- The manifest's `api` names the line it needs (`0.1`); the game refuses a
+  line it does not serve with a clear message.
+- Horizon follows Minecraft releases; the mod API does not have to. Vanilla
+  concepts mods see (dimensions, block and item ids) are the game's own ids,
+  so a version port changes the data, not the API.
+
+## Multiplayer
+
+- **Client mods** (`side = "client"`, all of 0.1) run in the player's game,
+  in single player and on any server, vanilla or Horizon. They see only what
+  the client already knows (the snapshot), like F3 does, and act only on the
+  local screen and chat. A server cannot see them.
+- **Server mods** (`side = "server"`) will run where the world is simulated:
+  Horizon's integrated server in single player and LAN, and the dedicated
+  server. Vanilla clients can join if the mod only uses vanilla content
+  (rules, commands, events).
+- **Both** (`side = "both"`): a server mod with a client half (new blocks,
+  their textures, a custom screen). On join the Horizon server announces its
+  mods (id, version, SHA-256) on a `horizon:mods` custom payload channel; a
+  Horizon client with matching client halves enables them for that session, or
+  offers to download them from the same source the launcher uses. Vanilla
+  clients are refused only if the server says its mods need a client.
+- Registries (new blocks and items) are server-owned and synced like vanilla's
+  registry sync, so ids match on both ends.
+
+## Distribution
+
+- **The file.** `.hmod`: a zip holding `horizon-mod.toml`, `mod.wasm` and,
+  later, `assets/` and `data/`. `mod.wasm` is capped at 32 MiB.
+- **Integrity.** Every download is checked against the SHA-256 the index
+  lists before the file reaches `horizon-mods/`.
+- **Signing.** Authors sign `.hmod` files with an Ed25519 key (minisign
+  format: a `.hmod.minisig` beside it); the index pins each project's public
+  key, so an update signed by another key is refused. Unsigned local files
+  stay allowed, with an "unsigned" mark on the Mods page.
+- **Where mods come from.** Modrinth is where players already look and it
+  stores files with hashes, but its loader list is Modrinth's to extend: we ask
+  Modrinth to add a `horizon` loader. Until then (and as a fallback), the
+  launcher reads a small index of approved mods: a JSON file in a public Git
+  repository (id, versions, file URLs as GitHub release assets, SHA-256,
+  signing key). No server of our own is needed.
+- **The launcher.** A Mods tab per installation: browse and search the index,
+  install, update, turn on and off (it writes the same `horizon-mods.txt`),
+  see capabilities before installing. The launcher's CLI and MCP tools gain
+  `mods list|search|install|remove|enable|disable`, so agents can set up a
+  modded game the same way players do.
+
+## Roadmap
+
+1. Design (this page) and the Java research.
+2. SDK, example mod, runtime, `cargo horizon-mod`, the game's Mods page: API 0.1.
+3. `keys`, `target`, `inventory-read`, `storage`, `ui`: enough for the first
+   native ports (zoom presets, AppleSkin-style food HUD, Jade-style tooltips).
+4. Launcher Mods tab, the index, signatures; the Mods page shows cost and
+   update state.
+5. `recipes`, `world-read`, `render`: recipe viewer and schematics ports.
+6. Server mods, `registries`, `net`, data-driven content from `.hmod`
+   `data/` and `assets/`, multiplayer sync.
