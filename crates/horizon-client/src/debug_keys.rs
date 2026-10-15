@@ -434,6 +434,23 @@ mod tests {
     }
 
     #[test]
+    fn switcher_modifier_release_does_not_toggle_the_debug_overlay() {
+        let (mut k, mut h, mut b) = (DebugKeys::default(), Host::default(), KeyBinds::default());
+        // Screen release handling must also work with rebound debug keys.
+        b.set("key.debug.modifier", "key.keyboard.f7");
+        b.set("key.debug.overlay", "key.keyboard.f7");
+        b.set("key.debug.switchGameMode", "key.keyboard.f8");
+        press(&mut k, &mut h, &b, "key.keyboard.f7", 0);
+        assert!(!press(&mut k, &mut h, &b, "key.keyboard.f8", 1));
+        assert_eq!(h.actions, [(DebugAction::SwitchGameMode, false)]);
+        h.screen = Some(OpenScreen::GameModeSwitcher);
+        release(&mut k, &mut h, &b, "key.keyboard.f8");
+        release(&mut k, &mut h, &b, "key.keyboard.f7");
+        assert!(!k.modifier_down);
+        assert_eq!(h.overlay, 0);
+    }
+
+    #[test]
     fn a_separate_overlay_key_toggles_on_press() {
         let (mut k, mut h, mut b) = (DebugKeys::default(), Host::default(), KeyBinds::default());
         b.set("key.debug.overlay", "key.keyboard.f7");

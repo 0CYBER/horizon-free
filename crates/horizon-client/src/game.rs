@@ -42,6 +42,7 @@ mod fov;
 mod frames;
 mod functions;
 mod game_mode;
+mod gamemode_switcher;
 mod ghasts;
 mod golems;
 mod growth;
@@ -351,6 +352,7 @@ impl Options {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Screen {
     Playing,
+    GameModeSwitcher,
     Paused,
     Options,
     Chat,
@@ -937,6 +939,7 @@ struct Game<'a> {
     pause_menu: bool,
     /// MultiPlayerGameMode.previousLocalPlayerMode (F3+N goes back to it).
     previous_mode: Option<horizon_client::command::args::GameMode>,
+    gamemode_switcher: Option<horizon_client::game_mode_switcher::GameModeSwitcher>,
     /// The system clipboard (`KeyboardHandler.clipboardManager`).
     clipboard: horizon_client::clipboard::SystemClipboard,
     /// Select All in the append-only text fields.
@@ -3697,6 +3700,7 @@ impl Game<'_> {
                     true,
                 );
             }
+            Screen::GameModeSwitcher => self.draw_gamemode_switcher(&mut batch),
             Screen::Dead => self.draw_death_screen(&mut batch),
             Screen::Stats => self.draw_stats(&mut batch),
             Screen::Advancements => self.draw_advancements(&mut batch),
@@ -8217,6 +8221,7 @@ impl Game<'_> {
                     self.pause_menu = true;
                     self.capture(true);
                 }
+                Screen::GameModeSwitcher => self.close_gamemode_switcher(false),
                 Screen::Dead => {}
                 Screen::Stats => self.screen = Screen::Paused,
                 Screen::Advancements => self.close_advancements(),
@@ -9498,6 +9503,7 @@ pub fn run() -> Result<()> {
         show_chunk_borders: false,
         pause_menu: true,
         previous_mode: None,
+        gamemode_switcher: None,
         clipboard: Default::default(),
         text_selection: Default::default(),
         saved_for_exit: false,

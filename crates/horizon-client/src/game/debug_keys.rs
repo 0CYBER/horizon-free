@@ -49,6 +49,7 @@ impl DebugHost for Host<'_, '_> {
 impl Game<'_> {
     fn open_screen(&self) -> OpenScreen {
         match self.screen {
+            Screen::GameModeSwitcher => OpenScreen::GameModeSwitcher,
             Screen::Playing if self.book.is_none() && self.sign_edit.is_none() => OpenScreen::None,
             Screen::Paused if !self.pause_menu => OpenScreen::PauseWithoutMenu,
             _ => OpenScreen::Other,
@@ -62,6 +63,19 @@ impl Game<'_> {
             return false;
         };
         let pressed = action != KeyAction::Release;
+        let switcher_open = self.screen == Screen::GameModeSwitcher;
+        if switcher_open && pressed {
+            if name == self.settings.keys.get("key.debug.switchGameMode") {
+                if let Some(switcher) = &mut self.gamemode_switcher {
+                    switcher.cycle();
+                }
+            } else if key == KeyCode::Escape {
+                self.close_gamemode_switcher(false);
+            } else if matches!(key, KeyCode::F2 | KeyCode::F11) {
+                return false;
+            }
+            return true;
+        }
         // Screens with a text box take every key press first
         // (EditBox.keyPressed); releases still reach KeyboardHandler.
         let typing = matches!(
@@ -116,6 +130,13 @@ impl Game<'_> {
             now,
         );
         self.debug_keys = keys;
+        if switcher_open {
+            if name == binds.get("key.debug.modifier") {
+                self.close_gamemode_switcher(true);
+                return true;
+            }
+            return false;
+        }
         if !pressed {
             return false;
         }
@@ -190,7 +211,7 @@ impl Game<'_> {
         self.settings.reduced_debug_info || self.ui.rules.bool("reduced_debug_info")
     }
     /// `Permissions.COMMANDS_GAMEMASTER` (`GameModeCommand.PERMISSION_CHECK`).
-    fn gamemaster(&self) -> bool {
+    pub(super) fn gamemaster(&self) -> bool {
         self.ui.registries.permission >= 2
     }
     fn toggle_option(&mut self, key: &str) -> bool {
@@ -268,10 +289,10 @@ impl Game<'_> {
                 true
             }
             DebugAction::SwitchGameMode if self.open_screen() == OpenScreen::None => {
-                // Minecraft.canSwitchGameMode and the permission; the
-                // GameModeSwitcherScreen itself is not drawn yet.
                 if self.player.is_none() || !self.gamemaster() {
                     self.debug_translated("debug.gamemodes.error");
+                } else {
+                    self.open_gamemode_switcher();
                 }
                 true
             }
@@ -343,8 +364,15 @@ impl Game<'_> {
     /// `ServerboundChangeGameModePacket` handled by the integrated server:
     /// `GameModeCommand.setGameMode` with its feedback.
     pub(super) fn change_game_mode(&mut self, mode: GameMode) {
-        // On a server the packet decides; Horizon's client does not send it yet.
         if self.remote.is_some() {
+            use horizon_protocol::packets::play::{ChangeGameMode, Serverbound};
+            let mode = match mode {
+                GameMode::Survival => 0,
+                GameMode::Creative => 1,
+                GameMode::Adventure => 2,
+                GameMode::Spectator => 3,
+            };
+            self.send(Serverbound::ChangeGameMode(ChangeGameMode { mode }));
             return;
         }
         if self.set_game_mode(mode) {
