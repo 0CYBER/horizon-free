@@ -644,6 +644,43 @@ fn preparer_binary(dir: &Path) -> Option<PathBuf> {
     binary.is_file().then_some(binary)
 }
 
+/// What a Minecraft folder lacks of `version`'s files in the official launcher's layout, or
+/// None when it has them.
+fn missing_game_files(minecraft: &Path, version: &str) -> Option<String> {
+    if !minecraft.is_dir() {
+        return Some("the folder doesn't exist".into());
+    }
+    let files = [format!("{version}.json"), format!("{version}.jar")];
+    let missing: Vec<String> = files
+        .iter()
+        .filter(|file| {
+            !minecraft
+                .join("versions")
+                .join(version)
+                .join(file)
+                .is_file()
+        })
+        .map(|file| format!("versions/{version}/{file}"))
+        .collect();
+    (!missing.is_empty()).then(|| format!("no {}", missing.join(" or ")))
+}
+
+/// The error when no folder has Minecraft `version`: every folder looked in with what it
+/// lacks, and what the player can do about it (#419).
+fn not_found(version: &str, checked: &[(PathBuf, String)]) -> String {
+    let mut text = format!("Minecraft {version} was not found. Horizon looked in:");
+    for (dir, missing) in checked {
+        text += &format!("\n  {} ({missing})", dir.display());
+    }
+    text += &format!(
+        "\nTo fix it:\n  \
+         • Play {version} once in the official Minecraft launcher, then prepare again.\n  \
+         • Or choose the folder where your launcher keeps Minecraft {version} (Minecraft folder › \
+         Choose… in the launcher, --minecraft on the command line)."
+    );
+    text
+}
+
 /// Checks what the preparation needs and picks how to run it. PLAY.txt describes the same
 /// steps: the player's own launcher install, the server jar from that version's own json, and
 /// Java (and Python, for versions before horizon-prepare).
@@ -655,11 +692,10 @@ pub fn preparer(tag: &str, minecraft: &Path, log: &dyn Fn(String)) -> Result<Pre
         .join("versions")
         .join(&version)
         .join(format!("{version}.json"));
-    if !reused && !manifest.exists() {
-        return Err(format!(
-            "Minecraft {version} is not in {}. Play {version} once from the official launcher, or choose another folder.",
-            minecraft.display()
-        ));
+    if !reused {
+        if let Some(missing) = missing_game_files(minecraft, &version) {
+            return Err(not_found(&version, &[(minecraft.to_path_buf(), missing)]));
+        }
     }
     let binary = preparer_binary(&dir);
     let python = if binary.is_some() {
@@ -1683,6 +1719,32 @@ mod release_loading_tests;
 mod tests {
     use super::*;
     use std::cmp::Ordering::*;
+
+    #[test]
+    fn a_folder_without_the_game_says_what_it_lacks_and_what_to_do() {
+        let dir = std::env::temp_dir().join(format!("horizon-missing-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(
+            missing_game_files(&dir, "26.3").as_deref(),
+            Some("the folder doesn't exist")
+        );
+        fs::create_dir_all(dir.join("versions/26.3")).unwrap();
+        assert_eq!(
+            missing_game_files(&dir, "26.3").as_deref(),
+            Some("no versions/26.3/26.3.json or versions/26.3/26.3.jar")
+        );
+        fs::write(dir.join("versions/26.3/26.3.json"), "{}").unwrap();
+        let missing = missing_game_files(&dir, "26.3").unwrap();
+        assert_eq!(missing, "no versions/26.3/26.3.jar");
+        let error = not_found("26.3", &[(dir.clone(), missing)]);
+        assert!(error.starts_with("Minecraft 26.3 was not found. Horizon looked in:\n"));
+        assert!(error.contains(&format!("{} (no versions/26.3/26.3.jar)", dir.display())));
+        assert!(error.contains("Play 26.3 once in the official Minecraft launcher"));
+        assert!(error.contains("--minecraft on the command line"));
+        fs::write(dir.join("versions/26.3/26.3.jar"), "jar").unwrap();
+        assert_eq!(missing_game_files(&dir, "26.3"), None);
+        fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn the_game_plays_under_its_own_audio_stream_name() {
