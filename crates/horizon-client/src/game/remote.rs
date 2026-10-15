@@ -2716,6 +2716,18 @@ impl Game<'_> {
         }
     }
     /// Status for `horizon-ctl status`.
+    /// The other players' entities in the level and their names (from the
+    /// player list).
+    pub(super) fn remote_player_names(&self) -> Vec<(u32, String)> {
+        let Some(r) = self.remote.as_ref() else {
+            return Vec::new();
+        };
+        r.level_players
+            .iter()
+            .filter(|(_, uuid)| **uuid != r.profile)
+            .filter_map(|(id, uuid)| Some((*id as u32, r.players.get(uuid)?.clone())))
+            .collect()
+    }
     pub(super) fn remote_status(&self) -> Option<serde_json::Value> {
         let r = self.remote.as_ref()?;
         Some(serde_json::json!({

@@ -713,6 +713,10 @@ impl Game<'_> {
             })),
             "uptime_seconds": self.started.elapsed().as_secs_f64(),
             "server": self.remote_status(),
+            // The names the name tags show now, seen from the eyes.
+            "name_tags": self
+                .eye_position()
+                .map(|e| self.shown_name_tags(glam::DVec3::from_array(e))),
         });
         status["physical_keys"] = json!(physical_keys);
         status
