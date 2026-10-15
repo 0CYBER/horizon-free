@@ -138,6 +138,7 @@ pub mod screen_layout;
 pub mod sculk;
 pub mod server;
 pub mod settings;
+pub mod shader_pack;
 pub mod shadows;
 pub mod signs;
 pub mod skins;

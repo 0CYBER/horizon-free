@@ -22,6 +22,9 @@ png = "0.18"
 sha2 = "0.10.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["raw_value"] }
+# Shader packs: pack.toml, and WGSL checked before it reaches wgpu.
+toml = "1.1"
+naga = { version = "30.0.1", features = ["wgsl-in"] }
 cpal = "0.16"
 symphonia = { version = "0.5", default-features = false, features = ["ogg", "vorbis"] }
 miniz_oxide = "0.8"
@@ -50,7 +53,3 @@ rng-trace = ["horizon-core/rng-trace"]
 
 [lints]
 workspace = true
-
-[dev-dependencies]
-# Parses and validates the composed entity shader (already built for wgpu).
-naga = { version = "30.0.1", features = ["wgsl-in"] }
