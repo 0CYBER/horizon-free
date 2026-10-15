@@ -9122,6 +9122,13 @@ impl ApplicationHandler for Game<'_> {
                     }
                     if rendered {
                         self.frame_stats.record(elapsed.as_secs_f32() * 1000.0);
+                        if self.frames == 0 {
+                            // The launcher times Play to this line (launcher/src/perf.rs).
+                            log::info!(
+                                "Horizon: first frame after {} ms",
+                                self.started.elapsed().as_millis()
+                            );
+                        }
                         if self.title.is_some() {
                             self.perf.title_shown();
                         } else if self.screen == Screen::Playing && self.player.is_some() {
