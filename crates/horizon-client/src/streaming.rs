@@ -822,16 +822,18 @@ impl Streaming {
                 continue;
             }
             // Once per column: the 3x3 check would otherwise repeat for each
-            // of its sections every frame. A neighbour being lit or waiting
-            // for light dirties this column again when it finishes (new
-            // chunks relight their eight neighbours), so mesh once its light
-            // has settled rather than once per neighbour.
-            let (lit, lighting, dirty_light) = (&self.lit, &self.lighting, &world.dirty_light);
+            // of its sections every frame. A neighbour being lit dirties this
+            // column again when its light job finishes (new chunks relight
+            // their eight neighbours), so wait for it rather than mesh once
+            // per neighbour. Columns still in `dirty_light` here can't be lit
+            // yet (a neighbour of theirs is missing): waiting for them could
+            // last until the player comes back.
+            let (lit, lighting) = (&self.lit, &self.lighting);
             let ready = *ready_columns.entry((x, z)).or_insert_with(|| {
                 (-1..=1).all(|dz| {
                     (-1..=1).all(|dx| {
                         let n = (x + dx, z + dz);
-                        lit.contains(&n) && !lighting.contains_key(&n) && !dirty_light.contains(&n)
+                        lit.contains(&n) && !lighting.contains_key(&n)
                     })
                 })
             });
