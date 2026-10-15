@@ -28,7 +28,9 @@ import static dev.horizonlab.parity.VanillaRegistryCollisionScanOracle.*;
  * the path, water putting them out, and the blocks they light (TNT, campfires,
  * candles). Pickup: the INTANGIBLE_PROJECTILE ammo the constructor sees, `setOwner`, and
  * `playerTouch` by a player (creative or not, with room in the inventory or not).
- * No entities to hit, no rain; sounds, particles and game events are recorded in order. */
+ * Entities: a box in the way that takes the arrow's damage or refuses it (`onHitEntity`'s
+ * REVERSE deflection). No rain; sounds, particles, game events, the damage dealt and
+ * dropped pickups are recorded in order. */
 public final class VanillaArrowOracle {
     static final class Border extends WorldBorder {
         @Override public boolean isInsideCloseToBorder(Entity e,AABB b){return false;}
@@ -50,6 +52,22 @@ public final class VanillaArrowOracle {
         @Override public net.minecraft.world.damagesource.DamageSource lava(){return any;}
         @Override public net.minecraft.world.damagesource.DamageSource inFire(){return any;}
         @Override public net.minecraft.world.damagesource.DamageSource onFire(){return any;}
+        @Override public net.minecraft.world.damagesource.DamageSource arrow(AbstractArrow arrow,Entity owner){return any;}
+    }
+    /** The entity in the way (allocated without a constructor): a box at a position that
+     * takes the arrow's damage or refuses it (a raised shield), recording what it was dealt. */
+    static final class Target extends Entity {
+        boolean takes;List<String> events;
+        Target(){super(null,null);}
+        @Override protected void defineSynchedData(net.minecraft.network.syncher.SynchedEntityData.Builder entityData){}
+        @Override protected void readAdditionalSaveData(net.minecraft.world.level.storage.ValueInput input){}
+        @Override protected void addAdditionalSaveData(net.minecraft.world.level.storage.ValueOutput output){}
+        @Override public boolean hurtServer(net.minecraft.server.level.ServerLevel level,net.minecraft.world.damagesource.DamageSource source,float damage){
+            events.add(String.format("hurt %08x",Float.floatToIntBits(damage)));return takes;
+        }
+        @Override public boolean isPickable(){return true;}
+        // Untagged: neither DEFLECTS_PROJECTILES nor REDIRECTABLE_PROJECTILE.
+        @Override public boolean is(net.minecraft.tags.TagKey<EntityType<?>> tag){return false;}
     }
     static final class Level extends net.minecraft.server.level.ServerLevel {
         Map<Long,Chunk> chunks;WorldBorder border;net.minecraft.util.RandomSource rng;List<String> events;net.minecraft.server.MinecraftServer server;
@@ -64,13 +82,16 @@ public final class VanillaArrowOracle {
         @Override public BlockState getBlockState(BlockPos p){var c=chunks.get(key(p.getX()>>4,p.getZ()>>4));return c==null?Blocks.AIR.defaultBlockState():c.getBlockState(p);}
         @Override public FluidState getFluidState(BlockPos p){return getBlockState(p).getFluidState();}
         @Override public List<VoxelShape> getEntityCollisions(Entity e,AABB b){return List.of();}
-        @Override public List<Entity> getEntities(Entity e,AABB b,java.util.function.Predicate<? super Entity> p){return List.of();}
+        Target target;
+        @Override public List<Entity> getEntities(Entity e,AABB b,java.util.function.Predicate<? super Entity> p){
+            return target!=null&&target.getBoundingBox().intersects(b)&&p.test(target)?List.of(target):List.of();
+        }
         @Override public WorldBorder getWorldBorder(){return border;}
         @Override public net.minecraft.util.RandomSource getRandom(){return rng;}
         @Override public boolean isRainingAt(BlockPos p){return false;}
         @Override public net.minecraft.server.MinecraftServer getServer(){return server;}
         @Override public void gameEvent(Holder<GameEvent> event,Vec3 pos,GameEvent.Context context){
-            if(event==GameEvent.PROJECTILE_SHOOT)events.add("shoot-event");else if(event==GameEvent.SPLASH)events.add("splash-event");else throw new AssertionError(event);
+            if(event==GameEvent.PROJECTILE_SHOOT)events.add("shoot-event");else if(event==GameEvent.SPLASH)events.add("splash-event");else if(event!=GameEvent.PROJECTILE_LAND)throw new AssertionError(event);
         }
         // Projectile.onHit's PROJECTILE_LAND: the game posts it from the hit it is handed.
         @Override public void gameEvent(Holder<GameEvent> event,BlockPos pos,GameEvent.Context context){
@@ -84,6 +105,8 @@ public final class VanillaArrowOracle {
             chunks.get(key(p.getX()>>4,p.getZ()>>4)).write(p,Block.getId(state));events.add("write "+p.getX()+","+p.getY()+","+p.getZ()+" "+Block.getId(state)+" "+flags);return true;
         }
         @Override public boolean addFreshEntity(Entity e){
+            // spawnAtLocation's item (its motion comes from the item's own unseeded random).
+            if(e instanceof net.minecraft.world.entity.item.ItemEntity item){events.add("drop "+bits(item.position())+" "+item.getItem().getCount());return true;}
             if(!(e instanceof net.minecraft.world.entity.item.PrimedTnt tnt))throw new AssertionError(e);
             events.add("spawn tnt "+bits(tnt.position())+" "+tnt.getFuse());return true;
         }
@@ -154,7 +177,7 @@ public final class VanillaArrowOracle {
                 // The client's recreateFromPacket snaps a spawned arrow, old position included.
                 a.setOldPosAndRot();
                 a.setCritArrow(row.get("crit").getAsBoolean());a.setNoPhysics(row.get("no_physics").getAsBoolean());
-                String touched="-";
+                String touched="-";level.target=null;
                 for(var value:row.getAsJsonArray("ops")){
                     var op=value.getAsJsonObject();
                     switch(op.get("mode").getAsString()){
@@ -177,6 +200,14 @@ public final class VanillaArrowOracle {
                                 default->null;
                             };
                             a.setOwner(owner);a.setOwner((Entity)null);
+                        }
+                        // A player-sized box standing at the position.
+                        case "target"->{
+                            var t=(Target)allocate.invoke(unsafe,Target.class);t.takes=op.get("takes").getAsBoolean();t.events=level.events;
+                            var at=VanillaSceneCollisionOracle.vector(op.get("position"));
+                            field(Entity.class,"level").set(t,level);field(Entity.class,"position").set(t,at);
+                            field(Entity.class,"bb").set(t,EntityDimensions.scalable(0.6F,1.8F).makeBoundingBox(at));
+                            level.target=t;
                         }
                         // ArrowItem.asProjectile (dispensers) sets pickup directly.
                         case "pickup"->a.pickup=AbstractArrow.Pickup.byOrdinal(op.get("value").getAsInt());
