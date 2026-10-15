@@ -101,6 +101,7 @@ pub const SECTIONS: &[Section] = &[
                 [
                     Opt::PadEnabled,
                     Opt::PadVibration,
+                    Opt::PadAdaptiveTriggers,
                     Opt::PadLookSensitivity,
                     Opt::PadToggleSneak,
                     Opt::PadInvertX,
@@ -219,6 +220,7 @@ fn switch_value(opt: Opt, s: &Settings) -> Option<bool> {
         Opt::JapaneseGlyphs => s.japanese_glyphs,
         Opt::PadEnabled => s.controller.enabled,
         Opt::PadVibration => s.controller.vibration,
+        Opt::PadAdaptiveTriggers => s.controller.adaptive_triggers,
         Opt::PadInvertX => s.controller.invert_x,
         Opt::PadInvertY => s.controller.invert_y,
         _ => return None,

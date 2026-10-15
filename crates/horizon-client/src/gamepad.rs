@@ -385,6 +385,8 @@ pub fn steam_keyboard(choice: TextKeyboard) -> bool {
 pub struct PadSettings {
     pub enabled: bool,
     pub vibration: bool,
+    /// A DualSense's triggers push back (Horizon's; docs/controllers.md).
+    pub adaptive_triggers: bool,
     /// 0..1; 0.5 is the default speed, 1 twice that.
     pub look_sensitivity: f32,
     pub invert_x: bool,
@@ -407,6 +409,7 @@ impl Default for PadSettings {
         Self {
             enabled: true,
             vibration: true,
+            adaptive_triggers: true,
             look_sensitivity: 0.5,
             invert_x: false,
             invert_y: false,
@@ -460,6 +463,7 @@ impl PadSettings {
             match key.trim() {
                 "enabled" => s.enabled = flag(s.enabled),
                 "vibration" => s.vibration = flag(s.vibration),
+                "adaptiveTriggers" => s.adaptive_triggers = flag(s.adaptive_triggers),
                 "lookSensitivity" => s.look_sensitivity = unit(s.look_sensitivity),
                 "invertX" => s.invert_x = flag(s.invert_x),
                 "invertY" => s.invert_y = flag(s.invert_y),
@@ -490,9 +494,10 @@ impl PadSettings {
     }
     pub fn serialize(&self) -> String {
         let mut text = format!(
-            "enabled:{}\nvibration:{}\nlookSensitivity:{}\ninvertX:{}\ninvertY:{}\nmoveDeadzone:{}\nlookDeadzone:{}\ntriggerThreshold:{}\ntoggleSneak:{}\nglyphs:{}\nmenuNavigation:{}\nkeyboard:{}\n",
+            "enabled:{}\nvibration:{}\nadaptiveTriggers:{}\nlookSensitivity:{}\ninvertX:{}\ninvertY:{}\nmoveDeadzone:{}\nlookDeadzone:{}\ntriggerThreshold:{}\ntoggleSneak:{}\nglyphs:{}\nmenuNavigation:{}\nkeyboard:{}\n",
             bool_text(self.enabled),
             bool_text(self.vibration),
+            bool_text(self.adaptive_triggers),
             self.look_sensitivity,
             bool_text(self.invert_x),
             bool_text(self.invert_y),
@@ -947,6 +952,69 @@ impl Rumble {
     }
 }
 
+/// What a trigger feels like on a DualSense, from what its action is doing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TriggerFeel {
+    Free,
+    /// Drawing a bow, charging a trident, loading a crossbow: resistance that grows with the
+    /// charge, 0..1.
+    Draw(f32),
+    /// A loaded crossbow: a gun trigger's click.
+    Click,
+    /// Mining a block of this hardness: a light buzz, stronger on harder blocks.
+    Texture(f32),
+    /// Pulling it boosts (a rocket while gliding, the stick while riding a pig or a strider):
+    /// a firm wall halfway.
+    Boost,
+}
+impl TriggerFeel {
+    pub fn effect(self) -> horizon_dualsense::TriggerEffect {
+        use horizon_dualsense::trigger;
+        match self {
+            TriggerFeel::Free => horizon_dualsense::TRIGGER_OFF,
+            TriggerFeel::Draw(charge) => {
+                trigger::feedback(1, 1 + (7.0 * charge.clamp(0.0, 1.0)).round() as u8)
+            }
+            TriggerFeel::Click => trigger::weapon(3, 6, 8),
+            TriggerFeel::Texture(hardness) if hardness > 0.0 => {
+                // Dirt 2, stone 3, deepslate 4, obsidian 5 of 8.
+                let amplitude = (1.0 + 1.6 * hardness.sqrt()).round().clamp(1.0, 5.0);
+                trigger::vibration(1, amplitude as u8, 30)
+            }
+            TriggerFeel::Texture(_) => horizon_dualsense::TRIGGER_OFF,
+            TriggerFeel::Boost => trigger::feedback(4, 6),
+        }
+    }
+}
+impl PadSettings {
+    /// The left and right triggers' effects: each feels the action bound to it, `key.use` or
+    /// `key.attack`.
+    pub fn trigger_effects(
+        &self,
+        using: TriggerFeel,
+        attacking: TriggerFeel,
+    ) -> [horizon_dualsense::TriggerEffect; 2] {
+        [Button::LeftTrigger, Button::RightTrigger].map(|trigger| {
+            let actions = self.actions_of(trigger);
+            let feel = if !self.adaptive_triggers {
+                TriggerFeel::Free
+            } else if actions.contains(&"key.use") {
+                using
+            } else if actions.contains(&"key.attack") {
+                attacking
+            } else {
+                TriggerFeel::Free
+            };
+            feel.effect()
+        })
+    }
+}
+/// `BowItem.getPowerForTime`: a bow's draw after this many ticks, 0..1.
+pub fn bow_power(ticks: u32) -> f32 {
+    let f = ticks as f32 / 20.0;
+    ((f * f + f * 2.0) / 3.0).min(1.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1220,6 +1288,36 @@ mod tests {
         assert_eq!(w.observe(None), None);
         assert_eq!(w.observe(Some(2.0)), None);
         assert_eq!(w.observe(Some(1.0)), Some(1.0));
+    }
+
+    #[test]
+    fn triggers_feel_their_action() {
+        use horizon_dualsense::TRIGGER_OFF;
+        let mut s = PadSettings::default();
+        // Use is LT, attack RT by default.
+        let [left, right] = s.trigger_effects(TriggerFeel::Draw(1.0), TriggerFeel::Texture(1.5));
+        assert_eq!(left, horizon_dualsense::trigger::feedback(1, 8));
+        assert_eq!(right, horizon_dualsense::trigger::vibration(1, 3, 30));
+        assert_eq!(
+            s.trigger_effects(TriggerFeel::Draw(0.0), TriggerFeel::Free),
+            [horizon_dualsense::trigger::feedback(1, 1), TRIGGER_OFF]
+        );
+        // Instant-break blocks don't buzz.
+        assert_eq!(TriggerFeel::Texture(0.0).effect(), TRIGGER_OFF);
+        s.adaptive_triggers = false;
+        assert_eq!(
+            s.trigger_effects(TriggerFeel::Click, TriggerFeel::Boost),
+            [TRIGGER_OFF; 2]
+        );
+        assert!(!PadSettings::parse(&s.serialize()).adaptive_triggers);
+    }
+
+    #[test]
+    fn bow_draw() {
+        assert_eq!(bow_power(0), 0.0);
+        assert!((bow_power(10) - 5.0 / 12.0).abs() < 1e-6);
+        assert_eq!(bow_power(20), 1.0);
+        assert_eq!(bow_power(40), 1.0);
     }
 
     #[test]

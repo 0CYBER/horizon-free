@@ -219,6 +219,7 @@ exactly vanilla's, so a vanilla client can share the game folder.
 ```
 enabled:true
 vibration:true
+adaptiveTriggers:true
 lookSensitivity:0.5
 invertX:false
 invertY:false
@@ -232,7 +233,7 @@ bind_pad.hotbarNext:rb
 ```
 
 Only bindings that differ from the defaults are written. The controls
-options get a Controller page: on/off, vibration, look sensitivity, invert
+options get a Controller page: on/off, vibration, adaptive triggers, look sensitivity, invert
 X/Y, deadzones, glyph style, sneak toggle, and a binding list like the key
 binds screen (pick an action, press a button; conflicts marked as vanilla
 does; reset).
@@ -323,6 +324,28 @@ shared, so gilrs keeps reading the same pad), the HID API on Windows.
   shake while the motors run (`watch` logs the shake while the game drives
   the pad).
 
+### Adaptive triggers
+
+On by default with a DualSense ("Adaptive Triggers" in the controller
+options, `adaptiveTriggers:`). Each trigger feels the action bound to it, so
+rebinding moves the feel along: with the default mapping that is L2 for
+`key.use` and R2 for `key.attack`.
+
+| While | Trigger | Feel |
+|---|---|---|
+| Drawing a bow | use | resistance from the first tenth of the travel, growing with the draw (`BowItem.getPowerForTime`) |
+| Charging a trident | use | the same, full at the 10 ticks a throw needs |
+| Loading a crossbow | use | the same, full when it is loaded |
+| Holding a loaded crossbow | use | a gun trigger: resistance that gives way with a click, where it fires |
+| Gliding with a rocket, riding a pig with a carrot on a stick or a strider with a warped fungus on a stick | use | a firm wall halfway: pulling through it boosts |
+| Mining (survival) | attack | a light 30 Hz buzz, stronger on harder blocks (dirt 2, stone 3, deepslate 4, obsidian 5 of 8); none on blocks that break at once |
+
+Everything else, and every menu, the pause screen, a window without focus,
+another pad being the active one, and controllers turned off, leaves the
+triggers free; quitting frees them too. Effects are the pad's own modes
+(feedback 0x21, weapon 0x25, vibration 0x26): ten zones along the travel, a
+three-bit strength per zone. `pad status` shows the effects in use.
+
 Byte layout from public references, read for facts; no code is copied from
 them (the kernel and dualsensectl are GPL):
 
@@ -331,6 +354,7 @@ them (the kernel and dualsensectl are GPL):
 | SDL [`SDL_hidapi_ps5.c`](https://github.com/libsdl-org/SDL/blob/6defbc0129b5ba90bab3f6c67bbc1e9329e24ff1/src/joystick/hidapi/SDL_hidapi_ps5.c) and [`SDL_hints.h`](https://github.com/libsdl-org/SDL/blob/6defbc0129b5ba90bab3f6c67bbc1e9329e24ff1/include/SDL3/SDL_hints.h) (zlib) | `6defbc0` | the 47-byte block, rumble flags and stop, 0x0224, legacy at half, LED reset and the Bluetooth animation clock, USB report length 48, the enhanced-mode switch |
 | Linux [`hid-playstation.c`](https://github.com/torvalds/linux/blob/045958acaa75205b31578cb22c4345e28dd2e4bf/drivers/hid/hid-playstation.c) (GPL) | `045958a` | valid flags, the Bluetooth sequence and tag 0x10, CRC seed 0xA2, `dualsense_reset_leds`, `use_vibration_v2` from 2.21, player LED patterns, the default blue |
 | [dualsensectl](https://github.com/nowrep/dualsensectl/blob/d3ae2fa272e1bf9a5c08a0ded3f374b40f7c73ac/main.c) (GPL) | `d3ae2fa` | trigger valid bits (flags 0 bits 2, 3), `reduce_motor_power` (byte 36) and its flag, the trigger effect packing |
+| Nielk1's [TriggerEffectGenerator](https://gist.github.com/Nielk1/6d54cc2c00d2201ccb8c2720ad7538db/f73a299fdc52f43be84d39e62734192ad82bb393) (MIT) | rev. `f73a299` | the trigger modes (official 0x05, 0x21, 0x25, 0x26) and their zone packing |
 | [pydualsense](https://github.com/flok/pydualsense/blob/01445f5ed6ba/pydualsense/pydualsense.py) (MIT) | `01445f5` | sets the attenuation flag with 0 on every report |
 | [nondebug/dualsense](https://github.com/nondebug/dualsense) | `b87450e` | an all-zero report 0x02 leaves rumble emulation for the audio haptics |
 

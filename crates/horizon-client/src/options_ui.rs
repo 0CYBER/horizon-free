@@ -71,6 +71,7 @@ pub enum Opt {
     /// Horizon's controller settings (`horizon-controller.txt`).
     PadEnabled,
     PadVibration,
+    PadAdaptiveTriggers,
     PadLookSensitivity,
     PadInvertX,
     PadInvertY,
@@ -169,6 +170,7 @@ impl Opt {
             // Horizon's own options: English captions (no vanilla keys).
             Opt::PadEnabled => "Controller",
             Opt::PadVibration => "Vibration",
+            Opt::PadAdaptiveTriggers => "Adaptive Triggers",
             Opt::PadLookSensitivity => "Look Sensitivity",
             Opt::PadInvertX => "Invert Look X",
             Opt::PadInvertY => "Invert Look Y",
@@ -423,6 +425,7 @@ impl Opt {
             Opt::JapaneseGlyphs => on_off(s.japanese_glyphs),
             Opt::PadEnabled => on_off(s.controller.enabled),
             Opt::PadVibration => on_off(s.controller.vibration),
+            Opt::PadAdaptiveTriggers => on_off(s.controller.adaptive_triggers),
             Opt::PadInvertX => on_off(s.controller.invert_x),
             Opt::PadInvertY => on_off(s.controller.invert_y),
             Opt::PadToggleSneak => tr(if s.controller.toggle_sneak {
@@ -566,6 +569,9 @@ impl Opt {
             Opt::JapaneseGlyphs => s.japanese_glyphs = !s.japanese_glyphs,
             Opt::PadEnabled => s.controller.enabled = !s.controller.enabled,
             Opt::PadVibration => s.controller.vibration = !s.controller.vibration,
+            Opt::PadAdaptiveTriggers => {
+                s.controller.adaptive_triggers = !s.controller.adaptive_triggers
+            }
             Opt::PadInvertX => s.controller.invert_x = !s.controller.invert_x,
             Opt::PadInvertY => s.controller.invert_y = !s.controller.invert_y,
             Opt::PadToggleSneak => s.controller.toggle_sneak = !s.controller.toggle_sneak,
@@ -1028,6 +1034,7 @@ impl OptionsUi {
                 rows.extend(pairs(&[
                     Opt::PadEnabled,
                     Opt::PadVibration,
+                    Opt::PadAdaptiveTriggers,
                     Opt::PadLookSensitivity,
                     Opt::PadToggleSneak,
                     Opt::PadInvertX,
