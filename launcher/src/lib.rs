@@ -2,3 +2,4 @@
 pub mod account;
 pub mod backend;
 pub mod desktop;
+pub mod telemetry;
