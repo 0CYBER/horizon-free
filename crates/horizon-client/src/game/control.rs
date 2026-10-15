@@ -97,15 +97,22 @@ impl Game<'_> {
         }
         horizon_client::widgets::end_frame(self.frames);
         self.advance_agent();
-        while let Some(request) = self.control.as_ref().and_then(|c| c.try_recv()) {
-            let reply = match self.control_command(&request.line, &request.reply, event_loop) {
-                Ok(Some(value)) => value,
-                // Deferred: the command keeps its own reply channel.
-                Ok(None) => continue,
-                Err(e) => json!({ "error": e.to_string() }),
-            };
-            let _ = request.reply.send(reply.to_string());
+        for request in self.ui_wait.ready() {
+            self.answer(request, event_loop);
         }
+        while let Some(request) = self.control.as_ref().and_then(|c| c.try_recv()) {
+            self.answer(request, event_loop);
+        }
+    }
+
+    fn answer(&mut self, request: horizon_client::control::Request, event_loop: &ActiveEventLoop) {
+        let reply = match self.control_command(&request.line, &request.reply, event_loop) {
+            Ok(Some(value)) => value,
+            // Deferred: the command keeps its own reply channel.
+            Ok(None) => return,
+            Err(e) => json!({ "error": e.to_string() }),
+        };
+        let _ = request.reply.send(reply.to_string());
     }
 
     fn control_command(
@@ -124,6 +131,11 @@ impl Game<'_> {
         let ok = || Ok(Some(json!({ "ok": true })));
         if let Some(value) = self.block_command(&words)? {
             return Ok(Some(value));
+        }
+        match self.ui_command(&words, line, reply, event_loop)? {
+            super::agent::Handled::Reply(value) => return Ok(Some(value)),
+            super::agent::Handled::Deferred => return Ok(None),
+            super::agent::Handled::No => {}
         }
         if let Some(value) = self.lan_control(&words)? {
             return Ok(Some(value));
@@ -146,6 +158,7 @@ impl Game<'_> {
                 .chain(super::render_control::HELP)
                 .chain(super::sculk::HELP)
                 .chain(super::agent::HELP)
+                .chain(super::ui_control::HELP)
                 .chain(super::pad::HELP)
                 .collect::<Vec<_>>() }))),
             "setblock" | "fill" | "particle" | "signedit" => self.render_command(&words),

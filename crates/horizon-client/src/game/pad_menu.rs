@@ -101,7 +101,7 @@ impl Game<'_> {
             || self.book.is_some()
     }
 
-    fn gui_scale(&self) -> Option<HudBatch> {
+    pub(super) fn gui_scale(&self) -> Option<HudBatch> {
         self.renderer
             .as_ref()
             .map(|r| HudBatch::new([r.config.width, r.config.height]))

@@ -96,6 +96,8 @@ $C inventory                                 # hotbar, inventory, armor, offhand
 $C open-inventory                            # craft planks in the 2x2 grid:
 $C click-slot 0; $C click-slot 100 right; $C click-slot 0; $C click-slot 200 shift; $C close
 $C place 2 65 -2 --item birch_planks         # {"changed": true, "block": {...}}
+$C pause; $C ui                              # the pause menu's widgets: ids, kinds, labels, bounds
+$C click options; $C set fov 0.75; $C click done   # widgets by id
 $C screenshot /tmp/view.png                  # PNG of the next presented frame
 $C quit                                      # save and exit
 ```
@@ -116,6 +118,16 @@ game accepts, test hooks included.
   `look-at` a point, block face or entity, `attack [ID]`, `break X Y Z`,
   `place X Y Z [--item ITEM]`, `interact X Y Z` (doors, chests, crafting
   tables), `use-item [--hold S]` (eat, drink, throw), `select SLOT|ITEM`, `drop`.
+- **Widgets:** `ui` lists every widget of the open screen (title menus, pause,
+  options pages in both menu styles, inventories and menus): an id, its kind
+  (`button`, `slider` with its 0..1 `value`, `field`, `row`, `tab` with
+  `selected`, `slot` with its stack), the label and its bounds. Ids come from
+  labels (`FOV: 70` is `fov`, `Video Settings...` is `video-settings`, a
+  world row is the world's name; a repeat gets `-2`), else `row-0`, `field-0`,
+  and slots are `slot-ID`. `click ID [right] [shift]` clicks one as the mouse
+  would and `set ID VALUE` moves a slider to 0..1; after a click, the next
+  `ui`, `click` or `set` waits for the screen to be redrawn. Design and plans:
+  [agent-control.md](agent-control.md).
 - **Screens:** `open-inventory`, `click-slot SLOT [right] [shift]` (0-8 hotbar,
   9-35 inventory, 100+ crafting grid, 200 result, 300+ containers, 500-503
   armor, 504 offhand, 600+ stations), `close`, `click-button LABEL` (any

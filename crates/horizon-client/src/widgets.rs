@@ -1,9 +1,10 @@
-//! The labelled buttons drawn in the last frame, for the control socket: a
-//! script clicks a button by its label (`horizon-ctl click-button Respawn`)
-//! whatever screen or menu style drew it.
+//! The labelled widgets and focus targets drawn in the last frame, for the
+//! control socket: a script clicks a button by its label (`horizon-ctl
+//! click-button Respawn`) or any widget by its id in [`tree`] (`horizon-ctl
+//! click done`), whatever screen or menu style drew it.
 use std::cell::RefCell;
 
-/// A button in GUI pixels (the coordinates screens take input in).
+/// A labelled widget in GUI pixels (the coordinates screens take input in).
 #[derive(Clone, Debug)]
 pub struct Widget {
     pub label: String,
@@ -12,6 +13,8 @@ pub struct Widget {
     pub w: f32,
     pub h: f32,
     pub enabled: bool,
+    /// Buttons for [`record`]; sliders and tabs carry their labels too.
+    pub kind: Kind,
 }
 
 /// What a controller does with a focus target (docs/controllers.md, "Focus
@@ -106,7 +109,12 @@ pub fn generation() -> u64 {
 }
 
 /// Called by the button drawers.
-pub fn record(label: &str, [x, y, w, h]: [f32; 4], enabled: bool) {
+pub fn record(label: &str, rect: [f32; 4], enabled: bool) {
+    record_as(label, rect, enabled, Kind::Button);
+}
+
+/// The label of a widget of another kind (a slider's "FOV: 70", a tab).
+pub fn record_as(label: &str, [x, y, w, h]: [f32; 4], enabled: bool, kind: Kind) {
     let label = label.trim();
     if label.is_empty() {
         return;
@@ -120,6 +128,7 @@ pub fn record(label: &str, [x, y, w, h]: [f32; 4], enabled: bool) {
                 w,
                 h,
                 enabled,
+                kind,
             });
         }
     });
@@ -142,7 +151,116 @@ pub fn end_frame(frames: u64) {
 
 /// The buttons of the last drawn frame, top-most last.
 pub fn last() -> Vec<Widget> {
+    WIDGETS.with_borrow(|(_, last, _)| {
+        last.iter()
+            .filter(|w| w.kind == Kind::Button)
+            .cloned()
+            .collect()
+    })
+}
+
+/// Every labelled widget of the last drawn frame, sliders and tabs included.
+pub fn last_labelled() -> Vec<Widget> {
     WIDGETS.with_borrow(|(_, last, _)| last.clone())
+}
+
+impl Kind {
+    /// The kind's name in the control socket's `ui` reply.
+    pub fn name(self) -> &'static str {
+        match self {
+            Kind::Button => "button",
+            Kind::Slider { .. } => "slider",
+            Kind::Field => "field",
+            Kind::Row => "row",
+            Kind::Slot => "slot",
+            Kind::Tab(_) => "tab",
+        }
+    }
+}
+
+/// A widget of the `ui` tree: a labelled widget and its focus target merged.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Node {
+    /// The label as a slug up to its `:` (`FOV: 70` is `fov`), `-2`, `-3`
+    /// for repeats; `<kind>-<n>` in draw order without a label.
+    pub id: String,
+    pub kind: Kind,
+    pub label: Option<String>,
+    pub rect: [f32; 4],
+    pub enabled: bool,
+}
+
+/// `Video Settings...` → `video-settings`, `FOV: 70` → `fov`.
+pub fn slug(label: &str) -> String {
+    let name = label.split(':').next().unwrap_or(label);
+    let mut out = String::new();
+    for c in name.chars().flat_map(char::to_lowercase) {
+        if c.is_alphanumeric() {
+            out.push(c);
+        } else if !out.is_empty() && !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    out.trim_end_matches('-').to_owned()
+}
+
+/// The labelled widgets and the focus targets of a frame as one list with
+/// ids: a target drawn at a labelled widget's rectangle is that widget
+/// (its kind wins, a slider's value, unless the label says it's a tab:
+/// Horizon's segments); other targets follow, unlabelled. With the GUI
+/// size, what lies off screen (layout probes) is left out before naming.
+pub fn tree(widgets: &[Widget], targets: &[Target], screen: Option<[f32; 2]>) -> Vec<Node> {
+    let same = |a: [f32; 4], b: [f32; 4]| a.iter().zip(b).all(|(p, q)| (p - q).abs() < 0.5);
+    let mut nodes: Vec<Node> = widgets
+        .iter()
+        .map(|w| Node {
+            id: String::new(),
+            kind: w.kind,
+            label: Some(w.label.clone()),
+            rect: [w.x, w.y, w.w, w.h],
+            enabled: w.enabled,
+        })
+        .collect();
+    for t in targets {
+        if let Some(node) = nodes.iter_mut().find(|n| same(n.rect, t.rect)) {
+            if !matches!(node.kind, Kind::Tab(_)) {
+                node.kind = t.kind;
+            }
+        } else {
+            nodes.push(Node {
+                id: String::new(),
+                kind: t.kind,
+                label: None,
+                rect: t.rect,
+                enabled: true,
+            });
+        }
+    }
+    if let Some([w, h]) = screen {
+        nodes.retain(|n| {
+            let [x, y, nw, nh] = n.rect;
+            x >= -0.5 && y >= -0.5 && x + nw <= w + 0.5 && y + nh <= h + 0.5
+        });
+    }
+    let mut seen = std::collections::HashMap::<String, usize>::new();
+    for node in &mut nodes {
+        let base = node
+            .label
+            .as_deref()
+            .map(slug)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| node.kind.name().to_owned());
+        let n = seen.entry(base.clone()).or_default();
+        *n += 1;
+        node.id = if node.label.is_none() {
+            format!("{base}-{}", *n - 1)
+        } else if *n > 1 {
+            format!("{base}-{n}")
+        } else {
+            base
+        };
+    }
+    nodes
 }
 
 /// The button `label` names: an exact match (case-insensitive), else the only
@@ -185,6 +303,7 @@ mod tests {
             w: 10.0,
             h: 10.0,
             enabled: true,
+            kind: Kind::Button,
         }
     }
 
@@ -195,6 +314,59 @@ mod tests {
         assert_eq!(find(&list, "create").unwrap().label, "Create New World");
         assert!(find(&list, "world").is_err());
         assert!(find(&list, "options").is_err());
+    }
+
+    #[test]
+    fn tree_merges_labels_with_targets_and_names_them() {
+        let slider = Kind::Slider {
+            value: 0.25,
+            track: [4.0, 142.0],
+        };
+        let mut fov = w("FOV: 70");
+        fov.kind = slider;
+        let mut done = w("Done");
+        done.y = 30.0;
+        let mut done2 = w("Done");
+        done2.y = 60.0;
+        let widgets = [fov, w("Video Settings..."), done, done2];
+        let targets = [
+            Target {
+                rect: [0.0, 0.0, 10.0, 10.0],
+                kind: slider,
+            },
+            Target {
+                rect: [0.0, 90.0, 10.0, 10.0],
+                kind: Kind::Row,
+            },
+            Target {
+                rect: [0.0, 100.0, 10.0, 10.0],
+                kind: Kind::Row,
+            },
+        ];
+        let mut probe = w("Done");
+        probe.x = -10_000.0;
+        let widgets = [&[probe][..], &widgets].concat();
+        let nodes = tree(&widgets, &targets, Some([400.0, 200.0]));
+        let ids: Vec<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["fov", "video-settings", "done", "done-2", "row-0", "row-1"]
+        );
+        assert_eq!(nodes[0].kind, slider, "the target's kind carries the value");
+        assert_eq!(nodes[4].label, None);
+        assert_eq!(slug("Music & Sounds..."), "music-sounds");
+        assert_eq!(slug("Difficulty: Normal"), "difficulty");
+        assert_eq!(slug("Économie"), "économie");
+    }
+
+    #[test]
+    fn last_lists_buttons_only() {
+        end_frame(100);
+        record("Back", [0.0, 0.0, 5.0, 5.0], true);
+        record_as("FOV: 70", [0.0, 9.0, 5.0, 5.0], true, Kind::Tab(true));
+        end_frame(101);
+        assert_eq!(last().len(), 1);
+        assert_eq!(last_labelled().len(), 2);
     }
 
     #[test]

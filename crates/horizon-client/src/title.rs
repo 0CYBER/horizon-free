@@ -826,10 +826,15 @@ impl Title {
                     }
                     let mid = y - 2.0 + ROW_HEIGHT / 2.0;
                     if mid > top && mid < bottom {
-                        crate::widgets::target_as(
-                            [x - 2.0, y - 2.0, ROW_WIDTH, ROW_HEIGHT],
+                        let rect = [x - 2.0, y - 2.0, ROW_WIDTH, ROW_HEIGHT];
+                        // The control socket's widget tree names the row.
+                        crate::widgets::record_as(
+                            &world.name,
+                            rect,
+                            true,
                             crate::widgets::Kind::Row,
                         );
+                        crate::widgets::target_as(rect, crate::widgets::Kind::Row);
                     }
                     // extractSelection: white once the list has focus.
                     if *selected == Some(i) {

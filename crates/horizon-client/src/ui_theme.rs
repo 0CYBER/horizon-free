@@ -458,6 +458,9 @@ pub struct Ui<'a> {
     /// The number the next settings row shows (`01`, `02`…); `page_header`
     /// starts it again.
     pub row_index: usize,
+    /// The caption of the settings row drawn last: the control socket's
+    /// label for the switch, slider or segments drawn on it.
+    row_label: String,
     /// Secondary text (indices, inactive items, captions): `FAINT`, or `MUTED` over the home
     /// page's lighter veil (`horizon_theme::HOME_VEIL`).
     pub muted: u32,
@@ -491,6 +494,7 @@ impl<'a> Ui<'a> {
             opacity: 1.0,
             offset: (0.0, 0.0),
             row_index: 0,
+            row_label: String::new(),
             muted: color::FAINT,
         }
     }
@@ -953,6 +957,25 @@ impl<'a> Ui<'a> {
         self.mark(22.0, 26.0, 18.0);
         self.text_line(Face::Medium, BODY, 18.0, 48.0, 26.0, color::TEXT, title);
     }
+    /// A widget's label for the control socket (`click-button`, `ui`), in GUI pixels.
+    fn record_label(
+        &self,
+        label: &str,
+        [x, y, w, h]: [f32; 4],
+        enabled: bool,
+        kind: crate::widgets::Kind,
+    ) {
+        if self.real {
+            let k = self.density / self.scale;
+            let (ox, oy) = self.offset;
+            crate::widgets::record_as(
+                label,
+                [(x + ox) * k, (y + oy) * k, w * k, h * k],
+                enabled,
+                kind,
+            );
+        }
+    }
     /// The launcher's `button`: a pill 32 tall (or `CONTROL_LARGE` with
     /// `LARGE` text), medium weight, a hover layer easing in over `QUICK`,
     /// and the press state. Returns the hover.
@@ -964,12 +987,7 @@ impl<'a> Ui<'a> {
         kind: Kind,
         enabled: bool,
     ) -> f32 {
-        if self.real {
-            // The control socket's button list, in GUI pixels.
-            let k = self.density / self.scale;
-            let (ox, oy) = self.offset;
-            crate::widgets::record(label, [(x + ox) * k, (y + oy) * k, w * k, h * k], enabled);
-        }
+        self.record_label(label, [x, y, w, h], enabled, crate::widgets::Kind::Button);
         let hover = self.interact(id, x, y, w, h, enabled);
         let saved = self.opacity;
         if !enabled {
@@ -1043,6 +1061,12 @@ impl<'a> Ui<'a> {
         for (i, label) in labels.iter().enumerate() {
             let iy = y + i as f32 * STEP;
             let active = i == selected;
+            self.record_label(
+                label,
+                [x, iy, w, CONTROL],
+                true,
+                crate::widgets::Kind::Tab(active),
+            );
             let hover = self.interact_as(
                 base + i as u64,
                 [x, iy, w, CONTROL],
@@ -1089,6 +1113,13 @@ impl<'a> Ui<'a> {
         let mut sx = x + 2.0;
         for (i, (label, sw)) in labels.iter().zip(&widths).enumerate() {
             let active = i == selected;
+            let name = format!("{} {label}", self.row_label);
+            self.record_label(
+                &name,
+                [sx, y + 2.0, *sw, SEGMENT],
+                true,
+                crate::widgets::Kind::Tab(active),
+            );
             let hover = self.interact(base + i as u64, sx, y + 2.0, *sw, SEGMENT, true);
             if active {
                 self.rounded(sx, y + 2.0, *sw, SEGMENT, PILL, color::TEXT);
@@ -1117,7 +1148,12 @@ impl<'a> Ui<'a> {
     pub fn switch(&mut self, id: u64, right: f32, cy: f32, on: bool) {
         let (w, h) = (36.0, 20.0);
         let (x, y) = (right - w, (cy - h / 2.0).round());
-        self.interact(id, x - 4.0, y - 4.0, w + 8.0, h + 8.0, true);
+        let rect = [x - 4.0, y - 4.0, w + 8.0, h + 8.0];
+        if !self.row_label.is_empty() {
+            let label = format!("{}: {}", self.row_label, if on { "on" } else { "off" });
+            self.record_label(&label, rect, true, crate::widgets::Kind::Button);
+        }
+        self.interact_as(id, rect, true, crate::widgets::Kind::Button);
         let t = self.tween(id ^ 0x5717c4, if on { 1.0 } else { 0.0 }, move_());
         self.rounded(
             x,
@@ -1142,6 +1178,7 @@ impl<'a> Ui<'a> {
     /// the value column as before the numbers came; the index takes its
     /// share from it.
     pub fn row(&mut self, x: f32, y: f32, label: &str, value: &str, value_w: f32) -> f32 {
+        self.row_label = label.to_owned();
         let line = (BODY * 1.45).round();
         let h = 12.0 + line.max(CONTROL) + 12.0;
         let ty = y + (h - line) / 2.0;
@@ -1173,6 +1210,7 @@ impl<'a> Ui<'a> {
         description: &str,
         description_w: f32,
     ) -> f32 {
+        self.row_label = label.to_owned();
         let h = 12.0 + CONTROL + 12.0;
         let top = y + 8.0;
         self.index(x, top);
@@ -1218,15 +1256,14 @@ impl<'a> Ui<'a> {
     /// Dragging is the screen's job (see [`slider_value`]).
     pub fn slider(&mut self, id: u64, x: f32, cy: f32, w: f32, value: f32) {
         let v = value.clamp(0.0, 1.0);
-        let hover = self.interact_as(
-            id,
-            [x - 8.0, cy - 12.0, w + 16.0, 24.0],
-            true,
-            crate::widgets::Kind::Slider {
-                value: v,
-                track: [x, w],
-            },
-        );
+        let kind = crate::widgets::Kind::Slider {
+            value: v,
+            track: [x, w],
+        };
+        let rect = [x - 8.0, cy - 12.0, w + 16.0, 24.0];
+        let label = self.row_label.clone();
+        self.record_label(&label, rect, true, kind);
+        let hover = self.interact_as(id, rect, true, kind);
         self.rounded(x, cy - 1.0, w, 2.0, 1.0, color::BORDER);
         self.rounded(x, cy - 1.0, w * v, 2.0, 1.0, color::TEXT);
         let r = 7.0 + hover;

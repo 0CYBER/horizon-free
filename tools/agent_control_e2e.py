@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""End-to-end check of agent control: play Horizon on a virtual screen with horizon-ctl.
+"""End-to-end check of agent control: play Horizon with horizon-ctl.
 
 A script creates a world through the title menus, finds a tree it can walk to, breaks a log,
 checks the inventory, crafts planks in the inventory screen, places one and reads it back. It
 runs through the CLI (one horizon-ctl process per command) and through `horizon-ctl mcp` with a
-small JSON-RPC client, and saves a screenshot of each run.
+small JSON-RPC client, and saves a screenshot of each run. The ui scenario drives the menus by
+widget id instead: the title screen, the options (a slider set by id) and the inventory's slots.
 
     python3 tools/agent_control_e2e.py                 # both modes
     python3 tools/agent_control_e2e.py --mode mcp      # one of them
     python3 tools/agent_control_e2e.py --bin-dir target/fast --out /tmp/agent-e2e
+    python3 tools/agent_control_e2e.py --scenario ui   # menus by widget id only (a minute)
 
-Needs vscreen (Linux desktop), the prepared resources in .local/horizon-client and a build of
+Needs vscreen on Linux (the desktop); on macOS the game renders offscreen, so it also runs in a
+locked session or over SSH. It needs the prepared resources in .local/horizon-client and a build of
 horizon-client and horizon-ctl (built with the fast profile unless --bin-dir is given). Games
 started here have no audio (HORIZON_NO_AUDIO=1).
 """
@@ -35,17 +38,20 @@ POSITIONAL = {
     'goto': ['x', 'y', 'z'], 'break': ['x', 'y', 'z'], 'place': ['x', 'y', 'z'], 'block': ['x', 'y', 'z'],
     'find_block': ['block', 'radius'], 'entities': ['radius', 'type'], 'click_slot': ['slot'],
     'click_button': ['label'], 'type': ['text'], 'wait': ['ticks'], 'wait_ready': ['seconds'],
-    'command': ['command'], 'look_at_block': ['x', 'y', 'z'],
+    'command': ['command'], 'look_at_block': ['x', 'y', 'z'], 'click': ['id'], 'set': ['id', 'value'],
+    'give': ['item', 'count'],
 }
 # Booleans the game takes as bare words.
-BARE = {'click_slot': ['right', 'shift']}
+BARE = {'click_slot': ['right', 'shift'], 'click': ['right', 'shift']}
 
 
 class Failed(Exception):
     pass
 
 
-def vscreen_env(screen):
+def game_env(screen):
+    if sys.platform == 'darwin':
+        return dict(os.environ, HORIZON_NO_AUDIO='1')
     env = dict(os.environ, VSCREEN=screen)
     subprocess.run(['vscreen', 'up'], env=env, check=False, capture_output=True)
     text = subprocess.run(['vscreen', 'env'], env=env, capture_output=True, text=True, check=True).stdout
@@ -166,7 +172,8 @@ def scenario(d, out):
     assert screen['screen'] == 'title', screen
     assert any(b['label'] == 'Singleplayer' for b in screen['buttons']), screen
     d('click_button', label='Singleplayer')
-    d('click_button', label='Create New World')
+    if d('screen')['menu'].get('mode') != 'create-world':  # with no worlds, Singleplayer opens it itself
+        d('click_button', label='Create New World')
     d('type', field='name', replace=True, text='Agent World')
     d('type', field='seed', text='5')  # spawn near a walkable oak
     created = d('click_button', label='Create New World')
@@ -243,18 +250,79 @@ def scenario(d, out):
     return {'tree': base, 'log': log_id, 'placed': target}
 
 
-def run(mode, ctl, out, resources):
+def widgets(d):
+    """The ui tree as {id: widget}."""
+    return {w['id']: w for w in d('ui')['widgets']}
+
+
+def ui_scenario(d, out):
+    # 1. Create a world through the title menus, by widget id.
+    tree = widgets(d)
+    assert tree['singleplayer']['kind'] == 'button', tree
+    d('click', id='singleplayer')
+    if 'game' not in widgets(d):  # with no worlds, Singleplayer opens Create New World itself
+        d('click', id='create-new-world')
+    tree = widgets(d)
+    assert tree['game']['kind'] == 'button' and any(w['kind'] == 'field' for w in tree.values()), tree
+    d('type', field='name', replace=True, text='UI World')
+    created = d('click', id='create-new-world')
+    assert created['screen'] == 'playing', created
+    d('wait_ready', seconds=400)
+
+    # 2. Options from the pause menu: a slider set by id moves its value and label.
+    d('pause')
+    d('click', id='options')
+    fov = widgets(d)['fov']
+    assert fov['kind'] == 'slider' and abs(fov['value'] - 0.5) < 0.01, fov
+    d('set', id='fov', value=1)
+    moved = widgets(d)['fov']
+    assert moved['value'] > 0.99 and moved['label'] != fov['label'], moved
+    d('set', id='fov', value=0.5)
+    try:
+        d('click', id='no-such-widget')
+        raise AssertionError('clicking an unknown id succeeded')
+    except Failed as e:
+        assert 'no widget' in str(e), e
+    try:
+        d('set', id='done', value=0.5)
+        raise AssertionError('set accepted a button')
+    except Failed as e:
+        assert 'set moves sliders' in str(e), e
+    d('click', id='done')
+    assert d('click', id='back-to-game')['screen'] == 'playing'
+
+    # 3. The inventory's slots are widgets too, with their stacks.
+    d('give', item='oak_log', count=2)
+    d('open_inventory')
+    tree = widgets(d)
+    log = next(w for w in tree.values() if w['kind'] == 'slot' and (w.get('stack') or {}).get('item') == 'minecraft:oak_log')
+    assert log['stack']['count'] == 2 and 'slot-200' in tree, log
+    d('click', id=log['id'])
+    d('click', id='slot-100', right=True)
+    d('click', id=log['id'])
+    assert widgets(d)['slot-200']['stack']['item'] == 'minecraft:oak_planks'
+    d('close')
+    shot = d('screenshot', path=str(out / f'{d.name}-ui.png'))
+    if '_image' in shot:
+        (out / f'{d.name}-ui.png').write_bytes(shot['_image'])
+    return {'widgets': len(tree)}
+
+
+SCENARIOS = {'survival': scenario, 'ui': ui_scenario}
+
+
+def run(mode, ctl, out, resources, which='survival'):
     work = Path(tempfile.mkdtemp(prefix=f'hzac-{mode}-'))
     (work / '.local').mkdir()
     (work / '.local/horizon-client').mkdir()
     os.symlink(resources, work / '.local/horizon-client/26.3')
     socket = work / 'c.sock'
-    env = vscreen_env(os.environ.get('VSCREEN', 'agent-control'))
+    env = game_env(os.environ.get('VSCREEN', 'agent-control'))
     driver = (Cli if mode == 'cli' else Mcp)(ctl, socket, work, env)
     started = time.time()
     try:
-        driver('launch', wait=False)
-        summary = scenario(driver, out)
+        driver('launch', wait=False, offscreen=sys.platform == 'darwin')
+        summary = SCENARIOS[which](driver, out)
         print(f'[{mode}] PASS in {time.time() - started:.0f} s: {summary}')
         return True
     except (Failed, AssertionError, StopIteration) as e:
@@ -276,6 +344,7 @@ def run(mode, ctl, out, resources):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--mode', choices=['cli', 'mcp', 'both'], default='both')
+    parser.add_argument('--scenario', choices=[*SCENARIOS, 'all'], default='all')
     parser.add_argument('--bin-dir', help='prebuilt horizon-client and horizon-ctl (default: build with the fast profile)')
     parser.add_argument('--out', default=str(ROOT / '.local/agent-control-e2e'), help='screenshots go here')
     args = parser.parse_args()
@@ -293,7 +362,8 @@ def main():
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     modes = ['cli', 'mcp'] if args.mode == 'both' else [args.mode]
-    results = {m: run(m, bins / 'horizon-ctl', out, resources) for m in modes}
+    scenarios = list(SCENARIOS) if args.scenario == 'all' else [args.scenario]
+    results = {f'{m}/{s}': run(m, bins / 'horizon-ctl', out, resources, s) for m in modes for s in scenarios}
     print(json.dumps(results))
     sys.exit(0 if all(results.values()) else 1)
 

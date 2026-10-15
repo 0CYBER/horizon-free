@@ -118,6 +118,7 @@ mod totem;
 mod trading;
 mod trial_spawner;
 mod trident;
+mod ui_control;
 mod villagers;
 mod wandering_trader;
 mod wind;
@@ -945,6 +946,8 @@ struct Game<'a> {
     flight: Option<control::Flight>,
     /// The running agent action from the control socket (game/agent.rs).
     agent: agent::Agent,
+    /// Widget commands waiting for the frame after a click (game/ui_control.rs).
+    ui_wait: ui_control::UiWait,
     /// The overworld's last `sky_darken` and its inputs (time, rain, thunder).
     sky_darken_memo: std::cell::Cell<Option<((i64, u32, u32), i32)>>,
     persist: persist::EntityMemory,
@@ -9809,6 +9812,7 @@ pub fn run() -> Result<()> {
         pending_screenshot: None,
         pending_bench: None,
         flight: None,
+        ui_wait: Default::default(),
         agent: agent::Agent::default(),
         view_frustum: None,
         pending_uploads: Vec::new(),
