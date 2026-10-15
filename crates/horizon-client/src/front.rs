@@ -840,8 +840,14 @@ fn multiplayer_page(ui: &mut Ui, x: f32, w: f32, screen: &Screen, caret: bool) {
                         Some(Ping::Ok {
                             motd, players, ms, ..
                         }) => (
-                            motd.lines().next().unwrap_or("").trim().to_owned(),
-                            format!("{players}  ·  {ms} ms"),
+                            motd.resolve_legacy()
+                                .plain()
+                                .lines()
+                                .next()
+                                .unwrap_or("")
+                                .trim()
+                                .to_owned(),
+                            format!("{}  ·  {ms} ms", Ping::player_count(*players).plain()),
                             color::ACCENT,
                         ),
                         Some(Ping::Failed(_)) => (
