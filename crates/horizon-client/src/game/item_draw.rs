@@ -222,6 +222,9 @@ impl Game<'_> {
             owner.use_item_remaining_ticks = duration - ticks as i32;
             owner.crossbow_charge_duration = Self::charge_ticks(stack).max(1) as i32;
         }
+        owner.fishing_cast_with_this_item = stack
+            .zip(self.cast_rod())
+            .is_some_and(|(s, rod)| std::ptr::eq(s, rod));
         owner.is_selected =
             stack.is_some() && self.inventory.get(self.selected).and_then(Option::as_ref) == stack;
         owner.is_carried = owner.is_selected;

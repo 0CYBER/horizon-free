@@ -3,10 +3,16 @@
 //! `gameplay/fishing` loot) and `FishingHookRenderer` (bobber and line).
 use super::{Game, view_vector};
 use horizon_client::{
-    blocks::Fluid, collisions::SceneCollisions, items::ItemStack, mesher::Vertex,
+    blocks::Fluid,
+    collisions::SceneCollisions,
+    gizmos::Line,
+    items::ItemStack,
+    mesher::Vertex,
+    particles::{ParticleOptions, ParticleType},
+    pose::Pose,
 };
 use horizon_core::{
-    geometry::{Aabb, Vec3},
+    geometry::{Aabb, Vec3, trig},
     random::RandomSource,
 };
 use std::sync::Arc;
@@ -302,7 +308,29 @@ impl Game<'_> {
         } else if h.time_until_hooked > 0 {
             h.time_until_hooked -= speed;
             if h.time_until_hooked > 0 {
+                // The fish swimming up: a bubble now and then, and a fishing
+                // particle to each side of its path.
                 h.fish_angle += triangle(&mut self.world.random, 0.0, 9.188) as f32;
+                let angle = h.fish_angle * (std::f64::consts::PI / 180.0) as f32;
+                let (sin, cos) = (trig::sin(f64::from(angle)), trig::cos(f64::from(angle)));
+                let distance = h.time_until_hooked as f32 * 0.1;
+                let fish = [
+                    h.position.x + f64::from(sin * distance),
+                    f64::from(h.position.y.floor() as f32 + 1.0),
+                    h.position.z + f64::from(cos * distance),
+                ];
+                if self.water_block(fish) {
+                    if self.world.random.next_float() < 0.15 {
+                        let spread = [f64::from(sin), 0.1, f64::from(cos)];
+                        let at = [fish[0], fish[1] - f64::from(0.1f32), fish[2]];
+                        self.send_particles(ParticleType::Bubble, at, spread, 0.0, 1);
+                    }
+                    let (x, z) = (sin * 0.04, cos * 0.04);
+                    for side in [1.0f32, -1.0] {
+                        let spread = [f64::from(z * side), 0.01, f64::from(-x * side)];
+                        self.send_particles(ParticleType::Fishing, fish, spread, 1.0, 0);
+                    }
+                }
             } else {
                 let pitch =
                     1.0 + (self.world.random.next_float() - self.world.random.next_float()) * 0.4;
@@ -312,6 +340,13 @@ impl Game<'_> {
                     0.25,
                     pitch,
                 );
+                // The bite: bubbles and fishing particles around the bobber.
+                let at = [h.position.x, h.position.y + 0.5, h.position.z];
+                let count = (1.0 + SIZE as f32 * 20.0) as u32;
+                let spread = [SIZE, 0.0, SIZE];
+                for kind in [ParticleType::Bubble, ParticleType::Fishing] {
+                    self.send_particles(kind, at, spread, f64::from(0.2f32), count);
+                }
                 h.nibble = 20 + self.world.random.next_int_bound(21).unwrap_or(0);
             }
         } else if h.time_until_lured > 0 {
@@ -326,8 +361,19 @@ impl Game<'_> {
             }
             let r = &mut self.world.random;
             if r.next_float() < tease {
-                // The fish particle draws: angle and distance.
-                let _ = (r.next_float(), r.next_float());
+                // A splash where a fish is teasing the bait.
+                let angle = (r.next_float() * 360.0) * (std::f64::consts::PI / 180.0) as f32;
+                let distance = r.next_float() * 35.0 + 25.0;
+                let fish = [
+                    h.position.x + f64::from(trig::sin(f64::from(angle)) * distance) * 0.1,
+                    f64::from(h.position.y.floor() as f32 + 1.0),
+                    h.position.z + f64::from(trig::cos(f64::from(angle)) * distance) * 0.1,
+                ];
+                if self.water_block(fish) {
+                    let count = 2 + self.world.random.next_int_bound(2).unwrap_or(0) as u32;
+                    let spread = [f64::from(0.1f32), 0.0, f64::from(0.1f32)];
+                    self.send_particles(ParticleType::Splash, fish, spread, 0.0, count);
+                }
             }
             if h.time_until_lured <= 0 {
                 h.fish_angle = self.world.random.next_float() * 360.0;
@@ -336,6 +382,28 @@ impl Game<'_> {
         } else {
             h.time_until_lured = 100 + self.world.random.next_int_bound(501).unwrap_or(0) - h.lure;
         }
+    }
+    /// `catchingFish`'s check below a fish: the block under it is water.
+    fn water_block(&self, fish: [f64; 3]) -> bool {
+        let state = self.world.block(
+            fish[0].floor() as i32,
+            (fish[1] - 1.0).floor() as i32,
+            fish[2].floor() as i32,
+        );
+        &*self.res.facts.get(state).name == "minecraft:water"
+    }
+    /// `ServerLevel.sendParticles` of a simple particle.
+    fn send_particles(
+        &mut self,
+        kind: ParticleType,
+        at: [f64; 3],
+        spread: [f64; 3],
+        speed: f64,
+        count: u32,
+    ) {
+        let options = ParticleOptions::simple(kind);
+        self.particles
+            .send_particles(&options, at, spread, speed, count);
     }
     /// `FishingHook.tick`.
     pub(super) fn tick_fishing(&mut self) {
@@ -466,16 +534,45 @@ impl Game<'_> {
         );
         self.hook = Some(h);
     }
-    /// FishingHookRenderer: the bobber billboard and the line to the rod.
-    pub(super) fn fishing_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
-        let Some(h) = &self.hook else { return };
-        let atlas = &self.res.atlas;
+    /// `FishingRodCast`: the stack in the arm holding the rod
+    /// (`FishingHookRenderer.getHoldingArm`) while the hook is out.
+    pub(super) fn cast_rod(&self) -> Option<&ItemStack> {
+        self.hook.as_ref()?;
+        if self.main_hand_rod() {
+            self.held()
+        } else {
+            self.offhand.as_ref()
+        }
+    }
+    pub(super) fn main_hand_rod(&self) -> bool {
+        self.held()
+            .is_some_and(|s| &*s.item == "minecraft:fishing_rod")
+    }
+    /// The hook's position this frame.
+    fn hook_position(&self, alpha: f64) -> Option<glam::DVec3> {
+        let h = self.hook.as_ref()?;
         let lerp = |a: f64, b: f64| a + (b - a) * alpha;
-        let p = glam::DVec3::new(
+        Some(glam::DVec3::new(
             lerp(h.previous.x, h.position.x),
             lerp(h.previous.y, h.position.y),
             lerp(h.previous.z, h.position.z),
-        );
+        ))
+    }
+    /// FishingHookRenderer: the bobber, a camera-facing half-block quad
+    /// centred on the hook.
+    pub(super) fn fishing_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
+        let Some(p) = self.hook_position(alpha) else {
+            return;
+        };
+        let Some(r) = self
+            .res
+            .atlas
+            .sprites
+            .get("entity/fishing/fishing_hook")
+            .copied()
+        else {
+            return;
+        };
         let light = self
             .world
             .light(p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32);
@@ -483,52 +580,112 @@ impl Game<'_> {
         let forward = glam::DVec3::from_array(view_vector(self.yaw, self.pitch));
         let right = forward.cross(glam::DVec3::Y).normalize_or_zero();
         let up = right.cross(forward).normalize_or_zero();
-        let mut quad = |c: [glam::DVec3; 4], uv: [[f32; 2]; 4], color: u32| {
-            for (v, uv) in c.iter().zip(uv) {
-                out.push(Vertex {
-                    normal: [0; 4],
-                    pos: (*v - camera).as_vec3().to_array(),
-                    uv,
-                    layer: 0,
-                    color,
-                    light: packed,
-                });
-            }
-        };
-        if let Some(r) = atlas.sprites.get("entity/fishing/fishing_hook").copied() {
-            let c = p + glam::DVec3::new(0.0, SIZE / 2.0, 0.0);
-            let s = 0.25;
-            quad(
-                [
-                    c - right * s - up * s,
-                    c + right * s - up * s,
-                    c + right * s + up * s,
-                    c - right * s + up * s,
-                ],
-                [[r.u0, r.v1], [r.u1, r.v1], [r.u1, r.v0], [r.u0, r.v0]],
-                0xFFFF_FFFF,
-            );
+        let s = 0.25;
+        let corners = [
+            p - right * s - up * s,
+            p + right * s - up * s,
+            p + right * s + up * s,
+            p - right * s + up * s,
+        ];
+        let uv = [[r.u0, r.v1], [r.u1, r.v1], [r.u1, r.v0], [r.u0, r.v0]];
+        for (v, uv) in corners.iter().zip(uv) {
+            out.push(Vertex {
+                normal: [0; 4],
+                pos: (*v - camera).as_vec3().to_array(),
+                uv,
+                layer: 0,
+                color: 0xFFFF_FFFF,
+                light: packed,
+            });
         }
-        // The line: 16 segments sagging from the rod tip to the bobber.
-        let Some(eye) = self.eye_position() else {
-            return;
+    }
+    /// FishingHookRenderer: the line, 16 black `lines` segments sagging from
+    /// a quarter block above the hook to the rod in the player's hand,
+    /// `width` pixels wide (`Window.getAppropriateLineWidth`).
+    pub(super) fn fishing_line(&self, alpha: f64, size: [u32; 2]) -> Vec<Line> {
+        let (Some(hook), Some(hand)) = (
+            self.hook_position(alpha),
+            self.rod_hand_position(alpha, size),
+        ) else {
+            return Vec::new();
         };
-        let tip = glam::DVec3::from_array(eye) + forward * 0.6 + right * 0.35 - up * 0.25;
-        let end = p + glam::DVec3::new(0.0, SIZE * 0.7, 0.0);
-        let w = atlas.font.white();
-        let uv = [[w.u0, w.v1], [w.u1, w.v1], [w.u1, w.v0], [w.u0, w.v0]];
-        let point = |t: f64| {
-            let d = end - tip;
-            tip + glam::DVec3::new(
-                d.x * t,
-                d.y * (t * t + t) * 0.5 + 0.25 * t * (1.0 - t),
-                d.z * t,
+        let offset = (hand - (hook + glam::DVec3::new(0.0, 0.25, 0.0))).as_vec3();
+        let point = |a: f32| {
+            let y = offset.y * (a * a + a) * 0.5 + 0.25;
+            hook + glam::Vec3::new(offset.x * a, y, offset.z * a).as_dvec3()
+        };
+        let width = horizon_client::gfx::outline_width(size[0]);
+        (0..16)
+            .map(|i| Line {
+                start: point(i as f32 / 16.0).to_array(),
+                end: point((i + 1) as f32 / 16.0).to_array(),
+                color: 0xFF00_0000,
+                width,
+            })
+            .collect()
+    }
+    /// `FishingHookRenderer.getPlayerHandPos`: on the near plane in first
+    /// person, beside the body otherwise.
+    fn rod_hand_position(&self, alpha: f64, size: [u32; 2]) -> Option<glam::DVec3> {
+        let p = self.player.as_ref()?;
+        let right_arm = self.main_hand_rod() != self.settings.main_hand_left;
+        let invert: f32 = if right_arm { 1.0 } else { -1.0 };
+        let swing = trig::sin(f64::from(
+            self.swing.animation(alpha as f32).sqrt() * std::f32::consts::PI,
+        ));
+        let feet = self.previous_position.lerp(p.position, alpha);
+        let eye = glam::DVec3::new(feet.x, feet.y + f64::from(p.dimensions.eye_height), feet.z);
+        if self.camera_type.first_person() {
+            let fov = self.settings.fov as i32 as f32;
+            // Camera.getNearPlane(fov).getPointOnPlane(invert * 0.525, -0.1).
+            let aspect = f64::from(size[0]) / f64::from(size[1].max(1));
+            let height =
+                (f64::from(fov * (std::f64::consts::PI / 180.0) as f32) / 2.0).tan() * 0.05;
+            let forward = glam::DVec3::from_array(view_vector(self.yaw, self.pitch));
+            let left = -forward.cross(glam::DVec3::Y).normalize_or_zero();
+            let up = forward.cross(left).normalize_or_zero();
+            let point = forward * 0.05 + up * (height * -0.1)
+                - left * (height * aspect * f64::from(invert * 0.525));
+            let point = point * (960.0 / f64::from(fov));
+            // Vec3.yRot(swing * 0.5), then xRot(-swing * 0.7).
+            let (s, c) = (
+                f64::from(trig::sin(f64::from(swing * 0.5))),
+                f64::from(trig::cos(f64::from(swing * 0.5))),
+            );
+            let point = glam::DVec3::new(
+                point.x * c + point.z * s,
+                point.y,
+                point.z * c - point.x * s,
+            );
+            let (s, c) = (
+                f64::from(trig::sin(f64::from(-swing * 0.7))),
+                f64::from(trig::cos(f64::from(-swing * 0.7))),
+            );
+            let point = glam::DVec3::new(
+                point.x,
+                point.y * c + point.z * s,
+                point.z * c - point.y * s,
+            );
+            Some(eye + point)
+        } else {
+            let model = self.player_model.as_ref()?;
+            let body =
+                horizon_client::camera::lerp(alpha as f32, model.previous_body_yaw, model.body_yaw);
+            let angle = f64::from(body * (std::f64::consts::PI / 180.0) as f32);
+            let (sin, cos) = (f64::from(trig::sin(angle)), f64::from(trig::cos(angle)));
+            let right = f64::from(invert) * 0.35;
+            let crouch = if p.pose == Pose::Crouching {
+                -0.1875
+            } else {
+                0.0
+            };
+            Some(
+                eye + glam::DVec3::new(
+                    -cos * right - sin * 0.8,
+                    crouch - 0.45,
+                    -sin * right + cos * 0.8,
+                ),
             )
-        };
-        for i in 0..16 {
-            let (a, b) = (point(f64::from(i) / 16.0), point(f64::from(i + 1) / 16.0));
-            let side = (b - a).cross(forward).normalize_or_zero() * 0.0125;
-            quad([a - side, b - side, b + side, a + side], uv, 0xFF00_0000);
         }
     }
 }
