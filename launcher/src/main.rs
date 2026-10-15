@@ -2595,6 +2595,8 @@ impl Render for Launcher {
         let content = div()
             .relative()
             .w_full()
+            // Let the page shrink inside the padded flex row so long notices can wrap.
+            .min_w_0()
             .max_w(px(1152.))
             .child(content)
             .with_animation(
