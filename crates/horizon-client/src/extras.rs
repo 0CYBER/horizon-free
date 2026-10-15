@@ -94,6 +94,10 @@ pub struct Extras {
     pub minimap_rotate: bool,
     /// Retry lost multiplayer connections (`reconnect`).
     pub auto_reconnect: bool,
+    /// Mouse Tweaks-style drags in the inventory and storage containers.
+    pub mouse_tweaks: bool,
+    /// With them, the wheel over a slot moves its items one at a time.
+    pub mouse_tweaks_wheel: bool,
 }
 impl Default for Extras {
     fn default() -> Self {
@@ -116,6 +120,8 @@ impl Default for Extras {
             minimap_zoom: 1.0,
             minimap_rotate: false,
             auto_reconnect: false,
+            mouse_tweaks: false,
+            mouse_tweaks_wheel: true,
         }
     }
 }
@@ -173,6 +179,8 @@ impl Extras {
                 }
                 "minimapRotate" => e.minimap_rotate = flag(e.minimap_rotate),
                 "autoReconnect" => e.auto_reconnect = flag(e.auto_reconnect),
+                "mouseTweaks" => e.mouse_tweaks = flag(e.mouse_tweaks),
+                "mouseTweaksWheel" => e.mouse_tweaks_wheel = flag(e.mouse_tweaks_wheel),
                 _ => {}
             }
         }
@@ -180,7 +188,7 @@ impl Extras {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "zoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\n",
+            "zoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\n",
             bool_text(self.zoom),
             self.zoom_key,
             self.zoom_level,
@@ -203,6 +211,8 @@ impl Extras {
             self.minimap_zoom,
             bool_text(self.minimap_rotate),
             bool_text(self.auto_reconnect),
+            bool_text(self.mouse_tweaks),
+            bool_text(self.mouse_tweaks_wheel),
         )
     }
     /// Written only once something differs from the defaults, so a vanilla
@@ -404,6 +414,8 @@ pub enum Item {
     MinimapZoom,
     MinimapRotate,
     AutoReconnect,
+    MouseTweaks,
+    MouseTweaksWheel,
 }
 /// The Extras page: headers and items.
 pub fn rows() -> Vec<Result<Item, &'static str>> {
@@ -430,6 +442,9 @@ pub fn rows() -> Vec<Result<Item, &'static str>> {
         Ok(Keystrokes),
         Ok(KeystrokesCorner),
         Ok(KeystrokesCps),
+        Err("Inventory"),
+        Ok(MouseTweaks),
+        Ok(MouseTweaksWheel),
         Err("Multiplayer"),
         Ok(AutoReconnect),
     ]
@@ -465,6 +480,8 @@ impl Item {
             Item::MinimapZoom => "Zoom",
             Item::MinimapRotate => "Turn with the player",
             Item::AutoReconnect => "Auto-reconnect",
+            Item::MouseTweaks => "Mouse Tweaks controls",
+            Item::MouseTweaksWheel => "Scroll wheel moves items",
             Item::FpsLows => "Minimum and 1% low",
             Item::Keystrokes => "Keystrokes",
             Item::KeystrokesCps => "Clicks per second",
@@ -491,6 +508,12 @@ impl Item {
                 "Rejoins a server after a lost connection or a restart, never after a kick or ban."
             }
             Item::FpsLows => "The slowest frame and the 1% low of the last 5 seconds.",
+            Item::MouseTweaks => {
+                "Right-drag places one per slot, left-drag gathers the held item, Shift + left-drag moves every slot."
+            }
+            Item::MouseTweaksWheel => {
+                "Down sends one item of the slot to the other side, up brings one back."
+            }
             Item::Keystrokes => "Movement keys, jump and mouse buttons as you press them.",
             Item::KeystrokesCps => "Clicks in the last second under each mouse button.",
         }
@@ -501,7 +524,7 @@ impl Item {
         match self {
             Item::Zoom | Item::Fps | Item::Keystrokes => Some(Cost::None),
             Item::Minimap => Some(Cost::Low),
-            Item::AutoReconnect => Some(Cost::None),
+            Item::AutoReconnect | Item::MouseTweaks => Some(Cost::None),
             _ => None,
         }
     }
@@ -518,6 +541,8 @@ impl Item {
             Item::Minimap => e.minimap,
             Item::MinimapRotate => e.minimap_rotate,
             Item::AutoReconnect => e.auto_reconnect,
+            Item::MouseTweaks => e.mouse_tweaks,
+            Item::MouseTweaksWheel => e.mouse_tweaks_wheel,
             _ => return None,
         })
     }
@@ -560,6 +585,8 @@ impl Item {
             Item::Minimap => e.minimap = !e.minimap,
             Item::MinimapRotate => e.minimap_rotate = !e.minimap_rotate,
             Item::AutoReconnect => e.auto_reconnect = !e.auto_reconnect,
+            Item::MouseTweaks => e.mouse_tweaks = !e.mouse_tweaks,
+            Item::MouseTweaksWheel => e.mouse_tweaks_wheel = !e.mouse_tweaks_wheel,
             Item::MinimapCorner => e.minimap_corner = next(&Corner::ALL, e.minimap_corner, back),
             Item::MinimapSize => {
                 let sizes: Vec<u8> = MINIMAP_SIZES.iter().map(|s| s.0).collect();
@@ -580,6 +607,7 @@ mod tests {
     fn everything_is_off_by_default_and_round_trips() {
         let d = Extras::default();
         assert!(!d.zoom && !d.fps && !d.keystrokes && !d.minimap && !d.auto_reconnect);
+        assert!(!d.mouse_tweaks);
         assert_eq!(Extras::parse(""), d);
         assert_eq!(Extras::parse(&d.serialize()), d);
         let mut e = d.clone();
@@ -596,6 +624,8 @@ mod tests {
         e.minimap_rotate = true;
         e.minimap_corner = Corner::BottomLeft;
         e.auto_reconnect = true;
+        e.mouse_tweaks = true;
+        e.mouse_tweaks_wheel = false;
         assert_eq!(Extras::parse(&e.serialize()), e);
     }
 

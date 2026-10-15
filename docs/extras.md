@@ -1,7 +1,7 @@
 # Horizon extras
 
 Optional conveniences built into the client: zoom, a minimap, an FPS counter, a
-keystroke overlay and auto-reconnect. **Every one is off by default**: a fresh
+keystroke overlay, auto-reconnect and Mouse Tweaks-style inventory controls. **Every one is off by default**: a fresh
 install looks and behaves exactly like vanilla 26.3, and turning an extra off
 again restores vanilla's behaviour completely.
 
@@ -15,6 +15,7 @@ again restores vanilla's behaviour completely.
 | Minimap colours, tiles and image | `crates/horizon-client/src/minimap.rs` |
 | Reconnect policy and backoff | `crates/horizon-client/src/reconnect.rs` |
 | Game glue (input hooks, per-frame update) | `crates/horizon-client/src/game/extras.rs` |
+| Mouse Tweaks-style controls | `crates/horizon-client/src/game/tweaks.rs` |
 | The settings page | `options_horizon.rs`: the **Extras** section of Horizon's Options |
 
 `game.rs` only gets one-line hooks (key, wheel, mouse, frame, HUD), so the
@@ -93,6 +94,27 @@ Horizon category in Controls, and adding one would put a non-vanilla mapping int
 - Online-mode servers: the retry joins with the account the game signed in
   with, held in memory for the whole run (`auth::current()`); nothing is
   written to disk.
+
+### Mouse Tweaks controls (`mouseTweaks`, default off; `mouseTweaksWheel`, default on)
+In the player inventory and chest-like containers (chests, barrels, ender
+chests, shulker boxes, hoppers, dispensers), in singleplayer and on servers:
+- Right-drag holding a stack: one item goes into each slot entered, at once
+  (slots holding another item, or full, are skipped).
+- Left-drag holding a stack: each slot entered that holds the same item is
+  gathered into the hand, when it all fits. This takes over only while
+  vanilla's drag covers one slot, so a left-drag across empty slots still
+  splits the stack as vanilla does.
+- Shift + left-drag: every slot entered is quick-moved (with a stack in hand,
+  only the slots of its item).
+- The wheel over a slot, with an empty hand (`mouseTweaksWheel`): down moves
+  one item to the other side (container and inventory, or hotbar and main
+  inventory: to a stack of it with room, else the first empty slot, as
+  quick-move picks), up brings one of the same item back.
+
+Every action is ordinary slot clicks (`ContainerClick` on a server), so a
+vanilla server sees nothing unusual. With the extra off, the hooks return at
+once and the screens click exactly as vanilla's (`tools/test_menu_click_parity.py`
+and the container screen tests are unchanged).
 
 ## Shared rules
 

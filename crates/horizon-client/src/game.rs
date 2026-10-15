@@ -119,6 +119,7 @@ mod totem;
 mod trading;
 mod trial_spawner;
 mod trident;
+mod tweaks;
 mod ui_control;
 mod villagers;
 mod wandering_trader;
@@ -692,6 +693,8 @@ struct Game<'a> {
     inv_drag: Option<(i32, Vec<usize>)>,
     /// `AbstractContainerScreen`'s quick craft and skip-release state.
     inv_clicks: horizon_client::container_screen::Clicks,
+    /// The Mouse Tweaks extra's drag and wheel (`tweaks`).
+    tweaks: tweaks::Tweaks,
     /// The last inventory click, for the double click that gathers a stack.
     last_inv_click: Option<(std::time::Instant, usize, bool)>,
     /// `lastQuickMoved`: what the last Shift click moved, which a Shift
@@ -4803,6 +4806,9 @@ impl Game<'_> {
             }
             return;
         }
+        if self.tweak_press(slot, right, shift) {
+            return;
+        }
         if let Some(slot) = slot
             && shift
             && slot != 200
@@ -4887,6 +4893,9 @@ impl Game<'_> {
     }
     /// Mouse movement while a quick craft drag is running.
     fn inventory_drag_move(&mut self) {
+        if self.tweaks_on() && self.tweak_drag_move(self.inventory_target().0) {
+            return;
+        }
         let Some((ty, slots)) = self.inv_drag.clone() else {
             return;
         };
@@ -5005,6 +5014,7 @@ impl Game<'_> {
     /// cancels the drag, drops a stack released outside, or clicks.
     fn inventory_mouse_release(&mut self, right: bool) {
         use horizon_client::container_screen::{Release, Target};
+        self.tweak_release();
         let (slot, outside) = self.inventory_target();
         let dragged = self.inv_drag.as_ref().is_some_and(|(_, s)| !s.is_empty());
         let release = self.inv_clicks.release(
@@ -9110,7 +9120,10 @@ impl ApplicationHandler for Game<'_> {
                     if self.screen == Screen::Creative && d != 0.0 {
                         self.creative_screen.wheel(f64::from(d), &self.res.names);
                     }
-                    if self.screen == Screen::Inventory && d != 0.0 {
+                    if self.screen == Screen::Inventory
+                        && d != 0.0
+                        && !self.tweak_scroll(d, self.inventory_target().0)
+                    {
                         self.station_scroll(d);
                     }
                     if self.screen == Screen::Stats && d != 0.0 {
@@ -9828,6 +9841,7 @@ pub fn run() -> Result<()> {
         craft_grid: vec![None; 9],
         craft_size: 2,
         inv_drag: None,
+        tweaks: Default::default(),
         inv_clicks: Default::default(),
         last_inv_click: None,
         last_quick_moved: None,

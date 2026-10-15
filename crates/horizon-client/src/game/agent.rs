@@ -16,7 +16,7 @@ use std::{
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalPosition,
-    event::{DeviceId, ElementState, MouseButton, WindowEvent},
+    event::{DeviceId, ElementState, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent},
     event_loop::ActiveEventLoop,
     keyboard::KeyCode,
 };
@@ -47,6 +47,8 @@ pub(super) const HELP: &[&str] = &[
     "open-inventory                 open the inventory screen",
     "click-button LABEL             click a button of the open screen or menu by its label",
     "click-at X Y [right]           click at GUI pixel X Y of the window",
+    "drag-at [right] X Y X Y...     press at the first GUI point, move through the others, release",
+    "scroll-at X Y STEPS            turn the wheel at GUI pixel X Y (positive scrolls up)",
     "command TEXT                   run a /command",
     "pause                          open the pause menu",
     "wait TICKS                     wait for game ticks to pass",
@@ -789,6 +791,16 @@ impl Game<'_> {
         y: f32,
         button: MouseButton,
     ) -> Result<()> {
+        self.synth_drag(event_loop, &[(x, y)], button)
+    }
+    /// The window events of a press at the first GUI point, moves through
+    /// the others and a release at the last (one point is a click).
+    fn synth_drag(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        points: &[(f32, f32)],
+        button: MouseButton,
+    ) -> Result<()> {
         let id = self.window.as_ref().ok_or("no window yet")?.id();
         let scale = self
             .renderer
@@ -796,26 +808,37 @@ impl Game<'_> {
             .map(|r| horizon_client::hud::HudBatch::new([r.config.width, r.config.height]).scale)
             .ok_or("no renderer yet")?;
         let device_id = DeviceId::dummy();
-        let position = PhysicalPosition::new(f64::from(x * scale), f64::from(y * scale));
-        self.window_event(
-            event_loop,
-            id,
-            WindowEvent::CursorMoved {
-                device_id,
-                position,
-            },
-        );
-        for state in [ElementState::Pressed, ElementState::Released] {
+        for (i, &(x, y)) in points.iter().enumerate() {
+            let position = PhysicalPosition::new(f64::from(x * scale), f64::from(y * scale));
             self.window_event(
                 event_loop,
                 id,
-                WindowEvent::MouseInput {
+                WindowEvent::CursorMoved {
                     device_id,
-                    state,
-                    button,
+                    position,
                 },
             );
+            if i == 0 {
+                self.window_event(
+                    event_loop,
+                    id,
+                    WindowEvent::MouseInput {
+                        device_id,
+                        state: ElementState::Pressed,
+                        button,
+                    },
+                );
+            }
         }
+        self.window_event(
+            event_loop,
+            id,
+            WindowEvent::MouseInput {
+                device_id,
+                state: ElementState::Released,
+                button,
+            },
+        );
         Ok(())
     }
 
@@ -1293,6 +1316,61 @@ impl Game<'_> {
                     MouseButton::Left,
                 )?;
                 ok(json!({ "ok": true, "clicked": w.label, "screen": self.screen_label() }))
+            }
+            "drag-at" => {
+                let right = a.pos.first() == Some(&"right");
+                let numbers = &a.pos[usize::from(right)..];
+                let points = numbers
+                    .chunks(2)
+                    .map(|c| match c {
+                        [x, y] => Ok((x.parse::<f32>()?, y.parse::<f32>()?)),
+                        _ => Err("drag-at needs X Y pairs".into()),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                if points.is_empty() {
+                    return Err("drag-at needs X Y pairs".into());
+                }
+                let button = if right {
+                    MouseButton::Right
+                } else {
+                    MouseButton::Left
+                };
+                self.synth_drag(event_loop, &points, button)?;
+                ok(json!({ "ok": true, "screen": self.screen_label() }))
+            }
+            "scroll-at" => {
+                let (x, y) = (a.f64(0, "X")? as f32, a.f64(1, "Y")? as f32);
+                let steps = a.f64(2, "STEPS")? as f32;
+                let id = self.window.as_ref().ok_or("no window yet")?.id();
+                let scale = self
+                    .renderer
+                    .as_ref()
+                    .map(|r| {
+                        horizon_client::hud::HudBatch::new([r.config.width, r.config.height]).scale
+                    })
+                    .ok_or("no renderer yet")?;
+                let device_id = DeviceId::dummy();
+                let position = PhysicalPosition::new(f64::from(x * scale), f64::from(y * scale));
+                self.window_event(
+                    event_loop,
+                    id,
+                    WindowEvent::CursorMoved {
+                        device_id,
+                        position,
+                    },
+                );
+                for _ in 0..steps.abs() as u32 {
+                    self.window_event(
+                        event_loop,
+                        id,
+                        WindowEvent::MouseWheel {
+                            device_id,
+                            delta: MouseScrollDelta::LineDelta(0.0, steps.signum()),
+                            phase: TouchPhase::Moved,
+                        },
+                    );
+                }
+                ok(json!({ "ok": true, "screen": self.screen_label() }))
             }
             "click-at" => {
                 let (x, y) = (a.f64(0, "X")? as f32, a.f64(1, "Y")? as f32);
