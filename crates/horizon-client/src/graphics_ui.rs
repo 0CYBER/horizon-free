@@ -127,7 +127,7 @@ pub fn rows(level: Level) -> Vec<Row> {
             h(
                 H::EntityCulling,
                 None,
-                "Skips drawing entities hidden behind opaque terrain; they still update. Inactive with custom resource packs.",
+                "Hides models behind opaque blocks. Entities update. Off with custom packs.",
             ),
             h(
                 H::ChunkUpdates,
