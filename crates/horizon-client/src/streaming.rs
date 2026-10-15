@@ -120,6 +120,10 @@ pub struct Streaming {
     lit: FxHashSet<(i32, i32)>,
     /// Columns whose sections have been meshed at least once.
     meshed: FxHashSet<(i32, i32)>,
+    /// Dirty sections of loaded columns past the render distance, meshed once
+    /// the player comes closer, and the area they were set aside for.
+    waiting: FxHashSet<(i32, i32, i32)>,
+    waiting_area: ((i32, i32), i32, usize),
     sequence: u64,
     pub center: (i32, i32),
     pub radius: i32,
@@ -249,6 +253,8 @@ impl Streaming {
             meshing: Default::default(),
             lit: Default::default(),
             meshed: Default::default(),
+            waiting: Default::default(),
+            waiting_area: ((0, 0), 0, 0),
             sequence: 0,
             center: (0, 0),
             radius: 8,
@@ -303,6 +309,7 @@ impl Streaming {
         self.meshed.remove(&(x, z));
         self.lighting.remove(&(x, z));
         self.meshing.retain(|k, _| (k.0, k.2) != (x, z));
+        self.waiting.retain(|k| (k.0, k.2) != (x, z));
         world.dirty_sections.retain(|k| (k.0, k.2) != (x, z));
         world.chunks.remove(&(x, z))
     }
@@ -484,6 +491,7 @@ impl Streaming {
         if !far.is_empty() {
             let far: HashSet<(i32, i32)> = far.iter().copied().collect();
             self.meshing.retain(|k, _| !far.contains(&(k.0, k.2)));
+            self.waiting.retain(|k| !far.contains(&(k.0, k.2)));
             world.dirty_sections.retain(|k| !far.contains(&(k.0, k.2)));
         }
         // Drop far proto chunks that are not checked out.
@@ -706,13 +714,38 @@ impl Streaming {
                 Job::Light(x, z, region, self.sequence, self.sky_light),
             );
         }
-        // Meshing once the column and its neighbours are lit.
+        // Meshing once the column and its neighbours are lit, and the column
+        // is within the render distance. Sections set aside past it come back
+        // when the player moves: a column that loads with its light gets no
+        // other request (#228).
+        let area = (self.center, self.radius, self.forced.len());
+        if self.waiting_area != area {
+            self.waiting_area = area;
+            let ranges = Ranges {
+                center: self.center,
+                radius: self.radius,
+                extra: &self.extra,
+                forced: &self.forced,
+            };
+            self.waiting.retain(|&(x, sy, z)| {
+                let back = ranges.in_main_range(x, z, 0);
+                if back {
+                    world.dirty_sections.insert((x, sy, z));
+                }
+                !back
+            });
+        }
         let dirty: Vec<_> = world.dirty_sections.iter().copied().collect();
         let mut columns: FxHashMap<(i32, i32), Option<Box<Region>>> = FxHashMap::default();
         let mut ready_columns: FxHashMap<(i32, i32), bool> = FxHashMap::default();
         for (x, sy, z) in dirty {
-            if !world.chunks.contains_key(&(x, z)) || !self.in_main_range(x, z, 0) {
+            if !world.chunks.contains_key(&(x, z)) {
                 world.dirty_sections.remove(&(x, sy, z));
+                continue;
+            }
+            if !self.in_main_range(x, z, 0) {
+                world.dirty_sections.remove(&(x, sy, z));
+                self.waiting.insert((x, sy, z));
                 continue;
             }
             // Once per column: the 3x3 lit check would otherwise repeat for
