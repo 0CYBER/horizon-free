@@ -2853,7 +2853,7 @@ impl Game<'_> {
             self.tick_weather_effects();
         }
         if self.ticks.is_multiple_of(6000) {
-            self.save_game()?;
+            self.save_game_with(false)?;
         }
         if running {
             self.advance_clock();
@@ -6048,6 +6048,7 @@ impl Game<'_> {
             return Ok(());
         };
         // Save the departing dimension's changed chunks.
+        self.streaming.save(&mut self.world, true);
         let keys: Vec<_> = self.world.modified.drain().collect();
         let chunks = self.with_entities(keys.iter().filter_map(|k| self.world.chunks.get(k)));
         self.save
@@ -7891,13 +7892,23 @@ impl Game<'_> {
             .collect();
     }
     fn save_game(&mut self) -> Result<()> {
+        self.save_game_with(true)
+    }
+    /// The autosave doesn't `wait` for the chunks to be on disk: every
+    /// generated chunk is saved, hundreds at a time, encoded and written on
+    /// the region writer meanwhile.
+    fn save_game_with(&mut self, wait: bool) -> Result<()> {
         if self.remote.is_some() {
             return Ok(());
         }
+        self.streaming.save(&mut self.world, wait);
         let keys: Vec<_> = self.world.modified.drain().collect();
         let chunks = self.with_entities(keys.iter().filter_map(|k| self.world.chunks.get(k)));
         self.save
-            .save(&chunks, self.res.assets.registry, &self.res.biomes)?;
+            .save_later(&chunks, self.res.assets.registry, &self.res.biomes)?;
+        if wait {
+            self.save.flush();
+        }
         self.save_entities()?;
         self.save_maps();
         self.save_random_sequences();

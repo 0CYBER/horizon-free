@@ -27,6 +27,7 @@ use horizon_core::{
 use horizon_world::{
     DATA_VERSION,
     chunk::BlockState,
+    chunk_status::ChunkStatus,
     compression::Compression,
     heightmap::{Heightmap, HeightmapChunk, HeightmapType},
     nbt::{self, Compound, JavaString, Limits, NamedTag, Tag},
@@ -972,9 +973,21 @@ const GENERATED_KEYS: [&str; 14] = [
 pub fn decode(root: &NamedTag, registry: &BlockRegistry, biomes: &Biomes) -> Option<Chunk> {
     decode_with(root, registry, biomes, None)
 }
-/// Only full chunks load; partially generated ones (vanilla's world border
-/// of proto chunks) are generated again.
+/// Only full chunks load here; partially generated ones (vanilla's world
+/// border of proto chunks) resume generation through `decode_proto`.
 pub fn decode_with(
+    root: &NamedTag,
+    registry: &BlockRegistry,
+    biomes: &Biomes,
+    tables: Option<&SaveTables>,
+) -> Option<Chunk> {
+    if text(root.tag.get("Status")).is_some_and(|s| s != "minecraft:full" && s != "full") {
+        return None;
+    }
+    decode_column(root, registry, biomes, tables)
+}
+/// `decode_with` whatever the chunk's status.
+fn decode_column(
     root: &NamedTag,
     registry: &BlockRegistry,
     biomes: &Biomes,
@@ -987,9 +1000,6 @@ pub fn decode_with(
     let Tag::Int(z) = tag.get("zPos")? else {
         return None;
     };
-    if text(tag.get("Status")).is_some_and(|s| s != "minecraft:full" && s != "full") {
-        return None;
-    }
     let mut chunk = Chunk::empty(*x, *z);
     // structures.References: structure id -> packed start chunk positions.
     if let Some(Tag::Compound(refs)) = tag.get("structures").and_then(|s| s.get("References")) {
@@ -1125,6 +1135,102 @@ pub fn decode_with(
     }
     chunk.saved = Some(Arc::new(extras));
     Some(chunk)
+}
+
+/// A proto chunk saved before it became final. Decoration writes into a
+/// chunk's neighbours, and decorated chunks wait for theirs, so the chunks
+/// past the finished ones hold writes that generating them again would lose
+/// (whole structure pieces, trees, ores). Vanilla saves its proto chunks too.
+pub struct SavedProto {
+    /// Blocks, scheduled ticks (in `saved`) and post-processing marks.
+    pub column: Chunk,
+    /// Decorated itself (`features`), not only written to by its neighbours
+    /// (`terrain`).
+    pub decorated: bool,
+    /// Block entity data in placement order, with `x`, `y` and `z`.
+    pub block_entities: Vec<Tag>,
+    /// Entities placed by structures, with absolute `Pos`.
+    pub entities: Vec<Tag>,
+}
+pub fn encode_proto(
+    proto: &SavedProto,
+    registry: &BlockRegistry,
+    biomes: &Biomes,
+    tables: Option<&SaveTables>,
+    sky_light: bool,
+) -> NamedTag {
+    let mut root = encode_with(&proto.column, registry, biomes, tables, sky_light);
+    let status = if proto.decorated {
+        ChunkStatus::Features
+    } else {
+        ChunkStatus::Terrain
+    };
+    // ProtoChunk.postProcessing: one list per section, packed section offsets.
+    let mut marks = vec![Vec::new(); SECTIONS];
+    for &[x, y, z] in &proto.column.postprocess {
+        if let Some(list) = marks.get_mut(((y - MIN_Y) >> 4) as usize) {
+            list.push(Tag::Short(
+                ((x & 15) | (y & 15) << 4 | (z & 15) << 8) as i16,
+            ));
+        }
+    }
+    for (key, value) in [
+        ("Status", string(status.name())),
+        ("isLightOn", Tag::Byte(0)),
+        ("block_entities", Tag::List(proto.block_entities.clone())),
+        ("entities", Tag::List(proto.entities.clone())),
+        (
+            "PostProcessing",
+            Tag::List(marks.into_iter().map(Tag::List).collect()),
+        ),
+    ] {
+        put(&mut root.tag, key, value);
+    }
+    root
+}
+/// A proto chunk generation can resume: `terrain` (written to by a
+/// neighbour's decoration) up to `spawn`. Earlier statuses hold nothing that
+/// generating the chunk again doesn't reproduce.
+pub fn decode_proto(
+    root: &NamedTag,
+    registry: &BlockRegistry,
+    biomes: &Biomes,
+    tables: Option<&SaveTables>,
+) -> Option<SavedProto> {
+    let status = ChunkStatus::parse(&text(root.tag.get("Status"))?).ok()?;
+    if !(ChunkStatus::Terrain..ChunkStatus::Full).contains(&status) {
+        return None;
+    }
+    let mut column = decode_column(root, registry, biomes, tables)?;
+    column.block_entities.clear();
+    let base = number(root.tag.get("yPos")).map_or(MIN_Y, |y| y as i32 * 16);
+    if let Some(Tag::List(sections)) = root.tag.get("PostProcessing") {
+        for (si, marks) in sections.iter().enumerate() {
+            let Tag::List(marks) = marks else {
+                continue;
+            };
+            for mark in marks {
+                if let Tag::Short(p) = mark {
+                    let p = i32::from(*p);
+                    column.postprocess.push([
+                        column.x * 16 + (p & 15),
+                        base + si as i32 * 16 + ((p >> 4) & 15),
+                        column.z * 16 + ((p >> 8) & 15),
+                    ]);
+                }
+            }
+        }
+    }
+    let list = |key: &str| match root.tag.get(key) {
+        Some(Tag::List(list)) => list.clone(),
+        _ => Vec::new(),
+    };
+    Some(SavedProto {
+        column,
+        decorated: status >= ChunkStatus::Features,
+        block_entities: list("block_entities"),
+        entities: list("entities"),
+    })
 }
 
 /// Read the stored `SkyLight`/`BlockLight` layers of a chunk saved with
@@ -1394,6 +1500,34 @@ impl SaveDir {
         let mut chunk = decode_with(&root, registry, biomes, tables)?;
         load_light(&root.tag, &mut chunk, self.sky_light);
         Some(chunk)
+    }
+    /// A proto chunk saved before it became final (`decode_proto`).
+    pub fn load_proto(
+        &self,
+        x: i32,
+        z: i32,
+        registry: &BlockRegistry,
+        biomes: &Biomes,
+    ) -> Option<SavedProto> {
+        let root = self.read_record("region", x, z)?;
+        decode_proto(&root, registry, biomes, self.tables.get().map(|t| &**t))
+    }
+    /// Queue proto chunks for the writer thread; loads see them meanwhile.
+    pub fn save_protos(
+        &self,
+        protos: &[SavedProto],
+        registry: &BlockRegistry,
+        biomes: &Biomes,
+    ) -> Result<()> {
+        let tables = self.tables.get().map(|t| &**t);
+        let records = protos
+            .iter()
+            .map(|p| {
+                let tag = encode_proto(p, registry, biomes, tables, self.sky_light);
+                ((p.column.x, p.column.z), Some(tag))
+            })
+            .collect();
+        self.write_records("region", records, false)
     }
     /// Entities saved for a chunk (`entities/`; older chunks may still keep
     /// them in the chunk's own `entities` list).
@@ -2539,7 +2673,46 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
         Some(chunk)
     }
     fn proto(&self, worker: &mut G::Worker, x: i32, z: i32) -> crate::streaming::Proto {
-        self.inner.proto(worker, x, z)
+        let mut proto = self.inner.proto(worker, x, z);
+        if let Some(saved) = self
+            .save
+            .load_proto(x, z, self.registry.registry, &self.biomes)
+        {
+            self.inner.restore_proto(&mut proto, saved);
+        }
+        proto
+    }
+    fn is_decorated(&self, proto: &crate::streaming::Proto) -> bool {
+        self.inner.is_decorated(proto)
+    }
+    fn save_protos(&self, protos: &[&crate::streaming::Proto]) {
+        self.save
+            .tables
+            .get_or_init(|| Arc::new(SaveTables::new(&self.registry)));
+        let saved: Vec<SavedProto> = protos
+            .iter()
+            .filter_map(|p| self.inner.saved_proto(p))
+            .collect();
+        if let Err(e) = self
+            .save
+            .save_protos(&saved, self.registry.registry, &self.biomes)
+        {
+            log::warn!("Horizon: failed to save proto chunks: {e}");
+        }
+    }
+    fn save_finished(&self, mut chunk: Chunk) {
+        self.save
+            .tables
+            .get_or_init(|| Arc::new(SaveTables::new(&self.registry)));
+        let key = (chunk.x, chunk.z);
+        let entities = std::mem::take(&mut chunk.entities);
+        let saved = self
+            .save
+            .save_later(&[Arc::new(chunk)], self.registry.registry, &self.biomes)
+            .and_then(|_| self.save.save_entities_later(vec![(key, entities)]));
+        if let Err(e) = saved {
+            log::warn!("Horizon: failed to save chunk {} {}: {e}", key.0, key.1);
+        }
     }
     fn decorates(&self) -> bool {
         self.inner.decorates()
