@@ -1253,6 +1253,7 @@ dependencies = [
  "horizon-core",
  "horizon-dualsense",
  "horizon-friends",
+ "horizon-mods",
  "horizon-protocol",
  "horizon-telemetry",
  "horizon-theme",

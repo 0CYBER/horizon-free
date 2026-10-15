@@ -13,6 +13,8 @@ horizon-core = { path = "../horizon-core" }
 horizon-world = { path = "../horizon-world" }
 horizon-protocol = { path = "../horizon-protocol" }
 horizon-friends = { path = "../horizon-friends" }
+# Horizon mods: sandboxed WebAssembly components, off unless installed and turned on (docs/mods.md).
+horizon-mods = { path = "../horizon-mods" }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "vulkan", "metal", "wgsl"] }
 winit = "0.30.13"
 pollster = "0.4"

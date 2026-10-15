@@ -34,6 +34,8 @@ pub enum HRow {
     Graphics(Item, Cost, &'static str),
     /// One of Horizon's extras (`extras`), off by default.
     Extra(extras::Item),
+    /// Installed mod `i` (`settings.mods.installed`) and its switch.
+    Mod(usize),
 }
 /// A sidebar section: name, description, rows.
 pub struct Section {
@@ -182,6 +184,18 @@ pub const SECTIONS: &[Section] = &[
                 .into_iter()
                 .map(|r| r.map_or_else(HRow::Header, HRow::Extra))
                 .collect()
+        },
+    },
+    Section {
+        name: "Mods",
+        blurb: "Mods made for Horizon, from the horizon-mods folder. Each runs in a sandbox and stays off until you turn it on; check what it may do first.",
+        rows: |s| {
+            if s.mods.installed.is_empty() {
+                return vec![HRow::Header(
+                    "No mods: put .hmod files in the horizon-mods folder",
+                )];
+            }
+            (0..s.mods.installed.len()).map(HRow::Mod).collect()
         },
     },
 ];
@@ -405,6 +419,20 @@ impl OptionsUi {
                         );
                     }
                 }
+                HRow::Mod(m) => {
+                    let installed = &s.mods.installed[m];
+                    let cost = match (&installed.problem, installed.dev) {
+                        (Some(_), _) => (3, "Stopped"),
+                        (None, true) => (1, "Dev"),
+                        (None, false) => (0, ""),
+                    };
+                    let text = installed
+                        .problem
+                        .as_deref()
+                        .unwrap_or(&installed.description);
+                    ui.described_row(x, y, &installed.title, "", 0.0, cost, text, cw - 60.0);
+                    ui.switch(ROW + i as u64, control_x, y + ROW_H / 2.0, s.mods.is_on(m));
+                }
                 HRow::Extra(item) => {
                     let cy = y + ROW_H / 2.0;
                     let id = ROW + i as u64;
@@ -606,6 +634,10 @@ impl OptionsUi {
                     }
                     Some(HRow::Extra(item)) => {
                         item.cycle(&mut s.extras, right);
+                        events.push(Event::Changed);
+                    }
+                    Some(HRow::Mod(m)) => {
+                        s.mods.toggle(*m);
                         events.push(Event::Changed);
                     }
                     _ => {}

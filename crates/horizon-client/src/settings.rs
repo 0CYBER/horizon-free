@@ -181,6 +181,8 @@ pub struct Settings {
     pub controller: crate::gamepad::PadSettings,
     /// Horizon's optional extras (`horizon-extras.txt`), all off by default.
     pub extras: crate::extras::Extras,
+    /// The Horizon mods turned on (`horizon-mods.txt`), all off by default.
+    pub mods: crate::mod_list::ModList,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -253,6 +255,7 @@ impl Default for Settings {
             horizon: Default::default(),
             controller: Default::default(),
             extras: Default::default(),
+            mods: Default::default(),
         }
     }
 }
@@ -301,17 +304,23 @@ impl Settings {
             .parent()
             .map(crate::extras::Extras::load)
             .unwrap_or_default();
+        let mods = path
+            .parent()
+            .map(crate::mod_list::ModList::load)
+            .unwrap_or_default();
         let settings = match fs::read(path) {
             Ok(bytes) => Self {
                 horizon,
                 controller,
                 extras,
+                mods,
                 ..Self::parse(&String::from_utf8_lossy(&bytes))
             },
             Err(_) => Self {
                 horizon,
                 controller,
                 extras,
+                mods,
                 ..Self::default()
             },
         };
@@ -412,6 +421,7 @@ impl Settings {
             horizon: Default::default(),
             controller: Default::default(),
             extras: Default::default(),
+            mods: Default::default(),
             auto_jump: f.bool("autoJump"),
             language: f.string("lang"),
             force_unicode: f.bool("forceUnicodeFont"),
@@ -546,6 +556,7 @@ impl Settings {
             self.horizon.save(dir);
             self.controller.save(dir);
             self.extras.save(dir);
+            self.mods.save(dir);
         }
     }
     /// Volume of a sound source (master excluded).

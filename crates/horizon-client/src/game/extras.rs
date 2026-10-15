@@ -233,7 +233,8 @@ impl Game<'_> {
     /// the caller). The top left corner gives way to the debug screen.
     pub(super) fn draw_extras(&mut self, batch: &mut HudBatch) {
         let e = &self.settings.extras;
-        if !e.fps && !e.keystrokes && !e.minimap {
+        let mod_panels = self.mods.mods.panels().next().is_some();
+        if !e.fps && !e.keystrokes && !e.minimap && !mod_panels {
             return;
         }
         let (fps_on, fps_corner, lows) = (e.fps, e.fps_corner, e.fps_lows);
@@ -286,6 +287,9 @@ impl Game<'_> {
                 cps,
             };
             extras_hud::draw_keystrokes(batch, &self.res.atlas, &mut corners, keys_corner, &k);
+        }
+        if mod_panels {
+            self.draw_mod_panels(batch, &mut corners);
         }
     }
     /// The height the status effect icons take at the top right
