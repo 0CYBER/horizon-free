@@ -847,6 +847,12 @@ pub enum MobEvent {
         chest: [i32; 3],
         open: bool,
     },
+    /// `BeeEnterHiveGoal.start`: the bee goes into its hive (the host stores
+    /// its tag with `BeehiveBlockEntity.addOccupant` and discards it).
+    EnterHive {
+        mob: u32,
+        hive: [i32; 3],
+    },
     /// `CopperGolem.turnToStatue`.
     BecomeStatue {
         mob: u32,

@@ -597,6 +597,7 @@ public final class VanillaMobAiOracle {
                             }
                         }
                         case "inlove" -> ((net.minecraft.world.entity.animal.Animal) mob).setInLoveTime(600);
+                        case "nectar" -> method(net.minecraft.world.entity.animal.bee.Bee.class, "setHasNectar", boolean.class).invoke(mob, true);
                         case "tame" -> { if (mob instanceof net.minecraft.world.entity.animal.equine.AbstractHorse horse) horse.setTamed(true); }
                         case "strength" -> method(net.minecraft.world.entity.animal.equine.Llama.class, "setStrength", int.class)
                             .invoke(mob, Integer.parseInt(v));
@@ -627,20 +628,7 @@ public final class VanillaMobAiOracle {
                     if (cooldown > 0) brain.setMemory(MemoryModuleType.TRANSPORT_ITEMS_COOLDOWN_TICKS, cooldown);
                     else brain.eraseMemory(MemoryModuleType.TRANSPORT_ITEMS_COOLDOWN_TICKS);
                 }
-                if (mob instanceof net.minecraft.world.entity.animal.bee.Bee bee) {
-                    // The constructor's draws, made again with the seeded random: the validate
-                    // goals' cooldowns (registerGoals), then the flower cooldown's initialiser.
-                    var rnd = bee.getRandom();
-                    int hive = net.minecraft.util.Mth.nextInt(rnd, 20, 40);
-                    int flower = net.minecraft.util.Mth.nextInt(rnd, 20, 40);
-                    for (WrappedGoal g : ((GoalSelector) get(bee, "goalSelector")).getAvailableGoals()) {
-                        String n = g.getGoal().getClass().getSimpleName();
-                        if (n.equals("ValidateHiveGoal")) field(g.getGoal().getClass(), "VALIDATE_HIVE_COOLDOWN").setInt(g.getGoal(), hive);
-                        if (n.equals("ValidateFlowerGoal")) field(g.getGoal().getClass(), "validateFlowerCooldown").setInt(g.getGoal(), flower);
-                    }
-                    field(net.minecraft.world.entity.animal.bee.Bee.class, "remainingCooldownBeforeLocatingNewFlower")
-                        .setInt(bee, net.minecraft.util.Mth.nextInt(rnd, 20, 60));
-                }
+                if (mob instanceof net.minecraft.world.entity.animal.bee.Bee bee) seedBee(bee);
                 @SuppressWarnings("unchecked")
                 Map<Object, Sensor<?>> sensors = (Map<Object, Sensor<?>>) get(brain, "sensors");
                 for (Sensor<?> sensor : sensors.values()) sensor.randomlyDelayStart(mob.getRandom());
@@ -760,14 +748,19 @@ public final class VanillaMobAiOracle {
                     if (e.isRemoved()) continue;
                     level.tickNonPassenger(e);
                 }
-                if (!heartPositions.isEmpty()) level.tickBlockEntities();
+                if (s.blocks.stream().anyMatch(Server::isHive)) {
+                    // A bee leaving its hive takes the id the probe gives it, 100000 + its index
+                    // (goals run in full on ticks where tickCount + id is even).
+                    ((java.util.concurrent.atomic.AtomicInteger) field(ServerLevel.class, "ENTITY_COUNTER").get(null)).set(100000 + ENTS.size() - 1);
+                    level.tickBlockEntities();
+                } else if (!heartPositions.isEmpty()) level.tickBlockEntities();
                 managerTick.invoke(manager);
                 // Villagers the tick spawned (babies) and a heart's creakings tick from the next
                 // one, in the order they were added, with a seeded random of their own. Other
                 // newcomers (animal babies, dropped items) are left out, as the probe leaves them.
                 List<Entity> fresh = new ArrayList<>();
                 for (Entity e : level.getAllEntities())
-                    if (!LABELS.containsKey(e) && (e instanceof Villager || created.contains(e))) fresh.add(e);
+                    if (!LABELS.containsKey(e) && (e instanceof Villager || e instanceof net.minecraft.world.entity.animal.bee.Bee || created.contains(e))) fresh.add(e);
                 fresh.sort(java.util.Comparator.comparingInt(Entity::getId));
                 for (Entity e : fresh) {
                     int index = ENTS.size();
@@ -791,6 +784,8 @@ public final class VanillaMobAiOracle {
                         mob.yHeadRotO = mob.getYRot();
                         if (tracing(s)) field(Entity.class, "random").set(mob, new TracingRandom(0L, TRACE, index));
                         mob.getRandom().setSeed(seed);
+                        // A bee out of a hive: its constructor drew from an unseeded random.
+                        if (mob instanceof net.minecraft.world.entity.animal.bee.Bee bee) seedBee(bee);
                         @SuppressWarnings("unchecked")
                         Map<Object, Sensor<?>> sensors = (Map<Object, Sensor<?>>) get(mob.getBrain(), "sensors");
                         for (Sensor<?> sensor : sensors.values()) sensor.randomlyDelayStart(mob.getRandom());
@@ -803,6 +798,7 @@ public final class VanillaMobAiOracle {
                 for (int i = 0; i < ENTS.size(); i++) print(t, i, ENTS.get(i));
                 for (BlockPos h : heartPositions) printHeart(t, level, h);
                 for (String[] b : s.blocks) if (b[0].equals("chest")) printChest(t, s, level, b);
+                for (String[] b : s.blocks) if (isHive(b)) printHive(t, level, b);
                 for (String sound : SOUNDS) out.println(t + " sound " + sound);
                 for (var w : watched.entrySet()) {
                     BlockState now = level.getBlockState(w.getKey());
@@ -822,6 +818,44 @@ public final class VanillaMobAiOracle {
             this.getGameRules().set(GameRules.SPAWN_MONSTERS, spawnMonsters, this);
             managerTick.invoke(manager);
             out.flush();
+        }
+
+        /**
+         * A bee's constructor draws, made again with its seeded random: the validate goals'
+         * cooldowns (registerGoals), then the flower cooldown's initialiser.
+         */
+        static void seedBee(net.minecraft.world.entity.animal.bee.Bee bee) throws Exception {
+            var rnd = bee.getRandom();
+            int hive = net.minecraft.util.Mth.nextInt(rnd, 20, 40);
+            int flower = net.minecraft.util.Mth.nextInt(rnd, 20, 40);
+            for (WrappedGoal g : ((GoalSelector) get(bee, "goalSelector")).getAvailableGoals()) {
+                String n = g.getGoal().getClass().getSimpleName();
+                if (n.equals("ValidateHiveGoal")) field(g.getGoal().getClass(), "VALIDATE_HIVE_COOLDOWN").setInt(g.getGoal(), hive);
+                if (n.equals("ValidateFlowerGoal")) field(g.getGoal().getClass(), "validateFlowerCooldown").setInt(g.getGoal(), flower);
+            }
+            field(net.minecraft.world.entity.animal.bee.Bee.class, "remainingCooldownBeforeLocatingNewFlower")
+                .setInt(bee, net.minecraft.util.Mth.nextInt(rnd, 20, 60));
+        }
+
+        /** A hive's honey level and bees (ticks inside / ticks to stay). */
+        static void printHive(int t, ServerLevel level, String[] b) {
+            BlockPos at = new BlockPos(Integer.parseInt(b[1]), Integer.parseInt(b[2]), Integer.parseInt(b[3]));
+            if (!(level.getBlockEntity(at) instanceof net.minecraft.world.level.block.entity.BeehiveBlockEntity hive)) return;
+            net.minecraft.nbt.CompoundTag tag = hive.saveWithoutMetadata(level.registryAccess());
+            StringBuilder bees = new StringBuilder();
+            for (var bee : tag.getListOrEmpty("bees")) {
+                net.minecraft.nbt.CompoundTag c = (net.minecraft.nbt.CompoundTag) bee;
+                if (!bees.isEmpty()) bees.append(',');
+                bees.append(c.getIntOr("ticks_in_hive", 0)).append('/').append(c.getIntOr("min_ticks_in_hive", 0));
+            }
+            BlockState state = level.getBlockState(at);
+            out.println(t + " hive " + b[1] + "," + b[2] + "," + b[3] + " honey "
+                + (state.hasProperty(net.minecraft.world.level.block.BeehiveBlock.HONEY_LEVEL) ? state.getValue(net.minecraft.world.level.block.BeehiveBlock.HONEY_LEVEL) : -1)
+                + " bees " + (bees.isEmpty() ? "-" : bees) + " flower " + tag.getIntArray("flower_pos").map(p -> p[0] + "," + p[1] + "," + p[2]).orElse("-"));
+        }
+
+        static boolean isHive(String[] b) {
+            return b[0].equals("block") && (b[4].startsWith("minecraft:beehive") || b[4].startsWith("minecraft:bee_nest"));
         }
 
         /** The random seed of the entity a scenario spawned at this index. */
