@@ -264,28 +264,41 @@ def poll(control, check, limit, interval=0.05):
     raise TimeoutError(f"not ready after {limit} s")
 
 
+# Fewer section meshes than this in a second is the game remeshing blocks that change (random
+# ticks), not loading.
+QUIET_MESHES_PER_S = 100
+
+
 def wait_loaded(control, near, limit):
-    """Waits until the player is spawned (near(position)), nothing is queued and
-    the resident and generated chunk counts have not changed for a second, as
-    the vanilla driver does; returns the time of the last change.
-    (pending_chunks alone misses work the threads have already taken; sections
-    are remeshed all the time as blocks change, so meshes are not counted.)"""
+    """Waits until the player is spawned (near(position)), nothing is queued, the
+    resident and generated chunk counts have not changed for a second, as the
+    vanilla driver does, and meshing has gone quiet (fewer than
+    QUIET_MESHES_PER_S section meshes in a second: the last sections drawn);
+    returns when the last of these happened. (pending_chunks alone misses work
+    the threads have already taken, and sections waiting for their neighbours'
+    light; blocks keep being remeshed as they change, so meshes can't be
+    required to stop.)"""
     deadline = time.time() + limit
-    last, changed = None, time.time()
+    last, changed, previous, meshing = None, time.time(), None, time.time()
     while time.time() < deadline:
         try:
             s = control("status", timeout=10)
         except (OSError, ValueError, RuntimeError):
             s = {}
         player = s.get("player")
+        now = time.time()
         if not player or not near(player["position"]) or s.get("pending_chunks") != 0 or s.get("screen") == "title":
-            last, changed = None, time.time()
+            last, changed, previous, meshing = None, now, None, now
         else:
             counts = (s["chunks"], s["generated_chunks"])
             if counts != last:
-                last, changed = counts, time.time()
-            elif time.time() - changed >= 1.0:
-                return changed
+                last, changed = counts, now
+            sample = (now, s["meshed_sections"])
+            if previous and sample[1] - previous[1] > QUIET_MESHES_PER_S * (now - previous[0]):
+                meshing = now
+            previous = sample
+            if now - max(changed, meshing) >= 1.0:
+                return max(changed, meshing)
         time.sleep(0.05)
     raise TimeoutError(f"not loaded after {limit} s")
 
