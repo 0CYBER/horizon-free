@@ -2731,13 +2731,20 @@ impl Game<'_> {
             if mob.fire_ticks > 0 || matches!(mob.species(), Species::Blaze | Species::MagmaCube) {
                 packed = (15 * 16) | ((15 * 16) << 8);
             }
-            horizon_client::mobs::render::render(
+            // Other players on a server: PlayerRenderer's HumanoidArmorLayer.
+            let armor = if &*mob.kind.id == "minecraft:player" {
+                self.worn_armor_layers(mob)
+            } else {
+                Vec::new()
+            };
+            horizon_client::mobs::render::render_with(
                 mob,
                 alpha as f32,
                 camera,
                 &lookup,
                 packed,
                 &self.res.mob_data,
+                &armor,
                 out,
             );
             self.mob_block_geometry(mob, camera, alpha, packed, out);

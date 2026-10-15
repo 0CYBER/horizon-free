@@ -334,6 +334,11 @@ impl Game<'_> {
                         "game_mode": g.game_mode,
                         "chunks": g.sent_chunks.len(),
                         "tracked": g.tracker.len(),
+                        // The armour the host draws on this guest, head to feet.
+                        "model_armor": h.models.get(&g.conn).map(|m| {
+                            [&m.extra.head, &m.extra.chest, &m.extra.legs, &m.extra.feet]
+                                .map(|s| s.as_deref())
+                        }),
                     })).collect::<Vec<_>>(),
                 }),
                 None => json!({ "open": false }),
@@ -839,6 +844,10 @@ impl Game<'_> {
                 .and_then(|s| s.as_ref())
                 .map(|s| s.item.clone());
             m.extra.off_hand = g.offhand.as_ref().map(|s| s.item.clone());
+            [m.extra.head, m.extra.chest, m.extra.legs, m.extra.feet] = g
+                .armor
+                .each_ref()
+                .map(|s| s.as_ref().map(|s| s.item.clone()));
             m.extra.crouching = g.sneaking;
         }
     }
@@ -869,9 +878,10 @@ impl Game<'_> {
                 &lookup,
                 packed,
                 &self.res.mob_data,
-                &self.player_armor_layers(),
+                &self.worn_armor_layers(m),
                 out,
             );
+            self.held_item_geometry(m, camera, alpha, packed, true, out);
         }
     }
 
