@@ -629,7 +629,7 @@ impl Game<'_> {
     fn rod_hand_position(&self, alpha: f64, size: [u32; 2]) -> Option<glam::DVec3> {
         let p = self.player.as_ref()?;
         let right_arm = self.main_hand_rod() != self.settings.main_hand_left;
-        let invert = if right_arm { 1.0 } else { -1.0 };
+        let invert: f32 = if right_arm { 1.0 } else { -1.0 };
         let swing = trig::sin(f64::from(
             self.swing.animation(alpha as f32).sqrt() * std::f32::consts::PI,
         ));
