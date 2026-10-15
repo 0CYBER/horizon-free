@@ -5,6 +5,7 @@
 use crate::hud::{HudAtlas, HudBatch, rgba};
 use crate::lan::discovery::Scanner;
 use crate::text::{Text, format_translation};
+use crate::title::confirm_top;
 use horizon_protocol::servers::{self, ServerEntry};
 use std::{
     collections::HashMap,
@@ -46,6 +47,13 @@ pub enum Screen {
     },
     Direct {
         address: String,
+    },
+    /// ConfirmScreen for Delete: the list it returns to, the server's name
+    /// and how many lines the warning took when last drawn.
+    ConfirmDelete {
+        list: Box<Screen>,
+        name: String,
+        lines: std::cell::Cell<usize>,
     },
     /// Join a friend's world with its invite code (Horizon's own, reached
     /// from Horizon's multiplayer page).
@@ -344,6 +352,29 @@ impl Screen {
                     51,
                 ),
             ],
+            // ConfirmScreen's two 150-wide buttons, 4 apart, under the message.
+            Self::ConfirmDelete { lines, .. } => {
+                let y = confirm_top(h, lines.get()) + 41.0 + lines.get() as f32 * 9.0;
+                let x = (w.ceil() / 2.0).floor();
+                vec![
+                    b(
+                        x - 152.0,
+                        y,
+                        150.0,
+                        &crate::lang::get_or("selectServer.deleteButton", "Delete"),
+                        true,
+                        58,
+                    ),
+                    b(
+                        x + 2.0,
+                        y,
+                        150.0,
+                        &crate::lang::get_or("gui.cancel", "Cancel"),
+                        true,
+                        59,
+                    ),
+                ]
+            }
             Self::Direct { address } => vec![
                 b(
                     w / 2.0 - 100.0,
@@ -403,32 +434,31 @@ impl Screen {
             }
         }
     }
+    /// An EditBox and its label: the label at `label_y` (one pixel in, in
+    /// 0xA0A0A0), the 200x20 box at `box_y`.
     fn field(
         atlas: &HudAtlas,
         batch: &mut HudBatch,
         label: &str,
         value: &str,
-        y: f32,
+        (label_y, box_y): (f32, f32),
         focused: bool,
         blink: bool,
     ) {
-        let w = batch.width;
-        crate::widgets::target_as(
-            [w / 2.0 - 100.0, y + 11.0, 200.0, 20.0],
-            crate::widgets::Kind::Field,
-        );
+        let x = (batch.width.ceil() / 2.0).floor() - 100.0;
+        crate::widgets::target_as([x, box_y, 200.0, 20.0], crate::widgets::Kind::Field);
         batch.text(
             atlas,
             label,
-            w / 2.0 - 100.0,
-            y,
+            x + 1.0,
+            label_y,
             rgba(160, 160, 160, 255),
             true,
         );
         batch.fill(
             atlas,
-            w / 2.0 - 100.0,
-            y + 11.0,
+            x,
+            box_y,
             200.0,
             20.0,
             if focused {
@@ -437,14 +467,7 @@ impl Screen {
                 rgba(160, 160, 160, 255)
             },
         );
-        batch.fill(
-            atlas,
-            w / 2.0 - 99.0,
-            y + 12.0,
-            198.0,
-            18.0,
-            rgba(0, 0, 0, 255),
-        );
+        batch.fill(atlas, x + 1.0, box_y + 1.0, 198.0, 18.0, rgba(0, 0, 0, 255));
         let shown = if focused && blink {
             format!("{value}_")
         } else {
@@ -453,8 +476,8 @@ impl Screen {
         batch.text(
             atlas,
             &shown,
-            w / 2.0 - 96.0,
-            y + 17.0,
+            x + 4.0,
+            box_y + 6.0,
             rgba(224, 224, 224, 255),
             true,
         );
@@ -693,38 +716,88 @@ impl Screen {
                     17.0,
                     u32::MAX,
                 );
-                Self::field(atlas, batch, "Server Name", name, 53.0, *focus == 0, blink);
+                // ManageServerScreen: labels at 53 and 94, boxes at 66 and 106.
+                Self::field(
+                    atlas,
+                    batch,
+                    "Server Name",
+                    name,
+                    (53.0, 66.0),
+                    *focus == 0,
+                    blink,
+                );
                 Self::field(
                     atlas,
                     batch,
                     "Server Address",
                     address,
-                    94.0,
+                    (94.0, 106.0),
                     *focus == 1,
                     blink,
                 );
             }
             Self::Direct { address } => {
-                centered(batch, "Direct Connection", 20.0, u32::MAX);
+                // DirectJoinServerScreen: the title at 20, the label at 100
+                // and the box at 116.
+                centered(
+                    batch,
+                    &crate::lang::get_or("selectServer.direct", "Direct Connection"),
+                    20.0,
+                    u32::MAX,
+                );
                 Self::field(
                     atlas,
                     batch,
-                    "Server Address",
+                    &crate::lang::get_or("addServer.enterIp", "Server Address"),
                     address,
-                    100.0 - 11.0,
+                    (100.0, 116.0),
                     true,
                     blink,
                 );
             }
+            Self::ConfirmDelete { name, lines, .. } => {
+                // ConfirmScreen: the title, then the message wrapped to
+                // width - 50, centred as a block.
+                let warning = format_translation(
+                    &crate::lang::get_or(
+                        "selectServer.deleteWarning",
+                        "'%s' will be lost forever! (A long time!)",
+                    ),
+                    &[Text::literal(name.clone())],
+                );
+                let message = atlas.font.split(&warning, (w.ceil() - 50.0).max(1.0));
+                lines.set(message.len());
+                let top = confirm_top(h, message.len());
+                centered(
+                    batch,
+                    &crate::lang::get_or(
+                        "selectServer.deleteQuestion",
+                        "Are you sure you want to remove this server?",
+                    ),
+                    top,
+                    u32::MAX,
+                );
+                for (i, line) in message.iter().enumerate() {
+                    centered(batch, &line.plain(), top + 17.0 + i as f32 * 9.0, u32::MAX);
+                }
+            }
             Self::Friend { code, relay, focus } => {
                 centered(batch, "Join a Friend", 20.0, u32::MAX);
-                Self::field(atlas, batch, "Invite Code", code, 53.0, *focus == 0, blink);
+                Self::field(
+                    atlas,
+                    batch,
+                    "Invite Code",
+                    code,
+                    (53.0, 64.0),
+                    *focus == 0,
+                    blink,
+                );
                 Self::field(
                     atlas,
                     batch,
                     "Relay (optional)",
                     relay,
-                    94.0,
+                    (94.0, 105.0),
                     *focus == 1,
                     blink,
                 );
@@ -805,7 +878,41 @@ impl Screen {
                 },
                 Some(44),
             ) => {
-                if let Some(i) = selected.take()
+                // JoinMultiplayerScreen's Delete asks first (ConfirmScreen).
+                if let Some(name) = selected
+                    .and_then(|i| servers.get(i))
+                    .map(|s| s.name.clone())
+                {
+                    let list = std::mem::replace(
+                        self,
+                        Self::Direct {
+                            address: String::new(),
+                        },
+                    );
+                    *self = Self::ConfirmDelete {
+                        list: Box::new(list),
+                        name,
+                        lines: std::cell::Cell::new(1),
+                    };
+                }
+            }
+            // deleteCallback: yes removes the server and clears the
+            // selection; either answer returns to the list as it was.
+            (Self::ConfirmDelete { .. }, Some(id @ (58 | 59))) => {
+                let Self::ConfirmDelete { list, .. } = std::mem::replace(
+                    self,
+                    Self::Direct {
+                        address: String::new(),
+                    },
+                ) else {
+                    unreachable!()
+                };
+                *self = *list;
+                if id == 58
+                    && let Self::List {
+                        servers, selected, ..
+                    } = self
+                    && let Some(i) = selected.take()
                     && i < servers.len()
                 {
                     servers.remove(i);
@@ -890,8 +997,16 @@ impl Screen {
                     return Outcome::Connect(format!("{}{code}", crate::net::FRIEND));
                 }
             }
-            (Self::Edit { focus, .. } | Self::Friend { focus, .. }, None) => {
-                for (i, fy) in [(0u8, 53.0 + 11.0), (1, 94.0 + 11.0)] {
+            (Self::Edit { .. } | Self::Friend { .. }, None) => {
+                let boxes = if matches!(self, Self::Edit { .. }) {
+                    [66.0, 106.0]
+                } else {
+                    [64.0, 105.0]
+                };
+                let (Self::Edit { focus, .. } | Self::Friend { focus, .. }) = self else {
+                    unreachable!()
+                };
+                for (i, fy) in [(0u8, boxes[0]), (1, boxes[1])] {
                     if y >= fy && y < fy + 20.0 && (x - w / 2.0).abs() < 100.0 {
                         *focus = i;
                     }
@@ -1018,6 +1133,17 @@ impl Screen {
     pub fn escape(&mut self, saves: &Path) -> bool {
         match self {
             Self::List { .. } => true,
+            // ConfirmScreen.keyPressed: Escape answers no.
+            Self::ConfirmDelete { list, .. } => {
+                let list = std::mem::replace(
+                    &mut **list,
+                    Self::Direct {
+                        address: String::new(),
+                    },
+                );
+                *self = list;
+                false
+            }
             _ => {
                 *self = Self::list(saves);
                 false
@@ -1148,5 +1274,71 @@ mod tests {
             frames,
             ["O o o", "O o o", "o O o", "o o O", "o O o", "O o o"]
         );
+    }
+
+    #[test]
+    fn delete_asks_before_removing_the_server() {
+        let dir = std::env::temp_dir().join(format!("horizon-mp-delete-{}", std::process::id()));
+        let saves = dir.join("saves");
+        std::fs::create_dir_all(&saves).unwrap();
+        let file = servers_file(&saves);
+        let list = vec![
+            ServerEntry::new("Keep", "127.0.0.1:2"),
+            ServerEntry::new("Gone", "127.0.0.1:3"),
+        ];
+        servers::save(&file, &list).unwrap();
+        let size = (427.0, 240.0);
+        let names =
+            || -> Vec<String> { servers::load(&file).into_iter().map(|s| s.name).collect() };
+        let mut screen = Screen::list(&saves);
+        let select = |screen: &mut Screen| {
+            if let Screen::List { selected, .. } = screen {
+                *selected = Some(1);
+            }
+        };
+        select(&mut screen);
+        // Delete opens the ConfirmScreen: nothing is removed yet.
+        screen.click(Some(44), 0.0, 0.0, size, &saves);
+        assert!(matches!(&screen, Screen::ConfirmDelete { name, .. } if name == "Gone"));
+        let labels: Vec<(f32, f32, String, u8)> = screen
+            .buttons(size.0, size.1)
+            .into_iter()
+            .map(|b| (b.0, b.1, b.3, b.5))
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                (61.0, 135.0, "Delete".to_owned(), 58),
+                (215.0, 135.0, "Cancel".to_owned(), 59),
+            ]
+        );
+        assert_eq!(names(), ["Keep", "Gone"]);
+        // Cancel and Escape return to the list with the selection kept.
+        screen.click(Some(59), 0.0, 0.0, size, &saves);
+        assert!(matches!(
+            &screen,
+            Screen::List {
+                selected: Some(1),
+                ..
+            }
+        ));
+        screen.click(Some(44), 0.0, 0.0, size, &saves);
+        assert!(!screen.escape(&saves));
+        assert!(matches!(
+            &screen,
+            Screen::List {
+                selected: Some(1),
+                ..
+            }
+        ));
+        assert_eq!(names(), ["Keep", "Gone"]);
+        // Delete removes it, saves, and clears the selection.
+        screen.click(Some(44), 0.0, 0.0, size, &saves);
+        screen.click(Some(58), 0.0, 0.0, size, &saves);
+        assert!(
+            matches!(&screen, Screen::List { selected: None, servers, .. } if servers.len() == 1)
+        );
+        assert_eq!(names(), ["Keep"]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

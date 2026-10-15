@@ -27,7 +27,7 @@ const ROW_WIDTH: f32 = 270.0;
 fn edit_top(h: f32) -> f32 {
     ((h.ceil() - 234.0) / 2.0).floor()
 }
-fn confirm_top(h: f32, lines: usize) -> f32 {
+pub(crate) fn confirm_top(h: f32, lines: usize) -> f32 {
     ((h.ceil() - 61.0 - lines as f32 * 9.0) / 2.0).floor()
 }
 
