@@ -17,6 +17,7 @@ Both are off by default. With no pack selected the renderer draws exactly what i
 | Horizon shader packs: `deferred`, `gbuffer`, `shadow` stages, custom textures | planned |
 | Java shader packs: preprocessing + GLSL parse coverage | spike done: 450 of 470 programs reach valid WGSL (below) |
 | Java shader packs: preprocessor (`crates/horizon-shaderpack`: includes, options, Iris's macros) | done: every program of the three test packs preprocesses |
+| Java shader packs: GLSL → WGSL (`horizon_shaderpack::translate`: syntax-tree legaliser, naga) | done: the 464 programs the three test packs enable by default translate (below) |
 | Java shader packs: Iris pipeline emulation | planned |
 
 ## How the renderer draws a frame today
@@ -304,6 +305,12 @@ What is left, by cause:
 | 9 | Sildur's passes a `mat3` between stages (`tbnMatrix`); WGSL can't | split matrix varyings into columns |
 | 6 | `writeonly image2D` without a format (`shadowcomp.csh` in Complementary and BSL) | take the format from the pack's image declaration (`shaders.properties` / `const int` format) |
 | 5 | naga GLSL front-end bug: a call result inside a constructor (`vec3(TAAJitter(..), z)`) leaves an unvisited expression (BSL) | spill call results to temporaries; report to naga |
+
+The translator in `crates/horizon-shaderpack` now passes all of them that the packs enable by default (464 of 464,
+the WGSL read back and validated): matrix varyings are split into columns; the five BSL failures were not a naga bug
+but dead code after a `discard;` (how BSL turns its clouds and weather off), which the legaliser drops; the six
+`shadowcomp.csh` are off by default (`program.*/shadowcomp.enabled` in `shaders.properties`) and use images and arrays
+that only exist with their options on, so they wait for `shaders.properties`.
 
 So the GLSL side is feasible: naga's front end plus a legaliser reaches 96% on the three packs, and every remaining
 failure has a mechanical fix. Valid WGSL isn't a working pack yet: the output still has to be bound to Horizon's
