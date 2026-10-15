@@ -144,7 +144,7 @@ fn rumble(pad: &mut DualSense) {
         write(
             pad,
             Output {
-                rumble: Some(motors),
+                rumble: motors,
                 ..Output::default()
             },
         );
@@ -153,7 +153,7 @@ fn rumble(pad: &mut DualSense) {
         write(
             pad,
             Output {
-                rumble: Some([0, 0]),
+                rumble: [0, 0],
                 ..Output::default()
             },
         );

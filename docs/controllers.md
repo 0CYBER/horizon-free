@@ -264,9 +264,34 @@ shared, so gilrs keeps reading the same pad), the HID API on Windows.
   (three flag bytes), the two compatible-vibration motors, both adaptive
   triggers' effects, the lightbar colour and the player LEDs. Over USB it is
   report 0x02; over Bluetooth report 0x31, led by a sequence number and a tag
-  and closed by a CRC-32 of the seed byte 0xA2 and the report. Firmware with
-  update version 0x0224 or later (feature report 0x20) takes the newer rumble
-  emulation flag. Unit tests check the bytes and the CRC.
+  and closed by a CRC-32 of the seed byte 0xA2 and the report. Unit tests pin
+  the bytes to the references below (the CRC to zlib's, the LED reset to the
+  kernel's).
+- **Rumble.** Every report carries the motors: a report without the rumble
+  flags ends the motors' emulation and hands the actuators back to the audio
+  haptics (that is how SDL stops rumble, and how the HD haptics are re-armed),
+  so a trigger change mid-rumble would otherwise cut it. A pad with update
+  version 0x0224 or later (feature report 0x20), and every Edge, takes the
+  newer emulation (flags 2, bit 2); older or unknown firmware the legacy one
+  (flags 0, bit 0), at half strength as SDL does. The kernel takes the newer
+  one from 0x0215; between the two, legacy works on every firmware. The first
+  report after opening clears the motor and trigger attenuation another host
+  (a PS5's intensity settings) may have left (flags 1, bit 6, byte 36 = 0).
+- **Lights.** Before the first colour, a report of its own resets the lights
+  (flags 1 bit 3, and the lightbar setup "light out"; the kernel does the
+  same). Over Bluetooth the pad plays a connection animation that paints over
+  the lightbar: like SDL, the colour waits until the pad's sensor clock
+  (input report 0x31) passes 10 200 000.
+- **Bluetooth.** Any output report, even reading a feature report, switches a
+  pad on Bluetooth to its full input report (0x31) until it is turned off. On
+  Linux `hid-playstation` has done that already and gilrs reads its events,
+  so output goes ahead. Gilrs on macOS and Windows parses the simple report
+  0x01 instead and would stop seeing the pad (SDL's
+  `SDL_HINT_JOYSTICK_ENHANCED_REPORTS`: "break Windows DirectInput for other
+  applications"), so there a pad on Bluetooth gets no output unless
+  `HORIZON_DUALSENSE_BT=1`. Doing it for everyone means reading the pad's
+  input ourselves over HID, as SDL does (a later PR). A pad on both cables is
+  written over USB.
 - **Writer thread.** Writes block (a Bluetooth write can take milliseconds),
   so a thread owns the pad: the game hands it the state to show and timed
   vibrations, and it sends only what changed, and everything again when the
@@ -298,14 +323,23 @@ shared, so gilrs keeps reading the same pad), the HID API on Windows.
   shake while the motors run (`watch` logs the shake while the game drives
   the pad).
 
-Byte layout from public references; no code is copied from them: the Linux
-kernel's [`hid-playstation.c`](https://github.com/torvalds/linux/blob/master/drivers/hid/hid-playstation.c)
-(report IDs and sizes, valid flags, motor, lightbar and player LED offsets,
-the Bluetooth CRC, the firmware's vibration version), SDL's
-[`SDL_hidapi_ps5.c`](https://github.com/libsdl-org/SDL/blob/main/src/joystick/hidapi/SDL_hidapi_ps5.c)
-(the trigger effect blocks and the input report), and the
-[dualsensectl](https://github.com/nowrep/dualsensectl) and DualSenseX
-documentation.
+Byte layout from public references, read for facts; no code is copied from
+them (the kernel and dualsensectl are GPL):
+
+| Reference | Read at | What it settles |
+| --- | --- | --- |
+| SDL [`SDL_hidapi_ps5.c`](https://github.com/libsdl-org/SDL/blob/6defbc0129b5ba90bab3f6c67bbc1e9329e24ff1/src/joystick/hidapi/SDL_hidapi_ps5.c) and [`SDL_hints.h`](https://github.com/libsdl-org/SDL/blob/6defbc0129b5ba90bab3f6c67bbc1e9329e24ff1/include/SDL3/SDL_hints.h) (zlib) | `6defbc0` | the 47-byte block, rumble flags and stop, 0x0224, legacy at half, LED reset and the Bluetooth animation clock, USB report length 48, the enhanced-mode switch |
+| Linux [`hid-playstation.c`](https://github.com/torvalds/linux/blob/045958acaa75205b31578cb22c4345e28dd2e4bf/drivers/hid/hid-playstation.c) (GPL) | `045958a` | valid flags, the Bluetooth sequence and tag 0x10, CRC seed 0xA2, `dualsense_reset_leds`, `use_vibration_v2` from 2.21, player LED patterns, the default blue |
+| [dualsensectl](https://github.com/nowrep/dualsensectl/blob/d3ae2fa272e1bf9a5c08a0ded3f374b40f7c73ac/main.c) (GPL) | `d3ae2fa` | trigger valid bits (flags 0 bits 2, 3), `reduce_motor_power` (byte 36) and its flag, the trigger effect packing |
+| [pydualsense](https://github.com/flok/pydualsense/blob/01445f5ed6ba/pydualsense/pydualsense.py) (MIT) | `01445f5` | sets the attenuation flag with 0 on every report |
+| [nondebug/dualsense](https://github.com/nondebug/dualsense) | `b87450e` | an all-zero report 0x02 leaves rumble emulation for the audio haptics |
+
+Verified on hardware (USB, dualsense-1, Mac mini): the motors with the V2
+flags (the IMU shook, and settled after a stop that then still sent the
+flags), the pad reporting a feedback and a weapon trigger effect as active,
+and the writer thread. Verified against the references only: everything
+else, the flag-less stop, the attenuation and LED reset reports, and all of
+Bluetooth.
 
 ## Steam Deck
 

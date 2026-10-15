@@ -3,7 +3,7 @@
 use crate::{Output, TRIGGER_OFF, TriggerEffect, Vibration, is_dualsense};
 use hidapi::{BusType, HidApi, HidDevice, HidResult};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -23,13 +23,35 @@ pub struct DualSense {
     seq: u8,
 }
 
+/// Whether a pad on Bluetooth may be written to. Any output report, and even reading a feature
+/// report, switches it to its full input report (0x31) until it is turned off (SDL_hints.h,
+/// `SDL_HINT_JOYSTICK_ENHANCED_REPORTS`; SDL_hidapi_ps5.c). Linux's `hid-playstation` has
+/// already switched it and reads that report, but gilrs on macOS and Windows parses the simple
+/// report 0x01 and would stop seeing the pad: there it waits for `HORIZON_DUALSENSE_BT=1`.
+pub fn bluetooth_allowed() -> bool {
+    cfg!(target_os = "linux") || std::env::var_os("HORIZON_DUALSENSE_BT").is_some_and(|v| v == "1")
+}
+
 impl DualSense {
-    /// The first DualSense hidapi lists; `None` when there is none, an error when it can't be
-    /// opened (Linux without access to its hidraw node).
+    /// The first DualSense hidapi lists, USB before Bluetooth (as SDL); `None` when there is
+    /// none, an error when it can't be opened (Linux without access to its hidraw node).
     pub fn open(api: &HidApi) -> Option<HidResult<Self>> {
-        let info = api
+        static SKIPPED: AtomicBool = AtomicBool::new(false);
+        let bluetooth = |d: &&hidapi::DeviceInfo| matches!(d.bus_type(), BusType::Bluetooth);
+        let pads = api
             .device_list()
-            .find(|d| is_dualsense(d.vendor_id(), d.product_id()))?;
+            .filter(|d| is_dualsense(d.vendor_id(), d.product_id()));
+        let (wireless, wired): (Vec<_>, Vec<_>) = pads.partition(bluetooth);
+        let info = match wired.first() {
+            Some(info) => info,
+            None if bluetooth_allowed() => wireless.first()?,
+            None => {
+                if !wireless.is_empty() && !SKIPPED.swap(true, Ordering::Relaxed) {
+                    log::info!("Horizon: no DualSense output over Bluetooth on this system");
+                }
+                return None;
+            }
+        };
         let transport = match info.bus_type() {
             BusType::Bluetooth => Transport::Bluetooth,
             _ => Transport::Usb,
@@ -37,14 +59,11 @@ impl DualSense {
         Some(info.open_device(api).map(|device| {
             let mut firmware = [0; 64];
             firmware[0] = 0x20;
-            // The update version decides how vibration is asked for; without it, the kernel's
-            // default.
-            let vibration = match device.get_feature_report(&mut firmware) {
-                Ok(n) if n >= 46 => {
-                    Vibration::of_update_version(u16::from_le_bytes([firmware[44], firmware[45]]))
-                }
-                _ => Vibration::Legacy,
+            let version = match device.get_feature_report(&mut firmware) {
+                Ok(n) if n >= 46 => Some(u16::from_le_bytes([firmware[44], firmware[45]])),
+                _ => None,
             };
+            let vibration = Vibration::of(info.product_id(), version);
             DualSense {
                 device,
                 transport,
@@ -182,11 +201,40 @@ struct Writer {
     state: State,
     /// What the pad was last sent; `None` after (re)opening.
     sent: Option<(State, [u8; 2])>,
+    /// Whether the lights may be set: over Bluetooth, not before the pad's connection
+    /// animation is over, or it paints over them.
+    lights: Lights,
     rumble: Rumble,
     /// When the vibration's current step ends.
     step_end: Option<Instant>,
     scans_left: u32,
     next_scan: Instant,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Lights {
+    /// Over Bluetooth, until the pad's clock says its animation is over (or this long after
+    /// opening, when it sends no clock).
+    Waiting(Instant),
+    /// They may be set, after the reset report that hands them to the host.
+    Ready,
+    Reset,
+}
+
+/// The pad's sensor clock once its Bluetooth connection animation is over (SDL_hidapi_ps5.c's
+/// `HIDAPI_DriverPS5_CheckPendingLEDReset`).
+const ANIMATION_OVER: u32 = 10_200_000;
+
+/// The sensor clock of a Bluetooth input report 0x31: its state block starts at byte 2 and
+/// holds the clock at 27..31, little-endian (SDL's `PS5StatePacketCommon_t`, the kernel's
+/// `dualsense_input_report`).
+fn bluetooth_clock(report: &[u8]) -> Option<u32> {
+    match report {
+        [0x31, _, state @ ..] if state.len() >= 31 => {
+            Some(u32::from_le_bytes(state[27..31].try_into().ok()?))
+        }
+        _ => None,
+    }
 }
 
 impl Writer {
@@ -197,6 +245,7 @@ impl Writer {
             open,
             state: State::default(),
             sent: None,
+            lights: Lights::Ready,
             rumble: Vec::new(),
             step_end: None,
             scans_left: 1,
@@ -210,9 +259,11 @@ impl Writer {
             if self.pad.is_none() && self.scans_left > 0 && now >= self.next_scan {
                 self.scan();
             }
+            let waiting = matches!(self.lights, Lights::Waiting(_)) && self.pad.is_some();
             let wake = [
                 self.step_end,
                 (self.pad.is_none() && self.scans_left > 0).then_some(self.next_scan),
+                waiting.then(|| now + Duration::from_millis(250)),
             ]
             .into_iter()
             .flatten()
@@ -247,6 +298,7 @@ impl Writer {
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => break,
             }
+            self.watch_animation();
             self.advance_rumble();
             self.flush();
         }
@@ -274,6 +326,12 @@ impl Writer {
                 log::info!("DualSense output over {:?}", pad.transport());
                 self.open
                     .store(1 + pad.transport() as u8, Ordering::Relaxed);
+                self.lights = match pad.transport() {
+                    Transport::Usb => Lights::Ready,
+                    Transport::Bluetooth => {
+                        Lights::Waiting(Instant::now() + Duration::from_secs(1))
+                    }
+                };
                 self.pad = Some(pad);
                 self.sent = None;
                 self.scans_left = 0;
@@ -285,6 +343,28 @@ impl Writer {
                 self.scans_left = 0;
             }
             None => {}
+        }
+    }
+
+    /// Over Bluetooth, read the pad's clock until its connection animation is over.
+    fn watch_animation(&mut self) {
+        let (Lights::Waiting(deadline), Some(pad)) = (self.lights, self.pad.as_ref()) else {
+            return;
+        };
+        let mut buf = [0; 80];
+        let mut clock = None;
+        while let Ok(n) = pad.read(&mut buf, 0)
+            && n > 0
+        {
+            clock = bluetooth_clock(&buf[..n]).or(clock);
+        }
+        let over = match clock {
+            Some(clock) => clock >= ANIMATION_OVER,
+            // No full report to read the clock from: as SDL, take it as over.
+            None => Instant::now() >= deadline,
+        };
+        if over {
+            self.lights = Lights::Ready;
         }
     }
 
@@ -307,13 +387,36 @@ impl Writer {
             return;
         };
         let motors = self.rumble.last().map_or([0, 0], |(m, _)| *m);
-        let (state, sent) = (self.state, self.sent);
+        let mut state = self.state;
+        if matches!(self.lights, Lights::Waiting(_)) {
+            state.lightbar = None;
+            state.player_leds = None;
+        }
+        let sent = self.sent;
         if sent == Some((state, motors)) {
             return;
         }
+        // Every report carries the motors: one without them stops the rumble.
+        let mut first = Output {
+            rumble: motors,
+            ..Output::default()
+        };
+        if sent.is_none() {
+            first.full_power = true;
+        }
+        let lit = state.lightbar.is_some() || state.player_leds.is_some();
+        if lit && self.lights == Lights::Ready {
+            first.release_leds = true;
+            self.lights = Lights::Reset;
+        }
+        // The reset goes alone, before any colour (hid-playstation.c).
+        if first.full_power || first.release_leds {
+            if let Err(e) = pad.write(&first) {
+                return self.lost(&e.to_string());
+            }
+        }
         let mut out = Output {
-            rumble: (sent.is_none_or(|(_, m)| m != motors)).then_some(motors),
-            release_leds: sent.is_none() && state.lightbar.is_some(),
+            rumble: motors,
             ..Output::default()
         };
         let old = sent.map(|(s, _)| s);
@@ -337,5 +440,22 @@ impl Writer {
         log::info!("DualSense output closed: {why}");
         self.pad = None;
         self.open.store(0, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bluetooth_clock_offset() {
+        let mut report = [0; 78];
+        report[0] = 0x31;
+        report[2 + 27..2 + 31].copy_from_slice(&ANIMATION_OVER.to_le_bytes());
+        assert_eq!(bluetooth_clock(&report), Some(10_200_000));
+        // The simple report, or a USB one, has no clock here.
+        report[0] = 0x01;
+        assert_eq!(bluetooth_clock(&report), None);
+        assert_eq!(bluetooth_clock(&[0x31, 0, 0]), None);
     }
 }

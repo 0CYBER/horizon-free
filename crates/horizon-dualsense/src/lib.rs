@@ -36,6 +36,9 @@ const MOTOR_RIGHT: usize = 2;
 const MOTOR_LEFT: usize = 3;
 const RIGHT_TRIGGER: usize = 10;
 const LEFT_TRIGGER: usize = 21;
+/// `reduce_motor_power` (dualsensectl): the motors' attenuation in bits 0..2, the triggers' in
+/// bits 4..6, 0 (none) to 7.
+const ATTENUATION: usize = 36;
 const FLAGS2: usize = 38;
 const LIGHTBAR_SETUP: usize = 41;
 const PLAYER_LEDS: usize = 43;
@@ -49,6 +52,7 @@ const FLAG0_LEFT_TRIGGER: u8 = 1 << 3;
 const FLAG1_LIGHTBAR: u8 = 1 << 2;
 const FLAG1_RELEASE_LEDS: u8 = 1 << 3;
 const FLAG1_PLAYER_LEDS: u8 = 1 << 4;
+const FLAG1_ATTENUATION: u8 = 1 << 6;
 const FLAG2_LIGHTBAR_SETUP: u8 = 1 << 1;
 const FLAG2_VIBRATION_V2: u8 = 1 << 2;
 /// `lightbar_setup`: fade the firmware's own blue light out, so the host's colour shows.
@@ -65,19 +69,27 @@ pub const TRIGGER_OFF: TriggerEffect = [0x05, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Output {
     /// The vibration motors, 0..255: the left (heavy, low) and the right (light, high) one.
-    pub rumble: Option<[u8; 2]>,
+    /// Every report carries them: one without the rumble flags ends the motors' emulation and
+    /// hands the actuators back to the audio haptics (SDL_hidapi_ps5.c: "Leaving emulated
+    /// rumble bits off will restore audio haptics"), so stopping sends no flags at all.
+    pub rumble: [u8; 2],
     pub left_trigger: Option<TriggerEffect>,
     pub right_trigger: Option<TriggerEffect>,
     /// Red, green, blue.
     pub lightbar: Option<[u8; 3]>,
     /// The five LEDs under the touchpad, left to right in bits 0..4.
     pub player_leds: Option<u8>,
-    /// Hand the lightbar to the host: the firmware's blue light fades out.
+    /// Hand the lightbar to the host: the firmware's blue light fades out. Sent alone, before
+    /// any colour (hid-playstation.c's `dualsense_reset_leds`).
     pub release_leds: bool,
+    /// Undo the motor and trigger attenuation another host (a PS5's intensity settings) left in
+    /// the pad, which would otherwise scale every effect down.
+    pub full_power: bool,
 }
 
-/// How the pad takes vibration: firmware 2.24 and later has a better rumble emulation, picked
-/// with its own flag (`hid-playstation.c`'s `use_vibration_v2`).
+/// How the pad takes vibration: newer firmware has a better rumble emulation, picked with its
+/// own flag (`hid-playstation.c`'s `use_vibration_v2`, SDL's `enhanced_rumble`); the legacy one
+/// still works on every firmware.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Vibration {
     Legacy,
@@ -86,9 +98,12 @@ pub enum Vibration {
 }
 
 impl Vibration {
-    /// From the firmware's update version (feature report 0x20, bytes 44..46).
-    pub fn of_update_version(version: u16) -> Self {
-        if version >= 0x0224 {
+    /// From the product and the firmware's update version (feature report 0x20, bytes 44..46;
+    /// `None` when it can't be read). The Edge always has it. SDL picks it from 0x0224, the
+    /// kernel from 0x0215 (`DS_FEATURE_VERSION(2, 21)`): we take SDL's, as both agree from
+    /// there, and legacy below it and when the version is unknown, as it works everywhere.
+    pub fn of(product: u16, update_version: Option<u16>) -> Self {
+        if product == DUALSENSE_EDGE || update_version.is_some_and(|v| v >= 0x0224) {
             Vibration::V2
         } else {
             Vibration::Legacy
@@ -100,7 +115,7 @@ impl Output {
     /// Everything off: triggers free, motors still.
     pub fn release() -> Self {
         Output {
-            rumble: Some([0, 0]),
+            rumble: [0, 0],
             left_trigger: Some(TRIGGER_OFF),
             right_trigger: Some(TRIGGER_OFF),
             ..Output::default()
@@ -110,15 +125,26 @@ impl Output {
     /// The block both transports carry.
     pub fn common(&self, vibration: Vibration) -> [u8; COMMON_LEN] {
         let mut c = [0; COMMON_LEN];
-        if let Some([left, right]) = self.rumble {
+        if self.rumble != [0, 0] {
             // Classic rumble rather than the audio-driven haptics.
             c[FLAGS0] |= FLAG0_HAPTICS_SELECT;
-            match vibration {
-                Vibration::V2 => c[FLAGS2] |= FLAG2_VIBRATION_V2,
-                Vibration::Legacy => c[FLAGS0] |= FLAG0_COMPATIBLE_VIBRATION,
-            }
+            let [left, right] = match vibration {
+                Vibration::V2 => {
+                    c[FLAGS2] |= FLAG2_VIBRATION_V2;
+                    self.rumble
+                }
+                Vibration::Legacy => {
+                    c[FLAGS0] |= FLAG0_COMPATIBLE_VIBRATION;
+                    // The old emulation shakes about twice as hard: SDL halves it.
+                    self.rumble.map(|m| m >> 1)
+                }
+            };
             c[MOTOR_LEFT] = left;
             c[MOTOR_RIGHT] = right;
+        }
+        if self.full_power {
+            c[FLAGS1] |= FLAG1_ATTENUATION;
+            c[ATTENUATION] = 0;
         }
         if let Some(effect) = self.right_trigger {
             c[FLAGS0] |= FLAG0_RIGHT_TRIGGER;
@@ -201,7 +227,7 @@ mod tests {
     #[test]
     fn usb_report_layout() {
         let out = Output {
-            rumble: Some([200, 40]),
+            rumble: [200, 40],
             right_trigger: Some([0x25, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
             lightbar: Some([255, 128, 0]),
             player_leds: Some(0b00100),
@@ -225,42 +251,75 @@ mod tests {
     }
 
     #[test]
-    fn legacy_vibration_selects_haptics() {
-        let out = Output {
-            rumble: Some([1, 2]),
+    fn legacy_vibration() {
+        // SDL's pre-2.24 path: rumble emulation (0x01) and audio haptics off (0x02), the
+        // motors halved, nothing in flags 2.
+        let c = Output {
+            rumble: [200, 41],
             ..Output::default()
-        };
-        let c = out.common(Vibration::Legacy);
-        assert_eq!(c[FLAGS0], FLAG0_COMPATIBLE_VIBRATION | FLAG0_HAPTICS_SELECT);
+        }
+        .common(Vibration::Legacy);
+        assert_eq!(c[FLAGS0], 0x03);
+        assert_eq!(c[MOTOR_RIGHT..=MOTOR_LEFT], [20, 100]);
         assert_eq!(c[FLAGS2], 0);
-        assert_eq!(Vibration::of_update_version(0x0223), Vibration::Legacy);
-        assert_eq!(Vibration::of_update_version(0x0641), Vibration::V2);
+    }
+
+    #[test]
+    fn vibration_mode_of_the_firmware() {
+        assert_eq!(Vibration::of(DUALSENSE, Some(0x0223)), Vibration::Legacy);
+        assert_eq!(Vibration::of(DUALSENSE, Some(0x0224)), Vibration::V2);
+        assert_eq!(Vibration::of(DUALSENSE, Some(0x0641)), Vibration::V2);
+        assert_eq!(Vibration::of(DUALSENSE, None), Vibration::Legacy);
+        assert_eq!(Vibration::of(DUALSENSE_EDGE, None), Vibration::V2);
+    }
+
+    #[test]
+    fn still_motors_send_no_rumble_flags() {
+        // The all-zero report, which also re-arms the audio haptics (nondebug/dualsense).
+        assert_eq!(Output::default().common(Vibration::V2), [0; COMMON_LEN]);
+        assert_eq!(Output::default().common(Vibration::Legacy), [0; COMMON_LEN]);
     }
 
     #[test]
     fn release_frees_both_triggers_and_stops_the_motors() {
         let c = Output::release().common(Vibration::V2);
-        assert_eq!(
-            c[FLAGS0],
-            FLAG0_HAPTICS_SELECT | FLAG0_LEFT_TRIGGER | FLAG0_RIGHT_TRIGGER
-        );
-        assert_eq!(c[MOTOR_LEFT..MOTOR_LEFT + 1], [0]);
+        assert_eq!(c[FLAGS0], FLAG0_LEFT_TRIGGER | FLAG0_RIGHT_TRIGGER);
+        assert_eq!(c[FLAGS0], 0b1100);
+        assert_eq!(c[MOTOR_RIGHT..=MOTOR_LEFT], [0, 0]);
         assert_eq!(c[RIGHT_TRIGGER..RIGHT_TRIGGER + 11], TRIGGER_OFF);
         assert_eq!(c[LEFT_TRIGGER..LEFT_TRIGGER + 11], TRIGGER_OFF);
         // Nothing else changes.
         assert_eq!(c[FLAGS1], 0);
+        assert_eq!(c[FLAGS2], 0);
     }
 
     #[test]
-    fn release_leds_fades_the_firmware_light() {
+    fn full_power_clears_the_attenuation() {
+        let c = Output {
+            full_power: true,
+            ..Output::default()
+        }
+        .common(Vibration::V2);
+        // dualsensectl's VIBRATION_ATTENUATION_ENABLE and `reduce_motor_power`.
+        assert_eq!(c[FLAGS1], 0x40);
+        assert_eq!(c[36], 0);
+    }
+
+    #[test]
+    fn release_leds_resets_the_lights() {
+        // hid-playstation.c's dualsense_reset_leds (lightbar setup: light out) and SDL's
+        // "Reset LED state" bit, over Bluetooth with sequence number 5; the CRC is
+        // zlib.crc32(b"\xa2" + report[:74]).
+        let mut expected = [0; BT_REPORT_LEN];
+        expected[..5].copy_from_slice(&[0x31, 0x50, 0x10, 0x00, 0x08]);
+        expected[3 + 38] = 0x02;
+        expected[3 + 41] = 0x02;
+        expected[74..].copy_from_slice(&0xc72d_0f94u32.to_le_bytes());
         let out = Output {
             release_leds: true,
             ..Output::default()
         };
-        let c = out.common(Vibration::V2);
-        assert_eq!(c[FLAGS1], FLAG1_RELEASE_LEDS);
-        assert_eq!(c[FLAGS2], FLAG2_LIGHTBAR_SETUP);
-        assert_eq!(c[LIGHTBAR_SETUP], LIGHTBAR_LIGHT_OUT);
+        assert_eq!(out.bluetooth(Vibration::V2, 5), expected);
     }
 
     #[test]
@@ -271,6 +330,7 @@ mod tests {
         };
         let r = out.bluetooth(Vibration::V2, 0x13);
         assert_eq!(r.len(), 78);
+        // The sequence number in the high nibble, the tag 0x10 (hid-playstation.c).
         assert_eq!(r[..3], [0x31, 0x30, 0x10]);
         assert_eq!(r[3..50], out.common(Vibration::V2));
         assert_eq!(r[50..74], [0; 24]);
