@@ -93,6 +93,7 @@ pub mod mesher;
 pub mod minimap;
 pub mod mipmap;
 pub mod mobs;
+mod model_library;
 pub mod models;
 pub mod motion;
 pub mod mouse;

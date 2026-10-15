@@ -55,6 +55,19 @@ pub fn prepare(
     registry: &BlockRegistry,
     sprites: &mut Sprites,
 ) -> Result<PreparedModels> {
+    prepare_with_models(
+        root,
+        registry,
+        sprites,
+        &crate::model_library::ParsedModels::default(),
+    )
+}
+pub(crate) fn prepare_with_models(
+    root: &Path,
+    registry: &BlockRegistry,
+    sprites: &mut Sprites,
+    models: &crate::model_library::ParsedModels,
+) -> Result<PreparedModels> {
     let facts: serde_json::Map<String, Value> =
         serde_json::from_slice(&std::fs::read(root.join("model-states.json"))?)?;
     let blocks: Vec<&str> = facts
@@ -62,7 +75,7 @@ pub fn prepare(
         .filter(|name| registry.default_state(name).is_some())
         .filter_map(|name| name.strip_prefix("minecraft:"))
         .collect();
-    let catalog = StateModels::load(root, registry, &blocks, sprites)?;
+    let catalog = StateModels::load_with_models(root, registry, &blocks, sprites, models)?;
     let mut placements = Vec::new();
     let mut states = Vec::new();
     for (index, (name, properties)) in GALLERY.iter().enumerate() {

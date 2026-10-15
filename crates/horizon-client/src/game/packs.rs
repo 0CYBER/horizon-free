@@ -115,7 +115,10 @@ impl Game<'_> {
         let panorama = horizon_client::gfx::panorama::Faces::load(root);
         atlas.font.uniform = self.settings.force_unicode;
         atlas.font.japanese = self.settings.japanese_glyphs;
-        let item_renderer = horizon_client::item_render::ItemRenderer::load(root)?;
+        let item_renderer = horizon_client::item_render::ItemRenderer::load_with_library(
+            root,
+            assets.model_library.clone(),
+        )?;
         let visibility = horizon_client::models::load_visibility(root, assets.registry)?;
         let tables = std::sync::Arc::new(horizon_client::mesher::MeshTables::new(
             &assets,

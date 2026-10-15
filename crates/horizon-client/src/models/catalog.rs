@@ -9,8 +9,6 @@ use horizon_assets::{
         bind::{Properties, PropertySchema, PropertyValues, SelectedModels},
         choice::CompiledChoices,
     },
-    model::CuboidModel,
-    resolve::ModelLibrary,
 };
 use horizon_core::{
     position::BlockPos,
@@ -54,6 +52,21 @@ impl StateModels {
         registry: &BlockRegistry,
         blocks: &[&str],
         sprites: &mut Sprites,
+    ) -> Result<Self> {
+        Self::load_with_models(
+            root,
+            registry,
+            blocks,
+            sprites,
+            &crate::model_library::ParsedModels::default(),
+        )
+    }
+    pub(crate) fn load_with_models(
+        root: &Path,
+        registry: &BlockRegistry,
+        blocks: &[&str],
+        sprites: &mut Sprites,
+        models: &crate::model_library::ParsedModels,
     ) -> Result<Self> {
         let facts: BTreeMap<String, Value> =
             serde_json::from_slice(&fs::read(root.join("model-states.json"))?)?;
@@ -156,22 +169,10 @@ impl StateModels {
             }
             choices.push(CompiledChoices::new(&definition)?);
         }
-        let mut models = BTreeMap::new();
-        let mut pending: Vec<_> = variants.iter().map(|(name, _, _)| name.clone()).collect();
-        while let Some(name) = pending.pop() {
-            if models.contains_key(&name) {
-                continue;
-            }
-            let (namespace, path) = name.split_once(':').ok_or("invalid model identifier")?;
-            let text =
-                fs::read_to_string(root.join(format!("assets/{namespace}/models/{path}.json")))?;
-            let model = CuboidModel::from_json(&text)?;
-            if let Some(parent) = &model.parent {
-                pending.push(parent.clone());
-            }
-            models.insert(name, model);
-        }
-        let library = ModelLibrary::new(models)?;
+        let library = models.block_library(
+            root,
+            variants.iter().map(|(name, _, _)| name.clone()).collect(),
+        )?;
         let mut baked = BTreeMap::new();
         for (name, turns, lock) in variants {
             let model = library.resolve(&name)?;

@@ -9143,6 +9143,12 @@ pub fn run() -> Result<()> {
     let animate =
         horizon_client::animate_tick::AnimateTables::load(&root, registry_owner.registry, &biomes)?;
     let fog = horizon_client::fog::FogRenderer::load(&root, &biomes);
+    let item_renderer = Arc::new(
+        horizon_client::item_render::ItemRenderer::load_with_library(
+            &root,
+            assets.model_library.clone(),
+        )?,
+    );
     let mut resources = Resources {
         stations,
         assets,
@@ -9154,7 +9160,7 @@ pub fn run() -> Result<()> {
         environment,
         atlas,
         panorama,
-        item_renderer: Arc::new(horizon_client::item_render::ItemRenderer::load(&root)?),
+        item_renderer,
         layer_names,
         providers: Providers::load(&root),
         block_entity_render: horizon_client::block_entity_render::BlockEntityRenderer::load(
