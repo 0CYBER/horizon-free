@@ -19,8 +19,9 @@ Both are off by default. With no pack selected the renderer draws exactly what i
 | Java shader packs: preprocessor (`crates/horizon-shaderpack`: includes, options, Iris's macros) | done: every program of the three test packs preprocesses |
 | Java shader packs: GLSL → WGSL (`horizon_shaderpack::translate`: syntax-tree legaliser, naga) | done: the 464 programs the three test packs enable by default translate (below) |
 | Java shader packs: `shaders.properties` (`horizon_shaderpack::properties`: screens, sliders, profiles, `program.*.enabled`, image formats, blend modes) | done, no screen yet: read like Iris for the three test packs |
-| Java shader packs: full-screen pass plan (`horizon_shaderpack::pipeline`: `DRAWBUFFERS`/`RENDERTARGETS`, `colortexN` formats and clearing, buffer flips) | done, not drawn yet: planned for the three test packs |
-| Java shader packs: Iris pipeline emulation | planned |
+| Java shader packs: full-screen pass plan (`horizon_shaderpack::pipeline`: `DRAWBUFFERS`/`RENDERTARGETS`, `colortexN` formats and clearing, buffer flips) | done: planned for the three test packs |
+| Java shader packs: full-screen passes drawn (`java_pack.rs`, `gfx/java_stages.rs`: `begin`, `prepare`, `deferred*`, `composite*`, `final` over Horizon's world) | first slice: BSL and Complementary run (below) |
+| Java shader packs: `gbuffers_*`, `shadow`, custom textures, images, compute, option screen | planned |
 
 ## How the renderer draws a frame today
 
@@ -327,6 +328,42 @@ pipeline (render targets, the uniforms' values, vertex attributes for `gbuffers_
 The spike also showed what the real translator needs that a token rewriter does badly: scopes (a local named like a
 uniform), types (which `texture` call returns a float) and declarations split across `#if`s, so it should rewrite a
 GLSL syntax tree after preprocessing, not tokens.
+
+### Running a Java pack's full-screen passes
+
+A folder holding `shaders/`, or a `.zip`, in `shaderpacks/` shows in the Shader Packs screen next to Horizon packs.
+Picking one translates every planned pass of each dimension folder (`java_pack.rs`) and runs them each frame
+(`gfx/java_stages.rs`):
+
+1. the targets the pack clears are cleared;
+2. `begin*` and `prepare*` run, then Horizon's world enters `colortex0` and `depthtex0..2` on the side the flips give;
+3. `deferred*` and `composite*` run in order, each reading the side its plan gives and writing the other;
+4. `final` draws into a target that replaces the world's picture, where Horizon packs' `composite` output goes: the
+   hand, menus and HUD are drawn over it.
+
+What makes Horizon look like OpenGL to the pack:
+
+- **Layout.** The translator ends every vertex shader by flipping `gl_Position.y` and moving depth from `[-w, w]` to
+  `[0, w]`, so the targets keep OpenGL's layout (row 0 at the bottom). The world is flipped going in, `final` coming out.
+- **Depth.** Horizon's depth is reversed (1 near, 0 sky); the world goes in as `1 - depth`, and the matrices the pack
+  gets (`gbufferProjection` and its inverse, previous frame too) are OpenGL's, rebuilt from Horizon's.
+- **Formats.** Iris formats become renderable wgpu formats: 8-bit unorm ones and `RGB10_A2` stay, `*32F` stay (sampled
+  unfiltered), integer formats become 32-bit, the rest (`R11F_G11F_B10F`, `*16F`, `*16`) 16-bit float, with the
+  channel count of the name.
+- **Samplers.** Metal allows 16 samplers per stage and Complementary binds 23 textures, so textures share four
+  samplers by kind (`iris_linear`, `iris_nearest` for depth and 32-bit or integer targets, `iris_repeat` for
+  `noisetex`, `iris_compare` for shadow lookups) instead of one each.
+- **`isnan`/`isinf`** test the float's bits: Metal compiles with fast math, which folds `x != x` to false, and a NaN
+  then stays forever in Complementary's TAA history (the picture turns black).
+- **Uniforms.** Matrices, camera, view size, time, sun and moon, weather, fog and sky colour, eye state come from the
+  frame; `eyeBrightness(Smooth)` is `(0, 240)` under the sky; `noisetex` is a fixed 256² noise.
+
+Measured on the Mac mini (M4 Pro) with the packs' default options: BSL v10.1.8 and Complementary Reimagined r5.9.3
+grade and light Horizon's world as their post-processing would. Sildur's Vibrant v2.02 draws only its sky: its
+`deferred` reads the albedo `gbuffers_*` write to `colortex4`. Without `gbuffers_*` and `shadow`, no pack has its
+shadows, water or sky look yet; Distant Horizons' and Voxy's depth read as far. Not supported yet: images and
+compute (`.csh`; a pack that needs them doesn't load), mipmapped targets (`colortexNMipmapEnabled` is read but
+ignored), custom textures, custom uniforms, the option screen; shadow matrices are identity.
 
 ### Order to implement
 

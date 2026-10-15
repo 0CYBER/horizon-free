@@ -249,6 +249,13 @@ fn translates_a_compatibility_profile_pass() {
     assert!(!fs.glsl.contains("albedo = vec4(0.);"), "{}", fs.glsl);
     assert!(fs.glsl.contains("iris_isnan(albedo.r)"), "{}", fs.glsl);
     assert!(fs.wgsl.contains("@fragment"));
+    // GL's clip space becomes wgpu's after the program's own `main`.
+    assert!(
+        vs.glsl
+            .contains("gl_Position.y = -gl_Position.y;\n    gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5;\n}"),
+        "{}",
+        vs.glsl
+    );
 }
 
 #[test]
@@ -353,4 +360,48 @@ fn real_packs_translate() {
         );
     }
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+#[test]
+fn textures_share_samplers_by_name() {
+    let mut link = Link {
+        shared_samplers: [("colortex0", "iris_linear"), ("colortex1", "iris_linear")]
+            .map(|(a, b)| (a.to_owned(), b.to_owned()))
+            .into(),
+        ..Link::default()
+    };
+    let fs = run(
+        Stage::Fragment,
+        "uniform sampler2D colortex0;\nuniform sampler2D colortex1;\nuniform sampler2D custom;\n\
+         uniform sampler2DShadow shadowtex0;\nvarying vec2 uv;\n\
+         void main() { gl_FragColor = texture2D(colortex0, uv) + texture2D(colortex1, uv)\n\
+         + texture2D(custom, uv) + shadow2D(shadowtex0, vec3(uv, 0.5)); }",
+        &mut link,
+    )
+    .unwrap();
+    assert_eq!(
+        fs.glsl.matches("uniform sampler iris_linear;").count(),
+        1,
+        "{}",
+        fs.glsl
+    );
+    assert!(
+        fs.glsl.contains("sampler2D(colortex1_t, iris_linear)"),
+        "{}",
+        fs.glsl
+    );
+    assert!(fs.glsl.contains("uniform sampler custom_s;"), "{}", fs.glsl);
+    assert!(
+        fs.glsl.contains("uniform samplerShadow iris_compare;"),
+        "{}",
+        fs.glsl
+    );
+    assert_eq!(fs.interface.sampler_vars["colortex0"], "iris_linear");
+    // Three sampler bindings for four textures.
+    assert_eq!(
+        bindings(&fs).keys().filter(|k| !k.ends_with("_t")).count(),
+        3,
+        "{:?}",
+        bindings(&fs)
+    );
 }

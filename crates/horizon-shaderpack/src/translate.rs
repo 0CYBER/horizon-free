@@ -50,6 +50,11 @@ pub struct Link {
     pub uniforms: Vec<(String, String)>,
     /// Storage formats of images whose declaration has none.
     pub image_formats: BTreeMap<String, String>,
+    /// Samplers shared by texture name (`colortex0` → `iris_linear`), so a
+    /// pass binds a few samplers rather than one per texture (Metal allows
+    /// 16). Once any is named, comparison samplers share `iris_compare` and
+    /// integer ones `iris_nearest`; textures not named keep `{name}_s`.
+    pub shared_samplers: BTreeMap<String, String>,
 }
 
 impl Link {
@@ -81,8 +86,11 @@ impl Link {
 #[derive(Default, Debug)]
 pub struct Interface {
     /// `(name, kind)` of each sampler the program reads (`colortex0`,
-    /// `sampler2D`); its bindings are `{name}_t` and `{name}_s` in the [`Link`].
+    /// `sampler2D`); its bindings are `{name}_t` and its sampler's in the [`Link`].
     pub samplers: Vec<(String, String)>,
+    /// Each sampler's sampler variable: `{name}_s`, or a shared one
+    /// ([`Link::shared_samplers`]).
+    pub sampler_vars: BTreeMap<String, String>,
     /// `(name, format)` of each image.
     pub images: Vec<(String, String)>,
     /// Uniform names the program declares or uses.
@@ -208,16 +216,18 @@ const IRIS_IMPLICIT: &[(&str, &str, bool)] = &[
     ("alphaTestRef", "float", false),
 ];
 
+/// Built-ins naga lacks. `isnan` and `isinf` test the bits: Metal compiles
+/// with fast math, which folds `x != x` to false.
 const HELPERS: &str = "\
 struct iris_FogParameters { vec4 color; float density; float start; float end; float scale; };
-bool iris_isnan(float x) { return x != x; }
-bvec2 iris_isnan(vec2 x) { return notEqual(x, x); }
-bvec3 iris_isnan(vec3 x) { return notEqual(x, x); }
-bvec4 iris_isnan(vec4 x) { return notEqual(x, x); }
-bool iris_isinf(float x) { return abs(x) > 3.4028235e38; }
-bvec2 iris_isinf(vec2 x) { return greaterThan(abs(x), vec2(3.4028235e38)); }
-bvec3 iris_isinf(vec3 x) { return greaterThan(abs(x), vec3(3.4028235e38)); }
-bvec4 iris_isinf(vec4 x) { return greaterThan(abs(x), vec4(3.4028235e38)); }
+bool iris_isnan(float x) { return (floatBitsToUint(x) & 0x7fffffffu) > 0x7f800000u; }
+bvec2 iris_isnan(vec2 x) { return greaterThan(floatBitsToUint(x) & 0x7fffffffu, uvec2(0x7f800000u)); }
+bvec3 iris_isnan(vec3 x) { return greaterThan(floatBitsToUint(x) & 0x7fffffffu, uvec3(0x7f800000u)); }
+bvec4 iris_isnan(vec4 x) { return greaterThan(floatBitsToUint(x) & 0x7fffffffu, uvec4(0x7f800000u)); }
+bool iris_isinf(float x) { return (floatBitsToUint(x) & 0x7fffffffu) == 0x7f800000u; }
+bvec2 iris_isinf(vec2 x) { return equal(floatBitsToUint(x) & 0x7fffffffu, uvec2(0x7f800000u)); }
+bvec3 iris_isinf(vec3 x) { return equal(floatBitsToUint(x) & 0x7fffffffu, uvec3(0x7f800000u)); }
+bvec4 iris_isinf(vec4 x) { return equal(floatBitsToUint(x) & 0x7fffffffu, uvec4(0x7f800000u)); }
 float iris_modf(float x, out float i) { i = trunc(x); return x - i; }
 vec2 iris_modf(vec2 x, out vec2 i) { i = trunc(x); return x - i; }
 vec3 iris_modf(vec3 x, out vec3 i) { i = trunc(x); return x - i; }
@@ -288,7 +298,10 @@ struct Legaliser<'a> {
     link: &'a mut Link,
     interface: Interface,
     /// Global samplers: name → combined type.
-    samplers: HashMap<String, &'static str>,
+    /// Sampler uniforms: their combined type and sampler variable.
+    samplers: HashMap<String, (&'static str, String)>,
+    /// Sampler variables declared so far (shared ones once).
+    sampler_vars: HashSet<String>,
     /// User functions → indices of their sampler parameters.
     sampler_params: HashMap<String, BTreeSet<usize>>,
     functions: HashSet<String>,
@@ -484,6 +497,7 @@ impl<'a> Legaliser<'a> {
             link,
             interface: Interface::default(),
             samplers: HashMap::new(),
+            sampler_vars: HashSet::new(),
             sampler_params: HashMap::new(),
             functions: HashSet::new(),
             scopes: Vec::new(),
@@ -601,17 +615,35 @@ impl<'a> Legaliser<'a> {
             || has(ast::StorageQualifierData::Out) && self.stage == Stage::Vertex
             || has(ast::StorageQualifierData::In) && self.stage == Stage::Fragment;
         if has(ast::StorageQualifierData::Uniform) {
-            if let Some(&(combined, texture, sampler, _)) = opaque(&ty) {
+            if let Some(&(combined, texture, sampler, compare)) = opaque(&ty) {
                 for (name, _) in &names {
                     let t = self.link.binding(&format!("{name}_t"));
-                    let s = self.link.binding(&format!("{name}_s"));
                     self.header.push(format!(
                         "layout(set = 0, binding = {t}) uniform {texture} {name}_t;"
                     ));
-                    self.header.push(format!(
-                        "layout(set = 0, binding = {s}) uniform {sampler} {name}_s;"
-                    ));
-                    self.samplers.insert(name.clone(), combined);
+                    let shared = &self.link.shared_samplers;
+                    let var = if shared.is_empty() {
+                        format!("{name}_s")
+                    } else if compare {
+                        "iris_compare".to_owned()
+                    } else if combined.starts_with(['i', 'u']) {
+                        "iris_nearest".to_owned()
+                    } else {
+                        shared
+                            .get(name)
+                            .cloned()
+                            .unwrap_or_else(|| format!("{name}_s"))
+                    };
+                    if self.sampler_vars.insert(var.clone()) {
+                        let s = self.link.binding(&var);
+                        self.header.push(format!(
+                            "layout(set = 0, binding = {s}) uniform {sampler} {var};"
+                        ));
+                    }
+                    self.interface
+                        .sampler_vars
+                        .insert(name.clone(), var.clone());
+                    self.samplers.insert(name.clone(), (combined, var));
                     self.interface
                         .samplers
                         .push((name.clone(), combined.to_owned()));
@@ -1034,13 +1066,14 @@ impl<'a> Legaliser<'a> {
         let combined = match self.local(name) {
             Some(Local::Sampler(c)) => Some(c),
             Some(Local::Plain) => return None,
-            None => self.samplers.get(name).copied(),
+            None => self.samplers.get(name).map(|(c, _)| *c),
         };
         if let Some(c) = combined {
-            return Some(call(
-                c,
-                vec![var(&format!("{name}_t")), var(&format!("{name}_s"))],
-            ));
+            let sampler = match self.samplers.get(name) {
+                Some((_, v)) if self.local(name).is_none() => v.clone(),
+                _ => format!("{name}_s"),
+            };
+            return Some(call(c, vec![var(&format!("{name}_t")), var(&sampler)]));
         }
         self.used.insert(name.to_owned());
         if let Some((_, decl)) = LEGACY_UNIFORMS.iter().find(|(n, _)| *n == name) {
@@ -1262,6 +1295,15 @@ impl<'a> Legaliser<'a> {
         }
         if !self.errors.is_empty() {
             return Err(self.errors.join("\n"));
+        }
+        if self.stage == Stage::Vertex {
+            // GL's clip space to wgpu's: y flipped, so texture row 0 stays
+            // the bottom of the picture as in GL (texture coordinates and
+            // `gl_FragCoord` then agree with the pack's), and z from
+            // [-w, w] to [0, w].
+            self.epilogue.push("gl_Position.y = -gl_Position.y;".into());
+            self.epilogue
+                .push("gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5;".into());
         }
         let mut out = String::from("#version 450 core\n");
         out.push_str(HELPERS);

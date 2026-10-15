@@ -109,6 +109,8 @@ pub struct ShaderPack {
     pub info: Info,
     pub stages: Vec<Stage>,
     pub options: Vec<PackOption>,
+    /// A Java (OptiFine/Iris) pack's translated passes, instead of `stages`.
+    pub java: Option<crate::java_pack::JavaPasses>,
     dir: PathBuf,
     stamp: Stamp,
 }
@@ -120,6 +122,11 @@ pub struct Stamp(Vec<(PathBuf, u64, Option<SystemTime>)>);
 impl Stamp {
     pub fn of(dir: &Path) -> Self {
         let mut files = Vec::new();
+        if let Ok(meta) = fs::metadata(dir)
+            && meta.is_file()
+        {
+            files.push((dir.to_path_buf(), meta.len(), meta.modified().ok()));
+        }
         let mut stack = vec![dir.to_path_buf()];
         while let Some(d) = stack.pop() {
             let Ok(entries) = fs::read_dir(&d) else {
@@ -141,21 +148,39 @@ impl Stamp {
 }
 
 /// The packs in `dir` (`shaderpacks/`): folders holding a `pack.toml`, by
-/// folder name, with their manifest or why it can't be read.
+/// folder name, with their manifest or why it can't be read, and Java packs
+/// (folders holding `shaders/`, zips).
 pub fn list(dir: &Path) -> Vec<(String, Result<Info, String>)> {
     let mut packs: Vec<_> = fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
-        .filter(|e| e.path().join("pack.toml").is_file())
-        .map(|e| {
+        .filter_map(|e| {
             let id = e.file_name().to_string_lossy().into_owned();
-            let info = manifest(&e.path()).map(|m| m.pack);
-            (id, info)
+            let path = e.path();
+            if path.join("pack.toml").is_file() {
+                Some((id, manifest(&path).map(|m| m.pack)))
+            } else if crate::java_pack::is_java_pack(&path) {
+                Some((id.clone(), Ok(java_info(id))))
+            } else {
+                None
+            }
         })
         .collect();
     packs.sort_by(|a, b| a.0.cmp(&b.0));
     packs
+}
+
+/// A Java pack has no manifest: its name is its file name.
+fn java_info(name: String) -> Info {
+    Info {
+        name,
+        description: String::new(),
+        authors: Vec::new(),
+        version: String::new(),
+        license: String::new(),
+        api: API,
+    }
 }
 
 fn manifest(dir: &Path) -> Result<Manifest, String> {
@@ -228,7 +253,35 @@ impl ShaderPack {
             info: manifest.pack,
             stages,
             options,
+            java: None,
             dir: dir.to_path_buf(),
+            stamp,
+        })
+    }
+    /// Load the pack at `path` (a folder or a zip): a Horizon pack, or a
+    /// Java pack translated for the GPU `vendor` and `renderer` names.
+    pub fn load_any(
+        path: &Path,
+        values: &BTreeMap<String, String>,
+        vendor: &str,
+        renderer: &str,
+    ) -> Result<Self, String> {
+        if path.join("pack.toml").is_file() || !crate::java_pack::is_java_pack(path) {
+            return Self::load(path, values);
+        }
+        let stamp = Stamp::of(path);
+        let java = crate::java_pack::load(path, values, vendor, renderer)?;
+        let id = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        Ok(Self {
+            info: java_info(id.clone()),
+            id,
+            stages: Vec::new(),
+            options: Vec::new(),
+            java: Some(java),
+            dir: path.to_path_buf(),
             stamp,
         })
     }

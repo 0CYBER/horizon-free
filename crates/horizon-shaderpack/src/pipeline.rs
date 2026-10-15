@@ -8,8 +8,11 @@
 //! and `CompositeRenderer` do.
 
 use crate::{
-    JavaPack, options::OptionValues, preprocess::Environment, properties::LEGACY_TARGETS,
-    properties::ShaderProperties,
+    JavaPack,
+    options::OptionValues,
+    preprocess::Environment,
+    properties::{LEGACY_TARGETS, ShaderProperties},
+    translate::{Link, Translated},
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -476,6 +479,91 @@ impl JavaPack {
         }
         Ok(out)
     }
+}
+
+/// A pass's programs translated, with the targets it draws to.
+pub struct Program {
+    pub pass: Pass,
+    pub vertex: Translated,
+    pub fragment: Translated,
+    /// The target each output location writes: the pass's directive, or
+    /// as Iris does without one, location `i` to target `i`.
+    pub draw_buffers: Vec<u32>,
+    /// The bindings both programs share.
+    pub link: Link,
+}
+
+impl JavaPack {
+    /// Translate `pass`'s `.vsh` and `.fsh`.
+    pub fn compile(
+        &self,
+        pass: &Pass,
+        targets: &[TargetSettings],
+        values: &OptionValues,
+        env: &Environment,
+        properties: &ShaderProperties,
+    ) -> Result<Program, String> {
+        let mut link = Link {
+            image_formats: properties.image_formats(),
+            shared_samplers: shared_samplers(targets),
+            ..Link::default()
+        };
+        let vertex = self.translate(&format!("{}.vsh", pass.program), values, env, &mut link)?;
+        let fragment = self.translate(&format!("{}.fsh", pass.program), values, env, &mut link)?;
+        let draw_buffers = match &pass.draw_buffers {
+            Some(buffers) => buffers.clone(),
+            None => (0..fragment.interface.outputs.keys().max().map_or(1, |m| m + 1)).collect(),
+        };
+        Ok(Program {
+            pass: pass.clone(),
+            vertex,
+            fragment,
+            draw_buffers,
+            link,
+        })
+    }
+}
+
+/// Iris's sampler states for the textures it binds: colour targets
+/// linear (nearest for integer formats, and for 32-bit floats, which wgpu
+/// can't filter everywhere), depth nearest, noise repeating. For
+/// [`Link::shared_samplers`].
+pub fn shared_samplers(targets: &[TargetSettings]) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for (i, t) in targets.iter().enumerate() {
+        let f = &t.format;
+        let class = if f.ends_with("32F") || f.ends_with('I') {
+            "iris_nearest"
+        } else {
+            "iris_linear"
+        };
+        out.insert(format!("colortex{i}"), class.to_owned());
+        if let Some(legacy) = LEGACY_TARGETS.get(i) {
+            out.insert((*legacy).to_owned(), class.to_owned());
+        }
+    }
+    for name in [
+        "depthtex0",
+        "depthtex1",
+        "depthtex2",
+        "gdepthtex",
+        "shadowtex0",
+        "shadowtex1",
+        "shadow",
+        "watershadow",
+        "dhDepthTex",
+        "dhDepthTex0",
+        "dhDepthTex1",
+        "vxDepthTexOpaque",
+        "vxDepthTexTrans",
+    ] {
+        out.insert(name.to_owned(), "iris_nearest".to_owned());
+    }
+    for name in ["shadowcolor", "shadowcolor0", "shadowcolor1"] {
+        out.insert(name.to_owned(), "iris_linear".to_owned());
+    }
+    out.insert("noisetex".to_owned(), "iris_repeat".to_owned());
+    out
 }
 
 fn toggle(set: &mut BTreeSet<u32>, buffer: u32) {

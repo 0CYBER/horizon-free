@@ -58,6 +58,7 @@ pub fn outline_vertices(edges: &[[f64; 6]], camera: glam::DVec3) -> Vec<[f32; 6]
 }
 
 mod arena;
+mod java_stages;
 mod occlusion;
 mod pack_stages;
 pub mod panorama;
@@ -308,7 +309,7 @@ pub struct Renderer {
     /// Resolution scale and FXAA (Horizon settings).
     world_post: world_post::Post,
     /// The selected shader pack's stages (Horizon setting; none by default).
-    pack: Option<pack_stages::PackStages>,
+    pack: Option<Pack>,
     pub hud: HudRenderer,
     /// The menus' backdrop blur, made on first use.
     post: Option<crate::post::Post>,
@@ -1679,19 +1680,28 @@ impl Renderer {
     /// Run `pack`'s stages over the world from now on (`None`: no pack, the
     /// vanilla frame). On error the previous pack stays.
     pub fn set_shader_pack(&mut self, pack: Option<&crate::shader_pack::ShaderPack>) -> Result<()> {
+        let format = self.config.format.remove_srgb_suffix();
         self.pack = match pack {
-            Some(pack) => Some(pack_stages::PackStages::new(
-                &self.device,
-                self.config.format.remove_srgb_suffix(),
-                pack,
-            )?),
+            Some(pack) => Some(match &pack.java {
+                Some(java) => Pack::Java(java_stages::JavaStages::new(
+                    &self.device,
+                    &self.queue,
+                    format,
+                    &pack.id,
+                    java,
+                )?),
+                None => Pack::Horizon(pack_stages::PackStages::new(&self.device, format, pack)?),
+            }),
             None => None,
         };
         Ok(())
     }
     /// The folder name of the pack `set_shader_pack` gave.
     pub fn shader_pack_id(&self) -> Option<&str> {
-        self.pack.as_ref().map(|p| p.id.as_str())
+        self.pack.as_ref().map(|p| match p {
+            Pack::Horizon(p) => p.id.as_str(),
+            Pack::Java(p) => p.id.as_str(),
+        })
     }
     /// Horizon's resolution scale (world pixels per window pixel) and FXAA.
     pub fn set_world_post(&mut self, scale: f32, antialias: bool) {
@@ -2380,16 +2390,28 @@ impl Renderer {
         if let (true, Some((color, depth)), Some(size), Some(stages)) =
             (pack, &scaled, self.world_post.size(), self.pack.as_mut())
         {
-            let output = stages.run(
-                &self.device,
-                &self.queue,
-                &mut encoder,
-                color,
-                depth,
-                size,
-                &self.world_post,
-                pack_uniform,
-            );
+            let output = match stages {
+                Pack::Horizon(stages) => stages.run(
+                    &self.device,
+                    &self.queue,
+                    &mut encoder,
+                    color,
+                    depth,
+                    size,
+                    &self.world_post,
+                    pack_uniform,
+                ),
+                Pack::Java(stages) => stages.run(
+                    &self.device,
+                    &self.queue,
+                    &mut encoder,
+                    color,
+                    depth,
+                    size,
+                    &self.world_post,
+                    pack_uniform,
+                ),
+            };
             self.world_post
                 .finish_with(&mut encoder, &view_target, output);
         } else if scaled.is_some() {
@@ -2708,6 +2730,13 @@ fn shader_pack_uniform(
         ],
         ..Default::default()
     }
+}
+
+/// The selected shader pack on the GPU: a Horizon pack's WGSL stages, or a
+/// Java pack's translated programs.
+enum Pack {
+    Horizon(pack_stages::PackStages),
+    Java(java_stages::JavaStages),
 }
 
 fn world_projection(fov_degrees: f32, aspect: f32, far: f32) -> Mat4 {
