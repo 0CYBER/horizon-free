@@ -194,8 +194,9 @@ impl Default for Settings {
             gui_scale: 0,
             view_bobbing: true,
             gamma: 0.5,
-            // Vanilla defaults to 120; Horizon runs unlimited unless capped.
-            max_fps: 260,
+            // Vanilla's default, as for an options.txt without the key: a
+            // capped frame rate leaves the cores idle when VSync is off.
+            max_fps: 120,
             vsync: true,
             fullscreen: false,
             smooth_lighting: true,
@@ -606,6 +607,16 @@ mod tests {
         let again = Settings::parse(&out);
         assert_eq!(again.fov, 90.0);
         assert_eq!(again.keys.get("key.jump"), "key.keyboard.j");
+    }
+    #[test]
+    fn no_options_txt_paces_frames_like_an_empty_one() {
+        let (fresh, empty) = (Settings::default(), Settings::parse(""));
+        assert_eq!(fresh.max_fps, 120);
+        assert_eq!(fresh.max_fps, empty.max_fps);
+        assert_eq!(fresh.vsync, empty.vsync);
+        assert_eq!(fresh.inactivity_fps_limit, empty.inactivity_fps_limit);
+        assert_eq!(fresh.render_distance, empty.render_distance);
+        assert_eq!(fresh.simulation_distance, empty.simulation_distance);
     }
     #[test]
     fn subtitle_options() {
