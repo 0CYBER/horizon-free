@@ -837,7 +837,10 @@ impl Game<'_> {
                 let state = self.world.block(p.pos[0], p.pos[1], p.pos[2]);
                 let block = &self.res.facts.get(state).name;
                 let named = self.remote.as_ref().and_then(|r| {
-                    r.builtin.get("minecraft:block")?.name(p.block).map(str::to_owned)
+                    r.builtin
+                        .get("minecraft:block")?
+                        .name(p.block)
+                        .map(str::to_owned)
                 });
                 if named.as_deref() == Some(&**block) {
                     self.block_entity_event(p.pos, i32::from(p.b0), i32::from(p.b1));
