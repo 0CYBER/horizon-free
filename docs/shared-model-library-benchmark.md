@@ -79,3 +79,28 @@ The baseline and current candidate resource probes both produce
 `86a447cfd3f535c2` over all 4,192 item models and the block selections/faces at
 two fixed positions. The focused test additionally preserves item-only error
 timing, so invalid item identifiers do not change resource-pack rollback.
+
+## Integration check against updated upstream
+
+After merging upstream `c6eb50f10b04a6fa01fffe1ca94a8420cc148342`, including its
+model-state schema reuse, the same protocol compares that upstream commit
+against this implementation on top. Build and paired measurement use separate
+heavy-lock acquisitions. The allocation tracker remains compiled out for latency.
+
+| Median | Updated upstream | Shared |
+| --- | ---: | ---: |
+| Assets (ms) | 410.753 | 434.221 |
+| Items (ms) | 83.7835 | 36.578 |
+| Combined (ms) | 495.526 | 471.568 |
+| Peak RSS (KiB) | 238280 | 239944 |
+
+Combined preparation improves by 23.958 ms (4.83%), faster in all ten pairs.
+Peak RSS increases by 1664 KiB (0.70%). Separate counting builds again retain
+129,921,272 versus 129,921,320 bytes (+48 bytes) after both loaders, and
+115,873,670 versus 122,249,411 bytes after assets alone. The baseline and candidate
+probes still match `86a447cfd3f535c2` over 4,192 models.
+
+```text
+baseline: 498.655, 498.148, 494.521, 493.105, 492.193, 501.778, 493.373, 494.278, 496.531, 497.549
+candidate: 470.865, 469.526, 481.467, 475.666, 471.591, 472.186, 479.168, 469.798, 471.545, 469.152
+```
