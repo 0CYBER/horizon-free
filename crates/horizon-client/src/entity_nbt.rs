@@ -601,7 +601,9 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         m.extra.main_hand = None;
     }
     m.death_time = number(tag.get("DeathTime")).unwrap_or(0) as i32;
-    m.persistent |= flag(tag, "PersistenceRequired");
+    // Mob.readAdditionalSaveData overrides what the constructor set (copper
+    // golems and elder guardians start persistent).
+    m.persistent = flag(tag, "PersistenceRequired");
     m.extra.pick_up_loot = flag(tag, "CanPickUpLoot");
     m.custom_name = custom_name(tag);
     if m.kind.category == "creature" {

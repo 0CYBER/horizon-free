@@ -350,7 +350,8 @@ impl W<'_, '_> {
                 "minecraft:elder_guardian",
                 pos,
                 true,
-                false,
+                // The ElderGuardian constructor's setPersistenceRequired.
+                true,
             ))?;
         }
         Ok(())
