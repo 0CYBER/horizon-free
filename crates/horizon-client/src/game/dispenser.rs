@@ -950,7 +950,7 @@ impl Game<'_> {
             "minecraft:firework_rocket" => {
                 let mut shot = Projectile::new(ProjectileKind::Snowball, at, None);
                 shot.shoot(&mut own, dir, power, uncertainty);
-                self.launch_dispensed_rocket(at, shot.velocity, &one);
+                self.launch_angled_rocket(at, shot.velocity, &one);
             }
             _ => {
                 let kind = match item.as_str() {

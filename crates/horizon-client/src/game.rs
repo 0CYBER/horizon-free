@@ -2386,7 +2386,9 @@ impl Game<'_> {
             return Ok(());
         }
         if &*stack.item == "minecraft:bow" {
-            if self.using.is_none() && (self.creative || self.arrow_slot().is_some()) {
+            if self.using.is_none()
+                && (self.creative || self.projectile_slot("minecraft:bow").is_some())
+            {
                 self.using = Some((self.selected, 0));
             }
             return Ok(());
@@ -7046,10 +7048,7 @@ impl Game<'_> {
         if power < 0.1 {
             return;
         }
-        let arrow_slot = self
-            .inventory
-            .iter()
-            .position(|s| s.as_ref().is_some_and(|s| &*s.item == "minecraft:arrow"));
+        let arrow_slot = self.projectile_slot("minecraft:bow");
         if arrow_slot.is_none() && !self.creative {
             return;
         }
@@ -7073,7 +7072,7 @@ impl Game<'_> {
         // using the ammo, so the arrow is CREATIVE_ONLY; else setOwner(player)
         // lets it be picked up.
         let ammo = arrow_slot
-            .and_then(|i| self.inventory[i].clone())
+            .and_then(|i| self.stack_in(i).cloned())
             .unwrap_or_else(|| ItemStack::new("minecraft:arrow", 1));
         if let Some(a) = arrow.arrow.as_mut() {
             a.set_item(&horizon_client::arrows::drawn_ammo(
@@ -7110,11 +7109,13 @@ impl Game<'_> {
         if !self.creative
             && !infinity
             && let Some(i) = arrow_slot
-            && let Some(s) = self.inventory[i].as_mut()
         {
-            s.count -= 1;
-            if s.count == 0 {
-                self.inventory[i] = None;
+            let cell = self.stack_in_mut(i);
+            if let Some(s) = cell.as_mut() {
+                s.count -= 1;
+                if s.count == 0 {
+                    *cell = None;
+                }
             }
         }
         self.damage_held(1);
