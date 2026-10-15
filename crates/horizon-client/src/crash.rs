@@ -105,6 +105,16 @@ impl Report {
     }
 }
 
+/// The release tag (the launcher installs each build in a folder named after it) and the client's
+/// own version, or just the latter.
+pub fn version() -> String {
+    let version = env!("CARGO_PKG_VERSION");
+    match release_tag() {
+        Some(tag) => format!("{tag} (client {version})"),
+        None => version.to_owned(),
+    }
+}
+
 /// The release this binary came with: launcher installs live in a folder named after the tag.
 pub fn release_tag() -> Option<String> {
     let exe = std::env::current_exe().ok()?;
@@ -228,12 +238,8 @@ fn memory() -> String {
 
 /// The report's details: Horizon's and the machine's, then what the game set as it ran.
 pub fn system_details() -> Vec<(String, String)> {
-    let mut version = env!("CARGO_PKG_VERSION").to_owned();
-    if let Some(tag) = release_tag() {
-        version = format!("{tag} (client {version})");
-    }
     let mut out = vec![
-        ("Horizon Version".to_owned(), version),
+        ("Horizon Version".to_owned(), version()),
         ("Minecraft Version".to_owned(), "26.3".to_owned()),
         ("Operating System".to_owned(), operating_system()),
         ("CPU".to_owned(), cpu()),

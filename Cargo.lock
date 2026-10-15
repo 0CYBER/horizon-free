@@ -1014,6 +1014,7 @@ dependencies = [
  "gilrs",
  "glam",
  "horizon-assets",
+ "horizon-bench",
  "horizon-core",
  "horizon-friends",
  "horizon-protocol",

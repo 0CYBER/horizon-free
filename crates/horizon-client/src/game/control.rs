@@ -81,6 +81,8 @@ impl Game<'_> {
             let mut summary = self.frame_stats.summary();
             if flight.raw {
                 summary["frame_ms"] = self.frame_stats.frame_millis().into();
+                summary["cpu_ms"] = self.frame_stats.cpu_millis().into();
+                summary["gpu_ms"] = self.frame_stats.gpu_millis().into();
             }
             let _ = flight.reply.send(summary.to_string());
         }
@@ -606,6 +608,15 @@ impl Game<'_> {
             let memory = r.device.generate_allocator_report();
             json!({
                 "gpu": r.info.name,
+                "vendor": vendor_name(r.info.vendor),
+                "driver": format!("{} {}", r.info.driver, r.info.driver_info).trim(),
+                "device_type": match r.info.device_type {
+                    wgpu::DeviceType::IntegratedGpu => "integrated",
+                    wgpu::DeviceType::DiscreteGpu => "discrete",
+                    wgpu::DeviceType::VirtualGpu => "virtual",
+                    wgpu::DeviceType::Cpu => "cpu",
+                    wgpu::DeviceType::Other => "other",
+                },
                 "backend": format!("{:?}", r.info.backend),
                 "size": [r.config.width, r.config.height],
                 "present_mode": format!("{:?}", r.config.present_mode),
@@ -660,9 +671,30 @@ impl Game<'_> {
             "generated_chunks": self.streaming.generated_total,
             "meshed_sections": self.streaming.meshed_total,
             "renderer": renderer,
+            "display": self.window.as_ref().and_then(|w| w.current_monitor()).map(|m| json!({
+                "width": m.size().width,
+                "height": m.size().height,
+                "scale": m.scale_factor(),
+                "refresh_hz": m.refresh_rate_millihertz().map(|r| r.div_ceil(1000)),
+            })),
             "uptime_seconds": self.started.elapsed().as_secs_f64(),
             "server": self.remote_status(),
         })
+    }
+}
+
+/// PCI vendor IDs of the GPU makers players have (Apple's is wgpu's Metal value).
+fn vendor_name(id: u32) -> String {
+    match id {
+        0x10de => "nvidia".into(),
+        0x1002 | 0x1022 => "amd".into(),
+        0x8086 => "intel".into(),
+        0x106b => "apple".into(),
+        0x5143 => "qualcomm".into(),
+        0x13b5 => "arm".into(),
+        0x10005 => "mesa".into(),
+        0 => String::new(),
+        other => format!("{other:#06x}"),
     }
 }
 

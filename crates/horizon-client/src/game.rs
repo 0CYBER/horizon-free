@@ -217,6 +217,8 @@ struct Options {
     /// `--dedicated`: run as a dedicated server; vanilla's server arguments
     /// (`--nogui`, `--port`, `--world`, `--universe`, `--initSettings`) follow.
     dedicated: Option<Vec<String>>,
+    /// `--benchmark SCENARIO`: run the benchmark, write its report and quit.
+    benchmark: Option<String>,
 }
 impl Options {
     /// The name to join servers with: the one given, else the offline name kept
@@ -265,6 +267,7 @@ impl Options {
                 .ok()
                 .filter(|n| !n.is_empty()),
             dedicated: None,
+            benchmark: None,
         };
         let mut session_file = std::env::var("HORIZON_SESSION_FILE").ok();
         let mut args = std::env::args().skip(1);
@@ -272,7 +275,7 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Horizon — Minecraft Java Edition 26.3 in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause."
+                        "Horizon — Minecraft Java Edition 26.3 in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause."
                     );
                     return Ok(None);
                 }
@@ -314,6 +317,15 @@ impl Options {
                         "--smoke-report" => o.report = Some(value.into()),
                         "--screenshot-after" => o.screenshot_after = Some(value.parse()?),
                         "--world" => o.world = Some(value),
+                        "--benchmark" => {
+                            if horizon_client::benchmark::scenes(&value).is_none() {
+                                return Err(format!(
+                                    "unknown benchmark {value}: standard, village, forest, ocean or mountain"
+                                )
+                                .into());
+                            }
+                            o.benchmark = Some(value);
+                        }
                         "--server" => o.server = Some(value),
                         "--name" => o.player_name = Some(value),
                         "--session-file" => session_file = Some(value),
@@ -9620,12 +9632,43 @@ pub fn run() -> Result<()> {
         player_model: None,
     };
     game.ui.vanilla_root = vanilla_root;
+    if game.options.benchmark.is_some() {
+        // The same conditions on every machine: no VSync, no frame cap, no
+        // pause or idle limit without focus. In memory only, never saved.
+        game.settings.vsync = false;
+        game.settings.max_fps = 260;
+        game.settings.inactivity_fps_limit = "minimized".into();
+        game.options.no_pause = true;
+    }
     game.apply_settings();
     if let Some(path) = &game.options.control {
         let server = horizon_client::control::Server::start(path)
             .map_err(|e| format!("control socket {}: {e}", path.display()))?;
         log::info!("Horizon: control socket {}", server.path().display());
         game.control = Some(server);
+    }
+    if let Some(scenario) = game.options.benchmark.clone() {
+        let control = game
+            .control
+            .get_or_insert_with(horizon_client::control::Server::local);
+        horizon_client::benchmark::start(
+            control.sender(),
+            horizon_client::benchmark::Setup {
+                scenario,
+                started,
+                app: horizon_bench::App {
+                    name: "horizon-client".into(),
+                    version: horizon_client::crash::version(),
+                    commit: option_env!("HORIZON_COMMIT").map(str::to_owned),
+                    mods: Vec::new(),
+                },
+                simulation_distance: game.settings.simulation_distance as u32,
+                vsync: false,
+                fps_cap: None,
+                offscreen: game.options.offscreen,
+                game_dir: std::env::current_dir()?,
+            },
+        );
     }
     if let Ok(spec) = std::env::var("HORIZON_DISPENSE_FIXTURE") {
         return game.dispense_fixture(&spec);

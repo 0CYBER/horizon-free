@@ -105,6 +105,20 @@ pub fn keep_crash(home: &Path, report: &crate::crash::Report) {
     }
 }
 
+/// Keeps a benchmark report (`--benchmark`) for the launcher to send, if the player allows
+/// benchmark uploads: the report as docs/benchmark-report.md defines it, dated to the day.
+pub fn keep_benchmark(home: &Path, report: &horizon_bench::Report) {
+    let Ok(data) = serde_json::to_value(report.for_upload()) else {
+        return;
+    };
+    if let Err(e) = outbox::push(
+        home,
+        &Item::new(Source::Game, version(), Payload::Benchmark(data)),
+    ) {
+        log::warn!("Horizon: could not keep the benchmark report to send: {e}");
+    }
+}
+
 /// One play session's performance, from entering a world to leaving it: frame and tick
 /// times as [`Timings`] (fixed size whatever the length), never the frames themselves.
 #[derive(Default)]
@@ -301,6 +315,39 @@ mod tests {
             panic!("a crash item");
         };
         assert!(crash.stack.lines().count() > 100);
+    }
+
+    #[test]
+    fn benchmark_reports_need_their_own_consent_and_go_dated_to_the_day() {
+        let home = home("benchmark");
+        let mut report = horizon_bench::Report::new(horizon_bench::Kind::Game, Default::default());
+        report.created = "2026-10-15T14:03:27Z".into();
+        report.label = Some("my machine".into());
+        keep_benchmark(&home, &report);
+        allow(
+            &home,
+            Choices {
+                performance: true,
+                ..Choices::NONE
+            },
+        );
+        keep_benchmark(&home, &report);
+        assert!(outbox::pending(&home).is_empty());
+        allow(
+            &home,
+            Choices {
+                benchmarks: true,
+                ..Choices::NONE
+            },
+        );
+        keep_benchmark(&home, &report);
+        let pending = outbox::pending(&home);
+        assert_eq!(pending.len(), 1);
+        let text = serde_json::to_string(&pending[0].1).unwrap();
+        assert!(
+            text.contains("2026-10-15T00:00:00Z") && !text.contains("my machine"),
+            "{text}"
+        );
     }
 
     #[test]

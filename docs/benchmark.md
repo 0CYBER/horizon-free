@@ -32,6 +32,18 @@ One game is started per render distance (8, 16 and 32 chunks by default), each f
 - **World generation is the same algorithm but not the same threads.** Both generate the same terrain (the parity harnesses check it), with their own threading; the work per chunk differs, which is also part of what is being compared.
 - **Variance.** Flights are short (12 seconds), so each configuration runs `--repeats` times (3 by default), each from a fresh world, and every figure is reported as the mean over the repeats with its standard deviation and 95% confidence interval (Student's t). Differences inside the intervals are noise. Lows are the noisiest figures.
 
+## Benchmark your own machine
+
+The game runs the Horizon half of this benchmark by itself, with nothing else installed:
+
+```sh
+horizon-client --benchmark standard --render-distance 16
+```
+
+It starts at the title screen, creates the world `horizon-benchmark` (seed 1234, creative; the next run replaces it, and it never touches a world it didn't create), flies the four scenes as above, writes a report to `benchmarks/` in the game folder and quits. `--benchmark village` (or `forest`, `ocean`, `mountain`) flies one scene. For the run only, VSync is off, the frame rate unlimited and the game doesn't pause or slow down without focus; your options are not changed. Your other settings (render distance unless given, graphics, window size) are used as they are, and stored in the report, so compare reports with the same conditions.
+
+The report is the [benchmark report format](benchmark-report.md): startup to the title screen and to in-world, each scene's chunk load time, chunks generated and section meshes built, every flight's frame figures and histogram, resident and GPU memory, the binary's size, and the machine (OS, CPU, RAM, GPU, driver, backend, display), the load average before the run and whether it ran on battery. If you allowed benchmark uploads (the launcher's data collection choices, [docs/telemetry.md](telemetry.md)), the same report, dated to the day and without local fields, is kept for the launcher to send; otherwise it stays on your machine.
+
 ## Reproduce it
 
 You need Horizon built (`cargo build --release -p horizon-client --bins`) and its resources prepared from your own copy of 26.3 (which also provides `.local/minecraft/26.3`, the vanilla client the driver starts), Java 25 with `javac`, and Python 3.10 or newer.
