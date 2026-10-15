@@ -197,8 +197,16 @@ fn commands_need_allow_commands() {
     assert_eq!(e.message.plain(), "command.unknown.command");
     assert!(d.parse("me waves", &reg).executable().is_ok());
     let parse = d.parse("", &reg);
+    // Brigadier itself lists every literal; the chat's (client tree) only
+    // the ones the player may use.
+    assert!(
+        d.suggestions(&parse, 0, &reg)
+            .1
+            .iter()
+            .any(|s| s.text == "gamemode")
+    );
     let root: Vec<String> = d
-        .suggestions(&parse, 0, &reg)
+        .client_suggestions(&parse, 0, &reg)
         .1
         .into_iter()
         .map(|s| s.text)
