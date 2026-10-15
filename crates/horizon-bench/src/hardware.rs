@@ -60,6 +60,87 @@ impl Hardware {
     }
 }
 
+/// The one-minute load average: above about the number of threads the machine was busy.
+pub fn load_average() -> Option<f64> {
+    if cfg!(target_os = "macos") {
+        // "{ 1.23 1.10 1.00 }"
+        output("sysctl", &["-n", "vm.loadavg"])?
+            .trim_start_matches('{')
+            .split_whitespace()
+            .next()?
+            .parse()
+            .ok()
+    } else {
+        std::fs::read_to_string("/proc/loadavg")
+            .ok()?
+            .split_whitespace()
+            .next()?
+            .parse()
+            .ok()
+    }
+}
+
+/// `ac` or `battery`; `None` where it can't be read (and on machines without a battery on Linux).
+pub fn power_source() -> Option<&'static str> {
+    if cfg!(target_os = "macos") {
+        let batt = output("pmset", &["-g", "batt"])?;
+        return Some(if batt.contains("'Battery Power'") {
+            "battery"
+        } else {
+            "ac"
+        });
+    }
+    let mut on_battery = None;
+    for entry in std::fs::read_dir("/sys/class/power_supply").ok()?.flatten() {
+        let read =
+            |name: &str| std::fs::read_to_string(entry.path().join(name)).unwrap_or_default();
+        match read("type").trim() {
+            "Mains" if read("online").trim() == "1" => return Some("ac"),
+            "Battery" => on_battery = Some("battery"),
+            _ => {}
+        }
+    }
+    on_battery
+}
+
+/// Resident memory of a process, in bytes (macOS, Linux).
+pub fn rss_bytes(pid: u32) -> Option<u64> {
+    if cfg!(target_os = "macos") {
+        return output("ps", &["-o", "rss=", "-p", &pid.to_string()])?
+            .parse::<u64>()
+            .ok()
+            .map(|kb| kb * 1024);
+    }
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    let line = status.lines().find(|l| l.starts_with("VmRSS:"))?;
+    line.split_whitespace()
+        .nth(1)?
+        .parse::<u64>()
+        .ok()
+        .map(|kb| kb * 1024)
+}
+
+/// CPU time a process has used, user and system, in seconds (macOS, Linux).
+pub fn cpu_seconds(pid: u32) -> Option<f64> {
+    if cfg!(target_os = "macos") {
+        // "[[dd-]hh:]mm:ss.cc"
+        let time = output("ps", &["-o", "time=", "-p", &pid.to_string()])?;
+        let (rest, days) = match time.split_once('-') {
+            Some((d, rest)) => (rest.to_owned(), d.parse::<f64>().ok()?),
+            None => (time, 0.0),
+        };
+        let seconds = rest.split(':').try_fold(0.0, |acc, part| {
+            part.parse::<f64>().ok().map(|v| acc * 60.0 + v)
+        })?;
+        return Some(days * 86_400.0 + seconds);
+    }
+    // utime and stime, fields 14 and 15, in clock ticks (100 per second on Linux).
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let fields: Vec<&str> = stat.rsplit_once(')')?.1.split_whitespace().collect();
+    let ticks: f64 = fields.get(11)?.parse::<f64>().ok()? + fields.get(12)?.parse::<f64>().ok()?;
+    Some(ticks / 100.0)
+}
+
 fn output(program: &str, args: &[&str]) -> Option<String> {
     let out = Command::new(program).args(args).output().ok()?;
     let text = String::from_utf8(out.stdout).ok()?.trim().to_owned();
@@ -170,6 +251,9 @@ mod tests {
             assert!(hw.cpu.is_some(), "{hw:?}");
             assert!(hw.ram_mb.unwrap() > 256, "{hw:?}");
             assert!(hw.os_version.is_some(), "{hw:?}");
+            assert!(load_average().is_some());
+            assert!(rss_bytes(std::process::id()).unwrap() > 1 << 20);
+            assert!(cpu_seconds(std::process::id()).unwrap() >= 0.0);
         }
     }
 }

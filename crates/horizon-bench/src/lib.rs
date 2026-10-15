@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 mod hardware;
 
-pub use hardware::{Display, Gpu, Hardware};
+pub use hardware::{cpu_seconds, load_average, power_source, rss_bytes, Display, Gpu, Hardware};
 
 pub const FORMAT: &str = "horizon-benchmark-report";
 pub const VERSION: u32 = 1;

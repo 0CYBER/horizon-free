@@ -79,18 +79,19 @@ confidence interval of the mean, Student's t, null when `n` is 1). The unit is t
 | `startup.title_ms` | process start to the first frame of the title screen |
 | `startup.world_ms` | process start to in-world, every chunk around the spawn loaded and drawn |
 | `chunks.<phase>.load_ms` | teleport to every chunk in view distance loaded and drawn |
-| `chunks.generated_per_s`, `chunks.meshed_per_s` | throughput while filling the view distance |
-| `chunks.meshes_per_section_count` | meshes built per section (re-meshing; 1 is ideal) |
+| `chunks.<phase>.generated_count`, `chunks.<phase>.meshed_count`, `chunks.<phase>.generated_per_s` | chunks generated and section meshes built while loading, and the rate |
 | `fps.<phase>.avg_fps`, `fps.<phase>.low_1pct_fps`, `fps.<phase>.low_01pct_fps` | per-phase figures across repeats |
-| `tick.mspt`, `tick.tps` | integrated server tick time and rate |
+| `tick.mspt`, `tick.tps` | integrated server tick time and rate (planned) |
 | `memory.rss_peak_mb`, `memory.rss_steady_mb` | resident memory: peak over the run, median while flying |
-| `memory.gpu_mb` | video memory the game allocated, where readable |
-| `power.package_w`, `power.battery_drain_pct` | power draw, battery used per hour (laptops) |
-| `thermal.cpu_c`, `thermal.throttled_pct` | temperature, share of the run spent throttled |
-| `launcher.cold_start_ms`, `launcher.warm_start_ms` | launcher process start to its first frame |
-| `launcher.rss_idle_mb`, `launcher.rss_peak_mb`, `launcher.cpu_idle_pct` | launcher memory and CPU |
+| `memory.gpu_mb`, `memory.<phase>.gpu_mb` | video memory the game allocated (or NVIDIA attributes to it), where readable |
+| `power.package_w`, `power.battery_drain_pct` | power draw, battery used per hour (laptops; planned) |
+| `thermal.cpu_c`, `thermal.throttled_pct` | temperature, share of the run spent throttled (planned) |
+| `launcher.start_ms` | launcher process start to its first frame (a session) |
+| `launcher.cold_start_ms`, `launcher.warm_start_ms` | the same in `horizon-launcher benchmark`: its first start, then the others |
+| `launcher.rss_mb`, `launcher.cpu_idle_pct` | launcher resident memory (sampled; `max` is the peak), CPU used while idle |
 | `launcher.release_list_ms` | fetching the release list |
-| `launcher.download_ms`, `launcher.install_ms`, `launcher.prepare_ms` | getting a build ready, with `conditions.scenario` `first-install`, `update` or `reuse` |
+| `launcher.install_ms`, `launcher.update_ms` | downloading and unpacking a version: a new one, an update |
+| `launcher.prepare_ms` | preparing a version's resources |
 | `launcher.play_to_game_frame_ms` | Play pressed to the game's first frame |
 | `launcher.binary_bytes`, `game.binary_bytes` | size of the executables |
 
