@@ -125,6 +125,7 @@ pub mod post;
 pub mod projectiles;
 pub mod raid;
 pub mod random_sequences;
+pub mod random_tick_sections;
 pub mod recipe_book;
 pub mod recipe_book_screen;
 pub mod reconnect;

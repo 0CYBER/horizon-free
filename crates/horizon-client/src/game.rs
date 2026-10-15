@@ -863,6 +863,7 @@ struct Game<'a> {
     end: end::EndState,
     block_ticks: Ticks,
     tick_chunks: horizon_client::tick_chunk_membership::TickChunkMembership,
+    random_tick_sections: horizon_client::random_tick_sections::RandomTickSections,
     level_events: Vec<LevelEvent>,
     falling: Vec<FallingBlock>,
     paintings: Vec<horizon_client::entities::Painting>,
@@ -1618,6 +1619,7 @@ impl Game<'_> {
             self.register_chunk_ticks(key);
         }
         for &key in self.tick_chunks.removed() {
+            self.random_tick_sections.remove(&key);
             self.block_ticks
                 .remove_chunk(horizon_core::position::ChunkPos::new(key.0, key.1));
         }
@@ -1641,19 +1643,10 @@ impl Game<'_> {
             if (x - pcx).abs() > simulation || (z - pcz).abs() > simulation || !chunk.lit {
                 continue;
             }
-            // LevelChunkSection.isRandomlyTicking: a randomly ticking block or
-            // fluid state (lava reports both through LiquidBlock). The palette
-            // stands in for vanilla's exact counts.
-            let sections: Vec<i32> = chunk
-                .sections
-                .iter()
-                .enumerate()
-                .filter(|(_, s)| {
-                    s.blocks
-                        .maybe_has(|id| facts.get(BlockStateId(id)).random_ticks)
-                })
-                .map(|(i, _)| MIN_Y + i as i32 * 16)
-                .collect();
+            // Capture eligibility before inside-block and scheduled updates, as
+            // before. Keep the world map's chunk order, including empty chunks
+            // (tick_chunk_random still draws for precipitation in those).
+            let sections = self.random_tick_sections.get((x, z), chunk, facts);
             ticking.push((x, z, sections));
         }
         // Entity.checkInsideBlocks for the plates, tripwires and detector rails
@@ -9753,6 +9746,7 @@ pub fn run() -> Result<()> {
         end: Default::default(),
         block_ticks: Ticks::new(0),
         tick_chunks: Default::default(),
+        random_tick_sections: Default::default(),
         level_events: Vec::new(),
         falling: Vec::new(),
         paintings: Vec::new(),
