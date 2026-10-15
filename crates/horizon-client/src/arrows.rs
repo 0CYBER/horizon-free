@@ -1,8 +1,9 @@
 //! `AbstractArrow.tick` for arrows, tipped and spectral arrows: the flight with
 //! its water inertia and bubbles, the base tick's fluids (currents, splash),
 //! bubble columns and water along the path, sticking in blocks, falling out
-//! when the block goes, and despawning. Entity hits and their effects stay
-//! with the game (`projectile_hit`).
+//! when the block goes, and despawning. The tick stops at an entity it hits:
+//! the game hurts the entity (`projectile_hit`), then `finish_entity_hit`
+//! spends the arrow or turns it back and ends the tick.
 use crate::{
     blocks::BlockFacts,
     collisions::SceneCollisions,
@@ -113,6 +114,9 @@ pub enum ArrowEvent {
     /// The SPLASH and PROJECTILE_SHOOT game events.
     SplashEvent,
     ShootEvent,
+    /// `spawnAtLocation(pickupItem, 0.1)`: a turned-back arrow too slow to fly
+    /// on drops what picking it up gives.
+    Drop,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArrowParticle {
@@ -124,7 +128,7 @@ pub enum ArrowParticle {
 pub enum ArrowSound {
     /// `entity.generic.splash` (an arrow's splash and high-speed splash).
     Splash,
-    /// The arrow's hit-ground sound (`entity.arrow.hit`).
+    /// The arrow's `soundEvent` (`entity.arrow.hit`), for blocks and entities.
     HitGround,
     /// `entity.generic.extinguish_fire`.
     Extinguish,
@@ -382,14 +386,17 @@ fn signum(v: f64) -> f64 {
         v
     }
 }
-/// One arrow tick: whether to keep it and what it hit.
+/// One arrow tick: whether to keep it and what it hit. An arrow that hit an
+/// entity stops there and is not kept: the game hands it to
+/// `finish_entity_hit` once it has hurt the entity.
 pub fn tick(p: &mut Projectile, scene: &ArrowScene, targets: &[(Who, Aabb)]) -> (bool, Hit) {
     let Some(mut st) = p.arrow.take() else {
         return (false, Hit::None);
     };
     // Entity.setOldPosAndRot: the renderer interpolates from here, in flight
-    // and stuck alike.
+    // and stuck alike; ServerLevel.tickNonPassenger counts the tick.
     p.previous = p.position;
+    p.age += 1;
     let hit = Ticker {
         p,
         st: &mut st,
@@ -397,9 +404,43 @@ pub fn tick(p: &mut Projectile, scene: &ArrowScene, targets: &[(Who, Aabb)]) -> 
     }
     .tick(targets);
     p.stuck = st.in_ground;
-    let keep = !st.removed;
+    let keep = !st.removed && !matches!(hit, Hit::Entity { .. });
     p.arrow = Some(st);
     (keep, hit)
+}
+/// What became of the entity an arrow hit (`AbstractArrow.onHitEntity`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EntityHit {
+    /// `hurtOrSimulate` succeeded: the arrow is spent, with its hit sound.
+    Hurt,
+    /// It failed (a raised shield, invulnerability): the arrow turns back.
+    Refused,
+    /// The entity turned it first (`Entity.deflection`: breezes).
+    Deflected,
+}
+/// The rest of the tick of an arrow that hit an entity: whether to keep it.
+pub fn finish_entity_hit(p: &mut Projectile, scene: &ArrowScene, outcome: EntityHit) -> bool {
+    let Some(mut st) = p.arrow.take() else {
+        return false;
+    };
+    let mut ticker = Ticker {
+        p,
+        st: &mut st,
+        scene,
+    };
+    match outcome {
+        EntityHit::Hurt => {
+            ticker.hit_sound();
+            ticker.st.removed = true;
+        }
+        EntityHit::Refused => ticker.turn_back(),
+        EntityHit::Deflected => {}
+    }
+    ticker.finish();
+    p.stuck = st.in_ground;
+    let keep = !st.removed;
+    p.arrow = Some(st);
+    keep
 }
 struct Ticker<'p, 's, 'a, 'r> {
     p: &'p mut Projectile,
@@ -517,10 +558,20 @@ impl Ticker<'_, '_, '_, '_> {
         );
         if physics {
             hit = self.step_move_and_hit(original, end, targets);
+            if matches!(hit, Hit::Entity { .. }) {
+                return hit;
+            }
         } else {
             self.p.position = end;
             self.apply_effects_from_blocks(original, end);
         }
+        self.finish();
+        hit
+    }
+    /// The end of a tick in flight: drag and gravity, then `Projectile.tick`
+    /// and `Entity.baseTick`'s fluid and fire phases.
+    fn finish(&mut self) {
+        let physics = !self.st.no_physics;
         if !self.st.was_touching_water {
             self.p.velocity = self.p.velocity.scale(f64::from(0.99f32));
         }
@@ -547,7 +598,6 @@ impl Ticker<'_, '_, '_, '_> {
             self.st.removed = true;
         }
         self.st.first_tick = false;
-        hit
     }
     /// `getDeltaMovement().add(0, y, 0)`: the zeros added to x and z also
     /// turn a negative zero positive.
@@ -589,16 +639,23 @@ impl Ticker<'_, '_, '_, '_> {
         self.st.life = 0;
     }
     /// `AbstractArrow.stepMoveAndHit`: the nearest entity on the way, else the
-    /// block (not piercing: the game removes an arrow that hits an entity).
+    /// block (piercing is not modelled).
     fn step_move_and_hit(&mut self, from: Vec3, to: Vec3, targets: &[(Who, Aabb)]) -> Hit {
         let block = self.scene.clip(from, to);
         let end = block.map_or(to, |b| b.0);
+        // findHitEntities: ProjectileUtil.computeMargin and the search box.
+        let margin = f64::from(((self.p.age as i32 - 2) as f32 / 20.0).clamp(0.0, 0.3));
+        let area = bounds(from)
+            .expand_towards(self.p.velocity)
+            .inflate(Vec3::new(1.0, 1.0, 1.0));
         let mut best: Option<(Who, Vec3, f64)> = None;
         for (who, b) in targets {
-            if Some(*who) == self.p.owner && !self.p.left_owner {
+            if Some(*who) == self.p.owner && !self.p.left_owner || !b.intersects(area) {
                 continue;
             }
-            if let Some(at) = b.inflate(Vec3::new(0.3, 0.3, 0.3)).clip(from, end) {
+            if let Some(at) = self.entity_hit(b, from, end, margin) {
+                // Sorted by the distance to the entity's position (the
+                // stable sort keeps the first of equals).
                 let c = b.center();
                 let d = from.distance_squared(Vec3::new(c.x, b.min_position().y, c.z));
                 if best.is_none_or(|bb| d < bb.2) {
@@ -610,8 +667,6 @@ impl Ticker<'_, '_, '_, '_> {
         self.p.position = next;
         self.apply_effects_from_blocks(from, next);
         if let Some((who, at, _)) = best {
-            // The game hurts it; the arrow is spent (piercing is not modelled).
-            self.st.removed = true;
             return Hit::Entity { who, at };
         }
         let Some((at, pos, face)) = block else {
@@ -629,6 +684,49 @@ impl Ticker<'_, '_, '_, '_> {
             pos: [pos.x, pos.y, pos.z],
             at,
             face,
+        }
+    }
+    /// `ProjectileUtil.getManyEntityHitResult` for one entity box: where the
+    /// path enters it, else where it enters the box grown by `margin`, if a
+    /// line from there towards the centre (stopped by blocks) reaches the box.
+    fn entity_hit(&self, b: &Aabb, from: Vec3, to: Vec3, margin: f64) -> Option<Vec3> {
+        if let Some(at) = b.clip(from, to) {
+            return Some(at);
+        }
+        if margin <= 0.0 {
+            return None;
+        }
+        let outside = b
+            .inflate(Vec3::new(margin, margin, margin))
+            .clip(from, to)?;
+        let centre = b.center();
+        let towards = self.scene.clip(outside, centre).map_or(centre, |h| h.0);
+        b.clip(outside, towards).map(|_| outside)
+    }
+    /// `playSound(soundEvent, 1, 1.2 / (random * 0.2 + 0.9))`.
+    fn hit_sound(&mut self) {
+        let pitch = 1.2 / (self.st.random.next_float() * 0.2 + 0.9);
+        self.st.events.push(ArrowEvent::Sound {
+            sound: ArrowSound::HitGround,
+            volume: 1.0,
+            pitch,
+        });
+    }
+    /// `onHitEntity` when the entity took no damage: `deflect(REVERSE, 0.2)`,
+    /// a half turn give or take ten degrees at a tenth of the speed; one
+    /// left almost still drops its pickup (ALLOWED) and is discarded.
+    fn turn_back(&mut self) {
+        let power = 0.2;
+        let rotation = 170.0 + self.st.random.next_float() * 20.0;
+        let v = self.p.velocity;
+        let k = -power * 0.5;
+        self.p.velocity = Vec3::new(v.x * k, v.y * k, v.z * k);
+        self.p.yaw += rotation;
+        if self.p.velocity.length_squared() < 1.0e-7 {
+            if self.st.pickup == Pickup::Allowed {
+                self.st.events.push(ArrowEvent::Drop);
+            }
+            self.st.removed = true;
         }
     }
     /// `AbstractArrow.onHitBlock`: back off the face by 0.05 along each axis
@@ -649,12 +747,7 @@ impl Ticker<'_, '_, '_, '_> {
             self.p.position.z - signum(v.z) * offset,
         );
         self.p.velocity = Vec3::ZERO;
-        let pitch = 1.2 / (self.st.random.next_float() * 0.2 + 0.9);
-        self.st.events.push(ArrowEvent::Sound {
-            sound: ArrowSound::HitGround,
-            volume: 1.0,
-            pitch,
-        });
+        self.hit_sound();
         self.st.in_ground = true;
         self.st.shake = 7;
         self.p.set_critical(false);

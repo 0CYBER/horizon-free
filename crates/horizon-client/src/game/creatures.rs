@@ -5,6 +5,7 @@
 use super::{Dim, Game, view_vector};
 use horizon_client::{
     Result,
+    arrows::EntityHit,
     blocks::Fluid,
     collisions::SceneCollisions,
     items::ItemStack,
@@ -25,14 +26,16 @@ use horizon_core::{
 use std::sync::Arc;
 
 /// The world impact sound after successful arrow damage, including self-shots.
-fn arrow_impact_sound(
-    random: &mut impl RandomSource,
-    hurt: bool,
-) -> Option<(&'static str, f32, f32)> {
-    hurt.then(|| {
-        let pitch = 1.2 / (random.next_float() * 0.2 + 0.9);
-        ("minecraft:entity.arrow.hit", 1.0, pitch)
-    })
+/// `AbstractArrow.onHitEntity`'s damage: the crit bonus comes from the
+/// arrow's own random.
+fn arrow_damage(arrow: &mut Projectile, fallback: &mut impl RandomSource) -> f32 {
+    let mut state = arrow.arrow.take();
+    let damage = match state.as_mut() {
+        Some(a) => arrow.arrow_damage(&mut a.random),
+        None => arrow.arrow_damage(fallback),
+    };
+    arrow.arrow = state;
+    damage
 }
 
 /// Mob-system state owned by the game.
@@ -1528,20 +1531,8 @@ impl Game<'_> {
                 self.world.random.next_float()
             };
             let w = self.mob_world_base(&[]);
-            // Level.isRainingAt: raining, open to the sky (the biome's
-            // precipitation is not checked here).
-            let (raining, world) = (w.raining, w.world);
-            let rain = move |p: BlockPos| raining && world.light(p.x, p.y, p.z) >> 4 == 15;
-            let scene = horizon_client::arrows::ArrowScene {
-                world: w.world,
-                registry: w.registry,
-                facts: w.facts,
-                collision: w.collision,
-                fluids: &self.motion.fluids,
-                raining: &rain,
-                mob_griefing: self.ui.rules.bool("mob_griefing"),
-                tnt_explodes: self.ui.rules.bool("tnt_explodes"),
-            };
+            let rain = self.arrow_rain();
+            let scene = self.arrow_scene(&rain);
             // Arrows also hit minecarts (VehicleEntity is pickable).
             let mut arrow_targets = targets.clone();
             arrow_targets.extend(self.carts.iter().map(|c| (Who::Mob(c.id), c.bounds())));
@@ -1568,8 +1559,10 @@ impl Game<'_> {
                     && breezes.contains(&id)
                 {
                     super::wind::reverse(p, jitter);
-                    if let Some(a) = p.arrow.as_mut() {
-                        a.removed = false;
+                    if p.arrow.is_some() {
+                        horizon_client::arrows::finish_entity_hit(p, &scene, EntityHit::Deflected);
+                        let a = p.arrow.as_mut().expect("an arrow");
+                        arrow_events.extend(a.events.drain(..).map(|e| (p.position, e)));
                     }
                     deflections.push([at.x, at.y, at.z]);
                     return true;
@@ -1680,7 +1673,53 @@ impl Game<'_> {
             ArrowEvent::SplashEvent => {
                 self.projectile_event("minecraft:splash", None, [at.x, at.y, at.z]);
             }
-            ArrowEvent::ShootEvent => {}
+            // finish_arrow_hit drops the pickup, which it holds.
+            ArrowEvent::ShootEvent | ArrowEvent::Drop => {}
+        }
+    }
+    /// `Level.isRainingAt` for arrows: raining, open to the sky (the biome's
+    /// precipitation is not checked here).
+    fn arrow_rain(&self) -> impl Fn(BlockPos) -> bool + '_ {
+        let raining = self.world.weather.levels(1.0).0 > 0.2;
+        move |p: BlockPos| raining && self.world.light(p.x, p.y, p.z) >> 4 == 15
+    }
+    /// The level as arrows see it.
+    fn arrow_scene<'s>(
+        &'s self,
+        rain: &'s dyn Fn(BlockPos) -> bool,
+    ) -> horizon_client::arrows::ArrowScene<'s, 's> {
+        horizon_client::arrows::ArrowScene {
+            world: &self.world,
+            registry: self.res.assets.registry,
+            facts: &self.res.facts,
+            collision: self.collision,
+            fluids: &self.motion.fluids,
+            raining: rain,
+            mob_griefing: self.ui.rules.bool("mob_griefing"),
+            tnt_explodes: self.ui.rules.bool("tnt_explodes"),
+        }
+    }
+    /// The rest of the tick of an arrow that hit an entity
+    /// (`arrows::finish_entity_hit`): its sounds and drop, and back among the
+    /// projectiles if it flies on.
+    fn finish_arrow_hit(&mut self, mut arrow: Projectile, outcome: EntityHit) {
+        let keep = {
+            let rain = self.arrow_rain();
+            horizon_client::arrows::finish_entity_hit(&mut arrow, &self.arrow_scene(&rain), outcome)
+        };
+        let Some(a) = arrow.arrow.as_mut() else {
+            return;
+        };
+        let (events, item) = (std::mem::take(&mut a.events), a.pickup_item.clone());
+        for event in events {
+            if event == horizon_client::arrows::ArrowEvent::Drop {
+                self.spawn_at_location(arrow.position, f64::from(0.1f32), item.clone());
+            } else {
+                self.arrow_event(arrow.position, event);
+            }
+        }
+        if keep {
+            self.creatures.projectiles.push(arrow);
         }
     }
     fn projectile_hit(&mut self, p: &Projectile, hit: Hit) -> Result<()> {
@@ -1720,14 +1759,12 @@ impl Game<'_> {
             && let Some(i) = self.carts.iter().position(|c| c.id == id)
         {
             // AbstractArrow.onHitEntity on a minecart.
-            let amount = p.arrow_damage(&mut self.world.random) + p.bonus.damage;
+            let mut arrow = p.clone();
+            let amount = arrow_damage(&mut arrow, &mut self.world.random) + p.bonus.damage;
             let burning = p.arrow.as_ref().is_some_and(|a| a.on_fire());
             let creative = p.owner == Some(Who::Player) && self.creative;
             self.arrow_hits_cart(i, amount, p.velocity, burning, creative);
-            if let Some((sound, volume, pitch)) = arrow_impact_sound(&mut self.world.random, true) {
-                self.audio
-                    .play(sound, Some([at.x, at.y, at.z]), volume, pitch);
-            }
+            self.finish_arrow_hit(arrow, EntityHit::Hurt);
             return Ok(());
         }
         let atp = [at.x, at.y, at.z];
@@ -1747,16 +1784,9 @@ impl Game<'_> {
         };
         match (&p.kind, hit) {
             (ProjectileKind::Arrow { effect, .. }, Hit::Entity { who, .. }) => {
-                let amount = p.arrow_damage(&mut self.world.random) + p.bonus.damage;
-                // Punch pushes along the flight, Flame burns for five seconds.
-                let flight = (p.velocity.x * p.velocity.x + p.velocity.z * p.velocity.z).sqrt();
-                if p.bonus.punch > 0 && flight > 1e-6 {
-                    let k = f64::from(p.bonus.punch) * 0.6 / flight;
-                    self.handle_mob_events(vec![MobEvent::Push {
-                        target: who,
-                        velocity: [p.velocity.x * k, 0.1, p.velocity.z * k],
-                    }])?;
-                }
+                let mut arrow = p.clone();
+                let amount = arrow_damage(&mut arrow, &mut self.world.random) + p.bonus.damage;
+                let player_fire = self.player.as_ref().map(|pl| pl.fire_ticks);
                 // AbstractArrow.onHitEntity: a burning arrow sets its target alight.
                 if p.arrow.as_ref().is_some_and(|a| a.on_fire()) {
                     self.handle_mob_events(vec![MobEvent::Ignite {
@@ -1788,10 +1818,27 @@ impl Game<'_> {
                         hurt
                     }
                 };
-                if let Some((sound, volume, pitch)) =
-                    arrow_impact_sound(&mut self.world.random, hurt)
-                {
-                    self.audio.play(sound, Some(atp), volume, pitch);
+                // doKnockback: Punch pushes along the flight.
+                let flight = (p.velocity.x * p.velocity.x + p.velocity.z * p.velocity.z).sqrt();
+                if hurt && p.bonus.punch > 0 && flight > 1e-6 {
+                    let k = f64::from(p.bonus.punch) * 0.6 / flight;
+                    self.handle_mob_events(vec![MobEvent::Push {
+                        target: who,
+                        velocity: [p.velocity.x * k, 0.1, p.velocity.z * k],
+                    }])?;
+                }
+                match (hurt, who) {
+                    (true, _) => self.finish_arrow_hit(arrow, EntityHit::Hurt),
+                    // What the player took no damage from (a raised shield)
+                    // keeps its fire as it was and turns the arrow back.
+                    (false, Who::Player) => {
+                        if let (Some(pl), Some(ticks)) = (self.player.as_mut(), player_fire) {
+                            pl.set_remaining_fire_ticks(ticks);
+                        }
+                        self.finish_arrow_hit(arrow, EntityHit::Refused);
+                    }
+                    // Mobs' refusals don't follow hurtServer yet: the arrow is gone.
+                    (false, Who::Mob(_)) => {}
                 }
             }
             // AbstractArrow.onHitBlock plays its sound itself (ArrowEvent).
@@ -2943,34 +2990,5 @@ impl Game<'_> {
             f64::from(pos[2]) + 0.5,
         ];
         let _ = self.spawn_mob("minecraft:zombified_piglin", at, false);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use horizon_core::random::LegacyRandom;
-
-    #[test]
-    fn arrow_impact_uses_world_sound_volume_and_seeded_pitch() {
-        let mut random = LegacyRandom::new(0);
-        assert_eq!(
-            arrow_impact_sound(&mut random, true),
-            Some((
-                "minecraft:entity.arrow.hit",
-                1.0,
-                f32::from_bits(0x3f92d167)
-            ))
-        );
-        let mut expected = LegacyRandom::new(0);
-        expected.next_float();
-        assert_eq!(random.next_float(), expected.next_float());
-    }
-
-    #[test]
-    fn rejected_arrow_damage_is_silent_without_drawing_pitch() {
-        let mut random = LegacyRandom::new(0);
-        assert_eq!(arrow_impact_sound(&mut random, false), None);
-        assert_eq!(random.next_float(), LegacyRandom::new(0).next_float());
     }
 }

@@ -20,9 +20,14 @@ burning and non-burning arrows; pickup: arrows from no one, a player or a mob,
 from intangible ammo (creative, Infinity, multishot extras) or a dispenser,
 touched in flight, while shaking and when stuck, by survival and creative
 players with empty, partly and fully filled inventories, and without physics.
-No entities to hit, no rain.
+Entities: a player-sized box in the way that takes the arrow's damage (the
+arrow is spent with its hit sound) or refuses it (a raised shield: the arrow
+turns back, and drops its pickup when left almost still), struck squarely or
+grazed within ProjectileUtil's margin, crits drawing from the arrow's random.
+No rain.
 """
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -181,6 +186,26 @@ def corpus():
         for creative in [False, True]:
             ops = ([op('owner', owner)] if owner else []) + [o for _ in range(4) for o in (op('tick'), touch(creative, 'empty'))]
             yield arrow((rng.uniform(18, 30), 6, rng.uniform(4, 30)), aim(.4, rng.uniform(-180, 180), 0), ops, no_physics=True)
+    # An entity in the way (a player-sized box on the floor) that takes or
+    # refuses the damage: squarely, grazing within the margin (older arrows),
+    # missing, and slow enough to drop on the spot.
+    def target(x, z, takes):
+        return op('target', position=vec((x, 4, z)), takes=takes)
+    for takes in [True, False]:
+        for _ in range(24):
+            tx, tz = rng.uniform(21, 27), rng.uniform(21, 27)
+            yaw, distance = rng.uniform(-180, 180), rng.uniform(1.5, 9)
+            start = (tx + math.sin(math.radians(yaw)) * distance, rng.uniform(4.2, 7.5), tz - math.cos(math.radians(yaw)) * distance)
+            aim_at = (tx + rng.uniform(-.75, .75), rng.uniform(4, 6.2), tz + rng.uniform(-.75, .75))
+            d = [aim_at[i] - start[i] for i in range(3)]
+            speed = rng.choice([.4, 1.1, 2.2, 3]) / math.sqrt(sum(c * c for c in d))
+            yield arrow(start, [c * speed for c in d], [target(tx, tz, takes)] + ticks(45), crit=rng.random() < .5)
+        for pickup in [0, 1]:
+            for speed in [.002, .03, .2]:
+                # Struck in the first tick; the slowest, turned back at a
+                # tenth of its speed, is left almost still and stops.
+                ops = [op('pickup', pickup), target(25.5, 25.5, takes)] + ticks(6)
+                yield arrow((25.199, 4.5, 25.5), (speed, 0, 0), ops)
     # Despawning 1200 ticks after sticking in the floor.
     for _ in range(2):
         yield arrow((rng.uniform(18, 30), 6, rng.uniform(4, 30)), (0, -1, 0), ticks(1215))
