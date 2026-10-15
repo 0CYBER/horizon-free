@@ -4714,6 +4714,12 @@ impl Game<'_> {
         self.physical_keys.contains(&KeyCode::ShiftLeft)
             || self.physical_keys.contains(&KeyCode::ShiftRight)
     }
+    /// `Minecraft.hasControlDown`: the physical Control keys, whatever the
+    /// sprint key is bound or toggled to.
+    pub(super) fn has_control_down(&self) -> bool {
+        self.physical_keys.contains(&KeyCode::ControlLeft)
+            || self.physical_keys.contains(&KeyCode::ControlRight)
+    }
     /// `hasClickedOutside` of the open screen at the cursor.
     fn clicked_outside(&self, batch: &HudBatch) -> bool {
         use horizon_client::container_screen::{Book, Image, clicked_outside};
@@ -7956,7 +7962,7 @@ impl Game<'_> {
         {
             return;
         }
-        let shift = self.keys.contains(&KeyCode::ShiftLeft);
+        let shift = self.has_shift_down();
         let items = self.creative_screen.items(&self.res.names);
         let first = self.creative_screen.first_row(&self.res.names);
         for r in 0..5 {

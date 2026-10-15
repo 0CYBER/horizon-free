@@ -629,7 +629,14 @@ impl Game<'_> {
                 "gpu_reserved_bytes": memory.as_ref().map(|m| m.total_reserved_bytes),
             })
         });
-        json!({
+        // The keyboard as the OS reports it (screens read Shift and Ctrl here).
+        let mut physical_keys: Vec<_> = self
+            .physical_keys
+            .iter()
+            .map(|k| format!("{k:?}"))
+            .collect();
+        physical_keys.sort();
+        let mut status = json!({
             "screen": self.screen_name(),
             "debug": {
                 "overlay": self.debug,
@@ -650,6 +657,7 @@ impl Game<'_> {
             "held": self.held().map(|s| json!({ "item": &*s.item, "count": s.count })),
             "offhand": self.offhand.as_ref().map(|s| json!({ "item": &*s.item, "count": s.count, "damage": s.damage })),
             "keys": self.keys.iter().map(|k| format!("{k:?}")).collect::<Vec<_>>(),
+            // The keyboard as the OS reports it (Shift and Ctrl in screens).
             "fps": self.fps,
             "frames": self.frames,
             "ticks": self.ticks,
@@ -681,7 +689,9 @@ impl Game<'_> {
             })),
             "uptime_seconds": self.started.elapsed().as_secs_f64(),
             "server": self.remote_status(),
-        })
+        });
+        status["physical_keys"] = json!(physical_keys);
+        status
     }
 }
 

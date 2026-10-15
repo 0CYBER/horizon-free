@@ -224,8 +224,7 @@ impl Game<'_> {
         let Some(slot) = self.slot_at(&batch, self.cursor.0, self.cursor.1) else {
             return true;
         };
-        let shift = self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft)
-            || self.keys.contains(&winit::keyboard::KeyCode::ShiftRight);
+        let shift = self.has_shift_down();
         if shift {
             self.mount_quick_move(slot);
         } else if slot >= SADDLE {
