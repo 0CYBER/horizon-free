@@ -129,8 +129,9 @@ pub struct Frame<'a> {
     pub dark_disc: bool,
     /// The hit block outline as line segments (from, to) in world space.
     pub outline: Vec<[f64; 6]>,
-    /// Debug gizmo lines (`gizmos::camera_relative`): depth tested, then
-    /// drawn over everything.
+    /// `lines` with a colour and pixel width (`gizmos::camera_relative`):
+    /// the fishing line and debug gizmos, depth tested, then gizmos drawn
+    /// over everything.
     pub debug_lines: &'a [[f32; 8]],
     pub debug_lines_on_top: &'a [[f32; 8]],
     pub hud: &'a HudBatch,

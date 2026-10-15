@@ -282,6 +282,13 @@ impl Game<'_> {
                 mob.body_yaw,
                 &mob.kind.id,
             );
+            // The local player's rod while its hook is out.
+            owner.fishing_cast_with_this_item = self.cast_rod().is_some()
+                && self.main_hand_rod() != left
+                && self
+                    .player_model
+                    .as_ref()
+                    .is_some_and(|p| std::ptr::eq(p, mob));
             if !left && mob.extra.using_item > 0 {
                 owner.using_this_item = true;
                 owner.use_duration = 72_000;

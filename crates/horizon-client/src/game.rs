@@ -7184,7 +7184,10 @@ impl Game<'_> {
                 );
             }
             Some(stack) => {
-                let owner = self.player_owner(Some(&stack));
+                let mut owner = self.player_owner(Some(&stack));
+                // The hand renderer's copy of the main hand stack.
+                owner.fishing_cast_with_this_item =
+                    self.main_hand_rod() && self.cast_rod() == Some(&stack);
                 let using = owner.using_this_item && owner.use_item_remaining_ticks > 0;
                 let ticks_used =
                     owner.use_duration as f32 - (owner.use_item_remaining_ticks as f32 - a + 1.0);
@@ -8047,18 +8050,19 @@ impl Game<'_> {
             sky.sky_color = [0.9, 0.9, 1.0];
             sky.sky_light_factor = 1.0;
         }
-        // DebugRenderer: chunk borders and hitboxes (F3+G, F3+B).
-        let (debug_lines, debug_lines_on_top) = if self.show_hitboxes || self.show_chunk_borders {
+        // FishingHookRenderer's line, then DebugRenderer: chunk borders and
+        // hitboxes (F3+G, F3+B).
+        let mut lines = self.fishing_line(alpha, size);
+        let mut on_top = Vec::new();
+        if self.show_hitboxes || self.show_chunk_borders {
             let g = self.debug_gizmos(alpha as f32);
-            let view = horizon_client::camera::view_matrix(view_yaw, view_pitch);
-            let at = camera.to_array();
-            (
-                horizon_client::gizmos::camera_relative(&g.lines, at, view),
-                horizon_client::gizmos::camera_relative(&g.on_top, at, view),
-            )
-        } else {
-            (Vec::new(), Vec::new())
-        };
+            lines.extend(g.lines);
+            on_top = g.on_top;
+        }
+        let view = horizon_client::camera::view_matrix(view_yaw, view_pitch);
+        let at = camera.to_array();
+        let debug_lines = horizon_client::gizmos::camera_relative(&lines, at, view);
+        let debug_lines_on_top = horizon_client::gizmos::camera_relative(&on_top, at, view);
         // LevelRenderer.renderHitOutline: the outline shape's edges.
         let outline = if self.screen == Screen::Playing && !self.spectator() {
             self.pick()
