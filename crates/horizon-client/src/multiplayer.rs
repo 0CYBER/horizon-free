@@ -4,6 +4,7 @@
 //! ServerStatusPinger to show the MOTD, player count and latency.
 use crate::hud::{HudAtlas, HudBatch, rgba};
 use crate::lan::discovery::Scanner;
+use crate::text::{Text, format_translation};
 use horizon_protocol::servers::{self, ServerEntry};
 use std::{
     collections::HashMap,
@@ -172,7 +173,66 @@ fn loading_dots(millis: u128) -> &'static str {
     ["O o o", "o O o", "o o O", "o O o"][(millis / 300 % 4) as usize]
 }
 
+fn ping_tooltip(
+    servers: &[ServerEntry],
+    pings: &HashMap<String, Ping>,
+    size: (f32, f32),
+    scroll: f32,
+    cursor: (f32, f32),
+) -> Option<Text> {
+    let Row::Server(i) = row_at(servers.len(), 0, cursor, size, scroll)? else {
+        return None;
+    };
+    let (top, _, left) = list_area(size.0, size.1);
+    let x = left + 2.0 + ROW_WIDTH - 4.0 - 15.0;
+    let y = top + 4.0 - scroll.trunc() + i as f32 * ROW_HEIGHT;
+    if cursor.0 < x || cursor.0 >= x + 10.0 || cursor.1 < y || cursor.1 >= y + 8.0 {
+        return None;
+    }
+    Some(match pings.get(&servers[i].ip) {
+        Some(Ping::Ok { ms, .. }) => format_translation(
+            &crate::lang::get_or("multiplayer.status.ping", "%s ms"),
+            &[Text::literal(ms.to_string())],
+        ),
+        Some(Ping::Failed(_)) => Text::literal(crate::lang::get_or(
+            "multiplayer.status.no_connection",
+            "(no connection)",
+        )),
+        _ => Text::literal(crate::lang::get_or(
+            "multiplayer.status.pinging",
+            "Pinging...",
+        )),
+    })
+}
+
 impl Screen {
+    /// Draw after the list and footer so the tooltip is neither clipped nor covered.
+    pub fn draw_tooltip(&self, atlas: &HudAtlas, batch: &mut HudBatch, cursor: (f32, f32)) {
+        let Self::List {
+            servers,
+            pings,
+            lan,
+            scroll,
+            ..
+        } = self
+        else {
+            return;
+        };
+        let size = (batch.width.ceil(), batch.height.ceil());
+        let (top, bottom, _) = list_area(size.0, size.1);
+        let mut scroll = *scroll;
+        scroll.clamp(
+            top,
+            bottom,
+            content_height(servers.len(), lan.games().len()),
+        );
+        if let Some(text) =
+            ping_tooltip(servers, &pings.lock().unwrap(), size, scroll.amount, cursor)
+        {
+            crate::ui::tooltip(batch, atlas, &[text], cursor);
+        }
+    }
+
     /// The address of list row `row` (saved servers, then LAN games).
     pub fn address_of(&self, row: usize) -> Option<String> {
         match self {
@@ -992,6 +1052,62 @@ pub fn wrap(text: &str, width: f32, atlas: &HudAtlas) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ping_tooltip_follows_only_visible_status_bars_and_current_ping() {
+        let servers: Vec<_> = (0..6)
+            .map(|i| ServerEntry::new("Test", &format!("server{i}")))
+            .collect();
+        let mut pings = HashMap::new();
+        let size = (427.0, 240.0);
+        let hover = |pings: &HashMap<String, Ping>, scroll, cursor| {
+            ping_tooltip(&servers, pings, size, scroll, cursor).map(|t| t.plain())
+        };
+        // The first bar is at (349, 37), with a 10 by 8 hit area.
+        assert_eq!(
+            hover(&pings, 0.0, (349.0, 37.0)).as_deref(),
+            Some("Pinging...")
+        );
+        pings.insert(
+            "server0".into(),
+            Ping::Ok {
+                motd: String::new(),
+                players: String::new(),
+                ms: 42,
+                version: String::new(),
+            },
+        );
+        assert_eq!(hover(&pings, 0.0, (358.9, 44.9)).as_deref(), Some("42 ms"));
+        pings.insert("server1".into(), Ping::Pinging);
+        for cursor in [
+            (348.9, 37.0),
+            (359.0, 37.0),
+            (349.0, 36.9),
+            (349.0, 45.0),
+            (100.0, 40.0),
+            (349.0, 32.0),
+            (349.0, 181.0),
+        ] {
+            assert!(hover(&pings, 0.0, cursor).is_none(), "{cursor:?}");
+        }
+        // Scrolling moves the next row's bars into the same location.
+        assert_eq!(
+            hover(&pings, 36.0, (349.0, 37.0)).as_deref(),
+            Some("Pinging...")
+        );
+        assert_eq!(hover(&pings, 5.0, (349.0, 34.0)).as_deref(), Some("42 ms"));
+        assert!(hover(&pings, 36.0, (349.0, 33.0)).is_none());
+        assert!(hover(&pings, 0.0, (349.0, 179.0)).is_none());
+        assert!(hover(&pings, 216.0, (349.0, 37.0)).is_none()); // LAN header
+        pings.insert(
+            "server0".into(),
+            Ping::Failed("private connection error".into()),
+        );
+        assert_eq!(
+            hover(&pings, 0.0, (349.0, 37.0)).as_deref(),
+            Some("(no connection)")
+        );
+    }
 
     #[test]
     fn the_lan_header_follows_the_saved_servers() {
