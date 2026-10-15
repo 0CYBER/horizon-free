@@ -1286,6 +1286,7 @@ dependencies = [
 name = "horizon-dualsense"
 version = "0.1.0"
 dependencies = [
+ "cpal",
  "hidapi",
  "log",
 ]

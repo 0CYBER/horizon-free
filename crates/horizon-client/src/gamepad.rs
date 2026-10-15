@@ -950,6 +950,38 @@ impl Rumble {
             }),
         }
     }
+
+    /// The pulse shaped, for a pad that plays steps (a DualSense): a hit starts at full
+    /// strength and dies away, an explosion rolls on, a totem swells; a broken block is a tick.
+    pub fn shape(self) -> Vec<Pulse> {
+        let Some(p) = self.pulse() else {
+            return Vec::new();
+        };
+        let step = |level: f32, millis: u32| Pulse {
+            strong: p.strong * level,
+            weak: p.weak * level,
+            millis,
+        };
+        match self {
+            Rumble::BlockBroken => vec![Pulse { millis: 35, ..p }],
+            Rumble::Hurt(_) => {
+                let tail = p.millis.saturating_sub(50) / 2;
+                vec![step(1.0, 50), step(0.55, tail), step(0.25, tail)]
+            }
+            Rumble::Explosion { .. } => vec![
+                step(1.0, 80),
+                step(0.6, 150),
+                step(0.35, 150),
+                step(0.15, 150),
+            ],
+            Rumble::Totem => vec![
+                step(0.4, 100),
+                step(0.7, 100),
+                step(1.0, 200),
+                step(0.5, 100),
+            ],
+        }
+    }
 }
 
 /// What a trigger feels like on a DualSense, from what its action is doing (docs/controllers.md
@@ -1394,6 +1426,26 @@ mod tests {
             None
         );
         assert_eq!(Rumble::BlockBroken.pulse().unwrap().strong, 0.0);
+        // Shapes open at the pulse's strength and fade; nothing for what isn't felt.
+        for rumble in [
+            Rumble::Hurt(4.0),
+            Rumble::Explosion {
+                distance: 2.0,
+                radius: 4.0,
+            },
+        ] {
+            let (pulse, shape) = (rumble.pulse().unwrap(), rumble.shape());
+            assert_eq!(shape[0].strong, pulse.strong);
+            assert!(shape.windows(2).all(|w| w[1].strong < w[0].strong));
+        }
+        let hurt: u32 = Rumble::Hurt(4.0).shape().iter().map(|s| s.millis).sum();
+        assert!(hurt.abs_diff(Rumble::Hurt(4.0).pulse().unwrap().millis) <= 1);
+        assert_eq!(
+            Rumble::Totem.shape().iter().map(|s| s.millis).sum::<u32>(),
+            500
+        );
+        assert_eq!(Rumble::BlockBroken.shape()[0].millis, 35);
+        assert!(Rumble::Hurt(0.0).shape().is_empty());
     }
 
     #[test]

@@ -11,6 +11,8 @@ description = "The DualSense's output over HID: rumble, adaptive triggers, light
 # IOKit on macOS (opened shared, so gilrs keeps reading the pad), the HID API on Windows.
 hidapi = { version = "2.6.7", default-features = false, features = ["linux-static-hidraw", "macos-shared-device"] }
 log = "0.4"
+# HD haptics through the pad's own audio device (USB).
+cpal = "0.16"
 
 [lints]
 workspace = true
