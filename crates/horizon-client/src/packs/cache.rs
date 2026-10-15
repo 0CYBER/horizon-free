@@ -1,13 +1,14 @@
-//! Content-validated overlay reuse. Live symlink files/subtrees need no content
-//! scan; merged, extracted and copied bytes do. Topology and link targets are
-//! always checked, including vanilla directories materialized by mirror.
+//! Overlay reuse validated by source topology and filesystem stamps.
+//! Published output is an owned cache artifact; hits do not traverse its tree.
 use super::{Pack, Source, build_overlay_uncached};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeSet, fs, io, io::Read, path::Path, path::PathBuf};
+#[cfg(any(test, not(unix)))]
+use std::io::Read;
+use std::{collections::BTreeSet, fs, io, path::Path, path::PathBuf};
 
 // Bump when overlay/merge semantics change. Markers are disposable cache data.
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 
 #[derive(Default, Serialize, Deserialize)]
 pub(super) struct Dependencies {
@@ -47,7 +48,6 @@ struct Marker {
     vanilla: PathBuf,
     packs: String,
     dependencies: Dependencies,
-    output: String,
 }
 
 fn finish(hash: Sha256) -> String {
@@ -58,6 +58,7 @@ fn field(hash: &mut Sha256, bytes: &[u8]) {
     hash.update((bytes.len() as u64).to_le_bytes());
     hash.update(bytes);
 }
+#[cfg(any(test, not(unix)))]
 fn content(hash: &mut Sha256, path: &Path) -> io::Result<()> {
     let mut file = fs::File::open(path)?;
     hash.update(file.metadata()?.len().to_le_bytes());
@@ -68,6 +69,31 @@ fn content(hash: &mut Sha256, path: &Path) -> io::Result<()> {
             break;
         }
         hash.update(&buffer[..n]);
+    }
+    Ok(())
+}
+fn stamp(hash: &mut Sha256, path: &Path) -> io::Result<()> {
+    let meta = fs::metadata(path)?;
+    hash.update(meta.len().to_le_bytes());
+    field(hash, format!("{:?}", meta.modified()?).as_bytes());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        hash.update(meta.dev().to_le_bytes());
+        hash.update(meta.ino().to_le_bytes());
+        hash.update(meta.ctime().to_le_bytes());
+        hash.update(meta.ctime_nsec().to_le_bytes());
+    }
+    #[cfg(not(unix))]
+    {
+        // Portable metadata lacks a change timestamp. Preserve content-based
+        // validation for materialized files on those platforms.
+        if meta.is_file() {
+            return content(hash, path);
+        }
+        if let Ok(created) = meta.created() {
+            field(hash, format!("{created:?}").as_bytes());
+        }
     }
     Ok(())
 }
@@ -85,14 +111,10 @@ fn dependency_signature(path: &Path, directory: bool) -> io::Result<String> {
         Err(e) => return Err(e),
         Ok(meta) if directory && meta.is_dir() => {
             field(&mut hash, b"directory");
-            for entry in entries(path)? {
-                field(&mut hash, entry.file_name().unwrap().as_encoded_bytes());
-                // mirror's decisions use the followed file type, including symlinks.
-                field(&mut hash, &[u8::from(entry.is_dir())]);
-            }
+            stamp(&mut hash, path)?;
         }
         Ok(_) if directory => field(&mut hash, b"not-directory"),
-        Ok(_) => content(&mut hash, path)?,
+        Ok(_) => stamp(&mut hash, path)?,
     }
     Ok(finish(hash))
 }
@@ -114,7 +136,7 @@ fn needs_content(path: &Path, pack: Option<&Pack>) -> bool {
         .replace('\\', "/");
     // Ordinary folder resources are live Unix file symlinks. Rewrites and
     // replacements at that path are visible without rebuilding. Merged JSON
-    // and configuration bytes are materialized and need content validation.
+    // and configuration bytes are materialized and need stamp validation.
     relative == "pack.mcmeta"
         || super::merge_kind(&relative).is_some()
         || pack.overlays.iter().any(|overlay| {
@@ -164,11 +186,16 @@ fn tree_inner(
     } else {
         field(hash, b"file");
         if needs_content(path, pack) {
-            content(hash, path)?;
+            #[cfg(test)]
+            if pack.is_none() {
+                return content(hash, path);
+            }
+            stamp(hash, path)?;
         }
     }
     Ok(())
 }
+#[cfg(test)]
 fn output_signature(out: &Path) -> io::Result<String> {
     let mut hash = Sha256::new();
     tree(&mut hash, out, None)?;
@@ -203,8 +230,14 @@ fn pack_signature(packs: &[Pack]) -> io::Result<String> {
         field(&mut hash, format!("{:?}", pack.overlays).as_bytes());
         field(&mut hash, format!("{:?}", pack.filter).as_bytes());
         match &pack.source {
-            Source::Dir(path) => tree(&mut hash, path, Some(pack))?,
-            Source::Zip(path) => content(&mut hash, path)?,
+            Source::Dir(path) => {
+                field(&mut hash, absolute(path)?.as_os_str().as_encoded_bytes());
+                tree(&mut hash, path, Some(pack))?;
+            }
+            Source::Zip(path) => {
+                field(&mut hash, absolute(path)?.as_os_str().as_encoded_bytes());
+                stamp(&mut hash, path)?;
+            }
         }
     }
     Ok(finish(hash))
@@ -242,31 +275,18 @@ pub(super) fn build(vanilla: &Path, packs: &[Pack], out: &Path) -> io::Result<()
         .truncate(false)
         .open(lock_path(out))?;
     lock.lock()?;
-    // Absolute paths also prevent cwd changes from reusing relative symlinks.
-    // Keep root symlink aliases live, as mirror does for individual resources.
-    let vanilla = absolute(vanilla)?;
-    let packs: Vec<Pack> = packs
-        .iter()
-        .map(|pack| {
-            let mut pack = pack.clone();
-            match &mut pack.source {
-                Source::Dir(path) | Source::Zip(path) => {
-                    *path = absolute(path)?;
-                }
-            }
-            Ok(pack)
-        })
-        .collect::<io::Result<_>>()?;
+    // Resolve marker identity only; preserve the builder's original link targets.
+    let vanilla_key = absolute(vanilla)?;
     let marker_path = marker_path(out);
-    let signature = pack_signature(&packs);
+    let signature = pack_signature(packs);
     if let Ok(signature) = &signature
         && let Ok(bytes) = fs::read(&marker_path)
         && let Ok(marker) = serde_json::from_slice::<Marker>(&bytes)
         && marker.version == VERSION
-        && marker.vanilla == vanilla
+        && marker.vanilla == vanilla_key
         && marker.packs == *signature
         && marker.dependencies.valid()
-        && output_signature(out).is_ok_and(|s| s == marker.output)
+        && out.is_dir()
     {
         return Ok(());
     }
@@ -280,17 +300,16 @@ pub(super) fn build(vanilla: &Path, packs: &[Pack], out: &Path) -> io::Result<()
         tracking: signature.is_ok(),
         ..Dependencies::default()
     };
-    build_overlay_uncached(&vanilla, &packs, out, &mut dependencies)?;
+    build_overlay_uncached(vanilla, packs, out, &mut dependencies)?;
     if let Ok(signature) = signature
         && dependencies.valid()
-        && pack_signature(&packs).is_ok_and(|s| s == signature)
+        && pack_signature(packs).is_ok_and(|s| s == signature)
     {
         let marker = Marker {
             version: VERSION,
-            vanilla,
+            vanilla: vanilla_key,
             packs: signature,
             dependencies,
-            output: output_signature(out)?,
         };
         // PathBuf serialization requires UTF-8; unusual resource root names
         // can still build normally without a reusable marker.
@@ -404,7 +423,7 @@ mod tests {
     }
 
     #[test]
-    fn directory_inputs_config_and_output_invalidate() {
+    fn directory_inputs_config_and_owned_output_recovery() {
         let f = Fixture::new();
         let resource = "assets/minecraft/lang/en_us.json";
         f.write(&format!("vanilla/{resource}"), br#"{"v":"a"}"#);
@@ -461,8 +480,14 @@ mod tests {
         low.filter = packs::filter_of(&serde_json::json!({"filter":{"block":[{"path":"lang"}]}}));
         f.rebuild_matches(std::slice::from_ref(&low));
         fs::write(out.join(resource), b"corrupt").unwrap();
+        // Published output is trusted; clearing the marker explicitly repairs
+        // a cache tree changed outside the builder.
+        packs::build_overlay(&f.0.join("vanilla"), std::slice::from_ref(&low), &out).unwrap();
+        assert_eq!(fs::read(out.join(resource)).unwrap(), b"corrupt");
+        fs::remove_file(&marker).unwrap();
         f.rebuild_matches(std::slice::from_ref(&low));
         fs::remove_file(out.join(resource)).unwrap();
+        fs::remove_file(&marker).unwrap();
         f.rebuild_matches(std::slice::from_ref(&low));
         fs::write(&marker, b"corrupt").unwrap();
         f.rebuild_matches(std::slice::from_ref(&low));
@@ -584,8 +609,8 @@ mod tests {
         f.rebuild_matches(std::slice::from_ref(&pack));
         assert_eq!(fs::read(out.join(name)).unwrap(), b"ccc");
         assert_eq!(fs::metadata(&marker).unwrap().modified().unwrap(), before);
-        // A changed source symlink identity is fingerprinted, and a corrupt
-        // output symlink is repaired even when its target bytes happen to match.
+        // A changed source symlink identity is fingerprinted. Output is trusted
+        // until its marker is cleared explicitly.
         fs::remove_file(&path).unwrap();
         f.write("other", b"ddd");
         std::os::unix::fs::symlink(f.0.join("other"), &path).unwrap();
@@ -593,6 +618,7 @@ mod tests {
         assert_eq!(fs::read(out.join(name)).unwrap(), b"ddd");
         fs::remove_file(out.join(name)).unwrap();
         std::os::unix::fs::symlink(f.0.join("other"), out.join(name)).unwrap();
+        fs::remove_file(&marker).unwrap();
         f.rebuild_matches(std::slice::from_ref(&pack));
         assert_eq!(fs::read_link(out.join(name)).unwrap(), path);
         fs::remove_file(&path).unwrap();
@@ -907,5 +933,140 @@ mod tests {
             "4 x 8 MiB directory textures: baseline={:.3} ms cold={:.3} ms unchanged={:.3} ms (11 medians, full validation)",
             medians[0], medians[1], medians[2]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn relative_builder_targets_are_preserved() {
+        let f = Fixture::new();
+        f.write("vanilla/facts.json", b"[]");
+        let mut pack = f.dir_pack("pack");
+        let name = "assets/minecraft/textures/a";
+        f.write(&format!("pack/{name}"), b"pack");
+        let cwd = std::env::current_dir().unwrap();
+        let mut relative = PathBuf::new();
+        for component in cwd.components() {
+            if matches!(component, std::path::Component::Normal(_)) {
+                relative.push("..");
+            }
+        }
+        relative.push(f.0.strip_prefix("/").unwrap());
+        pack.source = Source::Dir(relative.join("pack"));
+        let vanilla = relative.join("vanilla");
+        let out = f.0.join("cached");
+        let reference = f.0.join("reference");
+        packs::build_overlay(&vanilla, std::slice::from_ref(&pack), &out).unwrap();
+        build_overlay_uncached(&vanilla, &[pack], &reference, &mut Dependencies::default())
+            .unwrap();
+        let expected = relative.join("pack").join(name);
+        assert_eq!(fs::read_link(out.join(name)).unwrap(), expected);
+        assert_eq!(fs::read_link(reference.join(name)).unwrap(), expected);
+        assert_eq!(
+            fs::read_link(out.join("facts.json")).unwrap(),
+            vanilla.join("facts.json")
+        );
+    }
+
+    #[test]
+    #[ignore = "requires prepared resources and real pack paths in environment"]
+    fn benchmark_real_resource_root() {
+        use std::{hint::black_box, time::Instant};
+        let vanilla = PathBuf::from(std::env::var("HORIZON_OVERLAY_BENCH_VANILLA").unwrap());
+        assert!(vanilla.join("horizon-resources.json").is_file());
+        let paths: Vec<PathBuf> =
+            serde_json::from_str(&std::env::var("HORIZON_OVERLAY_BENCH_PACKS").unwrap()).unwrap();
+        // The original resource_root selection/cache-key path, with its original builder.
+        fn original(vanilla: &Path, packs: &[Pack], cache: &Path) -> PathBuf {
+            let key = packs
+                .iter()
+                .map(|p| p.id.as_str())
+                .collect::<Vec<_>>()
+                .join("|");
+            let hash = key.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+                (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3)
+            });
+            let out = cache.join(format!("{hash:016x}"));
+            build_overlay_uncached(vanilla, packs, &out, &mut Dependencies::default()).unwrap();
+            out
+        }
+        let median = |mut times: Vec<f64>| {
+            times.sort_by(f64::total_cmp);
+            times[times.len() / 2]
+        };
+        for path in paths {
+            let f = Fixture::new();
+            let pack = packs::pack(
+                path.to_string_lossy().into_owned(),
+                Text::empty(),
+                Source::Zip(path.clone()),
+            )
+            .unwrap();
+            let selected = std::slice::from_ref(&pack);
+            let reference_cache = f.0.join("reference");
+            let cached_cache = f.0.join("cached");
+            fs::create_dir_all(&reference_cache).unwrap();
+            let reference = original(&vanilla, selected, &reference_cache);
+            let out = packs::resource_root(&vanilla, selected, &cached_cache);
+            assert_ne!(out, vanilla, "resource_root must not fall back to vanilla");
+            assert!(marker_path(&out).exists());
+            let expected = output_signature(&reference).unwrap();
+            assert_eq!(output_signature(&out).unwrap(), expected);
+            for _ in 0..2 {
+                original(&vanilla, selected, &reference_cache);
+                assert_eq!(packs::resource_root(&vanilla, selected, &cached_cache), out);
+            }
+            let mut baseline = Vec::new();
+            let mut cold = Vec::new();
+            let mut hit = Vec::new();
+            for iteration in 0..11 {
+                for operation in if iteration % 2 == 0 {
+                    [0, 1, 2]
+                } else {
+                    [1, 2, 0]
+                } {
+                    if operation == 1 {
+                        fs::remove_file(marker_path(&out)).unwrap();
+                    }
+                    let started = Instant::now();
+                    let result = if operation == 0 {
+                        original(
+                            black_box(&vanilla),
+                            black_box(selected),
+                            black_box(&reference_cache),
+                        )
+                    } else {
+                        packs::resource_root(
+                            black_box(&vanilla),
+                            black_box(selected),
+                            black_box(&cached_cache),
+                        )
+                    };
+                    black_box(&result);
+                    let ms = started.elapsed().as_secs_f64() * 1000.0;
+                    match operation {
+                        0 => baseline.push(ms),
+                        1 => cold.push(ms),
+                        _ => hit.push(ms),
+                    }
+                    if operation != 0 {
+                        assert_eq!(result, out);
+                    }
+                }
+                // Verify full materialized bytes and symlink identities outside timing.
+                assert_eq!(output_signature(&out).unwrap(), expected);
+                assert_eq!(output_signature(&reference).unwrap(), expected);
+            }
+            let baseline = median(baseline);
+            let cold = median(cold);
+            let hit = median(hit);
+            println!(
+                "real pack={} ZIP={} bytes: original={baseline:.3} ms cold={cold:.3} ms hit={hit:.3} ms speedup={:.2}x saved={:.3} ms cold_overhead={:.2}% (11 medians, 2 warmups)",
+                path.display(),
+                fs::metadata(&path).unwrap().len(),
+                baseline / hit,
+                baseline - hit,
+                (cold / baseline - 1.0) * 100.0
+            );
+        }
     }
 }
