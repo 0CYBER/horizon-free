@@ -101,6 +101,7 @@ mod scoreboard;
 mod screens;
 mod sculk;
 mod sculk_fixture;
+mod shader_packs;
 mod shield;
 mod sign_edit;
 mod sniffers;
@@ -730,6 +731,8 @@ struct Game<'a> {
     modifiers: winit::keyboard::ModifiersState,
     /// The window's fullscreen request and reported state.
     fullscreen: horizon_client::window::FullscreenState,
+    /// The selected Horizon shader pack (`game/shader_packs.rs`).
+    shader_packs: shader_packs::ShaderPacks,
     /// MouseHandler's accumulated look and wheel state.
     mouse: MouseLook,
     /// An agent moved the mouse (`mouse-move`) since the pointer was last
@@ -8345,6 +8348,7 @@ impl Game<'_> {
         Ok(())
     }
     fn render(&mut self) -> Result<bool> {
+        self.poll_shader_pack();
         let Some(size) = self
             .renderer
             .as_ref()
@@ -8538,6 +8542,7 @@ impl Game<'_> {
             .then(|| self.border_draw(camera.to_array(), alpha as f32))
             .flatten();
         let frame = Frame {
+            shader: self.shader_inputs(camera, alpha as f32),
             nether_lighting: self.dim == Dim::Nether,
             camera,
             yaw,
@@ -9886,6 +9891,7 @@ pub fn run() -> Result<()> {
         focused: true,
         modifiers: winit::keyboard::ModifiersState::empty(),
         fullscreen: horizon_client::window::FullscreenState::new(false),
+        shader_packs: Default::default(),
         mouse: MouseLook::default(),
         agent_pointer: false,
         smooth_camera: false,

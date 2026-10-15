@@ -59,6 +59,7 @@ pub fn outline_vertices(edges: &[[f64; 6]], camera: glam::DVec3) -> Vec<[f32; 6]
 
 mod arena;
 mod occlusion;
+mod pack_stages;
 pub mod panorama;
 mod timing;
 mod world_post;
@@ -173,6 +174,25 @@ pub struct Frame<'a> {
     /// `Screen.extractBlurredBackground`: blur the frame by this radius
     /// (`menuBackgroundBlurriness`) before the screen is drawn over it.
     pub menu_blur: Option<f32>,
+    /// What a shader pack's `Frame` uniform reads beyond the rest of the frame.
+    pub shader: ShaderInputs,
+}
+/// A shader pack's view of the game this frame (docs/shader-packs.md, `Frame`).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ShaderInputs {
+    /// `Level.getRainLevel` and `getThunderLevel` at the partial tick.
+    pub rain: f32,
+    pub thunder: f32,
+    /// The camera's fog type: 0 air, 1 water, 2 lava, 3 powder snow.
+    pub submerged: u8,
+    /// 0 overworld, -1 the Nether, 1 the End.
+    pub dimension: i8,
+    pub has_sky_light: bool,
+    /// `DimensionType.moonPhase`, 0..=7.
+    pub moon_phase: u8,
+    /// The time of day as a fraction (0 sunrise, 0.25 noon) and the partial tick.
+    pub day_fraction: f32,
+    pub partial_tick: f32,
 }
 /// One frame of the world border wall (`WorldBorderRenderer.render`).
 #[derive(Clone, Debug)]
@@ -287,6 +307,8 @@ pub struct Renderer {
     occlusion: occlusion::Occlusion,
     /// Resolution scale and FXAA (Horizon settings).
     world_post: world_post::Post,
+    /// The selected shader pack's stages (Horizon setting; none by default).
+    pack: Option<pack_stages::PackStages>,
     pub hud: HudRenderer,
     /// The menus' backdrop blur, made on first use.
     post: Option<crate::post::Post>,
@@ -1434,6 +1456,7 @@ impl Renderer {
             block_entities: HashMap::new(),
             occlusion: occlusion::Occlusion::new(crate::chunk::HEIGHT / 16),
             world_post,
+            pack: None,
             hud,
             post: None,
             menu_blur: None,
@@ -1652,6 +1675,23 @@ impl Renderer {
         self.block_entities.remove(&key);
         self.occlusion.remove(key);
         self.release_section(key);
+    }
+    /// Run `pack`'s stages over the world from now on (`None`: no pack, the
+    /// vanilla frame). On error the previous pack stays.
+    pub fn set_shader_pack(&mut self, pack: Option<&crate::shader_pack::ShaderPack>) -> Result<()> {
+        self.pack = match pack {
+            Some(pack) => Some(pack_stages::PackStages::new(
+                &self.device,
+                self.config.format.remove_srgb_suffix(),
+                pack,
+            )?),
+            None => None,
+        };
+        Ok(())
+    }
+    /// The folder name of the pack `set_shader_pack` gave.
+    pub fn shader_pack_id(&self) -> Option<&str> {
+        self.pack.as_ref().map(|p| p.id.as_str())
     }
     /// Horizon's resolution scale (world pixels per window pixel) and FXAA.
     pub fn set_world_post(&mut self, scale: f32, antialias: bool) {
@@ -1957,6 +1997,15 @@ impl Renderer {
         };
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
+        let pack_uniform = shader_pack_uniform(
+            frame,
+            view,
+            world_projection(frame.fov_degrees, aspect, frame.depth_far) * frame.bob,
+            sun,
+            fog_color,
+            globals.fog,
+            globals.fog_ends,
+        );
         // GameRenderer.render3dHud: the hand's projection at hudFov, with the
         // bob in its pose rather than the projection (same product).
         let hand_projection = Mat4::from_cols_array(&crate::camera::hand_projection(
@@ -2177,9 +2226,10 @@ impl Renderer {
             timer.begin(&mut encoder);
         }
         // The world's targets: the screen, or the scaled target of `post`.
-        let scaled = self
-            .world_post
-            .prepare(&self.device, [self.config.width, self.config.height]);
+        let pack = self.pack.is_some() && !frame.title;
+        let scaled =
+            self.world_post
+                .prepare(&self.device, [self.config.width, self.config.height], pack);
         let (world_view, world_depth) = match &scaled {
             Some((color, depth)) => (color, depth),
             None => (&view_target, &self.depth),
@@ -2212,7 +2262,12 @@ impl Renderer {
                     view: world_depth,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(0.0),
-                        store: wgpu::StoreOp::Discard,
+                        // A shader pack reads the world's depth.
+                        store: if pack {
+                            wgpu::StoreOp::Store
+                        } else {
+                            wgpu::StoreOp::Discard
+                        },
                     }),
                     stencil_ops: None,
                 }),
@@ -2322,7 +2377,22 @@ impl Renderer {
                 );
             }
         }
-        if scaled.is_some() {
+        if let (true, Some((color, depth)), Some(size), Some(stages)) =
+            (pack, &scaled, self.world_post.size(), self.pack.as_mut())
+        {
+            let output = stages.run(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                color,
+                depth,
+                size,
+                &self.world_post,
+                pack_uniform,
+            );
+            self.world_post
+                .finish_with(&mut encoder, &view_target, output);
+        } else if scaled.is_some() {
             self.world_post.finish(&mut encoder, &view_target);
         }
         if hand_quads > 0 {
@@ -2587,6 +2657,59 @@ impl Frustum {
 /// Vanilla's `Projection`: reversed depth (near maps to 1, far to 0, tests
 /// are GREATER_THAN_OR_EQUAL), which keeps far faces a hair apart, like
 /// fire_side's 0.01 pixel in front of its block, from z-fighting.
+/// The prelude's `Frame` (`shader_pack_prelude.wgsl`); `resolution` and the
+/// time are filled per stage.
+fn shader_pack_uniform(
+    frame: &Frame,
+    view: Mat4,
+    projection: Mat4,
+    sun: Vec3,
+    fog_color: [f32; 4],
+    fog: [f32; 4],
+    fog_ends: [f32; 4],
+) -> pack_stages::FrameUniform {
+    let s = frame.shader;
+    let sky = frame.sky.sky_color;
+    pack_stages::FrameUniform {
+        view: view.to_cols_array_2d(),
+        projection: projection.to_cols_array_2d(),
+        inverse_view: view.inverse().to_cols_array_2d(),
+        inverse_projection: projection.inverse().to_cols_array_2d(),
+        camera_position: [
+            frame.camera.x as f32,
+            frame.camera.y as f32,
+            frame.camera.z as f32,
+            0.0,
+        ],
+        time: [0.0, 0.0, s.day_fraction, s.partial_tick],
+        sun: [sun.x, sun.y, sun.z, frame.sky.sun_angle.to_radians()],
+        moon: [-sun.x, -sun.y, -sun.z, f32::from(s.moon_phase)],
+        sky_color: [sky[0], sky[1], sky[2], 1.0],
+        fog_color,
+        fog: [fog[0], fog[1], fog_ends[0], fog_ends[1]],
+        weather: [s.rain, s.thunder, 0.0, 0.0],
+        camera_state: [
+            f32::from(s.submerged),
+            frame.night_vision,
+            frame.darkness.1,
+            0.0,
+        ],
+        view_params: [
+            0.05,
+            frame.depth_far,
+            frame.distance,
+            frame.fov_degrees.to_radians(),
+        ],
+        dimension: [
+            f32::from(s.dimension),
+            f32::from(u8::from(s.has_sky_light)),
+            0.0,
+            0.0,
+        ],
+        ..Default::default()
+    }
+}
+
 fn world_projection(fov_degrees: f32, aspect: f32, far: f32) -> Mat4 {
     Mat4::perspective_rh(fov_degrees.to_radians(), aspect, far, 0.05)
 }
