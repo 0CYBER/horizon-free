@@ -16,6 +16,7 @@ Both are off by default. With no pack selected the renderer draws exactly what i
 | Horizon shader packs: `composite` stage, uniforms, hot reload, Shader Packs screen | first slice planned |
 | Horizon shader packs: `deferred`, `gbuffer`, `shadow` stages, custom textures | planned |
 | Java shader packs: preprocessing + GLSL parse coverage | spike done: 450 of 470 programs reach valid WGSL (below) |
+| Java shader packs: preprocessor (`crates/horizon-shaderpack`: includes, options, Iris's macros) | done: every program of the three test packs preprocesses |
 | Java shader packs: Iris pipeline emulation | planned |
 
 ## How the renderer draws a frame today
