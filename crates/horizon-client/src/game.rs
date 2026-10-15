@@ -40,6 +40,7 @@ mod fireworks;
 mod fishing;
 mod fov;
 mod frames;
+mod friends;
 mod functions;
 mod game_mode;
 mod gamemode_switcher;
@@ -929,6 +930,8 @@ struct Game<'a> {
     remote: Option<remote::Remote>,
     /// This world is open to the network (game/lan.rs).
     lan: Option<lan::LanHost>,
+    /// The open world is shared behind an invite code (game/friends.rs).
+    friends: Option<friends::Sharing>,
     world_options: Option<lan_screen::WorldOptions>,
     /// KeyboardHandler's debug key state (game/debug_keys.rs), the physical
     /// keys held, and the debug renderers F3+B and F3+G switch on.
@@ -3211,6 +3214,7 @@ impl Game<'_> {
             });
         }
         horizon_client::spans::time("tick_lan", || self.tick_lan());
+        self.tick_friends();
         horizon_client::spans::time("tick_hand", || self.tick_hand());
         horizon_client::spans::time("tick_sleep", || self.tick_sleep());
         horizon_client::spans::time("tick_portal", || self.tick_nether_portal())?;
@@ -9506,6 +9510,7 @@ pub fn run() -> Result<()> {
         remote: None,
         lan: None,
         world_options: None,
+        friends: None,
         debug_keys: Default::default(),
         show_hitboxes: false,
         show_chunk_borders: false,

@@ -420,8 +420,10 @@ impl Hub {
     }
 
     fn admit(&mut self, j: super::Joined, ctx: &mut TickCtx) -> u32 {
-        let entity_id = *ctx.next_entity as i32;
+        // The game's ids are taken by incrementing first: the current value
+        // is the last id in use (the host's own, right after opening to LAN).
         *ctx.next_entity += 1;
+        let entity_id = *ctx.next_entity as i32;
         let conn = j.conn;
         let mut guest = Guest::new(j, entity_id, ctx.spawn, self.config.view_distance);
         guest.last_action_tick = self.ticks;

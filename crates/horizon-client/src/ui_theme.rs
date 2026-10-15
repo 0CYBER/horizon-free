@@ -71,7 +71,30 @@ pub fn save_preferences(dir: &Path) {
         MenuStyle::Horizon => "horizon",
         MenuStyle::Classic => "classic",
     };
-    let _ = std::fs::write(dir.join("horizon.txt"), format!("menuStyle:{value}\n"));
+    set_preference(dir, "menuStyle", Some(value));
+}
+/// A Horizon-only preference from `horizon.txt` (`key:value` lines).
+pub fn preference(dir: &Path, key: &str) -> Option<String> {
+    let text = std::fs::read_to_string(dir.join("horizon.txt")).ok()?;
+    text.lines().find_map(|l| {
+        let (k, v) = l.split_once(':')?;
+        (k.trim() == key).then(|| v.trim().to_owned())
+    })
+}
+/// Set (or with None remove) one preference, keeping the others.
+pub fn set_preference(dir: &Path, key: &str, value: Option<&str>) {
+    let text = std::fs::read_to_string(dir.join("horizon.txt")).unwrap_or_default();
+    let mut lines: Vec<String> = text
+        .lines()
+        .filter(|l| l.split_once(':').is_none_or(|(k, _)| k.trim() != key))
+        .map(str::to_owned)
+        .collect();
+    if let Some(v) = value {
+        lines.push(format!("{key}:{v}"));
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    let _ = std::fs::write(dir.join("horizon.txt"), out);
 }
 
 /// The dark palette (`horizon_theme::DARK`) in the HUD's colour encoding, plus the

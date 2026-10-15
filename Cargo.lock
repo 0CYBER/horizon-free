@@ -1007,6 +1007,7 @@ dependencies = [
  "glam",
  "horizon-assets",
  "horizon-core",
+ "horizon-friends",
  "horizon-protocol",
  "horizon-telemetry",
  "horizon-theme",
