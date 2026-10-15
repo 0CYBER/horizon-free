@@ -201,15 +201,28 @@ harnesses read) is the next stage's first step.
 
 ### Run every harness against the new version
 
-In the candidate worktree, with `research-lock.json` pinned to NEW and `.local/` linking to the new store
-(`.local/minecraft/NEW` holds `jars/`, `datagen` the new reports, `horizon-client` what the candidate's
-`horizon-prepare` made), `tools/parity.py --all` runs every harness. Each result is one of:
+`version_port.py harnesses NEW [NAME...] --baseline STATE` (`tools/port_harness.py`), in the candidate `regen`
+made:
 
-- **pass**: Horizon already matches NEW there;
-- **oracle does not compile**: vanilla's API changed under the oracle (javac names the symbol);
-- **fails**: behaviour changed (or Horizon's data reading broke); the log has the first differing case.
+1. **horizon-prepare**, built from the candidate and run there: `.local/horizon-client/NEW` and its exporters'
+   outputs. Its `sounds` and `panorama` steps read the version store's launcher-shaped copy, whose asset index and the
+   objects those steps copy (about 370 MB of sounds) are downloaded once per version from Mojang's resource server,
+   each checked against its sha1. When the exporters no longer compile against NEW, the stage goes on and the report
+   gets a rank-1 item with javac's errors.
+2. **`tools/parity.py --all`** there (or the harnesses named), from scratch.
+3. **Each harness classified**:
+   - **pass**: Horizon already matches NEW there;
+   - **oracle**: its log has javac errors, so vanilla's API changed under the oracle (javac names the symbol);
+   - **fail**: behaviour changed (or Horizon's data reading broke); the log has the first differing case;
 
-The known failures of `main` (`tools/ci/parity_issues.py`'s audit) are subtracted, so only what NEW broke counts.
+   and **newly failing** unless it fails in the baseline too: `--baseline` is a `tools/parity.py` `state.json` from
+   a run on the pinned version (the nightly audit's, or any worktree of `main`), so the known failures of `main` don't
+   count. `--no-run` classifies the last run again against another baseline.
+
+The result is `diff-OLD-NEW/harnesses.json`, with the logs of the harnesses that don't pass copied beside it
+(`harness-logs/`, local only). `report` reads it: a newly failing harness marks the rank-2 item that names it as
+failing (or "oracle no longer compiles"), a newly failing harness no item names gets its own rank-2 item, and the
+summary counts pass / oracle / fail / newly failing.
 
 ### The port report
 
@@ -321,6 +334,7 @@ python3 tools/version_port.py prepare 26.4           # downloads, verifies, runs
 python3 tools/version_port.py diff 26.3 26.4         # summary; the full diff in versions/diff-26.3-26.4/diff.json
 python3 tools/version_port.py regen 26.4            # ports/26.4 on port/26.4: pinned, every table regenerated
 python3 tools/version_port.py report 26.3 26.4 [--results .local/parity-runner/state.json]   # report.md, report.json
+python3 tools/version_port.py harnesses 26.4 --baseline .local/parity-runner/state.json   # in ports/26.4
 python3 tools/version_port.py port 26.4             # prepare both, diff, regen, report
 python3 tools/version_port.py gc                     # keep the pinned version and the newest two others
 python3 tools/vanilla_map.py versions/26.3/classes.json net.minecraft.world.food.FoodData   # its Rust files and harnesses
@@ -335,4 +349,5 @@ python3 tools/vanilla_map.py versions/26.3/classes.json net.minecraft.world.food
 | `version_consts`: one generated file for the version facts (`tools/gen_version_consts.py`) | done |
 | Tools read the version from the lock (`lab.VERSION`, `lab.GAME`, `lab.RESOURCES`, `lab.version_info()`) | done |
 | `regen` (`tools/port_regen.py`): candidate worktree, its `.local/`, the generators' classes decompiled alone, every generator, `regen.json` in the report | done |
-| Candidate harness run, `publish`, launchd agent | later |
+| Candidate harness run (`tools/port_harness.py`, `harnesses`): horizon-prepare with sounds, every harness, pass / oracle / fail, newly failing against a baseline, in the report | done |
+| `publish`, launchd agent | later |
