@@ -105,6 +105,7 @@ pub enum Family {
     Nautilus,
     Strider,
     Bat,
+    Bee,
 }
 pub fn family(s: Species) -> Family {
     use Species as S;
@@ -165,6 +166,7 @@ pub fn family(s: Species) -> Family {
         S::Shulker => Family::Shulker,
         S::Strider => Family::Strider,
         S::Bat => Family::Bat,
+        S::Bee => Family::Bee,
         _ => Family::Generic,
     }
 }
@@ -221,6 +223,7 @@ pub fn register(m: &mut Mob) {
         Family::Nautilus => super::nautilus::register(m),
         Family::Strider => super::strider::register(m),
         Family::Bat => super::bat::register(m),
+        Family::Bee => super::bee::register(m),
     }
 }
 /// Mob.tick additions that run before the entity tick (creeper fuse, puffing).
@@ -403,6 +406,9 @@ pub fn tick(
     }
     if m.species() == Species::Bat {
         super::bat::tick(m);
+    }
+    if m.species() == Species::Bee {
+        super::bee::tick(m, level_random);
     }
     true
 }
@@ -859,7 +865,8 @@ fn server_ai_step(
     // A creaking looked at stands still: its navigation, move, look and jump
     // controls wait (CreakingPathNavigation and the Creaking*Control).
     let frozen = super::creaking::is_creaking(m) && !super::creaking::can_move(m);
-    if !frozen {
+    // The bee's navigation waits while it pollinates.
+    if !frozen && !super::bee::pollinating(m) {
         m.nav_tick(w);
     }
     if super::monster_brain::has_brain(m.species()) {
@@ -894,7 +901,10 @@ fn server_ai_step(
     }
     if !super::axolotl::is_playing_dead(m) {
         m.move_control_tick(w, events);
-        m.look_control_tick();
+        // BeeLookControl: still while angry.
+        if !(m.species() == Species::Bee && super::bee::angry(m, w)) {
+            m.look_control_tick();
+        }
     }
     m.jump_control_tick();
 }
@@ -919,6 +929,7 @@ fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
         // SpellcasterIllager.customServerAiStep.
         Species::Evoker if m.extra.counter > 0 => m.extra.counter -= 1,
         Species::Bat => super::bat::server_ai_step(m, cx.w, cx.events),
+        Species::Bee => super::bee::server_ai_step(m, cx),
         _ => {}
     }
 }
@@ -944,6 +955,7 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         Species::Ravager => super::ravager::ai_step(m, w, events),
         Species::Wither => super::wither::ai_step(m, w, events),
         Species::Allay => super::allay::ai_step(m),
+        Species::Bee => super::bee::ai_step(m, w),
         Species::Breeze => super::breeze::ai_step(m),
         Species::Sniffer => super::sniffer::ai_step(m, events),
         Species::HappyGhast => super::happy_ghast::ai_step(m, w),
@@ -1183,6 +1195,14 @@ pub fn walk_target_value(m: &Mob, w: &MobWorld, p: [i32; 3]) -> f32 {
     if m.species() == Species::Strider {
         return super::strider::walk_target_value(m, w, p);
     }
+    // Bee.getWalkTargetValue: any air block.
+    if m.species() == Species::Bee {
+        return if w.facts.is_air(w.world.block(p[0], p[1], p[2])) {
+            10.0
+        } else {
+            0.0
+        };
+    }
     // AbstractNautilus and Creaking.getWalkTargetValue: everywhere alike.
     if matches!(
         m.species(),
@@ -1221,6 +1241,10 @@ pub fn accepts_damage(m: &mut Mob, source: &Damage, _amount: f32) -> bool {
             super::bat::hurt(m);
             true
         }
+        Species::Bee => {
+            super::bee::hurt(m);
+            true
+        }
         Species::Enderman => super::enderman::on_damage(m, source),
         Species::WitherSkeleton | Species::Blaze | Species::MagmaCube | Species::Strider
             if source.is_fire() =>
@@ -1257,6 +1281,9 @@ pub fn after_hurt(m: &mut Mob, source: &Damage) {
 pub fn do_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
     if m.species() == Species::IronGolem {
         return super::golem::iron_hurt_target(m, who, cx);
+    }
+    if m.species() == Species::Bee {
+        return super::bee::sting(m, who, cx);
     }
     if matches!(m.species(), Species::Hoglin | Species::Zoglin) {
         return super::piglin::hoglin_hurt_target(m, who, cx);
