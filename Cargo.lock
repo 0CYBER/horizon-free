@@ -1239,6 +1239,7 @@ dependencies = [
  "horizon-bench",
  "horizon-core",
  "horizon-friends",
+ "horizon-mods",
  "horizon-protocol",
  "horizon-telemetry",
  "horizon-theme",

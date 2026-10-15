@@ -193,6 +193,7 @@ impl Game<'_> {
                 Event::Changed => {
                     self.settings.save(&Self::options_path());
                     self.apply_settings();
+                    self.sync_mods();
                 }
                 Event::Close => {
                     self.settings.save(&Self::options_path());

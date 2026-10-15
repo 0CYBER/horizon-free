@@ -408,6 +408,7 @@ impl Game<'_> {
             return;
         }
         let focused = self.screen == Screen::Chat;
+        let heard = self.mods.mods.is_running().then(|| text.plain());
         self.ui.chat.add(
             &self.res.atlas,
             text,
@@ -415,6 +416,9 @@ impl Game<'_> {
             self.ticks,
             focused,
         );
+        if let Some(line) = heard {
+            self.mods_chat(&line);
+        }
     }
     /// Keys while the chat screen is open.
     pub(super) fn chat_key(&mut self, event: &KeyEvent) {
@@ -511,9 +515,13 @@ impl Game<'_> {
                 &[Text::literal(PLAYER_NAME), Text::literal(message)],
             );
             let focused = self.screen == Screen::Chat;
+            let heard = self.mods.mods.is_running().then(|| line.plain());
             self.ui
                 .chat
                 .add(&self.res.atlas, line, None, self.ticks, focused);
+            if let Some(line) = heard {
+                self.mods_chat(&line);
+            }
             self.lan_host_chat(message);
         }
     }
