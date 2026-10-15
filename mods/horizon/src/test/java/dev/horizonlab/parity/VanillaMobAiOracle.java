@@ -315,6 +315,8 @@ public final class VanillaMobAiOracle {
         int scenario = 0;
         int phase = 0;
         int wait = 0;
+        /** The light engine's post-update tasks queued after the scene was built. */
+        final List<java.util.concurrent.CompletableFuture<?>> lit = new ArrayList<>();
         ServerPlayer player;
         int failures = 0;
 
@@ -428,13 +430,23 @@ public final class VanillaMobAiOracle {
                             ready = level.isPositionEntityTicking(new BlockPos((cx + dx) * 16, -60, (cz + dz) * 16));
                     if (ready) {
                         build(s, level);
+                        // The scene's light updates reach the light thread through the chunk task
+                        // dispatcher, where hasLightWork() can't see them: a mob's first sun-burn
+                        // roll then reads stale light. A post-update task queued behind them on
+                        // every chunk completes once they have all run.
+                        var light = (net.minecraft.server.level.ThreadedLevelLightEngine) level.getChunkSource().getLightEngine();
+                        lit.clear();
+                        for (int dx = -4; dx <= 4; dx++)
+                            for (int dz = -4; dz <= 4; dz++)
+                                lit.add(light.waitForPendingTasks(cx + dx, cz + dz));
                         phase = 2;
                         wait = 0;
                     }
                 }
                 case 2 -> {
                     super.tickServer(haveTime);
-                    if (!level.getChunkSource().getLightEngine().hasLightWork() && ++wait > 5) {
+                    if (lit.stream().allMatch(java.util.concurrent.CompletableFuture::isDone)
+                        && !level.getChunkSource().getLightEngine().hasLightWork() && ++wait > 5) {
                         run(s, level);
                         for (int dx = -4; dx <= 4; dx++)
                             for (int dz = -4; dz <= 4; dz++)
