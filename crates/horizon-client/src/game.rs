@@ -7269,15 +7269,31 @@ impl Game<'_> {
                 .clamp_gui_scale([r.config.width as i32, r.config.height as i32]);
         }
         self.streaming.radius = self.settings.render_distance;
+        // Options.biomeBlendRadius, ambientOcclusion and cutoutLeaves:
+        // LevelExtractor.allChanged when they change.
+        let (s, st) = (&self.settings, &self.streaming);
+        let remesh = (s.biome_blend, s.smooth_lighting, s.cutout_leaves)
+            != (st.biome_blend, st.smooth_lighting, st.cutout_leaves);
         self.streaming.biome_blend = self.settings.biome_blend;
         self.streaming.smooth_lighting = self.settings.smooth_lighting;
         self.streaming.cutout_leaves = self.settings.cutout_leaves;
+        if remesh {
+            self.all_sections_changed();
+        }
         self.audio.master = self.settings.master_volume;
         horizon_client::hud::GUI_SCALE.store(
             self.settings.gui_scale,
             std::sync::atomic::Ordering::Relaxed,
         );
         self.apply_ui_settings();
+    }
+    /// `LevelExtractor.allChanged`: every loaded section is rebuilt.
+    fn all_sections_changed(&mut self) {
+        for &(x, z) in self.world.chunks.keys() {
+            for sy in 0..horizon_client::chunk::HEIGHT / 16 {
+                self.world.dirty_sections.insert((x, sy, z));
+            }
+        }
     }
     /// Whether precipitation at a column is snow (Biome.coldEnoughToSnow:
     /// base temperature lowered above y 80) or none (no precipitation).
