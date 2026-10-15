@@ -3,9 +3,11 @@
 (docs/version-ports.md).
 
     version_port.py detect [--snapshots]          what Mojang released that Horizon doesn't pin
-    version_port.py prepare VERSION               download, verify, run the data generator, read its facts
+    version_port.py prepare VERSION               download, verify, run the data generator, read its facts,
+                                                  index its classes (tools/class_index.py)
     version_port.py diff OLD NEW                  facts, packets, registries, blocks, items, commands,
-                                                  data packs, assets and lang: diff-OLD-NEW/diff.json
+                                                  data packs, assets, lang and classes, with the Horizon
+                                                  code each changed class concerns: diff-OLD-NEW/diff.json
     version_port.py gc [--keep VERSION...]        keep the pinned, the newest two others and --keep
 
 The downloads are for development only: they go to the version store (~/code/horizon-parity/versions,
@@ -29,9 +31,11 @@ import urllib.request
 import zipfile
 
 try:
-    from . import lab
+    from . import class_index, lab, vanilla_map
 except ImportError:
+    import class_index
     import lab
+    import vanilla_map
 
 MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 STORE = Path(os.environ.get("HORIZON_VERSIONS", Path.home() / "code" / "horizon-parity" / "versions"))
@@ -216,6 +220,9 @@ def prepare(args):
     if facts["id"] != version:
         raise ValueError(f"The client jar says it is {facts['id']}, not {version}")
     lab.write_json(directory / "facts.json", facts)
+    classes = class_index.index_jars([found["client"], found["server_game"]], jobs=args.jobs)
+    (directory / "classes.json").write_text(json.dumps(classes, separators=(",", ":")))
+    print(f"Indexed {len(classes)} classes, {sum(len(c['methods']) for c in classes.values())} methods")
     lab.write_json(directory / "prepared.json", {
         "version": version, "pinned": version == pinned() and not args.download,
         "paths": {key: str(path) for key, path in found.items()},
@@ -431,8 +438,26 @@ def read_reports(reports):
     }
 
 
-def diff_versions(old_paths, new_paths, old_facts, new_facts):
+def diff_classes(old, new, mapping):
+    """The class diff, each changed or removed class with the Horizon files and harnesses that concern it
+    (looked up under its old name: Horizon's code names the pinned version's classes)."""
+    result = class_index.diff(old, new)
+    horizon = {}
+    for name, change in result["changed"].items():
+        entry = vanilla_map.lookup(mapping, change.get("moved_from", name))
+        if entry["rust"] or entry["harnesses"]:
+            horizon[name] = entry
+    for name in result["removed"]:
+        entry = vanilla_map.lookup(mapping, name)
+        if entry["rust"] or entry["harnesses"]:
+            horizon[name] = entry
+    result["horizon"] = horizon
+    return result
+
+
+def diff_versions(old_paths, new_paths, old_facts, new_facts, old_classes=None, new_classes=None, mapping=None):
     a, b = read_reports(old_paths["reports"]), read_reports(new_paths["reports"])
+    classes = diff_classes(old_classes, new_classes, mapping) if old_classes is not None else None
     return {
         "facts": diff_facts(old_facts, new_facts),
         "packets": diff_packets(a["packets"], b["packets"]),
@@ -443,6 +468,7 @@ def diff_versions(old_paths, new_paths, old_facts, new_facts):
         "data": diff_contents(old_paths["client"], new_paths["client"], "data/minecraft/"),
         "assets": diff_contents(old_paths["client"], new_paths["client"], "assets/minecraft/"),
         "lang": diff_lang(old_paths["client"], new_paths["client"]),
+        "classes": classes,
     }
 
 
@@ -480,6 +506,12 @@ def summary(old, new, result):
         lines.append(f"  {key} files: +{counts['added']} -{counts['removed']} ~{counts['changed']}")
     lang = result["lang"]
     lines.append(f"  en_us keys: +{len(lang['added'])} -{len(lang['removed'])} ~{len(lang['changed'])}")
+    classes = result.get("classes")
+    if classes:
+        methods = sum(class_index.changed_methods(c) for c in classes["changed"].values())
+        lines.append(f"  classes: +{len(classes['added'])} -{len(classes['removed'])}, {len(classes['moved'])} moved, "
+                     f"{len(classes['changed'])} changed ({methods} methods); {len(classes['horizon'])} of the "
+                     f"changed or removed ones are ported or proved by Horizon")
     return "\n".join(lines)
 
 
@@ -487,10 +519,17 @@ def diff_dir(old, new):
     return STORE / f"diff-{safe_version(old)}-{safe_version(new)}"
 
 
+def load(version, name):
+    return json.loads((version_dir(version) / name).read_text())
+
+
 def diff(args):
-    facts = {v: json.loads((version_dir(v) / "facts.json").read_text()) for v in (args.old, args.new)}
-    result = diff_versions(paths(args.old), paths(args.new), facts[args.old], facts[args.new])
     directory = diff_dir(args.old, args.new)
+    old_classes, new_classes = load(args.old, "classes.json"), load(args.new, "classes.json")
+    mapping = vanilla_map.build(old_classes, dependencies=vanilla_map.recorded_dependencies(vanilla_map.default_shared()))
+    lab.write_json(directory / "vanilla_map.json", mapping)
+    result = diff_versions(paths(args.old), paths(args.new), load(args.old, "facts.json"), load(args.new, "facts.json"),
+                           old_classes, new_classes, mapping)
     lab.write_json(directory / "diff.json", result)
     print(summary(args.old, args.new, result))
     print(f"\n{directory / 'diff.json'}")
@@ -535,6 +574,8 @@ def main():
     command = commands.add_parser("prepare", help="download, verify and run the data generator")
     command.add_argument("version")
     command.add_argument("--download", action="store_true", help="download even the pinned version")
+    command.add_argument("-j", "--jobs", type=int, default=int(os.environ.get("FLEET_LOAD_JOBS", 0)) or None,
+                         help="class indexing processes (default: $FLEET_LOAD_JOBS, else the CPU count)")
     command = commands.add_parser("diff", help="diff two prepared versions")
     command.add_argument("old")
     command.add_argument("new")
