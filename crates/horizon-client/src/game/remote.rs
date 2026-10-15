@@ -2419,24 +2419,43 @@ impl Game<'_> {
         let Some(internal) = self.slot_at(&batch, self.cursor.0, self.cursor.1) else {
             return;
         };
+        let input = if self.has_shift_down() { 1 } else { 0 };
+        self.remote_slot_click(internal, i8::from(right), input);
+    }
+    /// A `ContainerClick` on game slot `internal` of the server's open menu
+    /// (`input` is the ContainerInput ordinal). False when the menu has no
+    /// such slot.
+    pub(super) fn remote_slot_click(&mut self, internal: usize, button: i8, input: i32) -> bool {
         let (container, menu) = match self.remote.as_ref().and_then(|r| r.menu.clone()) {
             Some((id, name)) => (id, name),
             None => (0, "inventory".to_owned()),
         };
         let slot = (0..64).find(|&s| Self::menu_slot(&menu, s) == Some(internal));
-        let Some(slot) = slot else { return };
-        let shift = self.has_shift_down();
+        let Some(slot) = slot else { return false };
         let carried = self.to_network(&self.carried).map(|s| Hashed::of(&s));
         let state = self.remote.as_ref().map_or(0, |r| r.state_id);
         self.send(S::ContainerClick(play::ContainerClick {
             container,
             state,
             slot: slot as i16,
-            button: i8::from(right),
-            input: if shift { 1 } else { 0 },
+            button,
+            input,
             changed: Vec::new(),
             carried,
         }));
+        true
+    }
+    /// The server's open menu is the inventory or a chest-like container
+    /// (chests, barrels, ender chests: `generic_9xN`; shulker boxes).
+    pub(super) fn remote_storage_open(&self) -> bool {
+        match self.remote.as_ref().and_then(|r| r.menu.as_ref()) {
+            None => true,
+            Some((_, name)) => {
+                name == "inventory"
+                    || name.starts_with("minecraft:generic_9x")
+                    || name == "minecraft:shulker_box"
+            }
+        }
     }
     /// A click outside a server's window (slot -999): predicted like
     /// `MultiPlayerGameMode.handleContainerInput` (the carried stack after

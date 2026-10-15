@@ -490,7 +490,7 @@ impl Game<'_> {
         }
         self.station = Some(s);
     }
-    fn max_stack(&self, stack: &ItemStack) -> u32 {
+    pub(super) fn max_stack(&self, stack: &ItemStack) -> u32 {
         self.res.items.get(&stack.item).map_or(64, |i| i.max_stack)
     }
     /// `Slot.mayPlace` and `getMaxStackSize` for station and brewing slots.
