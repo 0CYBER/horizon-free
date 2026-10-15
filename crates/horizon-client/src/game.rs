@@ -3837,8 +3837,12 @@ impl Game<'_> {
     fn creative_inventory_open(&self) -> bool {
         self.screen == Screen::Creative && self.creative_screen.tab().inventory
     }
+    /// An item tab of the creative screen (its ItemPickerMenu).
+    fn creative_tab_open(&self) -> bool {
+        self.screen == Screen::Creative && !self.creative_screen.tab().inventory
+    }
     fn inventory_origin(&self, batch: &HudBatch) -> (f32, f32) {
-        if self.creative_inventory_open() {
+        if self.screen == Screen::Creative {
             return Self::creative_origin(batch);
         }
         let (x, y) = batch.centered_origin(176.0, self.screen_height());
@@ -3853,6 +3857,9 @@ impl Game<'_> {
     fn slots(&self) -> Vec<usize> {
         if self.creative_inventory_open() {
             return Creative::inventory_slots().collect();
+        }
+        if self.creative_tab_open() {
+            return Creative::tab_slots().collect();
         }
         if let Some(v) = self.station_slots().or_else(|| self.mount_slots()) {
             return v;
@@ -3889,6 +3896,11 @@ impl Game<'_> {
     fn slot_position(&self, i: usize) -> (f32, f32) {
         if self.creative_inventory_open()
             && let Some(position) = Creative::inventory_slot_position(i)
+        {
+            return position;
+        }
+        if self.creative_tab_open()
+            && let Some(position) = Creative::tab_slot_position(i)
         {
             return position;
         }
@@ -4250,7 +4262,34 @@ impl Game<'_> {
         button: i32,
         input: horizon_client::menu::Input,
     ) -> bool {
+        if let Some(slot) = slot
+            && slot >= Creative::DISPLAY
+            && self.creative_tab_open()
+        {
+            self.creative_display_click(slot, button, input);
+            return true;
+        }
         self.menu_ops(&[(slot, button, input)])
+    }
+    /// A click on an item tab's display slot: the screen's own handling
+    /// (`creative::click_display`), never the menu's.
+    fn creative_display_click(
+        &mut self,
+        slot: usize,
+        button: i32,
+        input: horizon_client::menu::Input,
+    ) {
+        use horizon_client::creative::{DisplayClick, click_display};
+        let items = self.creative_screen.items(&self.res.names);
+        let first = self.creative_screen.first_row(&self.res.names);
+        let shown = items.get(first * 9 + slot - Creative::DISPLAY);
+        let catalog = &self.res.items;
+        let max = |s: &ItemStack| catalog.get(&s.item).map_or(64, |i| i.max_stack);
+        match click_display(&mut self.carried, shown, max, button, input) {
+            DisplayClick::Hotbar(i, stack) => self.inventory[i] = Some(stack),
+            DisplayClick::Drop(stack) => self.player_drop(stack),
+            DisplayClick::Nothing => {}
+        }
     }
     /// Several clicks on one menu instance (a quick craft drag is three).
     fn menu_ops(&mut self, ops: &[(Option<usize>, i32, horizon_client::menu::Input)]) -> bool {
@@ -4367,7 +4406,12 @@ impl Game<'_> {
             .station
             .as_ref()
             .is_some_and(|s| s.kind == stations::Kind::Merchant);
-        let (kind, game_of): (Kind, Vec<Option<usize>>) = if merchant_open {
+        let (kind, game_of): (Kind, Vec<Option<usize>>) = if self.creative_tab_open() {
+            // ItemPickerMenu: the display slots (clicked by the screen), then the hotbar.
+            let mut v = vec![None; 45];
+            v.extend((0..9).map(Some));
+            (Kind::ItemPicker, v)
+        } else if merchant_open {
             // MerchantMenu: two payment slots, the result, then the inventory.
             let mut v: Vec<Option<usize>> = vec![
                 Some(stations::INPUT),
@@ -4662,8 +4706,11 @@ impl Game<'_> {
             && !shift
             && slot != 200
         {
+            // An item tab's display slots take no drags or PICKUP_ALL.
+            let display = slot >= Creative::DISPLAY;
             let now = std::time::Instant::now();
             let double = !right
+                && !display
                 && self.carried.is_some()
                 && self.last_inv_click.is_some_and(|(at, last, was_right)| {
                     last == slot && !was_right && now.duration_since(at).as_millis() < 250
@@ -4676,9 +4723,24 @@ impl Game<'_> {
                 return;
             }
             if self.carried.is_some() {
-                self.inv_drag = Some((i32::from(right), vec![slot]));
+                let first = if display { Vec::new() } else { vec![slot] };
+                self.inv_drag = Some((i32::from(right), first));
                 return;
             }
+        }
+        if self.creative_tab_open() {
+            // CreativeModeInventoryScreen goes through the same mouseClicked:
+            // a click now, or a drag that its release ends.
+            match input {
+                Some(input) => {
+                    self.menu_click(slot, i32::from(right), input);
+                }
+                None if self.inv_clicks.quick_crafting().is_some() => {
+                    self.inv_drag = Some((i32::from(right), Vec::new()));
+                }
+                None => {}
+            }
+            return;
         }
         self.click_inventory(right);
     }
@@ -4693,6 +4755,7 @@ impl Game<'_> {
         let batch = HudBatch::new([r.config.width, r.config.height]);
         if let Some(slot) = self.slot_at(&batch, self.cursor.0, self.cursor.1)
             && slot != 200
+            && slot < Creative::DISPLAY
             && !slots.contains(&slot)
             && let Some((_, slots)) = self.inv_drag.as_mut()
         {
@@ -4730,7 +4793,7 @@ impl Game<'_> {
     fn clicked_outside(&self, batch: &HudBatch) -> bool {
         use horizon_client::container_screen::{Book, Image, clicked_outside};
         let (ox, oy) = self.inventory_origin(batch);
-        let (shift, width, height) = if self.creative_inventory_open() {
+        let (shift, width, height) = if self.screen == Screen::Creative {
             (0.0, Creative::WIDTH as i32, Creative::HEIGHT as i32)
         } else {
             let (shift, width) = match self.station.as_ref().map(|s| s.kind) {
@@ -7980,45 +8043,8 @@ impl Game<'_> {
         {
             return;
         }
-        let shift = self.has_shift_down();
-        let items = self.creative_screen.items(&self.res.names);
-        let first = self.creative_screen.first_row(&self.res.names);
-        for r in 0..5 {
-            for c in 0..9 {
-                let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 18.0 + r as f32 * 18.0);
-                if !(cx >= x && cx < x + 16.0 && cy >= y && cy < y + 16.0) {
-                    continue;
-                }
-                // Clicking the grid with an item deletes it; otherwise take a stack.
-                if self.carried.take().is_some() {
-                    return;
-                }
-                let Some(stack) = items.get((first + r) * 9 + c) else {
-                    return;
-                };
-                let max = self.res.items.get(&stack.item).map_or(64, |i| i.max_stack);
-                let stack = ItemStack {
-                    count: if right { 1 } else { max },
-                    ..stack.clone()
-                };
-                if shift {
-                    let _ = self.give(stack);
-                } else {
-                    self.carried = Some(stack);
-                }
-                return;
-            }
-        }
-        for c in 0..9 {
-            let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 112.0);
-            if cx >= x && cx < x + 16.0 && cy >= y && cy < y + 16.0 {
-                std::mem::swap(&mut self.carried, &mut self.inventory[c]);
-                return;
-            }
-        }
-        // Clicking outside the panel throws the carried stack away.
-        if !(cx >= ox && cx < ox + Creative::WIDTH && cy >= oy && cy < oy + Creative::HEIGHT) {
-            self.carried = None;
+        if self.slot_at(&batch, cx, cy).is_some() || self.clicked_outside(&batch) {
+            self.inventory_press(right);
         }
     }
     /// Copy the live player and world state into the `Level` that gets saved.
@@ -8524,7 +8550,8 @@ impl Game<'_> {
             | KeyCode::Digit9
             | KeyCode::KeyF
             | KeyCode::KeyQ
-                if (self.screen == Screen::Inventory || self.creative_inventory_open())
+                if (self.screen == Screen::Inventory
+                    || (self.screen == Screen::Creative && !self.creative_screen.tab().search))
                     && self.inventory_hotkey(key) => {}
             KeyCode::KeyT if self.screen == Screen::Inventory => self.recipe_focus_search(),
             KeyCode::KeyT if self.screen == Screen::Playing => self.open_chat(""),
@@ -8879,7 +8906,7 @@ impl ApplicationHandler for Game<'_> {
                         if self.screen == Screen::Inventory {
                             self.loom_drag();
                         }
-                        if self.screen == Screen::Inventory || self.creative_inventory_open() {
+                        if matches!(self.screen, Screen::Inventory | Screen::Creative) {
                             self.inventory_drag_move();
                         }
                         if let Some(title) = &mut self.title
@@ -9078,11 +9105,11 @@ impl ApplicationHandler for Game<'_> {
                         Screen::Creative if pressed => {
                             self.click_creative(button == MouseButton::Right);
                         }
-                        Screen::Creative if self.creative_screen.tab().inventory => {
+                        Screen::Creative => {
+                            if button == MouseButton::Left {
+                                self.creative_screen.release();
+                            }
                             self.inventory_mouse_release(button == MouseButton::Right);
-                        }
-                        Screen::Creative if button == MouseButton::Left => {
-                            self.creative_screen.release();
                         }
                         Screen::Paused
                             if pressed && button == MouseButton::Left && self.pause_menu =>

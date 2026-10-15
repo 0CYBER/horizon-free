@@ -73,6 +73,9 @@ pub enum Kind {
     Loom,
     /// `MerchantMenu`: two payment slots, the result, then the inventory.
     Merchant,
+    /// `CreativeModeInventoryScreen.ItemPickerMenu`: an item tab's 45
+    /// display slots, then the hotbar.
+    ItemPicker,
 }
 
 impl Kind {
@@ -94,6 +97,7 @@ impl Kind {
             "crafter_be" => Self::CrafterBlock,
             "loom" => Self::Loom,
             "merchant" => Self::Merchant,
+            "item_picker" => Self::ItemPicker,
             _ => return None,
         })
     }
@@ -129,6 +133,9 @@ enum Role {
     LoomResult,
     /// `MerchantResultSlot`.
     MerchantResult,
+    /// `CustomCreativeSlot`: a creative tab's display slot, which the
+    /// screen clicks itself; drags and PICKUP_ALL pass it by.
+    CreativeDisplay,
 }
 
 #[derive(Clone, Copy)]
@@ -307,6 +314,16 @@ impl Menu {
                 });
                 player(&mut slots);
                 data = 1;
+            }
+            Kind::ItemPicker => {
+                containers[MAIN] = vec![None; 45];
+                slots.extend(main(45, Role::CreativeDisplay));
+                // addInventoryHotbarSlots.
+                slots.extend((0..9).map(|index| Slot {
+                    container: PLAYER,
+                    index,
+                    role: Role::Plain,
+                }));
             }
             Kind::Merchant => {
                 containers[MAIN] = vec![None; 2];
@@ -574,7 +591,7 @@ impl Menu {
 
     fn may_place(&self, env: &Env, s: usize, stack: &ItemStack) -> bool {
         match self.slots[s].role {
-            Role::Plain => true,
+            Role::Plain | Role::CreativeDisplay => true,
             Role::Armor(eq) => env
                 .items
                 .get(&stack.item)
@@ -1034,6 +1051,13 @@ impl Menu {
         let mut check_count = true;
         let mut after_take = false;
         match self.kind {
+            Kind::ItemPicker => {
+                // ItemPickerMenu.quickMoveStack: a hotbar stack is deleted.
+                if index >= total - 9 {
+                    self.put(env, index, None);
+                }
+                return None;
+            }
             Kind::Chest(rows) => {
                 check_count = false;
                 let n = rows * 9;
@@ -1357,6 +1381,7 @@ impl Menu {
                 if self.quick_replace(s, &carried, env)
                     && self.may_place(env, s, &carried)
                     && (self.quick_type == 2 || carried.count as usize > self.quick_slots.len())
+                    && self.can_drag_to(s)
                     && !self.quick_slots.contains(&s)
                 {
                     self.quick_slots.push(s);
@@ -1377,6 +1402,7 @@ impl Menu {
                             && self.may_place(env, s, &carried)
                             && (self.quick_type == 2
                                 || carried.count as usize >= self.quick_slots.len())
+                            && self.can_drag_to(s)
                         {
                             let have = self.slot(s).map_or(0, |c| c.count);
                             let max =
@@ -1626,6 +1652,11 @@ impl Menu {
     }
 
     /// The PICKUP_ALL branch (double click).
+    /// `canDragTo`: ItemPickerMenu keeps drags off its display slots.
+    fn can_drag_to(&self, s: usize) -> bool {
+        self.slots[s].role != Role::CreativeDisplay
+    }
+
     fn pickup_all(&mut self, env: &Env, s: usize, button: i32) {
         let Some(carried) = self.carried.clone() else {
             return;
@@ -1645,6 +1676,7 @@ impl Menu {
                 let have = self.carried.clone().expect("some");
                 // MerchantMenu.canTakeItemForPickAll is always false.
                 if self.kind != Kind::Merchant
+                    && self.slots[t].role != Role::CreativeDisplay
                     && self.has_item(t)
                     && self.quick_replace(t, &have, env)
                     && self.may_pickup(env, t)
@@ -1808,5 +1840,82 @@ impl Menu {
                 self.place_back(env, &mut stack);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{banner::Banners, brewing::Brewing, crafting::Recipes};
+
+    fn stack(item: &str, count: u32) -> Option<ItemStack> {
+        Some(ItemStack {
+            item: format!("minecraft:{item}").into(),
+            count,
+            damage: 0,
+            extra: None,
+        })
+    }
+
+    /// An item tab's ItemPickerMenu: the 45 display slots show `shown`.
+    fn with_picker(shown: &str, test: impl FnOnce(&Env, &mut Menu)) {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("items.json").exists() {
+            return;
+        }
+        let items = Items::catalog(&root).unwrap();
+        let recipes = Recipes::load(&root, &items).unwrap();
+        let brewing = Brewing::load(&root, &items);
+        let banners = Banners::load(&root);
+        let env = Env {
+            items: &items,
+            recipes: &recipes,
+            brewing: &brewing,
+            banners: &banners,
+            trade: None,
+        };
+        let mut menu = Menu::new(Kind::ItemPicker);
+        menu.creative = true;
+        assert_eq!(menu.slot_count(), 54);
+        for i in 0..45 {
+            menu.set_slot(&env, i, stack(shown, 1));
+        }
+        test(&env, &mut menu);
+    }
+
+    #[test]
+    fn item_picker_quick_move_deletes_a_hotbar_stack() {
+        with_picker("stone", |env, menu| {
+            menu.set_slot(env, 45, stack("dirt", 12));
+            menu.set_slot(env, 46, stack("dirt", 5));
+            menu.click(env, 45, 0, Input::QuickMove).unwrap();
+            assert_eq!(menu.player_item(0), None);
+            // Nothing moves anywhere: the other hotbar stack and the tab stay.
+            assert_eq!(menu.player_item(1), stack("dirt", 5).as_ref());
+            assert_eq!(menu.slot(0), stack("stone", 1).as_ref());
+            assert_eq!(menu.carried, None);
+        });
+    }
+
+    #[test]
+    fn item_picker_drags_and_pickup_all_skip_the_display_slots() {
+        with_picker("dirt", |env, menu| {
+            // A right-drag over a display slot and two hotbar slots.
+            menu.carried = stack("dirt", 10);
+            for (slot, header) in [(-999, 0), (3, 1), (45, 1), (47, 1), (-999, 2)] {
+                menu.click(env, slot, header | (1 << 2), Input::QuickCraft)
+                    .unwrap();
+            }
+            assert_eq!(menu.player_item(0), stack("dirt", 1).as_ref());
+            assert_eq!(menu.player_item(2), stack("dirt", 1).as_ref());
+            assert_eq!(menu.slot(3), stack("dirt", 1).as_ref());
+            assert_eq!(menu.carried, stack("dirt", 8));
+            // A double click gathers from the hotbar only.
+            menu.click(env, 48, 0, Input::PickupAll).unwrap();
+            assert_eq!(menu.carried, stack("dirt", 10));
+            assert_eq!(menu.player_item(0), None);
+            assert_eq!(menu.slot(0), stack("dirt", 1).as_ref());
+        });
     }
 }
