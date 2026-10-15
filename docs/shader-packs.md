@@ -50,7 +50,7 @@ The lightmap, fog and sky colours are computed on the CPU (`environment.rs`, `fo
 ### Where packs live and how one is picked
 
 - Packs go in `shaderpacks/` beside `options.txt` in the game folder (the same folder Iris uses, so one folder
-  holds both kinds). A pack is a folder or a `.zip`. A pack with a `pack.toml` at its root is a Horizon pack; a pack
+  holds both kinds). A pack is a folder (zips planned). A pack with a `pack.toml` at its root is a Horizon pack; a pack
   with a `shaders/` folder is a Java pack.
 - **Options → Video Settings → Shader Packs...** (Classic screens, laid out like Iris's: the packs on the left with
   "(off)" first, Apply and Done, *Open Shader Pack Folder*, *Shader Pack Settings...*) and a **Shader Packs** row in
@@ -148,13 +148,13 @@ struct Frame {
     camera_position: vec4<f32>,     // xyz: world position of the eye (f32, so ~1 mm precision at 30 000 blocks)
     resolution: vec4<f32>,          // width, height, 1/width, 1/height of this stage's target
     time: vec4<f32>,                // seconds since the pack loaded, frame counter, day fraction (0 = sunrise), partial tick
-    sun: vec4<f32>,                 // xyz: direction to the sun (view-independent, world space), w: sun angle (vanilla's)
+    sun: vec4<f32>,                 // xyz: direction to the sun (world space), w: sun angle in radians (0 at noon)
     moon: vec4<f32>,                // xyz: direction to the moon, w: moon phase (0..7)
     sky_color: vec4<f32>,           // vanilla's sky colour this frame
     fog_color: vec4<f32>,           // vanilla's fog colour this frame (what the world pass clears to)
     fog: vec4<f32>,                 // environmental fog start, end; sky fog end; cloud fog end (blocks)
     weather: vec4<f32>,             // rain level, thunder level, 0, 0 (smoothed as vanilla does)
-    camera_state: vec4<f32>,        // submerged in: 0 air, 1 water, 2 lava, 3 powder snow; night vision; darkness; blindness
+    camera_state: vec4<f32>,        // submerged in: 0 air, 1 water, 2 lava, 3 powder snow; night vision; darkness; blindness (0 for now)
     view_params: vec4<f32>,         // near, far (Camera.depthFar), render distance (blocks), vertical FOV (radians)
     dimension: vec4<f32>,           // 0 overworld, -1 nether, 1 end; has sky light; 0, 0
 }
