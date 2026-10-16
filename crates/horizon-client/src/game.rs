@@ -4109,7 +4109,9 @@ impl Game<'_> {
     fn slot_view(&mut self, i: usize) -> Option<ItemStack> {
         match i {
             200 => self.craft_result(),
-            309 => self.crafter_result(),
+            309 if matches!(self.container_kind(), Some(BlockEntity::Crafter(_))) => {
+                self.crafter_result()
+            }
             _ => self.slot_mut(i).clone(),
         }
     }
