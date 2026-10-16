@@ -107,7 +107,6 @@ impl Game<'_> {
             None => *self.spawn_origin.insert(self.spawn_origin()?),
         };
         while let Some((dx, dz)) = self.spawn_spiral.current() {
-            self.spawn_search = self.spawn_spiral.steps() as u32;
             if self.spawn_spiral.tested() {
                 let (cx, cz) = (ox + dx, oz + dz);
                 if !self.streaming.is_lit(cx, cz) {

@@ -93,6 +93,7 @@ pub mod keymapping;
 pub mod lan;
 pub mod landing;
 pub mod lang;
+pub mod level_loading;
 pub mod light;
 pub mod logging;
 pub mod menu;
