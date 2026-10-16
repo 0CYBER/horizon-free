@@ -4,8 +4,11 @@
 
 use crate::config::Config;
 use std::{
+    io::{BufRead, BufReader, Write},
+    net::{Ipv4Addr, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
+    time::Duration,
 };
 
 /// The game's program names, most specific first: a headless engine once there is one, else the game.
@@ -83,12 +86,15 @@ pub fn resources(config: &Config, dir: &Path, program: Option<&Path>) -> Result<
         })
 }
 
-/// Starts the engine in the server folder, with its console and log piped to the supervisor.
+/// Starts the engine in the server folder, with its console and log piped to the supervisor and its status
+/// on the control endpoint.
 pub fn spawn(program: &Path, resources: &Path, dir: &Path) -> std::io::Result<Child> {
     let mut command = Command::new(program);
     command
         .arg("--resources")
         .arg(resources)
+        .arg("--control-socket")
+        .arg(control_path(dir))
         .args(["--dedicated", "--nogui"])
         .current_dir(dir)
         .env("HORIZON_NO_AUDIO", "1")
@@ -104,6 +110,55 @@ pub fn spawn(program: &Path, resources: &Path, dir: &Path) -> std::io::Result<Ch
         windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP,
     );
     command.spawn()
+}
+
+/// The game's control endpoint in a server folder (`--control-socket`): TCP on 127.0.0.1 with a token, on every OS.
+pub fn control_path(dir: &Path) -> PathBuf {
+    dir.join(".horizon/engine.json")
+}
+
+/// A connection to the game's control endpoint: one JSON line asked, one answered.
+pub struct Control {
+    writer: TcpStream,
+    reader: BufReader<TcpStream>,
+}
+
+impl Control {
+    pub fn connect(dir: &Path) -> std::io::Result<Self> {
+        let text = std::fs::read_to_string(control_path(dir))?;
+        let bad = || std::io::Error::new(std::io::ErrorKind::InvalidData, "not a control endpoint");
+        let v: serde_json::Value = serde_json::from_str(&text).map_err(|_| bad())?;
+        let port = v["port"]
+            .as_u64()
+            .and_then(|p| u16::try_from(p).ok())
+            .ok_or_else(bad)?;
+        let token = v["token"].as_str().ok_or_else(bad)?;
+        let writer = TcpStream::connect((Ipv4Addr::LOCALHOST, port))?;
+        writer.set_read_timeout(Some(Duration::from_secs(30)))?;
+        let mut control = Self {
+            reader: BufReader::new(writer.try_clone()?),
+            writer,
+        };
+        let reply = control.ask(&format!("auth {token}"))?;
+        if reply["ok"] != true {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "the game refused the token",
+            ));
+        }
+        Ok(control)
+    }
+
+    pub fn ask(&mut self, line: &str) -> std::io::Result<serde_json::Value> {
+        writeln!(self.writer, "{line}")?;
+        self.writer.flush()?;
+        let mut reply = String::new();
+        if self.reader.read_line(&mut reply)? == 0 {
+            return Err(std::io::ErrorKind::UnexpectedEof.into());
+        }
+        serde_json::from_str(&reply)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    }
 }
 
 #[cfg(test)]

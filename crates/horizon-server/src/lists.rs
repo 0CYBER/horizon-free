@@ -1,6 +1,6 @@
-//! `op`, `deop` and `whitelist` while the server is stopped: they edit vanilla's files with the code the game
-//! reads them with (horizon-server-files) and answer with vanilla's console messages. While it runs, the game
-//! owns the lists, so the same commands are typed in its console instead.
+//! `op`, `deop` and `whitelist`. While the server runs, the game owns the lists: the command goes to its
+//! console. While it is stopped, they edit vanilla's files with the code the game reads them with
+//! (horizon-server-files) and answer with vanilla's console messages.
 
 use crate::{config, supervisor};
 use horizon_server_files::user_lists::{NameAndId, OpEntry, OpList, WhiteEntry, WhiteList};
@@ -9,12 +9,11 @@ use std::path::Path;
 pub fn run(dir: &Path, command: &str, args: &[String]) -> Result<(), String> {
     let config = config::Config::load(dir)?;
     // Holding the folder's lock keeps the server from starting halfway through.
-    let _lock = supervisor::lock(dir).map_err(|_| {
-        format!(
-            "the server is running: type `{command} {}` in its console",
-            args.join(" ")
-        )
-    })?;
+    let Ok(_lock) = supervisor::lock(dir) else {
+        let mut words = vec![command.to_owned()];
+        words.extend_from_slice(args);
+        return crate::cli::command(dir, &words);
+    };
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let ops_path = dir.join("ops.json");
     let white_path = dir.join("whitelist.json");
@@ -140,14 +139,15 @@ mod tests {
                 .unwrap()
                 .contains("Alex")
         );
-        // A running server owns the lists.
+        // A running server owns the lists: without its API, nothing changes.
         let lock = supervisor::lock(&dir).unwrap();
-        assert!(
-            run(&dir, "op", &s(&["Alex"]))
-                .unwrap_err()
-                .contains("running")
-        );
+        assert!(run(&dir, "op", &s(&["Alex"])).is_err());
         drop(lock);
+        assert!(
+            !std::fs::read_to_string(dir.join("ops.json"))
+                .unwrap()
+                .contains("Alex")
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

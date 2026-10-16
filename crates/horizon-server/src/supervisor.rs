@@ -1,14 +1,21 @@
 //! `horizon-server run`: writes `server.properties` from `server.toml`, runs the engine with the console on
-//! stdin, stops it cleanly on Ctrl-C or SIGTERM, and restarts it when it crashes (docs/server.md, section 7).
+//! stdin, serves the control API, stops the game cleanly on Ctrl-C, SIGTERM or `stop`, and restarts it when
+//! it crashes (docs/server.md, sections 2 and 7).
 
-use crate::{config, config::Config, engine, signals};
+use crate::{
+    api::{self, Phase, Shared},
+    config,
+    config::Config,
+    engine, signals,
+};
 use horizon_server_files::java_properties::now_millis;
+use serde_json::json;
 use std::{
     fs::File,
     io::{BufRead, BufReader, Read, Write},
     path::Path,
     process::{Child, ExitStatus},
-    sync::mpsc,
+    sync::{Arc, atomic::Ordering, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -22,15 +29,18 @@ const MAX_BACKOFF: Duration = Duration::from_secs(300);
 /// How long `stop` may take before the game is killed.
 const STOP_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// A line from the supervisor, in the game's log format (`[HH:mm:ss] [thread/LEVEL]: message`, UTC).
-pub fn note(level: &str, message: &str) {
+/// A line from the supervisor, in the game's log format (`[HH:mm:ss] [thread/LEVEL]: message`, UTC), on
+/// stdout and in the log the API serves.
+fn note(shared: &Shared, level: &str, message: &str) {
     let secs = now_millis().div_euclid(1000).rem_euclid(86_400);
-    println!(
+    let line = format!(
         "[{:02}:{:02}:{:02}] [Supervisor/{level}]: {message}",
         secs / 3600,
         secs / 60 % 60,
         secs % 60
     );
+    println!("{line}");
+    shared.log.lock().unwrap().push(line);
 }
 
 /// The folder's lock: one supervisor per server folder. Released when the process ends, even by a crash.
@@ -56,6 +66,8 @@ enum Exit {
     /// Asked to stop, or the game ended by itself without an error (`stop` typed in its console, the EULA
     /// not agreed, the port taken): not restarted.
     Stopped,
+    /// Asked to restart (`horizon-server restart`).
+    Restart,
     Crashed(ExitStatus),
 }
 
@@ -65,6 +77,9 @@ pub fn run(dir: &Path) -> Result<(), String> {
     let program = engine::program(&config, dir)?;
     let resources = engine::resources(&config, dir, Some(&program))?;
     let _lock = lock(dir)?;
+    let shared = Shared::new(dir);
+    let _endpoint = api::start(shared.clone())?;
+    sample(shared.clone());
     let console = console_lines();
     let mut crashes: Vec<Instant> = Vec::new();
     loop {
@@ -74,6 +89,7 @@ pub fn run(dir: &Path) -> Result<(), String> {
             .write_properties(dir)
             .map_err(|e| format!("server.properties: {e}"))?;
         note(
+            &shared,
             "INFO",
             &format!(
                 "Starting {} with the game files in {}",
@@ -81,11 +97,23 @@ pub fn run(dir: &Path) -> Result<(), String> {
                 resources.display()
             ),
         );
+        shared.set_phase(Phase::Starting);
         let mut child = engine::spawn(&program, &resources, dir)
             .map_err(|e| format!("{}: {e}", program.display()))?;
-        let exit = supervise(&mut child, &console);
+        {
+            let mut state = shared.state.lock().unwrap();
+            state.engine_pid = Some(child.id());
+            state.engine_started = Some(Instant::now());
+        }
+        let exit = supervise(&shared, &mut child, &console);
+        {
+            let mut state = shared.state.lock().unwrap();
+            state.engine_pid = None;
+            state.engine_started = None;
+        }
         match config::sync_back(dir, &written) {
             Ok(keys) if !keys.is_empty() => note(
+                &shared,
                 "INFO",
                 &format!(
                     "Copied into server.toml what the game changed: {}",
@@ -93,12 +121,22 @@ pub fn run(dir: &Path) -> Result<(), String> {
                 ),
             ),
             Ok(_) => {}
-            Err(e) => note("WARN", &format!("Could not update server.toml: {e}")),
+            Err(e) => note(
+                &shared,
+                "WARN",
+                &format!("Could not update server.toml: {e}"),
+            ),
         }
         let status = match exit {
             Exit::Stopped => return Ok(()),
+            Exit::Restart => continue,
             Exit::Crashed(status) => status,
         };
+        {
+            let mut state = shared.state.lock().unwrap();
+            state.crashes += 1;
+            state.last_crash = Some(status.to_string());
+        }
         if !config.engine.restart_on_crash {
             return Err(format!(
                 "the game stopped unexpectedly ({status}); engine.restart_on_crash is off"
@@ -116,15 +154,17 @@ pub fn run(dir: &Path) -> Result<(), String> {
         }
         let wait = backoff(crashes.len());
         note(
+            &shared,
             "WARN",
             &format!(
                 "The game stopped unexpectedly ({status}); restarting in {} s",
                 wait.as_secs()
             ),
         );
+        shared.set_phase(Phase::Restarting);
         let until = Instant::now() + wait;
         while Instant::now() < until {
-            if signals::requests() > 0 {
+            if signals::requests() > 0 || shared.stop.load(Ordering::SeqCst) {
                 return Ok(());
             }
             thread::sleep(Duration::from_millis(100));
@@ -156,8 +196,10 @@ fn console_lines() -> mpsc::Receiver<String> {
     rx
 }
 
-/// Copies the game's output to ours, line by line.
-fn pump(from: impl Read + Send + 'static, to_stderr: bool) {
+/// Copies the game's output to ours and to the API's log, line by line; the game's `Done` line means it
+/// is up.
+fn pump(shared: &Arc<Shared>, from: impl Read + Send + 'static, to_stderr: bool) {
+    let shared = shared.clone();
     let _ = thread::Builder::new()
         .name("engine-log".into())
         .spawn(move || {
@@ -167,27 +209,86 @@ fn pump(from: impl Read + Send + 'static, to_stderr: bool) {
                     eprintln!("{line}");
                 } else {
                     println!("{line}");
+                    if line.contains("/INFO]: Done (") {
+                        let mut state = shared.state.lock().unwrap();
+                        if state.phase == Phase::Starting {
+                            state.phase = Phase::Running;
+                        }
+                    }
                 }
+                shared.log.lock().unwrap().push(line);
+            }
+        });
+}
+
+/// Every second, the game's RAM, CPU and status, for `status` and (later) the panel's graphs.
+fn sample(shared: Arc<Shared>) {
+    let _ = thread::Builder::new()
+        .name("sampler".into())
+        .spawn(move || {
+            let mut control: Option<engine::Control> = None;
+            let mut previous: Option<(u32, Instant, f64)> = None;
+            loop {
+                thread::sleep(Duration::from_secs(1));
+                let (pid, running) = {
+                    let state = shared.state.lock().unwrap();
+                    (state.engine_pid, state.phase == Phase::Running)
+                };
+                let Some(pid) = pid else {
+                    control = None;
+                    previous = None;
+                    shared.state.lock().unwrap().sample = serde_json::Value::Null;
+                    continue;
+                };
+                let now = Instant::now();
+                let cpu = horizon_bench::cpu_seconds(pid);
+                let cpu_percent = match (previous, cpu) {
+                    (Some((p, at, before)), Some(cpu)) if p == pid => {
+                        Some((cpu - before) / now.duration_since(at).as_secs_f64() * 100.0)
+                    }
+                    _ => None,
+                };
+                previous = cpu.map(|c| (pid, now, c));
+                if !running {
+                    control = None;
+                } else if control.is_none() {
+                    control = engine::Control::connect(&shared.dir).ok();
+                }
+                let game = control
+                    .as_mut()
+                    .map(|c| c.ask("server-status"))
+                    .transpose()
+                    .unwrap_or_else(|_| {
+                        control = None;
+                        None
+                    });
+                shared.state.lock().unwrap().sample = json!({
+                    "rss_bytes": horizon_bench::rss_bytes(pid),
+                    "cpu_percent": cpu_percent,
+                    "game": game,
+                });
             }
         });
 }
 
 /// Runs one engine process to its end: console lines in, the log out, and a clean `stop` when asked.
-fn supervise(child: &mut Child, console: &mpsc::Receiver<String>) -> Exit {
+fn supervise(shared: &Arc<Shared>, child: &mut Child, console: &mpsc::Receiver<String>) -> Exit {
     if let Some(out) = child.stdout.take() {
-        pump(out, false);
+        pump(shared, out, false);
     }
     if let Some(err) = child.stderr.take() {
-        pump(err, true);
+        pump(shared, err, true);
     }
     let mut stdin = child.stdin.take();
     let mut stopping: Option<Instant> = None;
+    let mut restart = false;
     let mut handled = signals::requests();
     loop {
         while let Ok(line) = console.try_recv() {
             let command = line.trim().trim_start_matches('/');
             if command == "stop" && stopping.is_none() {
                 stopping = Some(Instant::now());
+                shared.set_phase(Phase::Stopping);
             }
             if let Some(input) = stdin.as_mut()
                 && writeln!(input, "{line}")
@@ -198,21 +299,30 @@ fn supervise(child: &mut Child, console: &mpsc::Receiver<String>) -> Exit {
             }
         }
         let requests = signals::requests();
-        if requests > handled {
-            handled = requests;
+        let asked = requests > handled || shared.stop.swap(false, Ordering::SeqCst);
+        handled = requests;
+        if shared.restart.swap(false, Ordering::SeqCst) && stopping.is_none() {
+            restart = true;
+            note(shared, "INFO", "Restarting the server");
+            stopping = Some(Instant::now());
+            shared.set_phase(Phase::Restarting);
+            send_stop(&mut stdin);
+        }
+        if asked {
+            restart = false;
             if stopping.is_none() {
-                note("INFO", "Stopping the server");
+                note(shared, "INFO", "Stopping the server");
                 stopping = Some(Instant::now());
-                if let Some(input) = stdin.as_mut() {
-                    let _ = writeln!(input, "stop").and_then(|()| input.flush());
-                }
+                shared.set_phase(Phase::Stopping);
+                send_stop(&mut stdin);
             } else {
-                note("WARN", "Stopping the game at once, without saving");
+                note(shared, "WARN", "Stopping the game at once, without saving");
                 let _ = child.kill();
             }
         }
         if stopping.is_some_and(|t| t.elapsed() > STOP_TIMEOUT) {
             note(
+                shared,
                 "WARN",
                 &format!(
                     "The game did not stop within {} s: killing it",
@@ -220,16 +330,24 @@ fn supervise(child: &mut Child, console: &mpsc::Receiver<String>) -> Exit {
                 ),
             );
             let _ = child.kill();
+            stopping = Some(Instant::now());
         }
         match child.try_wait() {
+            Ok(Some(_)) if restart => return Exit::Restart,
             Ok(Some(status)) if stopping.is_some() || status.success() => return Exit::Stopped,
             Ok(Some(status)) => return Exit::Crashed(status),
             Ok(None) => thread::sleep(Duration::from_millis(50)),
             Err(e) => {
-                note("ERROR", &format!("Lost track of the game: {e}"));
+                note(shared, "ERROR", &format!("Lost track of the game: {e}"));
                 return Exit::Stopped;
             }
         }
+    }
+}
+
+fn send_stop(stdin: &mut Option<std::process::ChildStdin>) {
+    if let Some(input) = stdin.as_mut() {
+        let _ = writeln!(input, "stop").and_then(|()| input.flush());
     }
 }
 

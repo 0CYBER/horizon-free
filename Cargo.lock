@@ -1532,9 +1532,11 @@ dependencies = [
 name = "horizon-server"
 version = "0.1.0"
 dependencies = [
+ "horizon-bench",
  "horizon-server-files",
  "libc",
  "serde",
+ "serde_json",
  "toml",
  "toml_edit",
  "windows-sys 0.61.2",
