@@ -90,6 +90,8 @@ pub(super) struct Remote {
     loaded_sent: bool,
     /// Open container: (window id, menu name).
     menu: Option<(i32, String)>,
+    /// The open menu's title as the server named it.
+    menu_title: Option<String>,
     state_id: i32,
     use_target: Option<[i32; 3]>,
     entities: HashMap<i32, Tracked>,
@@ -231,6 +233,7 @@ impl Game<'_> {
             carried: None,
             loaded_sent: false,
             menu: None,
+            menu_title: None,
             state_id: 0,
             use_target: None,
             entities: HashMap::new(),
@@ -2549,6 +2552,7 @@ impl Game<'_> {
     fn remote_close_local(&mut self) {
         if let Some(r) = self.remote.as_mut() {
             r.menu = None;
+            r.menu_title = None;
         }
         if self
             .station
@@ -2677,18 +2681,48 @@ impl Game<'_> {
                 return;
             }
         };
+        let title = plain(
+            &p.title,
+            &self
+                .remote
+                .as_ref()
+                .map(|r| r.lang.clone())
+                .unwrap_or_default(),
+        );
         if let Some(r) = self.remote.as_mut() {
             r.menu = Some((p.container, menu.clone()));
+            r.menu_title = Some(title);
         }
         self.craft_size = if menu == "minecraft:crafting" { 3 } else { 2 };
         self.container = None;
         if let Some(entity) = entity {
-            let key = target.unwrap_or((i32::MIN, 0, 0));
+            // The clicked block shows the menu when it holds that container;
+            // an ender chest's or a double chest's slots are no one block's,
+            // so they go under a key no block has.
+            let holds = |k: &(i32, i32, i32)| {
+                let name = &self.res.facts.get(self.world.block(k.0, k.1, k.2)).name;
+                BlockEntity::for_block(name).is_some_and(|e| {
+                    e.id() == entity.id() && e.slots().len() == entity.slots().len()
+                })
+            };
+            let key = target.filter(holds).unwrap_or((i32::MIN, 0, 0));
             self.world.block_entities.insert(key, entity);
             self.container = Some(key);
         }
         self.screen = Screen::Inventory;
         self.capture(false);
+    }
+    /// A server's chest-like menu (`MenuType.GENERIC_9xN`): its rows and title.
+    pub(super) fn remote_chest_menu(&self) -> Option<(usize, String)> {
+        let r = self.remote.as_ref()?;
+        let rows = r
+            .menu
+            .as_ref()?
+            .1
+            .strip_prefix("minecraft:generic_9x")?
+            .parse()
+            .ok()?;
+        Some((rows, r.menu_title.clone().unwrap_or_default()))
     }
     pub(super) fn remote_respawn(&mut self) {
         self.send(S::ClientCommand(play::ClientCommand { action: 0 }));

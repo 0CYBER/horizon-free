@@ -11,7 +11,10 @@ use horizon_client::{
     containers::BlockEntity,
     entities::Experience,
     items::ItemStack,
-    lan::{guest::SPECTATOR, menu::Rules},
+    lan::{
+        guest::SPECTATOR,
+        menu::{Rules, Slots},
+    },
     motion::{MotionEvent, MotionWorld, PlayerMotion},
 };
 use horizon_core::geometry::Vec3;
@@ -145,10 +148,18 @@ impl Game<'_> {
         self.right = play.using.is_some() || self.using.is_some();
         let riding = self.riding.take();
         let host_station = self.station.take();
+        // The guest's own ender inventory; one the host has open goes back
+        // into the host's while the guest acts.
+        let host_ender = self.ender_open;
+        self.close_ender_chest();
+        std::mem::swap(&mut self.ender_items, &mut g.ender_items);
         self.lan_acting = Some(conn);
 
         let result = f(self);
         self.lan_acting = None;
+        // An ender chest the guest opened: the menu shows their inventory
+        // itself (lan_open_container), not a stand-in block entity.
+        self.close_ender_chest();
 
         // What the action opened: handed to the guest instead of the host.
         let opened = self.container.take();
@@ -172,6 +183,13 @@ impl Game<'_> {
             self.keys.remove(&KeyCode::ShiftLeft);
         }
         let g = &mut host.hub.guests[i];
+        std::mem::swap(&mut self.ender_items, &mut g.ender_items);
+        if let Some(key) = host_ender {
+            self.world
+                .block_entities
+                .insert(key, BlockEntity::Chest(self.ender_items.clone()));
+            self.ender_open = Some(key);
+        }
         let new_xp = std::mem::replace(&mut self.experience, xp);
         g.xp_level = new_xp.level;
         g.xp_progress = new_xp.progress;
@@ -240,30 +258,51 @@ impl Game<'_> {
     /// Hand a container the guest opened over (ServerPlayer.openMenu);
     /// false when it is not one a guest can open.
     fn lan_open_container(&mut self, host: &mut LanHost, conn: u32, pos: (i32, i32, i32)) -> bool {
-        let Some(entity) = self.world.block_entities.get(&pos) else {
-            return false;
-        };
-        let (menu, title) = match entity {
-            BlockEntity::Chest(items) => match items.len() {
-                27 => ("minecraft:generic_9x3", "container.chest"),
-                9 => ("minecraft:generic_3x3", "container.dispenser"),
-                5 => ("minecraft:hopper", "container.hopper"),
-                _ => return false,
-            },
-            _ => return false,
-        };
         let name = &self
             .res
             .facts
             .get(self.world.block(pos.0, pos.1, pos.2))
             .name;
-        let title = match &**name {
-            "minecraft:barrel" => "container.barrel",
-            "minecraft:dropper" => "container.dropper",
-            n if n.ends_with("shulker_box") => "container.shulkerBox",
-            _ => title,
+        let (menu, title, slots) = if &**name == "minecraft:ender_chest" {
+            // EnderChestBlock.useWithoutItem: the player's own inventory.
+            (
+                "minecraft:generic_9x3",
+                "container.enderchest",
+                Slots::Ender,
+            )
+        } else if let Some((other, right)) = self.chest_partner(pos) {
+            // ChestBlock.combine: the right half's slots come first.
+            let halves = if right {
+                Slots::Double(pos, other)
+            } else {
+                Slots::Double(other, pos)
+            };
+            ("minecraft:generic_9x6", "container.chestDouble", halves)
+        } else {
+            let Some(BlockEntity::Chest(items)) = self.world.block_entities.get(&pos) else {
+                return false;
+            };
+            let (menu, title) = match items.len() {
+                27 => ("minecraft:generic_9x3", "container.chest"),
+                9 => ("minecraft:generic_3x3", "container.dispenser"),
+                5 => ("minecraft:hopper", "container.hopper"),
+                _ => return false,
+            };
+            let title = match &**name {
+                "minecraft:barrel" => "container.barrel",
+                "minecraft:dropper" => "container.dropper",
+                n if n.ends_with("shulker_box") => "container.shulkerBox",
+                _ => title,
+            };
+            (menu, title, Slots::Block(pos))
         };
-        let items = entity.slots().to_vec();
+        let Some(items) = host
+            .hub
+            .guest(conn)
+            .and_then(|g| slots.read(&self.world, g))
+        else {
+            return false;
+        };
         // ServerPlayer.openMenu closes the menu that was open.
         self.guest_container_closed(host, conn);
         host.hub.open_container(
@@ -271,6 +310,7 @@ impl Game<'_> {
             menu,
             horizon_protocol::text::translatable(title, &[]),
             pos,
+            slots,
             items,
         );
         true

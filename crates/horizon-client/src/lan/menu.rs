@@ -4,7 +4,7 @@
 //! clone, throw, quick craft (drag) and pickup all; items thrown out of a
 //! menu are returned for the game to drop.
 use super::guest::Guest;
-use crate::items::ItemStack;
+use crate::{items::ItemStack, world::World};
 
 /// What the menus need to know about items.
 pub trait Rules {
@@ -19,6 +19,8 @@ pub struct Menu {
     /// The `minecraft:menu` registry id.
     pub kind: i32,
     pub pos: Option<(i32, i32, i32)>,
+    /// Where the container's slots live.
+    pub slots: Slots,
     /// Slots of the container itself (without the 36 inventory slots).
     pub size: usize,
     pub state: i32,
@@ -26,6 +28,75 @@ pub struct Menu {
     pub sent: Vec<Option<ItemStack>>,
     /// An unfinished drag: (mode, slots).
     pub drag: Option<(u8, Vec<usize>)>,
+}
+
+/// Where the slots of a container menu live.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Slots {
+    /// One block entity.
+    Block((i32, i32, i32)),
+    /// A double chest (`CompoundContainer`): the first half's slots, then
+    /// the second's.
+    Double((i32, i32, i32), (i32, i32, i32)),
+    /// The player's own ender chest inventory (`PlayerEnderChestContainer`).
+    Ender,
+}
+
+impl Slots {
+    fn halves(self) -> Vec<(i32, i32, i32)> {
+        match self {
+            Slots::Block(k) => vec![k],
+            Slots::Double(a, b) => vec![a, b],
+            Slots::Ender => Vec::new(),
+        }
+    }
+    /// Whether the block entities behind the slots are still there
+    /// (`Container.stillValid`).
+    pub fn valid(self, world: &World) -> bool {
+        self.halves()
+            .iter()
+            .all(|k| world.block_entities.contains_key(k))
+    }
+    /// Container slot `n`.
+    pub fn get(self, world: &World, guest: &Guest, mut n: usize) -> Option<ItemStack> {
+        if self == Slots::Ender {
+            return guest.ender_items.get(n).cloned().flatten();
+        }
+        for k in self.halves() {
+            let slots = world.block_entities.get(&k)?.slots();
+            if n < slots.len() {
+                return slots[n].clone();
+            }
+            n -= slots.len();
+        }
+        None
+    }
+    /// Every container slot, in menu order.
+    pub fn read(self, world: &World, guest: &Guest) -> Option<Vec<Option<ItemStack>>> {
+        if self == Slots::Ender {
+            return Some(guest.ender_items.clone());
+        }
+        let mut items = Vec::new();
+        for k in self.halves() {
+            items.extend_from_slice(world.block_entities.get(&k)?.slots());
+        }
+        Some(items)
+    }
+    /// Store what `read` gave, changed.
+    pub fn write(self, world: &mut World, guest: &mut Guest, items: Vec<Option<ItemStack>>) {
+        if self == Slots::Ender {
+            guest.ender_items = items;
+            return;
+        }
+        let mut rest = items.into_iter();
+        for k in self.halves() {
+            if let Some(e) = world.block_entities.get_mut(&k) {
+                for slot in e.slots_mut() {
+                    *slot = rest.next().flatten();
+                }
+            }
+        }
+    }
 }
 
 /// Slots of a menu seen as one list.

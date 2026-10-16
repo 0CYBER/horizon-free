@@ -16,7 +16,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - mobs:      with the host in creative, a zombie and a skeleton go for the guest and hurt them;
 - hazards:   a guest in survival gets hungry sprint-jumping and is hurt by lava, a block at the eyes,
              drowning and the void (then respawns);
-- pvp:       the guest and the host hit each other with a sword; with the pvp game rule off, nothing.
+- pvp:       the guest and the host hit each other with a sword; with the pvp game rule off, nothing;
+- containers: the guest's ender chest holds the guest's items, not the host's, and a double chest
+             opens as 9x6 with the right half first.
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -43,7 +45,7 @@ from agent_control_e2e import Cli, Failed, game_env  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'chest', 'crafting', 'damage', 'mobs', 'hazards', 'pvp']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'chest', 'crafting', 'damage', 'mobs', 'hazards', 'pvp', 'containers']
 
 
 class Game:
@@ -389,9 +391,62 @@ def check_pvp(host, guest, out):
     return hits
 
 
+def container_items(game):
+    """The open container's stacks by slot (Horizon's container slots are 300 and up) and its size."""
+    slots = [s for s in game('screen').get('slots', []) if s.get('slot', 0) >= 300]
+    return {s['slot'] - 300: s['item'] for s in slots if s.get('item')}, len(slots)
+
+
+def open_container(guest, pos, out, label, take=None):
+    """Open the container at `pos` and read it; `take` shift-clicks that container slot out first."""
+    guest.raw('interact', *pos)
+    guest.raw('wait-for', 'screen', 'container', '--timeout', 10)
+    guest.wait(5)
+    if take is not None:
+        guest.raw('click-slot', 300 + take, 'shift')
+        guest.wait(5)
+    items = container_items(guest)
+    guest.shot(out, label)
+    guest.raw('key', 'esc', 'tap')
+    guest.wait(5)
+    return items
+
+
+def check_containers(host, guest, out):
+    host('command', command='item replace entity @s enderchest.0 with minecraft:diamond')
+    guest('command', command='item replace entity @s enderchest.4 with minecraft:emerald')
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    guest('command', command=f'setblock {x} {y} {z + 2} minecraft:ender_chest')
+    guest.wait(10)
+    ender, ender_size = open_container(guest, (x, y, z + 2), out, 'ender-chest')
+    # Facing north, a left half pairs with the block to its east (ChestBlock.getConnectedDirection).
+    guest('command', command=f'setblock {x} {y} {z - 2} minecraft:chest[facing=north,type=left]')
+    guest('command', command=f'setblock {x + 1} {y} {z - 2} minecraft:chest[facing=north,type=right]')
+    guest('command', command=f'item replace block {x + 1} {y} {z - 2} container.0 with minecraft:gold_ingot')
+    guest('command', command=f'item replace block {x} {y} {z - 2} container.0 with minecraft:iron_ingot')
+    guest.wait(10)
+    double, double_size = open_container(guest, (x, y, z - 2), out, 'double-chest')
+    # Taking from each writes back to the guest's ender inventory and to the right half.
+    guest('command', command='clear @s')
+    open_container(guest, (x, y, z + 2), out, 'ender-chest-take', take=4)
+    open_container(guest, (x, y, z - 2), out, 'double-chest-take', take=0)
+    taken = guest('inventory')['counts']
+    after = (open_container(guest, (x, y, z + 2), out, 'ender-chest-after')[0],
+             open_container(guest, (x, y, z - 2), out, 'double-chest-after')[0])
+    host_ender = host('command', command='data get entity @s EnderItems')
+    assert ender == {4: 'minecraft:emerald'} and ender_size == 27, f'the guest\'s ender chest: {ender} ({ender_size})'
+    assert double_size == 54, f'the double chest opened with {double_size} slots'
+    assert double == {0: 'minecraft:gold_ingot', 27: 'minecraft:iron_ingot'}, f'the double chest: {double}'
+    assert 'emerald' not in json.dumps(host_ender), f'the guest\'s item went to the host: {host_ender}'
+    assert taken.get('minecraft:emerald') == 1 and taken.get('minecraft:gold_ingot') == 1, f'taken: {taken}'
+    assert after == ({}, {27: 'minecraft:iron_ingot'}), f'after taking: {after}'
+    return {'ender': ender, 'double': double, 'taken': taken}
+
+
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
              'chest': check_chest, 'crafting': check_crafting, 'damage': check_damage,
-             'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp}
+             'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
+             'containers': check_containers}
 
 
 def run(ctl, out, resources, checks):

@@ -2,7 +2,7 @@
 //! level events, animations and block containers with their clicks.
 use super::{
     hub::Hub,
-    menu::{self, Menu, Rules, View},
+    menu::{self, Menu, Rules, Slots, View},
 };
 use crate::{items::ItemStack, world::World};
 use horizon_protocol::{
@@ -143,6 +143,7 @@ impl Hub {
         menu_kind: &str,
         title: Tag,
         pos: (i32, i32, i32),
+        slots: Slots,
         items: Vec<Option<ItemStack>>,
     ) {
         let Some(kind) = self
@@ -169,6 +170,7 @@ impl Hub {
             window,
             kind,
             pos: Some(pos),
+            slots,
             size: items.len(),
             state: 0,
             sent: Vec::new(),
@@ -265,10 +267,7 @@ impl Hub {
     fn view_slot(&self, i: usize, world: &World, slot: usize) -> Option<ItemStack> {
         let g = &self.guests[i];
         match &g.menu {
-            Some(m) if slot < m.size => {
-                let e = world.block_entities.get(&m.pos?)?;
-                e.slots().get(slot).cloned().flatten()
-            }
+            Some(m) if slot < m.size => m.slots.get(world, g, slot),
             Some(m) => g
                 .inventory
                 .get(player_slot(slot - m.size))
@@ -299,32 +298,32 @@ impl Hub {
         if !window_ok || self.guests[i].spectator() {
             return Vec::new();
         }
-        let pos = self.guests[i].menu.as_ref().and_then(|m| m.pos);
+        let source = self.guests[i].menu.as_ref().map(|m| m.slots);
         let mut drag = if in_menu {
             self.guests[i].menu.as_mut().and_then(|m| m.drag.take())
         } else {
             self.guests[i].drag.take()
         };
-        let (drops, changed) = {
-            let guest = &mut self.guests[i];
-            let mut entity = pos.and_then(|k| world.block_entities.get_mut(&k));
-            let slots = entity.as_mut().map(|e| e.slots_mut());
-            if in_menu && slots.is_none() {
-                return Vec::new();
-            }
-            let mut view = View {
-                guest,
-                container: slots,
-            };
-            menu::click(
-                &mut view,
-                &mut drag,
-                i32::from(p.slot),
-                i32::from(p.button),
-                p.input,
-                rules,
-            )
+        let guest = &mut self.guests[i];
+        let mut items = source.and_then(|s| s.read(world, guest));
+        if in_menu && items.is_none() {
+            return Vec::new();
+        }
+        let mut view = View {
+            guest,
+            container: items.as_deref_mut(),
         };
+        let (drops, changed) = menu::click(
+            &mut view,
+            &mut drag,
+            i32::from(p.slot),
+            i32::from(p.button),
+            p.input,
+            rules,
+        );
+        if let (Some(source), Some(items)) = (source, items) {
+            source.write(world, guest, items);
+        }
         if in_menu {
             if let Some(m) = self.guests[i].menu.as_mut() {
                 m.drag = drag;
@@ -427,8 +426,8 @@ impl Hub {
             else {
                 continue;
             };
-            let (size, window, pos) = (menu.size, menu.window, menu.pos);
-            if !pos.is_some_and(|k| world.block_entities.contains_key(&k)) {
+            let (size, window, slots) = (menu.size, menu.window, menu.slots);
+            if !slots.valid(world) {
                 self.close_container_at(i);
                 continue;
             }
