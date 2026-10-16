@@ -22,20 +22,30 @@ pub fn ring_positions(
     preferred: &BTreeSet<BiomeId>,
     biome: &mut dyn FnMut([i32; 3]) -> BiomeId,
 ) -> Vec<ChunkPos> {
-    let mut random = LegacyRandom::new(seed);
-    let mut angle = random.next_double() * PI * 2.0;
-    let (mut in_circle, mut circle, mut spread) = (0, 0, spread);
-    let mut out = Vec::with_capacity(count.max(0) as usize);
-    for i in 0..count {
-        let dist = f64::from(4 * distance + distance * circle * 6)
-            + (random.next_double() - 0.5) * (f64::from(distance) * 2.5);
-        let round = |v: f64| (v + 0.5).floor() as i64 as i32;
-        let (x, z) = (
-            round(horizon_core::jmath::cos(angle) * dist),
-            round(horizon_core::jmath::sin(angle) * dist),
-        );
-        let mut search = random.fork();
-        let (cx, cz) = ((x * 16 + 8) >> 2, (z * 16 + 8) >> 2);
+    ring_searches(seed, distance, spread, count)
+        .iter()
+        .map(|search| search.find(preferred, biome))
+        .collect()
+}
+
+/// One ring position before its biome search: the chunk on the ring and the
+/// random its search uses. Vanilla runs each search as its own task.
+#[derive(Clone, Debug)]
+pub struct RingSearch {
+    x: i32,
+    z: i32,
+    random: LegacyRandom,
+}
+impl RingSearch {
+    /// BiomeSource.findBiomeHorizontal around the ring chunk's centre: a
+    /// random preferred biome within 112 blocks, else the ring chunk itself.
+    pub fn find(
+        &self,
+        preferred: &BTreeSet<BiomeId>,
+        biome: &mut dyn FnMut([i32; 3]) -> BiomeId,
+    ) -> ChunkPos {
+        let mut search = self.random.clone();
+        let (cx, cz) = ((self.x * 16 + 8) >> 2, (self.z * 16 + 8) >> 2);
         let mut found = 0;
         let mut result = None;
         for dz in -28..=28 {
@@ -48,9 +58,28 @@ pub fn ring_positions(
                 }
             }
         }
-        out.push(match result {
+        match result {
             Some((bx, bz)) => ChunkPos::new(bx >> 4, bz >> 4),
-            None => ChunkPos::new(x, z),
+            None => ChunkPos::new(self.x, self.z),
+        }
+    }
+}
+
+/// The ring chunks and search randoms of generateRingPositions, in order:
+/// the serial part, cheap; the searches can then run anywhere.
+pub fn ring_searches(seed: i64, distance: i32, spread: i32, count: i32) -> Vec<RingSearch> {
+    let mut random = LegacyRandom::new(seed);
+    let mut angle = random.next_double() * PI * 2.0;
+    let (mut in_circle, mut circle, mut spread) = (0, 0, spread);
+    let mut out = Vec::with_capacity(count.max(0) as usize);
+    for i in 0..count {
+        let dist = f64::from(4 * distance + distance * circle * 6)
+            + (random.next_double() - 0.5) * (f64::from(distance) * 2.5);
+        let round = |v: f64| (v + 0.5).floor() as i64 as i32;
+        out.push(RingSearch {
+            x: round(horizon_core::jmath::cos(angle) * dist),
+            z: round(horizon_core::jmath::sin(angle) * dist),
+            random: random.fork(),
         });
         angle += PI * 2.0 / f64::from(spread);
         in_circle += 1;
