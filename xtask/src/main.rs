@@ -1,8 +1,8 @@
 //! Repository tasks, run with `cargo run -p xtask -- TASK`.
 //!
-//! `package BINARY OUTDIR`: a playable Horizon folder with the game binary, horizon-ctl and
-//! horizon-prepare (built beside it: cargo build --release -p horizon-client --bins -p
-//! horizon-prepare), the exporters horizon-prepare compiles, its sources (the launcher compares
+//! `package BINARY OUTDIR`: a playable Horizon folder with the game binary, horizon-ctl,
+//! horizon-prepare and horizon-server (built beside it: cargo build --release -p horizon-client
+//! --bins -p horizon-prepare -p horizon-server), the exporters horizon-prepare compiles, its sources (the launcher compares
 //! them to its own), and PLAY.txt. It holds none of Minecraft's files: players prepare those
 //! from their own copy. .github/workflows/release.yml makes the release folders with it.
 //!
@@ -29,9 +29,10 @@ const ARCHIVED: [&str; 5] = [
 ];
 
 /// The programs that sit beside the client: horizon-ctl, the command line and MCP server that
-/// play the game, and horizon-prepare, which prepares the resources from the player's own
-/// Minecraft.
-const TOOLS: [&str; 2] = ["horizon-ctl", "horizon-prepare"];
+/// play the game, horizon-prepare, which prepares the resources from the player's own
+/// Minecraft, and horizon-server, which hosts a server with the client as its engine
+/// (docs/server.md).
+const TOOLS: [&str; 3] = ["horizon-ctl", "horizon-prepare", "horizon-server"];
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -234,7 +235,7 @@ fn package(binary: &Path, out: &Path) -> Result<(), String> {
         let path = binary.parent().unwrap_or(Path::new("")).join(name);
         if !path.is_file() {
             return Err(format!(
-                "{} is missing; build it too: cargo build --release -p horizon-client --bins -p horizon-prepare",
+                "{} is missing; build it too: cargo build --release -p horizon-client --bins -p horizon-prepare -p horizon-server",
                 path.display()
             ));
         }

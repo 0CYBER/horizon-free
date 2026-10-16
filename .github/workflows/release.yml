@@ -109,18 +109,18 @@ jobs:
       - name: ALSA and udev headers
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
-      - name: Build the client, horizon-ctl and horizon-prepare
-        run: cargo build --release --locked -p horizon-client --bin horizon-client --bin horizon-ctl -p horizon-prepare --bin horizon-prepare
+      - name: Build the client, horizon-ctl, horizon-prepare and horizon-server
+        run: cargo build --release --locked -p horizon-client --bin horizon-client --bin horizon-ctl -p horizon-prepare --bin horizon-prepare -p horizon-server --bin horizon-server
       - name: Every program the release folder takes was built
         run: |
-          for binary in horizon-client horizon-ctl horizon-prepare; do
+          for binary in horizon-client horizon-ctl horizon-prepare horizon-server; do
             test -f "target/release/$binary${{ matrix.exe }}" || { echo "::error::target/release/$binary${{ matrix.exe }} is missing"; exit 1; }
           done
       - name: Only system libraries
         # Windows: no non-system DLL (a "DLL not found" dialog on some players' machines). Linux: the standard
         # loader and libraries every desktop distribution has. macOS: only the system's own libraries.
         run: |
-          for binary in horizon-client horizon-ctl horizon-prepare; do
+          for binary in horizon-client horizon-ctl horizon-prepare horizon-server; do
             file="target/release/$binary${{ matrix.exe }}"
             if [[ "$RUNNER_OS" == macOS ]]; then
               others=$(otool -L "$file" | tail -n +2 | awk '{print $1}' | grep -v -E '^(/usr/lib/|/System/Library/)' || true)
@@ -137,6 +137,7 @@ jobs:
           "$bin/horizon-ctl${{ matrix.exe }}" --help > /dev/null
           "$bin/horizon-prepare${{ matrix.exe }}" --version
           "$bin/horizon-prepare${{ matrix.exe }}" --help | grep -q -- '--minecraft-dir'
+          "$bin/horizon-server${{ matrix.exe }}" --version
       - name: Tools from the runner
         if: runner.environment == 'self-hosted'
         run: bash tools/ci/runner-env.sh

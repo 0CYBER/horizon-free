@@ -27,6 +27,38 @@ pub struct Answers {
     pub yes: bool,
 }
 
+impl Answers {
+    /// The answers in the environment, for containers: `HORIZON_EULA=true`, `HORIZON_WORLD`,
+    /// `HORIZON_SEED`, `HORIZON_PORT`, `HORIZON_WHITELIST=true|false`, `HORIZON_PLAYERS` (names separated by
+    /// commas) and `HORIZON_OP`. Flags given on the command line win.
+    pub fn from_env() -> Result<Self, String> {
+        let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+        let flag = |name: &str| var(name).map(|v| v.eq_ignore_ascii_case("true"));
+        Ok(Self {
+            eula: flag("HORIZON_EULA").unwrap_or(false),
+            world: var("HORIZON_WORLD"),
+            seed: var("HORIZON_SEED"),
+            port: var("HORIZON_PORT")
+                .map(|p| {
+                    p.parse()
+                        .map_err(|_| format!("HORIZON_PORT is {p:?}: use a port number"))
+                })
+                .transpose()?,
+            whitelist: flag("HORIZON_WHITELIST"),
+            players: var("HORIZON_PLAYERS")
+                .map(|p| {
+                    p.split([',', ' '])
+                        .filter(|n| !n.is_empty())
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            op: var("HORIZON_OP"),
+            yes: false,
+        })
+    }
+}
+
 struct Prompt {
     interactive: bool,
 }

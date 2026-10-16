@@ -9,6 +9,7 @@ mod engine;
 mod http;
 mod init;
 mod lists;
+mod service;
 mod signals;
 mod supervisor;
 
@@ -38,6 +39,9 @@ Usage: horizon-server [--dir DIR] <command>
   restore BACKUP [--yes]
               Put a backup's world in place (the current one is kept in backups/); a running
               server restarts with it
+  service install|uninstall|print [--system]
+              Start the server at boot or login: a systemd unit on Linux (--system: for every user,
+              with sudo), a launchd agent on macOS, a task at logon on Windows
   import FILE Write server.toml from a vanilla server.properties
   op NAME, deop NAME
   whitelist on|off|list, whitelist add|remove NAME
@@ -78,6 +82,7 @@ fn main() -> ExitCode {
         Some("logs") => logs(&dir, &args[1..]),
         Some("backup") => cli::backup(&dir, args.get(1).map(String::as_str)),
         Some("backups") => cli::backups(&dir),
+        Some("service") => service::command(&dir, &args[1..]),
         Some("restore") => match args.get(1) {
             Some(name) => cli::restore(&dir, name, args[2..].iter().any(|a| a == "--yes")),
             None => Err("restore needs a backup (`horizon-server backups` lists them)".into()),
@@ -117,7 +122,7 @@ fn logs(dir: &std::path::Path, args: &[String]) -> Result<(), String> {
 }
 
 fn init_answers(args: &[String]) -> Result<init::Answers, String> {
-    let mut answers = init::Answers::default();
+    let mut answers = init::Answers::from_env()?;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         let mut value = |flag: &str| {
