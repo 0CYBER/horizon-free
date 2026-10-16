@@ -25,7 +25,7 @@ impl Game<'_> {
                         .join("worldgen/blocks/structure-blocks.json"),
                 )
                 .ok()?;
-                StateTransforms::from_json(&json, self.res.assets.registry.len()).ok()
+                StateTransforms::from_json(&json, self.pack.assets.registry.len()).ok()
             })
             .as_ref()
     }
@@ -64,7 +64,7 @@ impl Game<'_> {
             };
             return Some(Arc::new(StructureTemplate::from_nbt(
                 &named.tag,
-                self.res.assets.registry,
+                self.pack.assets.registry,
                 transforms,
             )));
         }

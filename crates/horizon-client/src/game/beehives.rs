@@ -63,7 +63,7 @@ impl HiveHost for GameHive<'_, '_> {
 
 impl Game<'_> {
     fn hive_with_honey(&self, state: BlockStateId, level: i32) -> Option<BlockStateId> {
-        let registry = self.res.assets.registry;
+        let registry = self.pack.assets.registry;
         let mut s = registry.state(state)?.clone();
         s.properties
             .insert("honey_level".to_owned(), level.to_string());
@@ -82,7 +82,7 @@ impl Game<'_> {
         {
             return None;
         }
-        let props = &self.res.assets.registry.state(state)?.properties;
+        let props = &self.pack.assets.registry.state(state)?.properties;
         let honey = props.get("honey_level").and_then(|v| v.parse().ok());
         let facing = beehive::facing_step(props.get("facing").map(String::as_str));
         Some((honey, facing))

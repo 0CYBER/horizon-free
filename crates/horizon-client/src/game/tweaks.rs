@@ -331,7 +331,7 @@ impl Game<'_> {
     /// The sort buttons: a bordered square with three bars, lighter under
     /// the cursor.
     pub(super) fn draw_sort_buttons(&self, batch: &mut HudBatch, ox: f32, oy: f32) {
-        let atlas = &self.res.atlas;
+        let atlas = &self.atlas;
         for ((x, y), _) in self.sort_buttons() {
             let (x, y) = (ox + x, oy + y);
             let (cx, cy) = self.cursor;
@@ -401,7 +401,7 @@ impl Game<'_> {
         }
         let views: Vec<Option<ItemStack>> = slots.iter().map(|&s| self.slot_view(s)).collect();
         let clicks = {
-            let names = |id: &str| self.res.names.item(id);
+            let names = |id: &str| self.pack.names.item(id);
             let rank = |s: &ItemStack| {
                 let order = self.creative_screen.order_of(s).unwrap_or(usize::MAX);
                 (order, hover_name(&names, s))

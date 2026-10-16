@@ -169,7 +169,7 @@ impl Game<'_> {
         let player_type = super::perspective::player_type(&root);
         let mut streaming = Streaming::new(
             Arc::new(NoTerrain),
-            self.res.context.clone(),
+            self.pack.context.clone(),
             self.res.threads,
         );
         streaming.remote = true;
@@ -278,7 +278,7 @@ impl Game<'_> {
         self.debug_charts.reset();
         self.tab_list.reset();
         self.score.board = Default::default();
-        self.streaming = Streaming::new(Arc::new(NoTerrain), self.res.context.clone(), 1);
+        self.streaming = Streaming::new(Arc::new(NoTerrain), self.pack.context.clone(), 1);
         self.streaming.paused = true;
         self.world = World::new(self.res.facts.air, 0);
         self.player = None;
@@ -465,7 +465,7 @@ impl Game<'_> {
         if !same {
             let mut streaming = Streaming::new(
                 Arc::new(NoTerrain),
-                self.res.context.clone(),
+                self.pack.context.clone(),
                 self.res.threads,
             );
             streaming.remote = true;
@@ -1545,11 +1545,10 @@ impl Game<'_> {
             self.skin_slots.len()
         } else {
             let (old, slot) = self.skin_slots.remove(0);
-            self.res.atlas.sprites.remove(&old);
+            self.atlas.sprites.remove(&old);
             slot
         };
         let Some(rect) = self
-            .res
             .atlas
             .sprites
             .get(&format!("horizon/skin{slot}"))
@@ -1557,7 +1556,7 @@ impl Game<'_> {
         else {
             return;
         };
-        let (w, h) = (self.res.atlas.width as f32, self.res.atlas.height as f32);
+        let (w, h) = (self.atlas.width as f32, self.atlas.height as f32);
         self.map_patches.push(horizon_client::font::Patch {
             x: (rect.u0 * w).round() as u32,
             y: (rect.v0 * h).round() as u32,
@@ -1565,7 +1564,7 @@ impl Game<'_> {
             height: 64,
             rgba,
         });
-        self.res.atlas.sprites.insert(location.clone(), rect);
+        self.atlas.sprites.insert(location.clone(), rect);
         self.skin_slots.push((location, slot));
     }
     /// Whether a downloaded skin is in the atlas, marking it recently shown.
@@ -1807,7 +1806,7 @@ impl Game<'_> {
                 entities: &ghast_collisions,
                 player,
                 scene: &mut self.world,
-                assets: &self.res.assets,
+                assets: &self.pack.assets,
                 collision_binding: self.collision,
                 resources: self.motion,
             }
@@ -2742,7 +2741,7 @@ impl Game<'_> {
         if self.player.is_some() {
             return false;
         }
-        let atlas = &self.res.atlas;
+        let atlas = &self.atlas;
         let (w, h) = (batch.width, batch.height);
         batch.fill(atlas, 0.0, 0.0, w, h, rgba(20, 20, 20, 255));
         let shown = horizon_client::net::shown_address(&r.session.address);
@@ -2767,7 +2766,7 @@ impl Game<'_> {
     /// Chat (ChatComponent), the chat input line and the action bar.
     pub(super) fn remote_hud(&self, batch: &mut HudBatch) {
         let Some(r) = &self.remote else { return };
-        let atlas = &self.res.atlas;
+        let atlas = &self.atlas;
         let (w, h) = (batch.width, batch.height);
         let open = r.chat_input.is_some();
         let now = Instant::now();

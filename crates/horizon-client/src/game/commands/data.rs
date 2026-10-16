@@ -180,7 +180,7 @@ impl Game<'_> {
     }
     pub(in crate::game) fn data_block_name(&self, p: [i32; 3]) -> String {
         let state = self.world.block(p[0], p[1], p[2]);
-        self.res
+        self.pack
             .assets
             .registry
             .state(state)

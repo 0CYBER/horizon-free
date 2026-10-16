@@ -511,7 +511,7 @@ impl Game<'_> {
             // random sequence.
             let decay = (interaction == BlockInteraction::DestroyWithDecay).then_some(radius);
             let drops = self.res.items.block_drops_exploded(
-                self.res.assets.registry,
+                self.pack.assets.registry,
                 state,
                 None,
                 &dynamic,

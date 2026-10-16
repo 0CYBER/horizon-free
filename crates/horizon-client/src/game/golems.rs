@@ -146,7 +146,7 @@ impl Game<'_> {
         let below = [head[0], head[1] - 1, head[2]];
         let copper = self.world.block(below[0], below[1], below[2]);
         let pumpkin = self.world.block(head[0], head[1], head[2]);
-        let registry = self.res.assets.registry;
+        let registry = self.pack.assets.registry;
         let facing = registry
             .state(pumpkin)
             .and_then(|s| s.properties.get("facing").cloned())

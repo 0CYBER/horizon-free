@@ -1067,6 +1067,8 @@ fn render_visible(
             let variant = variant.strip_prefix("baby/").unwrap_or(variant);
             let profession = PROFESSIONS[m.extra.variant2 as usize % PROFESSIONS.len()];
             data.villager_hats
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .apply(folder, variant, profession, &mut poses);
         }
         let light = if layer.full_bright {
