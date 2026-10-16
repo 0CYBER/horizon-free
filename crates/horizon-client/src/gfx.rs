@@ -62,6 +62,7 @@ mod java_stages;
 mod occlusion;
 mod pack_stages;
 pub mod panorama;
+mod resident;
 mod timing;
 pub(crate) mod upload;
 mod world_post;
@@ -98,8 +99,6 @@ struct SectionGpu {
     /// The solid quads by facing: back-facing groups are skipped.
     faces: crate::mesher::FaceGroups,
 }
-/// A visible section this frame: key, squared distance, camera-relative origin.
-type Visible = (SectionKey, f64, [f32; 3]);
 /// Line segments the hit outline can hold.
 const MAX_OUTLINE_EDGES: u64 = 256;
 pub struct Frame<'a> {
@@ -310,7 +309,7 @@ pub struct Renderer {
     instance_capacity: u64,
     outline: wgpu::Buffer,
     depth: wgpu::TextureView,
-    sections: HashMap<SectionKey, SectionGpu>,
+    sections: resident::Resident<SectionGpu>,
     arena: arena::Arena,
     /// `DrawIndexedIndirectArgs` for this frame's solid then translucent draws.
     indirect: wgpu::Buffer,
@@ -318,7 +317,7 @@ pub struct Renderer {
     /// Indirect draws may set `first_instance` (the section origin).
     pub multi_draw: bool,
     /// Per-frame scratch, kept to avoid allocating every frame.
-    visible: Vec<Visible>,
+    visible: Vec<resident::Visible>,
     origins: Vec<[f32; 4]>,
     /// `DrawIndexedIndirectArgs` words: index count, instance count, first
     /// index, base vertex, first instance.
@@ -1576,7 +1575,7 @@ impl Renderer {
             instance_capacity,
             outline,
             depth,
-            sections: HashMap::new(),
+            sections: resident::Resident::default(),
             arena,
             indirect,
             indirect_capacity: 1024,
@@ -1723,7 +1722,7 @@ impl Renderer {
         self.sections.len()
     }
     pub fn has_section(&self, key: SectionKey) -> bool {
-        self.sections.contains_key(&key)
+        self.sections.contains(key)
     }
     pub fn upload(&mut self, key: SectionKey, mesh: &SectionMesh) {
         self.occlusion.set(key, mesh.visibility);
@@ -1792,7 +1791,7 @@ impl Renderer {
         }
     }
     fn release_section(&mut self, key: SectionKey) {
-        if let Some(s) = self.sections.remove(&key) {
+        if let Some(s) = self.sections.remove(key) {
             self.arena
                 .release(s.page, s.start, u64::from(s.solid + s.translucent) * 4);
         }
@@ -2199,34 +2198,13 @@ impl Renderer {
         let reachable = &self.occlusion;
         let mut visible = std::mem::take(&mut self.visible);
         visible.clear();
-        visible.extend(
-            self.sections
-                .keys()
-                .filter(|&&k| !culling || reachable.contains(k))
-                .filter_map(|&(sx, sy, sz)| {
-                    let origin = DVec3::new(
-                        f64::from(sx * 16),
-                        f64::from(crate::chunk::MIN_Y + sy * 16),
-                        f64::from(sz * 16),
-                    ) - camera;
-                    let center = origin + DVec3::splat(8.0);
-                    let horizontal = (center.x * center.x + center.z * center.z).sqrt();
-                    if horizontal > f64::from(frame.distance) + 24.0 {
-                        return None;
-                    }
-                    let min = origin.as_vec3();
-                    let max = min + Vec3::splat(16.0);
-                    if !view.intersects(min, max) {
-                        return None;
-                    }
-                    Some((
-                        (sx, sy, sz),
-                        center.length_squared(),
-                        origin.as_vec3().to_array(),
-                    ))
-                }),
+        self.sections.visible(
+            camera,
+            frame.distance,
+            &view,
+            |k| !culling || reachable.contains(k),
+            &mut visible,
         );
-        visible.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
         self.drawn_sections = visible.len();
         if visible.len() as u64 > self.instance_capacity {
             self.instance_capacity = (visible.len() as u64).next_power_of_two();
@@ -2238,8 +2216,11 @@ impl Renderer {
             });
         }
         self.origins.clear();
-        self.origins
-            .extend(visible.iter().map(|(_, _, o)| [o[0], o[1], o[2], 0.0]));
+        self.origins.extend(
+            visible
+                .iter()
+                .map(|v| [v.origin[0], v.origin[1], v.origin[2], 0.0]),
+        );
         if !self.origins.is_empty() {
             self.uploads.buffer(
                 &mut encoder,
@@ -2259,18 +2240,18 @@ impl Renderer {
         let eye = (frame.bob * crate::camera::view_matrix(frame.yaw, frame.pitch))
             .inverse()
             .transform_point3(Vec3::ZERO);
-        for (i, (key, _, origin)) in visible.iter().enumerate() {
-            let s = &self.sections[key];
+        for (i, v) in visible.iter().enumerate() {
+            let s = self.sections.get(v.slot);
             // Only the solid groups that can face the eye.
-            s.faces.ranges(eye - Vec3::from(*origin), |first, quads| {
+            s.faces.ranges(eye - Vec3::from(v.origin), |first, quads| {
                 let first = s.start + u64::from(first) * 4;
                 self.draws.push([quads * 6, 1, 0, first as u32, i as u32]);
                 self.draw_pages.push(s.page);
             });
         }
         let solid_draws = self.draws.len() as u32;
-        for (i, (key, _, _)) in visible.iter().enumerate().rev() {
-            let s = &self.sections[key];
+        for (i, v) in visible.iter().enumerate().rev() {
+            let s = self.sections.get(v.slot);
             if s.translucent > 0 {
                 let first = s.start + u64::from(s.solid) * 4;
                 self.draws
