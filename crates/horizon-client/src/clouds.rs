@@ -120,8 +120,9 @@ impl Input<'_> {
             bottom: bottom + 4.0 >= 0.0,
         };
         let colors = [1.0, 0.7, 0.8, 0.9].map(|shade| {
-            self.color
-                .map(|v| ((v * shade).clamp(0.0, 1.0) * 255.0) as u8 as f32 / 255.0)
+            let [r, g, b, a] = self.color;
+            [r * shade, g * shade, b * shade, a]
+                .map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8 as f32 / 255.0)
         });
         (
             key,
@@ -249,8 +250,11 @@ mod tests {
             assert_eq!(uniform.offset[1], (192.33 - input.camera.y) as f32);
             assert_eq!(
                 uniform.colors[1],
-                [0.8, 0.7, 0.6, 0.5].map(|v| ((v * 0.7f32) * 255.0) as u8 as f32 / 255.0)
+                [0.8 * 0.7, 0.7 * 0.7, 0.6 * 0.7, 0.5].map(|v| (v * 255.0) as u8 as f32 / 255.0)
             );
+            for color in uniform.colors {
+                assert_eq!(color[3], 127.0 / 255.0);
+            }
         }
         for (x, y, z, range, fast) in [
             (13.0, 101.0, 1.0, 2, false),
