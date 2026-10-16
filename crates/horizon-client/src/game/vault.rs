@@ -51,7 +51,7 @@ impl Game<'_> {
     /// The vault at `key` with its block's state and ominous flag.
     pub(super) fn take_vault(&mut self, key: Pos) -> Option<(Box<Vault>, VaultState, bool)> {
         let state = self.world.block(key.0, key.1, key.2);
-        let block = self.res.assets.registry.state(state)?;
+        let block = self.pack.assets.registry.state(state)?;
         if block.name != "minecraft:vault" {
             return None;
         }
@@ -200,13 +200,13 @@ impl Game<'_> {
     /// `setBlockAndUpdate` with the new `vault_state`.
     fn set_vault_state(&mut self, key: Pos, state: VaultState) -> Result<()> {
         let current = self.world.block(key.0, key.1, key.2);
-        let Some(mut block) = self.res.assets.registry.state(current).cloned() else {
+        let Some(mut block) = self.pack.assets.registry.state(current).cloned() else {
             return Ok(());
         };
         block
             .properties
             .insert("vault_state".into(), state.name().into());
-        let id = self.res.assets.registry.resolve(&block)?;
+        let id = self.pack.assets.registry.resolve(&block)?;
         self.level_set([key.0, key.1, key.2], id)
     }
     /// `VaultRenderer`: the display item of every vault near the camera that
@@ -233,7 +233,7 @@ impl Game<'_> {
                 ) * glam::Mat4::from_rotation_y(vault.display_spin(alpha as f32).to_radians());
             let light = self.world.light(key.0, key.1, key.2);
             let seed =
-                i64::from(self.res.item_renderer.item_id(&stack.item)) + i64::from(stack.damage);
+                i64::from(self.pack.item_renderer.item_id(&stack.item)) + i64::from(stack.damage);
             for copy in item_render::cluster_poses(
                 &state,
                 pose,

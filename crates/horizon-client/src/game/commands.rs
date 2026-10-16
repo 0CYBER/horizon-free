@@ -340,7 +340,7 @@ impl Game<'_> {
                     .find(|i| i.id == id)
                     .map(|i| i.stack.item.to_string())
                     .unwrap_or_default();
-                Text::literal(self.res.names.item(&item))
+                Text::literal(self.pack.names.item(&item))
             }
             Target::Mob(id)
                 if self
@@ -783,7 +783,7 @@ impl Game<'_> {
             _ => text::WHITE,
         };
         Text::literal("[")
-            .append(Text::literal(self.res.names.item(item)))
+            .append(Text::literal(self.pack.names.item(item)))
             .append("]")
             .with_color(color)
     }
@@ -816,7 +816,7 @@ impl Game<'_> {
                 &[],
             )
         } else {
-            Text::literal(self.res.names.item(item))
+            Text::literal(self.pack.names.item(item))
         };
         let wrapped = Text::translate("chat.square_brackets", &[hover]);
         if empty {
@@ -1456,7 +1456,7 @@ impl Game<'_> {
             name: b.id.clone(),
             properties: b.properties.iter().cloned().collect(),
         };
-        self.res
+        self.pack
             .assets
             .registry
             .resolve(&state)
@@ -1464,7 +1464,7 @@ impl Game<'_> {
     }
     /// BlockPredicateArgument test.
     fn block_matches(&self, b: &BlockInput, state: BlockStateId) -> bool {
-        let Some(s) = self.res.assets.registry.state(state) else {
+        let Some(s) = self.pack.assets.registry.state(state) else {
             return false;
         };
         let name_ok = if b.tag {
@@ -1739,7 +1739,7 @@ impl Game<'_> {
         let strict = ctx.has("strict");
         // CloneCommands.clone sets every destination to a barrier first, so
         // each copied state but a barrier counts as placed.
-        let barrier = self.res.assets.registry.default_state("minecraft:barrier");
+        let barrier = self.pack.assets.registry.default_state("minecraft:barrier");
         let mut count = 0;
         for (_, to, s, entity) in copies {
             self.place_state(to, s, strict)?;
@@ -2266,7 +2266,7 @@ impl Game<'_> {
     }
     /// `PoiTypes`: the point of interest type of a block state.
     fn poi_type(&self, state: horizon_world::registry::BlockStateId) -> Option<&'static str> {
-        let s = self.res.assets.registry.state(state)?;
+        let s = self.pack.assets.registry.state(state)?;
         let name = s.name.strip_prefix("minecraft:")?;
         Some(match name {
             "blast_furnace" => "minecraft:armorer",
@@ -2542,7 +2542,7 @@ impl Game<'_> {
         let focused = self.screen == Screen::Chat;
         self.ui
             .chat
-            .add(&self.res.atlas, line, None, self.ticks, focused);
+            .add(&self.atlas, line, None, self.ticks, focused);
         Ok(1)
     }
     /// MessageArgument: `@p`-style selectors in a message become names.

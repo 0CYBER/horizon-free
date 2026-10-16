@@ -626,6 +626,34 @@ fn delete_removes_links_without_following_them() {
 }
 
 #[test]
+fn world_search_hint_is_gray_and_only_shown_empty_and_unfocused() {
+    let mut f = Fixture::new();
+    f.world("World", "World");
+    f.select();
+    let atlas = crate::hud::HudAtlas::build(Path::new("/nonexistent/horizon-test-assets")).unwrap();
+    let draw = |title: &Title| {
+        let mut batch = HudBatch::new([480, 262]);
+        title.draw(&atlas, &mut batch, (0.0, 0.0), true);
+        batch
+    };
+    let has_hint = |batch: &HudBatch| {
+        batch
+            .vertices
+            .iter()
+            .any(|v| v.color == rgba(170, 170, 170, 255) && (21.0..41.0).contains(&v.pos[1]))
+    };
+    assert!(has_hint(&draw(&f.title)));
+
+    f.title.click(240.0, 31.0, (480.0, 262.0));
+    assert!(f.title.search_focused);
+    assert!(!has_hint(&draw(&f.title)));
+    f.title.type_text("World");
+    f.title.click(240.0, 60.0, (480.0, 262.0));
+    assert!(!f.title.search_focused);
+    assert!(!has_hint(&draw(&f.title)));
+}
+
+#[test]
 fn scrolled_world_list_draws_inside_the_list_and_drags_its_scroller() {
     let mut f = Fixture::new();
     for i in 0..10 {

@@ -398,7 +398,7 @@ impl Game<'_> {
     fn anvil_item_name(&self, s: &Station) -> String {
         match &s.inputs[0] {
             Some(input)
-                if input.custom_name().is_none() && s.name == self.res.names.item(&input.item) =>
+                if input.custom_name().is_none() && s.name == self.pack.names.item(&input.item) =>
             {
                 String::new()
             }
@@ -429,7 +429,7 @@ impl Game<'_> {
                 let name = self.anvil_item_name(&s);
                 let hover = s.inputs[0]
                     .as_ref()
-                    .map(|i| stations::hover_name(&|id| self.res.names.item(id), i))
+                    .map(|i| stations::hover_name(&|id| self.pack.names.item(id), i))
                     .unwrap_or_default();
                 s.anvil = stations::anvil_result(
                     &data.enchantments,
@@ -1157,7 +1157,7 @@ impl Game<'_> {
             s.anvil_last = s.inputs[0].clone();
             s.name = s.inputs[0]
                 .as_ref()
-                .map(|i| stations::hover_name(&|id| self.res.names.item(id), i))
+                .map(|i| stations::hover_name(&|id| self.pack.names.item(id), i))
                 .unwrap_or_default();
         }
         self.station_changed();
@@ -1249,7 +1249,7 @@ impl Game<'_> {
     }
     /// Text in the Standard Galactic alphabet (`minecraft:alt`), cut to `max` pixels.
     fn galactic(&self, batch: &mut HudBatch, text: &str, x: f32, y: f32, max: f32, color: u32) {
-        let atlas = &self.res.atlas;
+        let atlas = &self.atlas;
         let Some(sheet) = atlas.sprites.get("font/ascii_sga").copied() else {
             batch.text(atlas, text, x, y, color, false);
             return;
@@ -1325,7 +1325,7 @@ impl Game<'_> {
         let local = (self.cursor.0 - ox, self.cursor.1 - oy);
         let mut tooltip: Option<Vec<(String, u32)>> = None;
         {
-            let atlas = &self.res.atlas;
+            let atlas = &self.atlas;
             batch.fill(
                 atlas,
                 0.0,
@@ -1342,7 +1342,7 @@ impl Game<'_> {
             };
             let (fuel, total_fuel, brew, total_brew) =
                 (b.fuel, b.total_fuel, b.brew_time, b.total_brew_time);
-            let atlas = &self.res.atlas;
+            let atlas = &self.atlas;
             Self::part(
                 batch,
                 atlas,
@@ -1417,7 +1417,7 @@ impl Game<'_> {
                 if self.slot_mut(i).is_none() {
                     let (sx, sy) = self.station_slot_position(i).unwrap_or_default();
                     batch.sprite(
-                        &self.res.atlas,
+                        &self.atlas,
                         &format!("gui/sprites/container/slot/{icon}"),
                         ox + sx,
                         oy + sy,
@@ -1427,7 +1427,7 @@ impl Game<'_> {
         } else if let Some(kind) = self.station.as_ref().map(|s| s.kind) {
             let title = self.translate(kind.title_key(), "");
             {
-                let atlas = &self.res.atlas;
+                let atlas = &self.atlas;
                 Self::part(
                     batch,
                     atlas,
@@ -1446,7 +1446,7 @@ impl Game<'_> {
             if kind == Kind::Loom {
                 tooltip = self.draw_loom(batch, ox, oy, local);
             }
-            let atlas = &self.res.atlas;
+            let atlas = &self.atlas;
             let s = self.station.as_ref().expect("open station");
             let has_input = s.inputs.iter().any(Option::is_some);
             match kind {
@@ -1552,7 +1552,7 @@ impl Game<'_> {
                             );
                             -8323296
                         };
-                        let atlas = &self.res.atlas;
+                        let atlas = &self.atlas;
                         let cw = HudBatch::text_width(atlas, &cost_text);
                         batch.text(
                             atlas,
@@ -1679,7 +1679,7 @@ impl Game<'_> {
                             )
                         };
                         if let Some(line) = line {
-                            let atlas = &self.res.atlas;
+                            let atlas = &self.atlas;
                             let tw = HudBatch::text_width(atlas, &line);
                             let tx = 176.0 - 8.0 - tw - 2.0;
                             batch.fill(
@@ -1788,7 +1788,7 @@ impl Game<'_> {
                                 "recipe"
                             };
                             batch.sprite_scaled(
-                                &self.res.atlas,
+                                &self.atlas,
                                 &format!("gui/sprites/container/stonecutter/{sprite}"),
                                 ox + x,
                                 oy + y - 1.0,
@@ -1816,7 +1816,7 @@ impl Game<'_> {
         if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
             let (sx, sy) = self.slot_position(slot);
             batch.fill(
-                &self.res.atlas,
+                &self.atlas,
                 ox + sx,
                 oy + sy,
                 16.0,
@@ -1881,16 +1881,16 @@ impl Game<'_> {
         {
             let key = brewing::potion_name_key(&stack.item, stack.potion());
             e.translate(&key)
-                .map_or_else(|| self.res.names.item(&stack.item), str::to_owned)
+                .map_or_else(|| self.pack.names.item(&stack.item), str::to_owned)
         } else {
-            self.res.names.item(&stack.item)
+            self.pack.names.item(&stack.item)
         };
         let mut lines = vec![(name, color)];
         let translate = |k: &str| e.translate(k).map(str::to_owned);
         // ItemContainerContents.addToTooltip.
         let hover_name = |s: &ItemStack| {
             s.custom_name()
-                .map_or_else(|| self.res.names.item(&s.item), str::to_owned)
+                .map_or_else(|| self.pack.names.item(&s.item), str::to_owned)
         };
         for line in horizon_client::item_tooltip::container_lines(stack, &hover_name, &translate) {
             lines.push((line, u32::MAX));
@@ -2037,7 +2037,7 @@ impl Game<'_> {
         if lines.is_empty() {
             return;
         }
-        let atlas = &self.res.atlas;
+        let atlas = &self.atlas;
         let w = lines
             .iter()
             .map(|(t, _)| HudBatch::text_width(atlas, t))
@@ -2141,14 +2141,14 @@ impl Game<'_> {
             }
             if let Some(bottles) = out.bottles {
                 let state = self.world.block(x, y, z);
-                if let Some(mut s) = self.res.assets.registry.state(state).cloned()
+                if let Some(mut s) = self.pack.assets.registry.state(state).cloned()
                     && AsRef::<str>::as_ref(&s.name) == "minecraft:brewing_stand"
                 {
                     for (i, has) in bottles.iter().enumerate() {
                         s.properties
                             .insert(format!("has_bottle_{i}"), has.to_string());
                     }
-                    if let Ok(id) = self.res.assets.registry.resolve(&s) {
+                    if let Ok(id) = self.pack.assets.registry.resolve(&s) {
                         self.world.set(x, y, z, id)?;
                     }
                 }

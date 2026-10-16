@@ -110,7 +110,7 @@ impl Game<'_> {
             f64::from(pos[2]) + 0.5,
         ];
         let facing = self
-            .res
+            .pack
             .assets
             .registry
             .state(state)

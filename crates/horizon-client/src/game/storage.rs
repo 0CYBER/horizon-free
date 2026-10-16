@@ -76,7 +76,7 @@ impl Game<'_> {
     /// The other half of the open double chest and whether the open one is
     /// the right half (`ChestBlock.getConnectedDirection`).
     pub(super) fn chest_partner(&self, key: (i32, i32, i32)) -> Option<((i32, i32, i32), bool)> {
-        let registry = self.res.assets.registry;
+        let registry = self.pack.assets.registry;
         let state = registry.state(self.world.block(key.0, key.1, key.2))?;
         if !matches!(
             state.name.as_str(),
@@ -211,7 +211,7 @@ impl Game<'_> {
         oy: f32,
     ) {
         use horizon_client::hud::rgba;
-        let atlas = &self.res.atlas;
+        let atlas = &self.atlas;
         let grey = rgba(64, 64, 64, 255);
         if self
             .container_block()

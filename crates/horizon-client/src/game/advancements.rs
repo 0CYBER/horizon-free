@@ -109,7 +109,7 @@ impl adv::World for View<'_, '_> {
         let name = self.0.res.facts.get(state).name.to_string();
         let props = self
             .0
-            .res
+            .pack
             .assets
             .registry
             .state(state)
@@ -613,7 +613,7 @@ impl Game<'_> {
     }
     /// `EnterBlockTrigger`: the block, its state properties and the player.
     pub(super) fn trigger_enter_block(&mut self, state: horizon_world::registry::BlockStateId) {
-        let Some(definition) = self.res.assets.registry.state(state).cloned() else {
+        let Some(definition) = self.pack.assets.registry.state(state).cloned() else {
             return;
         };
         let me = self.player_entity();
@@ -746,11 +746,11 @@ impl Game<'_> {
         if let Some((station, item)) = recipe {
             // RecipeToast: black description under a purple title, the
             // station at 0.6 scale in the corner over the cycling result.
-            let atlas = &self.res.atlas;
+            let atlas = &self.atlas;
             batch.sprite(atlas, "gui/sprites/toast/recipe", x, 0.0);
             let title = self.translate("recipe.toast.title", "New Recipe(s) Unlocked!");
             let description = self.translate("recipe.toast.description", "Check your recipe book");
-            let atlas = &self.res.atlas;
+            let atlas = &self.atlas;
             batch.text(atlas, &title, x + 30.0, 7.0, 0xFF50_0050, false);
             batch.text(atlas, &description, x + 30.0, 18.0, 0xFF00_0000, false);
             let start = batch.vertices.len();
@@ -759,7 +759,7 @@ impl Game<'_> {
             self.draw_item_model(batch, &item, x + 8.0, 8.0);
             return;
         }
-        let atlas = &self.res.atlas;
+        let atlas = &self.atlas;
         batch.sprite(atlas, "gui/sprites/toast/advancement", x, 0.0);
         let (key, color) = match frame {
             Frame::Task => ("advancements.toast.task", 0xFF00_FFFF),

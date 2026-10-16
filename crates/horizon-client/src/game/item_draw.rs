@@ -31,7 +31,7 @@ impl ItemEnv for Env<'_, '_> {
     }
     fn grass_color(&self, temperature: f64, downfall: f64) -> i32 {
         self.game
-            .res
+            .pack
             .item_renderer
             .grass_color(temperature, downfall)
     }
@@ -43,7 +43,7 @@ impl ItemEnv for Env<'_, '_> {
         else {
             return 0.0;
         };
-        let prototypes = &self.game.res.item_renderer.models.prototypes;
+        let prototypes = &self.game.pack.item_renderer.models.prototypes;
         let mut total = 0.0f64;
         for item in items {
             let id = item["id"].as_str().unwrap_or("");
@@ -216,7 +216,7 @@ impl Game<'_> {
             && self.inventory.get(slot).and_then(Option::as_ref) == Some(stack)
         {
             let view = item_render::stack_view(stack);
-            let duration = use_duration(&self.res.item_renderer.models.components(&view));
+            let duration = use_duration(&self.pack.item_renderer.models.components(&view));
             owner.using_this_item = true;
             owner.use_duration = duration;
             owner.use_item_remaining_ticks = duration - ticks as i32;
@@ -239,7 +239,7 @@ impl Game<'_> {
         seed: i32,
     ) -> ItemRenderState {
         let level = self.item_level();
-        self.res.item_renderer.resolve(
+        self.pack.item_renderer.resolve(
             &item_render::stack_view(stack),
             display,
             owner,
@@ -254,8 +254,8 @@ impl Game<'_> {
         let state = self.resolve_item(stack, DisplayContext::Gui, Some(&owner), 0);
         item_render::gui::draw(
             &state,
-            &self.res.item_renderer,
-            &self.res.atlas.sprites,
+            &self.pack.item_renderer,
+            &self.atlas.sprites,
             &self.item_host(),
             batch,
             x,
@@ -278,8 +278,8 @@ impl Game<'_> {
             lights: Some(diffuse_lights(self.dim == Dim::Nether)),
         };
         state.submit(
-            &self.res.item_renderer,
-            &self.res.atlas.sprites,
+            &self.pack.item_renderer,
+            &self.atlas.sprites,
             &self.item_host(),
             pose,
             &mut sink,
@@ -299,8 +299,8 @@ impl Game<'_> {
             lights: None,
         };
         state.submit(
-            &self.res.item_renderer,
-            &self.res.atlas.sprites,
+            &self.pack.item_renderer,
+            &self.atlas.sprites,
             &self.item_host(),
             pose,
             &mut sink,
@@ -360,7 +360,7 @@ impl Game<'_> {
                 (q.y + 0.1).floor() as i32,
                 q.z.floor() as i32,
             );
-            let seed = i64::from(self.res.item_renderer.item_id(&item.stack.item))
+            let seed = i64::from(self.pack.item_renderer.item_id(&item.stack.item))
                 + i64::from(item.stack.damage);
             for copy in item_render::cluster_poses(
                 &state,

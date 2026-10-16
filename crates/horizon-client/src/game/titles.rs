@@ -16,10 +16,10 @@ impl Game<'_> {
         let (w, h) = (batch.width as i32, batch.height as i32);
         let partial = self.clock.fraction() as f32;
         let background = self.settings.text_background(0.0);
-        let font = &self.res.atlas.font;
+        let font = &self.atlas.font;
         let mut draws = self.titles.overlay_message(w, h, partial, font, background);
         draws.extend(self.titles.title(w, h, partial, font, background));
-        hud_layout::paint(batch, &self.res.atlas, &draws);
+        hud_layout::paint(batch, &self.atlas, &draws);
     }
     /// The selected stack as `Hud.tick` compares it for the name highlight.
     fn held_name(&self) -> Option<HeldName> {
@@ -30,7 +30,7 @@ impl Game<'_> {
         Some(HeldName {
             item: stack.item.to_string(),
             hover_name: Text::literal(item_tooltip::name_line(stack, &|key| {
-                self.res.names.get(key).map(str::to_owned)
+                self.pack.names.get(key).map(str::to_owned)
             })),
             rarity_color: match rarity {
                 "uncommon" => text::YELLOW,
@@ -54,9 +54,9 @@ impl Game<'_> {
             batch.width as i32,
             batch.height as i32,
             can_hurt,
-            &self.res.atlas.font,
+            &self.atlas.font,
             self.settings.text_background(0.0),
         );
-        hud_layout::paint(batch, &self.res.atlas, &draws);
+        hud_layout::paint(batch, &self.atlas, &draws);
     }
 }

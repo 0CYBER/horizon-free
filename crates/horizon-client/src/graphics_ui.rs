@@ -265,6 +265,24 @@ pub fn rows(level: Level) -> Vec<Row> {
 
 const UPLOAD_STEPS: [u32; 8] = [0, 256, 512, 1024, 2048, 4096, 8192, 16384];
 
+/// Classic's submenus supplement the vanilla options on their parent screens.
+fn extra_rows(level: Level) -> Vec<Row> {
+    let mut rows = rows(level);
+    rows.retain(|row| !matches!(row, Row::Setting(s) if matches!(s.item, Item::Vanilla(_))));
+    // Drop headings whose settings were all on the parent screens.
+    let mut has_setting = false;
+    rows.reverse();
+    rows.retain(|row| match row {
+        Row::Setting(_) => {
+            has_setting = true;
+            true
+        }
+        Row::Header(_) => std::mem::take(&mut has_setting),
+    });
+    rows.reverse();
+    rows
+}
+
 fn on_off(on: bool) -> &'static str {
     if on { "On" } else { "Off" }
 }
@@ -539,7 +557,7 @@ impl GraphicsUi {
         (STYLE.band, h - STYLE.band)
     }
     fn content_height(level: Level) -> f32 {
-        rows(level).iter().fold(4.0, |height, row| {
+        extra_rows(level).iter().fold(4.0, |height, row| {
             height
                 + match row {
                     Row::Header(_) => STYLE.header_height,
@@ -561,7 +579,7 @@ impl GraphicsUi {
         let mut y = top + 4.0 - self.scroll;
         let mut widgets = Vec::new();
         let mut headers = Vec::new();
-        for row in rows(level) {
+        for row in extra_rows(level) {
             match row {
                 Row::Header(name) => {
                     headers.push((y, name));
@@ -625,7 +643,7 @@ impl GraphicsUi {
                 STYLE.header(batch, atlas, &Text::literal(name), x, y);
             }
         }
-        let descriptions: Vec<(Cost, &'static str)> = rows(level)
+        let descriptions: Vec<(Cost, &'static str)> = extra_rows(level)
             .into_iter()
             .filter_map(|r| match r {
                 Row::Setting(s) => Some((s.cost, s.text)),
@@ -766,18 +784,34 @@ mod tests {
         let mut s = Settings::default();
         let mut ui = GraphicsUi::default();
         let size = (480.0, 320.0);
-        let (widgets, _, _) = ui.layout(Level::Simple, size.0, size.1);
+        let (widgets, _, _) = ui.layout(Level::Advanced, size.0, size.1);
         let button = widgets
             .iter()
             .find(|w| matches!(w.target, Target::Button(_)))
             .unwrap();
         let point = (button.x + 1.0, button.y + 1.0);
         assert!(
-            ui.click(Level::Simple, &mut s, point, size, [854, 480], false, true)
-                .is_empty()
+            ui.click(
+                Level::Advanced,
+                &mut s,
+                point,
+                size,
+                [854, 480],
+                false,
+                true
+            )
+            .is_empty()
         );
         assert_eq!(
-            ui.click(Level::Simple, &mut s, point, size, [854, 480], false, false)[0],
+            ui.click(
+                Level::Advanced,
+                &mut s,
+                point,
+                size,
+                [854, 480],
+                false,
+                false
+            )[0],
             Action::ButtonClick
         );
         assert!(!ui.release());
@@ -787,7 +821,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             ui.click(
-                Level::Simple,
+                Level::Advanced,
                 &mut s,
                 (slider.x + 1.0, slider.y + 1.0),
                 size,
@@ -799,7 +833,7 @@ mod tests {
         );
         assert_eq!(
             ui.click(
-                Level::Simple,
+                Level::Advanced,
                 &mut s,
                 (-100.0, -100.0),
                 size,
@@ -817,7 +851,7 @@ mod tests {
     fn scrolling_stops_at_both_limits_before_layout() {
         for level in [Level::Simple, Level::Advanced] {
             let mut ui = GraphicsUi::default();
-            let h = 120.0;
+            let h = 2.0 * STYLE.band + 10.0;
             let (top, bottom) = GraphicsUi::bounds(h);
             let max = GraphicsUi::content_height(level) - (bottom - top);
             assert!(max > 4.5);
@@ -841,7 +875,7 @@ mod tests {
     fn resizing_clamps_before_positioning_graphics_rows() {
         for level in [Level::Simple, Level::Advanced] {
             let mut ui = GraphicsUi::default();
-            ui.scroll(level, 120.0, -1000.0);
+            ui.scroll(level, 2.0 * STYLE.band + 10.0, -1000.0);
             assert!(ui.scroll > 0.0);
             let (widgets, headers, _) = ui.layout(level, 480.0, 4000.0);
             assert_eq!(ui.scroll, 0.0);
@@ -855,6 +889,25 @@ mod tests {
             );
             ui.scroll(level, 4000.0, -1000.0);
             assert_eq!(ui.scroll, 0.0);
+        }
+    }
+
+    #[test]
+    fn classic_submenus_only_add_horizon_settings_without_empty_groups() {
+        for level in [Level::Simple, Level::Advanced] {
+            let rows = extra_rows(level);
+            assert!(rows.iter().any(|row| matches!(row, Row::Setting(_))));
+            for (i, row) in rows.iter().enumerate() {
+                match row {
+                    Row::Setting(s) => assert!(matches!(s.item, Item::Horizon(_))),
+                    Row::Header(_) => assert!(matches!(rows.get(i + 1), Some(Row::Setting(_)))),
+                }
+            }
+            assert!(
+                super::rows(level).iter().any(
+                    |row| matches!(row, Row::Setting(s) if matches!(s.item, Item::Vanilla(_)))
+                )
+            );
         }
     }
 

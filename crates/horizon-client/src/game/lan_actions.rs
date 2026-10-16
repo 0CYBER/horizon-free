@@ -859,7 +859,7 @@ impl Game<'_> {
                 entities: &[],
                 player,
                 scene: &mut game.world,
-                assets: &game.res.assets,
+                assets: &game.pack.assets,
                 collision_binding: game.collision,
                 resources: game.motion,
             };

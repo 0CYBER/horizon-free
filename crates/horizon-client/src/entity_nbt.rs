@@ -1046,12 +1046,15 @@ pub fn arrow_from_nbt(
 }
 
 /// `FallingBlockEntity`: BlockState, Time, DropItem, HurtEntities.
+#[allow(clippy::too_many_arguments)]
 pub fn falling_block_to_nbt(
     state: Tag,
     position: Vec3,
     motion: Vec3,
     time: i32,
     drop_item: bool,
+    damage: crate::falling_block::Damage,
+    fall_distance: f64,
     uuid: [i32; 4],
 ) -> Tag {
     let base = Base {
@@ -1061,29 +1064,27 @@ pub fn falling_block_to_nbt(
         motion,
         rotation: [0.0, 0.0],
         on_ground: false,
-        fall_distance: 0.0,
+        fall_distance,
     };
     let mut tag = base.tag(None);
     for (key, value) in [
         ("BlockState", state),
         ("Time", Tag::Int(time)),
         ("DropItem", Tag::Byte(i8::from(drop_item))),
-        ("HurtEntities", Tag::Byte(0)),
-        ("CancelDrop", Tag::Byte(0)),
-        ("FallHurtAmount", Tag::Float(0)),
-        ("FallHurtMax", Tag::Int(40)),
     ] {
         put(&mut tag, key, value);
     }
+    damage.save(&mut tag);
     tag
 }
-/// (block state tag, position, motion, time)
-pub fn falling_block_from_nbt(tag: &Tag) -> Option<(Tag, Vec3, Vec3, i32)> {
+/// (block state tag, position, motion, time, fall distance)
+pub fn falling_block_from_nbt(tag: &Tag) -> Option<(Tag, Vec3, Vec3, i32, f64)> {
     Some((
         tag.get("BlockState")?.clone(),
         position(tag)?,
         motion(tag),
         number(tag.get("Time")).unwrap_or(0) as i32,
+        float(tag.get("fall_distance")).unwrap_or(0.0),
     ))
 }
 
@@ -1492,6 +1493,36 @@ fn read_villager(m: &mut Mob, tag: &Tag) {
 mod tests {
     use super::*;
     use crate::items::ItemStack;
+
+    #[test]
+    fn falling_block_round_trip_keeps_impact_distance_and_settings() {
+        let state = Tag::compound([("Name", string("minecraft:damaged_anvil"))]);
+        let position = Vec3::new(3.5, 100.0, -7.5);
+        let velocity = Vec3::new(0.0, -1.25, 0.0);
+        let damage = crate::falling_block::Damage {
+            cancel_drop: true,
+            ..crate::falling_block::Damage::anvil()
+        };
+        let tag = falling_block_to_nbt(
+            state.clone(),
+            position,
+            velocity,
+            30,
+            false,
+            damage,
+            19.75,
+            [1, 2, 3, 4],
+        );
+        let (loaded_state, pos, motion, age, distance) = falling_block_from_nbt(&tag).unwrap();
+        assert_eq!(loaded_state, state);
+        assert_eq!(
+            (pos, motion, age, distance),
+            (position, velocity, 30, 19.75)
+        );
+        assert_eq!(falling_block_flags(&tag), (false, false));
+        assert_eq!(crate::falling_block::Damage::from_nbt(&tag, true), damage);
+        assert_eq!(uuid(&tag), Some([1, 2, 3, 4]));
+    }
 
     #[test]
     fn item_entities_round_trip() {

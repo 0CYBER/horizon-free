@@ -976,7 +976,7 @@ impl Game<'_> {
                         }
                         let bed = *known.entry(state.0).or_insert_with(|| {
                             self.res.facts.get(state).name.ends_with("_bed")
-                                && self.res.assets.registry.state(state).is_some_and(|s| {
+                                && self.pack.assets.registry.state(state).is_some_and(|s| {
                                     s.properties.get("part").map(String::as_str) == Some("head")
                                 })
                         });

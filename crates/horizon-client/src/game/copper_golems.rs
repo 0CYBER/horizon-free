@@ -168,7 +168,7 @@ impl Game<'_> {
             ]
             .into(),
         };
-        let registry = self.res.assets.registry;
+        let registry = self.pack.assets.registry;
         let Some(id) = registry.id(&state) else {
             return;
         };

@@ -96,7 +96,9 @@ impl StateModels {
             }
         }
         for block in blocks.iter().copied().collect::<BTreeSet<_>>() {
-            let name = format!("minecraft:{block}");
+            // Vanilla blocks come bare; content mods' blocks with their namespace.
+            let (namespace, path) = block.split_once(':').unwrap_or(("minecraft", block));
+            let name = format!("{namespace}:{path}");
             let facts = facts.get(&name).ok_or("missing block model state schema")?;
             let schema: PropertySchema = facts["schema"]
                 .as_object()
@@ -135,7 +137,7 @@ impl StateModels {
                 .collect::<Result<_>>()?;
             let possible: Vec<Properties> = serde_json::from_value(facts["states"].clone())?;
             let resource = fs::read_to_string(
-                root.join(format!("assets/minecraft/blockstates/{block}.json")),
+                root.join(format!("assets/{namespace}/blockstates/{path}.json")),
             )?;
             let definition = BlockStateDefinition::from_json(&resource)?;
             let bound = definition.bind(&schema, &possible)?;

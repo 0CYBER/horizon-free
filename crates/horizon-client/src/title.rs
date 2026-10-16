@@ -839,13 +839,15 @@ impl Title {
                     self.search_focused,
                     self.started,
                 );
-                if self.search.is_empty() {
-                    batch.text(
+                if self.search.is_empty() && !self.search_focused {
+                    batch.text_styled(
                         atlas,
-                        &lang::get_or("gui.selectWorld.search", "Search..."),
+                        &Text::literal(lang::get_or("gui.selectWorld.search", "Search..."))
+                            .italic()
+                            .with_color(crate::text::GRAY),
                         (w / 2.0).floor() - 96.0,
                         27.0,
-                        rgba(128, 128, 128, 255),
+                        u32::MAX,
                         true,
                     );
                 }
@@ -921,7 +923,7 @@ impl Title {
                         atlas,
                         &details,
                         x + 35.0,
-                        y + 22.0,
+                        y + 21.0,
                         rgba(128, 128, 128, 255),
                         true,
                     );

@@ -6,6 +6,7 @@ To play, use [the launcher](../launcher/README.md); the project site is [playhor
 
 - [Build from source](../README.md#build-from-source): your own copy of the game, resource preparation, `cargo run`.
 - [Native client](native-client.md): options, controls, the dedicated server, `horizon-ctl` scripting, packaging, architecture.
+- [Hosting a server](server.md): `horizon-server`, the design and the plan: install, `server.toml`, the CLI, the web panel, backups, services, Docker, and the bot benchmark against vanilla.
 - [Agent control](agent-control.md): what AI agents can drive in the launcher and the game, and the design of the control socket, `horizon-ctl` and MCP.
 - [Graphics](graphics.md): the Simple and Advanced graphics settings, the graphics benchmark and what it measured.
 - [Benchmark](benchmark.md): Horizon against vanilla 26.3 and vanilla with performance mods, on the same machine, world, path and settings: what is measured, how it is kept fair, how to reproduce it.

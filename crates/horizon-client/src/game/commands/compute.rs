@@ -494,7 +494,7 @@ impl Game<'_> {
                             return false;
                         };
                         let state = self.world.block(p[0], p[1], p[2]);
-                        let Some(s) = self.res.assets.registry.state(state) else {
+                        let Some(s) = self.pack.assets.registry.state(state) else {
                             return false;
                         };
                         let name = s.name.to_string();

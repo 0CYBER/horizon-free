@@ -223,6 +223,25 @@ impl Opt {
             _ => Kind::Cycle,
         }
     }
+    /// OptionInstance's static or value-dependent tooltip translation.
+    fn tooltip_key(self, s: &Settings) -> String {
+        let key = match self {
+            Opt::InactivityFps => {
+                if s.inactivity_fps_limit == "minimized" {
+                    "options.inactivityFpsLimit.minimized"
+                } else {
+                    "options.inactivityFpsLimit.afk"
+                }
+            }
+            Opt::ChunkBuilder => [
+                "options.prioritizeChunkUpdates.none",
+                "options.prioritizeChunkUpdates.byPlayer",
+                "options.prioritizeChunkUpdates.nearby",
+            ][usize::from(s.prioritize_chunk_updates.min(2))],
+            _ => self.caption(),
+        };
+        format!("{key}.tooltip")
+    }
     /// A slider's position (0..1), or `None` for a cycle button.
     pub fn slider_position(self, s: &Settings) -> Option<f32> {
         match self.kind(s) {
@@ -1611,6 +1630,27 @@ impl OptionsUi {
             let start = batch.vertices.len();
             let hover = ui::hovered(cursor, wd.x, wd.y, wd.w, wd.h)
                 && (!wd.list || cursor.1 >= top && cursor.1 < bottom);
+            if hover {
+                let key = match &wd.kind {
+                    WKind::Button {
+                        act: Act::Cycle(opt),
+                        ..
+                    }
+                    | WKind::Slider { opt, .. } => Some(opt.tooltip_key(s)),
+                    WKind::Button {
+                        act: Act::Push(Page::Language),
+                        ..
+                    } => Some("options.language.tooltip".into()),
+                    WKind::Button {
+                        act: Act::Push(Page::Accessibility),
+                        ..
+                    } => Some("options.accessibility.tooltip".into()),
+                    _ => None,
+                };
+                if let Some(key) = key.filter(|key| lang::has(key)) {
+                    tooltip = Some(atlas.font.split(&tr(&key), 170.0));
+                }
+            }
             match &wd.kind {
                 WKind::Button { label, active, act } => {
                     ui::button(batch, atlas, wd.x, wd.y, wd.w, wd.h, label, *active, hover);
@@ -2159,6 +2199,78 @@ mod tests {
 
     fn atlas() -> HudAtlas {
         HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets")).unwrap()
+    }
+
+    #[test]
+    fn option_tooltip_keys_follow_value_dependent_descriptions() {
+        let mut s = Settings::default();
+        assert_eq!(
+            Opt::InactivityFps.tooltip_key(&s),
+            "options.inactivityFpsLimit.afk.tooltip"
+        );
+        s.inactivity_fps_limit = "minimized".into();
+        assert_eq!(
+            Opt::InactivityFps.tooltip_key(&s),
+            "options.inactivityFpsLimit.minimized.tooltip"
+        );
+        for (value, name) in ["none", "byPlayer", "nearby"].iter().enumerate() {
+            s.prioritize_chunk_updates = value as u8;
+            assert_eq!(
+                Opt::ChunkBuilder.tooltip_key(&s),
+                format!("options.prioritizeChunkUpdates.{name}.tooltip")
+            );
+        }
+        assert_eq!(
+            Opt::MenuBlur.tooltip_key(&s),
+            "options.accessibility.menu_background_blurriness.tooltip"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires prepared language data in HORIZON_TEST_RESOURCES; run alone"]
+    fn classic_hover_draws_the_selected_options_wrapped_tooltip() {
+        let root = std::path::PathBuf::from(
+            std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),
+        );
+        lang::set(lang::Language::load(&[&root], "en_us"));
+        let atlas = atlas();
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        ui.show(Page::Video);
+        for mode in ["afk", "minimized"] {
+            s.inactivity_fps_limit = mode.into();
+            let (widgets, _, _, _) = ui.layout(&s, 480.0, 480.0);
+            let option = widgets
+                .iter()
+                .find(|w| {
+                    matches!(
+                        w.kind,
+                        WKind::Button {
+                            act: Act::Cycle(Opt::InactivityFps),
+                            ..
+                        }
+                    )
+                })
+                .unwrap();
+            let cursor = (option.x + 1.0, option.y + 1.0);
+            let mut actual = HudBatch::new([480, 480]);
+            ui.draw(&s, &mut actual, &atlas, cursor);
+            let key = format!("options.inactivityFpsLimit.{mode}.tooltip");
+            assert!(lang::has(&key));
+            let mut expected = HudBatch::new([480, 480]);
+            ui::tooltip(
+                &mut expected,
+                &atlas,
+                &atlas.font.split(&tr(&key), 170.0),
+                cursor,
+            );
+            assert!(!expected.vertices.is_empty());
+            let tail = &actual.vertices[actual.vertices.len() - expected.vertices.len()..];
+            assert_eq!(
+                bytemuck::cast_slice::<_, u8>(tail),
+                bytemuck::cast_slice::<_, u8>(&expected.vertices)
+            );
+        }
     }
 
     #[test]

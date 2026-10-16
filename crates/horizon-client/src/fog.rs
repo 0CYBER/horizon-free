@@ -119,22 +119,6 @@ impl FogState {
     }
 }
 
-/// The fog tables and evolving state kept by the game.
-pub struct FogRenderer {
-    pub tables: FogTables,
-    pub state: FogState,
-}
-impl FogRenderer {
-    pub fn load(root: &Path, biomes: &Biomes) -> Self {
-        Self {
-            tables: FogTables::load(root, biomes),
-            state: FogState::default(),
-        }
-    }
-    pub fn setup(&self, input: &FogInputs) -> FogData {
-        setup_fog(&self.tables, &self.state, input)
-    }
-}
 /// `FluidState.getHeightForCamera`.
 fn camera_fluid_height(world: &World, facts: &BlockFacts, b: [i32; 3]) -> Option<(Fluid, f64)> {
     let s = facts.get(world.block(b[0], b[1], b[2]));

@@ -46,6 +46,8 @@ pub struct MobData {
     /// Each entity type's `SpawnPlacements.getHeightmapType`.
     pub heightmaps: HashMap<String, String>,
     pub animations: HashMap<String, Animation>,
+    /// Replaced when the resource packs change (the rest of `MobData` never is).
+    pub villager_hats: std::sync::RwLock<super::villager_hats::VillagerHats>,
     /// Biome tags (spawns_warm_variant_farm_animals, is_ocean...) by tag id.
     pub biome_tags: HashMap<String, std::collections::HashSet<String>>,
     /// Entity type tags (`data/*/tags/entity_type`).
@@ -71,6 +73,7 @@ impl MobData {
         };
         data.biome_tags = crate::items::load_tags(root, "worldgen/biome").unwrap_or_default();
         data.entity_tags = crate::items::load_tags(root, "entity_type").unwrap_or_default();
+        data.villager_hats = std::sync::RwLock::new(super::villager_hats::VillagerHats::load(root));
         data
     }
     /// Only the keyframe animation definitions of `mob-data.json`.
@@ -131,6 +134,7 @@ impl MobData {
             placements,
             heightmaps,
             animations,
+            villager_hats: Default::default(),
             biome_tags: HashMap::new(),
             entity_tags: HashMap::new(),
             pois: Default::default(),
@@ -186,6 +190,7 @@ impl MobData {
             placements: HashMap::new(),
             heightmaps: HashMap::new(),
             animations: HashMap::new(),
+            villager_hats: Default::default(),
             biome_tags: HashMap::new(),
             entity_tags: HashMap::new(),
             pois: Default::default(),

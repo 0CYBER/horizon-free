@@ -652,7 +652,7 @@ impl Game<'_> {
             let facts = self.res.facts.get(state);
             let blocks = facts.legacy_solid || facts.fluid != horizon_client::blocks::Fluid::None;
             let leaves = self
-                .res
+                .pack
                 .assets
                 .registry
                 .state(state)
