@@ -531,7 +531,8 @@ def check_walls(host, guest, out):
     # (TEXT_SEE_THROUGH), but not once the guest crouches (Entity.isDiscrete).
     for g in (host, guest):
         back_to_game(g)
-    if remote(guest)['health'] <= 0:
+    # The trial spawner's zombies may have killed the guest.
+    if guest('state').get('screen') == 'dead' or remote(guest)['health'] <= 0:
         guest.raw('respawn')
         guest.wait(40)
     face_each_other(host, guest)
