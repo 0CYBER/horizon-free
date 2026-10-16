@@ -9116,6 +9116,7 @@ impl ApplicationHandler for Game<'_> {
                             && !horizon_client::ui_theme::horizon()
                         {
                             title.drag(self.cursor, (b.width, b.height));
+                            title.drag_field(&self.res.atlas, self.cursor.0);
                         }
                         if self.dragging && self.screen == Screen::Options {
                             let _ = b;
@@ -9202,6 +9203,7 @@ impl ApplicationHandler for Game<'_> {
                 } if self.title.is_some() && self.screen != Screen::Options => {
                     if let Some(title) = &mut self.title {
                         title.release();
+                        title.release_field();
                     }
                 }
                 WindowEvent::MouseInput {
@@ -9216,6 +9218,7 @@ impl ApplicationHandler for Game<'_> {
                         .unwrap_or([1, 1]);
                     let mut b = HudBatch::new(size);
                     let atlas = &self.res.atlas;
+                    let shift = self.has_shift_down();
                     let (action, sound) = self.title.as_mut().map_or((Action::None, false), |t| {
                         if horizon_client::ui_theme::horizon() {
                             (
@@ -9223,7 +9226,10 @@ impl ApplicationHandler for Game<'_> {
                                 false,
                             )
                         } else {
-                            t.click(self.cursor.0, self.cursor.1, (b.width, b.height))
+                            let clicked =
+                                t.click(self.cursor.0, self.cursor.1, (b.width, b.height));
+                            t.press_field(atlas, self.cursor, (b.width, b.height), shift);
+                            clicked
                         }
                     });
                     if sound {
@@ -9432,6 +9438,20 @@ impl ApplicationHandler for Game<'_> {
                             PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
                                 if let Some(t) = self.title.as_mut() {
                                     t.confirm_edit();
+                                }
+                            }
+                            PhysicalKey::Code(
+                                key @ (KeyCode::Backspace
+                                | KeyCode::Delete
+                                | KeyCode::ArrowLeft
+                                | KeyCode::ArrowRight
+                                | KeyCode::Home
+                                | KeyCode::End),
+                            ) if self.title.as_mut().is_some_and(|t| t.has_caret_field()) => {
+                                let (ctrl, shift) =
+                                    (self.has_control_down(), self.has_shift_down());
+                                if let Some(t) = self.title.as_mut() {
+                                    t.field_key(key, ctrl, shift);
                                 }
                             }
                             PhysicalKey::Code(KeyCode::Backspace) => self.title_edit(None, true),

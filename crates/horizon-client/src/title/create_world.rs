@@ -145,14 +145,19 @@ fn grid(w: f32, h: f32, tab: usize) -> (f32, f32) {
         TAB_BAR + ((area - gh) * 0.166_666_67).trunc(),
     )
 }
-/// The text box under the pointer: 0 the name, 1 the seed.
-pub(super) fn field_at(w: f32, h: f32, tab: usize, (x, y): (f32, f32)) -> Option<u8> {
+/// The text box of `tab`: 0 the name (Game tab), 1 the seed (World tab).
+pub(super) fn field_rect(w: f32, h: f32, tab: usize) -> Option<(u8, [f32; 4])> {
     let (gx, gy) = grid(w, h, tab);
     match tab {
-        0 => ui::hovered((x, y), gx + 1.0, gy + 13.0, 208.0, 20.0).then_some(0),
-        1 => ui::hovered((x, y), gx, gy + 41.0, 308.0, 20.0).then_some(1),
+        0 => Some((0, [gx + 1.0, gy + 13.0, 208.0, 20.0])),
+        1 => Some((1, [gx, gy + 41.0, 308.0, 20.0])),
         _ => None,
     }
+}
+/// The text box under the pointer: 0 the name, 1 the seed.
+pub(super) fn field_at(w: f32, h: f32, tab: usize, (x, y): (f32, f32)) -> Option<u8> {
+    let (id, [fx, fy, fw, fh]) = field_rect(w, h, tab)?;
+    ui::hovered((x, y), fx, fy, fw, fh).then_some(id)
 }
 
 fn tr(key: &str) -> String {
@@ -390,7 +395,7 @@ impl Title {
                 self.create_field(
                     atlas,
                     batch,
-                    name,
+                    (super::WORLD_NAME, name, 32),
                     [gx + 1.0, gy + 13.0, 208.0],
                     focus == 0,
                     None,
@@ -401,7 +406,7 @@ impl Title {
                 self.create_field(
                     atlas,
                     batch,
-                    seed,
+                    (super::WORLD_SEED, seed, 32),
                     [gx, gy + 41.0, 308.0],
                     focus == 1,
                     Some("selectWorld.seedInfo"),
@@ -425,24 +430,21 @@ impl Title {
             u32::MAX,
         );
     }
-    /// An EditBox with its cursor at the end; `hint` shows while it is empty
-    /// and unfocused.
+    /// An EditBox; `hint` shows while it is empty and unfocused.
     fn create_field(
         &self,
         atlas: &HudAtlas,
         batch: &mut HudBatch,
-        value: &str,
+        (id, value, max): (crate::clipboard::FieldId, &str, usize),
         [x, y, width]: [f32; 3],
         focused: bool,
         hint: Option<&str>,
     ) {
-        let mut field = ui::EditBox::new(x, y, width, 20.0);
-        field.value = value.to_owned();
-        field.cursor = ui::char_len(value);
-        field.highlight = field.cursor;
-        field.focused = focused;
-        field.focused_since(self.started);
-        field.draw(batch, atlas, None);
+        let rect = [x, y, width, 20.0];
+        self.caret
+            .borrow_mut()
+            .draw(batch, atlas, (id, value, max), rect, focused, self.started);
+        let field = ui::EditBox::new(x, y, width, 20.0);
         if let Some(hint) = hint
             && value.is_empty()
             && !focused
