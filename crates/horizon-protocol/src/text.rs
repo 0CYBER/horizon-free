@@ -47,9 +47,10 @@ fn append(tag: &Tag, lang: &Language, out: &mut String, depth: usize) {
         Tag::Compound(_) => {
             if let Some(text) = get(tag, "text").and_then(string) {
                 out.push_str(&text);
-            } else if let Some(text) = get(tag, "").and_then(string) {
-                // Mixed-list wrapper for a bare string.
-                out.push_str(&text);
+            } else if let Some(value) = get(tag, "") {
+                // NbtOps' wrapper for a bare value in a mixed list (a
+                // translation's number and string arguments).
+                append(value, lang, out, depth + 1);
             } else if let Some(key) = get(tag, "translate").and_then(string) {
                 let args: Vec<String> = match get(tag, "with") {
                     Some(Tag::List(args)) => args
@@ -152,6 +153,34 @@ mod tests {
         assert_eq!(format_java("<%s> %s", &args), "<Steve> hi");
         assert_eq!(format_java("%2$s by %1$s", &args), "hi by Steve");
         assert_eq!(format_java("100%% sure", &[]), "100% sure");
+    }
+
+    #[test]
+    fn unwraps_mixed_list_arguments() {
+        let mut lang = Language::new();
+        lang.insert(
+            "commands.item.entity.set.success.single".into(),
+            "Replaced %s slot(s) on %s with %s".into(),
+        );
+        // `with: [1, {text: "Alex"}, ...]` in NBT: the int comes wrapped.
+        let replaced = Tag::compound([
+            (
+                "translate",
+                Tag::String("commands.item.entity.set.success.single".into()),
+            ),
+            (
+                "with",
+                Tag::List(vec![
+                    Tag::compound([("", Tag::Int(1))]),
+                    Tag::compound([("text", Tag::String("Alex".into()))]),
+                    Tag::compound([("", Tag::String("[Emerald]".into()))]),
+                ]),
+            ),
+        ]);
+        assert_eq!(
+            plain(&replaced, &lang),
+            "Replaced 1 slot(s) on Alex with [Emerald]"
+        );
     }
 
     #[test]

@@ -1044,6 +1044,8 @@ struct Game<'a> {
     /// have each chest open.
     lid_openers: HashMap<(i32, i32, i32), i32>,
     lan_acting: Option<u32>,
+    /// The name of the guest `lan_acting` acts for (`Player.getName`).
+    lan_acting_name: Option<String>,
     /// Command feedback to forward to a guest.
     chat_capture: Option<Vec<horizon_client::text::Text>>,
     /// State of `/spectate`, `/posteffect`, `/debug`, `/waypoint` and friends.
@@ -10223,6 +10225,7 @@ pub fn run() -> Result<()> {
         lan_entity_events: Vec::new(),
         lid_openers: HashMap::new(),
         lan_acting: None,
+        lan_acting_name: None,
         chat_capture: None,
         cmds: Default::default(),
         ui: Default::default(),
