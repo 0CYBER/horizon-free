@@ -48,7 +48,7 @@ from agent_control_e2e import Cli, Failed, game_env  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'chest', 'crafting', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'trials', 'walls']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'trials']
 
 
 class Game:
