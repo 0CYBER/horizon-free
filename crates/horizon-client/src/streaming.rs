@@ -968,7 +968,8 @@ impl Streaming {
             return (uploads, removed);
         }
         // Meshing once the column and its neighbours are lit, and the column
-        // is within the render distance. Sections set aside past it come back
+        // is within the render distance (`in_view_distance`, the columns
+        // vanilla draws). Sections set aside past it come back
         // when the player moves: a column that loads with its light gets no
         // other request (#228).
         let area = (self.center, self.radius, self.forced.len());
@@ -981,7 +982,7 @@ impl Streaming {
                 forced: &self.forced,
             };
             self.waiting.retain(|&(x, sy, z)| {
-                let back = ranges.in_main_range(x, z, 0);
+                let back = ranges.in_view(x, z);
                 if back {
                     world.dirty_sections.insert((x, sy, z));
                 }
@@ -996,7 +997,7 @@ impl Streaming {
                 world.dirty_sections.remove(&(x, sy, z));
                 continue;
             }
-            if !self.in_main_range(x, z, 0) {
+            if !self.ranges().in_view(x, z) {
                 world.dirty_sections.remove(&(x, sy, z));
                 self.waiting.insert((x, sy, z));
                 continue;
@@ -1204,9 +1205,15 @@ impl Streaming {
     fn in_range(&self, x: i32, z: i32, margin: i32) -> bool {
         self.ranges().in_range(x, z, margin)
     }
-    fn in_main_range(&self, x: i32, z: i32, margin: i32) -> bool {
-        self.ranges().in_main_range(x, z, margin)
-    }
+}
+/// `ChunkTrackingView.isInViewDistance`: whether the column (x, z) is drawn
+/// at this render distance around `center`, the camera's column
+/// (`SectionOcclusionGraph.isInViewDistance`). Each axis gets a column of
+/// slack, so this reaches past the circle of `radius` columns.
+pub fn in_view_distance(center: (i32, i32), radius: i32, x: i32, z: i32) -> bool {
+    let gap = |d: i32| i64::from((d.abs() - 1).max(0));
+    let (dx, dz) = (gap(x - center.0), gap(z - center.1));
+    dx * dx + dz * dz < i64::from(radius) * i64::from(radius)
 }
 /// The areas kept loaded: circles around the player and `extra`, and forced chunks.
 struct Ranges<'a> {
@@ -1271,6 +1278,11 @@ impl Ranges<'_> {
                 dx * dx + dz * dz <= r * r
             })
     }
+    /// The columns meshed for drawing: those vanilla draws around the
+    /// player (`in_view_distance`), and forced ones.
+    fn in_view(&self, x: i32, z: i32) -> bool {
+        in_view_distance(self.center, self.radius, x, z) || self.forced.contains(&(x, z))
+    }
     fn in_main_range(&self, x: i32, z: i32, margin: i32) -> bool {
         let r = i64::from(self.radius + margin);
         let (dx, dz) = (i64::from(x - self.center.0), i64::from(z - self.center.1));
@@ -1305,6 +1317,31 @@ impl Drop for Streaming {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn view_distance_is_vanillas_shape() {
+        // ChunkTrackingView.isInViewDistance at render distance 12: a column
+        // of slack on each axis, so 533 columns rather than the 441 of a
+        // circle of radius 12.
+        let count = |r: i32| {
+            (-40..=40)
+                .flat_map(|x| (-40..=40).map(move |z| (x, z)))
+                .filter(|&(x, z)| in_view_distance((5, -7), r, x + 5, z - 7))
+                .count()
+        };
+        assert_eq!(count(12), 533);
+        assert_eq!(count(2), 25);
+        for (x, z, inside) in [(12, 0, true), (13, 0, false), (9, 9, true), (10, 9, false)] {
+            assert_eq!(in_view_distance((0, 0), 12, x, z), inside, "({x}, {z})");
+            assert_eq!(
+                in_view_distance((0, 0), 12, -z, -x),
+                inside,
+                "({}, {})",
+                -z,
+                -x
+            );
+        }
+    }
 
     struct GenerationFixture {
         world: World,
