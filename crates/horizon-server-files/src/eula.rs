@@ -9,8 +9,13 @@ pub const EULA_LINK: &str = "https://aka.ms/MinecraftEULA";
 
 /// The default file, as Properties.store(OutputStream) writes it.
 pub fn default_file(millis: i64) -> String {
+    file(millis, false)
+}
+
+/// The file with `eula` set: what the owner's agreement writes (horizon-server init).
+pub fn file(millis: i64, agreed: bool) -> String {
     let mut p = Properties::default();
-    p.put("eula", "false".into());
+    p.put("eula", agreed.to_string());
     p.store(
         Some(&format!(
             "By changing the setting below to TRUE you are indicating your agreement to our EULA ({EULA_LINK})."
