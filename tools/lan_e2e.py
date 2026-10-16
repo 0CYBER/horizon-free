@@ -40,6 +40,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import zlib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -47,7 +48,7 @@ from agent_control_e2e import Cli, Failed, game_env  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'chest', 'crafting', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'trials']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'trials']
 
 
 class Game:
@@ -474,6 +475,98 @@ def check_feedback(host, guest, out):
     return chat
 
 
+def png_rows(path):
+    """The rows of an 8-bit RGB or RGBA PNG, unfiltered, as bytes of 4 (or 3) per pixel."""
+    data = Path(path).read_bytes()
+    pos, idat, head = 8, b'', None
+    while pos < len(data):
+        size = int.from_bytes(data[pos:pos + 4], 'big')
+        kind, body = data[pos + 4:pos + 8], data[pos + 8:pos + 8 + size]
+        if kind == b'IHDR':
+            head = body
+        elif kind == b'IDAT':
+            idat += body
+        pos += 12 + size
+    width, height = int.from_bytes(head[:4], 'big'), int.from_bytes(head[4:8], 'big')
+    assert head[8] == 8 and head[9] in (2, 6) and head[12] == 0, f'unsupported PNG {head.hex()}'
+    bpp = 4 if head[9] == 6 else 3
+    raw, stride, rows, prev = zlib.decompress(idat), width * bpp, [], bytearray(width * bpp)
+    for y in range(height):
+        kind, line = raw[y * (stride + 1)], bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
+        for i in range(stride):
+            a = line[i - bpp] if i >= bpp else 0
+            b, c = prev[i], prev[i - bpp] if i >= bpp else 0
+            if kind == 1:
+                line[i] = (line[i] + a) & 255
+            elif kind == 2:
+                line[i] = (line[i] + b) & 255
+            elif kind == 3:
+                line[i] = (line[i] + (a + b) // 2) & 255
+            elif kind == 4:
+                pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
+                line[i] = (line[i] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+        rows.append(bytes(line))
+        prev = line
+    return rows, bpp
+
+
+def changed_pixels(a, b):
+    (ra, bpp), (rb, _) = png_rows(a), png_rows(b)
+    return sum(1 for la, lb in zip(ra, rb) for i in range(0, len(la), bpp)
+               if max(abs(la[i + k] - lb[i + k]) for k in range(3)) > 24)
+
+
+def sneaking_on_host(host, want, ticks=40):
+    """Whether the host sees the guest crouching, once it matches `want` or after `ticks`."""
+    for _ in range(ticks // 5):
+        sneaking = host.raw('lan', 'status')['guests'][0]['sneaking']
+        if sneaking == want:
+            return sneaking
+        host.wait(5)
+    return sneaking
+
+
+def check_walls(host, guest, out):
+    # A stone wall between the two: the host still sees the guest's name through it
+    # (TEXT_SEE_THROUGH), but not once the guest crouches (Entity.isDiscrete).
+    for g in (host, guest):
+        back_to_game(g)
+    # The trial spawner's zombies may have killed the guest.
+    if guest('state').get('screen') == 'dead' or remote(guest)['health'] <= 0:
+        guest.raw('respawn')
+        guest.wait(40)
+    face_each_other(host, guest)
+    hx, hy, hz = pos_of(host)
+    gx, gy, gz = pos_of(guest)
+    # Halfway: the players stand 3 apart, so the wall's block touches neither.
+    wall = int((hx + gx) / 2 // 1)
+    host('command', command=f'fill {wall} {int(hy // 1)} {int(hz // 1) - 3} {wall} {int(hy // 1) + 4} '
+                            f'{int(hz // 1) + 3} minecraft:stone')
+    try:
+        host.raw('look-at', f'{gx:.2f}', f'{gy + 2.3:.2f}', f'{gz:.2f}')
+        # Chat lines fade out after 200 ticks; let them go so only the name tag can differ.
+        host.wait(210)
+        standing = host.shot(out, 'walls-standing')
+        guest.raw('key', 'shift', 'down')
+        crouched = sneaking_on_host(host, True)
+        guest.wait(10)
+        crouching = host.shot(out, 'walls-crouching')
+        guest.raw('key', 'shift', 'up')
+        stood = not sneaking_on_host(host, False)
+        guest.wait(10)
+        again = host.shot(out, 'walls-standing-again')
+    finally:
+        guest.raw('key', 'shift', 'up')
+        host('command', command=f'fill {wall} {int(hy // 1)} {int(hz // 1) - 3} {wall} {int(hy // 1) + 4} '
+                                f'{int(hz // 1) + 3} minecraft:air')
+        face_each_other(host, guest)
+    assert crouched and stood, f'the host never saw the guest crouch and stand: {crouched}, {stood}'
+    seen, steady = changed_pixels(standing, crouching), changed_pixels(standing, again)
+    assert seen > 50, f'no name tag through the wall: {seen} pixels differ standing vs crouching'
+    assert steady < seen // 4, f'the view itself changed: {steady} pixels between two standing shots ({seen})'
+    return {'standing_vs_crouching': seen, 'standing_twice': steady}
+
+
 def state_of(game, pos, key):
     state = game.raw('block', *pos)['state']
     return dict(kv.split('=') for kv in state.partition('[')[2].rstrip(']').split(',') if kv).get(key)
@@ -532,7 +625,8 @@ def check_trials(host, guest, out):
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
              'chest': check_chest, 'crafting': check_crafting, 'damage': check_damage,
              'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
-             'containers': check_containers, 'feedback': check_feedback, 'trials': check_trials}
+             'containers': check_containers, 'feedback': check_feedback, 'trials': check_trials,
+             'walls': check_walls}
 
 
 def run(ctl, out, resources, checks):

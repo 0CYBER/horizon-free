@@ -773,6 +773,8 @@ struct Game<'a> {
     renderer: Option<Renderer>,
     /// CPU geometry storage retained across frames, including empty/title frames.
     entity_vertices: Vec<Vertex>,
+    /// Name tags drawn over everything (`RenderPipelines.TEXT_SEE_THROUGH`).
+    see_through_vertices: Vec<Vertex>,
     started: Instant,
     previous: Instant,
     /// FramerateLimitTracker.latestInputTime.
@@ -5393,7 +5395,10 @@ impl Game<'_> {
         self.player_model_geometry(camera, alpha, &mut out);
         self.guest_model_geometry(camera, alpha, &mut out);
         self.fangs_geometry(camera, alpha, &mut out);
-        self.name_tag_geometry(camera, alpha, &mut out);
+        let mut see_through = std::mem::take(&mut self.see_through_vertices);
+        see_through.clear();
+        self.name_tag_geometry(camera, alpha, &mut out, &mut see_through);
+        self.see_through_vertices = see_through;
         // Entity shadows (EntityRenderer.extractShadow).
         if let Some(sprite) = self.res.atlas.sprites.get("misc/shadow").copied() {
             let ambient = if self.dim == Dim::Nether { 0.1 } else { 0.0 };
@@ -8528,6 +8533,7 @@ impl Game<'_> {
         // Keep the buffer local while builders need mutable access to the game.
         let mut entities = std::mem::take(&mut self.entity_vertices);
         entities.clear();
+        self.see_through_vertices.clear();
         if !title {
             entities = horizon_client::spans::time("entity_geometry", || {
                 self.entity_geometry(camera, alpha, entities)
@@ -8592,6 +8598,7 @@ impl Game<'_> {
         let border = (!title)
             .then(|| self.border_draw(camera.to_array(), alpha as f32))
             .flatten();
+        let see_through = std::mem::take(&mut self.see_through_vertices);
         let frame = Frame {
             shader: self.shader_inputs(camera, alpha as f32),
             nether_lighting: self.dim == Dim::Nether,
@@ -8633,6 +8640,7 @@ impl Game<'_> {
             hud: &hud,
             entities: &entities,
             additive: &additive,
+            see_through: &see_through,
             celestial: if self.settings.horizon.sky || title {
                 &celestial
             } else {
@@ -8680,6 +8688,7 @@ impl Game<'_> {
         };
         // Restore storage even when rendering fails (for example, a lost surface).
         self.entity_vertices = entities;
+        self.see_through_vertices = see_through;
         result
     }
     /// The LevelLoadingScreen shown while the player waits for its chunks:
@@ -10045,6 +10054,7 @@ pub fn run() -> Result<()> {
         window: None,
         renderer: None,
         entity_vertices: Vec::new(),
+        see_through_vertices: Vec::new(),
         health_hud: hud_layout::HealthHud::default(),
         started: now,
         previous: now,
