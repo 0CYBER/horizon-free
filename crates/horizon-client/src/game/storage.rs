@@ -75,7 +75,7 @@ fn facing_step(facing: &str) -> (i32, i32) {
 impl Game<'_> {
     /// The other half of the open double chest and whether the open one is
     /// the right half (`ChestBlock.getConnectedDirection`).
-    fn chest_partner(&self, key: (i32, i32, i32)) -> Option<((i32, i32, i32), bool)> {
+    pub(super) fn chest_partner(&self, key: (i32, i32, i32)) -> Option<((i32, i32, i32), bool)> {
         let registry = self.res.assets.registry;
         let state = registry.state(self.world.block(key.0, key.1, key.2))?;
         if !matches!(
@@ -169,6 +169,9 @@ impl Game<'_> {
     /// Rows of the open generic 9-wide container (`ChestMenu`), or None for
     /// the other menus (hoppers, dispensers, shulker boxes, furnaces...).
     pub(super) fn chest_rows(&self) -> Option<usize> {
+        if let Some((rows, _)) = self.remote_chest_menu() {
+            return Some(rows);
+        }
         if !matches!(self.container_kind()?, BlockEntity::Chest(_)) {
             return None;
         }
@@ -185,6 +188,9 @@ impl Game<'_> {
     }
     /// The title of the open chest-like menu.
     fn chest_title(&self, rows: usize) -> String {
+        if let Some((_, title)) = self.remote_chest_menu() {
+            return title;
+        }
         let (key, fallback) = match self.container_block().as_deref() {
             Some("minecraft:barrel") => ("container.barrel", "Barrel"),
             Some("minecraft:ender_chest") => ("container.enderchest", "Ender Chest"),

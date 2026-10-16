@@ -84,6 +84,8 @@ pub struct Guest {
     /// (`InventoryMenu.craftSlots`, `resultSlots`), which the game computes.
     pub craft_grid: [Option<ItemStack>; 4],
     pub craft_result: Option<ItemStack>,
+    /// The ender chest inventory (`PlayerEnderChestContainer`, 27 slots).
+    pub ender_items: Vec<Option<ItemStack>>,
     pub health: f32,
     pub food: i32,
     pub saturation: f32,
@@ -165,6 +167,7 @@ impl Guest {
             carried: None,
             craft_grid: Default::default(),
             craft_result: None,
+            ender_items: vec![None; 27],
             health: 20.0,
             food: 20,
             saturation: 5.0,
