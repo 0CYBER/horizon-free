@@ -704,3 +704,28 @@ fn new_world_generation_settings_round_trip() {
         Some("minecraft:flat")
     );
 }
+
+#[test]
+fn world_fields_edit_at_their_cursor() {
+    use winit::keyboard::KeyCode;
+    let mut f = Fixture::new();
+    f.world("World", "World");
+    f.title.enter_singleplayer();
+    // The search box takes the focus.
+    f.title.click(240.0, 30.0, (480.0, 262.0));
+    f.title.type_text("hello world");
+    for _ in 0..5 {
+        assert!(f.title.field_key(KeyCode::ArrowLeft, false, false));
+    }
+    f.title.type_text("X");
+    assert_eq!(f.title.search, "hello Xworld");
+    // Shift+Home selects back to the start; typing replaces the selection.
+    f.title.field_key(KeyCode::Home, false, true);
+    f.title.type_text("Y");
+    assert_eq!(f.title.search, "Yworld");
+    // Ctrl+Left jumps a word; Backspace deletes before the cursor.
+    f.title.field_key(KeyCode::ArrowLeft, true, false);
+    f.title.field_key(KeyCode::ArrowRight, false, false);
+    f.title.field_key(KeyCode::Backspace, false, false);
+    assert_eq!(f.title.search, "world");
+}

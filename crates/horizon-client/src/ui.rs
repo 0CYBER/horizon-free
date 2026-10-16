@@ -598,6 +598,122 @@ pub struct EditBox {
     pub suggestion: Option<String>,
     pub text_color: u32,
 }
+/// The focused text field of a screen that keeps its values as `String`s
+/// (the world list's search, world names, seeds): the `EditBox` state that
+/// outlives a frame, its cursor, selection and scroll.
+#[derive(Clone, Debug)]
+pub struct Caret {
+    field: Option<crate::clipboard::FieldId>,
+    edit: EditBox,
+    /// The last click's time and field, for double clicks.
+    last_click: Option<(Instant, crate::clipboard::FieldId)>,
+    /// The button is held since a press on the field (`onDrag`).
+    held: bool,
+}
+impl Default for Caret {
+    fn default() -> Self {
+        Self {
+            field: None,
+            edit: EditBox::new(0.0, 0.0, 200.0, 20.0),
+            last_click: None,
+            held: false,
+        }
+    }
+}
+impl Caret {
+    /// The box for field `id` holding `value`. A field newly focused, or
+    /// whose value changed elsewhere, starts with its cursor at the end.
+    fn sync(&mut self, id: crate::clipboard::FieldId, value: &str, max: usize) -> &mut EditBox {
+        self.edit.max_length = max;
+        if self.field != Some(id) || self.edit.value != value {
+            self.edit.value = value.to_owned();
+            self.edit.move_cursor_to_end(false);
+            if self.field != Some(id) {
+                self.edit.display = 0;
+                self.field = Some(id);
+            }
+        }
+        &mut self.edit
+    }
+    /// Edit field `id`'s `value` through its box; the value is written back.
+    pub fn edit<R>(
+        &mut self,
+        id: crate::clipboard::FieldId,
+        value: &mut String,
+        max: usize,
+        f: impl FnOnce(&mut EditBox) -> R,
+    ) -> R {
+        let edit = self.sync(id, value, max);
+        let result = f(edit);
+        value.clone_from(&edit.value);
+        result
+    }
+    /// A press on field `id` at GUI `x` (`EditBox.onClick`): a second press
+    /// within 250 ms is a double click (`MouseHandler`).
+    pub fn press(
+        &mut self,
+        atlas: &HudAtlas,
+        (id, value, max): (crate::clipboard::FieldId, &mut String, usize),
+        rect: [f32; 4],
+        x: f32,
+        shift: bool,
+    ) {
+        let now = Instant::now();
+        let double = self
+            .last_click
+            .is_some_and(|(at, field)| field == id && now.duration_since(at).as_millis() < 250);
+        self.last_click = Some((now, id));
+        self.held = true;
+        self.edit(id, value, max, |edit| {
+            [edit.x, edit.y, edit.width, edit.height] = rect;
+            edit.click(atlas, x, shift, double);
+        });
+    }
+    /// The pointer moved with the button held after a press on field `id`.
+    pub fn drag(
+        &mut self,
+        atlas: &HudAtlas,
+        (id, value, max): (crate::clipboard::FieldId, &mut String, usize),
+        x: f32,
+    ) {
+        if self.held && self.last_click.is_some_and(|(_, field)| field == id) {
+            self.edit(id, value, max, |edit| edit.drag_to(atlas, x));
+        }
+    }
+    /// The button was released: drags no longer select.
+    pub fn release(&mut self) {
+        self.held = false;
+    }
+    /// Draw field `id` at `rect`: the focused one with its caret, the others
+    /// showing the end of their text.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw(
+        &mut self,
+        batch: &mut HudBatch,
+        atlas: &HudAtlas,
+        (id, value, max): (crate::clipboard::FieldId, &str, usize),
+        rect: [f32; 4],
+        focused: bool,
+        focused_at: Instant,
+    ) {
+        let mut idle;
+        let edit = if focused {
+            self.sync(id, value, max)
+        } else {
+            idle = EditBox::new(0.0, 0.0, 0.0, 0.0);
+            idle.max_length = max;
+            idle.set_value(value);
+            &mut idle
+        };
+        [edit.x, edit.y, edit.width, edit.height] = rect;
+        edit.focused = focused;
+        if edit.focused_at < focused_at {
+            edit.focused_at = focused_at;
+        }
+        edit.draw(batch, atlas, None);
+    }
+}
+
 /// `EditBox.extractWidgetRenderState` for Horizon's append-only fields,
 /// unbordered and with the cursor at the end: the text from (x, y), the
 /// highlight when Select All covers the value (`invert_text` as
@@ -740,10 +856,14 @@ impl EditBox {
         self.value.replace_range(ba..bb, "");
         self.set_cursor(a, false);
     }
-    /// EditBox.getWordPosition.
+    /// EditBox.getWordPosition from the cursor.
     pub fn word_position(&self, dir: isize) -> usize {
+        self.word_position_from(dir, self.cursor)
+    }
+    /// EditBox.getWordPosition(dir, from).
+    fn word_position_from(&self, dir: isize, from: usize) -> usize {
         let chars: Vec<char> = self.value.chars().collect();
-        let mut pos = self.cursor;
+        let mut pos = from.min(chars.len());
         if dir < 0 {
             while pos > 0 && chars[pos - 1] == ' ' {
                 pos -= 1;
@@ -772,6 +892,33 @@ impl EditBox {
     }
     pub fn move_cursor_to_end(&mut self, select: bool) {
         self.set_cursor(char_len(&self.value), select);
+    }
+    /// EditBox.findClickedPositionInText: the character boundary under GUI `x`.
+    pub fn position_at(&mut self, atlas: &HudAtlas, x: f32) -> usize {
+        self.layout(atlas);
+        let room = (x.floor() - self.text_x()).min(self.inner_width());
+        let rest: String = self.value.chars().skip(self.display).collect();
+        self.display + atlas.font.fit(&rest, room)
+    }
+    /// EditBox.onClick: the cursor to the pointer, extending the selection
+    /// with Shift; a double click selects the word under it (`selectWord`).
+    pub fn click(&mut self, atlas: &HudAtlas, x: f32, shift: bool, double: bool) {
+        let pos = self.position_at(atlas, x);
+        if double {
+            let (start, end) = (
+                self.word_position_from(-1, pos),
+                self.word_position_from(1, pos),
+            );
+            self.set_cursor(start, false);
+            self.set_cursor(end, true);
+        } else {
+            self.set_cursor(pos, shift);
+        }
+    }
+    /// EditBox.onDrag: the selection follows the pointer.
+    pub fn drag_to(&mut self, atlas: &HudAtlas, x: f32) {
+        let pos = self.position_at(atlas, x);
+        self.set_cursor(pos, true);
     }
     fn scroll_to(&mut self, pos: usize) {
         // EditBox.scrollTo without font access is completed in `layout`.
@@ -1084,6 +1231,26 @@ mod tests {
         assert!(!s.press((103.0, 10.0), 100.0, top, bottom, 90.0));
         s.wheel(-2.0, 18.0, top, bottom, content);
         assert_eq!(s.amount, 36.0);
+    }
+    #[test]
+    fn edit_box_clicks_place_the_cursor_and_select() {
+        let atlas = HudAtlas::build(Path::new("/nonexistent/horizon-test-assets")).unwrap();
+        let mut e = EditBox::new(10.0, 0.0, 200.0, 20.0);
+        e.set_value("hello world");
+        let at = |e: &EditBox, s: &str| e.text_x() + atlas.font.width(s);
+        // findClickedPositionInText: the characters left of the pointer.
+        e.click(&atlas, at(&e, "hello "), false, false);
+        assert_eq!((e.cursor, e.highlight), (6, 6));
+        // Shift extends the selection from the anchor.
+        e.click(&atlas, at(&e, "hello wor"), true, false);
+        assert_eq!(e.selected_text(), "wor");
+        // selectWord: the word and the spaces after it.
+        e.click(&atlas, at(&e, "he"), false, true);
+        assert_eq!(e.selected_text(), "hello ");
+        // onDrag from a click: left of the text is its start.
+        e.click(&atlas, at(&e, "hello "), false, false);
+        e.drag_to(&atlas, e.text_x() - 5.0);
+        assert_eq!((e.cursor, e.highlight), (0, 6));
     }
     #[test]
     fn edit_box_editing() {
