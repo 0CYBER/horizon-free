@@ -1860,18 +1860,10 @@ impl Game<'_> {
     pub(super) fn stack_tooltip(&self, stack: &ItemStack) -> Vec<(String, u32)> {
         let e: &Enchantments = &self.res.stations.enchantments;
         let props = e.props(&stack.item);
-        let mut rarity = props.map_or("common", |p| p.rarity.as_str());
-        // The ominous banner's rarity component.
-        if stack.data().is_some_and(|d| d.ominous_banner) {
-            rarity = "uncommon";
-        }
-        if !stack.enchantments().is_empty() {
-            rarity = match rarity {
-                "common" | "uncommon" => "rare",
-                "rare" => "epic",
-                r => r,
-            };
-        }
+        let rarity = horizon_client::item_tooltip::rarity(
+            stack,
+            props.map_or("common", |p| p.rarity.as_str()),
+        );
         let color = match rarity {
             "uncommon" => rgba(255, 255, 85, 255),
             "rare" => rgba(85, 255, 255, 255),

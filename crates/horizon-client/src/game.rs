@@ -7999,7 +7999,7 @@ impl Game<'_> {
                 self.creative_screen.search_focused.elapsed().as_millis(),
             );
         }
-        let mut hovered: Option<String> = None;
+        let mut hovered: Option<ItemStack> = None;
         if tab.inventory {
             self.draw_player_preview(
                 batch,
@@ -8049,7 +8049,7 @@ impl Game<'_> {
                         && self.cursor.1 < y + 16.0
                     {
                         batch.fill(&self.res.atlas, x, y, 16.0, 16.0, rgba(255, 255, 255, 128));
-                        hovered = Some(stack.item.to_string());
+                        hovered = Some(stack.clone());
                     }
                 }
             }
@@ -8064,7 +8064,7 @@ impl Game<'_> {
                     && self.cursor.1 >= y
                     && self.cursor.1 < y + 16.0
                 {
-                    hovered = Some(stack.item.to_string());
+                    hovered = Some(stack);
                 }
             }
             let scrollable = self.creative_screen.rows(&self.res.names) > 5;
@@ -8100,8 +8100,8 @@ impl Game<'_> {
         } else if self.carried.is_none()
             && let Some(item) = hovered
         {
-            let name = self.res.names.item(&item);
-            self.tooltip(batch, &name, self.cursor.0, self.cursor.1);
+            let lines = self.stack_tooltip(&item);
+            self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
         }
         self.draw_inventory_effects(batch, (ox, oy), Creative::WIDTH as i32);
     }

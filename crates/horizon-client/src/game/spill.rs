@@ -609,6 +609,14 @@ mod tests {
             pending.attach([pos.0, pos.1, pos.2], &mut dropped);
             assert!(dropped.data().unwrap().ominous_banner);
             assert_eq!(
+                horizon_client::item_tooltip::name_line(&dropped, &|_| None),
+                "Ominous Banner"
+            );
+            assert_eq!(
+                horizon_client::item_tooltip::rarity(&dropped, "common"),
+                "uncommon"
+            );
+            assert_eq!(
                 item_data::encode_components(&dropped),
                 Some(Tag::Compound(components.clone()))
             );
