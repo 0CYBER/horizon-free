@@ -1,8 +1,11 @@
 //! `horizon-server`: host a Horizon server (docs/server.md). It keeps the server's settings in `server.toml`,
 //! runs the game headless as the engine, and manages the vanilla files around it.
 
+mod api;
+mod cli;
 mod config;
 mod engine;
+mod http;
 mod init;
 mod lists;
 mod signals;
@@ -20,11 +23,18 @@ Usage: horizon-server [--dir DIR] <command>
               --yes)
   run         Run the server in the foreground; type console commands, Ctrl-C stops it cleanly. It
               restarts the game if it crashes.
+  start       Run the server in the background (its output goes to logs/supervisor.log)
+  stop, restart
+  status [--json]
+              Up or not, TPS, MSPT, players, RAM and CPU
+  cmd COMMAND...
+              Run a console command on the running server and print what it answers
+  logs [-f] [-n N]
+              The last N lines of the log (default 50); -f follows it
   import FILE Write server.toml from a vanilla server.properties
   op NAME, deop NAME
   whitelist on|off|list, whitelist add|remove NAME
-              Change who may join while the server is stopped (while it runs, type the same command
-              in its console)
+              Who may join (on the running server, or in the files when it is stopped)
 
   --dir DIR   The server folder (default: the current folder)
 
@@ -53,6 +63,12 @@ fn main() -> ExitCode {
         }
         Some("init") => init_answers(&args[1..]).and_then(|a| init::run(&dir, a)),
         Some("run") => supervisor::run(&dir),
+        Some("start") => cli::start(&dir),
+        Some("stop") => cli::stop(&dir, false),
+        Some("restart") => cli::stop(&dir, true),
+        Some("status") => cli::status(&dir, args[1..].iter().any(|a| a == "--json")),
+        Some("cmd") => cli::command(&dir, &args[1..]),
+        Some("logs") => logs(&dir, &args[1..]),
         Some("import") => import(&dir, &args[1..]),
         Some(command @ ("op" | "deop" | "whitelist")) => lists::run(&dir, command, &args[1..]),
         Some(other) => Err(format!(
@@ -66,6 +82,25 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn logs(dir: &std::path::Path, args: &[String]) -> Result<(), String> {
+    let mut follow = false;
+    let mut count = 50;
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "-f" | "--follow" => follow = true,
+            "-n" => {
+                count = it
+                    .next()
+                    .and_then(|n| n.parse().ok())
+                    .ok_or("-n needs a number of lines")?;
+            }
+            other => return Err(format!("logs: unknown option {other}")),
+        }
+    }
+    cli::logs(dir, follow, count)
 }
 
 fn init_answers(args: &[String]) -> Result<init::Answers, String> {

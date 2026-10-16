@@ -8,7 +8,10 @@ description = "Host a Horizon server: server.toml, the CLI and the supervisor th
 
 [dependencies]
 horizon-server-files = { path = "../horizon-server-files" }
+# The game process's RAM and CPU (the same probes the benchmark reports use).
+horizon-bench = { path = "../horizon-bench" }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 toml = "1.1"
 # Edits server.toml in place, keeping the owner's comments and order.
 toml_edit = "0.25"
