@@ -425,6 +425,12 @@ impl Game<'_> {
             capture.push(text);
             return;
         }
+        // Connected to a server (single player's own included), the chat on
+        // screen is the connection's: the game's own messages join it.
+        if self.remote.is_some() {
+            self.chat_line(text.plain());
+            return;
+        }
         let focused = self.screen == Screen::Chat;
         let heard = self.mods.mods.is_running().then(|| text.plain());
         self.ui.chat.add(

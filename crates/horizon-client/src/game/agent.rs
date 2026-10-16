@@ -460,7 +460,10 @@ impl Game<'_> {
         json!({
             "screen": self.screen_label(),
             "menu": self.title.as_ref().map(|_| self.title_value()),
-            "world": (self.title.is_none()).then(|| self.level.name.clone()),
+            "world": (self.title.is_none()).then(|| match &self.integrated {
+                Some(server) => server.world_name.clone(),
+                None => self.level.name.clone(),
+            }),
             "dimension": self.dim.id(),
             "gamemode": format!("{:?}", self.mode).to_lowercase(),
             "time": { "day_time": self.world.day_time, "day": self.world.day_time.div_euclid(24000), "time_of_day": self.world.day_time.rem_euclid(24000) },

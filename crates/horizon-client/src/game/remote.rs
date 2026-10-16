@@ -426,7 +426,7 @@ impl Game<'_> {
         }
         Some(stack)
     }
-    fn chat_line(&mut self, text: String) {
+    pub(super) fn chat_line(&mut self, text: String) {
         log::info!("[chat] {text}");
         if let Some(r) = self.remote.as_mut() {
             r.chat.push((text, Instant::now()));
@@ -1133,6 +1133,14 @@ impl Game<'_> {
                 }
             }
             C::EntityEvent(p) => {
+                // EntityEvent.PERMISSION_LEVEL_ALL..OWNERS (24..=28) for this
+                // player: LocalPlayer.setPermissionLevel, which the commands
+                // the chat offers and checks follow.
+                if (24..=28).contains(&p.event)
+                    && self.remote.as_ref().is_some_and(|r| r.entity_id == p.id)
+                {
+                    self.ui.registries.permission = (p.event - 24) as u8;
+                }
                 if p.event == 1
                     && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
                     && m.species() == horizon_client::mobs::Species::Rabbit
