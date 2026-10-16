@@ -48,6 +48,10 @@ pub struct HubConfig {
     pub max_players: usize,
     /// A dedicated server: operators from `ops`, the dedicated-only commands.
     pub dedicated: bool,
+    /// An integrated server (`dedicated` too, since it has no host player):
+    /// the owner's level from `ops`, the others' from Allow Commands and
+    /// the guests' command access, and the integrated-only commands.
+    pub integrated: bool,
 }
 
 /// The host player as the other players see them.
@@ -445,7 +449,11 @@ impl Hub {
     /// (IntegratedServer.setGuestCommandAccess); a dedicated server its
     /// operators' level (`ops`).
     fn default_permission(&self, uuid: u128) -> u8 {
-        if self.config.dedicated {
+        if self.config.integrated {
+            // IntegratedServer.getProfilePermissions / getCustomPermissionLevel.
+            let guests = if self.config.guest_commands { 2 } else { 0 };
+            self.ops.get(&uuid).copied().unwrap_or(guests)
+        } else if self.config.dedicated {
             self.ops.get(&uuid).copied().unwrap_or(0)
         } else if self.config.guest_commands {
             2
@@ -682,7 +690,10 @@ impl Hub {
     fn send_commands(&self, i: usize) {
         let g = &self.guests[i];
         let packet = match &self.sync.commands {
-            Some(tree) => tree.packet(g.permission, self.config.dedicated, &self.sync.builtin),
+            Some(tree) => {
+                let dedicated = self.config.dedicated && !self.config.integrated;
+                tree.packet(g.permission, dedicated, &self.sync.builtin)
+            }
             None => play::Commands {
                 nodes: vec![play::CommandNode {
                     kind: 0,

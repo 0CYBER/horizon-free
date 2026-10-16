@@ -227,6 +227,10 @@ impl Connection {
             },
         })
     }
+    /// `Connection.isMemoryConnection`: through a [`Pipe`] rather than a socket.
+    pub fn is_memory(&self) -> bool {
+        matches!(self.reader.stream, Stream::Memory(_))
+    }
     /// ClientboundLoginCompressionPacket: negative thresholds disable compression.
     pub fn set_compression(&mut self, threshold: i32) {
         let t = usize::try_from(threshold).ok();

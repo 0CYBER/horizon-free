@@ -1085,6 +1085,8 @@ struct Game<'a> {
     lan: Option<lan::LanHost>,
     /// Single player's server thread, which `remote` is connected to.
     integrated: Option<integrated::Integrated>,
+    /// This game is that server thread's (game/integrated.rs).
+    serving: Option<integrated::Serving>,
     /// The open world is shared behind an invite code (game/friends.rs).
     friends: Option<friends::Sharing>,
     world_options: Option<lan_screen::WorldOptions>,
@@ -3644,7 +3646,7 @@ impl Game<'_> {
     /// `Minecraft.pause`: a single-player game with a pausing screen open.
     fn pauses_game(&self) -> bool {
         self.has_singleplayer_server()
-            && self.lan.is_none()
+            && !self.is_published()
             && self.title.is_none()
             && (matches!(
                 self.screen,
@@ -10073,6 +10075,7 @@ impl<'a> Game<'a> {
             remote: None,
             lan: None,
             integrated: None,
+            serving: None,
             world_options: None,
             options_to_world_options: false,
             command_block_screen: None,
