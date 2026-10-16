@@ -177,6 +177,14 @@ public final class VanillaNaturalSpawnOracle {
         /** The game time (trial cases advance it). */
         long time;
         net.minecraft.world.level.block.entity.BlockEntity trial;
+        /** Trial cases: the mobs added so far, which name their UUIDs. */
+        int trialMobs;
+        /** Mobs a trial spawner discards stop being tracked as waypoints. */
+        net.minecraft.server.waypoints.ServerWaypointManager waypoints;
+        @Override public net.minecraft.server.waypoints.ServerWaypointManager getWaypointManager() {
+            if (waypoints == null) waypoints = new net.minecraft.server.waypoints.ServerWaypointManager();
+            return waypoints;
+        }
         @Override public long getGameTime() { return time; }
         @Override public int getNextEntityId() { return next++; }
         @Override public net.minecraft.world.flag.FeatureFlagSet enabledFeatures() { return net.minecraft.world.flag.FeatureFlags.REGISTRY.allFlags(); }
@@ -285,6 +293,17 @@ public final class VanillaNaturalSpawnOracle {
             return out;
         }
         @Override public boolean addFreshEntity(Entity entity) {
+            if (entity instanceof OminousItemSpawner spawner && tick >= 0) {
+                try {
+                    Field delay = OminousItemSpawner.class.getDeclaredField("spawnItemAfterTicks");
+                    delay.setAccessible(true);
+                    log.add(tick + " ispawner " + BuiltInRegistries.ITEM.getKey(spawner.getItem().getItem()) + " " + spawner.getItem().getCount() + " "
+                        + bits(spawner.getX()) + " " + bits(spawner.getY()) + " " + bits(spawner.getZ()) + " " + delay.getLong(spawner));
+                } catch (ReflectiveOperationException e) {
+                    throw new RuntimeException(e);
+                }
+                return true;
+            }
             if (entity instanceof net.minecraft.world.entity.item.ItemEntity item && tick >= 0) {
                 Vec3 v = item.getDeltaMovement();
                 log.add(tick + " item " + BuiltInRegistries.ITEM.getKey(item.getItem().getItem()) + " " + item.getItem().getCount() + " " + bits(item.getX()) + " " + bits(item.getY()) + " " + bits(item.getZ()) + " " + bits(v.x) + " " + bits(v.y) + " " + bits(v.z));
@@ -292,7 +311,17 @@ public final class VanillaNaturalSpawnOracle {
             entities.add(entity);
             return true;
         }
-        @Override public void addFreshEntityWithPassengers(Entity entity) { entity.getSelfAndPassengers().forEach(this::addFreshEntity); }
+        @Override public void addFreshEntityWithPassengers(Entity entity) {
+            // A trial spawner's mob gets a UUID in spawn order (its own is random),
+            // so the spawner's HashSet iterates them the same way on every run.
+            if (trial instanceof net.minecraft.world.level.block.entity.TrialSpawnerBlockEntity && entity instanceof Mob) entity.setUUID(new UUID(1L << 32, trialMobs++));
+            entity.getSelfAndPassengers().forEach(this::addFreshEntity);
+        }
+        /** Ominous trial spawners: their level events at a player's eye or a mob carry the position. */
+        @Override public void levelEvent(int type, BlockPos pos, int data) {
+            if (type != 3020 && type != 3012) { super.levelEvent(type, pos, data); return; }
+            if (tick >= 0) log.add(tick + " levent " + type + " " + data + " at " + pos.getX() + "," + pos.getY() + "," + pos.getZ());
+        }
         @Override public Player getNearestPlayer(double x, double y, double z, double maxDist, boolean filter) {
             if (maxDist == -1.0 && !filter) log.add("try " + (int) Math.floor(x) + " " + (int) Math.floor(z));
             return super.getNearestPlayer(x, y, z, maxDist, filter);
@@ -386,6 +415,17 @@ public final class VanillaNaturalSpawnOracle {
     static final class OraclePlayer extends ServerPlayer {
         OraclePlayer() { super(null, null, null, null); }
         GameType mode;
+        Lvl lvl;
+        // Trial Omen replacing Bad Omen: logged, without the client updates.
+        @Override public boolean addEffect(net.minecraft.world.effect.MobEffectInstance effect, Entity source) {
+            if (lvl.tick >= 0) lvl.log.add(lvl.tick + " effect add " + effect.getEffect().unwrapKey().orElseThrow().identifier() + " " + effect.getDuration() + " " + effect.getAmplifier());
+            getActiveEffectsMap().put(effect.getEffect(), effect);
+            return true;
+        }
+        @Override public boolean removeEffect(Holder<net.minecraft.world.effect.MobEffect> effect) {
+            if (lvl.tick >= 0) lvl.log.add(lvl.tick + " effect remove " + effect.unwrapKey().orElseThrow().identifier());
+            return getActiveEffectsMap().remove(effect) != null;
+        }
         @Override public boolean isSpectator() { return mode == GameType.SPECTATOR; }
         @Override public boolean isCreative() { return mode == GameType.CREATIVE; }
         @Override public GameType gameMode() { return mode; }
@@ -512,6 +552,7 @@ public final class VanillaNaturalSpawnOracle {
         var entity = new net.minecraft.world.level.block.entity.TrialSpawnerBlockEntity(at, block);
         entity.setLevel(level);
         level.trial = entity;
+        level.trialMobs = 0;
         entity.getTrialSpawner().load(net.minecraft.world.level.storage.TagValueInput.create(net.minecraft.util.ProblemReporter.DISCARDING, access, nbt));
         int ticks = Integer.parseInt(c.getOrDefault("ticks", "1"));
         long t0 = Long.parseLong(c.getOrDefault("t0", "0"));
@@ -523,6 +564,8 @@ public final class VanillaNaturalSpawnOracle {
                 level.time = t0 + t;
                 BlockState state = level.getBlockState(at);
                 entity.getTrialSpawner().tickServer(level, at, state.getValue(net.minecraft.world.level.block.TrialSpawnerBlock.OMINOUS));
+                // Mobs discarded as the spawner turned ominous leave the level.
+                level.entities.removeIf(Entity::isRemoved);
                 if (kill > 0 && t % kill == kill - 1) {
                     int n = 0;
                     for (Iterator<Entity> it = level.entities.subList(before, level.entities.size()).iterator(); it.hasNext(); ) {
@@ -700,6 +743,14 @@ public final class VanillaNaturalSpawnOracle {
                         put(player, Entity.class, "uuid", new UUID(0L, i + 1));
                         eyeHeight.setFloat(player, 1.62F);
                         put(player, LivingEntity.class, "activeEffects", new HashMap<>());
+                        put(player, Entity.class, "dimensions", EntityTypes.PLAYER.getDimensions());
+                        player.lvl = level;
+                        if (p.length > 2) {
+                            // An omen: trial_omen or bad_omen, with its amplifier.
+                            String[] effect = p[2].split(":");
+                            var omen = effect[0].equals("trial_omen") ? net.minecraft.world.effect.MobEffects.TRIAL_OMEN : net.minecraft.world.effect.MobEffects.BAD_OMEN;
+                            player.getActiveEffectsMap().put(omen, new net.minecraft.world.effect.MobEffectInstance(omen, 6000, Integer.parseInt(effect[1])));
+                        }
                         level.playerList.add(player);
                     }
                     level.entities.clear();

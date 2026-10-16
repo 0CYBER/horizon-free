@@ -81,6 +81,7 @@ mod natural_spawning;
 mod nautili;
 mod net_harness;
 mod nether_portal;
+mod ominous_item_spawner;
 mod options;
 mod packs;
 mod pad;
@@ -948,6 +949,8 @@ struct Game<'a> {
     hook: Option<fishing::Hook>,
     tridents: Vec<trident::ThrownTrident>,
     rockets: Vec<fireworks::Rocket>,
+    /// Ominous trial spawners' item spawners.
+    ominous_spawners: Vec<ominous_item_spawner::OminousItemSpawner>,
     creaking: creaking::CreakingState,
     /// Monster spawners' display mobs (`game/spawner.rs`).
     spawners: spawner::SpawnerState,
@@ -3330,6 +3333,9 @@ impl Game<'_> {
             horizon_client::spans::time("tick_fishing", || self.tick_fishing());
             horizon_client::spans::time("tick_tridents", || self.tick_tridents());
             horizon_client::spans::time("tick_rockets", || self.tick_rockets());
+            horizon_client::spans::time("tick_ominous_item_spawners", || {
+                self.tick_ominous_item_spawners()
+            });
         }
         if running {
             horizon_client::spans::time("entity_portals", || self.handle_entity_portals());
@@ -5307,6 +5313,7 @@ impl Game<'_> {
         self.dropped_item_geometry(camera, alpha, &mut out);
         // `VaultRenderer`.
         self.vault_geometry(camera, alpha, &mut out);
+        self.ominous_item_spawner_geometry(camera, alpha, &mut out);
         // Mobs and their projectiles.
         self.mob_geometry(camera, alpha, &mut out);
         self.player_model_geometry(camera, alpha, &mut out);
@@ -10017,6 +10024,7 @@ pub fn run() -> Result<()> {
         hook: None,
         tridents: Vec::new(),
         rockets: Vec::new(),
+        ominous_spawners: Vec::new(),
         creaking: Default::default(),
         spawners: Default::default(),
         trident_model: horizon_client::mobs::load_model(&root, "minecraft:trident#main"),
