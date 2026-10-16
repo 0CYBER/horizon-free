@@ -17,7 +17,7 @@ use horizon_core::random::LegacyRandom;
 
 type Pos = (i32, i32, i32);
 
-/// What a vault reads: the game time and the player.
+/// What a vault reads: the game time and the players.
 struct Players {
     time: i64,
     players: Vec<VaultPlayer>,
@@ -33,14 +33,19 @@ impl VaultLevel for Players {
 
 impl Game<'_> {
     fn vault_players(&self) -> Players {
-        let players = self.player.as_ref().map(|p| VaultPlayer {
-            uuid: self.level.player_uuid.unwrap_or_default(),
+        let host = self.player.as_ref().map(|p| VaultPlayer {
+            uuid: self.acting_uuid(),
             block: [p.position.x, p.position.y, p.position.z].map(|v| v.floor() as i32),
             spectator: self.spectator(),
         });
+        let guests = self.lan_present().into_iter().map(|g| VaultPlayer {
+            uuid: g.uuid,
+            block: g.position.map(|v| v.floor() as i32),
+            spectator: g.spectator,
+        });
         Players {
             time: self.world.game_time,
-            players: players.into_iter().collect(),
+            players: host.into_iter().chain(guests).collect(),
         }
     }
     /// The vault at `key` with its block's state and ominous flag.
@@ -143,7 +148,7 @@ impl Game<'_> {
         let Some(stack) = held.cloned() else {
             return Ok(false);
         };
-        let player = self.level.player_uuid.unwrap_or_default();
+        let player = self.acting_uuid();
         let used = self.with_vault(
             (pos[0], pos[1], pos[2]),
             |v, l, random, state, ominous, roll, events| {

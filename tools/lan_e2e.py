@@ -34,6 +34,7 @@ macOS both games render offscreen. Games started here have no audio (HORIZON_NO_
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -46,7 +47,7 @@ from agent_control_e2e import Cli, Failed, game_env  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'chest', 'crafting', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'chest', 'crafting', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'trials']
 
 
 class Game:
@@ -473,10 +474,65 @@ def check_feedback(host, guest, out):
     return chat
 
 
+def state_of(game, pos, key):
+    state = game.raw('block', *pos)['state']
+    return dict(kv.split('=') for kv in state.partition('[')[2].rstrip(']').split(',') if kv).get(key)
+
+
+def wait_state(game, pos, key, want, ticks):
+    for _ in range(ticks // 10):
+        if state_of(game, pos, key) == want:
+            return want
+        game.wait(10)
+    return state_of(game, pos, key)
+
+
+def check_trials(host, guest, out):
+    # The host watches as a spectator, whom neither block detects: only the guest can wake them.
+    hx, hy, hz = pos_of(host)
+    host('command', command='gamemode spectator')
+    host('command', command='difficulty normal')
+    host('command', command='gamerule spawn_mobs true')
+    guest('command', command='gamemode survival')
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    spawner, vault = (x, y, z + 3), (x, y, z - 2)
+    # Open air from the vault to the spawner: the spawner wants to see the guest's eyes.
+    guest('command', command=f'fill {x - 1} {y} {z - 2} {x + 1} {y + 2} {z + 3} minecraft:air')
+    try:
+        guest('command', command=f'setblock {spawner[0]} {spawner[1]} {spawner[2]} minecraft:trial_spawner'
+                                 '{spawn_data:{entity:{id:"minecraft:zombie"}},required_player_range:6}')
+        guest('command', command=f'setblock {vault[0]} {vault[1]} {vault[2]} minecraft:vault'
+                                 '{config:{key_item:{id:"minecraft:trial_key",count:1}}}')
+        trial = wait_state(host, spawner, 'trial_spawner_state', 'active', 100)
+        active = wait_state(host, vault, 'vault_state', 'active', 60)
+        host.shot(out, 'trials-active')
+        guest('command', command='item replace entity @s weapon.mainhand with minecraft:trial_key')
+        guest.wait(5)
+        guest.raw('interact', *vault)
+        unlocking = wait_state(host, vault, 'vault_state', 'unlocking', 20)
+        guest.shot(out, 'trials-unlocking')
+        rewarded = host('command', command=f'data get block {vault[0]} {vault[1]} {vault[2]} server_data.rewarded_players')
+        host_uuid = host('command', command='data get entity @s UUID')
+    finally:
+        host('command', command='gamerule spawn_mobs false')
+        host('command', command='kill @e[type=minecraft:zombie]')
+        host('command', command='gamemode survival')
+        # Back where it stood: a spectator drifts, and may be inside the ground when it lands.
+        host('command', command=f'tp @s {hx:.2f} {hy:.2f} {hz:.2f}')
+        guest('command', command=f'setblock {spawner[0]} {spawner[1]} {spawner[2]} minecraft:air')
+        guest('command', command=f'setblock {vault[0]} {vault[1]} {vault[2]} minecraft:air')
+    uuid = lambda reply: re.findall(r'-?\d+', json.dumps(reply).partition('[I;')[2].partition(']')[0])
+    assert trial == 'active', f'the trial spawner never saw the guest: {trial}'
+    assert active == 'active', f'the vault never saw the guest: {active}'
+    assert unlocking == 'unlocking', f'the guest\'s key did not unlock the vault: {unlocking}'
+    assert uuid(rewarded) and uuid(rewarded) != uuid(host_uuid), f'rewarded {rewarded}, host {host_uuid}'
+    return {'spawner': trial, 'vault': active, 'rewarded': uuid(rewarded), 'host': uuid(host_uuid)}
+
+
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
              'chest': check_chest, 'crafting': check_crafting, 'damage': check_damage,
              'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
-             'containers': check_containers, 'feedback': check_feedback}
+             'containers': check_containers, 'feedback': check_feedback, 'trials': check_trials}
 
 
 def run(ctl, out, resources, checks):
