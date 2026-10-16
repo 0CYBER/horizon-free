@@ -209,21 +209,22 @@ where
     )
     .unwrap_or(false)
 }
-impl BlockCollisionWorld for SceneCollisions<'_, '_> {
+impl<'w> BlockCollisionWorld for SceneCollisions<'w, '_> {
     type Error = io::Error;
-    type Chunk = ChunkPos;
-    fn collision_chunk(&mut self, p: ChunkPos) -> io::Result<Option<ChunkPos>> {
-        Ok(self.world.chunks.contains_key(&(p.x, p.z)).then_some(p))
+    /// The resident column, looked up once per chunk the scan enters.
+    type Chunk = &'w crate::chunk::Chunk;
+    fn collision_chunk(&mut self, p: ChunkPos) -> io::Result<Option<Self::Chunk>> {
+        Ok(self.world.chunks.get(&(p.x, p.z)).map(|chunk| &**chunk))
     }
-    fn collision_block(&mut self, chunk: ChunkPos, p: BlockPos) -> io::Result<CollisionBlock> {
-        let chunk = self
-            .world
-            .chunks
-            .get(&(chunk.x, chunk.z))
-            .ok_or_else(|| io::Error::other("resident collision chunk disappeared"))?;
+    fn collision_block(&mut self, chunk: Self::Chunk, p: BlockPos) -> io::Result<CollisionBlock> {
         self.binding.collision_block(chunk.block(p.x, p.y, p.z))
     }
-    fn is_suffocating(&mut self, _: ChunkPos, _: CollisionBlock, _: BlockPos) -> io::Result<bool> {
+    fn is_suffocating(
+        &mut self,
+        _: Self::Chunk,
+        _: CollisionBlock,
+        _: BlockPos,
+    ) -> io::Result<bool> {
         Ok(false)
     }
     fn context_shape(

@@ -98,8 +98,6 @@ impl<'r> BlockCollisionRegistry<'r> {
                     .into_iter()
                     .any(|axis| shape.min(axis) < 0.0 || shape.max(axis) > 1.0)
             });
-            scan_flags
-                .push(u8::from(large) | (u8::from(state.name == "minecraft:moving_piston") << 1));
             if let Some(rule) = ScaffoldingCollision::from_state(state)? {
                 contextual.insert(id, ContextualRule::Scaffolding(rule));
             } else if let Some(rule) = LiquidCollision::from_state(state)? {
@@ -107,6 +105,14 @@ impl<'r> BlockCollisionRegistry<'r> {
             } else if state.name == "minecraft:powder_snow" {
                 contextual.insert(id, ContextualRule::PowderSnow);
             }
+            // No contextual rule and an empty cached shape: empty everywhere.
+            let empty = !contextual.contains_key(&id)
+                && cached.cached_shape(id)?.is_some_and(VoxelShape::is_empty);
+            scan_flags.push(
+                u8::from(large)
+                    | (u8::from(state.name == "minecraft:moving_piston") << 1)
+                    | (u8::from(empty) << 2),
+            );
             if cached.cached_shape(id)?.is_none() {
                 if let Some(rule) =
                     DynamicSupport::from_state(cached.registry().state(id).unwrap())?
@@ -138,6 +144,7 @@ impl<'r> BlockCollisionRegistry<'r> {
             state,
             large_collision_shape: flags & 1 != 0,
             moving_piston: flags & 2 != 0,
+            empty_shape: flags & 4 != 0,
         })
     }
     pub fn collision_shape<W: DynamicCollisionWorld>(
