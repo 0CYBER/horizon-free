@@ -2534,7 +2534,12 @@ impl Renderer {
         }
         let present = Instant::now();
         if let Some(surface_frame) = surface_frame {
-            self.window.pre_present_notify();
+            // On Wayland this ties RedrawRequested to the compositor's frame
+            // callbacks, one per refresh. Only VSync (Fifo) waits for the
+            // display: with it off, vanilla's window draws uncapped.
+            if self.config.present_mode == wgpu::PresentMode::Fifo {
+                self.window.pre_present_notify();
+            }
             self.queue.present(surface_frame);
             if reconfigure && let Some(surface) = &self.surface {
                 surface.configure(&self.device, &self.config);
