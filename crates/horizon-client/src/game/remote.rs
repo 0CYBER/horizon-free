@@ -186,7 +186,7 @@ impl Game<'_> {
         let root = self.options.resources.clone();
         let builtin = Builtin::find(&root)
             .and_then(|p| Builtin::load(&p).ok())
-            .ok_or("Resources are incomplete: registries.json is missing or invalid. Repair resources in the launcher (or run horizon-prepare), then try again.")?;
+            .ok_or("Resources are incomplete: registries.json is missing or invalid. Click \"Prepare again\" in the launcher (or run horizon-prepare), then try again.")?;
         let lang = Arc::new(horizon_client::net::load_language(&root));
         let view = self.settings.render_distance.clamp(2, 32) as i8;
         if local.is_none() {
