@@ -304,7 +304,11 @@ def check_mobs(host, guest, out):
 
 def check_hazards(host, guest, out):
     guest('command', command='gamemode survival')
-    guest.wait(10)
+    # A fresh life: full health, so no regeneration eats food while the guest runs.
+    guest('command', command='kill @s')
+    guest.wait(20)
+    guest.raw('respawn')
+    guest.wait(40)
     # Sprint-jumping down a stone lane: ServerPlayer.jumpFromGround and checkMovementStatistics.
     guest('command', command='fill ~ ~-1 ~-1 ~60 ~-1 ~1 minecraft:stone')
     guest('command', command='fill ~ ~ ~-1 ~60 ~3 ~1 minecraft:air')
@@ -349,8 +353,10 @@ def check_hazards(host, guest, out):
     if remote(guest)['health'] <= 0:
         guest.raw('respawn')
         guest.wait(40)
-    # [food, saturation, exhaustion]: 8 s of sprint-jumping is about 2 of exhaustion.
-    assert fed[2] - food[2] > 1.0 or fed[1] < food[1], f'no hunger from moving: {hunger}'
+    # [food, saturation, exhaustion]: 8 s of sprint-jumping is about 2 of exhaustion; every 4
+    # of it takes a point of saturation, or of food once saturation is gone (FoodData.tick).
+    spent = 4 * (food[0] + food[1] - fed[0] - fed[1]) + fed[2] - food[2]
+    assert spent > 1.0, f'no hunger from moving: {hunger} ({spent:.2f} spent)'
     for name, (before, after) in hurt.items():
         assert after < before, f'{name} never hurt the guest: health {before} -> {after} (all: {hurt})'
     return {'hunger': hunger, **hurt}
