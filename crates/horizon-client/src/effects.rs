@@ -68,6 +68,14 @@ impl EffectInstance {
         }
         changed
     }
+    /// `MobEffectInstance.tickClient`: a client counts its effects down
+    /// (the server removes them).
+    pub fn tick_client(&mut self) {
+        if self.infinite() || self.duration > 0 {
+            self.tick_down();
+            self.downgrade();
+        }
+    }
     fn tick_down(&mut self) {
         if let Some(h) = self.hidden.as_mut() {
             h.tick_down();
@@ -169,6 +177,39 @@ impl PlayerEffects {
     }
     pub fn clear(&mut self) {
         self.list.clear();
+    }
+    /// The effects of a saved player (`Player.active_effects`: id,
+    /// duration, amplifier, ambient, visible).
+    pub fn from_saved(saved: &[(String, i32, i32, bool, bool)]) -> Self {
+        let mut effects = Self::default();
+        for (id, duration, amplifier, ambient, _) in saved {
+            if let Some(def) = brewing::effect(id) {
+                let mut e = EffectInstance::new(def.id, *duration, *amplifier);
+                e.ambient = *ambient;
+                effects.add(e);
+            }
+        }
+        effects
+    }
+    /// `Player.active_effects` for the save.
+    pub fn saved(&self) -> Vec<(String, i32, i32, bool, bool)> {
+        self.list
+            .iter()
+            .map(|e| {
+                (
+                    format!("minecraft:{}", e.id),
+                    e.duration,
+                    e.amplifier,
+                    e.ambient,
+                    e.visible,
+                )
+            })
+            .collect()
+    }
+    /// ClientboundUpdateMobEffectPacket's flags without blending: ambient,
+    /// particles visible and the icon shown (always, for these effects).
+    pub fn flags(e: &EffectInstance) -> i8 {
+        i8::from(e.ambient) | i8::from(e.visible) << 1 | 4
     }
     /// `LivingEntity.tickEffects` (server part) with the omens' effect ticks:
     /// `omen` answers `BadOmenMobEffect` (every tick) and `RaidOmenMobEffect`

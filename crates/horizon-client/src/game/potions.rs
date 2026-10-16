@@ -49,6 +49,14 @@ impl Game<'_> {
         });
     }
 }
+/// What a player's body was last given for its effects and enchantments:
+/// a guest keeps their own while the host's are in `PotionState`.
+#[derive(Default)]
+pub(super) struct BodyPotions {
+    applied: Vec<(&'static str, &'static str, f64, &'static str)>,
+    protection_for: Option<Vec<Option<ItemStack>>>,
+    enchant_modifiers: Vec<(String, String, f64, String)>,
+}
 /// Effects, thrown potions and the attribute modifiers last applied.
 #[derive(Default)]
 pub(super) struct PotionState {
@@ -63,6 +71,14 @@ pub(super) struct PotionState {
 }
 
 impl PotionState {
+    /// Trade the player's own state (effects and what their body was given)
+    /// with a guest's, around `as_guest`. Potions in flight stay.
+    pub(super) fn swap_player(&mut self, effects: &mut PlayerEffects, body: &mut BodyPotions) {
+        std::mem::swap(&mut self.effects, effects);
+        std::mem::swap(&mut self.applied, &mut body.applied);
+        std::mem::swap(&mut self.protection_for, &mut body.protection_for);
+        std::mem::swap(&mut self.enchant_modifiers, &mut body.enchant_modifiers);
+    }
     /// Thrown potions in flight as (entity type, position, motion), for the
     /// dispenser parity fixture.
     pub(super) fn thrown_entities(&self) -> Vec<(&'static str, Vec3, Vec3)> {
@@ -274,8 +290,16 @@ impl Game<'_> {
             }
         }
     }
-    /// `LivingEntity.tickEffects`, attribute modifiers and the status flags.
+    /// The local player's effects (`tick_mob_effects`), then the potions
+    /// in flight, which a server without a local player still has.
     pub(super) fn tick_effects(&mut self) {
+        self.tick_mob_effects();
+        self.tick_thrown_potions();
+    }
+    /// `LivingEntity.tickEffects` (server side) for `self.player`, the local
+    /// player or a guest acting (`as_guest`), then its attribute modifiers
+    /// and status flags.
+    pub(super) fn tick_mob_effects(&mut self) {
         let Some(player) = self.player.as_ref() else {
             return;
         };
@@ -294,6 +318,20 @@ impl Game<'_> {
         for action in actions {
             self.apply_effect_action(action);
         }
+        self.apply_effect_status();
+    }
+    /// A client's own effects (`LivingEntity.tickEffects` on the client,
+    /// `MobEffectInstance.tickClient`): they count down, and the server
+    /// removes them. Their modifiers and flags move the predicted player.
+    pub(super) fn tick_client_effects(&mut self) {
+        for e in &mut self.potions.effects.list {
+            e.tick_client();
+        }
+        self.apply_effect_status();
+    }
+    /// The effects' attribute modifiers, armor protection and status flags
+    /// on `self.player`.
+    fn apply_effect_status(&mut self) {
         let modifiers = self.potions.effects.modifiers();
         if modifiers != self.potions.applied
             && let Some(p) = self.player.as_mut()
@@ -346,7 +384,6 @@ impl Game<'_> {
             status.protection = std::mem::take(&mut p.status.protection);
             p.status = status;
         }
-        self.tick_thrown_potions();
     }
     fn tick_thrown_potions(&mut self) {
         let mut thrown = std::mem::take(&mut self.potions.thrown);
@@ -606,13 +643,7 @@ impl Game<'_> {
     /// Effects saved in level.dat (`Player.active_effects`).
     pub(super) fn restore_effects(&mut self) {
         self.potions = PotionState::default();
-        for (id, duration, amplifier, ambient, _) in self.level.active_effects.clone() {
-            if let Some(def) = brewing::effect(&id) {
-                let mut e = EffectInstance::new(def.id, duration, amplifier);
-                e.ambient = ambient;
-                self.potions.effects.add(e);
-            }
-        }
+        self.potions.effects = PlayerEffects::from_saved(&self.level.active_effects);
     }
     pub(super) fn effects_json(&self) -> serde_json::Value {
         serde_json::json!({
