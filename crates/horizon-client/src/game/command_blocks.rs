@@ -210,15 +210,16 @@ impl Game<'_> {
         self.with_level(|b, level, ticks| b.update_neighbour_for_output_signal(level, ticks, at));
     }
 
-    /// `CommandBlock.setPlacedBy`: output tracking follows
-    /// `send_command_feedback`, then the block takes the signal around it.
-    pub(super) fn command_block_placed(&mut self, pos: Pos) {
+    /// `CommandBlock.setPlacedBy`: unless the item carried block entity data
+    /// (`defaults` false), output tracking follows `send_command_feedback` and
+    /// the block's own automatic flag; then the block takes the signal around it.
+    pub(super) fn command_block_placed(&mut self, pos: Pos, defaults: bool) {
         let feedback = self.ui.rules.bool("send_command_feedback");
         let Some(name) = self.block_state_at(pos).map(|s| s.name.as_str()) else {
             return;
         };
         let auto = command_block::automatic_block(name);
-        if let Some(c) = command_block_mut(&mut self.world, pos) {
+        if defaults && let Some(c) = command_block_mut(&mut self.world, pos) {
             c.track_output = feedback;
             c.auto = auto;
         }

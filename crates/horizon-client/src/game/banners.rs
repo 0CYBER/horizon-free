@@ -5,7 +5,6 @@ use super::Game;
 use horizon_client::{
     banner::{self, BannerLayer},
     containers::BlockEntity,
-    items::ItemStack,
 };
 
 impl Game<'_> {
@@ -16,19 +15,6 @@ impl Game<'_> {
             return Vec::new();
         };
         layer_textures(&self.res.stations.banners, &b.layers)
-    }
-    /// A placed banner takes the item's layers and name.
-    pub(super) fn fill_placed_banner(&mut self, pos: [i32; 3], stack: &ItemStack) {
-        self.pending.banner.remove(&pos);
-        if !stack.item.ends_with("_banner") {
-            return;
-        }
-        if let Some(BlockEntity::Banner(b)) =
-            self.world.block_entities.get_mut(&(pos[0], pos[1], pos[2]))
-        {
-            b.layers = banner::layers(stack).to_vec();
-            b.name = stack.custom_name().map(str::to_owned);
-        }
     }
 }
 

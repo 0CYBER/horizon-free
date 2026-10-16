@@ -8,18 +8,6 @@ pub(super) fn is_shulker_box(name: &str) -> bool {
     name.ends_with("shulker_box")
 }
 impl Game<'_> {
-    /// A placed container takes the item's custom name.
-    pub(super) fn name_placed_container(&mut self, pos: [i32; 3], stack: &ItemStack) {
-        let key = (pos[0], pos[1], pos[2]);
-        if let Some(name) = stack.custom_name()
-            && !matches!(
-                self.world.block_entities.get(&key),
-                Some(BlockEntity::Banner(_) | BlockEntity::Sign(_))
-            )
-        {
-            self.world.block_names.insert(key, name.to_owned());
-        }
-    }
     /// The custom name of the open container, or its default title
     /// (a double chest is named by whichever half has a name).
     pub(super) fn container_title(&self, default: String) -> String {
@@ -28,22 +16,6 @@ impl Game<'_> {
             .find_map(|(key, _)| self.world.block_names.get(key))
             .cloned()
             .unwrap_or(default)
-    }
-    /// A placed shulker box takes the item's contents.
-    pub(super) fn fill_placed_box(&mut self, pos: [i32; 3], stack: &ItemStack) {
-        let Some(data) = stack.data() else { return };
-        if !is_shulker_box(&stack.item) || data.container.is_empty() {
-            return;
-        }
-        if let Some(BlockEntity::Chest(items)) =
-            self.world.block_entities.get_mut(&(pos[0], pos[1], pos[2]))
-        {
-            for (slot, s) in &data.container {
-                if let Some(cell) = items.get_mut(usize::from(*slot)) {
-                    *cell = Some(s.clone());
-                }
-            }
-        }
     }
     /// ShulkerBoxSlot.mayPlace: no shulker box inside a shulker box.
     pub(super) fn refuses(&self, slot: usize, stack: &ItemStack) -> bool {
