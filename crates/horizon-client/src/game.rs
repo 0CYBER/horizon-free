@@ -9748,6 +9748,11 @@ pub fn run() -> Result<()> {
     let vanilla_root = options.resources.clone();
     let early_settings = Settings::load(&std::env::current_dir()?.join("options.txt"));
     options.resources = packs::startup_root(&vanilla_root, &early_settings.resource_packs);
+    options.resources = mods::content_root(
+        &options.resources,
+        &early_settings.mods.enabled,
+        &options.dev_mods,
+    );
     let assets = match Assets::load(&options.resources) {
         Ok(assets) => assets,
         // Minecraft.rollbackResourcePacks: the packs break loading, start

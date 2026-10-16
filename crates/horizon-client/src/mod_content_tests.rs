@@ -177,6 +177,11 @@ fn content_root_loads_with_every_table() {
     crate::motion::MotionResources::load(&root, &assets).unwrap();
     horizon_world::worldgen::generator::GeneratorData::load(&root.join("worldgen"), new).unwrap();
     assert!(root.join("assets/ruby/lang/en_us.json").is_file());
+    // Blocks without a blockstate of their own take their template's.
+    assert_eq!(
+        fs::read(root.join("assets/ruby/blockstates/ruby_door.json")).unwrap(),
+        fs::read(base.join("assets/minecraft/blockstates/oak_door.json")).unwrap()
+    );
 
     // The base root was only read.
     assert!(
