@@ -74,7 +74,7 @@ impl Game<'_> {
             .unwrap_or_default()
             .join("options.txt")
     }
-    fn gui_size(&self) -> (f32, f32) {
+    pub(super) fn gui_size(&self) -> (f32, f32) {
         let size = self
             .renderer
             .as_ref()

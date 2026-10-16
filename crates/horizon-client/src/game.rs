@@ -9130,6 +9130,9 @@ impl ApplicationHandler for Game<'_> {
                     if self.screen == Screen::Stats && d != 0.0 {
                         self.stats_scroll(d);
                     }
+                    if self.screen == Screen::WorldOptions && d != 0.0 {
+                        self.world_options_scroll(d);
+                    }
                     if self.screen == Screen::Advancements {
                         self.advancements_scroll(scaled(raw_x) as f32, d);
                     }

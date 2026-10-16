@@ -22,7 +22,10 @@ pub(super) struct WorldOptions {
     hint: u16,
     guest_commands: bool,
     force: bool,
+    hardcore: bool,
     initial: Snapshot,
+    /// ScrollableLayout's scroll amount.
+    scroll: f32,
 }
 #[derive(Clone, PartialEq)]
 struct Snapshot {
@@ -39,12 +42,28 @@ struct Snapshot {
 const MODES: [&str; 4] = ["survival", "creative", "adventure", "spectator"];
 const DIFFICULTIES: [&str; 4] = ["peaceful", "easy", "normal", "hard"];
 
-#[derive(Clone, Copy, PartialEq)]
+/// HeaderAndFooterLayout's header and footer heights.
+const HEADER: f32 = 33.0;
+const FOOTER: f32 = 33.0;
+/// The scrolled content: both grids, each padded by 8 and 8 apart.
+const CONTENT: f32 = 218.0;
+/// The category headings' tops (FocusableTextWidget, padding 4).
+const GENERAL_TOP: f32 = 8.0;
+const MULTIPLAYER_TOP: f32 = 145.0;
+/// The port box's top beside the LAN button.
+const PORT_TOP: f32 = 166.0;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Button {
     DefaultMode,
     PersonalMode,
     Cheats,
     Difficulty,
+    /// LockIconButton: Horizon can't lock a world's difficulty yet.
+    Lock,
+    /// InWorldGameRulesScreen and RestrictionsScreen are not in Horizon yet.
+    GameRules,
+    Restrictions,
     Lan,
     CommandAccess,
     Force,
@@ -86,25 +105,55 @@ impl WorldOptions {
         let valid = !self.lan || self.parsed_port().is_some();
         valid && self.snapshot() != self.initial
     }
-    fn buttons(w: f32) -> Vec<(Button, f32, f32, f32)> {
-        let x = (w / 2.0 - 154.0).floor();
+    /// The scrolled content's top: under the header, less the scroll.
+    fn top(&self) -> f32 {
+        HEADER - self.scroll.trunc()
+    }
+    /// The grids' left edge: the content (308 wide, padded by 8) centred
+    /// in a ScrollableLayout reserving 10 pixels for the scrollbar each side.
+    fn left(w: f32) -> f32 {
+        (w / 2.0).floor() - 154.0
+    }
+    /// The scrolled widgets: each grid's rows 4 apart, columns 8 apart.
+    fn buttons(w: f32, top: f32) -> Vec<(Button, f32, f32, f32)> {
+        let x = Self::left(w);
         let right = x + 158.0;
         vec![
-            (Button::DefaultMode, x, 38.0, 308.0),
-            (Button::PersonalMode, x, 62.0, 308.0),
-            (Button::Cheats, x, 86.0, 150.0),
-            (Button::Difficulty, right, 86.0, 150.0),
-            (Button::Lan, x, 126.0, 150.0),
-            (Button::CommandAccess, x, 150.0, 150.0),
-            (Button::Force, right, 150.0, 150.0),
+            (Button::DefaultMode, x, top + 29.0, 308.0),
+            (Button::PersonalMode, x, top + 53.0, 308.0),
+            (Button::Cheats, x, top + 77.0, 150.0),
+            // DifficultyButtons: the cycle button gives the lock its 20 pixels.
+            (Button::Difficulty, right, top + 77.0, 130.0),
+            (Button::Lock, right + 130.0, top + 77.0, 20.0),
+            (Button::GameRules, x, top + 101.0, 150.0),
+            (Button::Restrictions, right, top + 101.0, 150.0),
+            (Button::Lan, x, top + 166.0, 150.0),
+            (Button::CommandAccess, x, top + 190.0, 150.0),
+            (Button::Force, right, top + 190.0, 150.0),
         ]
     }
+    /// The footer's two buttons, centred in its 33 pixels (FrameLayout
+    /// truncates the 6.5 pixel offset).
     fn footer(w: f32, h: f32) -> [(Button, f32, f32, f32); 2] {
-        let x = (w / 2.0 - 154.0).floor();
+        let x = Self::left(w);
         [
-            (Button::Apply, x, h - 28.0, 150.0),
-            (Button::Cancel, x + 158.0, h - 28.0, 150.0),
+            (Button::Apply, x, h - FOOTER + 6.0, 150.0),
+            (Button::Cancel, x + 158.0, h - FOOTER + 6.0, 150.0),
         ]
+    }
+    /// The widgets under the pointer's row: scrolled ones only inside the
+    /// scroll area.
+    fn hit(&self, (x, y): (f32, f32), (w, h): (f32, f32)) -> Option<Button> {
+        let inside = y >= HEADER && y < h - FOOTER;
+        Self::buttons(w, self.top())
+            .into_iter()
+            .filter(|_| inside)
+            .chain(Self::footer(w, h))
+            .find(|(b, bx, by, bw)| self.active(*b) && ui::hovered((x, y), *bx, *by, *bw, 20.0))
+            .map(|b| b.0)
+    }
+    fn max_scroll(h: f32) -> f32 {
+        (CONTENT - (h - HEADER - FOOTER)).max(0.0)
     }
     fn label(&self, b: Button) -> Text {
         let mode = |m: i32| {
@@ -122,6 +171,9 @@ impl WorldOptions {
                 mode(self.personal_mode),
             ),
             Button::Cheats => labelled("selectWorld.allowCommands", on_off(self.cheats)),
+            Button::Lock => Text::translate("narrator.button.difficulty_lock", &[]),
+            Button::GameRules => Text::translate("editGamerule.inGame.button", &[]),
+            Button::Restrictions => Text::translate("restrictions_screen.button", &[]),
             Button::Difficulty => labelled(
                 "options.difficulty",
                 Text::translate(
@@ -139,18 +191,24 @@ impl WorldOptions {
             ),
             Button::Force => labelled(
                 "options.worldOptions.guest.force_game_mode",
-                on_off(self.force || !self.lan),
+                on_off(self.force || !self.lan || self.hardcore),
             ),
             Button::Apply => Text::translate("menu.multiplayerOptions.applyChanges", &[]),
             Button::Cancel => Text::translate("gui.cancel", &[]),
         }
     }
+    /// WorldOptionsScreen.updateButton and the update*Button methods.
     fn active(&self, b: Button) -> bool {
         match b {
+            Button::DefaultMode | Button::PersonalMode => self.cheats && !self.hardcore,
+            // An owner's commands come with Allow Commands.
+            Button::Cheats => !self.hardcore || self.initial.cheats,
+            Button::Difficulty => !self.hardcore,
+            Button::Lock | Button::GameRules | Button::Restrictions => false,
             Button::CommandAccess => self.lan && self.cheats,
-            Button::Force => self.lan && !(self.guest_commands && self.cheats),
+            Button::Force => self.lan && !(self.guest_commands && self.cheats) && !self.hardcore,
             Button::Apply => self.changed(),
-            _ => true,
+            Button::Lan | Button::Cancel => true,
         }
     }
 }
@@ -177,6 +235,8 @@ impl Game<'_> {
             hint,
             guest_commands,
             force,
+            hardcore: self.level.hardcore,
+            scroll: 0.0,
             initial: Snapshot {
                 default_mode: 0,
                 personal_mode: 0,
@@ -204,91 +264,138 @@ impl Game<'_> {
         };
         let atlas = &self.res.atlas;
         let (w, h) = (batch.width, batch.height);
+        o.scroll = o.scroll.clamp(0.0, WorldOptions::max_scroll(h));
+        // extractMenuBackground: the in-world background, the list
+        // background under the content, then the separators over it.
         ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
-        let centered = |batch: &mut HudBatch, key: &str, y: f32| {
-            let t = Text::translate(key, &[]);
+        ui::list_background(batch, atlas, HEADER, h - FOOTER, true);
+        let title = Text::translate("options.worldOptions.title", &[]);
+        let tw = atlas.font.width_text(&title);
+        batch.text_styled(
+            atlas,
+            &title,
+            ((w - tw) / 2.0).floor(),
+            12.0,
+            u32::MAX,
+            true,
+        );
+        let top = o.top();
+        let first = batch.vertices.len();
+        let x = WorldOptions::left(w);
+        for (key, y) in [
+            ("options.worldOptions.general.title", GENERAL_TOP),
+            ("options.worldOptions.multiplayer.title", MULTIPLAYER_TOP),
+        ] {
+            // A FocusableTextWidget padded by 4, centred over both columns.
+            let t = Text::translate(key, &[]).underlined().bold();
             let tw = atlas.font.width_text(&t);
-            batch.text_styled(atlas, &t, ((w - tw) / 2.0).floor(), y, u32::MAX, true);
-        };
-        centered(batch, "options.worldOptions.title", 12.0);
-        centered(batch, "options.worldOptions.general.title", 26.0);
-        centered(batch, "options.worldOptions.multiplayer.title", 114.0);
-        for (b, x, y, bw) in WorldOptions::buttons(w)
-            .into_iter()
-            .chain(WorldOptions::footer(w, h))
-        {
-            let active = o.active(b);
-            let hover = active && ui::hovered(self.cursor, x, y, bw, 20.0);
-            ui::button(batch, atlas, x, y, bw, 20.0, &o.label(b), active, hover);
+            let tx = x + ((308.0 - (tw + 8.0)) / 2.0).trunc() + 4.0;
+            batch.text_styled(atlas, &t, tx, top + y + 4.0, u32::MAX, true);
         }
-        // The port box sits beside the LAN button.
-        let x = (w / 2.0 - 154.0).floor() + 158.0;
-        o.port.x = x;
-        o.port.y = 126.0;
+        let inside = self.cursor.1 >= HEADER && self.cursor.1 < h - FOOTER;
+        for (b, bx, by, bw) in WorldOptions::buttons(w, top) {
+            let active = o.active(b);
+            let hover = active && inside && ui::hovered(self.cursor, bx, by, bw, 20.0);
+            if b == Button::Lock {
+                let lock = if o.hardcore { "locked" } else { "unlocked" };
+                let state = match (active, hover) {
+                    (false, _) => "_disabled",
+                    (true, true) => "_highlighted",
+                    (true, false) => "",
+                };
+                let sprite = format!("gui/sprites/widget/{lock}_button{state}");
+                batch.sprite_scaled(atlas, &sprite, bx, by, 20.0, 20.0, u32::MAX);
+                continue;
+            }
+            ui::button(batch, atlas, bx, by, bw, 20.0, &o.label(b), active, hover);
+        }
+        // The port box beside the LAN button: editable only with LAN on,
+        // its hint the port to use (setPortError colours the text).
+        o.port.x = x + 158.0;
+        o.port.y = top + PORT_TOP;
         o.port.focused = o.lan && o.port.focused;
-        if o.lan {
-            o.port.draw(batch, atlas, None);
-            if o.port.value.is_empty() {
-                let hint = Text::literal(o.hint.to_string());
-                batch.text_styled(
-                    atlas,
-                    &hint,
-                    x + 4.0,
-                    132.0,
-                    rgba(160, 160, 160, 255),
-                    false,
-                );
-            }
-            if o.parsed_port().is_none() {
-                let t = Text::translate(
-                    "lanServer.port.invalid",
-                    &[Text::literal("1024"), Text::literal("65535")],
-                );
-                let first = t.clone();
-                batch.text_styled(atlas, &first, x, 148.0, rgba(255, 85, 85, 255), true);
-            }
+        o.port.text_color = if !o.lan {
+            rgba(0x70, 0x70, 0x70, 255)
+        } else if o.parsed_port().is_some() {
+            rgba(0xE0, 0xE0, 0xE0, 255)
         } else {
-            ui::button(
-                batch,
+            rgba(0xDF, 0x50, 0x50, 255)
+        };
+        o.port.draw(batch, atlas, None);
+        if o.port.value.is_empty() && !o.port.focused {
+            let hint = if o.lan {
+                Text::literal(o.hint.to_string())
+            } else {
+                Text::translate("lanServer.port", &[])
+            };
+            // EditBox.DEFAULT_HINT_STYLE: dark gray.
+            batch.text_styled(
                 atlas,
-                x,
-                126.0,
-                150.0,
-                20.0,
-                &Text::translate("lanServer.port", &[]),
-                false,
-                false,
+                &hint,
+                o.port.text_x(),
+                o.port.text_y(),
+                rgba(0x55, 0x55, 0x55, 255),
+                true,
             );
         }
+        batch.clip_since(first, 0.0, HEADER, w, h - FOOTER);
+        ui::scrollbar(
+            batch,
+            atlas,
+            (w / 2.0).floor() + 166.0,
+            HEADER,
+            h - FOOTER,
+            CONTENT,
+            o.scroll.trunc(),
+        );
+        ui::separators(batch, atlas, HEADER, h - FOOTER, true);
+        for (b, bx, by, bw) in WorldOptions::footer(w, h) {
+            let active = o.active(b);
+            let hover = active && ui::hovered(self.cursor, bx, by, bw, 20.0);
+            ui::button(batch, atlas, bx, by, bw, 20.0, &o.label(b), active, hover);
+        }
         self.world_options = Some(o);
+    }
+
+    /// The mouse wheel over the screen (ScrollableLayout, 10 pixels a step).
+    pub(super) fn world_options_scroll(&mut self, delta: f32) {
+        let h = self.gui_size().1;
+        if let Some(o) = self.world_options.as_mut() {
+            o.scroll = (o.scroll - delta * 10.0).clamp(0.0, WorldOptions::max_scroll(h));
+        }
     }
 
     pub(super) fn world_options_click(&mut self) {
         let Some(mut o) = self.world_options.take() else {
             return;
         };
-        let size = self
-            .renderer
-            .as_ref()
-            .map_or([1, 1], |r| [r.config.width, r.config.height]);
-        let b = HudBatch::new(size);
-        let (w, h) = (b.width, b.height);
-        let port_x = (w / 2.0 - 154.0).floor() + 158.0;
-        o.port.focused = o.lan && ui::hovered(self.cursor, port_x, 126.0, 150.0, 20.0);
-        let hit = WorldOptions::buttons(w)
-            .into_iter()
-            .chain(WorldOptions::footer(w, h))
-            .find(|(button, x, y, bw)| {
-                o.active(*button) && ui::hovered(self.cursor, *x, *y, *bw, 20.0)
-            })
-            .map(|b| b.0);
+        let (w, h) = self.gui_size();
+        let inside = self.cursor.1 >= HEADER && self.cursor.1 < h - FOOTER;
+        o.port.focused = o.lan
+            && inside
+            && ui::hovered(
+                self.cursor,
+                WorldOptions::left(w) + 158.0,
+                o.top() + PORT_TOP,
+                150.0,
+                20.0,
+            );
+        let hit = o.hit(self.cursor, (w, h));
         if hit.is_some() {
             self.audio.play_button_click();
         }
         match hit {
             Some(Button::DefaultMode) => o.default_mode = (o.default_mode + 1) % 4,
             Some(Button::PersonalMode) => o.personal_mode = (o.personal_mode + 1) % 4,
-            Some(Button::Cheats) => o.cheats = !o.cheats,
+            Some(Button::Cheats) => {
+                o.cheats = !o.cheats;
+                // updatePermissionDependentButtons: without commands both
+                // game modes return to the world's default.
+                if !o.cheats {
+                    o.default_mode = o.initial.default_mode;
+                    o.personal_mode = o.default_mode;
+                }
+            }
             Some(Button::Difficulty) => o.difficulty = (o.difficulty + 1) % 4,
             Some(Button::Lan) => {
                 o.lan = !o.lan;
@@ -309,7 +416,7 @@ impl Game<'_> {
                 self.close_world_options();
                 return;
             }
-            None => {}
+            Some(Button::Lock | Button::GameRules | Button::Restrictions) | None => {}
         }
         self.world_options = Some(o);
     }
@@ -388,5 +495,82 @@ impl Game<'_> {
         } else if settings_changed {
             self.lan_apply_settings(wanted.guest_commands, wanted.force);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn options(cheats: bool, hardcore: bool) -> WorldOptions {
+        let mut o = WorldOptions {
+            default_mode: 1,
+            personal_mode: 1,
+            cheats,
+            difficulty: 2,
+            lan: false,
+            port: EditBox::new(0.0, 0.0, 150.0, 20.0),
+            hint: 25565,
+            guest_commands: false,
+            force: true,
+            hardcore,
+            scroll: 0.0,
+            initial: Snapshot {
+                default_mode: 0,
+                personal_mode: 0,
+                cheats: false,
+                difficulty: 0,
+                lan: false,
+                port: 0,
+                guest_commands: false,
+                force: false,
+            },
+        };
+        o.initial = o.snapshot();
+        o
+    }
+
+    #[test]
+    fn layout_follows_the_header_footer_and_grids() {
+        let at = |b: Button| {
+            let o = options(true, false);
+            WorldOptions::buttons(427.0, o.top())
+                .into_iter()
+                .chain(WorldOptions::footer(427.0, 240.0))
+                .find(|e| e.0 == b)
+                .map(|(_, x, y, w)| (x, y, w))
+                .unwrap()
+        };
+        // Header 33, content padding 8, heading 17, rows 4 apart.
+        assert_eq!(at(Button::DefaultMode), (59.0, 62.0, 308.0));
+        assert_eq!(at(Button::Cheats), (59.0, 110.0, 150.0));
+        assert_eq!(at(Button::Difficulty), (217.0, 110.0, 130.0));
+        assert_eq!(at(Button::Lock), (347.0, 110.0, 20.0));
+        assert_eq!(at(Button::Restrictions), (217.0, 134.0, 150.0));
+        // The Multiplayer grid 24 below: padding, spacing, padding.
+        assert_eq!(at(Button::Lan), (59.0, 199.0, 150.0));
+        assert_eq!(at(Button::Force), (217.0, 223.0, 150.0));
+        assert_eq!(at(Button::Apply), (59.0, 213.0, 150.0));
+        // 218 pixels of content over 174 between the separators.
+        assert_eq!(WorldOptions::max_scroll(240.0), 44.0);
+        assert_eq!(WorldOptions::max_scroll(400.0), 0.0);
+    }
+
+    #[test]
+    fn buttons_follow_commands_hardcore_and_lan() {
+        let o = options(true, false);
+        assert!(o.active(Button::DefaultMode) && o.active(Button::Difficulty));
+        assert!(!o.active(Button::CommandAccess) && !o.active(Button::Force));
+        assert!(!o.active(Button::Apply));
+        let o = options(false, false);
+        assert!(!o.active(Button::DefaultMode) && !o.active(Button::PersonalMode));
+        let o = options(false, true);
+        assert!(!o.active(Button::Cheats) && !o.active(Button::Difficulty));
+        assert!(!o.active(Button::Force));
+        // Scrolled widgets only take clicks between the separators.
+        let mut o = options(true, false);
+        o.scroll = 44.0;
+        assert_eq!(o.hit((100.0, 30.0), (427.0, 240.0)), None);
+        assert_eq!(o.hit((100.0, 70.0), (427.0, 240.0)), Some(Button::Cheats));
     }
 }
