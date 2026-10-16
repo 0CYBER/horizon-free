@@ -1,8 +1,9 @@
-//! The lines of an item's tooltip as `ItemStack.getTooltipLines` writes them
-//! without a player and without advanced tooltips, for stacks as recipes
-//! produce them. The recipe book's search tree matches them, so recipes of
-//! tools and armour answer to "attack speed" or "when on head".
-use crate::items::{ItemInfo, ItemStack};
+//! Item tooltip formatting: equipment modifiers with a player's base values,
+//! and lines without player context for the recipe book's search tree.
+use crate::{
+    hud::rgba,
+    items::{ItemInfo, ItemStack},
+};
 
 /// `EquipmentSlotGroup` in declaration order, the order tooltips list them in.
 const SLOT_GROUPS: [&str; 11] = [
@@ -25,6 +26,7 @@ fn modifier_line(
     attribute: &str,
     amount: f64,
     operation: usize,
+    total: bool,
 ) -> Option<String> {
     let text = |key: &str| translate(key).unwrap_or_else(|| key.to_owned());
     let scale = match operation {
@@ -32,7 +34,9 @@ fn modifier_line(
         0 => 1.0,
         _ => 100.0,
     };
-    let (kind, shown) = if amount > 0.0 {
+    let (kind, shown) = if total {
+        ("equals", amount * scale)
+    } else if amount > 0.0 {
         ("plus", amount * scale)
     } else if amount < 0.0 {
         ("take", -amount * scale)
@@ -47,22 +51,27 @@ fn modifier_line(
     )
 }
 
-/// `ItemStack.addAttributeTooltips` for the item's own modifiers: per slot
-/// group an empty line, the group's heading and a line per modifier.
-fn attribute_lines(info: &ItemInfo, translate: &dyn Fn(&str) -> Option<String>) -> Vec<String> {
+/// `ItemStack.addAttributeTooltips`: slot groups, colors and optional player
+/// attack damage/speed bases. Recipe search has no player context.
+pub fn attribute_lines(
+    modifiers: &[(String, String, f64, String, String)],
+    player_base: Option<[f64; 2]>,
+    translate: &dyn Fn(&str) -> Option<String>,
+) -> Vec<(String, u32)> {
     let mut lines = Vec::new();
     for group in SLOT_GROUPS {
         let mut first = true;
-        for (attribute, _, amount, operation, slot) in &info.modifiers {
+        for (attribute, modifier, amount, operation, slot) in modifiers {
             if slot != group {
                 continue;
             }
             if std::mem::take(&mut first) {
-                lines.push(String::new());
-                lines.push(
+                lines.push((String::new(), u32::MAX));
+                lines.push((
                     translate(&format!("item.modifiers.{group}"))
                         .unwrap_or_else(|| format!("item.modifiers.{group}")),
-                );
+                    rgba(170, 170, 170, 255),
+                ));
             }
             let id = match operation.as_str() {
                 "add_multiplied_base" => 1,
@@ -70,7 +79,27 @@ fn attribute_lines(info: &ItemInfo, translate: &dyn Fn(&str) -> Option<String>) 
                 _ => 0,
             };
             let path = attribute.strip_prefix("minecraft:").unwrap_or(attribute);
-            lines.extend(modifier_line(translate, path, *amount, id));
+            let base = player_base.and_then(|[damage, speed]| match modifier.as_str() {
+                "minecraft:base_attack_damage" => Some(damage),
+                "minecraft:base_attack_speed" => Some(speed),
+                _ => None,
+            });
+            if let Some(line) = modifier_line(
+                translate,
+                path,
+                amount + base.unwrap_or(0.0),
+                id,
+                base.is_some(),
+            ) {
+                let (line, color) = if base.is_some() {
+                    (format!(" {line}"), rgba(0, 170, 0, 255))
+                } else if *amount > 0.0 {
+                    (line, rgba(85, 85, 255, 255))
+                } else {
+                    (line, rgba(255, 85, 85, 255))
+                };
+                lines.push((line, color));
+            }
         }
     }
     lines
@@ -211,6 +240,7 @@ pub fn detail_lines(
                     attribute,
                     amount * (*amplifier + 1) as f64,
                     operation,
+                    false,
                 )
             })
             .collect();
@@ -242,7 +272,11 @@ pub fn detail_lines(
         lines.push(text("item.dyed"));
     }
     if let Some(info) = info {
-        lines.extend(attribute_lines(info, translate));
+        lines.extend(
+            attribute_lines(&info.modifiers, None, translate)
+                .into_iter()
+                .map(|(line, _)| line),
+        );
     }
     lines
 }
@@ -336,6 +370,66 @@ mod tests {
     }
 
     #[test]
+    fn equipment_attributes_use_player_totals_and_slot_group_colors() {
+        let modifiers = [
+            ("attack_damage", "base_attack_damage", 6.0, "mainhand"),
+            ("attack_speed", "base_attack_speed", -2.4, "mainhand"),
+            ("armor", "armor", 3.0, "head"),
+        ]
+        .map(|(attribute, id, amount, slot)| {
+            (
+                format!("minecraft:{attribute}"),
+                format!("minecraft:{id}"),
+                amount,
+                "add_value".to_owned(),
+                slot.to_owned(),
+            )
+        });
+        let lang = |key: &str| {
+            Some(
+                match key {
+                    "item.modifiers.mainhand" => "When in Main Hand:",
+                    "item.modifiers.head" => "When on Head:",
+                    "attribute.modifier.equals.0" => "%s %s",
+                    "attribute.modifier.plus.0" => "+%s %s",
+                    "attribute.modifier.take.0" => "-%s %s",
+                    "attribute.name.attack_damage" => "Attack Damage",
+                    "attribute.name.attack_speed" => "Attack Speed",
+                    "attribute.name.armor" => "Armor",
+                    _ => return None,
+                }
+                .to_owned(),
+            )
+        };
+        let green = rgba(0, 170, 0, 255);
+        let gray = rgba(170, 170, 170, 255);
+        let blue = rgba(85, 85, 255, 255);
+        let red = rgba(255, 85, 85, 255);
+        assert_eq!(
+            attribute_lines(&modifiers, Some([1.0, 4.0]), &lang),
+            [
+                (String::new(), u32::MAX),
+                ("When in Main Hand:".into(), gray),
+                (" 7 Attack Damage".into(), green),
+                (" 1.6 Attack Speed".into(), green),
+                (String::new(), u32::MAX),
+                ("When on Head:".into(), gray),
+                ("+3 Armor".into(), blue),
+            ]
+        );
+        let recipe = attribute_lines(&modifiers, None, &lang);
+        assert_eq!(recipe[2], ("+6 Attack Damage".into(), blue));
+        assert_eq!(recipe[3], ("-2.4 Attack Speed".into(), red));
+        let custom_base = attribute_lines(&modifiers, Some([2.0, 6.0]), &lang);
+        assert_eq!(custom_base[2].0, " 8 Attack Damage");
+        assert_eq!(custom_base[3].0, " 3.6 Attack Speed");
+        assert_eq!(
+            modifier_line(&lang, "attack_damage", 0.0, 0, true).as_deref(),
+            Some("0 Attack Damage")
+        );
+    }
+
+    #[test]
     fn modifier_lines_follow_the_sign_and_operation() {
         let lang = |k: &str| {
             Some(
@@ -349,13 +443,13 @@ mod tests {
             )
         };
         assert_eq!(
-            modifier_line(&lang, "movement_speed", 0.2, 2).as_deref(),
+            modifier_line(&lang, "movement_speed", 0.2, 2, false).as_deref(),
             Some("+20% Speed")
         );
         assert_eq!(
-            modifier_line(&lang, "movement_speed", -0.6, 2).as_deref(),
+            modifier_line(&lang, "movement_speed", -0.6, 2, false).as_deref(),
             Some("-60% Speed")
         );
-        assert_eq!(modifier_line(&lang, "movement_speed", 0.0, 2), None);
+        assert_eq!(modifier_line(&lang, "movement_speed", 0.0, 2, false), None);
     }
 }
