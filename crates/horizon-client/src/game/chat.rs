@@ -3,7 +3,7 @@
 use super::{Dim, Game, Screen};
 use horizon_client::{
     chat::{Chat, ChatAction, ChatScreen, Commands, SYSTEM_INDICATOR},
-    command::{Registries, vanilla},
+    command::Registries,
     gamerules::GameRules,
     hud::{HudBatch, rgba},
     screen_draw::Measure,
@@ -391,7 +391,7 @@ impl Game<'_> {
         let b = HudBatch::new(size);
         let m = Measure(&self.res.atlas.font);
         let c = Commands {
-            dispatcher: vanilla::game_dispatcher(),
+            dispatcher: self.mods.dispatcher(),
             registries: &self.ui.registries,
         };
         let mut screen = ChatScreen::new(
@@ -443,7 +443,7 @@ impl Game<'_> {
         if let Some(shortcut) = self.edit_shortcut(event) {
             let m = Measure(&self.res.atlas.font);
             let c = Commands {
-                dispatcher: vanilla::game_dispatcher(),
+                dispatcher: self.mods.dispatcher(),
                 registries: &self.ui.registries,
             };
             if let Some(screen) = self.ui.chat_screen.as_mut() {
@@ -489,7 +489,7 @@ impl Game<'_> {
         };
         let m = Measure(&self.res.atlas.font);
         let c = Commands {
-            dispatcher: vanilla::game_dispatcher(),
+            dispatcher: self.mods.dispatcher(),
             registries: &self.ui.registries,
         };
         match screen.key(&m, &c, &self.ui.chat.recent, key, shift, ctrl) {
@@ -515,7 +515,7 @@ impl Game<'_> {
     pub(super) fn chat_type(&mut self, text: &str) {
         let m = Measure(&self.res.atlas.font);
         let c = Commands {
-            dispatcher: vanilla::game_dispatcher(),
+            dispatcher: self.mods.dispatcher(),
             registries: &self.ui.registries,
         };
         if let Some(screen) = self.ui.chat_screen.as_mut() {
@@ -566,7 +566,7 @@ impl Game<'_> {
         });
         let m = Measure(&self.res.atlas.font);
         let c = Commands {
-            dispatcher: vanilla::game_dispatcher(),
+            dispatcher: self.mods.dispatcher(),
             registries: &self.ui.registries,
         };
         if let Some(screen) = self.ui.chat_screen.as_mut() {
@@ -613,7 +613,7 @@ impl Game<'_> {
         };
         let m = Measure(&self.res.atlas.font);
         let c = Commands {
-            dispatcher: vanilla::game_dispatcher(),
+            dispatcher: self.mods.dispatcher(),
             registries: &self.ui.registries,
         };
         screen.resize(&m, &c, batch.width as i32, batch.height as i32);
