@@ -12,6 +12,10 @@
 //!   (`tools/neoforge_oracle.py`), blocks and items come from its facts;
 //!   `--resources` limits templates to the blocks Horizon's tables have.
 //!
+//! - `report <work>`: the coverage report, per mod ported, partial, not yet
+//!   or not needed with the reason, in `<work>/coverage.json` and
+//!   `coverage.md`.
+//!
 //! The work folder belongs to the user: jars and carried-over files stay
 //! there and are never uploaded or committed.
 mod carry;
@@ -21,10 +25,11 @@ mod inventory;
 mod jar;
 mod modrinth;
 mod oracle;
+mod report;
 
 use std::{fs, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: horizon-port-pack import <pack> <work> | inventory <work> [--offline] | carry <work> [--resources <prepared>] [<mod id>...]";
+const USAGE: &str = "usage: horizon-port-pack import <pack> <work> | inventory <work> [--offline] | carry <work> [--resources <prepared>] [<mod id>...] | report <work>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -49,6 +54,7 @@ fn main() -> ExitCode {
             };
             carry(w, resources.as_deref(), &rest)
         }),
+        Some("report") => path(1).and_then(report),
         _ => Err(USAGE.to_owned()),
     };
     match result {
@@ -68,6 +74,22 @@ fn write_json(path: &Path, value: &impl serde::Serialize) -> Result<(), String> 
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
     let text = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+fn report(work: &Path) -> Result<(), String> {
+    let pack: import::Pack = read_json(&work.join("pack.json"))?;
+    let records: Vec<inventory::Record> = read_json(&work.join("inventory.json"))?;
+    let rows = report::build(&records, work);
+    write_json(&work.join("coverage.json"), &rows)?;
+    let title = format!(
+        "{} ({} {}, Minecraft {})",
+        pack.name, pack.loader, pack.loader_version, pack.minecraft
+    );
+    fs::write(work.join("coverage.md"), report::markdown(&title, &rows))
+        .map_err(|e| format!("coverage.md: {e}"))?;
+    println!("{title}: {} files: {:?}", rows.len(), report::counts(&rows));
+    println!("{}", work.join("coverage.md").display());
+    Ok(())
 }
 
 fn import(pack: &Path, work: &Path) -> Result<(), String> {

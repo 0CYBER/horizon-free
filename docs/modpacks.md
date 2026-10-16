@@ -262,13 +262,14 @@ inspected:
 └── coverage.json, coverage.md
 ```
 
-**Status.** `import`, `inventory` and `carry` run today:
+**Status.** `import`, `inventory`, `carry` and `report` run today:
 
 ```
 cargo run -p horizon-port-pack -- import ~/Downloads/pack.mrpack ~/.horizon/ports/pack
 cargo run -p horizon-port-pack -- inventory ~/.horizon/ports/pack     # --offline reuses modrinth.json
 cargo run -p horizon-port-pack -- carry ~/.horizon/ports/pack         # content mods with a jar, or name them
 #   --resources <prepared root>: only templates Horizon's tables have
+cargo run -p horizon-port-pack -- report ~/.horizon/ports/pack        # coverage.json and coverage.md
 ```
 
 `inventory` reads metadata only: Modrinth answers by file hash, and the jars only if the user's
@@ -307,6 +308,7 @@ block's name breaking ties (`_pane`, `_gate`, `_trapdoor`).
 | CurseForge zip | `manifest.json`: `minecraft.version`, `modLoaders[]`, `files[]` (`projectID`, `fileID`, `required`), `overrides` | the user's installed instance (CurseForge app `minecraftinstance.json` + `mods/`). CurseForge's API needs a key, so we take what the user already downloaded |
 | Prism / MultiMC instance | `mmc-pack.json` components (`net.minecraft`, `net.neoforged`, `net.fabricmc.fabric-loader`), `instance.cfg`, `.minecraft/mods/*.jar`, packwiz `.pw.toml` files if present | the instance folder |
 | packwiz | `pack.toml`, `index.toml`, `mods/*.pw.toml` | as listed |
+| Crash Assistant `modlist.json` | jar name → mod id, name, version, Modrinth SHA-1; the loader entry (NeoForge `21.1.x` is Minecraft 1.21.1). Packs such as ATM10 publish it in their repository | metadata only; jars put in `<work>/jars/` |
 
 `pack.json` holds the Minecraft version, the loader and its version, each file with its hashes
 and side, and the overrides (configs, KubeJS scripts, datapacks).
@@ -458,8 +460,36 @@ and tag of the declared blocks matches.
 
 Plus the licence summary (how many ports could be published) and, for a pack, "playable?":
 whether every required content mod is ported or partial with its blocks and items present.
-For ATM10 today: 125 of 495 are not needed. The other 370 are not yet ported; 68 of them are
-data tier, so they need registries and carry-over but no agent.
+
+`horizon-port-pack report <work>` writes the per-mod rows and the class, tier and licence totals from the inventory, each mod's `carry-report.json`
+and its harness result. A data-tier mod is **ported** when its harness is green and nothing was
+left out (blocks with a class of their own are counted and named, since facts cannot show
+their extra code); **partial** with the failing checks, the blocks left out and what the
+templates miss; **not yet** with the API tier it waits for, or the dependency; **not needed**
+for libraries, performance mods, pack tooling and what Horizon has built in. Unclassified mods
+(the 20 CurseForge-only rows the reviewed table only guesses) count as not yet.
+
+**ATM10, measured** (`import` of ATM10's `modlist.json` from its repository on 2026-10-16, 496
+files; `inventory`; `carry` and the harness on the eight mods we downloaded; `report`):
+
+| class | ported | partial | not yet | not needed | all |
+|---|---:|---:|---:|---:|---:|
+| content | 1 | 7 | 268 | 0 | 276 |
+| library | 0 | 0 | 0 | 77 | 77 |
+| integration | 0 | 0 | 40 | 3 | 43 |
+| client-ui | 0 | 0 | 27 | 2 | 29 |
+| other | 0 | 0 | 1 | 23 | 24 |
+| unknown | 0 | 0 | 20 | 0 | 20 |
+| performance | 0 | 0 | 0 | 16 | 16 |
+| server-only | 0 | 0 | 11 | 0 | 11 |
+| **all** | **1** | **7** | **367** | **121** | **496** |
+
+By tier, the 367 not yet: data 57 (carry-over and the harness, no agent: their jars were not
+downloaded), logic 66 (API 0.3), machines 97 (0.4), deep 92 (0.5), client 35, unclassified 20.
+Ported: Macaw's Trapdoors. Partial: Macaw's Doors, Fences and Walls, Paths and Pavings,
+Glassential, Factory Blocks, Cloud Glass (see the harness table) and MVS, whose 784 worldgen
+files are carried but not yet read by the game. Of the 8, 7 are MIT and one LGPL; nothing is
+published.
 
 ## Measuring "10x"
 
