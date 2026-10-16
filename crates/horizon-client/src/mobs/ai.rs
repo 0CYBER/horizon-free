@@ -777,7 +777,7 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     {
         targets.push((Who::Player, p.position));
     }
-    for o in w.others {
+    for o in w.others_near(bounds) {
         if o.id != m.id && o.alive && o.pushable && o.bounds.intersects(bounds) {
             targets.push((Who::Mob(o.id), o.position));
         }

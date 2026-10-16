@@ -385,6 +385,7 @@ impl Game<'_> {
             data: &self.res.mob_data,
             player: self.player_view(),
             others,
+            others_grid: None,
             daylight: self.dim != Dim::Nether && self.sky_darken() < 4,
             game_time: self.world.game_time,
             day_time: self.world.day_time,
@@ -528,8 +529,11 @@ impl Game<'_> {
             let mut scratch = self.world.random.clone();
             let mut pushes = Vec::new();
             let mut keep = Vec::with_capacity(mobs.len());
+            let mut grid =
+                horizon_client::mobs::seen_grid::SeenGrid::new(snapshot.iter().map(|s| s.bounds));
             for i in 0..mobs.len() {
                 let mut w = self.mob_world_base(&snapshot);
+                w.others_grid = Some(&grid);
                 let m = &mut mobs[i];
                 let seen_guest = if guests.is_empty() {
                     None
@@ -592,6 +596,7 @@ impl Game<'_> {
                 // after this mob see it as it is now.
                 snapshot[i] = seen(m, uuid);
                 snapshot[i].alive &= kept;
+                grid.update(i, snapshot[i].bounds);
                 horizon_client::mobs::apply_brain_events(&mut mobs, &mut events, from);
             }
             let mut flags = keep.into_iter();
