@@ -112,15 +112,10 @@ impl Game<'_> {
         }
         for (x, y, sprite) in pause_icons(w, h) {
             ui::button(batch, atlas, x, y, 20.0, 20.0, &Text::empty(), false, false);
-            batch.sprite_scaled(
-                atlas,
-                sprite,
-                x + 2.0,
-                y + 2.0,
-                15.0,
-                15.0,
-                rgba(160, 160, 160, 255),
-            );
+            // SpriteIconButton.CenteredIcon: the 15x15 sprite at
+            // x + width / 2 - 15 / 2 in integer pixels, untinted even
+            // when the button is inactive.
+            batch.sprite_scaled(atlas, sprite, x + 3.0, y + 3.0, 15.0, 15.0, u32::MAX);
         }
     }
     pub(super) fn pause_click(&mut self) -> Result<()> {
