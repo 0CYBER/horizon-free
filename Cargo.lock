@@ -1499,6 +1499,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-port-pack"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha1",
+ "toml",
+ "ureq",
+ "zip",
+]
+
+[[package]]
 name = "horizon-prepare"
 version = "0.1.0"
 dependencies = [
