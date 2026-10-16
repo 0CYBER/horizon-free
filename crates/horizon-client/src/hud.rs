@@ -550,6 +550,26 @@ impl HudBatch {
         r.v1 = cv;
         self.rect_uv(x, y, w, h, r, color);
     }
+    /// GuiGraphics.fillGradient: `top` to `bottom`, down the rectangle.
+    pub fn fill_gradient(
+        &mut self,
+        atlas: &HudAtlas,
+        (x, y, w, h): (f32, f32, f32, f32),
+        top: u32,
+        bottom: u32,
+    ) {
+        let r = atlas.white;
+        let uv = [(r.u0 + r.u1) / 2.0, (r.v0 + r.v1) / 2.0];
+        let p = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
+        let c = [top, top, bottom, bottom];
+        for i in [0, 1, 2, 0, 2, 3] {
+            self.vertices.push(HudVertex {
+                pos: p[i],
+                uv,
+                color: c[i],
+            });
+        }
+    }
     pub fn text_width(atlas: &HudAtlas, text: &str) -> f32 {
         atlas.font.width(text)
     }

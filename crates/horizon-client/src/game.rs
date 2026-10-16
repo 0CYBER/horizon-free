@@ -1004,6 +1004,8 @@ struct Game<'a> {
     /// The open world is shared behind an invite code (game/friends.rs).
     friends: Option<friends::Sharing>,
     world_options: Option<lan_screen::WorldOptions>,
+    /// Chat Settings opened from RestrictionsScreen: Done returns to World Options.
+    options_to_world_options: bool,
     command_block_screen: Option<command_blocks::CommandBlockScreen>,
     /// KeyboardHandler's debug key state (game/debug_keys.rs), the physical
     /// keys held, and the debug renderers F3+B and F3+G switch on.
@@ -8783,7 +8785,7 @@ impl Game<'_> {
                 Screen::Dead => {}
                 Screen::Stats => self.screen = Screen::Paused,
                 Screen::Advancements => self.close_advancements(),
-                Screen::WorldOptions => self.close_world_options(),
+                Screen::WorldOptions => self.world_options_escape(),
                 Screen::CommandBlock => self.close_command_block(),
                 Screen::Chat => self.close_chat(),
             },
@@ -10179,6 +10181,7 @@ pub fn run() -> Result<()> {
         remote: None,
         lan: None,
         world_options: None,
+        options_to_world_options: false,
         command_block_screen: None,
         friends: None,
         debug_keys: Default::default(),

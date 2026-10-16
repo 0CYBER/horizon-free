@@ -197,7 +197,9 @@ impl Game<'_> {
                 }
                 Event::Close => {
                     self.settings.save(&Self::options_path());
-                    self.screen = if self.options_from_title {
+                    self.screen = if std::mem::take(&mut self.options_to_world_options) {
+                        Screen::WorldOptions
+                    } else if self.options_from_title {
                         Screen::Playing
                     } else {
                         Screen::Paused
