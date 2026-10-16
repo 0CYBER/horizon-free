@@ -237,6 +237,11 @@ How the game loads them, without touching vanilla's path:
 - Loaders that read only `data/minecraft/` (recipes, loot, tags) read every namespace, as
   vanilla does. With no mods there is only `minecraft`, so nothing changes.
 - The overlay is cached like the resource-pack overlay and rebuilt when a mod file changes.
+- **Limits.** Chunk sections store a block state in 16 bits: vanilla 26.3 has 35,723 states,
+  so mods may add 29,813. Past that the content root is refused with the states per mod
+  (Macaw's Doors, Fences, Paths and Trapdoors alone add 36,154: not all four fit). Block
+  sprites fill texture arrays of 2048 layers, four at most (8,192; vanilla takes 1,250,
+  identical textures share a layer). Wider state ids are the next step for big packs.
 - Not in 0.2: multiplayer registry sync (single player and the integrated server first), worlds
   opened without a mod they used (vanilla turns unknown blocks into air; we will ask first),
   vanilla ids redefined by a mod (refused).
@@ -494,10 +499,12 @@ published.
 ## Measuring "10x"
 
 `tools/perf_bench.py` already measures Horizon against vanilla and vanilla with performance
-mods on the same machine, world and camera path ([benchmark.md](benchmark.md)). It gains
-`--game pack --pack <file or instance>`: the pack on its own loader (NeoForge 21.1.259 for
-ATM10), launched with the pack's recommended JVM arguments, driven by the same dev-only bench
-mod, ported to that loader.
+mods on the same machine, world and camera path ([benchmark.md](benchmark.md)). With
+`--game neoforge --mod-jars <dir> --deps <dir>` it runs the mods on their own loader (NeoForge
+21.1.259 for ATM10, installed under `.local/neoforge-oracle`, `-Xmx2G` like the launcher),
+driven by the same steps through a dev-only NeoForge port of the bench mod
+(`mods/horizon/src/neoforge-bench`). `--game horizon --port-work <work>` loads a work folder's
+carried-over mods into Horizon. A whole pack (`--pack`, its recommended JVM arguments) is next.
 
 | Metric | How | Horizon side |
 |---|---|---|
@@ -519,6 +526,37 @@ Two comparisons, both published:
 confidence interval. Other ratios are reported as they come out. Caveat (in every report):
 the pack runs Minecraft 1.21.1 and Horizon runs 26.3, so the vanilla parts differ by a few
 versions.
+
+### Measured: six ported mods against the same mods on NeoForge
+
+Cloud Glass, Factory Blocks, Glassential, Macaw's Fences, Paths and Trapdoors (Doors left out:
+with Trapdoors it passes the block states chunks hold, see Limits), carried over and loaded as
+dev mods in Horizon, against their jars plus Architectury and Fusion on NeoForge 21.1.259.
+Mac mini M4 Pro, 1280x720, seed 1234, the four flight scenes, 2 games per row, 2026-10-17.
+Means; FPS is the mean of the four scenes. "Title" is start to title screen, "world" start to
+a fresh world drawn around the spawn, "scene load" a teleport to every chunk drawn.
+
+| RD | game | title s | world s | scene load s | FPS | RSS steady / peak MB | load avg |
+|---|---|---:|---:|---:|---:|---:|---:|
+| 8 | Horizon + 6 mods | 9.8 | 16.2 | 4.0 | 122 | 2,644 / 2,771 | 32 |
+| 8 | NeoForge + 6 mods | 19.5 | 50.0 | 30.2 | 72 | 2,325 / 2,592 | 56 |
+| 8 | Horizon | 5.0 | 11.0 | 4.0 | 124 | 1,559 / 1,629 | 51 |
+| 8 | NeoForge | 12.8 | 36.1 | 21.9 | 104 | 2,334 / 2,558 | 30 |
+| 16 | Horizon + 6 mods | 10.8 | 27.0 | 11.3 | 90 | 2,925 / 3,032 | 40 |
+| 16 | NeoForge + 6 mods | 26.4 | 82.5 | 64.3 | 25 | 3,016 / 3,519 | 45 |
+| 16 | Horizon | 3.5 | 10.0 | 7.4 | 119 | 1,732 / 1,871 | 56 |
+| 16 | NeoForge | 16.9 | 73.7 | 43.2 | 36 | 2,748 / 3,425 | 48 |
+
+Same content, Horizon against NeoForge: the world is ready 3.1x sooner at 8 chunks and 3.1x at
+16, the title screen 2.0x and 2.4x sooner, and the flights run 1.7x and 3.6x the frames. RAM is
+not lower: Horizon's steady RSS grows 1.1 GB with the mods (61,816 block states against
+vanilla's 35,723; the per-state tables are the next thing to measure), while the JVM stays
+inside its 2 GB heap. Caveats, so none of this is a "10x" claim yet: other sessions and CI
+runners kept the machine's load average between 30 and 56 on 14 threads, so the confidence
+intervals are as wide as the means (`perf_bench.py --table`); Horizon's frames are paced near
+the display's 144 Hz at 8 chunks; Horizon's title time includes building the content overlay on
+a first start (about 5 s, cached afterwards); and the pack runs 1.21.1 against Horizon's 26.3.
+A quiet rerun with more games is the next measurement.
 
 ## The working version for 2026-10-23
 
@@ -545,7 +583,11 @@ In scope (each is a PR or a small stack):
 6. **Measured:** load time, RAM and FPS of that pack on NeoForge 1.21.1 against Horizon, with
    the full ATM10 on NeoForge as the reference row.
 
-Out of scope for that date, and next in order: worldgen carry-over (the 30 or so structure and biome mods),
+Out of scope for that date, and next in order: worldgen carry-over (the 30 or so structure and biome mods;
+the first one looked at, Moog's Voyager Structures, declares all 130 structures and 116 structure
+sets with MoogsStructureLib's own `generic_jigsaw_structure` and `advanced_random_spread` types and
+NeoForge's `c:` biome tags, so its carry needs a mapping to vanilla's jigsaw and random spread
+types plus the oracle's biome tags, not only bundle merging),
 behaviour callbacks and server events (0.3), block entities, menus, capabilities and net
 (0.4), the first agent-ported logic-tier mod as the pilot of step 5, then machines. Porting all
 of ATM10 is a campaign. Each step publishes its coverage number; we make no claim beyond what

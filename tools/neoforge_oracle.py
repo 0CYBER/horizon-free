@@ -45,6 +45,84 @@ def install():
     return home
 
 
+def client():
+    """The NeoForge client (tools/perf_bench.py --game neoforge), installed once per version: the installer's
+    own files, then the vanilla libraries its version inherits, fetched as the launcher does (sha1-checked)."""
+    sys.path.insert(0, str(ROOT / 'tools'))
+    import hashlib
+    import lab
+    home = LOCAL / f'client-{NEOFORGE}'
+    profile = home / 'versions' / f'neoforge-{NEOFORGE}' / f'neoforge-{NEOFORGE}.json'
+    if not profile.exists():
+        install()  # the installer jar
+        home.mkdir(parents=True, exist_ok=True)
+        (home / 'launcher_profiles.json').write_text('{"profiles":{}}')
+        with (LOCAL / f'install-client-{NEOFORGE}.log').open('w') as log:
+            subprocess.run(['java', '-jar', str(LOCAL / f'neoforge-{NEOFORGE}-installer.jar'), '--installClient',
+                            str(home)], cwd=LOCAL, stdout=log, stderr=subprocess.STDOUT, check=True)
+    neo = json.loads(profile.read_text())
+    base = json.loads((home / 'versions' / neo['inheritsFrom'] / f'{neo["inheritsFrom"]}.json').read_text())
+    jars = []
+    for manifest in (neo, base):
+        names = {library['name'] for library in manifest['libraries']}
+        for library in manifest['libraries']:
+            artifact = library.get('downloads', {}).get('artifact')
+            if not artifact or not lab.library_allowed(library) or not lab.native_library_matches(library, None, names):
+                continue
+            path = home / 'libraries' / artifact['path']
+            if not path.exists():
+                with urllib.request.urlopen(artifact['url'], timeout=120) as r:
+                    data = r.read()
+                if hashlib.sha1(data).hexdigest() != artifact['sha1']:
+                    sys.exit(f'{artifact["url"]}: sha1 mismatch')
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
+            if path not in jars:
+                jars.append(path)
+    return home, neo, base, jars
+
+
+def client_command(java, heap, game_dir, natives, assets, jvm=(), game=()):
+    """The command the launcher would run for the NeoForge client profile, with no account."""
+    home, neo, base, jars = client()
+    import lab
+    values = {'library_directory': str(home / 'libraries'), 'classpath_separator': os.pathsep,
+              'version_name': f'neoforge-{NEOFORGE}', 'natives_directory': str(natives),
+              'launcher_name': 'horizon-bench', 'launcher_version': '1'}
+    expand = lambda s: s.replace('${', '{').format(**values)
+    command = [str(java), f'-Xmx{heap}']
+    for argument in base['arguments']['jvm']:
+        if isinstance(argument, dict):
+            if lab.library_allowed(argument):
+                command += [argument['value']] if isinstance(argument['value'], str) else argument['value']
+        elif argument == '${classpath}':
+            # Every library; not the vanilla jar, which NeoForge's patched client replaces.
+            command.append(os.pathsep.join(map(str, jars)))
+        else:
+            command.append(expand(argument))
+    command += [expand(a) for a in neo['arguments']['jvm']]
+    command += [*jvm, neo['mainClass']]
+    command += ['--username', 'Bench', '--uuid', '00000000000000000000000000000000', '--accessToken', '0',
+                '--version', f'neoforge-{NEOFORGE}', '--gameDir', str(game_dir), '--assetsDir', str(assets),
+                '--assetIndex', base['assetIndex']['id'], '--userType', 'msa', '--versionType', 'release',
+                *neo['arguments']['game'], *game]
+    return home, command
+
+
+def build_bench(home):
+    """The NeoForge benchmark driver (mods/horizon/src/neoforge-bench), against the client."""
+    return build(home, ROOT / 'mods/horizon/src/neoforge-bench', 'horizon-bench-neoforge.jar', client_classpath(home))
+
+
+def client_classpath(home):
+    libs = home / 'libraries'
+    first = [libs / f'net/neoforged/neoforge/{NEOFORGE}/neoforge-{NEOFORGE}-client.jar',
+             libs / f'net/neoforged/neoforge/{NEOFORGE}/neoforge-{NEOFORGE}-universal.jar']
+    rest = sorted(p for p in libs.rglob('*.jar') if p not in first and 'slim' not in p.name
+                  and 'extra' not in p.name and not p.name.endswith('-unpacked.jar'))
+    return os.pathsep.join(map(str, first + rest))
+
+
 def classpath(home):
     libs = home / 'libraries'
     first = [libs / f'net/neoforged/neoforge/{NEOFORGE}/neoforge-{NEOFORGE}-server.jar',
@@ -54,27 +132,27 @@ def classpath(home):
     return os.pathsep.join(map(str, first + rest))
 
 
-def build(home):
-    """The exporter mod jar, rebuilt when its sources change."""
+def build(home, source=SOURCE, name='horizon-oracle.jar', cp=None):
+    """A dev-only mod jar (by default the exporter), rebuilt when its sources change."""
     out = LOCAL / 'build'
-    jar = out / 'horizon-oracle.jar'
-    sources = sorted((SOURCE / 'java').rglob('*.java'))
-    resources = sorted(p for p in (SOURCE / 'resources').rglob('*') if p.is_file())
+    jar = out / name
+    sources = sorted((source / 'java').rglob('*.java'))
+    resources = sorted(p for p in (source / 'resources').rglob('*') if p.is_file())
     newest = max(p.stat().st_mtime for p in sources + resources)
     if jar.exists() and jar.stat().st_mtime > newest:
         return jar
-    classes = out / 'classes'
+    classes = out / f'classes-{Path(name).stem}'
     shutil.rmtree(classes, ignore_errors=True)
     classes.mkdir(parents=True)
-    javac = subprocess.run(['javac', '--release', '21', '-proc:none', '-nowarn', '-cp', classpath(home),
+    javac = subprocess.run(['javac', '--release', '21', '-proc:none', '-nowarn', '-cp', cp or classpath(home),
                             '-d', str(classes), *map(str, sources)], capture_output=True, text=True)
     if javac.returncode:
-        sys.exit(f'the exporter does not compile:\n{javac.stdout}{javac.stderr}')
+        sys.exit(f'{name} does not compile:\n{javac.stdout}{javac.stderr}')
     with zipfile.ZipFile(jar, 'w', zipfile.ZIP_DEFLATED) as z:
         for p in sorted(classes.rglob('*.class')):
             z.write(p, p.relative_to(classes).as_posix())
         for p in resources:
-            z.write(p, p.relative_to(SOURCE / 'resources').as_posix())
+            z.write(p, p.relative_to(source / 'resources').as_posix())
     return jar
 
 
