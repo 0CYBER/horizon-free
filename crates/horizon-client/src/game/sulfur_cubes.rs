@@ -50,6 +50,8 @@ impl Game<'_> {
         if super::armor_stands::skull_kind(item).is_some() {
             return;
         }
+        // shortcut: the body slot retains only an item id; preserve the stack
+        // before supporting its block-state components here.
         let Some(state) = self.res.items.get(item).and_then(|item| item.block) else {
             return;
         };
