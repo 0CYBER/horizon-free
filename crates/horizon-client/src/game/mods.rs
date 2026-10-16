@@ -4,6 +4,7 @@
 //! every hook here returns after one check.
 use super::{Game, Screen};
 use horizon_client::{
+    command::{Dispatcher, vanilla},
     extras::Corner,
     extras_hud::{self, Corners},
     hud::HudBatch,
@@ -23,17 +24,81 @@ pub(super) struct ModsState {
     pub(super) dev: Vec<PathBuf>,
     /// When dev mods were last checked for a rebuild.
     checked: Option<Instant>,
+    /// The chat's command tree while a running mod owns commands.
+    tree: Option<Dispatcher>,
+}
+impl ModsState {
+    /// The chat's command tree: vanilla's, plus the running mods' commands.
+    pub(super) fn dispatcher(&self) -> &Dispatcher {
+        self.tree
+            .as_ref()
+            .unwrap_or_else(|| vanilla::game_dispatcher())
+    }
 }
 /// How often dev mods are checked for a rebuild.
 const RELOAD_CHECK: Duration = Duration::from_secs(1);
 
 /// A vanilla command name: mods may not take it.
 fn vanilla_command(name: &str) -> bool {
-    let d = horizon_client::command::vanilla::game_dispatcher();
+    let d = vanilla::game_dispatcher();
     d.nodes[0]
         .children
         .iter()
         .any(|&c| d.nodes[c].name() == name)
+}
+
+/// `root` with the content mods that are on layered over it
+/// (docs/modpacks.md): their blocks, items, data and assets. Read once at
+/// start, before the resources load; a mod whose content is refused is left
+/// out here and its row on the Mods page says why.
+pub(super) fn content_root(
+    root: &std::path::Path,
+    enabled: &std::collections::BTreeSet<String>,
+    dev: &[std::path::PathBuf],
+) -> std::path::PathBuf {
+    use horizon_client::mod_content::{self, ContentMod};
+    use horizon_mods::{Capability, Content, Package};
+    let here = std::env::current_dir().unwrap_or_default();
+    let mut paths = horizon_mods::find(&here.join(mod_list::DIR));
+    paths.retain(|p| !dev.contains(p));
+    paths.extend(dev.iter().cloned());
+    let mut mods: Vec<ContentMod> = Vec::new();
+    for path in &paths {
+        let Ok(package) = Package::read(path) else {
+            continue;
+        };
+        let m = &package.manifest;
+        let on = enabled.contains(&m.id) || dev.contains(path);
+        if !on
+            || !m.capabilities.contains(&Capability::Registries)
+            || mods.iter().any(|c| c.id == m.id)
+        {
+            continue;
+        }
+        match Content::read(path, m) {
+            Ok(content) => mods.push(ContentMod {
+                id: m.id.clone(),
+                content,
+            }),
+            Err(e) => log::warn!("Horizon: mod {} content not loaded: {e}", m.id),
+        }
+    }
+    match mod_content::resource_root(root, &mods, &here.join(".horizon-cache")) {
+        Ok(out) => {
+            if out != root {
+                log::info!(
+                    "Horizon: content from {} mod(s) in {}",
+                    mods.len(),
+                    out.display()
+                );
+            }
+            out
+        }
+        Err(e) => {
+            log::warn!("Horizon: content mods not loaded: {e}");
+            root.to_owned()
+        }
+    }
 }
 
 impl Game<'_> {
@@ -55,6 +120,7 @@ impl Game<'_> {
         let mods = Mods::load(&paths, on, vanilla_command);
         self.mods.mods = mods;
         self.list_mods();
+        self.sync_mod_commands();
         self.show_mod_output();
     }
     /// The Mods page's rows, from what loaded.
@@ -96,6 +162,14 @@ impl Game<'_> {
                 }
             })
             .collect();
+    }
+    /// The chat's tree after the running mods changed.
+    fn sync_mod_commands(&mut self) {
+        let mut names = self.mods.mods.commands().peekable();
+        self.mods.tree = names
+            .peek()
+            .is_some()
+            .then(|| vanilla::game_dispatcher().with_mod_commands(names));
     }
     /// After the options changed: restart the mods if the list of the ones
     /// turned on did.
@@ -160,6 +234,7 @@ impl Game<'_> {
             self.mods.checked = Some(Instant::now());
             if self.mods.mods.reload_changed(vanilla_command) {
                 self.list_mods();
+                self.sync_mod_commands();
                 self.system_message(Text::literal("Mods reloaded").with_color(text::GRAY));
             }
         }
@@ -201,6 +276,7 @@ impl Game<'_> {
                 Output::Feedback { text, error: true } => Text::literal(text).with_color(text::RED),
                 Output::Stopped { name, reason } => {
                     self.list_mods();
+                    self.sync_mod_commands();
                     Text::literal(format!("Mod {name} stopped: {reason}")).with_color(text::RED)
                 }
             };
@@ -208,7 +284,7 @@ impl Game<'_> {
             let focused = self.screen == Screen::Chat;
             self.ui
                 .chat
-                .add(&self.res.atlas, line, None, self.ticks, focused);
+                .add(&self.atlas, line, None, self.ticks, focused);
         }
     }
     /// The mods' HUD panels, stacked with the extras in their corners.
@@ -229,7 +305,7 @@ impl Game<'_> {
                 .iter()
                 .map(|l| (l.text.as_str(), l.color))
                 .collect();
-            extras_hud::draw_lines(batch, &self.res.atlas, corners, corner, &lines);
+            extras_hud::draw_lines(batch, &self.atlas, corners, corner, &lines);
         }
     }
 }

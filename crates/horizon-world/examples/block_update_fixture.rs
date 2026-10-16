@@ -426,8 +426,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 // A fresh shrieker has warning level 0 and so never responds,
                 // and no player is near enough for a portal to spawn a piglin.
+                // A fresh command block has no command and is neither powered
+                // nor always active: `CommandBlock.tick` changes nothing.
                 LevelEvent::BlockEvent {
-                    kind: "shrieker_respond" | "portal_spawn",
+                    kind: "shrieker_respond" | "portal_spawn" | "command_block",
                     ..
                 } => {}
                 LevelEvent::BlockEvent { kind, .. } => {

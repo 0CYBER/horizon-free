@@ -102,8 +102,10 @@ fn atlas_sprites(root: &Path, packed: &[PackedImage]) -> Vec<PackedImage> {
             let image = match &origin {
                 SpriteOrigin::File(texture) => {
                     let path = texture.strip_prefix("minecraft:").unwrap_or(texture);
-                    // Packed under its own name already: only a renamed file is new.
-                    if path == name {
+                    // A vanilla file is packed under its own name already:
+                    // only a renamed one is new. Other namespaces' files
+                    // (content mods) are never in the walked directories.
+                    if texture.starts_with("minecraft:") && path == name {
                         continue;
                     }
                     load(texture, "textures").map(|(w, h, p)| {
@@ -550,6 +552,26 @@ impl HudBatch {
         r.v1 = cv;
         self.rect_uv(x, y, w, h, r, color);
     }
+    /// GuiGraphics.fillGradient: `top` to `bottom`, down the rectangle.
+    pub fn fill_gradient(
+        &mut self,
+        atlas: &HudAtlas,
+        (x, y, w, h): (f32, f32, f32, f32),
+        top: u32,
+        bottom: u32,
+    ) {
+        let r = atlas.white;
+        let uv = [(r.u0 + r.u1) / 2.0, (r.v0 + r.v1) / 2.0];
+        let p = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
+        let c = [top, top, bottom, bottom];
+        for i in [0, 1, 2, 0, 2, 3] {
+            self.vertices.push(HudVertex {
+                pos: p[i],
+                uv,
+                color: c[i],
+            });
+        }
+    }
     pub fn text_width(atlas: &HudAtlas, text: &str) -> f32 {
         atlas.font.width(text)
     }
@@ -910,6 +932,7 @@ impl HudRenderer {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        uploads: &mut crate::gfx::upload::Uploads,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         batch: &HudBatch,
@@ -955,8 +978,14 @@ impl HudRenderer {
                 mapped_at_creation: false,
             });
         }
-        queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(&batch.vertices));
-        queue.write_buffer(
+        uploads.buffer(
+            encoder,
+            &self.buffer,
+            0,
+            bytemuck::cast_slice(&batch.vertices),
+        );
+        uploads.buffer(
+            encoder,
             &self.uniform,
             0,
             bytemuck::bytes_of(&HudUniform {

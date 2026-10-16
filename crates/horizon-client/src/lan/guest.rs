@@ -84,6 +84,8 @@ pub struct Guest {
     /// (`InventoryMenu.craftSlots`, `resultSlots`), which the game computes.
     pub craft_grid: [Option<ItemStack>; 4],
     pub craft_result: Option<ItemStack>,
+    /// The ender chest inventory (`PlayerEnderChestContainer`, 27 slots).
+    pub ender_items: Vec<Option<ItemStack>>,
     pub health: f32,
     pub food: i32,
     pub saturation: f32,
@@ -102,6 +104,8 @@ pub struct Guest {
     /// The moves accepted since the game last looked (movement, on ground),
     /// for ServerPlayer.doCheckFallDamage.
     pub moves: Vec<([f64; 3], bool)>,
+    /// Whether the guest was on the ground before the first of `moves`.
+    pub moves_from_ground: bool,
     pub dead: bool,
     /// The join packets were sent (PlayerList.placeNewPlayer ran).
     pub placed: bool,
@@ -163,6 +167,7 @@ impl Guest {
             carried: None,
             craft_grid: Default::default(),
             craft_result: None,
+            ender_items: vec![None; 27],
             health: 20.0,
             food: 20,
             saturation: 5.0,
@@ -178,6 +183,7 @@ impl Guest {
             joined_tick: 0,
             ticks: 0,
             moves: Vec::new(),
+            moves_from_ground: false,
             dead: false,
             placed: false,
             menu: None,

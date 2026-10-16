@@ -58,10 +58,13 @@ pub fn outline_vertices(edges: &[[f64; 6]], camera: glam::DVec3) -> Vec<[f32; 6]
 }
 
 mod arena;
+mod java_stages;
 mod occlusion;
 mod pack_stages;
 pub mod panorama;
+mod resident;
 mod timing;
+pub(crate) mod upload;
 mod world_post;
 
 #[repr(C)]
@@ -93,9 +96,9 @@ struct SectionGpu {
     start: u64,
     solid: u32,
     translucent: u32,
+    /// The solid quads by facing: back-facing groups are skipped.
+    faces: crate::mesher::FaceGroups,
 }
-/// A visible section this frame: key, squared distance, camera-relative origin.
-type Visible = (SectionKey, f64, [f32; 3]);
 /// Line segments the hit outline can hold.
 const MAX_OUTLINE_EDGES: u64 = 256;
 pub struct Frame<'a> {
@@ -135,13 +138,20 @@ pub struct Frame<'a> {
     /// over everything.
     pub debug_lines: &'a [[f32; 8]],
     pub debug_lines_on_top: &'a [[f32; 8]],
+    /// `DebugCrosshairRenderer`'s axes, camera relative like `debug_lines`:
+    /// drawn after the hand at its projection, without the bob or fog.
+    pub debug_crosshair: &'a [[f32; 8]],
     pub hud: &'a HudBatch,
     /// CardinalLighting.Type.NETHER, otherwise DEFAULT.
     pub nether_lighting: bool,
     /// Camera-relative entity geometry textured from the shared atlas.
     pub entities: &'a [Vertex],
+    /// Cloud mesh inputs; geometry and GPU storage are retained by the renderer.
+    pub clouds: Option<crate::clouds::Input<'a>>,
     /// Additive translucent geometry after the entities (lightning, dragon rays).
     pub additive: &'a [Vertex],
+    /// Name tags over everything, without depth (`TEXT_SEE_THROUGH`).
+    pub see_through: &'a [Vertex],
     /// Camera-relative sun, moon and stars (drawn behind everything, additive).
     pub celestial: &'a [Vertex],
     /// First-person hand and held item, drawn after clearing depth.
@@ -244,10 +254,20 @@ pub struct Renderer {
     debug_lines_on_top: wgpu::RenderPipeline,
     debug_line_buffer: wgpu::Buffer,
     debug_line_capacity: u64,
+    /// The terrain resources with the debug crosshair's projection
+    /// (`crosshair_globals`).
+    crosshair_group: wgpu::BindGroup,
+    crosshair_globals: wgpu::Buffer,
     entity_pipeline: wgpu::RenderPipeline,
     crumbling_pipeline: wgpu::RenderPipeline,
     cloud_pipeline: wgpu::RenderPipeline,
+    cloud_mesh: crate::clouds::Mesh,
+    cloud_buffer: wgpu::Buffer,
+    cloud_capacity: u64,
+    cloud_uniform: wgpu::Buffer,
+    cloud_group: wgpu::BindGroup,
     additive_pipeline: wgpu::RenderPipeline,
+    see_through_pipeline: wgpu::RenderPipeline,
     celestial_pipeline: wgpu::RenderPipeline,
     celestial_buffer: wgpu::Buffer,
     panorama: panorama::Panorama,
@@ -279,6 +299,9 @@ pub struct Renderer {
     lightmap_view: wgpu::TextureView,
     lightmap_sampler: wgpu::Sampler,
     animations: AnimatedSprites,
+    uploads: upload::Uploads,
+    /// Whether `lightmap` holds `lightmap_pixels` yet.
+    lightmap_uploaded: bool,
     sprite_minimum_size: u32,
     indices: wgpu::Buffer,
     index_quads: u32,
@@ -286,7 +309,7 @@ pub struct Renderer {
     instance_capacity: u64,
     outline: wgpu::Buffer,
     depth: wgpu::TextureView,
-    sections: HashMap<SectionKey, SectionGpu>,
+    sections: resident::Resident<SectionGpu>,
     arena: arena::Arena,
     /// `DrawIndexedIndirectArgs` for this frame's solid then translucent draws.
     indirect: wgpu::Buffer,
@@ -294,7 +317,7 @@ pub struct Renderer {
     /// Indirect draws may set `first_instance` (the section origin).
     pub multi_draw: bool,
     /// Per-frame scratch, kept to avoid allocating every frame.
-    visible: Vec<Visible>,
+    visible: Vec<resident::Visible>,
     origins: Vec<[f32; 4]>,
     /// `DrawIndexedIndirectArgs` words: index count, instance count, first
     /// index, base vertex, first instance.
@@ -308,7 +331,7 @@ pub struct Renderer {
     /// Resolution scale and FXAA (Horizon settings).
     world_post: world_post::Post,
     /// The selected shader pack's stages (Horizon setting; none by default).
-    pack: Option<pack_stages::PackStages>,
+    pack: Option<Pack>,
     pub hud: HudRenderer,
     /// The menus' backdrop blur, made on first use.
     post: Option<crate::post::Post>,
@@ -340,7 +363,9 @@ fn mip_chain(
 ) -> (Vec<u8>, u32) {
     let levels = size.trailing_zeros() + 1;
     let layer_bytes = (size * size * 4) as usize;
-    let mut out = Vec::new();
+    // Exactly the chain's size: cached animation frames count their capacity.
+    let chain_bytes: usize = (0..levels).map(|l| layer_bytes >> (2 * l)).sum();
+    let mut out = Vec::with_capacity(chain_bytes * layers as usize);
     for layer in 0..layers as usize {
         let base = crate::mipmap::Image {
             width: size,
@@ -366,7 +391,26 @@ fn mip_chain(
             out.extend(image.pixels.iter().flatten());
         }
     }
+    debug_assert_eq!(out.len(), chain_bytes * layers as usize);
     (out, levels)
+}
+/// The wgpu instance options, without wgpu's validation of indirect draws
+/// in release builds. That validation (meant for untrusted WebGPU content)
+/// copies every indirect draw through a compute pass before the render pass
+/// and costs about a tenth of `render`'s CPU time on Metal. The only indirect
+/// draws are the section draws `render` writes from resident sections, in
+/// bounds by construction: index counts within `indices`, vertices within
+/// the section's arena range, first instances below the origins written that
+/// frame. Debug builds keep validating them; `WGPU_VALIDATION_INDIRECT_CALL=1`
+/// turns it back on.
+fn instance_descriptor() -> wgpu::InstanceDescriptor {
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    if !cfg!(debug_assertions) {
+        descriptor
+            .flags
+            .remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
+    }
+    descriptor.with_env()
 }
 /// What to tell a player whose system offers no usable graphics adapter.
 /// Vulkan is loaded at run time (the game links no graphics library), so a
@@ -411,8 +455,7 @@ impl Renderer {
         forcefield: (&[u8], u32),
         panorama_faces: &panorama::Faces,
     ) -> Result<Self> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let instance = wgpu::Instance::new(instance_descriptor());
         // Offscreen rendering needs no surface, so it can use a GPU the
         // window's display cannot present from (a headless compositor).
         let surface = if offscreen {
@@ -735,6 +778,12 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let crosshair_globals = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Debug crosshair globals"),
+            size: std::mem::size_of::<Globals>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let (mips, mip_levels) = mip_chain(sprite_pixels, sprite_size, sprite_mips, 0, layers);
         let sprite_texture = device.create_texture_with_data(
             &queue,
@@ -796,6 +845,32 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: globals.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&sprite_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&sprite_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&lightmap_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&lightmap_sampler),
+                },
+            ],
+        });
+        let crosshair_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Debug crosshair resources"),
+            layout: &bindings,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: crosshair_globals.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -967,19 +1042,60 @@ impl Renderer {
             bind_group_layouts: &[Some(&entity_bindings)],
             ..Default::default()
         });
+        let cloud_bindings = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Cloud bindings"),
+            entries: &[entry(
+                0,
+                wgpu::ShaderStages::VERTEX,
+                wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+            )],
+        });
+        let cloud_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Cloud transforms and colors"),
+            size: std::mem::size_of::<crate::clouds::Uniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let cloud_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Cloud resources"),
+            layout: &cloud_bindings,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: cloud_uniform.as_entire_binding(),
+            }],
+        });
+        let cloud_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Cloud layout"),
+            bind_group_layouts: &[Some(&entity_bindings), Some(&cloud_bindings)],
+            ..Default::default()
+        });
+        let cloud_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Cloud vertices"),
+            size: 4 * std::mem::size_of::<Vertex>() as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let entity_attributes = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x2,2=>Uint32,3=>Unorm8x4,4=>Uint8x4,5=>Snorm8x4];
         let entity_vertex = [Some(wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Vertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &entity_attributes,
         })];
-        let entity_pipeline = |label, cull_mode, depth_write, bias, blend| {
+        let entity_pipeline = |label, cull_mode, depth_write, compare, bias, blend, clouds| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
-                layout: Some(&entity_layout),
+                layout: Some(if clouds {
+                    &cloud_layout
+                } else {
+                    &entity_layout
+                }),
                 vertex: wgpu::VertexState {
                     module: &entity_shader,
-                    entry_point: Some("vs_entity"),
+                    entry_point: Some(if clouds { "vs_cloud" } else { "vs_entity" }),
                     compilation_options: Default::default(),
                     buffers: &entity_vertex,
                 },
@@ -990,7 +1106,7 @@ impl Renderer {
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth32Float,
                     depth_write_enabled: Some(depth_write),
-                    depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
+                    depth_compare: Some(compare),
                     stencil: Default::default(),
                     bias,
                 }),
@@ -1013,22 +1129,43 @@ impl Renderer {
             "Breaking cracks",
             Some(wgpu::Face::Back),
             false,
+            wgpu::CompareFunction::GreaterEqual,
             wgpu::DepthBiasState {
                 constant: 10,
                 slope_scale: 1.0,
                 clamp: 0.0,
             },
             CRUMBLING_BLEND,
+            false,
         );
         let cloud_pipeline = entity_pipeline(
             "Clouds",
             Some(wgpu::Face::Back),
             true,
+            wgpu::CompareFunction::GreaterEqual,
             Default::default(),
             alpha_blend,
+            true,
         );
-        let entity_pipeline =
-            entity_pipeline("Entities", None, true, Default::default(), alpha_blend);
+        // RenderPipelines.TEXT_SEE_THROUGH: translucent, no depth test or writes.
+        let see_through_pipeline = entity_pipeline(
+            "See-through text",
+            None,
+            false,
+            wgpu::CompareFunction::Always,
+            Default::default(),
+            alpha_blend,
+            false,
+        );
+        let entity_pipeline = entity_pipeline(
+            "Entities",
+            None,
+            true,
+            wgpu::CompareFunction::GreaterEqual,
+            Default::default(),
+            alpha_blend,
+            false,
+        );
         // BlendFunction.LIGHTNING: src alpha, one; no depth writes.
         let additive_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Additive entities"),
@@ -1377,6 +1514,7 @@ impl Renderer {
             .features()
             .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE);
         let world_post = world_post::Post::new(&device, config.format.remove_srgb_suffix());
+        let uploads = upload::Uploads::new(&device);
         let panorama = panorama::Panorama::new(
             &device,
             &queue,
@@ -1406,10 +1544,18 @@ impl Renderer {
             debug_lines_on_top,
             debug_line_buffer,
             debug_line_capacity: 4096,
+            crosshair_group,
+            crosshair_globals,
             entity_pipeline,
             crumbling_pipeline,
             cloud_pipeline,
+            cloud_mesh: Default::default(),
+            cloud_buffer,
+            cloud_capacity: 4,
+            cloud_uniform,
+            cloud_group,
             additive_pipeline,
+            see_through_pipeline,
             celestial_pipeline,
             celestial_buffer,
             panorama,
@@ -1437,6 +1583,8 @@ impl Renderer {
             lightmap_view,
             lightmap_sampler,
             animations: AnimatedSprites::new(animations, sprite_size, sprite_mips),
+            uploads,
+            lightmap_uploaded: false,
             sprite_minimum_size,
             indices,
             index_quads,
@@ -1444,7 +1592,7 @@ impl Renderer {
             instance_capacity,
             outline,
             depth,
-            sections: HashMap::new(),
+            sections: resident::Resident::default(),
             arena,
             indirect,
             indirect_capacity: 1024,
@@ -1591,7 +1739,7 @@ impl Renderer {
         self.sections.len()
     }
     pub fn has_section(&self, key: SectionKey) -> bool {
-        self.sections.contains_key(&key)
+        self.sections.contains(key)
     }
     pub fn upload(&mut self, key: SectionKey, mesh: &SectionMesh) {
         self.occlusion.set(key, mesh.visibility);
@@ -1632,6 +1780,7 @@ impl Renderer {
                 start,
                 solid,
                 translucent,
+                faces: mesh.faces,
             },
         );
     }
@@ -1659,7 +1808,7 @@ impl Renderer {
         }
     }
     fn release_section(&mut self, key: SectionKey) {
-        if let Some(s) = self.sections.remove(&key) {
+        if let Some(s) = self.sections.remove(key) {
             self.arena
                 .release(s.page, s.start, u64::from(s.solid + s.translucent) * 4);
         }
@@ -1682,19 +1831,28 @@ impl Renderer {
     /// Run `pack`'s stages over the world from now on (`None`: no pack, the
     /// vanilla frame). On error the previous pack stays.
     pub fn set_shader_pack(&mut self, pack: Option<&crate::shader_pack::ShaderPack>) -> Result<()> {
+        let format = self.config.format.remove_srgb_suffix();
         self.pack = match pack {
-            Some(pack) => Some(pack_stages::PackStages::new(
-                &self.device,
-                self.config.format.remove_srgb_suffix(),
-                pack,
-            )?),
+            Some(pack) => Some(match &pack.java {
+                Some(java) => Pack::Java(java_stages::JavaStages::new(
+                    &self.device,
+                    &self.queue,
+                    format,
+                    &pack.id,
+                    java,
+                )?),
+                None => Pack::Horizon(pack_stages::PackStages::new(&self.device, format, pack)?),
+            }),
             None => None,
         };
         Ok(())
     }
     /// The folder name of the pack `set_shader_pack` gave.
     pub fn shader_pack_id(&self) -> Option<&str> {
-        self.pack.as_ref().map(|p| p.id.as_str())
+        self.pack.as_ref().map(|p| match p {
+            Pack::Horizon(p) => p.id.as_str(),
+            Pack::Java(p) => p.id.as_str(),
+        })
     }
     /// Horizon's resolution scale (world pixels per window pixel) and FXAA.
     pub fn set_world_post(&mut self, scale: f32, antialias: bool) {
@@ -1777,6 +1935,7 @@ impl Renderer {
     }
     fn update_lightmap(
         &mut self,
+        encoder: &mut wgpu::CommandEncoder,
         sky: &Sky,
         darkness: f32,
         gamma: f32,
@@ -1813,34 +1972,34 @@ impl Renderer {
                 pixels[i + 3] = 255;
             }
         }
-        self.queue.write_texture(
+        // The lightmap changes with the time of day, flicker and effects,
+        // not every frame: upload only what differs from the texture.
+        if pixels == self.lightmap_pixels && self.lightmap_uploaded {
+            return;
+        }
+        self.uploads.texture(
+            encoder,
             wgpu::TexelCopyTextureInfo {
                 texture: &self.lightmap,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
+            16,
+            16,
             &pixels,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(64),
-                rows_per_image: Some(16),
-            },
-            wgpu::Extent3d {
-                width: 16,
-                height: 16,
-                depth_or_array_layers: 1,
-            },
         );
         self.lightmap_pixels = pixels;
+        self.lightmap_uploaded = true;
     }
-    fn animate(&mut self, tick: u64) {
+    fn animate(&mut self, encoder: &mut wgpu::CommandEncoder, tick: u64) {
         animate_sprites(
             &mut self.animations,
             tick,
             self.mip_levels,
             |layer, level, size, pixels| {
-                self.queue.write_texture(
+                self.uploads.texture(
+                    encoder,
                     wgpu::TexelCopyTextureInfo {
                         texture: &self.sprite_texture,
                         mip_level: level,
@@ -1851,17 +2010,9 @@ impl Renderer {
                         },
                         aspect: wgpu::TextureAspect::All,
                     },
+                    size,
+                    size,
                     pixels,
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(size * 4),
-                        rows_per_image: Some(size),
-                    },
-                    wgpu::Extent3d {
-                        width: size,
-                        height: size,
-                        depth_or_array_layers: 1,
-                    },
                 );
             },
         );
@@ -1901,11 +2052,17 @@ impl Renderer {
             Some(f) => f.texture.clone(),
             None => self.offscreen.clone().ok_or("no offscreen target")?,
         };
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Horizon frame"),
+            });
         if self.animated_textures {
-            self.animate(frame.ticks);
+            self.animate(&mut encoder, frame.ticks);
             self.hud.animate_fire(&self.queue, frame.ticks);
         }
         self.update_lightmap(
+            &mut encoder,
             &frame.sky,
             frame.darkness.1,
             (self.gamma - frame.darkness.0).max(0.0),
@@ -1998,8 +2155,8 @@ impl Renderer {
             ],
             outline_params: outline_params(self.config.width, self.config.height),
         };
-        self.queue
-            .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
+        self.uploads
+            .buffer(&mut encoder, &self.globals, 0, bytemuck::bytes_of(&globals));
         let pack_uniform = shader_pack_uniform(
             frame,
             view,
@@ -2021,8 +2178,25 @@ impl Renderer {
             view_proj: (hand_projection * frame.bob * view).to_cols_array_2d(),
             ..globals
         };
-        self.queue
-            .write_buffer(&self.hand_globals, 0, bytemuck::bytes_of(&hand_globals));
+        self.uploads.buffer(
+            &mut encoder,
+            &self.hand_globals,
+            0,
+            bytemuck::bytes_of(&hand_globals),
+        );
+        // GameRenderer.render3dHud: DebugCrosshairRenderer draws with the
+        // hand's projection but no bob, and FogMode.NONE (no fog colour).
+        let crosshair_globals = Globals {
+            view_proj: (hand_projection * view).to_cols_array_2d(),
+            fog_color: [0.0; 4],
+            ..globals
+        };
+        self.uploads.buffer(
+            &mut encoder,
+            &self.crosshair_globals,
+            0,
+            bytemuck::bytes_of(&crosshair_globals),
+        );
         // Frustum culling and camera-relative origins.
         let view = Frustum {
             planes: frustum(view_proj),
@@ -2041,34 +2215,13 @@ impl Renderer {
         let reachable = &self.occlusion;
         let mut visible = std::mem::take(&mut self.visible);
         visible.clear();
-        visible.extend(
-            self.sections
-                .keys()
-                .filter(|&&k| !culling || reachable.contains(k))
-                .filter_map(|&(sx, sy, sz)| {
-                    let origin = DVec3::new(
-                        f64::from(sx * 16),
-                        f64::from(crate::chunk::MIN_Y + sy * 16),
-                        f64::from(sz * 16),
-                    ) - camera;
-                    let center = origin + DVec3::splat(8.0);
-                    let horizontal = (center.x * center.x + center.z * center.z).sqrt();
-                    if horizontal > f64::from(frame.distance) + 24.0 {
-                        return None;
-                    }
-                    let min = origin.as_vec3();
-                    let max = min + Vec3::splat(16.0);
-                    if !view.intersects(min, max) {
-                        return None;
-                    }
-                    Some((
-                        (sx, sy, sz),
-                        center.length_squared(),
-                        origin.as_vec3().to_array(),
-                    ))
-                }),
+        self.sections.visible(
+            camera,
+            frame.distance,
+            &view,
+            |k| !culling || reachable.contains(k),
+            &mut visible,
         );
-        visible.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
         self.drawn_sections = visible.len();
         if visible.len() as u64 > self.instance_capacity {
             self.instance_capacity = (visible.len() as u64).next_power_of_two();
@@ -2080,11 +2233,18 @@ impl Renderer {
             });
         }
         self.origins.clear();
-        self.origins
-            .extend(visible.iter().map(|(_, _, o)| [o[0], o[1], o[2], 0.0]));
+        self.origins.extend(
+            visible
+                .iter()
+                .map(|v| [v.origin[0], v.origin[1], v.origin[2], 0.0]),
+        );
         if !self.origins.is_empty() {
-            self.queue
-                .write_buffer(&self.instances, 0, bytemuck::cast_slice(&self.origins));
+            self.uploads.buffer(
+                &mut encoder,
+                &self.instances,
+                0,
+                bytemuck::cast_slice(&self.origins),
+            );
         }
         if frame.title {
             visible.clear();
@@ -2093,25 +2253,27 @@ impl Renderer {
         // as one list of indirect draws over the section arena.
         self.draws.clear();
         self.draw_pages.clear();
-        let draw = |s: &SectionGpu, i: usize, translucent: bool| {
-            let (quads, first) = if translucent {
-                (s.translucent, s.start + u64::from(s.solid) * 4)
-            } else {
-                (s.solid, s.start)
-            };
-            (quads > 0).then_some(([quads * 6, 1, 0, first as u32, i as u32], s.page))
-        };
-        for (i, (key, _, _)) in visible.iter().enumerate() {
-            if let Some((d, page)) = draw(&self.sections[key], i, false) {
-                self.draws.push(d);
-                self.draw_pages.push(page);
-            }
+        // The eye, camera-relative: view bobbing moves it off the camera.
+        let eye = (frame.bob * crate::camera::view_matrix(frame.yaw, frame.pitch))
+            .inverse()
+            .transform_point3(Vec3::ZERO);
+        for (i, v) in visible.iter().enumerate() {
+            let s = self.sections.get(v.slot);
+            // Only the solid groups that can face the eye.
+            s.faces.ranges(eye - Vec3::from(v.origin), |first, quads| {
+                let first = s.start + u64::from(first) * 4;
+                self.draws.push([quads * 6, 1, 0, first as u32, i as u32]);
+                self.draw_pages.push(s.page);
+            });
         }
         let solid_draws = self.draws.len() as u32;
-        for (i, (key, _, _)) in visible.iter().enumerate().rev() {
-            if let Some((d, page)) = draw(&self.sections[key], i, true) {
-                self.draws.push(d);
-                self.draw_pages.push(page);
+        for (i, v) in visible.iter().enumerate().rev() {
+            let s = self.sections.get(v.slot);
+            if s.translucent > 0 {
+                let first = s.start + u64::from(s.solid) * 4;
+                self.draws
+                    .push([s.translucent * 6, 1, 0, first as u32, i as u32]);
+                self.draw_pages.push(s.page);
             }
         }
         let translucent_draws = self.draws.len() as u32 - solid_draws;
@@ -2125,13 +2287,18 @@ impl Renderer {
                     mapped_at_creation: false,
                 });
             }
-            self.queue
-                .write_buffer(&self.indirect, 0, bytemuck::cast_slice(&self.draws));
+            self.uploads.buffer(
+                &mut encoder,
+                &self.indirect,
+                0,
+                bytemuck::cast_slice(&self.draws),
+            );
         }
         let debug_depth = frame.debug_lines.len() as u32;
         let debug_top = frame.debug_lines_on_top.len() as u32;
-        if debug_depth + debug_top > 0 {
-            let needed = u64::from(debug_depth + debug_top);
+        let crosshair = frame.debug_crosshair.len() as u32;
+        if debug_depth + debug_top + crosshair > 0 {
+            let needed = u64::from(debug_depth + debug_top + crosshair);
             if needed > self.debug_line_capacity {
                 self.debug_line_capacity = needed.next_power_of_two();
                 self.debug_line_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -2145,30 +2312,65 @@ impl Renderer {
                 .debug_lines
                 .iter()
                 .chain(frame.debug_lines_on_top)
+                .chain(frame.debug_crosshair)
                 .copied()
                 .collect();
-            self.queue
-                .write_buffer(&self.debug_line_buffer, 0, bytemuck::cast_slice(&all));
+            self.uploads.buffer(
+                &mut encoder,
+                &self.debug_line_buffer,
+                0,
+                bytemuck::cast_slice(&all),
+            );
         }
         let outline_edges = frame.outline.len().min(MAX_OUTLINE_EDGES as usize);
         if outline_edges > 0 {
             let lines = outline_vertices(&frame.outline[..outline_edges], camera);
-            self.queue
-                .write_buffer(&self.outline, 0, bytemuck::cast_slice(&lines));
+            self.uploads
+                .buffer(&mut encoder, &self.outline, 0, bytemuck::cast_slice(&lines));
         }
-        let [
-            entity_quads,
-            crumbling_quads,
-            translucent_crumbling_quads,
-            cloud_quads,
-        ] = self
-            .entity_batch
-            .update(frame.entities, frame.additive, frame.hand);
-        let world_quads =
-            entity_quads + crumbling_quads + translucent_crumbling_quads + cloud_quads;
+        let [entity_quads, crumbling_quads, translucent_crumbling_quads] =
+            self.entity_batch.update(
+                frame.entities,
+                frame.additive,
+                frame.hand,
+                frame.see_through,
+            );
+        let world_quads = entity_quads + crumbling_quads + translucent_crumbling_quads;
+        let cloud_quads = if let Some(input) = &frame.clouds {
+            let (rebuilt, uniform) =
+                crate::spans::time("clouds", || self.cloud_mesh.prepare(input));
+            let vertices = self.cloud_mesh.vertices.len() as u64;
+            if rebuilt && vertices > 0 {
+                if vertices > self.cloud_capacity {
+                    self.cloud_capacity = vertices.next_power_of_two();
+                    self.cloud_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("Cloud vertices"),
+                        size: self.cloud_capacity * std::mem::size_of::<Vertex>() as u64,
+                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    });
+                }
+                self.uploads.buffer(
+                    &mut encoder,
+                    &self.cloud_buffer,
+                    0,
+                    bytemuck::cast_slice(&self.cloud_mesh.vertices),
+                );
+            }
+            self.uploads.buffer(
+                &mut encoder,
+                &self.cloud_uniform,
+                0,
+                bytemuck::bytes_of(&uniform),
+            );
+            (vertices / 4) as u32
+        } else {
+            0
+        };
         let all_entities = &self.entity_batch.combined;
         let hand_quads = (frame.hand.len() / 4) as u32;
         let additive_quads = (frame.additive.len() / 4) as u32;
+        let see_through_quads = (frame.see_through.len() / 4) as u32;
         let entity_vertices = all_entities.len() as u64;
         if entity_vertices > self.entity_capacity {
             self.entity_capacity = entity_vertices.next_power_of_two();
@@ -2180,24 +2382,32 @@ impl Renderer {
             });
         }
         if entity_vertices > 0 {
-            self.queue
-                .write_buffer(&self.entity_buffer, 0, bytemuck::cast_slice(all_entities));
+            self.uploads.buffer(
+                &mut encoder,
+                &self.entity_buffer,
+                0,
+                bytemuck::cast_slice(all_entities),
+            );
         }
         let celestial_vertices = frame.celestial.len().min(2048 * 4);
         if celestial_vertices > 0 {
-            self.queue.write_buffer(
+            self.uploads.buffer(
+                &mut encoder,
                 &self.celestial_buffer,
                 0,
                 bytemuck::cast_slice(&frame.celestial[..celestial_vertices]),
             );
         }
-        if world_quads + additive_quads + hand_quads > self.index_quads {
-            self.index_quads = (world_quads + additive_quads + hand_quads).next_power_of_two();
+        let max_quads =
+            (world_quads + additive_quads + hand_quads + see_through_quads).max(cloud_quads);
+        if max_quads > self.index_quads {
+            self.index_quads = max_quads.next_power_of_two();
             self.indices = Self::quad_indices(&self.device, self.index_quads);
         }
         if let Some(b) = &frame.border {
             if b.rebuilt {
-                self.queue.write_buffer(
+                self.uploads.buffer(
+                    &mut encoder,
                     &self.border_vertices,
                     0,
                     bytemuck::cast_slice(&b.vertices),
@@ -2213,18 +2423,17 @@ impl Renderer {
                     t.texture_offset,
                 ],
             };
-            self.queue
-                .write_buffer(&self.border_uniform, 0, bytemuck::bytes_of(&uniform));
+            self.uploads.buffer(
+                &mut encoder,
+                &self.border_uniform,
+                0,
+                bytemuck::bytes_of(&uniform),
+            );
         }
         let view_target = target_texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.config.format.remove_srgb_suffix()),
             ..Default::default()
         });
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Horizon frame"),
-            });
         if let Some(timer) = &mut self.gpu_timer {
             timer.begin(&mut encoder);
         }
@@ -2372,10 +2581,18 @@ impl Renderer {
             if cloud_quads > 0 {
                 pass.set_pipeline(&self.cloud_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
+                pass.set_bind_group(1, &self.cloud_group, &[]);
+                pass.set_vertex_buffer(0, self.cloud_buffer.slice(..));
+                pass.draw_indexed(0..cloud_quads * 6, 0, 0..1);
+            }
+            // LevelRenderer.executeSeeThrough, after the rest of the world.
+            if see_through_quads > 0 {
+                pass.set_pipeline(&self.see_through_pipeline);
+                pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
                 pass.draw_indexed(
-                    0..cloud_quads * 6,
-                    ((entity_quads + crumbling_quads + translucent_crumbling_quads) * 4) as i32,
+                    0..see_through_quads * 6,
+                    ((world_quads + additive_quads + hand_quads) * 4) as i32,
                     0..1,
                 );
             }
@@ -2383,16 +2600,28 @@ impl Renderer {
         if let (true, Some((color, depth)), Some(size), Some(stages)) =
             (pack, &scaled, self.world_post.size(), self.pack.as_mut())
         {
-            let output = stages.run(
-                &self.device,
-                &self.queue,
-                &mut encoder,
-                color,
-                depth,
-                size,
-                &self.world_post,
-                pack_uniform,
-            );
+            let output = match stages {
+                Pack::Horizon(stages) => stages.run(
+                    &self.device,
+                    &self.queue,
+                    &mut encoder,
+                    color,
+                    depth,
+                    size,
+                    &self.world_post,
+                    pack_uniform,
+                ),
+                Pack::Java(stages) => stages.run(
+                    &self.device,
+                    &self.queue,
+                    &mut encoder,
+                    color,
+                    depth,
+                    size,
+                    &self.world_post,
+                    pack_uniform,
+                ),
+            };
             self.world_post
                 .finish_with(&mut encoder, &view_target, output);
         } else if scaled.is_some() {
@@ -2444,8 +2673,12 @@ impl Renderer {
                     mapped_at_creation: false,
                 });
             }
-            self.queue
-                .write_buffer(&self.screen_buffer, 0, bytemuck::cast_slice(&vertices));
+            self.uploads.buffer(
+                &mut encoder,
+                &self.screen_buffer,
+                0,
+                bytemuck::cast_slice(&vertices),
+            );
             let attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: &view_target,
                 resolve_target: None,
@@ -2471,6 +2704,37 @@ impl Renderer {
                 pass.set_pipeline(pipeline);
                 pass.draw_indexed(0..6, (i * 4) as i32, 0..1);
             }
+        }
+        // GameRenderer.render3dHud: the debug crosshair after the hand and
+        // the screen effects.
+        if crosshair > 0 {
+            let attachments = [Some(wgpu::RenderPassColorAttachment {
+                view: &view_target,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })];
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("3d crosshair"),
+                color_attachments: &attachments,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(0.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            pass.set_pipeline(&self.debug_lines_on_top);
+            pass.set_bind_group(0, &self.crosshair_group, &[]);
+            pass.set_vertex_buffer(0, self.debug_line_buffer.slice(..));
+            let first = debug_depth + debug_top;
+            pass.draw(0..4, first..first + crosshair);
         }
         if let Some(radius) = frame.menu_blur
             && self.config.usage.contains(wgpu::TextureUsages::COPY_SRC)
@@ -2509,6 +2773,7 @@ impl Renderer {
         self.hud.draw(
             &self.device,
             &self.queue,
+            &mut self.uploads,
             &mut encoder,
             &view_target,
             frame.hud,
@@ -2521,6 +2786,7 @@ impl Renderer {
             .screenshot
             .take()
             .map(|path| (path, self.copy_frame(&mut encoder, &target_texture)));
+        self.uploads.finish(&encoder);
         let submission = self.queue.submit([encoder.finish()]);
         if let Some(timer) = &mut self.gpu_timer {
             timer.submitted();
@@ -2534,7 +2800,12 @@ impl Renderer {
         }
         let present = Instant::now();
         if let Some(surface_frame) = surface_frame {
-            self.window.pre_present_notify();
+            // On Wayland this ties RedrawRequested to the compositor's frame
+            // callbacks, one per refresh. Only VSync (Fifo) waits for the
+            // display: with it off, vanilla's window draws uncapped.
+            if self.config.present_mode == wgpu::PresentMode::Fifo {
+                self.window.pre_present_notify();
+            }
             self.queue.present(surface_frame);
             if reconfigure && let Some(surface) = &self.surface {
                 surface.configure(&self.device, &self.config);
@@ -2713,6 +2984,13 @@ fn shader_pack_uniform(
     }
 }
 
+/// The selected shader pack on the GPU: a Horizon pack's WGSL stages, or a
+/// Java pack's translated programs.
+enum Pack {
+    Horizon(pack_stages::PackStages),
+    Java(java_stages::JavaStages),
+}
+
 fn world_projection(fov_degrees: f32, aspect: f32, far: f32) -> Mat4 {
     Mat4::perspective_rh(fov_degrees.to_radians(), aspect, far, 0.05)
 }
@@ -2749,9 +3027,9 @@ mod tests {
             .flat_map(|(layer, id)| quad(layer, id))
             .collect();
         let mut batch = super::EntityBatch::default();
-        let counts = batch.update(&entities, &quad(3, 5), &quad(0, 6));
+        let counts = batch.update(&entities, &quad(3, 5), &quad(0, 6), &quad(0, 8));
         let vertices = &batch.combined;
-        assert_eq!(counts, [2, 1, 1, 2]);
+        assert_eq!(counts, [4, 1, 1]);
         assert_eq!(
             vertices
                 .as_chunks::<4>()
@@ -2759,7 +3037,7 @@ mod tests {
                 .iter()
                 .map(|q| q[0].light)
                 .collect::<Vec<_>>(),
-            [0, 3, 2, 7, 1, 4, 5, 6]
+            [0, 1, 3, 4, 2, 7, 5, 6, 8]
         );
     }
     #[test]
@@ -2822,6 +3100,16 @@ mod tests {
         assert_eq!(super::outline_width(3840), 5.0);
     }
     #[test]
+    fn indirect_draws_are_validated_only_in_debug_builds() {
+        if std::env::var_os("WGPU_VALIDATION_INDIRECT_CALL").is_none() {
+            let flags = super::instance_descriptor().flags;
+            assert_eq!(
+                flags.contains(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL),
+                cfg!(debug_assertions)
+            );
+        }
+    }
+    #[test]
     fn far_faces_a_hair_apart_keep_their_depth_order() {
         let m = super::world_projection(70.0, 16.0 / 9.0, 768.0);
         let depth = |distance: f32| {
@@ -2868,7 +3156,10 @@ pub(crate) fn sprite_mipmap_limit(requested: u32, size: u32, minimum: u32, avail
     let upscale = (size / minimum.max(1)).max(1).ilog2();
     requested.saturating_add(upscale).min(available - 1)
 }
-const ANIMATION_MIP_BUDGET: usize = 8 << 20;
+/// Room for every frame of the vanilla animations (594 frames, 13 MB of mip
+/// chains in 64-pixel layers), so no frame's chain is rebuilt on the render
+/// thread when its animation comes back to it; larger packs stay bounded.
+const ANIMATION_MIP_BUDGET: usize = 32 << 20;
 const ANIMATION_MIP_ENTRIES: usize = 4096;
 
 /// One immutable resource snapshot and its lazily generated frame mips. A new
@@ -3141,6 +3432,29 @@ mod sprite_upload_tests {
             assert_eq!(state.cache.len(), 1);
             assert!(state.cache.contains_key(&(0, 0)));
         }
+    }
+
+    #[test]
+    fn mip_chain_allocates_exactly_its_size() {
+        for size in [16, 64] {
+            let animation = crate::sprites::test_animation(size, 0);
+            let (chain, _) = mip_chain(animation.pixels(0), size, &[], 0, 1);
+            assert_eq!(chain.capacity(), chain.len());
+        }
+    }
+
+    #[test]
+    fn every_vanilla_animation_frame_stays_cached() {
+        // Vanilla's 594 animation frames in 64-pixel layers: 297 two-frame clips.
+        let animations: Vec<_> = (0..297)
+            .map(|layer| crate::sprites::test_animation(64, layer))
+            .collect();
+        let mut state = AnimatedSprites::new(&animations, 64, &[]);
+        for tick in 0..4 {
+            animate_sprites(&mut state, tick, 7, |_, _, _, _| {});
+        }
+        assert_eq!(state.cache.len(), 594);
+        assert!(state.cache_bytes <= ANIMATION_MIP_BUDGET);
     }
 
     #[test]

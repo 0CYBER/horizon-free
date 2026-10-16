@@ -26,6 +26,11 @@ const MAX_MOB_TRACKING_DISTANCE: i64 = 47;
 /// `DELAY_BEFORE_EJECT_AFTER_KILLING_LAST_MOB` and `TIME_BETWEEN_EACH_EJECTION`.
 const DELAY_BEFORE_EJECT: f32 = 40.0;
 const TIME_BETWEEN_EJECTIONS: f32 = 30.0;
+/// `TrialSpawnerConfig.ticksBetweenItemSpawners`.
+const TICKS_BETWEEN_ITEM_SPAWNERS: i64 = 160;
+/// `transformBadOmenIntoTrialOmen`: Trial Omen lasts this long per level of
+/// Bad Omen.
+pub const TRIAL_OMEN_TICKS_PER_LEVEL: i32 = 18000;
 
 /// `TrialSpawnerConfig`.
 #[derive(Clone, Debug, PartialEq)]
@@ -261,6 +266,20 @@ pub struct TrialPlayer {
     pub eye: [f64; 3],
     pub creative: bool,
     pub spectator: bool,
+    /// `position()` and the box's height.
+    pub position: [f64; 3],
+    pub height: f32,
+    pub alive: bool,
+    pub omen: Option<Omen>,
+}
+
+/// The effect that turns a trial spawner ominous when its player is seen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Omen {
+    /// `MobEffects.TRIAL_OMEN`.
+    Trial,
+    /// `MobEffects.BAD_OMEN`, which becomes Trial Omen.
+    Bad,
 }
 
 /// What a trial spawner did that the level shows or sends.
@@ -277,6 +296,21 @@ pub enum TrialEvent {
     /// `setBlockAndUpdate` of the `ominous` property alone, even when it
     /// does not change (`removeOminous`).
     OminousSet(bool),
+    /// `transformBadOmenIntoTrialOmen`: the player's Bad Omen becomes Trial
+    /// Omen for [`TRIAL_OMEN_TICKS_PER_LEVEL`] per level.
+    TrialOmen(Uuid),
+    /// `resetAfterBecomingOminous`: the mob is discarded (after its level
+    /// event 3012).
+    Discard(Uuid),
+    /// `playSound(null, block, sound, BLOCKS, 1, pitch)`.
+    SoundAt(&'static str, [i32; 3], f32),
+    /// `OminousItemSpawner.create(level, item)` added at `position`, spawning
+    /// its item after `delay` ticks.
+    ItemSpawner {
+        item: crate::items::ItemStack,
+        position: [f64; 3],
+        delay: i32,
+    },
 }
 
 /// What a trial spawner reads from the level besides the spawn rules.
@@ -290,6 +324,15 @@ pub trait TrialSpawnerLevel: SpawnerLevel {
     fn visual_hit(&self, from: [f64; 3], to: [f64; 3]) -> Option<[i32; 3]>;
     /// The block position of a living entity of this dimension, if any.
     fn entity_block(&self, uuid: Uuid) -> Option<[i32; 3]>;
+    /// A living entity's position and box height, if it is in this dimension.
+    fn entity_box(&self, uuid: Uuid) -> Option<([f64; 3], f32)>;
+    /// The block's collision shape is empty.
+    fn no_block_collision(&self, block: [i32; 3]) -> bool;
+    /// `LootTable.getRandomItems` of `table` seeded with `seed` (an empty
+    /// context, stacks split).
+    fn loot_items(&self, table: &str, seed: i64) -> Vec<crate::items::ItemStack>;
+    /// `getSeed`.
+    fn seed(&self) -> i64;
 }
 
 /// `TrialSpawner` with its `TrialSpawnerStateData`.
@@ -313,6 +356,9 @@ pub struct TrialSpawner {
     pub has_display: bool,
     pub spin: f64,
     pub o_spin: f64,
+    /// `getDispensingItems`, kept once rolled (not saved): the ominous items
+    /// and their weights (the rolled counts).
+    pub dispensing: Option<Vec<crate::items::ItemStack>>,
 }
 impl Default for TrialSpawner {
     fn default() -> Self {
@@ -332,6 +378,7 @@ impl Default for TrialSpawner {
             has_display: false,
             spin: 0.0,
             o_spin: 0.0,
+            dispensing: None,
         }
     }
 }
@@ -530,7 +577,8 @@ impl TrialSpawner {
             .map(|p| p.uuid)
             .collect()
     }
-    /// `tryDetectPlayers`, every 20 ticks.
+    /// `tryDetectPlayers`, every 20 ticks: a player seen with Trial Omen or
+    /// Bad Omen turns the spawner ominous.
     fn try_detect_players<L: TrialSpawnerLevel>(
         &mut self,
         l: &L,
@@ -542,10 +590,43 @@ impl TrialSpawner {
         if packed.wrapping_add(l.game_time()) % 20 != 0 {
             return;
         }
-        if state == TrialState::Cooldown {
+        let cooldown = state == TrialState::Cooldown;
+        if cooldown && self.is_ominous {
             return;
         }
         let in_sight = self.detect(l, pos, true);
+        let mut became_ominous = false;
+        if !self.is_ominous && !in_sight.is_empty() {
+            // findPlayerWithOminousEffect: the first with Trial Omen, else
+            // the last with Bad Omen.
+            let players = l.players();
+            let mut found = None;
+            for uuid in &in_sight {
+                let Some(p) = players.iter().find(|p| p.uuid == *uuid) else {
+                    continue;
+                };
+                match p.omen {
+                    Some(Omen::Trial) => {
+                        found = Some((*p, Omen::Trial));
+                        break;
+                    }
+                    Some(Omen::Bad) => found = Some((*p, Omen::Bad)),
+                    None => {}
+                }
+            }
+            if let Some((player, omen)) = found {
+                if omen == Omen::Bad {
+                    events.push(TrialEvent::TrialOmen(player.uuid));
+                }
+                let eye = player.eye.map(|v| v.floor() as i32);
+                events.push(TrialEvent::LevelEvent(3020, eye, 0));
+                self.apply_ominous(l, pos, events);
+                became_ominous = true;
+            }
+        }
+        if cooldown && !became_ominous {
+            return;
+        }
         let found = if self.detected_players.is_empty() {
             in_sight
         } else {
@@ -560,13 +641,154 @@ impl TrialSpawner {
         }
         if added {
             self.next_mob_spawns_at = (l.game_time() + 40).max(self.next_mob_spawns_at);
-            let id = if self.is_ominous { 3019 } else { 3013 };
-            events.push(TrialEvent::LevelEvent(
-                id,
-                pos,
-                self.detected_players.len() as i32,
-            ));
+            if !became_ominous {
+                let id = if self.is_ominous { 3019 } else { 3013 };
+                events.push(TrialEvent::LevelEvent(
+                    id,
+                    pos,
+                    self.detected_players.len() as i32,
+                ));
+            }
         }
+    }
+    /// `applyOminous`, then `resetAfterBecomingOminous`: the spawner's mobs
+    /// vanish and the ominous config starts over.
+    fn apply_ominous<L: TrialSpawnerLevel>(
+        &mut self,
+        l: &L,
+        pos: [i32; 3],
+        events: &mut Vec<TrialEvent>,
+    ) {
+        events.push(TrialEvent::OminousSet(true));
+        events.push(TrialEvent::LevelEvent(3020, pos, 1));
+        self.is_ominous = true;
+        for uuid in hash_order(&self.current_mobs) {
+            if let Some(block) = l.entity_block(uuid) {
+                // FlameParticle.NORMAL.
+                events.push(TrialEvent::LevelEvent(3012, block, 0));
+                events.push(TrialEvent::Discard(uuid));
+            }
+        }
+        // WeightedList.isEmpty: a total weight of 0.
+        if self
+            .ominous
+            .config
+            .spawn_potentials
+            .iter()
+            .any(|(_, w)| *w > 0)
+        {
+            self.next_spawn_data = None;
+        }
+        self.total_mobs_spawned = 0;
+        self.current_mobs.clear();
+        let now = l.game_time();
+        self.next_mob_spawns_at = now + i64::from(self.ominous.config.ticks_between_spawn);
+        events.push(TrialEvent::BlockUpdated);
+        self.cooldown_ends_at = now + TICKS_BETWEEN_ITEM_SPAWNERS;
+    }
+    /// `TrialSpawnerState.spawnOminousOminousItemSpawner`: every tick an item
+    /// is drawn; once the item spawner cooldown is over, an ominous item
+    /// spawner appears above a player or one of the spawner's mobs.
+    fn spawn_ominous_item_spawner<L: TrialSpawnerLevel, R: RandomSource>(
+        &mut self,
+        l: &L,
+        random: &mut R,
+        pos: [i32; 3],
+        events: &mut Vec<TrialEvent>,
+    ) {
+        // getDispensingItems: rolled once with a seed from the level seed and
+        // the spawner's 30x20x30 cell; an empty roll is not kept.
+        if self.dispensing.is_none() {
+            let cell = BlockPos::new(
+                (pos[0] as f32 / 30.0).floor() as i32,
+                (pos[1] as f32 / 20.0).floor() as i32,
+                (pos[2] as f32 / 30.0).floor() as i32,
+            );
+            let table = &self.active_config().items_to_drop_when_ominous;
+            let drops = l.loot_items(table, l.seed().wrapping_add(cell.pack()));
+            if !drops.is_empty() {
+                self.dispensing = Some(drops);
+            }
+        }
+        let items = self.dispensing.as_deref().unwrap_or_default();
+        // WeightedList.getRandom: each stack weighs its count; one item spawns.
+        let Some(index) = spawner::weighted_index(items.iter().map(|s| s.count as i32), random)
+        else {
+            return;
+        };
+        let item = crate::items::ItemStack {
+            count: 1,
+            ..items[index].clone()
+        };
+        if l.game_time() < self.cooldown_ends_at {
+            return;
+        }
+        let Some(position) = self.item_spawner_position(l, random, pos) else {
+            return;
+        };
+        let delay = random.next_int_between_inclusive(60, 120).unwrap_or(60);
+        events.push(TrialEvent::ItemSpawner {
+            item,
+            position,
+            delay,
+        });
+        let pitch = (random.next_float() - random.next_float()) * 0.2 + 1.0;
+        events.push(TrialEvent::SoundAt(
+            "block.trial_spawner.spawn_item_begin",
+            position.map(|v| v.floor() as i32),
+            pitch,
+        ));
+        self.cooldown_ends_at = l.game_time() + TICKS_BETWEEN_ITEM_SPAWNERS;
+    }
+    /// `calculatePositionToSpawnSpawner`: above a player in range or one of
+    /// the spawner's mobs (a coin decides which), under the first block in
+    /// the way, unless that spot is solid.
+    fn item_spawner_position<L: TrialSpawnerLevel, R: RandomSource>(
+        &self,
+        l: &L,
+        random: &mut R,
+        pos: [i32; 3],
+    ) -> Option<[f64; 3]> {
+        let c = center(pos);
+        let range = f64::from(self.required_player_range * self.required_player_range);
+        let near = |p: [f64; 3]| {
+            (p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) + (p[2] - c[2]).powi(2) <= range
+        };
+        let all = l.players();
+        let players: Vec<([f64; 3], f32)> = hash_order(&self.detected_players)
+            .into_iter()
+            .filter_map(|uuid| all.iter().find(|p| p.uuid == uuid))
+            .filter(|p| !p.creative && !p.spectator && p.alive && near(p.position))
+            .map(|p| (p.position, p.height))
+            .collect();
+        if players.is_empty() {
+            return None;
+        }
+        let mobs: Vec<([f64; 3], f32)> = hash_order(&self.current_mobs)
+            .into_iter()
+            .filter_map(|uuid| l.entity_box(uuid))
+            .filter(|(p, _)| near(*p))
+            .collect();
+        let eligible = if random.next_boolean() { mobs } else { players };
+        let (at, height) = match eligible.len() {
+            0 => return None,
+            1 => eligible[0],
+            n => eligible[random.next_int_bound(n as i32).unwrap_or(0) as usize],
+        };
+        // calculatePositionAbove: a VISUAL clip up to 2 to 5 blocks over the
+        // entity's head; a miss ends in the block holding the end point.
+        let up = height + 2.0 + random.next_int_bound(4).unwrap_or(0) as f32;
+        let to = [at[0], at[1] + f64::from(up), at[2]];
+        let hit = l
+            .visual_hit(at, to)
+            .unwrap_or_else(|| to.map(|v| v.floor() as i32));
+        let down = [
+            f64::from(hit[0]) + 0.5,
+            f64::from(hit[1]) + 0.5 - 1.0,
+            f64::from(hit[2]) + 0.5,
+        ];
+        l.no_block_collision(down.map(|v| v.floor() as i32))
+            .then_some(down)
     }
     /// `TrialSpawner.tickServer`: the next state of the block.
     #[allow(clippy::too_many_arguments)]
@@ -649,6 +871,9 @@ impl TrialSpawner {
                 let config = self.active_config().clone();
                 let additional = (self.detected_players.len() as i32 - 1).max(0);
                 self.try_detect_players(l, pos, state, events);
+                if self.is_ominous {
+                    self.spawn_ominous_item_spawner(l, random, pos, events);
+                }
                 if self.total_mobs_spawned >= config.target_total_mobs(additional) {
                     if self.current_mobs.is_empty() {
                         self.cooldown_ends_at = now + i64::from(self.target_cooldown_length);
@@ -704,7 +929,10 @@ impl TrialSpawner {
                 {
                     events.push(TrialEvent::LevelEvent(3014, pos, 0));
                 }
-                self.detected_players.remove(0);
+                // detectedPlayers.remove(iterator().next()).
+                if let Some(first) = hash_order(&self.detected_players).first() {
+                    self.detected_players.retain(|u| u != first);
+                }
                 state
             }
             S::Cooldown => {
@@ -804,6 +1032,23 @@ impl TrialSpawner {
 }
 
 /// `Vec3.atCenterOf`.
+/// The iteration order of a `HashSet<UUID>` holding `ids` (inserted in
+/// order): `HashMap` buckets by the spread `UUID.hashCode`, in a table of 16
+/// slots grown to keep it at most three quarters full; within a bucket,
+/// insertion order.
+fn hash_order(ids: &[Uuid]) -> Vec<Uuid> {
+    let mut table = 16usize;
+    while ids.len() > table * 3 / 4 {
+        table *= 2;
+    }
+    let bucket = |u: &Uuid| {
+        let h = (u[0] ^ u[1] ^ u[2] ^ u[3]) as u32;
+        ((h ^ (h >> 16)) as usize) & (table - 1)
+    };
+    let mut out = ids.to_vec();
+    out.sort_by_key(bucket);
+    out
+}
 fn center(pos: [i32; 3]) -> [f64; 3] {
     pos.map(|v| f64::from(v) + 0.5)
 }

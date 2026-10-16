@@ -53,6 +53,19 @@ pub(super) struct LanHost {
     pub broken: Vec<[f64; 3]>,
     /// Hurt and death state of the mobs guests see.
     mob_state: HashMap<u32, (i32, bool)>,
+    /// The guest each mob sees as its player, when not the host (game/lan_mobs.rs).
+    pub mob_players: HashMap<u32, u32>,
+    /// An integrated server's owner (game/integrated.rs).
+    pub owner: Option<Owner>,
+}
+
+/// The player who owns an integrated server's world: a guest whose state is
+/// the world's own player (`players/data/<singleplayer_uuid>.dat`), as in
+/// single player.
+pub(super) struct Owner {
+    pub uuid: u128,
+    /// The world's player as loaded, until the owner joins.
+    pub saved: Option<Box<horizon_client::save::Level>>,
 }
 
 /// A stable UUID for an entity that has none.
@@ -335,6 +348,14 @@ impl Game<'_> {
                         "placed": g.placed,
                         "loaded": g.loaded,
                         "game_mode": g.game_mode,
+                        "sneaking": g.sneaking,
+                        "health": g.health,
+                        // FoodData: food level, saturation and exhaustion.
+                        "food": [
+                            f64::from(g.food),
+                            f64::from(g.saturation),
+                            g.motion.as_ref().map_or(0.0, |m| f64::from(m.health.food.exhaustion)),
+                        ],
                         "chunks": g.sent_chunks.len(),
                         "tracked": g.tracker.len(),
                         // The armour the host draws on this guest, head to feet.
@@ -430,7 +451,7 @@ impl Game<'_> {
         encoder.tables = Some(
             self.save
                 .tables
-                .get_or_init(|| Arc::new(horizon_client::save::SaveTables::new(&self.res.assets)))
+                .get_or_init(|| Arc::new(horizon_client::save::SaveTables::new(&self.pack.assets)))
                 .clone(),
         );
         let lan = Lan::start_with(sync.clone(), net)?;
@@ -454,6 +475,8 @@ impl Game<'_> {
             play: HashMap::new(),
             broken: Vec::new(),
             mob_state: HashMap::new(),
+            mob_players: HashMap::new(),
+            owner: None,
         });
         self.audio.capture = Some(Vec::new());
         Ok(())
@@ -466,7 +489,7 @@ impl Game<'_> {
             return;
         };
         for g in &host.hub.guests {
-            playerdata::save(g, &self.world_root);
+            self.save_guest(&host, g);
         }
         host.hub.disconnect_all();
         // Give the writer threads a moment to flush the disconnect packets.
@@ -480,6 +503,30 @@ impl Game<'_> {
                 "menu.multiplayerOptions.publish.stopped",
                 &[],
             ));
+        }
+    }
+
+    /// Save a guest when they leave or the world closes: an integrated
+    /// server's owner with the world (`save_game`), anyone else in their file.
+    pub(super) fn save_guest(&mut self, host: &LanHost, guest: &horizon_client::lan::guest::Guest) {
+        if host.owner.as_ref().is_some_and(|o| o.uuid == guest.uuid) {
+            if guest.placed {
+                playerdata::store(guest, &mut self.level);
+            }
+        } else {
+            playerdata::save(guest, &self.world_root);
+        }
+    }
+    /// The integrated server's owner into the world's player, for `Level::write`.
+    pub(super) fn store_owner(&mut self) {
+        let Some(host) = &self.lan else {
+            return;
+        };
+        let Some(uuid) = host.owner.as_ref().map(|o| o.uuid) else {
+            return;
+        };
+        if let Some(g) = host.hub.guests.iter().find(|g| g.uuid == uuid && g.placed) {
+            playerdata::store(g, &mut self.level);
         }
     }
 
@@ -601,7 +648,7 @@ impl Game<'_> {
                     next_entity: &mut self.next_entity,
                     spawn,
                     difficulty: i32::from(self.ui.difficulty),
-                    difficulty_locked: false,
+                    difficulty_locked: self.level.difficulty_locked,
                     clock_rate: if self.ui.rules.bool("advance_time") {
                         self.ui.clock.rate
                     } else {
@@ -653,7 +700,7 @@ impl Game<'_> {
                             self.container_openers_changed(pos, false);
                         }
                         self.lan_crafting_left(&mut host, &mut guest);
-                        playerdata::save(&guest, &self.world_root);
+                        self.save_guest(&host, &guest);
                         host.models.remove(&guest.conn);
                         if self.options.dedicated.is_some() && guest.placed {
                             super::dedicated::log(
@@ -696,10 +743,20 @@ impl Game<'_> {
         let default_mode = host.hub.config.default_game_mode;
         let force = host.hub.config.force_game_mode;
         let root = self.world_root.clone();
+        let owner = host.owner.as_mut();
         let Some(g) = host.hub.guest_mut(conn) else {
             return;
         };
-        let known = playerdata::load(g, &root);
+        let saved = owner
+            .filter(|o| o.uuid == g.uuid)
+            .and_then(|o| o.saved.take());
+        let known = match saved {
+            Some(level) => {
+                playerdata::apply(g, &level);
+                level.position.is_some()
+            }
+            None => playerdata::load(g, &root),
+        };
         if !known || force {
             g.game_mode = default_mode;
         }
@@ -716,7 +773,7 @@ impl Game<'_> {
             next_entity: &mut self.next_entity,
             spawn,
             difficulty: i32::from(self.ui.difficulty),
-            difficulty_locked: false,
+            difficulty_locked: self.level.difficulty_locked,
             clock_rate: self.ui.clock.rate,
             tick_rate: self.clock.rate(),
             tick_frozen: self.clock.frozen(),
@@ -875,7 +932,7 @@ impl Game<'_> {
         let Some(host) = &self.lan else {
             return;
         };
-        let atlas = &self.res.atlas;
+        let atlas = &self.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         for m in host.models.values() {
             let entity_start = out.len();

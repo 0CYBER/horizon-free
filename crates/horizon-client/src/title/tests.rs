@@ -374,6 +374,38 @@ fn stopped_backup_worker_returns_to_the_list_with_an_error_toast() {
 }
 
 #[test]
+fn backup_toast_slides_in_and_out_with_its_sounds() {
+    let mut f = Fixture::new();
+    f.world("World", "World");
+    f.select();
+    f.click("Edit");
+    f.click("Make Backup");
+    f.title.poll_backup();
+    f.finish_backup();
+    assert_eq!(f.title.update_toast(1.0), Some("minecraft:ui.toast.in"));
+    assert_eq!(f.title.update_toast(1.0), None);
+    let age = |f: &mut Fixture, ms: u64| {
+        let (slide, _) = f.title.toast.as_mut().unwrap();
+        let origin = slide.origin.as_mut().unwrap();
+        *origin -= std::time::Duration::from_millis(ms);
+    };
+    // Half way in: (300 / 600)² of its width shows.
+    age(&mut f, 300);
+    assert_eq!(f.title.update_toast(1.0), None);
+    let portion = f.title.toast.as_ref().unwrap().0.portion;
+    assert!((portion - 0.25).abs() < 0.02, "{portion}");
+    // Shown in full for the display time, then out.
+    age(&mut f, 300);
+    f.title.update_toast(1.0);
+    age(&mut f, 5100);
+    assert_eq!(f.title.update_toast(1.0), Some("minecraft:ui.toast.out"));
+    assert!(f.title.toast.is_some());
+    age(&mut f, 700);
+    assert_eq!(f.title.update_toast(1.0), None);
+    assert!(f.title.toast.is_none());
+}
+
+#[test]
 fn failed_operations_show_error_and_leave_world_intact() {
     let mut f = Fixture::new();
     f.world("World", "World");
@@ -484,6 +516,30 @@ fn classic_world_selection_is_silent_until_the_entry_launches() {
 }
 
 #[test]
+fn clicking_a_world_icon_joins_it_at_once() {
+    let mut f = Fixture::new();
+    f.world("World", "World");
+    f.title.enter_singleplayer();
+    // WorldListEntry.mouseOverIcon: the row's 32x32 icon, left of its text.
+    let (icon_x, icon_y) = (240.0 - 135.0 + 2.0, LIST_TOP + 4.0);
+    assert_eq!(
+        f.title.click(icon_x + 31.0, icon_y + 16.0, (480.0, 262.0)),
+        (
+            Action::Play {
+                folder: "World".into()
+            },
+            true
+        )
+    );
+    // Right of the icon only selects the row.
+    f.title.enter_singleplayer();
+    assert_eq!(
+        f.title.click(icon_x + 33.0, icon_y + 16.0, (480.0, 262.0)),
+        (Action::None, false)
+    );
+}
+
+#[test]
 fn world_management_buttons_sound_when_enabled() {
     let mut f = Fixture::new();
     f.world("World", "World");
@@ -567,6 +623,34 @@ fn delete_removes_links_without_following_them() {
     world_management::delete(&f.title.saves, "World").unwrap();
     assert!(!f.title.saves.join("World").exists());
     assert!(outside.join("keep.txt").is_file());
+}
+
+#[test]
+fn world_search_hint_is_gray_and_only_shown_empty_and_unfocused() {
+    let mut f = Fixture::new();
+    f.world("World", "World");
+    f.select();
+    let atlas = crate::hud::HudAtlas::build(Path::new("/nonexistent/horizon-test-assets")).unwrap();
+    let draw = |title: &Title| {
+        let mut batch = HudBatch::new([480, 262]);
+        title.draw(&atlas, &mut batch, (0.0, 0.0), true);
+        batch
+    };
+    let has_hint = |batch: &HudBatch| {
+        batch
+            .vertices
+            .iter()
+            .any(|v| v.color == rgba(170, 170, 170, 255) && (21.0..41.0).contains(&v.pos[1]))
+    };
+    assert!(has_hint(&draw(&f.title)));
+
+    f.title.click(240.0, 31.0, (480.0, 262.0));
+    assert!(f.title.search_focused);
+    assert!(!has_hint(&draw(&f.title)));
+    f.title.type_text("World");
+    f.title.click(240.0, 60.0, (480.0, 262.0));
+    assert!(!f.title.search_focused);
+    assert!(!has_hint(&draw(&f.title)));
 }
 
 #[test]
@@ -679,4 +763,29 @@ fn new_world_generation_settings_round_trip() {
         .as_deref(),
         Some("minecraft:flat")
     );
+}
+
+#[test]
+fn world_fields_edit_at_their_cursor() {
+    use winit::keyboard::KeyCode;
+    let mut f = Fixture::new();
+    f.world("World", "World");
+    f.title.enter_singleplayer();
+    // The search box takes the focus.
+    f.title.click(240.0, 30.0, (480.0, 262.0));
+    f.title.type_text("hello world");
+    for _ in 0..5 {
+        assert!(f.title.field_key(KeyCode::ArrowLeft, false, false));
+    }
+    f.title.type_text("X");
+    assert_eq!(f.title.search, "hello Xworld");
+    // Shift+Home selects back to the start; typing replaces the selection.
+    f.title.field_key(KeyCode::Home, false, true);
+    f.title.type_text("Y");
+    assert_eq!(f.title.search, "Yworld");
+    // Ctrl+Left jumps a word; Backspace deletes before the cursor.
+    f.title.field_key(KeyCode::ArrowLeft, true, false);
+    f.title.field_key(KeyCode::ArrowRight, false, false);
+    f.title.field_key(KeyCode::Backspace, false, false);
+    assert_eq!(f.title.search, "world");
 }

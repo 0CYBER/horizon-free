@@ -26,6 +26,9 @@ pub(in crate::game) struct Source {
     /// `execute in` another dimension than the one Horizon has loaded: none
     /// of its chunks are loaded.
     pub elsewhere: bool,
+    /// The command block whose output this source is
+    /// (`BaseCommandBlock.CloseableCommandBlockSource`).
+    pub block: Option<(i32, i32, i32)>,
 }
 
 /// Where `execute store` writes.
@@ -74,6 +77,7 @@ impl Game<'_> {
             silent: false,
             store: None,
             elsewhere: false,
+            block: None,
         }
     }
     /// The server as a source (function ticks and schedules): the world spawn.
@@ -86,6 +90,7 @@ impl Game<'_> {
             silent: true,
             store: None,
             elsewhere: false,
+            block: None,
         }
     }
     pub(super) fn target_rotation(&self, t: Target) -> [f32; 2] {
@@ -647,7 +652,7 @@ impl Game<'_> {
             let facts = self.res.facts.get(state);
             let blocks = facts.legacy_solid || facts.fluid != horizon_client::blocks::Fluid::None;
             let leaves = self
-                .res
+                .pack
                 .assets
                 .registry
                 .state(state)

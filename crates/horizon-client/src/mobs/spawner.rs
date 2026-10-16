@@ -640,18 +640,23 @@ impl Spawner {
     pub fn client_loaded(&mut self) {
         self.client_delay = self.spawn_delay;
     }
-    /// `TrialSpawnerRenderer.extractSpawnerData`: the spin in degrees and
-    /// the scale of a display mob of the given size.
+    /// The display mob's spin in degrees and scale ([`display_pose`]).
     pub fn display_pose(&self, alpha: f32, width: f32, height: f32) -> (f32, f32) {
-        let spin = (self.o_spin + f64::from(alpha) * (self.spin - self.o_spin)) as f32 * 10.0;
-        let longest = width.max(height);
-        let scale = if longest > 1.0 {
-            0.53125 / longest
-        } else {
-            0.53125
-        };
-        (spin, scale)
+        display_pose(self.o_spin, self.spin, alpha, width, height)
     }
+}
+
+/// `TrialSpawnerRenderer.extractSpawnerData`: the spin in degrees and the
+/// scale of a display mob of the given size, between the last two spins.
+pub fn display_pose(o_spin: f64, spin: f64, alpha: f32, width: f32, height: f32) -> (f32, f32) {
+    let spin = (o_spin + f64::from(alpha) * (spin - o_spin)) as f32 * 10.0;
+    let longest = width.max(height);
+    let scale = if longest > 1.0 {
+        0.53125 / longest
+    } else {
+        0.53125
+    };
+    (spin, scale)
 }
 
 /// `WeightedList.getRandom`: one draw over the total weight, none when the

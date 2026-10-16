@@ -48,7 +48,16 @@ impl Game<'_> {
             None
         } else {
             state.stamp = Stamp::of(&dir.join(&id));
-            match ShaderPack::load(&dir.join(&id), &shader_pack::load_values(&dir, &id)) {
+            // Java packs are told which GPU they run on.
+            let (vendor, renderer) = self.renderer.as_ref().map_or(("Unknown", ""), |r| {
+                let name = r.info.name.as_str();
+                (
+                    horizon_client::java_pack::vendor_name(r.info.vendor, name),
+                    name,
+                )
+            });
+            let values = shader_pack::load_values(&dir, &id);
+            match ShaderPack::load_any(&dir.join(&id), &values, vendor, renderer) {
                 Ok(pack) => Some(pack),
                 Err(e) => return self.shader_pack_error(&id, &e),
             }

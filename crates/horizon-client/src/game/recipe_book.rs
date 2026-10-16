@@ -467,7 +467,7 @@ impl Game<'_> {
                     horizon_client::item_tooltip::lines(
                         stack,
                         self.res.items.get(&stack.item),
-                        &|k| self.res.names.get(k).map(str::to_owned),
+                        &|k| self.pack.names.get(k).map(str::to_owned),
                     )
                 })
             {
@@ -629,7 +629,7 @@ impl Game<'_> {
                 search.focused = true;
                 search.reset_blink();
                 if !magnifier {
-                    let idx = search.index_at(&self.res.atlas, cursor.0);
+                    let idx = search.index_at(&self.atlas, cursor.0);
                     search.set_cursor(idx, false);
                 }
                 return true;
@@ -871,7 +871,7 @@ impl Game<'_> {
         let (bx, by) = self.book_button_pos(book_type, ox, batch);
         let hover = inside(cursor, bx, by, 20.0, 18.0);
         batch.sprite(
-            &self.res.atlas,
+            &self.atlas,
             &sprite(if hover {
                 "button_highlighted"
             } else {
@@ -919,7 +919,7 @@ impl Game<'_> {
     fn draw_book_panel(&mut self, batch: &mut HudBatch, book_type: BookType) {
         let (xo, yo) = self.book_origin(batch);
         let cursor = self.cursor;
-        let atlas = &self.res.atlas;
+        let atlas = &self.atlas;
         let search = match self.recipe_ui.search.as_mut() {
             Some(edit) => {
                 // The box's place, for clicks and typing.
@@ -1042,7 +1042,7 @@ impl Game<'_> {
         let mut tooltip: Option<Vec<(String, u32)>> = None;
         for d in calls {
             let start = batch.vertices.len();
-            let atlas = &self.res.atlas;
+            let atlas = &self.atlas;
             match &d.call {
                 Call::Blit {
                     x, y, w, h, u, v, ..

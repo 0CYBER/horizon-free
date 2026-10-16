@@ -385,7 +385,7 @@ impl Game<'_> {
         let levels = self.beacon_levels();
         let sel = self.station.as_ref().map_or([None; 2], |s| s.beacon);
         let paid = self.station.as_ref().is_some_and(|s| s.inputs[0].is_some());
-        let atlas = &self.res.atlas;
+        let atlas = &self.atlas;
         batch.fill(
             atlas,
             0.0,
@@ -406,7 +406,7 @@ impl Game<'_> {
             ("block.minecraft.beacon.secondary", "Secondary Power", 169.0),
         ] {
             let text = self.translate(key, fallback);
-            let atlas = &self.res.atlas;
+            let atlas = &self.atlas;
             let w = HudBatch::text_width(atlas, &text);
             batch.text(
                 atlas,
@@ -421,7 +421,7 @@ impl Game<'_> {
             let x = [20.0, 41.0, 63.0, 86.0, 108.0][i];
             self.draw_item(batch, &ItemStack::new(item, 1), bx + x, by + 109.0);
         }
-        let atlas = &self.res.atlas;
+        let atlas = &self.atlas;
         let mut tooltip = None;
         let button =
             |batch: &mut HudBatch, x: f32, y: f32, active: bool, selected: bool, icon: &str| {
@@ -503,7 +503,7 @@ impl Game<'_> {
         if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
             let (sx, sy) = self.slot_position(slot);
             batch.fill(
-                &self.res.atlas,
+                &self.atlas,
                 ox + sx,
                 oy + sy,
                 16.0,
@@ -524,13 +524,7 @@ impl Game<'_> {
     }
     /// `BeaconRenderer`: each section's rotating solid beam and its glow.
     pub(super) fn beacon_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
-        let Some(s) = self
-            .res
-            .atlas
-            .sprites
-            .get("entity/beacon/beacon_beam")
-            .copied()
-        else {
+        let Some(s) = self.atlas.sprites.get("entity/beacon/beacon_beam").copied() else {
             return;
         };
         let time = (self.world.game_time.rem_euclid(40)) as f32 + alpha as f32;

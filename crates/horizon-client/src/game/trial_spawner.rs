@@ -10,7 +10,8 @@ use horizon_client::{
         Who,
         spawner::SpawnerSpawn,
         trial_spawner::{
-            TrialEvent, TrialPlayer, TrialSpawner, TrialSpawnerLevel, TrialState, Uuid,
+            Omen, TRIAL_OMEN_TICKS_PER_LEVEL, TrialEvent, TrialPlayer, TrialSpawner,
+            TrialSpawnerLevel, TrialState, Uuid,
         },
     },
 };
@@ -31,16 +32,37 @@ impl TrialSpawnerLevel for GameLevel<'_, '_> {
         self.game.ui.rules.bool("spawn_mobs")
     }
     fn players(&self) -> Vec<TrialPlayer> {
+        let guests = self.game.lan_present().into_iter().map(|g| TrialPlayer {
+            uuid: g.uuid,
+            block: g.position.map(|v| v.floor() as i32),
+            eye: g.eye,
+            creative: g.creative,
+            spectator: g.spectator,
+            position: g.position,
+            height: g.height,
+            alive: g.alive,
+            // Guests carry no effects yet.
+            omen: None,
+        });
         let (Some(p), Some(view)) = (self.game.player.as_ref(), self.game.player_view()) else {
-            return Vec::new();
+            return guests.collect();
         };
-        vec![TrialPlayer {
-            uuid: self.game.level.player_uuid.unwrap_or_default(),
+        let host = TrialPlayer {
+            uuid: self.game.acting_uuid(),
             block: [p.position.x, p.position.y, p.position.z].map(|v| v.floor() as i32),
             eye: view.eye,
             creative: self.game.creative,
             spectator: self.game.spectator(),
-        }]
+            position: [p.position.x, p.position.y, p.position.z],
+            height: p.dimensions.height,
+            alive: self.game.level.health > 0.0,
+            omen: if self.game.potions.effects.get("trial_omen").is_some() {
+                Some(Omen::Trial)
+            } else {
+                self.game.potions.effects.get("bad_omen").map(|_| Omen::Bad)
+            },
+        };
+        std::iter::once(host).chain(guests).collect()
     }
     fn visual_hit(&self, from: [f64; 3], to: [f64; 3]) -> Option<[i32; 3]> {
         let v = |p: [f64; 3]| Vec3::new(p[0], p[1], p[2]);
@@ -51,6 +73,35 @@ impl TrialSpawnerLevel for GameLevel<'_, '_> {
         let m = self.game.mobs.iter().find(|m| m.id == *id)?;
         (!m.removed && m.alive())
             .then(|| [m.position.x, m.position.y, m.position.z].map(|v| v.floor() as i32))
+    }
+    fn entity_box(&self, uuid: Uuid) -> Option<([f64; 3], f32)> {
+        let (id, _) = self.game.persist.uuids.iter().find(|(_, u)| **u == uuid)?;
+        let m = self.game.mobs.iter().find(|m| m.id == *id)?;
+        let b = m.bounds();
+        (!m.removed && m.alive()).then(|| {
+            (
+                [m.position.x, m.position.y, m.position.z],
+                (b.max_position().y - b.min_position().y) as f32,
+            )
+        })
+    }
+    fn no_block_collision(&self, block: [i32; 3]) -> bool {
+        self.w
+            .block_collision_boxes(block[0], block[1], block[2])
+            .is_empty()
+    }
+    fn loot_items(&self, table: &str, seed: i64) -> Vec<ItemStack> {
+        let Some(loot) = horizon_client::structure_blocks::loot_data(&self.game.options.resources)
+        else {
+            return Vec::new();
+        };
+        loot.roll_split(table, &mut LegacyRandom::new(seed))
+            .iter()
+            .map(horizon_client::structure_blocks::loot_item_with_components)
+            .collect()
+    }
+    fn seed(&self) -> i64 {
+        self.game.level.seed
     }
 }
 
@@ -64,32 +115,45 @@ impl Game<'_> {
             .filter(|(_, e)| matches!(e, BlockEntity::TrialSpawner(_)))
             .map(|(k, _)| *k)
             .collect();
-        for key in keys {
-            let state = self.world.block(key.0, key.1, key.2);
-            let Some(block) = self.res.assets.registry.state(state).cloned() else {
+        for &key in &keys {
+            let Some((current, ominous)) = self.trial_spawner_block(key) else {
                 continue;
             };
-            if block.name != "minecraft:trial_spawner" {
-                continue;
-            }
             let Some(BlockEntity::TrialSpawner(mut spawner)) =
                 self.world.block_entities.remove(&key)
             else {
                 continue;
             };
-            let current = block
-                .properties
-                .get("trial_spawner_state")
-                .and_then(|s| TrialState::from_name(s))
-                .unwrap_or_default();
-            let ominous = block.properties.get("ominous").is_some_and(|v| v == "true");
             let result = self.server_tick_trial_spawner(key, &mut spawner, current, ominous);
             self.world
                 .block_entities
                 .insert(key, BlockEntity::TrialSpawner(spawner));
             result?;
         }
+        for key in keys {
+            self.client_tick_trial_spawner(key);
+        }
         Ok(())
+    }
+    /// The trial spawner block at `key`: its state and ominous flag.
+    pub(super) fn trial_spawner_block(&self, key: Pos) -> Option<(TrialState, bool)> {
+        let block = self
+            .pack
+            .assets
+            .registry
+            .state(self.world.block(key.0, key.1, key.2))?;
+        if block.name != "minecraft:trial_spawner" {
+            return None;
+        }
+        let state = block
+            .properties
+            .get("trial_spawner_state")
+            .and_then(|s| TrialState::from_name(s))
+            .unwrap_or_default();
+        Some((
+            state,
+            block.properties.get("ominous").is_some_and(|v| v == "true"),
+        ))
     }
     fn server_tick_trial_spawner(
         &mut self,
@@ -184,7 +248,7 @@ impl Game<'_> {
         }
         for event in events {
             match event {
-                TrialEvent::BlockUpdated => self.trial_spawner_updated(key),
+                TrialEvent::BlockUpdated => self.mark_block_entity_updated(key),
                 TrialEvent::LevelEvent(id, at, data) => self.level_event_at(id, at, data),
                 TrialEvent::Sound(name) => {
                     self.audio
@@ -196,6 +260,26 @@ impl Game<'_> {
                     let who = by_uuid.get(&uuid).map(|id| Who::Mob(*id));
                     self.post_block_game_event("minecraft:entity_place", at, who, None);
                 }
+                TrialEvent::TrialOmen(_) => self.bad_omen_to_trial_omen(),
+                TrialEvent::Discard(uuid) => {
+                    let id = self.persist.uuids.iter().find(|(_, u)| **u == uuid);
+                    if let Some((id, _)) = id
+                        && let Some(m) = self.mobs.iter_mut().find(|m| m.id == *id)
+                    {
+                        m.removed = true;
+                    }
+                }
+                TrialEvent::SoundAt(name, at, pitch) => self.audio.play(
+                    &format!("minecraft:{name}"),
+                    Some(at.map(|v| f64::from(v) + 0.5)),
+                    1.0,
+                    pitch,
+                ),
+                TrialEvent::ItemSpawner {
+                    item,
+                    position,
+                    delay,
+                } => self.add_ominous_item_spawner(item, position, delay),
             }
         }
         Ok(())
@@ -208,7 +292,7 @@ impl Game<'_> {
         ominous: bool,
     ) -> Result<()> {
         let current = self.world.block(key.0, key.1, key.2);
-        let Some(mut block) = self.res.assets.registry.state(current).cloned() else {
+        let Some(mut block) = self.pack.assets.registry.state(current).cloned() else {
             return Ok(());
         };
         block
@@ -217,11 +301,32 @@ impl Game<'_> {
         block
             .properties
             .insert("ominous".into(), ominous.to_string());
-        let id = self.res.assets.registry.resolve(&block)?;
+        let id = self.pack.assets.registry.resolve(&block)?;
         self.level_set([key.0, key.1, key.2], id)
     }
-    /// `markUpdated`: the clients load the new update tag.
-    fn trial_spawner_updated(&mut self, key: Pos) {
+    /// `transformBadOmenIntoTrialOmen`: Bad Omen becomes Trial Omen, 15
+    /// minutes per level, with Trial Omen's sound when it is new.
+    fn bad_omen_to_trial_omen(&mut self) {
+        let Some(amplifier) = self.potions.effects.amplifier("bad_omen") else {
+            return;
+        };
+        self.potions.effects.list.retain(|e| e.id != "bad_omen");
+        let new = self.potions.effects.get("trial_omen").is_none();
+        self.potions
+            .effects
+            .add(horizon_client::effects::EffectInstance::new(
+                "trial_omen",
+                TRIAL_OMEN_TICKS_PER_LEVEL * (amplifier + 1),
+                0,
+            ));
+        if new {
+            let eye = self.eye_position().unwrap_or_default();
+            self.audio
+                .play("minecraft:event.mob_effect.trial_omen", Some(eye), 1.0, 1.0);
+        }
+    }
+    /// `sendBlockUpdated` of a block entity: the clients load its new update tag.
+    pub(super) fn mark_block_entity_updated(&mut self, key: Pos) {
         if let Some(log) = self.world.block_log.as_mut() {
             log.push(key);
         }

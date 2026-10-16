@@ -158,7 +158,7 @@ impl Game<'_> {
             t.tick(
                 &self.world,
                 self.collision,
-                &self.res.assets,
+                &self.pack.assets,
                 &self.res.facts,
             )?;
             if t.fuse <= 0 {
@@ -210,12 +210,12 @@ impl Game<'_> {
         if self.tnts.is_empty() {
             return;
         }
-        let Some(state) = self.res.assets.registry.default_state("minecraft:tnt") else {
+        let Some(state) = self.pack.assets.registry.default_state("minecraft:tnt") else {
             return;
         };
         // Face sprites from the block model: up, down, north, south, west, east.
         let Ok(models) = self
-            .res
+            .pack
             .assets
             .model_catalog
             .collect(state, BlockPos::new(0, 0, 0))
@@ -235,10 +235,10 @@ impl Game<'_> {
             };
             if sprites[index].is_none() {
                 sprites[index] = self
-                    .res
+                    .pack
                     .layer_names
                     .get(&face.layer)
-                    .and_then(|name| self.res.atlas.sprites.get(name).copied());
+                    .and_then(|name| self.atlas.sprites.get(name).copied());
             }
         }
         for t in &self.tnts {

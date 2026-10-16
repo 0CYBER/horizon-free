@@ -33,7 +33,7 @@ fn parse_state(text: &str) -> Result<BlockState> {
 
 impl Game<'_> {
     fn state_text(&self, state: BlockStateId) -> String {
-        let Some(s) = self.res.assets.registry.state(state) else {
+        let Some(s) = self.pack.assets.registry.state(state) else {
             return "?".into();
         };
         if s.properties.is_empty() {
@@ -69,7 +69,7 @@ impl Game<'_> {
             "setblock" => {
                 let pos = [int(1)?, int(2)?, int(3)?];
                 let state = self
-                    .res
+                    .pack
                     .assets
                     .registry
                     .resolve(&parse_state(words.get(4).ok_or("missing block")?)?)?;
@@ -81,7 +81,7 @@ impl Game<'_> {
             "fill" => {
                 let (a, b) = ([int(1)?, int(2)?, int(3)?], [int(4)?, int(5)?, int(6)?]);
                 let state = self
-                    .res
+                    .pack
                     .assets
                     .registry
                     .resolve(&parse_state(words.get(7).ok_or("missing block")?)?)?;

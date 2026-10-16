@@ -7,6 +7,7 @@ use horizon_client::{
     hud::HudBatch,
     items::ItemStack,
     text::{self, Style, Text},
+    toasts::Slide,
 };
 use serde_json::Value;
 use std::{
@@ -68,51 +69,6 @@ impl Toast {
         (fully_for as f64 / (5000.0 * multiplier / n).max(1.0) % n) as usize
     }
 }
-/// `ToastManager.ToastInstance`: slides a toast in and out over 600 ms,
-/// eased by the square, and counts how long it has been fully shown.
-#[derive(Default)]
-struct Slide {
-    /// When it first updated; the times below are milliseconds since.
-    origin: Option<Instant>,
-    begun: bool,
-    /// `animationStartTime`.
-    start: i64,
-    /// `becameFullyVisibleAt`.
-    fully_at: i64,
-    show: bool,
-    /// `visiblePortion`: 0 off screen, 1 fully in.
-    portion: f32,
-    /// `fullyVisibleFor`.
-    fully_for: i64,
-}
-impl Slide {
-    const MS: i64 = 600;
-    /// `ToastInstance.update` at `now`; `wants_show` is the toast's own
-    /// update. The visibility it switched to (the sound to play), and whether
-    /// it has finished sliding out.
-    fn update(&mut self, now: i64, wants_show: impl FnOnce(i64) -> bool) -> (Option<bool>, bool) {
-        let was = self.show;
-        if !self.begun {
-            self.begun = true;
-            self.start = now;
-            self.show = true;
-        }
-        if self.show && now - self.start <= Self::MS {
-            self.fully_at = now;
-        }
-        self.fully_for = now - self.fully_at;
-        let progress = ((now - self.start) as f32 / Self::MS as f32).clamp(0.0, 1.0);
-        let progress = progress * progress;
-        self.portion = if self.show { progress } else { 1.0 - progress };
-        let wanted = wants_show(self.fully_for);
-        if wanted != self.show {
-            self.start = now - ((1.0 - self.portion) * Self::MS as f32) as i64;
-            self.show = wanted;
-        }
-        let finished = !self.show && now - self.start > Self::MS;
-        ((self.show != was).then_some(self.show), finished)
-    }
-}
 #[derive(Default)]
 pub(super) struct AdvState {
     pub(super) tree: Arc<Tree>,
@@ -153,7 +109,7 @@ impl adv::World for View<'_, '_> {
         let name = self.0.res.facts.get(state).name.to_string();
         let props = self
             .0
-            .res
+            .pack
             .assets
             .registry
             .state(state)
@@ -670,7 +626,7 @@ impl Game<'_> {
     }
     /// `EnterBlockTrigger`: the block, its state properties and the player.
     pub(super) fn trigger_enter_block(&mut self, state: horizon_world::registry::BlockStateId) {
-        let Some(definition) = self.res.assets.registry.state(state).cloned() else {
+        let Some(definition) = self.pack.assets.registry.state(state).cloned() else {
             return;
         };
         let me = self.player_entity();
@@ -803,11 +759,11 @@ impl Game<'_> {
         if let Some((station, item)) = recipe {
             // RecipeToast: black description under a purple title, the
             // station at 0.6 scale in the corner over the cycling result.
-            let atlas = &self.res.atlas;
+            let atlas = &self.atlas;
             batch.sprite(atlas, "gui/sprites/toast/recipe", x, 0.0);
             let title = self.translate("recipe.toast.title", "New Recipe(s) Unlocked!");
             let description = self.translate("recipe.toast.description", "Check your recipe book");
-            let atlas = &self.res.atlas;
+            let atlas = &self.atlas;
             batch.text(atlas, &title, x + 30.0, 7.0, 0xFF50_0050, false);
             batch.text(atlas, &description, x + 30.0, 18.0, 0xFF00_0000, false);
             let start = batch.vertices.len();
@@ -816,7 +772,7 @@ impl Game<'_> {
             self.draw_item_model(batch, &item, x + 8.0, 8.0);
             return;
         }
-        let atlas = &self.res.atlas;
+        let atlas = &self.atlas;
         batch.sprite(atlas, "gui/sprites/toast/advancement", x, 0.0);
         let (key, color) = match frame {
             Frame::Task => ("advancements.toast.task", 0xFF00_FFFF),

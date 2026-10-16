@@ -53,6 +53,7 @@ pub mod raider;
 pub mod ravager;
 pub mod render;
 pub mod riders;
+pub mod seen_grid;
 pub mod shulker;
 pub mod sniffer;
 pub mod spawn_rules;
@@ -70,6 +71,7 @@ pub mod undead;
 pub mod vex;
 pub mod villager;
 pub mod villager_brain;
+pub mod villager_hats;
 pub mod warden;
 pub mod warden_brain;
 pub mod witch;
@@ -1399,6 +1401,8 @@ pub struct MobWorld<'a> {
     pub data: &'a MobData,
     pub player: Option<PlayerView>,
     pub others: &'a [Seen],
+    /// `others` by position, when the caller keeps one (the mob ticks).
+    pub others_grid: Option<&'a seen_grid::SeenGrid>,
     pub daylight: bool,
     pub game_time: i64,
     pub day_time: i64,

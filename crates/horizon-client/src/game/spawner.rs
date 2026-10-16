@@ -92,9 +92,12 @@ impl Game<'_> {
             self.client_tick_spawner(key);
         }
         let entities = &self.world.block_entities;
-        self.spawners
-            .displays
-            .retain(|k, _| matches!(entities.get(k), Some(BlockEntity::Spawner(_))));
+        self.spawners.displays.retain(|k, _| {
+            matches!(
+                entities.get(k),
+                Some(BlockEntity::Spawner(_) | BlockEntity::TrialSpawner(_))
+            )
+        });
         Ok(())
     }
     fn server_tick_spawner(&mut self, key: Pos, spawner: &mut Spawner) -> Result<()> {
@@ -323,7 +326,7 @@ impl Game<'_> {
     }
     /// `getOrCreateDisplayEntity`: the mob shown in the spawner, made again
     /// when its type changes. False when there is none.
-    fn update_spawner_display(&mut self, key: Pos) -> bool {
+    pub(super) fn update_spawner_display(&mut self, key: Pos) -> bool {
         let Some(kind) = self.spawner_display_kind(key) else {
             self.spawners.displays.remove(&key);
             return false;
@@ -344,11 +347,16 @@ impl Game<'_> {
     }
     /// The type of the mob a spawner shows: its next data's id, when the game
     /// knows the mob.
+    /// A trial spawner shows one only in the states with a spinning mob.
     fn spawner_display_kind(&self, key: Pos) -> Option<String> {
-        let Some(BlockEntity::Spawner(s)) = self.world.block_entities.get(&key) else {
-            return None;
+        let id = match self.world.block_entities.get(&key)? {
+            BlockEntity::Spawner(s) => s.next_data()?.id()?,
+            BlockEntity::TrialSpawner(s) => {
+                self.trial_spawner_block(key)?.0.spinning_mob_speed()?;
+                s.next_spawn_data.as_ref()?.id()?
+            }
+            _ => return None,
         };
-        let id = s.next_data()?.id()?;
         self.res.mob_types.contains_key(&id).then_some(id)
     }
     /// `SpawnEggItem.useOn` on a spawner: the egg sets its mob. None when the
@@ -383,25 +391,34 @@ impl Game<'_> {
         self.post_block_game_event("minecraft:block_change", pos, Some(Who::Player), None);
         Some(true)
     }
-    /// `SpawnerRenderer`: the next mob of every spawner near the camera,
-    /// small and turning.
+    /// `SpawnerRenderer` and `TrialSpawnerRenderer`: the next mob of every
+    /// spawner near the camera, small and turning.
     pub(super) fn spawner_geometry(
         &self,
         camera: glam::DVec3,
         alpha: f64,
         out: &mut Vec<horizon_client::mesher::Vertex>,
     ) {
-        let atlas = &self.res.atlas;
+        let atlas = &self.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         for (key, (_, mob)) in &self.spawners.displays {
             let at = glam::DVec3::new(f64::from(key.0), f64::from(key.1), f64::from(key.2));
             if at.distance_squared(camera) >= 64.0 * 64.0 {
                 continue;
             }
-            let Some(BlockEntity::Spawner(s)) = self.world.block_entities.get(key) else {
-                continue;
+            let (spin, scale) = match self.world.block_entities.get(key) {
+                Some(BlockEntity::Spawner(s)) => {
+                    s.display_pose(alpha as f32, mob.width(), mob.height())
+                }
+                Some(BlockEntity::TrialSpawner(s)) => horizon_client::mobs::spawner::display_pose(
+                    s.o_spin,
+                    s.spin,
+                    alpha as f32,
+                    mob.width(),
+                    mob.height(),
+                ),
+                _ => continue,
             };
-            let (spin, scale) = s.display_pose(alpha as f32, mob.width(), mob.height());
             let origin = glam::Mat4::from_translation(
                 (at - camera).as_vec3() + glam::Vec3::new(0.5, 0.4, 0.5),
             ) * glam::Mat4::from_rotation_y(spin.to_radians())

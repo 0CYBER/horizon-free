@@ -200,6 +200,8 @@ pub struct Streaming {
     /// More areas to keep loaded (centre chunk, radius), e.g. around guests
     /// of a world open to the network. They are generated and kept but not meshed.
     pub extra: Vec<((i32, i32), i32)>,
+    /// Mesh the sections for drawing (false on a server thread).
+    pub mesh: bool,
 }
 /// Snapshot only after a scan found no missing candidates. Public range fields
 /// and `World::chunks` can change without going through Streaming, so compare
@@ -466,6 +468,7 @@ impl Streaming {
             meshed_total: 0,
             remote: false,
             extra: Vec::new(),
+            mesh: true,
         }
     }
     /// Resource packs reloaded (`LevelRenderer.allChanged`): mesh with the new
@@ -618,6 +621,30 @@ impl Streaming {
     }
     pub fn is_lit(&self, x: i32, z: i32) -> bool {
         self.lit.contains(&(x, z))
+    }
+    /// `ChunkMap.getLatestStatus` for the loading screen's chunk map: the
+    /// furthest step this column has reached, `None` before it is asked for.
+    pub fn latest_status(
+        &self,
+        world: &World,
+        x: i32,
+        z: i32,
+    ) -> Option<crate::level_loading::Status> {
+        use crate::level_loading::Status;
+        let key = (x, z);
+        Some(if self.lit.contains(&key) {
+            Status::Full
+        } else if world.chunks.contains_key(&key) {
+            Status::InitializeLight
+        } else if self.decorated.contains(&key) || self.finishing.contains(&key) {
+            Status::Features
+        } else if self.protos.contains_key(&key) {
+            Status::Terrain
+        } else if self.generating.contains(&key) {
+            Status::Empty
+        } else {
+            return None;
+        })
     }
     pub fn is_meshing(&self, section: (i32, i32, i32)) -> bool {
         self.meshing.contains_key(&section)
@@ -934,6 +961,11 @@ impl Streaming {
                 self.distance(x, z) * 4 + 1,
                 Job::Light(x, z, region, self.sequence, self.sky_light),
             );
+        }
+        // A server draws nothing: its sections are never meshed.
+        if !self.mesh {
+            world.dirty_sections.clear();
+            return (uploads, removed);
         }
         // Meshing once the column and its neighbours are lit, and the column
         // is within the render distance. Sections set aside past it come back

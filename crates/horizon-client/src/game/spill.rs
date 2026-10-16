@@ -191,6 +191,30 @@ pub(super) fn saved_entity(
         .cloned()
 }
 
+/// Keep `tag` as the block entity at its position Horizon does not model,
+/// replacing the one there.
+pub(super) fn put_saved_entity(
+    world: &mut horizon_client::world::World,
+    pos: [i32; 3],
+    tag: horizon_world::nbt::Tag,
+) {
+    use horizon_world::nbt::Tag;
+    let Some(chunk) = world.chunks.get_mut(&(pos[0] >> 4, pos[2] >> 4)) else {
+        return;
+    };
+    let chunk = std::sync::Arc::make_mut(chunk);
+    let saved = std::sync::Arc::make_mut(chunk.saved.get_or_insert_default());
+    let at = |t: &Tag| {
+        t.get("x") == Some(&Tag::Int(pos[0]))
+            && t.get("y") == Some(&Tag::Int(pos[1]))
+            && t.get("z") == Some(&Tag::Int(pos[2]))
+    };
+    match saved.block_entities.iter_mut().find(|t| at(t)) {
+        Some(old) => *old = tag,
+        None => saved.block_entities.push(tag),
+    }
+}
+
 impl GameLevel<'_> {
     /// `Block.popResource(level, pos, stack)` with the broken block's copied components.
     fn pop_resource(&mut self, pos: [i32; 3], mut stack: ItemStack) {
@@ -454,6 +478,15 @@ impl GameLevel<'_> {
         let name = self.facts.get(old).name.clone();
         let items = match removal::pre_remove(&name) {
             PreRemove::Contents { slots, .. } if &*name == "minecraft:decorated_pot" => {
+                // Containers.dropContents reads getTheItem, which unpacks the loot table.
+                let mut tag = tag;
+                super::decorated_pot::unpack_loot(
+                    &mut tag,
+                    self.loot.as_deref(),
+                    &mut self.world.random,
+                    self.rand_sequences,
+                    self.seed,
+                );
                 let mut items = vec![None; slots];
                 items[0] = tag
                     .get("item")

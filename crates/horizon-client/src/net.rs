@@ -68,6 +68,25 @@ impl Session {
         view_distance: i8,
         lang: Arc<Language>,
     ) -> Self {
+        Self::start(address, name, auth, view_distance, lang, None)
+    }
+    /// Join an integrated server through memory (`Connection.connectToLocalServer`).
+    pub fn connect_local(
+        pipe: horizon_protocol::connection::Pipe,
+        name: &str,
+        view_distance: i8,
+        lang: Arc<Language>,
+    ) -> Self {
+        Self::start("local", name, None, view_distance, lang, Some(pipe))
+    }
+    fn start(
+        address: &str,
+        name: &str,
+        auth: Option<Arc<AuthSession>>,
+        view_distance: i8,
+        lang: Arc<Language>,
+        local: Option<horizon_protocol::connection::Pipe>,
+    ) -> Self {
         let (send, events) = channel();
         let writer = Arc::new(Mutex::new(None));
         let counters = Arc::new(Mutex::new(None));
@@ -77,6 +96,7 @@ impl Session {
             .name("horizon-net".into())
             .spawn(move || {
                 let result = run(
+                    local,
                     &address_owned,
                     &name_owned,
                     auth.as_deref(),
@@ -222,6 +242,7 @@ fn tr(lang: &Language, key: &str) -> String {
 /// The whole connection. Ok: why it ended for good (the server's reason, or
 /// a refusal no retry fixes); Err: the connection failed.
 fn run(
+    local: Option<horizon_protocol::connection::Pipe>,
     address: &str,
     name: &str,
     auth: Option<&AuthSession>,
@@ -231,18 +252,23 @@ fn run(
     shared_writer: &Mutex<Option<ConnWriter>>,
     shared_counters: &Mutex<Option<Arc<Counters>>>,
 ) -> Result<String, String> {
-    let (host, port) = match address.strip_prefix(FRIEND) {
-        Some(code) => join_friend(code, send)?,
-        None => {
-            let Some(target) = parse_address(address) else {
-                return Ok(format!("Invalid server address: {address}"));
-            };
-            status(send, "Connecting to the server...");
-            target
-        }
+    let (host, port, mut c) = if let Some(pipe) = local {
+        (address.to_owned(), 0, Connection::local(pipe))
+    } else {
+        let (host, port) = match address.strip_prefix(FRIEND) {
+            Some(code) => join_friend(code, send)?,
+            None => {
+                let Some(target) = parse_address(address) else {
+                    return Ok(format!("Invalid server address: {address}"));
+                };
+                status(send, "Connecting to the server...");
+                target
+            }
+        };
+        let c =
+            Connection::connect(&host, port, Duration::from_secs(10)).map_err(|e| e.to_string())?;
+        (host, port, c)
     };
-    let mut c =
-        Connection::connect(&host, port, Duration::from_secs(10)).map_err(|e| e.to_string())?;
     *shared_counters.lock().unwrap() = Some(c.reader.counters.clone());
     let e = |e: horizon_protocol::Error| e.to_string();
     c.send(

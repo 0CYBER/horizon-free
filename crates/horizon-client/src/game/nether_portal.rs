@@ -161,7 +161,7 @@ impl Game<'_> {
                     Some(c) => &**c,
                     None => match self
                         .save
-                        .load(x, z, self.res.assets.registry, &self.res.biomes)
+                        .load(x, z, self.pack.assets.registry, &self.res.biomes)
                     {
                         Some(c) => {
                             saved = c;
@@ -390,7 +390,7 @@ impl Game<'_> {
                 self.capture(true);
             }
         }
-        if self.res.screen_fx.portal == 0.0 {
+        if self.screen_fx.portal == 0.0 {
             let pitch = self.world.random.next_float() * 0.4 + 0.8;
             self.audio
                 .play("minecraft:block.portal.trigger", None, 0.25, pitch);

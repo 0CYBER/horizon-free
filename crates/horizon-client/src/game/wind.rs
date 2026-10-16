@@ -404,7 +404,7 @@ impl Game<'_> {
         let state = self.world.block(pos[0], pos[1], pos[2]);
         let name = self.res.facts.get(state).name.clone();
         let prop = |game: &Self, key: &str| {
-            game.res
+            game.pack
                 .assets
                 .registry
                 .state(state)
@@ -478,7 +478,6 @@ impl Game<'_> {
         });
         let Some(model) = model else { return };
         let Some(r) = self
-            .res
             .atlas
             .sprites
             .get("entity/projectiles/wind_charge")

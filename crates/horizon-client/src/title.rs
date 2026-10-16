@@ -129,12 +129,15 @@ pub struct Title {
     pub started: std::time::Instant,
     search: String,
     search_focused: bool,
+    /// The focused text field's cursor, selection and scroll.
+    caret: RefCell<crate::ui::Caret>,
     scroll: Cell<crate::ui::Scroll>,
     create_return_to_main: bool,
     message_lines: Cell<usize>,
     backup: Option<mpsc::Receiver<Result<u64, String>>>,
     backup_shown: Cell<bool>,
-    toast: Option<(std::time::Instant, BackupToast)>,
+    /// EditWorldScreen's `SystemToast` (`WORLD_BACKUP`) and its slide.
+    toast: Option<(crate::toasts::Slide, BackupToast)>,
     icons: RefCell<std::collections::HashMap<PathBuf, (std::time::SystemTime, Option<Vec<u8>>)>>,
     splash: Option<String>,
     /// The mode last drawn and when it appeared (Horizon's screen fades).
@@ -233,6 +236,7 @@ impl Title {
             started: now,
             search: String::new(),
             search_focused: false,
+            caret: RefCell::default(),
             scroll: Cell::default(),
             create_return_to_main: false,
             message_lines: Cell::new(1),
@@ -337,6 +341,26 @@ impl Title {
         let left = (w / 2.0).floor() - ROW_WIDTH / 2.0;
         (LIST_TOP, h - LIST_BOTTOM, left, content)
     }
+    /// The visible row under the pointer and the pointer relative to its
+    /// content (`AbstractSelectionList.getEntryAtPosition`).
+    fn world_row_at(
+        &self,
+        worlds: &[WorldEntry],
+        (x, y): (f32, f32),
+        size: (f32, f32),
+    ) -> Option<(usize, (f32, f32))> {
+        let (top, bottom, left, _) = self.world_list(worlds, size);
+        if y < top || y >= bottom || x < left || x >= left + ROW_WIDTH {
+            return None;
+        }
+        let offset = self.scroll.get().amount.trunc();
+        let row = ((y - top - 2.0 + offset) / ROW_HEIGHT).floor();
+        if row < 0.0 || row as usize >= self.visible_worlds(worlds).count() {
+            return None;
+        }
+        let content_y = top + 4.0 + row * ROW_HEIGHT - offset;
+        Some((row as usize, (x - left - 2.0, y - content_y)))
+    }
     /// The pointer moved with the button held (`mouseDragged`).
     pub fn drag(&mut self, cursor: (f32, f32), size: (f32, f32)) {
         if let Mode::Multiplayer(screen) = &mut self.mode {
@@ -401,8 +425,27 @@ impl Title {
                 Ok(bytes) => BackupToast::Created { folder, bytes },
                 Err(error) => BackupToast::Failed(error),
             };
-            self.toast = Some((std::time::Instant::now(), toast));
+            self.toast = Some((crate::toasts::Slide::default(), toast));
         }
+    }
+    /// `ToastManager.update` for the system toast: slides it in, keeps it
+    /// for 5 s times the notification display time, slides it out. The
+    /// sound of a new visibility (`Toast.Visibility`), if any.
+    pub fn update_toast(&mut self, multiplier: f32) -> Option<&'static str> {
+        let (slide, _) = self.toast.as_mut()?;
+        // SystemToast.update: shown until displayTime (5000 ms) has passed.
+        let time = 5000.0 * f64::from(multiplier);
+        let (sound, finished) = slide.update_now(|fully| (fully as f64) < time);
+        if finished {
+            self.toast = None;
+        }
+        sound.map(|show| {
+            if show {
+                "minecraft:ui.toast.in"
+            } else {
+                "minecraft:ui.toast.out"
+            }
+        })
     }
     fn start_backup(&mut self, world: WorldEntry) {
         let (send, receive) = mpsc::channel();
@@ -788,22 +831,23 @@ impl Title {
             Mode::Select { worlds, selected } => {
                 crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
                 centered(atlas, batch, "Select World", 8.0, u32::MAX);
-                text_field(
-                    atlas,
+                self.caret.borrow_mut().draw(
                     batch,
-                    ((w / 2.0).floor() - 100.0, 21.0),
-                    &self.search,
+                    atlas,
+                    (SEARCH, &self.search, 50),
+                    [(w / 2.0).floor() - 100.0, 21.0, 200.0, 20.0],
                     self.search_focused,
-                    !self.search.is_empty()
-                        && (self.started.elapsed().as_millis() / 300).is_multiple_of(2),
+                    self.started,
                 );
-                if self.search.is_empty() {
-                    batch.text(
+                if self.search.is_empty() && !self.search_focused {
+                    batch.text_styled(
                         atlas,
-                        &lang::get_or("gui.selectWorld.search", "Search..."),
+                        &Text::literal(lang::get_or("gui.selectWorld.search", "Search..."))
+                            .italic()
+                            .with_color(crate::text::GRAY),
                         (w / 2.0).floor() - 96.0,
                         27.0,
-                        rgba(128, 128, 128, 255),
+                        u32::MAX,
                         true,
                     );
                 }
@@ -819,6 +863,7 @@ impl Title {
                 // Entry content sits 2 pixels inside its row.
                 let x = left + 2.0;
                 let mut slot = 0;
+                let hovered = self.world_row_at(worlds, cursor, (w, h));
                 for (row, (i, world)) in self.visible_worlds(worlds).enumerate() {
                     let y = top + 4.0 + row as f32 * ROW_HEIGHT - offset;
                     if y + 32.0 <= top || y >= bottom {
@@ -878,12 +923,24 @@ impl Title {
                         atlas,
                         &details,
                         x + 35.0,
-                        y + 22.0,
+                        y + 21.0,
                         rgba(128, 128, 128, 255),
                         true,
                     );
                     self.icon(atlas, batch, world, slot, x, y);
                     slot = (slot + 1) % crate::hud::WORLD_ICON_SLOTS;
+                    // WorldListEntry.extractContent: a hovered row dims its
+                    // icon under the join arrow, lit under the pointer.
+                    if let Some((_, (rx, ry))) = hovered.filter(|(r, _)| *r == row) {
+                        batch.fill(atlas, x, y, 32.0, 32.0, 0xA0909090);
+                        let on_icon = (0.0..32.0).contains(&rx) && (0.0..32.0).contains(&ry);
+                        let sprite = if on_icon {
+                            "gui/sprites/world_list/join_highlighted"
+                        } else {
+                            "gui/sprites/world_list/join"
+                        };
+                        batch.sprite_scaled(atlas, sprite, x, y, 32.0, 32.0, u32::MAX);
+                    }
                 }
                 // Clip list quads, including their UVs, to the content area.
                 for quad in batch.vertices[first..].as_chunks_mut::<6>().0 {
@@ -940,13 +997,13 @@ impl Title {
                     rgba(160, 160, 160, 255),
                     true,
                 );
-                text_field(
-                    atlas,
+                self.caret.borrow_mut().draw(
                     batch,
-                    ((w / 2.0).floor() - 100.0, top + 39.0),
-                    name,
+                    atlas,
+                    (EDIT_NAME, name, 32),
+                    [(w / 2.0).floor() - 100.0, top + 39.0, 200.0, 20.0],
                     *focused,
-                    (self.started.elapsed().as_millis() / 300).is_multiple_of(2),
+                    self.started,
                 );
             }
             Mode::Delete { world } => {
@@ -1088,25 +1145,18 @@ impl Title {
         if let Mode::Multiplayer(screen) = &self.mode {
             screen.draw_tooltip(atlas, batch, cursor);
         }
-        if let Some((at, toast)) = &self.toast
-            && at.elapsed().as_secs() < 5
-        {
+        if let Some((slide, toast)) = &self.toast {
             let (title, message) = toast.text();
             let width = HudBatch::text_width(atlas, &title)
                 .max(HudBatch::text_width(atlas, &message))
                 .ceil()
                 .max(160.0)
                 + 30.0;
-            toast_background(atlas, batch, w - width, width);
-            batch.text(
-                atlas,
-                &title,
-                w - width + 18.0,
-                7.0,
-                rgba(255, 255, 0, 255),
-                false,
-            );
-            batch.text(atlas, &message, w - width + 18.0, 19.0, u32::MAX, false);
+            // Toast.xPos: in from the right edge by the visible portion.
+            let x = w - width * slide.portion;
+            toast_background(atlas, batch, x, width);
+            batch.text(atlas, &title, x + 18.0, 7.0, rgba(255, 255, 0, 255), false);
+            batch.text(atlas, &message, x + 18.0, 19.0, u32::MAX, false);
         }
     }
     /// The action and whether to play `AbstractWidget.playButtonClickSound`.
@@ -1222,25 +1272,23 @@ impl Title {
                 {
                     return Action::None;
                 }
-                if y >= top && y < bottom && x >= left && x < left + ROW_WIDTH {
-                    let offset = self.scroll.get().amount.trunc();
-                    let row = ((y - top - 2.0 + offset) / ROW_HEIGHT).floor();
-                    if row >= 0.0 {
-                        let Mode::Select { worlds, selected } = &self.mode else {
-                            unreachable!()
-                        };
-                        let chosen = self
-                            .visible_worlds(worlds)
-                            .nth(row as usize)
-                            .map(|(index, world)| (index, world.folder.clone()));
-                        if let Some((index, folder)) = chosen {
-                            if *selected == Some(index) {
-                                return Action::Play { folder };
-                            }
-                            if let Mode::Select { selected, .. } = &mut self.mode {
-                                *selected = Some(index);
-                            }
-                        }
+                let Mode::Select { worlds, selected } = &self.mode else {
+                    unreachable!()
+                };
+                let chosen = self
+                    .world_row_at(worlds, (x, y), (w, h))
+                    .and_then(|(row, rel)| {
+                        let (index, world) = self.visible_worlds(worlds).nth(row)?;
+                        Some((index, world.folder.clone(), rel))
+                    });
+                if let Some((index, folder, (rx, ry))) = chosen {
+                    // WorldListEntry.mouseClicked: the icon joins at once.
+                    let on_icon = (0.0..32.0).contains(&rx) && (0.0..32.0).contains(&ry);
+                    if on_icon || *selected == Some(index) {
+                        return Action::Play { folder };
+                    }
+                    if let Mode::Select { selected, .. } = &mut self.mode {
+                        *selected = Some(index);
                     }
                 }
                 Action::None
@@ -1317,39 +1365,98 @@ impl Title {
     pub fn focused_field(&mut self) -> Option<(crate::clipboard::FieldId, &mut String, usize)> {
         match &mut self.mode {
             Mode::Multiplayer(screen) => screen.focused_text(),
-            Mode::Select { .. } if self.search_focused => {
-                Some((("world.search", 0), &mut self.search, 50))
-            }
-            Mode::Edit {
-                name,
-                focused: true,
-                ..
-            } => Some((("world.edit-name", 0), name, 32)),
-            Mode::Create {
-                name, seed, focus, ..
-            } => match focus {
-                0 => Some((("world.name", 0), name, 32)),
-                1 => Some((("world.seed", 0), seed, 32)),
-                _ => None,
-            },
+            mode => caret_field(mode, self.search_focused, &mut self.search),
+        }
+    }
+    /// Whether the focused field edits at its cursor (every field but the
+    /// server screens', which still append).
+    pub fn has_caret_field(&mut self) -> bool {
+        caret_field(&mut self.mode, self.search_focused, &mut self.search).is_some()
+    }
+    /// Edit the focused field through its `EditBox`; false when there is none.
+    fn edit_field(&mut self, f: impl FnOnce(&mut crate::ui::EditBox)) -> bool {
+        let Some((id, value, max)) =
+            caret_field(&mut self.mode, self.search_focused, &mut self.search)
+        else {
+            return false;
+        };
+        let before = value.clone();
+        self.caret.get_mut().edit(id, value, max, f);
+        if *value != before {
+            self.search_changed();
+        }
+        true
+    }
+    /// EditBox.charTyped / insertText at the cursor.
+    pub fn type_text(&mut self, text: &str) {
+        if let Mode::Multiplayer(screen) = &mut self.mode {
+            return screen.type_text(text);
+        }
+        self.edit_field(|edit| edit.insert_text(text));
+    }
+    pub fn backspace(&mut self) {
+        if let Mode::Multiplayer(screen) = &mut self.mode {
+            return screen.backspace();
+        }
+        self.field_key(winit::keyboard::KeyCode::Backspace, false, false);
+    }
+    /// EditBox.keyPressed: moving and deleting in the focused field.
+    pub fn field_key(&mut self, key: winit::keyboard::KeyCode, ctrl: bool, shift: bool) -> bool {
+        let mut handled = false;
+        self.edit_field(|edit| handled = edit.key(key, ctrl, shift));
+        handled
+    }
+    /// Ctrl+A/C/V/X in the focused field.
+    pub fn field_shortcut(
+        &mut self,
+        shortcut: crate::clipboard::EditShortcut,
+        board: &mut dyn crate::clipboard::Clipboard,
+    ) {
+        self.edit_field(|edit| {
+            edit.shortcut(shortcut, board);
+        });
+    }
+    /// The focused field's box on screen.
+    fn focused_rect(&self, (w, h): (f32, f32)) -> Option<[f32; 4]> {
+        let x = (w / 2.0).floor() - 100.0;
+        match &self.mode {
+            Mode::Select { .. } if self.search_focused => Some([x, 21.0, 200.0, 20.0]),
+            Mode::Edit { focused: true, .. } => Some([x, edit_top(h) + 39.0, 200.0, 20.0]),
+            Mode::Create { focus, options, .. } => create_world::field_rect(w, h, options.tab)
+                .filter(|(id, _)| id == focus)
+                .map(|(_, rect)| rect),
             _ => None,
         }
     }
-    pub fn type_text(&mut self, text: &str) {
-        if let Some((_, field, max)) = self.focused_field() {
-            for c in text.chars().filter(|c| !c.is_control()) {
-                if field.chars().count() < max {
-                    field.push(c);
-                }
-            }
-            self.search_changed();
+    /// A left press after `click` focused a field: the cursor goes under the
+    /// pointer (`EditBox.onClick`).
+    pub fn press_field(
+        &mut self,
+        atlas: &HudAtlas,
+        (x, y): (f32, f32),
+        size: (f32, f32),
+        shift: bool,
+    ) {
+        let (w, h) = (size.0.ceil(), size.1.ceil());
+        let Some(rect @ [fx, fy, fw, fh]) = self.focused_rect((w, h)) else {
+            return;
+        };
+        if !crate::ui::hovered((x, y), fx, fy, fw, fh) {
+            return;
+        }
+        if let Some(field) = caret_field(&mut self.mode, self.search_focused, &mut self.search) {
+            self.caret.get_mut().press(atlas, field, rect, x, shift);
         }
     }
-    pub fn backspace(&mut self) {
-        if let Some((_, field, _)) = self.focused_field() {
-            field.pop();
-            self.search_changed();
+    /// The pointer moved with the button held (`EditBox.onDrag`).
+    pub fn drag_field(&mut self, atlas: &HudAtlas, x: f32) {
+        if let Some(field) = caret_field(&mut self.mode, self.search_focused, &mut self.search) {
+            self.caret.get_mut().drag(atlas, field, x);
         }
+    }
+    /// The button was released: drags stop selecting.
+    pub fn release_field(&mut self) {
+        self.caret.get_mut().release();
     }
     /// Clipboard replacements also invalidate a selection in the filtered list.
     pub fn search_changed(&mut self) {
@@ -1472,52 +1579,32 @@ fn wrapped(atlas: &HudAtlas, text: &str, width: f32) -> Vec<String> {
         .map(|t| t.plain())
         .collect()
 }
-fn text_field(
-    atlas: &HudAtlas,
-    batch: &mut HudBatch,
-    pos: (f32, f32),
-    value: &str,
-    focused: bool,
-    blink: bool,
-) {
-    let (x, y) = pos;
-    crate::widgets::target_as([x, y, 200.0, 20.0], crate::widgets::Kind::Field);
-    batch.fill(
-        atlas,
-        x,
-        y,
-        200.0,
-        20.0,
-        if focused {
-            u32::MAX
-        } else {
-            rgba(160, 160, 160, 255)
+const SEARCH: crate::clipboard::FieldId = ("world.search", 0);
+const EDIT_NAME: crate::clipboard::FieldId = ("world.edit-name", 0);
+const WORLD_NAME: crate::clipboard::FieldId = ("world.name", 0);
+const WORLD_SEED: crate::clipboard::FieldId = ("world.seed", 0);
+/// The focused field of the world screens: the list's search, the world
+/// name being edited, or Create New World's name or seed.
+fn caret_field<'a>(
+    mode: &'a mut Mode,
+    search_focused: bool,
+    search: &'a mut String,
+) -> Option<(crate::clipboard::FieldId, &'a mut String, usize)> {
+    match mode {
+        Mode::Select { .. } if search_focused => Some((SEARCH, search, 50)),
+        Mode::Edit {
+            name,
+            focused: true,
+            ..
+        } => Some((EDIT_NAME, name, 32)),
+        Mode::Create {
+            name, seed, focus, ..
+        } => match focus {
+            0 => Some((WORLD_NAME, name, 32)),
+            1 => Some((WORLD_SEED, seed, 32)),
+            _ => None,
         },
-    );
-    batch.fill(atlas, x + 1.0, y + 1.0, 198.0, 18.0, rgba(0, 0, 0, 255));
-    let count = atlas.font.fit_reverse(value, 188.0);
-    let start = value
-        .char_indices()
-        .nth(value.chars().count().saturating_sub(count))
-        .map_or(value.len(), |(i, _)| i);
-    let value = &value[start..];
-    batch.text(
-        atlas,
-        value,
-        x + 4.0,
-        y + 6.0,
-        rgba(224, 224, 224, 255),
-        true,
-    );
-    if focused && blink {
-        batch.text(
-            atlas,
-            "_",
-            x + 4.0 + HudBatch::text_width(atlas, value),
-            y + 6.0,
-            rgba(224, 224, 224, 255),
-            true,
-        );
+        _ => None,
     }
 }
 /// `yyyy/MM/dd HH:mm` (UTC) for a modification time in Unix seconds.

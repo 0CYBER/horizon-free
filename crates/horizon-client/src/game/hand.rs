@@ -143,6 +143,7 @@ impl Game<'_> {
             || before(self.cart_hit().map(|h| h.1))
             || before(self.dragon_hit().map(|h| h.1))
             || before(self.mob_hit().map(|h| h.1))
+            || before(self.guest_hit().map(|h| h.1))
     }
     /// `LocalPlayer.isHandsBusy`: paddling a boat.
     fn hands_busy(&self) -> bool {
@@ -256,7 +257,7 @@ impl Game<'_> {
             .or_else(|| self.held());
         if let Some(stack) = active {
             let components = self
-                .res
+                .pack
                 .item_renderer
                 .models
                 .components(&horizon_client::item_render::stack_view(stack));

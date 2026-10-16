@@ -18,7 +18,8 @@ pub fn path(world: &Path, uuid: u128) -> PathBuf {
         .join(format!("{}.dat", uuid_string(uuid)))
 }
 
-fn uuid_ints(uuid: u128) -> [i32; 4] {
+/// `UUIDUtil.uuidToIntArray`.
+pub fn uuid_ints(uuid: u128) -> [i32; 4] {
     [
         (uuid >> 96) as i32,
         (uuid >> 64) as i32,
@@ -44,6 +45,13 @@ pub fn load(guest: &mut Guest, world: &Path) -> bool {
         ..Level::default()
     };
     level.read_player(&tag);
+    level.player_extra = Some(tag);
+    apply(guest, &level);
+    true
+}
+
+/// Give a guest the player state read into `level`.
+pub fn apply(guest: &mut Guest, level: &Level) {
     if let Some(p) = level.position {
         guest.position = p;
         guest.previous_position = p;
@@ -60,7 +68,10 @@ pub fn load(guest: &mut Guest, world: &Path) -> bool {
     guest.xp_total = level.xp_total;
     guest.game_mode = level.mode();
     guest.selected = (level.selected_slot.max(0) as usize).min(8);
-    guest.saved = Some(tag);
+    guest.saved = level.player_extra.clone();
+    if level.ender_items.len() == 27 {
+        guest.ender_items = level.ender_items.clone();
+    }
     for (slot, item, count, damage) in &level.inventory {
         let mut stack = ItemStack {
             item: Arc::from(item.as_str()),
@@ -81,29 +92,41 @@ pub fn load(guest: &mut Guest, world: &Path) -> bool {
             _ => {}
         }
     }
-    true
 }
 
 /// Save a guest (PlayerDataStorage.save).
 pub fn save(guest: &Guest, world: &Path) {
     let mut level = Level {
         player_uuid: Some(uuid_ints(guest.uuid)),
-        position: Some(guest.position),
-        rotation: [guest.yaw, guest.pitch],
-        health: guest.health,
-        food: guest.food,
-        saturation: guest.saturation,
-        xp_level: guest.xp_level,
-        xp_progress: guest.xp_progress,
-        xp_total: guest.xp_total,
-        game_mode: guest.game_mode,
-        creative: guest.game_mode == 1,
-        selected_slot: guest.selected as i32,
-        on_ground: guest.on_ground,
         dimension: "minecraft:overworld".into(),
-        player_extra: guest.saved.clone(),
         ..Level::default()
     };
+    store(guest, &mut level);
+    let file = path(world, guest.uuid);
+    if let Some(dir) = file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = write_dat(&file, level.player_tag());
+}
+
+/// Put a guest's state in `level`'s player fields.
+pub fn store(guest: &Guest, level: &mut Level) {
+    level.position = Some(guest.position);
+    level.rotation = [guest.yaw, guest.pitch];
+    level.health = guest.health;
+    level.food = guest.food;
+    level.saturation = guest.saturation;
+    level.xp_level = guest.xp_level;
+    level.xp_progress = guest.xp_progress;
+    level.xp_total = guest.xp_total;
+    level.game_mode = guest.game_mode;
+    level.creative = guest.game_mode == 1;
+    level.selected_slot = guest.selected as i32;
+    level.on_ground = guest.on_ground;
+    level.player_extra = guest.saved.clone();
+    level.ender_items = guest.ender_items.clone();
+    level.inventory.clear();
+    level.inventory_components.clear();
     let mut put = |slot: u8, stack: &Option<ItemStack>| {
         if let Some(s) = stack {
             level
@@ -122,9 +145,4 @@ pub fn save(guest: &Guest, world: &Path) {
     put(101, &guest.armor[2]);
     put(100, &guest.armor[3]);
     put(150, &guest.offhand);
-    let file = path(world, guest.uuid);
-    if let Some(dir) = file.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let _ = write_dat(&file, level.player_tag());
 }

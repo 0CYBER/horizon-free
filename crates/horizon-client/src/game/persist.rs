@@ -506,7 +506,7 @@ impl Game<'_> {
     }
     /// `BlockState.CODEC`: a block name or `{id, properties}` (or legacy `{Name, Properties}`).
     fn state_from_nbt(&self, tag: &Tag) -> Option<BlockStateId> {
-        let registry = self.res.assets.registry;
+        let registry = self.pack.assets.registry;
         let state = match tag.get("Name") {
             Some(Tag::String(name)) => BlockState {
                 name: name.to_string_lossy(),
@@ -528,7 +528,7 @@ impl Game<'_> {
             .or_else(|| registry.default_state(&state.name))
     }
     pub(in crate::game) fn state_to_nbt(&self, state: BlockStateId) -> Tag {
-        let registry = self.res.assets.registry;
+        let registry = self.pack.assets.registry;
         match registry.state(state) {
             Some(s) if registry.default_state(&s.name) == Some(state) => {
                 Tag::String(s.name.as_str().into())

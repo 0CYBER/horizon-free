@@ -203,7 +203,12 @@ impl Game<'_> {
         let p = self.player.as_ref()?;
         let sleeping = self.sleeping.map(|(head, _)| {
             let state = self.world.block(head[0], head[1], head[2]);
-            let props = self.res.assets.registry.state(state).map(|s| &s.properties);
+            let props = self
+                .pack
+                .assets
+                .registry
+                .state(state)
+                .map(|s| &s.properties);
             // BedBlock.getBedOrientation as Direction.toYRot.
             props.and_then(|props| match props.get("facing").map(String::as_str) {
                 Some("south") => Some(0.0),
@@ -405,7 +410,7 @@ impl Game<'_> {
             m.position.z.floor() as i32,
         );
         let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
-        let atlas = &self.res.atlas;
+        let atlas = &self.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         horizon_client::mobs::render::render_with(
             m,
@@ -459,7 +464,7 @@ impl Game<'_> {
         m.position.y += 0.125 * f64::from(u8::from(m.extra.crouching));
         m.previous = m.position;
         let camera = glam::DVec3::new(m.position.x, m.position.y, m.position.z);
-        let atlas = &self.res.atlas;
+        let atlas = &self.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         let mut verts = Vec::new();
         horizon_client::mobs::render::render_with(
@@ -530,10 +535,9 @@ impl Game<'_> {
         let Some((texture, _)) = assets.equipment.get(asset).and_then(|k| k.get("wings")) else {
             return;
         };
-        let (Some(model), Some(rect)) = (
-            assets.player.get("elytra"),
-            self.res.atlas.sprites.get(texture),
-        ) else {
+        let (Some(model), Some(rect)) =
+            (assets.player.get("elytra"), self.atlas.sprites.get(texture))
+        else {
             return;
         };
         let base = horizon_client::mobs::render::base_transform(m, partial, camera)

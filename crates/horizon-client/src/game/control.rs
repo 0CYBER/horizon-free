@@ -11,7 +11,7 @@ use winit::{event::MouseButton, event_loop::ActiveEventLoop, keyboard::KeyCode};
 
 const HELP: &[&str] = &[
     "status                         game, player, streaming and renderer state",
-    "key KEY down|up|tap            press or release a key (w a s d space shift ctrl e q esc f3 1-9 arrows ...)",
+    "key KEY down|up|tap|repeat     press, release or auto-repeat a key (w a s d space shift ctrl e q esc f3 1-9 arrows ...)",
     "release                        release every key and mouse button",
     "mouse left|right|middle down|up|click",
     "look YAW PITCH                 set the view direction in degrees",
@@ -201,7 +201,7 @@ impl Game<'_> {
                 }
                 // The zoom extra sees the key as the keyboard hook does.
                 let action = arg(2)?;
-                self.extras_key(physical, action != "up", false);
+                self.extras_key(physical, action != "up", action == "repeat");
                 if action == "tap" {
                     self.extras_key(physical, false, false);
                 }
@@ -233,6 +233,11 @@ impl Game<'_> {
                         self.keys.remove(&key);
                         self.physical_keys.remove(&key);
                     }
+                    // The system's auto-repeat while the key is held.
+                    "repeat" => {
+                        self.physical_keys.insert(physical);
+                        self.mapped_key(key, true, true)?;
+                    }
                     "tap" => {
                         self.control_key_down(key)?;
                         self.keys.remove(&key);
@@ -240,9 +245,10 @@ impl Game<'_> {
                         self.debug_key(physical, horizon_client::debug_keys::KeyAction::Release);
                     }
                     other => {
-                        return Err(
-                            format!("key action must be down, up or tap, not {other}").into()
-                        );
+                        return Err(format!(
+                            "key action must be down, up, tap or repeat, not {other}"
+                        )
+                        .into());
                     }
                 }
                 ok()
@@ -420,7 +426,11 @@ impl Game<'_> {
                 }
                 match self.screen {
                     Screen::Chat => self.chat_type(text),
-                    Screen::Options => self.ui.options.type_text(&self.res.atlas, text),
+                    Screen::CommandBlock => self.command_block_type(text),
+                    Screen::Options => self.ui.options.type_text(&self.atlas, text),
+                    // The port, or the game rules' search and number boxes.
+                    Screen::WorldOptions if text == "\\b" => self.world_options_text(None),
+                    Screen::WorldOptions => self.world_options_text(Some(text)),
                     Screen::Inventory if self.recipe_search_focused() => {
                         self.recipe_text(Some(text), false)
                     }
@@ -430,7 +440,7 @@ impl Game<'_> {
                     }
                     _ => {
                         return Err(
-                            "type needs the chat screen (key t tap), the language search or the creative search".into(),
+                            "type needs the chat screen (key t tap), the language search, the creative search or World Options".into(),
                         );
                     }
                 }
@@ -580,6 +590,18 @@ impl Game<'_> {
 
     fn control_key_down(&mut self, key: KeyCode) -> Result<()> {
         self.physical_keys.insert(key);
+        // A server's chat input takes the keys first, as remote_chat_key does.
+        if self.remote_chat_open() {
+            use winit::keyboard::NamedKey;
+            let named = match key {
+                KeyCode::Escape => Some(NamedKey::Escape),
+                KeyCode::Enter | KeyCode::NumpadEnter => Some(NamedKey::Enter),
+                KeyCode::Backspace => Some(NamedKey::Backspace),
+                _ => None,
+            };
+            self.remote_chat_input(named, None);
+            return Ok(());
+        }
         if self.screen == Screen::Chat {
             self.chat_key_code(key, None);
             return Ok(());
@@ -609,6 +631,7 @@ impl Game<'_> {
             Screen::Stats => "stats",
             Screen::Advancements => "advancements",
             Screen::WorldOptions => "world-options",
+            Screen::CommandBlock => "command-block",
         }
     }
 

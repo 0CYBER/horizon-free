@@ -83,7 +83,7 @@ impl Game<'_> {
         // (EditBox.keyPressed); releases still reach KeyboardHandler.
         let typing = matches!(
             self.screen,
-            Screen::Chat | Screen::Options | Screen::WorldOptions
+            Screen::Chat | Screen::Options | Screen::WorldOptions | Screen::CommandBlock
         ) || self.sign_edit.is_some()
             || self.book.is_some()
             || (self.screen == Screen::Creative && self.creative_screen.tab().search)
@@ -423,7 +423,7 @@ impl Game<'_> {
             ));
         }
         let (left, right) = d.columns(&self.debug_chart_lines());
-        let atlas = &self.res.atlas;
+        let atlas = &self.atlas;
         let mut draws = debug_overlay::draw(&atlas.font, [&left, &right], scale, width);
         let charts = self.debug_charts.draw(
             &atlas.font,

@@ -122,7 +122,7 @@ impl Game<'_> {
             f64::from(p.dimensions.width / 2.0),
             f64::from(p.dimensions.height),
         );
-        let registry = &self.res.assets.registry;
+        let registry = &self.pack.assets.registry;
         let facts = &self.res.facts;
         let bubble_column = horizon_client::ambience::bubble_column_in(
             [

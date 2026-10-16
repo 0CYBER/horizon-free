@@ -25,7 +25,7 @@ impl Game<'_> {
         } else {
             format!("minecraft:{name}")
         };
-        let registry = &self.res.assets.registry;
+        let registry = &self.pack.assets.registry;
         let default = registry
             .default_state(&name)
             .ok_or_else(|| format!("unknown block {name}"))?;

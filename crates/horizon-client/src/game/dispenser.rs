@@ -308,7 +308,7 @@ pub(super) fn mob_set_slot(m: &mut Mob, slot: Slot, stack: ItemStack) {
 
 impl Game<'_> {
     fn prop(&self, state: BlockStateId, key: &str) -> Option<String> {
-        self.res
+        self.pack
             .assets
             .registry
             .state(state)?
@@ -318,11 +318,11 @@ impl Game<'_> {
     }
     /// The same block with other properties (`withProperty`).
     fn with_props(&self, state: BlockStateId, props: &[(&str, &str)]) -> Option<BlockStateId> {
-        let mut s = self.res.assets.registry.state(state)?.clone();
+        let mut s = self.pack.assets.registry.state(state)?.clone();
         for (k, v) in props {
             s.properties.insert((*k).to_owned(), (*v).to_owned());
         }
-        self.res.assets.registry.resolve(&s).ok()
+        self.pack.assets.registry.resolve(&s).ok()
     }
     fn block_at(&self, p: Pos) -> BlockStateId {
         self.world.block(p.0, p.1, p.2)
@@ -933,6 +933,21 @@ impl Game<'_> {
                 LAUNCH,
             ),
         };
+        self.shoot_projectile_item(at, dir, &stack, power, uncertainty);
+        (shrink(stack), event)
+    }
+
+    /// `ProjectileItem.asProjectile` and `Projectile.spawnProjectileUsingShoot`:
+    /// one of `stack` fired from `at` along `dir`.
+    pub(super) fn shoot_projectile_item(
+        &mut self,
+        at: Vec3,
+        dir: [f64; 3],
+        stack: &ItemStack,
+        power: f32,
+        uncertainty: f32,
+    ) {
+        let item = stack.item.to_string();
         let one = ItemStack {
             count: 1,
             ..stack.clone()
@@ -967,7 +982,7 @@ impl Game<'_> {
                     "minecraft:tipped_arrow" => ProjectileKind::Arrow {
                         base_damage: 2.0,
                         critical: false,
-                        effect: tipped_effect(&stack),
+                        effect: tipped_effect(stack),
                     },
                     "minecraft:fire_charge" | "minecraft:wind_charge" => {
                         // asProjectile aims with the level's random first; the
@@ -1000,7 +1015,6 @@ impl Game<'_> {
                 self.creatures.projectiles.push(shot);
             }
         }
-        (shrink(stack), event)
     }
 
     // ---- entities placed by items ----
@@ -1393,7 +1407,7 @@ impl Game<'_> {
                 }
             };
             let skull = self
-                .res
+                .pack
                 .assets
                 .registry
                 .default_state("minecraft:wither_skeleton_skull")
@@ -1456,7 +1470,7 @@ impl Game<'_> {
             && self.can_spawn_golem([target.0, target.1, target.2])
         {
             if let Some(pumpkin) = self
-                .res
+                .pack
                 .assets
                 .registry
                 .default_state("minecraft:carved_pumpkin")
@@ -1527,8 +1541,7 @@ impl Game<'_> {
         let target = (placed.x, placed.y, placed.z);
         if let Some(entity) = BlockEntity::for_block(&self.res.facts.get(state).name) {
             self.world.block_entities.insert(target, entity);
-            self.fill_placed_box([target.0, target.1, target.2], &stack);
-            self.name_placed_container([target.0, target.1, target.2], &stack);
+            self.apply_placed_item([target.0, target.1, target.2], &stack, false);
         }
         self.process_level_events()?;
         Ok((shrink(stack), CLICK))
@@ -2033,10 +2046,10 @@ impl Game<'_> {
                 return None;
             }
             let twin = format!("minecraft:waxed_{n}");
-            let mut s = self.res.assets.registry.state(state)?.clone();
-            self.res.assets.registry.default_state(&twin)?;
+            let mut s = self.pack.assets.registry.state(state)?.clone();
+            self.pack.assets.registry.default_state(&twin)?;
             s.name = twin;
-            self.res.assets.registry.resolve(&s).ok()
+            self.pack.assets.registry.resolve(&s).ok()
         });
         let Some(waxed) =
             waxed.filter(|_| name.contains("copper") || name.contains("lightning_rod"))
@@ -2095,7 +2108,7 @@ impl Game<'_> {
             1.0,
         );
         self.post_block_game_event("minecraft:fluid_place", [pos.0, pos.1, pos.2], None, None);
-        if let Some(mud) = self.res.assets.registry.default_state("minecraft:mud") {
+        if let Some(mud) = self.pack.assets.registry.default_state("minecraft:mud") {
             self.level_set([target.0, target.1, target.2], mud)?;
         }
         let bottle = ItemStack::new("minecraft:glass_bottle", 1);

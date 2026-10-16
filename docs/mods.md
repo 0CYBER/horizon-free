@@ -93,6 +93,9 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 
 Commands: vanilla's command names win. A mod asking for `/give` does not get
 it (logged), and two mods cannot share a name (the first one loaded keeps it).
+The chat box colours and Tab-completes a mod's commands like vanilla's, for
+every player whatever their permission level, and takes any text after the
+name (the mod reads it as `args`; API 0.1 has no way to declare argument types).
 
 ### Planned interfaces
 
@@ -259,6 +262,28 @@ capabilities = ["game-read", "hud", "chat"]
 Unknown keys are refused, so a typo is an error, not a silently ignored
 permission.
 
+### Content mods (API 0.2)
+
+A mod with `api = "0.2"` and capability `registries` may carry `assets/` and
+`data/` in the `.hmod`, and needs no `mod.wasm` if it has no code. It adds
+blocks and items by declaring them in `data/<id>/horizon/block/*.json` and
+`data/<id>/horizon/item/*.json`, each copying a vanilla template
+([modpacks.md](modpacks.md#registries-02-data-driven-blocks-and-items)):
+
+```json
+{ "template": "minecraft:iron_block",
+  "properties": { "hardness": 4.0, "light": 3, "sounds": "minecraft:amethyst_block" },
+  "item": true }
+```
+
+The fence: files go in the mod's own namespace (`assets/<id>/`,
+`data/<id>/`), plus additions to vanilla tags (`data/minecraft/tags/`).
+Templates and `sounds` name vanilla blocks; unknown keys are refused. Paths
+use vanilla's resource characters, at most 65,536 files, 16 MiB each and
+512 MiB in all. A mod whose content is refused stays off, with the reason on
+its row. The game reading this content into its block and item tables comes
+next (docs/modpacks.md).
+
 ## Versions and compatibility
 
 - The API is the WIT package `horizon:mods@0.1.0`. New functions and
@@ -324,3 +349,8 @@ permission.
 5. `recipes`, `world-read`, `render`: recipe viewer and schematics ports.
 6. Server mods, `registries`, `net`, data-driven content from `.hmod`
    `data/` and `assets/`, multiplayer sync.
+
+Modpacks ([modpacks.md](modpacks.md)) move data-driven `registries` first:
+API 0.2 is content-only `.hmod`s (blocks, items, recipes, loot, models and
+textures), then server hooks (0.3) and block entities, menus, capabilities and
+`net` (0.4), in the order the ATM10 inventory needs them.

@@ -262,7 +262,7 @@ impl Game<'_> {
         if self.sculk.tables.built {
             return;
         }
-        let registry = self.res.assets.registry;
+        let registry = self.pack.assets.registry;
         let n = registry.len();
         let tag = |name: &str| {
             self.res
@@ -640,7 +640,7 @@ impl Game<'_> {
         self.state_property(state, "shrieking") == Some("true")
     }
     fn state_property(&self, state: BlockStateId, key: &str) -> Option<&str> {
-        self.res
+        self.pack
             .assets
             .registry
             .state(state)
@@ -1156,7 +1156,7 @@ impl Game<'_> {
             let in_water =
                 horizon_client::fog::fog_type(&self.world, &self.res.facts, eye, self.forward())
                     == FogType::Water;
-            return self.res.fog.state.water_vision(in_water);
+            return self.fog.water_vision(in_water);
         }
         0.0
     }

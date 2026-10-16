@@ -11,8 +11,11 @@ use horizon_client::{
     containers::BlockEntity,
     entities::Experience,
     items::ItemStack,
-    lan::{guest::SPECTATOR, menu::Rules},
-    motion::{MotionWorld, PlayerMotion},
+    lan::{
+        guest::SPECTATOR,
+        menu::{Rules, Slots},
+    },
+    motion::{MotionEvent, MotionWorld, PlayerMotion},
 };
 use horizon_core::geometry::Vec3;
 use horizon_protocol::{
@@ -145,10 +148,22 @@ impl Game<'_> {
         self.right = play.using.is_some() || self.using.is_some();
         let riding = self.riding.take();
         let host_station = self.station.take();
+        // The guest's own ender inventory; one the host has open goes back
+        // into the host's while the guest acts.
+        let host_ender = self.ender_open;
+        self.close_ender_chest();
+        std::mem::swap(&mut self.ender_items, &mut g.ender_items);
         self.lan_acting = Some(conn);
+        self.lan_acting_name = Some(g.name.clone());
+        self.lan_acting_uuid = Some(g.uuid);
 
         let result = f(self);
         self.lan_acting = None;
+        self.lan_acting_name = None;
+        self.lan_acting_uuid = None;
+        // An ender chest the guest opened: the menu shows their inventory
+        // itself (lan_open_container), not a stand-in block entity.
+        self.close_ender_chest();
 
         // What the action opened: handed to the guest instead of the host.
         let opened = self.container.take();
@@ -172,6 +187,13 @@ impl Game<'_> {
             self.keys.remove(&KeyCode::ShiftLeft);
         }
         let g = &mut host.hub.guests[i];
+        std::mem::swap(&mut self.ender_items, &mut g.ender_items);
+        if let Some(key) = host_ender {
+            self.world
+                .block_entities
+                .insert(key, BlockEntity::Chest(self.ender_items.clone()));
+            self.ender_open = Some(key);
+        }
         let new_xp = std::mem::replace(&mut self.experience, xp);
         g.xp_level = new_xp.level;
         g.xp_progress = new_xp.progress;
@@ -240,30 +262,51 @@ impl Game<'_> {
     /// Hand a container the guest opened over (ServerPlayer.openMenu);
     /// false when it is not one a guest can open.
     fn lan_open_container(&mut self, host: &mut LanHost, conn: u32, pos: (i32, i32, i32)) -> bool {
-        let Some(entity) = self.world.block_entities.get(&pos) else {
-            return false;
-        };
-        let (menu, title) = match entity {
-            BlockEntity::Chest(items) => match items.len() {
-                27 => ("minecraft:generic_9x3", "container.chest"),
-                9 => ("minecraft:generic_3x3", "container.dispenser"),
-                5 => ("minecraft:hopper", "container.hopper"),
-                _ => return false,
-            },
-            _ => return false,
-        };
         let name = &self
             .res
             .facts
             .get(self.world.block(pos.0, pos.1, pos.2))
             .name;
-        let title = match &**name {
-            "minecraft:barrel" => "container.barrel",
-            "minecraft:dropper" => "container.dropper",
-            n if n.ends_with("shulker_box") => "container.shulkerBox",
-            _ => title,
+        let (menu, title, slots) = if &**name == "minecraft:ender_chest" {
+            // EnderChestBlock.useWithoutItem: the player's own inventory.
+            (
+                "minecraft:generic_9x3",
+                "container.enderchest",
+                Slots::Ender,
+            )
+        } else if let Some((other, right)) = self.chest_partner(pos) {
+            // ChestBlock.combine: the right half's slots come first.
+            let halves = if right {
+                Slots::Double(pos, other)
+            } else {
+                Slots::Double(other, pos)
+            };
+            ("minecraft:generic_9x6", "container.chestDouble", halves)
+        } else {
+            let Some(BlockEntity::Chest(items)) = self.world.block_entities.get(&pos) else {
+                return false;
+            };
+            let (menu, title) = match items.len() {
+                27 => ("minecraft:generic_9x3", "container.chest"),
+                9 => ("minecraft:generic_3x3", "container.dispenser"),
+                5 => ("minecraft:hopper", "container.hopper"),
+                _ => return false,
+            };
+            let title = match &**name {
+                "minecraft:barrel" => "container.barrel",
+                "minecraft:dropper" => "container.dropper",
+                n if n.ends_with("shulker_box") => "container.shulkerBox",
+                _ => title,
+            };
+            (menu, title, Slots::Block(pos))
         };
-        let items = entity.slots().to_vec();
+        let Some(items) = host
+            .hub
+            .guest(conn)
+            .and_then(|g| slots.read(&self.world, g))
+        else {
+            return false;
+        };
         // ServerPlayer.openMenu closes the menu that was open.
         self.guest_container_closed(host, conn);
         host.hub.open_container(
@@ -271,6 +314,7 @@ impl Game<'_> {
             menu,
             horizon_protocol::text::translatable(title, &[]),
             pos,
+            slots,
             items,
         );
         true
@@ -401,8 +445,13 @@ impl Game<'_> {
                 if spectator {
                     return;
                 }
+                // handleUseItem: the client's rotation, then the item alone. What it
+                // looked at a moment ago (a block, a mob) is UseItemOn's or Interact's.
                 self.as_guest(host, conn, |g| {
+                    (g.yaw, g.pitch) = (p.yaw, p.pitch);
+                    g.lan_item_only = true;
                     let _ = g.use_item();
+                    g.lan_item_only = false;
                 });
             }
             S::Attack(p) => self.guest_attack(host, conn, p.id),
@@ -582,6 +631,12 @@ impl Game<'_> {
         if host.hub.guests[gi].spectator() {
             return;
         }
+        if let Some(victim) = Self::pvp_victim(host, conn, id) {
+            if let Some(Some(strike)) = self.as_guest(host, conn, |g| g.pvp_strike()) {
+                self.pvp_land(host, victim, &strike);
+            }
+            return;
+        }
         let (old_yaw, old_pitch) = (host.hub.guests[gi].yaw, host.hub.guests[gi].pitch);
         if self.look_at_entity(host, gi, id).is_none() {
             return;
@@ -589,6 +644,10 @@ impl Game<'_> {
         self.as_guest(host, conn, |g| {
             g.attack();
         });
+        // The mob now answers to this guest (game/lan_mobs.rs).
+        if let Ok(id) = u32::try_from(id) {
+            host.mob_players.insert(id, conn);
+        }
         host.hub.guests[gi].yaw = old_yaw;
         host.hub.guests[gi].pitch = old_pitch;
     }
@@ -766,48 +825,98 @@ impl Game<'_> {
     }
 
     /// The guest's body on the server each tick: ServerPlayer.tick's damage
-    /// clock and Entity.baseTick's fluid phase, then
-    /// ServerPlayer.doCheckFallDamage for each move the guest made (the fall
-    /// distance grows while they go down and hurts them where they land, as
-    /// the host's own landing does; water resets it, lava halves it), then
-    /// regeneration and the food tick (ServerPlayer.doTick).
+    /// clock and Entity.baseTick's fluid phase (burning), then for each move
+    /// the guest made ServerGamePacketListenerImpl.handleMovePlayer's jump
+    /// (`ServerPlayer.jumpFromGround`'s exhaustion),
+    /// ServerPlayer.doCheckFallDamage (the fall distance grows while they go
+    /// down and hurts them where they land, as the host's own landing does;
+    /// water resets it, lava halves it) and checkMovementStatistics (the
+    /// exhaustion of sprinting and swimming), then LivingEntity.baseTick's
+    /// hazards (drowning, lava, fire blocks, suffocation, the void), and
+    /// regeneration and the food tick (ServerPlayer.doTick). Their hurt
+    /// sounds are heard at the guest.
     fn guest_server_tick(&mut self, host: &mut LanHost, conn: u32) {
         let Some(g) = host.hub.guest_mut(conn) else {
             return;
         };
         let moves = std::mem::take(&mut g.moves);
+        let from_ground = if moves.is_empty() {
+            g.on_ground
+        } else {
+            g.moves_from_ground
+        };
         if g.spectator() {
             return;
         }
-        self.as_guest(host, conn, |game| {
+        let in_wall = !g.sleeping && self.in_wall(g.position, g.eye_height());
+        let at = g.position;
+        let sounds = self.as_guest(host, conn, |game| {
             let (rules, health) = (game.world.health_rules, &game.motion.health);
             let Some(player) = game.player.as_mut() else {
-                return;
+                return Vec::new();
             };
             let mut w = MotionWorld {
+                entities: &[],
                 player,
                 scene: &mut game.world,
-                assets: &game.res.assets,
+                assets: &game.pack.assets,
                 collision_binding: game.collision,
                 resources: game.motion,
             };
             w.player.health.advance_clock();
             let _ = w.fluid_base_tick();
+            w.player.ground.on_ground = from_ground;
             for (moved, on_ground) in moves {
                 let movement = Vec3::new(moved[0], moved[1], moved[2]);
+                if w.player.ground.on_ground && !on_ground && moved[1] > 0.0 {
+                    let sprinting = w.player.sprinting;
+                    w.player
+                        .health
+                        .food
+                        .add_exhaustion(if sprinting { 0.2 } else { 0.05 });
+                }
                 let landed = (|| -> horizon_client::Result<()> {
                     w.set_on_ground_with_movement(on_ground, false, movement)?;
                     let pos = w.legacy_on_position()?;
                     let state = w.block_state(pos)?;
-                    w.check_fall_damage(moved[1], on_ground, state, pos)
+                    w.check_fall_damage(moved[1], on_ground, state, pos)?;
+                    w.check_movement_statistics(movement)
                 })();
                 if landed.is_err() {
                     break;
                 }
             }
+            let _ = w.tick_environment_damage();
+            let _ = w.apply_fire_contact();
+            let _ = w.server_hazards_tick(in_wall);
             let _ = w.player.peaceful_regeneration(rules);
             let _ = w.player.food_tick(health, rules);
+            std::mem::take(&mut w.player.events)
+                .into_iter()
+                .filter_map(|e| match e {
+                    MotionEvent::HurtSound(sound) => Some(sound),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
         });
+        for sound in sounds.into_iter().flatten() {
+            self.player_hurt_sound(sound, at);
+        }
+    }
+
+    /// `Player.isInWall`: a suffocating block in the 0.48-wide box at the
+    /// eyes. Suffocating is a full collision box that is also a full render
+    /// cube (`BlockBehaviour.isSuffocating`'s default; glass and the like
+    /// opt out), as the mobs' check has it.
+    fn in_wall(&self, at: [f64; 3], eye_height: f64) -> bool {
+        let (y, half) = ((at[1] + eye_height).floor() as i32, 0.24);
+        let range = |v: f64| (v - half).floor() as i32..=(v + half).floor() as i32;
+        range(at[0]).any(|x| {
+            range(at[2]).any(|z| {
+                let f = self.res.facts.get(self.world.block(x, y, z));
+                f.full_collision && f.solid_render
+            })
+        })
     }
 
     /// The crack animation other players see.

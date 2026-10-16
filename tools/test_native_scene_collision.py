@@ -25,6 +25,13 @@ def corpus(radius):
                 'max': list(map(bits, [x+width/2, y+height, z+width/2])),
                 'delta': list(map(bits, delta)), 'step': struct.pack('>f', step).hex(), 'grounded': ground}
     # All gallery placements, all approach axes, ledges, ceilings and embedded starts.
+    # A four-block-wide ghast in midair: land, walk, jump and leave its edges.
+    for x in [10.3, 12.0, 13.7, 14.4]:
+        for y in [84.0, 84.5]:
+            for delta in [(0, -0.08, 0), (0, -1, 0), (0.2, -0.08, 0), (-0.2, -0.08, 0), (0, 0.42, 0)]:
+                fixture = row(x, y, 12.0, delta, ground=y == 84.0)
+                fixture['entities'] = [list(map(bits, [10, 80, 10, 14, 84, 14]))]
+                yield fixture
     for index in range(16):
         x, z = index % 4 * 4 - 7, index // 4 * 4 + 14
         for dx, dz in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1)]:

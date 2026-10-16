@@ -177,7 +177,7 @@ impl Game<'_> {
             Some((n, rest)) => (n, rest.trim_end_matches(']')),
             None => (text, ""),
         };
-        let registry = self.res.assets.registry;
+        let registry = self.pack.assets.registry;
         let base = registry
             .default_state(name)
             .ok_or_else(|| format!("unknown block {name}"))?;
@@ -197,7 +197,7 @@ impl Game<'_> {
 
     /// `BlockStateParser.serialize`.
     fn fixture_state_text(&self, state: BlockStateId) -> String {
-        let Some(s) = self.res.assets.registry.state(state) else {
+        let Some(s) = self.pack.assets.registry.state(state) else {
             return "?".into();
         };
         if s.properties.is_empty() {

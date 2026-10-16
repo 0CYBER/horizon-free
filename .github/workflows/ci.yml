@@ -27,6 +27,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Does this pull request need Rust checks?
+        if: github.event_name == 'pull_request'
+        id: rust
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 tools/ci/rust_changes.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
       - name: Keep game artifacts out of Git
         run: |
           python tools/check_public_tree.py
@@ -34,19 +41,23 @@ jobs:
       - name: Test offline research tooling
         run: python -m unittest discover -s tests -v
       - name: Install Rust toolchain and the ALSA and udev headers the client links against
+        if: steps.rust.outputs.required != 'false'
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy --target wasm32-unknown-unknown
       # Dependencies and the workspace's own build, saved from main's runs (pull requests read main's cache).
       - uses: Swatinem/rust-cache@v2
+        if: steps.rust.outputs.required != 'false'
         with:
           shared-key: verify
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Check formatting and lint
+        if: steps.rust.outputs.required != 'false'
         run: |
           cargo +stable fmt --all -- --check
           cargo +stable clippy --workspace --all-targets -- -D warnings
       - name: Test Rust core and voxel kernel correctness
+        if: steps.rust.outputs.required != 'false'
         run: cargo +stable test --workspace
   parity:
     if: >-

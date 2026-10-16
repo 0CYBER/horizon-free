@@ -528,7 +528,9 @@ pub fn encode_block_entity(
         }
         BlockEntity::Spawner(s) => entries.extend(s.save()),
         BlockEntity::TrialSpawner(s) => entries.extend(s.save()),
+        BlockEntity::Vault(v) => entries.extend(v.save()),
         BlockEntity::Beehive(h) => entries.extend(h.to_nbt()),
+        BlockEntity::CommandBlock(c) => entries.extend(c.save()),
     }
     Tag::compound(entries)
 }
@@ -658,7 +660,9 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
         | BlockEntity::CreakingHeart(_) => {}
         BlockEntity::Spawner(s) => **s = crate::mobs::spawner::Spawner::load(tag),
         BlockEntity::TrialSpawner(s) => **s = crate::mobs::trial_spawner::TrialSpawner::load(tag),
+        BlockEntity::Vault(v) => **v = crate::vault::Vault::load(tag),
         BlockEntity::Beehive(h) => **h = crate::beehive::Beehive::from_nbt(tag),
+        BlockEntity::CommandBlock(c) => **c = crate::command_block::CommandBlock::load(tag),
     }
     Some((pos, entity))
 }
@@ -2107,6 +2111,8 @@ pub struct Level {
     pub world_spawn: Option<[i32; 3]>,
     pub difficulty: String,
     pub hardcore: bool,
+    /// `difficulty_settings.locked` (LevelData.isDifficultyLocked).
+    pub difficulty_locked: bool,
     /// `allowCommands`: read from `level.dat` or chosen on the Create New
     /// World screen; unset is written as off.
     pub allow_commands: Option<bool>,
@@ -2181,6 +2187,7 @@ impl Level {
         if let Some(d) = data.get("difficulty_settings") {
             level.difficulty = text(d.get("difficulty")).unwrap_or_else(|| "normal".into());
             level.hardcore = n(d.get("hardcore")) != 0;
+            level.difficulty_locked = n(d.get("locked")) != 0;
         }
         level.allow_commands = Some(n(data.get("allowCommands")) != 0);
         let mut rules: BTreeMap<String, i32> = GAME_RULES
@@ -2632,9 +2639,11 @@ impl Level {
             "hardcore",
             Tag::Byte(i8::from(self.hardcore)),
         );
-        if let Tag::Compound(map) = &mut difficulty {
-            map.entry("locked".into()).or_insert(Tag::Byte(0));
-        }
+        put(
+            &mut difficulty,
+            "locked",
+            Tag::Byte(i8::from(self.difficulty_locked)),
+        );
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as i64);
@@ -3116,6 +3125,7 @@ mod tests {
             dimension: "minecraft:the_nether".into(),
             world_spawn: Some([8, 64, 8]),
             spawn: Some([20.0, 70.0, 20.0]),
+            difficulty_locked: true,
             ..Level::default()
         };
         level.weather.raining = true;
@@ -3147,6 +3157,7 @@ mod tests {
         assert_eq!(back.dimension, "minecraft:the_nether");
         assert_eq!(back.world_spawn, Some([8, 64, 8]));
         assert_eq!(back.spawn, Some([20.0, 70.0, 20.0]));
+        assert!(back.difficulty_locked);
         assert!(back.weather.raining);
         assert_eq!(back.weather.rain_time, 500);
         assert_eq!(back.game_rule("keep_inventory"), 1);

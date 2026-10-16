@@ -12,6 +12,7 @@ use horizon_client::{
     save::number,
 };
 use horizon_core::geometry::{Aabb, Vec3};
+use horizon_world::nbt::Tag;
 use std::collections::HashMap;
 
 /// The handle of the local player among a bell's gathered entities.
@@ -279,7 +280,7 @@ impl Game<'_> {
                 Ticker::Conduit => {
                     let world = &self.world;
                     let facts = &self.res.facts;
-                    let registry = self.res.assets.registry;
+                    let registry = self.pack.assets.registry;
                     let is_water = |p: [i32; 3]| {
                         facts.get(world.block(p[0], p[1], p[2])).fluid
                             == horizon_client::blocks::Fluid::Water
@@ -340,8 +341,15 @@ impl Game<'_> {
     /// The End gateway at `pos` as its chunk was loaded: `Age` from the saved
     /// block entity (`getUpdateTag`), or a new gateway.
     fn gateway_loaded(&self, pos: [i32; 3]) -> EndGateway {
-        let age = self
-            .world
+        let age = self.saved_tag(pos).and_then(|t| number(t.get("Age")));
+        EndGateway {
+            age: age.unwrap_or(0),
+            teleport_cooldown: 0,
+        }
+    }
+    /// The block entity at `pos` Horizon keeps as loaded, if any.
+    fn saved_tag(&self, pos: [i32; 3]) -> Option<&Tag> {
+        self.world
             .chunks
             .get(&(pos[0] >> 4, pos[2] >> 4))
             .and_then(|c| c.saved.as_deref())
@@ -352,16 +360,26 @@ impl Game<'_> {
                         .eq(&pos.map(|v| Some(i64::from(v))))
                 })
             })
-            .and_then(|t| number(t.get("Age")));
-        EndGateway {
-            age: age.unwrap_or(0),
-            teleport_cooldown: 0,
-        }
     }
-    /// The renderer's view of the block entity at `pos`.
+    /// The renderer's view of the block entity at `pos`, with a decorated
+    /// pot's saved `sherds` (back, left, right, front).
     pub(super) fn block_anim(&self, pos: [i32; 3], partial: f32) -> BlockAnim {
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        let sherds = if &*self.res.facts.get(state).name == "minecraft:decorated_pot" {
+            let sherds = self.saved_tag(pos).and_then(|t| t.get("sherds"));
+            ["back", "left", "right", "front"].map(|side| match sherds.and_then(|s| s.get(side)) {
+                // An item id, or the item stack the processed templates hold.
+                Some(Tag::String(id)) => Some(id.to_string_lossy()),
+                Some(stack) => {
+                    horizon_client::save::item_from_nbt(stack).map(|s| s.item.to_string())
+                }
+                None => None,
+            })
+        } else {
+            Default::default()
+        };
         self.be_anims
-            .block_anim(pos, self.world.game_time, partial, Default::default())
+            .block_anim(pos, self.world.game_time, partial, sherds)
     }
     /// `ChestLidController.getOpenness(partial)` at `pos`.
     pub(super) fn chest_lid(&self, pos: [i32; 3], partial: f32) -> f32 {

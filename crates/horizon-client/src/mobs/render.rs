@@ -1068,6 +1068,16 @@ fn render_visible(
         };
         let mut poses = Poses::new(&part);
         anim::setup(m, &s, &mut poses, &data.animations);
+        if matches!(m.species(), Species::Villager | Species::ZombieVillager)
+            && let Some((folder, variant)) = layer.texture.split_once("/type/")
+        {
+            let variant = variant.strip_prefix("baby/").unwrap_or(variant);
+            let profession = PROFESSIONS[m.extra.variant2 as usize % PROFESSIONS.len()];
+            data.villager_hats
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .apply(folder, variant, profession, &mut poses);
+        }
         let light = if layer.full_bright {
             240 | 240 << 8
         } else {
@@ -1252,6 +1262,8 @@ mod tests {
             animations: Default::default(),
             biome_tags: Default::default(),
             entity_tags: Default::default(),
+            villager_hats: Default::default(),
+            pois: Default::default(),
         };
         let atlas = |name: &str| {
             Some(if name.contains("_inner") {

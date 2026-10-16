@@ -220,7 +220,7 @@ impl Game<'_> {
         ) {
             return None;
         }
-        let s = self.res.assets.registry.state(state)?;
+        let s = self.pack.assets.registry.state(state)?;
         let shape = Shape::parse(s.properties.get("shape").map_or("", String::as_str));
         let powered = s.properties.get("powered").is_some_and(|v| v == "true");
         Some(Rail {
@@ -1148,16 +1148,16 @@ impl Game<'_> {
         diffuse: bool,
         out: &mut Vec<Vertex>,
     ) {
-        let Ok(models) = self.res.assets.model_catalog.collect_seeded(state, seed) else {
+        let Ok(models) = self.pack.assets.model_catalog.collect_seeded(state, seed) else {
             return;
         };
         for (_, model) in &models {
             for face in &model.faces {
                 let Some(s) = self
-                    .res
+                    .pack
                     .layer_names
                     .get(&face.layer)
-                    .and_then(|n| self.res.atlas.sprites.get(n))
+                    .and_then(|n| self.atlas.sprites.get(n))
                 else {
                     continue;
                 };
@@ -1203,7 +1203,7 @@ impl Game<'_> {
         }
     }
     fn display_state(&self, c: &Minecart) -> Option<BlockStateId> {
-        let registry = &self.res.assets.registry;
+        let registry = &self.pack.assets.registry;
         let with = |name: &str, props: &[(&str, &str)]| {
             let mut s = registry.state(registry.default_state(name)?)?.clone();
             for (k, v) in props {
@@ -1236,7 +1236,6 @@ impl Game<'_> {
                 continue;
             };
             let Some(uv) = self
-                .res
                 .atlas
                 .sprites
                 .get("entity/minecart/minecart")
@@ -1343,12 +1342,12 @@ impl Game<'_> {
             game_time: self.world.game_time,
             max_y: self.dim.max_y(),
             world: &self.world,
-            sprites: &self.res.atlas.sprites,
+            sprites: &self.atlas.sprites,
             nether: self.dim == super::Dim::Nether,
             lid: &lid,
             sign: &|_| None,
             banner: &|_| Vec::new(),
-            glyph: &|c| self.res.atlas.glyph_cell(c),
+            glyph: &|c| self.atlas.glyph_cell(c),
         };
         self.res
             .block_entity_render

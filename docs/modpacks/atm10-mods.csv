@@ -1,0 +1,496 @@
+mod_id,name,version,class,tier,confidence,source,license,client,server
+accelerateddecay,Accelerated Decay,21.0.0,content,logic,categories,modrinth,LGPL-3.0-only,required,required
+actuallyadditions,Actually Additions,1.3.26,content,machines,categories,modrinth,MIT,required,required
+ad_astra,Ad Astra,1.16.26,content,deep,categories,modrinth,LicenseRef-Terrarium-Licence,required,required
+ad_astra_giselle_addon,Ad Astra: Giselle Addon,8.6,integration,machines,categories,curseforge (modrinth listing),MIT,required,required
+additional_lights,Additional Lights,2.1.10,content,logic,guess,curseforge,unknown (read mods.toml at import),,
+advanced_ae,Advanced AE,1.6.12-1.21.1,content,machines,categories,modrinth,LGPL-3.0-or-later,required,required
+advancedperipherals,Advanced Peripherals,1.21.1-0.8.2a,integration,machines,categories,curseforge (modrinth listing),Apache-2.0,required,required
+ae2,Applied Energistics 2,19.2.18,content,deep,categories,modrinth,LicenseRef-Multiple,required,required
+ae2ct,AE2:Crafting Tree,1.21.1-1.1.1,client-ui,client,name,curseforge,unknown (read mods.toml at import),,
+ae2importexportcard,AE2 Import Export Card,1.21.1-1.9.1,content,machines,categories,modrinth,MIT,required,required
+ae2jeiintegration,AE2 JEI Integration,1.2.1,integration,client,name,curseforge,unknown (read mods.toml at import),,
+ae2netanalyser,AE2NetworkAnalyzer,1.21-2.1.5-neoforge,content,machines,name,curseforge,unknown (read mods.toml at import),,
+ae2wtlib,AE2WTLib,19.5.1,content,machines,categories,modrinth,MIT,required,required
+aeinfinitybooster,AEInfinityBooster,1.21.1-1.0.0.58,content,logic,categories,modrinth,LGPL-3.0-only,required,required
+aether,The Aether,1.5.10,content,deep,categories,curseforge (modrinth listing),LicenseRef-Custom,required,required
+aiimprovements,AI-Improvements,0.5.3,performance,none,categories,modrinth,LicenseRef-All-Rights-Reserved,unsupported,required
+akashictome,Akashic Tome,1.8-30,content,logic,categories,modrinth,CC-BY-NC-SA-3.0,required,required
+allthearcanistgear,All The Arcanist Gear,1.21.1-21.3.2,content,logic,name,curseforge,unknown (read mods.toml at import),,
+allthecompressed,AllTheCompressed,4.4.0,content,data,name,curseforge,unknown (read mods.toml at import),,
+alltheleaks,All The Leaks,1.1.13+1.21.1-neoforge,performance,none,name,curseforge,unknown (read mods.toml at import),,
+allthemodium,Allthemodium,3.2.1,content,deep,name,curseforge,unknown (read mods.toml at import),,
+alltheores,AllTheOres,3.2.0,content,data,name,curseforge,unknown (read mods.toml at import),,
+allthetweaks,AllTheTweaks,2.12.1,content,logic,name,curseforge,unknown (read mods.toml at import),,
+allthewizardgear,All the Wizard Gear,1.21.1-1.2.0,content,logic,name,curseforge,unknown (read mods.toml at import),,
+almostunified,AlmostUnified,1.21.1-1.4.2,other,none,categories,modrinth,LicenseRef-All-Rights-Reserved,optional,required
+amendments,Amendments,1.21-2.1.11,content,deep,categories,modrinth,LicenseRef-Supplementaries-Team-License-1.1,required,required
+apotheosis,Apotheosis,8.9.0,content,deep,categories,modrinth,MIT,required,required
+apothic_attributes,Apothic Attributes,2.11.0,library,none,categories,modrinth,MIT,required,required
+apothic_enchanting,Apothic Enchanting,1.6.4,content,machines,categories,modrinth,MIT,required,required
+apothic_spawners,Apothic Spawners,1.4.0,content,logic,categories,modrinth,MIT,required,required
+appflux,AppliedFlux,1.21-2.1.6-neoforge,content,machines,name,curseforge,unknown (read mods.toml at import),,
+appleskin,AppleSkin,3.0.9+mc1.21,client-ui,client,categories,modrinth,Unlicense,optional,optional
+appmek,Applied Mekanistics,1.6.3,integration,machines,categories,modrinth,LGPL-3.0-only,required,required
+aquaculture,Aquaculture 2,2.7.21,content,deep,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+architectury,Architectury,13.0.11,library,none,categories,modrinth,LGPL-3.0-only,required,required
+ars_additions,Ars Additions,1.21.1-21.3.0,content,logic,categories,modrinth,LGPL-3.0-only,required,required
+ars_controle,Ars Controle,1.21.1-1.6.16,content,logic,categories,modrinth,LGPL-3.0-only,required,required
+ars_creo,Ars Creo,5.4.0,integration,logic,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+ars_elemancy,Ars Elemancy,1.18.3,content,logic,categories,curseforge (modrinth listing),LGPL-3.0-only,required,required
+ars_elemental,Ars Elemental,0.7.10.4,content,deep,name,curseforge,unknown (read mods.toml at import),,
+ars_nouveau,Ars Nouveau,5.13.3,content,deep,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+ars_ocultas,Ars Ocultas,2.6.1,content,logic,categories,modrinth,LGPL-3.0-only,required,required
+ars_polymorphia,Ars Polymorphia,1.0.3,content,logic,categories,modrinth,LGPL-3.0-only,required,required
+ars_technica,Ars Technica,2.7.6,content,machines,name,curseforge,unknown (read mods.toml at import),,
+ars_unification,Ars Unification,1.2.21,integration,data,categories,modrinth,LGPL-3.0-only,required,required
+arseng,Ars Énergistique,2.1.1-beta,integration,machines,categories,modrinth,LGPL-3.0-only,required,required
+artifacts,Artifacts,13.2.5,content,deep,categories,modrinth,MIT,required,required
+astralsorcery,Astral Sorcery,2.0.2,content,deep,name,curseforge,unknown (read mods.toml at import),,
+athena,Athena,4.0.6,library,none,categories,modrinth,MIT,required,unsupported
+atlas_api,Atlas API,1.21.1-1.2.0,library,none,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+atmcompat,ATM: Compat,1.21.1-1.0.0,integration,data,name,curseforge,unknown (read mods.toml at import),,
+attributefix,AttributeFix,21.1.3,other,none,categories,modrinth,LGPL-2.1-only,required,required
+auroral,Auroral,1.21.1-1.1.3,content,deep,categories,modrinth,MIT,required,required
+auroras,Auroras,1.6.2,client-ui,client,categories,modrinth,BSD-2-Clause,required,unsupported
+balm,Balm,21.0.66,library,none,categories,modrinth,LicenseRef-All-Rights-Reserved,optional,optional
+bcc,Better Compatibility Checker,21.1.8,other,none,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+bellsandwhistles,Create: Bells & Whistles,0.4.7-1.21.1,content,deep,categories,modrinth,GPL-3.0-or-later,required,required
+betteradvancedtooltips,Better Advanced Tooltips,2101.1.0-build.5,client-ui,client,categories,modrinth,MIT,required,required
+betteradvancements,Better Advancements,0.4.3.21,client-ui,client,categories,modrinth,LicenseRef-Dont-Be-a-Jerk,required,unsupported
+betterdeserttemples,YUNG's Better Desert Temples,1.21.1-NeoForge-4.1.5,content,data,categories,modrinth,LGPL-3.0-only,unsupported,required
+betterdungeons,YUNG's Better Dungeons,1.21.1-NeoForge-5.1.4,content,data,categories,modrinth,LGPL-3.0-only,unsupported,required
+betterendisland,YUNG's Better End Island,1.21.1-NeoForge-3.1.2,content,data,categories,modrinth,LGPL-3.0-only,unsupported,required
+betterfortresses,YUNG's Better Nether Fortresses,1.21.1-NeoForge-3.1.5,content,data,categories,modrinth,LGPL-3.0-only,unsupported,required
+betterjungletemples,YUNG's Better Jungle Temples,1.21.1-NeoForge-3.1.2,content,data,categories,modrinth,LGPL-3.0-only,unsupported,required
+bettermineshafts,YUNG's Better Mineshafts,1.21.1-NeoForge-5.1.1,content,data,categories,modrinth,LGPL-3.0-only,unsupported,required
+betteroceanmonuments,YUNG's Better Ocean Monuments,1.21.1-NeoForge-4.1.2,content,data,categories,modrinth,LGPL-3.0-only,unsupported,required
+betterstrongholds,YUNG's Better Strongholds,1.21.1-NeoForge-5.1.3,content,data,categories,modrinth,LGPL-3.0-only,unsupported,required
+betterwitchhuts,YUNG's Better Witch Huts,1.21.1-NeoForge-4.1.1,content,data,categories,modrinth,LGPL-3.0-only,unsupported,required
+bhc,Baubley Heart Canisters,1.21.1-1.4.3,content,logic,categories,curseforge (modrinth listing),MIT,required,required
+bibliobiomes,Bibliobiomes Legacy,1.6.1,integration,data,categories,modrinth,MIT,required,required
+bibliocraft,Bibliocraft Legacy,1.6.5,content,machines,categories,modrinth,MIT,required,required
+bibliowoods,Bibliowoods Legacy,1.6.2,integration,data,categories,modrinth,MIT,required,required
+bigreactors,Extreme Reactors,1.21.1-2.4.28,content,machines,categories,curseforge (modrinth listing),MIT,required,required
+biomeswevegone,Oh The Biomes We've Gone,2.6.3,content,deep,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+blockui,UI Library Mod,1.0.212-1.21.1-snapshot,library,none,name,curseforge,unknown (read mods.toml at import),,
+blueflame,Blue Flame Burning,1.21.1-1.1.1,content,logic,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+bookshelf,Bookshelf,21.1.81,library,none,categories,modrinth,LGPL-2.1-only,required,required
+borderlesswindow,Borderless Window,1.21.1-1.7.5_1,other,none,categories,modrinth,MIT,required,unsupported
+botanypots,BotanyPots,21.1.44,content,machines,categories,modrinth,LGPL-2.1-only,required,required
+botanypotsmystical,BotanyPots-Mystical,21.1.12,integration,data,categories,modrinth,LGPL-2.1-only,required,required
+botanytrees,BotanyTrees,21.1.7,integration,data,categories,modrinth,LGPL-2.1-only,required,required
+brandonscore,Brandon's Core,3.2.1.309,library,none,categories,modrinth,LicenseRef-CoFH-Dont-Be-a-Jerk-License,required,required
+bridgingmod,Bridging Mod,2.6.2+1.21.1,content,logic,categories,modrinth,MIT,required,unsupported
+buildinggadgets2,Building Gadgets 2,1.3.9,content,deep,name,curseforge,unknown (read mods.toml at import),,
+bwncr,Bad Wither No Cookie Reloaded,3.20.4,server-only,logic,categories,modrinth,MIT,required,unsupported
+byzantine,Byzantine,51.1,content,data,guess,curseforge,unknown (read mods.toml at import),,
+cabletiers,Cable Tiers,1.21.1-0.6.15,content,machines,categories,modrinth,MIT,required,required
+caelus,Caelus API,7.0.1+1.21.1,library,none,categories,modrinth,LGPL-3.0-or-later,required,required
+camol,Camol,1.21.1-0.4.0,library,none,guess,curseforge,unknown (read mods.toml at import),,
+cataclysm,L_Ender's Cataclysm 1.21.1,3.33,content,deep,categories,modrinth,CC-BY-NC-ND-4.0,required,required
+catjammies,CatJammies,1.21-1.7.1,client-ui,client,guess,curseforge,unknown (read mods.toml at import),,
+charginggadgets,Charging Gadgets,1.14.1,content,machines,name,curseforge,unknown (read mods.toml at import),,
+chipped,Chipped,4.0.2,content,data,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+chisel,Chisel Reborn,2.0.1+mc1.21.1,content,machines,categories,modrinth,LicenseRef-Custom,required,required
+chromacarvings,Chroma Carvings,1.21.1-0.2.0,content,data,guess,curseforge,unknown (read mods.toml at import),,
+cleanswing,Clean Swing,1.10,content,logic,guess,curseforge,unknown (read mods.toml at import),,
+cloth_config,Cloth Config v15 API,15.0.140,library,none,categories,modrinth,LGPL-3.0-only,optional,optional
+cloudglass,Cloud Glass,1.1.0,content,data,categories,curseforge (modrinth listing),MIT,required,required
+clumps,Clumps,19.0.0.1,performance,none,categories,modrinth,MIT,optional,optional
+cobblegengalore,Cobblegen Galore,1.21.1-0.2.9,content,machines,guess,curseforge,unknown (read mods.toml at import),,
+cobweb,Cobweb,1.4.0,library,none,categories,modrinth,LicenseRef-Crystal-Nest-Community-License-v1,required,required
+codechickenlib,CodeChicken Lib,4.6.1.529,library,none,categories,modrinth,LGPL-2.1-or-later,optional,optional
+colorfulhearts,Colorful Hearts,10.5.9,client-ui,client,categories,modrinth,MIT,required,unsupported
+colorwheel,Colorwheel,1.3.0+mc1.21.1,other,none,categories,modrinth,LGPL-3.0-only,required,unsupported
+colorwheel_patcher,Colorwheel Patcher,1.0.5+mc1.21.1,other,none,categories,modrinth,LicenseRef-All-Rights-Reserved,required,unsupported
+comforts,Comforts,9.0.5+1.21.1,content,logic,categories,modrinth,LGPL-3.0-or-later,required,required
+common_storage_lib,Common Storage Lib: Core,0.0.10,library,none,categories,modrinth,MIT,required,required
+commoncapabilities,CommonCapabilities,2.11.6,library,none,name,curseforge,unknown (read mods.toml at import),,
+compactmachines,Compact Machines,7.0.81,content,deep,name,curseforge,unknown (read mods.toml at import),,
+computercraft,CC: Tweaked,1.113.1,content,deep,categories,modrinth,LicenseRef-CCPL,required,required
+connectedglass,Connected Glass,1.1.14,content,data,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+connectivity,Connectivity Mod,7.7,performance,none,name,curseforge,unknown (read mods.toml at import),,
+constructionstick,Construction Sticks,1.5.0,content,logic,categories,curseforge (modrinth listing),MIT,required,required
+controlling,Controlling,19.0.5,client-ui,client,categories,modrinth,MIT,required,unsupported
+cookingforblockheads,Cooking for Blockheads,21.1.24,content,machines,categories,curseforge (modrinth listing),LicenseRef-All-Rights-Reserved,required,required
+copycats,Create: Copycats+,3.0.9+mc.1.21.1-neoforge,content,deep,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+corgilib,CorgiLib,5.0.0.10,library,none,categories,modrinth,LGPL-3.0-only,required,required
+cosmeticarmorreworked,CosmeticArmorReworked,1.21.1-v1-neoforge,content,machines,name,curseforge,unknown (read mods.toml at import),,
+crafting_on_a_stick,Crafting On A Stick,1.21.0.6,content,logic,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+craftingtweaks,Crafting Tweaks,21.1.11,client-ui,client,categories,modrinth,LicenseRef-All-Rights-Reserved,optional,optional
+crash_assistant,Crash Assistant,1.11.12,other,none,categories,modrinth,LicenseRef-LicenseRef-KostromDan-MML-1.1.3,required,unsupported
+crashutilities,Crash Utilities,9.0.4,server-only,logic,categories,curseforge (modrinth listing),MIT,unsupported,required
+create,Create,6.0.10,content,deep,categories,modrinth,LicenseRef-Create-Mod-License,optional,required
+create_aquatic_ambitions,Create Aquatic Ambitions,2.0.4,content,deep,categories,modrinth,MIT,required,required
+create_dragons_plus,Create: Dragons Plus,1.11.9,content,deep,categories,modrinth,LGPL-3.0-or-later,required,required
+create_enchantment_industry,Create: Enchantment Industry,2.5.4b,content,deep,categories,modrinth,LGPL-3.0-or-later,required,required
+create_hypertube,Create Hypertube,0.6.0,content,deep,categories,modrinth,Apache-2.0,required,required
+createaddition,Create Crafts & Additions,1.7.2,content,deep,categories,modrinth,MIT,required,required
+creeperoverhaul,Creeper Overhaul,4.0.6,content,deep,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+cristellib,Cristel Lib,3.1.7,library,none,categories,modrinth,CC-BY-NC-ND-4.0,optional,required
+cryonicconfig,Cryonic Config,1.0.0+mc1.21.11,library,none,categories,modrinth,MIT,optional,optional
+crystalix,Crystalix,3.0.2,content,data,categories,curseforge (modrinth listing),LGPL-3.0-or-later,required,required
+ctm,ConnectedTexturesMod,1.21-1.2.1+3,other,none,name,curseforge,unknown (read mods.toml at import),,
+ctov,ChoiceTheorem's Overhauled Village,3.6.3,content,data,categories,modrinth,CC-BY-NC-ND-4.0,unsupported,required
+cucumber,Cucumber Library,8.0.16,library,none,categories,modrinth,MIT,required,required
+cupboard,Cupboard mod,4.2,library,none,name,curseforge,unknown (read mods.toml at import),,
+curios,Curios API,9.5.1+1.21.1,library,none,categories,modrinth,LGPL-3.0-or-later,required,required
+cyclopscore,Cyclops Core,1.30.0,library,none,categories,curseforge (modrinth listing),MIT,required,required
+darkmodeeverywhere,Dark Mode Everywhere,1.21.1-1.4.0,client-ui,client,categories,modrinth,MIT,required,unsupported
+deeperdarker,Deeper and Darker,1.4.1,content,deep,categories,modrinth,AGPL-3.0-only,required,required
+deimos,Deimos,2.7,library,none,categories,modrinth,MIT,optional,optional
+dimstorage,DimStorage,9.1.1,content,machines,categories,modrinth,AGPL-3.0-only,required,required
+disenchanting_table,Dis-Enchanting Table,5.0.2,content,machines,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+domum_ornamentum,Domum Ornamentum,1.0.236-snapshot,content,deep,name,curseforge,unknown (read mods.toml at import),,
+draconicevolution,Draconic Evolution,3.1.4.633,content,deep,categories,modrinth,LicenseRef-CoFH-Dont-Be-a-Jerk-License,required,required
+drippyloadingscreen,Drippy Loading Screen,3.1.5,client-ui,client,categories,modrinth,LicenseRef-DSMSLv3,required,unsupported
+dummmmmmy,MmmMmmMmmMmm,1.21-2.1.2,content,deep,categories,modrinth,CC0-1.0,required,required
+dungeoncrawl,Dungeon Crawl,2.3.17,content,deep,categories,modrinth,GPL-3.0-only,unsupported,required
+dungeons_arise,When Dungeons Arise,2.1.68,content,data,categories,modrinth,LicenseRef-All-Rights-Reserved,unsupported,required
+dyenamics,Dyenamics,1.21.1-3.5.0,content,logic,name,curseforge,unknown (read mods.toml at import),,
+dyenamicsandfriends,Dyenamics and Friends,1.21.1-2.2.2,integration,data,categories,curseforge (modrinth listing),LicenseRef-All-Rights-Reserved,required,required
+dysoncubeproject,Dyson Cube Project,1.0.5,content,deep,name,curseforge,unknown (read mods.toml at import),,
+easy_villagers,Easy Villagers,1.21.1-1.1.47,content,deep,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+edivadlib,EdivadLib,3.0.0,library,none,categories,modrinth,LGPL-3.0-only,required,required
+elevatorid,ElevatorMod,1.21.1-1.11.4,content,logic,categories,modrinth,MIT,required,required
+enchdesc,EnchantmentDescriptions,21.1.11,client-ui,client,categories,modrinth,LGPL-2.1-only,required,optional
+enderdrives,Ender Drives,1.5.23,content,machines,categories,curseforge (modrinth listing),MIT,required,required
+enderio,Ender IO,8.2.12-beta,content,deep,categories,modrinth,Unlicense,required,required
+endermanoverhaul,Enderman Overhaul,2.0.3,content,deep,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+enderstorage,EnderStorage,2.13.0.191,content,machines,categories,modrinth,MIT,required,required
+energymeter,Energy Meter,1.21.1-0.5.2,content,machines,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+entangled,Entangled,1.3.21,content,machines,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+eternal_starlight,Eternal Starlight,0.9.1+1.21.1+neoforge,content,deep,categories,modrinth,MIT,required,required
+euphoria_patcher,Euphoria Patcher,1.10.5-r5.9.3-neoforge,other,none,categories,modrinth,MPL-2.0,required,unsupported
+everythingcopper,Everything is Copper,1.21.1-2.4.5,content,data,categories,curseforge (modrinth listing),LicenseRef-All-Rights-Reserved,required,required
+evilcraft,EvilCraft,1.2.98,content,deep,categories,curseforge (modrinth listing),MIT,required,required
+expandedae,Expanded AE,2.1.4,content,machines,categories,curseforge (modrinth listing),LGPL-3.0-only,required,required
+experiencelib,ExperienceLib,1.2.1,library,none,categories,modrinth,GPL-3.0-only,required,required
+explorerscompass,Explorer's Compass,1.21.1-3.4.0-neoforge,content,machines,categories,modrinth,CC-BY-NC-SA-4.0,required,required
+explorify,Explorify,1.6.5,content,data,categories,modrinth,LicenseRef-All-Rights-Reserved,optional,required
+extended_industrialization,Extended Industrialization,1.16.4-1.21.1,content,machines,categories,modrinth,MIT,required,required
+extendedae,ExtendedAE,1.21-2.2.41-neoforge,content,machines,name,curseforge,unknown (read mods.toml at import),,
+extradisks,Extra Disks,1.21.1-4.0.15,content,machines,categories,modrinth,MIT,required,required
+extrastorage,ExtraStorage,5.0.10,content,machines,categories,modrinth,AGPL-3.0-only,required,required
+extremesoundmuffler,Extreme Sound Muffler,3.57,client-ui,client,categories,modrinth,LGPL-3.0-only,required,optional
+factory_blocks,Factory Blocks,1.4.0+mc1.21.1,content,data,categories,curseforge (modrinth listing),CC0-1.0,required,required
+fancymenu,FancyMenu,3.9.14,client-ui,client,categories,modrinth,LicenseRef-DSMSLv3.1,required,optional
+farmersdelight,Farmer's Delight,1.3.4,content,machines,categories,modrinth,MIT,required,required
+farmingforblockheads,Farming for Blockheads,21.1.14,content,machines,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+fastbench,Fast Workbench,9.1.3,performance,none,name,curseforge,unknown (read mods.toml at import),,
+fastfurnace,FastFurnace,9.0.1,performance,none,categories,curseforge (modrinth listing),MIT,unsupported,required
+fastsuite,Fast Suite,6.0.7,performance,none,categories,curseforge (modrinth listing),MIT,required,required
+ferritecore,Ferrite Core,7.0.3,performance,none,categories,modrinth,MIT,optional,optional
+fireproofboats,Fireproof Boats,1.21.1-1.0.4,content,deep,categories,curseforge (modrinth listing),LicenseRef-All-Rights-Reserved,required,required
+flickerfix,FlickerFix,6.1.0,other,none,categories,curseforge (modrinth listing),MIT,required,unsupported
+fluxnetworks,Flux Networks,8.0.0,content,machines,name,curseforge,unknown (read mods.toml at import),,
+forbidden_arcanus,Forbidden Arcanus,2.6.1,content,deep,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+formations,Formations,1.0.4,library,none,categories,modrinth,LicenseRef-All-Rights-Reserved,unsupported,required
+formationsnether,Formations Nether,1.0.5+b,content,data,categories,modrinth,LicenseRef-All-Rights-Reserved,unsupported,required
+formationsoverworld,Formations Overworld,1.0.5+c,content,data,categories,modrinth,LicenseRef-All-Rights-Reserved,unsupported,required
+framedblocks,FramedBlocks,10.6.3,content,deep,categories,modrinth,LGPL-3.0-only,required,required
+framework,Framework,0.13.11,library,none,name,curseforge,unknown (read mods.toml at import),,
+ftbchunks,FTB Chunks,2101.1.22,server-only,deep,name,curseforge,unknown (read mods.toml at import),,
+ftbessentials,FTB Essentials,2101.1.10,server-only,logic,name,curseforge,unknown (read mods.toml at import),,
+ftbfiltersystem,FTB Filter System,21.1.4,library,none,name,curseforge,unknown (read mods.toml at import),,
+ftbjeiextras,FTB Jei Extras,21.1.7,integration,client,name,curseforge,unknown (read mods.toml at import),,
+ftblibrary,FTB Library,2101.1.37,library,none,name,curseforge,unknown (read mods.toml at import),,
+ftbquests,FTB Quests,2101.1.36,content,machines,name,curseforge,unknown (read mods.toml at import),,
+ftbquestslangsplitter,FTB Quests Lang Splitter,1.0.7,other,none,name,curseforge,unknown (read mods.toml at import),,
+ftbranks,FTB Ranks,2101.1.5,server-only,logic,name,curseforge,unknown (read mods.toml at import),,
+ftbteams,FTB Teams,2101.1.11,server-only,logic,name,curseforge,unknown (read mods.toml at import),,
+ftbultimine,FTB Ultimine,2101.1.15,content,logic,name,curseforge,unknown (read mods.toml at import),,
+ftbxmodcompat,FTB XMod Compat,21.1.12,integration,logic,name,curseforge,unknown (read mods.toml at import),,
+fuelgoeshere,Fuel Goes Here,1.21.1-1.2.0,content,logic,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+functionalstorage,Functional Storage,1.21.1-1.5.8,content,machines,categories,curseforge (modrinth listing),MIT,required,required
+fusion,Fusion,1.3.16,library,none,categories,modrinth,LicenseRef-All-Rights-Reserved,required,unsupported
+fzzy_config,Fzzy Config,0.7.7+1.21+neoforge,library,none,categories,modrinth,LicenseRef-TDL-M,required,required
+gateways,Gateways To Eternity,5.1.0,content,deep,categories,curseforge (modrinth listing),MIT,required,required
+geckolib,GeckoLib 4,4.9.3,library,none,categories,modrinth,MIT,required,optional
+generatorgalore,Generator Galore,1.21.1-1.7.0,content,machines,categories,curseforge (modrinth listing),LicenseRef-All-Rights-Reserved,required,required
+getittogetherdrops,"Get It Together, Drops!",1.4,performance,none,categories,modrinth,MIT,unsupported,required
+glassential,Glassential-renewed,3.4.7,content,data,categories,modrinth,MIT,required,required
+glodium,Glodium,1.21-2.2-neoforge,library,none,categories,modrinth,MIT,required,required
+gmut,Gravitational Modulating Additional Unit,6.4,integration,logic,name,curseforge,unknown (read mods.toml at import),,
+guideme,GuideME,21.1.19,library,none,categories,modrinth,LicenseRef-Multiple-OSS-Licenses,required,required
+handcrafted,Handcrafted,4.0.3,content,machines,categories,modrinth,LicenseRef-Terrarium-Licence,required,required
+hardenedarmadillos,Hardened Armadillos,1.21.1-0.2.0,content,logic,guess,curseforge,unknown (read mods.toml at import),,
+hellish_trials,Hellish Trials,1.0.5,content,data,categories,modrinth,LicenseRef-All-Rights-Reserved,unknown,unknown
+herbsandharvest,Mama's Herbs and Harvest,1.21.1-24,content,data,categories,curseforge (modrinth listing),MIT,required,required
+heyberryshutup,Hey Berry! SHUT UP,1.21.0-2.0.4,content,logic,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+hostilenetworks,Hostile Neural Networks,6.5.1,content,machines,categories,modrinth,MIT,required,required
+iceandfire,Ice And Fire Community Edition,2.0-beta.17,content,deep,categories,modrinth,LGPL-3.0-or-later,required,required
+iceberg,Iceberg,1.3.2,library,none,categories,modrinth,CC-BY-NC-ND-4.0,required,required
+illagerwarship,Illager-Warship,1.0.1,content,deep,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+imfast,I'm Fast,1.0.3,content,logic,categories,modrinth,MIT,unsupported,required
+immediatelyfast,ImmediatelyFast,1.6.15+1.21.1,performance,none,categories,modrinth,LGPL-3.0-or-later,required,unsupported
+immeng,Immersive Energistics,1.1.0-beta,integration,machines,categories,modrinth,LGPL-3.0-only,required,required
+immersiveengineering,Immersive Engineering,12.4.2-194,content,deep,categories,modrinth,LicenseRef-Custom,required,required
+incontrol,InControl,1.21-10.3.0,server-only,logic,categories,modrinth,MIT,unsupported,required
+industrialforegoing,Industrial Foregoing,1.21-3.6.39,content,machines,categories,modrinth,MIT,required,required
+industrialforegoingsouls,Industrial Foregoing Souls,1.10.7,content,machines,categories,modrinth,MIT,required,required
+industrialization_overdrive,Industrialization Overdrive,1.14.0+1.21.1,content,machines,categories,modrinth,MIT,required,required
+integratedcrafting,IntegratedCrafting,1.7.2,content,deep,name,curseforge,unknown (read mods.toml at import),,
+integrateddynamics,IntegratedDynamics,1.38.0,content,deep,name,curseforge,unknown (read mods.toml at import),,
+integratedscripting,IntegratedScripting,1.0.27,content,deep,name,curseforge,unknown (read mods.toml at import),,
+integratedterminals,IntegratedTerminals,1.10.0,content,deep,name,curseforge,unknown (read mods.toml at import),,
+integratedtunnels,IntegratedTunnels,1.13.0,content,deep,name,curseforge,unknown (read mods.toml at import),,
+interdimensionalwirelesstransmitter,Interdimensional Wireless Transmitter,1.21.1-0.1.5,content,machines,categories,modrinth,MIT,required,required
+invasiveopts,Invasive Optimizations,1.0.24,performance,none,categories,modrinth,MIT,required,required
+invtweaks,Inventory Tweaks Refoxed,1.21.1-1.3.2,client-ui,client,name,curseforge,unknown (read mods.toml at import),,
+iris,Iris,1.8.14-beta.1+mc1.21.1,other,none,categories,modrinth,LGPL-3.0-only,required,unsupported
+iris_search,IrisSearch,1.8.3-neoforge,other,none,categories,modrinth,LGPL-3.0-only,required,unsupported
+ironfurnaces,Iron Furnaces,4.3.2,content,machines,categories,modrinth,Apache-2.0,required,required
+ironjetpacks,Iron Jetpacks,8.0.11,content,logic,categories,modrinth,MIT,required,required
+irons_jewelry,Iron's Gems 'n Jewelry,1.21.1-2.0.2,content,machines,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+irons_lib,Iron's Lib,1.21.1-2.2.0,library,none,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+irons_spellbooks,Iron's Spells 'n Spellbooks,1.21.1-3.16.3,content,deep,categories,curseforge (modrinth listing),LicenseRef-All-Rights-Reserved,required,required
+itemcollectors,Item Collectors,1.1.10,content,machines,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+jade,Jade,15.10.6+neoforge,client-ui,client,categories,modrinth,CC-BY-NC-SA-4.0,optional,optional
+jearchaeology,Just Enough Archaeology,1.21.1-1.2.0,integration,client,categories,curseforge (modrinth listing),LicenseRef-All-Rights-Reserved,required,required
+jei,Just Enough Items,19.64.0.454,client-ui,client,categories,modrinth,MIT,optional,optional
+jei_mekanism_multiblocks,Just Enough Mekanism Multiblocks,7.23,integration,client,categories,curseforge (modrinth listing),MIT,required,unsupported
+jeistuff,Just Enough Stuff,1.21.1-1.2.1,integration,client,name,curseforge,unknown (read mods.toml at import),,
+journeymap,Journeymap,1.21.1-6.0.9,client-ui,client,categories,modrinth,LicenseRef-All-Rights-Reserved,optional,optional
+jumpboat,Jumpy Boats,1.21.0-1.0.5,content,logic,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+jupiter,Jupiter,2.3.7,library,none,categories,modrinth,LGPL-3.0-or-later,optional,optional
+justdirethings,Just Dire Things,1.5.7,content,deep,name,curseforge,unknown (read mods.toml at import),,
+justenoughbreeding,Just Enough Breeding,3.3.1,integration,client,categories,modrinth,MIT,required,unsupported
+justenoughprofessions,Just Enough Professions (JEP),4.0.5,integration,client,categories,curseforge (modrinth listing),MIT,required,optional
+justzoom,Just Zoom,3.0.1,client-ui,none,categories,modrinth,LicenseRef-DSMSLv3.1,required,unsupported
+keybindbundles,KeyBind Bundles,1.4.0,client-ui,client,categories,curseforge (modrinth listing),MIT,required,unsupported
+keybindspurger,KeybindsPurger,1.4.0,client-ui,client,categories,modrinth,MIT,required,unsupported
+konkrete,Konkrete,1.9.9,library,none,categories,modrinth,Apache-2.0,optional,optional
+kotlinforforge,kotlinforforge,,library,none,name,curseforge,unknown (read mods.toml at import),,
+kubejs,KubeJS,2101.7.2-build.374,other,none,categories,curseforge (modrinth listing),LGPL-3.0-only,optional,optional
+kubejstweaks,KubeJS Tweaks,1.0.6,other,none,name,curseforge,unknown (read mods.toml at import),,
+laserbridges,Laser Bridges,6.2,content,machines,categories,modrinth,MIT,required,required
+laserio,LaserIO,1.9.11,content,machines,name,curseforge,unknown (read mods.toml at import),,
+lionfishapi,lionfishapi,3.1,library,none,categories,modrinth,LGPL-3.0-only,required,required
+lithostitched,Lithostitched,1.8.1,library,none,categories,modrinth,MIT,unsupported,required
+little_big_redstone,Little Big Redstone,1.9.12-1.21.1,content,deep,categories,modrinth,MIT,required,required
+livingthings,Living Things,1.21.1-2.3.2,content,deep,categories,modrinth,CC-BY-NC-ND-4.0,required,required
+lmft,Load My F***ing Tags,1.1.1+1.21.9,other,none,categories,modrinth,CC0-1.0,unsupported,required
+logisticsnetworks,LogisticsNetworks,1.17.2,content,machines,guess,curseforge,unknown (read mods.toml at import),,
+lootr,Lootr,1.21.1-1.11.38.127,content,machines,categories,modrinth,MIT,required,required
+luminax,Luminax,1.3.1,client-ui,client,guess,modrinth,LGPL-3.0-or-later,required,required
+mahoutsukai,Mahou Tsukai,1.21.1-v1.36.28,content,deep,categories,curseforge (modrinth listing),LicenseRef-All-Rights-Reserved,required,required
+mcjtylib,McJtyLib,1.21-9.0.21,library,none,categories,modrinth,MIT,required,required
+mcwbridges,Macaw's Bridges,3.1.2,content,data,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+mcwdoors,Macaw's Doors,1.1.5,content,data,categories,modrinth,MIT,required,required
+mcwfences,Macaw's Fences and Walls,1.2.1,content,data,categories,modrinth,MIT,required,required
+mcwfurnitures,Macaw's Furniture,3.4.1,content,machines,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+mcwholidays,Macaw's Holidays,1.1.2,content,data,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+mcwlights,Macaw's Lights and Lamps,1.1.5,content,logic,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+mcwpaths,Macaw's Paths and Pavings,1.1.1,content,data,categories,modrinth,MIT,required,required
+mcwroofs,Macaw's Roofs,2.3.2,content,data,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+mcwstairs,Macaw's Stairs and Balconies,1.0.2,content,data,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+mcwtrpdoors,Macaw's Trapdoors,1.1.5,content,data,categories,modrinth,MIT,required,required
+mcwwindows,Macaw's Windows,2.4.2,content,logic,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+measurements,Measurements,3.0.3,content,logic,categories,curseforge (modrinth listing),MIT,required,required
+megacells,MEGA Cells,4.11.0,content,machines,categories,curseforge (modrinth listing),LGPL-3.0-only,required,required
+mekanism,Mekanism,10.7.19,content,deep,categories,modrinth,MIT,required,required
+mekanismcovers,Mekanism Covers,1.3-BETA+1.21,integration,machines,categories,modrinth,MPL-2.0,required,required
+mekanismgenerators,Mekanism: Generators,10.7.19,content,deep,categories,modrinth,MIT,required,required
+mekanismtools,Mekanism: Tools,10.7.19,content,data,categories,modrinth,MIT,required,required
+mekanisticrouters,Mekanistic Routers,1.2.0,integration,machines,categories,curseforge (modrinth listing),MIT,required,required
+mekmm,Mekanism: MoreMachine,1.4.1,content,machines,categories,modrinth,MIT,required,required
+melody,Melody,1.0.10,library,none,categories,modrinth,MIT,unknown,unknown
+memorysettings,memorysettings mod,6.0,other,none,name,curseforge,unknown (read mods.toml at import),,
+merequester,ME Requester,1.21.1-1.5.0,content,machines,categories,modrinth,LGPL-3.0-only,required,required
+merrymaking,Mama's MerryMaking,1.21.1-17,content,logic,categories,curseforge (modrinth listing),MIT,required,required
+mes,MoogsEndStructures,2.1.1,content,data,categories,modrinth,LGPL-3.0-only,unsupported,required
+mezz_config,mezz_config,,library,none,categories,modrinth,MIT,optional,optional
+mffs,Modular Force Field System,5.4.44,content,deep,categories,curseforge (modrinth listing),LicenseRef-All-Rights-Reserved,required,required
+mifa,More Industrial Foregoing Addons,2.1.0,content,machines,categories,modrinth,MIT,required,required
+minecolonies,MineColonies,1.1.1403-1.21.1,content,deep,categories,curseforge (modrinth listing),GPL-3.0-or-later,required,required
+mininggadgets,Mining Gadgets,1.18.8,content,deep,name,curseforge,unknown (read mods.toml at import),,
+mns,MoogsNetherStructures,3.1.1,content,data,categories,modrinth,LGPL-3.0-only,unsupported,required
+mob_grinding_utils,Mob Grinding Utils,1.1.10+mc1.21.1,content,machines,name,curseforge,unknown (read mods.toml at import),,
+modelfix,Model Gap Fix,1.21-1.10,other,none,categories,modrinth,GPL-3.0-only,required,unsupported
+modern_industrialization,Modern Industrialization,2.5.10,content,deep,categories,modrinth,MIT,required,required
+moderndynamics,Modern Dynamics,0.9.6,content,machines,categories,modrinth,LGPL-3.0-only,required,required
+modernfix,ModernFix,5.27.26+mc1.21.1,performance,none,categories,modrinth,LGPL-3.0-only,optional,optional
+modonomicon,Modonomicon,1.120.7,library,none,categories,modrinth,MIT AND CC-BY-4.0,required,required
+modularbees,ModularBees,1.21.1-3.4-neoforge,content,machines,name,curseforge,unknown (read mods.toml at import),,
+modularrouters,Modular Routers,13.2.7,content,machines,categories,modrinth,MIT,required,required
+monolib,MonoLib,4.1.2,library,none,categories,modrinth,Unlicense,required,required
+moogs_structures,Moog's Structure Lib,3.4.2,library,none,categories,modrinth,LGPL-3.0-only,unsupported,required
+moonlight,Moonlight Lib,1.21.1-3.7.2,library,none,categories,modrinth,LicenseRef-LGPL-with-additional-dependency-clause,required,required
+moredragoneggs,More Dragon Eggs,5.0,content,logic,name,curseforge,unknown (read mods.toml at import),,
+moreoverlays,More Overlays Updated,1.24.2,client-ui,client,categories,modrinth,MIT,required,unsupported
+morered,More Red,6.0.0.3,content,logic,categories,curseforge (modrinth listing),MIT,required,required
+moreredxcctcompat,More Red x CC:Tweaked Compat,1.21.1-1.3.0,integration,logic,name,curseforge,unknown (read mods.toml at import),,
+mostructures,Mo' Structures,1.6.0+1.21.1,content,data,categories,modrinth,LGPL-3.0-only,unsupported,required
+mousetweaks,Mouse Tweaks,2.26.1,client-ui,client,categories,modrinth,BSD-3-Clause,required,unsupported
+mss,MoogsSoaringStructures,2.2.0,content,data,categories,modrinth,GPL-3.0-only,unsupported,required
+multipiston,Multi-Piston,1.2.58-1.21.1,content,logic,name,curseforge,unknown (read mods.toml at import),,
+mvs,MoogsVoyagerStructures,5.1.3,content,data,categories,modrinth,MIT,unsupported,required
+mysticalagradditions,Mystical Agradditions,8.0.15,content,logic,categories,modrinth,MIT,required,required
+mysticalagriculture,Mystical Agriculture,8.0.28,content,machines,categories,modrinth,MIT,required,required
+mysticalcustomization,Mystical Customization,6.0.2,other,none,categories,modrinth,MIT,required,required
+naturesaura,NaturesAura,41.10,content,deep,categories,modrinth,MIT,required,required
+naturescompass,Nature's Compass,1.21.1-3.4.0-neoforge,content,machines,categories,modrinth,CC-BY-NC-SA-4.0,required,required
+neo_auth,NeoAuth,1.0.1,other,none,categories,curseforge (modrinth listing),MIT,required,unsupported
+neovitae,Neo Vitae,1.1.38,content,deep,categories,modrinth,MIT,required,required
+netherportalfix,NetherPortalFix,21.1.1,server-only,logic,categories,curseforge (modrinth listing),LicenseRef-All-Rights-Reserved,unsupported,required
+nochatreports,No Chat Reports,1.21.1-v2.9.1,other,none,categories,modrinth,WTFPL,optional,optional
+not_enough_glyphs,Not Enough Glyphs,4.6.2,content,logic,categories,modrinth,LGPL-3.0-only,required,required
+notenoughanimations,NotEnoughAnimations,1.12.6,client-ui,client,categories,modrinth,LicenseRef-tr7zw-Protective-License,required,unsupported
+novillagerdm,No Villager Death Messages,6.0.0,server-only,logic,categories,modrinth,MIT,optional,optional
+nullscape,Nullscape,1.2.14,content,data,categories,modrinth,LicenseRef-Stardust-Labs-License,optional,required
+observable,Observable,5.4.4,performance,none,categories,modrinth,MPL-2.0,required,required
+observerlib,ObserverLib,1.10.3,library,none,name,curseforge,unknown (read mods.toml at import),,
+occultism,Occultism,1.224.5,content,deep,categories,modrinth,MIT,required,required
+occultism_kubejs,Occultism KubeJS,1.11.0,integration,none,categories,modrinth,MIT,required,required
+octolib,OctoLib,0.6.2,library,none,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+ohthetreesyoullgrow,Oh The Trees You'll Grow,5.3.5,library,none,categories,modrinth,LGPL-3.0-only,unsupported,required
+omegaconfig,Omega Config Architectury,1.5.1,library,none,name,curseforge,unknown (read mods.toml at import),,
+openloader,OpenLoader,21.1.5,other,none,categories,modrinth,LGPL-2.1-only,required,required
+oracle_index,Oracle Index,1.4.0,library,none,categories,modrinth,CC-BY-4.0,required,unsupported
+oritech,Oritech,1.2.13,content,deep,categories,modrinth,CC-BY-4.0,required,required
+overlapless,Overlapless,1.21.1-1.2.0,client-ui,client,guess,curseforge,unknown (read mods.toml at import),,
+overloadedarmorbar,OverloadedArmorBar,2,client-ui,client,name,curseforge,unknown (read mods.toml at import),,
+owo,oωo,0.12.15.5-beta.1+1.21,library,none,categories,modrinth,MIT,required,required
+pamhc2crops,Pam's HarvestCraft - Crops,1.0.9,content,data,name,curseforge,unknown (read mods.toml at import),,
+pamhc2foodcore,Pam's HarvestCraft - Food Core,1.0.4,content,data,name,curseforge,unknown (read mods.toml at import),,
+pamhc2foodextended,Pam's HarvestCraft - Food Extended,1.0.0,content,data,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+pamhc2trees,Pam's HarvestCraft - Trees,1.0.9,content,data,name,curseforge,unknown (read mods.toml at import),,
+patchouli,Patchouli,1.21.1-93-NEOFORGE,library,none,categories,modrinth,CC-BY-NC-SA-3.0,required,required
+pipez,Pipez,1.21.1-1.2.31,content,machines,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+placebo,Placebo,9.9.4,library,none,categories,modrinth,MIT,optional,optional
+playeranimator,Player Animator,2.0.4+1.21.1,library,none,categories,modrinth,MIT,required,required
+pneumaticcraft,PneumaticCraft: Repressurized,8.2.23,content,deep,categories,modrinth,LGPL-2.1-only,required,required
+pocketstorage,Pocket Storage,1.2.5,content,machines,categories,curseforge (modrinth listing),MIT,required,required
+polyeng,Polymorphic Energistics,0.4.1,integration,machines,categories,modrinth,LGPL-3.0-only,required,required
+polylib,PolyLib,2100.1.0-build.183,library,none,categories,curseforge (modrinth listing),BSD-4-Clause,optional,optional
+polymorph,Polymorph,1.2.0+1.21.1,client-ui,client,categories,modrinth,LGPL-3.0-or-later,required,required
+ponderjs,PonderJS,1.21.1-2.4.0,integration,none,categories,modrinth,MIT,required,unsupported
+potionsmaster,PotionsMaster,1.0.1,content,machines,guess,curseforge,unknown (read mods.toml at import),,
+powah,Powah,6.2.10,content,machines,categories,modrinth,LGPL-3.0-only,required,required
+prickle,PrickleMC,21.1.11,library,none,categories,modrinth,LGPL-2.1-only,required,required
+prism,Prism,1.0.11,library,none,categories,modrinth,CC-BY-NC-ND-4.0,required,unsupported
+productivebees,Productive Bees,1.21.1-13.14.0,content,deep,categories,curseforge (modrinth listing),LicenseRef-All-Rights-Reserved,required,required
+productivemetalworks,Productive Metalworks,1.21.1-1.15.1,content,machines,name,curseforge,unknown (read mods.toml at import),,
+productivetrees,Productive Trees,1.21.1-1.1.1,content,logic,categories,curseforge (modrinth listing),LicenseRef-All-Rights-Reserved,required,required
+pylons,Pylons,5.4.2,content,machines,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+quarryplus,QuarryPlus,21.1.164,content,machines,categories,modrinth,LGPL-3.0-only,required,required
+railcraft,Railcraft Reborn,1.2.12,content,deep,categories,modrinth,LicenseRef-Railcraft-Reborn-License,required,required
+rangedpumps,Ranged Pumps,1.3.0,content,machines,categories,curseforge (modrinth listing),MIT,required,required
+rebind_narrator,Rebind Narrator,2026.08.31,client-ui,none,categories,modrinth,LGPL-3.0-only,required,unsupported
+rechiseled,Rechiseled,1.2.6,content,machines,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+rechiseled_chipped,Rechiseled: Chipped,1.3,integration,data,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+rechiseledcreate,Rechiseled: Create,1.1.1,integration,data,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+redstonepen,Redstone Pen,1.11.42,content,logic,categories,modrinth,MIT,required,required
+refinedfluidsubstitution,Refined Fluid Substitution,1.21.1-2.0.0,integration,logic,categories,modrinth,MIT,required,required
+refinedstorage,Refined Storage,2.0.9,content,deep,categories,curseforge (modrinth listing),MIT,required,required
+refinedstorage_curios_integration,Refined Storage - Curios Integration,1.0.0,integration,machines,categories,curseforge (modrinth listing),MIT,required,required
+refinedstorage_jei_integration,Refined Storage - JEI Integration,1.0.0,integration,client,categories,curseforge (modrinth listing),MIT,required,required
+refinedstorage_mekanism_integration,Refined Storage - Mekanism Integration,1.2.0,integration,machines,categories,curseforge (modrinth listing),MIT,required,required
+refinedstorage_quartz_arsenal,Refined Storage - Quartz Arsenal,1.0.8,content,logic,categories,curseforge (modrinth listing),MIT,required,required
+refinedtypes,Refined Types,1.21.1-0.3.2,content,machines,categories,modrinth,MIT,required,required
+refurbished_furniture,MrCrayfish's Furniture Mod: Refurbished,1.0.22,content,deep,name,curseforge,unknown (read mods.toml at import),,
+regions_unexplored,Regions Unexplored,0.5.9,content,data,categories,modrinth,MIT,required,required
+relics,Relics,0.12.8,content,deep,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+reliquary,Reliquary Reincarnations,2.0.80,content,deep,categories,curseforge (modrinth listing),LicenseRef-All-Rights-Reserved,required,required
+reliquified_artifacts,reliquified_artifacts,1.0.9,integration,logic,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+repeatable_trial_vaults,Repeatable Trial Vaults,1.0.3,content,logic,categories,modrinth,MIT,required,required
+repurposed_structures,Repurposed Structures,7.5.22+1.21.1-neoforge,content,data,categories,modrinth,LGPL-3.0-only,unsupported,required
+resourcefulconfig,Resourcefulconfig,3.0.11,library,none,categories,modrinth,MIT,optional,optional
+resourcefullib,Resourceful Lib,3.0.12,library,none,categories,modrinth,MIT,required,required
+restrictions,Restrictions,1.21-7.0.3,content,logic,categories,curseforge (modrinth listing),MIT,required,required
+rftoolsbase,RFToolsBase,1.21-6.0.11,content,machines,categories,modrinth,MIT,required,required
+rftoolsbuilder,RFToolsBuilder,1.21-7.0.7,content,deep,categories,modrinth,MIT,required,required
+rftoolspower,RFToolsPower,1.21-7.0.6,content,machines,categories,modrinth,MIT,required,required
+rftoolsstorage,RFToolsStorage,1.21-6.0.5,content,machines,categories,modrinth,MIT,required,required
+rftoolsutility,RFToolsUtility,1.21-7.0.12,content,machines,categories,modrinth,MIT,required,required
+rhino,Rhino,2101.2.8-build.91,library,none,categories,modrinth,MPL-2.0,optional,optional
+rootsclassic,Roots Classic,1.21.1-1.5.10,content,deep,name,curseforge,unknown (read mods.toml at import),,
+rsinsertexportupgrade,Refined Wireless Upgrades,1.21.1-2.1.3,content,machines,categories,modrinth,MIT,required,required
+sawmill,Universal Sawmill,1.21-1.8.1,content,machines,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+sawmill.zip (datapack),sawmill.zip (datapack),,other,data,name,curseforge,unknown (read mods.toml at import),,
+ScalableCatsForce,ScalableCatsForce,,library,none,categories,modrinth,Apache-2.0,required,required
+searchables,Searchables,1.0.2,library,none,categories,modrinth,MIT,required,unsupported
+securitycraft,SecurityCraft,1.10.2.1,content,deep,categories,modrinth,MIT,required,required
+sfm,Super Factory Manager (SFM),4.34.0,content,deep,categories,modrinth,MPL-2.0,required,required
+sgearmetalworks,Silent Gear Metalworks,1.21.1-1.5.0,integration,logic,name,curseforge,unknown (read mods.toml at import),,
+shiny,Shiny!,1.21.1-1.3.0,content,logic,guess,curseforge,unknown (read mods.toml at import),,
+shrink,Shrink,2.0.1.47,content,deep,categories,curseforge (modrinth listing),LGPL-3.0,required,required
+silentgear,Silent Gear,4.2.1.1,content,deep,categories,modrinth,MIT,required,required
+silentgems,Silent's Gems,5.1.3,content,logic,categories,modrinth,MIT,required,required
+silentlib,Silent Lib,10.6.0,library,none,categories,modrinth,MIT,required,required
+simple_weather,Simple Weather,1.0.13-hotfix,content,logic,guess,curseforge,unknown (read mods.toml at import),,
+simplebackups,Simple Backups,1.21-4.0.30,server-only,logic,categories,modrinth,Apache-2.0,optional,optional
+simplemagnets,Simple Magnets,1.1.12+c,content,logic,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+simplylight,Simply Light,1.5.3,content,data,name,curseforge,unknown (read mods.toml at import),,
+smartbrainlib,SmartBrainLib,1.16.11,library,none,categories,modrinth,MPL-2.0,unsupported,required
+smithingtemplateviewer,SmithingTemplateViewer,1.0.4,client-ui,client,categories,modrinth,MIT,required,unsupported
+sodium,Sodium,0.8.13+mc1.21.1,performance,none,categories,modrinth,LicenseRef-Polyform-Shield-1.0.0,required,unsupported
+sodium_extra,Sodium Extra,0.9.4+mc1.21.1,performance,none,categories,modrinth,LGPL-3.0-only,required,unsupported
+solcarrot,Spice of Life: Carrot Edition,1.16.6,content,logic,name,curseforge,unknown (read mods.toml at import),,
+sophisticatedbackpacks,Sophisticated Backpacks,3.26.12,content,deep,categories,curseforge (modrinth listing),LicenseRef-All-Rights-Reserved,required,required
+sophisticatedbackpackscreateintegration,Sophisticated Backpacks Create Integration,0.2.3,integration,deep,categories,curseforge (modrinth listing),LicenseRef-All-Rights-Reserved,required,required
+sophisticatedcore,Sophisticated Core,1.5.12,library,none,categories,curseforge (modrinth listing),LicenseRef-All-Rights-Reserved,required,required
+sophisticatedstorage,Sophisticated Storage,1.6.6,content,machines,categories,curseforge (modrinth listing),LicenseRef-All-Rights-Reserved,required,required
+sophisticatedstoragecreateintegration,Sophisticated Storage Create Integration,0.1.23,integration,deep,categories,curseforge (modrinth listing),LicenseRef-All-Rights-Reserved,required,required
+sophisticatedstorageinmotion,Sophisticated Storage In Motion,0.10.36,integration,deep,categories,curseforge (modrinth listing),LicenseRef-All-Rights-Reserved,required,required
+soulplied_energistics,Soulplied Energistics,1.0.3,integration,machines,name,curseforge,unknown (read mods.toml at import),,
+spark,spark,1.10.124,performance,none,categories,modrinth,GPL-3.0-only,optional,optional
+starbunclemania,Starbunclemania,1.5.9,content,logic,name,curseforge,unknown (read mods.toml at import),,
+stepcrafter,Step Crafter,1.21.1-0.1.9,content,machines,categories,modrinth,MIT,required,required
+stevescarts,StevesCarts2,1.2.18,content,deep,name,curseforge,unknown (read mods.toml at import),,
+storagedelight,Storage Delight,26.09.17-1.21-neoforge,integration,machines,categories,modrinth,MIT,required,required
+structory,Structory,1.3.17,content,data,categories,modrinth,LicenseRef-Stardust-Labs-License,optional,required
+structory_towers,Structory: Towers,1.0.16,content,data,categories,modrinth,LicenseRef-Stardust-Labs-License,optional,required
+structurize,Structurize,1.0.835-1.21.1-snapshot,library,none,name,curseforge,unknown (read mods.toml at import),,
+stylecolonies,Stylecolonies,1.15.64-1.21.1,integration,data,name,curseforge,unknown (read mods.toml at import),,
+supermartijn642configlib,SuperMartijn642's Config Library,1.1.8,library,none,categories,modrinth,LicenseRef-All-Rights-Reserved,optional,optional
+supermartijn642corelib,SuperMartijn642's Core Lib,1.1.25,library,none,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+supplementaries,Supplementaries,1.21.1-4.0.1,content,deep,categories,modrinth,LicenseRef-Supplementaries-Team-License,required,required
+sushigocrafting,Sushi Go Crafting,0.6.6,content,machines,categories,modrinth,MIT,required,required
+sussysniffers,Sussy Sniffers,1.21.1-0.1.3,content,logic,guess,curseforge,unknown (read mods.toml at import),,
+t_and_t,Towns and Towers,1.13.11,content,data,categories,modrinth,CC-BY-NC-SA-4.0,optional,required
+tempad,Tempad,3.0.4,content,deep,categories,modrinth,LicenseRef-Terrarium-License,required,required
+terrablender,TerraBlender,4.1.0.8,library,none,categories,curseforge (modrinth listing),LGPL-3.0-only,required,required
+tesseract_api,Tesseract API,1.12.18-1.21.1,library,none,categories,modrinth,MIT,required,required
+the_bumblezone,The Bumblezone,7.16.1+1.21.1-neoforge,content,deep,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+theurgy,Theurgy,1.78.0,content,deep,categories,modrinth,MIT,required,required
+theurgy_kubejs,Theurgy KubeJS,1.6.0,integration,none,categories,modrinth,MIT,required,required
+tiab,Time In A Bottle,6.5.4,content,logic,categories,modrinth,MIT,required,required
+titanium,Titanium,4.0.51,library,none,categories,modrinth,MIT,required,required
+toastcontrol,Toast Control,9.0.1,client-ui,client,categories,curseforge (modrinth listing),MIT,required,unsupported
+tombstone,Corail Tombstone,9.5.6,content,deep,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+toolbelt,Tool Belt,2.2.10,content,machines,name,curseforge,unknown (read mods.toml at import),,
+torchmaster,Torchmaster,21.1.13,content,logic,categories,modrinth,MIT,required,required
+towntalk,Towntalk,1.2.0,integration,data,guess,curseforge,unknown (read mods.toml at import),,
+transfer_labels,Transfer Labels,0.1.9,content,machines,categories,modrinth,MIT,required,required
+trashcans,Trash Cans,1.1.1,content,machines,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+trashslot,TrashSlot,21.1.11,client-ui,client,categories,curseforge (modrinth listing),LicenseRef-All-Rights-Reserved,required,required
+treetap,Tree Tap,1.21.1-0.4.6,content,machines,categories,curseforge (modrinth listing),LicenseRef-All-Rights-Reserved,required,required
+trophymanager,Jonn's Trophies,1.21.1-3.0.0,content,machines,categories,curseforge (modrinth listing),LicenseRef-All-Rights-Reserved,required,required
+twilightforest,The Twilight Forest,4.8.3345,content,deep,name,curseforge,unknown (read mods.toml at import),,
+undergarden,The Undergarden,0.9.6,content,deep,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+underground_villages,Underground Villages Mod,4.0.3,content,data,guess,curseforge,unknown (read mods.toml at import),,
+universalgrid,Universal Grid,1.21.1-0.3.2,content,machines,categories,modrinth,MIT,required,required
+uranus,Uranus,2.4.1-bugfix,library,none,guess,curseforge,unknown (read mods.toml at import),,
+utilitarian,Utilitarian,1.21.1-0.19.2,content,logic,categories,curseforge (modrinth listing),LicenseRef-All-Rights-Reserved,required,required
+utilityvest,Utility vest,1.3.1,content,machines,guess,curseforge,unknown (read mods.toml at import),,
+valhelsia_core,Valhelsia Core,1.1.5,library,none,categories,curseforge (modrinth listing),LicenseRef-Custom,required,required
+variantsandventures,Variants&Ventures,1.0.28,content,deep,categories,modrinth,LicenseRef-CC-BY-NC-ND-4.0,required,required
+villagesandpillages,Villages&Pillages,2.0.0,content,data,categories,modrinth,LicenseRef-CC-BY-NC-ND-4.0,unsupported,required
+waystones,Waystones,21.1.46,content,machines,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+wirelesschargers,Wireless Chargers,1.0.9+a,content,machines,categories,modrinth,LicenseRef-All-Rights-Reserved,required,required
+wits,Wits,1.3.1,server-only,logic,categories,modrinth,MIT,unsupported,required
+wstweaks,Wither Skeleton Tweaks,10.1.1,content,logic,categories,curseforge (modrinth listing),MIT,required,required
+xnet,XNet,1.21-7.0.7,content,machines,categories,modrinth,MIT,required,required
+xtonesreworked,XTones Reworked,1.1.1-1.21.1,content,data,categories,curseforge (modrinth listing),MIT,required,required
+xycraft_core,XyCraft Core,0.7.53,library,none,name,curseforge,unknown (read mods.toml at import),,
+xycraft_machines,XyCraft Machines,0.7.53,content,machines,name,curseforge,unknown (read mods.toml at import),,
+xycraft_override,XyCraft Override,0.7.53,other,none,guess,curseforge,unknown (read mods.toml at import),,
+xycraft_world,XyCraft World,0.7.53,content,logic,name,curseforge,unknown (read mods.toml at import),,
+yeetusexperimentus,Yeetus Experimentus,87.0.0,other,none,categories,modrinth,LicenseRef-All-Rights-Reserved,required,unsupported
+yet_another_config_lib_v3,YetAnotherConfigLib,3.8.2+1.21.1-neoforge,library,none,categories,modrinth,LGPL-3.0-or-later,optional,optional
+yungsapi,YUNG's API,1.21.1-NeoForge-5.1.9,library,none,categories,modrinth,LGPL-3.0-only,required,required
+yungsextras,YUNG's Extras,1.21.1-NeoForge-5.1.1,content,data,categories,modrinth,LGPL-3.0-only,unsupported,required
+zerocore,Zero CORE 2,1.21.1-2.4.21,library,none,name,curseforge,unknown (read mods.toml at import),,

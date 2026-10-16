@@ -70,8 +70,12 @@ pub enum BlockEntity {
     Spawner(Box<crate::mobs::spawner::Spawner>),
     /// `TrialSpawnerBlockEntity` (`crate::mobs::trial_spawner`).
     TrialSpawner(Box<crate::mobs::trial_spawner::TrialSpawner>),
+    /// `VaultBlockEntity` (`crate::vault`).
+    Vault(Box<crate::vault::Vault>),
     /// `BeehiveBlockEntity` of beehives and bee nests (`crate::beehive`).
     Beehive(Box<crate::beehive::Beehive>),
+    /// `CommandBlockEntity` of the three command blocks (`crate::command_block`).
+    CommandBlock(Box<crate::command_block::CommandBlock>),
 }
 /// `CrafterBlockEntity`: nine slots that can be disabled, the powered flag
 /// and the ticks left in the crafting animation.
@@ -192,11 +196,23 @@ impl BlockEntity {
         if name == "minecraft:trial_spawner" {
             return Some(Self::TrialSpawner(Box::default()));
         }
+        if name == "minecraft:vault" {
+            return Some(Self::Vault(Box::default()));
+        }
         if name == "minecraft:beehive" || name == "minecraft:bee_nest" {
             return Some(Self::Beehive(Box::default()));
         }
         if name == "minecraft:lectern" {
             return Some(Self::Lectern(Lectern::default()));
+        }
+        if crate::command_block::Mode::of_block(name).is_some() {
+            // CommandBlock.newBlockEntity: setAutomatic(this.automatic).
+            return Some(Self::CommandBlock(Box::new(
+                crate::command_block::CommandBlock {
+                    auto: crate::command_block::automatic_block(name),
+                    ..Default::default()
+                },
+            )));
         }
         if let Some(sculk) = crate::sculk::SculkEntity::for_block(name) {
             return Some(Self::Sculk(Box::new(sculk)));
@@ -272,7 +288,9 @@ impl BlockEntity {
             Self::CreakingHeart(_) => "minecraft:creaking_heart",
             Self::Spawner(_) => "minecraft:mob_spawner",
             Self::TrialSpawner(_) => "minecraft:trial_spawner",
+            Self::Vault(_) => "minecraft:vault",
             Self::Beehive(_) => "minecraft:beehive",
+            Self::CommandBlock(_) => "minecraft:command_block",
         }
     }
     pub fn contents(&self) -> Vec<ItemStack> {
@@ -286,7 +304,9 @@ impl BlockEntity {
             | Self::CreakingHeart(_)
             | Self::Spawner(_)
             | Self::TrialSpawner(_)
-            | Self::Beehive(_) => Vec::new(),
+            | Self::Vault(_)
+            | Self::Beehive(_)
+            | Self::CommandBlock(_) => Vec::new(),
             Self::Lectern(l) => l.book.iter().cloned().collect(),
             Self::Sculk(_) => Vec::new(),
             Self::Banner(_) => Vec::new(),
@@ -308,7 +328,9 @@ impl BlockEntity {
             Self::CreakingHeart(_)
             | Self::Spawner(_)
             | Self::TrialSpawner(_)
-            | Self::Beehive(_) => &[],
+            | Self::Vault(_)
+            | Self::Beehive(_)
+            | Self::CommandBlock(_) => &[],
         }
     }
     pub fn slots_mut(&mut self) -> &mut [Option<ItemStack>] {
@@ -326,7 +348,9 @@ impl BlockEntity {
             Self::CreakingHeart(_)
             | Self::Spawner(_)
             | Self::TrialSpawner(_)
-            | Self::Beehive(_) => &mut [],
+            | Self::Vault(_)
+            | Self::Beehive(_)
+            | Self::CommandBlock(_) => &mut [],
         }
     }
 }

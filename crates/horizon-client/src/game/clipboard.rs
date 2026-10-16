@@ -46,6 +46,9 @@ impl Game<'_> {
         let Some(title) = self.title.as_mut() else {
             return;
         };
+        if title.has_caret_field() {
+            return title.field_shortcut(shortcut, &mut self.clipboard);
+        }
         if let Some((id, value, max)) = title.focused_field() {
             let changed = Self::append_shortcut(
                 &mut self.text_selection,
@@ -60,15 +63,16 @@ impl Game<'_> {
             }
         }
     }
-    /// Typing or a backspace in an append-only field of the title screens:
-    /// Select All's selection is replaced first.
+    /// Typing or a backspace in a field of the title screens: in the server
+    /// screens' append-only fields Select All's selection is replaced first.
     pub(super) fn title_edit(&mut self, typed: Option<&str>, backspace: bool) {
         let Some(title) = self.title.as_mut() else {
             return;
         };
-        let cleared = title
-            .focused_field()
-            .is_some_and(|(id, value, _)| self.text_selection.take(id, value));
+        let cleared = !title.has_caret_field()
+            && title
+                .focused_field()
+                .is_some_and(|(id, value, _)| self.text_selection.take(id, value));
         if cleared {
             title.search_changed();
         }
