@@ -9400,14 +9400,22 @@ impl ApplicationHandler for Game<'_> {
                     let elapsed = now.duration_since(self.previous);
                     self.frame_ticks = elapsed.as_secs_f32() * 20.0;
                     self.previous = now;
-                    // Arrow keys turn the camera (accessibility / scripted testing).
-                    let turn = |k| f32::from(u8::from(self.keys.contains(&k)));
-                    let secs = elapsed.as_secs_f32().min(0.1);
-                    self.yaw +=
-                        (turn(KeyCode::ArrowRight) - turn(KeyCode::ArrowLeft)) * 90.0 * secs;
-                    self.pitch = (self.pitch
-                        + (turn(KeyCode::ArrowDown) - turn(KeyCode::ArrowUp)) * 90.0 * secs)
-                        .clamp(-90.0, 90.0);
+                    // Arrow-key camera controls belong to gameplay; chat and
+                    // other screens use the same keys for their own navigation.
+                    if self.screen == Screen::Playing
+                        && self.title.is_none()
+                        && self.sign_edit.is_none()
+                        && self.book.is_none()
+                        && !self.remote_chat_open()
+                    {
+                        let turn = |k| f32::from(u8::from(self.keys.contains(&k)));
+                        let secs = elapsed.as_secs_f32().min(0.1);
+                        self.yaw +=
+                            (turn(KeyCode::ArrowRight) - turn(KeyCode::ArrowLeft)) * 90.0 * secs;
+                        self.pitch = (self.pitch
+                            + (turn(KeyCode::ArrowDown) - turn(KeyCode::ArrowUp)) * 90.0 * secs)
+                            .clamp(-90.0, 90.0);
+                    }
                     self.update_backdrop()?;
                     horizon_client::ui_theme::set_backdrop(self.backdrop_fade());
                     if self.screen != Screen::Paused {

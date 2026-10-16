@@ -163,3 +163,32 @@ fn locate_coordinates_fill_chat_with_teleport_without_submitting() {
         );
     }
 }
+
+#[test]
+fn history_arrows_recall_messages_and_restore_the_draft() {
+    use winit::keyboard::KeyCode::{ArrowDown, ArrowUp};
+
+    let font = font();
+    let m = Measure(&font);
+    let registries = Registries::default();
+    let commands = Commands {
+        dispatcher: crate::command::vanilla::game_dispatcher(),
+        registries: &registries,
+    };
+    let history = vec!["first message".to_owned(), "latest message".to_owned()];
+    let mut screen = ChatScreen::new(&m, &commands, "unfinished draft", history.len(), 640, 360);
+    for (key, expected) in [
+        (ArrowUp, "latest message"),
+        (ArrowUp, "first message"),
+        (ArrowUp, "first message"),
+        (ArrowDown, "latest message"),
+        (ArrowDown, "unfinished draft"),
+        (ArrowDown, "unfinished draft"),
+    ] {
+        assert_eq!(
+            screen.key(&m, &commands, &history, key, false, false),
+            ChatAction::None
+        );
+        assert_eq!(screen.value(), expected);
+    }
+}
