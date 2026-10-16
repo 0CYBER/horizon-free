@@ -19,7 +19,7 @@ use horizon_client::{
     },
     mobs::{
         Mob, MobData, MobEvent, MobTypes, MobWorld, PlayerView, Seen, Species, Who,
-        control::Operation, spawning::LocalDifficulty,
+        control::Operation, seen_grid::SeenGrid, spawning::LocalDifficulty,
     },
     world::World,
 };
@@ -1011,6 +1011,9 @@ fn main() -> horizon_client::Result<()> {
         // The MobWorld every step sees, over a snapshot of the mobs.
         macro_rules! mob_world {
             ($snapshot:expr) => {
+                mob_world!($snapshot, None)
+            };
+            ($snapshot:expr, $grid:expr) => {
                 MobWorld {
                     teams: Default::default(),
                     world: &world,
@@ -1021,6 +1024,7 @@ fn main() -> horizon_client::Result<()> {
                     data: &data,
                     player: player.clone(),
                     others: $snapshot,
+                    others_grid: $grid,
                     daylight: (world.day_time.rem_euclid(24000)) < 12000,
                     game_time: world.game_time,
                     day_time: world.day_time,
@@ -1065,6 +1069,8 @@ fn main() -> horizon_client::Result<()> {
                 p.yaw = yaw;
             }
             let mut snapshot: Vec<Seen> = mobs.iter().filter(|m| !m.removed).map(seen).collect();
+            // The snapshot by position, kept as the game keeps it.
+            let mut grid = SeenGrid::new(snapshot.iter().map(|e| e.bounds));
             let w = mob_world!(&snapshot);
             let mut events = Vec::new();
             let mut heart_events = Vec::new();
@@ -1130,7 +1136,7 @@ fn main() -> horizon_client::Result<()> {
                 if mobs[i].removed {
                     continue;
                 }
-                let w = mob_world!(&snapshot);
+                let w = mob_world!(&snapshot, Some(&grid));
                 let m = &mut mobs[i];
                 horizon_client::mobs::apply_mob_pushes(m, &mut pushes);
                 let from = events.len();
@@ -1246,9 +1252,10 @@ fn main() -> horizon_client::Result<()> {
                 }
                 // ServerLevel ticks entities one after another: the ones
                 // after this mob see it as it is now.
-                if let Some(e) = snapshot.iter_mut().find(|e| e.id == mobs[i].id) {
-                    *e = seen(&mobs[i]);
-                    e.alive &= !mobs[i].removed;
+                if let Some(k) = snapshot.iter().position(|e| e.id == mobs[i].id) {
+                    snapshot[k] = seen(&mobs[i]);
+                    snapshot[k].alive &= !mobs[i].removed;
+                    grid.update(k, snapshot[k].bounds);
                 }
             }
             for m in &mut mobs {
