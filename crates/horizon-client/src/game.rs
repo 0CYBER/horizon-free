@@ -122,6 +122,7 @@ mod tnt;
 mod totem;
 mod trading;
 mod trial_spawner;
+mod trial_visuals;
 mod trident;
 mod tweaks;
 mod ui_control;
@@ -1818,6 +1819,11 @@ impl Game<'_> {
                     pos,
                     data,
                 } => self.composter_fill_event(pos, data == 1),
+                LevelEvent::LevelEvent {
+                    id: id @ 3011..=3021,
+                    pos,
+                    data,
+                } => self.trial_level_event(id, [pos.x, pos.y, pos.z], data),
                 LevelEvent::LevelEvent { id, pos, .. } => {
                     let c = Some([
                         f64::from(pos.x) + 0.5,

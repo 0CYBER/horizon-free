@@ -44,7 +44,7 @@ impl Game<'_> {
         }
     }
     /// The vault at `key` with its block's state and ominous flag.
-    fn take_vault(&mut self, key: Pos) -> Option<(Box<Vault>, VaultState, bool)> {
+    pub(super) fn take_vault(&mut self, key: Pos) -> Option<(Box<Vault>, VaultState, bool)> {
         let state = self.world.block(key.0, key.1, key.2);
         let block = self.res.assets.registry.state(state)?;
         if block.name != "minecraft:vault" {
@@ -116,7 +116,7 @@ impl Game<'_> {
             .insert(key, BlockEntity::Vault(vault));
         Some(self.vault_events(key, events).map(|()| out))
     }
-    /// Every vault's server tick, then its client tick's spin.
+    /// Every vault's server tick, then its client tick.
     pub(super) fn tick_vaults(&mut self) -> Result<()> {
         let keys: Vec<Pos> = self
             .world
@@ -129,11 +129,11 @@ impl Game<'_> {
             let pos = [key.0, key.1, key.2];
             let ticked = self.with_vault(key, |v, l, random, state, ominous, roll, events| {
                 v.server_tick(l, random, pos, state, ominous, roll, events);
-                v.update_display_item_spin();
             });
             if let Some(result) = ticked {
                 result?;
             }
+            self.client_tick_vault(key);
         }
         Ok(())
     }
