@@ -434,6 +434,8 @@ def check_containers(host, guest, out):
     after = (open_container(guest, (x, y, z + 2), out, 'ender-chest-after')[0],
              open_container(guest, (x, y, z - 2), out, 'double-chest-after')[0])
     host_ender = host('command', command='data get entity @s EnderItems')
+    for at in ((x, y, z + 2), (x, y, z - 2), (x + 1, y, z - 2)):
+        guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:air')
     assert ender == {4: 'minecraft:emerald'} and ender_size == 27, f'the guest\'s ender chest: {ender} ({ender_size})'
     assert double_size == 54, f'the double chest opened with {double_size} slots'
     assert double == {0: 'minecraft:gold_ingot', 27: 'minecraft:iron_ingot'}, f'the double chest: {double}'
