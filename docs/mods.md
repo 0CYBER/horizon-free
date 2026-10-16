@@ -262,6 +262,28 @@ capabilities = ["game-read", "hud", "chat"]
 Unknown keys are refused, so a typo is an error, not a silently ignored
 permission.
 
+### Content mods (API 0.2)
+
+A mod with `api = "0.2"` and capability `registries` may carry `assets/` and
+`data/` in the `.hmod`, and needs no `mod.wasm` if it has no code. It adds
+blocks and items by declaring them in `data/<id>/horizon/block/*.json` and
+`data/<id>/horizon/item/*.json`, each copying a vanilla template
+([modpacks.md](modpacks.md#registries-02-data-driven-blocks-and-items)):
+
+```json
+{ "template": "minecraft:iron_block",
+  "properties": { "hardness": 4.0, "light": 3, "sounds": "minecraft:amethyst_block" },
+  "item": true }
+```
+
+The fence: files go in the mod's own namespace (`assets/<id>/`,
+`data/<id>/`), plus additions to vanilla tags (`data/minecraft/tags/`).
+Templates and `sounds` name vanilla blocks; unknown keys are refused. Paths
+use vanilla's resource characters, at most 65,536 files, 16 MiB each and
+512 MiB in all. A mod whose content is refused stays off, with the reason on
+its row. The game reading this content into its block and item tables comes
+next (docs/modpacks.md).
+
 ## Versions and compatibility
 
 - The API is the WIT package `horizon:mods@0.1.0`. New functions and
