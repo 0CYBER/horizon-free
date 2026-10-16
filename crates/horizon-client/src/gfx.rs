@@ -395,6 +395,24 @@ fn mip_chain(
     debug_assert_eq!(out.len(), chain_bytes * layers as usize);
     (out, levels)
 }
+/// The wgpu instance options, without wgpu's validation of indirect draws
+/// in release builds. That validation (meant for untrusted WebGPU content)
+/// copies every indirect draw through a compute pass before the render pass
+/// and costs about a tenth of `render`'s CPU time on Metal. The only indirect
+/// draws are the section draws `render` writes from resident sections, in
+/// bounds by construction: index counts within `indices`, vertices within
+/// the section's arena range, first instances below the origins written that
+/// frame. Debug builds keep validating them; `WGPU_VALIDATION_INDIRECT_CALL=1`
+/// turns it back on.
+fn instance_descriptor() -> wgpu::InstanceDescriptor {
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    if !cfg!(debug_assertions) {
+        descriptor
+            .flags
+            .remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
+    }
+    descriptor.with_env()
+}
 /// What to tell a player whose system offers no usable graphics adapter.
 /// Vulkan is loaded at run time (the game links no graphics library), so a
 /// missing driver shows here rather than as a missing-DLL dialog.
@@ -438,8 +456,7 @@ impl Renderer {
         forcefield: (&[u8], u32),
         panorama_faces: &panorama::Faces,
     ) -> Result<Self> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let instance = wgpu::Instance::new(instance_descriptor());
         // Offscreen rendering needs no surface, so it can use a GPU the
         // window's display cannot present from (a headless compositor).
         let surface = if offscreen {
@@ -3100,6 +3117,16 @@ mod tests {
         }
         assert_eq!(super::outline_width(2560), 2560.0 / 1920.0 * 2.5);
         assert_eq!(super::outline_width(3840), 5.0);
+    }
+    #[test]
+    fn indirect_draws_are_validated_only_in_debug_builds() {
+        if std::env::var_os("WGPU_VALIDATION_INDIRECT_CALL").is_none() {
+            let flags = super::instance_descriptor().flags;
+            assert_eq!(
+                flags.contains(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL),
+                cfg!(debug_assertions)
+            );
+        }
     }
     #[test]
     fn far_faces_a_hair_apart_keep_their_depth_order() {
