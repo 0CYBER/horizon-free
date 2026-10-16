@@ -29,6 +29,7 @@ import os
 import queue
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -45,7 +46,6 @@ LOCAL = ROOT / '.local'
 RESOURCES = LOCAL / 'horizon-client' / '26.3'
 SERVER = LOCAL / 'minecraft' / '26.3' / 'jars' / 'server.jar'
 RUN = LOCAL / 'save-roundtrip' / 'run'
-PORT = 25000 + (os.getpid() % 5000) + 1000
 
 # Game rules Horizon's player changes before saving: rule -> (vanilla's value, Horizon's).
 # The new value must be in Horizon's save, and nothing else may differ (#74).
@@ -96,8 +96,15 @@ BENIGN = re.compile(r'(Unpacking |OFFLINE/INSECURE|online-mode|authenticate user
 
 # ---------------------------------------------------------------- vanilla server
 
+def free_port():
+    with socket.socket() as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
+
+
 class Vanilla:
-    def __init__(self, directory, port=PORT, world='world', extra=None):
+    def __init__(self, directory, port=None, world='world', extra=None):
+        port = port or free_port()
         directory.mkdir(parents=True, exist_ok=True)
         (directory / 'eula.txt').write_text('eula=true\n')
         props = {

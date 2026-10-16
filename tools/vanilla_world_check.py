@@ -17,6 +17,7 @@ load failures.
 import argparse
 import os
 import re
+import socket
 import subprocess
 import sys
 import threading
@@ -30,22 +31,29 @@ BENIGN = re.compile(r'(Unpacking |OFFLINE/INSECURE|online-mode|authenticate user
                     r'Failed to load properties|Failed to load eula)')
 
 
+def free_port():
+    with socket.socket() as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--jar', required=True)
     p.add_argument('--dir', required=True)
     p.add_argument('--world', default='world')
     p.add_argument('--seed', default='12345')
-    p.add_argument('--port', default='25671')
+    p.add_argument('--port', type=int, default=0, help='default: a free port')
     p.add_argument('--command', action='append', default=[])
     p.add_argument('--wait-after', type=float, default=1.0)
     p.add_argument('--timeout', type=float, default=240)
     args = p.parse_args()
+    port = args.port or free_port()
     os.makedirs(args.dir, exist_ok=True)
     with open(os.path.join(args.dir, 'eula.txt'), 'w') as f:
         f.write('eula=true\n')
     props = {
-        'server-port': args.port, 'online-mode': 'false', 'level-seed': args.seed,
+        'server-port': port, 'online-mode': 'false', 'level-seed': args.seed,
         'level-name': args.world, 'spawn-protection': '0', 'view-distance': '4',
         'simulation-distance': '4', 'sync-chunk-writes': 'true', 'enable-query': 'false',
         'enable-rcon': 'false', 'management-server-enabled': 'false',
@@ -83,7 +91,7 @@ def main():
 
             def run(name=name, seconds=float(seconds)):
                 try:
-                    vanilla_login.join('127.0.0.1', int(args.port), name, seconds)
+                    vanilla_login.join('127.0.0.1', port, name, seconds)
                 except Exception as e:  # reported in the log check below
                     lines.append(f'login failed: {e}')
 
