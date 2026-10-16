@@ -710,7 +710,12 @@ impl Game<'_> {
                     },
                     tick_rate: self.clock.rate(),
                     tick_frozen: self.clock.frozen(),
+                    collision: Some(self.collision),
                 };
+                host.hub.movement_checks = (
+                    self.ui.rules.bool("player_movement_check"),
+                    self.ui.rules.bool("elytra_movement_check"),
+                );
                 host.hub.tick(&mut ctx)
             };
             if let Some(state) = &state
@@ -772,6 +777,10 @@ impl Game<'_> {
                         super::dedicated::log("INFO", &format!("[Not Secure] {line}"));
                     }
                     HostEvent::Chat(line) => self.system_message(Text::literal(line)),
+                    HostEvent::Warn(line) if self.options.dedicated.is_some() => {
+                        super::dedicated::log("WARN", &line);
+                    }
+                    HostEvent::Warn(line) => log::warn!("{line}"),
                     HostEvent::Packet(conn, packet) => {
                         self.lan_guest_packet(&mut host, conn, *packet);
                     }
@@ -831,6 +840,7 @@ impl Game<'_> {
             clock_rate: self.ui.clock.rate,
             tick_rate: self.clock.rate(),
             tick_frozen: self.clock.frozen(),
+            collision: Some(self.collision),
         };
         host.hub.place_new_player(conn, &mut ctx);
     }
