@@ -13,7 +13,6 @@ so that player data exists. The saved world is kept in datafix/worlds/VERSION be
 import argparse
 import hashlib
 import json
-import os
 import queue
 import re
 import shutil
@@ -158,6 +157,12 @@ def install_runtime(pin, home):
     for target, to in links:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.symlink_to(to)
+
+
+def free_port():
+    with socket.socket() as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
 
 
 class Server:
@@ -423,7 +428,7 @@ def build(name, force=False):
     era = scene.era(data_version)
     work = LOCAL / 'gen' / name
     shutil.rmtree(work, ignore_errors=True)
-    port = 30000 + (os.getpid() + data_version) % 20000
+    port = free_port()
     server = Server(work, jar, port, scene.experiments(data_version), java(version), props)
     problems = []
 

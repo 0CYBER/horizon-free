@@ -1874,7 +1874,7 @@ def build_flat(h, force=False):
         return []
     work = h.LOCAL / 'gen' / (version + '-flat')
     shutil.rmtree(work, ignore_errors=True)
-    port = 30000 + (h.os.getpid() + data_version + 1) % 20000
+    port = h.free_port()
 
     class FlatServer(h.Server):
         def __init__(self, directory):         # as Server.__init__, with a flat world
