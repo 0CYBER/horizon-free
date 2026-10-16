@@ -63,7 +63,7 @@ mod occlusion;
 mod pack_stages;
 pub mod panorama;
 mod timing;
-mod upload;
+pub(crate) mod upload;
 mod world_post;
 
 #[repr(C)]
@@ -299,6 +299,8 @@ pub struct Renderer {
     lightmap_sampler: wgpu::Sampler,
     animations: AnimatedSprites,
     uploads: upload::Uploads,
+    /// Whether `lightmap` holds `lightmap_pixels` yet.
+    lightmap_uploaded: bool,
     sprite_minimum_size: u32,
     indices: wgpu::Buffer,
     index_quads: u32,
@@ -1561,6 +1563,7 @@ impl Renderer {
             lightmap_sampler,
             animations: AnimatedSprites::new(animations, sprite_size, sprite_mips),
             uploads,
+            lightmap_uploaded: false,
             sprite_minimum_size,
             indices,
             index_quads,
@@ -1910,6 +1913,7 @@ impl Renderer {
     }
     fn update_lightmap(
         &mut self,
+        encoder: &mut wgpu::CommandEncoder,
         sky: &Sky,
         darkness: f32,
         gamma: f32,
@@ -1946,26 +1950,25 @@ impl Renderer {
                 pixels[i + 3] = 255;
             }
         }
-        self.queue.write_texture(
+        // The lightmap changes with the time of day, flicker and effects,
+        // not every frame: upload only what differs from the texture.
+        if pixels == self.lightmap_pixels && self.lightmap_uploaded {
+            return;
+        }
+        self.uploads.texture(
+            encoder,
             wgpu::TexelCopyTextureInfo {
                 texture: &self.lightmap,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
+            16,
+            16,
             &pixels,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(64),
-                rows_per_image: Some(16),
-            },
-            wgpu::Extent3d {
-                width: 16,
-                height: 16,
-                depth_or_array_layers: 1,
-            },
         );
         self.lightmap_pixels = pixels;
+        self.lightmap_uploaded = true;
     }
     fn animate(&mut self, encoder: &mut wgpu::CommandEncoder, tick: u64) {
         animate_sprites(
@@ -2037,6 +2040,7 @@ impl Renderer {
             self.hud.animate_fire(&self.queue, frame.ticks);
         }
         self.update_lightmap(
+            &mut encoder,
             &frame.sky,
             frame.darkness.1,
             (self.gamma - frame.darkness.0).max(0.0),
@@ -2129,8 +2133,8 @@ impl Renderer {
             ],
             outline_params: outline_params(self.config.width, self.config.height),
         };
-        self.queue
-            .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
+        self.uploads
+            .buffer(&mut encoder, &self.globals, 0, bytemuck::bytes_of(&globals));
         let pack_uniform = shader_pack_uniform(
             frame,
             view,
@@ -2152,8 +2156,12 @@ impl Renderer {
             view_proj: (hand_projection * frame.bob * view).to_cols_array_2d(),
             ..globals
         };
-        self.queue
-            .write_buffer(&self.hand_globals, 0, bytemuck::bytes_of(&hand_globals));
+        self.uploads.buffer(
+            &mut encoder,
+            &self.hand_globals,
+            0,
+            bytemuck::bytes_of(&hand_globals),
+        );
         // GameRenderer.render3dHud: DebugCrosshairRenderer draws with the
         // hand's projection but no bob, and FogMode.NONE (no fog colour).
         let crosshair_globals = Globals {
@@ -2161,7 +2169,8 @@ impl Renderer {
             fog_color: [0.0; 4],
             ..globals
         };
-        self.queue.write_buffer(
+        self.uploads.buffer(
+            &mut encoder,
             &self.crosshair_globals,
             0,
             bytemuck::bytes_of(&crosshair_globals),
@@ -2226,8 +2235,12 @@ impl Renderer {
         self.origins
             .extend(visible.iter().map(|(_, _, o)| [o[0], o[1], o[2], 0.0]));
         if !self.origins.is_empty() {
-            self.queue
-                .write_buffer(&self.instances, 0, bytemuck::cast_slice(&self.origins));
+            self.uploads.buffer(
+                &mut encoder,
+                &self.instances,
+                0,
+                bytemuck::cast_slice(&self.origins),
+            );
         }
         if frame.title {
             visible.clear();
@@ -2268,8 +2281,12 @@ impl Renderer {
                     mapped_at_creation: false,
                 });
             }
-            self.queue
-                .write_buffer(&self.indirect, 0, bytemuck::cast_slice(&self.draws));
+            self.uploads.buffer(
+                &mut encoder,
+                &self.indirect,
+                0,
+                bytemuck::cast_slice(&self.draws),
+            );
         }
         let debug_depth = frame.debug_lines.len() as u32;
         let debug_top = frame.debug_lines_on_top.len() as u32;
@@ -2292,14 +2309,18 @@ impl Renderer {
                 .chain(frame.debug_crosshair)
                 .copied()
                 .collect();
-            self.queue
-                .write_buffer(&self.debug_line_buffer, 0, bytemuck::cast_slice(&all));
+            self.uploads.buffer(
+                &mut encoder,
+                &self.debug_line_buffer,
+                0,
+                bytemuck::cast_slice(&all),
+            );
         }
         let outline_edges = frame.outline.len().min(MAX_OUTLINE_EDGES as usize);
         if outline_edges > 0 {
             let lines = outline_vertices(&frame.outline[..outline_edges], camera);
-            self.queue
-                .write_buffer(&self.outline, 0, bytemuck::cast_slice(&lines));
+            self.uploads
+                .buffer(&mut encoder, &self.outline, 0, bytemuck::cast_slice(&lines));
         }
         let [entity_quads, crumbling_quads, translucent_crumbling_quads] =
             self.entity_batch.update(
@@ -2323,14 +2344,19 @@ impl Renderer {
                         mapped_at_creation: false,
                     });
                 }
-                self.queue.write_buffer(
+                self.uploads.buffer(
+                    &mut encoder,
                     &self.cloud_buffer,
                     0,
                     bytemuck::cast_slice(&self.cloud_mesh.vertices),
                 );
             }
-            self.queue
-                .write_buffer(&self.cloud_uniform, 0, bytemuck::bytes_of(&uniform));
+            self.uploads.buffer(
+                &mut encoder,
+                &self.cloud_uniform,
+                0,
+                bytemuck::bytes_of(&uniform),
+            );
             (vertices / 4) as u32
         } else {
             0
@@ -2350,12 +2376,17 @@ impl Renderer {
             });
         }
         if entity_vertices > 0 {
-            self.queue
-                .write_buffer(&self.entity_buffer, 0, bytemuck::cast_slice(all_entities));
+            self.uploads.buffer(
+                &mut encoder,
+                &self.entity_buffer,
+                0,
+                bytemuck::cast_slice(all_entities),
+            );
         }
         let celestial_vertices = frame.celestial.len().min(2048 * 4);
         if celestial_vertices > 0 {
-            self.queue.write_buffer(
+            self.uploads.buffer(
+                &mut encoder,
                 &self.celestial_buffer,
                 0,
                 bytemuck::cast_slice(&frame.celestial[..celestial_vertices]),
@@ -2369,7 +2400,8 @@ impl Renderer {
         }
         if let Some(b) = &frame.border {
             if b.rebuilt {
-                self.queue.write_buffer(
+                self.uploads.buffer(
+                    &mut encoder,
                     &self.border_vertices,
                     0,
                     bytemuck::cast_slice(&b.vertices),
@@ -2385,8 +2417,12 @@ impl Renderer {
                     t.texture_offset,
                 ],
             };
-            self.queue
-                .write_buffer(&self.border_uniform, 0, bytemuck::bytes_of(&uniform));
+            self.uploads.buffer(
+                &mut encoder,
+                &self.border_uniform,
+                0,
+                bytemuck::bytes_of(&uniform),
+            );
         }
         let view_target = target_texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.config.format.remove_srgb_suffix()),
@@ -2631,8 +2667,12 @@ impl Renderer {
                     mapped_at_creation: false,
                 });
             }
-            self.queue
-                .write_buffer(&self.screen_buffer, 0, bytemuck::cast_slice(&vertices));
+            self.uploads.buffer(
+                &mut encoder,
+                &self.screen_buffer,
+                0,
+                bytemuck::cast_slice(&vertices),
+            );
             let attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: &view_target,
                 resolve_target: None,
@@ -2727,6 +2767,7 @@ impl Renderer {
         self.hud.draw(
             &self.device,
             &self.queue,
+            &mut self.uploads,
             &mut encoder,
             &view_target,
             frame.hud,
