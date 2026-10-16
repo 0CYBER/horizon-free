@@ -18,7 +18,8 @@ pub fn path(world: &Path, uuid: u128) -> PathBuf {
         .join(format!("{}.dat", uuid_string(uuid)))
 }
 
-fn uuid_ints(uuid: u128) -> [i32; 4] {
+/// `UUIDUtil.uuidToIntArray`.
+pub fn uuid_ints(uuid: u128) -> [i32; 4] {
     [
         (uuid >> 96) as i32,
         (uuid >> 64) as i32,

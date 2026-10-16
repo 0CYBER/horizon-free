@@ -589,6 +589,10 @@ impl Game<'_> {
         self.as_guest(host, conn, |g| {
             g.attack();
         });
+        // The mob now answers to this guest (game/lan_mobs.rs).
+        if let Ok(id) = u32::try_from(id) {
+            host.mob_players.insert(id, conn);
+        }
         host.hub.guests[gi].yaw = old_yaw;
         host.hub.guests[gi].pitch = old_pitch;
     }

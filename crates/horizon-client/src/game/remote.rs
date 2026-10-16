@@ -1046,6 +1046,12 @@ impl Game<'_> {
                 }
                 self.remove_entity(p.item);
             }
+            // ClientPacketListener.handleSetEntityMotion: knockback on this player.
+            C::SetEntityMotion(p) if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) => {
+                if let Some(pl) = self.player.as_mut() {
+                    pl.velocity = Vec3::new(p.velocity[0], p.velocity[1], p.velocity[2]);
+                }
+            }
             C::HurtAnimation(p) => {
                 if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
                     m.hurt_time = 10;
