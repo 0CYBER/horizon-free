@@ -11,7 +11,7 @@ use winit::{event::MouseButton, event_loop::ActiveEventLoop, keyboard::KeyCode};
 
 const HELP: &[&str] = &[
     "status                         game, player, streaming and renderer state",
-    "key KEY down|up|tap            press or release a key (w a s d space shift ctrl e q esc f3 1-9 arrows ...)",
+    "key KEY down|up|tap|repeat     press, release or auto-repeat a key (w a s d space shift ctrl e q esc f3 1-9 arrows ...)",
     "release                        release every key and mouse button",
     "mouse left|right|middle down|up|click",
     "look YAW PITCH                 set the view direction in degrees",
@@ -201,7 +201,7 @@ impl Game<'_> {
                 }
                 // The zoom extra sees the key as the keyboard hook does.
                 let action = arg(2)?;
-                self.extras_key(physical, action != "up", false);
+                self.extras_key(physical, action != "up", action == "repeat");
                 if action == "tap" {
                     self.extras_key(physical, false, false);
                 }
@@ -233,6 +233,11 @@ impl Game<'_> {
                         self.keys.remove(&key);
                         self.physical_keys.remove(&key);
                     }
+                    // The system's auto-repeat while the key is held.
+                    "repeat" => {
+                        self.physical_keys.insert(physical);
+                        self.mapped_key(key, true, true)?;
+                    }
                     "tap" => {
                         self.control_key_down(key)?;
                         self.keys.remove(&key);
@@ -240,9 +245,10 @@ impl Game<'_> {
                         self.debug_key(physical, horizon_client::debug_keys::KeyAction::Release);
                     }
                     other => {
-                        return Err(
-                            format!("key action must be down, up or tap, not {other}").into()
-                        );
+                        return Err(format!(
+                            "key action must be down, up, tap or repeat, not {other}"
+                        )
+                        .into());
                     }
                 }
                 ok()
