@@ -194,6 +194,47 @@ impl Game<'_> {
     }
 }
 
+/// A guest as the blocks that look for players see them
+/// (`PlayerDetector`, `level.getPlayers`: the dead ones too).
+pub(super) struct Present {
+    pub uuid: [i32; 4],
+    pub position: [f64; 3],
+    pub eye: [f64; 3],
+    pub height: f32,
+    pub creative: bool,
+    pub spectator: bool,
+    pub alive: bool,
+}
+
+impl Game<'_> {
+    /// Every guest in the world (`ServerLevel.getPlayers` past the host).
+    pub(super) fn lan_present(&self) -> Vec<Present> {
+        let guests = self.lan.iter().flat_map(|h| &h.hub.guests);
+        guests
+            .filter(|g| g.placed && g.loaded)
+            .map(|g| {
+                let [x, y, z] = g.position;
+                Present {
+                    uuid: horizon_client::lan::playerdata::uuid_ints(g.uuid),
+                    position: g.position,
+                    eye: [x, y + g.eye_height(), z],
+                    height: if g.sneaking { 1.5 } else { 1.8 },
+                    creative: g.creative(),
+                    spectator: g.spectator(),
+                    alive: !g.dead,
+                }
+            })
+            .collect()
+    }
+    /// The UUID of the player acting: the guest `as_guest` runs, else the host.
+    pub(super) fn acting_uuid(&self) -> [i32; 4] {
+        self.lan_acting_uuid
+            .map(horizon_client::lan::playerdata::uuid_ints)
+            .or(self.level.player_uuid)
+            .unwrap_or_default()
+    }
+}
+
 /// A guest's bounding box (0.6 wide, 1.8 tall, 1.5 crouching).
 pub(super) fn guest_bounds(g: &horizon_client::lan::guest::Guest) -> Aabb {
     let [x, y, z] = g.position;

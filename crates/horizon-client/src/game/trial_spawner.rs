@@ -32,11 +32,23 @@ impl TrialSpawnerLevel for GameLevel<'_, '_> {
         self.game.ui.rules.bool("spawn_mobs")
     }
     fn players(&self) -> Vec<TrialPlayer> {
+        let guests = self.game.lan_present().into_iter().map(|g| TrialPlayer {
+            uuid: g.uuid,
+            block: g.position.map(|v| v.floor() as i32),
+            eye: g.eye,
+            creative: g.creative,
+            spectator: g.spectator,
+            position: g.position,
+            height: g.height,
+            alive: g.alive,
+            // Guests carry no effects yet.
+            omen: None,
+        });
         let (Some(p), Some(view)) = (self.game.player.as_ref(), self.game.player_view()) else {
-            return Vec::new();
+            return guests.collect();
         };
-        vec![TrialPlayer {
-            uuid: self.game.level.player_uuid.unwrap_or_default(),
+        let host = TrialPlayer {
+            uuid: self.game.acting_uuid(),
             block: [p.position.x, p.position.y, p.position.z].map(|v| v.floor() as i32),
             eye: view.eye,
             creative: self.game.creative,
@@ -49,7 +61,8 @@ impl TrialSpawnerLevel for GameLevel<'_, '_> {
             } else {
                 self.game.potions.effects.get("bad_omen").map(|_| Omen::Bad)
             },
-        }]
+        };
+        std::iter::once(host).chain(guests).collect()
     }
     fn visual_hit(&self, from: [f64; 3], to: [f64; 3]) -> Option<[i32; 3]> {
         let v = |p: [f64; 3]| Vec3::new(p[0], p[1], p[2]);
