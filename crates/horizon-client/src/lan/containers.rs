@@ -180,11 +180,17 @@ impl Hub {
     /// Open a trading window for a guest (`Merchant.openTradingScreen`):
     /// its id, or None when the menu type is unknown.
     pub fn open_merchant_window(&mut self, conn: u32, title: Tag) -> Option<i32> {
+        self.open_window(conn, "minecraft:merchant", title)
+    }
+
+    /// ServerPlayer.openMenu for a menu the game runs (merchant, crafting
+    /// table): the open container closes, a new window id opens this menu.
+    pub fn open_window(&mut self, conn: u32, menu: &str, title: Tag) -> Option<i32> {
         let kind = self
             .sync
             .builtin
             .get("minecraft:menu")
-            .and_then(|m| m.id("minecraft:merchant"))?;
+            .and_then(|m| m.id(menu))?;
         let i = self.guests.iter().position(|g| g.conn == conn)?;
         self.close_container_at(i);
         let g = &mut self.guests[i];
@@ -277,7 +283,7 @@ impl Hub {
     pub fn container_click(
         &mut self,
         conn: u32,
-        p: play::ContainerClick,
+        p: &play::ContainerClick,
         world: &mut World,
         rules: &dyn Rules,
     ) -> Vec<ItemStack> {
@@ -326,7 +332,34 @@ impl Hub {
         } else {
             self.guests[i].drag = drag;
         }
-        // Tell the client about every slot it got wrong, or that it did not claim.
+        self.answer_click(i, p, world, &changed);
+        drops
+    }
+
+    /// A click on the inventory menu (window 0) the game applied itself
+    /// (the crafting grid): the client is corrected like after any click.
+    pub fn inventory_clicked(
+        &mut self,
+        conn: u32,
+        p: &play::ContainerClick,
+        world: &World,
+        changed: &[usize],
+    ) {
+        if let Some(i) = self.guests.iter().position(|g| g.conn == conn) {
+            self.answer_click(i, p, world, changed);
+        }
+    }
+
+    /// After a click: tell the client about every slot it got wrong, or that
+    /// it did not claim, and the carried stack.
+    fn answer_click(
+        &mut self,
+        i: usize,
+        p: &play::ContainerClick,
+        world: &World,
+        changed: &[usize],
+    ) {
+        let in_menu = p.container != 0;
         let claimed: HashMap<usize, Option<Hashed>> = p
             .changed
             .iter()
@@ -382,7 +415,6 @@ impl Hub {
         } else {
             self.guests[i].menu_sent = items;
         }
-        drops
     }
 
     /// Slot changes of open containers (AbstractContainerMenu.broadcastChanges).

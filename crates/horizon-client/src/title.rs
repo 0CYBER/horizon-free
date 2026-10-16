@@ -1020,6 +1020,7 @@ impl Title {
                 atlas,
                 batch,
                 (self.started.elapsed().as_millis() / 300).is_multiple_of(2),
+                cursor,
             ),
         }
         for b in self.buttons(w, h) {

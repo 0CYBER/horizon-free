@@ -346,7 +346,7 @@ def horizon_resave(source, destination, bin_dir):
     if launch.returncode:
         sys.exit('horizon failed to launch: ' + launch.stdout + launch.stderr)
     steps = [['wait-ready', '240']]
-    steps += [['chat', f'/gamerule {rule} {new}'] for rule, (_, new) in HORIZON_RULES.items()]
+    steps += [['command', f'gamerule {rule} {new}'] for rule, (_, new) in HORIZON_RULES.items()]
     steps += [['save-all'], ['quit']]
     for step in steps:
         result = subprocess.run(ctl + step, cwd=destination, env=env, capture_output=True, text=True)

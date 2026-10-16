@@ -174,6 +174,7 @@ impl Game<'_> {
         streaming.biome_blend = self.settings.biome_blend;
         streaming.smooth_lighting = self.settings.smooth_lighting;
         streaming.cutout_leaves = self.settings.cutout_leaves;
+        streaming.cull_leaves = self.settings.horizon.cull_leaves;
         streaming.biome_zoom = BiomeZoom::new(obfuscate_seed(seed));
         streaming.paused = true;
         self.streaming = streaming;

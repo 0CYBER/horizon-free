@@ -7,7 +7,7 @@ use horizon_client::{
     entities::ArmorStand,
     items::ItemStack,
     mesher::Vertex,
-    mobs::{Part, anim::Poses},
+    mobs::{Mob, Part, anim::Poses},
 };
 use horizon_core::{
     geometry::{Aabb, Vec3},
@@ -92,21 +92,26 @@ impl Game<'_> {
     /// `HumanoidArmorLayer` for the player: (model, texture rect, colour) of
     /// each worn piece, head to feet.
     pub(super) fn player_armor_layers(&self) -> Vec<(&Part, [f32; 4], u32)> {
+        self.armor_layers(self.armor.each_ref().map(|s| s.as_ref().map(|s| &*s.item)))
+    }
+    /// `HumanoidArmorLayer` for another player's model: the armour it wears
+    /// (`extra.head` .. `extra.feet`).
+    pub(super) fn worn_armor_layers(&self, m: &Mob) -> Vec<(&Part, [f32; 4], u32)> {
+        let e = &m.extra;
+        self.armor_layers([&e.head, &e.chest, &e.legs, &e.feet].map(|s| s.as_deref()))
+    }
+    /// The layers of the armour items `worn`, head to feet.
+    fn armor_layers(&self, worn: [Option<&str>; 4]) -> Vec<(&Part, [f32; 4], u32)> {
         let assets = &self.armor_stand_assets;
         let mut out = Vec::new();
-        for (i, layer) in ["helmet", "chestplate", "leggings", "boots"]
+        for (item, layer) in worn
             .into_iter()
-            .enumerate()
+            .zip(["helmet", "chestplate", "leggings", "boots"])
         {
-            let Some(stack) = &self.armor[i] else {
+            let Some(item) = item else {
                 continue;
             };
-            let Some(asset) = self
-                .res
-                .items
-                .get(&stack.item)
-                .and_then(|i| i.equip_asset.clone())
-            else {
+            let Some(asset) = self.res.items.get(item).and_then(|i| i.equip_asset.clone()) else {
                 continue;
             };
             let kind = if layer == "leggings" {
@@ -404,6 +409,7 @@ impl Game<'_> {
             return;
         };
         for a in &self.armor_stands {
+            let entity_start = out.len();
             if a.invisible {
                 continue;
             }
@@ -519,6 +525,7 @@ impl Game<'_> {
                     out,
                 );
             }
+            self.cull_entity_vertices(out, entity_start);
         }
     }
 }

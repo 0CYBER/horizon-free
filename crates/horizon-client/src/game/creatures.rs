@@ -2701,6 +2701,7 @@ impl Game<'_> {
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         let scale = f64::from(self.settings.entity_distance);
         for mob in &self.mobs {
+            let entity_start = out.len();
             let d = glam::DVec3::new(mob.position.x, mob.position.y, mob.position.z) - camera;
             // Entity.shouldRenderAtSqrDistance: 64 times the bounding box's
             // mean edge, scaled by the entity distance option.
@@ -2731,16 +2732,28 @@ impl Game<'_> {
             if mob.fire_ticks > 0 || matches!(mob.species(), Species::Blaze | Species::MagmaCube) {
                 packed = (15 * 16) | ((15 * 16) << 8);
             }
-            horizon_client::mobs::render::render(
+            // Other players on a server: PlayerRenderer's HumanoidArmorLayer.
+            let armor = if &*mob.kind.id == "minecraft:player" {
+                self.worn_armor_layers(mob)
+            } else {
+                Vec::new()
+            };
+            horizon_client::mobs::render::render_with(
                 mob,
                 alpha as f32,
                 camera,
                 &lookup,
                 packed,
                 &self.res.mob_data,
+                &armor,
                 out,
             );
             self.mob_block_geometry(mob, camera, alpha, packed, out);
+            // Glowing outlines and a guardian's beam remain visible independently
+            // of whether the body is hidden behind terrain.
+            if !mob.glowing && horizon_client::mobs::guardian::beam(mob, alpha as f32).is_none() {
+                self.cull_entity_vertices(out, entity_start);
+            }
             // GuardianRenderer: the laser to the locked target.
             if let Some((time, scale)) = horizon_client::mobs::guardian::beam(mob, alpha as f32)
                 && let Some(target) = self.beam_target(mob.ai.target, alpha)

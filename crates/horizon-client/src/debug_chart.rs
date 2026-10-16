@@ -72,6 +72,8 @@ pub struct DebugCharts {
     pub ping: SampleLogger,
     /// `bandwidthLogger`: bytes received per tick.
     pub bandwidth: SampleLogger,
+    /// `MinecraftServer.smoothedTickTimeMillis`.
+    pub smoothed_tick_ms: f32,
     previous_tick: Option<Instant>,
     bytes_seen: Option<i64>,
 }
@@ -110,6 +112,7 @@ impl DebugCharts {
         self.bandwidth.reset();
         self.previous_tick = None;
         self.bytes_seen = None;
+        self.smoothed_tick_ms = 0.0;
     }
     /// One integrated server tick that started at `started` and ran its
     /// tick method for `method` (`MinecraftServer.logFullTickTime` and
@@ -123,6 +126,7 @@ impl DebugCharts {
             .max(method);
         self.previous_tick = Some(started);
         self.tick_times.log_full([full, method, 0, full - method]);
+        self.smoothed_tick_ms = self.smoothed_tick_ms * 0.8 + method as f32 / 1e6 * 0.199_999_99;
     }
     /// `BandwidthDebugMonitor.tick`: the bytes received since the last
     /// tick, from the connection's running total.

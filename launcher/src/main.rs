@@ -501,9 +501,15 @@ impl Launcher {
                             if let (None, Some(started)) = (&error, self.prepare_started.take()) {
                                 self.perf.record_since("launcher.prepare_ms", started);
                             }
+                            // A preparer process's exit status says little, so its last line
+                            // follows; the launcher's own errors are full sentences already.
                             self.prepare_error = error.map(|e| {
-                                let tail =
-                                    self.prepare_log.iter().rev().find(|l| !l.trim().is_empty());
+                                let tail = self
+                                    .prepare_log
+                                    .iter()
+                                    .rev()
+                                    .find(|l| !l.trim().is_empty())
+                                    .filter(|_| e.starts_with("Exited with"));
                                 tail.map_or(e.clone(), |t| format!("{e}: {t}"))
                             });
                         }
@@ -632,8 +638,8 @@ impl Launcher {
                 let _ = tx.send(Msg::Line(Job::Prepare, line));
             };
             let result = backend::preparer(&tag, &minecraft, &log)
-                .inspect(|_| backend::sounds(&tag, &minecraft, &log))
-                .and_then(|p| match p {
+                .inspect(|(_, minecraft)| backend::sounds(&tag, minecraft, &log))
+                .and_then(|(p, _)| match p {
                     backend::Preparer::Process(cmd) => {
                         backend::spawn(Job::Prepare, cmd, tx.clone()).map(|_running| false)
                     }
@@ -1436,7 +1442,7 @@ impl Launcher {
         let minecraft = self.settings.minecraft_dir.as_deref().map_or_else(
             || {
                 div()
-                    .child("Not found. Choose the official launcher's game folder.")
+                    .child("Not found. Choose the folder where your launcher keeps Minecraft.")
                     .into_any_element()
             },
             |p| {

@@ -12,6 +12,8 @@ gpui = "0.2.2"
 ureq = { version = "2", features = ["json", "tls"], default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Checks the client jar and the version file found in other launchers' folders (sources.rs).
+sha1 = "0.10"
 pulldown-cmark = { version = "0.12", default-features = false }
 flate2 = "1"
 tar = { version = "0.4", default-features = false }

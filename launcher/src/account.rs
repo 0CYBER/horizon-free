@@ -422,6 +422,12 @@ fn profile(ep: &Endpoints, token: &str) -> Result<Account, String> {
     })
 }
 
+/// Whether the signed-in account still owns Minecraft: Java Edition, asked again now: the
+/// launcher downloads the game's files only for an owner (sources.rs).
+pub fn owns_minecraft(ep: &Endpoints, secrets: &Secrets) -> Result<bool, String> {
+    owns_game(ep, &secrets.minecraft_token)
+}
+
 /// What the keychain keeps for one account.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Secrets {

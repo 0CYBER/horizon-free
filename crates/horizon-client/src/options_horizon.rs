@@ -14,7 +14,7 @@ use crate::{
     graphics_style::Cost,
     graphics_ui::{self, Item, Level},
     hud::{HudAtlas, HudBatch},
-    options_ui::{Event, Kind, Opt, OptionsUi, Page, apply_preset},
+    options_ui::{self, Event, Kind, Opt, OptionsUi, Page, apply_preset},
     settings::{SOUND_SOURCES, Settings},
     ui_theme::{self as t, CONTROL, Kind as Button, MenuStyle, ROW_LABEL, SIDEBAR, Ui, color, id},
 };
@@ -659,12 +659,7 @@ impl OptionsUi {
 /// settings go through `graphics_ui`.
 fn set_item_slider(item: Item, s: &mut Settings, v: f32) {
     match item {
-        Item::Vanilla(opt) => {
-            opt.set_slider(s, v);
-            if opt == Opt::Preset {
-                apply_preset(s);
-            }
-        }
+        Item::Vanilla(opt) => options_ui::set_slider(opt, s, v),
         Item::Horizon(_) => item.set_slider(s, v),
     }
 }

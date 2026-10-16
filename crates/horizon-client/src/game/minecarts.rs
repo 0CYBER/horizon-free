@@ -1213,6 +1213,7 @@ impl Game<'_> {
     pub(super) fn cart_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
         let a = alpha as f32;
         for c in &self.carts {
+            let entity_start = out.len();
             let Some(model) = self.cart_models.models.get(&c.kind) else {
                 continue;
             };
@@ -1309,6 +1310,7 @@ impl Game<'_> {
             let m = base * glam::Mat4::from_scale(glam::Vec3::new(-1.0, -1.0, 1.0));
             let poses = Poses::new(model);
             horizon_client::mobs::render::draw(model, m, &poses, uv, 0xFFFF_FFFF, packed, 0, out);
+            self.cull_entity_vertices(out, entity_start);
         }
     }
     /// The chest inside a chest minecart, drawn by the chest block-entity renderer.

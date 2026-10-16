@@ -1,6 +1,7 @@
 //! Everything that is not UI: GitHub, installs, resource preparation, the game's processes and
 //! updates. The GUI, the CLI and the MCP server all go through this module. Functions here
 //! block; the GUI runs them on threads and reads their messages.
+use crate::{account, mojang, sources};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -594,17 +595,14 @@ fn reuse_prepared_in(versions: &Path) -> Vec<(String, String)> {
         .collect()
 }
 
-/// The official launcher's game directory, where horizon-prepare looks by default.
+/// The official launcher's game directory, else the first other launcher's found
+/// (sources.rs); preparing looks in all of them anyway.
 pub fn default_minecraft_dir() -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
-    let dir = if cfg!(target_os = "macos") {
-        home.join("Library/Application Support/minecraft")
-    } else if cfg!(windows) {
-        dirs::config_dir()?.join(".minecraft")
-    } else {
-        home.join(".minecraft")
-    };
-    dir.is_dir().then_some(dir)
+    let folders = sources::Folders::current()?;
+    sources::known_folders(sources::Os::current(), &folders)
+        .into_iter()
+        .map(|(_, dir)| dir)
+        .find(|dir| dir.is_dir())
 }
 
 fn found(program: &str, arg: &str) -> bool {
@@ -644,23 +642,102 @@ fn preparer_binary(dir: &Path) -> Option<PathBuf> {
     binary.is_file().then_some(binary)
 }
 
+/// Downloads the pinned version from Mojang into `dir` when the signed-in account owns
+/// Minecraft (asked again now), else says what signing in would do, as the last line of the
+/// not-found error.
+fn download_for_owner(
+    pins: &sources::Pins,
+    dir: &Path,
+    fetch: sources::Fetch,
+    log: &dyn Fn(String),
+) -> Result<(), String> {
+    let v = &pins.version;
+    let owner = (|| -> Result<Option<(String, bool)>, String> {
+        let ep = account::Endpoints::live();
+        let mut accounts = account::Accounts::load();
+        let Some((a, secrets)) = account::session_for_launch(&ep, account::store(), &mut accounts)?
+        else {
+            return Ok(None);
+        };
+        Ok(Some((a.name, account::owns_minecraft(&ep, &secrets)?)))
+    })();
+    match owner {
+        Ok(Some((name, true))) => {
+            log(format!(
+                "{name} owns Minecraft: downloading {v} from Mojang"
+            ));
+            let os = match sources::Os::current() {
+                sources::Os::Linux => "linux",
+                sources::Os::MacOs => "osx",
+                sources::Os::Windows => "windows",
+            };
+            mojang::download(pins, dir, os, 8, fetch, log).map_err(|e| {
+                format!("\n  • Horizon tried to download {v} from Mojang for {name}, but: {e}")
+            })
+        }
+        Ok(Some((name, false))) => Err(format!(
+            "\n  • {name}, the signed-in account, doesn't own Minecraft: Java Edition, so Horizon \
+             can't download it."
+        )),
+        Ok(None) => Err(format!(
+            "\n  • Or sign in with the Microsoft account that owns Minecraft: Horizon then \
+             downloads {v} from Mojang itself."
+        )),
+        Err(e) => Err(format!(
+            "\n  • Downloading {v} from Mojang needs your Microsoft account, which could not be \
+             checked: {e}"
+        )),
+    }
+}
+
 /// Checks what the preparation needs and picks how to run it. PLAY.txt describes the same
 /// steps: the player's own launcher install, the server jar from that version's own json, and
-/// Java (and Python, for versions before horizon-prepare).
-pub fn preparer(tag: &str, minecraft: &Path, log: &dyn Fn(String)) -> Result<Preparer, String> {
+/// Java (and Python, for versions before horizon-prepare). Also returns the Minecraft folder
+/// to prepare from: `minecraft`, or the files another launcher keeps, linked into the official
+/// launcher's layout (sources.rs).
+pub fn preparer(
+    tag: &str,
+    minecraft: &Path,
+    log: &dyn Fn(String),
+) -> Result<(Preparer, PathBuf), String> {
     let version = game_version(tag);
     let dir = version_dir(tag);
     let reused = horizon_prepare::artifacts::reuse_imported(&dir, &|line| log(line.to_string()))?;
+    let minecraft = if reused {
+        minecraft.to_path_buf()
+    } else {
+        let pins = read_json(&dir.join("research-lock.json"))
+            .and_then(|lock| sources::Pins::read(&lock))
+            .ok_or("The version's research-lock.json doesn't pin the Minecraft files")?;
+        let own = data_dir().join("minecraft");
+        let mut known = vec![("Horizon's own download", own.clone())];
+        known.extend(
+            sources::Folders::current()
+                .map(|f| sources::known_folders(sources::Os::current(), &f))
+                .unwrap_or_default(),
+        );
+        let fetch = |url: &str| -> Result<Vec<u8>, String> {
+            let mut body = Vec::new();
+            get(url)?
+                .into_reader()
+                .read_to_end(&mut body)
+                .map_err(|e| e.to_string())?;
+            Ok(body)
+        };
+        let linked = data_dir().join("linked-minecraft");
+        match sources::resolve(minecraft, &pins, &known, &linked, &fetch, log)? {
+            sources::Resolved::Folder(dir) => dir,
+            sources::Resolved::NotFound(checked) => {
+                let not_found = sources::not_found(&version, &checked);
+                download_for_owner(&pins, &own, &fetch, log).map_err(|e| not_found + &e)?;
+                own
+            }
+        }
+    };
     let manifest = minecraft
         .join("versions")
         .join(&version)
         .join(format!("{version}.json"));
-    if !reused && !manifest.exists() {
-        return Err(format!(
-            "Minecraft {version} is not in {}. Play {version} once from the official launcher, or choose another folder.",
-            minecraft.display()
-        ));
-    }
     let binary = preparer_binary(&dir);
     let python = if binary.is_some() {
         // The JDK the version pins, found as horizon-prepare finds it, so a missing one is
@@ -707,20 +784,21 @@ pub fn preparer(tag: &str, minecraft: &Path, log: &dyn Fn(String)) -> Result<Pre
         if horizon_prepare::sources_sha256(&dir.join(PREPARER_CRATE)).as_deref()
             == Some(horizon_prepare::SOURCES_SHA256)
         {
-            return Ok(Preparer::InProcess(horizon_prepare::Options {
+            let options = horizon_prepare::Options {
                 root: dir,
                 import: !reused,
-                minecraft_dir: Some(minecraft.to_path_buf()),
+                minecraft_dir: Some(minecraft.clone()),
                 server_jar: (!reused).then_some(jar),
-            }));
+            };
+            return Ok((Preparer::InProcess(options), minecraft));
         }
         let mut cmd = Command::new(binary);
         cmd.current_dir(&dir).arg("--root").arg(&dir);
         if !reused {
             cmd.args(["--prepare", "--server-jar"]).arg(&jar);
         }
-        cmd.arg("--minecraft-dir").arg(minecraft);
-        return Ok(Preparer::Process(cmd));
+        cmd.arg("--minecraft-dir").arg(&minecraft);
+        return Ok((Preparer::Process(cmd), minecraft));
     }
     let mut cmd = Command::new(python.unwrap());
     cmd.current_dir(&dir)
@@ -728,8 +806,8 @@ pub fn preparer(tag: &str, minecraft: &Path, log: &dyn Fn(String)) -> Result<Pre
     if !reused {
         cmd.args(["--prepare", "--server-jar"]).arg(&jar);
     }
-    cmd.arg("--minecraft-dir").arg(minecraft);
-    Ok(Preparer::Process(cmd))
+    cmd.arg("--minecraft-dir").arg(&minecraft);
+    Ok((Preparer::Process(cmd), minecraft))
 }
 
 /// Copies the pinned version's sounds from the player's own launcher install into the version's

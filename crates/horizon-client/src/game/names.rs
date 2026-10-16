@@ -3,9 +3,10 @@
 //! on a translucent black background, shown when the name is visible or the
 //! mob is under the crosshair within 64 blocks, as its team's name tag
 //! visibility allows, in the team's colours, with its score in the
-//! objective displayed below names.
+//! objective displayed below names. Other players' names (on a LAN host
+//! or a server) show whenever `LivingEntityRenderer.shouldShowName` allows.
 use super::{Game, view_vector};
-use horizon_client::{mesher::Vertex, save::uuid_text, scoreboard as sb, text::Text};
+use horizon_client::{mesher::Vertex, mobs::Mob, save::uuid_text, scoreboard as sb, text::Text};
 
 impl Game<'_> {
     /// A named name tag names the mob under the crosshair.
@@ -28,13 +29,12 @@ impl Game<'_> {
         self.swing_arm();
         true
     }
-    /// `Entity.belowNameDisplay`: the mob's score in the objective shown below
-    /// names, then a space and the objective's name.
-    fn below_name_text(&self, id: u32) -> Option<Text> {
+    /// `Entity.belowNameDisplay`: the score holder's score in the objective
+    /// shown below names, then a space and the objective's name.
+    fn below_name_text(&self, holder: &str) -> Option<Text> {
         let board = &self.score.board;
         let objective = board.display_objective(sb::SLOT_BELOW_NAME)?;
-        let uuid = self.persist.uuids.get(&id)?;
-        let score = board.score(&uuid_text(*uuid), &objective.name)?;
+        let score = board.score(holder, &objective.name)?;
         // numberFormatOrDefault(StyledFormat.NO_STYLE).
         let format = score
             .number_format
@@ -47,23 +47,60 @@ impl Game<'_> {
         t.push(objective.display_text());
         Some(t)
     }
-    pub(super) fn name_tag_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
+    /// The other players' models and names: the guests on a LAN host, the
+    /// players a server sends on a client.
+    fn other_players(&self) -> Vec<(&Mob, String)> {
+        let mut out = Vec::new();
+        if let Some(host) = &self.lan {
+            for (conn, m) in &host.models {
+                if let Some(g) = host.hub.guest(*conn) {
+                    out.push((m, g.name.clone()));
+                }
+            }
+        }
+        for (id, name) in self.remote_player_names() {
+            if let Some(m) = self.mobs.iter().find(|m| m.id == id) {
+                out.push((m, name));
+            }
+        }
+        out
+    }
+    /// The names the name tags show this frame (the control socket's status).
+    pub(super) fn shown_name_tags(&self, camera: glam::DVec3) -> Vec<String> {
+        self.name_tags(camera, 1.0)
+            .into_iter()
+            .filter_map(|(_, lines, _)| lines.last().map(|(t, _)| t.plain()))
+            .collect()
+    }
+    /// Each name tag: where it hangs, its lines (text, lift) and its light.
+    #[allow(clippy::type_complexity)]
+    fn name_tags(
+        &self,
+        camera: glam::DVec3,
+        alpha: f64,
+    ) -> Vec<(glam::DVec3, Vec<(Text, f64)>, u32)> {
         let target = self.mob_hit().map(|(i, _)| self.mobs[i].id);
-        let forward = glam::DVec3::from_array(view_vector(self.yaw, self.pitch));
-        let right = forward.cross(glam::DVec3::Y).normalize_or_zero();
-        let up = right.cross(forward).normalize_or_zero();
-        let white = self.res.atlas.font.white();
         let viewer = self.player_team();
-        for m in &self.mobs {
-            let Some(name) = m.custom_name.as_deref() else {
-                continue;
-            };
+        let mut tags = Vec::new();
+        let players = self.other_players();
+        let named = self
+            .mobs
+            .iter()
+            .filter_map(|m| Some((m, m.custom_name.clone()?, false)));
+        let players = players.into_iter().map(|(m, name)| (m, name, true));
+        for (m, name, player) in named.chain(players) {
             if !m.alive() {
                 continue;
             }
+            // EntityAttachment.NAME_TAG: 0.5 above the (crouching) height.
+            let height = if player && m.extra.crouching {
+                1.5
+            } else {
+                f64::from(m.height())
+            };
             let p = glam::DVec3::new(
                 m.previous.x + (m.position.x - m.previous.x) * alpha,
-                m.previous.y + (m.position.y - m.previous.y) * alpha + f64::from(m.height()) + 0.5,
+                m.previous.y + (m.position.y - m.previous.y) * alpha + height + 0.5,
                 m.previous.z + (m.position.z - m.previous.z) * alpha,
             );
             // The name tag distance (64) is measured to the entity.
@@ -72,7 +109,17 @@ impl Game<'_> {
             if distance_sqr >= 64.0 * 64.0 {
                 continue;
             }
-            let team = self.mob_team(m.id);
+            // A player's scores and team go by name, a mob's by UUID.
+            let holder = if player {
+                Some(name.clone())
+            } else {
+                self.persist.uuids.get(&m.id).map(|u| uuid_text(*u))
+            };
+            let team = if player {
+                self.score.board.players_team(&name)
+            } else {
+                self.mob_team(m.id)
+            };
             // LivingEntityRenderer.shouldShowName (team rules included), then
             // MobRenderer: a visible name, or the mob under the crosshair.
             let invisible = sb::invisible_to(
@@ -82,27 +129,31 @@ impl Game<'_> {
                 m.has_effect("minecraft:invisibility"),
             );
             let view = sb::NameView {
-                discrete: false,
+                discrete: player && m.extra.crouching,
                 distance_sqr,
                 invisible_to_viewer: invisible,
                 hud_hidden: self.ui.hide_gui,
                 is_camera: false,
                 is_vehicle: self.mobs.iter().any(|o| o.extra.mount == Some(m.id)),
             };
-            if !sb::name_shown(team, viewer, view) || !(m.name_visible || Some(m.id) == target) {
+            // MobRenderer.shouldShowName: a visible name, or the mob under the
+            // crosshair; players (LivingEntityRenderer) need neither.
+            if !sb::name_shown(team, viewer, view)
+                || !(player || m.name_visible || Some(m.id) == target)
+            {
                 continue;
             }
-            // getDisplayName: the custom name in the team's prefix, suffix and colour.
+            // getDisplayName: the name in the team's prefix, suffix and colour.
             let shown = match team {
-                Some(t) => t.formatted_name(Text::literal(name)),
-                None => Text::literal(name),
+                Some(t) => t.formatted_name(Text::literal(&name)),
+                None => Text::literal(&name),
             };
             let mut lines = Vec::new();
             // EntityRenderer.extractNameTags: the score shows within the
             // below-name distance (10), under the name.
             let mut lift = 0.0;
             if distance_sqr < 10.0 * 10.0
-                && let Some(score) = self.below_name_text(m.id)
+                && let Some(score) = holder.and_then(|h| self.below_name_text(&h))
             {
                 lines.push((score, 0.0));
                 lift = f64::from(9.0f32 * 1.15 * 0.025);
@@ -110,11 +161,21 @@ impl Game<'_> {
             lines.push((shown, lift));
             let l = self.world.light(
                 m.position.x.floor() as i32,
-                (m.position.y + f64::from(m.height())).floor() as i32,
+                (m.position.y + height).floor() as i32,
                 m.position.z.floor() as i32,
             );
             let light = (u32::from(l >> 4) * 16) | ((u32::from(l & 15) * 16) << 8);
-            let away = forward.as_vec3() * 0.002;
+            tags.push((p, lines, light));
+        }
+        tags
+    }
+    pub(super) fn name_tag_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
+        let forward = glam::DVec3::from_array(view_vector(self.yaw, self.pitch));
+        let right = forward.cross(glam::DVec3::Y).normalize_or_zero();
+        let up = right.cross(forward).normalize_or_zero();
+        let white = self.res.atlas.font.white();
+        let away = forward.as_vec3() * 0.002;
+        for (p, lines, light) in self.name_tags(camera, alpha) {
             for (text, lift) in lines {
                 let o = (p + glam::DVec3::new(0.0, lift, 0.0) - camera).as_vec3();
                 let (r, u) = (right.as_vec3() * 0.025, up.as_vec3() * 0.025);

@@ -210,6 +210,7 @@ fn relit_columns_keep_every_mesh_current() {
             blend_radius: 2,
             smooth_lighting: true,
             cutout_leaves: true,
+            cull_leaves: false,
             assets: &context.assets,
             tables: &context.tables,
             biomes: &context.biomes,
