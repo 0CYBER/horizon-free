@@ -68,6 +68,7 @@ struct Lerp {
 
 pub(super) struct Remote {
     pub session: Session,
+    pub brand: String,
     builtin: Arc<Builtin>,
     lang: Arc<Language>,
     registries: Arc<Dynamic>,
@@ -238,6 +239,7 @@ impl Game<'_> {
         self.apply_settings();
         self.remote = Some(Remote {
             session,
+            brand: "unknown".into(),
             builtin: Arc::new(builtin),
             lang,
             registries: Arc::new(Dynamic::default()),
@@ -440,6 +442,11 @@ impl Game<'_> {
                         r.joined = true;
                         r.profile = uuid;
                         r.status = format!("Joined as {name}; loading terrain...");
+                    }
+                }
+                Event::Brand(brand) => {
+                    if let Some(remote) = &mut self.remote {
+                        remote.brand = brand;
                     }
                 }
                 Event::Reconfigured(registries) => self.set_registries(registries),
