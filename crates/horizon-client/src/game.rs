@@ -5564,9 +5564,10 @@ impl Game<'_> {
             let start = out.len();
             self.block_model_vertices(
                 f.state,
-                f.start_pos,
+                horizon_core::random::position_seed(f.start_pos),
                 glam::Mat4::from_translation(o),
                 packed,
+                false,
                 &mut out,
             );
             let tint = horizon_client::mobs::render::abgr(tint);

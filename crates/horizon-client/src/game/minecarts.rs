@@ -17,7 +17,6 @@ use horizon_client::{
 };
 use horizon_core::{
     geometry::{Aabb, Vec3},
-    position::BlockPos,
     random::RandomSource,
 };
 use horizon_world::registry::BlockStateId;
@@ -1139,16 +1138,17 @@ impl Game<'_> {
             }
         }
     }
-    /// A block model's faces under `m` (block space 0..1), lit flat.
+    /// Baked block faces with terrain shade or block-item diffuse lighting.
     pub(super) fn block_model_vertices(
         &self,
         state: BlockStateId,
-        seed_pos: BlockPos,
+        seed: i64,
         m: glam::Mat4,
         light: u32,
+        diffuse: bool,
         out: &mut Vec<Vertex>,
     ) {
-        let Ok(models) = self.res.assets.model_catalog.collect(state, seed_pos) else {
+        let Ok(models) = self.res.assets.model_catalog.collect_seeded(state, seed) else {
             return;
         };
         for (_, model) in &models {
@@ -1168,12 +1168,30 @@ impl Game<'_> {
                     D::North | D::South => 204,
                     D::West | D::East => 153,
                 };
-                let color = 0xFF00_0000 | shade << 16 | shade << 8 | shade;
+                let color = if diffuse {
+                    u32::MAX
+                } else {
+                    0xFF00_0000 | shade << 16 | shade << 8 | shade
+                };
+                let normal = if diffuse {
+                    use horizon_client::item_render::{direction_vector, transform_normal};
+                    let n = transform_normal(m, direction_vector(face.quad.facing));
+                    let n = n.to_array().map(|v| (v.clamp(-1.0, 1.0) * 127.0) as i8);
+                    [n[0], n[1], n[2], 127]
+                } else {
+                    [0; 4]
+                };
+                let light = if diffuse {
+                    let emission = u32::from(face.quad.light_emission) * 16;
+                    (light & 0xFF) | (light >> 8 & 0xFF).max(emission) << 8
+                } else {
+                    light
+                };
                 for k in 0..4 {
                     let p = face.quad.positions[k];
                     let uv = face.quad.uv[k];
                     out.push(Vertex {
-                        normal: [0; 4],
+                        normal,
                         pos: m.transform_point3(glam::Vec3::from_array(p)).to_array(),
                         uv: [s.u0 + uv[0] * (s.u1 - s.u0), s.v0 + uv[1] * (s.v1 - s.v0)],
                         layer: 0,
@@ -1297,7 +1315,7 @@ impl Game<'_> {
                         * glam::Mat4::from_translation(glam::Vec3::splat(-0.5));
                     let flash = c.kind == CartKind::Tnt && c.fuse > -1 && (c.fuse / 5) % 2 == 0;
                     let start = out.len();
-                    self.block_model_vertices(state, BlockPos::default(), m, packed, out);
+                    self.block_model_vertices(state, 0, m, packed, false, out);
                     if flash {
                         // submitWhiteSolidBlock: OverlayTexture.u(1.0) on the cart's own light.
                         for v in &mut out[start..] {

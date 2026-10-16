@@ -413,6 +413,7 @@ impl Game<'_> {
             if mob.species() == horizon_client::mobs::Species::SulfurCube {
                 self.sulfur_cube_body_geometry(
                     mob,
+                    alpha as f32,
                     horizon_client::mobs::render::base_transform_at(mob, alpha as f32, origin),
                     packed,
                     out,

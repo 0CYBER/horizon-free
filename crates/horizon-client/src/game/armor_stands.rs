@@ -693,7 +693,7 @@ impl Game<'_> {
     }
 }
 /// `AbstractSkullBlock.getType` of a skull item.
-fn skull_kind(item: &str) -> Option<&'static str> {
+pub(super) fn skull_kind(item: &str) -> Option<&'static str> {
     Some(match item {
         "minecraft:skeleton_skull" => "skeleton",
         "minecraft:wither_skeleton_skull" => "wither_skeleton",

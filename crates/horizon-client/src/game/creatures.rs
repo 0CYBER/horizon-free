@@ -2740,6 +2740,7 @@ impl Game<'_> {
             {
                 self.sulfur_cube_body_geometry(
                     mob,
+                    alpha as f32,
                     horizon_client::mobs::render::base_transform(mob, alpha as f32, camera),
                     packed,
                     out,
