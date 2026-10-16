@@ -401,6 +401,14 @@ def open_container(guest, pos, out, label, take=None):
     """Open the container at `pos` and read it; `take` shift-clicks that container slot out first."""
     guest.raw('interact', *pos)
     guest.raw('wait-for', 'screen', 'container', '--timeout', 10)
+    # The server's menu (an ender or double chest has no stand-in block entity: key i32::MIN),
+    # then its contents, can come a few ticks after the screen.
+    for _ in range(20):
+        guest.wait(2)
+        screen = guest('screen')
+        items = {s['slot']: s.get('item') for s in screen.get('slots', [])}
+        if screen.get('container') == [-2**31, 0, 0] and (take is None or items.get(300 + take)):
+            break
     guest.wait(5)
     if take is not None:
         guest.raw('click-slot', 300 + take, 'shift')
