@@ -6,9 +6,12 @@
 //!   `<work>/modrinth.json`), the jars in the instance or `<work>/jars/`,
 //!   classes, tiers and dependency layers in `<work>/inventory.json` and
 //!   `inventory.csv`.
+//! - `carry <work> [<mod id>...]`: the content mods' data and assets into
+//!   `<work>/mods/<id>/carry/`, a folder mod for local use.
 //!
-//! The work folder belongs to the user: jars stay there and are never
-//! uploaded or committed.
+//! The work folder belongs to the user: jars and carried-over files stay
+//! there and are never uploaded or committed.
+mod carry;
 mod classify;
 mod import;
 mod inventory;
@@ -17,7 +20,7 @@ mod modrinth;
 
 use std::{fs, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: horizon-port-pack import <pack> <work> | inventory <work> [--offline]";
+const USAGE: &str = "usage: horizon-port-pack import <pack> <work> | inventory <work> [--offline] | carry <work> [<mod id>...]";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -29,6 +32,7 @@ fn main() -> ExitCode {
         Some("inventory") => {
             path(1).and_then(|w| inventory(w, args.iter().any(|a| a == "--offline")))
         }
+        Some("carry") => path(1).and_then(|w| carry(w, &args[2..])),
         _ => Err(USAGE.to_owned()),
     };
     match result {
@@ -100,5 +104,49 @@ fn inventory(work: &Path, offline: bool) -> Result<(), String> {
     if missing > 0 {
         println!("{missing} required dependencies are not in the pack (see inventory.json)");
     }
+    Ok(())
+}
+
+fn carry(work: &Path, only: &[String]) -> Result<(), String> {
+    let records: Vec<inventory::Record> = read_json(&work.join("inventory.json"))?;
+    let mut done = 0;
+    for r in &records {
+        let chosen = if only.is_empty() {
+            r.class == "content"
+        } else {
+            only.contains(&r.key)
+        };
+        let (Some(jar), Some(info)) = (&r.jar, &r.info) else {
+            if chosen && !only.is_empty() {
+                eprintln!("{}: no jar (put it in {}/jars/)", r.key, work.display());
+            }
+            continue;
+        };
+        if !chosen {
+            continue;
+        }
+        match carry::carry(jar, info, &work.join("mods").join(&r.key)) {
+            Ok(report) => {
+                done += 1;
+                println!(
+                    "{}: {} files, {} recipes upgraded ({} kept), {} item definitions added, {} blocks ({} without a template), {} items, {} outside",
+                    r.key,
+                    report.copied,
+                    report.recipes_upgraded,
+                    report.recipes_kept.len(),
+                    report.item_definitions_added,
+                    report.blocks.len(),
+                    report.blocks_unknown.len(),
+                    report.items,
+                    report.outside.len()
+                );
+            }
+            Err(e) => eprintln!("{}: {e}", r.key),
+        }
+    }
+    println!(
+        "{done} mods carried over into {}",
+        work.join("mods").display()
+    );
     Ok(())
 }
