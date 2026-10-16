@@ -1417,6 +1417,7 @@ dependencies = [
  "horizon-friends",
  "horizon-mods",
  "horizon-protocol",
+ "horizon-server-files",
  "horizon-shaderpack",
  "horizon-telemetry",
  "horizon-theme",
@@ -1525,6 +1526,28 @@ dependencies = [
  "getrandom 0.3.4",
  "horizon-friends",
  "serde_json",
+]
+
+[[package]]
+name = "horizon-server"
+version = "0.1.0"
+dependencies = [
+ "horizon-server-files",
+ "libc",
+ "serde",
+ "toml",
+ "toml_edit",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "horizon-server-files"
+version = "0.1.0"
+dependencies = [
+ "horizon-core",
+ "horizon-protocol",
+ "horizon-world",
+ "log",
 ]
 
 [[package]]
@@ -3725,6 +3748,7 @@ dependencies = [
  "indexmap",
  "toml_datetime",
  "toml_parser",
+ "toml_writer",
  "winnow",
 ]
 

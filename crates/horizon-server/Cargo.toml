@@ -1,0 +1,24 @@
+[package]
+name = "horizon-server"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version = "1.90"
+description = "Host a Horizon server: server.toml, the CLI and the supervisor that runs the game headless (docs/server.md)"
+
+[dependencies]
+horizon-server-files = { path = "../horizon-server-files" }
+serde = { version = "1", features = ["derive"] }
+toml = "1.1"
+# Edits server.toml in place, keeping the owner's comments and order.
+toml_edit = "0.25"
+
+[target.'cfg(unix)'.dependencies]
+# SIGINT/SIGTERM/SIGHUP: stop the game cleanly when the terminal or the service manager asks.
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_Threading"] }
+
+[lints]
+workspace = true
