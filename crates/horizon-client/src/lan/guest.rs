@@ -102,6 +102,8 @@ pub struct Guest {
     /// The moves accepted since the game last looked (movement, on ground),
     /// for ServerPlayer.doCheckFallDamage.
     pub moves: Vec<([f64; 3], bool)>,
+    /// Whether the guest was on the ground before the first of `moves`.
+    pub moves_from_ground: bool,
     pub dead: bool,
     /// The join packets were sent (PlayerList.placeNewPlayer ran).
     pub placed: bool,
@@ -178,6 +180,7 @@ impl Guest {
             joined_tick: 0,
             ticks: 0,
             moves: Vec::new(),
+            moves_from_ground: false,
             dead: false,
             placed: false,
             menu: None,

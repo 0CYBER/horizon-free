@@ -13,7 +13,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
              closes on both when the guest closes it;
 - crafting:  the guest crafts planks in the inventory's 2x2 grid and opens a crafting table;
 - damage:    a guest in survival takes fall damage;
-- mobs:      with the host in creative, a zombie and a skeleton go for the guest and hurt them.
+- mobs:      with the host in creative, a zombie and a skeleton go for the guest and hurt them;
+- hazards:   a guest in survival gets hungry sprint-jumping and is hurt by lava, a block at the eyes,
+             drowning and the void (then respawns).
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -40,7 +42,7 @@ from agent_control_e2e import Cli, Failed, game_env  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'chest', 'crafting', 'damage', 'mobs']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'chest', 'crafting', 'damage', 'mobs', 'hazards']
 
 
 class Game:
@@ -300,9 +302,63 @@ def check_mobs(host, guest, out):
     return hurt
 
 
+def check_hazards(host, guest, out):
+    guest('command', command='gamemode survival')
+    guest.wait(10)
+    # Sprint-jumping down a stone lane: ServerPlayer.jumpFromGround and checkMovementStatistics.
+    guest('command', command='fill ~ ~-1 ~-1 ~60 ~-1 ~1 minecraft:stone')
+    guest('command', command='fill ~ ~ ~-1 ~60 ~3 ~1 minecraft:air')
+    guest.wait(10)
+    x, y, z = pos_of(guest)
+    guest.raw('look-at', f'{x + 60:.2f}', f'{y + 1.6:.2f}', f'{z:.2f}')
+    food = host.raw('lan', 'status')['guests'][0]['food']
+    for k in ('w', 'ctrl', 'space'):
+        guest.raw('key', k, 'down')
+    guest.wait(160)
+    for k in ('space', 'ctrl', 'w'):
+        guest.raw('key', k, 'up')
+    guest.wait(10)
+    fed = host.raw('lan', 'status')['guests'][0]['food']
+    hunger = {'before': food, 'after': fed}
+    hurt = {}
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    x, y, z = hx + 3, hy, hz
+    for name, fill, ticks in (('lava', 'minecraft:lava', 60), ('wall', 'minecraft:stone', 60),
+                              ('drowning', 'minecraft:water', 500), ('void', None, 60)):
+        if remote(guest)['health'] <= 0:
+            guest.raw('respawn')
+            guest.wait(40)
+        # A stone box around the guest holds the lava and the water in.
+        guest('command', command=f'fill {x - 1} {y - 1} {z - 1} {x + 1} {y + 2} {z + 1} minecraft:stone')
+        guest('command', command=f'fill {x} {y} {z} {x} {y + 1} {z} minecraft:air')
+        guest('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+        guest.wait(100)
+        before = remote(guest)['health']
+        if fill:
+            guest('command', command=f'fill {x} {y} {z} {x} {y + 1} {z} {fill}')
+        else:
+            guest('command', command=f'tp @s {x + 0.5} -140 {z + 0.5}')
+        hurt[name] = (before, first_hurt(guest, before, ticks))
+        guest.shot(out, f'hazards-{name}')
+        # Water puts the lava's fire out.
+        guest('command', command=f'fill {x} {y} {z} {x} {y + 1} {z} minecraft:water')
+        guest.wait(5)
+        guest('command', command=f'fill {x - 1} {y - 1} {z - 1} {x + 1} {y + 2} {z + 1} minecraft:air')
+        guest('command', command=f'fill {x - 1} {y - 1} {z - 1} {x + 1} {y - 1} {z + 1} minecraft:stone')
+    guest.wait(20)
+    if remote(guest)['health'] <= 0:
+        guest.raw('respawn')
+        guest.wait(40)
+    # [food, saturation, exhaustion]: 8 s of sprint-jumping is about 2 of exhaustion.
+    assert fed[2] - food[2] > 1.0 or fed[1] < food[1], f'no hunger from moving: {hunger}'
+    for name, (before, after) in hurt.items():
+        assert after < before, f'{name} never hurt the guest: health {before} -> {after} (all: {hurt})'
+    return {'hunger': hunger, **hurt}
+
+
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
              'chest': check_chest, 'crafting': check_crafting, 'damage': check_damage,
-             'mobs': check_mobs}
+             'mobs': check_mobs, 'hazards': check_hazards}
 
 
 def run(ctl, out, resources, checks):

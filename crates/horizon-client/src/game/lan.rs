@@ -337,6 +337,13 @@ impl Game<'_> {
                         "placed": g.placed,
                         "loaded": g.loaded,
                         "game_mode": g.game_mode,
+                        "health": g.health,
+                        // FoodData: food level, saturation and exhaustion.
+                        "food": [
+                            f64::from(g.food),
+                            f64::from(g.saturation),
+                            g.motion.as_ref().map_or(0.0, |m| f64::from(m.health.food.exhaustion)),
+                        ],
                         "chunks": g.sent_chunks.len(),
                         "tracked": g.tracker.len(),
                         // The armour the host draws on this guest, head to feet.
