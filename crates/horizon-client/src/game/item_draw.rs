@@ -330,6 +330,7 @@ impl Game<'_> {
             _ => None,
         });
         for (item, at, partial) in live.chain(taken) {
+            let entity_start = out.len();
             let q = item.position;
             let pos = glam::DVec3::from_array(at) - camera;
             if pos.length_squared() > 64.0 * 64.0 {
@@ -369,6 +370,7 @@ impl Game<'_> {
             ) {
                 self.submit_item_world(&state, copy, vertex_light(packed), out);
             }
+            self.cull_entity_vertices(out, entity_start);
         }
     }
 }

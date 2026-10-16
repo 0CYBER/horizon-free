@@ -139,6 +139,7 @@ fn main() -> Result<()> {
         blend_radius: 2,
         smooth_lighting: true,
         cutout_leaves: true,
+        cull_leaves: false,
     };
     let mut best = f64::MAX;
     let mut quads = 0usize;

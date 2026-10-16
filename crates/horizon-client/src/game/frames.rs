@@ -305,6 +305,7 @@ impl Game<'_> {
         let mut maps: Vec<(i32, glam::Mat4, u32)> = Vec::new();
         let mut items: Vec<(ItemStack, u32, glam::Mat4, u8)> = Vec::new();
         for f in &self.item_frames {
+            let entity_start = out.len();
             let map = f.item.as_ref().and_then(super::maps::map_id);
             let s = f.step();
             // Pose: to the block centre, then X/Y rotation by facing.
@@ -371,6 +372,7 @@ impl Game<'_> {
                     );
                 }
             }
+            self.cull_entity_vertices(out, entity_start);
             if let Some(id) = map {
                 // ItemFrameRenderer: the map fills the face, in 90-degree steps.
                 let depth = if f.invisible { 0.5 } else { 0.4375 };
@@ -400,6 +402,7 @@ impl Game<'_> {
         }
         // `extractRenderState`: FIXED, seeded by the frame entity.
         for (stack, id, m, light) in items {
+            let entity_start = out.len();
             let owner = super::item_draw::owner_at([0.0; 3], 0.0, "minecraft:item_frame");
             let state = self.resolve_item(
                 &stack,
@@ -413,9 +416,12 @@ impl Game<'_> {
                 horizon_client::block_entity_render::vertex_light(light),
                 out,
             );
+            self.cull_entity_vertices(out, entity_start);
         }
         for (id, m, light) in maps {
+            let entity_start = out.len();
             self.map_vertices(id, m, light, out);
+            self.cull_entity_vertices(out, entity_start);
         }
     }
 }

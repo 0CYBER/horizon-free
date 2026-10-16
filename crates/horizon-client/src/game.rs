@@ -34,6 +34,7 @@ mod dispenser;
 mod dragon;
 mod enchant_effects;
 mod end;
+mod entity_culling;
 mod events;
 mod explosion;
 mod extras;
@@ -967,6 +968,7 @@ struct Game<'a> {
     pending_uploads: Vec<((i32, i32, i32), horizon_client::mesher::SectionMesh)>,
     /// This frame's view frustum, for culling entities and block entities.
     view_frustum: Option<horizon_client::gfx::Frustum>,
+    entity_culler: Option<horizon_client::entity_culling::Culler>,
     /// A scripted flight from the control socket (`fly`).
     flight: Option<control::Flight>,
     /// The running agent action from the control socket (game/agent.rs).
@@ -5300,6 +5302,7 @@ impl Game<'_> {
         alpha: f64,
         mut out: Vec<Vertex>,
     ) -> Vec<Vertex> {
+        self.prepare_entity_culling(camera);
         let fire_yaw = if self.camera_type == perspective::CameraType::ThirdPersonFront {
             self.yaw + 180.0
         } else {
@@ -5487,9 +5490,21 @@ impl Game<'_> {
                         v.intersects(o - glam::Vec3::ONE, o + glam::Vec3::splat(2.0))
                     })
             });
-            self.res
-                .block_entity_render
-                .render(&scene, visible, &mut out);
+            if self.entity_culler.is_some() {
+                for block in visible {
+                    let start = out.len();
+                    self.res
+                        .block_entity_render
+                        .render(&scene, std::iter::once(block), &mut out);
+                    if !off_screen(block.1) {
+                        self.cull_entity_vertices(&mut out, start);
+                    }
+                }
+            } else {
+                self.res
+                    .block_entity_render
+                    .render(&scene, visible, &mut out);
+            }
         }
         // Experience orbs (ExperienceOrbRenderer): pulsing billboards from a 4x4 icon sheet.
         if let Some(r) = self
@@ -6417,6 +6432,7 @@ impl Game<'_> {
         streaming.biome_blend = self.settings.biome_blend;
         streaming.smooth_lighting = self.settings.smooth_lighting;
         streaming.cutout_leaves = self.settings.cutout_leaves;
+        streaming.cull_leaves = self.settings.horizon.cull_leaves;
         streaming.biome_zoom = BiomeZoom::new(obfuscate_seed(seed));
         streaming.sky_light = dim != Dim::Nether;
         streaming.nether_shading = dim == Dim::Nether;
@@ -7677,11 +7693,21 @@ impl Game<'_> {
         // Options.biomeBlendRadius, ambientOcclusion and cutoutLeaves:
         // LevelExtractor.allChanged when they change.
         let (s, st) = (&self.settings, &self.streaming);
-        let remesh = (s.biome_blend, s.smooth_lighting, s.cutout_leaves)
-            != (st.biome_blend, st.smooth_lighting, st.cutout_leaves);
+        let remesh = (
+            s.biome_blend,
+            s.smooth_lighting,
+            s.cutout_leaves,
+            s.horizon.cull_leaves,
+        ) != (
+            st.biome_blend,
+            st.smooth_lighting,
+            st.cutout_leaves,
+            st.cull_leaves,
+        );
         self.streaming.biome_blend = self.settings.biome_blend;
         self.streaming.smooth_lighting = self.settings.smooth_lighting;
         self.streaming.cutout_leaves = self.settings.cutout_leaves;
+        self.streaming.cull_leaves = self.settings.horizon.cull_leaves;
         if remesh {
             self.all_sections_changed();
         }
@@ -10058,6 +10084,7 @@ pub fn run() -> Result<()> {
         events: Default::default(),
         agent: agent::Agent::default(),
         view_frustum: None,
+        entity_culler: None,
         pending_uploads: Vec::new(),
         frame_graph: Default::default(),
         extras: Default::default(),

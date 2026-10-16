@@ -1590,6 +1590,9 @@ impl Renderer {
     pub fn section_count(&self) -> usize {
         self.sections.len()
     }
+    pub fn has_section(&self, key: SectionKey) -> bool {
+        self.sections.contains_key(&key)
+    }
     pub fn upload(&mut self, key: SectionKey, mesh: &SectionMesh) {
         self.occlusion.set(key, mesh.visibility);
         if mesh.block_entities.is_empty() {

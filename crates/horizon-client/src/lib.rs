@@ -51,6 +51,7 @@ pub mod effects;
 pub mod enchant;
 pub mod end_crystal;
 pub mod entities;
+pub mod entity_culling;
 pub mod entity_nbt;
 pub mod environment;
 pub mod extras;
