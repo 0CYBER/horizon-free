@@ -531,6 +531,9 @@ def check_walls(host, guest, out):
     # (TEXT_SEE_THROUGH), but not once the guest crouches (Entity.isDiscrete).
     for g in (host, guest):
         back_to_game(g)
+    if remote(guest)['health'] <= 0:
+        guest.raw('respawn')
+        guest.wait(40)
     face_each_other(host, guest)
     hx, hy, hz = pos_of(host)
     gx, gy, gz = pos_of(guest)
