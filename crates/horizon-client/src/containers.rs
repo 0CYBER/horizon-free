@@ -70,6 +70,8 @@ pub enum BlockEntity {
     Spawner(Box<crate::mobs::spawner::Spawner>),
     /// `TrialSpawnerBlockEntity` (`crate::mobs::trial_spawner`).
     TrialSpawner(Box<crate::mobs::trial_spawner::TrialSpawner>),
+    /// `VaultBlockEntity` (`crate::vault`).
+    Vault(Box<crate::vault::Vault>),
     /// `BeehiveBlockEntity` of beehives and bee nests (`crate::beehive`).
     Beehive(Box<crate::beehive::Beehive>),
 }
@@ -192,6 +194,9 @@ impl BlockEntity {
         if name == "minecraft:trial_spawner" {
             return Some(Self::TrialSpawner(Box::default()));
         }
+        if name == "minecraft:vault" {
+            return Some(Self::Vault(Box::default()));
+        }
         if name == "minecraft:beehive" || name == "minecraft:bee_nest" {
             return Some(Self::Beehive(Box::default()));
         }
@@ -272,6 +277,7 @@ impl BlockEntity {
             Self::CreakingHeart(_) => "minecraft:creaking_heart",
             Self::Spawner(_) => "minecraft:mob_spawner",
             Self::TrialSpawner(_) => "minecraft:trial_spawner",
+            Self::Vault(_) => "minecraft:vault",
             Self::Beehive(_) => "minecraft:beehive",
         }
     }
@@ -286,6 +292,7 @@ impl BlockEntity {
             | Self::CreakingHeart(_)
             | Self::Spawner(_)
             | Self::TrialSpawner(_)
+            | Self::Vault(_)
             | Self::Beehive(_) => Vec::new(),
             Self::Lectern(l) => l.book.iter().cloned().collect(),
             Self::Sculk(_) => Vec::new(),
@@ -308,6 +315,7 @@ impl BlockEntity {
             Self::CreakingHeart(_)
             | Self::Spawner(_)
             | Self::TrialSpawner(_)
+            | Self::Vault(_)
             | Self::Beehive(_) => &[],
         }
     }
@@ -326,6 +334,7 @@ impl BlockEntity {
             Self::CreakingHeart(_)
             | Self::Spawner(_)
             | Self::TrialSpawner(_)
+            | Self::Vault(_)
             | Self::Beehive(_) => &mut [],
         }
     }

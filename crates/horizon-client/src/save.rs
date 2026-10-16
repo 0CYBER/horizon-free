@@ -528,6 +528,7 @@ pub fn encode_block_entity(
         }
         BlockEntity::Spawner(s) => entries.extend(s.save()),
         BlockEntity::TrialSpawner(s) => entries.extend(s.save()),
+        BlockEntity::Vault(v) => entries.extend(v.save()),
         BlockEntity::Beehive(h) => entries.extend(h.to_nbt()),
     }
     Tag::compound(entries)
@@ -658,6 +659,7 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
         | BlockEntity::CreakingHeart(_) => {}
         BlockEntity::Spawner(s) => **s = crate::mobs::spawner::Spawner::load(tag),
         BlockEntity::TrialSpawner(s) => **s = crate::mobs::trial_spawner::TrialSpawner::load(tag),
+        BlockEntity::Vault(v) => **v = crate::vault::Vault::load(tag),
         BlockEntity::Beehive(h) => **h = crate::beehive::Beehive::from_nbt(tag),
     }
     Some((pos, entity))

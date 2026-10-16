@@ -125,6 +125,7 @@ mod trial_spawner;
 mod trident;
 mod tweaks;
 mod ui_control;
+mod vault;
 mod villagers;
 mod wandering_trader;
 mod wind;
@@ -2360,6 +2361,10 @@ impl Game<'_> {
                 self.swing_arm();
                 return Ok(true);
             }
+            if self.use_vault(hit.pos, held.as_ref())? {
+                self.swing_arm();
+                return Ok(true);
+            }
             match self.use_respawn_anchor(hit.pos, held.as_ref())? {
                 respawn_anchor::AnchorUse::Charged => {
                     self.swing_arm();
@@ -3889,6 +3894,7 @@ impl Game<'_> {
                 | BlockEntity::CreakingHeart(_)
                 | BlockEntity::Spawner(_)
                 | BlockEntity::TrialSpawner(_)
+                | BlockEntity::Vault(_)
                 | BlockEntity::Beehive(_),
             ) => {}
             None => {
@@ -4144,6 +4150,7 @@ impl Game<'_> {
                     | BlockEntity::CreakingHeart(_)
                     | BlockEntity::Spawner(_)
                     | BlockEntity::TrialSpawner(_)
+                    | BlockEntity::Vault(_)
                     | BlockEntity::Beehive(_),
                 ) => {}
                 None if self.mount_active() => self.draw_mount_background(batch, ox, oy),
@@ -5284,6 +5291,8 @@ impl Game<'_> {
         }
         // `ItemEntityRenderer`.
         self.dropped_item_geometry(camera, alpha, &mut out);
+        // `VaultRenderer`.
+        self.vault_geometry(camera, alpha, &mut out);
         // Mobs and their projectiles.
         self.mob_geometry(camera, alpha, &mut out);
         self.player_model_geometry(camera, alpha, &mut out);
@@ -5801,6 +5810,7 @@ impl Game<'_> {
         self.tick_creaking_hearts()?;
         self.tick_spawners()?;
         self.tick_trial_spawners()?;
+        self.tick_vaults()?;
         self.tick_beehives();
         let mut lit_changes = Vec::new();
         for (pos, entity) in self.world.block_entities.iter_mut() {

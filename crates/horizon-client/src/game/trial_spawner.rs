@@ -184,7 +184,7 @@ impl Game<'_> {
         }
         for event in events {
             match event {
-                TrialEvent::BlockUpdated => self.trial_spawner_updated(key),
+                TrialEvent::BlockUpdated => self.mark_block_entity_updated(key),
                 TrialEvent::LevelEvent(id, at, data) => self.level_event_at(id, at, data),
                 TrialEvent::Sound(name) => {
                     self.audio
@@ -220,8 +220,8 @@ impl Game<'_> {
         let id = self.res.assets.registry.resolve(&block)?;
         self.level_set([key.0, key.1, key.2], id)
     }
-    /// `markUpdated`: the clients load the new update tag.
-    fn trial_spawner_updated(&mut self, key: Pos) {
+    /// `sendBlockUpdated` of a block entity: the clients load its new update tag.
+    pub(super) fn mark_block_entity_updated(&mut self, key: Pos) {
         if let Some(log) = self.world.block_log.as_mut() {
             log.push(key);
         }
