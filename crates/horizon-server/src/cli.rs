@@ -1,7 +1,7 @@
 //! The commands that manage a server in the background (docs/server.md, section 5): `start`, `stop`,
 //! `restart`, `status`, `cmd` and `logs`. They talk to the running supervisor through the control API.
 
-use crate::{api::Client, signals, supervisor};
+use crate::{api::Client, backup, signals, supervisor};
 use serde_json::{Value, json};
 use std::{
     path::Path,
@@ -250,6 +250,92 @@ fn duration(secs: u64) -> String {
         3600..86_400 => format!("{} h {:02} min", secs / 3600, secs / 60 % 60),
         _ => format!("{} d {} h", secs / 86_400, secs / 3600 % 24),
     }
+}
+
+/// `backup [NAME]`: through the running server (it saves first), or straight from the files.
+pub fn backup(dir: &Path, name: Option<&str>) -> Result<(), String> {
+    let made = match Client::open(dir)? {
+        Some(client) => client.call_within(
+            "POST",
+            "/api/v1/backups",
+            Some(&json!({ "name": name })),
+            Duration::from_secs(3600),
+        )?["name"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned(),
+        None => {
+            let _lock = supervisor::lock(dir)?;
+            let config = crate::config::Config::load(dir)?;
+            let file = backup::file_name(std::time::SystemTime::now(), name)?;
+            backup::create(dir, &config, &file)?;
+            file
+        }
+    };
+    println!("Backed up to {}/{made}", backup::DIR);
+    Ok(())
+}
+
+/// `backups`: the backups, newest first.
+pub fn backups(dir: &Path) -> Result<(), String> {
+    let all = backup::list(dir);
+    if all.is_empty() {
+        println!("No backups yet: `horizon-server backup` makes one.");
+    }
+    for b in all {
+        println!("{:>10}  {}", size(b.bytes), b.name);
+    }
+    Ok(())
+}
+
+fn size(bytes: u64) -> String {
+    match bytes {
+        0..1_000_000 => format!("{} kB", bytes.div_ceil(1000)),
+        1_000_000..1_000_000_000 => format!("{:.1} MB", bytes as f64 / 1e6),
+        _ => format!("{:.2} GB", bytes as f64 / 1e9),
+    }
+}
+
+/// `restore NAME [--yes]`: the backup's world in place of the current one (moved aside, not deleted). A
+/// running server restarts with it.
+pub fn restore(dir: &Path, name: &str, yes: bool) -> Result<(), String> {
+    let name = backup::find(dir, name)?;
+    if !yes {
+        if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            return Err("restore replaces the world: pass --yes to confirm".into());
+        }
+        print!(
+            "Replace the world with {name}? The current world is kept in {}/. [y/N] ",
+            backup::DIR
+        );
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        let mut answer = String::new();
+        let _ = std::io::stdin().read_line(&mut answer);
+        if !answer.trim().eq_ignore_ascii_case("y") && !answer.trim().eq_ignore_ascii_case("yes") {
+            println!("Nothing changed.");
+            return Ok(());
+        }
+    }
+    if let Some(client) = Client::open(dir)? {
+        let before = client.call("GET", "/api/v1/status", None)?["engine_pid"].as_u64();
+        client.call("POST", "/api/v1/restore", Some(&json!({ "name": name })))?;
+        print!("Restoring {name}: restarting the game with it");
+        wait_running(&client, before)?;
+        println!(
+            "\nThe game is running on the restored world; `horizon-server logs` has the details."
+        );
+        return Ok(());
+    }
+    let _lock = supervisor::lock(dir)?;
+    let config = crate::config::Config::load(dir)?;
+    match backup::restore(dir, &config, &name)? {
+        Some(old) => println!(
+            "Restored {name}; the world it replaced is in {}",
+            old.display()
+        ),
+        None => println!("Restored {name}"),
+    }
+    Ok(())
 }
 
 /// `logs [-f] [-n N]`: the last lines, from the running server or else from logs/latest.log.

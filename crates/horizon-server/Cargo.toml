@@ -15,6 +15,8 @@ serde_json = "1"
 toml = "1.1"
 # Edits server.toml in place, keeping the owner's comments and order.
 toml_edit = "0.25"
+# Backups: one zip anyone can open, Windows included.
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(unix)'.dependencies]
 # SIGINT/SIGTERM/SIGHUP: stop the game cleanly when the terminal or the service manager asks.

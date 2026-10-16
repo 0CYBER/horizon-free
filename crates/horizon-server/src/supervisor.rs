@@ -4,7 +4,7 @@
 
 use crate::{
     api::{self, Phase, Shared},
-    config,
+    backup, config,
     config::Config,
     engine, signals,
 };
@@ -80,6 +80,7 @@ pub fn run(dir: &Path) -> Result<(), String> {
     let shared = Shared::new(dir);
     let _endpoint = api::start(shared.clone())?;
     sample(shared.clone());
+    schedule_backups(shared.clone());
     let console = console_lines();
     let mut crashes: Vec<Instant> = Vec::new();
     loop {
@@ -129,7 +130,24 @@ pub fn run(dir: &Path) -> Result<(), String> {
         }
         let status = match exit {
             Exit::Stopped => return Ok(()),
-            Exit::Restart => continue,
+            Exit::Restart => {
+                let restore = shared.restore.lock().unwrap().take();
+                if let Some(name) = restore {
+                    match backup::restore(dir, &config, &name) {
+                        Ok(Some(old)) => note(
+                            &shared,
+                            "INFO",
+                            &format!(
+                                "Restored {name}; the world it replaced is in {}",
+                                old.display()
+                            ),
+                        ),
+                        Ok(None) => note(&shared, "INFO", &format!("Restored {name}")),
+                        Err(e) => note(&shared, "ERROR", &format!("Could not restore {name}: {e}")),
+                    }
+                }
+                continue;
+            }
             Exit::Crashed(status) => status,
         };
         {
@@ -267,6 +285,46 @@ fn sample(shared: Arc<Shared>) {
                     "cpu_percent": cpu_percent,
                     "game": game,
                 });
+            }
+        });
+}
+
+/// Automatic backups every `backups.every` while the game runs, keeping the last `backups.keep`.
+fn schedule_backups(shared: Arc<Shared>) {
+    let _ = thread::Builder::new()
+        .name("backups".into())
+        .spawn(move || {
+            let mut last = Instant::now();
+            loop {
+                thread::sleep(Duration::from_secs(30));
+                let Ok(config) = Config::load(&shared.dir) else {
+                    continue;
+                };
+                let Ok(Some(every)) = backup::interval(&config.backups.every) else {
+                    continue;
+                };
+                if last.elapsed() < every || shared.state.lock().unwrap().phase != Phase::Running {
+                    continue;
+                }
+                last = Instant::now();
+                match shared.back_up(&backup::auto_name(std::time::SystemTime::now())) {
+                    Ok(path) => {
+                        note(&shared, "INFO", &format!("Backed up to {}", path.display()));
+                        let pruned = backup::prune(&shared.dir, config.backups.keep as usize);
+                        if !pruned.is_empty() {
+                            note(
+                                &shared,
+                                "INFO",
+                                &format!("Deleted older backups: {}", pruned.join(", ")),
+                            );
+                        }
+                    }
+                    Err(e) => note(
+                        &shared,
+                        "WARN",
+                        &format!("The automatic backup failed: {e}"),
+                    ),
+                }
             }
         });
 }

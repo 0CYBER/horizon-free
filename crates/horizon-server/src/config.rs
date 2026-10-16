@@ -44,6 +44,10 @@ hardcore = false
 path = ""                    # the game program; empty: the one installed beside horizon-server
 resources = ""               # the prepared game files; empty: resources/ here, else the usual places
 restart_on_crash = true
+
+[backups]
+every = "6h"                 # automatic backups while the server runs: 30m, 6h, 1d...; "0" turns them off
+keep = 12                    # automatic backups kept (backups made by hand are never deleted)
 "##;
 
 /// Each typed setting: its section, its name, and the vanilla key it writes.
@@ -75,6 +79,8 @@ pub struct Config {
     pub properties: BTreeMap<String, toml::Value>,
     #[serde(default)]
     pub engine: Engine,
+    #[serde(default)]
+    pub backups: Backups,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -111,6 +117,13 @@ pub struct Engine {
     pub restart_on_crash: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Backups {
+    pub every: String,
+    pub keep: u32,
+}
+
 impl Default for Server {
     fn default() -> Self {
         Self {
@@ -143,6 +156,15 @@ impl Default for Engine {
             path: String::new(),
             resources: String::new(),
             restart_on_crash: true,
+        }
+    }
+}
+
+impl Default for Backups {
+    fn default() -> Self {
+        Self {
+            every: "6h".into(),
+            keep: 12,
         }
     }
 }
@@ -196,6 +218,7 @@ impl Config {
                 w.name
             ));
         }
+        crate::backup::interval(&self.backups.every)?;
         if self.server.port == 0 {
             return Err("server.port must be a port number from 1 to 65535".into());
         }
@@ -291,8 +314,14 @@ pub fn render(config: &Config) -> String {
     for (key, value) in &config.properties {
         set(&mut doc, "properties", key, value);
     }
-    for field in ["path", "resources", "restart_on_crash"] {
-        set(&mut doc, "engine", field, &table["engine"][field]);
+    for (section, field) in [
+        ("engine", "path"),
+        ("engine", "resources"),
+        ("engine", "restart_on_crash"),
+        ("backups", "every"),
+        ("backups", "keep"),
+    ] {
+        set(&mut doc, section, field, &table[section][field]);
     }
     doc.to_string()
 }

@@ -2,6 +2,7 @@
 //! runs the game headless as the engine, and manages the vanilla files around it.
 
 mod api;
+mod backup;
 mod cli;
 mod config;
 mod engine;
@@ -31,6 +32,12 @@ Usage: horizon-server [--dir DIR] <command>
               Run a console command on the running server and print what it answers
   logs [-f] [-n N]
               The last N lines of the log (default 50); -f follows it
+  backup [NAME]
+              Zip the world and the settings into backups/ (a running server saves first and stays up)
+  backups     List the backups
+  restore BACKUP [--yes]
+              Put a backup's world in place (the current one is kept in backups/); a running
+              server restarts with it
   import FILE Write server.toml from a vanilla server.properties
   op NAME, deop NAME
   whitelist on|off|list, whitelist add|remove NAME
@@ -69,6 +76,12 @@ fn main() -> ExitCode {
         Some("status") => cli::status(&dir, args[1..].iter().any(|a| a == "--json")),
         Some("cmd") => cli::command(&dir, &args[1..]),
         Some("logs") => logs(&dir, &args[1..]),
+        Some("backup") => cli::backup(&dir, args.get(1).map(String::as_str)),
+        Some("backups") => cli::backups(&dir),
+        Some("restore") => match args.get(1) {
+            Some(name) => cli::restore(&dir, name, args[2..].iter().any(|a| a == "--yes")),
+            None => Err("restore needs a backup (`horizon-server backups` lists them)".into()),
+        },
         Some("import") => import(&dir, &args[1..]),
         Some(command @ ("op" | "deop" | "whitelist")) => lists::run(&dir, command, &args[1..]),
         Some(other) => Err(format!(
