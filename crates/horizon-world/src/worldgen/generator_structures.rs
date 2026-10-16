@@ -409,7 +409,10 @@ mod tests {
             };
             assert_eq!(rings["set0"], serial(seed, 32, 3, 128, &preferred));
             assert_eq!(rings["set1"], Vec::new());
-            assert_eq!(rings["set2"], serial(seed.wrapping_add(1), 20, 5, 40, &preferred));
+            assert_eq!(
+                rings["set2"],
+                serial(seed.wrapping_add(1), 20, 5, 40, &preferred)
+            );
         }
     }
 }
