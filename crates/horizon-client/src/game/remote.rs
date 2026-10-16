@@ -153,6 +153,22 @@ fn number_format(f: &play::NumberFormat) -> horizon_client::scoreboard::NumberFo
 impl Game<'_> {
     /// Leave the title for a server (ConnectScreen): an empty world fed by the connection.
     pub(super) fn connect_server(&mut self, address: &str, name: &str) -> Result<()> {
+        self.join_server(address, name, None)
+    }
+    /// Join single player's integrated server through memory.
+    pub(super) fn connect_local(
+        &mut self,
+        pipe: horizon_protocol::connection::Pipe,
+        name: &str,
+    ) -> Result<()> {
+        self.join_server("local", name, Some(pipe))
+    }
+    fn join_server(
+        &mut self,
+        address: &str,
+        name: &str,
+        local: Option<horizon_protocol::connection::Pipe>,
+    ) -> Result<()> {
         self.perf.world_opening();
         let root = self.options.resources.clone();
         let builtin = Builtin::find(&root)
@@ -160,12 +176,22 @@ impl Game<'_> {
             .ok_or("registries.json not found next to the resources; run the data generator reports (horizon-prepare)")?;
         let lang = Arc::new(horizon_client::net::load_language(&root));
         let view = self.settings.render_distance.clamp(2, 32) as i8;
-        horizon_client::crash::set_detail("Server", horizon_client::net::shown_address(address));
+        if local.is_none() {
+            horizon_client::crash::set_detail(
+                "Server",
+                horizon_client::net::shown_address(address),
+            );
+        }
         // A signed-in account always plays under its own name.
         let auth = horizon_client::auth::current();
         let name = auth.as_ref().map_or(name, |a| a.name.as_str());
-        let session = Session::connect(address, name, auth.clone(), view, lang.clone());
-        self.extras_connecting(address, name);
+        let session = match local {
+            Some(pipe) => Session::connect_local(pipe, name, view, lang.clone()),
+            None => {
+                self.extras_connecting(address, name);
+                Session::connect(address, name, auth.clone(), view, lang.clone())
+            }
+        };
         let player_type = super::perspective::player_type(&root);
         let mut streaming = Streaming::new(
             Arc::new(NoTerrain),

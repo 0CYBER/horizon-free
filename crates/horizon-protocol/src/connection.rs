@@ -1,16 +1,162 @@
-//! A blocking TCP connection with vanilla's pipeline: optional AES/CFB8
+//! A blocking connection with vanilla's pipeline: optional AES/CFB8
 //! encryption, VarInt21 framing and threshold compression. After login it
-//! splits into a reader (for a receive thread) and a shareable writer.
+//! splits into a reader (for a receive thread) and a shareable writer. It runs
+//! over TCP, or over an in-memory pipe between two threads of one process
+//! (vanilla's `LocalChannel`, which an integrated server's player uses).
 use crate::{Error, Result, buf::Reader, crypto::Cfb8, frame};
 use std::{
     io::{Read, Write},
     net::{Shutdown, TcpStream, ToSocketAddrs},
     sync::{
-        Arc,
+        Arc, Condvar, Mutex,
         atomic::{AtomicI64, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
+
+/// One direction of a [`Pipe`]: the bytes written and not read yet, and
+/// whether either end closed it.
+#[derive(Default)]
+struct Channel {
+    state: Mutex<(std::collections::VecDeque<u8>, bool)>,
+    ready: Condvar,
+}
+impl Channel {
+    fn close(&self) {
+        self.state.lock().unwrap().1 = true;
+        self.ready.notify_all();
+    }
+}
+/// The channels of one end; dropping the end's last clone closes them, as
+/// a socket closes with its process.
+struct End {
+    incoming: Arc<Channel>,
+    outgoing: Arc<Channel>,
+}
+impl Drop for End {
+    fn drop(&mut self) {
+        self.incoming.close();
+        self.outgoing.close();
+    }
+}
+/// One end of an in-memory byte pipe: what one end writes the other reads.
+pub struct Pipe {
+    end: Arc<End>,
+    /// The read timeout (`set_read_timeout`).
+    timeout: Mutex<Option<Duration>>,
+}
+impl Pipe {
+    /// Two connected ends.
+    pub fn pair() -> (Self, Self) {
+        let (a, b) = (Arc::new(Channel::default()), Arc::new(Channel::default()));
+        let end = |incoming, outgoing| Self {
+            end: Arc::new(End { incoming, outgoing }),
+            timeout: Mutex::new(None),
+        };
+        (end(a.clone(), b.clone()), end(b, a))
+    }
+    fn try_clone(&self) -> Self {
+        Self {
+            end: self.end.clone(),
+            timeout: Mutex::new(*self.timeout.lock().unwrap()),
+        }
+    }
+    /// Close both directions: reads at either end then see the end of the stream.
+    pub fn shutdown(&self) {
+        self.end.incoming.close();
+        self.end.outgoing.close();
+    }
+}
+impl Read for Pipe {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        let deadline = self.timeout.lock().unwrap().map(|t| Instant::now() + t);
+        let mut state = self.end.incoming.state.lock().unwrap();
+        while state.0.is_empty() && !state.1 {
+            state = match deadline {
+                None => self.end.incoming.ready.wait(state).unwrap(),
+                Some(deadline) => {
+                    let left = deadline.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        return Err(std::io::ErrorKind::TimedOut.into());
+                    }
+                    self.end.incoming.ready.wait_timeout(state, left).unwrap().0
+                }
+            };
+        }
+        let n = out.len().min(state.0.len());
+        for (o, b) in out.iter_mut().zip(state.0.drain(..n)) {
+            *o = b;
+        }
+        Ok(n)
+    }
+}
+impl Write for Pipe {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        let mut state = self.end.outgoing.state.lock().unwrap();
+        if state.1 {
+            return Err(std::io::ErrorKind::BrokenPipe.into());
+        }
+        state.0.extend(data);
+        self.end.outgoing.ready.notify_all();
+        Ok(data.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// What a connection runs over.
+enum Stream {
+    Tcp(TcpStream),
+    Memory(Pipe),
+}
+impl Stream {
+    fn try_clone(&self) -> std::io::Result<Self> {
+        Ok(match self {
+            Self::Tcp(s) => Self::Tcp(s.try_clone()?),
+            Self::Memory(p) => Self::Memory(p.try_clone()),
+        })
+    }
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+        match self {
+            Self::Tcp(s) => s.set_read_timeout(timeout),
+            Self::Memory(p) => {
+                *p.timeout.lock().unwrap() = timeout;
+                Ok(())
+            }
+        }
+    }
+    fn shutdown(&self) {
+        match self {
+            Self::Tcp(s) => {
+                let _ = s.shutdown(Shutdown::Both);
+            }
+            Self::Memory(p) => p.shutdown(),
+        }
+    }
+}
+impl Read for Stream {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Tcp(s) => s.read(out),
+            Self::Memory(p) => p.read(out),
+        }
+    }
+}
+impl Write for Stream {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Tcp(s) => s.write(data),
+            Self::Memory(p) => p.write(data),
+        }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Self::Tcp(s) => s.flush(),
+            Self::Memory(p) => p.flush(),
+        }
+    }
+}
 
 /// Packets received/sent and bytes in/out, for the debug screen.
 #[derive(Debug, Default)]
@@ -22,14 +168,14 @@ pub struct Counters {
 }
 
 pub struct ConnReader {
-    stream: TcpStream,
+    stream: Stream,
     buffer: Vec<u8>,
     decrypt: Option<Cfb8>,
     pub threshold: Option<usize>,
     pub counters: Arc<Counters>,
 }
 pub struct ConnWriter {
-    stream: TcpStream,
+    stream: Stream,
     encrypt: Option<Cfb8>,
     pub threshold: Option<usize>,
     counters: Arc<Counters>,
@@ -56,6 +202,13 @@ impl Connection {
     }
     pub fn from_stream(stream: TcpStream) -> Result<Self> {
         stream.set_nodelay(true)?;
+        Self::over(Stream::Tcp(stream))
+    }
+    /// A connection over one end of an in-memory [`Pipe`].
+    pub fn local(pipe: Pipe) -> Self {
+        Self::over(Stream::Memory(pipe)).expect("a pipe end clones")
+    }
+    fn over(stream: Stream) -> Result<Self> {
         let counters = Arc::new(Counters::default());
         let write = stream.try_clone()?;
         Ok(Self {
@@ -144,7 +297,7 @@ impl ConnWriter {
         Ok(())
     }
     pub fn shutdown(&self) {
-        let _ = self.stream.shutdown(Shutdown::Both);
+        self.stream.shutdown();
     }
 }
 
@@ -182,6 +335,47 @@ mod tests {
         let (id, payload) = c.recv().unwrap();
         assert_eq!((id, payload.as_slice()), (9, &b"reply"[..]));
         server.join().unwrap();
+    }
+
+    #[test]
+    fn local_pipe_carries_packets_and_closes() {
+        let (a, b) = Pipe::pair();
+        let server = std::thread::spawn(move || {
+            let mut c = Connection::local(b);
+            c.set_compression(64);
+            let (id, payload) = c.recv().unwrap();
+            assert_eq!((id, payload.len()), (5, 1000));
+            c.send(&[9, 1, 2]).unwrap();
+            let (_, writer) = c.split();
+            writer.shutdown();
+        });
+        let mut c = Connection::local(a);
+        c.set_compression(64);
+        let mut big = vec![5];
+        big.extend(std::iter::repeat_n(3u8, 1000));
+        c.send(&big).unwrap();
+        assert_eq!(c.recv().unwrap(), (9, vec![1, 2]));
+        server.join().unwrap();
+        assert!(c.recv().is_err());
+    }
+
+    #[test]
+    fn dropping_a_pipe_end_closes_it() {
+        let (a, b) = Pipe::pair();
+        let mut c = Connection::local(a);
+        drop(b);
+        assert!(c.recv().is_err());
+        assert!(c.send(&[1]).is_err());
+    }
+
+    #[test]
+    fn local_pipe_read_times_out() {
+        let (a, _b) = Pipe::pair();
+        let mut c = Connection::local(a);
+        c.reader
+            .set_read_timeout(Some(Duration::from_millis(20)))
+            .unwrap();
+        assert!(c.recv().is_err());
     }
 
     /// Encrypted bytes that arrive in the same read as the last plain packet
