@@ -395,7 +395,7 @@ mod tests {
             let work = RingWork::new(vec![
                 (0, ring_searches(seed, 32, 3, 128)),
                 (1, ring_searches(seed ^ 5, 10, 4, 0)),
-                (2, ring_searches(seed + 1, 20, 5, 40)),
+                (2, ring_searches(seed.wrapping_add(1), 20, 5, 40)),
             ]);
             let sets = [&preferred, &none, &preferred];
             std::thread::scope(|scope| {
@@ -409,7 +409,7 @@ mod tests {
             };
             assert_eq!(rings["set0"], serial(seed, 32, 3, 128, &preferred));
             assert_eq!(rings["set1"], Vec::new());
-            assert_eq!(rings["set2"], serial(seed + 1, 20, 5, 40, &preferred));
+            assert_eq!(rings["set2"], serial(seed.wrapping_add(1), 20, 5, 40, &preferred));
         }
     }
 }
