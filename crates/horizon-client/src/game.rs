@@ -4109,7 +4109,9 @@ impl Game<'_> {
     fn slot_view(&mut self, i: usize) -> Option<ItemStack> {
         match i {
             200 => self.craft_result(),
-            309 => self.crafter_result(),
+            309 if matches!(self.container_kind(), Some(BlockEntity::Crafter(_))) => {
+                self.crafter_result()
+            }
             _ => self.slot_mut(i).clone(),
         }
     }
@@ -9746,6 +9748,11 @@ pub fn run() -> Result<()> {
     let vanilla_root = options.resources.clone();
     let early_settings = Settings::load(&std::env::current_dir()?.join("options.txt"));
     options.resources = packs::startup_root(&vanilla_root, &early_settings.resource_packs);
+    options.resources = mods::content_root(
+        &options.resources,
+        &early_settings.mods.enabled,
+        &options.dev_mods,
+    );
     let assets = match Assets::load(&options.resources) {
         Ok(assets) => assets,
         // Minecraft.rollbackResourcePacks: the packs break loading, start
