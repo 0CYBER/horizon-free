@@ -6,8 +6,12 @@
 //! - `GET /api/v1/logs?since=N`: the log lines after the Nth.
 //! - `POST /api/v1/command {"line": "..."}`: a console command; the lines it logged.
 //! - `POST /api/v1/stop`, `POST /api/v1/restart`.
+//! - `GET /api/v1/backups`; `POST /api/v1/backups {"name": "..."}` backs up now; `POST /api/v1/restore
+//!   {"name": "..."}` restarts the game with that backup's world.
 
 use crate::{
+    backup,
+    config::Config,
     engine,
     http::{self, Request, Response},
 };
@@ -89,6 +93,10 @@ pub struct Shared {
     pub log: Mutex<Log>,
     pub stop: AtomicBool,
     pub restart: AtomicBool,
+    /// The backup to put in place before the game starts again (`restore`).
+    pub restore: Mutex<Option<String>>,
+    /// Held while a backup is written: one at a time.
+    pub backing_up: Mutex<()>,
     pub started: Instant,
 }
 
@@ -107,11 +115,44 @@ impl Shared {
             log: Mutex::new(Log::default()),
             stop: AtomicBool::new(false),
             restart: AtomicBool::new(false),
+            restore: Mutex::new(None),
+            backing_up: Mutex::new(()),
             started: Instant::now(),
         })
     }
     pub fn set_phase(&self, phase: Phase) {
         self.state.lock().unwrap().phase = phase;
+    }
+    fn phase(&self) -> Phase {
+        self.state.lock().unwrap().phase
+    }
+
+    /// A backup while the server runs: the game saves everything and stops writing while the zip is made.
+    pub fn back_up(&self, file_name: &str) -> Result<PathBuf, String> {
+        let _one = self.backing_up.lock().unwrap();
+        let config = Config::load(&self.dir)?;
+        let mut game = match self.phase() {
+            Phase::Running => Some(
+                engine::Control::connect(&self.dir)
+                    .map_err(|e| format!("the game didn't answer: {e}"))?,
+            ),
+            // Between a crash and the restart nothing writes the world.
+            Phase::Restarting => None,
+            Phase::Starting | Phase::Stopping => {
+                return Err("the game is starting or stopping: try again in a moment".into());
+            }
+        };
+        if let Some(game) = game.as_mut() {
+            for command in ["console save-off", "console save-all flush"] {
+                game.ask(command)
+                    .map_err(|e| format!("the game didn't save: {e}"))?;
+            }
+        }
+        let result = backup::create(&self.dir, &config, file_name);
+        if let Some(game) = game.as_mut() {
+            let _ = game.ask("console save-on");
+        }
+        result
     }
 }
 
@@ -239,10 +280,40 @@ fn route(shared: &Shared, request: &Request) -> Response {
             shared.restart.store(true, Ordering::SeqCst);
             Response::json(200, &json!({ "ok": true }))
         }
+        ("GET", "/api/v1/backups") => {
+            let list: Vec<Value> = backup::list(&shared.dir)
+                .into_iter()
+                .map(|b| json!({ "name": b.name, "bytes": b.bytes }))
+                .collect();
+            Response::json(200, &json!({ "backups": list }))
+        }
+        ("POST", "/api/v1/backups") => {
+            let body: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
+            let made = backup::file_name(std::time::SystemTime::now(), body["name"].as_str())
+                .and_then(|name| shared.back_up(&name));
+            match made {
+                Ok(path) => Response::json(
+                    200,
+                    &json!({ "name": path.file_name().map(|n| n.to_string_lossy()) }),
+                ),
+                Err(e) => Response::error(409, &e),
+            }
+        }
+        ("POST", "/api/v1/restore") => {
+            let body: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
+            match backup::find(&shared.dir, body["name"].as_str().unwrap_or_default()) {
+                Ok(name) => {
+                    *shared.restore.lock().unwrap() = Some(name.clone());
+                    shared.restart.store(true, Ordering::SeqCst);
+                    Response::json(200, &json!({ "name": name }))
+                }
+                Err(e) => Response::error(404, &e),
+            }
+        }
         (
             _,
             "/api/v1/status" | "/api/v1/logs" | "/api/v1/command" | "/api/v1/stop"
-            | "/api/v1/restart",
+            | "/api/v1/restart" | "/api/v1/backups" | "/api/v1/restore",
         ) => Response::error(405, "wrong method"),
         _ => Response::error(404, "no such endpoint"),
     }
@@ -283,15 +354,19 @@ impl Client {
     }
 
     pub fn call(&self, method: &str, path: &str, body: Option<&Value>) -> Result<Value, String> {
-        let (status, text) = http::request(
-            self.address,
-            &self.token,
-            method,
-            path,
-            body,
-            Duration::from_secs(60),
-        )
-        .map_err(|e| format!("the server didn't answer: {e}"))?;
+        self.call_within(method, path, body, Duration::from_secs(60))
+    }
+
+    /// A call that may take long (a backup of a big world).
+    pub fn call_within(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        timeout: Duration,
+    ) -> Result<Value, String> {
+        let (status, text) = http::request(self.address, &self.token, method, path, body, timeout)
+            .map_err(|e| format!("the server didn't answer: {e}"))?;
         let value: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
         if status == 200 {
             Ok(value)
