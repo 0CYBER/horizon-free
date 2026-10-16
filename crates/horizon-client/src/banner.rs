@@ -199,6 +199,14 @@ pub fn dye_rgb(name: &str) -> u32 {
 pub fn layers(stack: &ItemStack) -> &[BannerLayer] {
     stack.data().map_or(&[], |d| &d.banner_patterns)
 }
+/// The ominous banner's component patch hides its pattern tooltip.
+pub fn tooltip_layers(stack: &ItemStack) -> &[BannerLayer] {
+    if stack.data().is_some_and(|d| d.ominous_banner) {
+        &[]
+    } else {
+        layers(stack)
+    }
+}
 /// `LoomMenu.setupResultSlot`: one banner with the pattern added in the dye colour.
 pub fn loom_result(banner: &ItemStack, dye: &str, pattern: &str) -> ItemStack {
     let mut result = ItemStack {
@@ -302,6 +310,24 @@ mod tests {
         }
         assert!(has_max_layers(&banner));
     }
+    #[test]
+    fn ominous_banner_hides_tooltip_layers_but_keeps_its_patterns() {
+        let mut banner = crate::mobs::raider::ominous_banner();
+        (banner.damage, banner.extra) = crate::item_data::decode_components(
+            crate::item_data::encode_components(&banner).as_ref(),
+        );
+        assert_eq!(
+            layers(&banner).len(),
+            crate::item_data::OMINOUS_LAYERS.len()
+        );
+        assert!(tooltip_layers(&banner).is_empty());
+        banner.data_mut().custom_name = Some("Captain's Standard".into());
+        assert!(tooltip_layers(&banner).is_empty());
+        banner.data_mut().ominous_banner = false;
+        assert_eq!(tooltip_layers(&banner), layers(&banner));
+        assert!(!tooltip_layers(&banner).is_empty());
+    }
+
     #[test]
     fn layers_round_trip_through_nbt() {
         let l = vec![

@@ -1944,7 +1944,7 @@ impl Game<'_> {
             ));
         }
         // BannerPatternLayers.addToTooltip: up to six layer names.
-        for layer in horizon_client::banner::layers(stack).iter().take(6) {
+        for layer in horizon_client::banner::tooltip_layers(stack).iter().take(6) {
             let key = self.res.stations.banners.layer_key(layer);
             lines.push((self.translate(&key, &key), rgba(170, 170, 170, 255)));
         }
