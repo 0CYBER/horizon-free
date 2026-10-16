@@ -53,7 +53,7 @@ Legend: **yes** complete, **part** partial (see note), **no** missing, **—** n
 | Crafting (grid, result, recipe book) | part | part | grid by `click-slot`; the recipe book only by `click-at` |
 | Movement, look, path-finding | yes | yes | `move`, `goto`, `look`, `look-at`, `turn --over`, `mouse-move` |
 | Act on the world | yes | yes | `break`, `place`, `interact`, `use-item`, `attack`, `select`, `drop` |
-| Raw input: keys, mouse buttons | yes | yes | `key`, `mouse`, `release` |
+| Raw input: keys, mouse buttons | yes | yes | `key`, `mouse`, `release`; `key w down` stays held through `wait` until `key w up`, `release` or `stop` |
 | Controllers | yes | yes | `pad` button/stick/trigger/status (a virtual pad) |
 | Chat and commands | yes | yes | `chat`, `command`, `type`, `messages`, `chat-log` |
 | Screens: which is open | yes | yes | `screen` gives a label (`title`, `options`, `inventory`...) but not the options page or sub-screen |
