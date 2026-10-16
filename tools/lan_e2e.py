@@ -537,7 +537,8 @@ def check_walls(host, guest, out):
     face_each_other(host, guest)
     hx, hy, hz = pos_of(host)
     gx, gy, gz = pos_of(guest)
-    wall = int(hx // 1) + 1
+    # Halfway: the players stand 3 apart, so the wall's block touches neither.
+    wall = int((hx + gx) / 2 // 1)
     host('command', command=f'fill {wall} {int(hy // 1)} {int(hz // 1) - 3} {wall} {int(hy // 1) + 4} '
                             f'{int(hz // 1) + 3} minecraft:stone')
     try:
