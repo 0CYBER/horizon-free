@@ -570,3 +570,25 @@ fn place_template_tree() {
     assert!(run("place template minecraft:x ~ ~ ~ sideways").is_err());
     assert!(run("place template minecraft:x ~ ~ ~ none none 2").is_err());
 }
+#[test]
+fn mod_commands_join_the_tree_for_every_player() {
+    let reg = Registries {
+        permission: 0,
+        ..reg()
+    };
+    let d = vanilla::game_dispatcher().with_mod_commands(["where"]);
+    for line in ["where", "where north 12"] {
+        let parse = d.parse(line, &reg);
+        assert_eq!(parse.executable().unwrap().1, MOD_COMMAND, "{line}");
+    }
+    let parse = d.parse("w", &reg);
+    let names: Vec<String> = d
+        .client_suggestions(&parse, 1, &reg)
+        .1
+        .into_iter()
+        .map(|s| s.text)
+        .collect();
+    assert!(names.contains(&"where".to_owned()), "{names:?}");
+    // The game's own tree is left as it was.
+    assert!(vanilla::game_dispatcher().find("where").is_none());
+}

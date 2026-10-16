@@ -23,6 +23,9 @@ mod vanilla_order;
 use crate::text::Text;
 pub use args::{Arg, ArgType, Registries};
 
+/// The command id of a mod's command (`Dispatcher::with_mod_commands`).
+pub const MOD_COMMAND: &str = "mod";
+
 /// A command error (CommandSyntaxException): the message and, for parse
 /// errors, the input and cursor it occurred at.
 #[derive(Clone, Debug, PartialEq)]
@@ -769,6 +772,19 @@ impl Dispatcher {
     pub fn requires(&mut self, node: usize, level: u8) -> usize {
         self.nodes[node].permission = level;
         node
+    }
+    /// This tree plus the commands mods own (`docs/mods.md`), so the chat
+    /// colours and completes them like the others. Every player may use one,
+    /// and the text after its name goes to the mod as it was typed.
+    pub fn with_mod_commands<'a>(&self, names: impl IntoIterator<Item = &'a str>) -> Dispatcher {
+        let mut d = self.clone();
+        for name in names {
+            let command = d.literal(0, name);
+            d.executes(command, MOD_COMMAND);
+            let args = d.argument(command, "args", ArgType::Greedy);
+            d.executes(args, MOD_COMMAND);
+        }
+        d
     }
     /// A root literal by name.
     pub fn find(&self, name: &str) -> Option<usize> {

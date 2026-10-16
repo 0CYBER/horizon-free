@@ -93,6 +93,9 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 
 Commands: vanilla's command names win. A mod asking for `/give` does not get
 it (logged), and two mods cannot share a name (the first one loaded keeps it).
+The chat box colours and Tab-completes a mod's commands like vanilla's, for
+every player whatever their permission level, and takes any text after the
+name (the mod reads it as `args`; API 0.1 has no way to declare argument types).
 
 ### Planned interfaces
 

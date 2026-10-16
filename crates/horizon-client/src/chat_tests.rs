@@ -192,3 +192,41 @@ fn history_arrows_recall_messages_and_restore_the_draft() {
         assert_eq!(screen.value(), expected);
     }
 }
+
+#[test]
+fn mod_commands_are_coloured_and_complete_like_vanilla_ones() {
+    let font = font();
+    let m = Measure(&font);
+    // Allow Commands off: a mod's command needs no level.
+    let registries = Registries::default();
+    let vanilla = crate::command::vanilla::game_dispatcher();
+    let modded = vanilla.with_mod_commands(["where", "coords"]);
+    let red = |screen: &ChatScreen| {
+        screen
+            .format(screen.value(), 0)
+            .spans
+            .iter()
+            .any(|s| s.style.color == Some(text::RED))
+    };
+    let typed = |dispatcher: &crate::command::Dispatcher, line: &str| {
+        let c = Commands {
+            dispatcher,
+            registries: &registries,
+        };
+        let mut screen = ChatScreen::new(&m, &c, "", 0, 640, 360);
+        screen.type_text(&m, &c, line);
+        screen
+    };
+    // Unknown without the mod's tree (#456).
+    assert!(red(&typed(vanilla, "/coords")));
+    for line in ["/coords", "/where", "/where me and you"] {
+        assert!(!red(&typed(&modded, line)), "{line}");
+    }
+    let c = Commands {
+        dispatcher: &modded,
+        registries: &registries,
+    };
+    let mut screen = typed(&modded, "/coo");
+    screen.key(&m, &c, &[], winit::keyboard::KeyCode::Tab, false, false);
+    assert_eq!(screen.value(), "/coords");
+}
