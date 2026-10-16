@@ -95,6 +95,8 @@ struct SectionGpu {
     start: u64,
     solid: u32,
     translucent: u32,
+    /// The solid quads by facing: back-facing groups are skipped.
+    faces: crate::mesher::FaceGroups,
 }
 /// A visible section this frame: key, squared distance, camera-relative origin.
 type Visible = (SectionKey, f64, [f32; 3]);
@@ -1756,6 +1758,7 @@ impl Renderer {
                 start,
                 solid,
                 translucent,
+                faces: mesh.faces,
             },
         );
     }
@@ -2236,25 +2239,27 @@ impl Renderer {
         // as one list of indirect draws over the section arena.
         self.draws.clear();
         self.draw_pages.clear();
-        let draw = |s: &SectionGpu, i: usize, translucent: bool| {
-            let (quads, first) = if translucent {
-                (s.translucent, s.start + u64::from(s.solid) * 4)
-            } else {
-                (s.solid, s.start)
-            };
-            (quads > 0).then_some(([quads * 6, 1, 0, first as u32, i as u32], s.page))
-        };
-        for (i, (key, _, _)) in visible.iter().enumerate() {
-            if let Some((d, page)) = draw(&self.sections[key], i, false) {
-                self.draws.push(d);
-                self.draw_pages.push(page);
-            }
+        // The eye, camera-relative: view bobbing moves it off the camera.
+        let eye = (frame.bob * crate::camera::view_matrix(frame.yaw, frame.pitch))
+            .inverse()
+            .transform_point3(Vec3::ZERO);
+        for (i, (key, _, origin)) in visible.iter().enumerate() {
+            let s = &self.sections[key];
+            // Only the solid groups that can face the eye.
+            s.faces.ranges(eye - Vec3::from(*origin), |first, quads| {
+                let first = s.start + u64::from(first) * 4;
+                self.draws.push([quads * 6, 1, 0, first as u32, i as u32]);
+                self.draw_pages.push(s.page);
+            });
         }
         let solid_draws = self.draws.len() as u32;
         for (i, (key, _, _)) in visible.iter().enumerate().rev() {
-            if let Some((d, page)) = draw(&self.sections[key], i, true) {
-                self.draws.push(d);
-                self.draw_pages.push(page);
+            let s = &self.sections[key];
+            if s.translucent > 0 {
+                let first = s.start + u64::from(s.solid) * 4;
+                self.draws
+                    .push([s.translucent * 6, 1, 0, first as u32, i as u32]);
+                self.draw_pages.push(s.page);
             }
         }
         let translucent_draws = self.draws.len() as u32 - solid_draws;
