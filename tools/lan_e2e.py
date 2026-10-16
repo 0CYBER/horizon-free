@@ -455,7 +455,7 @@ def check_containers(host, guest, out):
 
 
 def check_feedback(host, guest, out):
-    x, y, z = pos_of(guest)
+    x, y, z = (round(v, 1) for v in pos_of(guest))
     guest('command', command='item replace entity @s weapon.mainhand with minecraft:stick')
     guest('command', command=f'tp @s {x:.1f} {y:.1f} {z:.1f}')
     guest.wait(10)
@@ -464,9 +464,12 @@ def check_feedback(host, guest, out):
     guest.wait(5)
     guest.shot(out, 'feedback')
     guest.raw('key', 'esc', 'tap')
+    guest.wait(5)
+    screen = guest('state').get('screen')
     replaced = f'Replaced 1 slot(s) on {GUEST_NAME} with [Stick]'
     assert any(replaced in line for line in chat), f'no "{replaced}" in {chat}'
     assert any(line.startswith(f'Teleported {GUEST_NAME} to {x:.6f}') for line in chat), f'teleport feedback: {chat}'
+    assert screen in (None, 'playing'), f'the chat did not close: {screen}'
     return chat
 
 
