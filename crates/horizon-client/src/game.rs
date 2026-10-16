@@ -148,7 +148,7 @@ use horizon_client::{
     creative::{Creative, Names},
     entities::{Experience, ExperienceOrb, ItemEntity},
     environment::Environment,
-    first_person::Hand,
+    first_person::{Hand, SwingAnimation},
     gfx::{Frame, Renderer},
     hud::{HudAtlas, HudBatch, rgba},
     hud_layout, hud_overlays,
@@ -1449,13 +1449,15 @@ impl Game<'_> {
             return;
         };
         self.player_drop(thrown);
-        self.swing_arm();
     }
     /// `Player.drop`: the statistics and a thrown item entity in front of the player.
     fn player_drop(&mut self, thrown: ItemStack) {
         let Some(eye) = self.eye_position() else {
             return;
         };
+        // LivingEntity.drop: every drop swings the main hand, a menu's
+        // THROW and a creative tab's drop included.
+        self.swing_hand(Hand::Main, SwingAnimation::DEFAULT);
         // Player.drop: the drop statistics.
         self.stats.add("dropped", &thrown.item, thrown.count as i32);
         self.stats.custom("drop", 1);
