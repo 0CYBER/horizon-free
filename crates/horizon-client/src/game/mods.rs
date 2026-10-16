@@ -47,6 +47,60 @@ fn vanilla_command(name: &str) -> bool {
         .any(|&c| d.nodes[c].name() == name)
 }
 
+/// `root` with the content mods that are on layered over it
+/// (docs/modpacks.md): their blocks, items, data and assets. Read once at
+/// start, before the resources load; a mod whose content is refused is left
+/// out here and its row on the Mods page says why.
+pub(super) fn content_root(
+    root: &std::path::Path,
+    enabled: &std::collections::BTreeSet<String>,
+    dev: &[std::path::PathBuf],
+) -> std::path::PathBuf {
+    use horizon_client::mod_content::{self, ContentMod};
+    use horizon_mods::{Capability, Content, Package};
+    let here = std::env::current_dir().unwrap_or_default();
+    let mut paths = horizon_mods::find(&here.join(mod_list::DIR));
+    paths.retain(|p| !dev.contains(p));
+    paths.extend(dev.iter().cloned());
+    let mut mods: Vec<ContentMod> = Vec::new();
+    for path in &paths {
+        let Ok(package) = Package::read(path) else {
+            continue;
+        };
+        let m = &package.manifest;
+        let on = enabled.contains(&m.id) || dev.contains(path);
+        if !on
+            || !m.capabilities.contains(&Capability::Registries)
+            || mods.iter().any(|c| c.id == m.id)
+        {
+            continue;
+        }
+        match Content::read(path, m) {
+            Ok(content) => mods.push(ContentMod {
+                id: m.id.clone(),
+                content,
+            }),
+            Err(e) => log::warn!("Horizon: mod {} content not loaded: {e}", m.id),
+        }
+    }
+    match mod_content::resource_root(root, &mods, &here.join(".horizon-cache")) {
+        Ok(out) => {
+            if out != root {
+                log::info!(
+                    "Horizon: content from {} mod(s) in {}",
+                    mods.len(),
+                    out.display()
+                );
+            }
+            out
+        }
+        Err(e) => {
+            log::warn!("Horizon: content mods not loaded: {e}");
+            root.to_owned()
+        }
+    }
+}
+
 impl Game<'_> {
     /// Reads `horizon-mods/` and the dev mods, and starts the ones turned on.
     pub(super) fn start_mods(&mut self) {

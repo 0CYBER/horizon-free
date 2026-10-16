@@ -524,10 +524,19 @@ impl<'a> Plan<'a> {
             "items.json" => self.items(doc, true),
             "command-registries.json" => {
                 self.names(doc.at("blocks").ok_or("no blocks")?, false);
+                let new_items = || self.items.iter().map(|i| J::Str(i.rename.to.clone()));
+                let new_blocks = || self.blocks.iter().map(|b| J::Str(b.decl.id.clone()));
                 let Some(J::Arr(items)) = doc.at("items") else {
                     return Err("no items".into());
                 };
-                items.extend(self.items.iter().map(|i| J::Str(i.rename.to.clone())));
+                items.extend(new_items());
+                // The registries commands check ids against.
+                if let Some(J::Arr(ids)) = doc.at("by_registry/minecraft:item/ids") {
+                    ids.extend(new_items());
+                }
+                if let Some(J::Arr(ids)) = doc.at("by_registry/minecraft:block/ids") {
+                    ids.extend(new_blocks());
+                }
             }
             "mob-data.json" => states(doc, "states", false, false)?,
             "worldgen/block_flags.json" => states(doc, "", false, false)?,
@@ -616,6 +625,19 @@ const NBT_TABLES: [&str; 6] = [
     "worldgen/blocks/cached-support.nbt",
     "worldgen/blocks/cached-collision.nbt",
 ];
+/// In a root built here: the content mods' ids, the namespaces loaders
+/// read besides `minecraft`.
+const MARKER: &str = "horizon-mod-content.json";
+
+/// The content mods' namespaces in a root built by [`build`]; none in any
+/// other root, so vanilla's loaders read exactly what they did.
+pub fn namespaces(root: &Path) -> Vec<String> {
+    fs::read(root.join(MARKER))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
 /// Bundles of block tag files (tag id → the tag file's text).
 const TAG_BUNDLES: [&str; 2] = ["block-tags.json", "worldgen/block_tags.json"];
 
@@ -799,6 +821,23 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<()> {
     for (name, doc) in &bundles {
         overlay.write(name, &serde_json::to_vec(doc)?)?;
     }
+    // A block without its own blockstate looks like its template, so every
+    // state still has a model.
+    for m in mods {
+        for block in &m.content.blocks {
+            let (ns, path) = block.id.split_once(':').unwrap_or((&m.id, &block.id));
+            let own = format!("assets/{ns}/blockstates/{path}.json");
+            if m.content.files.contains(&own) {
+                continue;
+            }
+            let template = block.template.trim_start_matches("minecraft:");
+            let vanilla = base.join(format!("assets/minecraft/blockstates/{template}.json"));
+            overlay.write(&own, &fs::read(&vanilla)?)?;
+        }
+    }
+    let mut ids: Vec<&str> = mods.iter().map(|m| m.id.as_str()).collect();
+    ids.sort();
+    overlay.write(MARKER, &serde_json::to_vec(&ids)?)?;
     Ok(())
 }
 

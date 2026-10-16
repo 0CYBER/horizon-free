@@ -102,8 +102,10 @@ fn atlas_sprites(root: &Path, packed: &[PackedImage]) -> Vec<PackedImage> {
             let image = match &origin {
                 SpriteOrigin::File(texture) => {
                     let path = texture.strip_prefix("minecraft:").unwrap_or(texture);
-                    // Packed under its own name already: only a renamed file is new.
-                    if path == name {
+                    // A vanilla file is packed under its own name already:
+                    // only a renamed one is new. Other namespaces' files
+                    // (content mods) are never in the walked directories.
+                    if texture.starts_with("minecraft:") && path == name {
                         continue;
                     }
                     load(texture, "textures").map(|(w, h, p)| {
