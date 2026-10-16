@@ -154,9 +154,11 @@ impl Game<'_> {
         self.close_ender_chest();
         std::mem::swap(&mut self.ender_items, &mut g.ender_items);
         self.lan_acting = Some(conn);
+        self.lan_acting_name = Some(g.name.clone());
 
         let result = f(self);
         self.lan_acting = None;
+        self.lan_acting_name = None;
         // An ender chest the guest opened: the menu shows their inventory
         // itself (lan_open_container), not a stand-in block entity.
         self.close_ender_chest();

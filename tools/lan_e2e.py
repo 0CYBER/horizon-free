@@ -18,7 +18,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              drowning and the void (then respawns);
 - pvp:       the guest and the host hit each other with a sword; with the pvp game rule off, nothing;
 - containers: the guest's ender chest holds the guest's items, not the host's, and a double chest
-             opens as 9x6 with the right half first.
+             opens as 9x6 with the right half first;
+- feedback:  the guest's command feedback names the guest and shows the numbers.
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -45,7 +46,7 @@ from agent_control_e2e import Cli, Failed, game_env  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'chest', 'crafting', 'damage', 'mobs', 'hazards', 'pvp', 'containers']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'chest', 'crafting', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback']
 
 
 class Game:
@@ -453,10 +454,26 @@ def check_containers(host, guest, out):
     return {'ender': ender, 'double': double, 'taken': taken}
 
 
+def check_feedback(host, guest, out):
+    x, y, z = pos_of(guest)
+    guest('command', command='item replace entity @s weapon.mainhand with minecraft:stick')
+    guest('command', command=f'tp @s {x:.1f} {y:.1f} {z:.1f}')
+    guest.wait(10)
+    chat = guest.raw('messages', 5)['chat']
+    guest.raw('key', 't', 'tap')
+    guest.wait(5)
+    guest.shot(out, 'feedback')
+    guest.raw('key', 'esc', 'tap')
+    replaced = f'Replaced 1 slot(s) on {GUEST_NAME} with [Stick]'
+    assert any(replaced in line for line in chat), f'no "{replaced}" in {chat}'
+    assert any(line.startswith(f'Teleported {GUEST_NAME} to {x:.6f}') for line in chat), f'teleport feedback: {chat}'
+    return chat
+
+
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
              'chest': check_chest, 'crafting': check_crafting, 'damage': check_damage,
              'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
-             'containers': check_containers}
+             'containers': check_containers, 'feedback': check_feedback}
 
 
 def run(ctl, out, resources, checks):

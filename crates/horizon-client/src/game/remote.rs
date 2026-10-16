@@ -372,6 +372,12 @@ impl Game<'_> {
         }
     }
 
+    /// The server's last `n` chat lines, newest first.
+    pub(super) fn remote_chat(&self, n: usize) -> Option<Vec<String>> {
+        let r = self.remote.as_ref()?;
+        Some(r.chat.iter().rev().take(n).map(|l| l.0.clone()).collect())
+    }
+
     /// Process everything the network thread received (once per frame, like
     /// the client's packet processor).
     pub(super) fn poll_remote(&mut self) -> Result<()> {
