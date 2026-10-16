@@ -63,6 +63,7 @@ mod occlusion;
 mod pack_stages;
 pub mod panorama;
 mod timing;
+mod uploads;
 mod world_post;
 
 #[repr(C)]
@@ -297,6 +298,8 @@ pub struct Renderer {
     lightmap_view: wgpu::TextureView,
     lightmap_sampler: wgpu::Sampler,
     animations: AnimatedSprites,
+    /// The animated sprites' changed mip levels, written once per tick.
+    sprite_uploads: uploads::TextureUploads,
     sprite_minimum_size: u32,
     indices: wgpu::Buffer,
     index_quads: u32,
@@ -358,7 +361,9 @@ fn mip_chain(
 ) -> (Vec<u8>, u32) {
     let levels = size.trailing_zeros() + 1;
     let layer_bytes = (size * size * 4) as usize;
-    let mut out = Vec::new();
+    // Exactly the chain's size: cached animation frames count their capacity.
+    let chain_bytes: usize = (0..levels).map(|l| layer_bytes >> (2 * l)).sum();
+    let mut out = Vec::with_capacity(chain_bytes * layers as usize);
     for layer in 0..layers as usize {
         let base = crate::mipmap::Image {
             width: size,
@@ -384,6 +389,7 @@ fn mip_chain(
             out.extend(image.pixels.iter().flatten());
         }
     }
+    debug_assert_eq!(out.len(), chain_bytes * layers as usize);
     (out, levels)
 }
 /// What to tell a player whose system offers no usable graphics adapter.
@@ -1557,6 +1563,7 @@ impl Renderer {
             lightmap_view,
             lightmap_sampler,
             animations: AnimatedSprites::new(animations, sprite_size, sprite_mips),
+            sprite_uploads: uploads::TextureUploads::default(),
             sprite_minimum_size,
             indices,
             index_quads,
@@ -1964,36 +1971,14 @@ impl Renderer {
         self.lightmap_pixels = pixels;
     }
     fn animate(&mut self, tick: u64) {
+        let uploads = &mut self.sprite_uploads;
         animate_sprites(
             &mut self.animations,
             tick,
             self.mip_levels,
-            |layer, level, size, pixels| {
-                self.queue.write_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &self.sprite_texture,
-                        mip_level: level,
-                        origin: wgpu::Origin3d {
-                            x: 0,
-                            y: 0,
-                            z: layer,
-                        },
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    pixels,
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(size * 4),
-                        rows_per_image: Some(size),
-                    },
-                    wgpu::Extent3d {
-                        width: size,
-                        height: size,
-                        depth_or_array_layers: 1,
-                    },
-                );
-            },
+            |layer, level, size, pixels| uploads.push(layer, level, size, pixels),
         );
+        uploads.flush(&self.device, &self.queue, &self.sprite_texture);
     }
     pub fn render(&mut self, frame: &Frame) -> Result<bool> {
         if self.suspended {
@@ -2031,8 +2016,10 @@ impl Renderer {
             None => self.offscreen.clone().ok_or("no offscreen target")?,
         };
         if self.animated_textures {
-            self.animate(frame.ticks);
-            self.hud.animate_fire(&self.queue, frame.ticks);
+            crate::spans::time("animate", || {
+                self.animate(frame.ticks);
+                self.hud.animate_fire(&self.queue, frame.ticks);
+            });
         }
         self.update_lightmap(
             &frame.sky,
@@ -3101,7 +3088,10 @@ pub(crate) fn sprite_mipmap_limit(requested: u32, size: u32, minimum: u32, avail
     let upscale = (size / minimum.max(1)).max(1).ilog2();
     requested.saturating_add(upscale).min(available - 1)
 }
-const ANIMATION_MIP_BUDGET: usize = 8 << 20;
+/// Room for every frame of the vanilla animations (594 frames, 13 MB of mip
+/// chains in 64-pixel layers), so no frame's chain is rebuilt on the render
+/// thread when its animation comes back to it; larger packs stay bounded.
+const ANIMATION_MIP_BUDGET: usize = 32 << 20;
 const ANIMATION_MIP_ENTRIES: usize = 4096;
 
 /// One immutable resource snapshot and its lazily generated frame mips. A new
