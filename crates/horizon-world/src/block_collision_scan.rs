@@ -11,6 +11,10 @@ pub struct CollisionBlock {
     pub state: BlockStateId,
     pub large_collision_shape: bool,
     pub moving_piston: bool,
+    /// The shape is empty under every context (air, plants): a scan skips
+    /// the block without asking for its shape. Providers whose shapes come
+    /// from elsewhere leave it false.
+    pub empty_shape: bool,
 }
 
 pub trait BlockCollisionWorld {
@@ -72,7 +76,9 @@ pub struct BlockCollisionScan<'w, 'c, W: BlockCollisionWorld> {
     world: &'w mut W,
     context: CollisionContext<'c>,
     bounds: Aabb,
-    entity_shape: VoxelShape,
+    /// `Shapes.create(box)`, built the first time a block's shape is not
+    /// the unit cube (finite bounds always make one).
+    entity_shape: Option<VoxelShape>,
     only_suffocating: bool,
     start: BlockPos,
     sizes: [usize; 3],
@@ -120,7 +126,7 @@ impl<'w, 'c, W: BlockCollisionWorld> BlockCollisionScan<'w, 'c, W> {
             world,
             context,
             bounds,
-            entity_shape: VoxelShape::from_box(bounds).map_err(CollisionScanError::Shape)?,
+            entity_shape: None,
             only_suffocating,
             start,
             sizes: sizes.map(|s| s as usize),
@@ -185,6 +191,9 @@ impl<'w, 'c, W: BlockCollisionWorld> BlockCollisionScan<'w, 'c, W> {
             if kind == 1 && !block.large_collision_shape || kind == 2 && !block.moving_piston {
                 continue;
             }
+            if block.empty_shape {
+                continue;
+            }
             let shape = self
                 .world
                 .context_shape(block, p, &self.context)
@@ -201,10 +210,24 @@ impl<'w, 'c, W: BlockCollisionWorld> BlockCollisionScan<'w, 'c, W> {
                 }
                 shape.moved(offset)
             } else {
+                // Shapes whose bounds miss the box share no volume with it:
+                // joinIsNotEmpty(AND) is false without moving them.
+                if !shape
+                    .bounds()
+                    .is_some_and(|b| b.move_by(offset).intersects(self.bounds))
+                {
+                    continue;
+                }
                 let moved = shape.moved(offset);
+                let entity_shape = match &self.entity_shape {
+                    Some(shape) => shape,
+                    None => self.entity_shape.insert(
+                        VoxelShape::from_box(self.bounds).map_err(CollisionScanError::Shape)?,
+                    ),
+                };
                 if moved.is_empty()
                     || !moved
-                        .join_is_not_empty(&self.entity_shape, ShapeOp::AND)
+                        .join_is_not_empty(entity_shape, ShapeOp::AND)
                         .map_err(CollisionScanError::Shape)?
                 {
                     continue;
