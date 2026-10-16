@@ -50,6 +50,9 @@ pub struct MobData {
     pub biome_tags: HashMap<String, std::collections::HashSet<String>>,
     /// Entity type tags (`data/*/tags/entity_type`).
     pub entity_tags: HashMap<String, std::collections::HashSet<String>>,
+    /// The villager POI type of every block state (`PoiTypes.forState`),
+    /// worked out the first time a villager looks for one.
+    pub pois: std::sync::OnceLock<Vec<Option<super::villager_brain::Poi>>>,
 }
 impl MobData {
     pub fn load(root: &Path, facts: &BlockFacts) -> Self {
@@ -130,6 +133,7 @@ impl MobData {
             animations,
             biome_tags: HashMap::new(),
             entity_tags: HashMap::new(),
+            pois: Default::default(),
         }
     }
     /// Without the export, approximate path types from the gameplay facts.
@@ -184,6 +188,7 @@ impl MobData {
             animations: HashMap::new(),
             biome_tags: HashMap::new(),
             entity_tags: HashMap::new(),
+            pois: Default::default(),
         }
     }
     pub fn state(&self, id: horizon_world::registry::BlockStateId) -> StateData {

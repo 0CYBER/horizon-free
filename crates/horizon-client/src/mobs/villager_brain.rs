@@ -17,7 +17,6 @@ use horizon_core::{
     geometry::Vec3,
     random::{LegacyRandom, RandomSource},
 };
-use std::collections::HashMap;
 
 /// `MemorySlot.NEVER_EXPIRE`.
 pub(super) const NEVER: i64 = i64::MAX;
@@ -846,8 +845,20 @@ impl Poi {
 pub fn poi_at(w: &MobWorld, x: i32, y: i32, z: i32) -> Option<Poi> {
     poi_of_state(w, w.world.block(x, y, z))
 }
-/// The POI a block state is, if any (`PoiTypes.forState`).
+/// The POI a block state is, if any (`PoiTypes.forState`), from the table
+/// of every state built on first use.
 fn poi_of_state(w: &MobWorld, state: horizon_world::registry::BlockStateId) -> Option<Poi> {
+    let table = w.data.pois.get_or_init(|| {
+        (0..w.registry.len())
+            .map(|i| state_poi(w, horizon_world::registry::BlockStateId(i as u32)))
+            .collect()
+    });
+    match table.get(state.0 as usize) {
+        Some(poi) => *poi,
+        None => state_poi(w, state),
+    }
+}
+fn state_poi(w: &MobWorld, state: horizon_world::registry::BlockStateId) -> Option<Poi> {
     let name = &*w.facts.get(state).name;
     if name == "minecraft:bell" {
         return Some(Poi::Meeting);
@@ -929,16 +940,10 @@ fn pois_in_range(
     let chunks = radius.div_euclid(16) + 1;
     let y0 = (c[1] - radius).max(crate::chunk::MIN_Y);
     let y1 = (c[1] + radius).min(crate::chunk::MIN_Y + crate::chunk::HEIGHT - 1);
-    // The POI each block state is, worked out once per search, and the
-    // sections whose palette holds none skipped whole, as PoiManager only
-    // visits sections with records: the same positions in the same order,
-    // without reading and naming every block of the sphere.
-    let mut kinds: HashMap<u32, Option<Poi>> = HashMap::new();
-    let mut kind = |state: u32| {
-        *kinds
-            .entry(state)
-            .or_insert_with(|| poi_of_state(w, horizon_world::registry::BlockStateId(state)))
-    };
+    // Sections whose palette holds no POI state are skipped whole, as
+    // PoiManager only visits sections with records: the same positions in
+    // the same order, without reading and naming every block of the sphere.
+    let kind = |state: u32| poi_of_state(w, horizon_world::registry::BlockStateId(state));
     for qz in cz - chunks..=cz + chunks {
         for qx in cx - chunks..=cx + chunks {
             let Some(chunk) = w.world.chunks.get(&(qx, qz)) else {
