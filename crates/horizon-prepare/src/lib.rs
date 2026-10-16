@@ -802,6 +802,17 @@ fn steps(
         }
     }
 
+    // The registry and command reports, which the game reads next to these
+    // files when it serves players (a dedicated server, a LAN world): kept
+    // here too, so this folder works when it is copied or mounted alone.
+    let reports = run.local.join("datagen").join("out").join("reports");
+    for name in ["registries.json", "commands.json"] {
+        let (from, to) = (reports.join(name), root.join(name));
+        if from.is_file() && (!to.exists() || !run.same("server_sha256")) {
+            copy(&from, &to)?;
+        }
+    }
+
     // Biome parameter tables come from the data generator reports above.
     prepare_worldgen(run)?;
 
