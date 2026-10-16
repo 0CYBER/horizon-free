@@ -154,7 +154,7 @@ jobs:
           client="$PWD/target/release/horizon-client"
           resources="$PWD/.local/horizon-client/$version"
           (cd "$home" && HORIZON_HOME="$home" HORIZON_NO_AUDIO=1 "$client" --resources "$resources" --offscreen \
-            --world smoke --seed 1 --render-distance 4 --frames 1500 --timeout-seconds 180 \
+            --world smoke --seed 1 --render-distance 4 --world-frames 1500 --timeout-seconds 180 \
             --smoke-report "$home/smoke.json" > "$home/client.log" 2>&1) || { tail -40 "$home/client.log"; exit 1; }
           python3 - "$home/smoke.json" <<'EOF'
           import json, sys
