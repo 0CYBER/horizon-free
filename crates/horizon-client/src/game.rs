@@ -56,6 +56,7 @@ mod golems;
 mod growth;
 mod hand;
 mod initial_spawn;
+mod integrated;
 mod item_draw;
 mod item_particles;
 mod jukebox;
@@ -243,6 +244,11 @@ struct Options {
     benchmark: Option<String>,
     /// `--dev-mod PATH` (repeatable): mods always on and reloaded when rebuilt.
     dev_mods: Vec<PathBuf>,
+    /// `--server-thread` or `HORIZON_SERVER_THREAD=1`: single player runs on
+    /// an integrated server thread (game/integrated.rs).
+    server_thread: bool,
+    /// Set on the integrated server's own options: it draws nothing, so it skips meshing.
+    integrated: bool,
 }
 impl Options {
     /// The name to join servers with: the one given, else the offline name kept
@@ -294,6 +300,8 @@ impl Options {
             dedicated: None,
             benchmark: None,
             dev_mods: Vec::new(),
+            server_thread: std::env::var("HORIZON_SERVER_THREAD").is_ok_and(|v| v == "1"),
+            integrated: false,
         };
         let mut session_file = std::env::var("HORIZON_SESSION_FILE").ok();
         let mut args = std::env::args().skip(1);
@@ -314,6 +322,7 @@ impl Options {
                 "--no-pause" => o.no_pause = true,
                 "--offscreen" => o.offscreen = true,
                 "--control" => o.control = Some(horizon_client::control::default_path()),
+                "--server-thread" => o.server_thread = true,
                 _ => {
                     let value = args
                         .next()
@@ -1074,6 +1083,8 @@ struct Game<'a> {
     remote: Option<remote::Remote>,
     /// This world is open to the network (game/lan.rs).
     lan: Option<lan::LanHost>,
+    /// Single player's server thread, which `remote` is connected to.
+    integrated: Option<integrated::Integrated>,
     /// The open world is shared behind an invite code (game/friends.rs).
     friends: Option<friends::Sharing>,
     world_options: Option<lan_screen::WorldOptions>,
@@ -3632,7 +3643,7 @@ impl Game<'_> {
     }
     /// `Minecraft.pause`: a single-player game with a pausing screen open.
     fn pauses_game(&self) -> bool {
-        self.remote.is_none()
+        (self.remote.is_none() || self.integrated.is_some())
             && self.lan.is_none()
             && self.title.is_none()
             && (matches!(
@@ -6129,8 +6140,11 @@ impl Game<'_> {
         creative: bool,
         create: Option<&horizon_client::title::WorldOptions>,
     ) -> Result<()> {
-        self.perf.world_opening();
         let save_root = std::env::current_dir()?.join("saves").join(folder);
+        if integrated::wanted(&self.options, &save_root) {
+            return self.open_integrated(folder, name, seed, creative, create);
+        }
+        self.perf.world_opening();
         horizon_client::save::upgrade_older_world(&save_root)?;
         horizon_client::save::migrate_legacy(&save_root)?;
         self.session_lock = None;
@@ -6392,6 +6406,8 @@ impl Game<'_> {
         streaming.biome_zoom = BiomeZoom::new(obfuscate_seed(seed));
         streaming.sky_light = dim != Dim::Nether;
         streaming.nether_shading = dim == Dim::Nether;
+        // The integrated server draws nothing (the dedicated server keeps its behaviour).
+        streaming.mesh = !self.options.integrated;
         Ok((streaming, save))
     }
     /// Change dimension through a portal (Entity.changeDimension with
@@ -6587,6 +6603,11 @@ impl Game<'_> {
             return Ok(());
         }
         self.saved_for_exit = true;
+        if let Some(server) = self.integrated.take() {
+            // The server thread saves the world.
+            server.stop();
+            return Ok(());
+        }
         self.close_container();
         if self.remote.is_none() {
             self.stats.custom("leave_game", 1);
@@ -8340,6 +8361,7 @@ impl Game<'_> {
         self.save_schedule();
         self.save_warden_tracker();
         self.sync_level();
+        self.store_owner();
         self.level.write(&self.world_root)?;
         self.save_world_state();
         self.message = Some(("Saved the game".into(), Instant::now()));
@@ -9652,6 +9674,9 @@ impl ApplicationHandler for Game<'_> {
                     }
                     self.limit_frame();
                     self.pause = self.pauses_game();
+                    if let Some(server) = &self.integrated {
+                        server.set_paused(self.pause);
+                    }
                     self.clock.end_frame(self.pause);
                     let finished = self
                         .renderer
@@ -10047,6 +10072,7 @@ impl<'a> Game<'a> {
             persist: Default::default(),
             remote: None,
             lan: None,
+            integrated: None,
             world_options: None,
             options_to_world_options: false,
             command_block_screen: None,
