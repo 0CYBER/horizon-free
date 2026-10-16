@@ -3432,7 +3432,10 @@ impl Game<'_> {
         } else {
             self.keys.insert(key);
         }
-        if repeat {
+        // KeyboardHandler.keyPress: a repeat (InputConstants.REPEAT) reaches
+        // Screen.keyPressed and KeyMapping.click like a press, so holding
+        // key.drop keeps throwing, in game and over a menu slot.
+        if repeat && key != KeyCode::KeyQ {
             return Ok(());
         }
         self.key_pressed(key)
