@@ -53,7 +53,7 @@ const MULTIPLAYER_TOP: f32 = 145.0;
 /// The port box's top beside the LAN button.
 const PORT_TOP: f32 = 166.0;
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Button {
     DefaultMode,
     PersonalMode,
@@ -493,5 +493,82 @@ impl Game<'_> {
         } else if settings_changed {
             self.lan_apply_settings(wanted.guest_commands, wanted.force);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn options(cheats: bool, hardcore: bool) -> WorldOptions {
+        let mut o = WorldOptions {
+            default_mode: 1,
+            personal_mode: 1,
+            cheats,
+            difficulty: 2,
+            lan: false,
+            port: EditBox::new(0.0, 0.0, 150.0, 20.0),
+            hint: 25565,
+            guest_commands: false,
+            force: true,
+            hardcore,
+            scroll: 0.0,
+            initial: Snapshot {
+                default_mode: 0,
+                personal_mode: 0,
+                cheats: false,
+                difficulty: 0,
+                lan: false,
+                port: 0,
+                guest_commands: false,
+                force: false,
+            },
+        };
+        o.initial = o.snapshot();
+        o
+    }
+
+    #[test]
+    fn layout_follows_the_header_footer_and_grids() {
+        let at = |b: Button| {
+            let o = options(true, false);
+            WorldOptions::buttons(427.0, o.top())
+                .into_iter()
+                .chain(WorldOptions::footer(427.0, 240.0))
+                .find(|e| e.0 == b)
+                .map(|(_, x, y, w)| (x, y, w))
+                .unwrap()
+        };
+        // Header 33, content padding 8, heading 17, rows 4 apart.
+        assert_eq!(at(Button::DefaultMode), (59.0, 62.0, 308.0));
+        assert_eq!(at(Button::Cheats), (59.0, 110.0, 150.0));
+        assert_eq!(at(Button::Difficulty), (217.0, 110.0, 130.0));
+        assert_eq!(at(Button::Lock), (347.0, 110.0, 20.0));
+        assert_eq!(at(Button::Restrictions), (217.0, 134.0, 150.0));
+        // The Multiplayer grid 24 below: padding, spacing, padding.
+        assert_eq!(at(Button::Lan), (59.0, 199.0, 150.0));
+        assert_eq!(at(Button::Force), (217.0, 223.0, 150.0));
+        assert_eq!(at(Button::Apply), (59.0, 213.0, 150.0));
+        // 218 pixels of content over 174 between the separators.
+        assert_eq!(WorldOptions::max_scroll(240.0), 44.0);
+        assert_eq!(WorldOptions::max_scroll(400.0), 0.0);
+    }
+
+    #[test]
+    fn buttons_follow_commands_hardcore_and_lan() {
+        let o = options(true, false);
+        assert!(o.active(Button::DefaultMode) && o.active(Button::Difficulty));
+        assert!(!o.active(Button::CommandAccess) && !o.active(Button::Force));
+        assert!(!o.active(Button::Apply));
+        let o = options(false, false);
+        assert!(!o.active(Button::DefaultMode) && !o.active(Button::PersonalMode));
+        let o = options(false, true);
+        assert!(!o.active(Button::Cheats) && !o.active(Button::Difficulty));
+        assert!(!o.active(Button::Force));
+        // Scrolled widgets only take clicks between the separators.
+        let mut o = options(true, false);
+        o.scroll = 44.0;
+        assert_eq!(o.hit((100.0, 30.0), (427.0, 240.0)), None);
+        assert_eq!(o.hit((100.0, 70.0), (427.0, 240.0)), Some(Button::Cheats));
     }
 }
