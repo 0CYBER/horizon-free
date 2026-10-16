@@ -63,6 +63,7 @@ mod occlusion;
 mod pack_stages;
 pub mod panorama;
 mod timing;
+mod upload;
 mod world_post;
 
 #[repr(C)]
@@ -297,6 +298,7 @@ pub struct Renderer {
     lightmap_view: wgpu::TextureView,
     lightmap_sampler: wgpu::Sampler,
     animations: AnimatedSprites,
+    uploads: upload::Uploads,
     sprite_minimum_size: u32,
     indices: wgpu::Buffer,
     index_quads: u32,
@@ -1489,6 +1491,7 @@ impl Renderer {
             .features()
             .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE);
         let world_post = world_post::Post::new(&device, config.format.remove_srgb_suffix());
+        let uploads = upload::Uploads::new(&device);
         let panorama = panorama::Panorama::new(
             &device,
             &queue,
@@ -1557,6 +1560,7 @@ impl Renderer {
             lightmap_view,
             lightmap_sampler,
             animations: AnimatedSprites::new(animations, sprite_size, sprite_mips),
+            uploads,
             sprite_minimum_size,
             indices,
             index_quads,
@@ -1963,13 +1967,14 @@ impl Renderer {
         );
         self.lightmap_pixels = pixels;
     }
-    fn animate(&mut self, tick: u64) {
+    fn animate(&mut self, encoder: &mut wgpu::CommandEncoder, tick: u64) {
         animate_sprites(
             &mut self.animations,
             tick,
             self.mip_levels,
             |layer, level, size, pixels| {
-                self.queue.write_texture(
+                self.uploads.texture(
+                    encoder,
                     wgpu::TexelCopyTextureInfo {
                         texture: &self.sprite_texture,
                         mip_level: level,
@@ -1980,17 +1985,9 @@ impl Renderer {
                         },
                         aspect: wgpu::TextureAspect::All,
                     },
+                    size,
+                    size,
                     pixels,
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(size * 4),
-                        rows_per_image: Some(size),
-                    },
-                    wgpu::Extent3d {
-                        width: size,
-                        height: size,
-                        depth_or_array_layers: 1,
-                    },
                 );
             },
         );
@@ -2030,8 +2027,13 @@ impl Renderer {
             Some(f) => f.texture.clone(),
             None => self.offscreen.clone().ok_or("no offscreen target")?,
         };
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Horizon frame"),
+            });
         if self.animated_textures {
-            self.animate(frame.ticks);
+            self.animate(&mut encoder, frame.ticks);
             self.hud.animate_fire(&self.queue, frame.ticks);
         }
         self.update_lightmap(
@@ -2390,11 +2392,6 @@ impl Renderer {
             format: Some(self.config.format.remove_srgb_suffix()),
             ..Default::default()
         });
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Horizon frame"),
-            });
         if let Some(timer) = &mut self.gpu_timer {
             timer.begin(&mut encoder);
         }
@@ -2742,6 +2739,7 @@ impl Renderer {
             .screenshot
             .take()
             .map(|path| (path, self.copy_frame(&mut encoder, &target_texture)));
+        self.uploads.finish(&encoder);
         let submission = self.queue.submit([encoder.finish()]);
         if let Some(timer) = &mut self.gpu_timer {
             timer.submitted();
