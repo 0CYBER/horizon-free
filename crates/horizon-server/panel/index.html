@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Horizon server</title>
+<link rel="stylesheet" href="/panel.css">
+<script src="/panel.js" defer></script>
+</head>
+<body>
+<header>
+  <div class="title">
+    <h1>Horizon server</h1>
+    <span id="phase" class="pill">…</span>
+    <span id="summary" class="muted"></span>
+  </div>
+  <div class="actions">
+    <button id="restart" type="button">Restart</button>
+    <button id="stop" type="button" class="danger">Stop</button>
+  </div>
+</header>
+
+<main id="app" hidden>
+  <section class="charts" aria-label="Last 10 minutes">
+    <figure><figcaption>TPS <b id="tps-now">–</b></figcaption><canvas id="tps" width="320" height="96"></canvas></figure>
+    <figure><figcaption>MSPT <b id="mspt-now">–</b></figcaption><canvas id="mspt" width="320" height="96"></canvas></figure>
+    <figure><figcaption>RAM <b id="ram-now">–</b></figcaption><canvas id="ram" width="320" height="96"></canvas></figure>
+    <figure><figcaption>CPU <b id="cpu-now">–</b></figcaption><canvas id="cpu" width="320" height="96"></canvas></figure>
+  </section>
+
+  <div class="columns">
+    <section>
+      <h2>Players <span id="player-count" class="muted"></span></h2>
+      <table>
+        <thead><tr><th>Name</th><th>Ping</th><th></th></tr></thead>
+        <tbody id="players"></tbody>
+      </table>
+      <p id="no-players" class="muted">Nobody is online.</p>
+    </section>
+
+    <section>
+      <h2>Backups</h2>
+      <form id="backup-form" class="row">
+        <input id="backup-name" placeholder="Name (optional)" maxlength="40" pattern="[A-Za-z0-9_.\-]*" autocomplete="off">
+        <button type="submit">Back up now</button>
+      </form>
+      <table>
+        <thead><tr><th>Backup</th><th>Size</th><th></th></tr></thead>
+        <tbody id="backups"></tbody>
+      </table>
+      <p id="no-backups" class="muted">No backups yet.</p>
+    </section>
+  </div>
+
+  <section>
+    <h2>Console</h2>
+    <pre id="log" tabindex="0" aria-live="off"></pre>
+    <form id="command-form" class="row">
+      <input id="command" placeholder="A console command, like list or say Hello" autocomplete="off" spellcheck="false">
+      <button type="submit">Run</button>
+    </form>
+  </section>
+</main>
+
+<main id="signed-out" class="message" hidden>
+  <p>Sign in with a link from the server: run <code>horizon-server panel</code> in the server's folder and open
+  the link it prints. Links work once, for 10 minutes.</p>
+</main>
+
+<main id="gone" class="message" hidden>
+  <p>The server isn't answering. It may have stopped: start it again with <code>horizon-server start</code>,
+  then reload this page.</p>
+</main>
+
+<div id="toast" role="status" hidden></div>
+</body>
+</html>

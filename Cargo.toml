@@ -1,6 +1,6 @@
 [workspace]
 exclude = ["launcher", "crates/horizon-telemetry-server"]
-members = ["crates/horizon-core", "crates/horizon-dualsense", "crates/horizon-world", "crates/voxel-kernels", "crates/horizon-client", "crates/horizon-assets", "crates/horizon-protocol", "crates/horizon-theme", "crates/horizon-shaderpack", "crates/horizon-prepare", "crates/horizon-telemetry", "crates/horizon-bench", "crates/horizon-friends", "crates/horizon-relay", "crates/horizon-mod-sdk", "crates/horizon-mods", "crates/horizon-mods/tests/guest", "crates/cargo-horizon-mod", "crates/horizon-port-pack", "crates/horizon-mod-sdk/examples/coords-hud", "xtask"]
+members = ["crates/horizon-core", "crates/horizon-dualsense", "crates/horizon-world", "crates/voxel-kernels", "crates/horizon-client", "crates/horizon-server-files", "crates/horizon-server", "crates/horizon-bots", "crates/horizon-assets", "crates/horizon-protocol", "crates/horizon-theme", "crates/horizon-shaderpack", "crates/horizon-prepare", "crates/horizon-telemetry", "crates/horizon-bench", "crates/horizon-friends", "crates/horizon-relay", "crates/horizon-mod-sdk", "crates/horizon-mods", "crates/horizon-mods/tests/guest", "crates/cargo-horizon-mod", "crates/horizon-port-pack", "crates/horizon-mod-sdk/examples/coords-hud", "xtask"]
 resolver = "2"
 
 [workspace.package]
