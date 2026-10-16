@@ -553,6 +553,9 @@ public final class VanillaMobAiOracle {
                     String v = kv.length > 1 ? kv[1] : "";
                     switch (kv[0]) {
                         case "persistent" -> mob.setPersistenceRequired();
+                        case "ridden" -> mob.setItemSlot(net.minecraft.world.entity.EquipmentSlot.BODY,
+                            new net.minecraft.world.item.ItemStack(BuiltInRegistries.ITEM.getValue(
+                                net.minecraft.resources.Identifier.parse("minecraft:red_harness"))));
                         case "noai" -> mob.setNoAi(true);
                         case "profession" -> {
                             Villager villager = (Villager) mob;
@@ -641,6 +644,9 @@ public final class VanillaMobAiOracle {
             // Leads: to the player ("leashed") or to the n-th mob ("leashto=n").
             for (int i = 0; i < s.mobs.size(); i++) {
                 for (String flag : s.mobs.get(i).flags) {
+                    if (flag.equals("ridden")) {
+                        if (!player.startRiding(ENTS.get(i))) throw new IllegalStateException("Could not mount fixture");
+                    }
                     if (flag.equals("leashed")) ((net.minecraft.world.entity.Leashable) ENTS.get(i)).setLeashedTo(player, true);
                     else if (flag.startsWith("leashto=")) ((net.minecraft.world.entity.Leashable) ENTS.get(i))
                         .setLeashedTo(ENTS.get(Integer.parseInt(flag.substring(8))), true);

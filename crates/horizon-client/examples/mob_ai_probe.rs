@@ -902,6 +902,10 @@ fn main() -> horizon_client::Result<()> {
             for flag in &spec.flags {
                 match flag.as_str() {
                     "persistent" => m.persistent = true,
+                    "ridden" => {
+                        m.extra.head = Some("minecraft:red_harness".into());
+                        m.rider = Some(horizon_client::mobs::equine::Rider::default());
+                    }
                     "noai" => m.no_ai = true,
                     // Warden.finalizeSpawn's own part.
                     "digcooldown" | "emerge" => horizon_client::mobs::warden::finalize(

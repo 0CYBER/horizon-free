@@ -157,6 +157,11 @@ def scenarios():
     # Happy ghasts float above the grass; ghastlings follow players and adults.
     add('happy_ghast_player', 200, ['player 6.5 -60 0.5', 'mob minecraft:happy_ghast 0.5 -55 0.5 0 81 persistent'])
     add('happy_ghast_alone', 200, ['mob minecraft:happy_ghast 0.5 -55 0.5 90 82 persistent'])
+    # The driver's seat overlaps the front of the ghast: it must not push its own rider.
+    # One tick isolates riding input and turning from later passenger repositioning.
+    for name, yaw in [('hover', 0), ('turn', 90)]:
+        add(f'happy_ghast_ridden_{name}', 1, ['player 0.5 -51.6 2.2',
+            f'mob minecraft:happy_ghast 0.5 -55 0.5 {yaw} 82 persistent ridden'])
     add('ghastling_player', 200, ['player 8.5 -60 0.5', 'mob minecraft:happy_ghast 0.5 -57 0.5 0 83 persistent baby'])
     add('ghastling_alone', 200, ['mob minecraft:happy_ghast 0.5 -57 0.5 0 84 persistent baby'])
     add('ghastling_adult', 200, ['mob minecraft:happy_ghast 10.5 -55 0.5 0 85 persistent',
