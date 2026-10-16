@@ -2278,7 +2278,7 @@ impl Game<'_> {
                 if let Some(hit) = self.pick() {
                     self.send(S::PickItemFromBlock(play::PickItemFromBlock {
                         pos: hit.pos,
-                        include_data: false,
+                        include_data: self.has_control_down(),
                     }));
                 }
             }

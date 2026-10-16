@@ -10,6 +10,7 @@ mod banners;
 mod beacon;
 mod beehives;
 mod block_entity_anims;
+mod block_items;
 mod blockctl;
 mod boats;
 mod books;
@@ -2569,19 +2570,21 @@ impl Game<'_> {
         };
         let target = [pos.x, pos.y, pos.z];
         if let Some(entity) = BlockEntity::for_block(&self.res.facts.get(state).name) {
-            let sign = matches!(entity, BlockEntity::Sign(_));
-            let command_block = matches!(entity, BlockEntity::CommandBlock(_));
-            self.world
-                .block_entities
-                .insert((target[0], target[1], target[2]), entity);
-            if command_block {
-                self.command_block_placed((target[0], target[1], target[2]));
-            }
-            self.fill_placed_box(target, &stack);
-            self.name_placed_container(target, &stack);
-            self.fill_placed_banner(target, &stack);
-            if sign {
-                self.open_sign_editor((target[0], target[1], target[2]), true);
+            let key = (target[0], target[1], target[2]);
+            self.world.block_entities.insert(key, entity);
+            let game_master = self.can_use_game_master_blocks();
+            self.apply_placed_item(target, &stack, game_master);
+            // Block.setPlacedBy.
+            match self.world.block_entities.get(&key) {
+                Some(BlockEntity::CommandBlock(_)) => {
+                    let data = stack.data().is_some_and(|d| {
+                        d.other(horizon_client::block_entity_item::BLOCK_ENTITY_DATA)
+                            .is_some()
+                    });
+                    self.command_block_placed(key, !data);
+                }
+                Some(BlockEntity::Sign(sign)) if !sign.waxed => self.open_sign_editor(key, true),
+                _ => {}
             }
         }
         self.swing_arm();
@@ -8901,17 +8904,11 @@ impl Game<'_> {
             }
             MouseButton::Middle if pressed => {
                 // Minecraft.pickBlockOrEntity -> the server's handlePickItemFromBlock:
-                // the block's clone item, picked from the inventory (`pick_item`).
+                // the block's clone item, with its block entity's data on Ctrl in
+                // creative, picked from the inventory (`pick_item`).
                 if let Some(hit) = self.pick() {
-                    let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-                    let item = self.res.facts.get(state).item.clone();
-                    if &*item != "minecraft:air" {
-                        let stack = ItemStack {
-                            item,
-                            count: 1,
-                            damage: 0,
-                            extra: None,
-                        };
+                    let include_data = self.creative && self.has_control_down();
+                    if let Some(stack) = self.picked_stack(hit.pos, include_data) {
                         let infinite = self.creative;
                         horizon_client::pick_item::pick(
                             &mut self.inventory[..36],

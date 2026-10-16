@@ -1541,8 +1541,7 @@ impl Game<'_> {
         let target = (placed.x, placed.y, placed.z);
         if let Some(entity) = BlockEntity::for_block(&self.res.facts.get(state).name) {
             self.world.block_entities.insert(target, entity);
-            self.fill_placed_box([target.0, target.1, target.2], &stack);
-            self.name_placed_container([target.0, target.1, target.2], &stack);
+            self.apply_placed_item([target.0, target.1, target.2], &stack, false);
         }
         self.process_level_events()?;
         Ok((shrink(stack), CLICK))
