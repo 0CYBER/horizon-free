@@ -930,6 +930,7 @@ impl HudRenderer {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        uploads: &mut crate::gfx::upload::Uploads,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         batch: &HudBatch,
@@ -975,8 +976,14 @@ impl HudRenderer {
                 mapped_at_creation: false,
             });
         }
-        queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(&batch.vertices));
-        queue.write_buffer(
+        uploads.buffer(
+            encoder,
+            &self.buffer,
+            0,
+            bytemuck::cast_slice(&batch.vertices),
+        );
+        uploads.buffer(
+            encoder,
             &self.uniform,
             0,
             bytemuck::bytes_of(&HudUniform {
