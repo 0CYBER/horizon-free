@@ -2,11 +2,13 @@
 //! that opens the world to the local network (the 26.3 replacement of the
 //! old "Open to LAN" screen): default and personal game mode, cheats,
 //! difficulty, LAN on/off with its port, command access for guests and
-//! forcing the game mode.
+//! forcing the game mode. Its difficulty lock asks first (PopupScreen), and
+//! Restrictions opens RestrictionsScreen.
 use super::{Game, Screen, lan::LanSettings};
 use horizon_client::{
+    font::Font,
     hud::{HudBatch, rgba},
-    text::Text,
+    text::{Text, named_color},
     ui::{self, EditBox},
 };
 use winit::{event::KeyEvent, keyboard::PhysicalKey};
@@ -23,9 +25,22 @@ pub(super) struct WorldOptions {
     guest_commands: bool,
     force: bool,
     hardcore: bool,
+    /// The level's own lock (LevelData.isDifficultyLocked).
+    difficulty_locked: bool,
+    /// wantedDifficultyLocked: the lock icon, from the lock or hardcore.
+    locked: bool,
     initial: Snapshot,
     /// ScrollableLayout's scroll amount.
     scroll: f32,
+    view: View,
+}
+/// The screen on show: the options, the lock's question over them, or the
+/// RestrictionsScreen they opened (both return to the same options).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum View {
+    Options,
+    LockQuestion,
+    Restrictions,
 }
 #[derive(Clone, PartialEq)]
 struct Snapshot {
@@ -33,6 +48,7 @@ struct Snapshot {
     personal_mode: i32,
     cheats: bool,
     difficulty: u8,
+    locked: bool,
     lan: bool,
     port: u16,
     guest_commands: bool,
@@ -52,6 +68,12 @@ const GENERAL_TOP: f32 = 8.0;
 const MULTIPLAYER_TOP: f32 = 145.0;
 /// The port box's top beside the LAN button.
 const PORT_TOP: f32 = 166.0;
+/// PopupScreen: 250 wide less its 18 pixel border each side, two buttons
+/// `min((214 - 6) / 2, 150)` wide and 6 apart, rows 12 apart.
+const POPUP_CONTENT: f32 = 214.0;
+const POPUP_BUTTON: f32 = 104.0;
+/// RestrictionsScreen's text widgets: 250 wide, padded by 4.
+const RESTRICTION_WIDTH: f32 = 250.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Button {
@@ -59,9 +81,9 @@ enum Button {
     PersonalMode,
     Cheats,
     Difficulty,
-    /// LockIconButton: Horizon can't lock a world's difficulty yet.
+    /// DifficultyButtons.lockButton (LockIconButton).
     Lock,
-    /// InWorldGameRulesScreen and RestrictionsScreen are not in Horizon yet.
+    /// InWorldGameRulesScreen is not in Horizon yet.
     GameRules,
     Restrictions,
     Lan,
@@ -91,6 +113,7 @@ impl WorldOptions {
             personal_mode: self.personal_mode,
             cheats: self.cheats,
             difficulty: self.difficulty,
+            locked: self.locked,
             lan: self.lan,
             port: if self.lan {
                 self.parsed_port().unwrap_or(0)
@@ -203,13 +226,171 @@ impl WorldOptions {
             Button::DefaultMode | Button::PersonalMode => self.cheats && !self.hardcore,
             // An owner's commands come with Allow Commands.
             Button::Cheats => !self.hardcore || self.initial.cheats,
-            Button::Difficulty => !self.hardcore,
-            Button::Lock | Button::GameRules | Button::Restrictions => false,
+            // DifficultyButtons.updateDifficultyButtonsState: the level's
+            // lock or hardcore, not the wanted lock.
+            Button::Difficulty | Button::Lock => !self.hardcore && !self.difficulty_locked,
+            Button::GameRules => false,
+            Button::Restrictions => true,
             Button::CommandAccess => self.lan && self.cheats,
             Button::Force => self.lan && !(self.guest_commands && self.cheats) && !self.hardcore,
             Button::Apply => self.changed(),
             Button::Lan | Button::Cancel => true,
         }
+    }
+}
+
+/// MultiLineLabel: the lines of `t` wrapped to `width`.
+fn wrap(font: &Font, t: &Text, width: f32) -> Vec<Text> {
+    font.split_lines(t, width)
+        .into_iter()
+        .map(|(line, _)| line)
+        .collect()
+}
+fn widest(font: &Font, lines: &[Text]) -> f32 {
+    lines.iter().map(|l| font.width_text(l)).fold(0.0, f32::max)
+}
+/// Centred MultiLineTextWidget lines: each centred on `mid` from `top`, 9 apart.
+fn centred_lines(font: &Font, lines: Vec<Text>, mid: f32, top: f32) -> Vec<(Text, f32, f32)> {
+    lines
+        .into_iter()
+        .enumerate()
+        .map(|(i, line)| {
+            let x = mid - (font.width_text(&line) / 2.0).trunc();
+            (line, x, top + 9.0 * i as f32)
+        })
+        .collect()
+}
+
+/// PopupScreen centred on the screen: its title (bold) and message lines,
+/// the background sprite's rectangle and its two buttons.
+struct Popup {
+    lines: Vec<(Text, f32, f32)>,
+    frame: (f32, f32, f32, f32),
+    buttons: [(f32, f32); 2],
+}
+impl Popup {
+    fn new(font: &Font, title: &Text, message: &Text, (w, h): (f32, f32)) -> Self {
+        let blocks = [
+            wrap(font, title, POPUP_CONTENT),
+            wrap(font, message, POPUP_CONTENT),
+        ];
+        let row = 2.0 * POPUP_BUTTON + 6.0;
+        let lw = blocks.iter().map(|b| widest(font, b)).fold(row, f32::max);
+        let lh = blocks
+            .iter()
+            .map(|b| 9.0 * b.len() as f32 + 12.0)
+            .sum::<f32>()
+            + 20.0;
+        let (x, y) = (((w - lw) / 2.0).trunc(), ((h - lh) / 2.0).trunc());
+        let mut lines = Vec::new();
+        let mut top = y;
+        for block in blocks {
+            let bw = widest(font, &block);
+            let mid = x + ((lw - bw) / 2.0).trunc() + (bw / 2.0).trunc();
+            let n = block.len() as f32;
+            lines.extend(centred_lines(font, block, mid, top));
+            top += 9.0 * n + 12.0;
+        }
+        let bx = x + ((lw - row) / 2.0).trunc();
+        Self {
+            lines,
+            frame: (x - 18.0, y - 18.0, lw + 36.0, lh + 36.0),
+            buttons: [(bx, top), (bx + POPUP_BUTTON + 6.0, top)],
+        }
+    }
+    /// The lock's question: WorldOptionsScreen's Apply when the lock changed.
+    fn lock_question(font: &Font, difficulty: u8, size: (f32, f32)) -> Self {
+        let name = Text::translate(
+            &format!(
+                "options.difficulty.{}",
+                DIFFICULTIES[usize::from(difficulty) & 3]
+            ),
+            &[],
+        );
+        Self::new(
+            font,
+            &Text::translate("difficulty.lock.title", &[]).bold(),
+            &Text::translate("difficulty.lock.question", &[name]),
+            size,
+        )
+    }
+}
+
+/// RestrictionsScreen for the player of a single-player world, whose chat
+/// abilities come from the Chat option alone (Minecraft.computeChatAbilities).
+struct Restrictions {
+    lines: Vec<(Text, f32, f32)>,
+    /// The restriction's action, 200 wide: Chat Settings.
+    action: Option<(f32, f32)>,
+    /// The ScrollableLayout's top and bottom.
+    area: (f32, f32),
+}
+impl Restrictions {
+    fn new(font: &Font, chat_visibility: u8, (w, h): (f32, f32)) -> Self {
+        let red = named_color("red").unwrap_or(0xFF5555);
+        let green = named_color("green").unwrap_or(0x55FF55);
+        let inner = RESTRICTION_WIDTH - 8.0;
+        // ChatVisiblity HIDDEN takes chat and commands, SYSTEM the chat.
+        let restriction = match chat_visibility {
+            2 => Some("chat_restriction.chat_and_commands_disabled_by_options"),
+            1 => Some("chat_restriction.chat_disabled_by_options"),
+            _ => None,
+        };
+        let (chat, commands) = (chat_visibility == 0, chat_visibility < 2);
+        // The body's widgets: text blocks (lines, top) and the action's top.
+        let mut blocks = Vec::new();
+        let mut action = None;
+        let mut y = 0.0;
+        if let Some(key) = restriction {
+            let lines = wrap(
+                font,
+                &Text::translate(key, &[]).bold().with_color(red),
+                inner,
+            );
+            let n = lines.len() as f32;
+            blocks.push((lines, y));
+            y += 9.0 * n + 8.0;
+            action = Some(y);
+            // The button, then a 10 pixel SpacerElement.
+            y += 20.0 + 10.0;
+        }
+        let permissions = [
+            ("send_messages", chat),
+            ("send_commands", commands),
+            ("receive_system_messages", commands),
+            ("receive_player_messages", chat),
+        ];
+        let lines: Vec<Text> = permissions
+            .iter()
+            .flat_map(|&(id, allowed)| {
+                let state = if allowed { "allowed" } else { "denied" };
+                let t =
+                    Text::translate(&format!("restrictions_screen.permission.{id}.{state}"), &[])
+                        .with_color(if allowed { green } else { red });
+                wrap(font, &t, inner)
+            })
+            .collect();
+        let n = lines.len() as f32;
+        blocks.push((lines, y));
+        y += 9.0 * n + 8.0;
+        // HeaderAndFooterLayout: 30 under the header if it fits; the
+        // ScrollableLayout keeps 10 pixels each side for its scrollbar.
+        let height = y.min(h - HEADER - FOOTER);
+        let top = (HEADER + 30.0).min(h - FOOTER - height);
+        let x = ((w - (RESTRICTION_WIDTH + 20.0)) / 2.0).trunc() + 10.0;
+        let mid = x + RESTRICTION_WIDTH / 2.0;
+        Self {
+            lines: blocks
+                .into_iter()
+                .flat_map(|(lines, by)| centred_lines(font, lines, mid, top + by + 4.0))
+                .collect(),
+            action: action.map(|ay| (x + 25.0, top + ay)),
+            area: (top, top + height),
+        }
+    }
+    /// The footer's Done, 200 wide.
+    fn done(w: f32, h: f32) -> (f32, f32) {
+        (((w - 200.0) / 2.0).trunc(), h - FOOTER + 6.0)
     }
 }
 
@@ -236,12 +417,16 @@ impl Game<'_> {
             guest_commands,
             force,
             hardcore: self.level.hardcore,
+            difficulty_locked: self.level.difficulty_locked,
+            locked: self.level.difficulty_locked || self.level.hardcore,
             scroll: 0.0,
+            view: View::Options,
             initial: Snapshot {
                 default_mode: 0,
                 personal_mode: 0,
                 cheats: false,
                 difficulty: 0,
+                locked: false,
                 lan: false,
                 port: 0,
                 guest_commands: false,
@@ -258,10 +443,105 @@ impl Game<'_> {
         self.screen = Screen::Paused;
     }
 
+    /// Escape: the question and RestrictionsScreen return to the options
+    /// (their onClose), which close.
+    pub(super) fn world_options_escape(&mut self) {
+        match self.world_options.as_mut() {
+            Some(o) if o.view != View::Options => o.view = View::Options,
+            _ => self.close_world_options(),
+        }
+    }
+
     pub(super) fn draw_world_options(&mut self, batch: &mut HudBatch) {
         let Some(mut o) = self.world_options.take() else {
             return;
         };
+        match o.view {
+            View::Options => self.draw_options_view(&mut o, batch, self.cursor),
+            View::LockQuestion => {
+                // PopupScreen: the screen behind without the pointer, then the popup.
+                self.draw_options_view(&mut o, batch, (-1.0, -1.0));
+                self.draw_lock_question(&o, batch);
+            }
+            View::Restrictions => self.draw_restrictions(batch),
+        }
+        self.world_options = Some(o);
+    }
+
+    fn draw_lock_question(&self, o: &WorldOptions, batch: &mut HudBatch) {
+        let atlas = &self.res.atlas;
+        let (w, h) = (batch.width, batch.height);
+        // Screen.extractTransparentBackground.
+        batch.fill_gradient(
+            atlas,
+            (0.0, 0.0, w, h),
+            rgba(0x10, 0x10, 0x10, 0xC0),
+            rgba(0x10, 0x10, 0x10, 0xD0),
+        );
+        let p = Popup::lock_question(&atlas.font, o.difficulty, (w, h));
+        let (fx, fy, fw, fh) = p.frame;
+        ui::nine_slice(
+            batch,
+            atlas,
+            "gui/sprites/popup/background",
+            fx,
+            fy,
+            fw,
+            fh,
+            u32::MAX,
+        );
+        for (line, x, y) in &p.lines {
+            batch.text_styled(atlas, line, *x, *y, u32::MAX, true);
+        }
+        for ((bx, by), key) in p.buttons.into_iter().zip(["gui.yes", "gui.no"]) {
+            let hover = ui::hovered(self.cursor, bx, by, POPUP_BUTTON, 20.0);
+            let label = Text::translate(key, &[]);
+            ui::button(
+                batch,
+                atlas,
+                bx,
+                by,
+                POPUP_BUTTON,
+                20.0,
+                &label,
+                true,
+                hover,
+            );
+        }
+    }
+
+    fn draw_restrictions(&self, batch: &mut HudBatch) {
+        let atlas = &self.res.atlas;
+        let (w, h) = (batch.width, batch.height);
+        ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
+        let title = Text::translate("restrictions_screen.title", &[]);
+        let tw = atlas.font.width_text(&title);
+        batch.text_styled(
+            atlas,
+            &title,
+            ((w - tw) / 2.0).floor(),
+            12.0,
+            u32::MAX,
+            true,
+        );
+        let r = Restrictions::new(&atlas.font, self.settings.chat_visibility, (w, h));
+        let first = batch.vertices.len();
+        for (line, x, y) in &r.lines {
+            batch.text_styled(atlas, line, *x, *y, u32::MAX, true);
+        }
+        if let Some((ax, ay)) = r.action {
+            let hover = ui::hovered(self.cursor, ax, ay, 200.0, 20.0);
+            let label = Text::translate("chat_restriction.chat_disabled_by_options.action", &[]);
+            ui::button(batch, atlas, ax, ay, 200.0, 20.0, &label, true, hover);
+        }
+        batch.clip_since(first, 0.0, r.area.0, w, r.area.1);
+        let (dx, dy) = Restrictions::done(w, h);
+        let hover = ui::hovered(self.cursor, dx, dy, 200.0, 20.0);
+        let label = Text::translate("gui.done", &[]);
+        ui::button(batch, atlas, dx, dy, 200.0, 20.0, &label, true, hover);
+    }
+
+    fn draw_options_view(&self, o: &mut WorldOptions, batch: &mut HudBatch, cursor: (f32, f32)) {
         let atlas = &self.res.atlas;
         let (w, h) = (batch.width, batch.height);
         o.scroll = o.scroll.clamp(0.0, WorldOptions::max_scroll(h));
@@ -292,12 +572,12 @@ impl Game<'_> {
             let tx = x + ((308.0 - (tw + 8.0)) / 2.0).trunc() + 4.0;
             batch.text_styled(atlas, &t, tx, top + y + 4.0, u32::MAX, true);
         }
-        let inside = self.cursor.1 >= HEADER && self.cursor.1 < h - FOOTER;
+        let inside = cursor.1 >= HEADER && cursor.1 < h - FOOTER;
         for (b, bx, by, bw) in WorldOptions::buttons(w, top) {
             let active = o.active(b);
-            let hover = active && inside && ui::hovered(self.cursor, bx, by, bw, 20.0);
+            let hover = active && inside && ui::hovered(cursor, bx, by, bw, 20.0);
             if b == Button::Lock {
-                let lock = if o.hardcore { "locked" } else { "unlocked" };
+                let lock = if o.locked { "locked" } else { "unlocked" };
                 let state = match (active, hover) {
                     (false, _) => "_disabled",
                     (true, true) => "_highlighted",
@@ -351,16 +631,19 @@ impl Game<'_> {
         ui::separators(batch, atlas, HEADER, h - FOOTER, true);
         for (b, bx, by, bw) in WorldOptions::footer(w, h) {
             let active = o.active(b);
-            let hover = active && ui::hovered(self.cursor, bx, by, bw, 20.0);
+            let hover = active && ui::hovered(cursor, bx, by, bw, 20.0);
             ui::button(batch, atlas, bx, by, bw, 20.0, &o.label(b), active, hover);
         }
-        self.world_options = Some(o);
     }
 
     /// The mouse wheel over the screen (ScrollableLayout, 10 pixels a step).
     pub(super) fn world_options_scroll(&mut self, delta: f32) {
         let h = self.gui_size().1;
-        if let Some(o) = self.world_options.as_mut() {
+        if let Some(o) = self
+            .world_options
+            .as_mut()
+            .filter(|o| o.view == View::Options)
+        {
             o.scroll = (o.scroll - delta * 10.0).clamp(0.0, WorldOptions::max_scroll(h));
         }
     }
@@ -370,6 +653,49 @@ impl Game<'_> {
             return;
         };
         let (w, h) = self.gui_size();
+        match o.view {
+            View::Options => {}
+            View::LockQuestion => {
+                let p = Popup::lock_question(&self.res.atlas.font, o.difficulty, (w, h));
+                let hit = p
+                    .buttons
+                    .iter()
+                    .position(|&(bx, by)| ui::hovered(self.cursor, bx, by, POPUP_BUTTON, 20.0));
+                if hit.is_some() {
+                    self.audio.play_button_click();
+                }
+                match hit {
+                    // Yes: apply, then back to the pause menu; No: back to the options.
+                    Some(0) => return self.apply_and_close_world_options(o),
+                    Some(_) => o.view = View::Options,
+                    None => {}
+                }
+                self.world_options = Some(o);
+                return;
+            }
+            View::Restrictions => {
+                let r =
+                    Restrictions::new(&self.res.atlas.font, self.settings.chat_visibility, (w, h));
+                let in_body = self.cursor.1 >= r.area.0 && self.cursor.1 < r.area.1;
+                let action = r.action.is_some_and(|(ax, ay)| {
+                    in_body && ui::hovered(self.cursor, ax, ay, 200.0, 20.0)
+                });
+                let (dx, dy) = Restrictions::done(w, h);
+                let done = ui::hovered(self.cursor, dx, dy, 200.0, 20.0);
+                if action || done {
+                    self.audio.play_button_click();
+                    o.view = View::Options;
+                }
+                self.world_options = Some(o);
+                if action {
+                    // ChatRestriction.Action.GO_TO_CHAT_SETTINGS: Chat Settings,
+                    // which returns to the screen behind RestrictionsScreen.
+                    self.open_options_at(false, horizon_client::options_ui::Page::Chat);
+                    self.options_to_world_options = true;
+                }
+                return;
+            }
+        }
         let inside = self.cursor.1 >= HEADER && self.cursor.1 < h - FOOTER;
         o.port.focused = o.lan
             && inside
@@ -397,6 +723,8 @@ impl Game<'_> {
                 }
             }
             Some(Button::Difficulty) => o.difficulty = (o.difficulty + 1) % 4,
+            Some(Button::Lock) => o.locked = !o.locked,
+            Some(Button::Restrictions) => o.view = View::Restrictions,
             Some(Button::Lan) => {
                 o.lan = !o.lan;
                 o.port.focused = false;
@@ -408,17 +736,20 @@ impl Game<'_> {
                 self.close_world_options();
                 return;
             }
-            Some(Button::Apply) => {
-                let wanted = o.snapshot();
-                let before = o.initial.clone();
-                self.world_options = Some(o);
-                self.apply_world_options(&before, &wanted);
-                self.close_world_options();
-                return;
-            }
-            Some(Button::Lock | Button::GameRules | Button::Restrictions) | None => {}
+            // A new lock asks first.
+            Some(Button::Apply) if o.locked != o.initial.locked => o.view = View::LockQuestion,
+            Some(Button::Apply) => return self.apply_and_close_world_options(o),
+            Some(Button::GameRules) | None => {}
         }
         self.world_options = Some(o);
+    }
+
+    fn apply_and_close_world_options(&mut self, o: WorldOptions) {
+        let wanted = o.snapshot();
+        let before = o.initial.clone();
+        self.world_options = Some(o);
+        self.apply_world_options(&before, &wanted);
+        self.close_world_options();
     }
 
     pub(super) fn world_options_key(&mut self, event: &KeyEvent) {
@@ -433,7 +764,7 @@ impl Game<'_> {
         let Some(o) = self.world_options.as_mut() else {
             return;
         };
-        if !o.port.focused {
+        if !o.port.focused || o.view != View::Options {
             return;
         }
         if let Some(shortcut) = shortcut {
@@ -468,6 +799,10 @@ impl Game<'_> {
         if wanted.difficulty != before.difficulty {
             let name = DIFFICULTIES[usize::from(wanted.difficulty) & 3];
             self.as_console(|g| g.run_command(&format!("difficulty {name}")));
+        }
+        // ServerboundLockDifficultyPacket(true): MinecraftServer.setDifficultyLocked.
+        if wanted.locked && !before.locked {
+            self.level.difficulty_locked = true;
         }
         if wanted.default_mode != before.default_mode {
             self.set_default_game_mode(wanted.default_mode);
@@ -514,12 +849,16 @@ mod tests {
             guest_commands: false,
             force: true,
             hardcore,
+            difficulty_locked: false,
+            locked: hardcore,
             scroll: 0.0,
+            view: View::Options,
             initial: Snapshot {
                 default_mode: 0,
                 personal_mode: 0,
                 cheats: false,
                 difficulty: 0,
+                locked: false,
                 lan: false,
                 port: 0,
                 guest_commands: false,
@@ -572,5 +911,22 @@ mod tests {
         o.scroll = 44.0;
         assert_eq!(o.hit((100.0, 30.0), (427.0, 240.0)), None);
         assert_eq!(o.hit((100.0, 70.0), (427.0, 240.0)), Some(Button::Cheats));
+    }
+
+    #[test]
+    fn the_lock_follows_the_level_and_counts_as_a_change() {
+        let mut o = options(true, false);
+        assert!(o.active(Button::Lock) && o.active(Button::Restrictions));
+        assert!(!o.locked && !o.changed());
+        // The wanted lock alone enables Apply (hasSettingsChanges).
+        o.locked = true;
+        assert!(o.changed() && o.active(Button::Difficulty));
+        // A locked level: neither the difficulty nor the lock.
+        let mut o = options(true, false);
+        o.difficulty_locked = true;
+        assert!(!o.active(Button::Lock) && !o.active(Button::Difficulty));
+        // Hardcore shows the lock closed, and inactive.
+        let o = options(true, true);
+        assert!(o.locked && !o.active(Button::Lock));
     }
 }

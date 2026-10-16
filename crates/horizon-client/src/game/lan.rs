@@ -601,7 +601,7 @@ impl Game<'_> {
                     next_entity: &mut self.next_entity,
                     spawn,
                     difficulty: i32::from(self.ui.difficulty),
-                    difficulty_locked: false,
+                    difficulty_locked: self.level.difficulty_locked,
                     clock_rate: if self.ui.rules.bool("advance_time") {
                         self.ui.clock.rate
                     } else {
@@ -716,7 +716,7 @@ impl Game<'_> {
             next_entity: &mut self.next_entity,
             spawn,
             difficulty: i32::from(self.ui.difficulty),
-            difficulty_locked: false,
+            difficulty_locked: self.level.difficulty_locked,
             clock_rate: self.ui.clock.rate,
             tick_rate: self.clock.rate(),
             tick_frozen: self.clock.frozen(),
