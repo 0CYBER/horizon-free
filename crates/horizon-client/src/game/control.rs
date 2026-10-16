@@ -428,6 +428,9 @@ impl Game<'_> {
                     Screen::Chat => self.chat_type(text),
                     Screen::CommandBlock => self.command_block_type(text),
                     Screen::Options => self.ui.options.type_text(&self.res.atlas, text),
+                    // The port, or the game rules' search and number boxes.
+                    Screen::WorldOptions if text == "\\b" => self.world_options_text(None),
+                    Screen::WorldOptions => self.world_options_text(Some(text)),
                     Screen::Inventory if self.recipe_search_focused() => {
                         self.recipe_text(Some(text), false)
                     }
@@ -437,7 +440,7 @@ impl Game<'_> {
                     }
                     _ => {
                         return Err(
-                            "type needs the chat screen (key t tap), the language search or the creative search".into(),
+                            "type needs the chat screen (key t tap), the language search, the creative search or World Options".into(),
                         );
                     }
                 }
