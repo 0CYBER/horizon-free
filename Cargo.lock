@@ -1399,6 +1399,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-bots"
+version = "0.1.0"
+dependencies = [
+ "horizon-protocol",
+ "serde_json",
+]
+
+[[package]]
 name = "horizon-client"
 version = "0.1.0"
 dependencies = [
