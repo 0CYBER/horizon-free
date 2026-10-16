@@ -1461,6 +1461,9 @@ impl Hub {
         let moved = pos.map_or([0.0; 3], |_| {
             [0, 1, 2].map(|k| g.position[k] - g.previous_position[k])
         });
+        if g.moves.is_empty() {
+            g.moves_from_ground = g.on_ground;
+        }
         g.moves.push((moved, flags & 1 != 0));
         if let Some((yaw, pitch)) = rot
             && yaw.is_finite()

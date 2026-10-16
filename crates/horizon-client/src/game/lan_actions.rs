@@ -12,7 +12,7 @@ use horizon_client::{
     entities::Experience,
     items::ItemStack,
     lan::{guest::SPECTATOR, menu::Rules},
-    motion::{MotionWorld, PlayerMotion},
+    motion::{MotionEvent, MotionWorld, PlayerMotion},
 };
 use horizon_core::geometry::Vec3;
 use horizon_protocol::{
@@ -770,23 +770,35 @@ impl Game<'_> {
     }
 
     /// The guest's body on the server each tick: ServerPlayer.tick's damage
-    /// clock and Entity.baseTick's fluid phase, then
-    /// ServerPlayer.doCheckFallDamage for each move the guest made (the fall
-    /// distance grows while they go down and hurts them where they land, as
-    /// the host's own landing does; water resets it, lava halves it), then
-    /// regeneration and the food tick (ServerPlayer.doTick).
+    /// clock and Entity.baseTick's fluid phase (burning), then for each move
+    /// the guest made ServerGamePacketListenerImpl.handleMovePlayer's jump
+    /// (`ServerPlayer.jumpFromGround`'s exhaustion),
+    /// ServerPlayer.doCheckFallDamage (the fall distance grows while they go
+    /// down and hurts them where they land, as the host's own landing does;
+    /// water resets it, lava halves it) and checkMovementStatistics (the
+    /// exhaustion of sprinting and swimming), then LivingEntity.baseTick's
+    /// hazards (drowning, lava, fire blocks, suffocation, the void), and
+    /// regeneration and the food tick (ServerPlayer.doTick). Their hurt
+    /// sounds are heard at the guest.
     fn guest_server_tick(&mut self, host: &mut LanHost, conn: u32) {
         let Some(g) = host.hub.guest_mut(conn) else {
             return;
         };
         let moves = std::mem::take(&mut g.moves);
+        let from_ground = if moves.is_empty() {
+            g.on_ground
+        } else {
+            g.moves_from_ground
+        };
         if g.spectator() {
             return;
         }
-        self.as_guest(host, conn, |game| {
+        let in_wall = !g.sleeping && self.in_wall(g.position, g.eye_height());
+        let at = g.position;
+        let sounds = self.as_guest(host, conn, |game| {
             let (rules, health) = (game.world.health_rules, &game.motion.health);
             let Some(player) = game.player.as_mut() else {
-                return;
+                return Vec::new();
             };
             let mut w = MotionWorld {
                 entities: &[],
@@ -798,21 +810,58 @@ impl Game<'_> {
             };
             w.player.health.advance_clock();
             let _ = w.fluid_base_tick();
+            w.player.ground.on_ground = from_ground;
             for (moved, on_ground) in moves {
                 let movement = Vec3::new(moved[0], moved[1], moved[2]);
+                if w.player.ground.on_ground && !on_ground && moved[1] > 0.0 {
+                    let sprinting = w.player.sprinting;
+                    w.player
+                        .health
+                        .food
+                        .add_exhaustion(if sprinting { 0.2 } else { 0.05 });
+                }
                 let landed = (|| -> horizon_client::Result<()> {
                     w.set_on_ground_with_movement(on_ground, false, movement)?;
                     let pos = w.legacy_on_position()?;
                     let state = w.block_state(pos)?;
-                    w.check_fall_damage(moved[1], on_ground, state, pos)
+                    w.check_fall_damage(moved[1], on_ground, state, pos)?;
+                    w.check_movement_statistics(movement)
                 })();
                 if landed.is_err() {
                     break;
                 }
             }
+            let _ = w.tick_environment_damage();
+            let _ = w.apply_fire_contact();
+            let _ = w.server_hazards_tick(in_wall);
             let _ = w.player.peaceful_regeneration(rules);
             let _ = w.player.food_tick(health, rules);
+            std::mem::take(&mut w.player.events)
+                .into_iter()
+                .filter_map(|e| match e {
+                    MotionEvent::HurtSound(sound) => Some(sound),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
         });
+        for sound in sounds.into_iter().flatten() {
+            self.player_hurt_sound(sound, at);
+        }
+    }
+
+    /// `Player.isInWall`: a suffocating block in the 0.48-wide box at the
+    /// eyes. Suffocating is a full collision box that is also a full render
+    /// cube (`BlockBehaviour.isSuffocating`'s default; glass and the like
+    /// opt out), as the mobs' check has it.
+    fn in_wall(&self, at: [f64; 3], eye_height: f64) -> bool {
+        let (y, half) = ((at[1] + eye_height).floor() as i32, 0.24);
+        let range = |v: f64| (v - half).floor() as i32..=(v + half).floor() as i32;
+        range(at[0]).any(|x| {
+            range(at[2]).any(|z| {
+                let f = self.res.facts.get(self.world.block(x, y, z));
+                f.full_collision && f.solid_render
+            })
+        })
     }
 
     /// The crack animation other players see.
