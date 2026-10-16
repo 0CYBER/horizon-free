@@ -19,6 +19,7 @@ mod cartography;
 mod chat;
 mod clipboard;
 mod combat;
+mod command_blocks;
 mod command_harness;
 mod commands;
 mod composter;
@@ -396,6 +397,8 @@ enum Screen {
     Advancements,
     /// WorldOptionsScreen (game/lan_screen.rs).
     WorldOptions,
+    /// CommandBlockEditScreen (game/command_blocks.rs).
+    CommandBlock,
 }
 struct Mining {
     pos: [i32; 3],
@@ -446,6 +449,9 @@ impl LevelAccess for GameLevel<'_> {
         state: BlockStateId,
         _direction: Direction,
     ) -> i32 {
+        if let Some(signal) = command_blocks::analog_signal(self.world, (pos.x, pos.y, pos.z)) {
+            return signal;
+        }
         if let Some(signal) = sculk::sensor_signal(self.world, self.behaviours, state, pos) {
             return signal;
         }
@@ -602,6 +608,9 @@ impl LevelAccess for GameLevel<'_> {
     }
     fn remove_block_entity(&mut self, pos: BlockPos, old: BlockStateId, side_effects: bool) -> u8 {
         self.remove_entity(pos, old, side_effects)
+    }
+    fn set_command_block_powered(&mut self, pos: BlockPos, powered: bool) -> Option<(bool, bool)> {
+        command_blocks::set_powered(self.world, self.registry, (pos.x, pos.y, pos.z), powered)
     }
 }
 /// FallingBlockEntity carrying a block state.
@@ -995,6 +1004,7 @@ struct Game<'a> {
     /// The open world is shared behind an invite code (game/friends.rs).
     friends: Option<friends::Sharing>,
     world_options: Option<lan_screen::WorldOptions>,
+    command_block_screen: Option<command_blocks::CommandBlockScreen>,
     /// KeyboardHandler's debug key state (game/debug_keys.rs), the physical
     /// keys held, and the debug renderers F3+B and F3+G switch on.
     debug_keys: horizon_client::debug_keys::DebugKeys,
@@ -1934,6 +1944,11 @@ impl Game<'_> {
                     kind: "dispense",
                 } => self.dispense_from(pos, state)?,
                 LevelEvent::BlockEvent {
+                    pos,
+                    kind: "command_block",
+                    ..
+                } => self.command_block_tick(pos),
+                LevelEvent::BlockEvent {
                     pos, kind: "hatch", ..
                 } => {
                     // FrogspawnBlock.hatchFrogspawn: 2-5 tadpoles.
@@ -2004,6 +2019,10 @@ impl Game<'_> {
         let key = (pos[0], pos[1], pos[2]);
         if &*name == "minecraft:lectern" {
             self.open_lectern(pos);
+            return;
+        }
+        if horizon_client::command_block::Mode::of_block(&name).is_some() {
+            self.open_command_block(key);
             return;
         }
         if &*name == "minecraft:crafting_table" {
@@ -2411,7 +2430,7 @@ impl Game<'_> {
                             .player
                             .as_ref()
                             .is_some_and(|p| p.health.food.food < 20),
-                    game_master: false,
+                    game_master: self.can_use_game_master_blocks(),
                 };
                 let at = Vec3::new(hit.point[0], hit.point[1], hit.point[2]);
                 let item = held.as_ref().map(|s| s.item.to_string());
@@ -2534,7 +2553,7 @@ impl Game<'_> {
             pitch: self.pitch,
             sneaking: self.keys.contains(&KeyCode::ShiftLeft),
             item: stack.item.to_string(),
-            can_use_game_master_blocks: false,
+            can_use_game_master_blocks: self.can_use_game_master_blocks(),
         };
         let outcome = self.with_level(|b, level, ticks| b.place_block(level, ticks, &ctx));
         let PlaceOutcome::Placed { pos, state } = outcome else {
@@ -2549,9 +2568,13 @@ impl Game<'_> {
         let target = [pos.x, pos.y, pos.z];
         if let Some(entity) = BlockEntity::for_block(&self.res.facts.get(state).name) {
             let sign = matches!(entity, BlockEntity::Sign(_));
+            let command_block = matches!(entity, BlockEntity::CommandBlock(_));
             self.world
                 .block_entities
                 .insert((target[0], target[1], target[2]), entity);
+            if command_block {
+                self.command_block_placed((target[0], target[1], target[2]));
+            }
             self.fill_placed_box(target, &stack);
             self.name_placed_container(target, &stack);
             self.fill_placed_banner(target, &stack);
@@ -3498,6 +3521,7 @@ impl Game<'_> {
                     | Screen::Stats
                     | Screen::Advancements
                     | Screen::WorldOptions
+                    | Screen::CommandBlock
             ) || self.book.is_some())
     }
     fn capture(&mut self, capture: bool) {
@@ -3853,6 +3877,7 @@ impl Game<'_> {
             Screen::Stats => self.draw_stats(&mut batch),
             Screen::Advancements => self.draw_advancements(&mut batch),
             Screen::WorldOptions => self.draw_world_options(&mut batch),
+            Screen::CommandBlock => self.draw_command_block(&mut batch),
             Screen::Inventory => {
                 self.draw_inventory(&mut batch);
             }
@@ -3915,7 +3940,8 @@ impl Game<'_> {
                 | BlockEntity::Spawner(_)
                 | BlockEntity::TrialSpawner(_)
                 | BlockEntity::Vault(_)
-                | BlockEntity::Beehive(_),
+                | BlockEntity::Beehive(_)
+                | BlockEntity::CommandBlock(_),
             ) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
@@ -4171,7 +4197,8 @@ impl Game<'_> {
                     | BlockEntity::Spawner(_)
                     | BlockEntity::TrialSpawner(_)
                     | BlockEntity::Vault(_)
-                    | BlockEntity::Beehive(_),
+                    | BlockEntity::Beehive(_)
+                    | BlockEntity::CommandBlock(_),
                 ) => {}
                 None if self.mount_active() => self.draw_mount_background(batch, ox, oy),
                 None => {
@@ -8687,6 +8714,7 @@ impl Game<'_> {
                 Screen::Stats => self.screen = Screen::Paused,
                 Screen::Advancements => self.close_advancements(),
                 Screen::WorldOptions => self.close_world_options(),
+                Screen::CommandBlock => self.close_command_block(),
                 Screen::Chat => self.close_chat(),
             },
             KeyCode::Digit1
@@ -9274,6 +9302,9 @@ impl ApplicationHandler for Game<'_> {
                         Screen::WorldOptions if pressed && button == MouseButton::Left => {
                             self.world_options_click()
                         }
+                        Screen::CommandBlock if pressed && button == MouseButton::Left => {
+                            self.command_block_click()
+                        }
                         Screen::Dead if pressed && button == MouseButton::Left => {
                             self.death_click()?
                         }
@@ -9354,6 +9385,9 @@ impl ApplicationHandler for Game<'_> {
                         && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape)) =>
                 {
                     self.world_options_key(&event)
+                }
+                WindowEvent::KeyboardInput { event, .. } if self.screen == Screen::CommandBlock => {
+                    self.command_block_key(&event)
                 }
                 // Options consumes presses; releases still reach the bound
                 // gameplay mapping below, including sneak/sprint toggles.
@@ -10052,6 +10086,7 @@ pub fn run() -> Result<()> {
         remote: None,
         lan: None,
         world_options: None,
+        command_block_screen: None,
         friends: None,
         debug_keys: Default::default(),
         debug_charts: Default::default(),

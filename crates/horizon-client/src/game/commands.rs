@@ -143,11 +143,20 @@ impl Game<'_> {
         if self.command_source.is_some_and(|s| s.silent) {
             return;
         }
-        self.system_message(Text::empty().append(message).with_color(text::RED));
+        let message = Text::empty().append(message).with_color(text::RED);
+        if let Some(block) = self.command_source.and_then(|s| s.block) {
+            self.command_block_output(block, message);
+            return;
+        }
+        self.system_message(message);
     }
     /// sendSuccess honouring `send_command_feedback`.
     pub(super) fn feedback(&mut self, message: Text) {
         if self.command_source.is_some_and(|s| s.silent) {
+            return;
+        }
+        if let Some(block) = self.command_source.and_then(|s| s.block) {
+            self.command_block_success(block, message);
             return;
         }
         if self.ui.rules.bool("send_command_feedback") {

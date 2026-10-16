@@ -117,6 +117,14 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         kind: "dispense",
                     });
                 }
+                // CommandBlock.tick runs commands: the caller does it.
+                Class::Command => {
+                    self.emit(LevelEvent::BlockEvent {
+                        pos,
+                        state,
+                        kind: "command_block",
+                    });
+                }
                 Class::FallingBlock => self.falling_block_tick(pos, state),
                 Class::Brushable => {
                     if self.is_free(self.below_state(pos)) && pos.y >= self.level.min_y() {

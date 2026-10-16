@@ -83,7 +83,7 @@ impl Game<'_> {
         // (EditBox.keyPressed); releases still reach KeyboardHandler.
         let typing = matches!(
             self.screen,
-            Screen::Chat | Screen::Options | Screen::WorldOptions
+            Screen::Chat | Screen::Options | Screen::WorldOptions | Screen::CommandBlock
         ) || self.sign_edit.is_some()
             || self.book.is_some()
             || (self.screen == Screen::Creative && self.creative_screen.tab().search)

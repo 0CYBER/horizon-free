@@ -656,6 +656,31 @@ impl Behaviours {
     ) {
         self.sim(level, ticks).update_neighbors_at(pos, block);
     }
+    /// `Level.updateNeighbourForOutputSignal(pos, block)` for the block at
+    /// `pos`: comparators beside it (or behind a conductor there) read their
+    /// input again.
+    pub fn update_neighbour_for_output_signal<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+    ) {
+        let mut sim = self.sim(level, ticks);
+        let block = self.block(sim.state(pos));
+        sim.update_neighbour_for_output_signal(pos, block);
+    }
+    /// `Level.scheduleTick(pos, block, delay)` for the block at `pos`.
+    pub fn schedule_tick<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        delay: i32,
+    ) {
+        let mut sim = self.sim(level, ticks);
+        let block = self.block(sim.state(pos));
+        sim.schedule_tick(pos, block, delay);
+    }
     /// `BlockState.handleNeighborChanged(level, pos, changedBlock, orientation, movedByPiston)`
     /// for the state currently at `pos`.
     pub fn handle_neighbor_changed<L: LevelAccess + ?Sized>(
