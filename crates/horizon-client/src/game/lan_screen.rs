@@ -170,7 +170,7 @@ impl Game<'_> {
         let mut options = WorldOptions {
             default_mode: self.level.mode(),
             personal_mode: self.mode_id(),
-            cheats: self.cheats,
+            cheats: self.allow_commands(),
             difficulty: self.ui.difficulty,
             lan,
             port,
@@ -360,7 +360,7 @@ impl Game<'_> {
     fn apply_world_options(&mut self, before: &Snapshot, wanted: &Snapshot) {
         if wanted.difficulty != before.difficulty {
             let name = DIFFICULTIES[usize::from(wanted.difficulty) & 3];
-            self.run_command(&format!("difficulty {name}"));
+            self.as_console(|g| g.run_command(&format!("difficulty {name}")));
         }
         if wanted.default_mode != before.default_mode {
             self.set_default_game_mode(wanted.default_mode);
@@ -368,7 +368,9 @@ impl Game<'_> {
         if wanted.personal_mode != before.personal_mode {
             self.set_mode_id(wanted.personal_mode);
         }
-        self.cheats = wanted.cheats;
+        if wanted.cheats != before.cheats {
+            self.set_allow_commands(wanted.cheats);
+        }
         let settings_changed =
             wanted.guest_commands != before.guest_commands || wanted.force != before.force;
         if wanted.lan != before.lan || (wanted.lan && wanted.port != before.port) {
