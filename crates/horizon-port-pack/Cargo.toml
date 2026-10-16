@@ -14,5 +14,8 @@ toml = "1.1.6"
 ureq = { version = "2", default-features = false, features = ["tls"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
+[dev-dependencies]
+horizon-mods = { path = "../horizon-mods", default-features = false }
+
 [lints]
 workspace = true
