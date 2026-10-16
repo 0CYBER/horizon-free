@@ -262,6 +262,30 @@ inspected:
 └── coverage.json, coverage.md
 ```
 
+**Status.** `import`, `inventory` and `carry` run today:
+
+```
+cargo run -p horizon-port-pack -- import ~/Downloads/pack.mrpack ~/.horizon/ports/pack
+cargo run -p horizon-port-pack -- inventory ~/.horizon/ports/pack     # --offline reuses modrinth.json
+cargo run -p horizon-port-pack -- carry ~/.horizon/ports/pack         # content mods with a jar, or name them
+```
+
+`inventory` reads metadata only: Modrinth answers by file hash, and the jars only if the user's
+instance has them (an imported instance folder, or jars put in `<work>/jars/`). Without jars,
+classes come from the reviewed table, Modrinth categories and sides; with jars, from their
+`mods.toml` / `fabric.mod.json` and file census too. On Create+ 6.0.0 alpha f (155 files, metadata
+only): content 54, library 33, client-ui 26, performance 25, other 14, unknown 2, server-only 1;
+40 rows matched the reviewed ATM10 table; three dependency layers (93 / 57 / 5).
+
+`carry` copies a jar's `assets/<id>/`, `data/<id>/` and `data/minecraft/tags/` into
+`mods/<id>/carry/`, a folder content mod (API 0.2) the game loads with `--dev-mod`, and keeps
+what a content mod may not hold (other namespaces such as `c` tags, vanilla data) in `outside/`.
+No class file is copied. It upgrades vanilla-type recipes from 1.21.1 ingredients to 26.3's,
+adds the `items/` definitions 1.21.4 introduced, and declares each block from a vanilla template
+guessed from its blockstate properties (stone for none, a door for `facing, half, hinge, open,
+powered`, ...); blocks with an unknown property set, custom recipe types and NeoForge
+conditions are listed in `carry-report.json` for the oracle step.
+
 ### 1. Import
 
 | Format | Read | Jars come from |

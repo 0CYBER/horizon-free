@@ -153,9 +153,12 @@ impl Mods {
                     let on = enabled(&package.manifest.id);
                     entry.manifest = Some(package.manifest.clone());
                     if on {
-                        entry.status = match mods.start(&package, &reserved) {
+                        // Content is read before the world loads; a mod whose
+                        // content is refused stays off, with the reason.
+                        let content = crate::Content::read(path, &package.manifest);
+                        entry.status = match content.and_then(|_| mods.start(&package, &reserved)) {
                             Ok(run) => {
-                                entry.run = Some(run);
+                                entry.run = run;
                                 Status::Running
                             }
                             Err(e) => Status::Failed(e),
@@ -184,12 +187,17 @@ impl Mods {
         Ok(self.engine.as_ref().expect("made above"))
     }
 
+    /// Starts a mod's code; `Ok(None)` for a content-only mod, which has
+    /// nothing to run (the game reads its content before the world loads).
     fn start(
         &mut self,
         package: &Package,
         reserved: &dyn Fn(&str) -> bool,
-    ) -> Result<Running, String> {
+    ) -> Result<Option<Running>, String> {
         let m = &package.manifest;
+        let Some(wasm) = &package.wasm else {
+            return Ok(None);
+        };
         if m.side == Side::Server {
             return Err("server mods do not run yet".into());
         }
@@ -202,7 +210,7 @@ impl Mods {
         let snapshot = self.snapshot.clone();
         let (engine, linker) = self.engine()?;
         let component =
-            Component::new(engine, &package.wasm).map_err(|e| format!("not a component: {e}"))?;
+            Component::new(engine, wasm).map_err(|e| format!("not a component: {e}"))?;
         let ty = component.component_type();
         let imports: Vec<String> = ty
             .imports(engine)
@@ -237,11 +245,11 @@ impl Mods {
             free
         });
         self.out.append(&mut store.data_mut().out);
-        Ok(Running {
+        Ok(Some(Running {
             store,
             exports,
             hooks,
-        })
+        }))
     }
 
     /// True when at least one mod runs: the game skips its mod work otherwise.
@@ -403,7 +411,7 @@ impl Mods {
             match started {
                 Ok(run) => {
                     log::info!("Horizon: mod {id} reloaded");
-                    entry.run = Some(run);
+                    entry.run = run;
                     entry.status = Status::Running;
                 }
                 Err(e) => {

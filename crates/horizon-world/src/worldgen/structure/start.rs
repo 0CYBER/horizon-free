@@ -299,31 +299,37 @@ impl StructureRegistry {
             pools: Pools::new(pools),
         })
     }
-    /// ChunkGeneratorStructureState ring positions of the concentric-ring
-    /// sets among `possible_sets`.
-    pub fn ring_positions(
+    /// ChunkGeneratorStructureState.generatePositions: the ring positions of
+    /// each concentric-ring set among `possible_sets` before their biome
+    /// searches (set index, searches in order).
+    pub fn ring_searches(
         &self,
         possible_sets: &[usize],
         seed: i64,
-        biome: &mut dyn FnMut([i32; 3]) -> BiomeId,
-    ) -> Rings {
-        let mut rings = Rings::new();
-        for &i in possible_sets {
-            let set = &self.sets[i];
-            if let Placement::ConcentricRings {
-                distance,
-                spread,
-                count,
-                preferred,
-            } = &set.placement
-            {
-                let positions = super::stronghold::ring_positions(
-                    seed, *distance, *spread, *count, preferred, biome,
-                );
-                rings.insert(set.name.clone(), positions);
-            }
+    ) -> Vec<(usize, Vec<super::stronghold::RingSearch>)> {
+        possible_sets
+            .iter()
+            .filter_map(|&i| match &self.sets[i].placement {
+                Placement::ConcentricRings {
+                    distance,
+                    spread,
+                    count,
+                    ..
+                } => Some((
+                    i,
+                    super::stronghold::ring_searches(seed, *distance, *spread, *count),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+    /// The preferred biomes of a concentric-ring set (empty for others).
+    pub fn ring_biomes(&self, set: usize) -> &BTreeSet<BiomeId> {
+        static NONE: BTreeSet<BiomeId> = BTreeSet::new();
+        match &self.sets[set].placement {
+            Placement::ConcentricRings { preferred, .. } => preferred,
+            _ => &NONE,
         }
-        rings
     }
     /// RandomSpreadStructurePlacement.getPotentialStructureChunk et al.
     /// RandomSpreadStructurePlacement.getPotentialStructureChunk for the

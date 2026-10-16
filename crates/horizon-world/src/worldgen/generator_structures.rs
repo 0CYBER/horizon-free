@@ -5,7 +5,10 @@ use super::{
     generator::{GeneratorData, GeneratorError},
     structure::{
         StructureResources,
-        start::{Rings, StructureRegistry, StructureStart, beardifier, create_starts},
+        start::{
+            Rings, StartContext, StructureRegistry, StructureStart, beardifier, create_starts,
+        },
+        stronghold::RingSearch,
     },
 };
 use horizon_core::{density::Beardifier, position::ChunkPos};
@@ -13,7 +16,10 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::{
     collections::{BTreeSet, HashMap},
-    sync::{Arc, Mutex, OnceLock},
+    sync::{
+        Arc, Condvar, Mutex, OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 pub(super) type Starts = Arc<Vec<Arc<StructureStart>>>;
@@ -27,6 +33,78 @@ pub(super) struct StructureState {
     starts: Mutex<HashMap<(i32, i32), Starts>>,
     /// Concentric ring positions, computed on first use.
     rings: OnceLock<Rings>,
+    /// Their biome searches while they are computed.
+    ring_work: OnceLock<RingWork>,
+}
+
+/// generateRingPositions' biome searches, shared out. Vanilla runs each as
+/// its own task on its worker pool; here every thread that needs the rings
+/// before they exist takes searches until none are left, then waits for the
+/// ones others took. Done by the first thread alone, the 128 stronghold
+/// searches kept every other worker blocked for seconds after each world load.
+struct RingWork {
+    /// The concentric-ring sets, some with no positions.
+    sets: Vec<usize>,
+    /// Set index and search, sets in `possible_sets` order.
+    searches: Vec<(usize, RingSearch)>,
+    next: AtomicUsize,
+    found: Vec<OnceLock<ChunkPos>>,
+    left: Mutex<usize>,
+    finished: Condvar,
+}
+impl RingWork {
+    fn new(sets: Vec<(usize, Vec<RingSearch>)>) -> Self {
+        let indices = sets.iter().map(|(set, _)| *set).collect();
+        let searches: Vec<(usize, RingSearch)> = sets
+            .into_iter()
+            .flat_map(|(set, searches)| searches.into_iter().map(move |s| (set, s)))
+            .collect();
+        Self {
+            sets: indices,
+            next: AtomicUsize::new(0),
+            found: (0..searches.len()).map(|_| OnceLock::new()).collect(),
+            left: Mutex::new(searches.len()),
+            finished: Condvar::new(),
+            searches,
+        }
+    }
+    /// Run searches until none are left to take, then wait for the rest.
+    fn help<'a>(
+        &self,
+        preferred: impl Fn(usize) -> &'a BTreeSet<BiomeId>,
+        biome: &mut dyn FnMut([i32; 3]) -> BiomeId,
+    ) {
+        loop {
+            let i = self.next.fetch_add(1, Ordering::Relaxed);
+            let Some((set, search)) = self.searches.get(i) else {
+                break;
+            };
+            let _ = self.found[i].set(search.find(preferred(*set), biome));
+            let mut left = self.left.lock().unwrap();
+            *left -= 1;
+            if *left == 0 {
+                self.finished.notify_all();
+            }
+        }
+        let mut left = self.left.lock().unwrap();
+        while *left > 0 {
+            left = self.finished.wait(left).unwrap();
+        }
+    }
+    /// The positions by set name, once every search is done.
+    fn rings(&self, name: impl Fn(usize) -> String) -> Rings {
+        let mut rings: Rings = self
+            .sets
+            .iter()
+            .map(|&set| (name(set), Vec::new()))
+            .collect();
+        for ((set, _), found) in self.searches.iter().zip(&self.found) {
+            if let Some(positions) = rings.get_mut(&name(*set)) {
+                positions.push(*found.get().expect("every search finished"));
+            }
+        }
+        rings
+    }
 }
 const START_CACHE_LIMIT: usize = 65536;
 
@@ -89,12 +167,32 @@ impl StructureState {
             by_step,
             starts: Mutex::new(HashMap::new()),
             rings: OnceLock::new(),
+            ring_work: OnceLock::new(),
         }))
     }
     /// Concentric ring positions of a structure set, once the first start
     /// lookup has computed them.
     pub(super) fn cached_rings(&self, set: &str) -> Option<Vec<ChunkPos>> {
         self.rings.get().and_then(|rings| rings.get(set).cloned())
+    }
+    /// The concentric ring positions, computing them with the threads that
+    /// need them first (see `RingWork`).
+    fn rings(&self, context: &mut impl StartContext) -> &Rings {
+        if let Some(rings) = self.rings.get() {
+            return rings;
+        }
+        let work = self.ring_work.get_or_init(|| {
+            RingWork::new(
+                self.registry
+                    .ring_searches(&self.possible_sets, context.seed()),
+            )
+        });
+        let registry = &self.registry;
+        work.help(|set| registry.ring_biomes(set), &mut |q| {
+            context.noise_biome(q)
+        });
+        self.rings
+            .get_or_init(|| work.rings(|set| registry.sets[set].name.clone()))
     }
     /// Drop the cached starts, so that later chunks build fresh pieces (the
     /// pieces keep per-start placement state such as a shipwreck's height).
@@ -110,11 +208,7 @@ impl StructureState {
         if let Some(found) = self.starts.lock().unwrap().get(&(chunk.x, chunk.z)) {
             return found.clone();
         }
-        let rings = self.rings.get_or_init(|| {
-            let seed = context.seed();
-            self.registry
-                .ring_positions(&self.possible_sets, seed, &mut |q| context.noise_biome(q))
-        });
+        let rings = self.rings(context);
         let starts: Starts = Arc::new(
             create_starts(
                 &self.registry,
@@ -148,13 +242,7 @@ impl StructureState {
         radius: i32,
     ) -> Option<(String, [i32; 3])> {
         let seed = context.seed();
-        let rings = self
-            .rings
-            .get_or_init(|| {
-                self.registry
-                    .ring_positions(&self.possible_sets, seed, &mut |q| context.noise_biome(q))
-            })
-            .clone();
+        let rings = self.rings(context).clone();
         let wanted = |s: usize| names.iter().any(|n| *n == self.registry.structures[s].name);
         let dist = |p: [i32; 3]| {
             let (dx, dz) = (f64::from(p[0] - from[0]), f64::from(p[2] - from[2]));
@@ -286,5 +374,45 @@ impl StructureState {
         chunk: ChunkPos,
     ) -> Option<Beardifier> {
         beardifier(&self.registry, references, chunk)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::worldgen::structure::stronghold::{ring_positions, ring_searches};
+
+    /// Searches shared between threads give the positions of one thread
+    /// running them in order, set by set.
+    #[test]
+    fn ring_work_shared_between_threads_matches_serial_search() {
+        let preferred: BTreeSet<BiomeId> = (0..20).map(|b| BiomeId(b * 3)).collect();
+        let biome = |q: [i32; 3]| {
+            BiomeId((q[0].wrapping_mul(31) ^ q[2].wrapping_mul(17)).rem_euclid(64) as u32)
+        };
+        let none = BTreeSet::new();
+        for seed in [0, 1234, -77, i64::MAX] {
+            let work = RingWork::new(vec![
+                (0, ring_searches(seed, 32, 3, 128)),
+                (1, ring_searches(seed ^ 5, 10, 4, 0)),
+                (2, ring_searches(seed.wrapping_add(1), 20, 5, 40)),
+            ]);
+            let sets = [&preferred, &none, &preferred];
+            std::thread::scope(|scope| {
+                for _ in 0..4 {
+                    scope.spawn(|| work.help(|set| sets[set], &mut { biome }));
+                }
+            });
+            let rings = work.rings(|set| format!("set{set}"));
+            let serial = |s: i64, distance, spread, count, preferred| {
+                ring_positions(s, distance, spread, count, preferred, &mut { biome })
+            };
+            assert_eq!(rings["set0"], serial(seed, 32, 3, 128, &preferred));
+            assert_eq!(rings["set1"], Vec::new());
+            assert_eq!(
+                rings["set2"],
+                serial(seed.wrapping_add(1), 20, 5, 40, &preferred)
+            );
+        }
     }
 }
