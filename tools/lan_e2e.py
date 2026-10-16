@@ -495,6 +495,8 @@ def check_trials(host, guest, out):
     guest('command', command='gamemode survival')
     x, y, z = (int(v // 1) for v in pos_of(guest))
     spawner, vault = (x, y, z + 3), (x, y, z - 2)
+    # Open air from the vault to the spawner: the spawner wants to see the guest's eyes.
+    guest('command', command=f'fill {x - 1} {y} {z - 2} {x + 1} {y + 2} {z + 3} minecraft:air')
     try:
         guest('command', command=f'setblock {spawner[0]} {spawner[1]} {spawner[2]} minecraft:trial_spawner'
                                  '{spawn_data:{entity:{id:"minecraft:zombie"}},required_player_range:6}')
