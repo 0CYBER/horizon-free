@@ -602,13 +602,24 @@ impl LootData {
         slots: usize,
         biome: Option<&str>,
     ) -> Vec<Option<LootStack>> {
+        self.fill_with(table, &mut LegacyRandom::new(seed), slots, biome)
+    }
+    /// LootTable.fill drawing from `random` (a seeded random or the table's
+    /// random sequence), which is advanced.
+    pub fn fill_with<R: RandomSource + Clone>(
+        &self,
+        table: &str,
+        random: &mut R,
+        slots: usize,
+        biome: Option<&str>,
+    ) -> Vec<Option<LootStack>> {
         let mut out = vec![None; slots];
         let Some(json) = self.tables.get(table) else {
             return out;
         };
         let mut c = Context {
             data: self,
-            random: LegacyRandom::new(seed),
+            random: random.clone(),
             biome,
             visited: Vec::new(),
             luck: 0.0,
@@ -617,7 +628,7 @@ impl LootData {
         };
         let mut items = Vec::new();
         c.table_raw(table, json, &mut |c, stack| c.data.split(stack, &mut items));
-        let random = &mut c.random;
+        *random = c.random;
         let mut available: Vec<usize> = (0..slots).collect();
         shuffle(&mut available, random);
         shuffle_and_split(&mut items, available.len(), random);
@@ -653,7 +664,7 @@ fn next_int(random: &mut impl RandomSource, min: i32, max: i32) -> i32 {
     }
 }
 /// LootTable.shuffleAndSplitItems.
-fn shuffle_and_split(result: &mut Vec<LootStack>, slots: usize, random: &mut LegacyRandom) {
+fn shuffle_and_split(result: &mut Vec<LootStack>, slots: usize, random: &mut impl RandomSource) {
     let mut splittable = Vec::new();
     result.retain(|s| {
         if s.is_empty() {
