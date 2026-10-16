@@ -441,7 +441,9 @@ impl Title {
                         Screen::Direct { .. } => 53,
                         Screen::Friend { .. } => 57,
                         Screen::Disconnected { .. } => 54,
+                        Screen::ConfirmDelete { .. } => 59,
                     }),
+                    CONFIRM_DELETE => Some(58),
                     CANCEL_RETRY => Some(55),
                     DONE => Some(match screen {
                         Screen::Direct { .. } => 52,
@@ -1040,6 +1042,40 @@ fn multiplayer_page(ui: &mut Ui, x: f32, w: f32, screen: &Screen, caret: bool) {
             if let Some(note) = note {
                 ui.text(Face::Regular, SMALL, x, ry + 12.0, color::MUTED, &note);
             }
+        }
+        Screen::ConfirmDelete { name, .. } => {
+            let mut y = header(
+                ui,
+                x,
+                "Remove this server?",
+                "It leaves your list. You can add it again later.",
+            );
+            ui.divider(x, y, w);
+            y += 16.0;
+            y += notice(
+                ui,
+                x,
+                y,
+                w,
+                Some(name),
+                "Its address and icon will be forgotten.",
+            ) + 16.0;
+            let dw = ui.button_width("Delete server", false);
+            ui.button(
+                CONFIRM_DELETE,
+                [x, y, dw, CONTROL],
+                "Delete server",
+                Kind::Danger,
+                true,
+            );
+            let cw = ui.button_width("Cancel", false);
+            ui.button(
+                BACK,
+                [x + dw + 8.0, y, cw, CONTROL],
+                "Cancel",
+                Kind::Ghost,
+                true,
+            );
         }
         Screen::Disconnected { reason, retry } => {
             let mut y = header(
