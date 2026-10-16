@@ -362,7 +362,9 @@ fn mip_chain(
 ) -> (Vec<u8>, u32) {
     let levels = size.trailing_zeros() + 1;
     let layer_bytes = (size * size * 4) as usize;
-    let mut out = Vec::new();
+    // Exactly the chain's size: cached animation frames count their capacity.
+    let chain_bytes: usize = (0..levels).map(|l| layer_bytes >> (2 * l)).sum();
+    let mut out = Vec::with_capacity(chain_bytes * layers as usize);
     for layer in 0..layers as usize {
         let base = crate::mipmap::Image {
             width: size,
@@ -388,6 +390,7 @@ fn mip_chain(
             out.extend(image.pixels.iter().flatten());
         }
     }
+    debug_assert_eq!(out.len(), chain_bytes * layers as usize);
     (out, levels)
 }
 /// What to tell a player whose system offers no usable graphics adapter.
@@ -3104,7 +3107,10 @@ pub(crate) fn sprite_mipmap_limit(requested: u32, size: u32, minimum: u32, avail
     let upscale = (size / minimum.max(1)).max(1).ilog2();
     requested.saturating_add(upscale).min(available - 1)
 }
-const ANIMATION_MIP_BUDGET: usize = 8 << 20;
+/// Room for every frame of the vanilla animations (594 frames, 13 MB of mip
+/// chains in 64-pixel layers), so no frame's chain is rebuilt on the render
+/// thread when its animation comes back to it; larger packs stay bounded.
+const ANIMATION_MIP_BUDGET: usize = 32 << 20;
 const ANIMATION_MIP_ENTRIES: usize = 4096;
 
 /// One immutable resource snapshot and its lazily generated frame mips. A new
@@ -3377,6 +3383,29 @@ mod sprite_upload_tests {
             assert_eq!(state.cache.len(), 1);
             assert!(state.cache.contains_key(&(0, 0)));
         }
+    }
+
+    #[test]
+    fn mip_chain_allocates_exactly_its_size() {
+        for size in [16, 64] {
+            let animation = crate::sprites::test_animation(size, 0);
+            let (chain, _) = mip_chain(animation.pixels(0), size, &[], 0, 1);
+            assert_eq!(chain.capacity(), chain.len());
+        }
+    }
+
+    #[test]
+    fn every_vanilla_animation_frame_stays_cached() {
+        // Vanilla's 594 animation frames in 64-pixel layers: 297 two-frame clips.
+        let animations: Vec<_> = (0..297)
+            .map(|layer| crate::sprites::test_animation(64, layer))
+            .collect();
+        let mut state = AnimatedSprites::new(&animations, 64, &[]);
+        for tick in 0..4 {
+            animate_sprites(&mut state, tick, 7, |_, _, _, _| {});
+        }
+        assert_eq!(state.cache.len(), 594);
+        assert!(state.cache_bytes <= ANIMATION_MIP_BUDGET);
     }
 
     #[test]
