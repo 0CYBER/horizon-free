@@ -63,7 +63,7 @@ mod occlusion;
 mod pack_stages;
 pub mod panorama;
 mod timing;
-mod uploads;
+mod upload;
 mod world_post;
 
 #[repr(C)]
@@ -298,8 +298,7 @@ pub struct Renderer {
     lightmap_view: wgpu::TextureView,
     lightmap_sampler: wgpu::Sampler,
     animations: AnimatedSprites,
-    /// The animated sprites' changed mip levels, written once per tick.
-    sprite_uploads: uploads::TextureUploads,
+    uploads: upload::Uploads,
     sprite_minimum_size: u32,
     indices: wgpu::Buffer,
     index_quads: u32,
@@ -1495,6 +1494,7 @@ impl Renderer {
             .features()
             .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE);
         let world_post = world_post::Post::new(&device, config.format.remove_srgb_suffix());
+        let uploads = upload::Uploads::new(&device);
         let panorama = panorama::Panorama::new(
             &device,
             &queue,
@@ -1563,7 +1563,7 @@ impl Renderer {
             lightmap_view,
             lightmap_sampler,
             animations: AnimatedSprites::new(animations, sprite_size, sprite_mips),
-            sprite_uploads: uploads::TextureUploads::default(),
+            uploads,
             sprite_minimum_size,
             indices,
             index_quads,
@@ -1970,15 +1970,30 @@ impl Renderer {
         );
         self.lightmap_pixels = pixels;
     }
-    fn animate(&mut self, tick: u64) {
-        let uploads = &mut self.sprite_uploads;
+    fn animate(&mut self, encoder: &mut wgpu::CommandEncoder, tick: u64) {
         animate_sprites(
             &mut self.animations,
             tick,
             self.mip_levels,
-            |layer, level, size, pixels| uploads.push(layer, level, size, pixels),
+            |layer, level, size, pixels| {
+                self.uploads.texture(
+                    encoder,
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &self.sprite_texture,
+                        mip_level: level,
+                        origin: wgpu::Origin3d {
+                            x: 0,
+                            y: 0,
+                            z: layer,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    size,
+                    size,
+                    pixels,
+                );
+            },
         );
-        uploads.flush(&self.device, &self.queue, &self.sprite_texture);
     }
     pub fn render(&mut self, frame: &Frame) -> Result<bool> {
         if self.suspended {
@@ -2015,11 +2030,14 @@ impl Renderer {
             Some(f) => f.texture.clone(),
             None => self.offscreen.clone().ok_or("no offscreen target")?,
         };
-        if self.animated_textures {
-            crate::spans::time("animate", || {
-                self.animate(frame.ticks);
-                self.hud.animate_fire(&self.queue, frame.ticks);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Horizon frame"),
             });
+        if self.animated_textures {
+            self.animate(&mut encoder, frame.ticks);
+            self.hud.animate_fire(&self.queue, frame.ticks);
         }
         self.update_lightmap(
             &frame.sky,
@@ -2377,11 +2395,6 @@ impl Renderer {
             format: Some(self.config.format.remove_srgb_suffix()),
             ..Default::default()
         });
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Horizon frame"),
-            });
         if let Some(timer) = &mut self.gpu_timer {
             timer.begin(&mut encoder);
         }
@@ -2729,6 +2742,7 @@ impl Renderer {
             .screenshot
             .take()
             .map(|path| (path, self.copy_frame(&mut encoder, &target_texture)));
+        self.uploads.finish(&encoder);
         let submission = self.queue.submit([encoder.finish()]);
         if let Some(timer) = &mut self.gpu_timer {
             timer.submitted();
@@ -3364,6 +3378,29 @@ mod sprite_upload_tests {
             assert_eq!(state.cache.len(), 1);
             assert!(state.cache.contains_key(&(0, 0)));
         }
+    }
+
+    #[test]
+    fn mip_chain_allocates_exactly_its_size() {
+        for size in [16, 64] {
+            let animation = crate::sprites::test_animation(size, 0);
+            let (chain, _) = mip_chain(animation.pixels(0), size, &[], 0, 1);
+            assert_eq!(chain.capacity(), chain.len());
+        }
+    }
+
+    #[test]
+    fn every_vanilla_animation_frame_stays_cached() {
+        // Vanilla's 594 animation frames in 64-pixel layers: 297 two-frame clips.
+        let animations: Vec<_> = (0..297)
+            .map(|layer| crate::sprites::test_animation(64, layer))
+            .collect();
+        let mut state = AnimatedSprites::new(&animations, 64, &[]);
+        for tick in 0..4 {
+            animate_sprites(&mut state, tick, 7, |_, _, _, _| {});
+        }
+        assert_eq!(state.cache.len(), 594);
+        assert!(state.cache_bytes <= ANIMATION_MIP_BUDGET);
     }
 
     #[test]
