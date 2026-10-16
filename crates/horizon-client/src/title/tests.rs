@@ -484,6 +484,30 @@ fn classic_world_selection_is_silent_until_the_entry_launches() {
 }
 
 #[test]
+fn clicking_a_world_icon_joins_it_at_once() {
+    let mut f = Fixture::new();
+    f.world("World", "World");
+    f.title.enter_singleplayer();
+    // WorldListEntry.mouseOverIcon: the row's 32x32 icon, left of its text.
+    let (icon_x, icon_y) = (240.0 - 135.0 + 2.0, LIST_TOP + 4.0);
+    assert_eq!(
+        f.title.click(icon_x + 31.0, icon_y + 16.0, (480.0, 262.0)),
+        (
+            Action::Play {
+                folder: "World".into()
+            },
+            true
+        )
+    );
+    // Right of the icon only selects the row.
+    f.title.enter_singleplayer();
+    assert_eq!(
+        f.title.click(icon_x + 33.0, icon_y + 16.0, (480.0, 262.0)),
+        (Action::None, false)
+    );
+}
+
+#[test]
 fn world_management_buttons_sound_when_enabled() {
     let mut f = Fixture::new();
     f.world("World", "World");

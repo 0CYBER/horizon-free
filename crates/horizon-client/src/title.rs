@@ -337,6 +337,26 @@ impl Title {
         let left = (w / 2.0).floor() - ROW_WIDTH / 2.0;
         (LIST_TOP, h - LIST_BOTTOM, left, content)
     }
+    /// The visible row under the pointer and the pointer relative to its
+    /// content (`AbstractSelectionList.getEntryAtPosition`).
+    fn world_row_at(
+        &self,
+        worlds: &[WorldEntry],
+        (x, y): (f32, f32),
+        size: (f32, f32),
+    ) -> Option<(usize, (f32, f32))> {
+        let (top, bottom, left, _) = self.world_list(worlds, size);
+        if y < top || y >= bottom || x < left || x >= left + ROW_WIDTH {
+            return None;
+        }
+        let offset = self.scroll.get().amount.trunc();
+        let row = ((y - top - 2.0 + offset) / ROW_HEIGHT).floor();
+        if row < 0.0 || row as usize >= self.visible_worlds(worlds).count() {
+            return None;
+        }
+        let content_y = top + 4.0 + row * ROW_HEIGHT - offset;
+        Some((row as usize, (x - left - 2.0, y - content_y)))
+    }
     /// The pointer moved with the button held (`mouseDragged`).
     pub fn drag(&mut self, cursor: (f32, f32), size: (f32, f32)) {
         if let Mode::Multiplayer(screen) = &mut self.mode {
@@ -819,6 +839,7 @@ impl Title {
                 // Entry content sits 2 pixels inside its row.
                 let x = left + 2.0;
                 let mut slot = 0;
+                let hovered = self.world_row_at(worlds, cursor, (w, h));
                 for (row, (i, world)) in self.visible_worlds(worlds).enumerate() {
                     let y = top + 4.0 + row as f32 * ROW_HEIGHT - offset;
                     if y + 32.0 <= top || y >= bottom {
@@ -884,6 +905,18 @@ impl Title {
                     );
                     self.icon(atlas, batch, world, slot, x, y);
                     slot = (slot + 1) % crate::hud::WORLD_ICON_SLOTS;
+                    // WorldListEntry.extractContent: a hovered row dims its
+                    // icon under the join arrow, lit under the pointer.
+                    if let Some((_, (rx, ry))) = hovered.filter(|(r, _)| *r == row) {
+                        batch.fill(atlas, x, y, 32.0, 32.0, 0xA0909090);
+                        let on_icon = (0.0..32.0).contains(&rx) && (0.0..32.0).contains(&ry);
+                        let sprite = if on_icon {
+                            "gui/sprites/world_list/join_highlighted"
+                        } else {
+                            "gui/sprites/world_list/join"
+                        };
+                        batch.sprite_scaled(atlas, sprite, x, y, 32.0, 32.0, u32::MAX);
+                    }
                 }
                 // Clip list quads, including their UVs, to the content area.
                 for quad in batch.vertices[first..].as_chunks_mut::<6>().0 {
@@ -1222,25 +1255,23 @@ impl Title {
                 {
                     return Action::None;
                 }
-                if y >= top && y < bottom && x >= left && x < left + ROW_WIDTH {
-                    let offset = self.scroll.get().amount.trunc();
-                    let row = ((y - top - 2.0 + offset) / ROW_HEIGHT).floor();
-                    if row >= 0.0 {
-                        let Mode::Select { worlds, selected } = &self.mode else {
-                            unreachable!()
-                        };
-                        let chosen = self
-                            .visible_worlds(worlds)
-                            .nth(row as usize)
-                            .map(|(index, world)| (index, world.folder.clone()));
-                        if let Some((index, folder)) = chosen {
-                            if *selected == Some(index) {
-                                return Action::Play { folder };
-                            }
-                            if let Mode::Select { selected, .. } = &mut self.mode {
-                                *selected = Some(index);
-                            }
-                        }
+                let Mode::Select { worlds, selected } = &self.mode else {
+                    unreachable!()
+                };
+                let chosen = self
+                    .world_row_at(worlds, (x, y), (w, h))
+                    .and_then(|(row, rel)| {
+                        let (index, world) = self.visible_worlds(worlds).nth(row)?;
+                        Some((index, world.folder.clone(), rel))
+                    });
+                if let Some((index, folder, (rx, ry))) = chosen {
+                    // WorldListEntry.mouseClicked: the icon joins at once.
+                    let on_icon = (0.0..32.0).contains(&rx) && (0.0..32.0).contains(&ry);
+                    if on_icon || *selected == Some(index) {
+                        return Action::Play { folder };
+                    }
+                    if let Mode::Select { selected, .. } = &mut self.mode {
+                        *selected = Some(index);
                     }
                 }
                 Action::None
