@@ -293,7 +293,7 @@ impl Game<'_> {
             p.position.z,
         ];
         let facing = self
-            .res
+            .pack
             .assets
             .registry
             .state(self.world.block(pos[0], pos[1], pos[2]))

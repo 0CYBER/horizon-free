@@ -138,7 +138,7 @@ impl Game<'_> {
     /// The trial spawner block at `key`: its state and ominous flag.
     pub(super) fn trial_spawner_block(&self, key: Pos) -> Option<(TrialState, bool)> {
         let block = self
-            .res
+            .pack
             .assets
             .registry
             .state(self.world.block(key.0, key.1, key.2))?;
@@ -292,7 +292,7 @@ impl Game<'_> {
         ominous: bool,
     ) -> Result<()> {
         let current = self.world.block(key.0, key.1, key.2);
-        let Some(mut block) = self.res.assets.registry.state(current).cloned() else {
+        let Some(mut block) = self.pack.assets.registry.state(current).cloned() else {
             return Ok(());
         };
         block
@@ -301,7 +301,7 @@ impl Game<'_> {
         block
             .properties
             .insert("ominous".into(), ominous.to_string());
-        let id = self.res.assets.registry.resolve(&block)?;
+        let id = self.pack.assets.registry.resolve(&block)?;
         self.level_set([key.0, key.1, key.2], id)
     }
     /// `transformBadOmenIntoTrialOmen`: Bad Omen becomes Trial Omen, 15

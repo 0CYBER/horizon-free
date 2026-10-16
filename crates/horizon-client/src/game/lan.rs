@@ -440,7 +440,7 @@ impl Game<'_> {
         encoder.tables = Some(
             self.save
                 .tables
-                .get_or_init(|| Arc::new(horizon_client::save::SaveTables::new(&self.res.assets)))
+                .get_or_init(|| Arc::new(horizon_client::save::SaveTables::new(&self.pack.assets)))
                 .clone(),
         );
         let lan = Lan::start_with(sync.clone(), net)?;
@@ -886,7 +886,7 @@ impl Game<'_> {
         let Some(host) = &self.lan else {
             return;
         };
-        let atlas = &self.res.atlas;
+        let atlas = &self.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         for m in host.models.values() {
             let entity_start = out.len();

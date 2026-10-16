@@ -72,7 +72,7 @@ impl Game<'_> {
     fn spawn_columns(&self) -> Columns<'_, '_> {
         Columns {
             world: &self.world,
-            properties: &self.res.assets.properties,
+            properties: &self.pack.assets.properties,
             binding: self.collision,
         }
     }
@@ -82,7 +82,7 @@ impl Game<'_> {
             horizon_client::save::world_gen_settings(&self.world_root).and_then(|s| {
                 horizon_client::flatgen::FlatTerrain::from_settings(
                     &s,
-                    self.res.assets.registry,
+                    self.pack.assets.registry,
                     &self.res.biomes,
                 )
             })

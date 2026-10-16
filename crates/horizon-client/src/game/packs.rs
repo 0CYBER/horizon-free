@@ -110,44 +110,30 @@ impl Game<'_> {
         }
     }
     fn reload_resources(&mut self, root: &Path) -> horizon_client::Result<()> {
-        let assets = std::sync::Arc::new(self.res.assets.reload(root)?);
+        let assets = std::sync::Arc::new(self.pack.assets.reload(root)?);
         let mut atlas = HudAtlas::build(root)?;
-        let panorama = horizon_client::gfx::panorama::Faces::load(root);
         atlas.font.uniform = self.settings.force_unicode;
         atlas.font.japanese = self.settings.japanese_glyphs;
-        let item_renderer = horizon_client::item_render::ItemRenderer::load_with_library(
+        let pack = super::PackResources::load(
             root,
-            assets.model_library.clone(),
-        )?;
-        let visibility = horizon_client::models::load_visibility(root, assets.registry)?;
-        let tables = std::sync::Arc::new(horizon_client::mesher::MeshTables::new(
-            &assets,
+            assets,
             &self.res.facts,
-            visibility,
-        )?);
+            self.pack.context.biomes.clone(),
+            self.pack.context.light.clone(),
+        )?;
         // Everything loaded: switch over.
         self.random_tick_sections.clear();
         self.options.resources = root.to_path_buf();
-        let context = std::sync::Arc::new(horizon_client::streaming::WorkerContext {
-            assets: assets.clone(),
-            tables,
-            biomes: self.res.context.biomes.clone(),
-            light: self.res.context.light.clone(),
-        });
-        self.res.layer_names = assets
-            .sprite_layers
-            .iter()
-            .map(|(name, layer)| (*layer, name.trim_start_matches("minecraft:").to_owned()))
-            .collect();
-        self.res.assets = assets;
-        self.res.context = context.clone();
-        self.res.atlas = atlas;
-        self.res.panorama = panorama;
-        self.res.item_renderer = std::sync::Arc::new(item_renderer);
-        self.res.clouds = super::load_clouds(root);
-        self.res.forcefield = super::load_forcefield(root);
-        self.res.names = super::Names::load(root);
-        self.res.mob_data.villager_hats =
+        let context = pack.context.clone();
+        self.pack = pack;
+        self.atlas = atlas;
+        // Villager hats come from the pack's texture metadata (shared data, swapped in place).
+        *self
+            .res
+            .mob_data
+            .villager_hats
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
             horizon_client::mobs::villager_hats::VillagerHats::load(root);
         horizon_client::ui::load_metadata(root);
         lang::set(lang::Language::load(&[&root.to_path_buf()], &lang::code()));
@@ -161,7 +147,7 @@ impl Game<'_> {
             self.renderer = Some(self.new_renderer(window)?);
             self.apply_ui_settings();
         }
-        self.ui.chat.rescale(&self.res.atlas);
+        self.ui.chat.rescale(&self.atlas);
         Ok(())
     }
 }

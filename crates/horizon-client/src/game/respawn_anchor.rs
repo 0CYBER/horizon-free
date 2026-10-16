@@ -66,7 +66,7 @@ impl Game<'_> {
         &*self.res.facts.get(state).name == "minecraft:respawn_anchor"
     }
     fn anchor_charges(&self, state: BlockStateId) -> i32 {
-        self.res
+        self.pack
             .assets
             .registry
             .state(state)
@@ -75,9 +75,9 @@ impl Game<'_> {
             .unwrap_or(0)
     }
     fn anchor_with_charges(&self, state: BlockStateId, charges: i32) -> Option<BlockStateId> {
-        let mut s = self.res.assets.registry.state(state)?.clone();
+        let mut s = self.pack.assets.registry.state(state)?.clone();
         s.properties.insert("charges".into(), charges.to_string());
-        self.res.assets.registry.resolve(&s).ok()
+        self.pack.assets.registry.resolve(&s).ok()
     }
     /// `RespawnAnchorBlock.canSetSpawn`: the `respawn_anchor_works` attribute
     /// (only the Nether's dimension type sets it).
@@ -243,7 +243,7 @@ impl Game<'_> {
         }
         // removeBlock(head), then the foot behind it if it is still this bed.
         let facing = self
-            .res
+            .pack
             .assets
             .registry
             .state(state)
@@ -300,7 +300,7 @@ impl Game<'_> {
         let name = &self.res.facts.get(state).name;
         let open_trapdoor = name.ends_with("_trapdoor")
             && self
-                .res
+                .pack
                 .assets
                 .registry
                 .state(state)
@@ -337,7 +337,7 @@ impl Game<'_> {
         let name = &*self.res.facts.get(state).name;
         let lit_campfire = (name == "minecraft:campfire" || name == "minecraft:soul_campfire")
             && self
-                .res
+                .pack
                 .assets
                 .registry
                 .state(state)

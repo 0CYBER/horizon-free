@@ -198,8 +198,8 @@ impl Game<'_> {
             .map(|l| (banners.banner_texture(&l.pattern), l.color.to_string()))
             .collect();
         horizon_client::item_render::gui::draw_banner_result(
-            &self.res.item_renderer,
-            &self.res.atlas.sprites,
+            &self.pack.item_renderer,
+            &self.atlas.sprites,
             batch,
             x,
             y,
@@ -217,7 +217,7 @@ impl Game<'_> {
         draws: &[ScreenDraw],
         background: bool,
     ) -> Option<Vec<(String, u32)>> {
-        let atlas = &self.res.atlas;
+        let atlas = &self.atlas;
         let mut tooltip = None;
         let mut sheet: Option<String> = None;
         for d in draws {

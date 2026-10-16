@@ -78,12 +78,12 @@ impl Game<'_> {
             let (world, quit) = self.pause_labels();
             self.tick_friends();
             let friends = self.friends_view();
-            let mut ui = horizon_client::ui_theme::Ui::new(&self.res.atlas, batch, self.cursor);
+            let mut ui = horizon_client::ui_theme::Ui::new(&self.atlas, batch, self.cursor);
             horizon_client::front::pause::draw(&mut ui, &world, quit, opened, &friends);
             ui.finish();
             return;
         }
-        let atlas = &self.res.atlas;
+        let atlas = &self.atlas;
         let (w, h) = (batch.width, batch.height);
         ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
         let title = Text::translate("menu.game", &[]);
@@ -135,7 +135,7 @@ impl Game<'_> {
             let mut b = HudBatch::new(size);
             let (world, quit) = self.pause_labels();
             horizon_client::front::pause::click(
-                &self.res.atlas,
+                &self.atlas,
                 &mut b,
                 self.cursor.0,
                 self.cursor.1,
@@ -175,7 +175,7 @@ impl Game<'_> {
     }
     /// DeathScreen: gradient, the title at double size, the cause and score.
     pub(super) fn draw_death_screen(&mut self, batch: &mut HudBatch) {
-        let atlas = &self.res.atlas;
+        let atlas = &self.atlas;
         let (w, h) = (batch.width, batch.height);
         // fillGradient(0x60500000 -> 0xA0803030).
         let rows = h.ceil() as i32;

@@ -21,7 +21,7 @@ impl Game<'_> {
     }
     fn set_has_record(&mut self, pos: [i32; 3], has: bool) {
         let state = self.world.block(pos[0], pos[1], pos[2]);
-        let registry = self.res.assets.registry;
+        let registry = self.pack.assets.registry;
         let Some(mut s) = registry.state(state).cloned() else {
             return;
         };

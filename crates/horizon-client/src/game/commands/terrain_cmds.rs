@@ -551,14 +551,14 @@ impl Game<'_> {
                     Some(seq) => {
                         let random = self.rand_sequences.get(&seq, self.level.seed);
                         self.res.items.block_drops(
-                            self.res.assets.registry,
+                            self.pack.assets.registry,
                             state,
                             tool.as_ref(),
                             random,
                         )
                     }
                     None => self.res.items.block_drops(
-                        self.res.assets.registry,
+                        self.pack.assets.registry,
                         state,
                         tool.as_ref(),
                         &mut self.world.random,

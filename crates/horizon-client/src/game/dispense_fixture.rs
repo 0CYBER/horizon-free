@@ -224,7 +224,7 @@ impl Game<'_> {
         for p in crafter_positions {
             let state = self.world.block(p.0, p.1, p.2);
             let triggered = self
-                .res
+                .pack
                 .assets
                 .registry
                 .state(state)

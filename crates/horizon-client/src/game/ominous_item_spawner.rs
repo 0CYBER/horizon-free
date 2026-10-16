@@ -160,7 +160,7 @@ impl Game<'_> {
                 * glam::Mat4::from_scale(glam::Vec3::splat(scale))
                 * glam::Mat4::from_rotation_y(spin.to_radians());
             let seed =
-                i64::from(self.res.item_renderer.item_id(&s.item.item)) + i64::from(s.item.damage);
+                i64::from(self.pack.item_renderer.item_id(&s.item.item)) + i64::from(s.item.damage);
             for copy in item_render::cluster_poses(
                 &state,
                 pose,

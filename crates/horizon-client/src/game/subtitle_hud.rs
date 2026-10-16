@@ -47,7 +47,7 @@ impl Game<'_> {
             width: batch.width as i32,
             height: batch.height as i32,
         };
-        let atlas = &self.res.atlas;
+        let atlas = &self.atlas;
         let draws = self
             .subtitles
             .overlay

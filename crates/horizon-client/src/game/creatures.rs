@@ -378,7 +378,7 @@ impl Game<'_> {
         let (rain, thunder) = self.world.weather.levels(1.0);
         MobWorld {
             world: &self.world,
-            registry: self.res.assets.registry,
+            registry: self.pack.assets.registry,
             facts: &self.res.facts,
             movement: &self.motion.blocks,
             collision: self.collision,
@@ -995,7 +995,7 @@ impl Game<'_> {
                             0.8,
                         );
                     }
-                    if let Some(state) = self.res.assets.registry.default_state(name) {
+                    if let Some(state) = self.pack.assets.registry.default_state(name) {
                         self.world.set(pos[0], pos[1], pos[2], state)?;
                     }
                 }
@@ -1004,7 +1004,7 @@ impl Game<'_> {
                     self.destroy_particles(pos, old);
                     if drop {
                         let drops = self.res.items.block_drops_in(
-                            self.res.assets.registry,
+                            self.pack.assets.registry,
                             old,
                             None,
                             &mut self.world.random,
@@ -1752,7 +1752,7 @@ impl Game<'_> {
     ) -> horizon_client::arrows::ArrowScene<'s, 's> {
         horizon_client::arrows::ArrowScene {
             world: &self.world,
-            registry: self.res.assets.registry,
+            registry: self.pack.assets.registry,
             facts: &self.res.facts,
             collision: self.collision,
             fluids: &self.motion.fluids,
@@ -2008,7 +2008,7 @@ impl Game<'_> {
                         .facts
                         .is_air(self.world.block(fire[0], fire[1], fire[2]))
                         && let Some(state) =
-                            self.res.assets.registry.default_state("minecraft:fire")
+                            self.pack.assets.registry.default_state("minecraft:fire")
                     {
                         self.world.set(fire[0], fire[1], fire[2], state)?;
                     }
@@ -2767,7 +2767,7 @@ impl Game<'_> {
     }
     /// Mob models and projectiles for the entity pass.
     pub(super) fn mob_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
-        let atlas = &self.res.atlas;
+        let atlas = &self.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         let scale = f64::from(self.settings.entity_distance);
         for mob in &self.mobs {

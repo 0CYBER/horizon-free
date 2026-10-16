@@ -280,7 +280,7 @@ impl Game<'_> {
                 Ticker::Conduit => {
                     let world = &self.world;
                     let facts = &self.res.facts;
-                    let registry = self.res.assets.registry;
+                    let registry = self.pack.assets.registry;
                     let is_water = |p: [i32; 3]| {
                         facts.get(world.block(p[0], p[1], p[2])).fluid
                             == horizon_client::blocks::Fluid::Water

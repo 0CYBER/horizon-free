@@ -73,29 +73,33 @@ impl Game<'_> {
         } else {
             (0.0, 0.0)
         };
-        self.res.fog.setup(&FogInputs {
-            fog_type,
-            sky,
-            water_fog_color: [
-                (water >> 16 & 255) as f32 / 255.0,
-                (water >> 8 & 255) as f32 / 255.0,
-                (water & 255) as f32 / 255.0,
-            ],
-            biome,
-            render_distance_chunks: self.streaming.radius,
-            cloud_range_chunks: self.settings.cloud_range,
-            camera_y: camera.y,
-            // level.getMinY(): the Nether and the End start at y 0.
-            min_y: if self.dim == Dim::Overworld { MIN_Y } else { 0 },
-            flat: false,
-            forward: forward.map(|c| c as f32),
-            rain,
-            thunder,
-            skybox: self.dim == Dim::Overworld,
-            blindness: None,
-            darkness: self.darkness_fog(),
-            boss_world_fog: self.dragon_bar_shown(),
-        })
+        horizon_client::fog::setup_fog(
+            &self.res.fog,
+            &self.fog,
+            &FogInputs {
+                fog_type,
+                sky,
+                water_fog_color: [
+                    (water >> 16 & 255) as f32 / 255.0,
+                    (water >> 8 & 255) as f32 / 255.0,
+                    (water & 255) as f32 / 255.0,
+                ],
+                biome,
+                render_distance_chunks: self.streaming.radius,
+                cloud_range_chunks: self.settings.cloud_range,
+                camera_y: camera.y,
+                // level.getMinY(): the Nether and the End start at y 0.
+                min_y: if self.dim == Dim::Overworld { MIN_Y } else { 0 },
+                flat: false,
+                forward: forward.map(|c| c as f32),
+                rain,
+                thunder,
+                skybox: self.dim == Dim::Overworld,
+                blindness: None,
+                darkness: self.darkness_fog(),
+                boss_world_fog: self.dragon_bar_shown(),
+            },
+        )
     }
     /// What a shader pack's `Frame` uniform reads of the game this frame.
     pub(super) fn shader_inputs(
@@ -181,7 +185,7 @@ impl Game<'_> {
             (in_water && !spectator).then(|| (self.eye_brightness(eye), self.yaw, self.pitch));
         // Hud.extractCameraOverlays; the spyglass scope (and its easing) is
         // drawn on the HUD by draw_spyglass.
-        let fx = &self.res.screen_fx;
+        let fx = &self.screen_fx;
         let overlays = hud_overlays::CameraOverlays {
             vignette: self.settings.vignette.then_some((
                 fx.vignette_brightness,
@@ -206,8 +210,8 @@ impl Game<'_> {
         let mut scope = self.scope_scale;
         let gui_overlays =
             hud_overlays::camera_overlays(size[0] as i32, size[1] as i32, &overlays, &mut scope);
-        self.res.screen_fx.build(&ScreenInputs {
-            sprites: &self.res.atlas.sprites,
+        self.screen_fx.build(&ScreenInputs {
+            sprites: &self.atlas.sprites,
             aspect: size[0] as f32 / size[1].max(1) as f32,
             partial,
             block_overlay,
@@ -231,16 +235,16 @@ impl Game<'_> {
         lightmap_brightness(if self.dim == Dim::Nether { 0.1 } else { 0.0 }, raw)
     }
     pub(super) fn tick_particles(&mut self) {
-        self.res.fog.state.tick_flicker();
+        self.fog.tick_flicker();
         let eye = self.eye_position();
         if let Some(e) = eye {
             let brightness = self.eye_brightness(e);
             let inside_portal = self.client_portal_effect();
-            self.res.screen_fx.tick(brightness, inside_portal);
+            self.screen_fx.tick(brightness, inside_portal);
             // LocalPlayer water vision and AtmosphericFogEnvironment rain fog.
             let in_water =
                 fog_type(&self.world, &self.res.facts, e, self.forward()) == FogType::Water;
-            self.res.fog.state.tick(in_water);
+            self.fog.tick(in_water);
             let b = [
                 e[0].floor() as i32,
                 e[1].floor() as i32,
@@ -258,7 +262,7 @@ impl Game<'_> {
                 .map_or(0, |c| c.biome(b[0], b[1], b[2]));
             let rains = self.res.biomes.get(biome).precipitation;
             update_rain_fog(
-                &mut self.res.fog.state,
+                &mut self.fog,
                 rain,
                 self.world.light(b[0], b[1], b[2]) >> 4,
                 rains,
@@ -287,7 +291,7 @@ impl Game<'_> {
             facts,
             collision: self.collision,
             biomes,
-            registry: self.res.assets.registry,
+            registry: self.pack.assets.registry,
             raining_at: &raining_at,
         };
         if let Some(e) = eye {

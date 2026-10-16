@@ -84,7 +84,7 @@ impl HeartHost for Host<'_> {
 
 impl Game<'_> {
     fn heart_state_name(&self, state: BlockStateId) -> String {
-        self.res
+        self.pack
             .assets
             .registry
             .state(state)
@@ -177,7 +177,7 @@ impl Game<'_> {
     }
     /// `Creaking.tearDown`: the crumble particles.
     pub(super) fn creaking_tear_down(&mut self, center: [f64; 3], spread: [f64; 3]) {
-        let registry = self.res.assets.registry;
+        let registry = self.pack.assets.registry;
         let crumble = |this: &mut Self, name: &str, props: &[(&str, &str)], count: i32| {
             let Some(mut state) = registry
                 .default_state(name)
@@ -229,7 +229,7 @@ impl Game<'_> {
         });
         let state = self.world.block(key.0, key.1, key.2);
         let natural = self
-            .res
+            .pack
             .assets
             .registry
             .state(state)
@@ -297,7 +297,7 @@ impl Game<'_> {
     /// entity (`newBlockEntity`) the first time their chunk is seen.
     fn scan_for_hearts(&mut self) {
         let Some(heart) = self
-            .res
+            .pack
             .assets
             .registry
             .default_state("minecraft:creaking_heart")

@@ -124,7 +124,7 @@ impl Game<'_> {
                 continue;
             };
             let (Some(r), Some(part)) = (
-                self.res.atlas.sprites.get(texture.as_str()),
+                self.atlas.sprites.get(texture.as_str()),
                 assets.player.get(layer),
             ) else {
                 continue;
@@ -379,7 +379,7 @@ impl Game<'_> {
         let mut dead = Vec::new();
         for (i, a) in self.armor_stands.iter_mut().enumerate() {
             a.tick(&mut scene);
-            if !a.environment_tick(&self.world, &self.res.facts, self.res.assets.registry) {
+            if !a.environment_tick(&self.world, &self.res.facts, self.pack.assets.registry) {
                 dead.push(i);
             }
         }
@@ -403,7 +403,7 @@ impl Game<'_> {
         out: &mut Vec<Vertex>,
     ) {
         let assets = &self.armor_stand_assets;
-        let sprites = &self.res.atlas.sprites;
+        let sprites = &self.atlas.sprites;
         let uv_of = |name: &str| sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         let Some(wood) = uv_of("entity/armorstand/armorstand") else {
             return;
@@ -668,12 +668,12 @@ impl Game<'_> {
                     self.dim == super::Dim::Nether,
                 )),
             };
-            self.res.item_renderer.submit_special(
+            self.pack.item_renderer.submit_special(
                 &special,
                 &serde_json::Value::Null,
                 false,
                 pose,
-                &self.res.atlas.sprites,
+                &self.atlas.sprites,
                 &self.item_host(),
                 &mut sink,
             );

@@ -193,7 +193,7 @@ impl Game<'_> {
         }
     }
     fn block_state_at(&self, pos: Pos) -> Option<&'static BlockState> {
-        let registry = self.res.assets.registry;
+        let registry = self.pack.assets.registry;
         state_of(registry, self.world.block(pos.0, pos.1, pos.2))
     }
     fn schedule_command_block(&mut self, pos: Pos) {
@@ -202,7 +202,7 @@ impl Game<'_> {
     }
     /// `CommandBlockEntity.scheduleTick`.
     fn schedule_command_block_tick(&mut self, pos: Pos) {
-        mark_condition_met(&mut self.world, self.res.assets.registry, pos);
+        mark_condition_met(&mut self.world, self.pack.assets.registry, pos);
         self.schedule_command_block(pos);
     }
     fn update_output_signal(&mut self, pos: Pos) {
@@ -225,7 +225,7 @@ impl Game<'_> {
         }
         let at = BlockPos::new(pos.0, pos.1, pos.2);
         let signal = self.with_level(|b, level, ticks| b.has_neighbor_signal(level, ticks, at));
-        let registry = self.res.assets.registry;
+        let registry = self.pack.assets.registry;
         if let Some((was, auto)) = set_powered(&mut self.world, registry, pos, signal)
             && signal
             && !was
@@ -249,7 +249,7 @@ impl Game<'_> {
             return;
         };
         if mode == Mode::Auto {
-            mark_condition_met(&mut self.world, self.res.assets.registry, key);
+            mark_condition_met(&mut self.world, self.pack.assets.registry, key);
         }
         match command_block::tick_action(mode, was_met, conditional(state)) {
             Some(true) => self.command_block_execute(key, state),
@@ -283,7 +283,7 @@ impl Game<'_> {
     /// `CommandBlock.executeChain`: the chain command blocks in front, each
     /// facing on to the next, up to `max_command_sequence_length`.
     fn execute_chain(&mut self, start: Pos, mut step: [i32; 3]) {
-        let registry = self.res.assets.registry;
+        let registry = self.pack.assets.registry;
         let limit = self.ui.rules.int("max_command_sequence_length");
         let mut remaining = limit;
         let mut pos = start;
@@ -458,7 +458,7 @@ impl Game<'_> {
             self.close_command_block();
             return;
         }
-        let atlas = &self.res.atlas;
+        let atlas = &self.atlas;
         let (w, h) = (batch.width, batch.height);
         let mid = (w / 2.0).floor();
         ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
@@ -578,7 +578,7 @@ impl Game<'_> {
             return;
         }
         let pos = s.pos;
-        let registry = self.res.assets.registry;
+        let registry = self.pack.assets.registry;
         let Some(current) = self.block_state_at(pos) else {
             return;
         };

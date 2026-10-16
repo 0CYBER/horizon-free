@@ -13,7 +13,7 @@ impl Game<'_> {
     /// The composter's `level` at `pos`, None when it isn't a composter.
     pub(super) fn composter_level(&self, pos: [i32; 3]) -> Option<i32> {
         let state = self.world.block(pos[0], pos[1], pos[2]);
-        let s = self.res.assets.registry.state(state)?;
+        let s = self.pack.assets.registry.state(state)?;
         if &*s.name != "minecraft:composter" {
             return None;
         }
