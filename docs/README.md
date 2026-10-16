@@ -12,6 +12,7 @@ To play, use [the launcher](../launcher/README.md); the project site is [playhor
 - [Shader packs](shader-packs.md): how the renderer draws a frame, the Horizon WGSL shader pack format (stages, uniforms, `pack.toml`, hot reload), and the plan to translate OptiFine/Iris packs.
 - [Extras](extras.md): optional zoom, minimap, FPS and keystroke overlays and auto-reconnect, all off by default.
 - [Mods](mods.md): Horizon's own mod system (Rust, sandboxed WebAssembly), how to make and install mods, and [what carries over from Java mods](research/java-mod-compat.md).
+- [Modpacks](modpacks.md): porting whole packs (ATM10 and smaller): import, inventory, carry-over, an agent per mod with a harness against the Java original, coverage, and how "10x" is measured.
 - [Launcher](../launcher/README.md): installs, updates and starts builds; its CLI and MCP server; releasing it.
 - [Resource packs](resource-packs.md): everything a 26.3 resource pack can change, whether Horizon honours it, and the proof.
 - [Opt-in data collection](telemetry.md): the consent, exactly what is sent, how it is stored and sent.
