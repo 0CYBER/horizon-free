@@ -441,8 +441,13 @@ impl Game<'_> {
                 if spectator {
                     return;
                 }
+                // handleUseItem: the client's rotation, then the item alone. What it
+                // looked at a moment ago (a block, a mob) is UseItemOn's or Interact's.
                 self.as_guest(host, conn, |g| {
+                    (g.yaw, g.pitch) = (p.yaw, p.pitch);
+                    g.lan_item_only = true;
                     let _ = g.use_item();
+                    g.lan_item_only = false;
                 });
             }
             S::Attack(p) => self.guest_attack(host, conn, p.id),

@@ -1017,6 +1017,9 @@ struct Game<'a> {
     saved_for_exit: bool,
     /// The block a guest is acting on (game/lan_actions.rs).
     forced_hit: Option<Hit>,
+    /// A guest's `ServerboundUseItemPacket`: the held item alone, no block
+    /// or entity (`ServerGamePacketListenerImpl.handleUseItem`).
+    lan_item_only: bool,
     /// Level events of this tick for the guests, and the guest acting now.
     lan_events: Vec<(i32, [i32; 3], i32, Option<u32>)>,
     /// Block events (position, b0, b1, state) and entity events (id, event,
@@ -2350,17 +2353,18 @@ impl Game<'_> {
         {
             return Ok(Some(Hand::Main));
         }
-        if self.interact_frame()
-            || self.interact_armor_stand()
-            || self.interact_boat()
-            || self.interact_cart()
-            || self.interact_mob()?
-            || self.interact_knot()
+        if !self.lan_item_only
+            && (self.interact_frame()
+                || self.interact_armor_stand()
+                || self.interact_boat()
+                || self.interact_cart()
+                || self.interact_mob()?
+                || self.interact_knot())
         {
             return Ok(Some(Hand::Main));
         }
         // An EntityHitResult may fall through to Item.use, never to useItemOn.
-        let block_hit = if self.entity_targeted() {
+        let block_hit = if self.lan_item_only || self.entity_targeted() {
             None
         } else {
             self.pick()
@@ -10169,6 +10173,7 @@ pub fn run() -> Result<()> {
         text_selection: Default::default(),
         saved_for_exit: false,
         forced_hit: None,
+        lan_item_only: false,
         lan_events: Vec::new(),
         lan_block_events: Vec::new(),
         lan_entity_events: Vec::new(),
