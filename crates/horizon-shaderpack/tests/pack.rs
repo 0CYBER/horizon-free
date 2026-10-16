@@ -3,7 +3,11 @@
 //! `HORIZON_TEST_SHADERPACKS` names a folder of them (development only:
 //! third-party packs are never committed).
 
-use horizon_shaderpack::{JavaPack, Stage, preprocess::Environment};
+use horizon_shaderpack::{
+    JavaPack, Stage,
+    pipeline::{TargetSettings, TargetSize},
+    preprocess::Environment,
+};
 use std::{
     collections::BTreeMap,
     io::Write,
@@ -187,6 +191,54 @@ fn opens_zips_with_shaders_in_a_subfolder() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+#[test]
+fn plans_the_full_screen_passes() {
+    let pack = JavaPack::open(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/passes"))
+        .unwrap();
+    let values = pack.values(&BTreeMap::new());
+    let properties = pack.properties(&values, &env()).unwrap();
+    let passes = pack.passes("", &values, &env(), &properties).unwrap();
+
+    // Settings from the active comments only: colortex1's R8 is #ifdef'd out.
+    assert_eq!(passes.targets[1].format, "RGBA16F");
+    assert!(!passes.targets[2].clear);
+    assert_eq!(passes.targets[3].clear_color, Some([1.0, 0.0, 0.0, 1.0]));
+    assert_eq!(passes.targets[3].size, Some(TargetSize::Relative(0.5, 0.5)));
+    assert_eq!(passes.targets[4], TargetSettings::default());
+
+    let summary = |p: &horizon_shaderpack::pipeline::Pass| {
+        (
+            p.program.clone(),
+            p.draw_buffers.clone(),
+            p.reads_alt.iter().copied().collect::<Vec<_>>(),
+        )
+    };
+    assert_eq!(
+        passes.deferred.iter().map(summary).collect::<Vec<_>>(),
+        [("deferred".into(), Some(vec![3]), vec![])]
+    );
+    // composite2 is off; RENDERTARGETS in `#if 0` doesn't count; each pass
+    // reads the side its predecessors wrote, and composite1 flips colortex2.
+    assert_eq!(
+        passes.composite.iter().map(summary).collect::<Vec<_>>(),
+        [
+            ("composite".into(), Some(vec![0, 1]), vec![3]),
+            ("composite1".into(), Some(vec![0]), vec![0, 1, 3]),
+        ]
+    );
+    assert_eq!(passes.composite[0].mipmapped, [3].into());
+    assert_eq!(passes.composite[1].scale, 0.5);
+    assert_eq!(passes.flipped_after_prepare, [].into());
+    assert_eq!(passes.flipped_after_translucent, [3].into());
+    assert_eq!(passes.flipped_at_end, [1, 2, 3].into());
+    let final_pass = passes.final_pass.unwrap();
+    assert_eq!(
+        (final_pass.program.as_str(), final_pass.draw_buffers),
+        ("final", None)
+    );
+    assert_eq!(final_pass.reads_alt, [1, 2, 3].into());
+}
+
 fn scratch(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!("horizon-shaderpack-{name}-{}", std::process::id()))
 }
@@ -274,5 +326,47 @@ fn real_packs_properties() {
         }
         println!("  unknown screen options: {unknown:?}");
         assert!(unknown.len() <= 2, "{unknown:?}");
+    }
+}
+
+/// The overworld's full-screen passes for the packs in
+/// `HORIZON_TEST_SHADERPACKS`. Skipped when the variable isn't set.
+#[test]
+fn real_packs_passes() {
+    let Some(dir) = std::env::var_os("HORIZON_TEST_SHADERPACKS") else {
+        return;
+    };
+    for entry in std::fs::read_dir(dir).unwrap().flatten() {
+        let Ok(pack) = JavaPack::open(&entry.path()) else {
+            continue;
+        };
+        let values = pack.values(&BTreeMap::new());
+        let properties = pack.properties(&values, &env()).unwrap();
+        let folder = if pack.programs.iter().any(|p| p.starts_with("world0/")) {
+            "world0"
+        } else {
+            ""
+        };
+        let passes = pack.passes(folder, &values, &env(), &properties).unwrap();
+        println!("{}:", entry.file_name().to_string_lossy());
+        for (i, t) in passes.targets.iter().enumerate() {
+            if *t != TargetSettings::default() {
+                println!("  colortex{i}: {t:?}");
+            }
+        }
+        for p in passes
+            .begin
+            .iter()
+            .chain(&passes.prepare)
+            .chain(&passes.deferred)
+            .chain(&passes.composite)
+            .chain(&passes.final_pass)
+        {
+            println!(
+                "  {} writes {:?} reads alt {:?} mipmaps {:?} scale {}",
+                p.program, p.draw_buffers, p.reads_alt, p.mipmapped, p.scale
+            );
+        }
+        assert!(passes.final_pass.is_some() || !passes.composite.is_empty());
     }
 }
