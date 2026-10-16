@@ -6637,6 +6637,9 @@ impl Game<'_> {
             std::env::current_dir()?.join("saves"),
             &self.options.resources,
         ));
+        if let Some(title) = &mut self.title {
+            title.last_server = self.settings.file.string("lastServer");
+        }
         self.capture(false);
         Ok(())
     }
@@ -9304,6 +9307,7 @@ impl ApplicationHandler for Game<'_> {
                             clicked
                         }
                     });
+                    self.save_title_options();
                     if sound {
                         self.audio.play_button_click();
                     }
@@ -9542,6 +9546,7 @@ impl ApplicationHandler for Game<'_> {
                                 if let Some(t) = self.title.as_mut() {
                                     t.escape();
                                 }
+                                self.save_title_options();
                             }
                             _ => self.title_edit(event.text.as_deref(), false),
                         }
@@ -10325,10 +10330,11 @@ pub fn run() -> Result<()> {
             game.open_world(&folder, None, Some(seed), creative, None)?;
         }
         None => {
-            let title = Title::new(
+            let mut title = Title::new(
                 std::env::current_dir()?.join("saves"),
                 &game.options.resources,
             );
+            title.last_server = game.settings.file.string("lastServer");
             // The launcher's opening, once per session and only in Horizon's style.
             if horizon_client::ui_theme::horizon() && game.options.frames.is_none() {
                 title

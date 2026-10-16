@@ -343,6 +343,7 @@ impl Game<'_> {
         }
         let saves = std::env::current_dir()?.join("saves");
         let mut title = horizon_client::title::Title::new(saves.clone(), &self.options.resources);
+        title.last_server = self.settings.file.string("lastServer");
         if single_player && reason.is_none() {
             self.title = Some(title);
             self.capture(false);
