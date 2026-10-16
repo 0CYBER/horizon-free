@@ -8424,15 +8424,15 @@ impl Game<'_> {
         }
         let view = horizon_client::camera::view_matrix(view_yaw, view_pitch);
         let at = camera.to_array();
-        // GameRenderer.renderLevel: the debug crosshair, first person with the HUD shown.
+        // GameRenderer.render3dHud: the debug crosshair, first person with the HUD shown.
+        let mut crosshair = horizon_client::gizmos::Gizmos::default();
         if self.debug_crosshair() && self.camera_type.first_person() && !self.ui.hide_gui {
-            let mut g = horizon_client::gizmos::Gizmos::default();
             let scale = HudBatch::new(size).scale;
-            g.debug_crosshair(at, view_pitch, view_yaw, scale);
-            on_top.extend(g.on_top);
+            crosshair.debug_crosshair(at, view_pitch, view_yaw, scale);
         }
         let debug_lines = horizon_client::gizmos::camera_relative(&lines, at, view);
         let debug_lines_on_top = horizon_client::gizmos::camera_relative(&on_top, at, view);
+        let debug_crosshair = horizon_client::gizmos::camera_relative(&crosshair.on_top, at, view);
         // LevelRenderer.renderHitOutline: the outline shape's edges.
         let outline = if self.screen == Screen::Playing && !self.spectator() {
             self.pick()
@@ -8595,6 +8595,7 @@ impl Game<'_> {
             outline,
             debug_lines: &debug_lines,
             debug_lines_on_top: &debug_lines_on_top,
+            debug_crosshair: &debug_crosshair,
             hud: &hud,
             entities: &entities,
             additive: &additive,
