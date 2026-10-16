@@ -374,6 +374,38 @@ fn stopped_backup_worker_returns_to_the_list_with_an_error_toast() {
 }
 
 #[test]
+fn backup_toast_slides_in_and_out_with_its_sounds() {
+    let mut f = Fixture::new();
+    f.world("World", "World");
+    f.select();
+    f.click("Edit");
+    f.click("Make Backup");
+    f.title.poll_backup();
+    f.finish_backup();
+    assert_eq!(f.title.update_toast(1.0), Some("minecraft:ui.toast.in"));
+    assert_eq!(f.title.update_toast(1.0), None);
+    let age = |f: &mut Fixture, ms: u64| {
+        let (slide, _) = f.title.toast.as_mut().unwrap();
+        let origin = slide.origin.as_mut().unwrap();
+        *origin -= std::time::Duration::from_millis(ms);
+    };
+    // Half way in: (300 / 600)² of its width shows.
+    age(&mut f, 300);
+    assert_eq!(f.title.update_toast(1.0), None);
+    let portion = f.title.toast.as_ref().unwrap().0.portion;
+    assert!((portion - 0.25).abs() < 0.02, "{portion}");
+    // Shown in full for the display time, then out.
+    age(&mut f, 300);
+    f.title.update_toast(1.0);
+    age(&mut f, 5100);
+    assert_eq!(f.title.update_toast(1.0), Some("minecraft:ui.toast.out"));
+    assert!(f.title.toast.is_some());
+    age(&mut f, 700);
+    assert_eq!(f.title.update_toast(1.0), None);
+    assert!(f.title.toast.is_none());
+}
+
+#[test]
 fn failed_operations_show_error_and_leave_world_intact() {
     let mut f = Fixture::new();
     f.world("World", "World");
