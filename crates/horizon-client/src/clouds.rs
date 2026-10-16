@@ -68,9 +68,222 @@ pub fn cells(radius: i32) -> impl Iterator<Item = (i32, i32)> {
     })
 }
 
+/// Per-frame cloud inputs. Resources are immutable for the renderer's lifetime:
+/// resource-pack reloads replace the renderer and its cache together.
+pub struct Input<'a> {
+    pub texture: &'a (u32, u32, Vec<bool>),
+    pub uv: [f32; 2],
+    pub camera: glam::DVec3,
+    pub time: i64,
+    pub partial_tick: f64,
+    pub range: i32,
+    pub fast: bool,
+    pub color: [f32; 4],
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct MeshKey {
+    cell_x: i64,
+    cell_z: i64,
+    radius: i32,
+    fast: bool,
+    // The two vertical face tests include both surfaces at the boundaries.
+    top: bool,
+    bottom: bool,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct Uniform {
+    offset: [f32; 4],
+    colors: [[f32; 4]; 4],
+}
+
+impl Input<'_> {
+    fn state(&self) -> (MeshKey, Uniform) {
+        let (w, h, _) = self.texture;
+        let offset = self.time.rem_euclid(i64::from(*w) * 400) as f64 + self.partial_tick;
+        let mut x = self.camera.x + offset * 0.030_000_001;
+        let mut z = self.camera.z + 3.96;
+        let (tw, th) = (f64::from(*w) * 12.0, f64::from(*h) * 12.0);
+        x -= (x / tw).floor() * tw;
+        z -= (z / th).floor() * th;
+        let cell_x = (x / 12.0).floor() as i64;
+        let cell_z = (z / 12.0).floor() as i64;
+        let bottom = (192.33 - self.camera.y) as f32;
+        let key = MeshKey {
+            cell_x,
+            cell_z,
+            radius: radius_cells(self.range),
+            fast: self.fast,
+            top: bottom <= 0.0,
+            bottom: bottom + 4.0 >= 0.0,
+        };
+        let colors = [1.0, 0.7, 0.8, 0.9].map(|shade| {
+            self.color
+                .map(|v| ((v * shade).clamp(0.0, 1.0) * 255.0) as u8 as f32 / 255.0)
+        });
+        (
+            key,
+            Uniform {
+                offset: [
+                    -(x - cell_x as f64 * 12.0) as f32,
+                    bottom,
+                    -(z - cell_z as f64 * 12.0) as f32,
+                    0.0,
+                ],
+                colors,
+            },
+        )
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct Mesh {
+    key: Option<MeshKey>,
+    pub vertices: Vec<crate::mesher::Vertex>,
+}
+
+impl Mesh {
+    /// Returns true only when vertices must be uploaded. Sub-cell motion and
+    /// color changes update only the uniform, as in CloudRenderer.prepare.
+    pub fn prepare(&mut self, input: &Input<'_>) -> (bool, Uniform) {
+        let (key, uniform) = input.state();
+        if self.key.as_ref() == Some(&key) {
+            return (false, uniform);
+        }
+        self.vertices.clear();
+        let (w, h, cells) = input.texture;
+        let (w, h) = (i64::from(*w), i64::from(*h));
+        let (cell_x, cell_z, radius) = (key.cell_x, key.cell_z, key.radius);
+        let bottom = uniform.offset[1];
+        let uv = input.uv;
+        let filled = |cx: i64, cz: i64| cells[(cz.rem_euclid(h) * w + cx.rem_euclid(w)) as usize];
+        for (dx, dz) in self::cells(radius) {
+            let (dx, dz) = (i64::from(dx), i64::from(dz));
+            let (cx, cz) = (cell_x + dx, cell_z + dz);
+            if !filled(cx, cz) {
+                continue;
+            }
+            let x0 = dx as f32 * 12.0;
+            let z0 = dz as f32 * 12.0;
+            let (x1, z1, y0, y1) = (x0 + 12.0, z0 + 12.0, 0.0, 4.0);
+            let mut quad = |p: [[f32; 3]; 4], shade: u32| {
+                for v in p {
+                    // Overlay 4: clouds (unlit, faded by the cloud fog end).
+                    self.vertices.push(crate::mesher::Vertex {
+                        normal: [0; 4],
+                        pos: v,
+                        uv,
+                        layer: 4,
+                        color: u32::MAX,
+                        light: shade,
+                    });
+                }
+            };
+            if input.fast {
+                for p in flat_cell(x0, z0, 0.0) {
+                    quad(p, 0);
+                }
+                continue;
+            }
+            let quads = [
+                ([[x1, y0, z0], [x1, y0, z1], [x0, y0, z1], [x0, y0, z0]], 1),
+                ([[x0, y1, z0], [x0, y1, z1], [x1, y1, z1], [x1, y1, z0]], 0),
+                ([[x0, y0, z0], [x0, y1, z0], [x1, y1, z0], [x1, y0, z0]], 2),
+                ([[x1, y0, z1], [x1, y1, z1], [x0, y1, z1], [x0, y0, z1]], 2),
+                ([[x0, y0, z1], [x0, y1, z1], [x0, y1, z0], [x0, y0, z0]], 3),
+                ([[x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]], 3),
+            ];
+            let mask = face_mask(
+                dx as i32,
+                dz as i32,
+                bottom,
+                [
+                    !filled(cx, cz - 1),
+                    !filled(cx, cz + 1),
+                    !filled(cx - 1, cz),
+                    !filled(cx + 1, cz),
+                ],
+            );
+            for (direction, inside) in faces(mask) {
+                let (p, shade) = quads[usize::from(direction)];
+                quad(if inside { [p[3], p[2], p[1], p[0]] } else { p }, shade);
+            }
+        }
+        self.key = Some(key);
+        (true, uniform)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cached_mesh_tracks_geometry_but_not_subcell_motion_or_color() {
+        let texture = (8, 8, (0..64).map(|i| i % 3 != 0).collect());
+        let mut input = Input {
+            texture: &texture,
+            uv: [0.5; 2],
+            camera: glam::DVec3::new(1.0, 100.0, 1.0),
+            time: 0,
+            partial_tick: 0.0,
+            range: 2,
+            fast: false,
+            color: [1.0; 4],
+        };
+        let mut mesh = Mesh::default();
+        assert!(mesh.prepare(&input).0);
+        let vertices = bytemuck::cast_slice::<_, u8>(&mesh.vertices).to_vec();
+        let pointer = mesh.vertices.as_ptr();
+        for tick in 0..100 {
+            input.time = tick;
+            input.partial_tick = 0.5;
+            input.camera.x = 2.0;
+            input.camera.y = 101.0;
+            input.color = [0.8, 0.7, 0.6, 0.5];
+            let (rebuilt, uniform) = mesh.prepare(&input);
+            assert!(!rebuilt);
+            assert_eq!(mesh.vertices.as_ptr(), pointer);
+            assert_eq!(bytemuck::cast_slice::<_, u8>(&mesh.vertices), vertices);
+            assert_eq!(uniform.offset[1], (192.33 - input.camera.y) as f32);
+            assert_eq!(
+                uniform.colors[1],
+                [0.8, 0.7, 0.6, 0.5].map(|v| ((v * 0.7f32) * 255.0) as u8 as f32 / 255.0)
+            );
+        }
+        for (x, y, z, range, fast) in [
+            (13.0, 101.0, 1.0, 2, false),
+            (13.0, 101.0, -5.0, 2, false),
+            (13.0, 192.33, -5.0, 2, false),
+            (13.0, 196.34, -5.0, 2, false),
+            (13.0, 196.34, -5.0, 3, false),
+            (13.0, 196.34, -5.0, 3, true),
+        ] {
+            input.camera = glam::DVec3::new(x, y, z);
+            input.range = range;
+            input.fast = fast;
+            assert!(mesh.prepare(&input).0);
+            let mut fresh = Mesh::default();
+            fresh.prepare(&input);
+            assert_eq!(
+                bytemuck::cast_slice::<_, u8>(&mesh.vertices),
+                bytemuck::cast_slice::<_, u8>(&fresh.vertices)
+            );
+            assert!(!mesh.prepare(&input).0);
+        }
+        // Drift alone crosses a cell, even with a stationary camera.
+        input.time += 400;
+        assert!(mesh.prepare(&input).0);
+        // Resource reload constructs a new renderer and cache, including empty packs.
+        let mut reloaded = Mesh::default();
+        let empty = (1, 1, vec![false]);
+        input.texture = &empty;
+        assert!(reloaded.prepare(&input).0);
+        assert!(reloaded.vertices.is_empty());
+        assert!(!reloaded.prepare(&input).0);
+    }
+
     #[test]
     fn settings_and_packed_alpha_gate_clouds() {
         for mode in ["false", "fast", "true"] {

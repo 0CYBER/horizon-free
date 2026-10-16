@@ -6,7 +6,7 @@ pub(super) struct EntityBatch {
     // Quad indices avoid copying vertices twice while grouping materials.
     // Keep initialized high-water storage; local counts delimit active entries.
     // Each bucket can hold all quads, removing per-quad Vec growth checks.
-    buckets: [Vec<usize>; 4],
+    buckets: [Vec<usize>; 3],
     pub(super) combined: Vec<Vertex>,
 }
 
@@ -17,19 +17,18 @@ impl EntityBatch {
         additive: &[Vertex],
         hand: &[Vertex],
         see_through: &[Vertex],
-    ) -> [u32; 4] {
+    ) -> [u32; 3] {
         let quads = entities.as_chunks::<4>().0;
         for bucket in &mut self.buckets {
             if bucket.len() < quads.len() {
                 bucket.resize(quads.len(), 0);
             }
         }
-        let mut counts = [0usize; 4];
+        let mut counts = [0usize; 3];
         for (index, quad) in quads.iter().enumerate() {
             let material = match quad[0].layer {
                 11 => 1,
                 12 => 2,
-                4 => 3,
                 _ => 0,
             };
             self.buckets[material][counts[material]] = index;
@@ -78,15 +77,14 @@ mod tests {
         entities: &[Vertex],
         additive: &[Vertex],
         hand: &[Vertex],
-    ) -> (Vec<Vertex>, [u32; 4]) {
+    ) -> (Vec<Vertex>, [u32; 3]) {
         let mut combined = Vec::with_capacity(entities.len() + additive.len() + hand.len());
-        let mut counts = [0; 4];
-        for (i, layer) in [0, 11, 12, 4].into_iter().enumerate() {
+        let mut counts = [0; 3];
+        for (i, layer) in [0, 11, 12].into_iter().enumerate() {
             for quad in entities.as_chunks::<4>().0 {
                 let material = match quad[0].layer {
                     11 => 11,
                     12 => 12,
-                    4 => 4,
                     _ => 0,
                 };
                 if material == layer {

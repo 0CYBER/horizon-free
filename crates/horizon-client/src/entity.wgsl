@@ -58,8 +58,8 @@ fn overlay_texel(overlay: u32) -> vec4<f32> {
     if overlay >= 16u && overlay < 32u { return vec4(1.0, 1.0, 1.0, WHITE_OVERLAY_ALPHA[overlay - 16u]); }
     return vec4(1.0);
 }
-@vertex fn vs_entity(@location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
-    @location(2) overlay: u32, @location(3) color: vec4<f32>, @location(4) light: vec4<u32>, @location(5) normal: vec4<f32>) -> Out {
+fn entity_vertex(position: vec3<f32>, uv: vec2<f32>,
+    overlay: u32, color: vec4<f32>, light: vec4<u32>, normal: vec4<f32>) -> Out {
     var out: Out;
     out.clip = globals.view_proj * vec4(position, 1.0);
     out.proj = vec4(out.clip.xy * 0.5 + out.clip.w * 0.5, out.clip.zw);
@@ -89,6 +89,19 @@ fn overlay_texel(overlay: u32) -> vec4<f32> {
     out.overlay = overlay;
     if overlay == 4u { out.spherical = length(position); }
     return out;
+}
+@vertex fn vs_entity(@location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
+    @location(2) overlay: u32, @location(3) color: vec4<f32>, @location(4) light: vec4<u32>, @location(5) normal: vec4<f32>) -> Out {
+    return entity_vertex(position, uv, overlay, color, light, normal);
+}
+struct CloudInfo {
+    offset: vec4<f32>,
+    colors: array<vec4<f32>, 4>,
+}
+@group(1) @binding(0) var<uniform> cloud: CloudInfo;
+@vertex fn vs_cloud(@location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
+    @location(2) overlay: u32, @location(3) color: vec4<f32>, @location(4) light: vec4<u32>, @location(5) normal: vec4<f32>) -> Out {
+    return entity_vertex(position + cloud.offset.xyz, uv, overlay, cloud.colors[light.x], light, normal);
 }
 // rendertype_end_portal.fsh: the layer colours.
 const PORTAL_COLORS = array<vec3<f32>, 16>(
