@@ -3631,6 +3631,9 @@ impl Game<'_> {
         }
         if let Some(title) = &mut self.title {
             title.poll_backup();
+            if let Some(sound) = title.update_toast(self.settings.notification_display_time) {
+                self.audio.play(sound, None, 1.0, 1.0);
+            }
         }
         if let Some(title) = &self.title {
             if horizon_client::ui_theme::horizon() {

@@ -164,6 +164,7 @@ pub mod text;
 pub mod tick_chunk_membership;
 pub mod title;
 pub mod title_edition;
+pub mod toasts;
 pub mod ui;
 pub mod ui_theme;
 pub mod vanillagen;

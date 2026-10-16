@@ -134,7 +134,8 @@ pub struct Title {
     message_lines: Cell<usize>,
     backup: Option<mpsc::Receiver<Result<u64, String>>>,
     backup_shown: Cell<bool>,
-    toast: Option<(std::time::Instant, BackupToast)>,
+    /// EditWorldScreen's `SystemToast` (`WORLD_BACKUP`) and its slide.
+    toast: Option<(crate::toasts::Slide, BackupToast)>,
     icons: RefCell<std::collections::HashMap<PathBuf, (std::time::SystemTime, Option<Vec<u8>>)>>,
     splash: Option<String>,
     /// The mode last drawn and when it appeared (Horizon's screen fades).
@@ -401,8 +402,27 @@ impl Title {
                 Ok(bytes) => BackupToast::Created { folder, bytes },
                 Err(error) => BackupToast::Failed(error),
             };
-            self.toast = Some((std::time::Instant::now(), toast));
+            self.toast = Some((crate::toasts::Slide::default(), toast));
         }
+    }
+    /// `ToastManager.update` for the system toast: slides it in, keeps it
+    /// for 5 s times the notification display time, slides it out. The
+    /// sound of a new visibility (`Toast.Visibility`), if any.
+    pub fn update_toast(&mut self, multiplier: f32) -> Option<&'static str> {
+        let (slide, _) = self.toast.as_mut()?;
+        // SystemToast.update: shown until displayTime (5000 ms) has passed.
+        let time = 5000.0 * f64::from(multiplier);
+        let (sound, finished) = slide.update_now(|fully| (fully as f64) < time);
+        if finished {
+            self.toast = None;
+        }
+        sound.map(|show| {
+            if show {
+                "minecraft:ui.toast.in"
+            } else {
+                "minecraft:ui.toast.out"
+            }
+        })
     }
     fn start_backup(&mut self, world: WorldEntry) {
         let (send, receive) = mpsc::channel();
@@ -1087,25 +1107,18 @@ impl Title {
         if let Mode::Multiplayer(screen) = &self.mode {
             screen.draw_tooltip(atlas, batch, cursor);
         }
-        if let Some((at, toast)) = &self.toast
-            && at.elapsed().as_secs() < 5
-        {
+        if let Some((slide, toast)) = &self.toast {
             let (title, message) = toast.text();
             let width = HudBatch::text_width(atlas, &title)
                 .max(HudBatch::text_width(atlas, &message))
                 .ceil()
                 .max(160.0)
                 + 30.0;
-            toast_background(atlas, batch, w - width, width);
-            batch.text(
-                atlas,
-                &title,
-                w - width + 18.0,
-                7.0,
-                rgba(255, 255, 0, 255),
-                false,
-            );
-            batch.text(atlas, &message, w - width + 18.0, 19.0, u32::MAX, false);
+            // Toast.xPos: in from the right edge by the visible portion.
+            let x = w - width * slide.portion;
+            toast_background(atlas, batch, x, width);
+            batch.text(atlas, &title, x + 18.0, 7.0, rgba(255, 255, 0, 255), false);
+            batch.text(atlas, &message, x + 18.0, 19.0, u32::MAX, false);
         }
     }
     /// The action and whether to play `AbstractWidget.playButtonClickSound`.
