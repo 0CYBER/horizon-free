@@ -389,6 +389,7 @@ impl Game<'_> {
             Screen::Stats => "stats",
             Screen::Advancements => "advancements",
             Screen::WorldOptions => "world-options",
+            Screen::CommandBlock => "command-block",
         }
     }
     pub(super) fn inventory_counts(&self) -> BTreeMap<String, i64> {
