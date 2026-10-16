@@ -489,6 +489,7 @@ def wait_state(game, pos, key, want, ticks):
 
 def check_trials(host, guest, out):
     # The host watches as a spectator, whom neither block detects: only the guest can wake them.
+    hx, hy, hz = pos_of(host)
     host('command', command='gamemode spectator')
     host('command', command='difficulty normal')
     host('command', command='gamerule spawn_mobs true')
@@ -516,6 +517,8 @@ def check_trials(host, guest, out):
         host('command', command='gamerule spawn_mobs false')
         host('command', command='kill @e[type=minecraft:zombie]')
         host('command', command='gamemode survival')
+        # Back where it stood: a spectator drifts, and may be inside the ground when it lands.
+        host('command', command=f'tp @s {hx:.2f} {hy:.2f} {hz:.2f}')
         guest('command', command=f'setblock {spawner[0]} {spawner[1]} {spawner[2]} minecraft:air')
         guest('command', command=f'setblock {vault[0]} {vault[1]} {vault[2]} minecraft:air')
     uuid = lambda reply: re.findall(r'-?\d+', json.dumps(reply).partition('[I;')[2].partition(']')[0])
