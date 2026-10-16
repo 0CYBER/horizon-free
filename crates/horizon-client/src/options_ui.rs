@@ -2,6 +2,8 @@
 //! Controls, Key Binds, Mouse Settings, Chat Settings, Accessibility,
 //! Language and Resource Packs, laid out like vanilla's HeaderAndFooter /
 //! OptionsList screens and drawn with the shared widgets.
+use std::time::Instant;
+
 use crate::{
     gamepad::{self, GlyphStyle},
     hud::{HudAtlas, HudBatch, rgba},
@@ -756,10 +758,31 @@ pub enum Event {
     Packs(Vec<String>),
     OpenPackFolder,
 }
+/// `SliderableValueSet.applyValueImmediately`: these apply 600 ms after
+/// the last change (`OptionInstanceSliderButton.delayedApplyAt`).
+fn delays_apply(opt: Opt) -> bool {
+    matches!(
+        opt,
+        Opt::RenderDistance | Opt::SimulationDistance | Opt::BiomeBlend | Opt::WheelSensitivity
+    )
+}
+/// Whether a slider still shows its own position: while held, or for a
+/// delayed one until its value applies (both then `resetValue`).
+fn slider_unsnapped(opt: Opt, held: bool, moved: Instant) -> bool {
+    if delays_apply(opt) {
+        moved.elapsed().as_millis() < 600
+    } else {
+        held
+    }
+}
 pub struct OptionsUi {
     pub stack: Vec<Page>,
     scroll: f32,
     pub(crate) dragging: Option<Opt>,
+    /// The pressed slider's own position (`AbstractSliderButton.value`) and
+    /// when it last moved: the handle follows the pointer while the option
+    /// keeps its stepped value, then snaps to it (`resetValue`).
+    slider_value: Option<(Opt, f32, Instant)>,
     scrollbar_drag_y: Option<f32>,
     /// Horizon style: the selected sidebar section, the one last drawn and
     /// the rows' scroll in dp (`options_horizon`).
@@ -783,7 +806,7 @@ pub struct OptionsUi {
     /// The open pack screen, made at its first frame.
     pub pack_screen: Option<crate::pack_screen::PackScreen>,
     /// When the pack screen's search box took the focus (its cursor blink).
-    pack_focus: std::time::Instant,
+    pack_focus: Instant,
     pub in_world: bool,
     /// Scroll the selected language into the middle on the next layout.
     center_language: bool,
@@ -797,6 +820,7 @@ impl Default for OptionsUi {
             stack: vec![Page::Main],
             scroll: 0.0,
             dragging: None,
+            slider_value: None,
             scrollbar_drag_y: None,
             section: 0,
             section_shown: None,
@@ -811,7 +835,7 @@ impl Default for OptionsUi {
             pack_infos: Vec::new(),
             pack_selection: Vec::new(),
             pack_screen: None,
-            pack_focus: std::time::Instant::now(),
+            pack_focus: Instant::now(),
             in_world: false,
             center_language: false,
             graphics: Default::default(),
@@ -1613,6 +1637,7 @@ impl OptionsUi {
                 }
                 WKind::Slider { label, value, opt } => {
                     let dragging = self.dragging == Some(*opt);
+                    let shown = self.slider_shown(*opt, *value);
                     ui::slider(
                         batch,
                         atlas,
@@ -1620,7 +1645,7 @@ impl OptionsUi {
                         wd.y,
                         wd.w,
                         label,
-                        *value,
+                        shown,
                         hover || dragging,
                         true,
                     );
@@ -1765,7 +1790,7 @@ impl OptionsUi {
             let before = p.search_focused();
             let action = p.click(&m, x as f64, y as f64);
             if !before && p.search_focused() {
-                self.pack_focus = std::time::Instant::now();
+                self.pack_focus = Instant::now();
             }
             match action {
                 crate::pack_screen::Action::OpenFolder => events.push(Event::OpenPackFolder),
@@ -1799,7 +1824,9 @@ impl OptionsUi {
                     .iter()
                     .find(|wd| matches!(&wd.kind, WKind::Slider { opt: o, .. } if *o == opt))
             {
-                set_slider(opt, s, ui::slider_value(wd.x, wd.w, x));
+                let v = ui::slider_value(wd.x, wd.w, x);
+                self.slider_value = Some((opt, v, Instant::now()));
+                set_slider(opt, s, v);
                 events.push(Event::Changed);
             }
             return events;
@@ -1882,7 +1909,9 @@ impl OptionsUi {
                 }
                 WKind::Slider { opt, .. } => {
                     self.dragging = Some(opt);
-                    set_slider(opt, s, ui::slider_value(wd.x, wd.w, x));
+                    let v = ui::slider_value(wd.x, wd.w, x);
+                    self.slider_value = Some((opt, v, Instant::now()));
+                    set_slider(opt, s, v);
                     events.push(Event::Changed);
                 }
                 WKind::LanguageRow { code, .. } => {
@@ -1911,6 +1940,14 @@ impl OptionsUi {
             .unwrap_or(0);
         self.section_shown = None;
         self.hscroll = 0.0;
+    }
+    /// Where a slider's handle sits: its own position while held (or until
+    /// a delayed one applies), else the option's stepped value.
+    fn slider_shown(&self, opt: Opt, value: f32) -> f32 {
+        match self.slider_value {
+            Some((o, v, at)) if o == opt && slider_unsnapped(o, self.dragging == Some(o), at) => v,
+            _ => value,
+        }
     }
     pub fn release(&mut self) -> Vec<Event> {
         self.scrollbar_drag_y = None;
@@ -1961,7 +1998,7 @@ impl OptionsUi {
                 }
             }
             None => {
-                self.pack_focus = std::time::Instant::now();
+                self.pack_focus = Instant::now();
                 self.pack_screen = Some(crate::pack_screen::PackScreen::new(
                     &m,
                     w,
@@ -1981,6 +2018,7 @@ impl OptionsUi {
         self.scroll = 0.0;
         self.scrollbar_drag_y = None;
         self.dragging = None;
+        self.slider_value = None;
         self.selected_key = None;
         self.selected_pad_action = None;
         match page {
@@ -2362,6 +2400,58 @@ mod tests {
             ui.click(&mut s, &atlas, x, y, size, [854, 480], true, false)
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn classic_sliders_follow_the_pointer_and_snap_on_release() {
+        let atlas = atlas();
+        let size = (480.0, 320.0);
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        ui.show(Page::Sound);
+        let (widgets, _, _, _) = ui.layout(&s, size.0, size.1);
+        let slider = widgets
+            .iter()
+            .find(|wd| {
+                matches!(
+                    wd.kind,
+                    WKind::Slider {
+                        opt: Opt::Volume(0),
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        let (x, y) = (slider.x + 4.0 + (slider.w - 8.0) * 0.3, slider.y + 1.0);
+        ui.click(&mut s, &atlas, x, y, size, [854, 480], false, false);
+        let raw = ui::slider_value(slider.x, slider.w, x);
+        // Held: the handle stays under the pointer whatever the stepped value.
+        assert_eq!(ui.slider_shown(Opt::Volume(0), 0.25), raw);
+        assert_eq!(ui.slider_shown(Opt::Volume(1), 0.25), 0.25);
+        ui.click(
+            &mut s,
+            &atlas,
+            x + 10.0,
+            -50.0,
+            size,
+            [854, 480],
+            true,
+            false,
+        );
+        let raw = ui::slider_value(slider.x, slider.w, x + 10.0);
+        assert_eq!(ui.slider_shown(Opt::Volume(0), 0.25), raw);
+        ui.release();
+        assert_eq!(ui.slider_shown(Opt::Volume(0), 0.25), 0.25);
+        // Render distance applies late (applyValueImmediately = false) and
+        // keeps its position until then, even once released.
+        ui.slider_value = Some((Opt::RenderDistance, 0.51, Instant::now()));
+        assert_eq!(ui.slider_shown(Opt::RenderDistance, 0.5), 0.51);
+        ui.slider_value = Some((
+            Opt::RenderDistance,
+            0.51,
+            Instant::now() - std::time::Duration::from_millis(600),
+        ));
+        assert_eq!(ui.slider_shown(Opt::RenderDistance, 0.5), 0.5);
     }
 
     #[test]
