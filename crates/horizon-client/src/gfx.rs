@@ -2814,7 +2814,7 @@ mod tests {
             .flat_map(|(layer, id)| quad(layer, id))
             .collect();
         let mut batch = super::EntityBatch::default();
-        let counts = batch.update(&entities, &quad(3, 5), &quad(0, 6));
+        let counts = batch.update(&entities, &quad(3, 5), &quad(0, 6), &quad(0, 8));
         let vertices = &batch.combined;
         assert_eq!(counts, [2, 1, 1, 2]);
         assert_eq!(
@@ -2824,7 +2824,7 @@ mod tests {
                 .iter()
                 .map(|q| q[0].light)
                 .collect::<Vec<_>>(),
-            [0, 3, 2, 7, 1, 4, 5, 6]
+            [0, 3, 2, 7, 1, 4, 5, 6, 8]
         );
     }
     #[test]
