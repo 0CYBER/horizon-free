@@ -1377,9 +1377,13 @@ impl Game<'_> {
             .iter()
             .flat_map(|(_, m)| m.faces.iter())
             .find(|f| f.quad.facing == horizon_assets::model::Direction::Up)
-            .or_else(|| models.iter().flat_map(|(_, m)| m.faces.iter()).next())?;
-        let name = self.res.layer_names.get(&face.layer)?.clone();
-        let tint = if face.quad.tint_index >= 0 {
+            .or_else(|| models.iter().flat_map(|(_, m)| m.faces.iter()).next());
+        // Entity-rendered blocks may have a particle texture without any faces.
+        let layer = face
+            .map(|face| face.layer)
+            .or_else(|| models.iter().find_map(|(_, model)| model.particle))?;
+        let name = self.res.layer_names.get(&layer)?.clone();
+        let tint = if face.is_some_and(|face| face.quad.tint_index >= 0) {
             let n = &self.res.facts.get(state).name;
             if n.contains("leaves") || n.contains("vine") {
                 0x48B518
@@ -5514,6 +5518,20 @@ impl Game<'_> {
                 self.res
                     .block_entity_render
                     .render(&scene, visible, &mut out);
+            }
+            if let Some(mining) = &self.mining
+                && mining.progress > 0.0
+                && self.res.atlas.sprites.contains_key(&format!(
+                    "block/destroy_stage_{}",
+                    ((mining.progress * 10.0) as u32).min(9)
+                ))
+            {
+                let state = self
+                    .world
+                    .block(mining.pos[0], mining.pos[1], mining.pos[2]);
+                self.res
+                    .block_entity_render
+                    .render_banner_breaking(&scene, mining.pos, state.0, &mut out);
             }
         }
         // Experience orbs (ExperienceOrbRenderer): pulsing billboards from a 4x4 icon sheet.
