@@ -139,16 +139,40 @@ impl MobWorld<'_> {
     /// `Level.findSupportingBlock`: of the blocks whose collision shape
     /// meets `area`, the one whose centre is nearest `from` (ties: the
     /// greatest by `Vec3i.compareTo`, y then z then x).
+    ///
+    /// Like `BlockCollisions`' cursor, a block whose shape stays inside its
+    /// own cell (not `hasLargeCollisionShape`, not a moving piston) is only
+    /// shaped when that cell meets `area`: elsewhere it cannot. The pick is
+    /// a total order, so the column-by-column visit finds the same block.
     pub fn supporting_block(&self, area: Aabb, from: Vec3) -> Option<[i32; 3]> {
         use horizon_core::geometry::Axis;
         let range = |axis| {
             (area.min(axis) - 1.0e-7).floor() as i32 - 1
                 ..=(area.max(axis) + 1.0e-7).floor() as i32 + 1
         };
+        // Aabb.intersects of the unit cell at `c` along one axis.
+        let meets = |axis, c: i32| {
+            let c = f64::from(c);
+            c < area.max(axis) && c + 1.0 > area.min(axis)
+        };
         let mut best: Option<(f64, [i32; 3])> = None;
-        for y in range(Axis::Y) {
+        for x in range(Axis::X) {
             for z in range(Axis::Z) {
-                for x in range(Axis::X) {
+                let Some(chunk) = self.world.chunks.get(&(x >> 4, z >> 4)) else {
+                    continue;
+                };
+                let column = meets(Axis::X, x) && meets(Axis::Z, z);
+                for y in range(Axis::Y) {
+                    let state = chunk.block(x & 15, y, z & 15);
+                    let Ok(block) = self.collision.collision_block(state) else {
+                        continue;
+                    };
+                    if !block.large_collision_shape
+                        && !block.moving_piston
+                        && !(column && meets(Axis::Y, y))
+                    {
+                        continue;
+                    }
                     if !self
                         .block_collision_boxes(x, y, z)
                         .iter()
