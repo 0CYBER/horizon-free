@@ -158,6 +158,24 @@ pub fn command(dir: &Path, words: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// `panel`: a one-time login link for the web panel.
+pub fn panel(dir: &Path) -> Result<(), String> {
+    let reply = running(dir)?.call("POST", "/api/v1/panel/login", None)?;
+    let url = reply["url"].as_str().unwrap_or_default();
+    println!(
+        "Open this link in your browser (it works once, for 10 minutes):\n  {url}\n\
+         From another computer: put a tailnet address in [panel] bind, or forward the port first:\n  \
+         ssh -L {port}:{target} <this server>",
+        port = url
+            .split('/')
+            .nth(2)
+            .and_then(|h| h.rsplit_once(':'))
+            .map_or("8130", |(_, p)| p),
+        target = url.split('/').nth(2).unwrap_or("127.0.0.1:8130"),
+    );
+    Ok(())
+}
+
 /// `status [--json]`.
 pub fn status(dir: &Path, as_json: bool) -> Result<(), String> {
     let Some(client) = Client::open(dir)? else {

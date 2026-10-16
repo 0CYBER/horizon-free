@@ -79,6 +79,24 @@ pub fn run(dir: &Path) -> Result<(), String> {
     let _lock = lock(dir)?;
     let shared = Shared::new(dir);
     let _endpoint = api::start(shared.clone())?;
+    match config.panel.address() {
+        Ok(Some(address)) => match crate::panel::start(shared.clone(), address) {
+            Ok(()) => note(
+                &shared,
+                "INFO",
+                &format!(
+                    "Web panel on http://{address} (`horizon-server panel` prints a login link)"
+                ),
+            ),
+            Err(e) => note(
+                &shared,
+                "WARN",
+                &format!("The web panel can't listen on {address}: {e}"),
+            ),
+        },
+        Ok(None) => {}
+        Err(e) => note(&shared, "WARN", &e),
+    }
     sample(shared.clone());
     schedule_backups(shared.clone());
     let console = console_lines();
@@ -239,7 +257,7 @@ fn pump(shared: &Arc<Shared>, from: impl Read + Send + 'static, to_stderr: bool)
         });
 }
 
-/// Every second, the game's RAM, CPU and status, for `status` and (later) the panel's graphs.
+/// Every second, the game's RAM, CPU and status, for `status` and the panel's graphs.
 fn sample(shared: Arc<Shared>) {
     let _ = thread::Builder::new()
         .name("sampler".into())
@@ -280,8 +298,20 @@ fn sample(shared: Arc<Shared>) {
                         control = None;
                         None
                     });
+                let rss = horizon_bench::rss_bytes(pid);
+                shared.record(json!({
+                    "t": std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_secs()),
+                    "tps": game.as_ref().and_then(|g| g["tps"].as_f64()),
+                    "mspt": game.as_ref().and_then(|g| g["mspt"]["average"].as_f64()),
+                    "mspt_p95": game.as_ref().and_then(|g| g["mspt"]["p95"].as_f64()),
+                    "rss_bytes": rss,
+                    "cpu_percent": cpu_percent,
+                    "players": game.as_ref().and_then(|g| g["players"].as_array().map(Vec::len)),
+                }));
                 shared.state.lock().unwrap().sample = json!({
-                    "rss_bytes": horizon_bench::rss_bytes(pid),
+                    "rss_bytes": rss,
                     "cpu_percent": cpu_percent,
                     "game": game,
                 });

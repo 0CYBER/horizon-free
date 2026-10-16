@@ -6,14 +6,17 @@
 //! - `GET /api/v1/logs?since=N`: the log lines after the Nth.
 //! - `POST /api/v1/command {"line": "..."}`: a console command; the lines it logged.
 //! - `POST /api/v1/stop`, `POST /api/v1/restart`.
+//! - `GET /api/v1/metrics?since=T`: the samples taken after T (seconds since 1970), up to 10 minutes.
 //! - `GET /api/v1/backups`; `POST /api/v1/backups {"name": "..."}` backs up now; `POST /api/v1/restore
 //!   {"name": "..."}` restarts the game with that backup's world.
+//! - `POST /api/v1/panel/login`: a one-time login link for the web panel (with the token only).
 
 use crate::{
     backup,
     config::Config,
     engine,
     http::{self, Request, Response},
+    panel,
 };
 use serde_json::{Value, json};
 use std::{
@@ -31,6 +34,8 @@ use std::{
 const ENDPOINT: &str = ".horizon/api.json";
 /// The log lines kept for `logs` and the panel's console.
 const LOG_LINES: usize = 2000;
+/// The samples kept for the panel's graphs: 10 minutes, one a second.
+const METRICS: usize = 600;
 
 /// What the supervisor is doing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,6 +103,10 @@ pub struct Shared {
     /// Held while a backup is written: one at a time.
     pub backing_up: Mutex<()>,
     pub started: Instant,
+    /// The last samples, oldest first, for the panel's graphs.
+    pub metrics: Mutex<VecDeque<Value>>,
+    /// The panel's address, login links and sessions.
+    pub panel: Mutex<panel::Auth>,
 }
 
 impl Shared {
@@ -118,7 +127,17 @@ impl Shared {
             restore: Mutex::new(None),
             backing_up: Mutex::new(()),
             started: Instant::now(),
+            metrics: Mutex::new(VecDeque::new()),
+            panel: Mutex::new(panel::Auth::default()),
         })
+    }
+    /// Keeps one sample for the graphs.
+    pub fn record(&self, sample: Value) {
+        let mut metrics = self.metrics.lock().unwrap();
+        if metrics.len() == METRICS {
+            metrics.pop_front();
+        }
+        metrics.push_back(sample);
     }
     pub fn set_phase(&self, phase: Phase) {
         self.state.lock().unwrap().phase = phase;
@@ -172,7 +191,7 @@ fn status(shared: &Shared) -> Value {
 }
 
 /// A random token: two 64-bit hashes keyed by the OS's random hasher seeds, the time and the process.
-fn random_token() -> String {
+pub fn random_token() -> String {
     use std::hash::{BuildHasher, Hasher};
     (0..2u64)
         .map(|i| {
@@ -189,7 +208,7 @@ fn random_token() -> String {
         .collect()
 }
 
-fn same_token(a: &str, b: &str) -> bool {
+pub fn same_token(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |d, (x, y)| d | (x ^ y)) == 0
 }
 
@@ -238,15 +257,40 @@ pub fn start(shared: Arc<Shared>) -> Result<Endpoint, String> {
         {
             return Response::error(403, "wrong Host");
         }
+        if (request.method.as_str(), request.path.as_str()) == ("POST", "/api/v1/panel/login") {
+            return match shared.panel.lock().unwrap().login_link() {
+                Some(url) => Response::json(200, &json!({ "url": url })),
+                None => Response::error(
+                    409,
+                    "the panel is off: set [panel] bind in server.toml and restart",
+                ),
+            };
+        }
         route(&shared, request)
     })
     .map_err(|e| e.to_string())?;
     Ok(Endpoint(path))
 }
 
-fn route(shared: &Shared, request: &Request) -> Response {
+/// The API's routes, for the CLI (with the token) and the panel (with a session).
+pub fn route(shared: &Shared, request: &Request) -> Response {
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/api/v1/status") => Response::json(200, &status(shared)),
+        ("GET", "/api/v1/metrics") => {
+            let since: u64 = request
+                .param("since")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            let samples: Vec<Value> = shared
+                .metrics
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|m| m["t"].as_u64().is_some_and(|t| t > since))
+                .cloned()
+                .collect();
+            Response::json(200, &json!({ "samples": samples }))
+        }
         ("GET", "/api/v1/logs") => {
             let since = request
                 .param("since")
@@ -313,7 +357,7 @@ fn route(shared: &Shared, request: &Request) -> Response {
         (
             _,
             "/api/v1/status" | "/api/v1/logs" | "/api/v1/command" | "/api/v1/stop"
-            | "/api/v1/restart" | "/api/v1/backups" | "/api/v1/restore",
+            | "/api/v1/restart" | "/api/v1/backups" | "/api/v1/restore" | "/api/v1/metrics",
         ) => Response::error(405, "wrong method"),
         _ => Response::error(404, "no such endpoint"),
     }
