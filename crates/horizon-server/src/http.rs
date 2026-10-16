@@ -1,6 +1,6 @@
-//! Just enough HTTP/1.1 for the control API on 127.0.0.1 (docs/server.md, section 8): one request per
-//! connection, JSON bodies with a Content-Length. No async runtime and no dependency: a thread per
-//! connection is plenty for a CLI, a panel tab and an MCP client.
+//! Just enough HTTP/1.1 for the control API on 127.0.0.1 and the web panel (docs/server.md, sections 6 and
+//! 8): one request per connection, bodies with a Content-Length. No async runtime and no dependency: a
+//! thread per connection is plenty for a CLI, a panel tab and an MCP client.
 
 use std::{
     io::{BufRead, BufReader, Read, Write},
@@ -26,7 +26,8 @@ impl Request {
             .find(|(k, _)| k.eq_ignore_ascii_case(name))
             .map(|(_, v)| v.as_str())
     }
-    /// One `key=value` from the query string (no percent-decoding: the API's values are numbers).
+    /// One `key=value` from the query string (no percent-decoding: the API's values are numbers and
+    /// tokens).
     pub fn param(&self, key: &str) -> Option<&str> {
         self.query
             .split('&')
@@ -34,28 +35,50 @@ impl Request {
             .find(|(k, _)| *k == key)
             .map(|(_, v)| v)
     }
+    /// One cookie the browser sent.
+    pub fn cookie(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("cookie"))
+            .flat_map(|(_, v)| v.split(';'))
+            .filter_map(|c| c.trim().split_once('='))
+            .find(|(k, _)| *k == name)
+            .map(|(_, v)| v)
+    }
 }
 
 pub struct Response {
     pub status: u16,
+    pub content_type: &'static str,
+    pub headers: Vec<(&'static str, String)>,
     pub body: String,
 }
 
 impl Response {
     pub fn json(status: u16, value: &serde_json::Value) -> Self {
-        Self {
-            status,
-            body: value.to_string(),
-        }
+        Self::text(status, "application/json", value.to_string())
     }
     pub fn error(status: u16, message: &str) -> Self {
         Self::json(status, &serde_json::json!({ "error": message }))
+    }
+    pub fn text(status: u16, content_type: &'static str, body: impl Into<String>) -> Self {
+        Self {
+            status,
+            content_type,
+            headers: Vec::new(),
+            body: body.into(),
+        }
+    }
+    pub fn with(mut self, header: &'static str, value: impl Into<String>) -> Self {
+        self.headers.push((header, value.into()));
+        self
     }
 }
 
 fn reason(status: u16) -> &'static str {
     match status {
         200 => "OK",
+        303 => "See Other",
         400 => "Bad Request",
         401 => "Unauthorized",
         403 => "Forbidden",
@@ -63,6 +86,7 @@ fn reason(status: u16) -> &'static str {
         405 => "Method Not Allowed",
         409 => "Conflict",
         413 => "Payload Too Large",
+        429 => "Too Many Requests",
         _ => "Error",
     }
 }
@@ -112,14 +136,20 @@ fn read_request(stream: &TcpStream) -> Result<Request, Response> {
 }
 
 fn write_response(mut stream: &TcpStream, response: &Response) {
-    let _ = write!(
-        stream,
-        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{}",
+    let mut head = format!(
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n",
         response.status,
         reason(response.status),
+        response.content_type,
         response.body.len(),
-        response.body
     );
+    for (name, value) in &response.headers {
+        head.push_str(&format!("{name}: {value}\r\n"));
+    }
+    head.push_str("\r\n");
+    let _ = stream
+        .write_all(head.as_bytes())
+        .and_then(|()| stream.write_all(response.body.as_bytes()));
     let _ = stream.flush();
 }
 

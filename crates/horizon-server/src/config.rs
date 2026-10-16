@@ -48,6 +48,10 @@ restart_on_crash = true
 [backups]
 every = "6h"                 # automatic backups while the server runs: 30m, 6h, 1d...; "0" turns them off
 keep = 12                    # automatic backups kept (backups made by hand are never deleted)
+
+[panel]
+bind = "127.0.0.1:8130"      # the web panel: this computer only, or a tailnet address (100.x); "" turns it off
+allow_public = false         # true lets bind be any address; never put the panel on the open internet
 "##;
 
 /// Each typed setting: its section, its name, and the vanilla key it writes.
@@ -81,6 +85,8 @@ pub struct Config {
     pub engine: Engine,
     #[serde(default)]
     pub backups: Backups,
+    #[serde(default)]
+    pub panel: Panel,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -115,6 +121,57 @@ pub struct Engine {
     pub path: String,
     pub resources: String,
     pub restart_on_crash: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Panel {
+    pub bind: String,
+    pub allow_public: bool,
+}
+
+impl Default for Panel {
+    fn default() -> Self {
+        Self {
+            bind: "127.0.0.1:8130".into(),
+            allow_public: false,
+        }
+    }
+}
+
+impl Panel {
+    /// Where the panel listens; `None` when it is off.
+    pub fn address(&self) -> Result<Option<std::net::SocketAddr>, String> {
+        if self.bind.trim().is_empty() {
+            return Ok(None);
+        }
+        let address: std::net::SocketAddr = self.bind.trim().parse().map_err(|_| {
+            format!(
+                "panel.bind is \"{}\": use an address and a port, like 127.0.0.1:8130",
+                self.bind
+            )
+        })?;
+        if !self.allow_public && !private(address.ip()) {
+            return Err(format!(
+                "panel.bind is \"{}\": the panel listens only on this computer (127.0.0.1) or a tailnet \
+                 address (100.64.0.0/10, fd7a:115c:a1e0::/48); reach it from elsewhere over Tailscale or SSH",
+                self.bind
+            ));
+        }
+        Ok(Some(address))
+    }
+}
+
+/// Loopback, or a Tailscale address: reachable only from this computer or the owner's tailnet.
+pub fn private(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_loopback() || (v4.octets()[0] == 100 && (v4.octets()[1] & 0xc0) == 64)
+        }
+        std::net::IpAddr::V6(v6) => {
+            v6.is_loopback() || v6.segments()[..3] == [0xfd7a, 0x115c, 0xa1e0]
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -219,6 +276,7 @@ impl Config {
             ));
         }
         crate::backup::interval(&self.backups.every)?;
+        self.panel.address()?;
         if self.server.port == 0 {
             return Err("server.port must be a port number from 1 to 65535".into());
         }
@@ -320,6 +378,8 @@ pub fn render(config: &Config) -> String {
         ("engine", "restart_on_crash"),
         ("backups", "every"),
         ("backups", "keep"),
+        ("panel", "bind"),
+        ("panel", "allow_public"),
     ] {
         set(&mut doc, section, field, &table[section][field]);
     }
@@ -492,6 +552,34 @@ mod tests {
         assert!(text.contains("spawn-protection = 0"), "{text}");
         assert!(text.contains("port = 25600"), "{text}");
         assert_eq!(Config::parse(&text).unwrap(), c);
+    }
+
+    #[test]
+    fn the_panel_stays_private() {
+        let panel = |bind: &str, allow_public| Panel {
+            bind: bind.into(),
+            allow_public,
+        };
+        assert!(panel("127.0.0.1:8130", false).address().unwrap().is_some());
+        assert!(panel("[::1]:8130", false).address().unwrap().is_some());
+        assert!(
+            panel("100.101.102.103:8130", false)
+                .address()
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            panel("[fd7a:115c:a1e0::1]:8130", false)
+                .address()
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(panel("", false).address().unwrap(), None);
+        assert!(panel("0.0.0.0:8130", false).address().is_err());
+        assert!(panel("100.128.0.1:8130", false).address().is_err());
+        assert!(panel("192.168.1.2:8130", false).address().is_err());
+        assert!(panel("192.168.1.2:8130", true).address().unwrap().is_some());
+        assert!(panel("localhost", false).address().is_err());
     }
 
     #[test]

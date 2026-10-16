@@ -9,6 +9,7 @@ mod engine;
 mod http;
 mod init;
 mod lists;
+mod panel;
 mod service;
 mod signals;
 mod supervisor;
@@ -42,6 +43,8 @@ Usage: horizon-server [--dir DIR] <command>
   service install|uninstall|print [--system]
               Start the server at boot or login: a systemd unit on Linux (--system: for every user,
               with sudo), a launchd agent on macOS, a task at logon on Windows
+  panel       A one-time login link for the web panel ([panel] in server.toml; 127.0.0.1:8130 by
+              default)
   import FILE Write server.toml from a vanilla server.properties
   op NAME, deop NAME
   whitelist on|off|list, whitelist add|remove NAME
@@ -80,6 +83,7 @@ fn main() -> ExitCode {
         Some("status") => cli::status(&dir, args[1..].iter().any(|a| a == "--json")),
         Some("cmd") => cli::command(&dir, &args[1..]),
         Some("logs") => logs(&dir, &args[1..]),
+        Some("panel") => cli::panel(&dir),
         Some("backup") => cli::backup(&dir, args.get(1).map(String::as_str)),
         Some("backups") => cli::backups(&dir),
         Some("service") => service::command(&dir, &args[1..]),
