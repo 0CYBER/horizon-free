@@ -397,7 +397,7 @@ impl Title {
         scroll.wheel(delta, ROW_HEIGHT / 2.0, top, bottom, content);
         self.scroll.set(scroll);
     }
-    fn failed(&mut self, error: impl std::fmt::Display) {
+    pub fn failed(&mut self, error: impl std::fmt::Display) {
         let return_to = Box::new(self.mode.clone());
         self.mode = Mode::Error {
             message: error.to_string(),

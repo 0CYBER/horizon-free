@@ -153,7 +153,20 @@ fn number_format(f: &play::NumberFormat) -> horizon_client::scoreboard::NumberFo
 impl Game<'_> {
     /// Leave the title for a server (ConnectScreen): an empty world fed by the connection.
     pub(super) fn connect_server(&mut self, address: &str, name: &str) -> Result<()> {
-        self.join_server(address, name, None)
+        if let Err(error) = self.join_server(address, name, None) {
+            log::warn!("Horizon: could not join server: {error}");
+            if self.title.is_none() {
+                self.title = Some(horizon_client::title::Title::new(
+                    std::env::current_dir()?.join("saves"),
+                    &self.options.resources,
+                ));
+            }
+            if let Some(title) = &mut self.title {
+                title.failed(error);
+            }
+            self.capture(false);
+        }
+        Ok(())
     }
     /// Join single player's integrated server through memory.
     pub(super) fn connect_local(
@@ -173,7 +186,7 @@ impl Game<'_> {
         let root = self.options.resources.clone();
         let builtin = Builtin::find(&root)
             .and_then(|p| Builtin::load(&p).ok())
-            .ok_or("registries.json not found next to the resources; run the data generator reports (horizon-prepare)")?;
+            .ok_or("Resources are incomplete: registries.json is missing or invalid. Repair resources in the launcher (or run horizon-prepare), then try again.")?;
         let lang = Arc::new(horizon_client::net::load_language(&root));
         let view = self.settings.render_distance.clamp(2, 32) as i8;
         if local.is_none() {
