@@ -8,6 +8,7 @@ pub mod include;
 pub mod options;
 pub mod preprocess;
 pub mod source;
+pub mod translate;
 
 use include::{IncludeGraph, Inlined};
 use options::{Annotated, OptionSet, OptionValues};
@@ -17,6 +18,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
 };
+use translate::{Link, Translated};
 
 /// A program's pipeline stage, from its file extension.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,5 +120,21 @@ impl JavaPack {
         env: &Environment,
     ) -> Result<Preprocessed, String> {
         preprocess::preprocess(&self.source(program, values)?, env)
+    }
+
+    /// `program` translated to WGSL. The programs of one pass (its `.vsh`,
+    /// then its `.fsh`) share `link`.
+    pub fn translate(
+        &self,
+        program: &str,
+        values: &OptionValues,
+        env: &Environment,
+        link: &mut Link,
+    ) -> Result<Translated, String> {
+        let stage = Stage::of(program).ok_or_else(|| format!("{program}: not a program"))?;
+        let source = self.source(program, values)?;
+        let pre = preprocess::preprocess(&source, env)?;
+        translate::translate(stage, &pre.text, link, &|line| source.locate(line))
+            .map_err(|e| format!("{program}: {e}"))
     }
 }
