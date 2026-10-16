@@ -23,6 +23,29 @@ pub const OP_ONLY: [&str; 6] = [
     "minecraft:trial_spawner",
 ];
 
+/// The `minecraft:block_entity_data` of `stack`: its type id and its data.
+pub fn data(stack: &crate::items::ItemStack) -> Option<(String, &Tag)> {
+    let data = stack.data()?.other(BLOCK_ENTITY_DATA)?;
+    Some((block_entity_nbt::id(data)?, data))
+}
+
+/// `BlockItem.shouldPrintOpWarning` for a player with game master permission:
+/// the item carries data of an op-only type.
+pub fn op_warning(stack: &crate::items::ItemStack) -> bool {
+    data(stack).is_some_and(|(id, _)| OP_ONLY.contains(&id.as_str()))
+}
+
+/// `Spawner.getSpawnEntityDisplayName` (`SpawnData.entity.id` of the item's
+/// data, which `ItemStack.addDetailsToTooltip` reads for spawners and trial
+/// spawners alike): the entity type a spawner item spawns.
+pub fn spawner_entity(stack: &crate::items::ItemStack) -> Option<String> {
+    let (_, data) = data(stack)?;
+    match data.get("SpawnData")?.get("entity")?.get("id")? {
+        Tag::String(id) => Some(id.to_string_lossy()),
+        _ => None,
+    }
+}
+
 /// A part of a block entity's NBT that its item holds as a component.
 #[derive(Clone, Copy)]
 enum Part {
@@ -422,6 +445,29 @@ mod tests {
         // Data of another type is ignored.
         let chest = saved("{id:\"minecraft:chest\",x:0,y:0,z:0}");
         assert_eq!(place(&chest, &patch, true), chest);
+    }
+
+    #[test]
+    fn item_data_names_its_spawn_and_op_only_types() {
+        let item = |text: &str| {
+            let components = snbt(&format!("{{\"minecraft:block_entity_data\":{text}}}"));
+            let (damage, extra) = crate::item_data::decode_components(Some(&components));
+            crate::items::ItemStack {
+                damage,
+                extra,
+                ..crate::items::ItemStack::new("minecraft:spawner", 1)
+            }
+        };
+        let spawner =
+            item("{id:\"minecraft:mob_spawner\",SpawnData:{entity:{id:\"minecraft:zombie\"}}}");
+        assert_eq!(
+            spawner_entity(&spawner).as_deref(),
+            Some("minecraft:zombie")
+        );
+        assert!(op_warning(&spawner));
+        let chest = item("{id:\"minecraft:chest\",LootTable:\"x\"}");
+        assert_eq!(spawner_entity(&chest), None);
+        assert!(!op_warning(&chest));
     }
 
     #[test]
