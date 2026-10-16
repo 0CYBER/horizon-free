@@ -516,9 +516,22 @@ def changed_pixels(a, b):
                if max(abs(la[i + k] - lb[i + k]) for k in range(3)) > 24)
 
 
+def sneaking_on_host(host, want, ticks=40):
+    """Whether the host sees the guest crouching, once it matches `want` or after `ticks`."""
+    for _ in range(ticks // 5):
+        sneaking = host.raw('lan', 'status')['guests'][0]['sneaking']
+        if sneaking == want:
+            return sneaking
+        host.wait(5)
+    return sneaking
+
+
 def check_walls(host, guest, out):
     # A stone wall between the two: the host still sees the guest's name through it
     # (TEXT_SEE_THROUGH), but not once the guest crouches (Entity.isDiscrete).
+    for g in (host, guest):
+        back_to_game(g)
+    face_each_other(host, guest)
     hx, hy, hz = pos_of(host)
     gx, gy, gz = pos_of(guest)
     wall = int(hx // 1) + 1
@@ -530,9 +543,11 @@ def check_walls(host, guest, out):
         host.wait(210)
         standing = host.shot(out, 'walls-standing')
         guest.raw('key', 'shift', 'down')
-        guest.wait(20)
+        crouched = sneaking_on_host(host, True)
+        guest.wait(10)
         crouching = host.shot(out, 'walls-crouching')
         guest.raw('key', 'shift', 'up')
+        stood = not sneaking_on_host(host, False)
         guest.wait(10)
         again = host.shot(out, 'walls-standing-again')
     finally:
@@ -540,6 +555,7 @@ def check_walls(host, guest, out):
         host('command', command=f'fill {wall} {int(hy // 1)} {int(hz // 1) - 3} {wall} {int(hy // 1) + 4} '
                                 f'{int(hz // 1) + 3} minecraft:air')
         face_each_other(host, guest)
+    assert crouched and stood, f'the host never saw the guest crouch and stand: {crouched}, {stood}'
     seen, steady = changed_pixels(standing, crouching), changed_pixels(standing, again)
     assert seen > 50, f'no name tag through the wall: {seen} pixels differ standing vs crouching'
     assert steady < seen // 4, f'the view itself changed: {steady} pixels between two standing shots ({seen})'
