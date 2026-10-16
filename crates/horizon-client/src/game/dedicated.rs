@@ -9,7 +9,7 @@
 use super::{Game, Options, lan::LanSettings};
 use horizon_client::{
     Result,
-    lan::{LoginGate, NetConfig, hub::HubConfig},
+    lan::{LoginGate, NetConfig, NetLog, OnlineMode, hub::HubConfig},
     server::{
         eula,
         java_properties::now_millis,
@@ -60,6 +60,11 @@ static SETUP: OnceLock<Mutex<Option<Setup>>> = OnceLock::new();
 
 /// Log4j's console pattern: `[HH:mm:ss] [thread/LEVEL]: message`.
 pub(super) fn log(level: &str, message: &str) {
+    log_from("Server thread", level, message);
+}
+
+/// A line from another of vanilla's threads (the login's User Authenticator).
+fn log_from(thread: &str, level: &str, message: &str) {
     let file_level = match level {
         "WARN" => ::log::Level::Warn,
         "ERROR" => ::log::Level::Error,
@@ -73,7 +78,7 @@ pub(super) fn log(level: &str, message: &str) {
     });
     let secs = now_millis().div_euclid(1000).rem_euclid(86_400);
     println!(
-        "[{:02}:{:02}:{:02}] [Server thread/{level}]: {message}",
+        "[{:02}:{:02}:{:02}] [{thread}/{level}]: {message}",
         secs / 3600,
         secs / 60 % 60,
         secs % 60
@@ -354,6 +359,19 @@ impl Game<'_> {
             ),
         );
         let port = port.unwrap_or(props.server_port as u16);
+        // MinecraftServer.initializeKeyPair (only online mode uses it).
+        log("INFO", "Generating keypair");
+        let online = if props.online_mode {
+            let key = horizon_protocol::rsa::RsaPrivateKey::generate(1024)
+                .map_err(|e| format!("Failed to generate key pair: {e}"))?;
+            Some(Arc::new(OnlineMode {
+                public_der: key.public_der(),
+                key,
+                prevent_proxy: props.prevent_proxy_connections,
+            }))
+        } else {
+            None
+        };
         log(
             "INFO",
             &format!(
@@ -365,27 +383,21 @@ impl Game<'_> {
                 }
             ),
         );
-        if props.online_mode {
-            // Authentication needs Mojang's session servers (an HTTPS client
-            // and RSA), which Horizon does not have yet: offline mode.
+        if online.is_none() {
+            log("WARN", "**** SERVER IS RUNNING IN OFFLINE/INSECURE MODE!");
             log(
                 "WARN",
-                "online-mode=true is not supported by Horizon yet: running in offline mode",
+                "The server will make no attempt to authenticate usernames. Beware.",
+            );
+            log(
+                "WARN",
+                "While this makes the game possible to play without internet access, it also opens up the ability for hackers to connect with any username they choose.",
+            );
+            log(
+                "WARN",
+                "To change this, set \"online-mode\" to \"true\" in the server.properties file.",
             );
         }
-        log("WARN", "**** SERVER IS RUNNING IN OFFLINE/INSECURE MODE!");
-        log(
-            "WARN",
-            "The server will make no attempt to authenticate usernames. Beware.",
-        );
-        log(
-            "WARN",
-            "While this makes the game possible to play without internet access, it also opens up the ability for hackers to connect with any username they choose.",
-        );
-        log(
-            "WARN",
-            "To change this, set \"online-mode\" to \"true\" in the server.properties file.",
-        );
         let mut lists = Lists::load();
         lists.use_whitelist = props.white_list;
         lists.enforce_whitelist = props.enforce_whitelist;
@@ -451,6 +463,12 @@ impl Game<'_> {
                     .any(|e| e.user.id == uuid && e.bypasses_player_limit)
             })),
             gate: Some(gate),
+            online,
+            log: Some(NetLog {
+                write: Arc::new(log_from),
+                lang: Arc::new(horizon_client::net::load_language(&self.options.resources)),
+                log_ips: props.log_ips,
+            }),
         };
         let config = HubConfig {
             default_game_mode: game_mode,

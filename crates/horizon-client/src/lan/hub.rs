@@ -389,7 +389,12 @@ impl Hub {
         play::PlayerInfo {
             uuid,
             name: Some(name.to_owned()),
-            properties: Vec::new(),
+            properties: self
+                .guests
+                .iter()
+                .find(|g| g.uuid == uuid)
+                .map(|g| g.properties.clone())
+                .unwrap_or_default(),
             chat_session: None,
             game_mode: Some(mode),
             listed: Some(true),

@@ -1,4 +1,5 @@
-//! One accepted connection: handshake, status ping, offline-mode login and the
+//! One accepted connection: handshake, status ping, login (offline, or online
+//! with encryption and the session service's verdict) and the
 //! configuration phase (ServerStatusPacketListenerImpl,
 //! ServerLoginPacketListenerImpl, ServerConfigurationPacketListenerImpl). A
 //! player that completes configuration continues in the play state: the
@@ -12,7 +13,7 @@ use super::{
 use horizon_protocol::{
     PROTOCOL_VERSION,
     connection::{ConnReader, ConnWriter, Connection},
-    crypto::offline_uuid,
+    crypto::{offline_uuid, server_hash, uuid_string},
     packets::{
         Empty,
         configuration::{self as cfg, ClientInformation, KnownPack},
@@ -24,7 +25,7 @@ use std::{
     net::TcpStream,
     sync::{
         Arc,
-        atomic::{AtomicI32, AtomicI64, AtomicUsize, Ordering},
+        atomic::{AtomicI32, AtomicI64, AtomicU32, AtomicUsize, Ordering},
         mpsc::{Receiver, RecvTimeoutError, Sender, channel},
     },
     time::{Duration, Instant},
@@ -305,6 +306,145 @@ fn serve_status(c: &mut Connection, shared: &Shared) -> Result<(), String> {
     }
 }
 
+/// ServerLoginPacketListenerImpl.getUserName: the name and the address
+/// (Connection.getLoggableAddress, `/ip:port` as InetSocketAddress prints it).
+fn user_name(name: &str, address: std::net::SocketAddr, log: &super::NetLog) -> String {
+    if log.log_ips {
+        format!("{name} (/{address})")
+    } else {
+        format!("{name} (<ip address withheld>)")
+    }
+}
+
+/// ServerLoginPacketListenerImpl.disconnect: log the reason's text and send
+/// it. Returns the text, for the "lost connection" line that follows.
+fn refuse(
+    c: &mut Connection,
+    shared: &Shared,
+    thread: &str,
+    user: &str,
+    reason: &horizon_world::nbt::Tag,
+) -> String {
+    let text = shared
+        .config
+        .log
+        .as_ref()
+        .map(|log| horizon_protocol::text::plain(reason, &log.lang))
+        .unwrap_or_default();
+    if let Some(log) = &shared.config.log {
+        (log.write)(thread, "INFO", &format!("Disconnecting {user}: {text}"));
+    }
+    login_disconnect(c, reason);
+    text
+}
+
+/// ServerLoginPacketListenerImpl.onDisconnect, once the server thread sees
+/// the connection closed: by a refusal, or by the client ("Disconnected").
+fn lost(shared: &Shared, user: &str, text: &str) {
+    if let Some(log) = &shared.config.log {
+        (log.write)(
+            "Server thread",
+            "INFO",
+            &format!("{user} lost connection: {text}"),
+        );
+    }
+}
+
+/// UNIQUE_THREAD_ID: the User Authenticator threads are numbered from 1.
+static AUTHENTICATORS: AtomicU32 = AtomicU32::new(0);
+
+/// ServerLoginPacketListenerImpl.handleKey and the User Authenticator
+/// thread: check the client's answer to the encryption request, encrypt the
+/// connection, and ask the session service whether the player joined with
+/// this server's hash. The profile, or the text of the refusal.
+fn authenticate(
+    c: &mut Connection,
+    shared: &Shared,
+    online: &super::OnlineMode,
+    name: &str,
+    address: std::net::SocketAddr,
+    user: &str,
+) -> Result<Result<(u128, Vec<login::Property>), String>, String> {
+    let e = |e: horizon_protocol::Error| e.to_string();
+    let mut challenge = [0u8; 4];
+    horizon_protocol::crypto::random_bytes(&mut challenge).map_err(e)?;
+    c.send(
+        &login::Clientbound::Hello(login::Hello {
+            server_id: String::new(),
+            public_key: online.public_der.clone(),
+            challenge: challenge.to_vec(),
+            should_authenticate: true,
+        })
+        .encode(),
+    )
+    .map_err(e)?;
+    let (id, payload) = c.recv().map_err(e)?;
+    let key = match login::Serverbound::decode(id, &payload).map_err(e)? {
+        login::Serverbound::Key(k) => k,
+        _ => return Err("Unexpected packet during login".into()),
+    };
+    // ServerboundKeyPacket.isChallengeValid and getSecretKey.
+    let protocol_error = || "Protocol error".to_owned();
+    if online.key.decrypt(&key.challenge).ok().as_deref() != Some(&challenge[..]) {
+        return Err(protocol_error());
+    }
+    let secret: [u8; 16] = online
+        .key
+        .decrypt(&key.key)
+        .ok()
+        .and_then(|s| s.try_into().ok())
+        .ok_or_else(protocol_error)?;
+    let digest = server_hash("", &secret, &online.public_der);
+    c.enable_encryption(&secret);
+    let thread = format!(
+        "User Authenticator #{}",
+        AUTHENTICATORS.fetch_add(1, Ordering::Relaxed) + 1
+    );
+    let log = |level: &str, line: &str| {
+        if let Some(log) = &shared.config.log {
+            (log.write)(&thread, level, line);
+        }
+    };
+    let ip = online.prevent_proxy.then(|| address.ip());
+    match crate::auth::has_joined(name, &digest, ip) {
+        Ok(Some(profile)) => {
+            log(
+                "INFO",
+                &format!("UUID of player {name} is {}", uuid_string(profile.uuid)),
+            );
+            Ok(Ok((profile.uuid, profile.properties)))
+        }
+        Ok(None) => {
+            let text = refuse(
+                c,
+                shared,
+                &thread,
+                user,
+                &translatable("multiplayer.disconnect.unverified_username", &[]),
+            );
+            log(
+                "ERROR",
+                &format!("Username '{name}' tried to join with an invalid session"),
+            );
+            Ok(Err(text))
+        }
+        Err(_) => {
+            let text = refuse(
+                c,
+                shared,
+                &thread,
+                user,
+                &translatable("multiplayer.disconnect.authservers_down", &[]),
+            );
+            log(
+                "ERROR",
+                "Couldn't verify username because servers are unavailable",
+            );
+            Ok(Err(text))
+        }
+    }
+}
+
 fn serve_login(
     mut c: Connection,
     address: std::net::SocketAddr,
@@ -323,14 +463,36 @@ fn serve_login(
         );
         return Ok(());
     }
-    // Offline mode: the profile is derived from the name (PlayerList.canPlayerLogin
-    // then rejects duplicates and a full server).
-    let uuid = offline_uuid(&hello.name);
+    let user = shared
+        .config
+        .log
+        .as_ref()
+        .map(|log| user_name(&hello.name, address, log))
+        .unwrap_or_default();
+    // handleHello: online mode authenticates first; offline mode derives the
+    // profile from the name.
+    let (uuid, properties) = match &shared.config.online {
+        Some(online) => match authenticate(&mut c, shared, online, &hello.name, address, &user) {
+            Ok(Ok(profile)) => profile,
+            Ok(Err(refused)) => {
+                lost(shared, &user, &refused);
+                return Ok(());
+            }
+            Err(err) => {
+                lost(shared, &user, "Disconnected");
+                return Err(err);
+            }
+        },
+        None => (offline_uuid(&hello.name), Vec::new()),
+    };
+    // verifyLoginAndFinishConnectionSetup: PlayerList.canPlayerLogin, then
+    // duplicates and a full server.
     if let Some(reason) = shared.try_admit(address, uuid, &hello.name) {
-        login_disconnect(&mut c, &reason);
+        let text = refuse(&mut c, shared, "Server thread", &user, &reason);
+        lost(shared, &user, &text);
         return Ok(());
     }
-    let result = login_and_configure(&mut c, shared, uuid, &hello.name);
+    let result = login_and_configure(&mut c, shared, uuid, &hello.name, properties);
     match result {
         Ok(Some(parts)) => {
             play(c, shared, parts, address);
@@ -342,6 +504,9 @@ fn serve_login(
         }
         Err(err) => {
             shared.release(uuid);
+            // ServerConfigurationPacketListenerImpl.onDisconnect.
+            let profile = format!("{} ({})", hello.name, uuid_string(uuid));
+            lost(shared, &profile, "Disconnected");
             Err(err)
         }
     }
@@ -350,6 +515,7 @@ fn serve_login(
 struct Parts {
     uuid: u128,
     name: String,
+    properties: Vec<login::Property>,
     info: ClientInformation,
     brand: String,
 }
@@ -359,6 +525,7 @@ fn login_and_configure(
     shared: &Arc<Shared>,
     uuid: u128,
     name: &str,
+    properties: Vec<login::Property>,
 ) -> Result<Option<Parts>, String> {
     let e = |e: horizon_protocol::Error| e.to_string();
     let threshold = shared.config.compression_threshold;
@@ -372,7 +539,7 @@ fn login_and_configure(
             profile: login::GameProfile {
                 uuid,
                 name: name.to_owned(),
-                properties: Vec::new(),
+                properties: properties.clone(),
             },
             session: uuid,
         })
@@ -451,6 +618,7 @@ fn login_and_configure(
     Ok(Some(Parts {
         uuid,
         name: name.to_owned(),
+        properties,
         info,
         brand,
     }))
@@ -480,6 +648,7 @@ fn play(c: Connection, shared: &Arc<Shared>, parts: Parts, address: std::net::So
         conn: conn_id,
         uuid: parts.uuid,
         name: parts.name,
+        properties: parts.properties,
         info: parts.info,
         brand: parts.brand,
         sender,

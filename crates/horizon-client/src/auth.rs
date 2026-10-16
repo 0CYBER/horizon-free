@@ -232,6 +232,87 @@ pub fn join_server(session: &AuthSession, server_hash: &str) -> Result<(), JoinE
     }
 }
 
+/// What the session service says about a player joining this server
+/// (MinecraftServicesSessionService.hasJoinedServer).
+#[derive(Clone, Debug, PartialEq)]
+pub struct JoinedProfile {
+    pub uuid: u128,
+    pub properties: Vec<horizon_protocol::packets::login::Property>,
+}
+
+/// HttpDiscoveryService.buildQuery: `URLEncoder.encode(value, UTF-8)`.
+fn url_encode(text: &str) -> String {
+    let mut out = String::new();
+    for b in text.bytes() {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'.' | b'-' | b'*' | b'_' => {
+                out.push(char::from(b));
+            }
+            b' ' => out.push('+'),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// The session service's verify endpoint, asked by an online-mode server
+/// whether `name` joined with `server_hash` (and from `ip`, when the server
+/// prevents proxy connections). `Ok(None)`: it didn't, or the service said
+/// no; `Err(Unavailable)`: no answer.
+pub fn has_joined(
+    name: &str,
+    server_hash: &str,
+    ip: Option<std::net::IpAddr>,
+) -> Result<Option<JoinedProfile>, JoinError> {
+    let doc = discovery()?;
+    let url = endpoint(&doc, "session", "verify").ok_or(JoinError::Unavailable)?;
+    let mut query = format!(
+        "username={}&serverId={}",
+        url_encode(name),
+        url_encode(server_hash)
+    );
+    if let Some(ip) = ip {
+        query.push_str(&format!("&ip={}", url_encode(&ip.to_string())));
+    }
+    let separator = if url.contains('?') { '&' } else { '?' };
+    let body = match agent().get(&format!("{url}{separator}{query}")).call() {
+        Ok(response) => response.into_string().unwrap_or_default(),
+        Err(ureq::Error::Status(status, response)) => {
+            let error =
+                JoinError::from_response(status, &response.into_string().unwrap_or_default());
+            return match error {
+                JoinError::Unavailable => Err(error),
+                _ => Ok(None),
+            };
+        }
+        Err(ureq::Error::Transport(_)) => return Err(JoinError::Unavailable),
+    };
+    Ok(parse_joined(&body))
+}
+
+/// HasJoinedMinecraftServerResponse: `id` and `properties`; no id is no profile.
+pub fn parse_joined(body: &str) -> Option<JoinedProfile> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    let uuid = parse_uuid(v.get("id")?.as_str()?)?;
+    let properties = v
+        .get("properties")
+        .and_then(|p| p.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|p| {
+            Some(horizon_protocol::packets::login::Property {
+                name: p.get("name")?.as_str()?.to_owned(),
+                value: p.get("value")?.as_str()?.to_owned(),
+                signature: p
+                    .get("signature")
+                    .and_then(|s| s.as_str())
+                    .map(str::to_owned),
+            })
+        })
+        .collect();
+    Some(JoinedProfile { uuid, properties })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,6 +329,20 @@ mod tests {
         }
         let _ = mode;
         path
+    }
+
+    #[test]
+    fn verify_answers() {
+        assert_eq!(url_encode("Tester_1"), "Tester_1");
+        assert_eq!(url_encode("-5a f"), "-5a+f");
+        assert_eq!(url_encode("::1"), "%3A%3A1");
+        let body = r#"{"id":"069a79f444e94726a5befca90e38aaf5","name":"Notch","properties":[{"name":"textures","value":"e30=","signature":"c2ln"}]}"#;
+        let p = parse_joined(body).unwrap();
+        assert_eq!(p.uuid, UUID);
+        assert_eq!(p.properties.len(), 1);
+        assert_eq!(p.properties[0].signature.as_deref(), Some("c2ln"));
+        assert_eq!(parse_joined(""), None);
+        assert_eq!(parse_joined(r#"{"name":"Notch"}"#), None);
     }
 
     #[test]
