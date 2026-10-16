@@ -525,7 +525,7 @@ impl Game<'_> {
 
     /// Load the spawn area and find the world spawn as single player does,
     /// without keeping a player there.
-    fn settle_spawn(&mut self) -> Result<()> {
+    pub(super) fn settle_spawn(&mut self) -> Result<()> {
         let deadline = Instant::now() + Duration::from_secs(600);
         while self.player.is_none() {
             self.update_world();
@@ -541,7 +541,7 @@ impl Game<'_> {
 
     /// The chunks to keep loaded: the players' (lan_update_streaming), or
     /// the spawn chunk while nobody is online.
-    fn update_dedicated_streaming(&mut self) {
+    pub(super) fn update_dedicated_streaming(&mut self) {
         let center = self
             .lan
             .as_ref()

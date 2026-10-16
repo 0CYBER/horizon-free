@@ -200,6 +200,8 @@ pub struct Streaming {
     /// More areas to keep loaded (centre chunk, radius), e.g. around guests
     /// of a world open to the network. They are generated and kept but not meshed.
     pub extra: Vec<((i32, i32), i32)>,
+    /// Mesh the sections for drawing (false on a server thread).
+    pub mesh: bool,
 }
 /// Snapshot only after a scan found no missing candidates. Public range fields
 /// and `World::chunks` can change without going through Streaming, so compare
@@ -466,6 +468,7 @@ impl Streaming {
             meshed_total: 0,
             remote: false,
             extra: Vec::new(),
+            mesh: true,
         }
     }
     /// Resource packs reloaded (`LevelRenderer.allChanged`): mesh with the new
@@ -958,6 +961,11 @@ impl Streaming {
                 self.distance(x, z) * 4 + 1,
                 Job::Light(x, z, region, self.sequence, self.sky_light),
             );
+        }
+        // A server draws nothing: its sections are never meshed.
+        if !self.mesh {
+            world.dirty_sections.clear();
+            return (uploads, removed);
         }
         // Meshing once the column and its neighbours are lit, and the column
         // is within the render distance. Sections set aside past it come back

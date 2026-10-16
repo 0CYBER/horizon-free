@@ -274,6 +274,14 @@ impl Game<'_> {
         if let Some(mut r) = self.remote.take() {
             r.session.disconnect();
         }
+        // Single player's server thread saves the world before the title shows.
+        let single_player = match self.integrated.take() {
+            Some(server) => {
+                server.stop();
+                true
+            }
+            None => false,
+        };
         horizon_client::crash::clear_detail("Server");
         self.debug_charts.reset();
         self.tab_list.reset();
@@ -296,6 +304,11 @@ impl Game<'_> {
         }
         let saves = std::env::current_dir()?.join("saves");
         let mut title = horizon_client::title::Title::new(saves.clone(), &self.options.resources);
+        if single_player && reason.is_none() {
+            self.title = Some(title);
+            self.capture(false);
+            return Ok(());
+        }
         title.mode = horizon_client::title::Mode::Multiplayer(match reason {
             Some(reason) => horizon_client::multiplayer::Screen::Disconnected {
                 reason,
