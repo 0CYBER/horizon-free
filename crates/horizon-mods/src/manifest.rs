@@ -9,6 +9,10 @@ pub const WASM: &str = "mod.wasm";
 /// The API (WIT package `horizon:mods`) versions this build runs: a mod
 /// built for any 0.1.x SDK.
 pub const API: &str = "0.1";
+/// The manifest `api` lines this build loads. 0.2 is 0.1 plus content:
+/// `assets/` and `data/` in the `.hmod`, with blocks and items declared in
+/// `data/<id>/horizon/` (docs/modpacks.md). Code still links API 0.1.
+pub const APIS: [&str; 2] = [API, "0.2"];
 /// The biggest `mod.wasm` a mod may ship.
 const MAX_WASM: u64 = 32 << 20;
 
@@ -23,7 +27,7 @@ pub struct Manifest {
     pub description: String,
     #[serde(default)]
     pub authors: Vec<String>,
-    /// The API version the mod was built for: `0.1`.
+    /// The API line the mod was built for: `0.1`, or `0.2` for content.
     pub api: String,
     #[serde(default)]
     pub side: Side,
@@ -51,15 +55,24 @@ pub enum Capability {
     GameRead,
     Chat,
     Hud,
+    /// New blocks and items from the mod's `data/` (API 0.2): no WIT
+    /// interface, the game reads them before the world loads.
+    Registries,
 }
 impl Capability {
-    pub const ALL: [Capability; 3] = [Capability::GameRead, Capability::Chat, Capability::Hud];
+    pub const ALL: [Capability; 4] = [
+        Capability::GameRead,
+        Capability::Chat,
+        Capability::Hud,
+        Capability::Registries,
+    ];
     /// The WIT interface it grants, in `horizon:mods`.
     pub fn interface(self) -> &'static str {
         match self {
             Capability::GameRead => "game",
             Capability::Chat => "chat",
             Capability::Hud => "hud",
+            Capability::Registries => "registries",
         }
     }
     /// What the player reads before turning the mod on: "May <this>".
@@ -68,6 +81,7 @@ impl Capability {
             Capability::GameRead => "see your position, health and the time",
             Capability::Chat => "show you chat messages",
             Capability::Hud => "draw text on your screen",
+            Capability::Registries => "add blocks and items to your worlds",
         }
     }
     /// The capability a component import needs, `Ok(None)` for one every
@@ -84,6 +98,7 @@ impl Capability {
         }
         Capability::ALL
             .into_iter()
+            .filter(|c| *c != Capability::Registries)
             .find(|c| c.interface() == interface)
             .map(Some)
             .ok_or_else(unknown)
@@ -95,6 +110,7 @@ impl fmt::Display for Capability {
             Capability::GameRead => "game-read",
             Capability::Chat => "chat",
             Capability::Hud => "hud",
+            Capability::Registries => "registries",
         };
         f.write_str(name)
     }
@@ -113,8 +129,17 @@ impl Manifest {
                 m.id
             ));
         }
-        if m.api != API {
-            return Err(format!("built for API {}; this Horizon runs {API}", m.api));
+        if !APIS.contains(&m.api.as_str()) {
+            return Err(format!(
+                "built for API {}; this Horizon runs {}",
+                m.api,
+                APIS.join(" and ")
+            ));
+        }
+        if m.capabilities.contains(&Capability::Registries) && m.api == API {
+            return Err(format!(
+                "{MANIFEST}: capability registries needs api = \"0.2\""
+            ));
         }
         Ok(m)
     }
@@ -137,54 +162,79 @@ impl Manifest {
 /// A mod as found on disk: its manifest and component bytes.
 pub struct Package {
     pub manifest: Manifest,
-    pub wasm: Vec<u8>,
+    /// None for a content-only mod (capability `registries`, no code).
+    pub wasm: Option<Vec<u8>>,
 }
 impl Package {
-    /// A `.hmod` (a zip holding `horizon-mod.toml` and `mod.wasm`) or a
-    /// folder holding the same two files.
+    /// A `.hmod` (a zip holding `horizon-mod.toml`, `mod.wasm` and, for
+    /// content, `assets/` and `data/`) or a folder holding the same.
     pub fn read(path: &Path) -> Result<Self, String> {
         let (toml, wasm) = if path.is_dir() {
             let toml = std::fs::read_to_string(path.join(MANIFEST));
-            let wasm = std::fs::read(path.join(WASM));
-            (
-                toml.map_err(|e| format!("{MANIFEST}: {e}"))?,
-                wasm.map_err(|e| format!("{WASM}: {e}"))?,
-            )
+            let wasm = path.join(WASM);
+            let wasm = match wasm.exists() {
+                true => Some(std::fs::read(wasm).map_err(|e| format!("{WASM}: {e}"))?),
+                false => None,
+            };
+            (toml.map_err(|e| format!("{MANIFEST}: {e}"))?, wasm)
         } else {
             let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
             let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
-            let mut entry = |name: &str| -> Result<Vec<u8>, String> {
-                let f = zip.by_name(name).map_err(|e| format!("{name}: {e}"))?;
+            let mut entry = |name: &str| -> Result<Option<Vec<u8>>, String> {
+                let f = match zip.by_name(name) {
+                    Ok(f) => f,
+                    Err(zip::result::ZipError::FileNotFound) => return Ok(None),
+                    Err(e) => return Err(format!("{name}: {e}")),
+                };
                 let mut out = Vec::new();
                 f.take(MAX_WASM + 1)
                     .read_to_end(&mut out)
                     .map_err(|e| e.to_string())?;
-                Ok(out)
+                Ok(Some(out))
             };
-            let toml = String::from_utf8(entry(MANIFEST)?)
-                .map_err(|_| format!("{MANIFEST}: not UTF-8"))?;
+            let toml = entry(MANIFEST)?.ok_or_else(|| format!("{MANIFEST}: missing"))?;
+            let toml = String::from_utf8(toml).map_err(|_| format!("{MANIFEST}: not UTF-8"))?;
             (toml, entry(WASM)?)
         };
-        if wasm.len() as u64 > MAX_WASM {
+        if wasm.as_ref().is_some_and(|w| w.len() as u64 > MAX_WASM) {
             return Err(format!("{WASM} is over {} MiB", MAX_WASM >> 20));
         }
-        Ok(Package {
-            manifest: Manifest::parse(&toml)?,
-            wasm,
-        })
+        let manifest = Manifest::parse(&toml)?;
+        if wasm.is_none() && !manifest.capabilities.contains(&Capability::Registries) {
+            return Err(format!(
+                "{WASM}: missing (only a content mod, with capability registries, may have no code)"
+            ));
+        }
+        Ok(Package { manifest, wasm })
     }
     /// The `.hmod` bytes for `manifest_text` and a component.
     pub fn write(manifest_text: &str, wasm: &[u8]) -> Result<Vec<u8>, String> {
+        Self::write_files(manifest_text, Some(wasm), &[])
+    }
+    /// The `.hmod` bytes for `manifest_text`, a component if the mod has
+    /// code, and content `files` (`assets/...`, `data/...`) by path.
+    pub fn write_files(
+        manifest_text: &str,
+        wasm: Option<&[u8]>,
+        files: &[(&str, &[u8])],
+    ) -> Result<Vec<u8>, String> {
         use std::io::Write;
         Manifest::parse(manifest_text)?;
         let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         let options = zip::write::SimpleFileOptions::default();
         let err = |e: zip::result::ZipError| e.to_string();
-        zip.start_file(MANIFEST, options).map_err(err)?;
-        zip.write_all(manifest_text.as_bytes())
-            .map_err(|e| e.to_string())?;
-        zip.start_file(WASM, options).map_err(err)?;
-        zip.write_all(wasm).map_err(|e| e.to_string())?;
+        let mut put = |name: &str, bytes: &[u8]| -> Result<(), String> {
+            zip.start_file(name, options).map_err(err)?;
+            zip.write_all(bytes).map_err(|e| e.to_string())
+        };
+        put(MANIFEST, manifest_text.as_bytes())?;
+        if let Some(wasm) = wasm {
+            put(WASM, wasm)?;
+        }
+        for (name, bytes) in files {
+            crate::content::check_path(name)?;
+            put(name, bytes)?;
+        }
         Ok(zip.finish().map_err(err)?.into_inner())
     }
 }
@@ -256,8 +306,8 @@ capabilities = ["game-read", "hud"]
     fn refuses_bad_ids_and_apis() {
         let bad_id = EXAMPLE.replace("coords_hud", "Coords HUD");
         assert!(Manifest::parse(&bad_id).unwrap_err().contains("is not"));
-        let bad_api = EXAMPLE.replace("api = \"0.1\"", "api = \"0.2\"");
-        assert!(Manifest::parse(&bad_api).unwrap_err().contains("API 0.2"));
+        let bad_api = EXAMPLE.replace("api = \"0.1\"", "api = \"0.3\"");
+        assert!(Manifest::parse(&bad_api).unwrap_err().contains("API 0.3"));
         let unknown = format!("{EXAMPLE}network = true\n");
         assert!(Manifest::parse(&unknown).is_err());
     }
@@ -270,7 +320,7 @@ capabilities = ["game-read", "hud"]
         std::fs::write(&path, Package::write(EXAMPLE, b"\0asm").unwrap()).unwrap();
         let p = Package::read(&path).unwrap();
         assert_eq!(p.manifest.id, "coords_hud");
-        assert_eq!(p.wasm, b"\0asm");
+        assert_eq!(p.wasm.as_deref(), Some(&b"\0asm"[..]));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -1483,6 +1483,7 @@ dependencies = [
  "horizon-mods",
  "log",
  "serde",
+ "serde_json",
  "toml",
  "wasmtime",
  "wit-component 0.239.0",
