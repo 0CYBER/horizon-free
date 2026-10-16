@@ -798,8 +798,8 @@ struct Game<'a> {
     book: Option<books::BookScreen>,
     /// Lecterns whose page-turn pulse is running (ticks left).
     lectern_pulses: Vec<((i32, i32, i32), i32)>,
-    /// Steps of the world spawn's chunk spiral taken so far.
-    spawn_search: u32,
+    /// LevelLoadingScreen.smoothedProgress while the player is not placed yet.
+    loading_progress: f32,
     /// The world spawn search's origin chunk and fallback height, once known.
     spawn_origin: Option<((i32, i32), i32)>,
     spawn_spiral: horizon_client::world_spawn::ChunkSpiral,
@@ -2966,6 +2966,14 @@ impl Game<'_> {
         if self.remote.is_some() {
             return self.tick_remote();
         }
+        // LevelLoadingScreen.tick.
+        self.loading_progress = match self.loading_reason() {
+            Some(_) => horizon_client::level_loading::smooth(
+                self.loading_progress,
+                self.level_load_progress(),
+            ),
+            None => 0.0,
+        };
         self.ticks += 1;
         // `/tick freeze` stops the world but not the player.
         let running = self.clock.world_runs();
@@ -3680,16 +3688,8 @@ impl Game<'_> {
         if self.remote_overlay(&mut batch) {
             return batch;
         }
-        if self.player.is_none() {
-            let text = if self.spawn_search > 0 {
-                "Finding a place to spawn..."
-            } else {
-                "Loading terrain..."
-            };
-            let atlas = &self.res.atlas;
-            let tw = HudBatch::text_width(atlas, text);
-            batch.fill(atlas, 0.0, 0.0, w, h, rgba(20, 20, 20, 255));
-            batch.text(atlas, text, (w - tw) / 2.0, h / 2.0 - 4.0, u32::MAX, true);
+        if let Some(reason) = self.loading_reason() {
+            self.draw_level_loading(&mut batch, reason);
             return batch;
         }
         // Hud.extractRenderState: F1 (keyToggleGui) hides camera overlays, the
@@ -6250,7 +6250,6 @@ impl Game<'_> {
                     yaw: *yaw,
                     forced: *forced,
                 });
-        self.spawn_search = 0;
         self.spawn_origin = None;
         self.spawn_spiral = Default::default();
         self.player_spawn = None;
@@ -8425,7 +8424,9 @@ impl Game<'_> {
         let mut hud = horizon_client::spans::time("hud", || self.hud(size));
         // Map textures changed since the last drawn frame (game/maps.rs).
         hud.patches.append(&mut self.map_patches);
-        let title = self.title.is_some();
+        // LevelLoadingScreen (Reason.OTHER) draws the title's panorama.
+        let title = self.title.is_some()
+            || self.loading_reason() == Some(horizon_client::level_loading::Reason::Other);
         let (yaw, pitch) = if live {
             (view_yaw, view_pitch)
         } else if title {
@@ -8609,15 +8610,73 @@ impl Game<'_> {
         self.entity_vertices = entities;
         result
     }
+    /// The LevelLoadingScreen shown while the player waits for its chunks:
+    /// opening a world, or after a portal or a respawn into another dimension.
+    fn loading_reason(&self) -> Option<horizon_client::level_loading::Reason> {
+        use horizon_client::level_loading::Reason;
+        if self.title.is_some() || self.remote.is_some() || self.player.is_some() {
+            return None;
+        }
+        Some(
+            if self.travelling.is_none() || self.respawn_travel.is_some() {
+                Reason::Other
+            } else if self.end_travel {
+                Reason::EndPortal
+            } else {
+                Reason::NetherPortal
+            },
+        )
+    }
+    /// `LevelLoadTracker.serverProgress`: the player's 7x7 chunks loaded.
+    fn level_load_progress(&self) -> f32 {
+        let (cx, cz) = self.streaming.center;
+        let ready = (-3..=3)
+            .flat_map(|dz| (-3..=3).map(move |dx| (cx + dx, cz + dz)))
+            .filter(|&(x, z)| self.streaming.is_lit(x, z))
+            .count();
+        horizon_client::level_loading::progress(ready)
+    }
+    /// `LevelLoadingScreen.extractBackground` and `extractRenderState`.
+    fn draw_level_loading(
+        &self,
+        batch: &mut HudBatch,
+        reason: horizon_client::level_loading::Reason,
+    ) {
+        use horizon_client::level_loading::{self, Reason, STATUS_RADIUS};
+        let atlas = &self.res.atlas;
+        let (w, h) = (batch.width, batch.height);
+        match reason {
+            // The panorama and its blur are drawn by the renderer.
+            Reason::Other => {
+                horizon_client::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false)
+            }
+            Reason::NetherPortal => {
+                let overlay = hud_overlays::portal_overlay(w as i32, h as i32, 1.0);
+                hud_layout::paint(batch, atlas, &[overlay]);
+            }
+            Reason::EndPortal => batch.fill(atlas, 0.0, 0.0, w, h, rgba(20, 20, 20, 255)),
+        }
+        let (cx, cz) = self.streaming.center;
+        let status = |x: i32, z: i32| {
+            self.streaming.latest_status(
+                &self.world,
+                cx + x - STATUS_RADIUS,
+                cz + z - STATUS_RADIUS,
+            )
+        };
+        level_loading::draw(batch, atlas, Some(&status), Some(self.loading_progress));
+    }
     /// `Screen.extractBlurredBackground` over the panorama: every classic
     /// screen of the title menus but the title itself (`TitleScreen`
     /// doesn't blur), when `menuBackgroundBlurriness` is at least 1.
     fn menu_blur(&self) -> Option<f32> {
+        let loading = self.loading_reason() == Some(horizon_client::level_loading::Reason::Other);
         let blurred = !horizon_client::ui_theme::horizon()
-            && self.title.as_ref().is_some_and(|t| {
-                self.screen == Screen::Options
-                    || !matches!(t.mode, horizon_client::title::Mode::Main)
-            });
+            && (loading
+                || self.title.as_ref().is_some_and(|t| {
+                    self.screen == Screen::Options
+                        || !matches!(t.mode, horizon_client::title::Mode::Main)
+                }));
         let radius = self.settings.menu_blur as f32;
         (blurred && radius >= 1.0).then_some(radius)
     }
@@ -9921,7 +9980,7 @@ pub fn run() -> Result<()> {
         sign_edit: None,
         book: None,
         lectern_pulses: Vec::new(),
-        spawn_search: 0,
+        loading_progress: 0.0,
         spawn_origin: None,
         spawn_spiral: Default::default(),
         player_spawn: None,

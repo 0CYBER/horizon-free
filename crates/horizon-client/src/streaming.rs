@@ -619,6 +619,30 @@ impl Streaming {
     pub fn is_lit(&self, x: i32, z: i32) -> bool {
         self.lit.contains(&(x, z))
     }
+    /// `ChunkMap.getLatestStatus` for the loading screen's chunk map: the
+    /// furthest step this column has reached, `None` before it is asked for.
+    pub fn latest_status(
+        &self,
+        world: &World,
+        x: i32,
+        z: i32,
+    ) -> Option<crate::level_loading::Status> {
+        use crate::level_loading::Status;
+        let key = (x, z);
+        Some(if self.lit.contains(&key) {
+            Status::Full
+        } else if world.chunks.contains_key(&key) {
+            Status::InitializeLight
+        } else if self.decorated.contains(&key) || self.finishing.contains(&key) {
+            Status::Features
+        } else if self.protos.contains_key(&key) {
+            Status::Terrain
+        } else if self.generating.contains(&key) {
+            Status::Empty
+        } else {
+            return None;
+        })
+    }
     pub fn is_meshing(&self, section: (i32, i32, i32)) -> bool {
         self.meshing.contains_key(&section)
     }
