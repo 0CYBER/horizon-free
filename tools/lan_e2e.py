@@ -310,8 +310,12 @@ def run(ctl, out, resources, checks):
     results = {}
     try:
         host('launch', wait=False, offscreen=sys.platform == 'darwin')
-        host.raw('open', 'Lan', 5)
+        # Guests' commands need the world's Allow Commands as well as the LAN's (#372): a creative
+        # world has them; everyone plays in survival.
+        host.raw('open', 'Lan', 5, 'creative')
         host('wait_ready', seconds=400)
+        host('command', command='defaultgamemode survival')
+        host('command', command='gamemode survival')
         host('command', command='time set day')
         # An open stone floor around the host, so the players see each other and nothing is in the way.
         host('command', command='fill ~-8 ~-1 ~-8 ~8 ~-1 ~8 minecraft:stone')
