@@ -1484,6 +1484,7 @@ dependencies = [
  "horizon-mods",
  "log",
  "serde",
+ "serde_json",
  "toml",
  "wasmtime",
  "wit-component 0.239.0",
@@ -1496,6 +1497,19 @@ name = "horizon-mods-test-guest"
 version = "0.1.0"
 dependencies = [
  "horizon-mod-sdk",
+]
+
+[[package]]
+name = "horizon-port-pack"
+version = "0.1.0"
+dependencies = [
+ "horizon-mods",
+ "serde",
+ "serde_json",
+ "sha1",
+ "toml",
+ "ureq",
+ "zip",
 ]
 
 [[package]]

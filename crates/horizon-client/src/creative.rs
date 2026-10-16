@@ -49,17 +49,24 @@ pub struct Names {
 }
 impl Names {
     pub fn load(root: &Path) -> Self {
-        let map = fs::read(root.join("assets/minecraft/lang/en_us.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice::<HashMap<String, String>>(&b).ok())
-            .unwrap_or_default();
+        let read = |namespace: &str| {
+            fs::read(root.join(format!("assets/{namespace}/lang/en_us.json")))
+                .ok()
+                .and_then(|b| serde_json::from_slice::<HashMap<String, String>>(&b).ok())
+                .unwrap_or_default()
+        };
+        let mut map = read("minecraft");
+        // Content mods' names (docs/modpacks.md); none in a vanilla root.
+        for namespace in crate::mod_content::namespaces(root) {
+            map.extend(read(&namespace));
+        }
         Self { map }
     }
     pub fn item(&self, id: &str) -> String {
-        let path = id.trim_start_matches("minecraft:");
+        let (namespace, path) = id.split_once(':').unwrap_or(("minecraft", id));
         self.map
-            .get(&format!("item.minecraft.{path}"))
-            .or_else(|| self.map.get(&format!("block.minecraft.{path}")))
+            .get(&format!("item.{namespace}.{path}"))
+            .or_else(|| self.map.get(&format!("block.{namespace}.{path}")))
             .cloned()
             .unwrap_or_else(|| path.replace('_', " "))
     }
