@@ -114,8 +114,7 @@ impl Game<'_> {
         views
     }
 
-    /// Mob events aimed at a guest, run as that guest. Knockback reaches
-    /// their client (`hurtMarked`: ClientboundSetEntityMotionPacket).
+    /// Mob events aimed at a guest, run as that guest (`guest_hit_by`).
     pub(super) fn lan_guest_mob_events(&mut self, events: Vec<(u32, MobEvent)>) {
         if events.is_empty() {
             return;
@@ -124,17 +123,9 @@ impl Game<'_> {
             return;
         };
         for (conn, e) in events {
-            let pushed = self.as_guest(&mut host, conn, |g| {
-                let before = g.player.as_ref().map(|p| p.velocity);
+            self.guest_hit_by(&mut host, conn, |g| {
                 let _ = g.handle_mob_events(vec![e]);
-                g.player
-                    .as_ref()
-                    .map(|p| p.velocity)
-                    .filter(|v| Some(*v) != before)
             });
-            if let Some(Some(v)) = pushed {
-                send_motion(&host, conn, v);
-            }
         }
         self.lan = Some(host);
     }
@@ -148,15 +139,7 @@ impl Game<'_> {
             .guests
             .iter()
             .filter(|g| g.placed && g.loaded && !g.dead && !g.spectator())
-            .map(|g| {
-                let [x, y, z] = g.position;
-                let height = if g.sneaking { 1.5 } else { 1.8 };
-                let b = Aabb::new(
-                    Vec3::new(x - 0.3, y, z - 0.3),
-                    Vec3::new(x + 0.3, y + height, z + 0.3),
-                );
-                (Who::Mob(g.entity_id as u32), b)
-            })
+            .map(|g| (Who::Mob(g.entity_id as u32), guest_bounds(g)))
             .collect()
     }
 
@@ -173,34 +156,52 @@ impl Game<'_> {
             .find(|g| g.entity_id as u32 == id)
             .map(|g| g.conn);
         if let Some(conn) = conn {
-            let pushed = self.as_guest(&mut host, conn, |g| {
-                let before = g.player.as_ref().map(|p| p.velocity);
+            self.guest_hit_by(&mut host, conn, |g| {
                 let hit = Hit::Entity {
                     who: Who::Player,
                     at,
                 };
                 let _ = g.projectile_hit(p, hit);
-                g.player
-                    .as_ref()
-                    .map(|p| p.velocity)
-                    .filter(|v| Some(*v) != before)
             });
-            if let Some(Some(v)) = pushed {
-                send_motion(&host, conn, v);
-            }
         }
         self.lan = Some(host);
         conn.is_some()
     }
 }
 
-fn send_motion(host: &LanHost, conn: u32, v: Vec3) {
-    if let Some(g) = host.hub.guest(conn) {
-        g.send(&C::SetEntityMotion(play::SetEntityMotion {
-            id: g.entity_id,
-            velocity: [v.x, v.y, v.z],
-        }));
+impl Game<'_> {
+    /// Hurt a guest: `f` runs as them, and the knockback it gave reaches
+    /// their client (`hurtMarked`: ClientboundSetEntityMotionPacket).
+    pub(super) fn guest_hit_by<R>(
+        &mut self,
+        host: &mut LanHost,
+        conn: u32,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> Option<R> {
+        let (result, pushed) = self.as_guest(host, conn, |g| {
+            let before = g.player.as_ref().map(|p| p.velocity);
+            let result = f(g);
+            let after = g.player.as_ref().map(|p| p.velocity);
+            (result, after.filter(|v| Some(*v) != before))
+        })?;
+        if let (Some(v), Some(g)) = (pushed, host.hub.guest(conn)) {
+            g.send(&C::SetEntityMotion(play::SetEntityMotion {
+                id: g.entity_id,
+                velocity: [v.x, v.y, v.z],
+            }));
+        }
+        Some(result)
     }
+}
+
+/// A guest's bounding box (0.6 wide, 1.8 tall, 1.5 crouching).
+pub(super) fn guest_bounds(g: &horizon_client::lan::guest::Guest) -> Aabb {
+    let [x, y, z] = g.position;
+    let height = if g.sneaking { 1.5 } else { 1.8 };
+    Aabb::new(
+        Vec3::new(x - 0.3, y, z - 0.3),
+        Vec3::new(x + 0.3, y + height, z + 0.3),
+    )
 }
 
 #[cfg(test)]

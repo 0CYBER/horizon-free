@@ -63,6 +63,7 @@ mod lan;
 mod lan_actions;
 mod lan_crafting;
 mod lan_mobs;
+mod lan_pvp;
 mod lan_screen;
 mod lan_trading;
 mod leads;
@@ -1107,6 +1108,27 @@ fn facing_offset(facing: &str) -> [i32; 3] {
         "up" => [0, 1, 0],
         _ => [0, -1, 0],
     }
+}
+/// How far along `dir` (within `reach`) a ray from `eye` enters `b`.
+fn ray_box(eye: [f64; 3], dir: [f64; 3], reach: f64, b: Aabb) -> Option<f64> {
+    let (min, max) = (b.min_position(), b.max_position());
+    let (lo, hi) = ([min.x, min.y, min.z], [max.x, max.y, max.z]);
+    let (mut t0, mut t1) = (0.0f64, reach);
+    for a in 0..3 {
+        if dir[a].abs() < 1e-9 {
+            if eye[a] < lo[a] || eye[a] > hi[a] {
+                return None;
+            }
+            continue;
+        }
+        let (mut ta, mut tb) = ((lo[a] - eye[a]) / dir[a], (hi[a] - eye[a]) / dir[a]);
+        if ta > tb {
+            std::mem::swap(&mut ta, &mut tb);
+        }
+        t0 = t0.max(ta);
+        t1 = t1.min(tb);
+    }
+    (t0 <= t1).then_some(t0)
 }
 fn view_vector(yaw: f32, pitch: f32) -> [f64; 3] {
     let (y, p) = (f64::from(yaw).to_radians(), f64::from(pitch).to_radians());
@@ -5664,30 +5686,40 @@ impl Game<'_> {
             if !m.alive() {
                 continue;
             }
-            let b = m.bounds();
-            let (min, max) = (b.min_position(), b.max_position());
-            let (lo, hi) = ([min.x, min.y, min.z], [max.x, max.y, max.z]);
-            let (mut t0, mut t1) = (0.0f64, reach);
-            let mut hit = true;
-            for a in 0..3 {
-                if dir[a].abs() < 1e-9 {
-                    if eye[a] < lo[a] || eye[a] > hi[a] {
-                        hit = false;
-                    }
-                    continue;
-                }
-                let (mut ta, mut tb) = ((lo[a] - eye[a]) / dir[a], (hi[a] - eye[a]) / dir[a]);
-                if ta > tb {
-                    std::mem::swap(&mut ta, &mut tb);
-                }
-                t0 = t0.max(ta);
-                t1 = t1.min(tb);
-            }
-            if hit && t0 <= t1 && best.is_none_or(|b| t0 < b.1) {
-                best = Some((i, t0));
+            if let Some(t) = ray_box(eye, dir, reach, m.bounds())
+                && best.is_none_or(|b| t < b.1)
+            {
+                best = Some((i, t));
             }
         }
         best
+    }
+    /// `Player.attack`'s damage against `target_kind` (with the attack
+    /// strength and whether it is a critical hit): the weapon and effects
+    /// scaled by the attack strength, a mace's smash, the critical hit, then
+    /// enchantments.
+    pub(super) fn melee_damage(&mut self, target_kind: &str) -> (f32, f32, bool) {
+        let hand_damage = 1.0
+            + self
+                .held()
+                .and_then(|h| self.res.items.get(&h.item))
+                .map_or(0.0, |i| i.attack_damage);
+        let damage = hand_damage + self.effect_attack_bonus();
+        let scale = self.attack_strength_scale();
+        let mut amount = damage * (0.2 + scale * scale * 0.8);
+        // Item.getAttackDamageBonus (a mace's smash), before the critical hit.
+        amount += self.smash_damage_bonus(target_kind);
+        let player = self.player.as_ref();
+        // Player.canCriticalAttack: falling, off the ground, not sprinting.
+        let falling =
+            player.is_some_and(|p| !p.ground.on_ground && p.fall_distance > 0.0 && !p.sprinting);
+        let crit = scale > 0.9 && falling;
+        if crit {
+            amount *= 1.5;
+        }
+        // Enchantment damage (sharpness, smite, bane) scaled by the attack strength.
+        amount += self.enchant_damage_bonus(target_kind) * scale;
+        (amount, scale, crit)
     }
     /// `Player.getAttackStrengthScale(0.5)`.
     fn attack_strength_scale(&self) -> f32 {
@@ -5746,6 +5778,7 @@ impl Game<'_> {
             || self.attack_boat(hand_damage)
             || self.attack_cart(hand_damage)
             || self.attack_dragon()
+            || self.attack_guest()
         {
             return true;
         }
@@ -5762,23 +5795,9 @@ impl Game<'_> {
                 return false;
             }
         }
-        let damage = hand_damage + self.effect_attack_bonus();
-        let scale = self.attack_strength_scale();
-        let mut amount = damage * (0.2 + scale * scale * 0.8);
         let target_kind = self.mobs[index].kind.id.clone();
         let target_kind = format!("minecraft:{}", target_kind.trim_start_matches("minecraft:"));
-        // Item.getAttackDamageBonus (a mace's smash), before the critical hit.
-        amount += self.smash_damage_bonus(&target_kind);
-        let player = self.player.as_ref();
-        // Player.canCriticalAttack: falling, off the ground, not sprinting.
-        let falling =
-            player.is_some_and(|p| !p.ground.on_ground && p.fall_distance > 0.0 && !p.sprinting);
-        let crit = scale > 0.9 && falling;
-        if crit {
-            amount *= 1.5;
-        }
-        // Enchantment damage (sharpness, smite, bane) scaled by the attack strength.
-        amount += self.enchant_damage_bonus(&target_kind) * scale;
+        let (amount, scale, crit) = self.melee_damage(&target_kind);
         self.attack_ticks = 0;
         if let Some(p) = self.player.as_mut()
             && !self.creative
