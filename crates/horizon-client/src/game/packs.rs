@@ -147,6 +147,8 @@ impl Game<'_> {
         self.res.clouds = super::load_clouds(root);
         self.res.forcefield = super::load_forcefield(root);
         self.res.names = super::Names::load(root);
+        self.res.mob_data.villager_hats =
+            horizon_client::mobs::villager_hats::VillagerHats::load(root);
         horizon_client::ui::load_metadata(root);
         lang::set(lang::Language::load(&[&root.to_path_buf()], &lang::code()));
         self.audio.reload(root);
