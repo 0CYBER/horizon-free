@@ -48,6 +48,7 @@ mod frames;
 mod friends;
 mod functions;
 mod game_mode;
+mod game_rules_screen;
 mod gamemode_switcher;
 mod ghasts;
 mod golems;

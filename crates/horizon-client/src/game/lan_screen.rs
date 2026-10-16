@@ -4,7 +4,11 @@
 //! difficulty, LAN on/off with its port, command access for guests and
 //! forcing the game mode. Its difficulty lock asks first (PopupScreen), and
 //! Restrictions opens RestrictionsScreen.
-use super::{Game, Screen, lan::LanSettings};
+use super::{
+    Game, Screen,
+    game_rules_screen::{Exit, RulesScreen},
+    lan::LanSettings,
+};
 use horizon_client::{
     font::Font,
     hud::{HudBatch, rgba},
@@ -33,14 +37,18 @@ pub(super) struct WorldOptions {
     /// ScrollableLayout's scroll amount.
     scroll: f32,
     view: View,
+    /// InWorldGameRulesScreen, while it is open.
+    rules: Option<RulesScreen>,
 }
 /// The screen on show: the options, the lock's question over them, or the
-/// RestrictionsScreen they opened (both return to the same options).
+/// RestrictionsScreen or InWorldGameRulesScreen they opened (all return to
+/// the same options).
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum View {
     Options,
     LockQuestion,
     Restrictions,
+    GameRules,
 }
 #[derive(Clone, PartialEq)]
 struct Snapshot {
@@ -83,7 +91,6 @@ enum Button {
     Difficulty,
     /// DifficultyButtons.lockButton (LockIconButton).
     Lock,
-    /// InWorldGameRulesScreen is not in Horizon yet.
     GameRules,
     Restrictions,
     Lan,
@@ -229,7 +236,9 @@ impl WorldOptions {
             // DifficultyButtons.updateDifficultyButtonsState: the level's
             // lock or hardcore, not the wanted lock.
             Button::Difficulty | Button::Lock => !self.hardcore && !self.difficulty_locked,
-            Button::GameRules => false,
+            // updateButton from the player's permission: the Allow Commands
+            // switch leaves it (updatePermissionDependentButtons(.., false)).
+            Button::GameRules => !self.hardcore && self.initial.cheats,
             Button::Restrictions => true,
             Button::CommandAccess => self.lan && self.cheats,
             Button::Force => self.lan && !(self.guest_commands && self.cheats) && !self.hardcore,
@@ -421,6 +430,7 @@ impl Game<'_> {
             locked: self.level.difficulty_locked || self.level.hardcore,
             scroll: 0.0,
             view: View::Options,
+            rules: None,
             initial: Snapshot {
                 default_mode: 0,
                 personal_mode: 0,
@@ -444,12 +454,38 @@ impl Game<'_> {
     }
 
     /// Escape: the question and RestrictionsScreen return to the options
-    /// (their onClose), which close.
+    /// (their onClose), which close; the game rules ask first.
     pub(super) fn world_options_escape(&mut self) {
         match self.world_options.as_mut() {
+            Some(o) if o.view == View::GameRules => {
+                if let Some(exit) = o.rules.as_mut().and_then(RulesScreen::escape) {
+                    self.close_game_rules(exit);
+                }
+            }
             Some(o) if o.view != View::Options => o.view = View::Options,
             _ => self.close_world_options(),
         }
+    }
+
+    /// InWorldGameRulesScreen's exit, back to the options. Done sends the
+    /// changed rules (ServerboundSetGameRulePacket), which the server's
+    /// handleSetGameRule sets for a gamemaster and tells its operators.
+    fn close_game_rules(&mut self, exit: Exit) {
+        if let Some(o) = self.world_options.as_mut() {
+            o.view = View::Options;
+            o.rules = None;
+        }
+        let Exit::Apply(changes) = exit else {
+            return;
+        };
+        if !self.allow_commands() || changes.is_empty() {
+            return;
+        }
+        for (name, value) in changes {
+            self.ui.rules.set(name, value);
+            self.system_message(Text::tr("commands.gamerule.set", &[&name, &value]));
+        }
+        self.sync_rules();
     }
 
     pub(super) fn draw_world_options(&mut self, batch: &mut HudBatch) {
@@ -464,6 +500,11 @@ impl Game<'_> {
                 self.draw_lock_question(&o, batch);
             }
             View::Restrictions => self.draw_restrictions(batch),
+            View::GameRules => {
+                if let Some(rules) = o.rules.as_mut() {
+                    rules.draw(batch, &self.res.atlas, self.cursor);
+                }
+            }
         }
         self.world_options = Some(o);
     }
@@ -639,12 +680,16 @@ impl Game<'_> {
     /// The mouse wheel over the screen (ScrollableLayout, 10 pixels a step).
     pub(super) fn world_options_scroll(&mut self, delta: f32) {
         let h = self.gui_size().1;
-        if let Some(o) = self
-            .world_options
-            .as_mut()
-            .filter(|o| o.view == View::Options)
-        {
-            o.scroll = (o.scroll - delta * 10.0).clamp(0.0, WorldOptions::max_scroll(h));
+        match self.world_options.as_mut() {
+            Some(o) if o.view == View::Options => {
+                o.scroll = (o.scroll - delta * 10.0).clamp(0.0, WorldOptions::max_scroll(h));
+            }
+            Some(o) => {
+                if let Some(rules) = o.rules.as_mut() {
+                    rules.wheel(delta, h);
+                }
+            }
+            None => {}
         }
     }
 
@@ -655,6 +700,20 @@ impl Game<'_> {
         let (w, h) = self.gui_size();
         match o.view {
             View::Options => {}
+            View::GameRules => {
+                let atlas = &self.res.atlas;
+                let exit = o.rules.as_mut().and_then(|rules| {
+                    if rules.clicks_button(atlas, self.cursor, (w, h)) {
+                        self.audio.play_button_click();
+                    }
+                    rules.click(atlas, self.cursor, (w, h))
+                });
+                self.world_options = Some(o);
+                if let Some(exit) = exit {
+                    self.close_game_rules(exit);
+                }
+                return;
+            }
             View::LockQuestion => {
                 let p = Popup::lock_question(&self.res.atlas.font, o.difficulty, (w, h));
                 let hit = p
@@ -725,6 +784,10 @@ impl Game<'_> {
             Some(Button::Difficulty) => o.difficulty = (o.difficulty + 1) % 4,
             Some(Button::Lock) => o.locked = !o.locked,
             Some(Button::Restrictions) => o.view = View::Restrictions,
+            Some(Button::GameRules) => {
+                o.rules = Some(RulesScreen::new(&self.ui.rules));
+                o.view = View::GameRules;
+            }
             Some(Button::Lan) => {
                 o.lan = !o.lan;
                 o.port.focused = false;
@@ -739,7 +802,7 @@ impl Game<'_> {
             // A new lock asks first.
             Some(Button::Apply) if o.locked != o.initial.locked => o.view = View::LockQuestion,
             Some(Button::Apply) => return self.apply_and_close_world_options(o),
-            Some(Button::GameRules) | None => {}
+            None => {}
         }
         self.world_options = Some(o);
     }
@@ -764,6 +827,21 @@ impl Game<'_> {
         let Some(o) = self.world_options.as_mut() else {
             return;
         };
+        if let Some(rules) = o.rules.as_mut().filter(|r| r.typing()) {
+            match shortcut {
+                Some(shortcut) => rules.edit(|b| {
+                    b.shortcut(shortcut, &mut self.clipboard);
+                }),
+                None => {
+                    let mut handled = false;
+                    rules.edit(|b| handled = b.key(key, ctrl, false));
+                    if !handled && !ctrl {
+                        self.world_options_text(event.text.as_deref());
+                    }
+                }
+            }
+            return;
+        }
         if !o.port.focused || o.view != View::Options {
             return;
         }
@@ -778,6 +856,25 @@ impl Game<'_> {
     /// Digits typed into the port field (the keyboard, or a controller's
     /// on-screen keyboard), and its backspace.
     pub(super) fn world_options_text(&mut self, text: Option<&str>) {
+        if let Some(rules) = self
+            .world_options
+            .as_mut()
+            .and_then(|o| o.rules.as_mut())
+            .filter(|r| r.typing())
+        {
+            match text {
+                Some(text) => {
+                    let typed: String = text.chars().filter(|c| !c.is_control()).collect();
+                    if !typed.is_empty() {
+                        rules.edit(|b| b.insert_text(&typed));
+                    }
+                }
+                None => rules.edit(|b| {
+                    b.key(winit::keyboard::KeyCode::Backspace, false, false);
+                }),
+            }
+            return;
+        }
         let Some(o) = self.world_options.as_mut().filter(|o| o.port.focused) else {
             return;
         };
@@ -853,6 +950,7 @@ mod tests {
             locked: hardcore,
             scroll: 0.0,
             view: View::Options,
+            rules: None,
             initial: Snapshot {
                 default_mode: 0,
                 personal_mode: 0,
@@ -901,8 +999,15 @@ mod tests {
         assert!(o.active(Button::DefaultMode) && o.active(Button::Difficulty));
         assert!(!o.active(Button::CommandAccess) && !o.active(Button::Force));
         assert!(!o.active(Button::Apply));
-        let o = options(false, false);
+        assert!(o.active(Button::GameRules));
+        let mut o = options(false, false);
         assert!(!o.active(Button::DefaultMode) && !o.active(Button::PersonalMode));
+        // Game Rules follows the commands the player has, not the switch.
+        assert!(!o.active(Button::GameRules));
+        o.cheats = true;
+        assert!(!o.active(Button::GameRules));
+        let o = options(true, true);
+        assert!(!o.active(Button::GameRules));
         let o = options(false, true);
         assert!(!o.active(Button::Cheats) && !o.active(Button::Difficulty));
         assert!(!o.active(Button::Force));
