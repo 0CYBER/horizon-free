@@ -57,6 +57,8 @@ fn json_view(view: &(String, String), t: &Theme) -> Div {
                 .id("data-json")
                 .max_h(px(260.))
                 .overflow_y_scroll()
+                // GPUI lets wheel events reach scroll containers behind this one unless stopped.
+                .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
                 .p(px(16.))
                 .rounded(px(theme::RADIUS_PLATE))
                 .bg(t.plate)
@@ -186,6 +188,7 @@ impl Launcher {
             .flex_col()
             .bg(t.page.opacity(0.92))
             .overflow_y_scroll()
+            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
             // Taller than a small window: it scrolls, from the top, rather than shrinking.
             .child(
                 div()
