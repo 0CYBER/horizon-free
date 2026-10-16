@@ -80,26 +80,22 @@ impl FaceGroups {
     }
 }
 
+/// The axis and sign of each axis group (`UNALIGNED`'s entry is unused).
+const AXES: [(usize, bool); GROUPS] = {
+    let mut axes = [(0, false); GROUPS];
+    let mut axis = 0;
+    while axis < 3 {
+        axes[NEGATIVE[axis]] = (axis, false);
+        axes[GROUPS - 1 - NEGATIVE[axis]] = (axis, true);
+        axis += 1;
+    }
+    axes
+};
+
 /// The axis and sign of axis group `g`.
 fn axis(g: usize) -> (usize, bool) {
-    if g < UNALIGNED {
-        (
-            NEGATIVE
-                .iter()
-                .position(|&n| n == g)
-                .expect("negative group"),
-            false,
-        )
-    } else {
-        let n = GROUPS - 1 - g;
-        (
-            NEGATIVE
-                .iter()
-                .position(|&m| m == n)
-                .expect("positive group"),
-            true,
-        )
-    }
+    debug_assert_ne!(g, UNALIGNED);
+    AXES[g]
 }
 
 /// The group of one quad, and its plane: an axis group only when all four
