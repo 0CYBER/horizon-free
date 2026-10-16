@@ -53,6 +53,7 @@ pub mod raider;
 pub mod ravager;
 pub mod render;
 pub mod riders;
+pub mod seen_grid;
 pub mod shulker;
 pub mod sniffer;
 pub mod spawn_rules;
@@ -1399,6 +1400,8 @@ pub struct MobWorld<'a> {
     pub data: &'a MobData,
     pub player: Option<PlayerView>,
     pub others: &'a [Seen],
+    /// `others` by position, when the caller keeps one (the mob ticks).
+    pub others_grid: Option<&'a seen_grid::SeenGrid>,
     pub daylight: bool,
     pub game_time: i64,
     pub day_time: i64,
