@@ -59,6 +59,7 @@ pub mod entity_nbt;
 pub mod environment;
 pub mod extras;
 pub mod extras_hud;
+pub mod falling_block;
 pub mod fast_hash;
 pub mod fastutil_order;
 pub mod fire_render;

@@ -49,16 +49,7 @@ fn with_raw(modelled: Tag, raw: Option<&Tag>) -> Tag {
         // Defaults Horizon invents for fields it does not simulate give way to the save.
         let invented = matches!(
             k.to_string_lossy().as_str(),
-            "Fire"
-                | "Air"
-                | "Invulnerable"
-                | "PortalCooldown"
-                | "HasBeenShot"
-                // FallingBlockEntity fields Horizon does not simulate.
-                | "HurtEntities"
-                | "CancelDrop"
-                | "FallHurtAmount"
-                | "FallHurtMax"
+            "Fire" | "Air" | "Invulnerable" | "PortalCooldown" | "HasBeenShot"
         );
         if !(invented && out.contains_key(k)) {
             out.insert(k.clone(), v.clone());
@@ -199,7 +190,7 @@ impl Game<'_> {
                         }
                     }
                     "minecraft:falling_block" => {
-                        if let Some((state, position, velocity, age)) =
+                        if let Some((state, position, velocity, age, fall_distance)) =
                             entity_nbt::falling_block_from_nbt(&tag)
                             && let Some(state) = self.state_from_nbt(&state)
                         {
@@ -214,7 +205,11 @@ impl Game<'_> {
                                 age,
                                 no_gravity,
                                 drop_item,
-                                fall_distance: 0.0,
+                                fall_distance,
+                                damage: horizon_client::falling_block::Damage::from_nbt(
+                                    &tag,
+                                    self.res.facts.get(state).name.ends_with("anvil"),
+                                ),
                                 saved: uuid.map(|u| Box::new((u, tag.clone()))),
                             });
                         }
@@ -620,6 +615,8 @@ impl Game<'_> {
                     f.velocity,
                     f.age,
                     f.drop_item,
+                    f.damage,
+                    f.fall_distance,
                     uuid,
                 );
                 out.entry(chunk_of(f.position))

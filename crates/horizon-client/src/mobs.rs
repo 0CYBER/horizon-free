@@ -507,6 +507,7 @@ pub enum DamageKind {
     Fireball,
     Explosion,
     Fall,
+    FallingBlock,
     OnFire,
     InFire,
     Lava,
@@ -1610,6 +1611,12 @@ impl Mob {
             return false;
         }
         let mut amount = amount;
+        if source.kind == DamageKind::FallingBlock
+            && !species::body_slot(self.species())
+            && self.extra.head.is_some()
+        {
+            amount *= 0.75;
+        }
         let (worn, worn_toughness) = self.worn_armor();
         if !source.bypasses_armor() && self.kind.armor + worn > 0.0 {
             // CombatRules.getDamageAfterAbsorb

@@ -2980,6 +2980,7 @@ fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) -> &'static
         K::Explosion if player => "minecraft:player_explosion",
         K::Explosion => "minecraft:explosion",
         K::Fall => "minecraft:fall",
+        K::FallingBlock => "minecraft:falling_block",
         K::OnFire => "minecraft:on_fire",
         K::InFire => "minecraft:in_fire",
         K::Lava => "minecraft:lava",
