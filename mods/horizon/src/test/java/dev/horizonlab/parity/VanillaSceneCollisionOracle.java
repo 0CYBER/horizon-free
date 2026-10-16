@@ -86,12 +86,15 @@ public final class VanillaSceneCollisionOracle {
         var allocator=Class.forName("sun.misc.Unsafe");var access=allocator.getDeclaredField("theUnsafe");access.setAccessible(true);
         var unsafe=access.get(null);var allocate=allocator.getMethod("allocateInstance",Class.class);
         var level=(StepLevel)allocate.invoke(unsafe,StepLevel.class);level.trace=trace;level.world=world;level.entities=List.of();
+        level.filterEntities=true;
         level.border=new StepBorder();level.border.trace=trace;
         var entity=(StepEntity)allocate.invoke(unsafe,StepEntity.class);
         var collide=net.minecraft.world.entity.Entity.class.getDeclaredMethod("collide",Vec3.class);collide.setAccessible(true);
         try(var out=new PrintWriter(Files.newBufferedWriter(dir.resolve(args[0]+".txt")));var lines=Files.lines(dir.resolve("inputs.txt"))) {
             for(var line:(Iterable<String>)lines::iterator) {
                 var f=JsonParser.parseString(line).getAsJsonObject();var bounds=new AABB(vector(f.get("min")),vector(f.get("max")));
+                level.entities=new ArrayList<>();
+                if(f.has("entities"))for(var shape:f.getAsJsonArray("entities"))level.entities.add(boxShape(shape));
                 float step=Float.intBitsToFloat(Integer.parseUnsignedInt(f.get("step").getAsString(),16));
                 entity.configure(level,bounds,step,f.get("grounded").getAsBoolean());level.context=CollisionContext.positionContext(bounds.minY);
                 var movement=(Vec3)collide.invoke(entity,vector(f.get("delta")));

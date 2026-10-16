@@ -2,6 +2,11 @@
 #![forbid(unsafe_code)]
 use horizon_client::{assets, collisions, world};
 use horizon_core::geometry::{Aabb, Vec3};
+use horizon_world::{
+    collision_context::CollisionContext,
+    entity_obstruction::EntityIdentity,
+    world_movement::{self, CollisionCheckRequest, MovementRequest},
+};
 use serde_json::Value;
 use std::{
     fs,
@@ -57,21 +62,55 @@ fn main() -> Result<()> {
             f["step"].as_str().ok_or("expected step bits")?,
             16,
         )?);
-        let movement = scene.resolve(
-            bounds,
-            delta,
-            step,
-            f["grounded"].as_bool().ok_or("expected grounded flag")?,
+        let entities = f["entities"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|v| {
+                let a = v.as_array().ok_or("expected entity box")?;
+                Ok(Aabb::new(
+                    vector(&Value::Array(a[..3].to_vec()))?,
+                    vector(&Value::Array(a[3..].to_vec()))?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut selected = collisions::EntityCollisions {
+            blocks: scene,
+            entities: &entities,
+        };
+        let movement = world_movement::resolve_world_movement(
+            &mut selected,
+            MovementRequest {
+                entity: EntityIdentity(0),
+                context: CollisionContext::position(bounds.min_position().y),
+                bounds,
+                movement: delta,
+                max_step: step,
+                on_ground: f["grounded"].as_bool().ok_or("expected grounded flag")?,
+                candidate_budget: 1_000_000,
+            },
         )?;
+        let mut unobstructed = |bounds: Aabb| {
+            world_movement::no_world_collision(
+                &mut selected,
+                CollisionCheckRequest {
+                    entity: EntityIdentity(0),
+                    context: CollisionContext::position(bounds.min_position().y),
+                    bounds,
+                    candidate_budget: 1_000_000,
+                },
+            )
+        };
         writeln!(
             output,
             "move {:016x} {:016x} {:016x} clear {} {}",
             movement.x.to_bits(),
             movement.y.to_bits(),
             movement.z.to_bits(),
-            scene.unobstructed(bounds)?,
-            scene.unobstructed(bounds.move_by(movement))?
+            unobstructed(bounds)?,
+            unobstructed(bounds.move_by(movement))?
         )?;
+        scene = selected.blocks;
     }
     Ok(())
 }

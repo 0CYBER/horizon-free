@@ -583,6 +583,8 @@ impl PlayerMotion {
 }
 
 pub struct MotionWorld<'p, 'w, 'r> {
+    /// Entity boxes selected by the host for this player's collision queries.
+    pub entities: &'w [Aabb],
     pub player: &'p mut PlayerMotion,
     pub scene: &'w mut World,
     pub assets: &'r Assets,
@@ -612,10 +614,18 @@ impl MotionWorld<'_, '_, '_> {
             subject: Some(self.player.powder_snow_subject()),
         }
     }
+    fn movement_collisions(
+        &self,
+    ) -> crate::collisions::EntityCollisions<'_, SceneCollisions<'_, '_>> {
+        crate::collisions::EntityCollisions {
+            blocks: self.collisions(),
+            entities: self.entities,
+        }
+    }
     pub(crate) fn no_player_collision(&mut self, bounds: Aabb) -> Result<bool> {
         let context = self.context();
         Ok(world_movement::no_world_collision(
-            &mut self.collisions(),
+            &mut self.movement_collisions(),
             world_movement::CollisionCheckRequest {
                 entity: EntityIdentity(0),
                 context,
@@ -1462,7 +1472,7 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
     fn collide(&mut self, movement: Vec3) -> Result<Vec3> {
         let max_step = self.player.attribute("minecraft:step_height")? as f32;
         Ok(world_movement::resolve_world_movement(
-            &mut self.collisions(),
+            &mut self.movement_collisions(),
             MovementRequest {
                 entity: EntityIdentity(0),
                 context: self.context(),
@@ -1977,6 +1987,80 @@ mod tests {
     use super::*;
 
     #[test]
+    fn player_stands_walks_sneaks_and_jumps_on_ghast() {
+        let root = std::env::var_os("HORIZON_TEST_RESOURCES")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3")
+            });
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut scene = World::test_scene(&assets, 1).unwrap();
+        let entities = [Aabb::new(
+            Vec3::new(10.0, 80.0, 10.0),
+            Vec3::new(14.0, 84.0, 14.0),
+        )];
+        let mut player = PlayerMotion::new(&resources, Vec3::new(12.0, 84.0, 12.0)).unwrap();
+        let mut tick = |player: &mut PlayerMotion, keys| {
+            MotionWorld {
+                entities: &entities,
+                player,
+                scene: &mut scene,
+                assets: &assets,
+                collision_binding: &binding,
+                resources: &resources,
+            }
+            .controlled_simulation_tick(keys)
+            .unwrap()
+        };
+        for _ in 0..20 {
+            tick(&mut player, Default::default());
+        }
+        assert_eq!(player.position.y, 84.0);
+        assert!(player.ground.on_ground);
+        let forward = crate::sprint::Keys {
+            forward: true,
+            ..Default::default()
+        };
+        for _ in 0..5 {
+            tick(&mut player, forward);
+        }
+        assert!(player.position.z > 12.0);
+        assert_eq!(player.position.y, 84.0);
+        tick(
+            &mut player,
+            crate::sprint::Keys {
+                jump: true,
+                ..Default::default()
+            },
+        );
+        assert!(player.position.y > 84.0);
+        for _ in 0..30 {
+            tick(&mut player, Default::default());
+        }
+        assert_eq!(player.position.y, 84.0);
+        for _ in 0..80 {
+            tick(
+                &mut player,
+                crate::sprint::Keys {
+                    shift: true,
+                    ..forward
+                },
+            );
+        }
+        assert_eq!(player.position.y, 84.0);
+        assert!(player.position.z < 14.3);
+        for _ in 0..30 {
+            tick(&mut player, forward);
+        }
+        assert!(player.position.y < 84.0);
+    }
+
+    #[test]
     fn resident_spectator_flight_ignores_solid_and_climbable_blocks() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
         if !root.join("movement-properties.nbt").exists() {
@@ -2007,6 +2091,7 @@ mod tests {
             let mut trajectory = Vec::new();
             for _ in 0..4 {
                 MotionWorld {
+                    entities: &[],
                     player: &mut player,
                     scene: &mut scene,
                     assets: &assets,
@@ -2178,6 +2263,7 @@ mod tests {
             let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 20.0, 20.5)).unwrap();
             player.fall_distance = 30.0;
             let mut w = MotionWorld {
+                entities: &[],
                 player: &mut player,
                 scene: &mut scene,
                 assets: &assets,
@@ -2216,6 +2302,7 @@ mod tests {
             }
         }
         let mut w = MotionWorld {
+            entities: &[],
             player: &mut player,
             scene: &mut scene,
             assets: &assets,
@@ -2433,6 +2520,7 @@ mod tests {
         }
         let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
         let mut w = MotionWorld {
+            entities: &[],
             player: &mut player,
             scene: &mut scene,
             assets: &assets,
@@ -2505,6 +2593,7 @@ mod tests {
             player.fire_ticks = 160;
             player.fall_distance = 8.0;
             let mut w = MotionWorld {
+                entities: &[],
                 player: &mut player,
                 scene: &mut scene,
                 assets: &assets,
@@ -2553,6 +2642,7 @@ mod tests {
         scene.set(20, 5, 20, water).unwrap();
         let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
         let mut w = MotionWorld {
+            entities: &[],
             player: &mut player,
             scene: &mut scene,
             assets: &assets,
@@ -2634,6 +2724,7 @@ mod tests {
             let mut player = PlayerMotion::new(&resources, Vec3::new(21.0, 4.0, 20.5)).unwrap();
             player.ground.on_ground = true;
             let mut w = MotionWorld {
+                entities: &[],
                 player: &mut player,
                 scene: &mut scene,
                 assets: &assets,
@@ -2668,6 +2759,7 @@ mod tests {
             let mut count = 0;
             for _ in 0..ticks {
                 MotionWorld {
+                    entities: &[],
                     player: &mut *player,
                     scene: &mut scene,
                     assets: &assets,

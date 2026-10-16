@@ -298,6 +298,7 @@ fn main() -> Result<()> {
         let mut travel: Option<horizon_core::position::BlockPos> = None;
         for op in f["ops"].as_array().unwrap() {
             let mut world = MotionWorld {
+                entities: &[],
                 player: &mut player,
                 scene: &mut scene,
                 assets: &assets,

@@ -785,6 +785,7 @@ impl Game<'_> {
                 return;
             };
             let mut w = MotionWorld {
+                entities: &[],
                 player,
                 scene: &mut game.world,
                 assets: &game.res.assets,
