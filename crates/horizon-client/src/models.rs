@@ -73,7 +73,7 @@ pub(crate) fn prepare_with_models(
     let blocks: Vec<&str> = facts
         .keys()
         .filter(|name| registry.default_state(name).is_some())
-        .filter_map(|name| name.strip_prefix("minecraft:"))
+        .map(|name| name.strip_prefix("minecraft:").unwrap_or(name))
         .collect();
     let catalog =
         StateModels::from_facts_with_models(root, registry, &blocks, sprites, &facts, models)?;

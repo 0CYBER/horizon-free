@@ -512,11 +512,16 @@ impl Items {
         let mut loot = HashMap::new();
         // Every loot table, keyed by its id (blocks/stone, entities/sheep/white,
         // gameplay/chicken_lay, shearing/sheep/red...).
-        fn walk_loot(dir: &Path, base: &Path, loot: &mut HashMap<String, Value>) -> Result<()> {
+        fn walk_loot(
+            dir: &Path,
+            base: &Path,
+            namespace: &str,
+            loot: &mut HashMap<String, Value>,
+        ) -> Result<()> {
             for entry in fs::read_dir(dir)?.flatten() {
                 let p = entry.path();
                 if p.is_dir() {
-                    walk_loot(&p, base, loot)?;
+                    walk_loot(&p, base, namespace, loot)?;
                 } else if p.extension().is_some_and(|e| e == "json") {
                     let id = p
                         .strip_prefix(base)?
@@ -524,7 +529,7 @@ impl Items {
                         .to_string_lossy()
                         .replace('\\', "/");
                     loot.insert(
-                        format!("minecraft:{id}"),
+                        format!("{namespace}:{id}"),
                         serde_json::from_slice(&fs::read(&p)?)?,
                     );
                 }
@@ -532,7 +537,14 @@ impl Items {
             Ok(())
         }
         let loot_root = root.join("data/minecraft/loot_table");
-        walk_loot(&loot_root, &loot_root, &mut loot)?;
+        walk_loot(&loot_root, &loot_root, "minecraft", &mut loot)?;
+        // Content mods' tables (docs/modpacks.md): `<ns>:blocks/...`.
+        for namespace in crate::mod_content::namespaces(root) {
+            let dir = root.join(format!("data/{namespace}/loot_table"));
+            if dir.is_dir() {
+                walk_loot(&dir, &dir, &namespace, &mut loot)?;
+            }
+        }
         let registry_order = registry_order(root, &order);
         Ok(Self {
             items,
@@ -644,12 +656,15 @@ impl Items {
         state: BlockStateId,
     ) -> Option<String> {
         let block = registry.state(state)?;
-        let name = block.name.trim_start_matches("minecraft:");
+        let (namespace, name) = block
+            .name
+            .split_once(':')
+            .unwrap_or(("minecraft", &block.name));
         let standing = name.replacen("_wall_", "_", 1);
         let standing = standing.strip_prefix("wall_").unwrap_or(&standing);
         let standing = standing.replacen("wall_", "", 1);
-        self.loot_sequence(&format!("minecraft:blocks/{name}"))
-            .or_else(|| self.loot_sequence(&format!("minecraft:blocks/{standing}")))
+        self.loot_sequence(&format!("{namespace}:blocks/{name}"))
+            .or_else(|| self.loot_sequence(&format!("{namespace}:blocks/{standing}")))
     }
     /// Evaluate the block's loot table for a player break without explosions.
     pub fn block_drops<R: RandomSource>(
@@ -737,7 +752,10 @@ impl Items {
         let Some(block) = registry.state(state) else {
             return vec![];
         };
-        let name = block.name.trim_start_matches("minecraft:");
+        let (namespace, name) = block
+            .name
+            .split_once(':')
+            .unwrap_or(("minecraft", &block.name));
         // `Blocks.wallVariant`: wall signs, banners, heads, fans and torches
         // reuse the standing block's loot table.
         let standing = name.replacen("_wall_", "_", 1);
@@ -745,8 +763,8 @@ impl Items {
         let standing = standing.replacen("wall_", "", 1);
         let table = self
             .loot
-            .get(&format!("minecraft:blocks/{name}"))
-            .or_else(|| self.loot.get(&format!("minecraft:blocks/{standing}")));
+            .get(&format!("{namespace}:blocks/{name}"))
+            .or_else(|| self.loot.get(&format!("{namespace}:blocks/{standing}")));
         let Some(table) = table else {
             return vec![];
         };

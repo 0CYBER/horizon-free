@@ -71,6 +71,7 @@ pub mod undead;
 pub mod vex;
 pub mod villager;
 pub mod villager_brain;
+pub mod villager_hats;
 pub mod warden;
 pub mod warden_brain;
 pub mod witch;
