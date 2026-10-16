@@ -65,6 +65,68 @@ pub struct SceneCollisions<'w, 'r> {
     /// The entity colliding, for powder snow; None: no fall, no boots.
     pub subject: Option<PowderSnowSubject>,
 }
+/// Already selected entity boxes alongside the resident block collision world.
+pub struct EntityCollisions<'a, W> {
+    pub blocks: W,
+    pub entities: &'a [Aabb],
+}
+impl<W: BlockCollisionWorld> BlockCollisionWorld for EntityCollisions<'_, W> {
+    type Error = W::Error;
+    type Chunk = W::Chunk;
+    fn collision_chunk(
+        &mut self,
+        p: ChunkPos,
+    ) -> std::result::Result<Option<Self::Chunk>, Self::Error> {
+        self.blocks.collision_chunk(p)
+    }
+    fn collision_block(
+        &mut self,
+        chunk: Self::Chunk,
+        p: BlockPos,
+    ) -> std::result::Result<CollisionBlock, Self::Error> {
+        self.blocks.collision_block(chunk, p)
+    }
+    fn is_suffocating(
+        &mut self,
+        chunk: Self::Chunk,
+        block: CollisionBlock,
+        p: BlockPos,
+    ) -> std::result::Result<bool, Self::Error> {
+        self.blocks.is_suffocating(chunk, block, p)
+    }
+    fn context_shape(
+        &mut self,
+        block: CollisionBlock,
+        p: BlockPos,
+        context: &CollisionContext<'_>,
+    ) -> std::result::Result<VoxelShape, Self::Error> {
+        self.blocks.context_shape(block, p, context)
+    }
+}
+impl<W: EntityMovementWorld<Error = io::Error>> EntityMovementWorld for EntityCollisions<'_, W> {
+    type Error = io::Error;
+    fn entity_collisions(
+        &mut self,
+        entity: EntityIdentity,
+        bounds: Aabb,
+    ) -> io::Result<Vec<VoxelShape>> {
+        let mut shapes = self.blocks.entity_collisions(entity, bounds)?;
+        for &aabb in self.entities {
+            // EntityGetter.getEntityCollisions expands its entity query by 1e-7.
+            if aabb.intersects(bounds.inflate(Vec3::new(1.0e-7, 1.0e-7, 1.0e-7))) {
+                shapes.push(VoxelShape::from_box(aabb).map_err(io::Error::other)?);
+            }
+        }
+        Ok(shapes)
+    }
+    fn movement_border(
+        &mut self,
+        entity: EntityIdentity,
+        bounds: Aabb,
+    ) -> io::Result<Option<VoxelShape>> {
+        self.blocks.movement_border(entity, bounds)
+    }
+}
 impl SceneCollisions<'_, '_> {
     /// Position contexts permit geometric movement probes without inventing a
     /// player, inventory, effects or fluid-standing behavior; a lava walker

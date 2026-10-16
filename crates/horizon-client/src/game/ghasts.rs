@@ -6,10 +6,26 @@ use horizon_client::{
     items::ItemStack,
     mobs::{MobEvent, happy_ghast},
 };
-use horizon_core::geometry::Vec3;
+use horizon_core::geometry::{Aabb, Vec3};
 use horizon_world::registry::BlockStateId;
 
 impl Game<'_> {
+    /// Client `EntityGetter.getEntityCollisions`: only solid happy ghasts,
+    /// excluding the player's own vehicle.
+    pub(super) fn happy_ghast_player_collisions(&self) -> Vec<Aabb> {
+        let Some(p) = &self.player else {
+            return Vec::new();
+        };
+        self.mobs
+            .iter()
+            .filter(|m| {
+                m.species() == horizon_client::mobs::Species::HappyGhast
+                    && Some(m.id) != self.riding
+                    && happy_ghast::collides_with_player(m, p.position.y)
+            })
+            .map(|m| m.bounds())
+            .collect()
+    }
     /// `HappyGhast.mobInteract`. Returns whether the click was used.
     pub(super) fn interact_happy_ghast(&mut self, index: usize, item: &str) -> bool {
         let m = &self.mobs[index];

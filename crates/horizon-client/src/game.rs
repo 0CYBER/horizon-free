@@ -3016,6 +3016,7 @@ impl Game<'_> {
             self.tick_riding(keys)?;
         }
         let riding = self.riding.is_some();
+        let ghast_collisions = self.happy_ghast_player_collisions();
         let Some(player) = self.player.as_mut() else {
             // A dedicated server has no local player: the world still runs.
             if self.options.dedicated.is_some() {
@@ -3101,6 +3102,7 @@ impl Game<'_> {
         );
         if !riding {
             MotionWorld {
+                entities: &ghast_collisions,
                 player,
                 scene: &mut self.world,
                 assets: &self.res.assets,

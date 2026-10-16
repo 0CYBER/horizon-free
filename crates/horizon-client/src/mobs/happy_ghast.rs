@@ -96,6 +96,19 @@ fn within_home(m: &Mob, p: Vec3) -> bool {
 pub fn on_still_timeout(m: &Mob) -> bool {
     !m.is_baby() && m.extra.counter > 0
 }
+/// Client-side `HappyGhast.canBeCollidedWith(Player)`.
+pub fn collides_with_player(m: &Mob, feet_y: f64) -> bool {
+    player_collision(
+        m.alive(),
+        m.is_baby(),
+        on_still_timeout(m),
+        feet_y,
+        m.bounds().max_position().y,
+    )
+}
+fn player_collision(alive: bool, baby: bool, still: bool, feet_y: f64, top: f64) -> bool {
+    alive && !baby && (feet_y >= top || still)
+}
 /// `Mob.stopInPlace`.
 fn stop_in_place(m: &mut Mob) {
     m.ai.nav.stop();
@@ -608,6 +621,16 @@ pub fn goggles(down: bool, m: &Mob) -> MobEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn player_collision_matches_vanilla_top_and_still_timeout_rules() {
+        assert!(player_collision(true, false, false, 84.0, 84.0));
+        assert!(player_collision(true, false, false, 85.0, 84.0));
+        assert!(!player_collision(true, false, false, 83.99, 84.0));
+        assert!(player_collision(true, false, true, 83.99, 84.0));
+        assert!(!player_collision(true, true, true, 84.0, 84.0));
+        assert!(!player_collision(false, false, true, 84.0, 84.0));
+    }
 
     #[test]
     fn a_harness_names_its_texture() {

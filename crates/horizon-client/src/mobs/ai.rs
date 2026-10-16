@@ -769,6 +769,8 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         && !(m.species() == Species::Creaking && !super::creaking::can_move(m));
     let mut targets: Vec<(Who, Vec3)> = Vec::new();
     if let Some(p) = &w.player
+        // Entity.push: passengers of the same vehicle never push each other.
+        && m.rider.is_none()
         && p.alive
         && !p.spectator
         && p.bounds.intersects(bounds)

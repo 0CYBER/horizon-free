@@ -1736,6 +1736,7 @@ impl Game<'_> {
         self.tick_block_entity_anims();
         self.tick_hand();
         self.tick_particles();
+        let ghast_collisions = self.happy_ghast_player_collisions();
         let Some(player) = self.player.as_mut() else {
             return Ok(());
         };
@@ -1788,6 +1789,7 @@ impl Game<'_> {
         let dead = self.screen == Screen::Dead;
         if !dead {
             MotionWorld {
+                entities: &ghast_collisions,
                 player,
                 scene: &mut self.world,
                 assets: &self.res.assets,

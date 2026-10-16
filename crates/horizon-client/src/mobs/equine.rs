@@ -311,14 +311,14 @@ pub fn ridden_step(m: &mut Mob) {
     if super::nautilus::is_nautilus(m.species()) {
         return super::nautilus::ridden(m);
     }
+    if m.species() == Species::HappyGhast {
+        return super::happy_ghast::ridden(m);
+    }
     m.yaw = r.yaw;
     m.head_pitch = r.pitch * 0.5;
     m.body_yaw = r.yaw;
     m.head_yaw = r.yaw;
     m.ai.nav.stop();
-    if m.species() == Species::HappyGhast {
-        return super::happy_ghast::ridden(m);
-    }
 
     if matches!(m.species(), Species::Pig | Species::Strider) {
         // Pig/Strider: always forward along the rider's look, at a fraction
