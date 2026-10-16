@@ -268,6 +268,7 @@ inspected:
 cargo run -p horizon-port-pack -- import ~/Downloads/pack.mrpack ~/.horizon/ports/pack
 cargo run -p horizon-port-pack -- inventory ~/.horizon/ports/pack     # --offline reuses modrinth.json
 cargo run -p horizon-port-pack -- carry ~/.horizon/ports/pack         # content mods with a jar, or name them
+#   --resources <prepared root>: only templates Horizon's tables have
 ```
 
 `inventory` reads metadata only: Modrinth answers by file hash, and the jars only if the user's
@@ -277,14 +278,26 @@ classes come from the reviewed table, Modrinth categories and sides; with jars, 
 only): content 54, library 33, client-ui 26, performance 25, other 14, unknown 2, server-only 1;
 40 rows matched the reviewed ATM10 table; three dependency layers (93 / 57 / 5).
 
-`carry` copies a jar's `assets/<id>/`, `data/<id>/` and `data/minecraft/tags/` into
-`mods/<id>/carry/`, a folder content mod (API 0.2) the game loads with `--dev-mod`, and keeps
-what a content mod may not hold (other namespaces such as `c` tags, vanilla data) in `outside/`.
-No class file is copied. It upgrades vanilla-type recipes from 1.21.1 ingredients to 26.3's,
-adds the `items/` definitions 1.21.4 introduced, and declares each block from a vanilla template
-guessed from its blockstate properties (stone for none, a door for `facing, half, hinge, open,
-powered`, ...); blocks with an unknown property set, custom recipe types and NeoForge
-conditions are listed in `carry-report.json` for the oracle step.
+`carry` copies a jar's `assets/<id>/`, `data/<id>/`, `data/minecraft/tags/` and `data/c/tags/`
+into `mods/<id>/carry/`, a folder content mod (API 0.2) the game loads with `--dev-mod`, and
+keeps what a content mod may not hold (other namespaces, vanilla data) in `outside/`. No class
+file is copied. It upgrades from 1.21.1 to 26.3: vanilla-type recipes (ingredients), loot tables
+(`conditions` lists become one `condition`, `functions` become `modifier`, kinds move to `type`,
+tool matches on silk touch or shears become `minecraft:tool/can_silk_touch` and
+`minecraft:tool/can_shear`), and the `items/` definitions 1.21.4 introduced.
+
+Blocks and items come from the NeoForge oracle when `<work>/oracle/facts.json` exists (step 6):
+every block the mod registers gets the vanilla template of the same vanilla class and states
+whose shapes, sounds, set type and wood type match best, with the mod's own hardness, blast
+resistance, light, tool need, friction, map colour and sounds as overrides. `--resources
+<prepared>` limits templates to blocks Horizon's tables have. `carry-report.json` lists, per
+block, what the template does not reproduce (other shapes, sounds no vanilla block has, a class
+of its own), and the blocks left out: those whose vanilla class has no vanilla block with the
+same states (Macaw's garage doors, multi-part gates). Recipes get the convention tags they use
+(`c:dyes/red`), filled from the oracle with vanilla's and the mod's own members. Without the
+oracle, templates are guessed from the blockstate's properties: the template whose properties
+include them with the fewest left over (models often ignore `powered` or `waterlogged`), the
+block's name breaking ties (`_pane`, `_gate`, `_trapdoor`).
 
 ### 1. Import
 
