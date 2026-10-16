@@ -41,6 +41,7 @@ mod entity_culling;
 mod events;
 mod explosion;
 mod extras;
+mod falling_damage;
 mod fangs;
 mod fireworks;
 mod fishing;
@@ -652,6 +653,7 @@ struct FallingBlock {
     drop_item: bool,
     /// `Entity.fallDistance` (powder snow holds a block that fell far at 0.9).
     fall_distance: f64,
+    damage: horizon_client::falling_block::Damage,
     /// The UUID and compound it was loaded with, kept while it moves.
     saved: Option<Box<([i32; 4], horizon_world::nbt::Tag)>>,
 }
@@ -1968,6 +1970,7 @@ impl Game<'_> {
                         1009 => Some(("minecraft:block.fire.extinguish", 0.5)),
                         1502 => Some(("minecraft:block.redstone_torch.burnout", 0.5)),
                         1030 => Some(("minecraft:block.anvil.use", 1.0)),
+                        1029 => Some(("minecraft:block.anvil.destroy", 1.0)),
                         1031 => Some(("minecraft:block.anvil.land", 0.3)),
                         1505 => Some(("minecraft:item.bone_meal.use", 1.0)),
                         _ => None,
@@ -2020,6 +2023,11 @@ impl Game<'_> {
                         no_gravity: false,
                         drop_item: true,
                         fall_distance: 0.0,
+                        damage: if self.res.facts.get(state).name.ends_with("anvil") {
+                            horizon_client::falling_block::Damage::anvil()
+                        } else {
+                            Default::default()
+                        },
                         saved: None,
                     });
                 }
@@ -2275,14 +2283,19 @@ impl Game<'_> {
                 return false;
             }
             if solid {
-                landed.push((
-                    f.state,
-                    [
-                        next.x.floor() as i32,
-                        next.y.floor() as i32 + i32::from(!sunk),
-                        next.z.floor() as i32,
-                    ],
-                ));
+                let pos = [
+                    next.x.floor() as i32,
+                    next.y.floor() as i32 + i32::from(!sunk),
+                    next.z.floor() as i32,
+                ];
+                let landing_y = if sunk {
+                    next.y.floor() + f64::from(0.9_f32)
+                } else {
+                    f64::from(pos[1])
+                };
+                f.fall_distance += (f.position.y - landing_y).max(0.0);
+                f.position = Vec3::new(next.x, landing_y, next.z);
+                landed.push((f.clone(), pos));
                 return false;
             }
             if next.y < f.position.y {
@@ -2316,30 +2329,8 @@ impl Game<'_> {
                 self.spawn_item(stack, [at.x, at.y, at.z], v, 10);
             }
         }
-        for (state, pos) in landed {
-            let landing = self.with_level(|b, level, ticks| {
-                b.falling_block_landed(
-                    level,
-                    ticks,
-                    BlockPos::new(pos[0], pos[1], pos[2]),
-                    state,
-                    false,
-                )
-            });
-            if matches!(landing, Landing::Broken) {
-                let item = self.res.facts.get(state).item.clone();
-                if &*item != "minecraft:air" {
-                    self.pop_resource(
-                        pos,
-                        ItemStack {
-                            item,
-                            count: 1,
-                            damage: 0,
-                            extra: None,
-                        },
-                    );
-                }
-            }
+        for (block, pos) in landed {
+            self.finish_falling_block(block, pos);
         }
         self.process_level_events()
     }
