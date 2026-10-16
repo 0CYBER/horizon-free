@@ -51,7 +51,7 @@ pub(super) const HELP: &[&str] = &[
     "scroll-at X Y STEPS            turn the wheel at GUI pixel X Y (positive scrolls up)",
     "command TEXT                   run a /command",
     "pause                          open the pause menu",
-    "wait TICKS                     wait for game ticks to pass",
+    "wait TICKS                     wait for game ticks to pass (held keys stay held)",
     "stop                           cancel the running action and release every key",
 ];
 
@@ -230,6 +230,13 @@ enum TaskKind {
         health: Option<f32>,
         report_tick: u64,
     },
+}
+impl TaskKind {
+    /// Whether the keys and buttons are released when the task ends. A wait
+    /// holds nothing, so what `key w down` pressed stays down through it.
+    fn releases_input(&self) -> bool {
+        !matches!(self, TaskKind::Wait { .. })
+    }
 }
 struct Goto {
     target: [f64; 3],
@@ -1655,7 +1662,9 @@ impl Game<'_> {
         let result = self.step_task(&mut task.kind, timed_out);
         match result {
             Some(value) => {
-                self.release_agent_keys();
+                if task.kind.releases_input() {
+                    self.release_agent_keys();
+                }
                 let _ = task.reply.send(value.to_string());
             }
             None => self.agent.task = Some(task),
@@ -1958,6 +1967,16 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_wait_keeps_held_input() {
+        assert!(!TaskKind::Wait { until_tick: 40 }.releases_input());
+        let jump = TaskKind::Jump {
+            release_tick: 4,
+            from_y: 64.0,
+        };
+        assert!(jump.releases_input());
+    }
 
     #[test]
     fn parses_flags_and_values() {
