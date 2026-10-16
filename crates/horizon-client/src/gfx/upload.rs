@@ -61,6 +61,22 @@ impl Uploads {
             },
         );
     }
+    /// Copy `bytes` into `target` at `offset`, as `Queue::write_buffer`
+    /// would, in the encoder's order.
+    pub fn buffer(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::Buffer,
+        offset: u64,
+        bytes: &[u8],
+    ) {
+        let Some(size) = NonZeroU64::new(bytes.len() as u64) else {
+            return;
+        };
+        self.belt
+            .write_buffer(encoder, target, offset, size)
+            .copy_from_slice(bytes);
+    }
     /// Close this frame's staging buffers: they come back for reuse once the
     /// encoder's submission finishes on the GPU.
     pub fn finish(&mut self, encoder: &wgpu::CommandEncoder) {
@@ -191,6 +207,50 @@ mod tests {
                 read_back(&device, &queue, &expected),
                 "frame {frame}"
             );
+        }
+    }
+
+    #[test]
+    fn belt_buffer_writes_land_in_order_at_their_offsets() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let target = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut uploads = Uploads::new(&device);
+        let mut expected = [0u8; 64];
+        for frame in 0..3u8 {
+            let mut encoder = device.create_command_encoder(&Default::default());
+            // Overlapping writes: the later one wins, as with the queue.
+            for (offset, len, value) in [(0, 32, frame + 1), (16, 32, frame + 10), (60, 4, 7)] {
+                let bytes = vec![value; len];
+                uploads.buffer(&mut encoder, &target, offset as u64, &bytes);
+                expected[offset..offset + len].copy_from_slice(&bytes);
+            }
+            uploads.buffer(&mut encoder, &target, 0, &[]);
+            encoder.copy_buffer_to_buffer(&target, 0, &readback, 0, 64);
+            uploads.finish(&encoder);
+            queue.submit([encoder.finish()]);
+            readback
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, |r| r.unwrap());
+            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            assert_eq!(
+                *readback.slice(..).get_mapped_range().unwrap(),
+                expected[..]
+            );
+            readback.unmap();
         }
     }
 }

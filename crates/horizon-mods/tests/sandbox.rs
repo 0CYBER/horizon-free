@@ -131,7 +131,8 @@ fn undeclared_capabilities_are_refused() {
     std::fs::create_dir_all(&dir).unwrap();
     let wasm = Package::read(&mods_dir().join("horizon_mods_test_guest.hmod"))
         .unwrap()
-        .wasm;
+        .wasm
+        .expect("the guest has code");
     let manifest = GUEST_MANIFEST.replace("[\"chat\"]", "[]");
     std::fs::write(dir.join("horizon-mod.toml"), manifest).unwrap();
     std::fs::write(dir.join("mod.wasm"), wasm).unwrap();
@@ -240,4 +241,35 @@ fn hook_overhead() {
         "load coords-hud:      {:8.1} ms",
         started.elapsed().as_secs_f64() * 1000.0
     );
+}
+
+#[test]
+fn content_only_mods_load_without_an_engine() {
+    let manifest = r#"
+id = "ruby"
+name = "Ruby"
+version = "0.1.0"
+api = "0.2"
+side = "both"
+capabilities = ["registries"]
+"#;
+    let block: &[u8] = br#"{"template": "minecraft:iron_block"}"#;
+    let dir = mods_dir().join("content");
+    std::fs::create_dir_all(&dir).unwrap();
+    let ok = dir.join("ruby.hmod");
+    let files: &[(&str, &[u8])] = &[("data/ruby/horizon/block/ruby_block.json", block)];
+    std::fs::write(&ok, Package::write_files(manifest, None, files).unwrap()).unwrap();
+    let bad = dir.join("bad.hmod");
+    let files: &[(&str, &[u8])] = &[("data/minecraft/recipe/stone.json", b"{}")];
+    let bad_manifest = manifest.replace("\"ruby\"", "\"bad\"");
+    std::fs::write(
+        &bad,
+        Package::write_files(&bad_manifest, None, files).unwrap(),
+    )
+    .unwrap();
+    let mods = Mods::load(&[ok, bad], |_| true, |_| false);
+    assert_eq!(mods.entries()[0].status, Status::Running);
+    assert!(matches!(&mods.entries()[1].status, Status::Failed(e) if e.contains("own namespace")));
+    // Content has no hooks: the game's per-tick mod work stays skipped.
+    assert!(!mods.is_running());
 }

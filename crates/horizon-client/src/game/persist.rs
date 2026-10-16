@@ -49,16 +49,7 @@ fn with_raw(modelled: Tag, raw: Option<&Tag>) -> Tag {
         // Defaults Horizon invents for fields it does not simulate give way to the save.
         let invented = matches!(
             k.to_string_lossy().as_str(),
-            "Fire"
-                | "Air"
-                | "Invulnerable"
-                | "PortalCooldown"
-                | "HasBeenShot"
-                // FallingBlockEntity fields Horizon does not simulate.
-                | "HurtEntities"
-                | "CancelDrop"
-                | "FallHurtAmount"
-                | "FallHurtMax"
+            "Fire" | "Air" | "Invulnerable" | "PortalCooldown" | "HasBeenShot"
         );
         if !(invented && out.contains_key(k)) {
             out.insert(k.clone(), v.clone());
@@ -199,7 +190,7 @@ impl Game<'_> {
                         }
                     }
                     "minecraft:falling_block" => {
-                        if let Some((state, position, velocity, age)) =
+                        if let Some((state, position, velocity, age, fall_distance)) =
                             entity_nbt::falling_block_from_nbt(&tag)
                             && let Some(state) = self.state_from_nbt(&state)
                         {
@@ -214,7 +205,11 @@ impl Game<'_> {
                                 age,
                                 no_gravity,
                                 drop_item,
-                                fall_distance: 0.0,
+                                fall_distance,
+                                damage: horizon_client::falling_block::Damage::from_nbt(
+                                    &tag,
+                                    self.res.facts.get(state).name.ends_with("anvil"),
+                                ),
                                 saved: uuid.map(|u| Box::new((u, tag.clone()))),
                             });
                         }
@@ -506,7 +501,7 @@ impl Game<'_> {
     }
     /// `BlockState.CODEC`: a block name or `{id, properties}` (or legacy `{Name, Properties}`).
     fn state_from_nbt(&self, tag: &Tag) -> Option<BlockStateId> {
-        let registry = self.res.assets.registry;
+        let registry = self.pack.assets.registry;
         let state = match tag.get("Name") {
             Some(Tag::String(name)) => BlockState {
                 name: name.to_string_lossy(),
@@ -528,7 +523,7 @@ impl Game<'_> {
             .or_else(|| registry.default_state(&state.name))
     }
     pub(in crate::game) fn state_to_nbt(&self, state: BlockStateId) -> Tag {
-        let registry = self.res.assets.registry;
+        let registry = self.pack.assets.registry;
         match registry.state(state) {
             Some(s) if registry.default_state(&s.name) == Some(state) => {
                 Tag::String(s.name.as_str().into())
@@ -620,6 +615,8 @@ impl Game<'_> {
                     f.velocity,
                     f.age,
                     f.drop_item,
+                    f.damage,
+                    f.fall_distance,
                     uuid,
                 );
                 out.entry(chunk_of(f.position))

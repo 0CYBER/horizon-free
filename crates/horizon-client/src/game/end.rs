@@ -142,7 +142,7 @@ impl Game<'_> {
     /// tinted 0x282828. The atlas does not wrap, so each face is 16×16 quads.
     pub(super) fn end_sky_geometry(&self) -> Vec<Vertex> {
         let mut out = Vec::with_capacity(6 * 256 * 4);
-        let Some(r) = self.res.atlas.sprites.get("environment/end_sky").copied() else {
+        let Some(r) = self.atlas.sprites.get("environment/end_sky").copied() else {
             return out;
         };
         use std::f32::consts::FRAC_PI_2;
@@ -184,7 +184,6 @@ impl Game<'_> {
         let intensity = self.end.flash.intensity(self.clock.fraction() as f32);
         if intensity > 1e-5
             && let Some(r) = self
-                .res
                 .atlas
                 .sprites
                 .get("environment/celestial/end_flash")
@@ -237,7 +236,7 @@ impl Game<'_> {
         if &*stack.item != "minecraft:ender_eye" {
             return Ok(false);
         }
-        let registry = self.res.assets.registry;
+        let registry = self.pack.assets.registry;
         let target = self.pick().and_then(|hit| {
             let state = registry.state(self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]))?;
             (state.name == "minecraft:end_portal_frame").then(|| (hit, state.clone()))
@@ -303,7 +302,7 @@ impl Game<'_> {
     /// ring (corners free) of filled frames, all facing the centre or all
     /// facing away from it. Returns the centre of the 3×3 opening.
     fn portal_ring_center(&self, frame: [i32; 3]) -> Option<[i32; 3]> {
-        let registry = self.res.assets.registry;
+        let registry = self.pack.assets.registry;
         // (offset from the centre, facing when the frames face the centre)
         let mut ring = Vec::with_capacity(12);
         for i in -1..=1 {
@@ -630,7 +629,7 @@ impl Game<'_> {
                 &[],
             )?;
         }
-        let registry = self.res.assets.registry;
+        let registry = self.pack.assets.registry;
         for (facing, d) in [
             ("north", [0, -1]),
             ("south", [0, 1]),
@@ -898,8 +897,7 @@ impl Game<'_> {
     fn end_crystal_geometry(&self, camera: glam::DVec3, out: &mut Vec<Vertex>) {
         let (Some(model), Some(r)) = (
             self.crystal_model.as_ref(),
-            self.res
-                .atlas
+            self.atlas
                 .sprites
                 .get("entity/end_crystal/end_crystal")
                 .copied(),
@@ -1052,7 +1050,7 @@ impl Game<'_> {
 
     /// ThrownItemRenderer: the ender eye item facing the camera.
     fn eye_geometry(&self, camera: glam::DVec3, out: &mut Vec<Vertex>) {
-        let Some(r) = self.res.atlas.sprites.get("item/ender_eye").copied() else {
+        let Some(r) = self.atlas.sprites.get("item/ender_eye").copied() else {
             return;
         };
         let alpha = self.clock.fraction();

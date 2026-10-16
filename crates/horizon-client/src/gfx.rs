@@ -62,8 +62,9 @@ mod java_stages;
 mod occlusion;
 mod pack_stages;
 pub mod panorama;
+mod resident;
 mod timing;
-mod upload;
+pub(crate) mod upload;
 mod world_post;
 
 #[repr(C)]
@@ -98,8 +99,6 @@ struct SectionGpu {
     /// The solid quads by facing: back-facing groups are skipped.
     faces: crate::mesher::FaceGroups,
 }
-/// A visible section this frame: key, squared distance, camera-relative origin.
-type Visible = (SectionKey, f64, [f32; 3]);
 /// Line segments the hit outline can hold.
 const MAX_OUTLINE_EDGES: u64 = 256;
 pub struct Frame<'a> {
@@ -301,6 +300,8 @@ pub struct Renderer {
     lightmap_sampler: wgpu::Sampler,
     animations: AnimatedSprites,
     uploads: upload::Uploads,
+    /// Whether `lightmap` holds `lightmap_pixels` yet.
+    lightmap_uploaded: bool,
     sprite_minimum_size: u32,
     indices: wgpu::Buffer,
     index_quads: u32,
@@ -308,7 +309,7 @@ pub struct Renderer {
     instance_capacity: u64,
     outline: wgpu::Buffer,
     depth: wgpu::TextureView,
-    sections: HashMap<SectionKey, SectionGpu>,
+    sections: resident::Resident<SectionGpu>,
     arena: arena::Arena,
     /// `DrawIndexedIndirectArgs` for this frame's solid then translucent draws.
     indirect: wgpu::Buffer,
@@ -316,7 +317,7 @@ pub struct Renderer {
     /// Indirect draws may set `first_instance` (the section origin).
     pub multi_draw: bool,
     /// Per-frame scratch, kept to avoid allocating every frame.
-    visible: Vec<Visible>,
+    visible: Vec<resident::Visible>,
     origins: Vec<[f32; 4]>,
     /// `DrawIndexedIndirectArgs` words: index count, instance count, first
     /// index, base vertex, first instance.
@@ -362,7 +363,9 @@ fn mip_chain(
 ) -> (Vec<u8>, u32) {
     let levels = size.trailing_zeros() + 1;
     let layer_bytes = (size * size * 4) as usize;
-    let mut out = Vec::new();
+    // Exactly the chain's size: cached animation frames count their capacity.
+    let chain_bytes: usize = (0..levels).map(|l| layer_bytes >> (2 * l)).sum();
+    let mut out = Vec::with_capacity(chain_bytes * layers as usize);
     for layer in 0..layers as usize {
         let base = crate::mipmap::Image {
             width: size,
@@ -388,7 +391,26 @@ fn mip_chain(
             out.extend(image.pixels.iter().flatten());
         }
     }
+    debug_assert_eq!(out.len(), chain_bytes * layers as usize);
     (out, levels)
+}
+/// The wgpu instance options, without wgpu's validation of indirect draws
+/// in release builds. That validation (meant for untrusted WebGPU content)
+/// copies every indirect draw through a compute pass before the render pass
+/// and costs about a tenth of `render`'s CPU time on Metal. The only indirect
+/// draws are the section draws `render` writes from resident sections, in
+/// bounds by construction: index counts within `indices`, vertices within
+/// the section's arena range, first instances below the origins written that
+/// frame. Debug builds keep validating them; `WGPU_VALIDATION_INDIRECT_CALL=1`
+/// turns it back on.
+fn instance_descriptor() -> wgpu::InstanceDescriptor {
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    if !cfg!(debug_assertions) {
+        descriptor
+            .flags
+            .remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
+    }
+    descriptor.with_env()
 }
 /// What to tell a player whose system offers no usable graphics adapter.
 /// Vulkan is loaded at run time (the game links no graphics library), so a
@@ -433,8 +455,7 @@ impl Renderer {
         forcefield: (&[u8], u32),
         panorama_faces: &panorama::Faces,
     ) -> Result<Self> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let instance = wgpu::Instance::new(instance_descriptor());
         // Offscreen rendering needs no surface, so it can use a GPU the
         // window's display cannot present from (a headless compositor).
         let surface = if offscreen {
@@ -1563,6 +1584,7 @@ impl Renderer {
             lightmap_sampler,
             animations: AnimatedSprites::new(animations, sprite_size, sprite_mips),
             uploads,
+            lightmap_uploaded: false,
             sprite_minimum_size,
             indices,
             index_quads,
@@ -1570,7 +1592,7 @@ impl Renderer {
             instance_capacity,
             outline,
             depth,
-            sections: HashMap::new(),
+            sections: resident::Resident::default(),
             arena,
             indirect,
             indirect_capacity: 1024,
@@ -1717,7 +1739,7 @@ impl Renderer {
         self.sections.len()
     }
     pub fn has_section(&self, key: SectionKey) -> bool {
-        self.sections.contains_key(&key)
+        self.sections.contains(key)
     }
     pub fn upload(&mut self, key: SectionKey, mesh: &SectionMesh) {
         self.occlusion.set(key, mesh.visibility);
@@ -1786,7 +1808,7 @@ impl Renderer {
         }
     }
     fn release_section(&mut self, key: SectionKey) {
-        if let Some(s) = self.sections.remove(&key) {
+        if let Some(s) = self.sections.remove(key) {
             self.arena
                 .release(s.page, s.start, u64::from(s.solid + s.translucent) * 4);
         }
@@ -1913,6 +1935,7 @@ impl Renderer {
     }
     fn update_lightmap(
         &mut self,
+        encoder: &mut wgpu::CommandEncoder,
         sky: &Sky,
         darkness: f32,
         gamma: f32,
@@ -1949,26 +1972,25 @@ impl Renderer {
                 pixels[i + 3] = 255;
             }
         }
-        self.queue.write_texture(
+        // The lightmap changes with the time of day, flicker and effects,
+        // not every frame: upload only what differs from the texture.
+        if pixels == self.lightmap_pixels && self.lightmap_uploaded {
+            return;
+        }
+        self.uploads.texture(
+            encoder,
             wgpu::TexelCopyTextureInfo {
                 texture: &self.lightmap,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
+            16,
+            16,
             &pixels,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(64),
-                rows_per_image: Some(16),
-            },
-            wgpu::Extent3d {
-                width: 16,
-                height: 16,
-                depth_or_array_layers: 1,
-            },
         );
         self.lightmap_pixels = pixels;
+        self.lightmap_uploaded = true;
     }
     fn animate(&mut self, encoder: &mut wgpu::CommandEncoder, tick: u64) {
         animate_sprites(
@@ -2040,6 +2062,7 @@ impl Renderer {
             self.hud.animate_fire(&self.queue, frame.ticks);
         }
         self.update_lightmap(
+            &mut encoder,
             &frame.sky,
             frame.darkness.1,
             (self.gamma - frame.darkness.0).max(0.0),
@@ -2132,8 +2155,8 @@ impl Renderer {
             ],
             outline_params: outline_params(self.config.width, self.config.height),
         };
-        self.queue
-            .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
+        self.uploads
+            .buffer(&mut encoder, &self.globals, 0, bytemuck::bytes_of(&globals));
         let pack_uniform = shader_pack_uniform(
             frame,
             view,
@@ -2155,8 +2178,12 @@ impl Renderer {
             view_proj: (hand_projection * frame.bob * view).to_cols_array_2d(),
             ..globals
         };
-        self.queue
-            .write_buffer(&self.hand_globals, 0, bytemuck::bytes_of(&hand_globals));
+        self.uploads.buffer(
+            &mut encoder,
+            &self.hand_globals,
+            0,
+            bytemuck::bytes_of(&hand_globals),
+        );
         // GameRenderer.render3dHud: DebugCrosshairRenderer draws with the
         // hand's projection but no bob, and FogMode.NONE (no fog colour).
         let crosshair_globals = Globals {
@@ -2164,7 +2191,8 @@ impl Renderer {
             fog_color: [0.0; 4],
             ..globals
         };
-        self.queue.write_buffer(
+        self.uploads.buffer(
+            &mut encoder,
             &self.crosshair_globals,
             0,
             bytemuck::bytes_of(&crosshair_globals),
@@ -2187,34 +2215,13 @@ impl Renderer {
         let reachable = &self.occlusion;
         let mut visible = std::mem::take(&mut self.visible);
         visible.clear();
-        visible.extend(
-            self.sections
-                .keys()
-                .filter(|&&k| !culling || reachable.contains(k))
-                .filter_map(|&(sx, sy, sz)| {
-                    let origin = DVec3::new(
-                        f64::from(sx * 16),
-                        f64::from(crate::chunk::MIN_Y + sy * 16),
-                        f64::from(sz * 16),
-                    ) - camera;
-                    let center = origin + DVec3::splat(8.0);
-                    let horizontal = (center.x * center.x + center.z * center.z).sqrt();
-                    if horizontal > f64::from(frame.distance) + 24.0 {
-                        return None;
-                    }
-                    let min = origin.as_vec3();
-                    let max = min + Vec3::splat(16.0);
-                    if !view.intersects(min, max) {
-                        return None;
-                    }
-                    Some((
-                        (sx, sy, sz),
-                        center.length_squared(),
-                        origin.as_vec3().to_array(),
-                    ))
-                }),
+        self.sections.visible(
+            camera,
+            frame.distance,
+            &view,
+            |k| !culling || reachable.contains(k),
+            &mut visible,
         );
-        visible.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
         self.drawn_sections = visible.len();
         if visible.len() as u64 > self.instance_capacity {
             self.instance_capacity = (visible.len() as u64).next_power_of_two();
@@ -2226,11 +2233,18 @@ impl Renderer {
             });
         }
         self.origins.clear();
-        self.origins
-            .extend(visible.iter().map(|(_, _, o)| [o[0], o[1], o[2], 0.0]));
+        self.origins.extend(
+            visible
+                .iter()
+                .map(|v| [v.origin[0], v.origin[1], v.origin[2], 0.0]),
+        );
         if !self.origins.is_empty() {
-            self.queue
-                .write_buffer(&self.instances, 0, bytemuck::cast_slice(&self.origins));
+            self.uploads.buffer(
+                &mut encoder,
+                &self.instances,
+                0,
+                bytemuck::cast_slice(&self.origins),
+            );
         }
         if frame.title {
             visible.clear();
@@ -2243,18 +2257,18 @@ impl Renderer {
         let eye = (frame.bob * crate::camera::view_matrix(frame.yaw, frame.pitch))
             .inverse()
             .transform_point3(Vec3::ZERO);
-        for (i, (key, _, origin)) in visible.iter().enumerate() {
-            let s = &self.sections[key];
+        for (i, v) in visible.iter().enumerate() {
+            let s = self.sections.get(v.slot);
             // Only the solid groups that can face the eye.
-            s.faces.ranges(eye - Vec3::from(*origin), |first, quads| {
+            s.faces.ranges(eye - Vec3::from(v.origin), |first, quads| {
                 let first = s.start + u64::from(first) * 4;
                 self.draws.push([quads * 6, 1, 0, first as u32, i as u32]);
                 self.draw_pages.push(s.page);
             });
         }
         let solid_draws = self.draws.len() as u32;
-        for (i, (key, _, _)) in visible.iter().enumerate().rev() {
-            let s = &self.sections[key];
+        for (i, v) in visible.iter().enumerate().rev() {
+            let s = self.sections.get(v.slot);
             if s.translucent > 0 {
                 let first = s.start + u64::from(s.solid) * 4;
                 self.draws
@@ -2273,8 +2287,12 @@ impl Renderer {
                     mapped_at_creation: false,
                 });
             }
-            self.queue
-                .write_buffer(&self.indirect, 0, bytemuck::cast_slice(&self.draws));
+            self.uploads.buffer(
+                &mut encoder,
+                &self.indirect,
+                0,
+                bytemuck::cast_slice(&self.draws),
+            );
         }
         let debug_depth = frame.debug_lines.len() as u32;
         let debug_top = frame.debug_lines_on_top.len() as u32;
@@ -2297,14 +2315,18 @@ impl Renderer {
                 .chain(frame.debug_crosshair)
                 .copied()
                 .collect();
-            self.queue
-                .write_buffer(&self.debug_line_buffer, 0, bytemuck::cast_slice(&all));
+            self.uploads.buffer(
+                &mut encoder,
+                &self.debug_line_buffer,
+                0,
+                bytemuck::cast_slice(&all),
+            );
         }
         let outline_edges = frame.outline.len().min(MAX_OUTLINE_EDGES as usize);
         if outline_edges > 0 {
             let lines = outline_vertices(&frame.outline[..outline_edges], camera);
-            self.queue
-                .write_buffer(&self.outline, 0, bytemuck::cast_slice(&lines));
+            self.uploads
+                .buffer(&mut encoder, &self.outline, 0, bytemuck::cast_slice(&lines));
         }
         let [entity_quads, crumbling_quads, translucent_crumbling_quads] =
             self.entity_batch.update(
@@ -2328,14 +2350,19 @@ impl Renderer {
                         mapped_at_creation: false,
                     });
                 }
-                self.queue.write_buffer(
+                self.uploads.buffer(
+                    &mut encoder,
                     &self.cloud_buffer,
                     0,
                     bytemuck::cast_slice(&self.cloud_mesh.vertices),
                 );
             }
-            self.queue
-                .write_buffer(&self.cloud_uniform, 0, bytemuck::bytes_of(&uniform));
+            self.uploads.buffer(
+                &mut encoder,
+                &self.cloud_uniform,
+                0,
+                bytemuck::bytes_of(&uniform),
+            );
             (vertices / 4) as u32
         } else {
             0
@@ -2355,12 +2382,17 @@ impl Renderer {
             });
         }
         if entity_vertices > 0 {
-            self.queue
-                .write_buffer(&self.entity_buffer, 0, bytemuck::cast_slice(all_entities));
+            self.uploads.buffer(
+                &mut encoder,
+                &self.entity_buffer,
+                0,
+                bytemuck::cast_slice(all_entities),
+            );
         }
         let celestial_vertices = frame.celestial.len().min(2048 * 4);
         if celestial_vertices > 0 {
-            self.queue.write_buffer(
+            self.uploads.buffer(
+                &mut encoder,
                 &self.celestial_buffer,
                 0,
                 bytemuck::cast_slice(&frame.celestial[..celestial_vertices]),
@@ -2374,7 +2406,8 @@ impl Renderer {
         }
         if let Some(b) = &frame.border {
             if b.rebuilt {
-                self.queue.write_buffer(
+                self.uploads.buffer(
+                    &mut encoder,
                     &self.border_vertices,
                     0,
                     bytemuck::cast_slice(&b.vertices),
@@ -2390,8 +2423,12 @@ impl Renderer {
                     t.texture_offset,
                 ],
             };
-            self.queue
-                .write_buffer(&self.border_uniform, 0, bytemuck::bytes_of(&uniform));
+            self.uploads.buffer(
+                &mut encoder,
+                &self.border_uniform,
+                0,
+                bytemuck::bytes_of(&uniform),
+            );
         }
         let view_target = target_texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.config.format.remove_srgb_suffix()),
@@ -2636,8 +2673,12 @@ impl Renderer {
                     mapped_at_creation: false,
                 });
             }
-            self.queue
-                .write_buffer(&self.screen_buffer, 0, bytemuck::cast_slice(&vertices));
+            self.uploads.buffer(
+                &mut encoder,
+                &self.screen_buffer,
+                0,
+                bytemuck::cast_slice(&vertices),
+            );
             let attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: &view_target,
                 resolve_target: None,
@@ -2732,6 +2773,7 @@ impl Renderer {
         self.hud.draw(
             &self.device,
             &self.queue,
+            &mut self.uploads,
             &mut encoder,
             &view_target,
             frame.hud,
@@ -3058,6 +3100,16 @@ mod tests {
         assert_eq!(super::outline_width(3840), 5.0);
     }
     #[test]
+    fn indirect_draws_are_validated_only_in_debug_builds() {
+        if std::env::var_os("WGPU_VALIDATION_INDIRECT_CALL").is_none() {
+            let flags = super::instance_descriptor().flags;
+            assert_eq!(
+                flags.contains(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL),
+                cfg!(debug_assertions)
+            );
+        }
+    }
+    #[test]
     fn far_faces_a_hair_apart_keep_their_depth_order() {
         let m = super::world_projection(70.0, 16.0 / 9.0, 768.0);
         let depth = |distance: f32| {
@@ -3104,7 +3156,10 @@ pub(crate) fn sprite_mipmap_limit(requested: u32, size: u32, minimum: u32, avail
     let upscale = (size / minimum.max(1)).max(1).ilog2();
     requested.saturating_add(upscale).min(available - 1)
 }
-const ANIMATION_MIP_BUDGET: usize = 8 << 20;
+/// Room for every frame of the vanilla animations (594 frames, 13 MB of mip
+/// chains in 64-pixel layers), so no frame's chain is rebuilt on the render
+/// thread when its animation comes back to it; larger packs stay bounded.
+const ANIMATION_MIP_BUDGET: usize = 32 << 20;
 const ANIMATION_MIP_ENTRIES: usize = 4096;
 
 /// One immutable resource snapshot and its lazily generated frame mips. A new
@@ -3377,6 +3432,29 @@ mod sprite_upload_tests {
             assert_eq!(state.cache.len(), 1);
             assert!(state.cache.contains_key(&(0, 0)));
         }
+    }
+
+    #[test]
+    fn mip_chain_allocates_exactly_its_size() {
+        for size in [16, 64] {
+            let animation = crate::sprites::test_animation(size, 0);
+            let (chain, _) = mip_chain(animation.pixels(0), size, &[], 0, 1);
+            assert_eq!(chain.capacity(), chain.len());
+        }
+    }
+
+    #[test]
+    fn every_vanilla_animation_frame_stays_cached() {
+        // Vanilla's 594 animation frames in 64-pixel layers: 297 two-frame clips.
+        let animations: Vec<_> = (0..297)
+            .map(|layer| crate::sprites::test_animation(64, layer))
+            .collect();
+        let mut state = AnimatedSprites::new(&animations, 64, &[]);
+        for tick in 0..4 {
+            animate_sprites(&mut state, tick, 7, |_, _, _, _| {});
+        }
+        assert_eq!(state.cache.len(), 594);
+        assert!(state.cache_bytes <= ANIMATION_MIP_BUDGET);
     }
 
     #[test]

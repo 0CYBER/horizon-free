@@ -153,6 +153,22 @@ fn number_format(f: &play::NumberFormat) -> horizon_client::scoreboard::NumberFo
 impl Game<'_> {
     /// Leave the title for a server (ConnectScreen): an empty world fed by the connection.
     pub(super) fn connect_server(&mut self, address: &str, name: &str) -> Result<()> {
+        self.join_server(address, name, None)
+    }
+    /// Join single player's integrated server through memory.
+    pub(super) fn connect_local(
+        &mut self,
+        pipe: horizon_protocol::connection::Pipe,
+        name: &str,
+    ) -> Result<()> {
+        self.join_server("local", name, Some(pipe))
+    }
+    fn join_server(
+        &mut self,
+        address: &str,
+        name: &str,
+        local: Option<horizon_protocol::connection::Pipe>,
+    ) -> Result<()> {
         self.perf.world_opening();
         let root = self.options.resources.clone();
         let builtin = Builtin::find(&root)
@@ -160,16 +176,26 @@ impl Game<'_> {
             .ok_or("registries.json not found next to the resources; run the data generator reports (horizon-prepare)")?;
         let lang = Arc::new(horizon_client::net::load_language(&root));
         let view = self.settings.render_distance.clamp(2, 32) as i8;
-        horizon_client::crash::set_detail("Server", horizon_client::net::shown_address(address));
+        if local.is_none() {
+            horizon_client::crash::set_detail(
+                "Server",
+                horizon_client::net::shown_address(address),
+            );
+        }
         // A signed-in account always plays under its own name.
         let auth = horizon_client::auth::current();
         let name = auth.as_ref().map_or(name, |a| a.name.as_str());
-        let session = Session::connect(address, name, auth.clone(), view, lang.clone());
-        self.extras_connecting(address, name);
+        let session = match local {
+            Some(pipe) => Session::connect_local(pipe, name, view, lang.clone()),
+            None => {
+                self.extras_connecting(address, name);
+                Session::connect(address, name, auth.clone(), view, lang.clone())
+            }
+        };
         let player_type = super::perspective::player_type(&root);
         let mut streaming = Streaming::new(
             Arc::new(NoTerrain),
-            self.res.context.clone(),
+            self.pack.context.clone(),
             self.res.threads,
         );
         streaming.remote = true;
@@ -274,11 +300,19 @@ impl Game<'_> {
         if let Some(mut r) = self.remote.take() {
             r.session.disconnect();
         }
+        // Single player's server thread saves the world before the title shows.
+        let single_player = match self.integrated.take() {
+            Some(server) => {
+                server.stop();
+                true
+            }
+            None => false,
+        };
         horizon_client::crash::clear_detail("Server");
         self.debug_charts.reset();
         self.tab_list.reset();
         self.score.board = Default::default();
-        self.streaming = Streaming::new(Arc::new(NoTerrain), self.res.context.clone(), 1);
+        self.streaming = Streaming::new(Arc::new(NoTerrain), self.pack.context.clone(), 1);
         self.streaming.paused = true;
         self.world = World::new(self.res.facts.air, 0);
         self.player = None;
@@ -296,6 +330,11 @@ impl Game<'_> {
         }
         let saves = std::env::current_dir()?.join("saves");
         let mut title = horizon_client::title::Title::new(saves.clone(), &self.options.resources);
+        if single_player && reason.is_none() {
+            self.title = Some(title);
+            self.capture(false);
+            return Ok(());
+        }
         title.mode = horizon_client::title::Mode::Multiplayer(match reason {
             Some(reason) => horizon_client::multiplayer::Screen::Disconnected {
                 reason,
@@ -465,7 +504,7 @@ impl Game<'_> {
         if !same {
             let mut streaming = Streaming::new(
                 Arc::new(NoTerrain),
-                self.res.context.clone(),
+                self.pack.context.clone(),
                 self.res.threads,
             );
             streaming.remote = true;
@@ -1545,11 +1584,10 @@ impl Game<'_> {
             self.skin_slots.len()
         } else {
             let (old, slot) = self.skin_slots.remove(0);
-            self.res.atlas.sprites.remove(&old);
+            self.atlas.sprites.remove(&old);
             slot
         };
         let Some(rect) = self
-            .res
             .atlas
             .sprites
             .get(&format!("horizon/skin{slot}"))
@@ -1557,7 +1595,7 @@ impl Game<'_> {
         else {
             return;
         };
-        let (w, h) = (self.res.atlas.width as f32, self.res.atlas.height as f32);
+        let (w, h) = (self.atlas.width as f32, self.atlas.height as f32);
         self.map_patches.push(horizon_client::font::Patch {
             x: (rect.u0 * w).round() as u32,
             y: (rect.v0 * h).round() as u32,
@@ -1565,7 +1603,7 @@ impl Game<'_> {
             height: 64,
             rgba,
         });
-        self.res.atlas.sprites.insert(location.clone(), rect);
+        self.atlas.sprites.insert(location.clone(), rect);
         self.skin_slots.push((location, slot));
     }
     /// Whether a downloaded skin is in the atlas, marking it recently shown.
@@ -1807,7 +1845,7 @@ impl Game<'_> {
                 entities: &ghast_collisions,
                 player,
                 scene: &mut self.world,
-                assets: &self.res.assets,
+                assets: &self.pack.assets,
                 collision_binding: self.collision,
                 resources: self.motion,
             }
@@ -2742,7 +2780,7 @@ impl Game<'_> {
         if self.player.is_some() {
             return false;
         }
-        let atlas = &self.res.atlas;
+        let atlas = &self.atlas;
         let (w, h) = (batch.width, batch.height);
         batch.fill(atlas, 0.0, 0.0, w, h, rgba(20, 20, 20, 255));
         let shown = horizon_client::net::shown_address(&r.session.address);
@@ -2767,7 +2805,7 @@ impl Game<'_> {
     /// Chat (ChatComponent), the chat input line and the action bar.
     pub(super) fn remote_hud(&self, batch: &mut HudBatch) {
         let Some(r) = &self.remote else { return };
-        let atlas = &self.res.atlas;
+        let atlas = &self.atlas;
         let (w, h) = (batch.width, batch.height);
         let open = r.chat_input.is_some();
         let now = Instant::now();

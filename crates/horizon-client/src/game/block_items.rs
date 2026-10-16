@@ -46,7 +46,7 @@ impl Game<'_> {
         // BeehiveBlock.getCloneItemStack: the honey level as the item's block state.
         if include_data
             && let Some(level) = self
-                .res
+                .pack
                 .assets
                 .registry
                 .state(state)

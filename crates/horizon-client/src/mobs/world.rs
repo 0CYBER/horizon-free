@@ -213,6 +213,18 @@ impl MobWorld<'_> {
             }),
         }
     }
+    /// The other mobs whose boxes may meet `area` (callers test the boxes),
+    /// in snapshot order: through the grid when there is one, else all.
+    pub fn others_near(&self, area: Aabb) -> impl Iterator<Item = &Seen> {
+        let mut near = Vec::new();
+        let indexed = self
+            .others_grid
+            .is_some_and(|grid| grid.candidates(area, &mut near));
+        let all = (!indexed).then(|| self.others.iter());
+        near.into_iter()
+            .map(|i| &self.others[i as usize])
+            .chain(all.into_iter().flatten())
+    }
     pub fn seen(&self, id: u32) -> Option<&Seen> {
         self.others.iter().find(|s| s.id == id)
     }

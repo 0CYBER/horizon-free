@@ -102,8 +102,10 @@ fn atlas_sprites(root: &Path, packed: &[PackedImage]) -> Vec<PackedImage> {
             let image = match &origin {
                 SpriteOrigin::File(texture) => {
                     let path = texture.strip_prefix("minecraft:").unwrap_or(texture);
-                    // Packed under its own name already: only a renamed file is new.
-                    if path == name {
+                    // A vanilla file is packed under its own name already:
+                    // only a renamed one is new. Other namespaces' files
+                    // (content mods) are never in the walked directories.
+                    if texture.starts_with("minecraft:") && path == name {
                         continue;
                     }
                     load(texture, "textures").map(|(w, h, p)| {
@@ -930,6 +932,7 @@ impl HudRenderer {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        uploads: &mut crate::gfx::upload::Uploads,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         batch: &HudBatch,
@@ -975,8 +978,14 @@ impl HudRenderer {
                 mapped_at_creation: false,
             });
         }
-        queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(&batch.vertices));
-        queue.write_buffer(
+        uploads.buffer(
+            encoder,
+            &self.buffer,
+            0,
+            bytemuck::cast_slice(&batch.vertices),
+        );
+        uploads.buffer(
+            encoder,
             &self.uniform,
             0,
             bytemuck::bytes_of(&HudUniform {

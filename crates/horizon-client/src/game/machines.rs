@@ -363,7 +363,7 @@ impl Game<'_> {
             world: &self.world,
             behaviours: &self.res.behaviours,
             items: &self.res.items,
-            registry: self.res.assets.registry,
+            registry: self.pack.assets.registry,
             brewing: Some(&self.res.stations.brewing),
             bone_meal: bone_meal(),
         }
@@ -500,7 +500,7 @@ impl Game<'_> {
     /// Every hopper's `pushItemsTick`, in a stable position order.
     pub(super) fn tick_hoppers(&mut self) -> Result<()> {
         let hopper = self
-            .res
+            .pack
             .assets
             .registry
             .default_state("minecraft:hopper")
@@ -833,7 +833,7 @@ impl Game<'_> {
         let Some(screen) = self.machine_screen() else {
             return false;
         };
-        let atlas = &self.res.atlas;
+        let atlas = &self.atlas;
         let key_is_cart = self
             .container
             .is_some_and(|k| k.1 == super::minecarts::CART_KEY_Y);

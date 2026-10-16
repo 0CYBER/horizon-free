@@ -14,7 +14,7 @@ use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    path::Path,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
@@ -1182,18 +1182,33 @@ impl Recipes {
         let mut crafting = Vec::new();
         let mut cooking = Vec::new();
         let mut meta = HashMap::new();
-        let mut files: Vec<_> = fs::read_dir(root.join("data/minecraft/recipe"))?
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|e| e == "json"))
+        let json_files = |dir: &Path| -> Result<Vec<PathBuf>> {
+            let mut files: Vec<_> = fs::read_dir(dir)?
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|e| e == "json"))
+                .collect();
+            files.sort();
+            Ok(files)
+        };
+        // Vanilla's recipes by bare name, then content mods' as `<ns>:<name>`.
+        let mut files: Vec<(String, PathBuf)> = json_files(&root.join("data/minecraft/recipe"))?
+            .into_iter()
+            .map(|p| (String::new(), p))
             .collect();
-        files.sort();
-        for path in files {
-            let name = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_owned();
+        for namespace in crate::mod_content::namespaces(root) {
+            let dir = root.join(format!("data/{namespace}/recipe"));
+            if dir.is_dir() {
+                files.extend(
+                    json_files(&dir)?
+                        .into_iter()
+                        .map(|p| (format!("{namespace}:"), p)),
+                );
+            }
+        }
+        for (prefix, path) in files {
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            let name = format!("{prefix}{stem}");
             let v: Value = serde_json::from_slice(&fs::read(&path)?)?;
             let text = |k: &str| v[k].as_str().unwrap_or("").to_owned();
             meta.insert(name.clone(), (text("category"), text("group")));

@@ -257,7 +257,7 @@ impl Game<'_> {
             .or_else(|| self.held());
         if let Some(stack) = active {
             let components = self
-                .res
+                .pack
                 .item_renderer
                 .models
                 .components(&horizon_client::item_render::stack_view(stack));

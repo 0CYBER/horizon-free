@@ -582,7 +582,7 @@ impl Game<'_> {
     }
     /// `EndCrystal.tick`: the time and the fire below it in the End.
     fn tick_crystals(&mut self) {
-        let fire = self.res.assets.registry.default_state("minecraft:fire");
+        let fire = self.pack.assets.registry.default_state("minecraft:fire");
         for i in 0..self.crystals.len() {
             self.crystals[i].time += 1;
             let p = self.crystals[i].position;
@@ -1702,7 +1702,7 @@ impl Game<'_> {
         }
         if !self.fight.previously_killed
             && let Some(egg) = self
-                .res
+                .pack
                 .assets
                 .registry
                 .default_state("minecraft:dragon_egg")
@@ -1866,9 +1866,9 @@ impl Game<'_> {
             batch.width as i32,
             batch.height as i32,
             &bars,
-            &self.res.atlas.font,
+            &self.atlas.font,
         );
-        hud_layout::paint(batch, &self.res.atlas, &draws);
+        hud_layout::paint(batch, &self.atlas, &draws);
     }
     /// The dragon fight's boss bar shows (`EnderDragonFight.dragonEvent`,
     /// with `setCreateWorldFog`).
@@ -1906,13 +1906,7 @@ impl Game<'_> {
             return;
         };
         let a = alpha as f32;
-        let sprite = |n: &str| {
-            self.res
-                .atlas
-                .sprites
-                .get(n)
-                .map(|r| [r.u0, r.v0, r.u1, r.v1])
-        };
+        let sprite = |n: &str| self.atlas.sprites.get(n).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         let (Some(skin), Some(eyes)) = (
             sprite("entity/enderdragon/dragon"),
             sprite("entity/enderdragon/dragon_eyes"),
@@ -2078,7 +2072,7 @@ impl Game<'_> {
     }
     /// `submitRays`: the death rays from a fixed seed, fading in white to magenta.
     fn dragon_rays(&self, base: glam::Mat4, t: f32, out: &mut Vec<Vertex>) {
-        let white = self.res.atlas.font.white();
+        let white = self.atlas.font.white();
         let uv = [white.u0, white.v0];
         let over = if t > 0.8 {
             ((t - 0.8) / 0.2).min(1.0)
@@ -2134,7 +2128,6 @@ impl Game<'_> {
         out: &mut Vec<Vertex>,
     ) {
         let Some(s) = self
-            .res
             .atlas
             .sprites
             .get("entity/end_crystal/end_crystal_beam")
@@ -2196,7 +2189,6 @@ impl Game<'_> {
         out: &mut Vec<Vertex>,
     ) {
         let Some(s) = self
-            .res
             .atlas
             .sprites
             .get("entity/enderdragon/dragon_fireball")
@@ -2610,7 +2602,7 @@ impl Game<'_> {
     /// and grown again with a guarded crystal.
     fn rebuild_spike(&mut self, spike: &horizon_world::worldgen::end_spike::EndSpike) {
         let (cx, cz, h) = (spike.center_x, spike.center_z, spike.height);
-        let air = self.res.assets.registry.default_state("minecraft:air");
+        let air = self.pack.assets.registry.default_state("minecraft:air");
         let Some(air) = air else {
             return;
         };
@@ -2685,7 +2677,7 @@ impl Game<'_> {
     }
     /// Iron bars connected north, south, west and east.
     fn set_bars(&mut self, pos: [i32; 3], sides: [bool; 4]) {
-        let registry = self.res.assets.registry;
+        let registry = self.pack.assets.registry;
         let Some(mut state) = registry
             .default_state("minecraft:iron_bars")
             .and_then(|d| registry.state(d).cloned())

@@ -150,11 +150,11 @@ impl Game<'_> {
             .join("backdrop");
         std::fs::create_dir_all(&root)?;
         let save = Arc::new(SaveDir::new(root.join(format!("{seed}"))));
-        let res = &*self.res;
+        let (res, pack) = (&*self.res, &self.pack);
         let inner = Arc::new(
             VanillaTerrain::new(
                 &self.options.resources.join("worldgen"),
-                res.assets.registry,
+                pack.assets.registry,
                 &res.biomes,
                 seed,
             )
@@ -164,10 +164,10 @@ impl Game<'_> {
             Arc::new(Persistent {
                 inner: inner.clone(),
                 save: save.clone(),
-                registry: res.assets.clone(),
+                registry: pack.assets.clone(),
                 biomes: res.biomes.clone(),
             }),
-            res.context.clone(),
+            pack.context.clone(),
             res.threads.min(6),
         );
         streaming.radius = self.settings.render_distance.clamp(4, 10);

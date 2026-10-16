@@ -301,7 +301,7 @@ pub(super) enum Handled {
 
 impl Game<'_> {
     pub(super) fn state_string(&self, state: BlockStateId) -> String {
-        let Some(s) = self.res.assets.registry.state(state) else {
+        let Some(s) = self.pack.assets.registry.state(state) else {
             return "?".into();
         };
         if s.properties.is_empty() {

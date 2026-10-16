@@ -45,7 +45,7 @@ pub(super) enum BookScreen {
 }
 impl Game<'_> {
     fn book_lines(&self, page: &str) -> Vec<Text> {
-        self.res.atlas.font.split(&Text::literal(page), 114.0)
+        self.atlas.font.split(&Text::literal(page), 114.0)
     }
     /// `WritableBookItem.use` / `WrittenBookItem.use`.
     pub(super) fn use_book(&mut self, stack: &ItemStack) -> bool {
@@ -242,7 +242,7 @@ impl Game<'_> {
     /// the page (`MultilineTextField.insertText`: line breaks kept, cut to
     /// the 1024 characters left, rejected when it overflows the 14 lines).
     fn book_shortcut(&mut self, shortcut: horizon_client::clipboard::EditShortcut) {
-        let font = &self.res.atlas.font;
+        let font = &self.atlas.font;
         match self.book.as_mut() {
             Some(BookScreen::Edit {
                 signing: true,
@@ -363,7 +363,7 @@ impl Game<'_> {
     }
     fn set_lectern_property(&mut self, key: (i32, i32, i32), name: &str, value: bool) {
         let state = self.world.block(key.0, key.1, key.2);
-        let registry = self.res.assets.registry;
+        let registry = self.pack.assets.registry;
         let Some(mut s) = registry.state(state).cloned() else {
             return;
         };
@@ -549,7 +549,7 @@ impl Game<'_> {
     }
     pub(super) fn draw_book(&self, batch: &mut HudBatch) {
         let Some(book) = &self.book else { return };
-        let atlas = &self.res.atlas;
+        let atlas = &self.atlas;
         let (w, h) = (batch.width, batch.height);
         let (mx, my) = self.cursor;
         let hover =

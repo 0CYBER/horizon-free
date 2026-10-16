@@ -174,7 +174,7 @@ impl Game<'_> {
             if below.sturdy_full >> 1 & 1 == 0 {
                 continue;
             }
-            if let Some(fire) = self.res.assets.registry.default_state(name) {
+            if let Some(fire) = self.pack.assets.registry.default_state(name) {
                 let _ = self.level_set(p, fire);
             }
         }
@@ -239,7 +239,7 @@ impl Game<'_> {
         if !self.res.facts.get(state).name.ends_with("lightning_rod") {
             return;
         }
-        let registry = self.res.assets.registry;
+        let registry = self.pack.assets.registry;
         if let Some(mut s) = registry.state(state).cloned() {
             s.properties.insert("powered".into(), "true".into());
             if let Some(powered) = registry.id(&s) {
@@ -348,7 +348,7 @@ impl Game<'_> {
     /// `LightningBoltRenderer`: 4 layers of a trunk and two branches, 8
     /// segments of 16 blocks, from the bolt's seed.
     pub(super) fn bolt_geometry(&self, camera: glam::DVec3, out: &mut Vec<Vertex>) {
-        let white = self.res.atlas.font.white();
+        let white = self.atlas.font.white();
         let uv = [white.u0, white.v0];
         // ARGB 0.45, 0.45, 0.5 at 0.3 alpha, packed RGBA.
         let color = (76u32 << 24) | (127 << 16) | (114 << 8) | 114;

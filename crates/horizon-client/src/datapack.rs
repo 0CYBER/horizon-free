@@ -34,6 +34,27 @@ impl DataPack {
             }
         }
     }
+    /// The files of `data/<namespace>/<kind>/` for each kind, in the order
+    /// `list("data/")` gives them. A folder pack walks only those folders:
+    /// the built-in pack holds about 10,000 other data files.
+    fn list_kinds(&self, kinds: &[&str]) -> Vec<String> {
+        debug_assert!(kinds.is_sorted(), "kinds in walk order");
+        let Source::Dir(root) = &self.source else {
+            return self.list("data/");
+        };
+        let Ok(entries) = std::fs::read_dir(root.join("data")) else {
+            return Vec::new();
+        };
+        let mut namespaces: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+        namespaces.sort();
+        let mut out = Vec::new();
+        for ns in namespaces {
+            for kind in kinds {
+                walk(root, &ns.join(kind), &mut out);
+            }
+        }
+        out
+    }
     fn read(&self, path: &str) -> Option<Vec<u8>> {
         match &self.source {
             Source::Zip(z) => z.read(path).ok(),
@@ -308,7 +329,7 @@ impl DataStore {
     pub fn load(packs: &[&DataPack]) -> Self {
         let mut s = Self::default();
         for pack in packs {
-            for f in pack.list("data/") {
+            for f in pack.list_kinds(&["function", "item_modifier", "predicate", "tags/function"]) {
                 if let Some(id) = resource_id(&f, "function", ".mcfunction")
                     && let Some(bytes) = pack.read(&f)
                 {
@@ -503,6 +524,46 @@ mod tests {
             ["mine:a", "mine:sub/b"]
         );
         assert!(store.predicates.contains_key("mine:p"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn folder_packs_list_the_needed_kinds_in_walk_order() {
+        let dir = std::env::temp_dir().join(format!("hz-datapack-kinds-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let pack = dir.join("datapacks/p");
+        let files = [
+            "data/b/function/z.mcfunction",
+            "data/b/function/a/y.mcfunction",
+            "data/b/loot_table/l.json",
+            "data/b/tags/block/t.json",
+            "data/b/tags/function/load.json",
+            "data/b/predicate/p.json",
+            "data/a/item_modifier/m.json",
+            "data/a/function/f.mcfunction",
+            "data/a/functions/old.mcfunction",
+            "data/a/recipe/r.json",
+            "data/a/tags/function/tick.json",
+            "data/c/worldgen/noise/n.json",
+        ];
+        for f in files {
+            let path = pack.join(f);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "{}").unwrap();
+        }
+        std::fs::write(pack.join("pack.mcmeta"), "{}").unwrap();
+        let p = DataPack::builtin(&pack);
+        let kinds = ["function", "item_modifier", "predicate", "tags/function"];
+        let wanted: Vec<String> = p
+            .list("data/")
+            .into_iter()
+            .filter(|f| {
+                let rest = f.splitn(3, '/').nth(2).unwrap_or_default();
+                kinds.iter().any(|k| rest.starts_with(&format!("{k}/")))
+            })
+            .collect();
+        assert_eq!(wanted.len(), 7);
+        assert_eq!(p.list_kinds(&kinds), wanted);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

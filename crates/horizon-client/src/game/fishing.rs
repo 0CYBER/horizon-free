@@ -565,7 +565,6 @@ impl Game<'_> {
             return;
         };
         let Some(r) = self
-            .res
             .atlas
             .sprites
             .get("entity/fishing/fishing_hook")

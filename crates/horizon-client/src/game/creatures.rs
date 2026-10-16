@@ -378,13 +378,14 @@ impl Game<'_> {
         let (rain, thunder) = self.world.weather.levels(1.0);
         MobWorld {
             world: &self.world,
-            registry: self.res.assets.registry,
+            registry: self.pack.assets.registry,
             facts: &self.res.facts,
             movement: &self.motion.blocks,
             collision: self.collision,
             data: &self.res.mob_data,
             player: self.player_view(),
             others,
+            others_grid: None,
             daylight: self.dim != Dim::Nether && self.sky_darken() < 4,
             game_time: self.world.game_time,
             day_time: self.world.day_time,
@@ -528,8 +529,11 @@ impl Game<'_> {
             let mut scratch = self.world.random.clone();
             let mut pushes = Vec::new();
             let mut keep = Vec::with_capacity(mobs.len());
+            let mut grid =
+                horizon_client::mobs::seen_grid::SeenGrid::new(snapshot.iter().map(|s| s.bounds));
             for i in 0..mobs.len() {
                 let mut w = self.mob_world_base(&snapshot);
+                w.others_grid = Some(&grid);
                 let m = &mut mobs[i];
                 let seen_guest = if guests.is_empty() {
                     None
@@ -592,6 +596,7 @@ impl Game<'_> {
                 // after this mob see it as it is now.
                 snapshot[i] = seen(m, uuid);
                 snapshot[i].alive &= kept;
+                grid.update(i, snapshot[i].bounds);
                 horizon_client::mobs::apply_brain_events(&mut mobs, &mut events, from);
             }
             let mut flags = keep.into_iter();
@@ -990,7 +995,7 @@ impl Game<'_> {
                             0.8,
                         );
                     }
-                    if let Some(state) = self.res.assets.registry.default_state(name) {
+                    if let Some(state) = self.pack.assets.registry.default_state(name) {
                         self.world.set(pos[0], pos[1], pos[2], state)?;
                     }
                 }
@@ -999,7 +1004,7 @@ impl Game<'_> {
                     self.destroy_particles(pos, old);
                     if drop {
                         let drops = self.res.items.block_drops_in(
-                            self.res.assets.registry,
+                            self.pack.assets.registry,
                             old,
                             None,
                             &mut self.world.random,
@@ -1747,7 +1752,7 @@ impl Game<'_> {
     ) -> horizon_client::arrows::ArrowScene<'s, 's> {
         horizon_client::arrows::ArrowScene {
             world: &self.world,
-            registry: self.res.assets.registry,
+            registry: self.pack.assets.registry,
             facts: &self.res.facts,
             collision: self.collision,
             fluids: &self.motion.fluids,
@@ -2003,7 +2008,7 @@ impl Game<'_> {
                         .facts
                         .is_air(self.world.block(fire[0], fire[1], fire[2]))
                         && let Some(state) =
-                            self.res.assets.registry.default_state("minecraft:fire")
+                            self.pack.assets.registry.default_state("minecraft:fire")
                     {
                         self.world.set(fire[0], fire[1], fire[2], state)?;
                     }
@@ -2762,7 +2767,7 @@ impl Game<'_> {
     }
     /// Mob models and projectiles for the entity pass.
     pub(super) fn mob_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
-        let atlas = &self.res.atlas;
+        let atlas = &self.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         let scale = f64::from(self.settings.entity_distance);
         for mob in &self.mobs {
@@ -2980,6 +2985,7 @@ fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) -> &'static
         K::Explosion if player => "minecraft:player_explosion",
         K::Explosion => "minecraft:explosion",
         K::Fall => "minecraft:fall",
+        K::FallingBlock => "minecraft:falling_block",
         K::OnFire => "minecraft:on_fire",
         K::InFire => "minecraft:in_fire",
         K::Lava => "minecraft:lava",

@@ -227,7 +227,7 @@ impl Game<'_> {
                         return Err(err(
                             "commands.enchant.failed.incompatible",
                             &[&stack.custom_name().map_or_else(
-                                || self.res.names.item(&stack.item).to_string(),
+                                || self.pack.names.item(&stack.item).to_string(),
                                 str::to_owned,
                             )],
                         ));
@@ -247,7 +247,7 @@ impl Game<'_> {
                             ),
                             Some(item) => err(
                                 "commands.enchant.failed.incompatible",
-                                &[&self.res.names.item(&item)],
+                                &[&self.pack.names.item(&item)],
                             ),
                         });
                     }

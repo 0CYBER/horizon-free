@@ -467,13 +467,16 @@ impl FrameStats {
         }
         let total: f64 = sorted.iter().map(|&m| f64::from(m)).sum();
         let percentile = |p: f64| sorted[((n as f64 * p).ceil() as usize).clamp(1, n) - 1];
-        // Average frame time of the slowest 1% of frames, as frames per second.
-        let slowest = n.div_ceil(100);
-        let slow: f64 = sorted[n - slowest..]
-            .iter()
-            .map(|&m| f64::from(m))
-            .sum::<f64>()
-            / slowest as f64;
+        // Average frame time of the slowest 1% (0.1%) of frames, as frames per second.
+        let low = |per: usize| {
+            let slowest = n.div_ceil(per);
+            let slow: f64 = sorted[n - slowest..]
+                .iter()
+                .map(|&m| f64::from(m))
+                .sum::<f64>()
+                / slowest as f64;
+            1000.0 / slow
+        };
         // Where the slowest 1% of frames by CPU time go.
         let slow_phases = {
             let mut cpu = self.cpu.clone();
@@ -487,7 +490,8 @@ impl FrameStats {
             "frames": n,
             "seconds": total / 1000.0,
             "avg_fps": n as f64 * 1000.0 / total,
-            "low_1pct_fps": 1000.0 / slow,
+            "low_1pct_fps": low(100),
+            "low_01pct_fps": low(1000),
             "p50_ms": percentile(0.5),
             "p95_ms": percentile(0.95),
             "p99_ms": percentile(0.99),
