@@ -354,6 +354,7 @@ impl Game<'_> {
         }
         if let Some(title) = self.title.as_mut() {
             title.escape();
+            self.save_title_options();
             return Ok(());
         }
         if self.sign_edit.is_some() {
