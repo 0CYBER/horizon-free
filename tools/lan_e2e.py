@@ -15,7 +15,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - damage:    a guest in survival takes fall damage;
 - mobs:      with the host in creative, a zombie and a skeleton go for the guest and hurt them;
 - hazards:   a guest in survival gets hungry sprint-jumping and is hurt by lava, a block at the eyes,
-             drowning and the void (then respawns).
+             drowning and the void (then respawns);
+- pvp:       the guest and the host hit each other with a sword; with the pvp game rule off, nothing.
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -42,7 +43,7 @@ from agent_control_e2e import Cli, Failed, game_env  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'chest', 'crafting', 'damage', 'mobs', 'hazards']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'chest', 'crafting', 'damage', 'mobs', 'hazards', 'pvp']
 
 
 class Game:
@@ -362,9 +363,35 @@ def check_hazards(host, guest, out):
     return {'hunger': hunger, **hurt}
 
 
+def check_pvp(host, guest, out):
+    for g in (host, guest):
+        g('command', command='gamemode survival')
+        g('command', command='item replace entity @s weapon.mainhand with minecraft:iron_sword')
+    face_each_other(host, guest)
+    hits = {}
+    try:
+        for name, rule, attacker in (('guest hits host', 'true', guest), ('host hits guest', 'true', host),
+                                     ('pvp off', 'false', guest)):
+            host('command', command=f'gamerule pvp {rule}')
+            face_each_other(host, guest)
+            attacker.wait(30)  # a full attack charge
+            victim = (lambda: host('state')['player']['health']) if attacker is guest else (lambda: remote(guest)['health'])
+            before = victim()
+            attacker.raw('attack')
+            attacker.wait(10)
+            hits[name] = (before, victim())
+            attacker.shot(out, 'pvp-' + name.replace(' ', '-'))
+    finally:
+        host('command', command='gamerule pvp true')
+    assert hits['guest hits host'][1] < hits['guest hits host'][0], f'the guest did not hurt the host: {hits}'
+    assert hits['host hits guest'][1] < hits['host hits guest'][0], f'the host did not hurt the guest: {hits}'
+    assert hits['pvp off'][1] == hits['pvp off'][0], f'pvp off still hurts: {hits}'
+    return hits
+
+
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
              'chest': check_chest, 'crafting': check_crafting, 'damage': check_damage,
-             'mobs': check_mobs, 'hazards': check_hazards}
+             'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp}
 
 
 def run(ctl, out, resources, checks):

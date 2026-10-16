@@ -1377,7 +1377,12 @@ impl Game<'_> {
     pub(super) fn mob_hits_player_kind(&mut self, amount: f32, from: [f64; 3], kind: &str) {
         self.mob_hits_player(amount, from, kind);
     }
-    fn mob_hits_player(&mut self, amount: f32, from: [f64; 3], damage_type: &str) -> bool {
+    pub(super) fn mob_hits_player(
+        &mut self,
+        amount: f32,
+        from: [f64; 3],
+        damage_type: &str,
+    ) -> bool {
         if self.creative {
             return false;
         }
@@ -1390,8 +1395,8 @@ impl Game<'_> {
             .is_some_and(|t| t.contains(damage_type));
         let blocking = self.player_blocking(Some(from), damage_type, false);
         let raised = blocking.is_some();
-        // Melee: the attacker stands at `from`.
-        let attacker = (!projectile)
+        // Melee: the attacker stands at `from` (another player's hit has no mob behind it).
+        let attacker = (!projectile && damage_type != "minecraft:player_attack")
             .then(|| {
                 self.mobs
                     .iter()

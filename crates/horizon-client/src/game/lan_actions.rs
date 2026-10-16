@@ -582,6 +582,12 @@ impl Game<'_> {
         if host.hub.guests[gi].spectator() {
             return;
         }
+        if let Some(victim) = Self::pvp_victim(host, conn, id) {
+            if let Some(Some(strike)) = self.as_guest(host, conn, |g| g.pvp_strike()) {
+                self.pvp_land(host, victim, &strike);
+            }
+            return;
+        }
         let (old_yaw, old_pitch) = (host.hub.guests[gi].yaw, host.hub.guests[gi].pitch);
         if self.look_at_entity(host, gi, id).is_none() {
             return;
