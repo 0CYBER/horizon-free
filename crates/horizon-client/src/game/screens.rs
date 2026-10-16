@@ -60,17 +60,14 @@ impl Game<'_> {
             && horizon_client::ui_theme::horizon()
     }
     fn pause_labels(&self) -> (String, &'static str) {
-        let world = if self.remote.is_some() {
-            "Multiplayer".to_owned()
+        if let Some(server) = &self.integrated {
+            return (server.world_name.clone(), "Save and quit");
+        }
+        if self.remote.is_some() {
+            ("Multiplayer".to_owned(), "Disconnect")
         } else {
-            self.level.name.clone()
-        };
-        let quit = if self.remote.is_some() {
-            "Disconnect"
-        } else {
-            "Save and quit"
-        };
-        (world, quit)
+            (self.level.name.clone(), "Save and quit")
+        }
     }
     pub(super) fn draw_pause_menu(&mut self, batch: &mut HudBatch) {
         if horizon_client::ui_theme::horizon() {
