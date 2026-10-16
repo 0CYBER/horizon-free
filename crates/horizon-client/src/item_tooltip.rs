@@ -385,22 +385,34 @@ mod tests {
                 slot.to_owned(),
             )
         });
-        let lang = |key: &str| {
-            Some(
-                match key {
-                    "item.modifiers.mainhand" => "When in Main Hand:",
-                    "item.modifiers.head" => "When on Head:",
-                    "attribute.modifier.equals.0" => "%s %s",
-                    "attribute.modifier.plus.0" => "+%s %s",
-                    "attribute.modifier.take.0" => "-%s %s",
-                    "attribute.name.attack_damage" => "Attack Damage",
-                    "attribute.name.attack_speed" => "Attack Speed",
-                    "attribute.name.armor" => "Armor",
-                    _ => return None,
-                }
-                .to_owned(),
-            )
-        };
+        let root = std::env::temp_dir().join(format!(
+            "horizon-tooltip-language-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        let dir = root.join("assets/minecraft/lang");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("en_us.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "item.modifiers.mainhand": "When in Main Hand:",
+                "item.modifiers.head": "When on Head:",
+                "attribute.modifier.equals.0": "%s %s",
+                "attribute.modifier.plus.0": "+%s %s",
+                "attribute.modifier.take.0": "-%s %s",
+                "attribute.name.attack_damage": "Attack Damage",
+                "attribute.name.attack_speed": "Attack Speed",
+                "attribute.name.armor": "Armor",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let enchantments = crate::enchant::Enchantments::load(&root);
+        std::fs::remove_dir_all(&root).unwrap();
+        let lang = |key: &str| enchantments.translate(key).map(str::to_owned);
         let green = rgba(0, 170, 0, 255);
         let gray = rgba(170, 170, 170, 255);
         let blue = rgba(85, 85, 255, 255);
@@ -427,6 +439,43 @@ mod tests {
             modifier_line(&lang, "attack_damage", 0.0, 0, true).as_deref(),
             Some("0 Attack Damage")
         );
+    }
+
+    #[test]
+    #[ignore = "requires prepared items/language in HORIZON_TEST_RESOURCES"]
+    fn equipment_attributes_with_prepared_items_and_language() {
+        let root = std::path::PathBuf::from(
+            std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),
+        );
+        let items = crate::items::Items::catalog(&root).unwrap();
+        let enchantments = crate::enchant::Enchantments::load(&root);
+        let translate = |key: &str| enchantments.translate(key).map(str::to_owned);
+        for (item, expected) in [
+            (
+                "minecraft:diamond_sword",
+                [
+                    "",
+                    "When in Main Hand:",
+                    " 7 Attack Damage",
+                    " 1.6 Attack Speed",
+                ],
+            ),
+            (
+                "minecraft:diamond_helmet",
+                ["", "When on Head:", "+3 Armor", "+2 Armor Toughness"],
+            ),
+        ] {
+            let info = items.get(item).unwrap();
+            let lines = attribute_lines(&info.modifiers, Some([1.0, 4.0]), &translate);
+            assert_eq!(
+                lines
+                    .iter()
+                    .map(|(text, _)| text.as_str())
+                    .collect::<Vec<_>>(),
+                expected,
+                "{item}"
+            );
+        }
     }
 
     #[test]

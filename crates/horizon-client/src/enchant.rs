@@ -185,6 +185,8 @@ impl Enchantments {
             .into_iter()
             .filter(|(k, _)| {
                 k.starts_with("enchantment.")
+                    || k.starts_with("attribute.")
+                    || k.starts_with("item.modifiers.")
                     || k.starts_with("effect.")
                     || k.starts_with("item.minecraft.potion")
                     || k.starts_with("item.minecraft.splash_potion")
