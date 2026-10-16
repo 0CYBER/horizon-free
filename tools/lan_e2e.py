@@ -12,7 +12,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - chest:     a chest the guest opens opens on the guest's screen, its lid opens on both sides and
              closes on both when the guest closes it;
 - crafting:  the guest crafts planks in the inventory's 2x2 grid and opens a crafting table;
-- damage:    a guest in survival takes fall damage.
+- damage:    a guest in survival takes fall damage;
+- mobs:      with the host in creative, a zombie and a skeleton go for the guest and hurt them.
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -39,7 +40,7 @@ from agent_control_e2e import Cli, Failed, game_env  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'chest', 'crafting', 'damage']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'chest', 'crafting', 'damage', 'mobs']
 
 
 class Game:
@@ -263,8 +264,45 @@ def check_damage(host, guest, out):
     return {'before': before, 'after': after, 'water': water}
 
 
+def first_hurt(guest, before, ticks):
+    """The guest's health once it drops below `before`, waiting at most `ticks`."""
+    health = remote(guest)['health']
+    for _ in range(ticks // 10):
+        if health < before:
+            break
+        guest.wait(10)
+        health = remote(guest)['health']
+    return health
+
+
+def check_mobs(host, guest, out):
+    host('command', command='gamemode creative')
+    host('command', command='difficulty normal')
+    host('command', command='time set midnight')
+    guest('command', command='gamemode survival')
+    guest.wait(10)
+    hurt = {}
+    try:
+        for mob, distance in (('zombie', 3), ('skeleton', 7)):
+            x, y, z = pos_of(guest)
+            before = remote(guest)['health']
+            host('command', command=f'summon minecraft:{mob} {x:.2f} {y:.2f} {z + distance:.2f}')
+            low = first_hurt(guest, before, 300)
+            guest.shot(out, f'mobs-{mob}')
+            host.shot(out, f'mobs-{mob}')
+            host('command', command=f'kill @e[type=minecraft:{mob}]')
+            hurt[mob] = (before, low)
+    finally:
+        host('command', command='gamemode survival')
+        host('command', command='time set day')
+    for mob, (before, low) in hurt.items():
+        assert low < before, f'the {mob} never hurt the guest: health {before} -> {low} (all: {hurt})'
+    return hurt
+
+
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
-             'chest': check_chest, 'crafting': check_crafting, 'damage': check_damage}
+             'chest': check_chest, 'crafting': check_crafting, 'damage': check_damage,
+             'mobs': check_mobs}
 
 
 def run(ctl, out, resources, checks):
