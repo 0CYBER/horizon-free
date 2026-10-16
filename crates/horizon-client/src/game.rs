@@ -9027,6 +9027,20 @@ impl ApplicationHandler for Game<'_> {
         if let WindowEvent::ModifiersChanged(m) = &event {
             self.modifiers = m.state();
         }
+        // Fullscreen is a window shortcut, before screens consume keyboard input.
+        if let WindowEvent::KeyboardInput { event, .. } = &event
+            && event.state == ElementState::Pressed
+            && let PhysicalKey::Code(key) = event.physical_key
+            && horizon_client::keybinds::key_name(key)
+                == Some(self.settings.keys.get("key.fullscreen"))
+            && !(self.screen == Screen::Options && self.options_waiting_for_key())
+        {
+            self.last_input = Instant::now();
+            if !event.repeat {
+                self.toggle_fullscreen();
+            }
+            return;
+        }
         // KeyboardHandler.keyPress: the debug keys come before the game's.
         if let WindowEvent::KeyboardInput {
             event: key_event, ..
