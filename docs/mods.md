@@ -327,3 +327,8 @@ permission.
 5. `recipes`, `world-read`, `render`: recipe viewer and schematics ports.
 6. Server mods, `registries`, `net`, data-driven content from `.hmod`
    `data/` and `assets/`, multiplayer sync.
+
+Modpacks ([modpacks.md](modpacks.md)) move data-driven `registries` first:
+API 0.2 is content-only `.hmod`s (blocks, items, recipes, loot, models and
+textures), then server hooks (0.3) and block entities, menus, capabilities and
+`net` (0.4), in the order the ATM10 inventory needs them.
