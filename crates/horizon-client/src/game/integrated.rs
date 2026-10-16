@@ -1,6 +1,6 @@
 //! The integrated server (`IntegratedServer`): single player's world runs on
 //! its own "Server thread", as vanilla's does, and the window joins it as a
-//! player over a local connection, so a world tick never holds up a frame.
+//! player through memory, so a world tick never holds up a frame.
 //!
 //! Opt-in for now (`--server-thread` or `HORIZON_SERVER_THREAD=1`): the
 //! player joins as a network player, and the server side of a network player
@@ -20,9 +20,9 @@ use horizon_client::{
     settings::Settings,
     title::WorldOptions,
 };
+use horizon_protocol::connection::Pipe;
 use horizon_protocol::{crypto::offline_uuid, text::translatable};
 use std::{
-    net::{IpAddr, Ipv4Addr},
     path::Path,
     sync::{
         Arc,
@@ -89,7 +89,7 @@ pub(super) fn wanted(options: &Options, world: &Path) -> bool {
 
 impl Game<'_> {
     /// `Minecraft.doWorldLoad`: start the server thread on the world, wait
-    /// until it listens, then join it.
+    /// until it can be joined, then join it through memory.
     pub(super) fn open_integrated(
         &mut self,
         folder: &str,
@@ -149,12 +149,12 @@ impl Game<'_> {
             flags,
             thread: Some(thread),
         };
-        let port = match ready.recv() {
-            Ok(Ok(port)) => port,
+        let pipe = match ready.recv() {
+            Ok(Ok(pipe)) => pipe,
             Ok(Err(e)) => return Err(e.into()),
             Err(_) => return Err("the integrated server stopped".into()),
         };
-        self.connect_server(&format!("127.0.0.1:{port}"), &player)?;
+        self.connect_local(pipe, &player)?;
         self.integrated = Some(handle);
         Ok(())
     }
@@ -165,7 +165,7 @@ impl Game<'_> {
         &mut self,
         launch: Launch,
         flags: &Flags,
-        ready: &Sender<std::result::Result<u16, String>>,
+        ready: &Sender<std::result::Result<Pipe, String>>,
     ) -> Result<()> {
         self.open_world(
             &launch.folder,
@@ -191,8 +191,9 @@ impl Game<'_> {
         };
         let owner = launch.owner;
         let net = NetConfig {
-            bind: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
-            // A local connection is not compressed (`Connection.isMemoryConnection`).
+            // No network until it is opened to the LAN.
+            listen: false,
+            // A memory connection is not compressed (`Connection.isMemoryConnection`).
             compression_threshold: -1,
             enable_status: false,
             announce: false,
@@ -208,7 +209,7 @@ impl Game<'_> {
         };
         self.lan_host(settings, net, config, None)?;
         let commands = self.allow_commands();
-        let port = {
+        let pipe = {
             let host = self
                 .lan
                 .as_mut()
@@ -220,9 +221,9 @@ impl Game<'_> {
                 uuid: owner,
                 saved: Some(saved),
             });
-            host.settings.port
+            host.hub.lan.connect_local()?
         };
-        let _ = ready.send(Ok(port));
+        let _ = ready.send(Ok(pipe));
         self.settle_spawn()?;
         let mut next = Instant::now();
         while !flags.stop.load(Ordering::Relaxed) {
@@ -279,7 +280,7 @@ fn serve(
     settings: Settings,
     launch: Launch,
     flags: &Flags,
-    ready: &Sender<std::result::Result<u16, String>>,
+    ready: &Sender<std::result::Result<Pipe, String>>,
 ) -> Result<()> {
     let atlas = HudAtlas::build(&options.resources)?;
     let audio = Audio::silent(&options.resources);

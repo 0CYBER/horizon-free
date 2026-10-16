@@ -101,6 +101,9 @@ pub struct NetConfig {
     pub accepts_transfers: bool,
     /// LanServerPinger: announce the world on the local network.
     pub announce: bool,
+    /// Accept connections from the network. Without it only local ones
+    /// (`Lan::connect_local`): an integrated server not open to the LAN.
+    pub listen: bool,
     /// Ops bypass a full server (ServerOpList.canBypassPlayerLimit).
     pub bypasses_limit: Option<Arc<dyn Fn(u128) -> bool + Send + Sync>>,
     pub gate: Option<LoginGate>,
@@ -120,6 +123,7 @@ impl NetConfig {
             enforces_secure_chat: false,
             accepts_transfers: false,
             announce: true,
+            listen: true,
             bypasses_limit: None,
             gate: None,
         }
@@ -321,13 +325,21 @@ impl Lan {
     }
     /// ServerConnectionListener.startTcpServerListener with a configuration.
     pub fn start_with(sync: Arc<data::SyncData>, config: NetConfig) -> io::Result<Self> {
-        let bind = config
-            .bind
-            .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
-        let listener = TcpListener::bind((bind, config.port))?;
-        listener.set_nonblocking(true)?;
-        let port = listener.local_addr()?.port();
-        let _pinger = if config.announce {
+        let listener = if config.listen {
+            let bind = config
+                .bind
+                .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+            let listener = TcpListener::bind((bind, config.port))?;
+            listener.set_nonblocking(true)?;
+            Some(listener)
+        } else {
+            None
+        };
+        let port = match &listener {
+            Some(l) => l.local_addr()?.port(),
+            None => 0,
+        };
+        let _pinger = if config.announce && listener.is_some() {
             discovery::Pinger::start(config.motd.clone(), port).ok()
         } else {
             None
@@ -346,16 +358,36 @@ impl Lan {
             config,
         });
         let accept_shared = shared.clone();
-        let listener = std::thread::Builder::new()
-            .name("horizon-lan-accept".into())
-            .spawn(move || accept_loop(listener, accept_shared))?;
+        let listener = listener
+            .map(|listener| {
+                std::thread::Builder::new()
+                    .name("horizon-lan-accept".into())
+                    .spawn(move || accept_loop(listener, accept_shared))
+            })
+            .transpose()?;
         Ok(Self {
             shared,
             events,
             port,
-            listener: Some(listener),
+            listener,
             _pinger,
         })
+    }
+    /// `Connection.connectToLocalServer`: a connection through memory, its
+    /// server end served on its own thread like an accepted socket.
+    pub fn connect_local(&self) -> io::Result<horizon_protocol::connection::Pipe> {
+        let (client, server) = horizon_protocol::connection::Pipe::pair();
+        let shared = self.shared.clone();
+        std::thread::Builder::new()
+            .name("horizon-local-conn".into())
+            .spawn(move || {
+                if let Err(e) = conn::serve_local(server, shared)
+                    && std::env::var_os("HORIZON_NET_DEBUG").is_some()
+                {
+                    log::warn!("[lan] local: {e}");
+                }
+            })?;
+        Ok(client)
     }
     /// Everything the connection threads reported since the last call.
     pub fn poll(&self) -> Vec<NetEvent> {

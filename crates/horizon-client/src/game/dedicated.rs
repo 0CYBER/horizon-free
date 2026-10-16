@@ -418,6 +418,7 @@ impl Game<'_> {
             enforces_secure_chat: false,
             accepts_transfers: props.accepts_transfers,
             announce: false,
+            listen: true,
             bypasses_limit: Some(Arc::new(move |uuid| {
                 bypass_lists
                     .lock()
