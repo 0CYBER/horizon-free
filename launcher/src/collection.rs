@@ -124,16 +124,18 @@ impl Launcher {
                 )))
         });
         let viewing = self.collection.view.is_some();
-        let card = plate(&t)
+        // The body scrolls inside the card, so the answers stay at its foot however short the
+        // window and however long what would be sent.
+        let body = div()
+            .id("ask-body")
             .flex()
             .flex_col()
+            .min_h_0()
             .gap(px(12.))
-            .w_full()
-            .max_w(px(680.))
-            .p(px(28.))
-            .bg(t.page)
-            .border_1()
-            .border_color(t.rule)
+            .px(px(28.))
+            .pt(px(28.))
+            .pb(px(20.))
+            .overflow_y_scroll()
             .child(caps("Data collection").text_color(t.muted))
             .child(
                 text(theme::HEADING)
@@ -158,26 +160,41 @@ impl Launcher {
                         cx.notify();
                     })),
             )
-            .children(self.collection.view.as_ref().map(|v| json_view(v, &t)))
+            .children(self.collection.view.as_ref().map(|v| json_view(v, &t)));
+        let answers = div()
+            .flex()
+            .flex_none()
+            .justify_end()
+            .gap(px(12.))
+            .px(px(28.))
+            .pb(px(28.))
             .child(
-                div()
-                    .flex()
-                    .justify_end()
-                    .gap(px(12.))
-                    .pt(px(8.))
-                    .child(button("ask-none", "Send nothing", Kind::Secondary, &t).on_click(
-                        cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.answer_consent(Choices::NONE);
-                            cx.notify();
-                        }),
-                    ))
-                    .child(button("ask-save", "Save choices", Kind::Primary, &t).on_click(
-                        cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.answer_consent(this.collection.draft);
-                            cx.notify();
-                        }),
-                    )),
+                button("ask-none", "Send nothing", Kind::Secondary, &t).on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
+                        this.answer_consent(Choices::NONE);
+                        cx.notify();
+                    },
+                )),
+            )
+            .child(
+                button("ask-save", "Save choices", Kind::Primary, &t).on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
+                        this.answer_consent(this.collection.draft);
+                        cx.notify();
+                    },
+                )),
             );
+        let card = plate(&t)
+            .flex()
+            .flex_col()
+            .w_full()
+            .max_w(px(680.))
+            .max_h_full()
+            .bg(t.page)
+            .border_1()
+            .border_color(t.rule)
+            .child(body)
+            .child(answers);
         div()
             .id("consent")
             .absolute()
@@ -186,19 +203,12 @@ impl Launcher {
             .size_full()
             .flex()
             .flex_col()
+            .items_center()
+            .px(px(32.))
+            .py(px(24.))
             .bg(t.page.opacity(0.92))
-            .overflow_y_scroll()
             .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
-            // Taller than a small window: it scrolls, from the top, rather than shrinking.
-            .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .justify_center()
-                    .px(px(32.))
-                    .py(px(24.))
-                    .child(card),
-            )
+            .child(card)
     }
 
     /// Settings' data collection: a switch per kind, then the player's data.
