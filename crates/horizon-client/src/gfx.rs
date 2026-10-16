@@ -136,6 +136,9 @@ pub struct Frame<'a> {
     /// over everything.
     pub debug_lines: &'a [[f32; 8]],
     pub debug_lines_on_top: &'a [[f32; 8]],
+    /// `DebugCrosshairRenderer`'s axes, camera relative like `debug_lines`:
+    /// drawn after the hand at its projection, without the bob or fog.
+    pub debug_crosshair: &'a [[f32; 8]],
     pub hud: &'a HudBatch,
     /// CardinalLighting.Type.NETHER, otherwise DEFAULT.
     pub nether_lighting: bool,
@@ -245,6 +248,10 @@ pub struct Renderer {
     debug_lines_on_top: wgpu::RenderPipeline,
     debug_line_buffer: wgpu::Buffer,
     debug_line_capacity: u64,
+    /// The terrain resources with the debug crosshair's projection
+    /// (`crosshair_globals`).
+    crosshair_group: wgpu::BindGroup,
+    crosshair_globals: wgpu::Buffer,
     entity_pipeline: wgpu::RenderPipeline,
     crumbling_pipeline: wgpu::RenderPipeline,
     cloud_pipeline: wgpu::RenderPipeline,
@@ -736,6 +743,12 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let crosshair_globals = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Debug crosshair globals"),
+            size: std::mem::size_of::<Globals>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let (mips, mip_levels) = mip_chain(sprite_pixels, sprite_size, sprite_mips, 0, layers);
         let sprite_texture = device.create_texture_with_data(
             &queue,
@@ -797,6 +810,32 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: globals.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&sprite_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&sprite_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&lightmap_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&lightmap_sampler),
+                },
+            ],
+        });
+        let crosshair_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Debug crosshair resources"),
+            layout: &bindings,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: crosshair_globals.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -1407,6 +1446,8 @@ impl Renderer {
             debug_lines_on_top,
             debug_line_buffer,
             debug_line_capacity: 4096,
+            crosshair_group,
+            crosshair_globals,
             entity_pipeline,
             crumbling_pipeline,
             cloud_pipeline,
@@ -2033,6 +2074,18 @@ impl Renderer {
         };
         self.queue
             .write_buffer(&self.hand_globals, 0, bytemuck::bytes_of(&hand_globals));
+        // GameRenderer.render3dHud: DebugCrosshairRenderer draws with the
+        // hand's projection but no bob, and FogMode.NONE (no fog colour).
+        let crosshair_globals = Globals {
+            view_proj: (hand_projection * view).to_cols_array_2d(),
+            fog_color: [0.0; 4],
+            ..globals
+        };
+        self.queue.write_buffer(
+            &self.crosshair_globals,
+            0,
+            bytemuck::bytes_of(&crosshair_globals),
+        );
         // Frustum culling and camera-relative origins.
         let view = Frustum {
             planes: frustum(view_proj),
@@ -2140,8 +2193,9 @@ impl Renderer {
         }
         let debug_depth = frame.debug_lines.len() as u32;
         let debug_top = frame.debug_lines_on_top.len() as u32;
-        if debug_depth + debug_top > 0 {
-            let needed = u64::from(debug_depth + debug_top);
+        let crosshair = frame.debug_crosshair.len() as u32;
+        if debug_depth + debug_top + crosshair > 0 {
+            let needed = u64::from(debug_depth + debug_top + crosshair);
             if needed > self.debug_line_capacity {
                 self.debug_line_capacity = needed.next_power_of_two();
                 self.debug_line_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -2155,6 +2209,7 @@ impl Renderer {
                 .debug_lines
                 .iter()
                 .chain(frame.debug_lines_on_top)
+                .chain(frame.debug_crosshair)
                 .copied()
                 .collect();
             self.queue
@@ -2493,6 +2548,37 @@ impl Renderer {
                 pass.set_pipeline(pipeline);
                 pass.draw_indexed(0..6, (i * 4) as i32, 0..1);
             }
+        }
+        // GameRenderer.render3dHud: the debug crosshair after the hand and
+        // the screen effects.
+        if crosshair > 0 {
+            let attachments = [Some(wgpu::RenderPassColorAttachment {
+                view: &view_target,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })];
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("3d crosshair"),
+                color_attachments: &attachments,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(0.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            pass.set_pipeline(&self.debug_lines_on_top);
+            pass.set_bind_group(0, &self.crosshair_group, &[]);
+            pass.set_vertex_buffer(0, self.debug_line_buffer.slice(..));
+            let first = debug_depth + debug_top;
+            pass.draw(0..4, first..first + crosshair);
         }
         if let Some(radius) = frame.menu_blur
             && self.config.usage.contains(wgpu::TextureUsages::COPY_SRC)
