@@ -2107,8 +2107,8 @@ pub struct Level {
     pub world_spawn: Option<[i32; 3]>,
     pub difficulty: String,
     pub hardcore: bool,
-    /// `allowCommands` chosen on the Create New World screen; unset keeps
-    /// the saved value (off for a new world).
+    /// `allowCommands`: read from `level.dat` or chosen on the Create New
+    /// World screen; unset is written as off.
     pub allow_commands: Option<bool>,
     /// Game rule values by name without namespace (`keep_inventory`, ...).
     pub game_rules: BTreeMap<String, i32>,
@@ -2182,6 +2182,7 @@ impl Level {
             level.difficulty = text(d.get("difficulty")).unwrap_or_else(|| "normal".into());
             level.hardcore = n(d.get("hardcore")) != 0;
         }
+        level.allow_commands = Some(n(data.get("allowCommands")) != 0);
         let mut rules: BTreeMap<String, i32> = GAME_RULES
             .iter()
             .map(|(k, v)| ((*k).to_owned(), *v))

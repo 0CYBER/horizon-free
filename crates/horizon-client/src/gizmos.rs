@@ -37,6 +37,36 @@ pub const DRAGON_PART: u32 = 0xFF3F_FF00;
 pub const STROKE_WIDTH: f32 = 2.5;
 
 impl Gizmos {
+    /// `DebugCrosshairRenderer`: the world axes one block in front of the
+    /// camera, `0.01 * gui_scale` long, X red, Y green, Z light blue, each a
+    /// 2 pixel line over a 4 pixel black one. Drawn on top, in that order.
+    pub fn debug_crosshair(&mut self, camera: [f64; 3], x_rot: f32, y_rot: f32, gui_scale: f32) {
+        let forward = view_vector(x_rot, y_rot);
+        let center: [f64; 3] = std::array::from_fn(|i| camera[i] + forward[i]);
+        let length = f64::from(0.01 * gui_scale);
+        let axes = [(0, 0xFFFF_0000), (1, 0xFF00_FF00), (2, 0xFF7F_7FFF)];
+        let end = |axis: usize| {
+            let mut p = center;
+            p[axis] += length;
+            p
+        };
+        for (axis, _) in axes {
+            self.on_top.push(Line {
+                start: center,
+                end: end(axis),
+                color: 0xFF00_0000,
+                width: 4.0,
+            });
+        }
+        for (axis, color) in axes {
+            self.on_top.push(Line {
+                start: center,
+                end: end(axis),
+                color,
+                width: 2.0,
+            });
+        }
+    }
     /// `Gizmos.line`.
     pub fn line(&mut self, start: [f64; 3], end: [f64; 3], color: u32, width: f32) {
         self.lines.push(Line {
@@ -276,6 +306,35 @@ pub fn camera_relative(lines: &[Line], camera: [f64; 3], view: glam::Mat4) -> Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debug_crosshair_is_the_world_axes_ahead_of_the_camera() {
+        let mut g = Gizmos::default();
+        // Looking south (yaw 0) at GUI scale 2: one block towards +Z.
+        g.debug_crosshair([0.5, 64.0, 0.5], 0.0, 0.0, 2.0);
+        assert!(g.lines.is_empty());
+        let ends: Vec<([f64; 3], u32, f32)> =
+            g.on_top.iter().map(|l| (l.end, l.color, l.width)).collect();
+        assert_eq!(g.on_top[0].start, [0.5, 64.0, 1.5]);
+        // CROSSHAIR_SCALE * guiScale, in floats as vanilla scales.
+        let l = f64::from(0.01f32 * 2.0);
+        let (x, y, z) = (
+            [0.5 + l, 64.0, 1.5],
+            [0.5, 64.0 + l, 1.5],
+            [0.5, 64.0, 1.5 + l],
+        );
+        assert_eq!(
+            ends,
+            [
+                (x, 0xFF00_0000, 4.0),
+                (y, 0xFF00_0000, 4.0),
+                (z, 0xFF00_0000, 4.0),
+                (x, 0xFFFF_0000, 2.0),
+                (y, 0xFF00_FF00, 2.0),
+                (z, 0xFF7F_7FFF, 2.0),
+            ]
+        );
+    }
 
     #[test]
     fn chunk_borders_match_the_renderer() {

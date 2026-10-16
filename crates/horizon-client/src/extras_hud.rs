@@ -129,6 +129,32 @@ pub fn draw_fps(
     );
 }
 
+/// A box of text lines (a mod's HUD panel): `(text, 0xRRGGBB)` each.
+pub fn draw_lines(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    corners: &mut Corners,
+    corner: Corner,
+    lines: &[(&str, u32)],
+) {
+    if lines.is_empty() {
+        return;
+    }
+    let w = lines
+        .iter()
+        .map(|(text, _)| HudBatch::text_width(atlas, text))
+        .fold(0.0, f32::max)
+        + 4.0;
+    let h = 10.0 * lines.len() as f32 + 2.0;
+    let (x, y) = corners.place(corner, w, h);
+    batch.fill(atlas, x, y, w, h, BACKGROUND);
+    for (i, (text, color)) in lines.iter().enumerate() {
+        let [_, r, g, b] = color.to_be_bytes();
+        let y = y + 2.0 + 10.0 * i as f32;
+        batch.text(atlas, text, x + 2.0, y, rgba(r, g, b, 255), true);
+    }
+}
+
 /// What the keystroke overlay shows.
 pub struct Keystrokes {
     /// Forward, left, back, right: held, and the bound key's name.

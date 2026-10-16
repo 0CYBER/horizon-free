@@ -6,8 +6,11 @@ use horizon_client::{
     Result,
     command::args::GameMode,
     debug_keys::{CrashNotice, DebugAction, DebugHost, KeyAction, OpenScreen},
+    debug_overlay,
     gizmos::Gizmos,
-    keybinds,
+    hud::HudBatch,
+    hud_layout, keybinds,
+    save::VERSION_NAME,
     text::Text,
 };
 use horizon_core::geometry::Axis;
@@ -253,6 +256,199 @@ impl Game<'_> {
             format!("To edit: press {}", key("key.debug.debugOptions")),
         ]
     }
+    /// `DebugScreenOverlay.extractRenderState` with the default profile's
+    /// entries, over everything the frame drew (menus too), at the debug GUI
+    /// scale. F1 hides it unless a screen is open.
+    pub(super) fn draw_debug_overlay(&self, batch: &mut HudBatch, size: [u32; 2]) {
+        let screen_open = self.title.is_some() || self.screen != Screen::Playing;
+        if !self.debug || (self.ui.hide_gui && !screen_open) {
+            return;
+        }
+        let framebuffer = size.map(|v| v as i32);
+        let (scale, [width, height]) = debug_overlay::scale(
+            framebuffer,
+            batch.scale as i32,
+            self.settings.file.int("debugGuiScale"),
+            self.settings.force_unicode,
+            [batch.width as i32, batch.height as i32],
+        );
+        let mut d = debug_overlay::Displayer::default();
+        // fps: DebugEntryFps.
+        let limit = self.framerate_limit();
+        let present = self
+            .renderer
+            .as_ref()
+            .map_or("", |r| match r.config.present_mode {
+                wgpu::PresentMode::Immediate => " (immediate)",
+                wgpu::PresentMode::Mailbox => " (mailbox)",
+                wgpu::PresentMode::Fifo => " (fifo)",
+                wgpu::PresentMode::FifoRelaxed => " (fifo relaxed)",
+                _ => "",
+            });
+        let refresh = self
+            .window
+            .as_ref()
+            .and_then(|w| w.current_monitor())
+            .and_then(|m| m.refresh_rate_millihertz())
+            .map_or("0".into(), |mhz| {
+                debug_overlay::refresh_rate_label(f64::from(mhz) / 1000.0)
+            });
+        d.priority(format!(
+            "{} fps T: {}{present} @{refresh}Hz",
+            self.fps.round() as i32,
+            if limit == 260 {
+                "inf".into()
+            } else {
+                limit.to_string()
+            },
+        ));
+        // game_version: DebugEntryVersion (the launched version and brand).
+        d.priority(format!("Minecraft {VERSION_NAME} ({VERSION_NAME}/horizon)"));
+        // player_position, player_section_position.
+        if let Some(p) = self.player.as_ref() {
+            let mut lines = debug_overlay::position(
+                [p.position.x, p.position.y, p.position.z],
+                self.yaw,
+                self.pitch,
+                self.dim.id(),
+                self.streaming.forced.len(),
+            );
+            let section = lines.pop().unwrap_or_default();
+            if !self.reduced_debug_info() {
+                d.group("position", lines);
+            }
+            d.group("position", [section]);
+        }
+        // simple_performance_impactors.
+        let s = &self.settings;
+        d.line(format!(
+            "{}{}B: {}",
+            if s.improved_transparency {
+                "improved-transparency "
+            } else {
+                ""
+            },
+            match s.clouds.as_str() {
+                "false" => "",
+                "fast" => "fast-clouds ",
+                _ => "fancy-clouds ",
+            },
+            s.biome_blend
+        ));
+        d.line("Filtering: None");
+        d.line(format!(
+            "Terrain Rendering: {}",
+            if self.renderer.as_ref().is_some_and(|r| r.multi_draw) {
+                "multidrawindirect"
+            } else {
+                "naive"
+            }
+        ));
+        // system_specs (no Java line: Horizon has no JVM).
+        if let Some(r) = self.renderer.as_ref() {
+            static CPU: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+            d.group(
+                "system",
+                [format!(
+                    "CPU: {}",
+                    CPU.get_or_init(horizon_client::crash::cpu)
+                )],
+            );
+            let info = &r.info;
+            d.group(
+                "system",
+                [format!(
+                    "Display: {}x{} ({})",
+                    framebuffer[0],
+                    framebuffer[1],
+                    // Metal adapters report no PCI vendor.
+                    if info.vendor == 0 && info.backend == wgpu::Backend::Metal {
+                        "Apple".into()
+                    } else {
+                        debug_overlay::vendor_name(info.vendor)
+                    }
+                )],
+            );
+            if let Some(w) = self.window.as_ref() {
+                let density = w.scale_factor();
+                let logical = w.inner_size().to_logical::<f64>(density);
+                d.group(
+                    "system",
+                    [format!(
+                        "Window: {}x{} ({density:.2}x pixel density)",
+                        logical.width.round() as i32,
+                        logical.height.round() as i32
+                    )],
+                );
+            }
+            let kind = match info.device_type {
+                wgpu::DeviceType::IntegratedGpu => " (iGPU)",
+                wgpu::DeviceType::DiscreteGpu => " (dGPU)",
+                wgpu::DeviceType::VirtualGpu => " (vGPU)",
+                wgpu::DeviceType::Cpu => " (software)",
+                wgpu::DeviceType::Other => "",
+            };
+            let driver = format!("{} {}", info.driver, info.driver_info);
+            d.group(
+                "system",
+                [
+                    format!("{}{kind}", info.name),
+                    format!(
+                        "{:?} {}",
+                        info.backend,
+                        driver.trim().lines().next().unwrap_or("")
+                    )
+                    .trim_end()
+                    .to_owned(),
+                ],
+            );
+        }
+        // tps: DebugEntryTps for the integrated server (it counts no packets).
+        if self.player.is_some() && self.remote.is_none() {
+            let (target, status) = if self.clock.sprinting() {
+                ("-".to_owned(), " (sprinting)")
+            } else if self.clock.stepping() {
+                (
+                    format!("{:.1}", 1000.0 / self.clock.rate()),
+                    " (frozen - stepping)",
+                )
+            } else if self.clock.frozen() {
+                (format!("{:.1}", 1000.0 / self.clock.rate()), " (frozen)")
+            } else {
+                (format!("{:.1}", 1000.0 / self.clock.rate()), "")
+            };
+            d.line(format!(
+                "Integrated server @ {:.1}/{target} ms{status}, 0 tx, 0 rx",
+                self.debug_charts.smoothed_tick_ms
+            ));
+        }
+        let (left, right) = d.columns(&self.debug_chart_lines());
+        let atlas = &self.res.atlas;
+        let mut draws = debug_overlay::draw(&atlas.font, [&left, &right], scale, width);
+        let charts = self.debug_charts.draw(
+            &atlas.font,
+            width,
+            height,
+            self.settings.max_fps,
+            1000.0 / self.clock.rate(),
+            self.remote.is_some(),
+        );
+        draws.push(hud_layout::GuiDraw::Push(vec![hud_layout::PoseOp::Scale(
+            scale, scale,
+        )]));
+        draws.extend(charts);
+        if self.debug_charts.lightmap
+            && let Some(r) = &self.renderer
+        {
+            draws.extend(horizon_client::debug_chart::lightmap(
+                &r.lightmap_pixels,
+                width,
+                height,
+            ));
+        }
+        draws.push(hud_layout::GuiDraw::Pop);
+        hud_layout::paint(batch, atlas, &draws);
+    }
     /// `KeyMapping.getTranslatedKeyMessage`.
     fn key_text(&self, mapping: &str) -> Text {
         keybinds::display_name(self.settings.keys.get(mapping))
@@ -282,6 +478,11 @@ impl Game<'_> {
     /// `LocalPlayer.isReducedDebugInfo`: the server's rule or the option.
     fn reduced_debug_info(&self) -> bool {
         self.settings.reduced_debug_info || self.ui.rules.bool("reduced_debug_info")
+    }
+    /// The default profile's `3d_crosshair` entry: on while the overlay is
+    /// open, unless debug info is reduced.
+    pub(super) fn debug_crosshair(&self) -> bool {
+        self.debug && !self.reduced_debug_info()
     }
     /// `Permissions.COMMANDS_GAMEMASTER` (`GameModeCommand.PERMISSION_CHECK`).
     pub(super) fn gamemaster(&self) -> bool {
@@ -375,6 +576,7 @@ impl Game<'_> {
             DebugAction::ReloadResourcePacks => {
                 self.debug_translated("debug.reload_resourcepacks.message");
                 self.reload_packs();
+                self.load_shader_pack();
                 true
             }
             DebugAction::CopyLocation if player => {

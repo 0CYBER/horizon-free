@@ -71,6 +71,8 @@ pub enum Opt {
     /// Horizon's controller settings (`horizon-controller.txt`).
     PadEnabled,
     PadVibration,
+    PadAdaptiveTriggers,
+    PadLightbar,
     PadLookSensitivity,
     PadInvertX,
     PadInvertY,
@@ -169,6 +171,8 @@ impl Opt {
             // Horizon's own options: English captions (no vanilla keys).
             Opt::PadEnabled => "Controller",
             Opt::PadVibration => "Vibration",
+            Opt::PadAdaptiveTriggers => "Adaptive Triggers",
+            Opt::PadLightbar => "Lightbar",
             Opt::PadLookSensitivity => "Look Sensitivity",
             Opt::PadInvertX => "Invert Look X",
             Opt::PadInvertY => "Invert Look Y",
@@ -423,12 +427,18 @@ impl Opt {
             Opt::JapaneseGlyphs => on_off(s.japanese_glyphs),
             Opt::PadEnabled => on_off(s.controller.enabled),
             Opt::PadVibration => on_off(s.controller.vibration),
+            Opt::PadAdaptiveTriggers => on_off(s.controller.adaptive_triggers),
             Opt::PadInvertX => on_off(s.controller.invert_x),
             Opt::PadInvertY => on_off(s.controller.invert_y),
             Opt::PadToggleSneak => tr(if s.controller.toggle_sneak {
                 "options.key.toggle"
             } else {
                 "options.key.hold"
+            }),
+            Opt::PadLightbar => Text::literal(match s.controller.lightbar {
+                gamepad::Lightbar::Health => "Health",
+                gamepad::Lightbar::Dimension => "Dimension",
+                gamepad::Lightbar::Off => "Off",
             }),
             Opt::PadGlyphs => Text::literal(match s.controller.glyphs {
                 GlyphStyle::Auto => "Auto",
@@ -566,9 +576,20 @@ impl Opt {
             Opt::JapaneseGlyphs => s.japanese_glyphs = !s.japanese_glyphs,
             Opt::PadEnabled => s.controller.enabled = !s.controller.enabled,
             Opt::PadVibration => s.controller.vibration = !s.controller.vibration,
+            Opt::PadAdaptiveTriggers => {
+                s.controller.adaptive_triggers = !s.controller.adaptive_triggers
+            }
             Opt::PadInvertX => s.controller.invert_x = !s.controller.invert_x,
             Opt::PadInvertY => s.controller.invert_y = !s.controller.invert_y,
             Opt::PadToggleSneak => s.controller.toggle_sneak = !s.controller.toggle_sneak,
+            Opt::PadLightbar => {
+                let all = gamepad::Lightbar::ALL;
+                let i = all
+                    .iter()
+                    .position(|l| *l == s.controller.lightbar)
+                    .unwrap_or(0) as u8;
+                s.controller.lightbar = all[usize::from(next(i, 3))];
+            }
             Opt::PadGlyphs => {
                 let i = GlyphStyle::ALL
                     .iter()
@@ -601,32 +622,53 @@ const PRESETS: [&str; 4] = ["fast", "fancy", "fabulous", "custom"];
 fn preset_index(p: &str) -> usize {
     PRESETS.iter().position(|x| *x == p).unwrap_or(1)
 }
-/// GraphicsPreset.apply: quality options for Fast/Fancy/Fabulous.
+/// A slider moved to `v` (OptionInstance.set): the graphics preset applies
+/// its options when its value changes (`Options.applyGraphicsPreset`).
+pub fn set_slider(opt: Opt, s: &mut Settings, v: f32) {
+    let preset = preset_index(&s.graphics_preset);
+    opt.set_slider(s, v);
+    if opt == Opt::Preset && preset_index(&s.graphics_preset) != preset {
+        apply_preset(s);
+    }
+}
+/// GraphicsPreset.apply: the options Fast, Fancy and Fabulous set (texture
+/// filtering and anisotropy have no option here yet).
 pub fn apply_preset(s: &mut Settings) {
+    let fabulous = s.graphics_preset == "fabulous";
     match s.graphics_preset.as_str() {
         "fast" => {
+            s.biome_blend = 1;
+            s.render_distance = 8;
+            s.prioritize_chunk_updates = 0;
+            s.simulation_distance = 6;
+            s.smooth_lighting = false;
             s.clouds = "fast".into();
             s.particles = 1;
+            s.mipmap_levels = 2;
             s.entity_shadows = false;
-            s.biome_blend = 1;
+            s.entity_distance = 0.75;
+            s.menu_blur = 2;
+            s.cloud_range = 32;
             s.cutout_leaves = false;
             s.improved_transparency = false;
-            s.mipmap_levels = 2;
             s.weather_radius = 5;
-            s.cloud_range = 64;
-            s.entity_distance = 0.75;
         }
         "fancy" | "fabulous" => {
+            s.biome_blend = 2;
+            s.render_distance = if fabulous { 32 } else { 16 };
+            s.prioritize_chunk_updates = 1;
+            s.simulation_distance = 12;
+            s.smooth_lighting = true;
             s.clouds = "true".into();
             s.particles = 0;
-            s.entity_shadows = true;
-            s.biome_blend = 2;
-            s.cutout_leaves = true;
-            s.improved_transparency = s.graphics_preset == "fabulous";
             s.mipmap_levels = 4;
+            s.entity_shadows = true;
+            s.entity_distance = if fabulous { 1.25 } else { 1.0 };
+            s.menu_blur = 5;
+            s.cloud_range = if fabulous { 128 } else { 64 };
+            s.cutout_leaves = true;
+            s.improved_transparency = fabulous;
             s.weather_radius = 10;
-            s.cloud_range = 128;
-            s.entity_distance = 1.0;
         }
         _ => {}
     }
@@ -1028,6 +1070,8 @@ impl OptionsUi {
                 rows.extend(pairs(&[
                     Opt::PadEnabled,
                     Opt::PadVibration,
+                    Opt::PadAdaptiveTriggers,
+                    Opt::PadLightbar,
                     Opt::PadLookSensitivity,
                     Opt::PadToggleSneak,
                     Opt::PadInvertX,
@@ -1755,7 +1799,7 @@ impl OptionsUi {
                     .iter()
                     .find(|wd| matches!(&wd.kind, WKind::Slider { opt: o, .. } if *o == opt))
             {
-                opt.set_slider(s, ui::slider_value(wd.x, wd.w, x));
+                set_slider(opt, s, ui::slider_value(wd.x, wd.w, x));
                 events.push(Event::Changed);
             }
             return events;
@@ -1838,10 +1882,7 @@ impl OptionsUi {
                 }
                 WKind::Slider { opt, .. } => {
                     self.dragging = Some(opt);
-                    opt.set_slider(s, ui::slider_value(wd.x, wd.w, x));
-                    if opt == Opt::Preset {
-                        apply_preset(s);
-                    }
+                    set_slider(opt, s, ui::slider_value(wd.x, wd.w, x));
                     events.push(Event::Changed);
                 }
                 WKind::LanguageRow { code, .. } => {
@@ -2122,6 +2163,63 @@ mod tests {
             );
             assert_eq!(s.gui_scale, expected);
             assert!(ui.release().is_empty());
+        }
+    }
+
+    #[test]
+    fn classic_graphics_presets_set_the_distances() {
+        let atlas = atlas();
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        ui.show(Page::Video);
+        let size = (480.0, 480.0);
+        let (widgets, _, _, _) = ui.layout(&s, size.0, size.1);
+        let preset = widgets
+            .iter()
+            .find(|wd| {
+                matches!(
+                    wd.kind,
+                    WKind::Slider {
+                        opt: Opt::Preset,
+                        ..
+                    }
+                )
+            })
+            .expect("the Graphics preset slider is in classic Video Settings");
+        // Dragging the slider across its range (GraphicsPreset.apply on each change).
+        let y = preset.y + 1.0;
+        let mut seen = Vec::new();
+        ui.click(
+            &mut s,
+            &atlas,
+            preset.x + 1.0,
+            y,
+            size,
+            [854, 480],
+            false,
+            false,
+        );
+        for step in 0..=20 {
+            let x = preset.x + preset.w * step as f32 / 20.0;
+            ui.click(&mut s, &atlas, x, y, size, [854, 480], true, false);
+            seen.push((
+                s.graphics_preset.clone(),
+                s.render_distance,
+                s.simulation_distance,
+                s.cloud_range,
+            ));
+        }
+        ui.release();
+        for expected in [
+            ("fast", 8, 6, 32),
+            ("fancy", 16, 12, 64),
+            ("fabulous", 32, 12, 128),
+        ] {
+            assert!(
+                seen.iter()
+                    .any(|(p, r, d, c)| (p.as_str(), *r, *d, *c) == expected),
+                "{expected:?} in {seen:?}"
+            );
         }
     }
 

@@ -32,7 +32,7 @@ fn tools() -> Value {
         { "name": "remove_version", "description": "Remove an installed Horizon version and its prepared resources.",
           "inputSchema": { "type": "object", "properties": { "tag": { "type": "string" } }, "required": ["tag"] } },
         { "name": "prepare_resources", "description": "Prepare a version's resources from the player's own Minecraft install (needs Minecraft 26.3 played once in the official launcher and Java 25; versions before horizon-prepare also need Python 3.10+). Can take several minutes; returns the end of the log.",
-          "inputSchema": { "type": "object", "properties": { "version": version, "minecraft_dir": { "type": "string", "description": "The official launcher's game folder. Default: the launcher's setting, else the platform default." } } } },
+          "inputSchema": { "type": "object", "properties": { "version": version, "minecraft_dir": { "type": "string", "description": "The game folder of the official launcher, Prism Launcher, MultiMC, the Modrinth App, ATLauncher or GDLauncher. Default: the launcher's setting, then every launcher's default folder." } } } },
         { "name": "launch_client", "description": "Start the Horizon client (a game window on the player's screen) under agent control: the game_* tools then play it. Returns once it has started; game_wait_ready waits for the world.",
           "inputSchema": { "type": "object", "properties": { "version": version,
             "world": { "type": "string", "description": "Open or create this world (a folder under saves) at once." },
@@ -120,7 +120,7 @@ impl Session {
                 let tag = backend::resolve_version(arg_str(args, "version"))?;
                 let minecraft =
                     backend::minecraft_dir(arg_str(args, "minecraft_dir").map(PathBuf::from))?;
-                let preparer = backend::preparer(&tag, &minecraft, &|_| {})?;
+                let (preparer, minecraft) = backend::preparer(&tag, &minecraft, &|_| {})?;
                 let sound = std::cell::RefCell::new(Vec::new());
                 backend::sounds(&tag, &minecraft, &|line| sound.borrow_mut().push(line));
                 let (result, tail) = match preparer {

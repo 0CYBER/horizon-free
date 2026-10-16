@@ -55,6 +55,8 @@ impl Game<'_> {
             state.session.update_special_prices();
         }
         let title = self.merchant_display_name(&state);
+        // The container the trading screen replaces loses its opener.
+        self.guest_container_closed(host, conn);
         let Some(window) = host.hub.open_merchant_window(conn, title) else {
             self.merchant_closed(&mut state);
             return;

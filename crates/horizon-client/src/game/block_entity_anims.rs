@@ -69,17 +69,19 @@ impl Game<'_> {
     /// on both halves of a double chest (`CompoundContainer`).
     pub(super) fn container_opener_event(&mut self, key: (i32, i32, i32), open: bool) {
         // Spectators never count as openers.
-        if self.spectator() {
-            return;
+        if !self.spectator() {
+            self.container_openers_changed(key, open);
         }
+    }
+    /// `container_opener_event` for a player who is not a spectator (a guest).
+    pub(super) fn container_openers_changed(&mut self, key: (i32, i32, i32), open: bool) {
         let pos = [key.0, key.1, key.2];
         let state = self.world.block(pos[0], pos[1], pos[2]).0;
         match self.be_anims.ticker(state) {
             Some(Ticker::Lid) => {
-                let count = i32::from(open);
-                self.block_entity_event(pos, 1, count);
+                self.lid_openers_changed(key, open);
                 if let Some(other) = self.chest_other_half(key) {
-                    self.block_entity_event([other.0, other.1, other.2], 1, count);
+                    self.lid_openers_changed(other, open);
                 }
             }
             Some(Ticker::Shulker { .. }) => {
@@ -90,9 +92,25 @@ impl Game<'_> {
                     shulker.stop_open()
                 };
                 self.block_entity_event(pos, 1, count);
+                self.lan_block_event(pos, 1, count);
             }
             _ => {}
         }
+    }
+    /// `ContainerOpenersCounter.incrementOpeners` / `decrementOpeners` of the
+    /// chest at `key` (the host and the guests are counted), then
+    /// `ChestBlockEntity.signalOpenCount`: block event 1 with the count, here
+    /// and for the guests.
+    fn lid_openers_changed(&mut self, key: (i32, i32, i32), open: bool) {
+        let count = self.lid_openers.entry(key).or_default();
+        *count = (*count + if open { 1 } else { -1 }).max(0);
+        let count = *count;
+        if count == 0 {
+            self.lid_openers.remove(&key);
+        }
+        let pos = [key.0, key.1, key.2];
+        self.block_entity_event(pos, 1, count);
+        self.lan_block_event(pos, 1, count);
     }
     /// `BellBlockEntity.updateEntities`: the living entities whose bounding
     /// box meets the bell's block box inflated by 48.
@@ -233,7 +251,8 @@ impl Game<'_> {
                         f64::from(pos[1]) + 0.5,
                         f64::from(pos[2]) + 0.5,
                     ];
-                    if tick.resonate {
+                    // On a server its own copy does this and sends the sound.
+                    if tick.resonate && self.remote.is_none() {
                         // The server's copy plays the resonance for everyone.
                         self.audio
                             .play("minecraft:block.bell.resonate", Some(centre), 1.0, 1.0);
@@ -249,8 +268,8 @@ impl Game<'_> {
                             };
                             self.particles.add(&options, p, [0.0; 3]);
                         }
-                        // makeRaidersGlow.
-                        for m in self.mobs.iter_mut() {
+                        // makeRaidersGlow (the server's effect).
+                        for m in self.mobs.iter_mut().filter(|_| self.remote.is_none()) {
                             if glow.contains(&u64::from(m.id)) {
                                 m.add_effect("minecraft:glowing", 60, 0);
                             }
@@ -292,7 +311,8 @@ impl Game<'_> {
                     let initial = self.gateway_loaded(pos);
                     let anims = &mut self.be_anims;
                     let server = anims.gateway_servers.entry(pos).or_insert(initial);
-                    let triggered = server.portal_tick();
+                    // A server sends its copy's block event instead.
+                    let triggered = self.remote.is_none() && server.portal_tick();
                     let client = anims.gateways.entry(pos).or_insert(initial);
                     if triggered {
                         client.trigger_event(1, 0);

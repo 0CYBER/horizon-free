@@ -15,9 +15,38 @@ pub struct SpriteAnimation {
     frames: Arc<Vec<Vec<u8>>>,
     clip: Arc<AnimationClip>,
 }
+/// What an animated sprite shows: `frame`, mixed `millis` thousandths of the
+/// way towards `next` (0 for a single frame).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameBlend {
+    pub frame: usize,
+    pub next: usize,
+    pub millis: u32,
+}
 impl SpriteAnimation {
     pub fn frame(&self, tick: u64) -> usize {
         self.clip.sample(tick).frame as usize
+    }
+    /// `SpriteContents.AnimationState.drawToAtlas`: an animation with
+    /// `interpolate` mixes the frame with the next one by
+    /// `(int)(subFrame / time * 1000)` thousandths; others show the frame.
+    pub fn blend(&self, tick: u64) -> FrameBlend {
+        let sample = self.clip.sample(tick);
+        let frame = sample.frame as usize;
+        let next = sample.next_frame as usize;
+        if self.clip.interpolates() && sample.interpolation_millis > 0 && next != frame {
+            FrameBlend {
+                frame,
+                next,
+                millis: sample.interpolation_millis,
+            }
+        } else {
+            FrameBlend {
+                frame,
+                next: frame,
+                millis: 0,
+            }
+        }
     }
     pub fn resized_pixels(&self, frame: usize, width: u32, height: u32) -> Vec<u8> {
         let source = self.pixels(frame);
@@ -223,6 +252,7 @@ impl Sprites {
             .and_then(|v| v.get("texture"))
             .and_then(|v| serde_json::from_str::<serde_json::Value>(v.get()).ok());
         self.mips.push(crate::mipmap::Settings {
+            native_size: side,
             strategy: texture
                 .as_ref()
                 .and_then(|t| t["mipmap_strategy"].as_str())
@@ -254,12 +284,16 @@ impl Sprites {
 
 #[cfg(test)]
 pub(crate) fn test_animation(size: u32, layer: u32) -> SpriteAnimation {
+    test_clip(size, layer, r#"{"frametime":1,"frames":[0,1]}"#)
+}
+#[cfg(test)]
+pub(crate) fn test_clip(size: u32, layer: u32, metadata: &str) -> SpriteAnimation {
     let frame = |blue: u8| {
         (0..size * size)
             .flat_map(|i| [(i % size) as u8, (i / size) as u8, blue, 255])
             .collect()
     };
-    let metadata = AnimationMetadata::from_json(r#"{"frametime":1,"frames":[0,1]}"#).unwrap();
+    let metadata = AnimationMetadata::from_json(metadata).unwrap();
     SpriteAnimation {
         layer,
         frames: Arc::new(vec![frame(0), frame(99)]),
@@ -407,5 +441,28 @@ mod tests {
         ] {
             assert_eq!(animation.frame(tick), frame);
         }
+    }
+
+    #[test]
+    fn interpolated_animations_blend_towards_the_next_frame() {
+        let animation = test_clip(16, 0, r#"{"frametime":4,"interpolate":true}"#);
+        let blend = |frame, next, millis| FrameBlend {
+            frame,
+            next,
+            millis,
+        };
+        for (tick, expected) in [
+            (0, blend(0, 0, 0)),
+            (1, blend(0, 1, 250)),
+            (3, blend(0, 1, 750)),
+            (4, blend(1, 1, 0)),
+            (5, blend(1, 0, 250)),
+            (8, blend(0, 0, 0)),
+        ] {
+            assert_eq!(animation.blend(tick), expected, "tick {tick}");
+        }
+        let stepped = test_clip(16, 0, r#"{"frametime":4}"#);
+        assert_eq!(stepped.blend(1), blend(0, 0, 0));
+        assert_eq!(stepped.blend(5), blend(1, 1, 0));
     }
 }

@@ -4,6 +4,8 @@
 //! ServerStatusPinger to show the MOTD, player count and latency.
 use crate::hud::{HudAtlas, HudBatch, rgba};
 use crate::lan::discovery::Scanner;
+use crate::text::{DARK_GRAY, GRAY, Text, format_translation};
+use crate::title::confirm_top;
 use horizon_protocol::servers::{self, ServerEntry};
 use std::{
     collections::HashMap,
@@ -17,14 +19,36 @@ use std::{
 pub enum Ping {
     Pinging,
     Ok {
-        motd: String,
-        players: String,
+        /// The description component, styled (`sanitizeDescription`).
+        motd: Text,
+        /// Online and max players; None when the status has no `players`.
+        players: Option<(i64, i64)>,
         ms: u128,
         version: String,
     },
     Failed(String),
 }
+impl Ping {
+    /// ServerStatusPinger.formatPlayerCount: dark grey with grey numbers,
+    /// or `multiplayer.status.unknown` without a player count.
+    pub fn player_count(players: Option<(i64, i64)>) -> Text {
+        match players {
+            Some((online, max)) => Text::translate(
+                "multiplayer.status.player_count",
+                &[
+                    Text::colored(online.to_string(), GRAY),
+                    Text::colored(max.to_string(), GRAY),
+                ],
+            ),
+            None => Text::translate("multiplayer.status.unknown", &[]),
+        }
+        .with_color(DARK_GRAY)
+    }
+}
 type Pings = Arc<Mutex<HashMap<String, Ping>>>;
+/// Server icons by address as 64x64 RGBA (FaviconTexture), from servers.dat
+/// and then from each ping's favicon.
+type Icons = Arc<Mutex<HashMap<String, Arc<Vec<u8>>>>>;
 
 #[derive(Clone, Debug)]
 pub enum Screen {
@@ -32,6 +56,7 @@ pub enum Screen {
         servers: Vec<ServerEntry>,
         selected: Option<usize>,
         pings: Pings,
+        icons: Icons,
         /// Worlds announced on the local network, listed after the servers.
         lan: Scanner,
         scroll: crate::ui::Scroll,
@@ -45,6 +70,13 @@ pub enum Screen {
     },
     Direct {
         address: String,
+    },
+    /// ConfirmScreen for Delete: the list it returns to, the server's name
+    /// and how many lines the warning took when last drawn.
+    ConfirmDelete {
+        list: Box<Screen>,
+        name: String,
+        lines: std::cell::Cell<usize>,
     },
     /// Join a friend's world with its invite code (Horizon's own, reached
     /// from Horizon's multiplayer page).
@@ -74,24 +106,63 @@ pub fn servers_file(saves: &Path) -> PathBuf {
         .parent()
         .map_or_else(|| PathBuf::from("servers.dat"), |p| p.join("servers.dat"))
 }
-fn ping_all(servers: &[ServerEntry], pings: &Pings) {
+/// `FaviconTexture.upload`: a PNG of exactly 64x64 pixels, else no icon.
+fn icon_pixels(png: &[u8]) -> Option<Arc<Vec<u8>>> {
+    crate::hud::decode_bytes(png)
+        .ok()
+        .filter(|(w, h, _)| *w == 64 && *h == 64)
+        .map(|(_, _, p)| Arc::new(p))
+}
+/// `ServerStatus.Favicon.CODEC`: a base64 PNG behind the data URL prefix.
+fn favicon_bytes(json: &serde_json::Value) -> Option<Vec<u8>> {
+    let url = json["favicon"].as_str()?;
+    let base64 = url
+        .strip_prefix("data:image/png;base64,")?
+        .replace('\n', "");
+    crate::skins::base64_decode(&base64)
+}
+fn ping_all(servers: &[ServerEntry], pings: &Pings, icons: &Icons, file: &Path) {
     for s in servers {
         let address = s.ip.clone();
         pings.lock().unwrap().insert(address.clone(), Ping::Pinging);
-        let pings = pings.clone();
+        let saved = s.icon.clone();
+        if let Some(pixels) = saved
+            .as_deref()
+            .and_then(crate::skins::base64_decode)
+            .and_then(|png| icon_pixels(&png))
+        {
+            icons.lock().unwrap().insert(address.clone(), pixels);
+        }
+        let (pings, icons, file) = (pings.clone(), icons.clone(), file.to_owned());
         let _ = std::thread::Builder::new()
             .name("horizon-ping".into())
             .spawn(move || {
                 let result = match crate::net::ping(&address, Duration::from_secs(5)) {
                     Ok((json, ms)) => {
-                        let lang = Default::default();
-                        let motd = crate::net::json_text(&json["description"], &lang);
-                        let players = format!(
-                            "{}/{}",
-                            json["players"]["online"].as_i64().unwrap_or(0),
-                            json["players"]["max"].as_i64().unwrap_or(0)
-                        );
+                        let motd = crate::component::to_text(&json["description"], &mut |s| {
+                            Text::literal(s)
+                        });
+                        let players = json["players"].as_object().map(|p| {
+                            (
+                                p.get("online").and_then(|n| n.as_i64()).unwrap_or(0),
+                                p.get("max").and_then(|n| n.as_i64()).unwrap_or(0),
+                            )
+                        });
                         let version = json["version"]["name"].as_str().unwrap_or("?").to_owned();
+                        // A new favicon replaces the saved one (an invalid one
+                        // clears it) and servers.dat is saved again.
+                        if let Some(png) = favicon_bytes(&json) {
+                            let encoded = crate::lan::base64(&png);
+                            let pixels = icon_pixels(&png);
+                            match &pixels {
+                                Some(p) => icons.lock().unwrap().insert(address.clone(), p.clone()),
+                                None => icons.lock().unwrap().remove(&address),
+                            };
+                            let icon = pixels.map(|_| encoded);
+                            if icon != saved {
+                                save_icon(&file, &address, icon);
+                            }
+                        }
                         Ping::Ok {
                             motd,
                             players,
@@ -103,6 +174,33 @@ fn ping_all(servers: &[ServerEntry], pings: &Pings) {
                 };
                 pings.lock().unwrap().insert(address, result);
             });
+    }
+}
+/// Save the list after a move or delete, keeping the icons pings stored in
+/// servers.dat since it was loaded.
+fn save_servers(file: &Path, servers: &mut [ServerEntry]) {
+    let _guard = SAVING.lock();
+    let saved = servers::load(file);
+    for entry in servers.iter_mut() {
+        if let Some(s) = saved.iter().find(|s| s.ip == entry.ip) {
+            entry.icon = s.icon.clone();
+        }
+    }
+    let _ = servers::save(file, servers);
+}
+/// Held while servers.dat is read and written back.
+static SAVING: Mutex<()> = Mutex::new(());
+/// Store `icon` on the entries for `address` (OnlineServerEntry.updateServerList).
+fn save_icon(file: &Path, address: &str, icon: Option<String>) {
+    let _guard = SAVING.lock();
+    let mut list = servers::load(file);
+    let mut changed = false;
+    for entry in list.iter_mut().filter(|e| e.ip == address) {
+        changed |= entry.icon != icon;
+        entry.icon = icon.clone();
+    }
+    if changed {
+        let _ = servers::save(file, &list);
     }
 }
 
@@ -167,12 +265,106 @@ fn row_at(
     }
     rows(servers, lan).nth(index as usize)
 }
+/// SelectableEntry's hover areas over the 32-pixel icon, relative to it.
+fn over_right_half(x: f32, y: f32) -> bool {
+    (16.0..32.0).contains(&x) && (0.0..32.0).contains(&y)
+}
+fn over_top_left(x: f32, y: f32) -> bool {
+    (0.0..16.0).contains(&x) && (0.0..16.0).contains(&y)
+}
+fn over_bottom_left(x: f32, y: f32) -> bool {
+    (0.0..16.0).contains(&x) && (16.0..32.0).contains(&y)
+}
+/// The server's favicon in icon slot `slot`, else `misc/unknown_server`.
+fn draw_server_icon(
+    atlas: &HudAtlas,
+    batch: &mut HudBatch,
+    pixels: Option<&[u8]>,
+    slot: usize,
+    x: f32,
+    y: f32,
+) {
+    let sprite = format!("horizon/world-icon{}", slot % crate::hud::WORLD_ICON_SLOTS);
+    if let Some(pixels) = pixels
+        && let Some(rect) = atlas.sprites.get(&sprite)
+    {
+        batch.patches.push(crate::font::Patch {
+            x: (rect.u0 * atlas.width as f32).round() as u32,
+            y: (rect.v0 * atlas.height as f32).round() as u32,
+            width: 64,
+            height: 64,
+            rgba: pixels.to_vec(),
+        });
+        batch.sprite_scaled(atlas, &sprite, x, y, 32.0, 32.0, u32::MAX);
+    } else {
+        batch.sprite_scaled(atlas, "misc/unknown_server", x, y, 32.0, 32.0, u32::MAX);
+    }
+}
 /// `LoadingDotsText.get`.
 fn loading_dots(millis: u128) -> &'static str {
     ["O o o", "o O o", "o o O", "o O o"][(millis / 300 % 4) as usize]
 }
 
+fn ping_tooltip(
+    servers: &[ServerEntry],
+    pings: &HashMap<String, Ping>,
+    size: (f32, f32),
+    scroll: f32,
+    cursor: (f32, f32),
+) -> Option<Text> {
+    let Row::Server(i) = row_at(servers.len(), 0, cursor, size, scroll)? else {
+        return None;
+    };
+    let (top, _, left) = list_area(size.0, size.1);
+    let x = left + 2.0 + ROW_WIDTH - 4.0 - 15.0;
+    let y = top + 4.0 - scroll.trunc() + i as f32 * ROW_HEIGHT;
+    if cursor.0 < x || cursor.0 >= x + 10.0 || cursor.1 < y || cursor.1 >= y + 8.0 {
+        return None;
+    }
+    Some(match pings.get(&servers[i].ip) {
+        Some(Ping::Ok { ms, .. }) => format_translation(
+            &crate::lang::get_or("multiplayer.status.ping", "%s ms"),
+            &[Text::literal(ms.to_string())],
+        ),
+        Some(Ping::Failed(_)) => Text::literal(crate::lang::get_or(
+            "multiplayer.status.no_connection",
+            "(no connection)",
+        )),
+        _ => Text::literal(crate::lang::get_or(
+            "multiplayer.status.pinging",
+            "Pinging...",
+        )),
+    })
+}
+
 impl Screen {
+    /// Draw after the list and footer so the tooltip is neither clipped nor covered.
+    pub fn draw_tooltip(&self, atlas: &HudAtlas, batch: &mut HudBatch, cursor: (f32, f32)) {
+        let Self::List {
+            servers,
+            pings,
+            lan,
+            scroll,
+            ..
+        } = self
+        else {
+            return;
+        };
+        let size = (batch.width.ceil(), batch.height.ceil());
+        let (top, bottom, _) = list_area(size.0, size.1);
+        let mut scroll = *scroll;
+        scroll.clamp(
+            top,
+            bottom,
+            content_height(servers.len(), lan.games().len()),
+        );
+        if let Some(text) =
+            ping_tooltip(servers, &pings.lock().unwrap(), size, scroll.amount, cursor)
+        {
+            crate::ui::tooltip(batch, atlas, &[text], cursor);
+        }
+    }
+
     /// The address of list row `row` (saved servers, then LAN games).
     pub fn address_of(&self, row: usize) -> Option<String> {
         match self {
@@ -183,11 +375,13 @@ impl Screen {
     pub fn list(saves: &Path) -> Self {
         let servers = servers::load(&servers_file(saves));
         let pings: Pings = Arc::default();
-        ping_all(&servers, &pings);
+        let icons: Icons = Arc::default();
+        ping_all(&servers, &pings, &icons, &servers_file(saves));
         Self::List {
             servers,
             selected: None,
             pings,
+            icons,
             lan: Scanner::start(),
             scroll: crate::ui::Scroll::default(),
         }
@@ -284,6 +478,29 @@ impl Screen {
                     51,
                 ),
             ],
+            // ConfirmScreen's two 150-wide buttons, 4 apart, under the message.
+            Self::ConfirmDelete { lines, .. } => {
+                let y = confirm_top(h, lines.get()) + 41.0 + lines.get() as f32 * 9.0;
+                let x = (w.ceil() / 2.0).floor();
+                vec![
+                    b(
+                        x - 152.0,
+                        y,
+                        150.0,
+                        &crate::lang::get_or("selectServer.deleteButton", "Delete"),
+                        true,
+                        58,
+                    ),
+                    b(
+                        x + 2.0,
+                        y,
+                        150.0,
+                        &crate::lang::get_or("gui.cancel", "Cancel"),
+                        true,
+                        59,
+                    ),
+                ]
+            }
             Self::Direct { address } => vec![
                 b(
                     w / 2.0 - 100.0,
@@ -343,32 +560,31 @@ impl Screen {
             }
         }
     }
+    /// An EditBox and its label: the label at `label_y` (one pixel in, in
+    /// 0xA0A0A0), the 200x20 box at `box_y`.
     fn field(
         atlas: &HudAtlas,
         batch: &mut HudBatch,
         label: &str,
         value: &str,
-        y: f32,
+        (label_y, box_y): (f32, f32),
         focused: bool,
         blink: bool,
     ) {
-        let w = batch.width;
-        crate::widgets::target_as(
-            [w / 2.0 - 100.0, y + 11.0, 200.0, 20.0],
-            crate::widgets::Kind::Field,
-        );
+        let x = (batch.width.ceil() / 2.0).floor() - 100.0;
+        crate::widgets::target_as([x, box_y, 200.0, 20.0], crate::widgets::Kind::Field);
         batch.text(
             atlas,
             label,
-            w / 2.0 - 100.0,
-            y,
+            x + 1.0,
+            label_y,
             rgba(160, 160, 160, 255),
             true,
         );
         batch.fill(
             atlas,
-            w / 2.0 - 100.0,
-            y + 11.0,
+            x,
+            box_y,
             200.0,
             20.0,
             if focused {
@@ -377,14 +593,7 @@ impl Screen {
                 rgba(160, 160, 160, 255)
             },
         );
-        batch.fill(
-            atlas,
-            w / 2.0 - 99.0,
-            y + 12.0,
-            198.0,
-            18.0,
-            rgba(0, 0, 0, 255),
-        );
+        batch.fill(atlas, x + 1.0, box_y + 1.0, 198.0, 18.0, rgba(0, 0, 0, 255));
         let shown = if focused && blink {
             format!("{value}_")
         } else {
@@ -393,13 +602,13 @@ impl Screen {
         batch.text(
             atlas,
             &shown,
-            w / 2.0 - 96.0,
-            y + 17.0,
+            x + 4.0,
+            box_y + 6.0,
             rgba(224, 224, 224, 255),
             true,
         );
     }
-    pub fn draw(&self, atlas: &HudAtlas, batch: &mut HudBatch, blink: bool) {
+    pub fn draw(&self, atlas: &HudAtlas, batch: &mut HudBatch, blink: bool, cursor: (f32, f32)) {
         let (w, h) = (batch.width, batch.height);
         crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
         let centered = |batch: &mut HudBatch, text: &str, y: f32, color: u32| {
@@ -411,6 +620,7 @@ impl Screen {
                 servers,
                 selected,
                 pings,
+                icons,
                 lan,
                 scroll,
             } => {
@@ -437,6 +647,9 @@ impl Screen {
                 crate::ui::list_background(batch, atlas, top, bottom, false);
                 let first = batch.vertices.len();
                 let pings = pings.lock().unwrap();
+                let icons = icons.lock().unwrap();
+                // The row under the pointer (`isHovered`).
+                let hovered = row_at(servers.len(), games.len(), cursor, (w, h), scroll.amount);
                 let millis = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0, |d| d.as_millis());
@@ -483,25 +696,18 @@ impl Screen {
                     match row {
                         Row::Server(k) => {
                             let server = &servers[k];
-                            batch.sprite_scaled(
-                                atlas,
-                                "misc/unknown_server",
-                                cx,
-                                cy,
-                                32.0,
-                                32.0,
-                                u32::MAX,
-                            );
-                            batch.text(atlas, &server.name, cx + 35.0, cy + 1.0, u32::MAX, false);
+                            let icon = icons.get(&server.ip);
+                            draw_server_icon(atlas, batch, icon.map(|p| p.as_slice()), i, cx, cy);
+                            batch.text(atlas, &server.name, cx + 35.0, cy + 1.0, u32::MAX, true);
                             // OnlineServerEntry: up to two lines of MOTD, the
-                            // player count left of the status icon.
-                            let (motd, status, motd_color, icon) = match pings.get(&server.ip) {
+                            // player count left of the status icon, all with
+                            // GuiGraphics.text's shadow.
+                            let (motd, status, sprite) = match pings.get(&server.ip) {
                                 Some(Ping::Ok {
                                     motd, players, ms, ..
                                 }) => (
-                                    motd.clone(),
-                                    players.clone(),
-                                    gray,
+                                    motd.resolve_legacy(),
+                                    Ping::player_count(*players),
                                     format!(
                                         "server_list/ping_{}",
                                         match ms {
@@ -514,12 +720,9 @@ impl Screen {
                                     ),
                                 ),
                                 Some(Ping::Failed(_)) => (
-                                    crate::lang::get_or(
-                                        "multiplayer.status.cannot_connect",
-                                        "Can't connect to server",
-                                    ),
-                                    String::new(),
-                                    rgba(255, 0, 0, 255),
+                                    Text::translate("multiplayer.status.cannot_connect", &[])
+                                        .with_color(0xFF0000),
+                                    Text::empty(),
                                     "server_list/unreachable".to_owned(),
                                 ),
                                 _ => {
@@ -527,50 +730,71 @@ impl Screen {
                                     let frame = (millis / 100 + i as u128 * 2) & 7;
                                     let frame = if frame > 4 { 8 - frame } else { frame };
                                     (
-                                        crate::lang::get_or(
-                                            "multiplayer.status.pinging",
-                                            "Pinging...",
-                                        ),
-                                        String::new(),
-                                        gray,
+                                        Text::translate("multiplayer.status.pinging", &[]),
+                                        Text::empty(),
                                         format!("server_list/pinging_{}", frame + 1),
                                     )
                                 }
                             };
-                            for (n, line) in wrap(&motd, ROW_WIDTH - 4.0 - 34.0, atlas)
+                            for (n, line) in atlas
+                                .font
+                                .split(&motd, ROW_WIDTH - 4.0 - 32.0 - 2.0)
                                 .iter()
                                 .take(2)
                                 .enumerate()
                             {
-                                batch.text(
+                                batch.text_styled(
                                     atlas,
                                     line,
                                     cx + 35.0,
                                     cy + 12.0 + 9.0 * n as f32,
-                                    motd_color,
-                                    false,
+                                    gray,
+                                    true,
                                 );
                             }
                             let icon_x = cx + ROW_WIDTH - 4.0 - 15.0;
                             batch.sprite_scaled(
                                 atlas,
-                                &format!("gui/sprites/{icon}"),
+                                &format!("gui/sprites/{sprite}"),
                                 icon_x,
                                 cy,
                                 10.0,
                                 8.0,
                                 u32::MAX,
                             );
-                            if !status.is_empty() {
-                                let sw = HudBatch::text_width(atlas, &status).ceil();
-                                batch.text(
-                                    atlas,
-                                    &status,
-                                    icon_x - sw - 5.0,
-                                    cy + 1.0,
-                                    gray,
-                                    false,
-                                );
+                            let sw = atlas.font.width_text(&status).ceil();
+                            batch.text_styled(
+                                atlas,
+                                &status,
+                                icon_x - sw - 5.0,
+                                cy + 1.0,
+                                gray,
+                                true,
+                            );
+                            // Hovering the row: the join arrow over the icon
+                            // and the move arrows, each highlighted under
+                            // the pointer.
+                            if hovered == Some(row) {
+                                let (rx, ry) = (cursor.0 - cx, cursor.1 - cy);
+                                batch.fill(atlas, cx, cy, 32.0, 32.0, 0xA0909090);
+                                for (sprite, shown, over) in [
+                                    ("join", true, over_right_half(rx, ry)),
+                                    ("move_up", k > 0, over_top_left(rx, ry)),
+                                    ("move_down", k + 1 < servers.len(), over_bottom_left(rx, ry)),
+                                ] {
+                                    if shown {
+                                        let lit = if over { "_highlighted" } else { "" };
+                                        batch.sprite_scaled(
+                                            atlas,
+                                            &format!("gui/sprites/server_list/{sprite}{lit}"),
+                                            cx,
+                                            cy,
+                                            32.0,
+                                            32.0,
+                                            u32::MAX,
+                                        );
+                                    }
+                                }
                             }
                         }
                         Row::LanHeader => {
@@ -633,38 +857,88 @@ impl Screen {
                     17.0,
                     u32::MAX,
                 );
-                Self::field(atlas, batch, "Server Name", name, 53.0, *focus == 0, blink);
+                // ManageServerScreen: labels at 53 and 94, boxes at 66 and 106.
+                Self::field(
+                    atlas,
+                    batch,
+                    "Server Name",
+                    name,
+                    (53.0, 66.0),
+                    *focus == 0,
+                    blink,
+                );
                 Self::field(
                     atlas,
                     batch,
                     "Server Address",
                     address,
-                    94.0,
+                    (94.0, 106.0),
                     *focus == 1,
                     blink,
                 );
             }
             Self::Direct { address } => {
-                centered(batch, "Direct Connection", 20.0, u32::MAX);
+                // DirectJoinServerScreen: the title at 20, the label at 100
+                // and the box at 116.
+                centered(
+                    batch,
+                    &crate::lang::get_or("selectServer.direct", "Direct Connection"),
+                    20.0,
+                    u32::MAX,
+                );
                 Self::field(
                     atlas,
                     batch,
-                    "Server Address",
+                    &crate::lang::get_or("addServer.enterIp", "Server Address"),
                     address,
-                    100.0 - 11.0,
+                    (100.0, 116.0),
                     true,
                     blink,
                 );
             }
+            Self::ConfirmDelete { name, lines, .. } => {
+                // ConfirmScreen: the title, then the message wrapped to
+                // width - 50, centred as a block.
+                let warning = format_translation(
+                    &crate::lang::get_or(
+                        "selectServer.deleteWarning",
+                        "'%s' will be lost forever! (A long time!)",
+                    ),
+                    &[Text::literal(name.clone())],
+                );
+                let message = atlas.font.split(&warning, (w.ceil() - 50.0).max(1.0));
+                lines.set(message.len());
+                let top = confirm_top(h, message.len());
+                centered(
+                    batch,
+                    &crate::lang::get_or(
+                        "selectServer.deleteQuestion",
+                        "Are you sure you want to remove this server?",
+                    ),
+                    top,
+                    u32::MAX,
+                );
+                for (i, line) in message.iter().enumerate() {
+                    centered(batch, &line.plain(), top + 17.0 + i as f32 * 9.0, u32::MAX);
+                }
+            }
             Self::Friend { code, relay, focus } => {
                 centered(batch, "Join a Friend", 20.0, u32::MAX);
-                Self::field(atlas, batch, "Invite Code", code, 53.0, *focus == 0, blink);
+                Self::field(
+                    atlas,
+                    batch,
+                    "Invite Code",
+                    code,
+                    (53.0, 64.0),
+                    *focus == 0,
+                    blink,
+                );
                 Self::field(
                     atlas,
                     batch,
                     "Relay (optional)",
                     relay,
-                    94.0,
+                    (94.0, 105.0),
                     *focus == 1,
                     blink,
                 );
@@ -745,11 +1019,45 @@ impl Screen {
                 },
                 Some(44),
             ) => {
-                if let Some(i) = selected.take()
+                // JoinMultiplayerScreen's Delete asks first (ConfirmScreen).
+                if let Some(name) = selected
+                    .and_then(|i| servers.get(i))
+                    .map(|s| s.name.clone())
+                {
+                    let list = std::mem::replace(
+                        self,
+                        Self::Direct {
+                            address: String::new(),
+                        },
+                    );
+                    *self = Self::ConfirmDelete {
+                        list: Box::new(list),
+                        name,
+                        lines: std::cell::Cell::new(1),
+                    };
+                }
+            }
+            // deleteCallback: yes removes the server and clears the
+            // selection; either answer returns to the list as it was.
+            (Self::ConfirmDelete { .. }, Some(id @ (58 | 59))) => {
+                let Self::ConfirmDelete { list, .. } = std::mem::replace(
+                    self,
+                    Self::Direct {
+                        address: String::new(),
+                    },
+                ) else {
+                    unreachable!()
+                };
+                *self = *list;
+                if id == 58
+                    && let Self::List {
+                        servers, selected, ..
+                    } = self
+                    && let Some(i) = selected.take()
                     && i < servers.len()
                 {
                     servers.remove(i);
-                    let _ = servers::save(&servers_file(saves), servers);
+                    save_servers(&servers_file(saves), servers);
                 }
             }
             (Self::List { .. }, Some(45)) => *self = Self::list(saves),
@@ -771,9 +1079,34 @@ impl Screen {
                 if scroll.press((x, y), left + ROW_WIDTH + 8.0, top, bottom, content) {
                     return Outcome::None;
                 }
+                let row = row_at(servers.len(), games, (x, y), (w, h), scroll.amount);
+                // OnlineServerEntry.mouseClicked: the icon's right half joins,
+                // its left quarters move the server up or down (and keep it
+                // selected).
+                if let Some(Row::Server(k)) = row {
+                    let row_top = top + 2.0 - scroll.amount.trunc() + k as f32 * ROW_HEIGHT;
+                    let (rx, ry) = ((x - left - 2.0).floor(), (y - row_top - 2.0).floor());
+                    if over_right_half(rx, ry) {
+                        *selected = Some(k);
+                        return Outcome::Connect(servers[k].ip.clone());
+                    }
+                    let to = if k > 0 && over_top_left(rx, ry) {
+                        Some(k - 1)
+                    } else if k + 1 < servers.len() && over_bottom_left(rx, ry) {
+                        Some(k + 1)
+                    } else {
+                        None
+                    };
+                    if let Some(to) = to {
+                        servers.swap(k, to);
+                        save_servers(&servers_file(saves), servers);
+                        *selected = Some(to);
+                        return Outcome::None;
+                    }
+                }
                 // Clicking a selected row again joins it; the LAN header
                 // takes the click without anything to join.
-                let index = match row_at(servers.len(), games, (x, y), (w, h), scroll.amount) {
+                let index = match row {
                     Some(Row::Server(k)) => Some(k),
                     Some(Row::Lan(k)) => Some(servers.len() + k),
                     Some(Row::LanHeader) => {
@@ -830,8 +1163,16 @@ impl Screen {
                     return Outcome::Connect(format!("{}{code}", crate::net::FRIEND));
                 }
             }
-            (Self::Edit { focus, .. } | Self::Friend { focus, .. }, None) => {
-                for (i, fy) in [(0u8, 53.0 + 11.0), (1, 94.0 + 11.0)] {
+            (Self::Edit { .. } | Self::Friend { .. }, None) => {
+                let boxes = if matches!(self, Self::Edit { .. }) {
+                    [66.0, 106.0]
+                } else {
+                    [64.0, 105.0]
+                };
+                let (Self::Edit { focus, .. } | Self::Friend { focus, .. }) = self else {
+                    unreachable!()
+                };
+                for (i, fy) in [(0u8, boxes[0]), (1, boxes[1])] {
                     if y >= fy && y < fy + 20.0 && (x - w / 2.0).abs() < 100.0 {
                         *focus = i;
                     }
@@ -958,6 +1299,17 @@ impl Screen {
     pub fn escape(&mut self, saves: &Path) -> bool {
         match self {
             Self::List { .. } => true,
+            // ConfirmScreen.keyPressed: Escape answers no.
+            Self::ConfirmDelete { list, .. } => {
+                let list = std::mem::replace(
+                    &mut **list,
+                    Self::Direct {
+                        address: String::new(),
+                    },
+                );
+                *self = list;
+                false
+            }
             _ => {
                 *self = Self::list(saves);
                 false
@@ -992,6 +1344,62 @@ pub fn wrap(text: &str, width: f32, atlas: &HudAtlas) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ping_tooltip_follows_only_visible_status_bars_and_current_ping() {
+        let servers: Vec<_> = (0..6)
+            .map(|i| ServerEntry::new("Test", &format!("server{i}")))
+            .collect();
+        let mut pings = HashMap::new();
+        let size = (427.0, 240.0);
+        let hover = |pings: &HashMap<String, Ping>, scroll, cursor| {
+            ping_tooltip(&servers, pings, size, scroll, cursor).map(|t| t.plain())
+        };
+        // The first bar is at (349, 37), with a 10 by 8 hit area.
+        assert_eq!(
+            hover(&pings, 0.0, (349.0, 37.0)).as_deref(),
+            Some("Pinging...")
+        );
+        pings.insert(
+            "server0".into(),
+            Ping::Ok {
+                motd: Text::empty(),
+                players: None,
+                ms: 42,
+                version: String::new(),
+            },
+        );
+        assert_eq!(hover(&pings, 0.0, (358.9, 44.9)).as_deref(), Some("42 ms"));
+        pings.insert("server1".into(), Ping::Pinging);
+        for cursor in [
+            (348.9, 37.0),
+            (359.0, 37.0),
+            (349.0, 36.9),
+            (349.0, 45.0),
+            (100.0, 40.0),
+            (349.0, 32.0),
+            (349.0, 181.0),
+        ] {
+            assert!(hover(&pings, 0.0, cursor).is_none(), "{cursor:?}");
+        }
+        // Scrolling moves the next row's bars into the same location.
+        assert_eq!(
+            hover(&pings, 36.0, (349.0, 37.0)).as_deref(),
+            Some("Pinging...")
+        );
+        assert_eq!(hover(&pings, 5.0, (349.0, 34.0)).as_deref(), Some("42 ms"));
+        assert!(hover(&pings, 36.0, (349.0, 33.0)).is_none());
+        assert!(hover(&pings, 0.0, (349.0, 179.0)).is_none());
+        assert!(hover(&pings, 216.0, (349.0, 37.0)).is_none()); // LAN header
+        pings.insert(
+            "server0".into(),
+            Ping::Failed("private connection error".into()),
+        );
+        assert_eq!(
+            hover(&pings, 0.0, (349.0, 37.0)).as_deref(),
+            Some("(no connection)")
+        );
+    }
 
     #[test]
     fn the_lan_header_follows_the_saved_servers() {
@@ -1032,5 +1440,169 @@ mod tests {
             frames,
             ["O o o", "O o o", "o O o", "o o O", "o O o", "O o o"]
         );
+    }
+
+    #[test]
+    fn player_count_is_dark_gray_with_gray_numbers() {
+        assert_eq!(
+            Ping::player_count(Some((3, 20))).component(),
+            serde_json::json!({
+                "translate": "multiplayer.status.player_count",
+                "with": [{"text": "3", "color": "gray"}, {"text": "20", "color": "gray"}],
+                "color": "dark_gray",
+            })
+        );
+        assert_eq!(
+            Ping::player_count(None).component(),
+            serde_json::json!({"translate": "multiplayer.status.unknown", "color": "dark_gray"})
+        );
+    }
+
+    fn png(size: u32) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut encoder = png::Encoder::new(&mut out, size, size);
+        encoder.set_color(png::ColorType::Rgba);
+        let mut writer = encoder.write_header().unwrap();
+        writer
+            .write_image_data(&vec![200; (size * size * 4) as usize])
+            .unwrap();
+        writer.finish().unwrap();
+        out
+    }
+
+    #[test]
+    fn favicons_are_64_pixel_pngs_behind_the_data_url() {
+        let icon = png(64);
+        let encoded = crate::lan::base64(&icon);
+        let (a, b) = encoded.split_at(10);
+        let json = serde_json::json!({ "favicon": format!("data:image/png;base64,{a}\n{b}") });
+        let bytes = favicon_bytes(&json).unwrap();
+        assert_eq!(bytes, icon);
+        assert_eq!(icon_pixels(&bytes).unwrap().len(), 64 * 64 * 4);
+        // FaviconTexture refuses other sizes; other formats are not icons.
+        assert!(icon_pixels(&png(32)).is_none());
+        assert!(favicon_bytes(&serde_json::json!({ "favicon": encoded })).is_none());
+    }
+
+    #[test]
+    fn icon_arrows_join_and_move_servers() {
+        let dir = std::env::temp_dir().join(format!("horizon-mp-arrows-{}", std::process::id()));
+        let saves = dir.join("saves");
+        std::fs::create_dir_all(&saves).unwrap();
+        let file = servers_file(&saves);
+        let names = ["a", "b", "c"];
+        let list: Vec<ServerEntry> = names
+            .iter()
+            .map(|n| ServerEntry::new(n, &format!("127.0.0.1:{}", 1 + n.len())))
+            .collect();
+        servers::save(&file, &list).unwrap();
+        let mut screen = Screen::list(&saves);
+        let size = (427.0, 240.0);
+        let order = |screen: &Screen| match screen {
+            Screen::List {
+                servers, selected, ..
+            } => (
+                servers.iter().map(|s| s.name.clone()).collect::<Vec<_>>(),
+                *selected,
+            ),
+            _ => unreachable!(),
+        };
+        // 427x240: rows start at x 61, the first icon at (63, 37).
+        let (ix, iy) = (63.0, 37.0);
+        // The first server has no up arrow: its top-left quarter selects it.
+        assert!(matches!(
+            screen.click(None, ix + 4.0, iy + 4.0, size, &saves),
+            Outcome::None
+        ));
+        assert_eq!(
+            order(&screen),
+            (vec!["a".into(), "b".into(), "c".into()], Some(0))
+        );
+        // Bottom-left quarter: down, saved, and still selected.
+        screen.click(None, ix + 4.0, iy + 20.0, size, &saves);
+        assert_eq!(
+            order(&screen),
+            (vec!["b".into(), "a".into(), "c".into()], Some(1))
+        );
+        let saved: Vec<String> = servers::load(&file).into_iter().map(|s| s.name).collect();
+        assert_eq!(saved, ["b", "a", "c"]);
+        // Top-left quarter of the second row: back up.
+        screen.click(None, ix + 4.0, iy + ROW_HEIGHT + 4.0, size, &saves);
+        assert_eq!(
+            order(&screen),
+            (vec!["a".into(), "b".into(), "c".into()], Some(0))
+        );
+        // The right half joins at once.
+        match screen.click(None, ix + 20.0, iy + 2.0 * ROW_HEIGHT + 10.0, size, &saves) {
+            Outcome::Connect(address) => assert_eq!(address, list[2].ip),
+            _ => panic!("the join arrow connects"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn delete_asks_before_removing_the_server() {
+        let dir = std::env::temp_dir().join(format!("horizon-mp-delete-{}", std::process::id()));
+        let saves = dir.join("saves");
+        std::fs::create_dir_all(&saves).unwrap();
+        let file = servers_file(&saves);
+        let list = vec![
+            ServerEntry::new("Keep", "127.0.0.1:2"),
+            ServerEntry::new("Gone", "127.0.0.1:3"),
+        ];
+        servers::save(&file, &list).unwrap();
+        let size = (427.0, 240.0);
+        let names =
+            || -> Vec<String> { servers::load(&file).into_iter().map(|s| s.name).collect() };
+        let mut screen = Screen::list(&saves);
+        let select = |screen: &mut Screen| {
+            if let Screen::List { selected, .. } = screen {
+                *selected = Some(1);
+            }
+        };
+        select(&mut screen);
+        // Delete opens the ConfirmScreen: nothing is removed yet.
+        screen.click(Some(44), 0.0, 0.0, size, &saves);
+        assert!(matches!(&screen, Screen::ConfirmDelete { name, .. } if name == "Gone"));
+        let labels: Vec<(f32, f32, String, u8)> = screen
+            .buttons(size.0, size.1)
+            .into_iter()
+            .map(|b| (b.0, b.1, b.3, b.5))
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                (61.0, 135.0, "Delete".to_owned(), 58),
+                (215.0, 135.0, "Cancel".to_owned(), 59),
+            ]
+        );
+        assert_eq!(names(), ["Keep", "Gone"]);
+        // Cancel and Escape return to the list with the selection kept.
+        screen.click(Some(59), 0.0, 0.0, size, &saves);
+        assert!(matches!(
+            &screen,
+            Screen::List {
+                selected: Some(1),
+                ..
+            }
+        ));
+        screen.click(Some(44), 0.0, 0.0, size, &saves);
+        assert!(!screen.escape(&saves));
+        assert!(matches!(
+            &screen,
+            Screen::List {
+                selected: Some(1),
+                ..
+            }
+        ));
+        assert_eq!(names(), ["Keep", "Gone"]);
+        // Delete removes it, saves, and clears the selection.
+        screen.click(Some(44), 0.0, 0.0, size, &saves);
+        screen.click(Some(58), 0.0, 0.0, size, &saves);
+        assert!(
+            matches!(&screen, Screen::List { selected: None, servers, .. } if servers.len() == 1)
+        );
+        assert_eq!(names(), ["Keep"]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

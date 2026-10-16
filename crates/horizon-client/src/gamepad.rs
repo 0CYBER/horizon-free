@@ -385,6 +385,9 @@ pub fn steam_keyboard(choice: TextKeyboard) -> bool {
 pub struct PadSettings {
     pub enabled: bool,
     pub vibration: bool,
+    /// A DualSense's triggers push back (Horizon's; docs/controllers.md).
+    pub adaptive_triggers: bool,
+    pub lightbar: Lightbar,
     /// 0..1; 0.5 is the default speed, 1 twice that.
     pub look_sensitivity: f32,
     pub invert_x: bool,
@@ -407,6 +410,8 @@ impl Default for PadSettings {
         Self {
             enabled: true,
             vibration: true,
+            adaptive_triggers: true,
+            lightbar: Lightbar::Health,
             look_sensitivity: 0.5,
             invert_x: false,
             invert_y: false,
@@ -460,6 +465,8 @@ impl PadSettings {
             match key.trim() {
                 "enabled" => s.enabled = flag(s.enabled),
                 "vibration" => s.vibration = flag(s.vibration),
+                "adaptiveTriggers" => s.adaptive_triggers = flag(s.adaptive_triggers),
+                "lightbar" => s.lightbar = Lightbar::parse(value),
                 "lookSensitivity" => s.look_sensitivity = unit(s.look_sensitivity),
                 "invertX" => s.invert_x = flag(s.invert_x),
                 "invertY" => s.invert_y = flag(s.invert_y),
@@ -490,9 +497,11 @@ impl PadSettings {
     }
     pub fn serialize(&self) -> String {
         let mut text = format!(
-            "enabled:{}\nvibration:{}\nlookSensitivity:{}\ninvertX:{}\ninvertY:{}\nmoveDeadzone:{}\nlookDeadzone:{}\ntriggerThreshold:{}\ntoggleSneak:{}\nglyphs:{}\nmenuNavigation:{}\nkeyboard:{}\n",
+            "enabled:{}\nvibration:{}\nadaptiveTriggers:{}\nlightbar:{}\nlookSensitivity:{}\ninvertX:{}\ninvertY:{}\nmoveDeadzone:{}\nlookDeadzone:{}\ntriggerThreshold:{}\ntoggleSneak:{}\nglyphs:{}\nmenuNavigation:{}\nkeyboard:{}\n",
             bool_text(self.enabled),
             bool_text(self.vibration),
+            bool_text(self.adaptive_triggers),
+            self.lightbar.name(),
             self.look_sensitivity,
             bool_text(self.invert_x),
             bool_text(self.invert_y),
@@ -945,6 +954,179 @@ impl Rumble {
             }),
         }
     }
+
+    /// The pulse shaped, for a pad that plays steps (a DualSense): a hit starts at full
+    /// strength and dies away, an explosion rolls on, a totem swells; a broken block is a tick.
+    pub fn shape(self) -> Vec<Pulse> {
+        let Some(p) = self.pulse() else {
+            return Vec::new();
+        };
+        let step = |level: f32, millis: u32| Pulse {
+            strong: p.strong * level,
+            weak: p.weak * level,
+            millis,
+        };
+        match self {
+            Rumble::BlockBroken => vec![Pulse { millis: 35, ..p }],
+            Rumble::Hurt(_) => {
+                let tail = p.millis.saturating_sub(50) / 2;
+                vec![step(1.0, 50), step(0.55, tail), step(0.25, tail)]
+            }
+            Rumble::Explosion { .. } => vec![
+                step(1.0, 80),
+                step(0.6, 150),
+                step(0.35, 150),
+                step(0.15, 150),
+            ],
+            Rumble::Totem => vec![
+                step(0.4, 100),
+                step(0.7, 100),
+                step(1.0, 200),
+                step(0.5, 100),
+            ],
+        }
+    }
+}
+
+/// What a trigger feels like on a DualSense, from what its action is doing (docs/controllers.md
+/// "Adaptive triggers" for the choices). Only the pad's official modes: Nielk1's notes warn the
+/// others may leave the firmware.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TriggerFeel {
+    Free,
+    /// Drawing a bow, charging a trident, loading a crossbow: resistance that grows with the
+    /// charge, 0..1.
+    Draw(f32),
+    /// A loaded crossbow: a gun trigger's catch that gives way where it fires.
+    Click,
+    /// Pulling it boosts (a rocket while gliding, the stick while riding a pig or a strider):
+    /// a lighter catch that gives way where it fires.
+    Boost,
+    /// A shield in the use hand, raised or ready: its weight.
+    Brace,
+    /// That shield disabled by an axe: the trigger locks until it recovers.
+    Locked,
+    /// Mining a block of this hardness: a buzz, stronger and slower on harder blocks.
+    Texture(f32),
+}
+impl TriggerFeel {
+    /// The effect, for a trigger that presses its action at `threshold` (0..1) of its travel.
+    pub fn effect(self, threshold: f32) -> horizon_dualsense::TriggerEffect {
+        use horizon_dualsense::trigger;
+        // The zone (of ten along the travel) where the action presses: a catch gives way there,
+        // so the click and the shot coincide.
+        let press = ((threshold.clamp(0.0, 1.0) * 10.0) as u8).clamp(3, 8);
+        match self {
+            TriggerFeel::Free => horizon_dualsense::TRIGGER_OFF,
+            // From the third zone, so the press itself stays light; at most 6 of 8, as the
+            // draw is held.
+            TriggerFeel::Draw(charge) => {
+                trigger::feedback(2, 1 + (5.0 * charge.clamp(0.0, 1.0)).round() as u8)
+            }
+            TriggerFeel::Click => trigger::weapon((press - 2).max(2), press, 8),
+            TriggerFeel::Boost => trigger::weapon((press - 2).max(2), press, 5),
+            TriggerFeel::Brace => trigger::feedback(2, 3),
+            TriggerFeel::Locked => trigger::feedback(1, 8),
+            TriggerFeel::Texture(hardness) if hardness > 0.0 => {
+                // Dirt 2, stone 3, deepslate 4, obsidian 5 of 8.
+                let amplitude = (1.0 + 1.6 * hardness.sqrt()).round().clamp(1.0, 5.0);
+                // Sand and dirt a fine 40 Hz grit; stone 30; wood, deepslate and ores 20;
+                // obsidian a 10 Hz chisel.
+                let hertz = match hardness {
+                    h if h < 1.0 => 40,
+                    h if h < 2.0 => 30,
+                    h if h < 5.0 => 20,
+                    _ => 10,
+                };
+                trigger::vibration(1, amplitude as u8, hertz)
+            }
+            TriggerFeel::Texture(_) => horizon_dualsense::TRIGGER_OFF,
+        }
+    }
+}
+impl PadSettings {
+    /// The left and right triggers' effects: each feels the action bound to it, `key.use` or
+    /// `key.attack`.
+    pub fn trigger_effects(
+        &self,
+        using: TriggerFeel,
+        attacking: TriggerFeel,
+    ) -> [horizon_dualsense::TriggerEffect; 2] {
+        [Button::LeftTrigger, Button::RightTrigger].map(|trigger| {
+            let actions = self.actions_of(trigger);
+            let feel = if !self.adaptive_triggers {
+                TriggerFeel::Free
+            } else if actions.contains(&"key.use") {
+                using
+            } else if actions.contains(&"key.attack") {
+                attacking
+            } else {
+                TriggerFeel::Free
+            };
+            feel.effect(self.trigger_threshold)
+        })
+    }
+}
+/// What a DualSense's lightbar shows (`lightbar:`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lightbar {
+    /// Green at full health through amber to red.
+    Health,
+    /// A colour per dimension.
+    Dimension,
+    /// The pad's own.
+    Off,
+}
+impl Lightbar {
+    pub const ALL: [Lightbar; 3] = [Lightbar::Health, Lightbar::Dimension, Lightbar::Off];
+    pub fn name(self) -> &'static str {
+        match self {
+            Lightbar::Health => "health",
+            Lightbar::Dimension => "dimension",
+            Lightbar::Off => "off",
+        }
+    }
+    pub fn parse(name: &str) -> Self {
+        match name.trim() {
+            "dimension" => Lightbar::Dimension,
+            "off" => Lightbar::Off,
+            _ => Lightbar::Health,
+        }
+    }
+    /// The colour for a player with this share of their health in this dimension; at half
+    /// brightness, as the pad's full light is glaring.
+    pub fn colour(self, health: f32, dimension: &str) -> Option<[u8; 3]> {
+        let rgb = match self {
+            Lightbar::Off => return None,
+            Lightbar::Health => {
+                // Green to amber over the top half, amber to red below it.
+                let (green, amber, red) = (
+                    [34.0, 197.0, 94.0],
+                    [245.0, 158.0, 11.0],
+                    [239.0, 68.0, 68.0],
+                );
+                let h = health.clamp(0.0, 1.0);
+                let (from, to, k) = if h >= 0.5 {
+                    (amber, green, (h - 0.5) * 2.0)
+                } else {
+                    (red, amber, h * 2.0)
+                };
+                [0, 1, 2].map(|i| from[i] + (to[i] - from[i]) * k)
+            }
+            Lightbar::Dimension => match dimension {
+                "minecraft:the_nether" => [234.0, 88.0, 12.0],
+                "minecraft:the_end" => [139.0, 92.0, 246.0],
+                _ => [14.0, 165.0, 233.0],
+            },
+        };
+        Some(rgb.map(|v| (v * 0.5).round() as u8))
+    }
+}
+
+/// `BowItem.getPowerForTime`: a bow's draw after this many ticks, 0..1.
+pub fn bow_power(ticks: u32) -> f32 {
+    let f = ticks as f32 / 20.0;
+    ((f * f + f * 2.0) / 3.0).min(1.0)
 }
 
 #[cfg(test)]
@@ -1223,6 +1405,76 @@ mod tests {
     }
 
     #[test]
+    fn triggers_feel_their_action() {
+        use horizon_dualsense::{TRIGGER_OFF, trigger};
+        let mut s = PadSettings::default();
+        // Use is LT, attack RT by default.
+        let [left, right] = s.trigger_effects(TriggerFeel::Draw(1.0), TriggerFeel::Texture(1.5));
+        assert_eq!(left, trigger::feedback(2, 6));
+        assert_eq!(right, trigger::vibration(1, 3, 30));
+        assert_eq!(
+            s.trigger_effects(TriggerFeel::Draw(0.0), TriggerFeel::Free),
+            [trigger::feedback(2, 1), TRIGGER_OFF]
+        );
+        // The catch gives way in the zone where the default threshold (0.4) presses: weapon
+        // 0x25, zones 2 and 4, strength 8 (stored 7) or 5 (stored 4).
+        let catch = |strength| [0x25, 0x14, 0x00, strength, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(TriggerFeel::Click.effect(0.4), catch(7));
+        assert_eq!(TriggerFeel::Boost.effect(0.4), catch(4));
+        // A deeper threshold moves it: zones 5 and 7.
+        assert_eq!(TriggerFeel::Click.effect(0.7)[1..3], [0xa0, 0x00]);
+        assert_eq!(TriggerFeel::Click.effect(0.1), trigger::weapon(2, 3, 8));
+        assert_eq!(TriggerFeel::Brace.effect(0.4), trigger::feedback(2, 3));
+        assert_eq!(TriggerFeel::Locked.effect(0.4), trigger::feedback(1, 8));
+        // Harder blocks buzz harder and slower; instant-break blocks don't.
+        assert_eq!(
+            TriggerFeel::Texture(0.5).effect(0.4),
+            trigger::vibration(1, 2, 40)
+        );
+        assert_eq!(
+            TriggerFeel::Texture(3.0).effect(0.4),
+            trigger::vibration(1, 4, 20)
+        );
+        assert_eq!(
+            TriggerFeel::Texture(50.0).effect(0.4),
+            trigger::vibration(1, 5, 10)
+        );
+        assert_eq!(TriggerFeel::Texture(0.0).effect(0.4), TRIGGER_OFF);
+        assert_eq!(TriggerFeel::Texture(-1.0).effect(0.4), TRIGGER_OFF);
+        s.adaptive_triggers = false;
+        assert_eq!(
+            s.trigger_effects(TriggerFeel::Click, TriggerFeel::Boost),
+            [TRIGGER_OFF; 2]
+        );
+        assert!(!PadSettings::parse(&s.serialize()).adaptive_triggers);
+    }
+
+    #[test]
+    fn lightbar_colours() {
+        let full = Lightbar::Health.colour(1.0, "minecraft:overworld").unwrap();
+        let empty = Lightbar::Health.colour(0.0, "minecraft:overworld").unwrap();
+        assert!(full[1] > full[0], "green at full health: {full:?}");
+        assert!(empty[0] > empty[1], "red when dying: {empty:?}");
+        assert_eq!(Lightbar::Health.colour(0.5, ""), Some([123, 79, 6]));
+        assert_ne!(
+            Lightbar::Dimension.colour(1.0, "minecraft:the_nether"),
+            Lightbar::Dimension.colour(1.0, "minecraft:overworld")
+        );
+        assert_eq!(Lightbar::Off.colour(1.0, ""), None);
+        for l in Lightbar::ALL {
+            assert_eq!(Lightbar::parse(l.name()), l);
+        }
+    }
+
+    #[test]
+    fn bow_draw() {
+        assert_eq!(bow_power(0), 0.0);
+        assert!((bow_power(10) - 5.0 / 12.0).abs() < 1e-6);
+        assert_eq!(bow_power(20), 1.0);
+        assert_eq!(bow_power(40), 1.0);
+    }
+
+    #[test]
     fn rumble_pulses() {
         let small = Rumble::Hurt(1.0).pulse().unwrap();
         let big = Rumble::Hurt(10.0).pulse().unwrap();
@@ -1251,6 +1503,26 @@ mod tests {
             None
         );
         assert_eq!(Rumble::BlockBroken.pulse().unwrap().strong, 0.0);
+        // Shapes open at the pulse's strength and fade; nothing for what isn't felt.
+        for rumble in [
+            Rumble::Hurt(4.0),
+            Rumble::Explosion {
+                distance: 2.0,
+                radius: 4.0,
+            },
+        ] {
+            let (pulse, shape) = (rumble.pulse().unwrap(), rumble.shape());
+            assert_eq!(shape[0].strong, pulse.strong);
+            assert!(shape.windows(2).all(|w| w[1].strong < w[0].strong));
+        }
+        let hurt: u32 = Rumble::Hurt(4.0).shape().iter().map(|s| s.millis).sum();
+        assert!(hurt.abs_diff(Rumble::Hurt(4.0).pulse().unwrap().millis) <= 1);
+        assert_eq!(
+            Rumble::Totem.shape().iter().map(|s| s.millis).sum::<u32>(),
+            500
+        );
+        assert_eq!(Rumble::BlockBroken.shape()[0].millis, 35);
+        assert!(Rumble::Hurt(0.0).shape().is_empty());
     }
 
     #[test]

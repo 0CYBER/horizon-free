@@ -12,13 +12,14 @@ use horizon_client::{
     entities::Experience,
     items::ItemStack,
     lan::{guest::SPECTATOR, menu::Rules},
-    motion::PlayerMotion,
+    motion::{MotionWorld, PlayerMotion},
 };
 use horizon_core::geometry::Vec3;
 use horizon_protocol::{
     packets::play::{self, Clientbound as C, Serverbound as S},
     text::literal,
 };
+use horizon_world::entity_move::EntityMoveWorld;
 use winit::keyboard::KeyCode;
 
 /// Per-guest state of the gameplay code that lives outside `Guest`.
@@ -37,6 +38,8 @@ pub(super) struct GuestPlay {
     swung: bool,
     /// The trading screen the guest has open.
     pub(super) merchant: Option<super::lan_trading::GuestMerchant>,
+    /// The inventory menu and the crafting table the guest crafts in.
+    pub(super) crafting: super::lan_crafting::GuestCrafting,
 }
 
 struct ItemRules<'a>(&'a horizon_client::items::Items);
@@ -126,6 +129,10 @@ impl Game<'_> {
             self.keys.remove(&KeyCode::ShiftLeft);
         }
         let screen = std::mem::replace(&mut self.screen, Screen::Playing);
+        // The host's crafting grid stays theirs; a crafting table the guest
+        // opens shows as the 3x3 size.
+        let craft_size = std::mem::replace(&mut self.craft_size, 2);
+        let craft_grid = std::mem::replace(&mut self.craft_grid, vec![None; 9]);
         let container = self.container.take();
         let mining = std::mem::replace(&mut self.mining, play.mining.take());
         let destroy_delay = std::mem::replace(&mut self.destroy_delay, play.destroy_delay);
@@ -145,6 +152,8 @@ impl Game<'_> {
 
         // What the action opened: handed to the guest instead of the host.
         let opened = self.container.take();
+        let opened_table = std::mem::replace(&mut self.craft_size, craft_size) == 3;
+        self.craft_grid = craft_grid;
         let opened_station = std::mem::replace(&mut self.station, host_station);
         self.riding = riding;
         self.left = left;
@@ -200,11 +209,18 @@ impl Game<'_> {
             host.hub.set_game_mode(conn, new_mode);
         }
         host.play.insert(conn, play);
-        if let Some(pos) = opened {
-            self.lan_open_container(host, conn, pos);
+        if let Some(pos) = opened
+            && !self.lan_open_container(host, conn, pos)
+            && !host.hub.guests[i].spectator()
+        {
+            // Nothing the guest can use opened: its lid closes again.
+            self.container_openers_changed(pos, false);
         }
         if let Some(station) = opened_station {
             self.lan_station_opened(host, conn, station);
+        }
+        if opened_table {
+            self.lan_open_crafting(host, conn);
         }
         Some(result)
     }
@@ -221,19 +237,20 @@ impl Game<'_> {
         self.creative = self.mode == GameMode::Creative;
     }
 
-    /// Hand a container the guest opened over (ServerPlayer.openMenu).
-    fn lan_open_container(&mut self, host: &mut LanHost, conn: u32, pos: (i32, i32, i32)) {
+    /// Hand a container the guest opened over (ServerPlayer.openMenu);
+    /// false when it is not one a guest can open.
+    fn lan_open_container(&mut self, host: &mut LanHost, conn: u32, pos: (i32, i32, i32)) -> bool {
         let Some(entity) = self.world.block_entities.get(&pos) else {
-            return;
+            return false;
         };
         let (menu, title) = match entity {
             BlockEntity::Chest(items) => match items.len() {
                 27 => ("minecraft:generic_9x3", "container.chest"),
                 9 => ("minecraft:generic_3x3", "container.dispenser"),
                 5 => ("minecraft:hopper", "container.hopper"),
-                _ => return,
+                _ => return false,
             },
-            _ => return,
+            _ => return false,
         };
         let name = &self
             .res
@@ -247,6 +264,8 @@ impl Game<'_> {
             _ => title,
         };
         let items = entity.slots().to_vec();
+        // ServerPlayer.openMenu closes the menu that was open.
+        self.guest_container_closed(host, conn);
         host.hub.open_container(
             conn,
             menu,
@@ -254,6 +273,18 @@ impl Game<'_> {
             pos,
             items,
         );
+        true
+    }
+
+    /// The guest's open container is closing (`AbstractContainerMenu.removed`):
+    /// it no longer counts among the openers of the lid.
+    pub(super) fn guest_container_closed(&mut self, host: &mut LanHost, conn: u32) {
+        if let Some(g) = host.hub.guest(conn)
+            && let Some(pos) = g.menu.as_ref().and_then(|m| m.pos)
+            && !g.spectator()
+        {
+            self.container_openers_changed(pos, false);
+        }
     }
 
     /// A packet from a guest that the hub does not handle itself.
@@ -392,6 +423,8 @@ impl Game<'_> {
                 host.hub.guests[gi].set_menu_slot(p.slot as usize, item);
             }
             S::ContainerClick(p) if self.lan_merchant_click(host, conn, &p) => {}
+            S::ContainerClick(p) if self.lan_inventory_click(host, conn, &p) => {}
+            S::ContainerClick(p) if self.lan_crafting_click(host, conn, &p) => {}
             S::SelectTrade(p) => self.lan_select_trade(host, conn, p.item),
             S::ContainerClose(p) if self.lan_merchant_closed(host, conn, Some(p.container)) => {
                 let g = &mut host.hub.guests[gi];
@@ -399,12 +432,25 @@ impl Game<'_> {
                     self.drop_guest_items(host, gi, vec![c]);
                 }
             }
+            S::ContainerClose(p) if self.lan_crafting_closed(host, conn, Some(p.container)) => {
+                let g = &mut host.hub.guests[gi];
+                if let Some(c) = g.carried.take() {
+                    self.drop_guest_items(host, gi, vec![c]);
+                }
+            }
             S::ContainerClick(p) => {
                 let rules = ItemRules(&self.res.items);
-                let drops = host.hub.container_click(conn, p, &mut self.world, &rules);
+                let drops = host.hub.container_click(conn, &p, &mut self.world, &rules);
                 self.drop_guest_items(host, gi, drops);
             }
             S::ContainerClose(p) => {
+                if host.hub.guests[gi]
+                    .menu
+                    .as_ref()
+                    .is_some_and(|m| m.window == p.container)
+                {
+                    self.guest_container_closed(host, conn);
+                }
                 host.hub.container_closed(conn, p.container);
                 let g = &mut host.hub.guests[gi];
                 if let Some(c) = g.carried.take() {
@@ -553,7 +599,7 @@ impl Game<'_> {
         let words: Vec<&str> = command.trim_start_matches('/').split(' ').collect();
         if words[0] == "list" && (words.len() == 1 || words[1..] == ["uuids"]) {
             let me = (self.options.dedicated.is_none() && self.player.is_some())
-                .then_some((host.host_uuid, super::chat::PLAYER_NAME));
+                .then_some((host.host_uuid, host.host_name.as_str()));
             let content = host.hub.list_reply(me, words.len() == 2);
             host.hub.send_to(
                 conn,
@@ -564,7 +610,10 @@ impl Game<'_> {
             );
             return;
         }
-        if !host.settings.guest_commands || !self.cheats {
+        // A LAN world follows its Allow Commands; a dedicated server leaves
+        // it to the ops list (the guest's permission level).
+        let allowed = self.options.dedicated.is_some() || self.allow_commands();
+        if !host.settings.guest_commands || !allowed {
             host.hub.send_to(
                 conn,
                 &C::SystemChat(play::SystemChat {
@@ -698,6 +747,7 @@ impl Game<'_> {
                     }
                 });
             }
+            self.guest_server_tick(host, conn);
             self.guest_dig_feedback(host, conn);
             self.guest_pickups(host, gi);
             let g = &mut host.hub.guests[gi];
@@ -713,6 +763,51 @@ impl Game<'_> {
                 );
             }
         }
+    }
+
+    /// The guest's body on the server each tick: ServerPlayer.tick's damage
+    /// clock and Entity.baseTick's fluid phase, then
+    /// ServerPlayer.doCheckFallDamage for each move the guest made (the fall
+    /// distance grows while they go down and hurts them where they land, as
+    /// the host's own landing does; water resets it, lava halves it), then
+    /// regeneration and the food tick (ServerPlayer.doTick).
+    fn guest_server_tick(&mut self, host: &mut LanHost, conn: u32) {
+        let Some(g) = host.hub.guest_mut(conn) else {
+            return;
+        };
+        let moves = std::mem::take(&mut g.moves);
+        if g.spectator() {
+            return;
+        }
+        self.as_guest(host, conn, |game| {
+            let (rules, health) = (game.world.health_rules, &game.motion.health);
+            let Some(player) = game.player.as_mut() else {
+                return;
+            };
+            let mut w = MotionWorld {
+                player,
+                scene: &mut game.world,
+                assets: &game.res.assets,
+                collision_binding: game.collision,
+                resources: game.motion,
+            };
+            w.player.health.advance_clock();
+            let _ = w.fluid_base_tick();
+            for (moved, on_ground) in moves {
+                let movement = Vec3::new(moved[0], moved[1], moved[2]);
+                let landed = (|| -> horizon_client::Result<()> {
+                    w.set_on_ground_with_movement(on_ground, false, movement)?;
+                    let pos = w.legacy_on_position()?;
+                    let state = w.block_state(pos)?;
+                    w.check_fall_damage(moved[1], on_ground, state, pos)
+                })();
+                if landed.is_err() {
+                    break;
+                }
+            }
+            let _ = w.player.peaceful_regeneration(rules);
+            let _ = w.player.food_tick(health, rules);
+        });
     }
 
     /// The crack animation other players see.

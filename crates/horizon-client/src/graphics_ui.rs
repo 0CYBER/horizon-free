@@ -22,6 +22,8 @@ pub enum Level {
 pub enum H {
     Preset,
     CaveCulling,
+    CullLeaves,
+    EntityCulling,
     ChunkUpdates,
     UploadBudget,
     Sky,
@@ -35,6 +37,7 @@ pub enum H {
     ResolutionScale,
     Antialiasing,
     BatteryMode,
+    ShaderPack,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,6 +118,16 @@ pub fn rows(level: Level) -> Vec<Row> {
                 H::CaveCulling,
                 None,
                 "Skips terrain hidden behind closed sections. Off costs a lot.",
+            ),
+            h(
+                H::CullLeaves,
+                None,
+                "Hides shared leaf and mangrove root faces; foliage can look less dense.",
+            ),
+            h(
+                H::EntityCulling,
+                None,
+                "Hides models behind opaque blocks. Entities update. Off with custom packs.",
             ),
             h(
                 H::ChunkUpdates,
@@ -213,6 +226,11 @@ pub fn rows(level: Level) -> Vec<Row> {
                 None,
                 "Lowers the frame rate when minimised, or idle too.",
             ),
+            h(
+                H::ShaderPack,
+                High,
+                "Redraws the world with a pack from shaderpacks/. Off is vanilla.",
+            ),
             Row::Header("Preferences"),
             v(Opt::ViewBobbing, None, "Sways the view while walking."),
             v(Opt::ChunkFade, None, "Fades newly loaded chunks in."),
@@ -276,6 +294,8 @@ impl H {
         match self {
             H::Preset => labelled("Preset", g.preset.label()),
             H::CaveCulling => labelled("Cave Culling", on_off(g.cave_culling)),
+            H::CullLeaves => labelled("Cull Leaves", on_off(g.cull_leaves)),
+            H::EntityCulling => labelled("Entity Culling", on_off(g.entity_culling)),
             H::ChunkUpdates => match g.chunk_updates {
                 0 => labelled("Chunk Updates", "Unlimited"),
                 n => labelled("Chunk Updates", format!("{n} per frame")),
@@ -304,6 +324,10 @@ impl H {
             H::ResolutionScale => labelled("Resolution Scale", format!("{}%", g.resolution_scale)),
             H::Antialiasing => labelled("Anti-aliasing", if g.fxaa { "FXAA" } else { "Off" }),
             H::BatteryMode => labelled("Battery Mode", on_off(g.battery)),
+            H::ShaderPack => match g.shader_pack.as_str() {
+                "" => labelled("Shader Pack", "Off"),
+                id => labelled("Shader Pack", id),
+            },
             H::Overlay => labelled(
                 "Performance Overlay",
                 match g.overlay {
@@ -342,6 +366,8 @@ impl H {
         let g = &mut s.horizon;
         match self {
             H::CaveCulling => g.cave_culling = !g.cave_culling,
+            H::CullLeaves => g.cull_leaves = !g.cull_leaves,
+            H::EntityCulling => g.entity_culling = !g.entity_culling,
             H::Sky => g.sky = !g.sky,
             H::Fog => g.fog = !g.fog,
             H::Weather => g.weather = !g.weather,
@@ -349,6 +375,17 @@ impl H {
             H::PresentMode => g.present_mode = step(&PresentMode::ALL, g.present_mode, back),
             H::Antialiasing => g.fxaa = !g.fxaa,
             H::BatteryMode => g.battery = !g.battery,
+            H::ShaderPack => {
+                // Off, then every pack in shaderpacks/ by folder name.
+                let dir = std::env::current_dir()
+                    .unwrap_or_default()
+                    .join(crate::shader_pack::DIR);
+                let mut all = vec![String::new()];
+                all.extend(crate::shader_pack::list(&dir).into_iter().map(|(id, _)| id));
+                let i = all.iter().position(|x| *x == g.shader_pack).unwrap_or(0);
+                let n = all.len();
+                g.shader_pack = all[if back { (i + n - 1) % n } else { (i + 1) % n }].clone();
+            }
             H::Pacing => {
                 g.pacing = match g.pacing {
                     Pacing::Efficient => Pacing::Precise,
@@ -376,6 +413,8 @@ impl Item {
         let g = &s.horizon;
         Some(match self {
             Item::Horizon(H::CaveCulling) => g.cave_culling,
+            Item::Horizon(H::CullLeaves) => g.cull_leaves,
+            Item::Horizon(H::EntityCulling) => g.entity_culling,
             Item::Horizon(H::Sky) => g.sky,
             Item::Horizon(H::Fog) => g.fog,
             Item::Horizon(H::Weather) => g.weather,
@@ -433,7 +472,13 @@ impl Item {
         let presetless = matches!(
             self,
             Item::Horizon(
-                H::Preset | H::Overlay | H::Pacing | H::PresentMode | H::Workers | H::BatteryMode
+                H::Preset
+                    | H::Overlay
+                    | H::Pacing
+                    | H::PresentMode
+                    | H::Workers
+                    | H::BatteryMode
+                    | H::ShaderPack
             ) | Item::Vanilla(
                 Opt::GuiScale
                     | Opt::Fullscreen
@@ -826,6 +871,25 @@ mod tests {
     }
 
     #[test]
+    fn the_shader_pack_row_is_off_by_default_and_outside_presets() {
+        let mut s = Settings::default();
+        let row = Item::Horizon(H::ShaderPack);
+        assert_eq!(row.label(&s).plain(), "Shader Pack: Off");
+        assert!(
+            rows(Level::Advanced)
+                .iter()
+                .any(|r| matches!(r, Row::Setting(x) if x.item == row))
+        );
+        s.horizon.shader_pack = "horizon-sample".into();
+        assert_eq!(row.label(&s).plain(), "Shader Pack: horizon-sample");
+        // Picking a pack keeps the preset.
+        Item::Horizon(H::Preset).cycle(&mut s, false, [854, 480]);
+        let preset = s.horizon.preset;
+        row.cycle(&mut s, false, [854, 480]);
+        assert_eq!(s.horizon.preset, preset);
+    }
+
+    #[test]
     fn presets_set_vanilla_and_horizon_options() {
         let mut s = Settings::default();
         Item::Horizon(H::Preset).cycle(&mut s, false, [854, 480]);
@@ -849,5 +913,89 @@ mod tests {
         assert_eq!(H::UploadBudget.slider(&s), Some(1.0));
         H::UploadBudget.set_slider(&mut s, 0.0);
         assert_eq!(s.horizon.upload_budget_kib, 0);
+    }
+
+    #[test]
+    fn cull_leaves_is_opt_in_and_toggles_from_advanced_graphics() {
+        let mut s = Settings::default();
+        let item = Item::Horizon(H::CullLeaves);
+        assert_eq!(item.switch(&s), Some(false));
+        assert_eq!(item.label(&s).plain(), "Cull Leaves: Off");
+        for enabled in [false, true] {
+            s.horizon.cull_leaves = enabled;
+            for preset in Preset::ALL {
+                crate::graphics::apply_preset(preset, &mut s);
+                assert_eq!(s.horizon.cull_leaves, enabled);
+            }
+        }
+
+        let mut ui = GraphicsUi::default();
+        let size = (480.0, 4000.0);
+        let (widgets, _, _) = ui.layout(Level::Advanced, size.0, size.1);
+        let switch = widgets
+            .iter()
+            .find(|w| matches!(w.target, Target::Item(i) if i == item))
+            .unwrap();
+        let point = (switch.x + 1.0, switch.y + 1.0);
+        for enabled in [false, true] {
+            s.horizon.preset = Preset::Balanced;
+            assert_eq!(
+                ui.click(
+                    Level::Advanced,
+                    &mut s,
+                    point,
+                    size,
+                    [854, 480],
+                    false,
+                    false
+                ),
+                vec![Action::ButtonClick, Action::Changed]
+            );
+            assert_eq!(item.switch(&s), Some(enabled));
+            assert_eq!(s.horizon.preset, Preset::Custom);
+        }
+        assert_eq!(item.label(&s).plain(), "Cull Leaves: On");
+    }
+
+    #[test]
+    fn entity_culling_is_opt_in_and_toggles_from_advanced_graphics() {
+        let mut s = Settings::default();
+        let item = Item::Horizon(H::EntityCulling);
+        assert_eq!(item.switch(&s), Some(false));
+        assert_eq!(item.label(&s).plain(), "Entity Culling: Off");
+        for enabled in [false, true] {
+            s.horizon.entity_culling = enabled;
+            for preset in Preset::ALL {
+                crate::graphics::apply_preset(preset, &mut s);
+                assert_eq!(s.horizon.entity_culling, enabled);
+            }
+        }
+
+        let mut ui = GraphicsUi::default();
+        let size = (480.0, 4000.0);
+        let (widgets, _, _) = ui.layout(Level::Advanced, size.0, size.1);
+        let switch = widgets
+            .iter()
+            .find(|w| matches!(w.target, Target::Item(i) if i == item))
+            .unwrap();
+        let point = (switch.x + 1.0, switch.y + 1.0);
+        for enabled in [false, true] {
+            s.horizon.preset = Preset::Balanced;
+            assert_eq!(
+                ui.click(
+                    Level::Advanced,
+                    &mut s,
+                    point,
+                    size,
+                    [854, 480],
+                    false,
+                    false
+                ),
+                vec![Action::ButtonClick, Action::Changed]
+            );
+            assert_eq!(item.switch(&s), Some(enabled));
+            assert_eq!(s.horizon.preset, Preset::Custom);
+        }
+        assert_eq!(item.label(&s).plain(), "Entity Culling: On");
     }
 }

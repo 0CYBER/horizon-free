@@ -143,7 +143,7 @@ runs the game: GitHub's runners have neither a GPU worth the name nor the game f
 
 `tools/release_train.py notes` writes them from the same pull requests:
 
-- the title, `Horizon 2026.10.15.1: <the first pull request titles>`, features first, newest first;
+- the title, `Horizon 2026.10.15.01: <the first pull request titles>` (a day's later releases count .01, .02…, two digits so GitHub's releases page, which sorts them as text, keeps them in order), features first, newest first;
 - `### New` (label `feature`) and `### Fixed` (the rest), one line per pull request: its title, its number, the
   issues it closes;
 - `### Known issues`: the bullets of [docs/known-issues.md](known-issues.md);
@@ -177,7 +177,7 @@ While paused, runs still decide and say why in their summary; `force=true` still
 A bad release is withdrawn by turning it back into a draft:
 
 ```sh
-gh release edit v2026.10.15.1 --draft
+gh release edit v2026.10.15.01 --draft
 ```
 
 Launchers list only published releases: the previous version becomes the newest one again, launchers that

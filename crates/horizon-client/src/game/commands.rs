@@ -78,6 +78,9 @@ fn format_double(v: f64) -> String {
 impl Game<'_> {
     /// Commands.performCommand for a line without its slash.
     pub(super) fn run_command(&mut self, command: &str) {
+        if self.mod_command(command) {
+            return;
+        }
         let d = vanilla::game_dispatcher();
         let parse = d.parse(command, &self.ui.registries);
         let result = match parse.executable() {

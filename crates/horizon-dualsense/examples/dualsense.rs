@@ -6,7 +6,7 @@
 //! The pad's input report carries the triggers' active effect, and its accelerometer and gyro
 //! pick up the motors, so `rumble` measures the shake against the pad lying still.
 use horizon_dualsense::device::{DualSense, Link, State};
-use horizon_dualsense::{Output, TRIGGER_OFF, TriggerEffect};
+use horizon_dualsense::{Output, TRIGGER_OFF};
 use std::time::{Duration, Instant};
 
 /// Offsets in the input report's data, after the report ID (USB 0x01) or the ID and a tag byte
@@ -223,13 +223,16 @@ fn leds(pad: &mut DualSense) {
 }
 
 fn triggers(pad: &mut DualSense) {
-    // Raw effects in the pad's own encoding (docs/controllers.md): resistance from zone 3 on at
-    // strength 6, then a weapon click between zones 2 and 6.
-    let feedback: TriggerEffect = [0x21, 0xf8, 0x03, 0x00, 0xda, 0xb6, 0x2d, 0, 0, 0, 0];
-    let weapon: TriggerEffect = [0x25, 0x44, 0x00, 0x05, 0, 0, 0, 0, 0, 0, 0];
+    use horizon_dualsense::trigger;
+    // The game's feels (docs/controllers.md "Adaptive triggers"); each holds two seconds so a
+    // hand on the pad can feel it.
     for (name, effect) in [
-        ("feedback", feedback),
-        ("weapon", weapon),
+        ("bow drawn halfway", trigger::feedback(1, 4)),
+        ("bow drawn fully", trigger::feedback(1, 8)),
+        ("crossbow click", trigger::weapon(3, 6, 8)),
+        ("mining stone", trigger::vibration(1, 3, 30)),
+        ("mining obsidian", trigger::vibration(1, 5, 30)),
+        ("boost wall", trigger::feedback(4, 6)),
         ("off", TRIGGER_OFF),
     ] {
         write(
@@ -240,9 +243,12 @@ fn triggers(pad: &mut DualSense) {
                 ..Output::default()
             },
         );
-        std::thread::sleep(Duration::from_millis(100));
-        print!("  {name:9}");
+        std::thread::sleep(Duration::from_millis(150));
+        print!("  {name:18}");
         trigger_status(pad);
+        if effect != TRIGGER_OFF {
+            std::thread::sleep(Duration::from_millis(1850));
+        }
     }
 }
 
@@ -256,7 +262,7 @@ fn link() {
     }
     println!("  open over {:?} after {:?}", link.open(), start.elapsed());
     link.set(State {
-        triggers: [TRIGGER_OFF, [0x25, 0x44, 0x00, 0x05, 0, 0, 0, 0, 0, 0, 0]],
+        triggers: [TRIGGER_OFF, horizon_dualsense::trigger::weapon(2, 6, 6)],
         lightbar: Some([0x8b, 0x5c, 0xf6]),
         player_leds: Some(0b00100),
     });

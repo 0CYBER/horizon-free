@@ -831,6 +831,21 @@ impl Game<'_> {
                 }
             }
             C::BlockChangedAck(_) => {}
+            // ClientLevel.blockEvent: BlockEntity.triggerEvent (chest lids,
+            // shulker boxes, bells) when the block is still the one it names.
+            C::BlockEvent(p) => {
+                let state = self.world.block(p.pos[0], p.pos[1], p.pos[2]);
+                let block = &self.res.facts.get(state).name;
+                let named = self.remote.as_ref().and_then(|r| {
+                    r.builtin
+                        .get("minecraft:block")?
+                        .name(p.block)
+                        .map(str::to_owned)
+                });
+                if named.as_deref() == Some(&**block) {
+                    self.block_entity_event(p.pos, i32::from(p.b0), i32::from(p.b1));
+                }
+            }
             C::LevelEvent(p) if p.kind == 2015 => {
                 self.dragon_egg_particles(p.pos, p.data);
             }
@@ -976,6 +991,29 @@ impl Game<'_> {
                         && let Value::Item(stack) = value
                     {
                         self.remote_item_data(p.id, stack);
+                    }
+                }
+            }
+            // ClientPacketListener.handleSetEquipment: what a mob or another
+            // player holds and wears (EquipmentSlot ordinals).
+            C::SetEquipment(p) => {
+                let items: Vec<(u8, Option<Arc<str>>)> = p
+                    .slots
+                    .iter()
+                    .map(|(slot, stack)| (*slot, stack.as_ref().map(|s| self.item_name(s.item))))
+                    .collect();
+                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
+                    for (slot, item) in items {
+                        let e = &mut m.extra;
+                        match slot {
+                            0 => e.main_hand = item,
+                            1 => e.off_hand = item,
+                            2 => e.feet = item,
+                            3 => e.legs = item,
+                            4 => e.chest = item,
+                            5 => e.head = item,
+                            _ => {}
+                        }
                     }
                 }
             }
@@ -1695,6 +1733,8 @@ impl Game<'_> {
         // ClientLevel.tick: the border's size change.
         self.border.tick();
         self.tick_remote_entities();
+        // ClientLevel.tickBlockEntities: chest lids, shulker boxes, bells.
+        self.tick_block_entity_anims();
         self.tick_hand();
         self.tick_particles();
         let Some(player) = self.player.as_mut() else {
@@ -1786,6 +1826,8 @@ impl Game<'_> {
         // The server owns health and hunger: undo local food/fall changes.
         self.apply_remote_health();
         self.tick_avatar(before, false);
+        // The player's own model (third person, the inventory's preview).
+        self.tick_player_model();
         if !dead {
             self.remote_mining();
             if self.right && self.use_delay == 0 && playing {
@@ -2736,6 +2778,18 @@ impl Game<'_> {
         }
     }
     /// Status for `horizon-ctl status`.
+    /// The other players' entities in the level and their names (from the
+    /// player list).
+    pub(super) fn remote_player_names(&self) -> Vec<(u32, String)> {
+        let Some(r) = self.remote.as_ref() else {
+            return Vec::new();
+        };
+        r.level_players
+            .iter()
+            .filter(|(_, uuid)| **uuid != r.profile)
+            .filter_map(|(id, uuid)| Some((*id as u32, r.players.get(uuid)?.clone())))
+            .collect()
+    }
     pub(super) fn remote_status(&self) -> Option<serde_json::Value> {
         let r = self.remote.as_ref()?;
         Some(serde_json::json!({
@@ -2753,12 +2807,30 @@ impl Game<'_> {
             }),
             "players": r.players.values().collect::<Vec<_>>(),
             // Where the other players' entities are (harnesses check movement).
+            // What the other players hold and wear, as this client draws them.
+            "player_equipment": self
+                .mobs
+                .iter()
+                .filter(|m| r.level_players.contains_key(&(m.id as i32)))
+                .map(|m| {
+                    let e = &m.extra;
+                    let armor = [&e.head, &e.chest, &e.legs, &e.feet].map(|s| s.as_deref());
+                    serde_json::json!({
+                        "id": m.id,
+                        "armor": armor,
+                        "main_hand": e.main_hand.as_deref(),
+                        "off_hand": e.off_hand.as_deref(),
+                    })
+                })
+                .collect::<Vec<_>>(),
             "player_positions": r
                 .entities
                 .values()
                 .filter(|t| t.kind == "minecraft:player")
                 .map(|t| t.position)
                 .collect::<Vec<_>>(),
+            // The player's own model exists (third person and the inventory draw it).
+            "player_model": self.player_model.is_some(),
             "health": r.health.0,
             "food": r.health.1,
             "decode_errors": r.decode_errors,

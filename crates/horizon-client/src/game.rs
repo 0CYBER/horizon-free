@@ -34,6 +34,7 @@ mod dispenser;
 mod dragon;
 mod enchant_effects;
 mod end;
+mod entity_culling;
 mod events;
 mod explosion;
 mod extras;
@@ -56,6 +57,7 @@ mod item_particles;
 mod jukebox;
 mod lan;
 mod lan_actions;
+mod lan_crafting;
 mod lan_screen;
 mod lan_trading;
 mod leads;
@@ -69,6 +71,7 @@ mod maps;
 mod minecarts;
 mod mob_blocks;
 mod mob_gear;
+mod mods;
 mod mount_menu;
 mod mounts;
 mod music;
@@ -100,6 +103,7 @@ mod scoreboard;
 mod screens;
 mod sculk;
 mod sculk_fixture;
+mod shader_packs;
 mod shield;
 mod sign_edit;
 mod sniffers;
@@ -225,6 +229,8 @@ struct Options {
     dedicated: Option<Vec<String>>,
     /// `--benchmark SCENARIO`: run the benchmark, write its report and quit.
     benchmark: Option<String>,
+    /// `--dev-mod PATH` (repeatable): mods always on and reloaded when rebuilt.
+    dev_mods: Vec<PathBuf>,
 }
 impl Options {
     /// The name to join servers with: the one given, else the offline name kept
@@ -274,6 +280,7 @@ impl Options {
                 .filter(|n| !n.is_empty()),
             dedicated: None,
             benchmark: None,
+            dev_mods: Vec::new(),
         };
         let mut session_file = std::env::var("HORIZON_SESSION_FILE").ok();
         let mut args = std::env::args().skip(1);
@@ -281,7 +288,7 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Horizon — Minecraft Java Edition 26.3 in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause."
+                        "Horizon — Minecraft Java Edition 26.3 in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --dev-mod PATH          A Horizon mod (.hmod or folder) to develop: always on, reloaded when rebuilt\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause."
                     );
                     return Ok(None);
                 }
@@ -323,6 +330,7 @@ impl Options {
                         "--smoke-report" => o.report = Some(value.into()),
                         "--screenshot-after" => o.screenshot_after = Some(value.parse()?),
                         "--world" => o.world = Some(value),
+                        "--dev-mod" => o.dev_mods.push(std::path::absolute(&value)?),
                         "--benchmark" => {
                             if horizon_client::benchmark::scenes(&value).is_none() {
                                 return Err(format!(
@@ -725,6 +733,8 @@ struct Game<'a> {
     modifiers: winit::keyboard::ModifiersState,
     /// The window's fullscreen request and reported state.
     fullscreen: horizon_client::window::FullscreenState,
+    /// The selected Horizon shader pack (`game/shader_packs.rs`).
+    shader_packs: shader_packs::ShaderPacks,
     /// MouseHandler's accumulated look and wheel state.
     mouse: MouseLook,
     /// An agent moved the mouse (`mouse-move`) since the pointer was last
@@ -952,10 +962,13 @@ struct Game<'a> {
     frame_graph: horizon_client::perf_overlay::FrameGraph,
     /// Horizon's extras (zoom, FPS counter, keystrokes): `game/extras.rs`.
     extras: extras::ExtrasState,
+    /// Horizon mods (`game/mods.rs`), none running unless turned on.
+    mods: mods::ModsState,
     /// Meshed sections waiting for an upload budget (Horizon settings).
     pending_uploads: Vec<((i32, i32, i32), horizon_client::mesher::SectionMesh)>,
     /// This frame's view frustum, for culling entities and block entities.
     view_frustum: Option<horizon_client::gfx::Frustum>,
+    entity_culler: Option<horizon_client::entity_culling::Culler>,
     /// A scripted flight from the control socket (`fly`).
     flight: Option<control::Flight>,
     /// The running agent action from the control socket (game/agent.rs).
@@ -1000,13 +1013,14 @@ struct Game<'a> {
     /// position) for the guests.
     lan_block_events: Vec<([i32; 3], i32, i32, u16)>,
     lan_entity_events: Vec<(i32, i8, [f64; 3])>,
+    /// `ContainerOpenersCounter`: how many players (the host and the guests)
+    /// have each chest open.
+    lid_openers: HashMap<(i32, i32, i32), i32>,
     lan_acting: Option<u32>,
     /// Command feedback to forward to a guest.
     chat_capture: Option<Vec<horizon_client::text::Text>>,
     /// State of `/spectate`, `/posteffect`, `/debug`, `/waypoint` and friends.
     cmds: commands::extra::CommandExtras,
-    /// Allow Cheats: whether guests may be given commands.
-    cheats: bool,
     ui: chat::UiState,
     combat: combat::CombatTracker,
     mount: mounts::MountState,
@@ -2957,6 +2971,7 @@ impl Game<'_> {
         self.apply_totem();
         self.update_totem_ready();
         self.tick_command_extras();
+        self.tick_mods();
         let camera_eye = self.camera_eye_height();
         let stick = self.pad_move();
         if self.riding.is_some() && self.player.is_some() {
@@ -3605,6 +3620,9 @@ impl Game<'_> {
     }
     fn hud(&mut self, size: [u32; 2]) -> HudBatch {
         let mut batch = self.hud_layers(size);
+        // Gui.extractRenderState: the debug overlay comes after the screen
+        // and the toasts, so it is over everything, menus included.
+        self.draw_debug_overlay(&mut batch, size);
         self.frame_graph
             .draw(self.settings.horizon.overlay, &mut batch, &self.res.atlas);
         self.draw_pad_cursor(&mut batch);
@@ -3667,7 +3685,8 @@ impl Game<'_> {
             let indicator = self.settings.attack_indicator;
             let delay = horizon_client::attack_strength::delay(self.main_hand_attack_speed());
             let strength = self.hand_strength.scale(0.0, self.main_hand_attack_speed());
-            if self.camera_type.first_person() && !spectator {
+            // The 3D crosshair (F3) takes the 2D one's place.
+            if self.camera_type.first_person() && !spectator && !self.debug_crosshair() {
                 let attack = (indicator == 1).then_some(strength);
                 let full = attack.is_some_and(|a| {
                     hud_layout::full_attack_indicator(a, delay, self.crosshair_living())
@@ -3785,117 +3804,6 @@ impl Game<'_> {
             }
         }
         let atlas = &self.res.atlas;
-        if self.debug {
-            let p = self
-                .player
-                .as_ref()
-                .map(|p| p.position)
-                .unwrap_or(Vec3::ZERO);
-            let block = [p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32];
-            let biome = self
-                .world
-                .chunks
-                .get(&(block[0] >> 4, block[2] >> 4))
-                .map(|c| {
-                    self.res
-                        .biomes
-                        .get(c.biome(block[0], block[1], block[2]))
-                        .name
-                        .clone()
-                })
-                .unwrap_or_default();
-            let light = self.world.light(block[0], block[1], block[2]);
-            let facing = match ((self.yaw.rem_euclid(360.0) + 45.0) / 90.0) as i32 % 4 {
-                0 => "south (Towards positive Z)",
-                1 => "west (Towards negative X)",
-                2 => "north (Towards negative Z)",
-                _ => "east (Towards positive X)",
-            };
-            let mut lines = vec![
-                format!("Horizon 26.3 (Rust) {:.0} fps", self.fps),
-                format!(
-                    "C: {} chunks, {} sections drawn / {}",
-                    self.world.chunks.len(),
-                    self.renderer.as_ref().map_or(0, |r| r.drawn_sections),
-                    self.renderer.as_ref().map_or(0, |r| r.section_count())
-                ),
-                format!("Pending jobs: {}", self.streaming.pending()),
-                String::new(),
-                format!("XYZ: {:.3} / {:.5} / {:.3}", p.x, p.y, p.z),
-                format!("Block: {} {} {}", block[0], block[1], block[2]),
-                format!(
-                    "Chunk: {} {} {} in {} {} {}",
-                    block[0] & 15,
-                    block[1] & 15,
-                    block[2] & 15,
-                    block[0] >> 4,
-                    block[1] >> 4,
-                    block[2] >> 4
-                ),
-                format!(
-                    "Facing: {facing} ({:.1} / {:.1})",
-                    self.yaw.rem_euclid(360.0)
-                        - if self.yaw.rem_euclid(360.0) > 180.0 {
-                            360.0
-                        } else {
-                            0.0
-                        },
-                    self.pitch
-                ),
-                format!(
-                    "Light: {} (sky {}, block {})",
-                    (light >> 4).max(light & 15),
-                    light >> 4,
-                    light & 15
-                ),
-                format!("Biome: {biome}"),
-                format!(
-                    "Day {} time {}",
-                    self.world.day_time / 24000,
-                    self.world.day_time % 24000
-                ),
-                String::new(),
-            ];
-            lines.extend(self.debug_chart_lines());
-            for (i, line) in lines.iter().enumerate() {
-                if line.is_empty() {
-                    continue;
-                }
-                let tw = HudBatch::text_width(atlas, line);
-                batch.fill(
-                    atlas,
-                    1.0,
-                    2.0 + i as f32 * 9.0 - 1.0,
-                    tw + 2.0,
-                    9.0,
-                    rgba(80, 80, 80, 144),
-                );
-                batch.text(
-                    atlas,
-                    line,
-                    2.0,
-                    2.0 + i as f32 * 9.0,
-                    rgba(224, 224, 224, 255),
-                    false,
-                );
-            }
-            let charts = self.debug_charts.draw(
-                &atlas.font,
-                w as i32,
-                h as i32,
-                self.settings.max_fps,
-                1000.0 / self.clock.rate(),
-                self.remote.is_some(),
-            );
-            hud_layout::paint(&mut batch, atlas, &charts);
-            if self.debug_charts.lightmap
-                && let Some(r) = &self.renderer
-            {
-                let view =
-                    horizon_client::debug_chart::lightmap(&r.lightmap_pixels, w as i32, h as i32);
-                hud_layout::paint(&mut batch, atlas, &view);
-            }
-        }
         if !self.ui.hide_gui
             && let Some((text, at)) = &self.message
             && at.elapsed() < Duration::from_secs(3)
@@ -5290,6 +5198,7 @@ impl Game<'_> {
         alpha: f64,
         mut out: Vec<Vertex>,
     ) -> Vec<Vertex> {
+        self.prepare_entity_culling(camera);
         let fire_yaw = if self.camera_type == perspective::CameraType::ThirdPersonFront {
             self.yaw + 180.0
         } else {
@@ -5477,9 +5386,21 @@ impl Game<'_> {
                         v.intersects(o - glam::Vec3::ONE, o + glam::Vec3::splat(2.0))
                     })
             });
-            self.res
-                .block_entity_render
-                .render(&scene, visible, &mut out);
+            if self.entity_culler.is_some() {
+                for block in visible {
+                    let start = out.len();
+                    self.res
+                        .block_entity_render
+                        .render(&scene, std::iter::once(block), &mut out);
+                    if !off_screen(block.1) {
+                        self.cull_entity_vertices(&mut out, start);
+                    }
+                }
+            } else {
+                self.res
+                    .block_entity_render
+                    .render(&scene, visible, &mut out);
+            }
         }
         // Experience orbs (ExperienceOrbRenderer): pulsing billboards from a 4x4 icon sheet.
         if let Some(r) = self
@@ -6151,7 +6072,6 @@ impl Game<'_> {
         horizon_client::save::migrate_legacy(&save_root)?;
         self.session_lock = None;
         self.session_lock = Some(horizon_client::save::SessionLock::acquire(&save_root)?);
-        self.persist = Default::default();
         self.score = Default::default();
         self.fns = Default::default();
         self.bosses = Default::default();
@@ -6189,6 +6109,11 @@ impl Game<'_> {
             level.difficulty = horizon_client::title::DIFFICULTIES[o.difficulty()].into();
             level.allow_commands = Some(o.commands(creative));
             horizon_client::save::write_world_gen_settings(&save_root, level.seed, o.world_gen())?;
+        }
+        // Worlds made without the Create New World screen (--world, the
+        // control socket) take its default: commands on for Creative only.
+        if created {
+            level.allow_commands.get_or_insert(creative);
         }
         horizon_client::crash::set_detail("World", format!("{} (saves/{folder})", level.name));
         if let Some(d) = &self.options.dimension {
@@ -6285,8 +6210,7 @@ impl Game<'_> {
         self.block_ticks = Ticks::new(self.level.seed as i32);
         self.install_live_features();
         self.tick_chunks.clear();
-        self.falling.clear();
-        self.tnts.clear();
+        self.clear_entities();
         self.travelling = None;
         self.player = None;
         self.spawn = None;
@@ -6305,14 +6229,8 @@ impl Game<'_> {
         self.spawn_origin = None;
         self.spawn_spiral = Default::default();
         self.player_spawn = None;
-        self.mobs.clear();
         self.creatures.reset_trader();
         self.portals = Default::default();
-        self.creatures.projectiles.clear();
-        self.dropped.clear();
-        self.particles.clear();
-        self.pickups.clear();
-        self.orbs.clear();
         self.experience = Experience {
             level: self.level.xp_level,
             progress: self.level.xp_progress,
@@ -6408,6 +6326,7 @@ impl Game<'_> {
         streaming.biome_blend = self.settings.biome_blend;
         streaming.smooth_lighting = self.settings.smooth_lighting;
         streaming.cutout_leaves = self.settings.cutout_leaves;
+        streaming.cull_leaves = self.settings.horizon.cull_leaves;
         streaming.biome_zoom = BiomeZoom::new(obfuscate_seed(seed));
         streaming.sky_light = dim != Dim::Nether;
         streaming.nether_shading = dim == Dim::Nether;
@@ -6635,11 +6554,7 @@ impl Game<'_> {
         self.streaming.paused = true;
         self.world = World::new(self.res.facts.air, 0);
         self.player = None;
-        self.mobs.clear();
-        self.creatures.projectiles.clear();
-        self.dropped.clear();
-        self.particles.clear();
-        self.pickups.clear();
+        self.clear_entities();
         self.screen = Screen::Playing;
         if let Some(r) = self.renderer.as_mut() {
             r.clear_sections();
@@ -6650,6 +6565,33 @@ impl Game<'_> {
         ));
         self.capture(false);
         Ok(())
+    }
+    /// Let go of every entity of the level (saved first): the next world
+    /// opened must not inherit them, nor save them as its own.
+    fn clear_entities(&mut self) {
+        self.mobs.clear();
+        self.dropped.clear();
+        self.orbs.clear();
+        self.creatures.projectiles.clear();
+        self.falling.clear();
+        self.tnts.clear();
+        self.boats.clear();
+        self.carts.clear();
+        self.armor_stands.clear();
+        self.item_frames.clear();
+        self.paintings.clear();
+        self.others.clear();
+        self.dragon = None;
+        self.crystals.clear();
+        self.dragon_fireballs.clear();
+        self.breath_clouds.clear();
+        self.tridents.clear();
+        self.rockets.clear();
+        self.bolts.clear();
+        self.particles.clear();
+        self.pickups.clear();
+        self.riding = None;
+        self.persist = Default::default();
     }
     /// Equipment attribute modifiers (LivingEntity.collectEquipmentChanges).
     fn apply_equipment(&mut self) {
@@ -7668,11 +7610,21 @@ impl Game<'_> {
         // Options.biomeBlendRadius, ambientOcclusion and cutoutLeaves:
         // LevelExtractor.allChanged when they change.
         let (s, st) = (&self.settings, &self.streaming);
-        let remesh = (s.biome_blend, s.smooth_lighting, s.cutout_leaves)
-            != (st.biome_blend, st.smooth_lighting, st.cutout_leaves);
+        let remesh = (
+            s.biome_blend,
+            s.smooth_lighting,
+            s.cutout_leaves,
+            s.horizon.cull_leaves,
+        ) != (
+            st.biome_blend,
+            st.smooth_lighting,
+            st.cutout_leaves,
+            st.cull_leaves,
+        );
         self.streaming.biome_blend = self.settings.biome_blend;
         self.streaming.smooth_lighting = self.settings.smooth_lighting;
         self.streaming.cutout_leaves = self.settings.cutout_leaves;
+        self.streaming.cull_leaves = self.settings.horizon.cull_leaves;
         if remesh {
             self.all_sections_changed();
         }
@@ -8343,6 +8295,7 @@ impl Game<'_> {
         Ok(())
     }
     fn render(&mut self) -> Result<bool> {
+        self.poll_shader_pack();
         let Some(size) = self
             .renderer
             .as_ref()
@@ -8410,6 +8363,13 @@ impl Game<'_> {
         }
         let view = horizon_client::camera::view_matrix(view_yaw, view_pitch);
         let at = camera.to_array();
+        // GameRenderer.renderLevel: the debug crosshair, first person with the HUD shown.
+        if self.debug_crosshair() && self.camera_type.first_person() && !self.ui.hide_gui {
+            let mut g = horizon_client::gizmos::Gizmos::default();
+            let scale = HudBatch::new(size).scale;
+            g.debug_crosshair(at, view_pitch, view_yaw, scale);
+            on_top.extend(g.on_top);
+        }
         let debug_lines = horizon_client::gizmos::camera_relative(&lines, at, view);
         let debug_lines_on_top = horizon_client::gizmos::camera_relative(&on_top, at, view);
         // LevelRenderer.renderHitOutline: the outline shape's edges.
@@ -8536,6 +8496,7 @@ impl Game<'_> {
             .then(|| self.border_draw(camera.to_array(), alpha as f32))
             .flatten();
         let frame = Frame {
+            shader: self.shader_inputs(camera, alpha as f32),
             nether_lighting: self.dim == Dim::Nether,
             camera,
             yaw,
@@ -9488,6 +9449,7 @@ impl ApplicationHandler for Game<'_> {
                         }
                     }
                     self.extras_frame(elapsed);
+                    self.mods_frame(elapsed);
                     self.extras_retry()?;
                     self.apply_mouse_look();
                     self.pad_look(elapsed.as_secs_f32());
@@ -9883,6 +9845,7 @@ pub fn run() -> Result<()> {
         focused: true,
         modifiers: winit::keyboard::ModifiersState::empty(),
         fullscreen: horizon_client::window::FullscreenState::new(false),
+        shader_packs: Default::default(),
         mouse: MouseLook::default(),
         agent_pointer: false,
         smooth_camera: false,
@@ -10045,9 +10008,11 @@ pub fn run() -> Result<()> {
         events: Default::default(),
         agent: agent::Agent::default(),
         view_frustum: None,
+        entity_culler: None,
         pending_uploads: Vec::new(),
         frame_graph: Default::default(),
         extras: Default::default(),
+        mods: Default::default(),
         sky_darken_memo: Default::default(),
         persist: Default::default(),
         remote: None,
@@ -10068,10 +10033,10 @@ pub fn run() -> Result<()> {
         lan_events: Vec::new(),
         lan_block_events: Vec::new(),
         lan_entity_events: Vec::new(),
+        lid_openers: HashMap::new(),
         lan_acting: None,
         chat_capture: None,
         cmds: Default::default(),
-        cheats: true,
         ui: Default::default(),
         combat: Default::default(),
         mount: Default::default(),
@@ -10104,6 +10069,11 @@ pub fn run() -> Result<()> {
         game.options.no_pause = true;
     }
     game.apply_settings();
+    // Benchmarks measure the game alone.
+    if game.options.benchmark.is_none() {
+        game.mods.dev = game.options.dev_mods.clone();
+        game.start_mods();
+    }
     if let Some(path) = &game.options.control {
         let server = horizon_client::control::Server::start(path)
             .map_err(|e| format!("control socket {}: {e}", path.display()))?;

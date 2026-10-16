@@ -1394,9 +1394,7 @@ impl Hub {
                 S::MovePlayerRot(p) => {
                     self.move_player(i, None, Some((p.yaw, p.pitch)), p.flags);
                 }
-                S::MovePlayerStatus(p) => {
-                    self.guests[i].on_ground = p.flags & 1 != 0;
-                }
+                S::MovePlayerStatus(p) => self.move_player(i, None, None, p.flags),
                 S::PlayerLoaded(_) => self.guests[i].loaded = true,
                 S::ChunkBatchReceived(p) => {
                     let g = &mut self.guests[i];
@@ -1460,6 +1458,10 @@ impl Hub {
             g.previous_position = g.position;
             g.position = p;
         }
+        let moved = pos.map_or([0.0; 3], |_| {
+            [0, 1, 2].map(|k| g.position[k] - g.previous_position[k])
+        });
+        g.moves.push((moved, flags & 1 != 0));
         if let Some((yaw, pitch)) = rot
             && yaw.is_finite()
             && pitch.is_finite()

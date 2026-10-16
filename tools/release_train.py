@@ -11,7 +11,7 @@ of merges becomes one release), or the oldest at least MAX_WAIT ago (merges that
 of those pull requests is labelled release-now. Pull requests labelled skip-release (work players don't see) don't count
 towards a release and aren't listed in the notes. RELEASES_PAUSED=1 (a repository variable) stops automatic releases.
 
-Game releases are tagged vYYYY.MM.DD, then .1, .2 the same UTC day; launcher releases launcher-vX.Y.Z, the
+Game releases are tagged vYYYY.MM.DD, then .01, .02 the same UTC day; launcher releases launcher-vX.Y.Z, the
 patch after the last launcher tag, or the next minor when a merged pull request is labelled feature. Notes:
 "### New" lists the pull requests labelled feature, "### Fixed" the others, "### Known issues" the bullets of
 docs/known-issues.md. See docs/release-flow.md.
@@ -92,12 +92,15 @@ def tag_key(tag):
 
 
 def next_game_tag(tags, today):
-    """vYYYY.MM.DD, or .1, .2... when that day already has a tag (drafts and rolled-back releases included)."""
+    """vYYYY.MM.DD, or .01, .02... when that day already has a tag (drafts and rolled-back releases included).
+
+    The counter has two digits because GitHub's releases page sorts a day's tags as text: .9 went above .18.
+    Every reader compares the numbers as integers, so the unpadded tags from before still order correctly."""
     day = f"v{today:%Y.%m.%d}"
     taken = [tag for tag in tags if tag == day or tag.startswith(day + ".")]
     if not taken:
         return day
-    return f"{day}.{max(int(tag.split('.')[3]) if tag.count('.') == 3 else 0 for tag in taken) + 1}"
+    return f"{day}.{max(int(tag.split('.')[3]) if tag.count('.') == 3 else 0 for tag in taken) + 1:02d}"
 
 
 def next_launcher_tag(tags, minor):

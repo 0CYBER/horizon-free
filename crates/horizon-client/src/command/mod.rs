@@ -930,19 +930,41 @@ impl Dispatcher {
         let context = Context::new(0, start);
         self.parse_nodes(0, input, start, &context, reg, reg.permission)
     }
-    /// CommandDispatcher.getCompletionSuggestions at `cursor`.
+    /// CommandDispatcher.getCompletionSuggestions at `cursor`: brigadier
+    /// lists every child, whatever its requirement.
     pub fn suggestions(
         &self,
         parse: &ParseResults,
         cursor: usize,
         reg: &Registries,
     ) -> (Range, Vec<Suggestion>) {
+        self.suggestions_within(parse, cursor, reg, u8::MAX)
+    }
+    /// The suggestions the player's chat shows: the client's tree only holds
+    /// the nodes the player may use (Commands.sendCommands prunes by canUse).
+    pub fn client_suggestions(
+        &self,
+        parse: &ParseResults,
+        cursor: usize,
+        reg: &Registries,
+    ) -> (Range, Vec<Suggestion>) {
+        self.suggestions_within(parse, cursor, reg, reg.permission)
+    }
+    fn suggestions_within(
+        &self,
+        parse: &ParseResults,
+        cursor: usize,
+        reg: &Registries,
+        permission: u8,
+    ) -> (Range, Vec<Suggestion>) {
         let (parent, start, context) = parse.context.suggestion_context(cursor);
         let start = start.min(cursor);
         let truncated = &parse.input[..cursor.min(parse.input.len())];
         let mut all = Vec::new();
-        // Brigadier lists every child, whatever its requirement.
         for &child in &self.nodes[parent].children {
+            if self.nodes[child].permission > permission {
+                continue;
+            }
             let mut builder = SuggestionsBuilder::new(truncated, start);
             match &self.nodes[child].kind {
                 NodeKind::Literal(l) => {

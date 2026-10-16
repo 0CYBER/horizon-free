@@ -30,7 +30,10 @@ impl Game<'_> {
             &mut self.inventory[slot]
         }
     }
-    fn blocks_attacks(&self, stack: &ItemStack) -> Option<&horizon_client::items::BlocksAttacks> {
+    pub(super) fn blocks_attacks(
+        &self,
+        stack: &ItemStack,
+    ) -> Option<&horizon_client::items::BlocksAttacks> {
         self.res.items.get(&stack.item)?.blocks_attacks.as_ref()
     }
     /// `ShieldItem.use` (ItemUtils.startUsingInstantly) for the hand at `slot`;

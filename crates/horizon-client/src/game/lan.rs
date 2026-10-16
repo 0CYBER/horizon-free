@@ -2,7 +2,7 @@
 //! server threads and the play-state hub, feeds it the world's entities each
 //! tick and turns what the guests do into gameplay. A world that is not open
 //! costs one `Option` check per tick.
-use super::{Game, chat::PLAYER_NAME};
+use super::Game;
 use horizon_client::{
     Result,
     items::ItemStack,
@@ -43,6 +43,8 @@ pub(super) struct LanHost {
     pub settings: LanSettings,
     pub host_entity: i32,
     pub host_uuid: u128,
+    /// The host's profile name (the account's, or the offline name).
+    pub host_name: String,
     /// The guests' models in the host's world.
     pub models: HashMap<u32, Mob>,
     host_mode: i32,
@@ -325,6 +327,7 @@ impl Game<'_> {
             Some("status") => Ok(Some(match &self.lan {
                 Some(h) => json!({
                     "open": true,
+                    "host": h.host_name,
                     "port": h.settings.port,
                     "guests": h.hub.guests.iter().map(|g| json!({
                         "name": g.name,
@@ -334,6 +337,11 @@ impl Game<'_> {
                         "game_mode": g.game_mode,
                         "chunks": g.sent_chunks.len(),
                         "tracked": g.tracker.len(),
+                        // The armour the host draws on this guest, head to feet.
+                        "model_armor": h.models.get(&g.conn).map(|m| {
+                            [&m.extra.head, &m.extra.chest, &m.extra.legs, &m.extra.feet]
+                                .map(|s| s.as_deref())
+                        }),
                     })).collect::<Vec<_>>(),
                 }),
                 None => json!({ "open": false }),
@@ -356,9 +364,11 @@ impl Game<'_> {
         if self.lan.is_some() || self.remote.is_some() || self.title.is_some() {
             return Err("already open".into());
         }
-        let motd = format!("{PLAYER_NAME} - {}", self.level.name);
+        // IntegratedServer.publishServer: the MOTD names the host's profile.
+        let name = self.options.player_name();
+        let motd = format!("{name} - {}", self.level.name);
         let host_uuid = self.level.player_uuid.map_or_else(
-            || offline_uuid(PLAYER_NAME),
+            || offline_uuid(&name),
             |u| {
                 u128::from(u[0] as u32) << 96
                     | u128::from(u[1] as u32) << 64
@@ -438,6 +448,7 @@ impl Game<'_> {
             settings: LanSettings { port, ..settings },
             host_entity,
             host_uuid,
+            host_name: self.options.player_name(),
             models: HashMap::new(),
             host_mode: self.mode_id(),
             play: HashMap::new(),
@@ -509,7 +520,7 @@ impl Game<'_> {
         equipment[5] = self.armor[0].clone();
         Some(HostState {
             uuid: host.host_uuid,
-            name: PLAYER_NAME.to_owned(),
+            name: host.host_name.clone(),
             entity_id: host.host_entity,
             position: [p.position.x, p.position.y, p.position.z],
             yaw: self.yaw,
@@ -634,7 +645,14 @@ impl Game<'_> {
                             );
                         }
                     }
-                    HostEvent::Left(guest) => {
+                    HostEvent::Left(mut guest) => {
+                        // The container they had open loses an opener.
+                        if let Some(pos) = guest.menu.as_ref().and_then(|m| m.pos)
+                            && !guest.spectator()
+                        {
+                            self.container_openers_changed(pos, false);
+                        }
+                        self.lan_crafting_left(&mut host, &mut guest);
                         playerdata::save(&guest, &self.world_root);
                         host.models.remove(&guest.conn);
                         if self.options.dedicated.is_some() && guest.placed {
@@ -839,6 +857,10 @@ impl Game<'_> {
                 .and_then(|s| s.as_ref())
                 .map(|s| s.item.clone());
             m.extra.off_hand = g.offhand.as_ref().map(|s| s.item.clone());
+            [m.extra.head, m.extra.chest, m.extra.legs, m.extra.feet] = g
+                .armor
+                .each_ref()
+                .map(|s| s.as_ref().map(|s| s.item.clone()));
             m.extra.crouching = g.sneaking;
         }
     }
@@ -856,6 +878,7 @@ impl Game<'_> {
         let atlas = &self.res.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         for m in host.models.values() {
+            let entity_start = out.len();
             let light = self.world.light(
                 m.position.x.floor() as i32,
                 (m.position.y + 1.62).floor() as i32,
@@ -869,16 +892,20 @@ impl Game<'_> {
                 &lookup,
                 packed,
                 &self.res.mob_data,
-                &self.player_armor_layers(),
+                &self.worn_armor_layers(m),
                 out,
             );
+            self.held_item_geometry(m, camera, alpha, packed, true, out);
+            if !m.glowing {
+                self.cull_entity_vertices(out, entity_start);
+            }
         }
     }
 
     /// A chat line the host typed, for the guests.
     pub(super) fn lan_host_chat(&mut self, message: &str) {
         if let Some(host) = &self.lan {
-            host.hub.chat(PLAYER_NAME, message);
+            host.hub.chat(&host.host_name, message);
         }
     }
 }

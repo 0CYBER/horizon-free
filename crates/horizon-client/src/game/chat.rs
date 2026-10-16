@@ -90,10 +90,28 @@ pub struct UiState {
 }
 
 impl Game<'_> {
+    /// `PlayerList.isOp` for the single-player owner: the world's Allow Commands.
+    pub(super) fn allow_commands(&self) -> bool {
+        self.level.allow_commands == Some(true)
+    }
+    /// `IntegratedServer.setWorldAllowCommands`, then `updatePermissions`.
+    pub(super) fn set_allow_commands(&mut self, allow: bool) {
+        self.level.allow_commands = Some(allow);
+        self.ui.registries.permission = owner_permission(allow);
+    }
+    /// Commands the game issues itself (the server console, harnesses, the
+    /// control socket) run at the owner's level whatever Allow Commands says.
+    pub(super) fn as_console<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let level = std::mem::replace(&mut self.ui.registries.permission, 4);
+        let out = f(self);
+        self.ui.registries.permission = level;
+        out
+    }
     /// Registry contents for argument parsing (built when a world opens).
     pub(super) fn build_registries(&mut self) {
+        let permission = owner_permission(self.allow_commands());
         let reg = &mut self.ui.registries;
-        reg.permission = 4;
+        reg.permission = permission;
         {
             let dir = |sub: &str| -> Vec<String> {
                 let root = self.options.resources.join("data/minecraft").join(sub);
@@ -408,6 +426,7 @@ impl Game<'_> {
             return;
         }
         let focused = self.screen == Screen::Chat;
+        let heard = self.mods.mods.is_running().then(|| text.plain());
         self.ui.chat.add(
             &self.res.atlas,
             text,
@@ -415,6 +434,9 @@ impl Game<'_> {
             self.ticks,
             focused,
         );
+        if let Some(line) = heard {
+            self.mods_chat(&line);
+        }
     }
     /// Keys while the chat screen is open.
     pub(super) fn chat_key(&mut self, event: &KeyEvent) {
@@ -511,9 +533,13 @@ impl Game<'_> {
                 &[Text::literal(PLAYER_NAME), Text::literal(message)],
             );
             let focused = self.screen == Screen::Chat;
+            let heard = self.mods.mods.is_running().then(|| line.plain());
             self.ui
                 .chat
                 .add(&self.res.atlas, line, None, self.ticks, focused);
+            if let Some(line) = heard {
+                self.mods_chat(&line);
+            }
             self.lan_host_chat(message);
         }
     }
@@ -860,4 +886,10 @@ fn write_difficulty(world: &std::path::Path, difficulty: u8) -> horizon_client::
     let out = nbt::write_named(&root, nbt::Limits::default()).map_err(|e| e.to_string())?;
     std::fs::write(&path, Compression::Gzip.encode(&out)?)?;
     Ok(())
+}
+
+/// `IntegratedServer.getProfilePermissions` for the owner: `OWNER` (4) when
+/// commands are allowed, else `ALL` (0).
+fn owner_permission(allow_commands: bool) -> u8 {
+    if allow_commands { 4 } else { 0 }
 }

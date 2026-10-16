@@ -185,6 +185,42 @@ fn vanilla_error_messages() {
     assert_eq!(e.message.plain(), "argument.block.property.invalid");
 }
 #[test]
+fn commands_need_allow_commands() {
+    // IntegratedServer.getProfilePermissions: the owner of a world without
+    // Allow Commands is at LevelBasedPermissionSet.ALL.
+    let reg = Registries {
+        permission: 0,
+        ..reg()
+    };
+    let d = vanilla::game_dispatcher();
+    let e = d.parse("gamemode creative", &reg).executable().unwrap_err();
+    assert_eq!(e.message.plain(), "command.unknown.command");
+    assert!(d.parse("me waves", &reg).executable().is_ok());
+    let parse = d.parse("", &reg);
+    // Brigadier itself lists every literal; the chat's (client tree) only
+    // the ones the player may use.
+    assert!(
+        d.suggestions(&parse, 0, &reg)
+            .1
+            .iter()
+            .any(|s| s.text == "gamemode")
+    );
+    let root: Vec<String> = d
+        .client_suggestions(&parse, 0, &reg)
+        .1
+        .into_iter()
+        .map(|s| s.text)
+        .collect();
+    // Commands.java with CommandSelection.INTEGRATED: seed and version need no level.
+    assert_eq!(
+        root,
+        [
+            "help", "list", "me", "msg", "random", "seed", "teammsg", "tell", "tm", "trigger",
+            "version", "w"
+        ]
+    );
+}
+#[test]
 fn suggestions_like_vanilla() {
     let root = suggestions("");
     assert!(root.contains(&"gamemode".to_owned()) && root.contains(&"tp".to_owned()));

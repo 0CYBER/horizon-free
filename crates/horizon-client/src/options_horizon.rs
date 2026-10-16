@@ -14,7 +14,7 @@ use crate::{
     graphics_style::Cost,
     graphics_ui::{self, Item, Level},
     hud::{HudAtlas, HudBatch},
-    options_ui::{Event, Kind, Opt, OptionsUi, Page, apply_preset},
+    options_ui::{self, Event, Kind, Opt, OptionsUi, Page, apply_preset},
     settings::{SOUND_SOURCES, Settings},
     ui_theme::{self as t, CONTROL, Kind as Button, MenuStyle, ROW_LABEL, SIDEBAR, Ui, color, id},
 };
@@ -34,6 +34,8 @@ pub enum HRow {
     Graphics(Item, Cost, &'static str),
     /// One of Horizon's extras (`extras`), off by default.
     Extra(extras::Item),
+    /// Installed mod `i` (`settings.mods.installed`) and its switch.
+    Mod(usize),
 }
 /// A sidebar section: name, description, rows.
 pub struct Section {
@@ -101,6 +103,8 @@ pub const SECTIONS: &[Section] = &[
                 [
                     Opt::PadEnabled,
                     Opt::PadVibration,
+                    Opt::PadAdaptiveTriggers,
+                    Opt::PadLightbar,
                     Opt::PadLookSensitivity,
                     Opt::PadToggleSneak,
                     Opt::PadInvertX,
@@ -184,6 +188,18 @@ pub const SECTIONS: &[Section] = &[
                 .collect()
         },
     },
+    Section {
+        name: "Mods",
+        blurb: "Mods made for Horizon, from the horizon-mods folder. Each runs in a sandbox and stays off until you turn it on; check what it may do first.",
+        rows: |s| {
+            if s.mods.installed.is_empty() {
+                return vec![HRow::Header(
+                    "No mods: put .hmod files in the horizon-mods folder",
+                )];
+            }
+            (0..s.mods.installed.len()).map(HRow::Mod).collect()
+        },
+    },
 ];
 
 const NAV: u64 = id("options.nav", 0);
@@ -219,6 +235,7 @@ fn switch_value(opt: Opt, s: &Settings) -> Option<bool> {
         Opt::JapaneseGlyphs => s.japanese_glyphs,
         Opt::PadEnabled => s.controller.enabled,
         Opt::PadVibration => s.controller.vibration,
+        Opt::PadAdaptiveTriggers => s.controller.adaptive_triggers,
         Opt::PadInvertX => s.controller.invert_x,
         Opt::PadInvertY => s.controller.invert_y,
         _ => return None,
@@ -404,6 +421,20 @@ impl OptionsUi {
                             true,
                         );
                     }
+                }
+                HRow::Mod(m) => {
+                    let installed = &s.mods.installed[m];
+                    let cost = match (&installed.problem, installed.dev) {
+                        (Some(_), _) => (3, "Stopped"),
+                        (None, true) => (1, "Dev"),
+                        (None, false) => (0, ""),
+                    };
+                    let text = installed
+                        .problem
+                        .as_deref()
+                        .unwrap_or(&installed.description);
+                    ui.described_row(x, y, &installed.title, "", 0.0, cost, text, cw - 60.0);
+                    ui.switch(ROW + i as u64, control_x, y + ROW_H / 2.0, s.mods.is_on(m));
                 }
                 HRow::Extra(item) => {
                     let cy = y + ROW_H / 2.0;
@@ -608,6 +639,10 @@ impl OptionsUi {
                         item.cycle(&mut s.extras, right);
                         events.push(Event::Changed);
                     }
+                    Some(HRow::Mod(m)) => {
+                        s.mods.toggle(*m);
+                        events.push(Event::Changed);
+                    }
                     _ => {}
                 }
             }
@@ -624,12 +659,7 @@ impl OptionsUi {
 /// settings go through `graphics_ui`.
 fn set_item_slider(item: Item, s: &mut Settings, v: f32) {
     match item {
-        Item::Vanilla(opt) => {
-            opt.set_slider(s, v);
-            if opt == Opt::Preset {
-                apply_preset(s);
-            }
-        }
+        Item::Vanilla(opt) => options_ui::set_slider(opt, s, v),
         Item::Horizon(_) => item.set_slider(s, v),
     }
 }

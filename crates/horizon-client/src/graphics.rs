@@ -117,6 +117,10 @@ pub struct Graphics {
     pub preset: Preset,
     /// Skip sections hidden behind closed ones (vanilla's occlusion graph).
     pub cave_culling: bool,
+    /// Hide shared leaf and mangrove-root faces, reducing foliage density.
+    pub cull_leaves: bool,
+    /// Skip drawing entities hidden behind opaque terrain.
+    pub entity_culling: bool,
     /// Meshed sections uploaded per frame; 0 uploads all that are ready.
     pub chunk_updates: u32,
     /// Section mesh bytes uploaded per frame, in KiB; 0 is unlimited.
@@ -140,12 +144,17 @@ pub struct Graphics {
     /// or behind other windows, and half the worker threads. Off by default;
     /// it changes when frames are drawn, never what they show or the ticks.
     pub battery: bool,
+    /// The Horizon shader pack in `shaderpacks/` (its folder name); empty:
+    /// none, the vanilla picture (docs/shader-packs.md).
+    pub shader_pack: String,
 }
 impl Default for Graphics {
     fn default() -> Self {
         Self {
             preset: Preset::Custom,
             cave_culling: true,
+            cull_leaves: false,
+            entity_culling: false,
             chunk_updates: 0,
             upload_budget_kib: 0,
             sky: true,
@@ -160,6 +169,7 @@ impl Default for Graphics {
             fxaa: false,
             advanced: false,
             battery: false,
+            shader_pack: String::new(),
         }
     }
 }
@@ -188,6 +198,8 @@ impl Graphics {
             match key.trim() {
                 "preset" => g.preset = Preset::parse(value),
                 "caveCulling" => g.cave_culling = flag(g.cave_culling),
+                "cullLeaves" => g.cull_leaves = flag(g.cull_leaves),
+                "entityCulling" => g.entity_culling = flag(g.entity_culling),
                 "chunkUpdates" => g.chunk_updates = number(g.chunk_updates).min(512),
                 "uploadBudgetKiB" => g.upload_budget_kib = number(g.upload_budget_kib).min(65536),
                 "sky" => g.sky = flag(g.sky),
@@ -207,6 +219,7 @@ impl Graphics {
                 "fxaa" => g.fxaa = flag(g.fxaa),
                 "level" => g.advanced = value == "advanced",
                 "batteryMode" => g.battery = flag(g.battery),
+                "shaderPack" => g.shader_pack = value.to_string(),
                 "overlay" => {
                     g.overlay = match value {
                         "fps" => Overlay::Fps,
@@ -221,9 +234,11 @@ impl Graphics {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "preset:{}\ncaveCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nlevel:{}\nbatteryMode:{}\n",
+            "preset:{}\ncaveCulling:{}\ncullLeaves:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nlevel:{}\nbatteryMode:{}\nshaderPack:{}\n",
             self.preset.name(),
             bool_text(self.cave_culling),
+            bool_text(self.cull_leaves),
+            bool_text(self.entity_culling),
             self.chunk_updates,
             self.upload_budget_kib,
             bool_text(self.sky),
@@ -245,6 +260,7 @@ impl Graphics {
             bool_text(self.fxaa),
             if self.advanced { "advanced" } else { "simple" },
             bool_text(self.battery),
+            self.shader_pack,
         )
     }
     pub fn save(&self, dir: &Path) {
@@ -315,6 +331,8 @@ mod tests {
         let g = Graphics {
             preset: Preset::Balanced,
             cave_culling: false,
+            cull_leaves: true,
+            entity_culling: true,
             chunk_updates: 12,
             upload_budget_kib: 4096,
             sky: false,
@@ -329,11 +347,12 @@ mod tests {
             fxaa: true,
             advanced: true,
             battery: true,
+            shader_pack: "horizon-sample".into(),
         };
         assert_eq!(Graphics::parse(&g.serialize()), g);
         assert_eq!(Graphics::parse(""), Graphics::default());
         assert_eq!(
-            Graphics::parse("workers:abc\nsky:maybe\n"),
+            Graphics::parse("workers:abc\nsky:maybe\ncullLeaves:maybe\nentityCulling:maybe\n"),
             Graphics::default()
         );
     }

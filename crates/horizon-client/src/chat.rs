@@ -518,7 +518,9 @@ impl ChatScreen {
             }
             if cursor >= 1 && (self.suggestions.is_none() || !self.keep_suggestions) {
                 let parse = self.parse.as_ref().expect("parsed above");
-                let (range, list) = c.dispatcher.suggestions(parse, cursor_b, c.registries);
+                let (range, list) = c
+                    .dispatcher
+                    .client_suggestions(parse, cursor_b, c.registries);
                 self.pending = Some((range.0, list));
                 self.update_usage_info(m, c);
             }

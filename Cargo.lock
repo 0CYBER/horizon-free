@@ -1253,6 +1253,7 @@ dependencies = [
  "horizon-core",
  "horizon-dualsense",
  "horizon-friends",
+ "horizon-mods",
  "horizon-protocol",
  "horizon-telemetry",
  "horizon-theme",
@@ -1285,6 +1286,7 @@ dependencies = [
 name = "horizon-dualsense"
 version = "0.1.0"
 dependencies = [
+ "cpal",
  "hidapi",
  "log",
 ]

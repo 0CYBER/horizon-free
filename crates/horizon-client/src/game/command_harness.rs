@@ -89,7 +89,9 @@ impl Game<'_> {
                     let command = op["cmd"].as_str().unwrap_or("");
                     self.chat_capture = Some(Vec::new());
                     self.cmds.results = Some(Vec::new());
-                    self.run_command(command.strip_prefix('/').unwrap_or(command));
+                    self.as_console(|g| {
+                        g.run_command(command.strip_prefix('/').unwrap_or(command))
+                    });
                     let messages = self.chat_capture.take().unwrap_or_default();
                     let results = self.cmds.results.take().unwrap_or_default();
                     if op["record"].as_bool() != Some(false) {

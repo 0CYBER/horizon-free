@@ -276,6 +276,21 @@ fn refresh_only_when_the_token_runs_out() {
 }
 
 #[test]
+fn ownership_is_asked_again_with_the_saved_token() {
+    let secrets = |token: &str| Secrets {
+        refresh_token: "ms-refresh-1".into(),
+        minecraft_token: token.into(),
+        minecraft_expires_at: now() + 7200,
+        xuid: None,
+    };
+    let (m, ep) = mock(|_| {});
+    assert_eq!(owns_minecraft(&ep, &secrets("mc-token")), Ok(true));
+    assert_eq!(m.lock().unwrap().log.len(), 1);
+    let (_, ep) = mock(|m| m.owns_game = false);
+    assert_eq!(owns_minecraft(&ep, &secrets("mc-token")), Ok(false));
+}
+
+#[test]
 fn refusals_have_messages() {
     let tokens = || MsTokens {
         access: "ms-access-1".into(),

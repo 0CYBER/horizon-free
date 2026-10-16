@@ -27,7 +27,7 @@ const ROW_WIDTH: f32 = 270.0;
 fn edit_top(h: f32) -> f32 {
     ((h.ceil() - 234.0) / 2.0).floor()
 }
-fn confirm_top(h: f32, lines: usize) -> f32 {
+pub(crate) fn confirm_top(h: f32, lines: usize) -> f32 {
     ((h.ceil() - 61.0 - lines as f32 * 9.0) / 2.0).floor()
 }
 
@@ -1020,6 +1020,7 @@ impl Title {
                 atlas,
                 batch,
                 (self.started.elapsed().as_millis() / 300).is_multiple_of(2),
+                cursor,
             ),
         }
         for b in self.buttons(w, h) {
@@ -1083,6 +1084,9 @@ impl Title {
         } = &self.mode
         {
             self.create_tooltip(atlas, batch, cursor, name, *creative, options);
+        }
+        if let Mode::Multiplayer(screen) = &self.mode {
+            screen.draw_tooltip(atlas, batch, cursor);
         }
         if let Some((at, toast)) = &self.toast
             && at.elapsed().as_secs() < 5

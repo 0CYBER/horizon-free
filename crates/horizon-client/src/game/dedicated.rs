@@ -915,7 +915,7 @@ impl Game<'_> {
             _ => {
                 // The game's dispatcher, captured for the console.
                 self.chat_capture = Some(Vec::new());
-                self.run_command(line);
+                self.as_console(|g| g.run_command(line));
                 for text in self.chat_capture.take().unwrap_or_default() {
                     self.console_reply(text);
                 }

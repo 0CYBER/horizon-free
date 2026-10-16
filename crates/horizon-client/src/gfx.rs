@@ -59,6 +59,7 @@ pub fn outline_vertices(edges: &[[f64; 6]], camera: glam::DVec3) -> Vec<[f32; 6]
 
 mod arena;
 mod occlusion;
+mod pack_stages;
 pub mod panorama;
 mod timing;
 mod world_post;
@@ -173,6 +174,25 @@ pub struct Frame<'a> {
     /// `Screen.extractBlurredBackground`: blur the frame by this radius
     /// (`menuBackgroundBlurriness`) before the screen is drawn over it.
     pub menu_blur: Option<f32>,
+    /// What a shader pack's `Frame` uniform reads beyond the rest of the frame.
+    pub shader: ShaderInputs,
+}
+/// A shader pack's view of the game this frame (docs/shader-packs.md, `Frame`).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ShaderInputs {
+    /// `Level.getRainLevel` and `getThunderLevel` at the partial tick.
+    pub rain: f32,
+    pub thunder: f32,
+    /// The camera's fog type: 0 air, 1 water, 2 lava, 3 powder snow.
+    pub submerged: u8,
+    /// 0 overworld, -1 the Nether, 1 the End.
+    pub dimension: i8,
+    pub has_sky_light: bool,
+    /// `DimensionType.moonPhase`, 0..=7.
+    pub moon_phase: u8,
+    /// The time of day as a fraction (0 sunrise, 0.25 noon) and the partial tick.
+    pub day_fraction: f32,
+    pub partial_tick: f32,
 }
 /// One frame of the world border wall (`WorldBorderRenderer.render`).
 #[derive(Clone, Debug)]
@@ -272,7 +292,7 @@ pub struct Renderer {
     indirect: wgpu::Buffer,
     indirect_capacity: u64,
     /// Indirect draws may set `first_instance` (the section origin).
-    multi_draw: bool,
+    pub multi_draw: bool,
     /// Per-frame scratch, kept to avoid allocating every frame.
     visible: Vec<Visible>,
     origins: Vec<[f32; 4]>,
@@ -287,6 +307,8 @@ pub struct Renderer {
     occlusion: occlusion::Occlusion,
     /// Resolution scale and FXAA (Horizon settings).
     world_post: world_post::Post,
+    /// The selected shader pack's stages (Horizon setting; none by default).
+    pack: Option<pack_stages::PackStages>,
     pub hud: HudRenderer,
     /// The menus' backdrop blur, made on first use.
     post: Option<crate::post::Post>,
@@ -336,10 +358,10 @@ fn mip_chain(
         for image in crate::mipmap::generate(
             base,
             levels - 1,
-            s.strategy,
-            s.alpha_cutoff_bias,
-            has_transparent,
-            s.item,
+            crate::mipmap::Settings {
+                has_transparent,
+                ..s
+            },
         ) {
             out.extend(image.pixels.iter().flatten());
         }
@@ -1434,6 +1456,7 @@ impl Renderer {
             block_entities: HashMap::new(),
             occlusion: occlusion::Occlusion::new(crate::chunk::HEIGHT / 16),
             world_post,
+            pack: None,
             hud,
             post: None,
             menu_blur: None,
@@ -1567,6 +1590,9 @@ impl Renderer {
     pub fn section_count(&self) -> usize {
         self.sections.len()
     }
+    pub fn has_section(&self, key: SectionKey) -> bool {
+        self.sections.contains_key(&key)
+    }
     pub fn upload(&mut self, key: SectionKey, mesh: &SectionMesh) {
         self.occlusion.set(key, mesh.visibility);
         if mesh.block_entities.is_empty() {
@@ -1652,6 +1678,23 @@ impl Renderer {
         self.block_entities.remove(&key);
         self.occlusion.remove(key);
         self.release_section(key);
+    }
+    /// Run `pack`'s stages over the world from now on (`None`: no pack, the
+    /// vanilla frame). On error the previous pack stays.
+    pub fn set_shader_pack(&mut self, pack: Option<&crate::shader_pack::ShaderPack>) -> Result<()> {
+        self.pack = match pack {
+            Some(pack) => Some(pack_stages::PackStages::new(
+                &self.device,
+                self.config.format.remove_srgb_suffix(),
+                pack,
+            )?),
+            None => None,
+        };
+        Ok(())
+    }
+    /// The folder name of the pack `set_shader_pack` gave.
+    pub fn shader_pack_id(&self) -> Option<&str> {
+        self.pack.as_ref().map(|p| p.id.as_str())
     }
     /// Horizon's resolution scale (world pixels per window pixel) and FXAA.
     pub fn set_world_post(&mut self, scale: f32, antialias: bool) {
@@ -1957,6 +2000,15 @@ impl Renderer {
         };
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
+        let pack_uniform = shader_pack_uniform(
+            frame,
+            view,
+            world_projection(frame.fov_degrees, aspect, frame.depth_far) * frame.bob,
+            sun,
+            fog_color,
+            globals.fog,
+            globals.fog_ends,
+        );
         // GameRenderer.render3dHud: the hand's projection at hudFov, with the
         // bob in its pose rather than the projection (same product).
         let hand_projection = Mat4::from_cols_array(&crate::camera::hand_projection(
@@ -2177,9 +2229,10 @@ impl Renderer {
             timer.begin(&mut encoder);
         }
         // The world's targets: the screen, or the scaled target of `post`.
-        let scaled = self
-            .world_post
-            .prepare(&self.device, [self.config.width, self.config.height]);
+        let pack = self.pack.is_some() && !frame.title;
+        let scaled =
+            self.world_post
+                .prepare(&self.device, [self.config.width, self.config.height], pack);
         let (world_view, world_depth) = match &scaled {
             Some((color, depth)) => (color, depth),
             None => (&view_target, &self.depth),
@@ -2212,7 +2265,12 @@ impl Renderer {
                     view: world_depth,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(0.0),
-                        store: wgpu::StoreOp::Discard,
+                        // A shader pack reads the world's depth.
+                        store: if pack {
+                            wgpu::StoreOp::Store
+                        } else {
+                            wgpu::StoreOp::Discard
+                        },
                     }),
                     stencil_ops: None,
                 }),
@@ -2322,7 +2380,22 @@ impl Renderer {
                 );
             }
         }
-        if scaled.is_some() {
+        if let (true, Some((color, depth)), Some(size), Some(stages)) =
+            (pack, &scaled, self.world_post.size(), self.pack.as_mut())
+        {
+            let output = stages.run(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                color,
+                depth,
+                size,
+                &self.world_post,
+                pack_uniform,
+            );
+            self.world_post
+                .finish_with(&mut encoder, &view_target, output);
+        } else if scaled.is_some() {
             self.world_post.finish(&mut encoder, &view_target);
         }
         if hand_quads > 0 {
@@ -2587,6 +2660,59 @@ impl Frustum {
 /// Vanilla's `Projection`: reversed depth (near maps to 1, far to 0, tests
 /// are GREATER_THAN_OR_EQUAL), which keeps far faces a hair apart, like
 /// fire_side's 0.01 pixel in front of its block, from z-fighting.
+/// The prelude's `Frame` (`shader_pack_prelude.wgsl`); `resolution` and the
+/// time are filled per stage.
+fn shader_pack_uniform(
+    frame: &Frame,
+    view: Mat4,
+    projection: Mat4,
+    sun: Vec3,
+    fog_color: [f32; 4],
+    fog: [f32; 4],
+    fog_ends: [f32; 4],
+) -> pack_stages::FrameUniform {
+    let s = frame.shader;
+    let sky = frame.sky.sky_color;
+    pack_stages::FrameUniform {
+        view: view.to_cols_array_2d(),
+        projection: projection.to_cols_array_2d(),
+        inverse_view: view.inverse().to_cols_array_2d(),
+        inverse_projection: projection.inverse().to_cols_array_2d(),
+        camera_position: [
+            frame.camera.x as f32,
+            frame.camera.y as f32,
+            frame.camera.z as f32,
+            0.0,
+        ],
+        time: [0.0, 0.0, s.day_fraction, s.partial_tick],
+        sun: [sun.x, sun.y, sun.z, frame.sky.sun_angle.to_radians()],
+        moon: [-sun.x, -sun.y, -sun.z, f32::from(s.moon_phase)],
+        sky_color: [sky[0], sky[1], sky[2], 1.0],
+        fog_color,
+        fog: [fog[0], fog[1], fog_ends[0], fog_ends[1]],
+        weather: [s.rain, s.thunder, 0.0, 0.0],
+        camera_state: [
+            f32::from(s.submerged),
+            frame.night_vision,
+            frame.darkness.1,
+            0.0,
+        ],
+        view_params: [
+            0.05,
+            frame.depth_far,
+            frame.distance,
+            frame.fov_degrees.to_radians(),
+        ],
+        dimension: [
+            f32::from(s.dimension),
+            f32::from(u8::from(s.has_sky_light)),
+            0.0,
+            0.0,
+        ],
+        ..Default::default()
+    }
+}
+
 fn world_projection(fov_degrees: f32, aspect: f32, far: f32) -> Mat4 {
     Mat4::perspective_rh(fov_degrees.to_radians(), aspect, far, 0.05)
 }
@@ -2749,7 +2875,8 @@ const ANIMATION_MIP_ENTRIES: usize = 4096;
 /// renderer on resource reload drops this entire snapshot, including its cache:
 /// frame indices can never alias another resource's pixels, size or settings.
 struct AnimatedSprites {
-    animations: Vec<(SpriteAnimation, usize)>,
+    /// Each animated sprite and what its layer holds (`None`: not uploaded yet).
+    animations: Vec<(SpriteAnimation, Option<crate::sprites::FrameBlend>)>,
     size: u32,
     settings: Vec<crate::mipmap::Settings>,
     // Cache bookkeeping must not consume randomness or affect other maps' seeding.
@@ -2765,11 +2892,7 @@ impl AnimatedSprites {
         settings: &[crate::mipmap::Settings],
     ) -> Self {
         Self {
-            animations: animations
-                .iter()
-                .cloned()
-                .map(|a| (a, usize::MAX))
-                .collect(),
+            animations: animations.iter().cloned().map(|a| (a, None)).collect(),
             size,
             settings: settings.to_vec(),
             cache: Default::default(),
@@ -2786,35 +2909,53 @@ fn animate_sprites(
 ) {
     let size = state.size;
     let levels = size.trailing_zeros() + 1;
-    for (index, (animation, previous)) in state.animations.iter_mut().enumerate() {
-        let frame = animation.frame(tick);
-        if frame == *previous {
+    let AnimatedSprites {
+        animations,
+        settings,
+        cache,
+        cache_bytes,
+        budget,
+        ..
+    } = state;
+    for (index, (animation, previous)) in animations.iter_mut().enumerate() {
+        let blend = animation.blend(tick);
+        if *previous == Some(blend) {
             continue;
         }
-        *previous = frame;
-        let room = state.cache.len() < ANIMATION_MIP_ENTRIES;
-        let uncached;
-        let mips: &[u8] = match state.cache.entry((index, frame)) {
-            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                let (pixels, _) = mip_chain(
-                    animation.pixels(frame),
-                    size,
-                    &state.settings,
-                    animation.layer,
-                    1,
-                );
-                // Bound both pixel storage and map metadata. Keep admitted
-                // frames rather than churning them on large/unique workloads;
-                // frames that do not fit still use the same generation path.
-                if room && pixels.capacity() <= state.budget - state.cache_bytes {
-                    state.cache_bytes += pixels.capacity();
-                    entry.insert(pixels)
-                } else {
-                    uncached = pixels;
-                    &uncached
-                }
-            }
+        *previous = Some(blend);
+        let (animation, settings) = (&*animation, &**settings);
+        let chain = |frame: usize| {
+            move || mip_chain(animation.pixels(frame), size, settings, animation.layer, 1).0
+        };
+        let (current, mixed);
+        let mips: &[u8] = if blend.millis > 0 {
+            let mut mix = frame_mips(
+                cache,
+                cache_bytes,
+                *budget,
+                (index, blend.frame),
+                chain(blend.frame),
+            )
+            .into_owned();
+            let next = frame_mips(
+                cache,
+                cache_bytes,
+                *budget,
+                (index, blend.next),
+                chain(blend.next),
+            );
+            mix_frames(&mut mix, &next, blend.millis);
+            mixed = mix;
+            &mixed
+        } else {
+            current = frame_mips(
+                cache,
+                cache_bytes,
+                *budget,
+                (index, blend.frame),
+                chain(blend.frame),
+            );
+            &current
         };
         let mut offset = 0;
         for level in 0..levels.min(max_levels) {
@@ -2825,9 +2966,98 @@ fn animate_sprites(
         }
     }
 }
+/// `animate_sprite_interpolate.fsh`: `mix(current, next, millis / 1000)` per
+/// channel of every mipmap level, stored as 8-bit unorm.
+/// One frame's mip chain: from the cache, or generated and kept while the budget has room.
+/// Frames that do not fit still go through the same generation path.
+fn frame_mips<'a>(
+    cache: &'a mut crate::fast_hash::FxHashMap<(usize, usize), Vec<u8>>,
+    cache_bytes: &mut usize,
+    budget: usize,
+    key: (usize, usize),
+    generate: impl FnOnce() -> Vec<u8>,
+) -> std::borrow::Cow<'a, [u8]> {
+    let room = cache.len() < ANIMATION_MIP_ENTRIES;
+    match cache.entry(key) {
+        std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut().as_slice().into(),
+        std::collections::hash_map::Entry::Vacant(entry) => {
+            let pixels = generate();
+            // Bound both pixel storage and map metadata. Keep admitted frames
+            // rather than churning them on large/unique workloads.
+            if room && pixels.capacity() <= budget - *cache_bytes {
+                *cache_bytes += pixels.capacity();
+                entry.insert(pixels).as_slice().into()
+            } else {
+                pixels.into()
+            }
+        }
+    }
+}
+fn mix_frames(current: &mut [u8], next: &[u8], millis: u32) {
+    let t = millis as f32 / 1000.0;
+    for (c, n) in current.iter_mut().zip(next) {
+        let (a, b) = (f32::from(*c) / 255.0, f32::from(*n) / 255.0);
+        *c = ((a * (1.0 - t) + b * t) * 255.0).round() as u8;
+    }
+}
 #[cfg(test)]
 mod sprite_upload_tests {
     use super::*;
+    #[test]
+    fn real_rail_mips_do_not_change_with_larger_array_layers() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root
+            .join("assets/minecraft/textures/block/rail.png")
+            .exists()
+        {
+            return;
+        }
+        let mut sprites = crate::sprites::Sprites::default();
+        let layers: Vec<_> = [
+            "rail",
+            "powered_rail",
+            "powered_rail_on",
+            "detector_rail",
+            "activator_rail",
+        ]
+        .map(|name| {
+            sprites
+                .insert(&root, &format!("minecraft:block/{name}"))
+                .unwrap()
+        })
+        .into();
+        sprites.finish();
+        assert_eq!(sprites.size, 16);
+        let native: Vec<_> = layers
+            .iter()
+            .map(|&layer| {
+                let start = layer as usize * 16 * 16 * 4;
+                mip_chain(
+                    &sprites.pixels[start..start + 16 * 16 * 4],
+                    16,
+                    &sprites.mips,
+                    layer,
+                    1,
+                )
+                .0
+            })
+            .collect();
+        sprites.insert(&root, "minecraft:block/oak_sign").unwrap();
+        sprites.finish();
+        assert_eq!(sprites.size, 32);
+        for (&layer, expected) in layers.iter().zip(native) {
+            let start = layer as usize * 32 * 32 * 4;
+            let (actual, _) = mip_chain(
+                &sprites.pixels[start..start + 32 * 32 * 4],
+                32,
+                &sprites.mips,
+                layer,
+                1,
+            );
+            assert_eq!(&actual[32 * 32 * 4..], expected, "rail layer {layer}");
+        }
+    }
     #[test]
     fn mipmap_option_keeps_real_16px_reductions() {
         for levels in 0..=4 {
@@ -2843,7 +3073,7 @@ mod sprite_upload_tests {
             let settings = [];
             let (expected, levels) = mip_chain(&pixels, size, &settings, 7, 1);
             let mut animations = AnimatedSprites::new(&[animation], size, &settings);
-            animations.animations[0].1 = 0;
+            animations.animations[0].1 = Some(animations.animations[0].0.blend(0));
             let mut writes = Vec::new();
             let mut record = |layer, level, edge, data: &[u8]| {
                 assert_eq!(layer, 7);
@@ -2948,5 +3178,36 @@ mod sprite_upload_tests {
             actual.extend_from_slice(bytes)
         });
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn interpolated_animation_uploads_the_mix_every_tick() {
+        let animation = crate::sprites::test_clip(16, 3, r#"{"frametime":4,"interpolate":true}"#);
+        let settings = [];
+        let (_, levels) = mip_chain(animation.pixels(0), 16, &settings, 3, 1);
+        let mut cached = AnimatedSprites::new(std::slice::from_ref(&animation), 16, &settings);
+        let mut uncached = AnimatedSprites::new(std::slice::from_ref(&animation), 16, &settings);
+        uncached.budget = 0;
+        for state in [&mut cached, &mut uncached] {
+            state.animations[0].1 = Some(animation.blend(0));
+        }
+        let mut blues = Vec::new();
+        let mut uncached_blues = Vec::new();
+        let mut record = |_, level, _, data: &[u8]| {
+            if level == 0 {
+                blues.push(data[2]);
+            }
+        };
+        for tick in [0, 1, 1, 2, 4] {
+            animate_sprites(&mut cached, tick, levels, &mut record);
+            animate_sprites(&mut uncached, tick, levels, |_, level, _, data: &[u8]| {
+                if level == 0 {
+                    uncached_blues.push(data[2]);
+                }
+            });
+        }
+        // Frame 0 is blue 0, frame 1 blue 99: a quarter, a half, then frame 1.
+        assert_eq!(blues, [25, 50, 99]);
+        assert_eq!(uncached_blues, blues);
     }
 }
