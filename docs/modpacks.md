@@ -262,6 +262,20 @@ inspected:
 └── coverage.json, coverage.md
 ```
 
+**Status.** `import` and `inventory` run today, `carry` follows (see below):
+
+```
+cargo run -p horizon-port-pack -- import ~/Downloads/pack.mrpack ~/.horizon/ports/pack
+cargo run -p horizon-port-pack -- inventory ~/.horizon/ports/pack     # --offline reuses modrinth.json
+```
+
+`inventory` reads metadata only: Modrinth answers by file hash, and the jars only if the user's
+instance has them (an imported instance folder, or jars put in `<work>/jars/`). Without jars,
+classes come from the reviewed table, Modrinth categories and sides; with jars, from their
+`mods.toml` / `fabric.mod.json` and file census too. On Create+ 6.0.0 alpha f (155 files, metadata
+only): content 54, library 33, client-ui 26, performance 25, other 14, unknown 2, server-only 1;
+40 rows matched the reviewed ATM10 table; three dependency layers (93 / 57 / 5).
+
 ### 1. Import
 
 | Format | Read | Jars come from |
