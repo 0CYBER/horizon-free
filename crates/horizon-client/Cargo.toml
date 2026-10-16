@@ -27,6 +27,8 @@ serde_json = { version = "1.0.151", features = ["raw_value"] }
 # Shader packs: pack.toml, and WGSL checked before it reaches wgpu.
 toml = "1.1"
 naga = { version = "30.0.1", features = ["wgsl-in"] }
+# Java (OptiFine/Iris) shader packs, translated to WGSL.
+horizon-shaderpack = { path = "../horizon-shaderpack" }
 cpal = "0.16"
 symphonia = { version = "0.5", default-features = false, features = ["ogg", "vorbis"] }
 miniz_oxide = "0.8"

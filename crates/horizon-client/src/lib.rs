@@ -87,6 +87,7 @@ pub mod item_data;
 pub mod item_render;
 pub mod item_tooltip;
 pub mod items;
+pub mod java_pack;
 pub mod java_text;
 pub mod key_names;
 pub mod keybinds;

@@ -368,5 +368,31 @@ fn real_packs_passes() {
             );
         }
         assert!(passes.final_pass.is_some() || !passes.composite.is_empty());
+        // Every planned pass translates, its outputs within its targets.
+        for p in passes
+            .begin
+            .iter()
+            .chain(&passes.prepare)
+            .chain(&passes.deferred)
+            .chain(&passes.composite)
+            .chain(&passes.final_pass)
+        {
+            let program = pack
+                .compile(p, &passes.targets, &values, &env(), &properties)
+                .unwrap();
+            assert!(
+                program
+                    .fragment
+                    .interface
+                    .outputs
+                    .keys()
+                    .all(|&l| (l as usize) < program.draw_buffers.len())
+                    || p.program.ends_with("final"),
+                "{}: outputs {:?}, targets {:?}",
+                p.program,
+                program.fragment.interface.outputs,
+                program.draw_buffers
+            );
+        }
     }
 }
