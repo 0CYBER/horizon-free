@@ -5,7 +5,7 @@
 //! `BrewingStandScreen`); item rules live in `horizon_client::stations`.
 use super::{Game, Screen};
 use horizon_client::{
-    brewing,
+    block_entity_item, brewing,
     containers::BlockEntity,
     enchant::Enchantments,
     hud::{HudBatch, rgba},
@@ -1894,6 +1894,15 @@ impl Game<'_> {
             self.res.names.item(&stack.item)
         };
         let mut lines = vec![(name, color)];
+        let translate = |k: &str| e.translate(k).map(str::to_owned);
+        // ItemContainerContents.addToTooltip.
+        let hover_name = |s: &ItemStack| {
+            s.custom_name()
+                .map_or_else(|| self.res.names.item(&s.item), str::to_owned)
+        };
+        for line in horizon_client::item_tooltip::container_lines(stack, &hover_name, &translate) {
+            lines.push((line, u32::MAX));
+        }
         if stack.item.ends_with("potion") || &*stack.item == "minecraft:tipped_arrow" {
             let scale = match &*stack.item {
                 "minecraft:lingering_potion" => 0.25,
@@ -1947,6 +1956,27 @@ impl Game<'_> {
             let key = self.res.stations.banners.layer_key(layer);
             lines.push((self.translate(&key, &key), rgba(170, 170, 170, 255)));
         }
+        // Spawner.appendHoverText: what a spawner or trial spawner item spawns.
+        if matches!(
+            &*stack.item,
+            "minecraft:spawner" | "minecraft:trial_spawner"
+        ) {
+            let gray = rgba(170, 170, 170, 255);
+            match block_entity_item::spawner_entity(stack) {
+                Some(id) => {
+                    let key = format!("entity.{}", id.replacen(':', ".", 1));
+                    lines.push((self.translate(&key, &id), gray));
+                }
+                None => {
+                    lines.push((String::new(), u32::MAX));
+                    let desc1 =
+                        self.translate("block.minecraft.spawner.desc1", "Interact with Spawn Egg:");
+                    lines.push((desc1, gray));
+                    let desc2 = self.translate("block.minecraft.spawner.desc2", "Sets Mob Type");
+                    lines.push((format!(" {desc2}"), rgba(85, 85, 255, 255)));
+                }
+            }
+        }
         if let Some(info) = self.res.items.get(&stack.item)
             && info.max_damage > 0
             && stack.damage > 0
@@ -1960,6 +1990,22 @@ impl Game<'_> {
                 ),
                 u32::MAX,
             ));
+        }
+        // ItemStack.OP_NBT_WARNING, for a player with game master permission.
+        if self.ui.registries.permission >= 2 && block_entity_item::op_warning(stack) {
+            for (key, fallback) in [
+                ("item.op_warning.line1", "Warning:"),
+                (
+                    "item.op_warning.line2",
+                    "Use of this item might lead to command execution.",
+                ),
+                (
+                    "item.op_warning.line3",
+                    "Do not use unless you know the exact contents!",
+                ),
+            ] {
+                lines.push((self.translate(key, fallback), rgba(255, 85, 85, 255)));
+            }
         }
         lines
     }
