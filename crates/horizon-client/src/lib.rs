@@ -17,6 +17,7 @@ pub mod beehive;
 pub mod benchmark;
 pub mod biome;
 pub mod block_entity_anim;
+pub mod block_entity_item;
 pub mod block_entity_nbt;
 pub mod block_entity_render;
 pub mod block_transform;

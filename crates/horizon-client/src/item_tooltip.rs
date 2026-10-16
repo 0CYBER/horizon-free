@@ -247,6 +247,36 @@ pub fn detail_lines(
     lines
 }
 
+/// `ItemContainerContents.addToTooltip`: "count x name" for the first five
+/// stacks, by slot, then how many more there are (an italic line).
+pub fn container_lines(
+    stack: &ItemStack,
+    name: &dyn Fn(&ItemStack) -> String,
+    translate: &dyn Fn(&str) -> Option<String>,
+) -> Vec<String> {
+    let Some(data) = stack.data() else {
+        return Vec::new();
+    };
+    let mut slots: Vec<&(u8, ItemStack)> = data.container.iter().collect();
+    slots.sort_by_key(|(slot, _)| *slot);
+    let count = translate("item.container.item_count").unwrap_or_else(|| "%s x %s".into());
+    let mut lines: Vec<String> = slots
+        .iter()
+        .take(5)
+        .map(|(_, s)| {
+            count
+                .replacen("%s", &s.count.to_string(), 1)
+                .replacen("%s", &name(s), 1)
+        })
+        .collect();
+    if slots.len() > 5 {
+        let more =
+            translate("item.container.more_items").unwrap_or_else(|| "and %s more...".into());
+        lines.push(more.replacen("%s", &(slots.len() - 5).to_string(), 1));
+    }
+    lines
+}
+
 /// Every line of `stack`'s tooltip, name first.
 pub fn lines(
     stack: &ItemStack,
@@ -261,6 +291,40 @@ pub fn lines(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn container_lines_list_five_stacks_then_how_many_more() {
+        let mut chest = ItemStack::new("minecraft:chest", 1);
+        for slot in [9u8, 1, 2, 3, 4, 5, 6] {
+            chest
+                .data_mut()
+                .container
+                .push((slot, ItemStack::new("minecraft:stone", u32::from(slot))));
+        }
+        let lang = |k: &str| {
+            Some(
+                match k {
+                    "item.container.item_count" => "%s x %s",
+                    "item.container.more_items" => "and %s more...",
+                    _ => return None,
+                }
+                .to_owned(),
+            )
+        };
+        let name = |s: &ItemStack| s.item.trim_start_matches("minecraft:").to_owned();
+        assert_eq!(
+            container_lines(&chest, &name, &lang),
+            [
+                "1 x stone",
+                "2 x stone",
+                "3 x stone",
+                "4 x stone",
+                "5 x stone",
+                "and 2 more..."
+            ]
+        );
+        assert!(container_lines(&ItemStack::new("minecraft:chest", 1), &name, &lang).is_empty());
+    }
 
     #[test]
     fn amounts_use_two_decimals_at_most() {

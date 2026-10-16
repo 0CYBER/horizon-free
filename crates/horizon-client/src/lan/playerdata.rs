@@ -18,7 +18,8 @@ pub fn path(world: &Path, uuid: u128) -> PathBuf {
         .join(format!("{}.dat", uuid_string(uuid)))
 }
 
-fn uuid_ints(uuid: u128) -> [i32; 4] {
+/// `UUIDUtil.uuidToIntArray`.
+pub fn uuid_ints(uuid: u128) -> [i32; 4] {
     [
         (uuid >> 96) as i32,
         (uuid >> 64) as i32,
@@ -61,6 +62,9 @@ pub fn load(guest: &mut Guest, world: &Path) -> bool {
     guest.game_mode = level.mode();
     guest.selected = (level.selected_slot.max(0) as usize).min(8);
     guest.saved = Some(tag);
+    if level.ender_items.len() == 27 {
+        guest.ender_items = level.ender_items.clone();
+    }
     for (slot, item, count, damage) in &level.inventory {
         let mut stack = ItemStack {
             item: Arc::from(item.as_str()),
@@ -102,6 +106,7 @@ pub fn save(guest: &Guest, world: &Path) {
         on_ground: guest.on_ground,
         dimension: "minecraft:overworld".into(),
         player_extra: guest.saved.clone(),
+        ender_items: guest.ender_items.clone(),
         ..Level::default()
     };
     let mut put = |slot: u8, stack: &Option<ItemStack>| {

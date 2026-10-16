@@ -514,6 +514,13 @@ impl Game<'_> {
         let mut dead = Vec::new();
         let mut died = std::mem::take(&mut self.died);
         let ticking = self.entity_ticking_area();
+        // With guests on, each mob sees its nearest player (game/lan_mobs.rs).
+        let guests = self.lan_guest_views();
+        let mut bindings = match self.lan.as_mut() {
+            Some(host) if !guests.is_empty() => std::mem::take(&mut host.mob_players),
+            _ => Default::default(),
+        };
+        let mut guest_events = Vec::new();
         let level_random;
         {
             // The level random, lent to the mobs (brain behaviours draw from
@@ -522,8 +529,24 @@ impl Game<'_> {
             let mut pushes = Vec::new();
             let mut keep = Vec::with_capacity(mobs.len());
             for i in 0..mobs.len() {
-                let w = self.mob_world_base(&snapshot);
+                let mut w = self.mob_world_base(&snapshot);
                 let m = &mut mobs[i];
+                let seen_guest = if guests.is_empty() {
+                    None
+                } else {
+                    let bound = bindings.get(&m.id).copied();
+                    let conn = super::lan_mobs::player_for(m, w.player.as_ref(), &guests, bound);
+                    match conn {
+                        Some(conn) => {
+                            bindings.insert(m.id, conn);
+                            w.player = guests.iter().find(|g| g.0 == conn).map(|g| g.1.clone());
+                        }
+                        None => {
+                            bindings.remove(&m.id);
+                        }
+                    }
+                    conn
+                };
                 if !w
                     .world
                     .loaded(m.position.x.floor() as i32, m.position.z.floor() as i32)
@@ -547,6 +570,16 @@ impl Game<'_> {
                 let from = events.len();
                 let kept = m.tick(&w, &mut scratch, &mut events);
                 horizon_client::mobs::take_mob_pushes(&mut events, from, &mut pushes);
+                if let Some(conn) = seen_guest {
+                    let mut k = from;
+                    while k < events.len() {
+                        if super::lan_mobs::acts_on_player(&events[k]) {
+                            guest_events.push((conn, events.remove(k)));
+                        } else {
+                            k += 1;
+                        }
+                    }
+                }
                 // Killed during its own tick (drowning, burning, falling...).
                 if !m.alive() && !m.removed && died.insert(m.id) {
                     dead.push(m.clone());
@@ -569,6 +602,12 @@ impl Game<'_> {
             level_random = scratch;
         }
         self.world.random = level_random;
+        if let Some(host) = self.lan.as_mut()
+            && !guests.is_empty()
+        {
+            bindings.retain(|id, _| mobs.iter().any(|m| m.id == *id));
+            host.mob_players = bindings;
+        }
         self.mobs.append(&mut mobs);
         self.died = died;
         self.sync_riders();
@@ -581,6 +620,7 @@ impl Game<'_> {
             self.mob_died(&m);
         }
         self.handle_mob_events(events)?;
+        self.lan_guest_mob_events(guest_events);
         self.tick_projectiles()?;
         self.tick_fangs();
         self.tick_allays();
@@ -1337,7 +1377,12 @@ impl Game<'_> {
     pub(super) fn mob_hits_player_kind(&mut self, amount: f32, from: [f64; 3], kind: &str) {
         self.mob_hits_player(amount, from, kind);
     }
-    fn mob_hits_player(&mut self, amount: f32, from: [f64; 3], damage_type: &str) -> bool {
+    pub(super) fn mob_hits_player(
+        &mut self,
+        amount: f32,
+        from: [f64; 3],
+        damage_type: &str,
+    ) -> bool {
         if self.creative {
             return false;
         }
@@ -1350,8 +1395,8 @@ impl Game<'_> {
             .is_some_and(|t| t.contains(damage_type));
         let blocking = self.player_blocking(Some(from), damage_type, false);
         let raised = blocking.is_some();
-        // Melee: the attacker stands at `from`.
-        let attacker = (!projectile)
+        // Melee: the attacker stands at `from` (another player's hit has no mob behind it).
+        let attacker = (!projectile && damage_type != "minecraft:player_attack")
             .then(|| {
                 self.mobs
                     .iter()
@@ -1536,12 +1581,24 @@ impl Game<'_> {
             // Arrows also hit minecarts (VehicleEntity is pickable).
             let mut arrow_targets = targets.clone();
             arrow_targets.extend(self.carts.iter().map(|c| (Who::Mob(c.id), c.bounds())));
+            // Mobs' projectiles also hit the guests (game/lan_mobs.rs).
+            let guests = self.lan_projectile_targets();
+            let mut arrow_targets_guests = arrow_targets.clone();
+            arrow_targets_guests.extend(guests.iter().copied());
+            let mut targets_guests = targets.clone();
+            targets_guests.extend(guests);
             let pw = ProjWorld { w: &w, targets };
+            let pw_guests = ProjWorld {
+                w: &w,
+                targets: targets_guests,
+            };
             projectiles.retain_mut(|p| {
-                let (keep, hit) = if p.arrow.is_some() {
-                    horizon_client::arrows::tick(p, &scene, &arrow_targets)
-                } else {
-                    p.tick(&pw)
+                let mob_shot = !matches!(p.owner, Some(Who::Player));
+                let (keep, hit) = match (p.arrow.is_some(), mob_shot) {
+                    (true, false) => horizon_client::arrows::tick(p, &scene, &arrow_targets),
+                    (true, true) => horizon_client::arrows::tick(p, &scene, &arrow_targets_guests),
+                    (false, false) => p.tick(&pw),
+                    (false, true) => p.tick(&pw_guests),
                 };
                 if let Some(a) = p.arrow.as_mut() {
                     arrow_events.extend(a.events.drain(..).map(|e| (p.position, e)));
@@ -1722,7 +1779,7 @@ impl Game<'_> {
             self.creatures.projectiles.push(arrow);
         }
     }
-    fn projectile_hit(&mut self, p: &Projectile, hit: Hit) -> Result<()> {
+    pub(super) fn projectile_hit(&mut self, p: &Projectile, hit: Hit) -> Result<()> {
         self.combat.projectile_owner = match p.owner {
             Some(Who::Mob(id)) => Some(id),
             _ => None,
@@ -1731,6 +1788,14 @@ impl Game<'_> {
             Hit::Entity { at, .. } | Hit::Block { at, .. } => at,
             Hit::None => return Ok(()),
         };
+        if let Hit::Entity {
+            who: Who::Mob(id),
+            at,
+        } = hit
+            && self.lan_projectile_hit(p, id, at)
+        {
+            return Ok(());
+        }
         if matches!(
             p.kind,
             ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge

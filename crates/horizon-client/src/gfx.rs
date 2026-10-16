@@ -148,6 +148,8 @@ pub struct Frame<'a> {
     pub clouds: Option<crate::clouds::Input<'a>>,
     /// Additive translucent geometry after the entities (lightning, dragon rays).
     pub additive: &'a [Vertex],
+    /// Name tags over everything, without depth (`TEXT_SEE_THROUGH`).
+    pub see_through: &'a [Vertex],
     /// Camera-relative sun, moon and stars (drawn behind everything, additive).
     pub celestial: &'a [Vertex],
     /// First-person hand and held item, drawn after clearing depth.
@@ -263,6 +265,7 @@ pub struct Renderer {
     cloud_uniform: wgpu::Buffer,
     cloud_group: wgpu::BindGroup,
     additive_pipeline: wgpu::RenderPipeline,
+    see_through_pipeline: wgpu::RenderPipeline,
     celestial_pipeline: wgpu::RenderPipeline,
     celestial_buffer: wgpu::Buffer,
     panorama: panorama::Panorama,
@@ -1057,7 +1060,7 @@ impl Renderer {
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &entity_attributes,
         })];
-        let entity_pipeline = |label, cull_mode, depth_write, bias, blend, clouds| {
+        let entity_pipeline = |label, cull_mode, depth_write, compare, bias, blend, clouds| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(if clouds {
@@ -1078,7 +1081,7 @@ impl Renderer {
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth32Float,
                     depth_write_enabled: Some(depth_write),
-                    depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
+                    depth_compare: Some(compare),
                     stencil: Default::default(),
                     bias,
                 }),
@@ -1101,6 +1104,7 @@ impl Renderer {
             "Breaking cracks",
             Some(wgpu::Face::Back),
             false,
+            wgpu::CompareFunction::GreaterEqual,
             wgpu::DepthBiasState {
                 constant: 10,
                 slope_scale: 1.0,
@@ -1113,14 +1117,26 @@ impl Renderer {
             "Clouds",
             Some(wgpu::Face::Back),
             true,
+            wgpu::CompareFunction::GreaterEqual,
             Default::default(),
             alpha_blend,
             true,
+        );
+        // RenderPipelines.TEXT_SEE_THROUGH: translucent, no depth test or writes.
+        let see_through_pipeline = entity_pipeline(
+            "See-through text",
+            None,
+            false,
+            wgpu::CompareFunction::Always,
+            Default::default(),
+            alpha_blend,
+            false,
         );
         let entity_pipeline = entity_pipeline(
             "Entities",
             None,
             true,
+            wgpu::CompareFunction::GreaterEqual,
             Default::default(),
             alpha_blend,
             false,
@@ -1513,6 +1529,7 @@ impl Renderer {
             cloud_uniform,
             cloud_group,
             additive_pipeline,
+            see_through_pipeline,
             celestial_pipeline,
             celestial_buffer,
             panorama,
@@ -2282,9 +2299,13 @@ impl Renderer {
             self.queue
                 .write_buffer(&self.outline, 0, bytemuck::cast_slice(&lines));
         }
-        let [entity_quads, crumbling_quads, translucent_crumbling_quads] = self
-            .entity_batch
-            .update(frame.entities, frame.additive, frame.hand);
+        let [entity_quads, crumbling_quads, translucent_crumbling_quads] =
+            self.entity_batch.update(
+                frame.entities,
+                frame.additive,
+                frame.hand,
+                frame.see_through,
+            );
         let world_quads = entity_quads + crumbling_quads + translucent_crumbling_quads;
         let cloud_quads = if let Some(input) = &frame.clouds {
             let (rebuilt, uniform) =
@@ -2315,6 +2336,7 @@ impl Renderer {
         let all_entities = &self.entity_batch.combined;
         let hand_quads = (frame.hand.len() / 4) as u32;
         let additive_quads = (frame.additive.len() / 4) as u32;
+        let see_through_quads = (frame.see_through.len() / 4) as u32;
         let entity_vertices = all_entities.len() as u64;
         if entity_vertices > self.entity_capacity {
             self.entity_capacity = entity_vertices.next_power_of_two();
@@ -2337,7 +2359,8 @@ impl Renderer {
                 bytemuck::cast_slice(&frame.celestial[..celestial_vertices]),
             );
         }
-        let max_quads = (world_quads + additive_quads + hand_quads).max(cloud_quads);
+        let max_quads =
+            (world_quads + additive_quads + hand_quads + see_through_quads).max(cloud_quads);
         if max_quads > self.index_quads {
             self.index_quads = max_quads.next_power_of_two();
             self.indices = Self::quad_indices(&self.device, self.index_quads);
@@ -2522,6 +2545,17 @@ impl Renderer {
                 pass.set_bind_group(1, &self.cloud_group, &[]);
                 pass.set_vertex_buffer(0, self.cloud_buffer.slice(..));
                 pass.draw_indexed(0..cloud_quads * 6, 0, 0..1);
+            }
+            // LevelRenderer.executeSeeThrough, after the rest of the world.
+            if see_through_quads > 0 {
+                pass.set_pipeline(&self.see_through_pipeline);
+                pass.set_bind_group(0, &self.entity_group, &[]);
+                pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
+                pass.draw_indexed(
+                    0..see_through_quads * 6,
+                    ((world_quads + additive_quads + hand_quads) * 4) as i32,
+                    0..1,
+                );
             }
         }
         if let (true, Some((color, depth)), Some(size), Some(stages)) =
@@ -2948,7 +2982,7 @@ mod tests {
             .flat_map(|(layer, id)| quad(layer, id))
             .collect();
         let mut batch = super::EntityBatch::default();
-        let counts = batch.update(&entities, &quad(3, 5), &quad(0, 6));
+        let counts = batch.update(&entities, &quad(3, 5), &quad(0, 6), &quad(0, 8));
         let vertices = &batch.combined;
         assert_eq!(counts, [4, 1, 1]);
         assert_eq!(
@@ -2958,7 +2992,7 @@ mod tests {
                 .iter()
                 .map(|q| q[0].light)
                 .collect::<Vec<_>>(),
-            [0, 1, 3, 4, 2, 7, 5, 6]
+            [0, 1, 3, 4, 2, 7, 5, 6, 8]
         );
     }
     #[test]

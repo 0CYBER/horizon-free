@@ -53,6 +53,8 @@ pub(super) struct LanHost {
     pub broken: Vec<[f64; 3]>,
     /// Hurt and death state of the mobs guests see.
     mob_state: HashMap<u32, (i32, bool)>,
+    /// The guest each mob sees as its player, when not the host (game/lan_mobs.rs).
+    pub mob_players: HashMap<u32, u32>,
 }
 
 /// A stable UUID for an entity that has none.
@@ -335,6 +337,14 @@ impl Game<'_> {
                         "placed": g.placed,
                         "loaded": g.loaded,
                         "game_mode": g.game_mode,
+                        "sneaking": g.sneaking,
+                        "health": g.health,
+                        // FoodData: food level, saturation and exhaustion.
+                        "food": [
+                            f64::from(g.food),
+                            f64::from(g.saturation),
+                            g.motion.as_ref().map_or(0.0, |m| f64::from(m.health.food.exhaustion)),
+                        ],
                         "chunks": g.sent_chunks.len(),
                         "tracked": g.tracker.len(),
                         // The armour the host draws on this guest, head to feet.
@@ -454,6 +464,7 @@ impl Game<'_> {
             play: HashMap::new(),
             broken: Vec::new(),
             mob_state: HashMap::new(),
+            mob_players: HashMap::new(),
         });
         self.audio.capture = Some(Vec::new());
         Ok(())

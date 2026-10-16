@@ -324,11 +324,15 @@ impl Game<'_> {
     /// Entity.getDisplayName.
     pub(super) fn target_name(&self, t: Target) -> Text {
         match t {
-            Target::Player => match self.score.board.players_team(PLAYER_NAME) {
-                // PlayerTeam.formatNameForTeam.
-                Some(team) => team.formatted_name(Text::literal(PLAYER_NAME)),
-                None => Text::literal(PLAYER_NAME),
-            },
+            Target::Player => {
+                // A guest's commands name the guest.
+                let name = self.lan_acting_name.as_deref().unwrap_or(PLAYER_NAME);
+                match self.score.board.players_team(name) {
+                    // PlayerTeam.formatNameForTeam.
+                    Some(team) => team.formatted_name(Text::literal(name)),
+                    None => Text::literal(name),
+                }
+            }
             Target::Item(id) => {
                 let item = self
                     .dropped

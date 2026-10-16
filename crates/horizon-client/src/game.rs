@@ -10,6 +10,7 @@ mod banners;
 mod beacon;
 mod beehives;
 mod block_entity_anims;
+mod block_items;
 mod blockctl;
 mod boats;
 mod books;
@@ -61,6 +62,8 @@ mod jukebox;
 mod lan;
 mod lan_actions;
 mod lan_crafting;
+mod lan_mobs;
+mod lan_pvp;
 mod lan_screen;
 mod lan_trading;
 mod leads;
@@ -770,6 +773,8 @@ struct Game<'a> {
     renderer: Option<Renderer>,
     /// CPU geometry storage retained across frames, including empty/title frames.
     entity_vertices: Vec<Vertex>,
+    /// Name tags drawn over everything (`RenderPipelines.TEXT_SEE_THROUGH`).
+    see_through_vertices: Vec<Vertex>,
     started: Instant,
     previous: Instant,
     /// FramerateLimitTracker.latestInputTime.
@@ -1028,6 +1033,9 @@ struct Game<'a> {
     saved_for_exit: bool,
     /// The block a guest is acting on (game/lan_actions.rs).
     forced_hit: Option<Hit>,
+    /// A guest's `ServerboundUseItemPacket`: the held item alone, no block
+    /// or entity (`ServerGamePacketListenerImpl.handleUseItem`).
+    lan_item_only: bool,
     /// Level events of this tick for the guests, and the guest acting now.
     lan_events: Vec<(i32, [i32; 3], i32, Option<u32>)>,
     /// Block events (position, b0, b1, state) and entity events (id, event,
@@ -1038,6 +1046,10 @@ struct Game<'a> {
     /// have each chest open.
     lid_openers: HashMap<(i32, i32, i32), i32>,
     lan_acting: Option<u32>,
+    /// The name of the guest `lan_acting` acts for (`Player.getName`).
+    lan_acting_name: Option<String>,
+    /// Their UUID (`Player.getUUID`).
+    lan_acting_uuid: Option<u128>,
     /// Command feedback to forward to a guest.
     chat_capture: Option<Vec<horizon_client::text::Text>>,
     /// State of `/spectate`, `/posteffect`, `/debug`, `/waypoint` and friends.
@@ -1105,6 +1117,27 @@ fn facing_offset(facing: &str) -> [i32; 3] {
         "up" => [0, 1, 0],
         _ => [0, -1, 0],
     }
+}
+/// How far along `dir` (within `reach`) a ray from `eye` enters `b`.
+fn ray_box(eye: [f64; 3], dir: [f64; 3], reach: f64, b: Aabb) -> Option<f64> {
+    let (min, max) = (b.min_position(), b.max_position());
+    let (lo, hi) = ([min.x, min.y, min.z], [max.x, max.y, max.z]);
+    let (mut t0, mut t1) = (0.0f64, reach);
+    for a in 0..3 {
+        if dir[a].abs() < 1e-9 {
+            if eye[a] < lo[a] || eye[a] > hi[a] {
+                return None;
+            }
+            continue;
+        }
+        let (mut ta, mut tb) = ((lo[a] - eye[a]) / dir[a], (hi[a] - eye[a]) / dir[a]);
+        if ta > tb {
+            std::mem::swap(&mut ta, &mut tb);
+        }
+        t0 = t0.max(ta);
+        t1 = t1.min(tb);
+    }
+    (t0 <= t1).then_some(t0)
 }
 fn view_vector(yaw: f32, pitch: f32) -> [f64; 3] {
     let (y, p) = (f64::from(yaw).to_radians(), f64::from(pitch).to_radians());
@@ -2351,17 +2384,18 @@ impl Game<'_> {
         {
             return Ok(Some(Hand::Main));
         }
-        if self.interact_frame()
-            || self.interact_armor_stand()
-            || self.interact_boat()
-            || self.interact_cart()
-            || self.interact_mob()?
-            || self.interact_knot()
+        if !self.lan_item_only
+            && (self.interact_frame()
+                || self.interact_armor_stand()
+                || self.interact_boat()
+                || self.interact_cart()
+                || self.interact_mob()?
+                || self.interact_knot())
         {
             return Ok(Some(Hand::Main));
         }
         // An EntityHitResult may fall through to Item.use, never to useItemOn.
-        let block_hit = if self.entity_targeted() {
+        let block_hit = if self.lan_item_only || self.entity_targeted() {
             None
         } else {
             self.pick()
@@ -2572,19 +2606,21 @@ impl Game<'_> {
         };
         let target = [pos.x, pos.y, pos.z];
         if let Some(entity) = BlockEntity::for_block(&self.res.facts.get(state).name) {
-            let sign = matches!(entity, BlockEntity::Sign(_));
-            let command_block = matches!(entity, BlockEntity::CommandBlock(_));
-            self.world
-                .block_entities
-                .insert((target[0], target[1], target[2]), entity);
-            if command_block {
-                self.command_block_placed((target[0], target[1], target[2]));
-            }
-            self.fill_placed_box(target, &stack);
-            self.name_placed_container(target, &stack);
-            self.fill_placed_banner(target, &stack);
-            if sign {
-                self.open_sign_editor((target[0], target[1], target[2]), true);
+            let key = (target[0], target[1], target[2]);
+            self.world.block_entities.insert(key, entity);
+            let game_master = self.can_use_game_master_blocks();
+            self.apply_placed_item(target, &stack, game_master);
+            // Block.setPlacedBy.
+            match self.world.block_entities.get(&key) {
+                Some(BlockEntity::CommandBlock(_)) => {
+                    let data = stack.data().is_some_and(|d| {
+                        d.other(horizon_client::block_entity_item::BLOCK_ENTITY_DATA)
+                            .is_some()
+                    });
+                    self.command_block_placed(key, !data);
+                }
+                Some(BlockEntity::Sign(sign)) if !sign.waxed => self.open_sign_editor(key, true),
+                _ => {}
             }
         }
         self.swing_arm();
@@ -5359,7 +5395,10 @@ impl Game<'_> {
         self.player_model_geometry(camera, alpha, &mut out);
         self.guest_model_geometry(camera, alpha, &mut out);
         self.fangs_geometry(camera, alpha, &mut out);
-        self.name_tag_geometry(camera, alpha, &mut out);
+        let mut see_through = std::mem::take(&mut self.see_through_vertices);
+        see_through.clear();
+        self.name_tag_geometry(camera, alpha, &mut out, &mut see_through);
+        self.see_through_vertices = see_through;
         // Entity shadows (EntityRenderer.extractShadow).
         if let Some(sprite) = self.res.atlas.sprites.get("misc/shadow").copied() {
             let ambient = if self.dim == Dim::Nether { 0.1 } else { 0.0 };
@@ -5660,30 +5699,40 @@ impl Game<'_> {
             if !m.alive() {
                 continue;
             }
-            let b = m.bounds();
-            let (min, max) = (b.min_position(), b.max_position());
-            let (lo, hi) = ([min.x, min.y, min.z], [max.x, max.y, max.z]);
-            let (mut t0, mut t1) = (0.0f64, reach);
-            let mut hit = true;
-            for a in 0..3 {
-                if dir[a].abs() < 1e-9 {
-                    if eye[a] < lo[a] || eye[a] > hi[a] {
-                        hit = false;
-                    }
-                    continue;
-                }
-                let (mut ta, mut tb) = ((lo[a] - eye[a]) / dir[a], (hi[a] - eye[a]) / dir[a]);
-                if ta > tb {
-                    std::mem::swap(&mut ta, &mut tb);
-                }
-                t0 = t0.max(ta);
-                t1 = t1.min(tb);
-            }
-            if hit && t0 <= t1 && best.is_none_or(|b| t0 < b.1) {
-                best = Some((i, t0));
+            if let Some(t) = ray_box(eye, dir, reach, m.bounds())
+                && best.is_none_or(|b| t < b.1)
+            {
+                best = Some((i, t));
             }
         }
         best
+    }
+    /// `Player.attack`'s damage against `target_kind` (with the attack
+    /// strength and whether it is a critical hit): the weapon and effects
+    /// scaled by the attack strength, a mace's smash, the critical hit, then
+    /// enchantments.
+    pub(super) fn melee_damage(&mut self, target_kind: &str) -> (f32, f32, bool) {
+        let hand_damage = 1.0
+            + self
+                .held()
+                .and_then(|h| self.res.items.get(&h.item))
+                .map_or(0.0, |i| i.attack_damage);
+        let damage = hand_damage + self.effect_attack_bonus();
+        let scale = self.attack_strength_scale();
+        let mut amount = damage * (0.2 + scale * scale * 0.8);
+        // Item.getAttackDamageBonus (a mace's smash), before the critical hit.
+        amount += self.smash_damage_bonus(target_kind);
+        let player = self.player.as_ref();
+        // Player.canCriticalAttack: falling, off the ground, not sprinting.
+        let falling =
+            player.is_some_and(|p| !p.ground.on_ground && p.fall_distance > 0.0 && !p.sprinting);
+        let crit = scale > 0.9 && falling;
+        if crit {
+            amount *= 1.5;
+        }
+        // Enchantment damage (sharpness, smite, bane) scaled by the attack strength.
+        amount += self.enchant_damage_bonus(target_kind) * scale;
+        (amount, scale, crit)
     }
     /// `Player.getAttackStrengthScale(0.5)`.
     fn attack_strength_scale(&self) -> f32 {
@@ -5742,6 +5791,7 @@ impl Game<'_> {
             || self.attack_boat(hand_damage)
             || self.attack_cart(hand_damage)
             || self.attack_dragon()
+            || self.attack_guest()
         {
             return true;
         }
@@ -5758,23 +5808,9 @@ impl Game<'_> {
                 return false;
             }
         }
-        let damage = hand_damage + self.effect_attack_bonus();
-        let scale = self.attack_strength_scale();
-        let mut amount = damage * (0.2 + scale * scale * 0.8);
         let target_kind = self.mobs[index].kind.id.clone();
         let target_kind = format!("minecraft:{}", target_kind.trim_start_matches("minecraft:"));
-        // Item.getAttackDamageBonus (a mace's smash), before the critical hit.
-        amount += self.smash_damage_bonus(&target_kind);
-        let player = self.player.as_ref();
-        // Player.canCriticalAttack: falling, off the ground, not sprinting.
-        let falling =
-            player.is_some_and(|p| !p.ground.on_ground && p.fall_distance > 0.0 && !p.sprinting);
-        let crit = scale > 0.9 && falling;
-        if crit {
-            amount *= 1.5;
-        }
-        // Enchantment damage (sharpness, smite, bane) scaled by the attack strength.
-        amount += self.enchant_damage_bonus(&target_kind) * scale;
+        let (amount, scale, crit) = self.melee_damage(&target_kind);
         self.attack_ticks = 0;
         if let Some(p) = self.player.as_mut()
             && !self.creative
@@ -8391,6 +8427,7 @@ impl Game<'_> {
         // Keep the buffer local while builders need mutable access to the game.
         let mut entities = std::mem::take(&mut self.entity_vertices);
         entities.clear();
+        self.see_through_vertices.clear();
         if !title {
             entities = horizon_client::spans::time("entity_geometry", || {
                 self.entity_geometry(camera, alpha, entities)
@@ -8448,6 +8485,7 @@ impl Game<'_> {
         let border = (!title)
             .then(|| self.border_draw(camera.to_array(), alpha as f32))
             .flatten();
+        let see_through = std::mem::take(&mut self.see_through_vertices);
         let frame = Frame {
             shader: self.shader_inputs(camera, alpha as f32),
             nether_lighting: self.dim == Dim::Nether,
@@ -8504,6 +8542,7 @@ impl Game<'_> {
             }),
             entities: &entities,
             additive: &additive,
+            see_through: &see_through,
             celestial: if self.settings.horizon.sky || title {
                 &celestial
             } else {
@@ -8551,6 +8590,7 @@ impl Game<'_> {
         };
         // Restore storage even when rendering fails (for example, a lost surface).
         self.entity_vertices = entities;
+        self.see_through_vertices = see_through;
         result
     }
     /// The LevelLoadingScreen shown while the player waits for its chunks:
@@ -8807,17 +8847,11 @@ impl Game<'_> {
             }
             MouseButton::Middle if pressed => {
                 // Minecraft.pickBlockOrEntity -> the server's handlePickItemFromBlock:
-                // the block's clone item, picked from the inventory (`pick_item`).
+                // the block's clone item, with its block entity's data on Ctrl in
+                // creative, picked from the inventory (`pick_item`).
                 if let Some(hit) = self.pick() {
-                    let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-                    let item = self.res.facts.get(state).item.clone();
-                    if &*item != "minecraft:air" {
-                        let stack = ItemStack {
-                            item,
-                            count: 1,
-                            damage: 0,
-                            extra: None,
-                        };
+                    let include_data = self.creative && self.has_control_down();
+                    if let Some(stack) = self.picked_stack(hit.pos, include_data) {
                         let infinite = self.creative;
                         horizon_client::pick_item::pick(
                             &mut self.inventory[..36],
@@ -9922,6 +9956,7 @@ pub fn run() -> Result<()> {
         window: None,
         renderer: None,
         entity_vertices: Vec::new(),
+        see_through_vertices: Vec::new(),
         health_hud: hud_layout::HealthHud::default(),
         started: now,
         previous: now,
@@ -10098,11 +10133,14 @@ pub fn run() -> Result<()> {
         text_selection: Default::default(),
         saved_for_exit: false,
         forced_hit: None,
+        lan_item_only: false,
         lan_events: Vec::new(),
         lan_block_events: Vec::new(),
         lan_entity_events: Vec::new(),
         lid_openers: HashMap::new(),
         lan_acting: None,
+        lan_acting_name: None,
+        lan_acting_uuid: None,
         chat_capture: None,
         cmds: Default::default(),
         ui: Default::default(),

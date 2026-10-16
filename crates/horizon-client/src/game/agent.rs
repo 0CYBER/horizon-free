@@ -638,7 +638,7 @@ impl Game<'_> {
     fn messages_value(&self, n: usize) -> Value {
         let titles = &self.titles;
         json!({
-            "chat": self.ui.chat.recent_lines(n),
+            "chat": self.remote_chat(n).unwrap_or_else(|| self.ui.chat.recent_lines(n)),
             "order": "newest first",
             "title": (titles.time > 0).then(|| titles.title.as_ref().map(|t| t.plain())).flatten(),
             "subtitle": (titles.time > 0).then(|| titles.subtitle.as_ref().map(|t| t.plain())).flatten(),

@@ -8,18 +8,6 @@ pub(super) fn is_shulker_box(name: &str) -> bool {
     name.ends_with("shulker_box")
 }
 impl Game<'_> {
-    /// A placed container takes the item's custom name.
-    pub(super) fn name_placed_container(&mut self, pos: [i32; 3], stack: &ItemStack) {
-        let key = (pos[0], pos[1], pos[2]);
-        if let Some(name) = stack.custom_name()
-            && !matches!(
-                self.world.block_entities.get(&key),
-                Some(BlockEntity::Banner(_) | BlockEntity::Sign(_))
-            )
-        {
-            self.world.block_names.insert(key, name.to_owned());
-        }
-    }
     /// The custom name of the open container, or its default title
     /// (a double chest is named by whichever half has a name).
     pub(super) fn container_title(&self, default: String) -> String {
@@ -28,22 +16,6 @@ impl Game<'_> {
             .find_map(|(key, _)| self.world.block_names.get(key))
             .cloned()
             .unwrap_or(default)
-    }
-    /// A placed shulker box takes the item's contents.
-    pub(super) fn fill_placed_box(&mut self, pos: [i32; 3], stack: &ItemStack) {
-        let Some(data) = stack.data() else { return };
-        if !is_shulker_box(&stack.item) || data.container.is_empty() {
-            return;
-        }
-        if let Some(BlockEntity::Chest(items)) =
-            self.world.block_entities.get_mut(&(pos[0], pos[1], pos[2]))
-        {
-            for (slot, s) in &data.container {
-                if let Some(cell) = items.get_mut(usize::from(*slot)) {
-                    *cell = Some(s.clone());
-                }
-            }
-        }
     }
     /// ShulkerBoxSlot.mayPlace: no shulker box inside a shulker box.
     pub(super) fn refuses(&self, slot: usize, stack: &ItemStack) -> bool {
@@ -103,7 +75,7 @@ fn facing_step(facing: &str) -> (i32, i32) {
 impl Game<'_> {
     /// The other half of the open double chest and whether the open one is
     /// the right half (`ChestBlock.getConnectedDirection`).
-    fn chest_partner(&self, key: (i32, i32, i32)) -> Option<((i32, i32, i32), bool)> {
+    pub(super) fn chest_partner(&self, key: (i32, i32, i32)) -> Option<((i32, i32, i32), bool)> {
         let registry = self.res.assets.registry;
         let state = registry.state(self.world.block(key.0, key.1, key.2))?;
         if !matches!(
@@ -197,6 +169,9 @@ impl Game<'_> {
     /// Rows of the open generic 9-wide container (`ChestMenu`), or None for
     /// the other menus (hoppers, dispensers, shulker boxes, furnaces...).
     pub(super) fn chest_rows(&self) -> Option<usize> {
+        if let Some((rows, _)) = self.remote_chest_menu() {
+            return Some(rows);
+        }
         if !matches!(self.container_kind()?, BlockEntity::Chest(_)) {
             return None;
         }
@@ -213,6 +188,9 @@ impl Game<'_> {
     }
     /// The title of the open chest-like menu.
     fn chest_title(&self, rows: usize) -> String {
+        if let Some((_, title)) = self.remote_chest_menu() {
+            return title;
+        }
         let (key, fallback) = match self.container_block().as_deref() {
             Some("minecraft:barrel") => ("container.barrel", "Barrel"),
             Some("minecraft:ender_chest") => ("container.enderchest", "Ender Chest"),

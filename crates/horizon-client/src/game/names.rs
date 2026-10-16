@@ -6,7 +6,10 @@
 //! objective displayed below names. Other players' names (on a LAN host
 //! or a server) show whenever `LivingEntityRenderer.shouldShowName` allows.
 use super::{Game, view_vector};
-use horizon_client::{mesher::Vertex, mobs::Mob, save::uuid_text, scoreboard as sb, text::Text};
+use horizon_client::{
+    block_entity_render::vertex_light, mesher::Vertex, mobs::Mob, save::uuid_text,
+    scoreboard as sb, text::Text,
+};
 
 impl Game<'_> {
     /// A named name tag names the mob under the crosshair.
@@ -69,16 +72,11 @@ impl Game<'_> {
     pub(super) fn shown_name_tags(&self, camera: glam::DVec3) -> Vec<String> {
         self.name_tags(camera, 1.0)
             .into_iter()
-            .filter_map(|(_, lines, _)| lines.last().map(|(t, _)| t.plain()))
+            .filter_map(|t| t.lines.last().map(|(t, _)| t.plain()))
             .collect()
     }
-    /// Each name tag: where it hangs, its lines (text, lift) and its light.
-    #[allow(clippy::type_complexity)]
-    fn name_tags(
-        &self,
-        camera: glam::DVec3,
-        alpha: f64,
-    ) -> Vec<(glam::DVec3, Vec<(Text, f64)>, u32)> {
+    /// Each name tag this frame.
+    fn name_tags(&self, camera: glam::DVec3, alpha: f64) -> Vec<NameTag> {
         let target = self.mob_hit().map(|(i, _)| self.mobs[i].id);
         let viewer = self.player_team();
         let mut tags = Vec::new();
@@ -128,8 +126,10 @@ impl Game<'_> {
                 self.spectator(),
                 m.has_effect("minecraft:invisibility"),
             );
+            // Entity.isDiscrete: a crouching player.
+            let discrete = player && m.extra.crouching;
             let view = sb::NameView {
-                discrete: player && m.extra.crouching,
+                discrete,
                 distance_sqr,
                 invisible_to_viewer: invisible,
                 hud_hidden: self.ui.hide_gui,
@@ -164,91 +164,144 @@ impl Game<'_> {
                 (m.position.y + height).floor() as i32,
                 m.position.z.floor() as i32,
             );
-            let light = (u32::from(l >> 4) * 16) | ((u32::from(l & 15) * 16) << 8);
-            tags.push((p, lines, light));
+            tags.push(NameTag {
+                at: p,
+                lines,
+                light: l,
+                discrete,
+            });
         }
         tags
     }
-    pub(super) fn name_tag_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
+    /// `SubmitNodeCollection.submitNameTag`: a discrete name is drawn once,
+    /// faded, on its background; any other in full over the world, its faded
+    /// copy and background in `see_through`, over everything.
+    pub(super) fn name_tag_geometry(
+        &self,
+        camera: glam::DVec3,
+        alpha: f64,
+        out: &mut Vec<Vertex>,
+        see_through: &mut Vec<Vertex>,
+    ) {
+        // The text alpha that goes with getBackgroundOpacity(0.25):
+        // max((0.25 + 0.75) / 2, 0.5), as ARGB.color (the floor of 255 times it).
+        const FADED: u32 = 0x7F;
+        for tag in self.name_tags(camera, alpha) {
+            let o = tag.at - camera;
+            if tag.discrete {
+                self.name_tag_quads(o, &tag.lines, FADED, true, 0, vertex_light(tag.light), out);
+                continue;
+            }
+            // LightCoordsUtil.lightCoordsWithEmission(lightCoords, 2).
+            let lit = (tag.light >> 4).max(2) << 4 | (tag.light & 15).max(2);
+            self.name_tag_quads(o, &tag.lines, 0xFF, false, 0, vertex_light(lit), out);
+            // RenderPipelines.TEXT_SEE_THROUGH: no depth test, no lightmap.
+            self.name_tag_quads(o, &tag.lines, FADED, true, 2, 0, see_through);
+        }
+    }
+    /// The lines of one name tag, `o` from the camera: the text at
+    /// `text_alpha` in its layer, on the translucent black background
+    /// (unlit, a hair behind) when `background`.
+    #[allow(clippy::too_many_arguments)]
+    fn name_tag_quads(
+        &self,
+        o: glam::DVec3,
+        lines: &[(Text, f64)],
+        text_alpha: u32,
+        background: bool,
+        text_layer: u32,
+        light: u32,
+        out: &mut Vec<Vertex>,
+    ) {
+        // Options.getBackgroundOpacity(0.25) black, as ARGB.color.
+        const BACKGROUND: u32 = 0x3F00_0000;
         let forward = glam::DVec3::from_array(view_vector(self.yaw, self.pitch));
         let right = forward.cross(glam::DVec3::Y).normalize_or_zero();
         let up = right.cross(forward).normalize_or_zero();
         let white = self.res.atlas.font.white();
         let away = forward.as_vec3() * 0.002;
-        for (p, lines, light) in self.name_tags(camera, alpha) {
-            for (text, lift) in lines {
-                let o = (p + glam::DVec3::new(0.0, lift, 0.0) - camera).as_vec3();
-                let (r, u) = (right.as_vec3() * 0.025, up.as_vec3() * 0.025);
-                // Text space: x right, y down (scale 0.025, -0.025).
-                let at = |x: f32, y: f32| o + r * x - u * y;
-                let chars: Vec<(char, u32)> = text
-                    .spans
-                    .iter()
-                    .flat_map(|s| {
-                        let rgb = s.style.color.unwrap_or(0xFF_FF_FF);
-                        // RGBA8, alpha in the top byte.
-                        let color = 0xFF00_0000
-                            | ((rgb & 0xFF) << 16)
-                            | (rgb & 0xFF00)
-                            | ((rgb >> 16) & 0xFF);
-                        s.text.chars().map(move |c| (c, color))
-                    })
-                    .collect();
-                let width: f32 = chars
-                    .iter()
-                    .map(|(c, _)| self.res.atlas.glyph(*c).map_or(6.0, |g| g.1))
-                    .sum();
-                let x0 = -(width / 2.0).trunc();
-                let y0 = if text.plain() == "deadmau5" {
-                    -10.0
-                } else {
-                    0.0
-                };
-                // `background`: unlit (vertex colour only) and a hair behind the text.
-                let mut quad = |a: [f32; 4], uv: [f32; 4], color: u32, background: bool| {
-                    let corners = [(a[0], a[3]), (a[2], a[3]), (a[2], a[1]), (a[0], a[1])];
-                    let uvs = [
-                        [uv[0], uv[3]],
-                        [uv[2], uv[3]],
-                        [uv[2], uv[1]],
-                        [uv[0], uv[1]],
-                    ];
-                    for ((x, y), uv) in corners.into_iter().zip(uvs) {
-                        out.push(Vertex {
-                            normal: [0; 4],
-                            pos: (at(x, y) + if background { away } else { glam::Vec3::ZERO })
-                                .to_array(),
-                            uv,
-                            layer: if background { 2 } else { 0 },
-                            color,
-                            light,
-                        });
-                    }
-                };
-                // Background: Options.getBackgroundOpacity(0.25) black.
+        for (text, lift) in lines {
+            let o = (o + glam::DVec3::new(0.0, *lift, 0.0)).as_vec3();
+            let (r, u) = (right.as_vec3() * 0.025, up.as_vec3() * 0.025);
+            // Text space: x right, y down (scale 0.025, -0.025).
+            let at = |x: f32, y: f32| o + r * x - u * y;
+            let chars: Vec<(char, u32)> = text
+                .spans
+                .iter()
+                .flat_map(|s| {
+                    let rgb = s.style.color.unwrap_or(0xFF_FF_FF);
+                    // RGBA8, alpha in the top byte.
+                    let color = text_alpha << 24
+                        | ((rgb & 0xFF) << 16)
+                        | (rgb & 0xFF00)
+                        | ((rgb >> 16) & 0xFF);
+                    s.text.chars().map(move |c| (c, color))
+                })
+                .collect();
+            let width: f32 = chars
+                .iter()
+                .map(|(c, _)| self.res.atlas.glyph(*c).map_or(6.0, |g| g.1))
+                .sum();
+            let x0 = -(width / 2.0).trunc();
+            let y0 = if text.plain() == "deadmau5" {
+                -10.0
+            } else {
+                0.0
+            };
+            let mut quad = |a: [f32; 4], uv: [f32; 4], color: u32, behind: bool, layer: u32| {
+                let corners = [(a[0], a[3]), (a[2], a[3]), (a[2], a[1]), (a[0], a[1])];
+                let uvs = [
+                    [uv[0], uv[3]],
+                    [uv[2], uv[3]],
+                    [uv[2], uv[1]],
+                    [uv[0], uv[1]],
+                ];
+                for ((x, y), uv) in corners.into_iter().zip(uvs) {
+                    out.push(Vertex {
+                        normal: [0; 4],
+                        pos: (at(x, y) + if behind { away } else { glam::Vec3::ZERO }).to_array(),
+                        uv,
+                        layer,
+                        color,
+                        light,
+                    });
+                }
+            };
+            if background {
                 quad(
                     [x0 - 1.0, y0 - 1.0, x0 + width, y0 + 8.0],
                     [white.u0, white.v0, white.u1, white.v1],
-                    0x40_00_00_00,
+                    BACKGROUND,
                     true,
+                    2,
                 );
-                let mut x = x0;
-                for (ch, color) in chars {
-                    let Some((g, advance)) = self.res.atlas.glyph(ch) else {
-                        x += 6.0;
-                        continue;
-                    };
-                    if ch != ' ' {
-                        quad(
-                            [x, y0, x + 8.0, y0 + 8.0],
-                            [g.u0, g.v0, g.u1, g.v1],
-                            color,
-                            false,
-                        );
-                    }
-                    x += advance;
+            }
+            let mut x = x0;
+            for (ch, color) in chars {
+                let Some((g, advance)) = self.res.atlas.glyph(ch) else {
+                    x += 6.0;
+                    continue;
+                };
+                if ch != ' ' {
+                    quad(
+                        [x, y0, x + 8.0, y0 + 8.0],
+                        [g.u0, g.v0, g.u1, g.v1],
+                        color,
+                        false,
+                        text_layer,
+                    );
                 }
+                x += advance;
             }
         }
     }
+}
+
+/// A name tag: where it hangs, its lines (text, lift), the packed light at
+/// the entity and whether it is discrete.
+struct NameTag {
+    at: glam::DVec3,
+    lines: Vec<(Text, f64)>,
+    light: u8,
+    discrete: bool,
 }

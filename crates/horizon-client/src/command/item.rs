@@ -61,6 +61,33 @@ pub fn decode_component(id: &str, t: &Tag) -> Result<(), String> {
             _ => Err(not_map(t)),
         },
         "minecraft:custom_name" | "minecraft:item_name" => super::component::decode(t),
+        // TypedEntityData.codec: the type is the compound's id.
+        "minecraft:block_entity_data" => match t {
+            Tag::Compound(c) => match c.get(&"id".into()) {
+                None => Err(format!("Expected 'id' field in {}", snbt(t))),
+                Some(Tag::String(id)) => {
+                    let id = id.to_string_lossy();
+                    let id = if id.contains(':') {
+                        id
+                    } else {
+                        format!("minecraft:{id}")
+                    };
+                    let known = crate::block_entity_nbt::TYPES
+                        .iter()
+                        .chain(&crate::block_entity_nbt::NEWEST)
+                        .any(|k| *k == id);
+                    if known {
+                        Ok(())
+                    } else {
+                        Err(format!(
+                            "Unknown registry key in ResourceKey[minecraft:root / minecraft:block_entity_type]: {id}"
+                        ))
+                    }
+                }
+                Some(_) => Ok(()),
+            },
+            _ => Ok(()),
+        },
         _ => Ok(()),
     }
 }
@@ -608,4 +635,27 @@ pub fn suggest_predicate(builder: &mut SuggestionsBuilder, reg: &Registries) {
 #[allow(unused)]
 fn _unused(t: &Tag) -> String {
     snbt(t)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_component;
+
+    fn check(snbt: &str) -> Result<(), String> {
+        let tag = horizon_world::nbt::parse_snbt(snbt).expect("snbt").0;
+        decode_component("minecraft:block_entity_data", &tag)
+    }
+
+    #[test]
+    fn block_entity_data_needs_a_known_type() {
+        assert_eq!(check("{id:\"chest\",Lock:1}"), Ok(()));
+        assert_eq!(
+            check("{Command:\"say\"}"),
+            Err("Expected 'id' field in {Command:\"say\"}".into())
+        );
+        assert_eq!(
+            check("{id:\"minecraft:stone\"}"),
+            Err("Unknown registry key in ResourceKey[minecraft:root / minecraft:block_entity_type]: minecraft:stone".into())
+        );
+    }
 }
