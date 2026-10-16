@@ -5,11 +5,50 @@
 use super::Game;
 use horizon_client::{
     items::ItemStack,
+    mesher::Vertex,
     mobs::{Mob, Species, sulfur_cube},
 };
-use horizon_core::random::RandomSource;
+use horizon_core::{position::BlockPos, random::RandomSource};
+
+fn block_transform(base: glam::Mat4) -> glam::Mat4 {
+    base * glam::Mat4::from_scale(glam::Vec3::new(1.0, -1.0, -1.0))
+        * glam::Mat4::from_translation(glam::Vec3::splat(-0.5))
+}
 
 impl Game<'_> {
+    /// The swallowed block replaces the opaque core and precedes the shell.
+    pub(super) fn sulfur_cube_body_geometry(
+        &self,
+        mob: &Mob,
+        base: glam::Mat4,
+        light: u32,
+        out: &mut Vec<Vertex>,
+    ) {
+        let Some(state) = mob
+            .extra
+            .head
+            .as_deref()
+            .and_then(|item| self.res.items.get(item))
+            .and_then(|item| item.block)
+        else {
+            return;
+        };
+        let start = out.len();
+        self.block_model_vertices(
+            state,
+            BlockPos::default(),
+            block_transform(base),
+            light,
+            out,
+        );
+        let overlay = horizon_client::overlay::living(0.0, mob.hurt_time > 0 || mob.death_time > 0);
+        if overlay != 0 {
+            for vertex in &mut out[start..] {
+                vertex.layer = overlay;
+            }
+        }
+    }
+
     fn sulfur_sound(&mut self, index: usize, sound: &str) {
         let at = self.mobs[index].center();
         self.audio
@@ -126,6 +165,11 @@ impl Game<'_> {
                 continue;
             }
             let item = e.stack.item.clone();
+            let thrown_by_player = e
+                .thrower
+                .is_some_and(|uuid| Some(uuid) == self.level.player_uuid);
+            let mut swallowed = e.stack.clone();
+            swallowed.count = 1;
             let (taken_item, id) = (e.clone(), self.mobs[i].id);
             self.add_pickup(
                 super::pickups::Taken::Item(Box::new(taken_item)),
@@ -140,6 +184,14 @@ impl Game<'_> {
             m.extra.head = Some(item);
             m.extra.point = None;
             self.sulfur_sound(i, "entity.sulfur_cube.absorb");
+            if thrown_by_player {
+                let target = self.mob_entity(&self.mobs[i]);
+                self.trigger_item_entity(
+                    "minecraft:thrown_item_picked_up_by_entity",
+                    &swallowed,
+                    &target,
+                );
+            }
         }
     }
     /// `AbstractCubeMob.remove`: a dead adult splits into two babies (none
@@ -165,5 +217,81 @@ impl Game<'_> {
                 c.head_yaw = yaw;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn swallowed_block_occupies_the_default_cores_volume() {
+        use horizon_client::mobs::{EntityModelDocument, anim::Poses, render};
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("entity-models.json").exists() {
+            return;
+        }
+        let model = EntityModelDocument::load(&root)
+            .unwrap()
+            .model("minecraft:sulfur_cube#inner")
+            .unwrap();
+        let base = glam::Mat4::from_translation(glam::Vec3::new(3.0, 4.0, -2.0))
+            * glam::Mat4::from_rotation_y(0.7)
+            * glam::Mat4::from_scale(glam::Vec3::new(-1.0, -1.0, 1.0));
+        let mut core = Vec::new();
+        render::draw(
+            &model,
+            base,
+            &Poses::new(&model),
+            [0.0; 4],
+            u32::MAX,
+            0,
+            0,
+            &mut core,
+        );
+        let block = block_transform(base);
+        let corners: Vec<_> = (0..8)
+            .map(|i| {
+                block.transform_point3(glam::Vec3::new(
+                    (i & 1) as f32,
+                    ((i >> 1) & 1) as f32,
+                    ((i >> 2) & 1) as f32,
+                ))
+            })
+            .collect();
+        for axis in 0..3 {
+            let lo = core
+                .iter()
+                .map(|v| v.pos[axis])
+                .fold(f32::INFINITY, f32::min);
+            let hi = core
+                .iter()
+                .map(|v| v.pos[axis])
+                .fold(f32::NEG_INFINITY, f32::max);
+            assert!(
+                (corners
+                    .iter()
+                    .map(|p| p[axis])
+                    .fold(f32::INFINITY, f32::min)
+                    - lo)
+                    .abs()
+                    < 1e-5
+            );
+            assert!(
+                (corners
+                    .iter()
+                    .map(|p| p[axis])
+                    .fold(f32::NEG_INFINITY, f32::max)
+                    - hi)
+                    .abs()
+                    < 1e-5
+            );
+        }
+        let up = block.transform_vector3(glam::Vec3::Y);
+        assert!(
+            up.y > 0.0,
+            "block textures must stay upright inside the model"
+        );
     }
 }

@@ -858,7 +858,7 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     Some(m)
 }
 
-/// `ItemEntity`: Health, Age, PickupDelay, Item.
+/// `ItemEntity`: Health, Age, PickupDelay, Item, Thrower.
 pub fn item_entity_to_nbt(e: &ItemEntity, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
     let base = Base {
         id: "minecraft:item",
@@ -882,6 +882,11 @@ pub fn item_entity_to_nbt(e: &ItemEntity, uuid: [i32; 4], raw: Option<&Tag>) -> 
     ] {
         put(&mut tag, key, value);
     }
+    if let Some(thrower) = e.thrower {
+        put(&mut tag, "Thrower", Tag::IntArray(thrower.to_vec()));
+    } else if let Tag::Compound(map) = &mut tag {
+        map.remove(&"Thrower".into());
+    }
     tag
 }
 pub fn item_entity_from_nbt(tag: &Tag, id: u32, bob_offset: f32) -> Option<ItemEntity> {
@@ -892,6 +897,7 @@ pub fn item_entity_from_nbt(tag: &Tag, id: u32, bob_offset: f32) -> Option<ItemE
         fire_ticks: number(tag.get("Fire")).unwrap_or(0) as i32,
         id,
         stack,
+        thrower: uuid_from_tag(tag.get("Thrower")),
         position,
         previous: position,
         velocity: motion(tag),
@@ -1493,6 +1499,7 @@ mod tests {
         let e = ItemEntity {
             health: 2,
             fire_ticks: 73,
+            thrower: Some([5, 6, 7, 8]),
             id: 7,
             stack: ItemStack {
                 item: Arc::from("minecraft:diamond_pickaxe"),
@@ -1519,6 +1526,11 @@ mod tests {
             (120, 10, true)
         );
         assert_eq!(back.position.x, 100.5);
+        assert_eq!(back.thrower, e.thrower);
+        let mut cleared = back;
+        cleared.thrower = None;
+        let cleared = item_entity_to_nbt(&cleared, [1, 2, 3, 4], Some(&tag));
+        assert!(cleared.get("Thrower").is_none());
     }
     #[test]
     fn unknown_fields_survive() {
