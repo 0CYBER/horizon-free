@@ -3615,6 +3615,9 @@ impl Game<'_> {
     }
     fn hud(&mut self, size: [u32; 2]) -> HudBatch {
         let mut batch = self.hud_layers(size);
+        // Gui.extractRenderState: the debug overlay comes after the screen
+        // and the toasts, so it is over everything, menus included.
+        self.draw_debug_overlay(&mut batch, size);
         self.frame_graph
             .draw(self.settings.horizon.overlay, &mut batch, &self.res.atlas);
         self.draw_pad_cursor(&mut batch);
@@ -3795,117 +3798,6 @@ impl Game<'_> {
             }
         }
         let atlas = &self.res.atlas;
-        if self.debug {
-            let p = self
-                .player
-                .as_ref()
-                .map(|p| p.position)
-                .unwrap_or(Vec3::ZERO);
-            let block = [p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32];
-            let biome = self
-                .world
-                .chunks
-                .get(&(block[0] >> 4, block[2] >> 4))
-                .map(|c| {
-                    self.res
-                        .biomes
-                        .get(c.biome(block[0], block[1], block[2]))
-                        .name
-                        .clone()
-                })
-                .unwrap_or_default();
-            let light = self.world.light(block[0], block[1], block[2]);
-            let facing = match ((self.yaw.rem_euclid(360.0) + 45.0) / 90.0) as i32 % 4 {
-                0 => "south (Towards positive Z)",
-                1 => "west (Towards negative X)",
-                2 => "north (Towards negative Z)",
-                _ => "east (Towards positive X)",
-            };
-            let mut lines = vec![
-                format!("Horizon 26.3 (Rust) {:.0} fps", self.fps),
-                format!(
-                    "C: {} chunks, {} sections drawn / {}",
-                    self.world.chunks.len(),
-                    self.renderer.as_ref().map_or(0, |r| r.drawn_sections),
-                    self.renderer.as_ref().map_or(0, |r| r.section_count())
-                ),
-                format!("Pending jobs: {}", self.streaming.pending()),
-                String::new(),
-                format!("XYZ: {:.3} / {:.5} / {:.3}", p.x, p.y, p.z),
-                format!("Block: {} {} {}", block[0], block[1], block[2]),
-                format!(
-                    "Chunk: {} {} {} in {} {} {}",
-                    block[0] & 15,
-                    block[1] & 15,
-                    block[2] & 15,
-                    block[0] >> 4,
-                    block[1] >> 4,
-                    block[2] >> 4
-                ),
-                format!(
-                    "Facing: {facing} ({:.1} / {:.1})",
-                    self.yaw.rem_euclid(360.0)
-                        - if self.yaw.rem_euclid(360.0) > 180.0 {
-                            360.0
-                        } else {
-                            0.0
-                        },
-                    self.pitch
-                ),
-                format!(
-                    "Light: {} (sky {}, block {})",
-                    (light >> 4).max(light & 15),
-                    light >> 4,
-                    light & 15
-                ),
-                format!("Biome: {biome}"),
-                format!(
-                    "Day {} time {}",
-                    self.world.day_time / 24000,
-                    self.world.day_time % 24000
-                ),
-                String::new(),
-            ];
-            lines.extend(self.debug_chart_lines());
-            for (i, line) in lines.iter().enumerate() {
-                if line.is_empty() {
-                    continue;
-                }
-                let tw = HudBatch::text_width(atlas, line);
-                batch.fill(
-                    atlas,
-                    1.0,
-                    2.0 + i as f32 * 9.0 - 1.0,
-                    tw + 2.0,
-                    9.0,
-                    rgba(80, 80, 80, 144),
-                );
-                batch.text(
-                    atlas,
-                    line,
-                    2.0,
-                    2.0 + i as f32 * 9.0,
-                    rgba(224, 224, 224, 255),
-                    false,
-                );
-            }
-            let charts = self.debug_charts.draw(
-                &atlas.font,
-                w as i32,
-                h as i32,
-                self.settings.max_fps,
-                1000.0 / self.clock.rate(),
-                self.remote.is_some(),
-            );
-            hud_layout::paint(&mut batch, atlas, &charts);
-            if self.debug_charts.lightmap
-                && let Some(r) = &self.renderer
-            {
-                let view =
-                    horizon_client::debug_chart::lightmap(&r.lightmap_pixels, w as i32, h as i32);
-                hud_layout::paint(&mut batch, atlas, &view);
-            }
-        }
         if !self.ui.hide_gui
             && let Some((text, at)) = &self.message
             && at.elapsed() < Duration::from_secs(3)

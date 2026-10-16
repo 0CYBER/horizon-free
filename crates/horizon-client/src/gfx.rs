@@ -292,7 +292,7 @@ pub struct Renderer {
     indirect: wgpu::Buffer,
     indirect_capacity: u64,
     /// Indirect draws may set `first_instance` (the section origin).
-    multi_draw: bool,
+    pub multi_draw: bool,
     /// Per-frame scratch, kept to avoid allocating every frame.
     visible: Vec<Visible>,
     origins: Vec<[f32; 4]>,
