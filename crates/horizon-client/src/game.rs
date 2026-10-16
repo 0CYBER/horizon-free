@@ -211,6 +211,8 @@ struct Options {
     creative: bool,
     test_terrain: bool,
     frames: Option<u64>,
+    /// `--world-frames N`: exit after N frames drawn in the world (smoke runs; the world may load slowly).
+    world_frames: Option<u64>,
     screenshot_after: Option<u64>,
     timeout: Duration,
     report: Option<PathBuf>,
@@ -269,6 +271,7 @@ impl Options {
             creative: false,
             test_terrain: false,
             frames: None,
+            world_frames: None,
             screenshot_after: None,
             timeout: Duration::from_secs(120),
             report: None,
@@ -297,7 +300,7 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Horizon — Minecraft Java Edition 26.3 in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --dev-mod PATH          A Horizon mod (.hmod or folder) to develop: always on, reloaded when rebuilt\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause."
+                        "Horizon — Minecraft Java Edition 26.3 in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --world-frames N        Exit after N frames drawn in the world (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --dev-mod PATH          A Horizon mod (.hmod or folder) to develop: always on, reloaded when rebuilt\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause."
                     );
                     return Ok(None);
                 }
@@ -335,6 +338,11 @@ impl Options {
                             })
                         }
                         "--frames" => o.frames = Some(value.parse()?),
+                        "--world-frames" => {
+                            o.world_frames = Some(value.parse()?);
+                            // A frame-limited run in every other respect; --timeout-seconds still applies.
+                            o.frames.get_or_insert(u64::MAX);
+                        }
                         "--timeout-seconds" => o.timeout = Duration::from_secs(value.parse()?),
                         "--smoke-report" => o.report = Some(value.into()),
                         "--screenshot-after" => o.screenshot_after = Some(value.parse()?),
@@ -782,6 +790,8 @@ struct Game<'a> {
     /// Controllers (Horizon's own).
     pad: pad::Pads,
     frames: u64,
+    /// Frames drawn with the player in the world, for `--world-frames`.
+    world_frames: u64,
     fps: f32,
     fps_frames: u64,
     fps_at: Instant,
@@ -9633,6 +9643,7 @@ impl ApplicationHandler for Game<'_> {
                             self.perf.title_shown();
                         } else if self.screen == Screen::Playing && self.player.is_some() {
                             self.perf.frame(elapsed.as_secs_f32() * 1000.0);
+                            self.world_frames += 1;
                         }
                         self.frames += 1;
                         self.fps_frames += 1;
@@ -9642,7 +9653,12 @@ impl ApplicationHandler for Game<'_> {
                             self.fps_frames = 0;
                             self.fps_at = Instant::now();
                         }
-                        if self.options.frames.is_some_and(|f| self.frames >= f) {
+                        if self.options.frames.is_some_and(|f| self.frames >= f)
+                            || self
+                                .options
+                                .world_frames
+                                .is_some_and(|f| self.world_frames >= f)
+                        {
                             event_loop.exit();
                         }
                     }
@@ -9963,6 +9979,7 @@ pub fn run() -> Result<()> {
         last_input: now,
         pad: Default::default(),
         frames: 0,
+        world_frames: 0,
         fps: 0.0,
         fps_frames: 0,
         fps_at: now,
