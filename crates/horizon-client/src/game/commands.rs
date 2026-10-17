@@ -2312,7 +2312,7 @@ impl Game<'_> {
         };
         let from = self.source_position().map(|v| v.floor() as i32);
         const RANGE: i32 = 256;
-        let mut cache: std::collections::HashMap<u16, Option<&'static str>> =
+        let mut cache: std::collections::HashMap<u32, Option<&'static str>> =
             std::collections::HashMap::new();
         let mut best: Option<(i64, [i32; 3], &'static str)> = None;
         let (cx0, cz0) = ((from[0] - RANGE) >> 4, (from[2] - RANGE) >> 4);
@@ -2323,15 +2323,12 @@ impl Game<'_> {
                     continue;
                 };
                 for (i, section) in chunk.sections.iter().enumerate() {
-                    let mut wanted_state = |v: u32| {
-                        let state = v as u16;
+                    let mut wanted_state = |state: u32| {
                         cache
                             .entry(state)
                             .or_insert_with(|| {
-                                self.poi_type(horizon_world::registry::BlockStateId(u32::from(
-                                    state,
-                                )))
-                                .filter(|t| wanted.iter().any(|w| w == t))
+                                self.poi_type(horizon_world::registry::BlockStateId(state))
+                                    .filter(|t| wanted.iter().any(|w| w == t))
                             })
                             .is_some()
                     };

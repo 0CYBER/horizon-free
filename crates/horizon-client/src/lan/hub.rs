@@ -1193,7 +1193,7 @@ impl Hub {
                 let (x, y, z) = positions[0];
                 C::BlockUpdate(play::BlockUpdate {
                     pos: [x, y, z],
-                    state: i32::from(world.block(x, y, z).0 as u16),
+                    state: world.block(x, y, z).0 as i32,
                 })
             } else {
                 C::SectionBlocksUpdate(play::SectionBlocksUpdate {
@@ -1222,7 +1222,7 @@ impl Hub {
                 let Some(tag) = super::chunks::entity_tag(entity) else {
                     continue;
                 };
-                let state = world.block(x, y, z).0 as u16;
+                let state = world.block(x, y, z).0;
                 let Some(kind) = self.encoder.entity_type(state) else {
                     continue;
                 };

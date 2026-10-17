@@ -31,6 +31,10 @@ struct Globals {
 @group(0) @binding(5) var sprites_1: texture_2d_array<f32>;
 @group(0) @binding(6) var sprites_2: texture_2d_array<f32>;
 @group(0) @binding(7) var sprites_3: texture_2d_array<f32>;
+@group(0) @binding(8) var sprites_4: texture_2d_array<f32>;
+@group(0) @binding(9) var sprites_5: texture_2d_array<f32>;
+@group(0) @binding(10) var sprites_6: texture_2d_array<f32>;
+@group(0) @binding(11) var sprites_7: texture_2d_array<f32>;
 // How many sprite arrays hold layers (a pipeline constant): 1 for vanilla,
 // which then samples exactly as before.
 override SPRITE_ARRAYS: u32 = 1u;
@@ -47,7 +51,11 @@ fn sprite(uv: vec2<f32>, layer: u32) -> vec4<f32> {
         case 0u: { return textureSampleGrad(sprites, sprite_sampler, uv, l, dx, dy); }
         case 1u: { return textureSampleGrad(sprites_1, sprite_sampler, uv, l, dx, dy); }
         case 2u: { return textureSampleGrad(sprites_2, sprite_sampler, uv, l, dx, dy); }
-        default: { return textureSampleGrad(sprites_3, sprite_sampler, uv, l, dx, dy); }
+        case 3u: { return textureSampleGrad(sprites_3, sprite_sampler, uv, l, dx, dy); }
+        case 4u: { return textureSampleGrad(sprites_4, sprite_sampler, uv, l, dx, dy); }
+        case 5u: { return textureSampleGrad(sprites_5, sprite_sampler, uv, l, dx, dy); }
+        case 6u: { return textureSampleGrad(sprites_6, sprite_sampler, uv, l, dx, dy); }
+        default: { return textureSampleGrad(sprites_7, sprite_sampler, uv, l, dx, dy); }
     }
 }
 

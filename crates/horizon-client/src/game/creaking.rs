@@ -333,7 +333,7 @@ impl Game<'_> {
                 }
                 for i in 0..4096 {
                     let id = section.get(i);
-                    if !hearts.get(usize::from(id)).copied().unwrap_or(false) {
+                    if !hearts.get(id as usize).copied().unwrap_or(false) {
                         continue;
                     }
                     let (lx, lz, ly) = ((i & 15) as i32, ((i >> 4) & 15) as i32, (i >> 8) as i32);

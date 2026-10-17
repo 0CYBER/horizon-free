@@ -9,11 +9,26 @@ pub const MIN_Y: i32 = -64;
 pub const HEIGHT: i32 = 384;
 pub const SECTIONS: usize = (HEIGHT / 16) as usize;
 
-/// Block states are `PalettedContainer`s over the pinned registry (35,723
-/// states: a 16-bit global palette); biomes are 4x4x4 containers over the
-/// biome table (67 entries: a 7-bit global palette).
-pub const BLOCK_STRATEGY: Strategy = Strategy::blocks(16);
+/// Biomes are 4x4x4 containers over the biome table (67 entries: a 7-bit
+/// global palette).
 pub const BIOME_STRATEGY: Strategy = Strategy::biomes(7);
+
+/// Bits of the block states' global palette: 16 for vanilla's 35,723 states
+/// (what vanilla servers and clients send), more when content mods add states
+/// past 65,536 (docs/modpacks.md). Set once, before the first chunk.
+static BLOCK_BITS: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(16);
+
+/// Block states are `PalettedContainer`s over the registry: vanilla's 16-bit
+/// global palette, wider with enough content mods.
+pub fn block_strategy() -> Strategy {
+    Strategy::blocks(BLOCK_BITS.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Sizes the block states' global palette for a registry of `states`.
+pub fn set_block_states(states: usize) {
+    let bits = horizon_core::paletted::ceil_log2(states).max(16);
+    BLOCK_BITS.store(bits, std::sync::atomic::Ordering::Relaxed);
+}
 /// Packed light per block: sky light in the high nibble, block light in the low one.
 #[derive(Clone)]
 pub enum Light {
@@ -43,7 +58,7 @@ pub struct Section {
 impl Default for Section {
     fn default() -> Self {
         Self {
-            blocks: PalettedContainer::new(BLOCK_STRATEGY, 0),
+            blocks: PalettedContainer::new(block_strategy(), 0),
             biomes: PalettedContainer::new(BIOME_STRATEGY, 0),
             light: Light::Uniform(0xF0),
         }
@@ -51,27 +66,26 @@ impl Default for Section {
 }
 impl Section {
     #[inline]
-    pub fn get(&self, i: usize) -> u16 {
-        self.blocks.get(i) as u16
+    pub fn get(&self, i: usize) -> u32 {
+        self.blocks.get(i)
     }
-    pub fn set(&mut self, i: usize, v: u16) -> u16 {
-        self.blocks.set(i, u32::from(v)) as u16
+    pub fn set(&mut self, i: usize, v: u32) -> u32 {
+        self.blocks.set(i, v)
     }
     /// All 4,096 block states in index order.
-    pub fn unpack(&self, out: &mut [u16; 4096]) {
-        self.blocks.unpack_u16(out);
+    pub fn unpack(&self, out: &mut [u32; 4096]) {
+        self.blocks.unpack(out);
     }
     /// The block states of a whole section at once.
-    pub fn from_blocks(values: &[u16; 4096]) -> PalettedContainer {
-        let wide: Vec<u32> = values.iter().map(|&v| u32::from(v)).collect();
-        PalettedContainer::from_values(BLOCK_STRATEGY, &wide)
+    pub fn from_blocks(values: &[u32; 4096]) -> PalettedContainer {
+        PalettedContainer::from_values(block_strategy(), values)
     }
     #[inline]
     pub fn light(&self, i: usize) -> u8 {
         self.light.get(i)
     }
-    pub fn is_uniform(&self, v: u16) -> bool {
-        self.blocks.is_uniform(u32::from(v))
+    pub fn is_uniform(&self, v: u32) -> bool {
+        self.blocks.is_uniform(v)
     }
     /// Heap bytes held by the block, biome and light storage (benchmark accounting).
     pub fn heap_bytes(&self) -> usize {
@@ -147,7 +161,7 @@ impl Chunk {
         }
     }
     #[inline]
-    pub fn get(&self, x: i32, y: i32, z: i32) -> u16 {
+    pub fn get(&self, x: i32, y: i32, z: i32) -> u32 {
         let s = (y - MIN_Y) >> 4;
         if !(0..SECTIONS as i32).contains(&s) {
             return 0;
@@ -156,11 +170,11 @@ impl Chunk {
     }
     #[inline]
     pub fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId {
-        BlockStateId(u32::from(self.get(x, y, z)))
+        BlockStateId(self.get(x, y, z))
     }
     /// The highest y where `matches`, scanning down. Sections holding only
     /// `skip` are passed over whole: `matches` must be false for it.
-    pub fn highest(&self, skip: u16, mut matches: impl FnMut(i32) -> bool) -> Option<i32> {
+    pub fn highest(&self, skip: u32, mut matches: impl FnMut(i32) -> bool) -> Option<i32> {
         self.sections
             .iter()
             .enumerate()
@@ -171,7 +185,7 @@ impl Chunk {
                 (base..base + 16).rev().find(|&y| matches(y))
             })
     }
-    pub fn set(&mut self, x: i32, y: i32, z: i32, v: u16) -> u16 {
+    pub fn set(&mut self, x: i32, y: i32, z: i32, v: u32) -> u32 {
         let s = (y - MIN_Y) >> 4;
         if !(0..SECTIONS as i32).contains(&s) {
             return v;
@@ -228,15 +242,15 @@ mod tests {
             Arc::make_mut(&mut chunk.sections[5]).set(i, cave_air);
         }
         chunk.set(3, 150, 4, stone);
-        let full = |c: &Chunk, matches: &dyn Fn(u16) -> bool| {
+        let full = |c: &Chunk, matches: &dyn Fn(u32) -> bool| {
             (MIN_Y..MIN_Y + HEIGHT)
                 .rev()
                 .find(|&y| matches(c.get(3, y, 4)))
         };
         for matches in [
-            &(|v: u16| v != air) as &dyn Fn(u16) -> bool,
-            &|v: u16| v == stone,
-            &|v: u16| v == cave_air,
+            &(|v: u32| v != air) as &dyn Fn(u32) -> bool,
+            &|v: u32| v == stone,
+            &|v: u32| v == cave_air,
         ] {
             let fast = chunk.highest(air, |y| matches(chunk.get(3, y, 4)));
             assert_eq!(fast, full(&chunk, matches));

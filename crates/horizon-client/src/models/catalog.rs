@@ -136,11 +136,29 @@ impl StateModels {
                 })
                 .collect::<Result<_>>()?;
             let possible: Vec<Properties> = serde_json::from_value(facts["states"].clone())?;
-            let resource = fs::read_to_string(
+            // Vanilla's BlockStateModelLoader: a definition that does not
+            // read or bind is logged and its block gets no model; the other
+            // blocks still load.
+            let loaded = fs::read_to_string(
                 root.join(format!("assets/{namespace}/blockstates/{path}.json")),
-            )?;
-            let definition = BlockStateDefinition::from_json(&resource)?;
-            let bound = definition.bind(&schema, &possible)?;
+            )
+            .map_err(|e| e.to_string())
+            .and_then(|text| BlockStateDefinition::from_json(&text).map_err(|e| e.to_string()))
+            .and_then(|definition| {
+                let bound = definition
+                    .bind(&schema, &possible)
+                    .map_err(|e| e.to_string())?;
+                Ok((definition, bound))
+            });
+            let (definition, bound) = match loaded {
+                Ok(loaded) => loaded,
+                Err(e) => {
+                    log::warn!(
+                        "Horizon: blockstate definition of {namespace}:{path} not loaded: {e}"
+                    );
+                    continue;
+                }
+            };
             let native_order: Vec<_> = by_name
                 .get(name.as_str())
                 .map(Vec::as_slice)
@@ -185,10 +203,14 @@ impl StateModels {
             }
             choices.push(CompiledChoices::new(&definition)?);
         }
-        let library = models.block_library(
-            root,
-            variants.iter().map(|(name, _, _)| name.clone()).collect(),
-        )?;
+        let names: Vec<String> = variants.iter().map(|(name, _, _)| name.clone()).collect();
+        let library = match models.block_library(root, names.clone()) {
+            Ok(library) => library,
+            Err(e) => {
+                log::warn!("Horizon: block models incomplete ({e}); using the missing model");
+                models.block_library_or_missing(root, names)?
+            }
+        };
         let mut baked = BTreeMap::new();
         for (name, turns, lock) in variants {
             let model = library.resolve(&name)?;

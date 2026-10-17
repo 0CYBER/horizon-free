@@ -75,8 +75,8 @@ impl Palette {
         }
     }
     #[inline]
-    fn get(&self, id: u16) -> (u8, u8) {
-        let i = usize::from(id);
+    fn get(&self, id: u32) -> (u8, u8) {
+        let i = id as usize;
         (
             self.color.get(i).copied().unwrap_or(0),
             self.flags.get(i).copied().unwrap_or(AIR),
@@ -137,7 +137,7 @@ fn scan_column(
     (0, MIN_Y as i16, 0)
 }
 /// The highest block of a chunk worth scanning from.
-fn top_of(chunk: &Chunk, air: u16, layer: Layer) -> i32 {
+fn top_of(chunk: &Chunk, air: u32, layer: Layer) -> i32 {
     let surface = (0..SECTIONS)
         .rev()
         .find(|&s| {
@@ -152,7 +152,7 @@ fn top_of(chunk: &Chunk, air: u16, layer: Layer) -> i32 {
         Layer::Below(head) => surface.min(head),
     }
 }
-fn scan_tile(chunk: &Chunk, palette: &Palette, air: u16, layer: Layer, revision: u64) -> Tile {
+fn scan_tile(chunk: &Chunk, palette: &Palette, air: u32, layer: Layer, revision: u64) -> Tile {
     let top = top_of(chunk, air, layer);
     let mut tile = Tile {
         color: [0; 256],
@@ -287,7 +287,7 @@ impl Minimap {
     ) -> usize {
         let palette = self.palette.get_or_insert_with(|| Palette::new(facts));
         let started = Instant::now();
-        let air = world.air.0 as u16;
+        let air = world.air.0;
         // Tiles of unloaded or distant chunks go.
         self.tiles.retain(|k, _| {
             (k.0 - center.0).abs() <= radius + 2
@@ -417,7 +417,7 @@ mod tests {
             (LAVA, 2),
         ])
     }
-    fn chunk(columns: &[(i32, i32, &[(i32, u16)])]) -> Chunk {
+    fn chunk(columns: &[(i32, i32, &[(i32, u32)])]) -> Chunk {
         let mut c = Chunk::empty(0, 0);
         for &(x, z, blocks) in columns {
             for &(y, id) in blocks {
@@ -467,7 +467,7 @@ mod tests {
     fn below_a_height_shows_the_floor_and_cuts_walls() {
         let p = palette();
         // A cave: stone everywhere from 0 to 20, air at 10 and 11 in column 0.
-        let mut blocks: Vec<(i32, u16)> = (0..=20).map(|y| (y, 2)).collect();
+        let mut blocks: Vec<(i32, u32)> = (0..=20).map(|y| (y, 2)).collect();
         let solid = blocks.clone();
         blocks.retain(|&(y, _)| y != 10 && y != 11);
         let c = chunk(&[(0, 0, &blocks), (1, 0, &solid)]);

@@ -1127,7 +1127,7 @@ struct Game<'a> {
     lan_events: Vec<(i32, [i32; 3], i32, Option<u32>)>,
     /// Block events (position, b0, b1, state) and entity events (id, event,
     /// position) for the guests.
-    lan_block_events: Vec<([i32; 3], i32, i32, u16)>,
+    lan_block_events: Vec<([i32; 3], i32, i32, u32)>,
     lan_entity_events: Vec<(i32, i8, [f64; 3])>,
     /// `ContainerOpenersCounter`: how many players (the host and the guests)
     /// have each chest open.

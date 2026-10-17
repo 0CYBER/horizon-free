@@ -124,7 +124,7 @@ struct Encoded {
 
 /// A section's blocks that have a block entity type, as (index, state) in
 /// index order (y, then z, then x).
-type Entities = Arc<[(u16, u16)]>;
+type Entities = Arc<[(u16, u32)]>;
 
 /// One section's light as DataLayers (two blocks per byte, the even one in
 /// the low nibble), and whether each holds any light.
@@ -326,23 +326,23 @@ impl ChunkEncoder {
         // The heightmaps depend on the level's height.
         self.heights.get_mut().unwrap().clear();
     }
-    pub fn entity_type(&self, state: u16) -> Option<i32> {
+    pub fn entity_type(&self, state: u32) -> Option<i32> {
         self.entity_types
-            .get(usize::from(state))
+            .get(state as usize)
             .filter(|t| **t >= 0)
             .map(|t| i32::from(*t))
     }
-    pub fn is_air(&self, state: u16) -> bool {
+    pub fn is_air(&self, state: u32) -> bool {
         self.flags
-            .get(usize::from(state))
+            .get(state as usize)
             .is_none_or(|f| f & NON_AIR == 0)
     }
 
-    fn section(&self, section: &Section) -> (horizon_protocol::chunk::Section, Vec<(u16, u16)>) {
+    fn section(&self, section: &Section) -> (horizon_protocol::chunk::Section, Vec<(u16, u32)>) {
         let mut values = Vec::with_capacity(BLOCKS);
         let (mut non_empty, mut fluids, mut entities) = (0i16, 0i16, Vec::new());
-        let mut count = |state: u16, n: i16| {
-            let f = self.flags.get(usize::from(state)).copied().unwrap_or(0);
+        let mut count = |state: u32, n: i16| {
+            let f = self.flags.get(state as usize).copied().unwrap_or(0);
             if f & NON_AIR != 0 {
                 non_empty += n;
                 if f & FLUID != 0 {
@@ -354,17 +354,17 @@ impl ChunkEncoder {
         // One block everywhere (all air, mostly): what from_values would give.
         let uniform = section.blocks.uniform();
         if let Some(v) = uniform {
-            if count(v as u16, BLOCKS as i16) {
-                entities = (0..BLOCKS as u16).map(|i| (i, v as u16)).collect();
+            if count(v, BLOCKS as i16) {
+                entities = (0..BLOCKS as u16).map(|i| (i, v)).collect();
             }
         } else {
-            let mut unpacked = [0u16; BLOCKS];
+            let mut unpacked = [0u32; BLOCKS];
             section.unpack(&mut unpacked);
             for (i, &v) in unpacked.iter().enumerate() {
                 if count(v, 1) {
                     entities.push((i as u16, v));
                 }
-                values.push(i32::from(v));
+                values.push(v as i32);
             }
         }
         let biome_values: Vec<i32> = (0..BIOMES)
@@ -386,7 +386,11 @@ impl ChunkEncoder {
                         palette: vec![v as i32],
                         data: Vec::new(),
                     },
-                    None => Paletted::from_values(&values, Strategy::Blocks, 16),
+                    None => Paletted::from_values(
+                        &values,
+                        Strategy::Blocks,
+                        crate::chunk::block_strategy().global_bits,
+                    ),
                 },
                 biomes: Paletted::from_values(&biome_values, Strategy::Biomes, self.biome_bits),
             },
