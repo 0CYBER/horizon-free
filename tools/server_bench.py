@@ -219,6 +219,8 @@ def run_once(kind, bots, behaviour, args, out):
         result['start_seconds'] = round(time.time() - started, 2)
         # Every bot appears on the world spawn itself, not spread around it, so both servers see the same paths.
         server.console('gamerule respawn_radius 0')
+        for rule in filter(None, args.gamerule.split(',')):
+            server.console('gamerule ' + rule.replace('=', ' '))
         time.sleep(5)
         report = out / f'{name}-bots.json'
         total = bots * args.join_every + args.warmup + args.seconds
@@ -310,6 +312,9 @@ def main():
     parser.add_argument('--warmup', type=int, default=60)
     parser.add_argument('--seconds', type=int, default=300)
     parser.add_argument('--seed', type=int, default=12345)
+    parser.add_argument('--gamerule', default='',
+                        help="more game rules for both servers, 'name=value,...' (locator_bar=false: Horizon has "
+                             "no locator bar yet)")
     parser.add_argument('--heap', default='4g', help='the Java heap, -Xms and -Xmx (vanilla)')
     parser.add_argument('--out', type=Path, default=None, help='the report (JSON)')
     parser.add_argument('--nice', type=int, default=0, help='run the servers under nice -n N')
