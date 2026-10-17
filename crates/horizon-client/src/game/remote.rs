@@ -80,7 +80,7 @@ pub(super) struct Remote {
     pub brand: String,
     builtin: Arc<Builtin>,
     lang: Arc<Language>,
-    registries: Arc<Dynamic>,
+    pub(super) registries: Arc<Dynamic>,
     joined: bool,
     status: String,
     entity_id: i32,
@@ -245,6 +245,7 @@ impl Game<'_> {
         self.player = None;
         self.spawn = None;
         self.mobs.clear();
+        self.clear_remote_objects();
         self.creatures.projectiles.clear();
         self.dropped.clear();
         self.particles.clear();
@@ -363,6 +364,7 @@ impl Game<'_> {
         self.world = World::new(self.res.facts.air, 0);
         self.player = None;
         self.mobs.clear();
+        self.clear_remote_objects();
         self.dropped.clear();
         self.particles.clear();
         self.pickups.clear();
@@ -445,7 +447,7 @@ impl Game<'_> {
             .and_then(|i| i.id(name))
             .unwrap_or(0)
     }
-    fn to_stack(&self, s: &Option<Stack>) -> Option<ItemStack> {
+    pub(super) fn to_stack(&self, s: &Option<Stack>) -> Option<ItemStack> {
         let s = s.as_ref()?;
         let mut out = ItemStack {
             item: self.item_name(s.item),
@@ -608,6 +610,7 @@ impl Game<'_> {
             self.world.day_time = day;
             self.world.weather = weather;
             self.mobs.clear();
+            self.clear_remote_objects();
             self.dropped.clear();
             self.particles.clear();
             self.pickups.clear();
@@ -993,11 +996,13 @@ impl Game<'_> {
         if let Some(m) = mob {
             m.on_ground = on_ground;
         }
+        self.turn_remote_object(id, rotation.map(|(yaw, _)| yaw), on_ground);
     }
     fn remove_entity(&mut self, id: i32) {
         self.mobs.retain(|m| m.id != id as u32);
         self.orbs.retain(|o| o.id != id as u32);
         self.dropped.retain(|d| d.id != id as u32);
+        self.remove_remote_object(id as u32);
         if let Some(r) = self.remote.as_mut() {
             r.entities.remove(&id);
             r.lerps.remove(&id);
@@ -1261,6 +1266,7 @@ impl Game<'_> {
                     }
                 }
                 self.spawn_entity(p.id, &kind, p.position, rotation);
+                self.spawn_remote_object(p.id, &kind, p.position, rotation[0], p.data);
             }
             C::RemoveEntities(p) => {
                 for id in p.ids {
@@ -1369,10 +1375,12 @@ impl Game<'_> {
                         o.value = (*v).max(0) as u32;
                     }
                 }
+                self.remote_object_data(p.id, &p.values);
             }
             // ClientPacketListener.handleSetEquipment: what a mob or another
             // player holds and wears (EquipmentSlot ordinals).
             C::SetEquipment(p) => {
+                self.remote_object_equipment(p.id, &p.slots);
                 let items: Vec<(u8, Option<Arc<str>>)> = p
                     .slots
                     .iter()
@@ -2535,8 +2543,23 @@ impl Game<'_> {
                 l.steps -= 1;
             }
         }
-        lerps.retain(|_, l| l.steps > 0);
         head_lerps.retain(|_, (_, steps)| *steps > 0);
+        if running {
+            // Boats, minecarts and armor stands interpolate like mobs.
+            self.tick_remote_objects(|id, at| match lerps.get_mut(&(id as i32)) {
+                Some(l) if l.steps > 0 => {
+                    let n = f64::from(l.steps);
+                    l.steps -= 1;
+                    Vec3::new(
+                        at.x + (l.target[0] - at.x) / n,
+                        at.y + (l.target[1] - at.y) / n,
+                        at.z + (l.target[2] - at.z) / n,
+                    )
+                }
+                _ => at,
+            });
+        }
+        lerps.retain(|_, l| l.steps > 0);
         if let Some(r) = self.remote.as_mut() {
             for (id, l) in lerps {
                 r.lerps.entry(id).or_insert(l);
