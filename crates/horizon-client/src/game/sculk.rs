@@ -373,6 +373,14 @@ impl Game<'_> {
         let mut found = Vec::new();
         for (s, section) in chunk.sections.iter().enumerate() {
             let y0 = MIN_Y + s as i32 * 16;
+            // Without a sculk state in its palette, no block of the section
+            // is one: most sections are passed over without reading a block.
+            if !section
+                .blocks
+                .maybe_has(|v| u16::try_from(v).is_ok_and(|v| self.kind_of_state(v) != 0))
+            {
+                continue;
+            }
             if section.blocks.uniform().is_some() {
                 // A uniform section of sculk blocks does not exist.
                 continue;
