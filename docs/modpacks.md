@@ -302,8 +302,12 @@ only): content 54, library 33, client-ui 26, performance 25, other 14, unknown 2
 
 `carry` copies a jar's `assets/<id>/`, `data/<id>/`, `data/minecraft/tags/` and `data/c/tags/`
 into `mods/<id>/carry/`, a folder content mod (API 0.2) the game loads with `--dev-mod`, and
-keeps what a content mod may not hold (other namespaces, vanilla data) in `outside/`. No class
-file is copied. It upgrades from 1.21.1 to 26.3: vanilla-type recipes (ingredients), loot tables
+keeps what a content mod may not hold (other namespaces, vanilla data) in `outside/`. Files of
+the mod's own content that the game's content loader would refuse whole also go to `outside/`,
+listed with the reason in the report's `unreadable`: paths vanilla does not read (upper case),
+JSON that does not parse, and shared tags with `"replace": true`. Vanilla skips them one by one.
+A byte-order mark is dropped. For ATM10's 42 mods that is 19 files in 7 mods, and the 42 load as
+carried. No class file is copied. It upgrades from 1.21.1 to 26.3: vanilla-type recipes (ingredients), loot tables
 (`conditions` lists become one `condition`, `functions` become `modifier`, kinds move to `type`,
 tool matches on silk touch or shears become `minecraft:tool/can_silk_touch` and
 `minecraft:tool/can_shear`), and the `items/` definitions 1.21.4 introduced.
