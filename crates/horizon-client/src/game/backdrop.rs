@@ -71,7 +71,8 @@ impl Game<'_> {
     }
     /// Called every frame while the title is up.
     pub(super) fn update_backdrop(&mut self) -> Result<()> {
-        let wanted = self.title.is_some()
+        let wanted = self.pending_entry.is_none()
+            && self.title.is_some()
             && horizon_client::ui_theme::horizon()
             && self.world_renderer_ready
             && self.renderer.is_some()

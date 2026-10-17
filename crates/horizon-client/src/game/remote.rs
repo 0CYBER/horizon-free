@@ -165,6 +165,12 @@ fn number_format(f: &play::NumberFormat) -> horizon_client::scoreboard::NumberFo
 impl Game<'_> {
     /// Leave the title for a server (ConnectScreen): an empty world fed by the connection.
     pub(super) fn connect_server(&mut self, address: &str, name: &str) -> Result<()> {
+        if self.defer_world_entry(super::PendingWorldEntry::Server {
+            address: address.to_owned(),
+            name: name.to_owned(),
+        })? {
+            return Ok(());
+        }
         self.join_world_rest()?;
         if let Err(error) = self.join_server(address, name, None) {
             log::warn!("Horizon: could not join server: {error}");

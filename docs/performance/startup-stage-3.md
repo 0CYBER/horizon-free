@@ -1,6 +1,6 @@
 # Progressive world resources (#712)
 
-Stage 3a changes shared resource storage and accessors. Pack resources keep their existing per-game ownership for pack reloads. Stage 3b publishes core before the simulation tail, builds the real renderer using the previous device after releasing its surface, and gates backdrop streaming on that renderer. World entry joins the tail before sharing resources with an integrated server. The synchronous harness and dedicated path returns only fully loaded resources.
+Stage 3a changes shared resource storage and accessors. Pack resources keep their existing per-game ownership for pack reloads. Stage 3b publishes core before the simulation tail, builds the real renderer using the previous device after releasing its surface, and gates backdrop streaming on that renderer. Stage 3c queues an early Play or Connect action and draws the existing level-loading progress screen while polling the worker each event-loop turn. Close and resize events continue to work. After the worker completes, the queued local/server action resumes; integrated servers receive the resource handle only after that join. The synchronous harness and dedicated path returns only fully loaded resources.
 
 Startup logs distinguish `core-ready`, `world renderer ready`, `starting title backdrop`, and `rest-ready`. Opt-in performance summaries carry `to_core_ms` and `to_rest_ms` separately from the existing UI-driven `to_title_ms`. Loader failures and panics propagate to the client; a tail taking more than 120 seconds fails rather than waiting indefinitely.
 

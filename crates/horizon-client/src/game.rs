@@ -880,6 +880,7 @@ struct Game<'a> {
     /// Shared with an integrated server; `collision` and `motion` borrow from it.
     res: Arc<Resources>,
     rest_loader: Option<WorldRestLoader>,
+    pending_entry: Option<PendingWorldEntry>,
     world_renderer_ready: bool,
     collision: &'a BlockCollisionRegistry<'a>,
     motion: &'a MotionResources,
@@ -6359,6 +6360,15 @@ impl Game<'_> {
         creative: bool,
         create: Option<&horizon_client::title::WorldOptions>,
     ) -> Result<()> {
+        if self.defer_world_entry(PendingWorldEntry::Local {
+            folder: folder.to_owned(),
+            name: name.map(str::to_owned),
+            seed,
+            creative,
+            create: create.cloned().map(Box::new),
+        })? {
+            return Ok(());
+        }
         self.join_world_rest()?;
         let save_root = std::env::current_dir()?.join("saves").join(folder);
         if integrated::wanted(&self.options, &save_root) {
@@ -8600,6 +8610,19 @@ impl Game<'_> {
         Ok(())
     }
     fn render(&mut self) -> Result<bool> {
+        if self.pending_entry.is_some() {
+            if let (Some(renderer), Some(loader)) = (&mut self.renderer, &self.rest_loader) {
+                let mut hud = HudBatch::new([renderer.config.width, renderer.config.height]);
+                horizon_client::level_loading::draw_progress(
+                    &mut hud,
+                    &self.gui.atlas,
+                    loader.progress.line(),
+                    loader.progress.fraction(),
+                );
+                return renderer.render(&loading_frame(&hud));
+            }
+            return Ok(false);
+        }
         self.poll_shader_pack();
         let Some(size) = self
             .renderer
@@ -9411,6 +9434,16 @@ impl ApplicationHandler for Game<'_> {
             // The press state of Horizon-style buttons.
             horizon_client::ui_theme::set_pressed(*state == ElementState::Pressed);
         }
+        if self.pending_entry.is_some()
+            && !matches!(
+                &event,
+                WindowEvent::CloseRequested
+                    | WindowEvent::Resized(_)
+                    | WindowEvent::RedrawRequested
+            )
+        {
+            return;
+        }
         let result: Result<()> = (|| {
             match event {
                 WindowEvent::CloseRequested => {
@@ -10057,7 +10090,7 @@ impl ApplicationHandler for Game<'_> {
         }
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if let Err(error) = self.poll_world_rest() {
+        if let Err(error) = self.resume_world_entry() {
             self.error = Some(error);
             event_loop.exit();
             return;
@@ -10155,6 +10188,7 @@ impl<'a> Game<'a> {
         Ok(Game {
             res: res.clone(),
             rest_loader: None,
+            pending_entry: None,
             world_renderer_ready: false,
             collision: res.collision(),
             motion: res.motion(),
@@ -10453,12 +10487,37 @@ enum LoaderMsg {
     Done(std::result::Result<Loaded, String>),
 }
 
+enum PendingWorldEntry {
+    Local {
+        folder: String,
+        name: Option<String>,
+        seed: Option<i64>,
+        creative: bool,
+        create: Option<Box<horizon_client::title::WorldOptions>>,
+    },
+    Server {
+        address: String,
+        name: String,
+    },
+}
+
 struct WorldRestLoader {
+    progress: Progress,
     handle: JoinHandle<std::result::Result<(), String>>,
     started: Instant,
 }
 
 impl WorldRestLoader {
+    fn ready(&self) -> Result<bool> {
+        if self.handle.is_finished() {
+            return Ok(true);
+        }
+        if self.started.elapsed() > Duration::from_secs(120) {
+            return Err("world resource loading timed out after 120 seconds".into());
+        }
+        Ok(false)
+    }
+
     fn finish(self) -> Result<()> {
         self.handle
             .join()
@@ -10468,22 +10527,54 @@ impl WorldRestLoader {
 }
 
 impl Game<'_> {
+    fn defer_world_entry(&mut self, entry: PendingWorldEntry) -> Result<bool> {
+        self.poll_world_rest()?;
+        if self.rest_loader.is_none() {
+            return Ok(false);
+        }
+        self.perf.world_opening();
+        if self.title.is_none() {
+            self.title = Some(Title::new(
+                std::env::current_dir()?.join("saves"),
+                &self.options.resources,
+            ));
+        }
+        self.pending_entry = Some(entry);
+        log::info!("Horizon: world entry waiting for world resources");
+        Ok(true)
+    }
+
+    fn resume_world_entry(&mut self) -> Result<()> {
+        self.poll_world_rest()?;
+        if self.rest_loader.is_some() {
+            return Ok(());
+        }
+        match self.pending_entry.take() {
+            Some(PendingWorldEntry::Local {
+                folder,
+                name,
+                seed,
+                creative,
+                create,
+            }) => {
+                self.open_world(&folder, name.as_deref(), seed, creative, create.as_deref())?;
+            }
+            Some(PendingWorldEntry::Server { address, name }) => {
+                self.connect_server(&address, &name)?;
+            }
+            None => {}
+        }
+        Ok(())
+    }
+
     fn poll_world_rest(&mut self) -> Result<()> {
-        if self
-            .rest_loader
-            .as_ref()
-            .is_some_and(|loader| loader.handle.is_finished())
+        if let Some(loader) = &self.rest_loader
+            && loader.ready()?
         {
             self.rest_loader
                 .take()
                 .ok_or("missing world loader")?
                 .finish()?;
-        } else if self
-            .rest_loader
-            .as_ref()
-            .is_some_and(|loader| loader.started.elapsed() > Duration::from_secs(120))
-        {
-            return Err("world resource loading timed out after 120 seconds".into());
         }
         Ok(())
     }
@@ -10704,6 +10795,7 @@ fn load_resources(
     let rest_loader = if menu {
         let resources = resources.clone();
         let root = root.clone();
+        let rest_progress = progress.clone();
         let progress = progress.clone();
         let handle = std::thread::Builder::new()
             .name("world-rest-loader".into())
@@ -10730,6 +10822,7 @@ fn load_resources(
                 Ok(())
             })?;
         Some(WorldRestLoader {
+            progress: rest_progress,
             handle,
             started: Instant::now(),
         })
@@ -11608,8 +11701,42 @@ mod tests {
     }
 
     #[test]
+    fn world_rest_poll_does_not_wait_for_a_blocked_worker() {
+        let (release, wait) = std::sync::mpsc::channel();
+        let loader = WorldRestLoader {
+            progress: Progress::new(),
+            handle: std::thread::spawn(move || {
+                wait.recv().unwrap();
+                Ok(())
+            }),
+            started: Instant::now(),
+        };
+        assert!(!loader.ready().unwrap());
+        release.send(()).unwrap();
+        loader.finish().unwrap();
+    }
+
+    #[test]
+    fn world_rest_poll_reports_a_stalled_worker() {
+        let (release, wait) = std::sync::mpsc::channel();
+        let loader = WorldRestLoader {
+            progress: Progress::new(),
+            handle: std::thread::spawn(move || {
+                wait.recv().unwrap();
+                Ok(())
+            }),
+            started: Instant::now() - Duration::from_secs(121),
+        };
+        let error = loader.ready().unwrap_err().to_string();
+        release.send(()).unwrap();
+        loader.finish().unwrap();
+        assert_eq!(error, "world resource loading timed out after 120 seconds");
+    }
+
+    #[test]
     fn world_rest_worker_failure_reaches_the_client() {
         let loader = WorldRestLoader {
+            progress: Progress::new(),
             handle: std::thread::spawn(|| Err("missing world table".to_owned())),
             started: Instant::now(),
         };
@@ -11622,6 +11749,7 @@ mod tests {
     #[test]
     fn world_rest_worker_panic_reaches_the_client() {
         let loader = WorldRestLoader {
+            progress: Progress::new(),
             handle: std::thread::spawn(|| panic!("broken loader")),
             started: Instant::now(),
         };
