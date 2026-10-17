@@ -714,6 +714,7 @@ pub enum Page {
     /// Horizon's controller settings and button binds.
     Controller,
     PadBinds,
+    Extras,
 }
 #[derive(Clone, Debug, PartialEq)]
 enum Act {
@@ -721,6 +722,7 @@ enum Act {
     Push(Page),
     Done,
     Cycle(Opt),
+    Extra(crate::extras::Item),
     Key(&'static str),
     ResetKey(&'static str),
     ResetKeys,
@@ -974,6 +976,7 @@ impl OptionsUi {
             Page::Graphics | Page::GraphicsAdvanced => "options.videoTitle",
             Page::Controller => "Controller Settings",
             Page::PadBinds => "Controller Binds",
+            Page::Extras => "Horizon Extras",
         }
     }
     fn scrollbar_x(&self, width: f32) -> f32 {
@@ -986,6 +989,22 @@ impl OptionsUi {
     }
     fn list_rows(&self, s: &Settings) -> Vec<Row> {
         match self.page() {
+            Page::Extras => crate::extras::rows()
+                .into_iter()
+                .map(|row| match row {
+                    Err(header) => Row::Header(header),
+                    Ok(item) => {
+                        let value = format!("{}: {}", item.caption(), item.value(&s.extras));
+                        let label =
+                            if item.key_name().is_some() && self.selected_key == item.key_name() {
+                                Text::literal(format!("> {value} <")).with_color(text::YELLOW)
+                            } else {
+                                Text::literal(value)
+                            };
+                        Row::Buttons(button(0.0, 0.0, 310.0, label, Act::Extra(item)), None)
+                    }
+                })
+                .collect(),
             Page::Video => {
                 // Horizon's graphics screens, Simple and Advanced.
                 let mut rows = vec![Row::Buttons(
@@ -1207,7 +1226,7 @@ impl OptionsUi {
                     ("options.resourcepack", Some(Page::Packs)),
                     ("options.accessibility", Some(Page::Accessibility)),
                     ("options.telemetry", None),
-                    ("options.credits_and_attribution", None),
+                    ("Horizon Extras...", Some(Page::Extras)),
                 ];
                 let gy = (61.0 + 30.0f32).min(h - 33.0 - 120.0);
                 for (i, (key, page)) in entries.iter().enumerate() {
@@ -1631,6 +1650,13 @@ impl OptionsUi {
             let hover = ui::hovered(cursor, wd.x, wd.y, wd.w, wd.h)
                 && (!wd.list || cursor.1 >= top && cursor.1 < bottom);
             if hover {
+                if let WKind::Button {
+                    act: Act::Extra(item),
+                    ..
+                } = &wd.kind
+                {
+                    tooltip = Some(atlas.font.split(&Text::literal(item.description()), 170.0));
+                }
                 let key = match &wd.kind {
                     WKind::Button {
                         act: Act::Cycle(opt),
@@ -1918,6 +1944,14 @@ impl OptionsUi {
                                 apply_preset(s);
                             }
                             events.push(Event::Changed);
+                        }
+                        Act::Extra(item) => {
+                            if let Some(name) = item.key_name() {
+                                self.selected_key = Some(name);
+                            } else {
+                                item.cycle(&mut s.extras, right);
+                                events.push(Event::Changed);
+                            }
                         }
                         Act::Key(name) => self.selected_key = Some(name),
                         Act::ResetKey(name) => {
@@ -2314,6 +2348,83 @@ mod tests {
             assert_eq!(s.gui_scale, expected);
             assert!(ui.release().is_empty());
         }
+    }
+
+    #[test]
+    fn classic_extras_entry_edits_shared_settings_and_returns_without_changing_style() {
+        let previous_style = style();
+        set_style(MenuStyle::Classic);
+        let atlas = atlas();
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        let size = (480.0, 480.0);
+        let click = |ui: &mut OptionsUi, s: &mut Settings, act: Act| {
+            let (widgets, _, _, _) = ui.layout(s, size.0, size.1);
+            let widget = widgets
+                .iter()
+                .find(
+                    |w| matches!(&w.kind, WKind::Button { act: a, active: true, .. } if *a == act),
+                )
+                .unwrap();
+            ui.click(
+                s,
+                &atlas,
+                widget.x + 1.0,
+                widget.y + 1.0,
+                size,
+                [960, 960],
+                false,
+                false,
+            )
+        };
+        assert_eq!(
+            click(&mut ui, &mut s, Act::Push(Page::Extras)),
+            vec![Event::ButtonClick]
+        );
+        assert_eq!(ui.page(), Page::Extras);
+        let (widgets, _, _, _) = ui.layout(&s, size.0, size.1);
+        assert_eq!(
+            widgets
+                .iter()
+                .filter(|w| matches!(
+                    w.kind,
+                    WKind::Button {
+                        act: Act::Extra(_),
+                        ..
+                    }
+                ))
+                .count(),
+            crate::extras::rows().iter().filter(|r| r.is_ok()).count()
+        );
+        assert_eq!(
+            click(&mut ui, &mut s, Act::Extra(crate::extras::Item::Zoom)),
+            vec![Event::ButtonClick, Event::Changed]
+        );
+        assert!(s.extras.zoom);
+        assert_eq!(
+            click(&mut ui, &mut s, Act::Extra(crate::extras::Item::ZoomKey)),
+            vec![Event::ButtonClick]
+        );
+        assert_eq!(ui.selected_key, Some(crate::extras::ZOOM_KEY));
+        assert_eq!(
+            ui.key(&mut s, &atlas, winit::keyboard::KeyCode::KeyC, None),
+            vec![Event::Changed]
+        );
+        assert_eq!(s.extras.zoom_key, "key.keyboard.c");
+        assert_eq!(
+            crate::extras::Extras::parse(&s.extras.serialize()),
+            s.extras
+        );
+        ui.scroll(&s, size, -1000.0);
+        let (_, top, bottom, content) = ui.layout(&s, size.0, size.1);
+        assert_eq!(ui.scroll, content - (bottom - top));
+        assert_eq!(
+            ui.key(&mut s, &atlas, winit::keyboard::KeyCode::Escape, None),
+            vec![Event::Changed]
+        );
+        assert_eq!(ui.page(), Page::Main);
+        assert_eq!(style(), MenuStyle::Classic);
+        set_style(previous_style);
     }
 
     #[test]

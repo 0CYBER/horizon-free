@@ -464,6 +464,7 @@ impl Game<'_> {
                     "packs" => Page::Packs,
                     "graphics" => Page::Graphics,
                     "graphics-advanced" => Page::GraphicsAdvanced,
+                    "extras" => Page::Extras,
                     other => return Err(format!("unknown options page {other}").into()),
                 };
                 if self.screen == Screen::Playing && self.title.is_none() {
