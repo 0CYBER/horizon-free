@@ -10865,14 +10865,14 @@ fn load_world_rest(
     let biomes = resources.biomes();
     let threads = resources.threads();
     let registry_owner = assets;
+    progress.set(6);
     let mob_data = horizon_client::mobs::MobData::load(root, facts);
     horizon_client::mobs::trial_spawner::load_registry(root);
 
     let items = Items::load(root, assets.registry, facts)?;
     log::info!("load items: {:.2}s", started.elapsed().as_secs_f32());
-    progress.set(6);
-    let recipes = Recipes::load(root, &items)?;
     progress.set(7);
+    let recipes = Recipes::load(root, &items)?;
     let transformers = horizon_client::block_transform::Transformers::load(root, assets.registry)?;
     log::info!(
         "Horizon: resources loaded in {:.1}s; {} block states, {} items, {} biomes; {} worker threads",
