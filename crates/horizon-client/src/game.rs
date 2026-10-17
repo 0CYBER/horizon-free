@@ -1162,7 +1162,7 @@ struct Game<'a> {
     tab_list: horizon_client::tab_list::TabList,
     subtitles: subtitle_hud::SubtitleState,
     adv: advancements::AdvState,
-    restore_player_environment: bool,
+    restore_player_state: bool,
     stats_ui: stats_screen::StatsUi,
     adv_ui: advancements_screen::AdvUi,
     camera_type: perspective::CameraType,
@@ -3086,10 +3086,7 @@ impl Game<'_> {
         };
         let mut player = PlayerMotion::new(self.motion, feet)?;
         player.yaw = self.yaw;
-        player.load_environment_once(
-            &mut self.restore_player_environment,
-            self.level.player_extra.as_ref(),
-        );
+        player.load_saved_state_once(&mut self.restore_player_state, &self.level)?;
         let spectator = self.mode == horizon_client::command::args::GameMode::Spectator;
         player.may_fly = self.creative || spectator;
         player.invulnerable = self.creative || spectator;
@@ -3105,10 +3102,12 @@ impl Game<'_> {
                 .get(&s.item)
                 .is_some_and(|i| i.glider && (i.max_damage == 0 || s.damage + 1 < i.max_damage))
         });
-        if self.level.health > 0.0 && self.ticks < 2 {
-            player.set_health(self.level.health, false)?;
-            player.health.food.food = self.level.food;
-            player.health.food.saturation = self.level.saturation;
+        // A saved death already dropped inventory/XP and counted the death.
+        if player.health.dead_or_dying() {
+            self.screen = Screen::Dead;
+            self.ui.died_at = Some(Instant::now());
+            self.ui.death_text = None;
+            self.capture(false);
         }
         self.previous_position = feet;
         self.player = Some(player);
@@ -6253,7 +6252,7 @@ impl Game<'_> {
         self.bosses = Default::default();
         reset_world_progress(&mut self.adv, &mut self.stats);
         self.prefetch_advancement_tree();
-        self.restore_player_environment = true;
+        self.restore_player_state = true;
         // RandomSequences: the world's data/minecraft/random_sequences.dat.
         self.rand_sequences =
             horizon_client::save::read_dat(&save_root.join("data/minecraft/random_sequences.dat"))
@@ -10301,7 +10300,7 @@ impl<'a> Game<'a> {
             tab_list: Default::default(),
             subtitles: Default::default(),
             adv: Default::default(),
-            restore_player_environment: true,
+            restore_player_state: true,
             stats_ui: Default::default(),
             adv_ui: Default::default(),
             camera_type: Default::default(),
