@@ -137,7 +137,8 @@ pub struct Guest {
     /// What the client believes the inventory menu holds (for change detection).
     pub menu_sent: Vec<Option<ItemStack>>,
     pub menu_state: i32,
-    pub sent_health: Option<(f32, i32, f32)>,
+    /// `lastSentHealth`, `lastSentFood` and `lastFoodSaturationZero`.
+    pub sent_health: Option<(f32, i32, bool)>,
     pub sent_xp: Option<(f32, i32, i32)>,
     /// Where the player last died (Player.lastDeathLocation), sent with the respawn.
     pub last_death: Option<[i32; 3]>,

@@ -1585,17 +1585,15 @@ impl Hub {
                 self.flush_advancements(i, true);
             }
         }
-        let health = {
-            let g = &self.guests[i];
-            (g.health, g.food, g.saturation)
-        };
-        // A dead player's health isn't sent (the death screen shows from the combat kill).
-        if self.guests[i].sent_health != Some(health) && !self.guests[i].dead {
-            let g = &mut self.guests[i];
+        // Sent when the health or the food level changes, or the saturation
+        // reaches or leaves zero; a dead player's health of 0 too.
+        let g = &mut self.guests[i];
+        let health = (g.health, g.food, g.saturation == 0.0);
+        if g.sent_health != Some(health) {
             g.send(&C::SetHealth(play::SetHealth {
-                health: health.0,
-                food: health.1,
-                saturation: health.2,
+                health: g.health,
+                food: g.food,
+                saturation: g.saturation,
             }));
             g.sent_health = Some(health);
         }
