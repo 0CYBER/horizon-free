@@ -6,6 +6,7 @@ use horizon_client::{
     hud::HudBatch,
     hud_layout,
     hud_overlays::HeldName,
+    item_tooltip,
     text::{self, Text},
 };
 
@@ -24,22 +25,14 @@ impl Game<'_> {
     fn held_name(&self) -> Option<HeldName> {
         let stack = self.inventory.get(self.selected)?.as_ref()?;
         let custom = stack.custom_name();
-        // ItemStack.getRarity: enchanting raises common and uncommon to rare
-        // and rare to epic.
-        let mut rarity = self.item_rarity(&stack.item);
-        if !stack.enchantments().is_empty() {
-            rarity = match rarity.as_str() {
-                "common" | "uncommon" => "rare".into(),
-                "rare" => "epic".into(),
-                _ => rarity,
-            };
-        }
+        let default_rarity = self.item_rarity(&stack.item);
+        let rarity = item_tooltip::rarity(stack, &default_rarity);
         Some(HeldName {
             item: stack.item.to_string(),
-            hover_name: Text::literal(
-                custom.map_or_else(|| self.pack.names.item(&stack.item), str::to_owned),
-            ),
-            rarity_color: match rarity.as_str() {
+            hover_name: Text::literal(item_tooltip::name_line(stack, &|key| {
+                self.pack.names.get(key).map(str::to_owned)
+            })),
+            rarity_color: match rarity {
                 "uncommon" => text::YELLOW,
                 "rare" => text::AQUA,
                 "epic" => text::LIGHT_PURPLE,

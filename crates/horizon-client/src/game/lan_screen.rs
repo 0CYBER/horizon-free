@@ -7,6 +7,7 @@
 use super::{
     Game, Screen,
     game_rules_screen::{Exit, RulesScreen},
+    integrated::ServerOptions,
     lan::LanSettings,
 };
 use horizon_client::{
@@ -50,7 +51,7 @@ enum View {
     Restrictions,
     GameRules,
 }
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 struct Snapshot {
     default_mode: i32,
     personal_mode: i32,
@@ -406,28 +407,32 @@ impl Restrictions {
 impl Game<'_> {
     pub(super) fn open_world_options(&mut self) {
         let hint = horizon_client::lan::available_port();
-        let lan = self.lan.is_some();
         let mut port = EditBox::new(0.0, 0.0, 150.0, 20.0);
         port.max_length = 5;
-        let (guest_commands, force) = self.lan.as_ref().map_or((false, true), |h| {
-            (h.settings.guest_commands, h.settings.force_game_mode)
-        });
-        if let Some(p) = self.lan_port() {
+        // The world is the server thread's when there is one.
+        let state = match &self.integrated {
+            Some(server) => match server.call(|g| g.server_options()) {
+                Some(state) => state,
+                None => return,
+            },
+            None => self.local_server_options(),
+        };
+        if let Some(p) = state.port {
             port.set_value(&p.to_string());
         }
         let mut options = WorldOptions {
-            default_mode: self.level.mode(),
-            personal_mode: self.mode_id(),
-            cheats: self.allow_commands(),
-            difficulty: self.ui.difficulty,
-            lan,
+            default_mode: state.default_mode,
+            personal_mode: state.personal_mode,
+            cheats: state.cheats,
+            difficulty: state.difficulty,
+            lan: state.port.is_some(),
             port,
             hint,
-            guest_commands,
-            force,
-            hardcore: self.level.hardcore,
-            difficulty_locked: self.level.difficulty_locked,
-            locked: self.level.difficulty_locked || self.level.hardcore,
+            guest_commands: state.guest_commands,
+            force: state.force,
+            hardcore: state.hardcore,
+            difficulty_locked: state.difficulty_locked,
+            locked: state.difficulty_locked || state.hardcore,
             scroll: 0.0,
             view: View::Options,
             rules: None,
@@ -808,7 +813,7 @@ impl Game<'_> {
 
     fn apply_and_close_world_options(&mut self, o: WorldOptions) {
         let wanted = o.snapshot();
-        let before = o.initial.clone();
+        let before = o.initial;
         self.world_options = Some(o);
         self.apply_world_options(&before, &wanted);
         self.close_world_options();
@@ -891,7 +896,47 @@ impl Game<'_> {
         }
     }
 
+    /// The world options of a world run in the frame.
+    fn local_server_options(&self) -> ServerOptions {
+        let (guest_commands, force) = self.lan.as_ref().map_or((false, true), |h| {
+            (h.settings.guest_commands, h.settings.force_game_mode)
+        });
+        ServerOptions {
+            default_mode: self.level.mode(),
+            personal_mode: self.mode_id(),
+            cheats: self.allow_commands(),
+            difficulty: self.ui.difficulty,
+            hardcore: self.level.hardcore,
+            difficulty_locked: self.level.difficulty_locked,
+            port: self.lan_port(),
+            guest_commands,
+            force,
+        }
+    }
+
     fn apply_world_options(&mut self, before: &Snapshot, wanted: &Snapshot) {
+        if let Some(server) = &self.integrated {
+            // The server applies them; the window tells what came of
+            // Open to LAN (ShareToLanScreen's messages).
+            let (b, w) = (*before, *wanted);
+            server.call(move |g| g.apply_world_options(&b, &w));
+            if w.lan != b.lan || (w.lan && w.port != b.port) {
+                match (w.lan, self.lan_port()) {
+                    (true, Some(port)) => self.system_message(Text::translate(
+                        "menu.multiplayerOptions.publish.started.lan",
+                        &[Text::literal(port.to_string())],
+                    )),
+                    (true, None) => {
+                        self.system_message(Text::translate("commands.publish.failed", &[]));
+                    }
+                    (false, _) => self.system_message(Text::translate(
+                        "menu.multiplayerOptions.publish.stopped",
+                        &[],
+                    )),
+                }
+            }
+            return;
+        }
         if wanted.difficulty != before.difficulty {
             let name = DIFFICULTIES[usize::from(wanted.difficulty) & 3];
             self.as_console(|g| g.run_command(&format!("difficulty {name}")));
@@ -904,10 +949,15 @@ impl Game<'_> {
             self.set_default_game_mode(wanted.default_mode);
         }
         if wanted.personal_mode != before.personal_mode {
-            self.set_mode_id(wanted.personal_mode);
+            if self.serving() {
+                self.set_owner_mode(wanted.personal_mode);
+            } else {
+                self.set_mode_id(wanted.personal_mode);
+            }
         }
         if wanted.cheats != before.cheats {
             self.set_allow_commands(wanted.cheats);
+            self.owner_allow_commands(wanted.cheats);
         }
         let settings_changed =
             wanted.guest_commands != before.guest_commands || wanted.force != before.force;

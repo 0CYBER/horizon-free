@@ -31,7 +31,7 @@ use std::{
 static SYNC: OnceLock<std::result::Result<Arc<SyncData>, String>> = OnceLock::new();
 
 /// The settings of the open world (WorldOptionsScreen's multiplayer section).
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct LanSettings {
     pub port: u16,
     pub guest_commands: bool,
@@ -316,6 +316,15 @@ impl Game<'_> {
         if words[0] != "lan" {
             return Ok(None);
         }
+        if let Some(server) = &self.integrated
+            && words.get(1) == Some(&"status")
+        {
+            // The hub is the server thread's.
+            let status = server
+                .call(|g| g.lan_status())
+                .ok_or("the integrated server stopped")?;
+            return Ok(Some(status));
+        }
         match words.get(1).copied() {
             Some("open") => {
                 if self.title.is_some() {
@@ -337,43 +346,58 @@ impl Game<'_> {
                 self.lan_close(true);
                 Ok(Some(json!({ "ok": true })))
             }
-            Some("status") => Ok(Some(match &self.lan {
-                Some(h) => json!({
-                    "open": true,
-                    "host": h.host_name,
-                    "port": h.settings.port,
-                    "guests": h.hub.guests.iter().map(|g| json!({
-                        "name": g.name,
-                        "position": g.position,
-                        "placed": g.placed,
-                        "loaded": g.loaded,
-                        "game_mode": g.game_mode,
-                        "sneaking": g.sneaking,
-                        "health": g.health,
-                        // FoodData: food level, saturation and exhaustion.
-                        "food": [
-                            f64::from(g.food),
-                            f64::from(g.saturation),
-                            g.motion.as_ref().map_or(0.0, |m| f64::from(m.health.food.exhaustion)),
-                        ],
-                        "chunks": g.sent_chunks.len(),
-                        "tracked": g.tracker.len(),
-                        // The armour the host draws on this guest, head to feet.
-                        "model_armor": h.models.get(&g.conn).map(|m| {
-                            [&m.extra.head, &m.extra.chest, &m.extra.legs, &m.extra.feet]
-                                .map(|s| s.as_deref())
-                        }),
-                    })).collect::<Vec<_>>(),
-                }),
-                None => json!({ "open": false }),
-            })),
+            Some("status") => Ok(Some(self.lan_status())),
             _ => Err("lan open|close|status".into()),
         }
     }
 
+    /// `horizon-ctl lan status`.
+    fn lan_status(&self) -> serde_json::Value {
+        use serde_json::json;
+        match &self.lan {
+            Some(h) if !self.serving() || self.published_port().is_some() => json!({
+                "open": true,
+                "host": h.host_name,
+                "port": h.settings.port,
+                "guests": h.hub.guests.iter().map(|g| json!({
+                    "name": g.name,
+                    "position": g.position,
+                    "placed": g.placed,
+                    "loaded": g.loaded,
+                    "game_mode": g.game_mode,
+                    "sneaking": g.sneaking,
+                    "health": g.health,
+                    // FoodData: food level, saturation and exhaustion.
+                    "food": [
+                        f64::from(g.food),
+                        f64::from(g.saturation),
+                        g.motion.as_ref().map_or(0.0, |m| f64::from(m.health.food.exhaustion)),
+                    ],
+                    "chunks": g.sent_chunks.len(),
+                    "tracked": g.tracker.len(),
+                    // The armour the host draws on this guest, head to feet.
+                    "model_armor": h.models.get(&g.conn).map(|m| {
+                        [&m.extra.head, &m.extra.chest, &m.extra.legs, &m.extra.feet]
+                            .map(|s| s.as_deref())
+                    }),
+                })).collect::<Vec<_>>(),
+            }),
+            _ => json!({ "open": false }),
+        }
+    }
+
     pub(super) fn lan_open(&mut self, settings: LanSettings) -> Result<()> {
-        self.lan_start(settings)?;
-        let port = self.lan.as_ref().map_or(0, |l| l.settings.port);
+        let port = if let Some(server) = &self.integrated {
+            // ShareToLanScreen: IntegratedServer.publishServer.
+            server
+                .call(move |g| g.publish(settings))
+                .ok_or("the integrated server stopped")??
+        } else if self.serving() {
+            return self.publish(settings).map(drop).map_err(Into::into);
+        } else {
+            self.lan_start(settings)?;
+            self.lan.as_ref().map_or(0, |l| l.settings.port)
+        };
         self.system_message(Text::translate(
             "menu.multiplayerOptions.publish.started.lan",
             &[Text::literal(port.to_string())],
@@ -408,6 +432,7 @@ impl Game<'_> {
             seed: self.level.seed,
             max_players: MAX_PLAYERS,
             dedicated: false,
+            integrated: false,
         };
         let net = NetConfig::lan(settings.port, motd, MAX_PLAYERS);
         self.lan_host(settings, net, config, Some(host_uuid))
@@ -484,6 +509,22 @@ impl Game<'_> {
 
     /// IntegratedServer.unpublishServer: the guests are sent away.
     pub(super) fn lan_close(&mut self, announce: bool) {
+        if self.integrated.is_some() || self.serving() {
+            let closed = match &self.integrated {
+                Some(server) => server.call(|g| g.unpublish()).unwrap_or(false),
+                None => self.unpublish(),
+            };
+            if closed {
+                self.friends_lan_closed();
+            }
+            if closed && announce && self.integrated.is_some() {
+                self.system_message(Text::translate(
+                    "menu.multiplayerOptions.publish.stopped",
+                    &[],
+                ));
+            }
+            return;
+        }
         self.friends_lan_closed();
         let Some(mut host) = self.lan.take() else {
             return;
@@ -541,16 +582,29 @@ impl Game<'_> {
 
     /// New command access and game mode forcing settings of the open world.
     pub(super) fn lan_apply_settings(&mut self, guest_commands: bool, force: bool) {
+        if let Some(server) = &self.integrated {
+            server.call(move |g| g.lan_apply_settings(guest_commands, force));
+            return;
+        }
+        // An integrated server gives guests commands only where the world
+        // allows them (IntegratedServer.getCustomPermissionLevel).
+        let effective = guest_commands && (!self.serving() || self.allow_commands());
         if let Some(host) = self.lan.as_mut() {
             host.settings.guest_commands = guest_commands;
             host.settings.force_game_mode = force;
-            host.hub.config.guest_commands = guest_commands;
+            host.hub.config.guest_commands = effective;
             host.hub.config.force_game_mode = force;
             host.hub.resend_commands();
         }
     }
 
     pub(super) fn lan_port(&self) -> Option<u16> {
+        if let Some(server) = &self.integrated {
+            return server.published();
+        }
+        if self.serving() {
+            return self.published_port();
+        }
         self.lan.as_ref().map(|h| h.settings.port)
     }
 

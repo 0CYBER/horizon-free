@@ -690,6 +690,7 @@ impl<'a> Ui<'a> {
                 pos: p[i],
                 uv: [cu, cv],
                 color: c[i],
+                depth: 0.0,
             });
         }
     }

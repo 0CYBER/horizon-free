@@ -102,6 +102,10 @@ pub fn name_line(stack: &ItemStack, translate: &dyn Fn(&str) -> Option<String>) 
     if let Some(name) = stack.custom_name() {
         return name.to_owned();
     }
+    if stack.data().is_some_and(|d| d.ominous_banner) {
+        return translate("block.minecraft.ominous_banner")
+            .unwrap_or_else(|| "Ominous Banner".to_owned());
+    }
     let key = if is_potion_item(&stack.item) {
         Some(crate::brewing::potion_name_key(&stack.item, stack.potion()))
     } else if let Some(pattern) = path.strip_suffix("_armor_trim_smithing_template") {
@@ -118,6 +122,24 @@ pub fn name_line(stack: &ItemStack, translate: &dyn Fn(&str) -> Option<String>) 
         .or_else(|| translate(&format!("item.minecraft.{path}")))
         .or_else(|| translate(&format!("block.minecraft.{path}")))
         .unwrap_or_else(|| path.replace('_', " "))
+}
+
+/// ItemStack.getRarity: the ominous banner override, then the enchantment upgrade.
+pub fn rarity<'a>(stack: &ItemStack, default: &'a str) -> &'a str {
+    let rarity = if stack.data().is_some_and(|d| d.ominous_banner) {
+        "uncommon"
+    } else {
+        default
+    };
+    if stack.enchantments().is_empty() {
+        rarity
+    } else {
+        match rarity {
+            "common" | "uncommon" => "rare",
+            "rare" => "epic",
+            r => r,
+        }
+    }
 }
 
 /// The lines of `stack` below its name that its components give, in
@@ -291,6 +313,26 @@ pub fn lines(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ominous_banner_name_and_rarity_use_the_stack() {
+        let translate = |key: &str| match key {
+            "block.minecraft.ominous_banner" => Some("Ominous Banner".to_owned()),
+            "block.minecraft.white_banner" => Some("White Banner".to_owned()),
+            _ => None,
+        };
+        let mut banner = crate::mobs::raider::ominous_banner();
+        assert_eq!(name_line(&banner, &translate), "Ominous Banner");
+        assert_eq!(name_line(&banner, &|_| None), "Ominous Banner");
+        assert_eq!(rarity(&banner, "common"), "uncommon");
+        banner.data_mut().custom_name = Some("Captain's Standard".into());
+        assert_eq!(name_line(&banner, &translate), "Captain's Standard");
+        banner.enchant("minecraft:unbreaking", 1);
+        assert_eq!(rarity(&banner, "common"), "rare");
+        let plain = ItemStack::new("minecraft:white_banner", 1);
+        assert_eq!(name_line(&plain, &translate), "White Banner");
+        assert_eq!(rarity(&plain, "common"), "common");
+    }
 
     #[test]
     fn container_lines_list_five_stacks_then_how_many_more() {

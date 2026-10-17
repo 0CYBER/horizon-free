@@ -2,6 +2,10 @@
 //! its own "Server thread", as vanilla's does, and the window joins it as a
 //! player through memory, so a world tick never holds up a frame.
 //!
+//! The window asks its server for what only the server knows (Open to LAN,
+//! the world's options) with [`Integrated::call`], as vanilla's client calls
+//! into its `IntegratedServer`.
+//!
 //! Opt-in for now (`--server-thread` or `HORIZON_SERVER_THREAD=1`): the
 //! player joins as a network player, and the server side of a network player
 //! does not do everything single player does yet. Worlds whose player is
@@ -15,7 +19,7 @@ use horizon_client::{
     Result,
     audio::Audio,
     hud::HudAtlas,
-    lan::{MAX_PLAYERS, NetConfig, hub::HubConfig},
+    lan::{Lan, MAX_PLAYERS, NetConfig, hub::HubConfig},
     save::Level,
     settings::Settings,
     title::WorldOptions,
@@ -23,11 +27,12 @@ use horizon_client::{
 use horizon_protocol::connection::Pipe;
 use horizon_protocol::{crypto::offline_uuid, text::translatable};
 use std::{
+    net::TcpListener,
     path::Path,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU32, Ordering},
-        mpsc::{Sender, channel},
+        atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering},
+        mpsc::{Receiver, Sender, channel, sync_channel},
     },
     thread::JoinHandle,
     time::{Duration, Instant},
@@ -39,13 +44,22 @@ struct Flags {
     /// `Minecraft.pause`: a single-player pause screen is open.
     paused: AtomicBool,
     stop: AtomicBool,
+    /// `IntegratedServer.getPort`: the port it is open to the LAN on, 0
+    /// while it is not.
+    published: AtomicU16,
     smoothed_tick_ms: AtomicU32,
 }
+
+/// Work the window hands its server thread (`MinecraftServer.execute`).
+type Task = Box<dyn FnOnce(&mut Game<'_>) + Send>;
 
 /// The window's handle on its server thread.
 pub(super) struct Integrated {
     flags: Arc<Flags>,
     thread: Option<JoinHandle<()>>,
+    tasks: Sender<Task>,
+    /// The world's name (`level.dat`'s `LevelName`), for the pause menu.
+    pub world_name: String,
 }
 impl Integrated {
     pub fn smoothed_tick_ms(&self) -> f32 {
@@ -54,6 +68,24 @@ impl Integrated {
     /// `IntegratedServer.tickServer` skips the world while the game is paused.
     pub fn set_paused(&self, paused: bool) {
         self.flags.paused.store(paused, Ordering::Relaxed);
+    }
+    /// `IntegratedServer.getPort` while `isPublished`.
+    pub fn published(&self) -> Option<u16> {
+        Some(self.flags.published.load(Ordering::Relaxed)).filter(|&p| p != 0)
+    }
+    /// `executeBlocking`: run `f` on the server thread between two ticks and
+    /// wait for its answer; `None` once the server has stopped.
+    pub fn call<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&mut Game<'_>) -> T + Send + 'static,
+    ) -> Option<T> {
+        let (tx, rx) = sync_channel(1);
+        self.tasks
+            .send(Box::new(move |g| {
+                let _ = tx.send(f(g));
+            }))
+            .ok()?;
+        rx.recv_timeout(Duration::from_secs(10)).ok()
     }
     /// `IntegratedServer.halt(true)`: returns once the world is saved and let go.
     pub fn stop(mut self) {
@@ -72,6 +104,25 @@ impl Drop for Integrated {
     }
 }
 
+/// The server thread's side of the window's handle (`Game::serving`).
+pub(super) struct Serving {
+    flags: Arc<Flags>,
+    tasks: Receiver<Task>,
+    /// The window's profile.
+    owner: u128,
+    /// Open to LAN or closed from inside a player's command, while the hub
+    /// is out of its place: applied after the tick.
+    pending: Option<Publish>,
+}
+enum Publish {
+    Open(TcpListener, LanSettings),
+    Close,
+}
+
+/// What the server thread hands the window once the world is open: its end
+/// of the connection and the world's name, or why it failed.
+type Ready = std::result::Result<(Pipe, String), String>;
+
 /// The world to open and the player who owns it.
 struct Launch {
     folder: String,
@@ -79,8 +130,11 @@ struct Launch {
     seed: Option<i64>,
     creative: bool,
     create: Option<WorldOptions>,
-    /// The window's profile: the only one let in, and the world's player.
+    /// The window's profile: the only one let in until the world is open to
+    /// the LAN, and the world's player.
     owner: u128,
+    /// Its name, for the LAN's MOTD.
+    player: String,
 }
 
 /// Whether this world opens on a server thread: asked for, and its player
@@ -92,6 +146,19 @@ pub(super) fn wanted(options: &Options, world: &Path) -> bool {
 }
 
 impl Game<'_> {
+    /// `Minecraft.hasSingleplayerServer`: a world of this window's own, run
+    /// in the frame or on its server thread.
+    pub(super) fn has_singleplayer_server(&self) -> bool {
+        self.remote.is_none() || self.integrated.is_some()
+    }
+    /// `IntegratedServer.isPublished`: the world is open to the network.
+    pub(super) fn is_published(&self) -> bool {
+        self.lan.is_some()
+            || self
+                .integrated
+                .as_ref()
+                .is_some_and(|s| s.published().is_some())
+    }
     /// `Minecraft.doWorldLoad`: start the server thread on the world, wait
     /// until it can be joined, then join it through memory.
     pub(super) fn open_integrated(
@@ -114,6 +181,7 @@ impl Game<'_> {
             create: create.cloned(),
             // An offline-mode server names its players by their offline profile.
             owner: offline_uuid(&player),
+            player: player.clone(),
         };
         let mut options = self.options.clone();
         // A server without a console: no local player, no window, no control socket.
@@ -131,6 +199,7 @@ impl Game<'_> {
         let (res, pack, settings) = (self.res.clone(), self.pack.clone(), self.settings.clone());
         let flags = Arc::new(Flags::default());
         let (ready_tx, ready) = channel();
+        let (tasks, server_tasks) = channel();
         let server_flags = flags.clone();
         let thread = std::thread::Builder::new()
             .name("Server thread".into())
@@ -141,7 +210,8 @@ impl Game<'_> {
                     options,
                     settings,
                     launch,
-                    &server_flags,
+                    server_flags,
+                    server_tasks,
                     &ready_tx,
                 );
                 if let Err(e) = result {
@@ -149,12 +219,17 @@ impl Game<'_> {
                     let _ = ready_tx.send(Err(e.to_string()));
                 }
             })?;
-        let handle = Integrated {
+        let mut handle = Integrated {
             flags,
             thread: Some(thread),
+            tasks,
+            world_name: String::new(),
         };
         let pipe = match ready.recv() {
-            Ok(Ok(pipe)) => pipe,
+            Ok(Ok((pipe, world_name))) => {
+                handle.world_name = world_name;
+                pipe
+            }
             Ok(Err(e)) => return Err(e.into()),
             Err(_) => return Err("the integrated server stopped".into()),
         };
@@ -168,8 +243,9 @@ impl Game<'_> {
     fn run_integrated(
         &mut self,
         launch: Launch,
-        flags: &Flags,
-        ready: &Sender<std::result::Result<Pipe, String>>,
+        flags: Arc<Flags>,
+        tasks: Receiver<Task>,
+        ready: &Sender<Ready>,
     ) -> Result<()> {
         self.open_world(
             &launch.folder,
@@ -182,7 +258,8 @@ impl Game<'_> {
         let view_distance = self.settings.render_distance.clamp(2, 32);
         let config = HubConfig {
             default_game_mode: self.level.mode(),
-            guest_commands: true,
+            // Only the owner until it is opened to the LAN.
+            guest_commands: false,
             force_game_mode: false,
             hardcore: self.level.hardcore,
             view_distance,
@@ -192,23 +269,28 @@ impl Game<'_> {
             max_players: MAX_PLAYERS,
             // No player of its own: the hub runs without a host.
             dedicated: true,
+            integrated: true,
         };
         let owner = launch.owner;
+        let published = flags.clone();
         let net = NetConfig {
-            // No network until it is opened to the LAN.
+            // No network until it is opened to the LAN; the memory connection
+            // is not compressed (`Connection.isMemoryConnection`).
             listen: false,
-            // A memory connection is not compressed (`Connection.isMemoryConnection`).
-            compression_threshold: -1,
-            enable_status: false,
-            announce: false,
             gate: Some(Arc::new(move |_, uuid, _| {
-                (uuid != owner).then(|| translatable("multiplayer.disconnect.not_whitelisted", &[]))
+                (uuid != owner && published.published.load(Ordering::Relaxed) == 0)
+                    .then(|| translatable("multiplayer.disconnect.not_whitelisted", &[]))
             })),
-            ..NetConfig::lan(0, self.level.name.clone(), MAX_PLAYERS)
+            // IntegratedServer.initServer: the MOTD names the owner and the world.
+            ..NetConfig::lan(
+                0,
+                format!("{} - {}", launch.player, self.level.name),
+                MAX_PLAYERS,
+            )
         };
         let settings = LanSettings {
             port: 0,
-            guest_commands: true,
+            guest_commands: false,
             force_game_mode: false,
         };
         self.lan_host(settings, net, config, None)?;
@@ -227,10 +309,17 @@ impl Game<'_> {
             });
             host.hub.lan.connect_local()?
         };
-        let _ = ready.send(Ok(pipe));
+        self.serving = Some(Serving {
+            flags: flags.clone(),
+            tasks,
+            owner,
+            pending: None,
+        });
+        let _ = ready.send(Ok((pipe, self.level.name.clone())));
         self.settle_spawn()?;
         let mut next = Instant::now();
         while !flags.stop.load(Ordering::Relaxed) {
+            self.run_tasks();
             self.update_dedicated_streaming();
             self.update_world();
             if flags.paused.load(Ordering::Relaxed) {
@@ -245,6 +334,7 @@ impl Game<'_> {
                     Ordering::Relaxed,
                 );
             }
+            self.apply_publish();
             let rate = self.clock.rate().max(1.0);
             next += Duration::from_secs_f64(1.0 / f64::from(rate));
             let now = Instant::now();
@@ -260,6 +350,10 @@ impl Game<'_> {
     /// `MinecraftServer.stopServer`: the players are saved and sent away,
     /// then the world is saved.
     fn stop_integrated(&mut self) -> Result<()> {
+        // IntegratedServer.stopServer: teardownPublishedState.
+        if let Some(s) = self.serving.take() {
+            s.flags.published.store(0, Ordering::Relaxed);
+        }
         if let Some(mut host) = self.lan.take() {
             for g in &host.hub.guests {
                 self.save_guest(&host, g);
@@ -282,18 +376,191 @@ impl Game<'_> {
     }
 }
 
+/// What the world options screen shows of an integrated server.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ServerOptions {
+    pub default_mode: i32,
+    /// The owner's own game mode.
+    pub personal_mode: i32,
+    pub cheats: bool,
+    pub difficulty: u8,
+    pub hardcore: bool,
+    pub difficulty_locked: bool,
+    pub port: Option<u16>,
+    pub guest_commands: bool,
+    pub force: bool,
+}
+
+/// The server thread's side.
+impl Game<'_> {
+    /// Whether this game is an integrated server's.
+    pub(super) fn serving(&self) -> bool {
+        self.serving.is_some()
+    }
+    /// The window's requests, between two ticks.
+    fn run_tasks(&mut self) {
+        let tasks: Vec<Task> = match &self.serving {
+            Some(s) => s.tasks.try_iter().collect(),
+            None => return,
+        };
+        for task in tasks {
+            task(self);
+            self.apply_publish();
+        }
+    }
+    /// `IntegratedServer.getPort` while published.
+    pub(super) fn published_port(&self) -> Option<u16> {
+        let s = self.serving.as_ref()?;
+        Some(s.flags.published.load(Ordering::Relaxed)).filter(|&p| p != 0)
+    }
+    /// `IntegratedServer.publishServer`: listen on `settings.port` (0 picks
+    /// one) and announce the world. The socket is bound at once so a busy
+    /// port fails here; the hub starts listening once it is at hand.
+    pub(super) fn publish(&mut self, settings: LanSettings) -> std::result::Result<u16, String> {
+        let Some(s) = self.serving.as_mut() else {
+            return Err("not an integrated server".into());
+        };
+        if s.flags.published.load(Ordering::Relaxed) != 0 {
+            return Err("already published".into());
+        }
+        let listener = Lan::bind(None, settings.port).map_err(|e| e.to_string())?;
+        let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+        log::info!("Published LAN server on port {port}");
+        s.flags.published.store(port, Ordering::Relaxed);
+        s.pending = Some(Publish::Open(listener, LanSettings { port, ..settings }));
+        self.apply_publish();
+        Ok(port)
+    }
+    /// `IntegratedServer.unpublishServer`: stop listening and send every
+    /// player but the owner away. False when it was not published.
+    pub(super) fn unpublish(&mut self) -> bool {
+        let Some(s) = self.serving.as_mut() else {
+            return false;
+        };
+        if s.flags.published.swap(0, Ordering::Relaxed) == 0 {
+            return false;
+        }
+        s.pending = Some(Publish::Close);
+        self.apply_publish();
+        true
+    }
+    /// Publish or unpublish for real, once the hub is in its place (a
+    /// player's `/publish` runs while it is out).
+    fn apply_publish(&mut self) {
+        if self.lan.is_none() {
+            return;
+        }
+        let Some(s) = self.serving.as_mut() else {
+            return;
+        };
+        let (Some(pending), owner) = (s.pending.take(), s.owner) else {
+            return;
+        };
+        let allow_commands = self.allow_commands();
+        let Some(host) = self.lan.as_mut() else {
+            return;
+        };
+        match pending {
+            Publish::Open(listener, settings) => {
+                if let Err(e) = host.hub.lan.listen_on(listener, true) {
+                    log::error!("Horizon: Open to LAN: {e}");
+                }
+                host.settings = settings;
+                host.hub.config.force_game_mode = settings.force_game_mode;
+                // IntegratedServer.setGuestCommandAccess, then updatePermissions.
+                host.hub.config.guest_commands = settings.guest_commands && allow_commands;
+                host.hub.resend_commands();
+            }
+            Publish::Close => {
+                host.hub.lan.stop_listening();
+                log::info!(
+                    "Unpublishing integrated server (was on port {})",
+                    host.settings.port
+                );
+                let others: Vec<u32> = host
+                    .hub
+                    .guests
+                    .iter()
+                    .filter(|g| g.uuid != owner)
+                    .map(|g| g.conn)
+                    .collect();
+                for conn in others {
+                    host.hub.kick(
+                        conn,
+                        translatable("multiplayer.disconnect.server_shutdown", &[]),
+                    );
+                }
+            }
+        }
+    }
+    /// The world options screen's state, read on the server.
+    pub(super) fn server_options(&self) -> ServerOptions {
+        let owner = self.serving.as_ref().map(|s| s.owner);
+        let host = self.lan.as_ref();
+        let personal_mode = host
+            .and_then(|h| h.hub.guests.iter().find(|g| Some(g.uuid) == owner))
+            .map_or(self.level.mode(), |g| g.game_mode);
+        let published = self.published_port();
+        ServerOptions {
+            default_mode: self.level.mode(),
+            personal_mode,
+            cheats: self.allow_commands(),
+            difficulty: self.ui.difficulty,
+            hardcore: self.level.hardcore,
+            difficulty_locked: self.level.difficulty_locked,
+            port: published,
+            guest_commands: published.is_some() && host.is_some_and(|h| h.settings.guest_commands),
+            force: published.is_none() || host.is_some_and(|h| h.settings.force_game_mode),
+        }
+    }
+    /// `IntegratedServer.setPersonalGameType`: the owner's game mode.
+    pub(super) fn set_owner_mode(&mut self, mode: i32) {
+        let Some(owner) = self.serving.as_ref().map(|s| s.owner) else {
+            return;
+        };
+        if let Some(host) = self.lan.as_mut()
+            && let Some(conn) = host
+                .hub
+                .guests
+                .iter()
+                .find(|g| g.uuid == owner)
+                .map(|g| g.conn)
+        {
+            host.hub.set_game_mode(conn, mode);
+        }
+    }
+    /// `IntegratedServer.setWorldAllowCommands`: the owner is an operator
+    /// while the world allows commands; everyone's level is sent again.
+    pub(super) fn owner_allow_commands(&mut self, allow: bool) {
+        let Some(owner) = self.serving.as_ref().map(|s| s.owner) else {
+            return;
+        };
+        let published = self.published_port().is_some();
+        if let Some(host) = self.lan.as_mut() {
+            host.hub.ops.insert(owner, if allow { 4 } else { 0 });
+            if published {
+                host.hub.config.guest_commands = allow && host.settings.guest_commands;
+            }
+            host.hub.resend_commands();
+        }
+    }
+}
+
 /// The server thread: a game of its own over the shared resources.
+#[allow(clippy::too_many_arguments)]
 fn serve(
     res: &Arc<Resources>,
     pack: PackResources,
     options: Options,
     settings: Settings,
     launch: Launch,
-    flags: &Flags,
-    ready: &Sender<std::result::Result<Pipe, String>>,
+    flags: Arc<Flags>,
+    tasks: Receiver<Task>,
+    ready: &Sender<Ready>,
 ) -> Result<()> {
-    let atlas = HudAtlas::build(&options.resources)?;
+    // It draws nothing: only the font, which books and chat measure with.
+    let atlas = HudAtlas::fonts(&options.resources)?;
     let audio = Audio::silent(&options.resources);
     let mut server = Game::new(res, pack, atlas, options, settings, audio)?;
-    server.run_integrated(launch, flags, ready)
+    server.run_integrated(launch, flags, tasks, ready)
 }
