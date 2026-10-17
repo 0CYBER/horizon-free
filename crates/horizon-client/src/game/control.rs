@@ -475,7 +475,10 @@ impl Game<'_> {
             }
             "chat-log" => {
                 let n = words.get(1).map_or(Ok(10), |n| n.parse())?;
-                Ok(Some(json!({ "chat": self.ui.chat.recent_lines(n) })))
+                let lines = self
+                    .remote_chat(n)
+                    .unwrap_or_else(|| self.ui.chat.recent_lines(n));
+                Ok(Some(json!({ "chat": lines })))
             }
             "stats" => {
                 let summary = self.frame_stats.summary();
@@ -549,18 +552,20 @@ impl Game<'_> {
                 self.leave_server(None)?;
                 ok()
             }
-            "save" => {
+            "save" | "save-all" => {
                 self.require_world()?;
-                self.save_game()?;
-                ok()
-            }
-            "save-all" => {
-                // Like `save-all flush`: also rewrite chunks that were not modified
-                // (the save round-trip harness compares them with vanilla's files).
-                self.require_world()?;
-                let keys: Vec<_> = self.world.chunks.keys().copied().collect();
-                self.world.modified.extend(keys);
-                self.save_game()?;
+                // `save-all` is like `save-all flush`: it also rewrites chunks
+                // that were not modified (the save round-trip harness compares
+                // them with vanilla's files).
+                let all = words[0] == "save-all";
+                // Single player's world is its server thread's.
+                if let Some(server) = &self.integrated {
+                    server
+                        .call(move |g| g.control_save(all).map_err(|e| e.to_string()))
+                        .ok_or("the integrated server stopped")??;
+                } else {
+                    self.control_save(all)?;
+                }
                 ok()
             }
             "dragon-hurt" => {
@@ -579,6 +584,15 @@ impl Game<'_> {
                 None => Err(format!("unknown command {other}; try help").into()),
             },
         }
+    }
+
+    /// `horizon-ctl save` and `save-all`.
+    fn control_save(&mut self, all: bool) -> Result<()> {
+        if all {
+            let keys: Vec<_> = self.world.chunks.keys().copied().collect();
+            self.world.modified.extend(keys);
+        }
+        self.save_game()
     }
 
     fn require_world(&self) -> Result<()> {
