@@ -8584,6 +8584,22 @@ impl Game<'_> {
             camera.y.floor() as i32,
             camera.z.floor() as i32,
         ];
+        // The camera inside an opaque block sees nothing through it: disable.
+        let cave_culling = self.settings.horizon.cave_culling
+            && !self
+                .res
+                .facts
+                .get(self.world.block(block[0], block[1], block[2]))
+                .solid_render;
+        // The cave culling search runs on its worker while the frame is prepared.
+        if cave_culling
+            && self.title.is_none()
+            && let Some(renderer) = self.renderer.as_mut()
+        {
+            horizon_client::spans::time("occlusion", || {
+                renderer.start_occlusion(camera, (self.streaming.radius * 16) as f32)
+            });
+        }
         let biome = self
             .world
             .chunks
@@ -8772,13 +8788,7 @@ impl Game<'_> {
             skybox: self.dim == Dim::Overworld && self.settings.horizon.sky,
             end_sky: self.dim == Dim::End && self.settings.horizon.sky,
             environment_fog: (self.dim == Dim::Nether).then_some((sky.fog_start, sky.fog_end)),
-            // The camera inside an opaque block sees nothing through it: disable.
-            cave_culling: self.settings.horizon.cave_culling
-                && !self
-                    .res
-                    .facts
-                    .get(self.world.block(block[0], block[1], block[2]))
-                    .solid_render,
+            cave_culling,
             water_fog,
             fog: Some({
                 let mut fog = self.frame_fog(camera, &sky, biome);

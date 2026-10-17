@@ -1978,6 +1978,13 @@ impl Renderer {
     pub fn has_section(&self, key: SectionKey) -> bool {
         self.sections.contains(key)
     }
+    /// Bring the cave culling graph up to date for `camera` without waiting:
+    /// a search this starts runs on its worker while the frame is prepared,
+    /// and `render` takes it if it has finished.
+    pub fn start_occlusion(&mut self, camera: DVec3, distance: f32) {
+        self.occlusion
+            .update(camera_section(camera), (distance / 16.0) as i32 + 2);
+    }
     pub fn upload(&mut self, key: SectionKey, mesh: &SectionMesh) {
         self.occlusion.set(key, mesh.visibility);
         if mesh.block_entities.is_empty() {
@@ -2466,17 +2473,10 @@ impl Renderer {
             planes: frustum(view_proj),
         };
         let camera = frame.camera;
-        let camera_section = (
-            (camera.x.floor() as i32) >> 4,
-            (camera.y.floor() as i32 - crate::chunk::MIN_Y) >> 4,
-            (camera.z.floor() as i32) >> 4,
-        );
+        let camera_section = camera_section(camera);
         let culling = !frame.title && frame.cave_culling;
         if culling {
-            let radius = (frame.distance / 16.0) as i32 + 2;
-            crate::spans::time("occlusion", || {
-                self.occlusion.update(camera_section, radius)
-            });
+            crate::spans::time("occlusion", || self.start_occlusion(camera, frame.distance));
         }
         let reachable = &self.occlusion;
         let mut visible = std::mem::take(&mut self.visible);
@@ -3361,6 +3361,15 @@ fn shader_pack_uniform(
 enum Pack {
     Horizon(pack_stages::PackStages),
     Java(java_stages::JavaStages),
+}
+
+/// The section the camera is in.
+fn camera_section(camera: DVec3) -> SectionKey {
+    (
+        (camera.x.floor() as i32) >> 4,
+        (camera.y.floor() as i32 - crate::chunk::MIN_Y) >> 4,
+        (camera.z.floor() as i32) >> 4,
+    )
 }
 
 fn world_projection(fov_degrees: f32, aspect: f32, far: f32) -> Mat4 {
