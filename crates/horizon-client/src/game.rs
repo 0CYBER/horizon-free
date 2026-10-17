@@ -3653,6 +3653,9 @@ impl Game<'_> {
         if capture && !self.focused {
             return;
         }
+        if !capture {
+            self.stop_mining();
+        }
         // The real pointer takes over from an agent's.
         self.agent_pointer = false;
         let Some(window) = &self.window else { return };

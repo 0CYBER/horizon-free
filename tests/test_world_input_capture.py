@@ -67,15 +67,17 @@ struct Remote { chat_input: Option<()> }
 struct Game {
     focused: bool, agent_pointer: bool, window: Option<Window>, mouse: Mouse,
     captured: bool, title: Option<()>, screen: Screen, remote: Option<Remote>,
+    mining: bool,
 }
 impl Default for Game {
     fn default() -> Self {
         Self { focused: true, agent_pointer: false, window: Some(Window::default()),
             mouse: Mouse::default(), captured: false, title: None,
-            screen: Screen::Playing, remote: None }
+            screen: Screen::Playing, remote: None, mining: false }
     }
 }
 impl Game {
+    fn stop_mining(&mut self) { self.mining = false; }
 METHODS
 }
 fn main() {
@@ -95,7 +97,9 @@ fn main() {
             assert!(!game.window.as_ref().unwrap().visible.get());
             for screen in [Screen::Paused, Screen::Inventory] {
                 game.screen = screen;
+                game.mining = true;
                 game.capture(false);
+                assert!(!game.mining);
                 game.capture_loaded_world();
                 assert!(!game.captured);
                 assert!(game.window.as_ref().unwrap().visible.get());
@@ -106,7 +110,9 @@ fn main() {
         }
         // Alt+Tab during loading: no native grab or agent-pointer reset.
         game.focused = false;
+        game.mining = true;
         game.capture(false);
+        assert!(!game.mining);
         assert!(!game.captured);
         assert!(game.window.as_ref().unwrap().visible.get());
         game.agent_pointer = true;

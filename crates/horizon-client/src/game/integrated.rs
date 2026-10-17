@@ -26,7 +26,7 @@ use std::{
     path::Path,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
         mpsc::{Sender, channel},
     },
     thread::JoinHandle,
@@ -39,6 +39,7 @@ struct Flags {
     /// `Minecraft.pause`: a single-player pause screen is open.
     paused: AtomicBool,
     stop: AtomicBool,
+    smoothed_tick_ms: AtomicU32,
 }
 
 /// The window's handle on its server thread.
@@ -47,6 +48,9 @@ pub(super) struct Integrated {
     thread: Option<JoinHandle<()>>,
 }
 impl Integrated {
+    pub fn smoothed_tick_ms(&self) -> f32 {
+        f32::from_bits(self.flags.smoothed_tick_ms.load(Ordering::Relaxed))
+    }
     /// `IntegratedServer.tickServer` skips the world while the game is paused.
     pub fn set_paused(&self, paused: bool) {
         self.flags.paused.store(paused, Ordering::Relaxed);
@@ -233,7 +237,13 @@ impl Game<'_> {
                 // Only the connections run.
                 self.tick_lan();
             } else {
+                let started = Instant::now();
                 self.tick()?;
+                self.debug_charts.log_tick(started, started.elapsed());
+                flags.smoothed_tick_ms.store(
+                    self.debug_charts.smoothed_tick_ms.to_bits(),
+                    Ordering::Relaxed,
+                );
             }
             let rate = self.clock.rate().max(1.0);
             next += Duration::from_secs_f64(1.0 / f64::from(rate));

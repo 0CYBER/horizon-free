@@ -68,6 +68,7 @@ struct Lerp {
 
 pub(super) struct Remote {
     pub session: Session,
+    pub brand: String,
     builtin: Arc<Builtin>,
     lang: Arc<Language>,
     registries: Arc<Dynamic>,
@@ -251,6 +252,7 @@ impl Game<'_> {
         self.apply_settings();
         self.remote = Some(Remote {
             session,
+            brand: "unknown".into(),
             builtin: Arc::new(builtin),
             lang,
             registries: Arc::new(Dynamic::default()),
@@ -454,6 +456,11 @@ impl Game<'_> {
                         r.joined = true;
                         r.profile = uuid;
                         r.status = format!("Joined as {name}; loading terrain...");
+                    }
+                }
+                Event::Brand(brand) => {
+                    if let Some(remote) = &mut self.remote {
+                        remote.brand = brand;
                     }
                 }
                 Event::Reconfigured(registries) => self.set_registries(registries),
@@ -2072,6 +2079,17 @@ impl Game<'_> {
         }
     }
 
+    pub(super) fn stop_remote_mining(&mut self) {
+        if let Some((pos, _, _)) = self.remote.as_mut().and_then(|r| r.destroying.take()) {
+            self.send(S::PlayerAction(play::PlayerAction {
+                action: 2,
+                pos,
+                direction: 0,
+                sequence: 0,
+            }));
+        }
+    }
+
     /// MultiPlayerGameMode.startDestroyBlock / continueDestroyBlock.
     fn remote_mining(&mut self) {
         let Some(r) = self.remote.as_mut() else {
@@ -2082,14 +2100,7 @@ impl Game<'_> {
         }
         let chatting = r.chat_input.is_some();
         if !self.left || self.screen != Screen::Playing || chatting {
-            if let Some((pos, _, _)) = r.destroying.take() {
-                self.send(S::PlayerAction(play::PlayerAction {
-                    action: 2,
-                    pos,
-                    direction: 0,
-                    sequence: 0,
-                }));
-            }
+            self.stop_remote_mining();
             self.mining = None;
             return;
         }
