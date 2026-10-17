@@ -731,6 +731,22 @@ impl Hub {
         }));
     }
 
+    /// ClientboundSetDefaultSpawnPositionPacket for the level's respawn data.
+    fn default_spawn(&self, spawn: [f64; 3]) -> C {
+        C::SetDefaultSpawnPosition(play::SetDefaultSpawnPosition {
+            pos: play::GlobalPos {
+                dimension: self.config.dimension.clone(),
+                pos: [
+                    spawn[0].floor() as i32,
+                    spawn[1].floor() as i32,
+                    spawn[2].floor() as i32,
+                ],
+            },
+            yaw: 0.0,
+            pitch: 0.0,
+        })
+    }
+
     /// PlayerList.sendLevelInfo.
     fn send_level_info(&mut self, i: usize, ctx: &TickCtx) {
         let spawn = ctx.spawn;
@@ -747,18 +763,7 @@ impl Hub {
             warning_time: 300,
         }));
         g.send(&self.time_packet(ctx.world, ctx.clock_rate));
-        g.send(&C::SetDefaultSpawnPosition(play::SetDefaultSpawnPosition {
-            pos: play::GlobalPos {
-                dimension: self.config.dimension.clone(),
-                pos: [
-                    spawn[0].floor() as i32,
-                    spawn[1].floor() as i32,
-                    spawn[2].floor() as i32,
-                ],
-            },
-            yaw: 0.0,
-            pitch: 0.0,
-        }));
+        g.send(&self.default_spawn(spawn));
         let w = &ctx.world.weather;
         if w.raining {
             g.send(&C::GameEvent(play::GameEvent {
@@ -1408,7 +1413,8 @@ impl Hub {
             let g = &self.guests[i];
             (g.health, g.food, g.saturation)
         };
-        if self.guests[i].sent_health != Some(health) {
+        // A dead player's health isn't sent (the death screen shows from the combat kill).
+        if self.guests[i].sent_health != Some(health) && !self.guests[i].dead {
             let g = &mut self.guests[i];
             g.send(&C::SetHealth(play::SetHealth {
                 health: health.0,
@@ -1658,12 +1664,38 @@ impl Hub {
             .map(str::to_owned)
     }
 
-    /// ServerPlayer.respawn: back to `at` with a fresh start.
-    pub fn respawn(&mut self, i: usize, at: [f64; 3]) {
+    /// PlayerList.respawn: back to `at` with a fresh start. The vanilla client waits on its
+    /// level loading screen from the Respawn packet until the level info's "level chunks load
+    /// start" event and the chunk under the player, so the packets follow vanilla's order.
+    pub fn respawn(&mut self, i: usize, at: [f64; 3], ctx: &TickCtx) {
         let mode = self.guests[i].game_mode;
-        let info = self.spawn_info(mode);
+        let mut info = self.spawn_info(mode);
+        // Player.getLastDeathLocation, set where the player died.
+        info.last_death = self.guests[i].last_death.map(|pos| play::GlobalPos {
+            dimension: self.config.dimension.clone(),
+            pos,
+        });
         self.close_container_for(i);
         let g = &mut self.guests[i];
+        // ServerLevel.removePlayerImmediately: every entity paired with the dead player is
+        // removed (ServerEntity.removePairing, one packet each). Its chunks are dropped
+        // without ForgetLevelChunk (PlayerChunkSender.dropChunk skips dead players): the
+        // client keeps them and they are all sent again.
+        for id in g.tracker.ids() {
+            g.send(&C::RemoveEntities(play::RemoveEntities { ids: vec![id] }));
+        }
+        g.tracker.clear();
+        g.sent_chunks.clear();
+        g.chunk_queue.clear();
+        // ServerPlayer.restoreFrom: the game mode again (onUpdateAbilities).
+        g.send(&C::PlayerAbilities(play::PlayerAbilities {
+            flags: g.ability_flags(),
+            flying_speed: 0.05,
+            walking_speed: 0.1,
+        }));
+        // The new player faces the level's respawn direction (snapTo).
+        g.yaw = 0.0;
+        g.pitch = 0.0;
         g.position = at;
         g.previous_position = at;
         g.send(&C::Respawn(play::Respawn {
@@ -1679,6 +1711,34 @@ impl Hub {
         g.chunk_queue.clear();
         g.tracker.clear();
         self.teleport(i, None);
+        let spawn = self.default_spawn(ctx.spawn);
+        let g = &mut self.guests[i];
+        g.send(&spawn);
+        g.send(&C::ChangeDifficulty(play::ChangeDifficulty {
+            difficulty: ctx.difficulty,
+            locked: ctx.difficulty_locked,
+        }));
+        let xp = (g.xp_progress, g.xp_level, g.xp_total);
+        g.send(&C::SetExperience(play::SetExperience {
+            progress: xp.0,
+            level: xp.1,
+            total: xp.2,
+        }));
+        g.sent_xp = Some(xp);
+        // ServerPlayer.sendPostEffects.
+        g.send(&raw(ids::POST_EFFECTS, vec![0]));
+        self.send_level_info(i, ctx);
+        self.send_permission_level(i);
+        // ServerLevel.addRespawnedPlayer: the chunk tracking starts again at the player.
+        let g = &mut self.guests[i];
+        let (cx, cz) = g.chunk();
+        g.send(&C::SetChunkCacheCenter(play::SetChunkCacheCenter {
+            x: cx,
+            z: cz,
+        }));
+        g.center = None;
+        g.center_sent = Some((cx, cz));
+        // ServerPlayer.initInventoryMenu.
         self.send_inventory(i);
     }
 }
