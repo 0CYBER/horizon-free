@@ -4,7 +4,7 @@
 //!
 //! Content is data, not code: nothing here runs in the sandbox. What a mod
 //! may add is fenced instead. Its own namespace, plus additions to vanilla
-//! tags. Paths are plain, files and totals are capped, and vanilla ids
+//! tags and to the convention tags (`c`, which NeoForge and Fabric mods share). Paths are plain, files and totals are capped, and vanilla ids
 //! cannot be redefined.
 use crate::manifest::{Capability, MANIFEST, Manifest};
 use serde::Deserialize;
@@ -242,12 +242,13 @@ impl Content {
                 parts.next().unwrap_or(""),
             );
             let own = namespace == id;
-            // Vanilla's own files stay vanilla's; a mod may only add to its tags.
-            let allowed =
-                own || (top == "data" && namespace == "minecraft" && rest.starts_with("tags/"));
+            // Vanilla's own files stay vanilla's; a mod may only add to its
+            // tags, and to the convention tags mods share.
+            let shared = matches!(namespace, "minecraft" | "c");
+            let allowed = own || (top == "data" && shared && rest.starts_with("tags/"));
             if !allowed {
                 return Err(format!(
-                    "{name}: a mod adds files in its own namespace ({top}/{id}/) or to vanilla tags"
+                    "{name}: a mod adds files in its own namespace ({top}/{id}/) or to vanilla and convention (c) tags"
                 ));
             }
             let Some(decl) = (own && top == "data")
@@ -417,10 +418,11 @@ capabilities = ["registries"]
             ("data/ruby/horizon/item/ruby.json", ITEM),
             ("data/ruby/recipe/ruby_block.json", b"{}"),
             ("data/minecraft/tags/block/mineable/pickaxe.json", b"{}"),
+            ("data/c/tags/item/gems/ruby.json", b"{}"),
             ("assets/ruby/textures/block/ruby_block.png", b"png"),
         ];
         let content = hmod("ok", MANIFEST_TEXT, files).unwrap();
-        assert_eq!(content.files.len(), 5);
+        assert_eq!(content.files.len(), 6);
         assert_eq!(
             content.blocks,
             [Block {
@@ -471,6 +473,8 @@ capabilities = ["registries"]
             "vanilla-recipe",
             &[("data/minecraft/recipe/stone.json", b"{}")],
         );
+        refused("convention-recipe", &[("data/c/recipe/stone.json", b"{}")]);
+        refused("convention-asset", &[("assets/c/lang/en_us.json", b"{}")]);
         let e = refused(
             "modded-template",
             &[(

@@ -277,12 +277,15 @@ blocks and items by declaring them in `data/<id>/horizon/block/*.json` and
 ```
 
 The fence: files go in the mod's own namespace (`assets/<id>/`,
-`data/<id>/`), plus additions to vanilla tags (`data/minecraft/tags/`).
+`data/<id>/`), plus additions to vanilla tags (`data/minecraft/tags/`) and
+to the convention tags NeoForge and Fabric mods share (`data/c/tags/`).
 Templates and `sounds` name vanilla blocks; unknown keys are refused. Paths
 use vanilla's resource characters, at most 65,536 files, 16 MiB each and
 512 MiB in all. A mod whose content is refused stays off, with the reason on
-its row. The game reading this content into its block and item tables comes
-next (docs/modpacks.md).
+its row. The game reads this content into its block and item tables
+(`horizon_client::mod_content`, docs/modpacks.md). A tag entry naming an id
+nobody registers (a block a port left out, another mod's item) is dropped,
+so the rest of the tag still loads; vanilla would drop the whole tag.
 
 ## Versions and compatibility
 

@@ -63,7 +63,7 @@ impl MotionResources {
         )?)?)?);
         let data = nbt::read_named(
             &fs::read(root.join("movement-properties.nbt"))?,
-            Limits::default(),
+            Limits::tables(),
         )?
         .0
         .tag;
