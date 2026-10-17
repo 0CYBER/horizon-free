@@ -23,7 +23,7 @@ plan are in [docs/server.md](https://github.com/ludovic111/horizon/blob/main/doc
   checks accounts: anyone who reaches it can join under any name. Keep it on your LAN or a tailnet
   (Tailscale, ZeroTier), or share it only with friends you trust.
 - **No secure chat.** Chat isn't signed. Vanilla clients show chat from the server as not secure.
-- **No locator bar** for vanilla clients yet (coming).
+- **No locator bar** for vanilla clients yet (in review: [#692](https://github.com/ludovic111/horizon/pull/692)).
 - **Nether and End:** the world follows a player through portals when they are alone on the server
   (v2026.10.17.09 and newer). With several players online, portals don't move remote players yet.
 - **Vanilla's movement checks and chunk pacing** ("moved too quickly", sending chunks as fast as a client
