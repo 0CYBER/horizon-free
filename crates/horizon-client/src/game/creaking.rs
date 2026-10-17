@@ -327,13 +327,16 @@ impl Game<'_> {
             }
             let hearts = &self.creaking.hearts;
             let _ = heart;
+            let is_heart = |id: u32| hearts.get(id as usize).copied().unwrap_or(false);
             for (si, section) in chunk.sections.iter().enumerate() {
-                if section.is_uniform(0) {
+                // Only a section whose palette holds a heart state can have
+                // one: the others are skipped without reading their 4,096 blocks.
+                if !section.blocks.maybe_has(is_heart) {
                     continue;
                 }
                 for i in 0..4096 {
                     let id = section.get(i);
-                    if !hearts.get(id as usize).copied().unwrap_or(false) {
+                    if !is_heart(id) {
                         continue;
                     }
                     let (lx, lz, ly) = ((i & 15) as i32, ((i >> 4) & 15) as i32, (i >> 8) as i32);
