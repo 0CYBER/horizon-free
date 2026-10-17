@@ -46,6 +46,8 @@ pub struct World {
     /// Every block position written since the log was last drained, kept
     /// only while the world is open to the network (see `lan`).
     pub block_log: Option<Vec<(i32, i32, i32)>>,
+    /// The villager POIs of each section (`PoiManager`'s sections).
+    pub pois: crate::poi_sections::PoiSections<crate::mobs::villager_brain::Poi>,
 }
 /// ServerLevel weather state (advanceWeatherCycle).
 #[derive(Clone, Copy, Debug, Default)]
@@ -130,6 +132,7 @@ impl World {
             day_time: 1000,
             weather: Weather::default(),
             block_log: None,
+            pois: Default::default(),
         }
     }
     /// A controlled blockstate scene for the native scene probes: material
