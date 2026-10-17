@@ -8,7 +8,7 @@ use horizon_protocol::{
     packets::{configuration::ClientInformation, play},
 };
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::VecDeque,
     sync::{Arc, atomic::AtomicI32},
 };
 
@@ -46,6 +46,8 @@ pub struct Guest {
     pub left_reason: String,
     pub uuid: u128,
     pub name: String,
+    /// The profile's properties, for the player list (skins).
+    pub properties: Vec<horizon_protocol::packets::login::Property>,
     pub entity_id: i32,
     pub sender: PlayerSender,
     pub latency: Arc<AtomicI32>,
@@ -87,7 +89,7 @@ pub struct Guest {
     pub loaded: bool,
     // Chunks.
     pub center: Option<(i32, i32)>,
-    pub sent_chunks: HashSet<(i32, i32)>,
+    pub sent_chunks: crate::fast_hash::FxHashSet<(i32, i32)>,
     pub chunk_queue: Vec<(i32, i32)>,
     /// PlayerChunkSender: batches sent but not yet acknowledged, how many
     /// may be (1 until the client's first acknowledgement, then 10), the
@@ -129,6 +131,10 @@ pub struct Guest {
     pub menu_state: i32,
     pub sent_health: Option<(f32, i32, f32)>,
     pub sent_xp: Option<(f32, i32, i32)>,
+    /// Where the player last died (Player.lastDeathLocation), sent with the respawn.
+    pub last_death: Option<[i32; 3]>,
+    /// The last action sequence to acknowledge at the next tick (-1: none).
+    pub ack_up_to: std::cell::Cell<i32>,
     pub sent_selected: usize,
     pub inbox: VecDeque<play::Serverbound>,
     pub joined_tick: u64,
@@ -148,6 +154,19 @@ pub struct Guest {
     pub drag: Option<(u8, Vec<usize>)>,
     /// The compound this player was loaded from, for fields Horizon does not model.
     pub saved: Option<horizon_world::nbt::Tag>,
+    /// `ServerPlayer.recipeBook`.
+    pub recipe_book: crate::recipe_book::Settings,
+    /// `PlayerAdvancements`: the criteria obtained, whether they came from
+    /// the player's file, the advancements the client was last told it may
+    /// see (empty before the first packet), and those whose progress
+    /// changed since (`progressChanged`).
+    pub advancements: crate::advancements::Progress,
+    pub advancements_loaded: bool,
+    pub advancements_visible: Vec<bool>,
+    pub advancements_changed: std::collections::BTreeSet<usize>,
+    /// Recipes unlocked since the client was last told
+    /// (`ServerRecipeBook.addRecipes` sends them).
+    pub recipes_unlocked: Vec<String>,
 }
 
 impl Guest {
@@ -162,6 +181,7 @@ impl Guest {
             left_reason: String::new(),
             uuid: j.uuid,
             name: j.name,
+            properties: j.properties,
             entity_id,
             sender: j.sender,
             latency: j.latency,
@@ -190,7 +210,7 @@ impl Guest {
             position_this_tick: false,
             loaded: false,
             center: None,
-            sent_chunks: HashSet::new(),
+            sent_chunks: Default::default(),
             chunk_queue: Vec::new(),
             unacknowledged: 0,
             max_unacknowledged: 1,
@@ -218,6 +238,8 @@ impl Guest {
             menu_state: 0,
             sent_health: None,
             sent_xp: None,
+            last_death: None,
+            ack_up_to: std::cell::Cell::new(-1),
             sent_selected: 0,
             inbox: VecDeque::new(),
             joined_tick: 0,
@@ -230,6 +252,12 @@ impl Guest {
             next_window: 0,
             drag: None,
             saved: None,
+            recipe_book: Default::default(),
+            advancements: Default::default(),
+            advancements_loaded: false,
+            advancements_visible: Vec::new(),
+            advancements_changed: Default::default(),
+            recipes_unlocked: Vec::new(),
         }
     }
     pub fn send(&self, packet: &play::Clientbound) {

@@ -4,11 +4,14 @@
 //! ClientboundRecipeBookAddPacket) and the advancements the player may see go
 //! out in ClientboundUpdateAdvancementsPacket (PlayerAdvancements.flushDirty).
 use super::data::{SyncData, json_to_nbt};
-use crate::{advancements::Tree, recipe_book::RecipeIndex};
+use crate::{
+    advancements::{Progress, Tree},
+    recipe_book::{RecipeIndex, Settings},
+};
 use horizon_protocol::buf::Writer;
 use serde_json::Value;
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     path::Path,
 };
 
@@ -54,8 +57,16 @@ impl ServerAdvancements {
         }
     }
 
-    /// The first tick of a player without advancements.
-    pub fn first_tick(&self, sync: &SyncData, now_millis: i64) -> FirstTick {
+    /// The first tick of a player without advancements: the criteria
+    /// `minecraft:tick` meets go into `progress` and the recipes their
+    /// advancements reward into `book`.
+    pub fn first_tick(
+        &self,
+        sync: &SyncData,
+        now_millis: i64,
+        progress: &mut Progress,
+        book: &mut Settings,
+    ) -> FirstTick {
         // CriteriaTriggers.TICK: the criteria it meets, and what they complete.
         let mut obtained: Vec<Vec<&str>> = vec![Vec::new(); self.tree.list.len()];
         for (i, a) in self.tree.list.iter().enumerate() {
@@ -77,25 +88,24 @@ impl ServerAdvancements {
                         .all(|group| group.iter().any(|c| got.contains(&c.as_str())))
             })
             .collect();
+        let date = crate::advancements::date_text(now_millis.div_euclid(1000));
+        for (a, got) in self.tree.list.iter().zip(&obtained) {
+            for c in got {
+                progress.grant(&a.id, c, &date);
+            }
+        }
         // AdvancementRewards.grant: the recipes, in the advancements' order.
         let mut entries = Vec::new();
         for (i, a) in self.tree.list.iter().enumerate() {
             if !done[i] {
                 continue;
             }
+            book.add_recipes(&self.displays, &a.rewards.recipes);
             for id in &a.rewards.recipes {
-                entries.extend(self.book_entries(id, sync));
+                entries.extend(self.book_entries(id, sync, NOTIFY_AND_HIGHLIGHT));
             }
         }
-        let recipe_book_add = (!entries.is_empty()).then(|| {
-            let mut w = Writer::new();
-            w.varint(entries.len() as i32);
-            for e in entries {
-                w.data.extend(e);
-            }
-            w.bool(false); // not a replacement
-            w.data
-        });
+        let recipe_book_add = (!entries.is_empty()).then(|| book_add(entries, false));
         // flushDirty: every advancement the player may see, and its progress.
         let visible = self.tree.visible(&self.kids, |i| done[i]);
         let shown: Vec<usize> = (0..self.tree.list.len()).filter(|i| visible[*i]).collect();
@@ -103,60 +113,14 @@ impl ServerAdvancements {
         w.bool(true); // the first packet resets the client's advancements
         w.varint(shown.len() as i32);
         for &i in &shown {
-            let a = &self.tree.list[i];
-            w.string(&a.id);
-            w.bool(a.parent.is_some());
-            if let Some(p) = &a.parent {
-                w.string(p);
-            }
-            w.bool(a.display.is_some());
-            if let Some(d) = &a.display {
-                w.nbt(&json_to_nbt(&d.title));
-                w.nbt(&json_to_nbt(&d.description));
-                w.varint(sync.id("minecraft:item", &d.icon).unwrap_or(0));
-                w.varint(1);
-                w.varint(0);
-                w.varint(0);
-                w.varint(match d.frame {
-                    crate::advancements::Frame::Task => 0,
-                    crate::advancements::Frame::Challenge => 1,
-                    crate::advancements::Frame::Goal => 2,
-                });
-                w.i32(
-                    i32::from(d.background.is_some())
-                        | i32::from(d.show_toast) << 1
-                        | i32::from(d.hidden) << 2,
-                );
-                if let Some(b) = &d.background {
-                    w.string(b);
-                }
-            }
-            w.varint(a.requirements.len() as i32);
-            for group in &a.requirements {
-                w.varint(group.len() as i32);
-                for c in group {
-                    w.string(c);
-                }
-            }
-            w.bool(false); // sends_telemetry_event
-            let (x, y) = self.layout[i].unwrap_or((0, 0.0));
-            w.f32(x as f32);
-            w.f32(y);
+            self.write_advancement(&mut w, i, sync);
         }
         w.varint(0); // nothing removed
         w.varint(shown.len() as i32);
         for &i in &shown {
-            let a = &self.tree.list[i];
-            w.string(&a.id);
-            w.varint(a.criteria.len() as i32);
-            for c in &a.criteria {
-                w.string(&c.name);
-                let got = obtained[i].contains(&c.name.as_str());
-                w.bool(got);
-                if got {
-                    w.i64(now_millis);
-                }
-            }
+            self.write_progress(&mut w, i, |c| {
+                obtained[i].contains(&c).then_some(now_millis)
+            });
         }
         w.bool(true); // show the advancements
         FirstTick {
@@ -165,9 +129,169 @@ impl ServerAdvancements {
         }
     }
 
+    /// `PlayerAdvancements.flushDirty`: the advancements that became visible
+    /// or hidden since `visible` (which it updates; empty before the first
+    /// packet, which resets the client's and carries everything visible) and
+    /// the progress of the `changed` ones still visible. None when there is
+    /// nothing to send.
+    pub fn update(
+        &self,
+        sync: &SyncData,
+        progress: &Progress,
+        visible: &mut Vec<bool>,
+        changed: &BTreeSet<usize>,
+        show: bool,
+    ) -> Option<Vec<u8>> {
+        let n = self.tree.list.len();
+        let first = visible.len() != n;
+        // flushDirty does nothing unless it is the first packet or progress
+        // changed: visibility follows progress alone, and every grant and
+        // revoke is in `changed`. This skips walking the whole tree for
+        // every player every tick.
+        if !first && changed.is_empty() {
+            return None;
+        }
+        let now = self
+            .tree
+            .visible(&self.kids, |i| progress.done(&self.tree.list[i]));
+        let was = |i: usize| !first && visible[i];
+        let added: Vec<usize> = (0..n).filter(|&i| now[i] && !was(i)).collect();
+        let removed: Vec<usize> = (0..n).filter(|&i| !now[i] && was(i)).collect();
+        let progressed: Vec<usize> = if first {
+            (0..n).filter(|&i| now[i]).collect()
+        } else {
+            changed
+                .iter()
+                .copied()
+                .filter(|&i| i < n && now[i])
+                .collect()
+        };
+        *visible = now;
+        if !first && added.is_empty() && removed.is_empty() && progressed.is_empty() {
+            return None;
+        }
+        let mut w = Writer::new();
+        w.bool(first);
+        w.varint(added.len() as i32);
+        for &i in &added {
+            self.write_advancement(&mut w, i, sync);
+        }
+        w.varint(removed.len() as i32);
+        for &i in &removed {
+            w.string(&self.tree.list[i].id);
+        }
+        w.varint(progressed.len() as i32);
+        for &i in &progressed {
+            let id = &self.tree.list[i].id;
+            self.write_progress(&mut w, i, |c| {
+                progress
+                    .criteria
+                    .get(id)
+                    .and_then(|m| m.get(c))
+                    .map(|date| crate::advancements::date_millis(date).unwrap_or(0))
+            });
+        }
+        w.bool(show);
+        Some(w.data)
+    }
+
+    /// Which advancements a player with `progress` may see.
+    pub fn visibility(&self, progress: &Progress) -> Vec<bool> {
+        self.tree
+            .visible(&self.kids, |i| progress.done(&self.tree.list[i]))
+    }
+
+    /// `ClientboundUpdateAdvancementsPacket.PositionedAdvancement`.
+    fn write_advancement(&self, w: &mut Writer, i: usize, sync: &SyncData) {
+        let a = &self.tree.list[i];
+        w.string(&a.id);
+        w.bool(a.parent.is_some());
+        if let Some(p) = &a.parent {
+            w.string(p);
+        }
+        w.bool(a.display.is_some());
+        if let Some(d) = &a.display {
+            w.nbt(&json_to_nbt(&d.title));
+            w.nbt(&json_to_nbt(&d.description));
+            w.varint(sync.id("minecraft:item", &d.icon).unwrap_or(0));
+            w.varint(1);
+            w.varint(0);
+            w.varint(0);
+            w.varint(match d.frame {
+                crate::advancements::Frame::Task => 0,
+                crate::advancements::Frame::Challenge => 1,
+                crate::advancements::Frame::Goal => 2,
+            });
+            w.i32(
+                i32::from(d.background.is_some())
+                    | i32::from(d.show_toast) << 1
+                    | i32::from(d.hidden) << 2,
+            );
+            if let Some(b) = &d.background {
+                w.string(b);
+            }
+        }
+        w.varint(a.requirements.len() as i32);
+        for group in &a.requirements {
+            w.varint(group.len() as i32);
+            for c in group {
+                w.string(c);
+            }
+        }
+        w.bool(false); // sends_telemetry_event
+        let (x, y) = self.layout[i].unwrap_or((0, 0.0));
+        w.f32(x as f32);
+        w.f32(y);
+    }
+
+    /// An `AdvancementProgress`: each criterion and when it was obtained.
+    fn write_progress(&self, w: &mut Writer, i: usize, obtained: impl Fn(&str) -> Option<i64>) {
+        let a = &self.tree.list[i];
+        w.string(&a.id);
+        w.varint(a.criteria.len() as i32);
+        for c in &a.criteria {
+            w.string(&c.name);
+            let at = obtained(&c.name);
+            w.bool(at.is_some());
+            if let Some(at) = at {
+                w.i64(at);
+            }
+        }
+    }
+
+    /// `ServerRecipeBook.addRecipes`' packet for recipes just unlocked:
+    /// each display, with its notification and highlighted. None when no
+    /// recipe has a display.
+    pub fn recipes_added(&self, ids: &[String], sync: &SyncData) -> Option<Vec<u8>> {
+        let entries: Vec<Vec<u8>> = ids
+            .iter()
+            .flat_map(|id| self.book_entries(id, sync, NOTIFY_AND_HIGHLIGHT))
+            .collect();
+        (!entries.is_empty()).then(|| book_add(entries, false))
+    }
+
+    /// `ServerRecipeBook.sendInitialRecipeBook`: every known recipe, without
+    /// notifications, highlighted while not yet displayed, replacing the
+    /// client's book.
+    pub fn initial_recipe_book(&self, book: &Settings, sync: &SyncData) -> Vec<u8> {
+        let entries: Vec<Vec<u8>> = book
+            .recipes
+            .iter()
+            .flat_map(|id| {
+                let highlight = if book.to_be_displayed.contains(id) {
+                    2
+                } else {
+                    0
+                };
+                self.book_entries(id, sync, highlight)
+            })
+            .collect();
+        book_add(entries, true)
+    }
+
     /// ClientboundRecipeBookAddPacket.Entry for each display of a recipe:
     /// highlighted, and with a notification unless the recipe turns it off.
-    fn book_entries(&self, id: &str, sync: &SyncData) -> Vec<Vec<u8>> {
+    fn book_entries(&self, id: &str, sync: &SyncData, flags: i8) -> Vec<Vec<u8>> {
         let Some(r) = self.recipes.get(id) else {
             return Vec::new();
         };
@@ -245,10 +369,25 @@ impl ServerAdvancements {
         for v in placed {
             holder_set(&mut w, v, &item);
         }
+        // The notification only where the recipe shows one.
         let notify = r["show_notification"].as_bool().unwrap_or(true);
-        w.i8(i8::from(notify) | 2);
+        w.i8(if notify { flags } else { flags & !1 });
         vec![w.data]
     }
+}
+
+/// ClientboundRecipeBookAddPacket.Entry flags: notification, highlight.
+const NOTIFY_AND_HIGHLIGHT: i8 = 1 | 2;
+
+/// ClientboundRecipeBookAddPacket: the entries, then whether they replace the book.
+fn book_add(entries: Vec<Vec<u8>>, replace: bool) -> Vec<u8> {
+    let mut w = Writer::new();
+    w.varint(entries.len() as i32);
+    for e in entries {
+        w.data.extend(e);
+    }
+    w.bool(replace);
+    w.data
 }
 
 /// ShapedRecipePattern.shrink: the pattern without blank border rows and columns.

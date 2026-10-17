@@ -222,7 +222,7 @@ impl Game<'_> {
         }
     }
 
-    fn block_name(&self, p: [i32; 3]) -> std::sync::Arc<str> {
+    pub(super) fn block_name(&self, p: [i32; 3]) -> std::sync::Arc<str> {
         self.res
             .facts
             .get(self.world.block(p[0], p[1], p[2]))
@@ -366,31 +366,11 @@ impl Game<'_> {
         if self.travelling.is_some() || p.health.dead_or_dying() {
             return Ok(());
         }
-        let w = f64::from(p.dimensions.width) / 2.0;
-        let lo = [p.position.x - w, p.position.y, p.position.z - w];
-        let hi = [
-            p.position.x + w,
-            p.position.y + f64::from(p.dimensions.height),
-            p.position.z + w,
-        ];
-        let mut portal = false;
-        let mut gateway = None;
-        for x in lo[0].floor() as i32..=hi[0].floor() as i32 {
-            for y in lo[1].floor() as i32..=hi[1].floor() as i32 {
-                for z in lo[2].floor() as i32..=hi[2].floor() as i32 {
-                    let name = self.block_name([x, y, z]);
-                    // EndPortalBlock entity-inside shape: y 6/16..12/16.
-                    if &*name == "minecraft:end_portal"
-                        && lo[1] < f64::from(y) + 0.75
-                        && hi[1] > f64::from(y) + 0.375
-                    {
-                        portal = true;
-                    } else if &*name == "minecraft:end_gateway" && self.dim == Dim::End {
-                        gateway = Some([x, y, z]);
-                    }
-                }
-            }
-        }
+        let (portal, gateway) = self.inside_end_portals(
+            p.position,
+            f64::from(p.dimensions.width),
+            f64::from(p.dimensions.height),
+        );
         if portal {
             if self.portals.player.cooldown == 0 {
                 let target = if self.dim == Dim::End {
@@ -415,6 +395,38 @@ impl Game<'_> {
             self.enter_gateway(g)?;
         }
         Ok(())
+    }
+
+    /// Whether a `width` by `height` box at `position` is inside an End
+    /// portal (its entity-inside shape), and the End gateway it touches.
+    pub(super) fn inside_end_portals(
+        &self,
+        position: Vec3,
+        width: f64,
+        height: f64,
+    ) -> (bool, Option<[i32; 3]>) {
+        let w = width / 2.0;
+        let lo = [position.x - w, position.y, position.z - w];
+        let hi = [position.x + w, position.y + height, position.z + w];
+        let mut portal = false;
+        let mut gateway = None;
+        for x in lo[0].floor() as i32..=hi[0].floor() as i32 {
+            for y in lo[1].floor() as i32..=hi[1].floor() as i32 {
+                for z in lo[2].floor() as i32..=hi[2].floor() as i32 {
+                    let name = self.block_name([x, y, z]);
+                    // EndPortalBlock entity-inside shape: y 6/16..12/16.
+                    if &*name == "minecraft:end_portal"
+                        && lo[1] < f64::from(y) + 0.75
+                        && hi[1] > f64::from(y) + 0.375
+                    {
+                        portal = true;
+                    } else if &*name == "minecraft:end_gateway" && self.dim == Dim::End {
+                        gateway = Some([x, y, z]);
+                    }
+                }
+            }
+        }
+        (portal, gateway)
     }
 
     /// EndPortalBlock.getPortalDestination for the pending enter_dimension.
@@ -451,10 +463,36 @@ impl Game<'_> {
             self.previous_eye = 1.62;
             self.clock.reset();
         }
-        let mut position = target;
-        if let Some(job) = self.end.job.take() {
-            position = self.resolve_gateway(job, target)?;
-        } else if self.dim == Dim::End {
+        let position = if let Some(job) = self.end.job.take() {
+            self.resolve_gateway(job, target)?
+        } else {
+            let (position, yaw) = self.end_arrival(target)?;
+            if let Some(yaw) = yaw {
+                self.yaw = yaw;
+                player.yaw = yaw;
+                player.head_yaw = yaw;
+            }
+            position
+        };
+        player.position = position;
+        player.velocity = Vec3::ZERO;
+        player.fall_distance = 0.0;
+        self.previous_position = player.position;
+        self.player = Some(player);
+        self.pad.player_replaced();
+        self.sway = Default::default();
+        self.apply_equipment();
+        let pitch = self.world.random.next_float() * 0.4 + 0.8;
+        self.audio
+            .play("minecraft:block.portal.travel", None, 0.25, pitch);
+        Ok(())
+    }
+
+    /// Where an End portal's traveller lands once `target` has loaded, and
+    /// the yaw it faces there: the platform below the End's spawn point,
+    /// facing west, or the top of the Overworld's spawn column.
+    pub(super) fn end_arrival(&mut self, target: Vec3) -> Result<(Vec3, Option<f32>)> {
+        if self.dim == Dim::End {
             // EndPlatformFeature.createEndPlatform below the spawn point.
             let origin = [END_SPAWN[0], END_SPAWN[1] - 1, END_SPAWN[2]];
             for dz in -2..=2 {
@@ -473,28 +511,13 @@ impl Game<'_> {
                 }
             }
             // Direction.WEST.toYRot().
-            self.yaw = 90.0;
-            player.yaw = 90.0;
-            player.head_yaw = 90.0;
-        } else {
-            // ServerPlayer.findRespawnPositionAndUseSpawnBlock: onto the spawn column.
-            let y = self
-                .land_column(target.x.floor() as i32, target.z.floor() as i32)
-                .map_or(target.y, f64::from);
-            position = Vec3::new(target.x, y, target.z);
+            return Ok((target, Some(90.0)));
         }
-        player.position = position;
-        player.velocity = Vec3::ZERO;
-        player.fall_distance = 0.0;
-        self.previous_position = player.position;
-        self.player = Some(player);
-        self.pad.player_replaced();
-        self.sway = Default::default();
-        self.apply_equipment();
-        let pitch = self.world.random.next_float() * 0.4 + 0.8;
-        self.audio
-            .play("minecraft:block.portal.travel", None, 0.25, pitch);
-        Ok(())
+        // ServerPlayer.findRespawnPositionAndUseSpawnBlock: onto the spawn column.
+        let y = self
+            .land_column(target.x.floor() as i32, target.z.floor() as i32)
+            .map_or(target.y, f64::from);
+        Ok((Vec3::new(target.x, y, target.z), None))
     }
 
     /// Dying away from the Overworld respawns at the world spawn there.

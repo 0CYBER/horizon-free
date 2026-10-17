@@ -190,7 +190,7 @@ impl Opt {
         let unit = |v: f32, lo: f32, hi: f32| Kind::Slider(((v - lo) / (hi - lo)).clamp(0.0, 1.0));
         match self {
             Opt::Fov => unit(s.fov, 30.0, 110.0),
-            Opt::RenderDistance => unit(s.render_distance as f32, 2.0, 32.0),
+            Opt::RenderDistance => unit(s.render_distance as f32, 2.0, 64.0),
             Opt::SimulationDistance => unit(s.simulation_distance as f32, 5.0, 32.0),
             Opt::Sensitivity => Kind::Slider(s.sensitivity),
             Opt::WheelSensitivity => unit(s.mouse_wheel_sensitivity, 0.01, 10.0),
@@ -484,7 +484,7 @@ impl Opt {
         let step = |lo: f32, hi: f32| (lo + v * (hi - lo)).round();
         match self {
             Opt::Fov => s.fov = step(30.0, 110.0),
-            Opt::RenderDistance => s.render_distance = step(2.0, 32.0) as i32,
+            Opt::RenderDistance => s.render_distance = step(2.0, 64.0) as i32,
             Opt::SimulationDistance => s.simulation_distance = step(5.0, 32.0) as i32,
             Opt::Sensitivity => s.sensitivity = v,
             Opt::WheelSensitivity => s.mouse_wheel_sensitivity = 0.01 + v * 9.99,
@@ -828,6 +828,8 @@ pub struct OptionsUi {
     pub pack_selection: Vec<String>,
     /// The open pack screen, made at its first frame.
     pub pack_screen: Option<crate::pack_screen::PackScreen>,
+    /// A reload failure, dismissed before returning to the current page.
+    pub resource_error: Option<String>,
     /// When the pack screen's search box took the focus (its cursor blink).
     pack_focus: Instant,
     pub in_world: bool,
@@ -858,6 +860,7 @@ impl Default for OptionsUi {
             pack_infos: Vec::new(),
             pack_selection: Vec::new(),
             pack_screen: None,
+            resource_error: None,
             pack_focus: Instant::now(),
             in_world: false,
             center_language: false,
@@ -1648,6 +1651,42 @@ impl OptionsUi {
         cursor: (f32, f32),
     ) {
         let (w, h) = (batch.width, batch.height);
+        if let Some(error) = &self.resource_error {
+            ui::menu_background(batch, atlas, 0.0, 0.0, w, h, self.in_world);
+            let title = tr("resourcePack.load_fail");
+            batch.text_styled(
+                atlas,
+                &title,
+                ((w - atlas.font.width_text(&title)) / 2.0).floor(),
+                30.0,
+                u32::MAX,
+                true,
+            );
+            let lines = atlas.font.split(&Text::literal(error), (w - 50.0).max(1.0));
+            let limit = ((h - 110.0) / 9.0).max(1.0) as usize;
+            for (i, line) in lines.iter().take(limit).enumerate() {
+                batch.text_styled(
+                    atlas,
+                    line,
+                    ((w - atlas.font.width_text(line)) / 2.0).floor(),
+                    60.0 + i as f32 * 9.0,
+                    u32::MAX,
+                    true,
+                );
+            }
+            ui::button(
+                batch,
+                atlas,
+                w / 2.0 - 100.0,
+                h - 28.0,
+                200.0,
+                20.0,
+                &tr("gui.done"),
+                true,
+                ui::hovered(cursor, w / 2.0 - 100.0, h - 28.0, 200.0, 20.0),
+            );
+            return;
+        }
         if crate::ui_theme::horizon() && self.page() == Page::Main {
             self.draw_horizon(s, batch, atlas, cursor);
             return;
@@ -1830,7 +1869,7 @@ impl OptionsUi {
         if self.page() == Page::Language {
             let mut search = self.language_search.clone();
             search.draw(batch, atlas, None);
-            if search.value.is_empty() {
+            if search.value.is_empty() && !search.focused {
                 batch.text_styled(
                     atlas,
                     &tr("gui.language.search").with_color(text::GRAY).italic(),
@@ -1858,6 +1897,16 @@ impl OptionsUi {
         drag: bool,
         right: bool,
     ) -> Vec<Event> {
+        if self.resource_error.is_some() {
+            if !drag
+                && !right
+                && ui::hovered((x, y), size.0 / 2.0 - 100.0, size.1 - 28.0, 200.0, 20.0)
+            {
+                self.resource_error = None;
+                return vec![Event::ButtonClick];
+            }
+            return Vec::new();
+        }
         if crate::ui_theme::horizon() && self.page() == Page::Main {
             return self.click_horizon(s, atlas, x, y, framebuffer, drag, right);
         }
@@ -2096,6 +2145,9 @@ impl OptionsUi {
     }
     /// The mouse wheel at the cursor.
     pub fn scroll_at(&mut self, s: &Settings, size: (f32, f32), cursor: (f32, f32), amount: f32) {
+        if self.resource_error.is_some() {
+            return;
+        }
         if crate::ui_theme::horizon() && self.page() == Page::Main {
             self.scroll_horizon(amount);
             return;
@@ -2174,6 +2226,9 @@ impl OptionsUi {
     }
     /// Typed text (the language search box).
     pub fn type_text(&mut self, atlas: &HudAtlas, text: &str) {
+        if self.resource_error.is_some() {
+            return;
+        }
         if self.page() == Page::Packs
             && let Some(p) = &mut self.pack_screen
         {
@@ -2193,7 +2248,7 @@ impl OptionsUi {
         shortcut: crate::clipboard::EditShortcut,
         clipboard: &mut dyn crate::clipboard::Clipboard,
     ) -> bool {
-        if self.selected_key.is_some() {
+        if self.resource_error.is_some() || self.selected_key.is_some() {
             return false;
         }
         if self.page() == Page::Packs
@@ -2237,6 +2292,12 @@ impl OptionsUi {
         text: Option<&str>,
     ) -> Vec<Event> {
         use winit::keyboard::KeyCode as K;
+        if self.resource_error.is_some() {
+            if matches!(key, K::Escape | K::Enter | K::NumpadEnter) {
+                self.resource_error = None;
+            }
+            return Vec::new();
+        }
         if self.page() == Page::Packs
             && let Some(p) = &mut self.pack_screen
         {
@@ -2295,8 +2356,76 @@ mod tests {
     use super::*;
     use crate::ui_theme::{MenuStyle, set_style, style};
 
+    #[test]
+    fn render_distance_slider_round_trips_through_extended_options_range() {
+        let mut s = Settings::default();
+        for (position, distance) in [(0.0, 2), (0.5, 33), (1.0, 64)] {
+            set_slider(Opt::RenderDistance, &mut s, position);
+            assert_eq!(s.render_distance, distance);
+            let reloaded = Settings::parse(&s.serialize());
+            assert_eq!(reloaded.render_distance, distance);
+            assert_eq!(
+                Opt::RenderDistance.slider_position(&reloaded),
+                Some(position)
+            );
+        }
+        let mut file = crate::options_file::OptionsFile::default();
+        file.set_text("renderDistance", "64").unwrap();
+        assert!(file.set_text("renderDistance", "65").is_err());
+        assert!(file.set_text("renderDistance", "1").is_err());
+        assert_eq!(file.int("renderDistance"), 64);
+    }
     fn atlas() -> HudAtlas {
         HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets")).unwrap()
+    }
+
+    #[test]
+    fn resource_reload_error_blocks_options_until_dismissed() {
+        use winit::keyboard::KeyCode;
+        let atlas = atlas();
+        let mut settings = Settings::default();
+        let mut ui = OptionsUi {
+            resource_error: Some("broken pack".into()),
+            ..Default::default()
+        };
+        let stack = ui.stack.clone();
+        assert!(
+            ui.click(
+                &mut settings,
+                &atlas,
+                10.0,
+                10.0,
+                (480.0, 270.0),
+                [960, 540],
+                false,
+                false
+            )
+            .is_empty()
+        );
+        assert!(ui.resource_error.is_some());
+        assert!(
+            ui.key(&mut settings, &atlas, KeyCode::KeyW, None)
+                .is_empty()
+        );
+        assert!(ui.resource_error.is_some());
+        ui.key(&mut settings, &atlas, KeyCode::Escape, None);
+        assert!(ui.resource_error.is_none());
+        assert_eq!(ui.stack, stack);
+        ui.resource_error = Some("broken pack".into());
+        assert_eq!(
+            ui.click(
+                &mut settings,
+                &atlas,
+                240.0,
+                250.0,
+                (480.0, 270.0),
+                [960, 540],
+                false,
+                false
+            ),
+            vec![Event::ButtonClick]
+        );
+        assert!(ui.resource_error.is_none());
     }
 
     #[test]
@@ -2868,6 +2997,35 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    #[test]
+    fn language_search_hint_does_not_overlap_the_focused_caret() {
+        let atlas = atlas();
+        let settings = Settings::default();
+        let mut ui = OptionsUi::default();
+        ui.show(Page::Language);
+        let draw_hint = |ui: &mut OptionsUi| {
+            let mut batch = HudBatch::new([960, 640]);
+            ui.draw(&settings, &mut batch, &atlas, (-1.0, -1.0));
+            let search = &ui.language_search;
+            batch.vertices.iter().any(|v| {
+                v.color == rgba(170, 170, 170, 255)
+                    && v.pos[0] >= search.text_x()
+                    && v.pos[0] < search.x + search.width
+                    && v.pos[1] >= search.text_y()
+                    && v.pos[1] < search.y + search.height
+            })
+        };
+        ui.language_search.focused = false;
+        assert!(draw_hint(&mut ui));
+        ui.language_search.focused = true;
+        assert!(!draw_hint(&mut ui));
+        ui.language_search.focused = false;
+        ui.language_search.set_value("english");
+        assert!(!draw_hint(&mut ui));
+        ui.language_search.set_value("");
+        assert!(draw_hint(&mut ui));
     }
 
     fn languages() -> Vec<LanguageInfo> {

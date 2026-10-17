@@ -1634,7 +1634,16 @@ impl Def {
         use Species as S;
         match self.species {
             S::Turtle => 200,
-            S::Horse | S::Donkey | S::Mule | S::Llama | S::TraderLlama => 400,
+            // AbstractHorse.getAmbientSoundInterval, for every subclass.
+            S::Horse
+            | S::Donkey
+            | S::Mule
+            | S::ZombieHorse
+            | S::SkeletonHorse
+            | S::Llama
+            | S::TraderLlama
+            | S::Camel
+            | S::CamelHusk => 400,
             S::Ocelot => 900,
             S::Squid
             | S::GlowSquid

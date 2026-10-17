@@ -262,6 +262,12 @@ def scenarios():
     add('bee_hive_rain', 300, [HIVE, 'mob minecraft:bee 0.5 -58 0.5 0 162 persistent'], 'rain')
     add('bee_hive_morning', 1000, [HIVE, 'mob minecraft:bee 0.5 -58 0.5 0 163 persistent'], 'time=22900 daycycle')
     add('bee_hive_honey', 2600, [HIVE, 'mob minecraft:bee 0.5 -58 0.5 0 164 persistent nectar'])
+    # Mobs dropped into deep water (#542): FloatGoal users float at the surface (their navigation
+    # can float, so Mob.jumpInLiquid adds 0.04 a tick), zombies sink.
+    for species, seed in [('pig', 171), ('cow', 172), ('wolf', 173), ('cat', 174), ('horse', 175),
+                          ('witch', 176), ('vindicator', 177), ('zombie', 178)]:
+        add(f'{species}_deep_water', 160, ['fill -4 -64 -4 4 -61 4 minecraft:water',
+                                           f'mob minecraft:{species} 0.5 -62 0.5 0 {seed} persistent'])
     return s
 
 

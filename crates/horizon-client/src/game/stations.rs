@@ -1969,6 +1969,34 @@ impl Game<'_> {
                 }
             }
         }
+        if let Some(info) = self.res.items.get(&stack.item) {
+            let base = |name: &str, default| {
+                self.player
+                    .as_ref()
+                    .and_then(|player| {
+                        let key = player.attributes.key(name)?;
+                        let handle = player.attributes.lookup(Some(&key))?;
+                        player
+                            .attributes
+                            .instance(&handle)
+                            .ok()
+                            .map(|value| value.base_value())
+                    })
+                    .unwrap_or(default)
+            };
+            let player_base = [
+                base("minecraft:attack_damage", 1.0),
+                base(
+                    "minecraft:attack_speed",
+                    horizon_client::attack_strength::BASE_ATTACK_SPEED,
+                ),
+            ];
+            lines.extend(horizon_client::item_tooltip::attribute_lines(
+                &info.modifiers,
+                Some(player_base),
+                &translate,
+            ));
+        }
         if let Some(info) = self.res.items.get(&stack.item)
             && info.max_damage > 0
             && stack.damage > 0

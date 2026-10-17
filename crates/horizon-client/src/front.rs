@@ -1173,6 +1173,7 @@ pub mod pause {
         quit_label: &str,
         opened: Instant,
         friends: &FriendsView,
+        remote: bool,
     ) {
         let (w, h) = (ui.w, ui.h);
         let p = t::ease_out_quint(opened.elapsed().as_secs_f32() / t::move_());
@@ -1207,11 +1208,11 @@ pub mod pause {
             Kind::Primary,
             true,
         );
-        let lw = ui.button_width("Open to LAN", true);
+        let lw = ui.button_width("World Options", true);
         ui.button(
             act(9),
             [x + bw + 8.0, y, lw, CONTROL_LARGE],
-            "Open to LAN",
+            "World Options",
             Kind::Secondary,
             true,
         );
@@ -1235,7 +1236,11 @@ pub mod pause {
             x,
             y,
             "Leave",
-            "Saves the world, then returns to the title.",
+            if remote {
+                "Disconnects from the server, then returns to the title."
+            } else {
+                "Saves the world, then returns to the title."
+            },
             cw - t::ROW_LABEL - 220.0,
         );
         let qw = ui.button_width(quit_label, false);
@@ -1363,6 +1368,7 @@ pub mod pause {
         world: &str,
         quit_label: &str,
         friends: &FriendsView,
+        remote: bool,
     ) -> Option<u8> {
         let mut ui = Ui::dry(atlas, batch, (x, y));
         draw(
@@ -1371,6 +1377,7 @@ pub mod pause {
             quit_label,
             Instant::now() - std::time::Duration::from_secs(5),
             friends,
+            remote,
         );
         let hit = ui.hit((x, y))?;
         let nav = id("pause.nav", 0);
@@ -1390,6 +1397,47 @@ pub mod pause {
 mod tests {
     use super::*;
     use horizon_world::nbt::Tag;
+
+    #[test]
+    fn pause_world_options_and_disconnect_are_clickable_on_servers() {
+        let atlas =
+            HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets")).unwrap();
+        let friends = FriendsView::default();
+        for remote in [false, true] {
+            let quit = if remote {
+                "Disconnect"
+            } else {
+                "Save and quit"
+            };
+            for action in [9u8, 2] {
+                let mut batch = HudBatch::new([1280, 720]);
+                let (rect, density) = {
+                    let mut ui = Ui::dry(&atlas, &mut batch, (0.0, 0.0));
+                    pause::draw(
+                        &mut ui,
+                        "World",
+                        quit,
+                        Instant::now() - std::time::Duration::from_secs(5),
+                        &friends,
+                        remote,
+                    );
+                    let hit = ui
+                        .hits
+                        .iter()
+                        .find(|h| h.id == id("pause", u64::from(action)))
+                        .expect("pause action available");
+                    (hit.rect, ui.density)
+                };
+                let k = density / batch.scale;
+                let x = (rect[0] + rect[2]) / 2.0 * k;
+                let y = (rect[1] + rect[3]) / 2.0 * k;
+                assert_eq!(
+                    pause::click(&atlas, &mut batch, x, y, "World", quit, &friends, remote),
+                    Some(action)
+                );
+            }
+        }
+    }
 
     fn world(saves: &std::path::Path, folder: &str, last_played: i64) {
         crate::save::write_dat(

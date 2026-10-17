@@ -36,6 +36,9 @@ pub trait ChunkGenerator: Send + Sync + 'static {
     fn load(&self, _x: i32, _z: i32) -> Option<Chunk> {
         None
     }
+    /// What a loaded chunk needs from the generator before the game uses it,
+    /// on the worker that loaded it.
+    fn prepare_loaded(&self, _worker: &mut Self::Worker, _chunk: &Chunk) {}
     fn proto(&self, worker: &mut Self::Worker, x: i32, z: i32) -> Proto;
     fn decorates(&self) -> bool {
         false
@@ -261,25 +264,34 @@ impl GenerationScan {
         }
         {
             let mut wanted = Vec::new();
-            let areas: Vec<((i32, i32), i32)> =
-                std::iter::once((input.ranges.center, input.ranges.radius))
-                    .chain(input.ranges.extra.iter().copied())
-                    .collect();
-            for (center, radius) in areas {
+            // Each area's square of columns, as one run per row. Players'
+            // areas overlap (a server's players often stand together), so
+            // the runs of a row are merged and each column is looked at once.
+            let mut runs: Vec<(i32, i32, i32)> = Vec::new();
+            for (center, radius) in std::iter::once((input.ranges.center, input.ranges.radius))
+                .chain(input.ranges.extra.iter().copied())
+            {
                 let r = radius + margin.max(reach + 1);
-                for dz in -r..=r {
-                    for dx in -r..=r {
-                        let (x, z) = (center.0 + dx, center.1 + dz);
-                        if !input.ranges.requested(x, z, input.decorates)
-                            || input.world.chunks.contains_key(&(x, z))
-                            || input.generating.contains(&(x, z))
-                            || input.protos.contains_key(&(x, z))
-                            || input.finishing.contains(&(x, z))
-                        {
-                            continue;
-                        }
-                        wanted.push((input.ranges.distance(x, z), x, z));
+                runs.extend((center.1 - r..=center.1 + r).map(|z| (z, center.0 - r, center.0 + r)));
+            }
+            runs.sort_unstable();
+            let mut runs = runs.into_iter().peekable();
+            while let Some((z, x0, mut x1)) = runs.next() {
+                while let Some((_, _, next_x1)) =
+                    runs.next_if(|&(nz, nx0, _)| nz == z && nx0 <= x1.saturating_add(1))
+                {
+                    x1 = x1.max(next_x1);
+                }
+                for x in x0..=x1 {
+                    if !input.ranges.requested(x, z, input.decorates)
+                        || input.world.chunks.contains_key(&(x, z))
+                        || input.generating.contains(&(x, z))
+                        || input.protos.contains_key(&(x, z))
+                        || input.finishing.contains(&(x, z))
+                    {
+                        continue;
                     }
+                    wanted.push((input.ranges.distance(x, z), x, z));
                 }
             }
             // Forced chunks and their generation neighbourhood.
@@ -369,7 +381,10 @@ impl Streaming {
                             };
                             let done = match job {
                                 Job::Generate(x, z) => match generator.load(x, z) {
-                                    Some(chunk) => Done::Generated(chunk),
+                                    Some(chunk) => {
+                                        generator.prepare_loaded(&mut worker, &chunk);
+                                        Done::Generated(chunk)
+                                    }
                                     None => {
                                         let proto = generator.proto(&mut worker, x, z);
                                         let decorated = generator.is_decorated(&proto);
@@ -1560,6 +1575,38 @@ mod tests {
             gate.exhausted = false;
             assert!(f.assert_same(&mut gate, 3));
             assert_eq!(baseline_candidates(f.input(), 3).len(), 1);
+        }
+    }
+
+    #[test]
+    fn generation_scan_looks_at_overlapping_areas_once() {
+        // A server's players: many areas around one spot, some apart, one
+        // touching another only at a corner, and part of the land present.
+        for decorates in [false, true] {
+            let mut f = GenerationFixture::new(10, decorates);
+            for i in 0..40 {
+                f.extra.push(((i % 7 - 3, i / 7 - 3), 19));
+            }
+            f.extra.push(((200, -150), 19));
+            f.extra.push(((243, -107), 19));
+            f.extra.push(((-60, 5), 4));
+            f.forced.insert((90, 90));
+            let chunk = Arc::new(Chunk::empty(0, 0));
+            for x in -40i32..40 {
+                for z in -40i32..40 {
+                    match (x * 7 + z * 13).rem_euclid(5) {
+                        0 => drop(f.world.chunks.insert((x, z), chunk.clone())),
+                        1 => drop(f.protos.insert((x, z), None)),
+                        2 if x % 3 == 0 => drop(f.generating.insert((x, z))),
+                        _ => {}
+                    }
+                }
+            }
+            assert!(baseline_candidates(f.input(), usize::MAX).len() > 1000);
+            for capacity in [usize::MAX, f.generating.len() + 7] {
+                let mut gate = GenerationScan::default();
+                assert!(f.assert_same(&mut gate, capacity));
+            }
         }
     }
 

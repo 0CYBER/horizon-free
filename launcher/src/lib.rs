@@ -2,6 +2,7 @@
 pub mod account;
 pub mod backend;
 pub mod desktop;
+pub mod modpacks;
 pub mod mojang;
 pub mod sources;
 pub mod telemetry;
