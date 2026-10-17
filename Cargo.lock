@@ -1608,7 +1608,10 @@ dependencies = [
  "horizon-core",
  "libm",
  "lz4_flex",
+ "postcard",
+ "serde",
  "serde_json",
+ "sha2",
  "xxhash-rust",
 ]
 
