@@ -172,6 +172,16 @@ impl Game<'_> {
         self.right = play.using.is_some() || self.using.is_some();
         let riding = self.riding.take();
         let host_station = self.station.take();
+        // The guest's bed, sleep counter and respawn point; the host's
+        // respawn point, anchor and action bar stay theirs.
+        let sleeping = std::mem::replace(&mut self.sleeping, g.bed);
+        let sleep_timer = std::mem::replace(&mut self.sleep_timer, g.sleep_timer);
+        let spawn = std::mem::replace(
+            &mut self.spawn,
+            g.spawn.map(|s| Vec3::new(s[0], s[1], s[2])),
+        );
+        let respawn = (self.respawn_config.take(), self.level.spawn);
+        let message = self.message.take();
         // The guest's own ender inventory; one the host has open goes back
         // into the host's while the guest acts.
         let host_ender = self.ender_open;
@@ -203,6 +213,12 @@ impl Game<'_> {
         let opened_table = std::mem::replace(&mut self.craft_size, craft_size) == 3;
         self.craft_grid = craft_grid;
         let opened_station = std::mem::replace(&mut self.station, host_station);
+        let bed = std::mem::replace(&mut self.sleeping, sleeping);
+        let guest_sleep_timer = std::mem::replace(&mut self.sleep_timer, sleep_timer);
+        let guest_spawn = std::mem::replace(&mut self.spawn, spawn).map(|s| [s.x, s.y, s.z]);
+        (self.respawn_config, self.level.spawn) = respawn;
+        // ServerPlayer.displayClientMessage(_, true): the guest's action bar.
+        let guest_message = std::mem::replace(&mut self.message, message);
         self.riding = riding;
         self.left = left;
         self.right = right;
@@ -220,6 +236,15 @@ impl Game<'_> {
         self.mount_menu = host_mount_menu;
         self.keys = host_keys;
         let g = &mut host.hub.guests[i];
+        let fell_asleep = bed.is_some() && g.bed.is_none();
+        (g.bed, g.sleep_timer, g.spawn) = (bed, guest_sleep_timer, guest_spawn);
+        g.sleeping = g.bed.is_some();
+        if let Some((text, _)) = guest_message {
+            g.send(&C::SystemChat(play::SystemChat {
+                content: literal(&text),
+                overlay: true,
+            }));
+        }
         std::mem::swap(&mut self.ender_items, &mut g.ender_items);
         std::mem::swap(&mut self.adv.progress, &mut g.advancements);
         std::mem::swap(&mut self.adv.changed, &mut g.advancements_changed);
@@ -269,6 +294,19 @@ impl Game<'_> {
             }
         }
         let g = &mut host.hub.guests[i];
+        if let Some(head) = g.bed.filter(|_| fell_asleep) {
+            // LivingEntity.startSleeping: in the bed, still.
+            let at = [
+                f64::from(head[0]) + 0.5,
+                f64::from(head[1]) + 0.5625,
+                f64::from(head[2]) + 0.5,
+            ];
+            g.position = at;
+            if let Some(m) = g.motion.as_mut() {
+                m.position = Vec3::new(at[0], at[1], at[2]);
+                m.velocity = Vec3::ZERO;
+            }
+        }
         if new_mode != g.game_mode {
             let conn = g.conn;
             host.hub.set_game_mode(conn, new_mode);
@@ -966,10 +1004,19 @@ impl Game<'_> {
     }
 
     fn guest_respawn(&mut self, host: &mut LanHost, conn: u32) {
-        let spawn = self.spawn.map_or([0.5, 80.0, 0.5], |s| [s.x, s.y, s.z]);
         let Some(i) = host.hub.guests.iter().position(|g| g.conn == conn) else {
             return;
         };
+        // The guest's own bed, else the world spawn: never the host's bed.
+        let world = self
+            .level
+            .world_spawn
+            .map(|[x, y, z]| [f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5]);
+        let spawn = host.hub.guests[i]
+            .spawn
+            .or(world)
+            .or(self.spawn.map(|s| [s.x, s.y, s.z]))
+            .unwrap_or([0.5, 80.0, 0.5]);
         if !host.hub.guests[i].dead {
             return;
         }
@@ -1041,6 +1088,7 @@ impl Game<'_> {
             let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn) else {
                 continue;
             };
+            self.guest_sleep_tick(host, gi);
             if host.hub.guests[gi].dead || self.on_server_trip(conn) {
                 continue;
             }
@@ -1102,6 +1150,62 @@ impl Game<'_> {
                 // LivingEntity.die: the death animation, the dying player included.
                 host.hub.entity_event(id, 3, at);
                 self.spawn_orbs(at, reward);
+            }
+        }
+    }
+
+    /// `Player.tick`'s sleep counter, and `LivingEntity.tick`'s wake-up of a
+    /// sleeper who died or whose bed is gone.
+    fn guest_sleep_tick(&mut self, host: &mut LanHost, gi: usize) {
+        let g = &mut host.hub.guests[gi];
+        g.sleep_timer = super::tick_sleep_timer(g.sleep_timer, g.bed.is_some());
+        if let Some(head) = g.bed {
+            let block = self.world.block(head[0], head[1], head[2]);
+            let bed = self.res.facts.get(block).name.ends_with("_bed");
+            if g.dead || g.health <= 0.0 || !bed {
+                host.hub.wake(gi);
+            }
+        }
+    }
+
+    /// `SleepStatus.areEnoughSleeping` and `areEnoughDeepSleeping` over the
+    /// host's player and the guests: of the players not in spectator mode,
+    /// players_sleeping_percentage of them (at least one) are in bed, and as
+    /// many have slept 100 ticks.
+    pub(super) fn enough_slept(&self) -> bool {
+        let (mut active, mut sleeping, mut deep) = (0i64, 0i64, 0i64);
+        let mut count = |in_bed: bool, timer: u32| {
+            active += 1;
+            if in_bed {
+                sleeping += 1;
+                if timer >= 100 {
+                    deep += 1;
+                }
+            }
+        };
+        if self.player.is_some() && !self.spectator() {
+            count(self.sleeping.is_some(), self.sleep_timer);
+        }
+        if let Some(host) = self.lan.as_ref() {
+            for g in host
+                .hub
+                .guests
+                .iter()
+                .filter(|g| g.placed && !g.spectator())
+            {
+                count(g.bed.is_some(), g.sleep_timer);
+            }
+        }
+        let percent = i64::from(self.ui.rules.int("players_sleeping_percentage").max(0));
+        let needed = ((active * percent + 99) / 100).max(1);
+        sleeping >= needed && deep >= needed
+    }
+
+    /// `ServerLevel.wakeUpAllPlayers` for the guests.
+    pub(super) fn wake_guests(&mut self) {
+        if let Some(host) = self.lan.as_mut() {
+            for i in 0..host.hub.guests.len() {
+                host.hub.wake(i);
             }
         }
     }

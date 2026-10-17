@@ -69,6 +69,7 @@ pub fn apply(guest: &mut Guest, level: &Level) {
     guest.effects = crate::effects::PlayerEffects::from_saved(&level.active_effects);
     guest.game_mode = level.mode();
     guest.selected = (level.selected_slot.max(0) as usize).min(8);
+    guest.spawn = level.spawn.map(|s| [s[0] + 0.5, s[1], s[2] + 0.5]);
     guest.saved = level.player_extra.clone();
     guest.recipe_book = level.recipe_book.clone();
     guest.dimension = match level.dimension.as_str() {
@@ -129,6 +130,7 @@ pub fn store(guest: &Guest, level: &mut Level) {
     level.game_mode = guest.game_mode;
     level.creative = guest.game_mode == 1;
     level.selected_slot = guest.selected as i32;
+    level.spawn = guest.spawn.map(|s| [s[0] - 0.5, s[1], s[2] - 0.5]);
     level.on_ground = guest.on_ground;
     level.player_extra = guest.saved.clone();
     level.recipe_book = guest.recipe_book.clone();

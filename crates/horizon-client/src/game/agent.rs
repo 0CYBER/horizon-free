@@ -466,6 +466,8 @@ impl Game<'_> {
             }),
             "dimension": self.dim.id(),
             "gamemode": format!("{:?}", self.mode).to_lowercase(),
+            // The bed (its head) the player sleeps in.
+            "sleeping": self.sleeping,
             "time": { "day_time": self.world.day_time, "day": self.world.day_time.div_euclid(24000), "time_of_day": self.world.day_time.rem_euclid(24000) },
             "weather": { "raining": self.world.weather.raining, "thundering": self.world.weather.thundering },
             "paused": self.pause,

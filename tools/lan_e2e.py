@@ -34,6 +34,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - clicks:    with real mouse presses (not click-slot, which skips the screen's press and drag
              handling), the guest puts a stack into a chest and a furnace, drags planks across
              its crafting grid and gathers a stack with a double click; the server has each.
+- sleep:     at night the guest lies down in its own bed (not the host); alone it stays night, it
+             gets up with Escape, and once the host sleeps too the night ends and both wake.
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -65,7 +67,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'commands', 'recipes', 'trials', 'clicks', 'effects', 'portals']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'effects', 'portals']
 
 
 class Game:
@@ -913,12 +915,60 @@ def check_trials(host, guest, out):
     return {'spawner': trial, 'vault': active, 'rewarded': uuid(rewarded), 'host': uuid(host_uuid)}
 
 
+def bed_at(game, foot):
+    """A bed whose foot is at `foot`, its head one block east."""
+    x, y, z = foot
+    game('command', command=f'setblock {x} {y} {z} minecraft:red_bed[facing=east,part=foot]')
+    game('command', command=f'setblock {x + 1} {y} {z} minecraft:red_bed[facing=east,part=head]')
+    return [x + 1, y, z]
+
+
+def check_sleep(host, guest, out):
+    for g in (host, guest):
+        g('command', command='gamemode survival')
+    host('command', command='time set midnight')
+    gx, gy, gz = (int(v // 1) for v in pos_of(guest))
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    guest_bed = bed_at(guest, (gx, gy, gz + 2))
+    host_bed = bed_at(host, (hx, hy, hz + 2))
+    guest.wait(10)
+    guest.raw('interact', *guest_bed)
+    guest.wait(10)
+    asleep = {'guest': guest('state').get('sleeping'), 'host': host('state').get('sleeping'),
+              'server': host.raw('lan', 'status')['guests'][0].get('sleeping')}
+    guest.shot(out, 'sleep-guest')
+    # Alone in bed: still night 120 ticks later (everyone must sleep).
+    guest.wait(120)
+    night = host('state')['time']['time_of_day']
+    # Escape gets the guest up (InBedChatScreen), then back to bed.
+    guest.raw('key', 'esc', 'tap')
+    guest.wait(10)
+    up = guest('state').get('sleeping')
+    guest.raw('interact', *guest_bed)
+    host.raw('interact', *host_bed)
+    host.wait(130)
+    after = {'guest': guest('state').get('sleeping'), 'host': host('state').get('sleeping'),
+             'time': host('state')['time']['time_of_day']}
+    guest.shot(out, 'sleep-morning')
+    for at in (guest_bed, host_bed):
+        guest('command', command=f'fill {at[0] - 1} {at[1]} {at[2]} {at[0]} {at[1]} {at[2]} minecraft:air')
+    host('command', command='time set day')
+    detail = {'asleep': asleep, 'night': night, 'up': up, 'after': after}
+    assert asleep['guest'] == guest_bed and asleep['server'] == guest_bed, f'the guest is not in its bed: {detail}'
+    assert asleep['host'] is None, f'the guest\'s bed put the host to sleep: {detail}'
+    assert 13000 < night < 23000, f'one of two players asleep ended the night: {detail}'
+    assert up is None, f'Escape did not get the guest up: {detail}'
+    assert after['guest'] is None and after['host'] is None and after['time'] < 1000, f'no morning: {detail}'
+    return detail
+
+
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
              'chest': check_chest, 'crafting': check_crafting, 'sign': check_sign, 'damage': check_damage,
              'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
              'containers': check_containers, 'feedback': check_feedback, 'commands': check_commands,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,
-             'effects': check_effects, 'portals': check_portals, 'clicks': check_clicks}
+             'effects': check_effects, 'portals': check_portals, 'clicks': check_clicks,
+             'sleep': check_sleep}
 
 
 def run(ctl, out, resources, checks):
