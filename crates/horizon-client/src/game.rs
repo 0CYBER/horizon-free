@@ -1449,9 +1449,13 @@ impl Game<'_> {
             .iter()
             .flat_map(|(_, m)| m.faces.iter())
             .find(|f| f.quad.facing == horizon_assets::model::Direction::Up)
-            .or_else(|| models.iter().flat_map(|(_, m)| m.faces.iter()).next())?;
-        let name = self.pack.layer_names.get(&face.layer)?.clone();
-        let tint = if face.quad.tint_index >= 0 {
+            .or_else(|| models.iter().flat_map(|(_, m)| m.faces.iter()).next());
+        // Entity-rendered blocks may have a particle texture without any faces.
+        let layer = face
+            .map(|face| face.layer)
+            .or_else(|| models.iter().find_map(|(_, model)| model.particle))?;
+        let name = self.pack.layer_names.get(&layer)?.clone();
+        let tint = if face.is_some_and(|face| face.quad.tint_index >= 0) {
             let n = &self.res.facts.get(state).name;
             if n.contains("leaves") || n.contains("vine") {
                 0x48B518
@@ -1776,6 +1780,12 @@ impl Game<'_> {
                 state,
                 level_flags::UPDATE_ALL,
             );
+        });
+        self.process_level_events()
+    }
+    fn attack_block(&mut self, pos: [i32; 3]) -> Result<()> {
+        self.with_level(|b, level, ticks| {
+            b.attack_block(level, ticks, BlockPos::new(pos[0], pos[1], pos[2]));
         });
         self.process_level_events()
     }
@@ -2887,6 +2897,7 @@ impl Game<'_> {
             return Ok(());
         }
         if self.mining.as_ref().is_none_or(|m| m.pos != hit.pos) {
+            self.attack_block(hit.pos)?;
             self.mining = Some(Mining {
                 pos: hit.pos,
                 progress: 0.0,
@@ -4338,14 +4349,7 @@ impl Game<'_> {
                     } else {
                         ("Crafting", 97.0)
                     };
-                    batch.text(
-                        atlas,
-                        title,
-                        ox + tx,
-                        oy + if self.craft_size == 3 { 6.0 } else { 8.0 },
-                        grey,
-                        false,
-                    );
+                    batch.text(atlas, title, ox + tx, oy + 6.0, grey, false);
                     if self.craft_size == 3 {
                         batch.text(atlas, "Inventory", ox + 8.0, oy + 72.0, grey, false);
                     }
@@ -5580,6 +5584,20 @@ impl Game<'_> {
                 self.res
                     .block_entity_render
                     .render(&scene, visible, &mut out);
+            }
+            if let Some(mining) = &self.mining
+                && mining.progress > 0.0
+                && self.atlas.sprites.contains_key(&format!(
+                    "block/destroy_stage_{}",
+                    ((mining.progress * 10.0) as u32).min(9)
+                ))
+            {
+                let state = self
+                    .world
+                    .block(mining.pos[0], mining.pos[1], mining.pos[2]);
+                self.res
+                    .block_entity_render
+                    .render_banner_breaking(&scene, mining.pos, state.0, &mut out);
             }
         }
         // Experience orbs (ExperienceOrbRenderer): pulsing billboards from a 4x4 icon sheet.
@@ -8074,7 +8092,7 @@ impl Game<'_> {
                 self.creative_screen.search_focused.elapsed().as_millis(),
             );
         }
-        let mut hovered: Option<String> = None;
+        let mut hovered: Option<ItemStack> = None;
         if tab.inventory {
             self.draw_player_preview(
                 batch,
@@ -8124,7 +8142,7 @@ impl Game<'_> {
                         && self.cursor.1 < y + 16.0
                     {
                         batch.fill(&self.atlas, x, y, 16.0, 16.0, rgba(255, 255, 255, 128));
-                        hovered = Some(stack.item.to_string());
+                        hovered = Some(stack.clone());
                     }
                 }
             }
@@ -8139,7 +8157,7 @@ impl Game<'_> {
                     && self.cursor.1 >= y
                     && self.cursor.1 < y + 16.0
                 {
-                    hovered = Some(stack.item.to_string());
+                    hovered = Some(stack);
                 }
             }
             let scrollable = self.creative_screen.rows(&self.pack.names) > 5;
@@ -8175,8 +8193,8 @@ impl Game<'_> {
         } else if self.carried.is_none()
             && let Some(item) = hovered
         {
-            let name = self.pack.names.item(&item);
-            self.tooltip(batch, &name, self.cursor.0, self.cursor.1);
+            let lines = self.stack_tooltip(&item);
+            self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
         }
         self.draw_inventory_effects(batch, (ox, oy), Creative::WIDTH as i32);
     }
@@ -9359,6 +9377,9 @@ impl ApplicationHandler for Game<'_> {
                 }
                 WindowEvent::MouseInput { state, button, .. } => {
                     let pressed = state == ElementState::Pressed;
+                    if pressed && self.sort_mouse_press(button) {
+                        return Ok(());
+                    }
                     match self.screen {
                         Screen::Playing => {
                             if pressed && !self.captured {

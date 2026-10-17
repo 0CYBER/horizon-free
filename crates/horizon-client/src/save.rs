@@ -449,13 +449,17 @@ pub fn encode_block_entity(
     block: &str,
 ) -> Tag {
     use crate::containers::BlockEntity;
+    let components = match e {
+        BlockEntity::Banner(b) => b.components.clone(),
+        _ => Compound::new(),
+    };
     let mut entries = vec![
         ("id", string(&block_entity_id(e, block))),
         ("x", Tag::Int(p.0)),
         ("y", Tag::Int(p.1)),
         ("z", Tag::Int(p.2)),
         ("keepPacked", Tag::Byte(0)),
-        ("components", Tag::Compound(Compound::new())),
+        ("components", Tag::Compound(components)),
     ];
     match e {
         BlockEntity::Chest(items) => entries.push(("Items", encode_items(items))),
@@ -583,6 +587,10 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
             BlockEntity::Banner(crate::containers::Banner {
                 layers: crate::banner::layers_from_nbt(tag.get("patterns")),
                 name: text(tag.get("CustomName")),
+                components: match tag.get("components") {
+                    Some(Tag::Compound(c)) => c.clone(),
+                    _ => Compound::new(),
+                },
             }),
         ));
     }
@@ -2985,6 +2993,7 @@ mod tests {
         let banner = crate::containers::Banner {
             layers: vec![crate::banner::BannerLayer::new("minecraft:creeper", "lime")],
             name: Some("Flag".into()),
+            components: [("minecraft:rarity".into(), string("uncommon"))].into(),
         };
         let tag = encode_block_entity(
             (1, 2, 3),
@@ -2998,6 +3007,7 @@ mod tests {
         };
         assert_eq!(back.layers, banner.layers);
         assert_eq!(back.name, banner.name);
+        assert_eq!(back.components, banner.components);
     }
     use super::*;
 

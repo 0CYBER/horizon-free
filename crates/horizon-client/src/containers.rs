@@ -132,6 +132,8 @@ impl Crafter {
 pub struct Banner {
     pub layers: Vec<crate::banner::BannerLayer>,
     pub name: Option<String>,
+    /// Components not consumed by BannerBlockEntity's implicit fields.
+    pub components: horizon_world::nbt::Compound,
 }
 /// `CreakingHeartBlockEntity` (the logic is in `game/creaking.rs`).
 #[derive(Clone, Debug, Default)]
