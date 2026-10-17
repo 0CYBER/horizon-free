@@ -2776,6 +2776,7 @@ impl Renderer {
             &mut self.uploads,
             &mut encoder,
             &view_target,
+            &self.depth,
             frame.hud,
             [self.config.width, self.config.height],
         );
