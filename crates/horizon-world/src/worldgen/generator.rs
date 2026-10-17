@@ -51,7 +51,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     fs, io,
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
 };
 
 #[derive(Debug)]
@@ -184,7 +184,13 @@ pub struct GeneratorData {
     /// Block shape-update behaviour (`block-behaviours.json` next to the
     /// worldgen directory) for template placement's neighbor updates.
     pub(super) behaviours: Option<Arc<crate::level::Behaviours>>,
+    /// Concentric ring positions by seed and dimension generator (see
+    /// `rings_for`), most recent last.
+    ring_cache: Mutex<Vec<RingCacheEntry>>,
 }
+type RingCacheEntry = ((i64, String), Arc<OnceLock<super::structure::start::Rings>>);
+/// Generators whose ring positions are kept: the dimensions of a few worlds.
+const RING_CACHE_LIMIT: usize = 8;
 type Bundle = BTreeMap<String, String>;
 fn read_bundle(dir: &Path, name: &str) -> Result<Bundle, GeneratorError> {
     let path = dir.join(format!("{name}.json"));
@@ -458,7 +464,29 @@ impl GeneratorData {
             block_tags,
             biome_tags,
             feature_resources,
+            ring_cache: Mutex::new(Vec::new()),
         }))
+    }
+    /// The concentric ring positions (strongholds) of the generator for
+    /// `seed` and the dimension `generator` definition, shared by every
+    /// generator built for them. They depend on nothing else, so returning
+    /// to a dimension, which builds its generator again, finds them done.
+    pub(super) fn rings_for(
+        &self,
+        seed: i64,
+        generator: &Value,
+    ) -> Arc<OnceLock<super::structure::start::Rings>> {
+        let key = (seed, generator.to_string());
+        let mut cache = self.ring_cache.lock().unwrap_or_else(|e| e.into_inner());
+        let rings = match cache.iter().position(|(k, _)| *k == key) {
+            Some(i) => cache.remove(i).1,
+            None => Arc::new(OnceLock::new()),
+        };
+        if cache.len() >= RING_CACHE_LIMIT {
+            cache.remove(0);
+        }
+        cache.push((key, rings.clone()));
+        rings
     }
     pub fn registry(&self) -> &'static BlockRegistry {
         self.registry
@@ -821,8 +849,9 @@ where
                 .into_iter()
                 .filter_map(|name| pipeline.data.biome_id(name))
                 .collect();
+            let rings = pipeline.data.rings_for(seed, generator);
             pipeline.structures =
-                super::generator_structures::StructureState::new(&pipeline.data, &possible)?;
+                super::generator_structures::StructureState::new(&pipeline.data, &possible, rings)?;
         }
         Ok(pipeline)
     }
@@ -1905,6 +1934,55 @@ impl GeneratorWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Generators of one seed and dimension share their ring positions;
+    /// another seed or generator gets its own, and old entries go.
+    #[test]
+    fn ring_positions_are_shared_by_seed_and_dimension() {
+        let root = std::env::var_os("HORIZON_RESOURCES")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3")
+            });
+        if !root.join("worldgen/world_presets.json").exists() {
+            eprintln!("skipping: no worldgen bundle at {}", root.display());
+            return;
+        }
+        let registry: &'static BlockRegistry = Box::leak(Box::new(
+            crate::level::data::load_registry(&root).expect("registry"),
+        ));
+        let data = GeneratorData::load(&root.join("worldgen"), registry).expect("worldgen data");
+        let first = OverworldGenerator::new(data.clone(), 1234).expect("generator");
+        let again = OverworldGenerator::new(data.clone(), 1234).expect("generator");
+        {
+            let cache = data.ring_cache.lock().unwrap();
+            assert_eq!(cache.len(), 1);
+            // The cache's handle and the two generators'.
+            assert_eq!(Arc::strong_count(&cache[0].1), 3);
+        }
+        drop((first, again));
+        let a = data.rings_for(1, &serde_json::json!({ "settings": "a" }));
+        assert!(Arc::ptr_eq(
+            &a,
+            &data.rings_for(1, &serde_json::json!({ "settings": "a" }))
+        ));
+        assert!(!Arc::ptr_eq(
+            &a,
+            &data.rings_for(2, &serde_json::json!({ "settings": "a" }))
+        ));
+        assert!(!Arc::ptr_eq(
+            &a,
+            &data.rings_for(1, &serde_json::json!({ "settings": "b" }))
+        ));
+        for seed in 10..10 + RING_CACHE_LIMIT as i64 {
+            data.rings_for(seed, &serde_json::json!({ "settings": "a" }));
+        }
+        assert_eq!(data.ring_cache.lock().unwrap().len(), RING_CACHE_LIMIT);
+        assert!(!Arc::ptr_eq(
+            &a,
+            &data.rings_for(1, &serde_json::json!({ "settings": "a" }))
+        ));
+    }
 
     #[test]
     fn parameter_reports_quantize_like_vanilla() {

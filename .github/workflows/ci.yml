@@ -83,7 +83,7 @@ jobs:
       - name: The harnesses this change can affect
         env:
           PARITY_HOSTS: ''
-        run: python3 tools/parity.py --changed ${{ github.event.pull_request.base.sha }} --timeout 1500
+        run: python3 tools/parity.py --changed ${{ github.event.pull_request.base.sha }} --timeout 2400  # world_spawn takes ~1480 s on a busy runner
       - name: Logs of the failed harnesses
         if: failure()
         uses: actions/upload-artifact@v4

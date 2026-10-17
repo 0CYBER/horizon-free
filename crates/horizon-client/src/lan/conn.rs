@@ -361,8 +361,9 @@ fn login_and_configure(
     name: &str,
 ) -> Result<Option<Parts>, String> {
     let e = |e: horizon_protocol::Error| e.to_string();
+    // ServerLoginPacketListenerImpl: memory connections are not compressed.
     let threshold = shared.config.compression_threshold;
-    if threshold >= 0 {
+    if threshold >= 0 && !c.is_memory() {
         c.send(&login::Clientbound::Compression(login::Compression { threshold }).encode())
             .map_err(e)?;
         c.set_compression(threshold);

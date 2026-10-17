@@ -74,6 +74,10 @@ pub struct DebugCharts {
     pub bandwidth: SampleLogger,
     /// `MinecraftServer.smoothedTickTimeMillis`.
     pub smoothed_tick_ms: f32,
+    /// Connection's smoothed packets per second, sent then received.
+    pub packet_rates: [f32; 2],
+    packet_totals: [i64; 2],
+    packet_tick: u8,
     previous_tick: Option<Instant>,
     bytes_seen: Option<i64>,
 }
@@ -113,6 +117,9 @@ impl DebugCharts {
         self.previous_tick = None;
         self.bytes_seen = None;
         self.smoothed_tick_ms = 0.0;
+        self.packet_rates = [0.0; 2];
+        self.packet_totals = [0; 2];
+        self.packet_tick = 0;
     }
     /// One integrated server tick that started at `started` and ran its
     /// tick method for `method` (`MinecraftServer.logFullTickTime` and
@@ -135,6 +142,17 @@ impl DebugCharts {
             self.bandwidth.log(total - seen);
         }
         self.bytes_seen = Some(total);
+    }
+    /// `Connection.tickSecond`: sampled on the first tick, then every 20 ticks.
+    pub fn log_packets(&mut self, totals: [i64; 2]) {
+        if self.packet_tick == 0 {
+            for (i, total) in totals.into_iter().enumerate() {
+                let count = (total - self.packet_totals[i]).max(0) as f32;
+                self.packet_rates[i] = count + 0.75 * (self.packet_rates[i] - count);
+            }
+            self.packet_totals = totals;
+        }
+        self.packet_tick = (self.packet_tick + 1) % 20;
     }
     /// The charts along the bottom of the screen (`extractRenderState`):
     /// frame times left and tick times right, or bandwidth left (remote
@@ -522,6 +540,27 @@ mod tests {
         assert_eq!(draws[0], fill(360, 173, 426, 239, 0xFF00_0000));
         assert_eq!(draws.len(), 257);
         assert!(draws.contains(&fill(361, 174, 365, 178, 0xFF0A_141E)));
+    }
+
+    #[test]
+    fn packet_rates_follow_connection_smoothing_and_reset_between_worlds() {
+        let mut charts = DebugCharts::default();
+        charts.log_packets([80, 400]);
+        assert_eq!(charts.packet_rates, [20.0, 100.0]);
+        for _ in 1..20 {
+            charts.log_packets([180, 800]);
+        }
+        assert_eq!(charts.packet_rates, [20.0, 100.0]);
+        charts.log_packets([180, 800]);
+        assert_eq!(charts.packet_rates, [40.0, 175.0]);
+        for _ in 0..20 {
+            charts.log_packets([180, 800]);
+        }
+        assert_eq!(charts.packet_rates, [30.0, 131.25]);
+        charts.reset();
+        assert_eq!(charts.packet_rates, [0.0, 0.0]);
+        charts.log_packets([4, 8]);
+        assert_eq!(charts.packet_rates, [1.0, 2.0]);
     }
 
     #[test]

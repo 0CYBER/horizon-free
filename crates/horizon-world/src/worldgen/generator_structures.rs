@@ -31,8 +31,9 @@ pub(super) struct StructureState {
     /// Structure indices of each decoration step, in registry order.
     pub(super) by_step: Vec<Vec<usize>>,
     starts: Mutex<HashMap<(i32, i32), Starts>>,
-    /// Concentric ring positions, computed on first use.
-    rings: OnceLock<Rings>,
+    /// Concentric ring positions, computed on first use and shared with
+    /// later generators of the same seed and dimension.
+    rings: Arc<OnceLock<Rings>>,
     /// Their biome searches while they are computed.
     ring_work: OnceLock<RingWork>,
 }
@@ -131,6 +132,7 @@ impl StructureState {
     pub(super) fn new(
         data: &Arc<GeneratorData>,
         possible_biomes: &BTreeSet<BiomeId>,
+        rings: Arc<OnceLock<Rings>>,
     ) -> Result<Option<Self>, GeneratorError> {
         let (Some(resources), Some(raw)) = (&data.structures, &data.structure_resources) else {
             return Ok(None);
@@ -166,7 +168,7 @@ impl StructureState {
             possible_sets,
             by_step,
             starts: Mutex::new(HashMap::new()),
-            rings: OnceLock::new(),
+            rings,
             ring_work: OnceLock::new(),
         }))
     }

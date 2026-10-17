@@ -876,7 +876,7 @@ impl BlockEntityRenderer {
                 .as_vec3();
             let base = Mat4::from_translation(origin);
             let packed = scene.world.light(pos[0], pos[1], pos[2]);
-            self.render_one(scene, *pos, kind, base, packed, lights, out);
+            self.render_one(scene, *pos, kind, base, packed, lights, false, out);
         }
     }
     /// One block entity at `pos` drawn under `base` with the given packed light
@@ -892,11 +892,38 @@ impl BlockEntityRenderer {
     ) {
         let kind = self.kind(state);
         let lights = diffuse_lights(scene.nether);
-        self.render_one(scene, pos, kind, base, packed, lights, out);
+        self.render_one(scene, pos, kind, base, packed, lights, false, out);
     }
     /// Whether this block state has a block-entity renderer here.
     pub fn renders(&self, state: u32) -> bool {
         !matches!(self.kind(state), Kind::None)
+    }
+    /// BannerRenderer submits the support and animated flag once for crumbling.
+    pub fn render_banner_breaking(
+        &self,
+        scene: &Scene,
+        pos: [i32; 3],
+        state: u32,
+        out: &mut Vec<Vertex>,
+    ) {
+        if !matches!(self.kind(state), Kind::Banner { .. }) {
+            return;
+        }
+        let origin = (DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]))
+            - scene.camera)
+            .as_vec3();
+        let start = out.len();
+        self.render_one(
+            scene,
+            pos,
+            self.kind(state),
+            Mat4::from_translation(origin),
+            0xff,
+            diffuse_lights(scene.nether),
+            true,
+            out,
+        );
+        crate::breaking::entity_geometry(&mut out[start..], origin);
     }
     /// `ChestRenderer.extractRenderState`'s openness for the chest of `state`
     /// at `pos`: `ChestBlock.combine` (`DoubleBlockCombiner.combineWithNeigbour`)
@@ -970,7 +997,7 @@ impl BlockEntityRenderer {
         let kind = self.kind(state);
         if !matches!(kind, Kind::None) {
             let lights = diffuse_lights(scene.nether);
-            self.render_one(scene, [i32::MAX; 3], kind, base, packed, lights, out);
+            self.render_one(scene, [i32::MAX; 3], kind, base, packed, lights, false, out);
         }
     }
     #[allow(clippy::too_many_arguments)]
@@ -982,11 +1009,24 @@ impl BlockEntityRenderer {
         base: Mat4,
         packed: u8,
         lights: (Vec3, Vec3),
+        crumbling: bool,
         out: &mut Vec<Vertex>,
     ) {
         let sprite = |name: &str| scene.sprites.get(name).copied();
         let paint = |name: &str, tint: u32, packed: u8| {
-            sprite(name).map(|s| Paint {
+            let rect = if crumbling {
+                Some(Rect {
+                    u0: 0.0,
+                    v0: 0.0,
+                    u1: 1.0,
+                    v1: 1.0,
+                    w: 16,
+                    h: 16,
+                })
+            } else {
+                sprite(name)
+            };
+            rect.map(|s| Paint {
                 sprite: s,
                 tint,
                 light: vertex_light(packed),
@@ -1144,6 +1184,10 @@ impl BlockEntityRenderer {
                 if let Some(paint) = paint("entity/banner/banner_base", 0xFFFFFF, packed) {
                     draw_part(main, "root", m, &none, paint, out);
                     draw_part(flag, "root", m, &wave, paint, out);
+                }
+                // Pattern passes must not multiply the crumbling decal.
+                if crumbling {
+                    return;
                 }
                 // BannerRenderer.submitPatterns: the base pattern layer in the dye colour,
                 // then up to 16 pattern layers in order.
@@ -1673,6 +1717,109 @@ fn portal_cube(m: Mat4, faces: &[Direction], layer: u32, out: &mut Vec<Vertex>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires prepared models/textures in HORIZON_TEST_RESOURCES"]
+    fn banner_particle_and_breaking_use_exported_models() -> crate::Result<()> {
+        use crate::{models::catalog::StateModels, sprites::Sprites};
+        use horizon_world::{DATA_VERSION, chunk::BlockState, nbt::Tag};
+        let root = std::path::PathBuf::from(
+            std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),
+        );
+        let names = ["white_banner", "white_wall_banner"];
+        let mut facts: std::collections::BTreeMap<String, Value> =
+            serde_json::from_slice(&std::fs::read(root.join("model-states.json"))?)?;
+        let states = names.map(|name| {
+            let name = format!("minecraft:{name}");
+            let first = facts[&name]["states"][0].clone();
+            facts.get_mut(&name).unwrap()["states"] = serde_json::json!([first.clone()]);
+            BlockState {
+                name,
+                properties: serde_json::from_value(first).unwrap(),
+            }
+            .to_nbt()
+        });
+        let registry = BlockRegistry::from_nbt(&Tag::compound([
+            ("DataVersion", Tag::Int(DATA_VERSION)),
+            ("states", Tag::List(states.into())),
+            (
+                "defaults",
+                Tag::compound([
+                    ("minecraft:white_banner", Tag::Int(0)),
+                    ("minecraft:white_wall_banner", Tag::Int(1)),
+                ]),
+            ),
+        ]))?;
+        let mut sprites = Sprites::default();
+        let catalog = StateModels::from_facts(&root, &registry, &names, &mut sprites, &facts)?;
+        for id in 0..2 {
+            let models = catalog.collect(
+                BlockStateId(id),
+                horizon_core::position::BlockPos::default(),
+            )?;
+            assert!(models.iter().all(|(_, model)| model.faces.is_empty()));
+            assert_eq!(
+                models[0].1.particle,
+                Some(sprites.layers["minecraft:block/oak_planks"])
+            );
+        }
+        let all: Value = serde_json::from_slice(&std::fs::read(root.join("entity-models.json"))?)?;
+        let renderer = BlockEntityRenderer::new(
+            MODELS
+                .iter()
+                .filter_map(|(key, layer)| all.get(*layer).map(|v| (*key, ModelPart::parse(v))))
+                .collect(),
+            &registry,
+        );
+        let world = World::new(BlockStateId(0), 1);
+        let base_sprites = HashMap::from([(
+            "entity/banner/banner_base".to_owned(),
+            Rect {
+                u0: 0.0,
+                v0: 0.0,
+                u1: 1.0,
+                v1: 1.0,
+                w: 16,
+                h: 16,
+            },
+        )]);
+        let mut scene = Scene {
+            camera: DVec3::ZERO,
+            orientation: Quat::IDENTITY,
+            anim: &|_| BlockAnim::default(),
+            texts: None,
+            partial: 0.5,
+            game_time: 0,
+            max_y: 320,
+            world: &world,
+            sprites: &base_sprites,
+            nether: false,
+            lid: &|_| 0.0,
+            sign: &|_| None,
+            banner: &|_| Vec::new(),
+            glyph: &|_| (None, 0.0),
+        };
+        for state in 0..2 {
+            let mut base = Vec::new();
+            renderer.render_block(&scene, [0; 3], state, Mat4::IDENTITY, 0xff, &mut base);
+            let mut cracks = Vec::new();
+            renderer.render_banner_breaking(&scene, [0; 3], state, &mut cracks);
+            assert!(!cracks.is_empty());
+            assert_eq!(
+                base.iter().map(|v| v.pos).collect::<Vec<_>>(),
+                cracks.iter().map(|v| v.pos).collect::<Vec<_>>()
+            );
+            assert!(cracks.iter().all(|v| v.layer == 11
+                && v.color == u32::MAX
+                && v.uv.iter().all(|u| u.is_finite())));
+            scene.game_time = 20;
+            let mut animated = Vec::new();
+            renderer.render_banner_breaking(&scene, [0; 3], state, &mut animated);
+            assert!(cracks.iter().zip(&animated).any(|(a, b)| a.pos != b.pos));
+            scene.game_time = 0;
+        }
+        Ok(())
+    }
+
     #[test]
     fn classifies_vanilla_block_names() {
         let props = |pairs: &'static [(&'static str, &'static str)]| {
