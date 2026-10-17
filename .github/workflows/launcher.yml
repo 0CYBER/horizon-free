@@ -138,7 +138,8 @@ jobs:
             echo "::notice::No Metal toolchain on this runner: GPUI compiles its shaders at run time"
             echo "LAUNCHER_FEATURES=gpui/runtime_shaders" >> "$GITHUB_ENV"
           fi
-      - run: cargo test --release --locked --lib ${LAUNCHER_FEATURES:+--features "$LAUNCHER_FEATURES"}
+      # Every test target (the library, the binary, tests/), on each system the launcher ships for.
+      - run: cargo test --release --locked ${LAUNCHER_FEATURES:+--features "$LAUNCHER_FEATURES"}
       - run: cargo build --release --locked ${LAUNCHER_FEATURES:+--features "$LAUNCHER_FEATURES"}
       - name: The version is the release's
         run: |
