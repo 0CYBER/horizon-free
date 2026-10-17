@@ -746,6 +746,8 @@ impl Game<'_> {
                 5..=8 => Some(500 + s - 5),
                 9..=35 => Some(s),
                 36..=44 => Some(s - 36),
+                // InventoryMenu.SHIELD_SLOT: the off hand.
+                45 => Some(504),
                 _ => None,
             },
             "minecraft:crafting" => match s {
@@ -1245,6 +1247,8 @@ impl Game<'_> {
                 match p.slot {
                     0..=35 => self.inventory[p.slot as usize] = stack,
                     36..=39 => self.armor[3 - (p.slot - 36) as usize] = stack,
+                    // Inventory.SLOT_OFFHAND.
+                    40 => self.offhand = stack,
                     _ => {}
                 }
                 self.remote_synced();
@@ -2521,6 +2525,17 @@ impl Game<'_> {
             }));
         }
     }
+    /// Minecraft.handleKeybinds, key.swapOffhand: the server swaps the hands
+    /// (ServerboundPlayerActionPacket SWAP_ITEM_WITH_OFFHAND at BlockPos.ZERO, facing down) and
+    /// sends both slots back; nothing is predicted.
+    pub(super) fn remote_swap_hands(&mut self) {
+        self.send(S::PlayerAction(play::PlayerAction {
+            action: 7,
+            pos: [0; 3],
+            direction: 0,
+            sequence: 0,
+        }));
+    }
     /// A container click: the server answers with the authoritative slots.
     pub(super) fn remote_click(&mut self, right: bool) {
         let Some(size) = self
@@ -2939,5 +2954,22 @@ impl Game<'_> {
             "decode_errors": r.decode_errors,
             "chat": r.chat.iter().rev().take(10).rev().map(|(t, _)| t.clone()).collect::<Vec<_>>(),
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Game;
+
+    #[test]
+    fn every_inventory_menu_slot_is_a_game_slot_and_45_is_the_off_hand() {
+        // InventoryMenu: result, 2x2 grid, armour, 27 + 9 inventory slots, then the off hand.
+        assert_eq!(Game::menu_slot("inventory", 45), Some(504));
+        let mut seen = std::collections::HashSet::new();
+        for slot in 0..46 {
+            let internal = Game::menu_slot("inventory", slot);
+            assert!(internal.is_some_and(|i| seen.insert(i)), "slot {slot}");
+        }
+        assert_eq!(Game::menu_slot("inventory", 46), None);
     }
 }
