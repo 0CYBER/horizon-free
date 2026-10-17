@@ -442,7 +442,7 @@ impl<'r> BlockSection<'r> {
         if index >= 4096 {
             return Err(invalid("section index out of bounds"));
         }
-        let id = self.storage.as_ref().map_or(0, |s| s.get(index).unwrap());
+        let id = self.storage.as_ref().map_or(0, |s| s.read(index));
         Ok(self.palette[id as usize])
     }
     pub fn set(&mut self, index: usize, state: BlockStateId) -> io::Result<BlockStateId> {
@@ -454,7 +454,7 @@ impl<'r> BlockSection<'r> {
         }
         // The slot at `index` is the old state's id, so no palette lookup is
         // needed for it; only the new state has to be resolved.
-        let old_id = self.storage.as_ref().map_or(0, |s| s.get(index).unwrap());
+        let old_id = self.storage.as_ref().map_or(0, |s| s.read(index));
         let old = self.palette[old_id as usize];
         if old == state {
             return Ok(old);
@@ -481,7 +481,7 @@ impl<'r> BlockSection<'r> {
                             .map_err(|e| invalid(e.to_string()))?;
                         if let Some(old) = &self.storage {
                             for i in 0..4096 {
-                                storage.set(i, old.get(i).unwrap()).unwrap();
+                                storage.write(i, old.read(i));
                             }
                         }
                         self.storage = Some(storage);
@@ -493,11 +493,7 @@ impl<'r> BlockSection<'r> {
                 }
             }
         };
-        self.storage
-            .as_mut()
-            .unwrap()
-            .set(index, id)
-            .map_err(|e| invalid(e.to_string()))?;
+        self.storage.as_mut().unwrap().write(index, id);
         self.counts[old_id as usize] -= 1;
         self.counts[id as usize] += 1;
         if self.counts[old_id as usize] == 0 {
@@ -822,6 +818,42 @@ mod tests {
             times[0][0],
             times[1][0],
             times[0][0] / times[1][0]
+        );
+
+        let mut get_times = [Vec::new(), Vec::new()];
+        for round in 0..ROUNDS {
+            for optimized in [round % 2 == 0, round % 2 != 0] {
+                let started = Instant::now();
+                let mut acc = 0u32;
+                for &(index, _) in &ops {
+                    let state = if optimized {
+                        fast.get(black_box(index)).unwrap()
+                    } else {
+                        baseline_get(&base, black_box(index)).unwrap()
+                    };
+                    acc ^= state.0;
+                }
+                black_box(acc);
+                if round > 0 {
+                    get_times[usize::from(optimized)]
+                        .push(started.elapsed().as_secs_f64() * 1e9 / OPS as f64);
+                }
+            }
+        }
+        for values in &mut get_times {
+            values.sort_by(f64::total_cmp);
+        }
+        println!(
+            "section get median: baseline {:.3} ns/op optimized {:.3} ns/op speedup {:.3}x",
+            median(&get_times[0]),
+            median(&get_times[1]),
+            median(&get_times[0]) / median(&get_times[1])
+        );
+        println!(
+            "section get best:   baseline {:.3} ns/op optimized {:.3} ns/op speedup {:.3}x",
+            get_times[0][0],
+            get_times[1][0],
+            get_times[0][0] / get_times[1][0]
         );
     }
 }
