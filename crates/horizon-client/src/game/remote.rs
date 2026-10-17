@@ -558,7 +558,57 @@ impl Game<'_> {
                 break;
             }
         }
+        self.send_suggestion_request();
         Ok(())
+    }
+    /// ClientSuggestionProvider.customSuggestion: the chat's completion
+    /// request for an `ask_server` node goes to the server.
+    fn send_suggestion_request(&mut self) {
+        if self.remote.is_none() {
+            return;
+        }
+        let Some((id, command)) = self.ui.chat_screen.as_mut().and_then(|s| s.take_request())
+        else {
+            return;
+        };
+        let mut w = horizon_protocol::buf::Writer::new();
+        w.varint(id);
+        w.string(&command);
+        self.send(S::Unknown(
+            horizon_protocol::ids::play::serverbound::COMMAND_SUGGESTION,
+            w.data,
+        ));
+    }
+    /// ClientboundCommandSuggestionsPacket: id, range start and length, then
+    /// each suggestion's text and optional tooltip.
+    fn handle_command_suggestions(&mut self, data: &[u8]) {
+        let lang = self
+            .remote
+            .as_ref()
+            .map(|r| r.lang.clone())
+            .unwrap_or_default();
+        let mut r = horizon_protocol::buf::Reader::new(data);
+        let decoded = (|| {
+            let id = r.varint()?;
+            let start = r.varint()?;
+            let length = r.varint()?;
+            let n = r.count(usize::MAX)?;
+            let mut list = Vec::with_capacity(n.min(1000));
+            for _ in 0..n {
+                let text = r.string(32767)?;
+                let tooltip = if r.bool()? {
+                    Some(plain(&r.nbt()?, &lang))
+                } else {
+                    None
+                };
+                list.push((text, tooltip));
+            }
+            horizon_protocol::Result::Ok((id, start, length, list))
+        })();
+        if let Ok((id, start, length, list)) = decoded {
+            let range = (start.max(0) as usize, length.max(0) as usize);
+            self.chat_server_suggestions(id, range, list);
+        }
     }
     fn set_registries(&mut self, registries: Arc<Dynamic>) {
         let biomes: Vec<u16> = registries
@@ -1640,6 +1690,11 @@ impl Game<'_> {
                     self.screen = Screen::Playing;
                     self.capture(true);
                 }
+            }
+            C::Unknown(id, data)
+                if id == horizon_protocol::ids::play::clientbound::COMMAND_SUGGESTIONS =>
+            {
+                self.handle_command_suggestions(&data);
             }
             C::Commands(p) => {
                 let tree = horizon_client::command::network::from_packet(

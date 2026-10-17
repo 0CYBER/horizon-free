@@ -533,6 +533,23 @@ impl Game<'_> {
             }
         }
     }
+    /// The server's completions for an `ask_server` request
+    /// (ClientPacketListener.handleCommandSuggestions).
+    pub(super) fn chat_server_suggestions(
+        &mut self,
+        id: i32,
+        range: (usize, usize),
+        list: Vec<(String, Option<String>)>,
+    ) {
+        let m = Measure(&self.atlas.font);
+        let c = Commands {
+            dispatcher: chat_tree(&self.remote, &self.mods),
+            registries: &self.ui.registries,
+        };
+        if let Some(screen) = self.ui.chat_screen.as_mut() {
+            screen.server_suggestions(&m, &c, id, range, list);
+        }
+    }
     /// Text typed into the chat box (control socket `chat`).
     pub(super) fn chat_type(&mut self, text: &str) {
         let m = Measure(&self.atlas.font);
