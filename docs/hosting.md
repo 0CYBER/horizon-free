@@ -24,8 +24,9 @@ plan are in [docs/server.md](https://github.com/ludovic111/horizon/blob/main/doc
   chat from the server as not secure.
 - **Nether and End:** the world follows a player through portals when they are alone on the server
   (v2026.10.17.09 and newer). With several players online, portals don't move remote players yet.
-- **Vanilla's movement checks and chunk pacing** ("moved too quickly", sending chunks as fast as a client
-  acknowledges them) are in review ([#586](https://github.com/ludovic111/horizon/pull/586)).
+- **Movement checks and chunk pacing** (release v2026.10.17.16 and newer). The server pulls back players who
+  move too fast ("moved too quickly"), as vanilla does, and sends chunks as fast as each client acknowledges
+  them.
 - **No Docker image is published.** You build it yourself from the repository (below). Publishing an image
   needs the project owner.
 - Nothing of Mojang's is downloaded or shipped. The server reads the game files you prepare from your own copy
@@ -292,18 +293,25 @@ docker run -d --name horizon -p 25565:25565 --stop-timeout 180 \
 
 ## 10. How fast is it
 
-The latest bot benchmark against vanilla 26.3 (2026-10-17) is in
-[benchmarks/server-2026-10-17](https://github.com/ludovic111/horizon/blob/main/benchmarks/server-2026-10-17/README.md),
-and the earlier measurements are in [docs/server.md](https://github.com/ludovic111/horizon/blob/main/docs/server.md).
+The latest bot benchmark against vanilla 26.3 is in
+[benchmarks/server-2026-10-17](https://github.com/ludovic111/horizon/blob/main/benchmarks/server-2026-10-17/README.md).
+It ran on `main` at `7bbbf6e9` (in release v2026.10.17.17), on a 4-thread laptop CPU (i7-7500U), with the bots
+on another machine. Earlier measurements are in [docs/server.md](https://github.com/ludovic111/horizon/blob/main/docs/server.md).
 In short:
 
-- An existing world starts in about half vanilla's time (5.8 s against 10.7 s).
-- With 1 to 10 players, Horizon's tick takes about half as long as vanilla's, and it uses less than half the
-  memory (1.6 GB against 3.5 GB).
-- Idle with nobody online it uses more memory than vanilla (1.4 GB against 0.95 GB). The engine still loads
-  what only a window needs.
-- **With 25 or more players moving around, it can't keep up yet.** Encoding chunks for each player fills the
-  tick. It is the next server cost to fix. Until then, plan for about ten players at a time.
+- **Memory:** 0.8–0.9 GB with up to 100 players, and 1.4 GB at most with 100 players flying out fast. Vanilla
+  uses 3.4–4.0 GB with its 4 GB heap.
+- **Start:** a new world is ready in 9–10 s, against 15–17 s for vanilla.
+- **Same work** (players exploring at the same pace, so both servers send the same chunks): Horizon's average
+  tick is 44–81 % shorter than vanilla's with 1 to 50 players, and its 95th percentile is lower too.
+- **Players walking around spawn:** Horizon's average tick is shorter at every count. With 25 and 50 players,
+  its slowest ticks (95th percentile) are a little longer than vanilla's (31 against 28 ms, 60 against 56 ms).
+- **100 players** walking: Horizon keeps 15.8 TPS (63 ms ticks). Vanilla's watchdog stopped it on this machine.
+- **Players flying out as fast as they can:** with 10 and 25 players vanilla's average tick is a little shorter
+  than Horizon's, but Horizon sends 1.6–1.8 times as many new chunks. Vanilla's watchdog stopped it at 50 and 100.
+
+On this 4-thread machine Horizon held 20 TPS with 50 players in every scenario, and 15.8–19 TPS with 100. For more
+than 50 active players, give it more cores.
 
 ## When something goes wrong
 
