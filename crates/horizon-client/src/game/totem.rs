@@ -53,9 +53,7 @@ impl Game<'_> {
             ("fire_resistance", 800, 0),
         ] {
             if let Some(e) = horizon_client::brewing::effect(id) {
-                self.potions
-                    .effects
-                    .add(EffectInstance::new(e.id, ticks, amp));
+                self.add_player_effect(EffectInstance::new(e.id, ticks, amp));
             }
         }
         self.audio

@@ -806,7 +806,8 @@ pub struct OptionsUi {
     /// when it last moved: the handle follows the pointer while the option
     /// keeps its stepped value, then snaps to it (`resetValue`).
     slider_value: Option<(Opt, f32, Instant)>,
-    scrollbar_drag_y: Option<f32>,
+    /// The pointer's last y while a Classic or Horizon scrollbar is held.
+    pub(crate) scrollbar_drag_y: Option<f32>,
     /// Horizon style: the selected sidebar section, the one last drawn and
     /// the rows' scroll in dp (`options_horizon`).
     pub section: usize,
