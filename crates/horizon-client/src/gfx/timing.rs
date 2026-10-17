@@ -1,5 +1,9 @@
 //! GPU frame time from timestamp queries, read back a few frames late so the
 //! CPU never waits for it. Frames whose readback slot is still busy go untimed.
+//!
+//! Where the GPU can only time pass boundaries (Apple GPUs on Metal), the
+//! frame is bracketed by two one-thread compute passes that write the
+//! timestamps (Metal leaves an empty pass's timestamps at zero).
 use std::sync::{
     Arc,
     atomic::{AtomicU8, Ordering},
@@ -23,24 +27,18 @@ pub struct GpuTimer {
     current: Option<usize>,
     next: usize,
     period_ns: f32,
+    /// Timestamps between commands, or else this pass's boundaries.
+    marker: Option<wgpu::ComputePipeline>,
 }
 
 impl GpuTimer {
-    /// The features timing needs; `None` when the adapter lacks them.
+    /// The features timing uses that the adapter has (none: no timing).
     pub fn features(adapter: &wgpu::Adapter) -> wgpu::Features {
-        let wanted =
-            wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
-        if adapter.features().contains(wanted) {
-            wanted
-        } else {
-            wgpu::Features::empty()
-        }
+        adapter.features()
+            & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS)
     }
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Self> {
-        if !device
-            .features()
-            .contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS)
-        {
+        if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
             return None;
         }
         let queries = device.create_query_set(&wgpu::QuerySetDescriptor {
@@ -72,20 +70,55 @@ impl GpuTimer {
             current: None,
             next: 0,
             period_ns: queue.get_timestamp_period(),
+            marker: (!device
+                .features()
+                .contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS))
+            .then(|| {
+                let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("Frame timestamp"),
+                    source: wgpu::ShaderSource::Wgsl(
+                        "@compute @workgroup_size(1) fn mark() {}".into(),
+                    ),
+                });
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("Frame timestamp"),
+                    layout: None,
+                    module: &module,
+                    entry_point: Some("mark"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
+            }),
         })
     }
     pub fn begin(&mut self, encoder: &mut wgpu::CommandEncoder) {
         let slot = self.next;
         self.current = (self.slots[slot].state.load(Ordering::Acquire) == FREE).then_some(slot);
         if self.current.is_some() {
-            encoder.write_timestamp(&self.queries, 0);
+            self.stamp(encoder, 0);
         }
     }
     pub fn end(&mut self, encoder: &mut wgpu::CommandEncoder) {
         let Some(slot) = self.current else { return };
-        encoder.write_timestamp(&self.queries, 1);
+        self.stamp(encoder, 1);
         encoder.resolve_query_set(&self.queries, 0..2, &self.resolve, 0);
         encoder.copy_buffer_to_buffer(&self.resolve, 0, &self.slots[slot].buffer, 0, 16);
+    }
+    fn stamp(&self, encoder: &mut wgpu::CommandEncoder, index: u32) {
+        let Some(marker) = &self.marker else {
+            encoder.write_timestamp(&self.queries, index);
+            return;
+        };
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Frame timestamp"),
+            timestamp_writes: Some(wgpu::ComputePassTimestampWrites {
+                query_set: &self.queries,
+                beginning_of_pass_write_index: (index == 0).then_some(0),
+                end_of_pass_write_index: (index == 1).then_some(1),
+            }),
+        });
+        pass.set_pipeline(marker);
+        pass.dispatch_workgroups(1, 1, 1);
     }
     /// After the frame's submission: start reading its timestamps back.
     pub fn submitted(&mut self) {
