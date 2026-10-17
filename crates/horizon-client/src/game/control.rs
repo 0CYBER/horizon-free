@@ -684,6 +684,8 @@ impl Game<'_> {
                 "size": [r.config.width, r.config.height],
                 "present_mode": format!("{:?}", r.config.present_mode),
                 "drawn_sections": r.drawn_sections,
+                "section_draws": r.section_draws,
+                "section_draw_calls": r.section_draw_calls,
                 "uploaded_bytes": r.uploaded_bytes,
                 "resident_sections": r.resident_sections(),
                 "arena_bytes": arena_bytes,

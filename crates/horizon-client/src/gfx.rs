@@ -355,6 +355,10 @@ pub struct Renderer {
     pub info: wgpu::AdapterInfo,
     pub suspended: bool,
     pub drawn_sections: usize,
+    /// Last frame's section draws (face ranges and translucent sections),
+    /// and the draw calls the backend issued for them.
+    pub section_draws: usize,
+    pub section_draw_calls: usize,
     pub uploaded_bytes: u64,
     started: Instant,
     /// Write the next presented frame to this PNG path (control socket).
@@ -1759,6 +1763,8 @@ impl Renderer {
             info,
             suspended: size.width == 0 || size.height == 0,
             drawn_sections: 0,
+            section_draws: 0,
+            section_draw_calls: 0,
             uploaded_bytes: 0,
             started: Instant::now(),
             screenshot: None,
@@ -2388,18 +2394,22 @@ impl Renderer {
         let culling = !frame.title && frame.cave_culling;
         if culling {
             let radius = (frame.distance / 16.0) as i32 + 2;
-            self.occlusion.update(camera_section, radius);
+            crate::spans::time("occlusion", || {
+                self.occlusion.update(camera_section, radius)
+            });
         }
         let reachable = &self.occlusion;
         let mut visible = std::mem::take(&mut self.visible);
         visible.clear();
-        self.sections.visible(
-            camera,
-            (frame.distance / 16.0) as i32,
-            &view,
-            |k| !culling || reachable.contains(k),
-            &mut visible,
-        );
+        crate::spans::time("visibility", || {
+            self.sections.visible(
+                camera,
+                (frame.distance / 16.0) as i32,
+                &view,
+                |k| !culling || reachable.contains(k),
+                &mut visible,
+            )
+        });
         self.drawn_sections = visible.len();
         if visible.len() as u64 > self.instance_capacity {
             self.instance_capacity = (visible.len() as u64).next_power_of_two();
@@ -2487,6 +2497,19 @@ impl Renderer {
         }
         self.translucency_cursor += budget;
         let translucent_draws = self.draws.len() as u32 - solid_draws;
+        self.section_draws = self.draws.len();
+        // Metal replays a multi-draw as one draw call per entry.
+        self.section_draw_calls = if self.multi_draw && self.info.backend != wgpu::Backend::Metal {
+            (0..self.draws.len())
+                .filter(|&i| {
+                    i == 0
+                        || i == solid_draws as usize
+                        || self.draw_pages[i] != self.draw_pages[i - 1]
+                })
+                .count()
+        } else {
+            self.draws.len()
+        };
         if self.multi_draw && !self.draws.is_empty() {
             if self.draws.len() as u64 > self.indirect_capacity {
                 self.indirect_capacity = (self.draws.len() as u64).next_power_of_two();
@@ -3006,7 +3029,8 @@ impl Renderer {
             .take()
             .map(|path| (path, self.copy_frame(&mut encoder, &target_texture)));
         self.uploads.finish(&encoder);
-        let submission = self.queue.submit([encoder.finish()]);
+        let commands = crate::spans::time("encode", || encoder.finish());
+        let submission = crate::spans::time("submit", || self.queue.submit([commands]));
         if let Some(timer) = &mut self.gpu_timer {
             timer.submitted();
             timer.collect(&self.device, &mut self.gpu_times);
