@@ -211,7 +211,7 @@ pub fn rows(level: Level) -> Vec<Row> {
             h(
                 H::PresentMode,
                 None,
-                "How frames reach the screen. Auto follows VSync.",
+                "How frames reach the screen while VSync is off.",
             ),
             h(
                 H::Pacing,

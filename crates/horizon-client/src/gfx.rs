@@ -1847,30 +1847,12 @@ impl Renderer {
             })
             .create_view(&Default::default())
     }
-    /// VSync on: tear-free presentation (Mailbox, else Fifo); off: Immediate when available.
-    /// VSync, unless Horizon's present-mode setting names a supported mode.
+    /// VSync on presents with Fifo, capped to the display's refresh rate in a
+    /// window and in fullscreen alike; Horizon's present-mode setting applies
+    /// only with VSync off (`window::chosen_present_mode`).
     pub fn set_present_mode(&mut self, vsync: bool, mode: crate::graphics::PresentMode) {
         use crate::graphics::PresentMode as P;
-        let wanted = match mode {
-            P::Auto => None,
-            P::Fifo => Some(wgpu::PresentMode::Fifo),
-            P::Mailbox => Some(wgpu::PresentMode::Mailbox),
-            P::Immediate => Some(wgpu::PresentMode::Immediate),
-        };
-        match wanted.filter(|m| self.present_modes.contains(m)) {
-            Some(m) => {
-                if self.config.present_mode != m
-                    && let Some(surface) = &self.surface
-                {
-                    self.config.present_mode = m;
-                    surface.configure(&self.device, &self.config);
-                }
-            }
-            None => self.set_vsync(vsync),
-        }
-    }
-    pub fn set_vsync(&mut self, vsync: bool) {
-        use crate::window::{PresentMode, vsync_present_mode};
+        use crate::window::{PresentMode, chosen_present_mode};
         let supported: Vec<PresentMode> = self
             .present_modes
             .iter()
@@ -1881,8 +1863,13 @@ impl Renderer {
                 _ => None,
             })
             .collect();
-        // GpuSurface.PresentMode.getSupportedVsyncMode.
-        let mode = match vsync_present_mode(&supported, vsync) {
+        let setting = match mode {
+            P::Auto => None,
+            P::Fifo => Some(PresentMode::Fifo),
+            P::Mailbox => Some(PresentMode::Mailbox),
+            P::Immediate => Some(PresentMode::Immediate),
+        };
+        let mode = match chosen_present_mode(&supported, vsync, setting) {
             Some(PresentMode::Mailbox) => wgpu::PresentMode::Mailbox,
             Some(PresentMode::Immediate) => wgpu::PresentMode::Immediate,
             _ => wgpu::PresentMode::Fifo,
