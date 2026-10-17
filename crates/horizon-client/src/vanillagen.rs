@@ -265,6 +265,19 @@ impl ChunkGenerator for VanillaTerrain {
     fn worker(&self) -> GeneratorWorker {
         self.generator.worker()
     }
+    /// The structure starts a saved chunk references, as vanilla reads them
+    /// with the chunk: built here, on the loading worker, into the
+    /// generator's cache, rather than on the game thread the first time
+    /// spawning or a mob asks which structures hold a position (a village
+    /// start took 70 to 110 ms there, one tick each, after a world loaded).
+    fn prepare_loaded(&self, worker: &mut GeneratorWorker, chunk: &Chunk) {
+        let mut starts: Vec<(i32, i32)> = chunk.structure_refs.iter().map(|(_, at)| *at).collect();
+        starts.sort_unstable();
+        starts.dedup();
+        for (x, z) in starts {
+            worker.structure_starts(ChunkPos::new(x, z));
+        }
+    }
     fn proto(&self, worker: &mut GeneratorWorker, x: i32, z: i32) -> Proto {
         match worker.generate_proto(ChunkPos::new(x, z)) {
             Ok(chunk) => Box::new(VanillaProto::Ready(Box::new(chunk))),

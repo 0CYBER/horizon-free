@@ -4,7 +4,7 @@ use super::{
     hub::Hub,
     menu::{self, Menu, Rules, Slots, View},
 };
-use crate::{items::ItemStack, world::World};
+use crate::{containers::BlockEntity, items::ItemStack, world::World};
 use horizon_protocol::{
     item::Hashed,
     packets::play::{self, Clientbound as C},
@@ -175,6 +175,7 @@ impl Hub {
             state: 0,
             sent: Vec::new(),
             drag: None,
+            sent_data: Vec::new(),
         });
         self.send_menu_content(i, items);
     }
@@ -416,6 +417,47 @@ impl Hub {
         }
     }
 
+    /// AbstractContainerMenu.broadcastChanges' data slots: a furnace's
+    /// AbstractFurnaceBlockEntity.dataAccess (lit time left, lit total, cooking
+    /// timer, cooking total), each sent when it changes.
+    fn sync_container_data(&mut self, i: usize, world: &World) {
+        let g = &mut self.guests[i];
+        let Some(m) = g.menu.as_mut() else {
+            return;
+        };
+        let Slots::Block(pos) = m.slots else {
+            return;
+        };
+        let Some(BlockEntity::Furnace(f)) = world.block_entities.get(&pos) else {
+            return;
+        };
+        let data = [
+            f.lit_remaining,
+            f.lit_total,
+            f.cooking_timer,
+            f.cooking_total,
+        ]
+        .map(|v| v as i16);
+        m.sent_data.resize(data.len(), i16::MIN);
+        let window = m.window;
+        let changed: Vec<(usize, i16)> = data
+            .iter()
+            .enumerate()
+            .filter(|&(k, v)| m.sent_data[k] != *v)
+            .map(|(k, &v)| (k, v))
+            .collect();
+        for &(k, value) in &changed {
+            m.sent_data[k] = value;
+        }
+        for (k, value) in changed {
+            g.send(&C::ContainerSetData(play::ContainerSetData {
+                container: window,
+                id: k as i16,
+                value,
+            }));
+        }
+    }
+
     /// Slot changes of open containers (AbstractContainerMenu.broadcastChanges).
     pub fn sync_containers(&mut self, world: &World) {
         for i in 0..self.guests.len() {
@@ -457,6 +499,8 @@ impl Hub {
                     }));
                 }
             }
+            // Then the data slots, as broadcastChanges does.
+            self.sync_container_data(i, world);
         }
     }
 }

@@ -57,6 +57,10 @@ pub(super) struct LanHost {
     pub mob_players: HashMap<u32, u32>,
     /// An integrated server's owner (game/integrated.rs).
     pub owner: Option<Owner>,
+    /// The players' locator bars (game/lan_waypoints.rs), and the guests who
+    /// are dead, whose respawn replaces their waypoint.
+    pub waypoints: lan::waypoints::Waypoints,
+    pub waypoint_dead: std::collections::HashSet<u128>,
 }
 
 /// The player who owns an integrated server's world: a guest whose state is
@@ -502,6 +506,8 @@ impl Game<'_> {
             mob_state: HashMap::new(),
             mob_players: HashMap::new(),
             owner: None,
+            waypoints: Default::default(),
+            waypoint_dead: Default::default(),
         });
         self.audio.capture = Some(Vec::new());
         Ok(())
@@ -557,6 +563,75 @@ impl Game<'_> {
         } else {
             playerdata::save(guest, &self.world_root);
         }
+        self.save_guest_records(host, guest);
+    }
+    /// The file name of a player's advancements and statistics: an
+    /// integrated server's owner keeps single player's.
+    fn records_uuid(&self, host: &LanHost, uuid: u128) -> Option<[i32; 4]> {
+        if host.owner.as_ref().is_some_and(|o| o.uuid == uuid) {
+            self.level.player_uuid
+        } else {
+            Some(playerdata::uuid_ints(uuid))
+        }
+    }
+    /// `PlayerAdvancements.save` and `ServerStatsCounter.save` of a network player.
+    pub(super) fn save_guest_records(
+        &self,
+        host: &LanHost,
+        guest: &horizon_client::lan::guest::Guest,
+    ) {
+        if !guest.placed || self.adv.tree.list.is_empty() {
+            return;
+        }
+        let Some(uuid) = self.records_uuid(host, guest.uuid) else {
+            return;
+        };
+        let path = super::stats::player_json(&self.world_root, "advancements", uuid);
+        let json = guest
+            .advancements
+            .to_json(&self.adv.tree, horizon_world::DATA_VERSION);
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Ok(text) = serde_json::to_string_pretty(&json) {
+            let _ = std::fs::write(path, text);
+        }
+        if let Some(play) = host.play.get(&guest.conn) {
+            play.stats
+                .write(&super::stats::player_json(&self.world_root, "stats", uuid));
+        }
+    }
+    /// `PlayerAdvancements.load` and `ServerStatsCounter.parseLocal` of a
+    /// network player who joined; every statistic goes out on the first
+    /// request (`PlayerList.placeNewPlayer`'s `markAllDirty`).
+    fn load_guest_records(&mut self, host: &mut LanHost, conn: u32) {
+        let Some(uuid) = host
+            .hub
+            .guest(conn)
+            .and_then(|g| self.records_uuid(host, g.uuid))
+        else {
+            return;
+        };
+        let tree = self.advancement_tree();
+        let path = super::stats::player_json(&self.world_root, "advancements", uuid);
+        let saved = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+        if let Some(g) = host.hub.guest_mut(conn)
+            && let Some(json) = saved
+        {
+            let mut progress = horizon_client::advancements::Progress::from_json(&json);
+            // PlayerAdvancements.applyFrom: advancements this server lacks are dropped.
+            progress
+                .criteria
+                .retain(|id, _| tree.by_id.contains_key(id));
+            g.advancements = progress;
+            g.advancements_loaded = true;
+        }
+        let mut stats =
+            super::stats::Stats::read(&super::stats::player_json(&self.world_root, "stats", uuid));
+        stats.mark_all_dirty();
+        host.play.entry(conn).or_default().stats = stats;
     }
     /// The integrated server's owner into the world's player, for `Level::write`.
     pub(super) fn store_owner(&mut self) {
@@ -568,6 +643,7 @@ impl Game<'_> {
         };
         if let Some(g) = host.hub.guests.iter().find(|g| g.uuid == uuid && g.placed) {
             playerdata::store(g, &mut self.level);
+            self.save_guest_records(host, g);
         }
     }
 
@@ -684,6 +760,8 @@ impl Game<'_> {
         let Some(mut host) = self.lan.take() else {
             return;
         };
+        // What the tick sends a guest goes to its connection at the end.
+        let holding = lan::Holding::start();
         let state = self.lan_host_state(&host);
         // A dedicated server runs the hub without a host player.
         if state.is_some() || host.hub.config.dedicated {
@@ -732,6 +810,7 @@ impl Game<'_> {
                             && let Some(g) = host.hub.guest(conn)
                         {
                             // PlayerList.placeNewPlayer, then the broadcast join message.
+                            super::dedicated::player_joined(g.uuid, &g.name);
                             let [x, y, z] = g.position;
                             super::dedicated::log(
                                 "INFO",
@@ -761,6 +840,7 @@ impl Game<'_> {
                         self.lan_crafting_left(&mut host, &mut guest);
                         self.save_guest(&host, &guest);
                         host.models.remove(&guest.conn);
+                        host.play.remove(&guest.conn);
                         if self.options.dedicated.is_some() && guest.placed {
                             super::dedicated::log(
                                 "INFO",
@@ -789,9 +869,15 @@ impl Game<'_> {
         }
         self.lan_flush_effects(&mut host);
         self.tick_guests(&mut host);
+        self.tick_server_travel(&mut host);
         self.lan_swings(&mut host);
         self.lan_update_streaming(&host);
         self.lan_update_models(&mut host);
+        self.lan_update_waypoints(&mut host, state.as_ref());
+        drop(holding);
+        for g in &host.hub.guests {
+            g.sender.flush();
+        }
         self.lan = Some(host);
     }
 
@@ -829,6 +915,7 @@ impl Game<'_> {
             g.health = 20.0;
             g.food = 20;
         }
+        self.load_guest_records(host, conn);
         let mut ctx = TickCtx {
             world: &mut self.world,
             host: state,

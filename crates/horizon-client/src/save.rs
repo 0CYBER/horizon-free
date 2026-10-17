@@ -730,6 +730,15 @@ fn heightmaps(chunk: &Chunk, tables: &SaveTables) -> Tag {
 /// sendToClient: WORLD_SURFACE, MOTION_BLOCKING, MOTION_BLOCKING_NO_LEAVES),
 /// as (network id, packed longs) in Heightmap.Types order.
 pub fn client_heightmaps(chunk: &Chunk, tables: &SaveTables) -> Vec<(i32, Vec<i64>)> {
+    client_heightmaps_in(chunk, tables, MIN_Y, SECTIONS as i32 * 16)
+}
+/// The client heightmaps of a level from `min_y`, `height` blocks high.
+pub fn client_heightmaps_in(
+    chunk: &Chunk,
+    tables: &SaveTables,
+    min_y: i32,
+    height: i32,
+) -> Vec<(i32, Vec<i64>)> {
     let kinds = [
         (1, HeightmapType::WorldSurface),
         (4, HeightmapType::MotionBlocking),
@@ -737,11 +746,7 @@ pub fn client_heightmaps(chunk: &Chunk, tables: &SaveTables) -> Vec<(i32, Vec<i6
     ];
     let mut maps: Vec<(i32, Heightmap)> = kinds
         .iter()
-        .filter_map(|(id, k)| {
-            Heightmap::new(*k, MIN_Y, SECTIONS as i32 * 16)
-                .ok()
-                .map(|m| (*id, m))
-        })
+        .filter_map(|(id, k)| Heightmap::new(*k, min_y, height).ok().map(|m| (*id, m)))
         .collect();
     let view = HeightmapView { chunk, tables };
     let mut refs: Vec<&mut Heightmap> = maps.iter_mut().map(|(_, m)| m).collect();
@@ -2783,6 +2788,9 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
         }
         chunk.entities = self.save.load_entities(x, z);
         Some(chunk)
+    }
+    fn prepare_loaded(&self, worker: &mut G::Worker, chunk: &Chunk) {
+        self.inner.prepare_loaded(worker, chunk);
     }
     fn proto(&self, worker: &mut G::Worker, x: i32, z: i32) -> crate::streaming::Proto {
         let mut proto = self.inner.proto(worker, x, z);

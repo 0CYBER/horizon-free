@@ -298,6 +298,9 @@ pub struct FixedStep {
     tick_times: [i64; SAMPLES],
     aggregated: i64,
     tick_count: i64,
+    /// A server's client: its level's tick rate only slows the timer down
+    /// (`Minecraft.getTickTargetMillis`), since the server runs the ticks.
+    client: bool,
 }
 
 impl Default for FixedStep {
@@ -312,11 +315,20 @@ impl Default for FixedStep {
             tick_times: [0; SAMPLES],
             aggregated: 0,
             tick_count: 0,
+            client: false,
         }
     }
 }
 
 impl FixedStep {
+    /// The clock of a client connected to a server: the `ClientLevel`'s
+    /// `TickRateManager`, set by the server's ticking packets.
+    pub fn client() -> Self {
+        Self {
+            client: true,
+            ..Self::default()
+        }
+    }
     fn now_ms(&self) -> i64 {
         self.now.as_millis() as i64
     }
@@ -341,9 +353,14 @@ impl FixedStep {
         }
         let runs = self.manager.base.runs_normally();
         let mspt = self.manager.base.milliseconds_per_tick();
+        let client = self.client;
         let ticks = self
             .timer
-            .advance_game_time(now_ms, |default| if runs { mspt } else { default });
+            .advance_game_time(now_ms, |default| match (runs, client) {
+                (true, true) => default.max(mspt),
+                (true, false) => mspt,
+                (false, _) => default,
+            });
         ticks.clamp(0, 10) as u32
     }
     /// Restart pacing from now (after loading, so no backlog replays).
@@ -399,6 +416,10 @@ impl FixedStep {
     }
     pub fn set_frozen(&mut self, frozen: bool) {
         self.manager.base.set_frozen(frozen);
+    }
+    /// `TickRateManager.setFrozenTicksToRun` (ClientboundTickingStepPacket).
+    pub fn set_frozen_ticks_to_run(&mut self, ticks: i32) {
+        self.manager.base.set_frozen_ticks_to_run(ticks);
     }
     pub fn sprinting(&self) -> bool {
         self.manager.is_sprinting()
@@ -483,5 +504,22 @@ mod tests {
         }
         m.base.tick();
         assert!(!m.base.runs_normally());
+    }
+    #[test]
+    fn a_servers_tick_rate_only_slows_its_client_down() {
+        let quarter = std::time::Duration::from_millis(250);
+        let mut client = FixedStep::client();
+        client.set_rate(40.0);
+        assert_eq!(client.advance(quarter), 5, "still 20 a second");
+        let mut slow = FixedStep::client();
+        slow.set_rate(10.0);
+        assert_eq!(slow.advance(quarter * 2), 5, "10 a second");
+        let mut local = FixedStep::default();
+        local.set_rate(40.0);
+        assert_eq!(
+            local.advance(quarter),
+            10,
+            "the integrated loop runs at the rate"
+        );
     }
 }

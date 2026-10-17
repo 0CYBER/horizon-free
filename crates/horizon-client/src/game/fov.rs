@@ -55,7 +55,13 @@ impl Game<'_> {
             .fov_player()
             .map_or(1.0, |p| field_of_view_modifier(&p, first_person, effect));
         let target = self.zoomed_fov_target(target);
-        let eye = self.player.as_ref().map(|p| p.dimensions.eye_height);
+        let eye = self.player.as_ref().map(|p| {
+            if self.sleeping.is_some() {
+                0.2
+            } else {
+                p.dimensions.eye_height
+            }
+        });
         self.view.tick(eye, target);
     }
     /// The player's `deathTime` while dead or dying.

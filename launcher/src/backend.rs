@@ -583,6 +583,7 @@ fn reuse_prepared(versions: &Path, tag: &str) -> Option<String> {
 /// `reuse_prepared` for every installed version that is not prepared, oldest first, so a
 /// version prepared this way can serve the next. Launchers before 0.1.4 installed new versions
 /// without it; this catches those up. Returns each (version, where its resources came from).
+/// Prepared versions also get the run-time reports they lack (`complete_reports`).
 pub fn reuse_prepared_everywhere() -> Vec<(String, String)> {
     reuse_prepared_in(&versions_dir())
 }
@@ -590,9 +591,72 @@ pub fn reuse_prepared_everywhere() -> Vec<(String, String)> {
 fn reuse_prepared_in(versions: &Path) -> Vec<(String, String)> {
     let mut tags = installed_in(versions);
     tags.reverse();
-    tags.into_iter()
-        .filter_map(|tag| reuse_prepared(versions, &tag).map(|from| (tag, from)))
-        .collect()
+    let reused = tags
+        .iter()
+        .filter_map(|tag| reuse_prepared(versions, tag).map(|from| (tag.clone(), from)))
+        .collect();
+    for tag in &tags {
+        complete_reports(versions, tag);
+    }
+    reused
+}
+
+/// The data generator reports the game reads at run time: the built-in registries' network ids
+/// (without them no server can be joined or hosted) and the command tree.
+const RUNTIME_REPORTS: [&str; 2] = ["registries.json", "commands.json"];
+
+/// Puts the data generator reports the game reads at run time (`RUNTIME_REPORTS`) into a prepared version's
+/// resources when they are missing. Preparers before they shipped there left them only in the
+/// scratch output of the version that ran the data generator (`.local/datagen/out/reports`),
+/// and resources copied from another version (`reuse_prepared`) came without them. They depend
+/// only on the server jar, so the version's own scratch output or any installed version pinning
+/// the same jar serves, and no new preparation is needed. Returns whether all are there.
+fn complete_reports(versions: &Path, tag: &str) -> bool {
+    let target = versions.join(tag);
+    let to = resources_at(&target);
+    if !to.join(RESOURCES_MANIFEST).exists() {
+        return false;
+    }
+    let missing: Vec<_> = RUNTIME_REPORTS
+        .iter()
+        .filter(|name| !to.join(name).is_file())
+        .collect();
+    if missing.is_empty() {
+        return true;
+    }
+    let server = |dir: &Path| {
+        read_json(&dir.join("research-lock.json")).and_then(|lock| {
+            let pins = ["version", "server_sha1"].map(|k| lock["minecraft"][k].clone());
+            pins.iter().all(|v| v.is_string()).then_some(pins)
+        })
+    };
+    let Some(pins) = server(&target) else {
+        return false;
+    };
+    let reports = |dir: &Path| dir.join(".local/datagen/out/reports");
+    let mut sources = vec![reports(&target)];
+    for other in installed_in(versions).into_iter().filter(|t| t != tag) {
+        let dir = versions.join(&other);
+        if server(&dir).as_ref() == Some(&pins) {
+            sources.push(resources_at(&dir));
+            sources.push(reports(&dir));
+        }
+    }
+    let mut complete = true;
+    for name in missing {
+        let Some(from) = sources.iter().map(|s| s.join(name)).find(|p| p.is_file()) else {
+            complete = false;
+            continue;
+        };
+        // Copied beside it and renamed: an interrupted copy never looks complete.
+        let partial = to.join(format!(".{name}.partial-{}", std::process::id()));
+        let copied = fs::copy(&from, &partial).and_then(|_| fs::rename(&partial, to.join(name)));
+        if copied.is_err() {
+            let _ = fs::remove_file(&partial);
+            complete = false;
+        }
+    }
+    complete
 }
 
 /// The official launcher's game directory, else the first other launcher's found
@@ -1113,6 +1177,7 @@ pub fn server_dir(requested: Option<PathBuf>) -> PathBuf {
 
 fn need_prepared(tag: &str) -> Result<(), String> {
     if is_prepared(tag) {
+        complete_reports(&versions_dir(), tag);
         Ok(())
     } else {
         Err(format!(
@@ -1644,6 +1709,10 @@ pub enum Msg {
     /// The selected account's session file for the game about to start (none = offline), or
     /// why it could not be renewed.
     Session(Result<Option<PathBuf>, String>),
+    /// A modpack step's line (`modpacks`).
+    PackLine(String),
+    /// A modpack step ended: the pack as it now is.
+    PackDone(Result<Box<crate::modpacks::Imported>, String>),
 }
 
 /// A running process; its output arrives as `Msg::Line`, its end as `Msg::Exit`.
@@ -2089,6 +2158,65 @@ mod tests {
         release("v2026.10.20", "26.3");
         write("v2026.10.20", crate_file, "rust preparer, changed");
         assert_eq!(reuse_prepared(&versions, "v2026.10.20"), None);
+        let _ = fs::remove_dir_all(&versions);
+    }
+
+    #[test]
+    fn prepared_versions_get_the_run_time_reports_without_preparing_again() {
+        let versions = std::env::temp_dir().join(format!(
+            "horizon-launcher-reports-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&versions);
+        let write = |tag: &str, path: &str, text: &str| {
+            let path = versions.join(tag).join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+        };
+        let release = |tag: &str, server: &str| {
+            write(tag, COMPLETE, "");
+            let lock = serde_json::json!({"minecraft": {"version": "26.3", "client_sha1": "c", "server_sha1": server}});
+            write(tag, "research-lock.json", &lock.to_string());
+            write(
+                tag,
+                &format!(".local/horizon-client/26.3/{RESOURCES_MANIFEST}"),
+                "{}",
+            );
+        };
+        let resources = |tag: &str| resources_at(&versions.join(tag));
+        let datagen = |tag: &str, name: &str| {
+            write(tag, &format!(".local/datagen/out/reports/{name}"), tag);
+        };
+
+        // Prepared before the reports shipped with the resources: its own scratch output.
+        release("v2026.10.13", "s");
+        datagen("v2026.10.13", "registries.json");
+        datagen("v2026.10.13", "commands.json");
+        // Resources copied from it: the reports come from the version that ran the generator.
+        release("v2026.10.14", "s");
+        // Another server jar: the reports of the others would be wrong, and it has none.
+        release("v2026.10.15", "other");
+        assert!(reuse_prepared_in(&versions).is_empty());
+        for tag in ["v2026.10.13", "v2026.10.14"] {
+            for name in RUNTIME_REPORTS {
+                assert_eq!(
+                    fs::read_to_string(resources(tag).join(name)).unwrap(),
+                    "v2026.10.13"
+                );
+            }
+        }
+        assert!(!resources("v2026.10.15").join("registries.json").exists());
+        assert!(!complete_reports(&versions, "v2026.10.15"));
+        // Once there they stay as they are, even when the scratch output is gone.
+        fs::remove_dir_all(versions.join("v2026.10.13/.local/datagen")).unwrap();
+        assert!(complete_reports(&versions, "v2026.10.13"));
+        let left: Vec<_> = fs::read_dir(resources("v2026.10.14"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().into_string().unwrap())
+            .filter(|n| n.contains("partial"))
+            .collect();
+        assert!(left.is_empty());
         let _ = fs::remove_dir_all(&versions);
     }
 

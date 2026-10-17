@@ -89,6 +89,11 @@ pub(super) struct Remote {
     was_sprinting: bool,
     carried: Option<usize>,
     loaded_sent: bool,
+    /// BlockStatePredictionHandler: blocks changed ahead of the server (a predicted break),
+    /// with the sequence of the last action that changed them and the state the server
+    /// last said they have. Until the server acknowledges that sequence its block updates
+    /// only replace the remembered state; then the block takes it.
+    predictions: HashMap<[i32; 3], (i32, i32)>,
     /// Open container: (window id, menu name).
     menu: Option<(i32, String)>,
     /// The open menu's title as the server named it.
@@ -127,6 +132,8 @@ pub(super) struct Remote {
     decode_errors: u32,
     clock: Option<i32>,
     clock_rate: f32,
+    /// `ClientChunkCache.Storage`'s view centre (ClientboundSetChunkCacheCenterPacket).
+    chunk_center: (i32, i32),
 }
 
 fn face_direction(face: [i32; 3]) -> u8 {
@@ -243,6 +250,7 @@ impl Game<'_> {
             progress: 0.0,
             total: 0,
         };
+        self.ui.registries.permission = 0;
         self.screen = Screen::Playing;
         self.title = None;
         self.dim = Dim::Overworld;
@@ -273,6 +281,7 @@ impl Game<'_> {
             was_sprinting: false,
             carried: None,
             loaded_sent: false,
+            predictions: HashMap::new(),
             menu: None,
             menu_title: None,
             state_id: 0,
@@ -301,7 +310,13 @@ impl Game<'_> {
             decode_errors: 0,
             clock: None,
             clock_rate: 1.0,
+            chunk_center: (0, 0),
         });
+        // The level's TickRateManager follows the server's ticking packets.
+        self.clock = horizon_client::clock::FixedStep::client();
+        // The player's advancements and statistics are the server's.
+        self.adv = Default::default();
+        self.stats = Default::default();
         Ok(())
     }
 
@@ -324,6 +339,9 @@ impl Game<'_> {
             None => false,
         };
         horizon_client::crash::clear_detail("Server");
+        self.clock = Default::default();
+        self.adv = Default::default();
+        self.stats = Default::default();
         self.debug_charts.reset();
         self.tab_list.reset();
         self.score.board = Default::default();
@@ -541,12 +559,9 @@ impl Game<'_> {
         r.dimension = dimension;
         r.game_mode = spawn.game_type;
         r.loaded_sent = false;
+        r.predictions.clear();
         self.set_mode_id(spawn.game_type);
-        self.dim = if spawn.dimension == "minecraft:the_nether" {
-            Dim::Nether
-        } else {
-            Dim::Overworld
-        };
+        self.dim = Dim::from_id(&spawn.dimension);
         if !same {
             let mut streaming = Streaming::new(
                 Arc::new(NoTerrain),
@@ -573,6 +588,8 @@ impl Game<'_> {
                 r.entities.clear();
                 r.lerps.clear();
                 r.pending_items.clear();
+                // A new ClientLevel: a new chunk storage, centred on 0, 0.
+                r.chunk_center = (0, 0);
             }
             if let Some(renderer) = self.renderer.as_mut() {
                 renderer.clear_sections();
@@ -649,6 +666,128 @@ impl Game<'_> {
         }
         Ok(chunk)
     }
+    /// `ClientChunkCache.Storage.inRange`: within the storage around the
+    /// view centre, `calculateStorageRange` (the server's radius, at least
+    /// two, plus three) chunks each way.
+    fn remote_chunk_in_range(&self, x: i32, z: i32) -> bool {
+        self.remote.as_ref().is_none_or(|r| {
+            let range = r.view_distance.max(2) + 3;
+            (x - r.chunk_center.0).abs() <= range && (z - r.chunk_center.1).abs() <= range
+        })
+    }
+    /// The columns a moved or resized storage no longer holds.
+    fn drop_remote_chunks_out_of_range(&mut self) {
+        let gone: Vec<(i32, i32)> = self
+            .world
+            .chunks
+            .keys()
+            .copied()
+            .filter(|&(x, z)| !self.remote_chunk_in_range(x, z))
+            .collect();
+        for (x, z) in gone {
+            self.streaming.forget(&mut self.world, x, z);
+            self.world
+                .block_entities
+                .retain(|k, _| (k.0 >> 4, k.2 >> 4) != (x, z));
+            if let Some(renderer) = self.renderer.as_mut() {
+                for sy in 0..SECTIONS as i32 {
+                    renderer.remove((x, sy, z));
+                }
+            }
+        }
+    }
+    /// `handleBlockEntityData`: the block entity at `pos`, when it is of the
+    /// packet's type, loads the tag (`loadWithComponents`); an empty tag
+    /// changes nothing.
+    fn remote_block_entity_data(&mut self, pos: [i32; 3], kind: i32, tag: &Tag) {
+        let key = (pos[0], pos[1], pos[2]);
+        let Some(name) = self
+            .remote
+            .as_ref()
+            .and_then(|r| r.builtin.get("minecraft:block_entity_type")?.name(kind))
+        else {
+            return;
+        };
+        let Some(entity) = self.world.block_entities.get(&key) else {
+            return;
+        };
+        let Tag::Compound(fields) = tag else {
+            return;
+        };
+        if entity.id() != name || fields.is_empty() {
+            return;
+        }
+        let mut full = fields.clone();
+        full.insert("id".into(), Tag::String(name.into()));
+        for (k, v) in ["x", "y", "z"].into_iter().zip(pos) {
+            full.insert(k.into(), Tag::Int(v));
+        }
+        if let Some((_, loaded)) = horizon_client::save::decode_block_entity(&Tag::Compound(full)) {
+            self.world.block_entities.insert(key, loaded);
+            // The section is drawn again with what the block entity shows.
+            let state = self.world.block(pos[0], pos[1], pos[2]);
+            let _ = self.world.set(pos[0], pos[1], pos[2], state);
+        }
+    }
+    /// `handleAnimate`: a player wakes up, or an entity gets the critical
+    /// hit (`CRIT`) or magic critical hit (`ENCHANTED_HIT`) emitter.
+    fn remote_animate(&mut self, id: i32, action: u8) {
+        use horizon_client::particles::{ParticleOptions, ParticleType};
+        let me = self.remote.as_ref().is_some_and(|r| r.entity_id == id);
+        let body = if me {
+            self.player.as_ref().map(|p| {
+                let d = p.dimensions;
+                (
+                    [p.position.x, p.position.y, p.position.z],
+                    f64::from(d.width),
+                    f64::from(d.height),
+                )
+            })
+        } else {
+            self.mobs.iter().find(|m| m.id == id as u32).map(|m| {
+                (
+                    [m.position.x, m.position.y, m.position.z],
+                    m.kind.width,
+                    m.kind.height,
+                )
+            })
+        };
+        let Some((feet, width, height)) = body else {
+            return;
+        };
+        let particle = match action {
+            // Player.stopSleepInBed.
+            0 => {
+                if me {
+                    self.sleeping = None;
+                }
+                return;
+            }
+            1 => ParticleType::Crit,
+            2 => ParticleType::EnchantedHit,
+            _ => return,
+        };
+        self.particles
+            .tracking_emitter(ParticleOptions::simple(particle), feet, width, height);
+    }
+    /// `handleServerData`: the server list entry of the server joined keeps
+    /// the icon the server sends (`ServerList.saveSingleServer`). Single
+    /// player has no entry.
+    fn remote_server_data(&mut self, icon: Option<&[u8]>) {
+        let (Some(r), Some(png)) = (self.remote.as_ref(), icon) else {
+            return;
+        };
+        if self.integrated.is_some() {
+            return;
+        }
+        if let Ok(dir) = std::env::current_dir() {
+            horizon_client::multiplayer::save_server_icon(
+                &dir.join("saves"),
+                &r.session.address,
+                png,
+            );
+        }
+    }
     /// Keep the renderable block entities (chests, furnaces) in step with blocks.
     fn sync_block_entity(&mut self, pos: (i32, i32, i32), state: BlockStateId) {
         let name = self.res.facts.get(state).name.clone();
@@ -665,6 +804,42 @@ impl Game<'_> {
             }
             None => {
                 self.world.block_entities.remove(&pos);
+            }
+        }
+    }
+    /// ClientLevel.setServerVerifiedBlockState: a block the client predicted keeps its
+    /// predicted state until the server acknowledges the action; the server's state is
+    /// remembered for then.
+    fn server_block(&mut self, pos: [i32; 3], state: i32) {
+        if let Some((_, known)) = self
+            .remote
+            .as_mut()
+            .and_then(|r| r.predictions.get_mut(&pos))
+        {
+            *known = state;
+            return;
+        }
+        self.set_block(pos, state);
+    }
+    /// BlockStatePredictionHandler.endPredictionsUpTo (ClientboundBlockChangedAckPacket): the
+    /// actions up to `sequence` are settled, so the blocks they predicted take the state the
+    /// server gave them (a break the server refused comes back).
+    fn end_predictions(&mut self, sequence: i32) {
+        let Some(r) = self.remote.as_mut() else {
+            return;
+        };
+        let settled: Vec<_> = r
+            .predictions
+            .iter()
+            .filter(|(_, (s, _))| *s <= sequence)
+            .map(|(&pos, &(_, state))| (pos, state))
+            .collect();
+        for (pos, state) in settled {
+            if let Some(r) = self.remote.as_mut() {
+                r.predictions.remove(&pos);
+            }
+            if self.world.block(pos[0], pos[1], pos[2]).0 as i32 != state {
+                self.set_block(pos, state);
             }
         }
     }
@@ -778,6 +953,8 @@ impl Game<'_> {
                 5..=8 => Some(500 + s - 5),
                 9..=35 => Some(s),
                 36..=44 => Some(s - 36),
+                // InventoryMenu.SHIELD_SLOT: the off hand.
+                45 => Some(504),
                 _ => None,
             },
             "minecraft:crafting" => match s {
@@ -837,6 +1014,7 @@ impl Game<'_> {
                 self.debug_charts.ping.log(delay);
             }
             C::Login(p) => {
+                self.level.hardcore = p.hardcore;
                 if let Some(r) = self.remote.as_mut() {
                     r.online_mode = p.online_mode;
                     r.entity_id = p.player_id;
@@ -876,6 +1054,15 @@ impl Game<'_> {
                 })
                 .clamp(-90.0, 90.0);
             }
+            // ClientChunkCache.replaceWithPacketData: a column outside the
+            // storage around the view centre is ignored.
+            C::LevelChunkWithLight(p) if !self.remote_chunk_in_range(p.x, p.z) => {
+                log::warn!(
+                    "Ignoring chunk since it's not in the view range: {}, {}",
+                    p.x,
+                    p.z
+                );
+            }
             C::LevelChunkWithLight(p) => match self.remote_chunk(&p) {
                 Ok(chunk) => {
                     let (x, z) = (p.x, p.z);
@@ -891,6 +1078,8 @@ impl Game<'_> {
                         );
                         let state = self.world.block(pos.0, pos.1, pos.2);
                         self.sync_block_entity(pos, state);
+                        // LevelChunk.replaceWithPacketData: the block entity loads its update tag.
+                        self.remote_block_entity_data([pos.0, pos.1, pos.2], info.kind, &info.tag);
                     }
                 }
                 Err(e) => log::warn!("Horizon: chunk {} {}: {e}", p.x, p.z),
@@ -913,7 +1102,7 @@ impl Game<'_> {
                     chunks_per_tick: 64.0,
                 }));
             }
-            C::BlockUpdate(p) => self.set_block(p.pos, p.state),
+            C::BlockUpdate(p) => self.server_block(p.pos, p.state),
             C::SectionBlocksUpdate(p) => {
                 let [sx, sy, sz] = p.section;
                 for change in p.changes {
@@ -923,10 +1112,10 @@ impl Game<'_> {
                         sy * 16 + (local & 15),
                         sz * 16 + (local >> 4 & 15),
                     ];
-                    self.set_block(pos, (change >> 12) as i32);
+                    self.server_block(pos, (change >> 12) as i32);
                 }
             }
-            C::BlockChangedAck(_) => {}
+            C::BlockChangedAck(p) => self.end_predictions(p.sequence),
             // ClientLevel.blockEvent: BlockEntity.triggerEvent (chest lids,
             // shulker boxes, bells) when the block is still the one it names.
             C::BlockEvent(p) => {
@@ -1154,13 +1343,12 @@ impl Game<'_> {
                 }
             }
             C::EntityEvent(p) => {
-                // EntityEvent.PERMISSION_LEVEL_ALL..OWNERS (24..=28) for this
-                // player: LocalPlayer.setPermissionLevel, which the commands
-                // the chat offers and checks follow.
+                // LocalPlayer.setPermissions also refreshes an open World Options screen.
                 if (24..=28).contains(&p.event)
                     && self.remote.as_ref().is_some_and(|r| r.entity_id == p.id)
                 {
                     self.ui.registries.permission = (p.event - 24) as u8;
+                    self.remote_world_options_permission(p.event >= 26);
                 }
                 if p.event == 1
                     && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
@@ -1175,7 +1363,7 @@ impl Game<'_> {
                     m.health = 0.0;
                 }
             }
-            C::Animate(p) if p.action == 0 => {}
+            C::Animate(p) => self.remote_animate(p.id, p.action),
             C::UpdateMobEffect(p) => self.remote_effect(&p),
             C::RemoveMobEffect(p) => {
                 if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id)
@@ -1184,6 +1372,12 @@ impl Game<'_> {
                     self.potions.effects.list.retain(|e| e.id != id);
                 }
             }
+            C::ChangeDifficulty(p) => {
+                self.ui.difficulty = p.difficulty.clamp(0, 3) as u8;
+                self.level.difficulty_locked = p.locked;
+                self.remote_world_options_difficulty(self.ui.difficulty, p.locked);
+            }
+            C::GameRuleValues(p) => self.remote_world_options_rules(p.entries),
             C::SetHealth(p) => {
                 if let Some(r) = self.remote.as_mut() {
                     r.health = (p.health, p.food, p.saturation);
@@ -1201,8 +1395,15 @@ impl Game<'_> {
                     .map(|r| r.lang.clone())
                     .unwrap_or_default();
                 let message = plain(&p.message, &lang);
+                let me = self.remote.as_ref().is_some_and(|r| r.entity_id == p.id);
                 if let Some(r) = self.remote.as_mut() {
                     r.death_message = Some(message);
+                }
+                // ClientPacketListener.handlePlayerCombatKill: the death
+                // screen, whatever health was last sent.
+                if me && self.screen != Screen::Dead && self.player.is_some() {
+                    self.screen = Screen::Dead;
+                    self.capture(false);
                 }
             }
             C::SetExperience(p) => {
@@ -1295,6 +1496,8 @@ impl Game<'_> {
                 match p.slot {
                     0..=35 => self.inventory[p.slot as usize] = stack,
                     36..=39 => self.armor[3 - (p.slot - 36) as usize] = stack,
+                    // Inventory.SLOT_OFFHAND.
+                    40 => self.offhand = stack,
                     _ => {}
                 }
                 self.remote_synced();
@@ -1501,6 +1704,68 @@ impl Game<'_> {
                 self.streaming.radius = self.settings.render_distance.min(p.distance + 1).max(2);
                 if let Some(r) = self.remote.as_mut() {
                     r.view_distance = p.distance;
+                }
+                // ClientChunkCache.updateViewRadius: a new storage of that size.
+                self.drop_remote_chunks_out_of_range();
+            }
+            C::SetChunkCacheCenter(p) => {
+                if let Some(r) = self.remote.as_mut() {
+                    r.chunk_center = (p.x, p.z);
+                }
+                self.drop_remote_chunks_out_of_range();
+            }
+            C::BlockEntityData(p) => self.remote_block_entity_data(p.pos, p.kind, &p.tag),
+            // handleSetSpawn: ClientLevel.setRespawnData, which spawn compasses point at.
+            C::SetDefaultSpawnPosition(p) => {
+                let [x, y, z] = p.pos.pos;
+                self.spawn = (p.pos.dimension == "minecraft:overworld")
+                    .then(|| Vec3::new(f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5));
+            }
+            C::ServerData(p) => self.remote_server_data(p.icon.as_deref()),
+            // handleTickingState / handleTickingStep: the level's TickRateManager.
+            C::TickingState(p) => {
+                self.clock.set_rate(p.rate);
+                self.clock.set_frozen(p.frozen);
+            }
+            C::TickingStep(p) => self.clock.set_frozen_ticks_to_run(p.steps),
+            C::UpdateAdvancements(p) => {
+                let icons = p
+                    .added
+                    .iter()
+                    .map(|a| {
+                        a.display
+                            .as_ref()
+                            .map_or_else(String::new, |d| self.item_name(d.icon.item).to_string())
+                    })
+                    .collect();
+                self.remote_advancements(p, icons);
+            }
+            // handleAwardStats: StatsCounter.setValue for each.
+            C::AwardStats(p) => {
+                let Some(r) = self.remote.as_ref() else {
+                    return Ok(());
+                };
+                let mut known = Vec::new();
+                for (ty, value, count) in p.stats {
+                    let Some(ty) = r
+                        .builtin
+                        .get("minecraft:stat_type")
+                        .and_then(|t| t.name(ty))
+                    else {
+                        continue;
+                    };
+                    let values = match ty {
+                        "minecraft:mined" => "minecraft:block",
+                        "minecraft:killed" | "minecraft:killed_by" => "minecraft:entity_type",
+                        "minecraft:custom" => "minecraft:custom_stat",
+                        _ => "minecraft:item",
+                    };
+                    if let Some(key) = r.builtin.get(values).and_then(|v| v.name(value)) {
+                        known.push((ty.to_owned(), key.to_owned(), count));
+                    }
+                }
+                for (ty, key, count) in known {
+                    self.stats.values.entry(ty).or_default().insert(key, count);
                 }
             }
             C::SetActionBarText(p) | C::SetTitleText(p) => {
@@ -1834,10 +2099,15 @@ impl Game<'_> {
     /// One client tick while connected (Minecraft.tick with a ClientLevel).
     pub(super) fn tick_remote(&mut self) -> Result<()> {
         self.ticks += 1;
-        self.world.game_time += 1;
-        let rate = self.remote.as_ref().map_or(1.0, |r| r.clock_rate);
-        if rate > 0.0 {
-            self.world.day_time += rate.round() as i64;
+        // Minecraft.tick: TickRateManager.tick; ClientLevel.tick advances
+        // the time only while the level runs normally.
+        let running = self.clock.world_runs();
+        if running {
+            self.world.game_time += 1;
+            let rate = self.remote.as_ref().map_or(1.0, |r| r.clock_rate);
+            if rate > 0.0 {
+                self.world.day_time += rate.round() as i64;
+            }
         }
         // Weather levels drift toward their targets between server updates.
         let w = &mut self.world.weather;
@@ -1848,7 +2118,7 @@ impl Game<'_> {
         }
         // ClientLevel.tick: the border's size change.
         self.border.tick();
-        self.tick_remote_entities();
+        self.tick_remote_entities(running);
         // ClientLevel.tickBlockEntities: chest lids, shulker boxes, bells.
         self.tick_block_entity_anims();
         self.tick_hand();
@@ -1871,6 +2141,7 @@ impl Game<'_> {
             if let Some(r) = self.remote.as_mut() {
                 r.loaded_sent = true;
             }
+            self.capture_loaded_world();
         }
         let stick = self.pad_move();
         let Some(player) = self.player.as_mut() else {
@@ -1958,12 +2229,18 @@ impl Game<'_> {
         self.send(S::ClientTickEnd(Empty));
         Ok(())
     }
-    fn tick_remote_entities(&mut self) {
+    /// ClientLevel.tickEntities; a frozen level only ticks the players
+    /// (`TickRateManager.isEntityFrozen`).
+    fn tick_remote_entities(&mut self, running: bool) {
         let Some(r) = self.remote.as_mut() else {
             return;
         };
         let mut lerps = std::mem::take(&mut r.lerps);
+        let players = &r.level_players;
         for m in &mut self.mobs {
+            if !running && !players.contains_key(&(m.id as i32)) {
+                continue;
+            }
             m.previous = m.position;
             m.previous_yaw = m.yaw;
             m.previous_body_yaw = m.body_yaw;
@@ -2001,7 +2278,7 @@ impl Game<'_> {
                 horizon_client::mobs::rabbit::post_tick(m);
             }
         }
-        for d in &mut self.dropped {
+        for d in self.dropped.iter_mut().filter(|_| running) {
             d.previous = d.position;
             d.age += 1;
             if let Some(l) = lerps.get_mut(&(d.id as i32))
@@ -2163,7 +2440,7 @@ impl Game<'_> {
         self.send(S::Punch(Empty));
         if self.creative {
             let seq = self.next_sequence();
-            self.predict_break(hit.pos, state);
+            self.predict_break(hit.pos, state, seq);
             self.send(S::PlayerAction(play::PlayerAction {
                 action: 0,
                 pos: hit.pos,
@@ -2212,7 +2489,7 @@ impl Game<'_> {
                 sequence: seq,
             }));
             if progress >= 1.0 {
-                self.predict_break(hit.pos, state);
+                self.predict_break(hit.pos, state, seq);
                 if let Some(r) = self.remote.as_mut() {
                     r.destroy_delay = 5;
                 }
@@ -2249,7 +2526,7 @@ impl Game<'_> {
         self.crack_particle(pos, hit.face, state);
         if done >= 1.0 {
             let seq = self.next_sequence();
-            self.predict_break(pos, state);
+            self.predict_break(pos, state, seq);
             self.send(S::PlayerAction(play::PlayerAction {
                 action: 3,
                 pos,
@@ -2281,7 +2558,14 @@ impl Game<'_> {
         }
     }
     /// MultiPlayerGameMode.destroyBlock: the predicted break.
-    fn predict_break(&mut self, pos: [i32; 3], state: BlockStateId) {
+    fn predict_break(&mut self, pos: [i32; 3], state: BlockStateId, sequence: i32) {
+        // BlockStatePredictionHandler.retainKnownServerState.
+        if let Some(r) = self.remote.as_mut() {
+            r.predictions
+                .entry(pos)
+                .and_modify(|p| p.0 = sequence)
+                .or_insert((sequence, state.0 as i32));
+        }
         let s = self.res.facts.get(state).sounds.clone();
         let at = [
             f64::from(pos[0]) + 0.5,
@@ -2571,6 +2855,17 @@ impl Game<'_> {
                 },
             }));
         }
+    }
+    /// Minecraft.handleKeybinds, key.swapOffhand: the server swaps the hands
+    /// (ServerboundPlayerActionPacket SWAP_ITEM_WITH_OFFHAND at BlockPos.ZERO, facing down) and
+    /// sends both slots back; nothing is predicted.
+    pub(super) fn remote_swap_hands(&mut self) {
+        self.send(S::PlayerAction(play::PlayerAction {
+            action: 7,
+            pos: [0; 3],
+            direction: 0,
+            sequence: 0,
+        }));
     }
     /// A container click: the server answers with the authoritative slots.
     pub(super) fn remote_click(&mut self, right: bool) {
@@ -2990,5 +3285,22 @@ impl Game<'_> {
             "decode_errors": r.decode_errors,
             "chat": r.chat.iter().rev().take(10).rev().map(|(t, _)| t.clone()).collect::<Vec<_>>(),
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Game;
+
+    #[test]
+    fn every_inventory_menu_slot_is_a_game_slot_and_45_is_the_off_hand() {
+        // InventoryMenu: result, 2x2 grid, armour, 27 + 9 inventory slots, then the off hand.
+        assert_eq!(Game::menu_slot("inventory", 45), Some(504));
+        let mut seen = std::collections::HashSet::new();
+        for slot in 0..46 {
+            let internal = Game::menu_slot("inventory", slot);
+            assert!(internal.is_some_and(|i| seen.insert(i)), "slot {slot}");
+        }
+        assert_eq!(Game::menu_slot("inventory", 46), None);
     }
 }

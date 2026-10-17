@@ -33,6 +33,12 @@ The dedicated server is the game itself, run headless:
   `whitelist on|off|list|reload|add|remove`, `ban`, `ban-ip`, `pardon`, `pardon-ip`, `banlist`, `kick` and
   `say` behave as in `DedicatedServer`. Every other command goes to the game's own dispatcher as the server
   (permission level 4). The log follows vanilla's Log4j pattern, in `logs/latest.log` and on stdout.
+- **Player names.** `usercache.json` in the universe folder works as vanilla's `CachedUserNameToIdResolver`.
+  Players are added when they join and kept for a month, and the file keeps the 1000 most recently used,
+  newest first. The console finds a player by name in it, in any case. A name it doesn't hold is asked of the
+  profile service (`getByName`). If the service doesn't know the name, an offline server uses the offline
+  player of the lower-case name; an online server answers "That player does not exist".
+  `tools/test_user_cache_parity.py` checks this against vanilla, with a mock profile service.
 
 ### Measured (2026-10-16, Mac mini M4 Pro, main at bd8dff20, release build)
 
@@ -76,9 +82,9 @@ not tick cost, so it is in scope here (see section 9).
 
 | Area | Status |
 |---|---|
-| `online-mode=true` | **Not supported.** The server logs a warning and runs offline: no session `hasJoined` check, no encryption, no secure chat. (The client side of online mode works and is tested by `test_online_mode_parity.py` against vanilla's server.) A public server must not run like this. This is the top engine item. |
+| `online-mode=true` | **Works** (ServerLoginPacketListenerImpl): a 1024-bit RSA key pair at start ("Generating keypair"), the encryption request, the shared secret and challenge, AES/CFB8, and the session service's `hasJoined` check (with the address when `prevent-proxy-connections` is on), with vanilla's log lines and messages. `test_online_mode_parity.py` runs the same logins against vanilla's server and Horizon's with a mock session service. Not yet: secure chat (chat is unsigned, as on a server that doesn't enforce it). |
 | Nether and End | **Players can't change dimension.** The engine keeps one dimension loaded (`Game::enter_dimension` moves only the local single-player player), and the hub serves one `dimension` to everyone. |
-| Refused logins | Nothing is logged. Vanilla logs `Disconnecting <name>: <reason>` (`ServerLoginPacketListenerImpl.disconnect`) and `<name> lost connection: …`. |
+| Refused logins | Logged as vanilla does: `Disconnecting <name> (/address): <reason>`, then `<name> (/address) lost connection: <reason>`, and the session errors (`Username '<name>' tried to join with an invalid session`, `Couldn't verify username because servers are unavailable`). |
 | Gameplay for remote players | The LAN guest leftovers apply: an item used on a block is used twice, the recipe book doesn't work, status effects don't apply to guests, arrows don't record their owner, team friendly fire is ignored (#484). Block desync and short freezes are reported on a same-machine server (#500). |
 | Defaults that surprise owners | `white-list=true` is vanilla 26.3's default, so a fresh server refuses everyone until they are added. That matches vanilla, so the first-run flow (section 3) asks about the whitelist up front. |
 | Management | Only stdin. There is no service, no backups, no status beyond `list`, no restart after a crash, and a server can't be managed while it runs in the background. |
@@ -239,7 +245,7 @@ motd = "A Minecraft Server"
 port = 25565
 bind = ""                    # listen on every address, or only on this one (server-ip)
 max_players = 20
-online_mode = true           # not supported by Horizon yet: the server runs offline and says so
+online_mode = true           # check players' Minecraft accounts (false: anyone joins under any name)
 whitelist = true             # only whitelisted players and operators can join
 enforce_whitelist = false    # kick online players taken off the whitelist
 view_distance = 10
@@ -501,7 +507,7 @@ machine, then published in `benchmarks/`; and item 5.
 
 **Out (next):**
 
-- online mode on the server side (session `hasJoined`, encryption, secure chat);
+- secure chat on the server (online mode itself works);
 - the Nether and End for remote players;
 - the headless engine and its RAM win;
 - a server-only prepare without a JDK;
@@ -511,8 +517,8 @@ machine, then published in `benchmarks/`; and item 5.
 - the website's "host a server" page;
 - retiring `tools/server.py` and `docs/server-quickstart.txt` (once the benchmark replaces them).
 
-Until online mode works, the docs say to run Horizon's server only on a LAN, a tailnet, or behind a
-whitelist.
+Online mode works, so a public server can check accounts. An offline server should still run only on a
+LAN, a tailnet, or behind a whitelist.
 
 ## 11. Pull requests
 

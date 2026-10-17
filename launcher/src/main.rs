@@ -6,6 +6,7 @@ mod collection;
 mod game_tools;
 mod markdown;
 mod mcp;
+mod modpacks_page;
 mod perf;
 mod theme;
 
@@ -29,14 +30,16 @@ use theme::Theme;
 enum Page {
     Play,
     Versions,
+    Modpacks,
     Notes,
     Settings,
 }
 
 impl Page {
-    const ALL: [(Page, &'static str); 4] = [
+    const ALL: [(Page, &'static str); 5] = [
         (Page::Play, "Play"),
         (Page::Versions, "Versions"),
+        (Page::Modpacks, "Modpacks"),
         (Page::Notes, "Patch notes"),
         (Page::Settings, "Settings"),
     ];
@@ -161,6 +164,17 @@ struct Launcher {
     play_pressed: Option<Instant>,
     /// `horizon-launcher benchmark` started this window to measure it.
     bench: Option<perf::Bench>,
+    /// The Modpacks page: the imported packs (read when the page first opens), the one shown,
+    /// the report's filter, and the pipeline step running now with its log.
+    packs: Vec<horizon_launcher::modpacks::Imported>,
+    packs_loaded: Option<Instant>,
+    pack_open: Option<String>,
+    pack_filter: Option<horizon_port_pack::report::Status>,
+    pack_busy: bool,
+    pack_log: VecDeque<String>,
+    pack_error: Option<String>,
+    /// The game starting now plays this pack's profile (its work folder).
+    starting_pack: Option<std::path::PathBuf>,
 }
 
 impl Launcher {
@@ -266,6 +280,14 @@ impl Launcher {
             prepare_started: None,
             play_pressed: None,
             bench: perf::Bench::from_env(),
+            packs: Vec::new(),
+            packs_loaded: None,
+            pack_open: None,
+            pack_filter: None,
+            pack_busy: false,
+            pack_log: VecDeque::new(),
+            pack_error: None,
+            starting_pack: None,
         };
         if this.bench.is_some() {
             this.perf.keep_local_log(false);
@@ -406,6 +428,14 @@ impl Launcher {
                             Err(e) => self.client_error = Some(format!("Playing offline: {e}")),
                         }
                         self.accounts = Accounts::load();
+                        if let Some(work) = self.starting_pack.take() {
+                            if let Err(e) =
+                                horizon_launcher::modpacks::apply_profile(&mut cmd, &work)
+                            {
+                                self.client_error = Some(e);
+                                continue;
+                            }
+                        }
                         if let Some(code) = self.joining.take() {
                             if let Err(e) = backend::join_friend(&mut cmd, &code) {
                                 self.client_error = Some(e);
@@ -473,6 +503,13 @@ impl Launcher {
                         Err(e) => SelfUpdate::Failed(e),
                     };
                 }
+                Msg::PackLine(line) => {
+                    self.pack_log.push_back(line);
+                    if self.pack_log.len() > LOG_LINES {
+                        self.pack_log.pop_front();
+                    }
+                }
+                Msg::PackDone(result) => self.pack_done(result),
                 Msg::Line(job, line) => {
                     if job == Job::Client && line.starts_with(perf::GAME_FIRST_FRAME) {
                         if let Some(pressed) = self.play_pressed.take() {
@@ -671,37 +708,8 @@ impl Launcher {
                 if self.client.is_some() || self.starting_client.is_some() {
                     return;
                 }
-                self.client_error = None;
-                self.crash = None;
-                self.prepare_log.clear();
-                // A little earlier than the spawn: file times can be coarse.
-                self.client_started =
-                    Some(std::time::SystemTime::now() - std::time::Duration::from_secs(2));
-                // The session (a network round trip when the token needs renewing) comes first;
-                // `drain` starts the game when it arrives.
-                self.starting_client = Some(tag);
-                self.play_pressed = Some(Instant::now());
-                let tx = self.tx.clone();
-                std::thread::spawn(move || {
-                    let session = (|| {
-                        let mut accounts = Accounts::load();
-                        let Some((a, secrets)) = account::session_for_launch(
-                            &account::Endpoints::live(),
-                            account::store(),
-                            &mut accounts,
-                        )?
-                        else {
-                            return Ok(None);
-                        };
-                        account::write_session_file(
-                            &backend::game_home().join("sessions"),
-                            &a,
-                            &secrets,
-                        )
-                        .map(Some)
-                    })();
-                    let _ = tx.send(Msg::Session(session));
-                });
+                self.starting_pack = None;
+                self.start_client(tag);
             }
             Mode::Server => {
                 if let Some(server) = &mut self.server {
@@ -727,6 +735,38 @@ impl Launcher {
                 }
             }
         }
+    }
+
+    /// Starts the game: the session first (a network round trip when the token needs
+    /// renewing), then `drain` starts the process when it arrives.
+    fn start_client(&mut self, tag: String) {
+        self.client_error = None;
+        self.crash = None;
+        self.prepare_log.clear();
+        // A little earlier than the spawn: file times can be coarse.
+        self.client_started =
+            Some(std::time::SystemTime::now() - std::time::Duration::from_secs(2));
+        // The session (a network round trip when the token needs renewing) comes first;
+        // `drain` starts the game when it arrives.
+        self.starting_client = Some(tag);
+        self.play_pressed = Some(Instant::now());
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let session = (|| {
+                let mut accounts = Accounts::load();
+                let Some((a, secrets)) = account::session_for_launch(
+                    &account::Endpoints::live(),
+                    account::store(),
+                    &mut accounts,
+                )?
+                else {
+                    return Ok(None);
+                };
+                account::write_session_file(&backend::game_home().join("sessions"), &a, &secrets)
+                    .map(Some)
+            })();
+            let _ = tx.send(Msg::Session(session));
+        });
     }
 
     fn choose_folder(&mut self, server: bool, cx: &mut Context<Self>) {
@@ -2774,6 +2814,7 @@ impl Render for Launcher {
         let content = match self.page {
             Page::Play => self.play_page(cx),
             Page::Versions => self.versions_page(cx),
+            Page::Modpacks => self.modpacks_page(cx),
             Page::Notes => self.notes_page(cx),
             Page::Settings => self.settings_page(cx),
         };

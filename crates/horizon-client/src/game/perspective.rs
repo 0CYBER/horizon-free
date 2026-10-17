@@ -201,7 +201,7 @@ impl Game<'_> {
             )
         };
         let p = self.player.as_ref()?;
-        let sleeping = self.sleeping.map(|(head, _)| {
+        let sleeping = self.sleeping.map(|head| {
             let state = self.world.block(head[0], head[1], head[2]);
             let props = self
                 .pack
@@ -313,6 +313,15 @@ impl Game<'_> {
             .map_or(25, |s| Self::charge_ticks(s).max(1)) as i32;
         let attack = (self.swing.old_animation, self.swing.animation);
         let swinging = self.swing.swinging();
+        // currentSwing.hand().asArm(mainArm).
+        let swing_right_arm = swinging.then(|| {
+            (self.swing.attack_hand() == horizon_client::first_person::Hand::Main)
+                != self.settings.main_hand_left
+        });
+        // LivingEntity.isVisuallySwimming and Entity.isInWater.
+        let visually_swimming =
+            p.pose == Pose::Swimming || (!p.fall_flying && p.pose == Pose::FallFlying);
+        let in_water = p.fluids.was_touching_water;
         let (yaw, pitch) = (self.yaw, self.pitch);
         let main = self.inventory[self.selected]
             .as_ref()
@@ -378,6 +387,8 @@ impl Game<'_> {
         m.extra.charged = charged;
         m.extra.ints[5] = charge_duration;
         m.extra.elytra.tick(fall_flying, crouching, velocity);
+        m.extra.swim.tick(visually_swimming, in_water);
+        m.extra.swing_right_arm = swing_right_arm;
         m.hurt_time = hurt;
     }
     /// Whether the player's own model shows in the world view.

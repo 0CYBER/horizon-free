@@ -11,7 +11,7 @@ use horizon_client::{
 };
 use serde_json::Value;
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     sync::Arc,
     time::Instant,
 };
@@ -72,13 +72,25 @@ impl Toast {
 #[derive(Default)]
 pub(super) struct AdvState {
     pub(super) tree: Arc<Tree>,
+    /// `ClientAdvancements`: a server's tree carries each advancement's
+    /// place on its tab (`DisplayInfo` x, y), in tree order.
+    pub(super) positions: Option<Vec<(f32, f32)>>,
     pub(super) progress: Progress,
     pub(super) loaded: bool,
     pub(super) toasts: VecDeque<Toast>,
     /// Awards skip the toast (`/advancement grant ... everything`).
     pub(super) quiet: bool,
     /// The inventory last seen by `inventory_changed`.
-    last_inventory: u64,
+    pub(super) last_inventory: u64,
+    /// While the game acts for a network player (`as_guest`): the
+    /// advancements whose progress changed (`progressChanged`), the recipes
+    /// unlocked and the announcements, for their client and everyone's.
+    pub(super) changed: BTreeSet<usize>,
+    pub(super) unlocked: Vec<String>,
+    pub(super) announced: Vec<Text>,
+    /// The tree being read on another thread since the world opened
+    /// (`prefetch_advancement_tree`), taken by the first `advancement_tree`.
+    pub(super) pending_tree: Option<std::thread::JoinHandle<Tree>>,
 }
 /// The game's world for predicates.
 struct View<'a, 'g>(&'a Game<'g>);
@@ -171,29 +183,10 @@ impl adv::World for View<'_, '_> {
     }
 }
 fn now_text() -> String {
-    // "yyyy-MM-dd HH:mm:ss Z" in UTC.
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs()) as i64;
-    let days = secs.div_euclid(86400);
-    let rem = secs.rem_euclid(86400);
-    // Civil from days (Howard Hinnant's algorithm).
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    format!(
-        "{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02} +0000",
-        rem / 3600,
-        rem % 3600 / 60,
-        rem % 60
-    )
+    adv::date_text(secs)
 }
 impl Game<'_> {
     /// `ItemPredicate.test` (the `item_filter` of a filtered item modifier).
@@ -217,30 +210,47 @@ pub(super) fn item_view(s: &ItemStack) -> ItemView {
 }
 impl Game<'_> {
     fn adv_path(&self) -> Option<std::path::PathBuf> {
-        let uuid = self.level.player_uuid?;
-        let hex: String = uuid.iter().map(|v| format!("{:08x}", *v as u32)).collect();
-        let text = format!(
-            "{}-{}-{}-{}-{}",
-            &hex[0..8],
-            &hex[8..12],
-            &hex[12..16],
-            &hex[16..20],
-            &hex[20..32]
-        );
-        Some(
-            self.world_root
-                .join("players/advancements")
-                .join(format!("{text}.json")),
-        )
+        Some(super::stats::player_json(
+            &self.world_root,
+            "advancements",
+            self.level.player_uuid?,
+        ))
+    }
+    /// A server with no player of its own and nobody it acts for: there is
+    /// no player for advancements and statistics.
+    pub(super) fn no_player_here(&self) -> bool {
+        self.options.dedicated.is_some() && self.lan_acting.is_none()
+    }
+    /// The advancement tree, loaded once.
+    pub(super) fn advancement_tree(&mut self) -> Arc<Tree> {
+        if self.adv.tree.list.is_empty() {
+            let tree = match self.adv.pending_tree.take().map(|h| h.join()) {
+                Some(Ok(tree)) => tree,
+                _ => Tree::load(&self.options.resources.join("data")),
+            };
+            self.adv.tree = Arc::new(tree);
+        }
+        self.adv.tree.clone()
+    }
+    /// Start reading the advancement files on another thread while the world
+    /// loads. The first tick's first criterion trigger used to read and parse
+    /// all of them on the game thread (about 60 ms).
+    pub(super) fn prefetch_advancement_tree(&mut self) {
+        if !self.adv.tree.list.is_empty() || self.adv.pending_tree.is_some() {
+            return;
+        }
+        let data = self.options.resources.join("data");
+        self.adv.pending_tree = std::thread::Builder::new()
+            .name("horizon-advancements".into())
+            .spawn(move || Tree::load(&data))
+            .ok();
     }
     pub(super) fn load_advancements(&mut self) {
-        if self.adv.loaded || self.remote.is_some() {
+        if self.adv.loaded || self.remote.is_some() || self.no_player_here() {
             return;
         }
         self.adv.loaded = true;
-        if self.adv.tree.list.is_empty() {
-            self.adv.tree = Arc::new(Tree::load(&self.options.resources.join("data")));
-        }
+        self.advancement_tree();
         let progress = self
             .adv_path()
             .and_then(|p| std::fs::read_to_string(p).ok())
@@ -254,7 +264,7 @@ impl Game<'_> {
         self.ui.registries.advancements = tree.list.iter().map(|a| a.id.clone()).collect();
     }
     pub(super) fn save_advancements(&self) {
-        if !self.adv.loaded || self.remote.is_some() {
+        if !self.adv.loaded || self.remote.is_some() || self.no_player_here() {
             return;
         }
         let Some(path) = self.adv_path() else {
@@ -376,7 +386,7 @@ impl Game<'_> {
     /// `SimpleCriterionTrigger.trigger`: test each open criterion of the
     /// trigger and award what it completes.
     pub(super) fn trigger(&mut self, name: &str, test: impl Fn(&Value, &dyn adv::World) -> bool) {
-        if self.remote.is_some() {
+        if self.remote.is_some() || self.no_player_here() {
             return;
         }
         self.load_advancements();
@@ -403,15 +413,27 @@ impl Game<'_> {
             let a = &tree.list[ai];
             let was = self.adv.progress.done(a);
             self.adv.progress.grant(&a.id, &a.criteria[ci].name, &date);
+            self.progress_changed(ai);
             if !was && self.adv.progress.done(a) {
                 self.award(ai);
             }
         }
     }
+    /// `PlayerAdvancements.progressChanged`, kept for a network player's client.
+    fn progress_changed(&mut self, index: usize) {
+        if self.lan_acting.is_some() {
+            self.adv.changed.insert(index);
+        }
+    }
     /// After `ServerRecipeBook.addRecipes`: the toast and the
     /// `recipe_unlocked` trigger of each recipe now known.
     pub(super) fn recipe_unlocked(&mut self, unlocked: &[String]) {
-        self.recipe_toast(unlocked);
+        if self.lan_acting.is_some() {
+            // A network player's client gets them in ClientboundRecipeBookAddPacket.
+            self.adv.unlocked.extend_from_slice(unlocked);
+        } else {
+            self.recipe_toast(unlocked);
+        }
         for r in unlocked {
             let r = r.clone();
             self.trigger("minecraft:recipe_unlocked", move |c, _| {
@@ -453,7 +475,8 @@ impl Game<'_> {
             }
         }
         if let Some(d) = &a.display {
-            if d.show_toast && !self.adv.quiet {
+            // A network player's client shows its own toast.
+            if d.show_toast && !self.adv.quiet && self.lan_acting.is_none() {
                 self.adv.toasts.push_back(Toast {
                     icon: d.icon.clone(),
                     frame: d.frame,
@@ -471,10 +494,18 @@ impl Game<'_> {
                     Frame::Challenge => "chat.type.advancement.challenge",
                 };
                 let name = adv_name(a);
-                self.system_message(Text::translate(
-                    key,
-                    &[Text::literal(super::chat::PLAYER_NAME), name],
-                ));
+                // PlayerList.broadcastSystemMessage: everyone hears of a
+                // network player's advancement.
+                match self.lan_acting_name.clone() {
+                    Some(player) => self
+                        .adv
+                        .announced
+                        .push(Text::translate(key, &[Text::literal(&player), name])),
+                    None => self.system_message(Text::translate(
+                        key,
+                        &[Text::literal(super::chat::PLAYER_NAME), name],
+                    )),
+                }
             }
         }
         self.recipe_unlocked(&unlocked);
@@ -820,6 +851,7 @@ impl Game<'_> {
             let was = self.adv.progress.done(a);
             if self.adv.progress.grant(&a.id, c, &date) {
                 changed = true;
+                self.progress_changed(index);
                 if !was && self.adv.progress.done(a) {
                     self.award(index);
                 }
@@ -831,6 +863,7 @@ impl Game<'_> {
     pub(super) fn revoke_advancement(&mut self, index: usize, criterion: Option<&str>) -> bool {
         let tree = self.adv.tree.clone();
         let a = &tree.list[index];
+        self.progress_changed(index);
         match criterion {
             Some(c) => self.adv.progress.revoke(&a.id, c),
             None => {
@@ -839,6 +872,110 @@ impl Game<'_> {
                     any |= self.adv.progress.revoke(&a.id, &c.name);
                 }
                 any
+            }
+        }
+    }
+}
+impl Game<'_> {
+    /// `ClientAdvancements.update` (ClientboundUpdateAdvancementsPacket):
+    /// the server's advancements replace or join the tree, each changed one
+    /// takes the progress sent, and one just done shows its toast. `icons`
+    /// are the added advancements' icon items by name.
+    pub(super) fn remote_advancements(
+        &mut self,
+        p: horizon_protocol::packets::play::UpdateAdvancements,
+        icons: Vec<String>,
+    ) {
+        use horizon_client::scoreboard::tag_to_json;
+        let mut list: Vec<adv::Advancement> = Vec::new();
+        let mut positions: Vec<(f32, f32)> = Vec::new();
+        if !p.reset {
+            let old = self.adv.positions.take().unwrap_or_default();
+            for (i, a) in self.adv.tree.list.iter().enumerate() {
+                if !p.removed.contains(&a.id) {
+                    list.push(a.clone());
+                    positions.push(old.get(i).copied().unwrap_or((0.0, 0.0)));
+                }
+            }
+        } else {
+            self.adv.progress = Progress::default();
+        }
+        for id in &p.removed {
+            self.adv.progress.criteria.remove(id);
+        }
+        for (a, icon) in p.added.into_iter().zip(icons) {
+            list.retain(|o| o.id != a.id);
+            let display = a.display.map(|d| adv::Display {
+                icon,
+                title: tag_to_json(&d.title),
+                description: tag_to_json(&d.description),
+                frame: match d.frame {
+                    1 => Frame::Challenge,
+                    2 => Frame::Goal,
+                    _ => Frame::Task,
+                },
+                background: d.background,
+                show_toast: d.show_toast,
+                announce: false,
+                hidden: d.hidden,
+            });
+            let mut criteria: Vec<adv::Criterion> = Vec::new();
+            for name in a.requirements.iter().flatten() {
+                if !criteria.iter().any(|c| &c.name == name) {
+                    criteria.push(adv::Criterion {
+                        name: name.clone(),
+                        trigger: String::new(),
+                        conditions: Value::Null,
+                    });
+                }
+            }
+            list.push(adv::Advancement {
+                id: a.id,
+                parent: a.parent,
+                display,
+                criteria,
+                requirements: a.requirements,
+                rewards: Default::default(),
+            });
+            positions.push((a.x, a.y));
+        }
+        let mut tree = Tree {
+            list,
+            ..Tree::default()
+        };
+        for (i, a) in tree.list.iter().enumerate() {
+            tree.by_id.insert(a.id.clone(), i);
+        }
+        self.ui.registries.advancements = tree.list.iter().map(|a| a.id.clone()).collect();
+        self.adv.tree = Arc::new(tree);
+        self.adv.positions = Some(positions);
+        let tree = self.adv.tree.clone();
+        for (id, criteria) in p.progress {
+            let Some(&i) = tree.by_id.get(&id) else {
+                continue;
+            };
+            // The client only shows whether a criterion is obtained, not when.
+            let obtained: BTreeMap<String, String> = criteria
+                .into_iter()
+                .filter(|(_, at)| at.is_some())
+                .map(|(name, _)| (name, String::new()))
+                .collect();
+            self.adv.progress.criteria.insert(id, obtained);
+            let a = &tree.list[i];
+            if !p.reset
+                && p.show
+                && self.adv.progress.done(a)
+                && let Some(d) = a.display.as_ref().filter(|d| d.show_toast)
+            {
+                self.adv.toasts.push_back(Toast {
+                    icon: d.icon.clone(),
+                    frame: d.frame,
+                    title: text_of(&d.title),
+                    slide: Slide::default(),
+                    recipes: Vec::new(),
+                    changed: false,
+                    last_changed: 0,
+                });
             }
         }
     }
