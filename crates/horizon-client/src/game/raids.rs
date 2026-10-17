@@ -624,17 +624,17 @@ impl Game<'_> {
                     raider::state_mut(m).ticks_outside_raid = ticks;
                 }
             }
-            Action::Victory { heroes, amplifier } => {
-                let me = self.level.player_uuid;
-                if me.is_some_and(|u| heroes.contains(&u)) && !self.spectator() {
+            // Raid.tick on a victory: each hero who is still alive.
+            Action::Victory { heroes, amplifier } => self.for_each_player(|g| {
+                if heroes.contains(&g.acting_uuid()) && !g.spectator() {
                     let mut effect =
                         EffectInstance::new("hero_of_the_village", raid::HERO_DURATION, amplifier);
                     effect.visible = false;
-                    self.potions.effects.add(effect);
-                    self.stats.custom("raid_win", 1);
-                    self.trigger_player("minecraft:hero_of_the_village");
+                    g.potions.effects.add(effect);
+                    g.stats.custom("raid_win", 1);
+                    g.trigger_player("minecraft:hero_of_the_village");
                 }
-            }
+            }),
         }
     }
     /// `Raid.playSound`: the horn, 13 blocks away from the player toward the

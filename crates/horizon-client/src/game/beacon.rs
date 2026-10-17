@@ -220,7 +220,11 @@ impl Game<'_> {
         levels
     }
     /// `applyEffects`: the powers for players within `levels * 10 + 10` (any height above).
+    /// `BeaconBlockEntity.applyEffects`: every player in range.
     fn beacon_effects(&mut self, p: [i32; 3], b: &Beacon) {
+        self.for_each_player(|g| g.beacon_effects_on_player(p, b));
+    }
+    fn beacon_effects_on_player(&mut self, p: [i32; 3], b: &Beacon) {
         let Some(primary) = b.primary.as_deref().and_then(effect_id) else {
             return;
         };
