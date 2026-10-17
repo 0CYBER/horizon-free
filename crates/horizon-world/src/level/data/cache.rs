@@ -373,7 +373,6 @@ impl Snapshot {
             .iter()
             .map(|info| [info.full_faces, info.nonempty_faces, info.wall_cover])
             .collect();
-        let tags = tags;
         let f = behaviours.fluid_tags;
         let fluid_tags = [
             f.water,
