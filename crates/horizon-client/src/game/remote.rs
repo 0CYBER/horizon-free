@@ -68,6 +68,7 @@ struct Lerp {
 
 pub(super) struct Remote {
     pub session: Session,
+    pub brand: String,
     builtin: Arc<Builtin>,
     lang: Arc<Language>,
     registries: Arc<Dynamic>,
@@ -153,7 +154,20 @@ fn number_format(f: &play::NumberFormat) -> horizon_client::scoreboard::NumberFo
 impl Game<'_> {
     /// Leave the title for a server (ConnectScreen): an empty world fed by the connection.
     pub(super) fn connect_server(&mut self, address: &str, name: &str) -> Result<()> {
-        self.join_server(address, name, None)
+        if let Err(error) = self.join_server(address, name, None) {
+            log::warn!("Horizon: could not join server: {error}");
+            if self.title.is_none() {
+                self.title = Some(horizon_client::title::Title::new(
+                    std::env::current_dir()?.join("saves"),
+                    &self.options.resources,
+                ));
+            }
+            if let Some(title) = &mut self.title {
+                title.failed(error);
+            }
+            self.capture(false);
+        }
+        Ok(())
     }
     /// Join single player's integrated server through memory.
     pub(super) fn connect_local(
@@ -173,7 +187,7 @@ impl Game<'_> {
         let root = self.options.resources.clone();
         let builtin = Builtin::find(&root)
             .and_then(|p| Builtin::load(&p).ok())
-            .ok_or("registries.json not found next to the resources; run the data generator reports (horizon-prepare)")?;
+            .ok_or("Resources are incomplete: registries.json is missing or invalid. Click \"Prepare again\" in the launcher (or run horizon-prepare), then try again.")?;
         let lang = Arc::new(horizon_client::net::load_language(&root));
         let view = self.settings.render_distance.clamp(2, 32) as i8;
         if local.is_none() {
@@ -238,6 +252,7 @@ impl Game<'_> {
         self.apply_settings();
         self.remote = Some(Remote {
             session,
+            brand: "unknown".into(),
             builtin: Arc::new(builtin),
             lang,
             registries: Arc::new(Dynamic::default()),
@@ -330,6 +345,7 @@ impl Game<'_> {
         }
         let saves = std::env::current_dir()?.join("saves");
         let mut title = horizon_client::title::Title::new(saves.clone(), &self.options.resources);
+        title.last_server = self.settings.file.string("lastServer");
         if single_player && reason.is_none() {
             self.title = Some(title);
             self.capture(false);
@@ -465,6 +481,11 @@ impl Game<'_> {
                         r.joined = true;
                         r.profile = uuid;
                         r.status = format!("Joined as {name}; loading terrain...");
+                    }
+                }
+                Event::Brand(brand) => {
+                    if let Some(remote) = &mut self.remote {
+                        remote.brand = brand;
                     }
                 }
                 Event::Reconfigured(registries) => self.set_registries(registries),
@@ -2093,6 +2114,17 @@ impl Game<'_> {
         }
     }
 
+    pub(super) fn stop_remote_mining(&mut self) {
+        if let Some((pos, _, _)) = self.remote.as_mut().and_then(|r| r.destroying.take()) {
+            self.send(S::PlayerAction(play::PlayerAction {
+                action: 2,
+                pos,
+                direction: 0,
+                sequence: 0,
+            }));
+        }
+    }
+
     /// MultiPlayerGameMode.startDestroyBlock / continueDestroyBlock.
     fn remote_mining(&mut self) {
         let Some(r) = self.remote.as_mut() else {
@@ -2103,14 +2135,7 @@ impl Game<'_> {
         }
         let chatting = r.chat_input.is_some();
         if !self.left || self.screen != Screen::Playing || chatting {
-            if let Some((pos, _, _)) = r.destroying.take() {
-                self.send(S::PlayerAction(play::PlayerAction {
-                    action: 2,
-                    pos,
-                    direction: 0,
-                    sequence: 0,
-                }));
-            }
+            self.stop_remote_mining();
             self.mining = None;
             return;
         }

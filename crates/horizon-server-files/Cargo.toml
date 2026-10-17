@@ -1,0 +1,16 @@
+[package]
+name = "horizon-server-files"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version = "1.90"
+description = "The dedicated server's vanilla files: server.properties, eula.txt, ops, whitelist and bans"
+
+[dependencies]
+horizon-core = { path = "../horizon-core" }
+horizon-protocol = { path = "../horizon-protocol" }
+horizon-world = { path = "../horizon-world" }
+log = "0.4"
+
+[lints]
+workspace = true

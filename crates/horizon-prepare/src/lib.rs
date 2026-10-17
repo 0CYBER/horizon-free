@@ -762,8 +762,7 @@ fn steps(
         "behaviour-export.log",
     )?;
 
-    let items = root.join("items.json");
-    if !items.exists() || !run.same("server_sha256") {
+    if datagen_reports_missing(root) || !run.same("server_sha256") {
         // Vanilla's own data generator reports every item's default components.
         (run.log)("Running vanilla's data generator reports");
         let datagen = run.local.join("datagen");
@@ -785,21 +784,7 @@ fn steps(
             )
             .map_err(|e| format!("{e} in the data generator; see {}", log_path.display()))?;
         let reports = datagen.join("out").join("reports");
-        let mut components = Value::Object(Vec::new());
-        for file in json_files(&reports.join("minecraft/components/item"))? {
-            let stem = file.file_stem().unwrap().to_string_lossy().into_owned();
-            let report = read_json(&file)?;
-            let component = report
-                .get("components")
-                .ok_or_else(|| format!("{} has no components", file.display()))?;
-            components.insert(&format!("minecraft:{stem}"), component.clone());
-        }
-        write_text(&items, &pyjson::dumps(&components, &pyjson::DEFAULT))?;
-        let biome_parameters = root.join("biome-parameters");
-        mkdir(&biome_parameters)?;
-        for file in json_files(&reports.join("biome_parameters/minecraft"))? {
-            copy(&file, &biome_parameters.join(file.file_name().unwrap()))?;
-        }
+        install_datagen_reports(root, &reports)?;
     }
 
     // Biome parameter tables come from the data generator reports above.
@@ -923,6 +908,37 @@ fn steps(
         &root.join("horizon-resources.json"),
         &Value::Object(manifest),
     )
+}
+
+fn datagen_reports_missing(root: &Path) -> bool {
+    ["items.json", "registries.json", "commands.json"]
+        .iter()
+        .any(|name| !root.join(name).is_file())
+}
+
+fn install_datagen_reports(root: &Path, reports: &Path) -> Result<(), String> {
+    for name in ["registries.json", "commands.json"] {
+        copy(&reports.join(name), &root.join(name))?;
+    }
+    let mut components = Value::Object(Vec::new());
+    for file in json_files(&reports.join("minecraft/components/item"))? {
+        let stem = file.file_stem().unwrap().to_string_lossy().into_owned();
+        let report = read_json(&file)?;
+        let component = report
+            .get("components")
+            .ok_or_else(|| format!("{} has no components", file.display()))?;
+        components.insert(&format!("minecraft:{stem}"), component.clone());
+    }
+    write_text(
+        &root.join("items.json"),
+        &pyjson::dumps(&components, &pyjson::DEFAULT),
+    )?;
+    let biome_parameters = root.join("biome-parameters");
+    mkdir(&biome_parameters)?;
+    for file in json_files(&reports.join("biome_parameters/minecraft"))? {
+        copy(&file, &biome_parameters.join(file.file_name().unwrap()))?;
+    }
+    Ok(())
 }
 
 /// `sorted(directory.glob('*.json'))`: glob skips names starting with a dot.
@@ -1123,6 +1139,54 @@ fn export_block_behavior(run: &Run, export: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn datagen_reports_are_installed_beside_resources_and_missing_reports_need_repair() {
+        let dir =
+            std::env::temp_dir().join(format!("horizon-prepare-reports-{}", std::process::id()));
+        let root = dir.join("resources");
+        let reports = dir.join("reports");
+        mkdir(&root).unwrap();
+        mkdir(&reports.join("minecraft/components/item")).unwrap();
+        mkdir(&reports.join("biome_parameters/minecraft")).unwrap();
+        write_text(&root.join("items.json"), "{}").unwrap();
+        assert!(datagen_reports_missing(&root));
+        write_text(
+            &reports.join("registries.json"),
+            "{\"minecraft:item\":{\"entries\":{}}}",
+        )
+        .unwrap();
+        write_text(&reports.join("commands.json"), "{\"type\":\"root\"}").unwrap();
+        write_text(
+            &reports.join("minecraft/components/item/stone.json"),
+            "{\"components\":{\"minecraft:max_stack_size\":64}}",
+        )
+        .unwrap();
+        write_text(
+            &reports.join("biome_parameters/minecraft/overworld.json"),
+            "{}",
+        )
+        .unwrap();
+        install_datagen_reports(&root, &reports).unwrap();
+        assert!(!datagen_reports_missing(&root));
+        for name in ["registries.json", "commands.json"] {
+            assert_eq!(
+                read(&root.join(name)).unwrap(),
+                read(&reports.join(name)).unwrap()
+            );
+        }
+        assert!(read_json(&root.join("items.json"))
+            .unwrap()
+            .get("minecraft:stone")
+            .is_some());
+        assert!(root.join("biome-parameters/overworld.json").is_file());
+        for name in ["registries.json", "commands.json", "items.json"] {
+            fs::remove_file(root.join(name)).unwrap();
+            assert!(datagen_reports_missing(&root), "{name}");
+            install_datagen_reports(&root, &reports).unwrap();
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn the_source_digest_is_the_one_build_rs_computed() {

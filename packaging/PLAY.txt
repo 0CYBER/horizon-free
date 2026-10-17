@@ -38,3 +38,15 @@ Scripts and AI agents
   horizon-ctl mcp is an MCP server for AI agents (stdio; add it to your MCP
   client as the command horizon-ctl with the argument mcp). It finds the game
   beside it or the version the launcher installed.
+
+Running a server
+  horizon-server, in this folder, hosts a server with this game as its engine,
+  using the resources prepared above:
+    ./horizon-server --dir my-server init     the EULA, world, seed, port, who may join
+    ./horizon-server --dir my-server start    in the background; also stop, restart
+    ./horizon-server --dir my-server status   TPS, MSPT, players, RAM and CPU
+    ./horizon-server --dir my-server cmd list
+    ./horizon-server --dir my-server backup   also backups, restore
+    ./horizon-server --dir my-server service install   start it at boot or login
+  Its settings are in my-server/server.toml. ./horizon-server help lists every
+  command; docs/server.md in the repository has the details.
