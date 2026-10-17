@@ -7668,7 +7668,15 @@ impl Game<'_> {
     /// The renderer for the window, with the current block sprites, shared
     /// atlas and world border texture.
     fn new_renderer(&self, window: Arc<Window>) -> Result<Renderer> {
-        let assets = &self.pack.assets;
+        self.renderer_for(window, &self.pack, &self.atlas)
+    }
+    fn renderer_for(
+        &self,
+        window: Arc<Window>,
+        pack: &PackResources,
+        atlas: &HudAtlas,
+    ) -> Result<Renderer> {
+        let assets = &pack.assets;
         let mut renderer = pollster::block_on(Renderer::new(
             window,
             self.options.offscreen,
@@ -7678,12 +7686,12 @@ impl Game<'_> {
             assets.texture_layers,
             &assets.sprite_mips,
             &assets.animations,
-            (&self.atlas.pixels, self.atlas.width, self.atlas.height),
-            (&self.pack.forcefield.2, self.pack.forcefield.0),
-            &self.pack.panorama,
+            (&atlas.pixels, atlas.width, atlas.height),
+            (&pack.forcefield.2, pack.forcefield.0),
+            &pack.panorama,
+            self.renderer.as_ref(),
         ))?;
-        renderer.hud.fire_animations = self
-            .atlas
+        renderer.hud.fire_animations = atlas
             .fire_animations
             .iter()
             .map(|(rect, animation)| (*rect, animation.clone(), usize::MAX))
@@ -10169,7 +10177,13 @@ pub fn run() -> Result<()> {
     horizon_client::spans::enable(options.spikes.is_some());
     let vanilla_root = options.resources.clone();
     let early_settings = Settings::load(&std::env::current_dir()?.join("options.txt"));
-    options.resources = packs::startup_root(&vanilla_root, &early_settings.resource_packs);
+    let mut pack_error = None;
+    options.resources = packs::startup_root(&vanilla_root, &early_settings.resource_packs)
+        .unwrap_or_else(|e| {
+            log::warn!("Horizon: resource packs not applied: {e}");
+            pack_error = Some(e.to_string());
+            vanilla_root.clone()
+        });
     options.resources = mods::content_root(
         &options.resources,
         &early_settings.mods.enabled,
@@ -10181,6 +10195,7 @@ pub fn run() -> Result<()> {
         // with the game's own resources.
         Err(e) if options.resources != vanilla_root => {
             log::warn!("Horizon: resource packs failed to load ({e}); using the default resources");
+            pack_error = Some(e.to_string());
             options.resources = vanilla_root.clone();
             Assets::load(&vanilla_root)?
         }
@@ -10287,6 +10302,10 @@ pub fn run() -> Result<()> {
     }
     let mut game = Game::new(&resources, pack, atlas, options, settings, audio)?;
     game.ui.vanilla_root = vanilla_root;
+    if let Some(error) = pack_error {
+        game.open_options_at(true, horizon_client::options_ui::Page::Packs);
+        game.ui.options.resource_error = Some(error);
+    }
     if game.options.benchmark.is_some() {
         // The same conditions on every machine: no VSync, no frame cap, no
         // pause or idle limit without focus. In memory only, never saved.

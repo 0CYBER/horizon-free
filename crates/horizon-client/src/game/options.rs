@@ -201,6 +201,7 @@ impl Game<'_> {
                     self.apply_settings();
                     self.sync_mods();
                 }
+                Event::Close if self.ui.options.resource_error.is_some() => {}
                 Event::Close => {
                     self.settings.save(&Self::options_path());
                     self.screen = if std::mem::take(&mut self.options_to_world_options) {
