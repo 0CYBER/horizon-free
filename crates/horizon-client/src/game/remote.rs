@@ -11,7 +11,7 @@ use horizon_client::{
     Result,
     chunk::{BIOME_STRATEGY, BLOCK_STRATEGY, Chunk, Light, MIN_Y, SECTIONS, Section},
     containers::{BlockEntity, Furnace, FurnaceKind},
-    entities::{Experience, ItemEntity},
+    entities::{Experience, ExperienceOrb, ItemEntity},
     hud::{HudBatch, rgba},
     items::ItemStack,
     mobs::{Mob, MobType},
@@ -875,6 +875,19 @@ impl Game<'_> {
         } else {
             self.res.mob_types.get(kind).cloned()
         };
+        if kind == "minecraft:experience_orb" {
+            // Its value (ExperienceOrb.DATA_VALUE) follows in SetEntityData.
+            self.orbs.retain(|o| o.id != id as u32);
+            self.orbs.push(ExperienceOrb {
+                id: id as u32,
+                position: at,
+                previous: at,
+                velocity: Vec3::ZERO,
+                value: 1,
+                age: 0,
+                on_ground: false,
+            });
+        }
         if let Some(t) = mob_type {
             let mut mob = Mob::new(id as u32, t, at, head);
             mob.body_yaw = yaw;
@@ -928,6 +941,7 @@ impl Game<'_> {
     }
     fn remove_entity(&mut self, id: i32) {
         self.mobs.retain(|m| m.id != id as u32);
+        self.orbs.retain(|o| o.id != id as u32);
         self.dropped.retain(|d| d.id != id as u32);
         if let Some(r) = self.remote.as_mut() {
             r.entities.remove(&id);
@@ -1277,6 +1291,13 @@ impl Game<'_> {
                     {
                         self.remote_item_data(p.id, stack);
                     }
+                    // ExperienceOrb.DATA_VALUE (the icon's size).
+                    if *index == 8
+                        && let Value::Int(v) = value
+                        && let Some(o) = self.orbs.iter_mut().find(|o| o.id == p.id as u32)
+                    {
+                        o.value = (*v).max(0) as u32;
+                    }
                 }
             }
             // ClientPacketListener.handleSetEquipment: what a mob or another
@@ -1303,10 +1324,13 @@ impl Game<'_> {
                 }
             }
             C::TakeItemEntity(p) => {
-                if self
-                    .remote
-                    .as_ref()
-                    .is_some_and(|r| r.entity_id == p.player)
+                // An orb's sound comes from the server, at the orb.
+                let orb = self.orbs.iter().any(|o| o.id == p.item as u32);
+                if !orb
+                    && self
+                        .remote
+                        .as_ref()
+                        .is_some_and(|r| r.entity_id == p.player)
                     && let Some(eye) = self.eye_position()
                 {
                     let pitch = ((self.world.random.next_float() - self.world.random.next_float())
@@ -1317,17 +1341,20 @@ impl Game<'_> {
                         .play("minecraft:entity.item.pickup", Some(eye), 0.2, pitch);
                 }
                 // ItemPickupParticle toward the collector (this player, another one or a mob).
+                let collector = if self
+                    .remote
+                    .as_ref()
+                    .is_some_and(|r| r.entity_id == p.player)
+                {
+                    super::pickups::Collector::Player
+                } else {
+                    super::pickups::Collector::Mob(p.player as u32)
+                };
                 if let Some(item) = self.dropped.iter().find(|d| d.id == p.item as u32).cloned() {
-                    let collector = if self
-                        .remote
-                        .as_ref()
-                        .is_some_and(|r| r.entity_id == p.player)
-                    {
-                        super::pickups::Collector::Player
-                    } else {
-                        super::pickups::Collector::Mob(p.player as u32)
-                    };
                     self.add_pickup(super::pickups::Taken::Item(Box::new(item)), collector);
+                } else if let Some(orb) = self.orbs.iter().find(|o| o.id == p.item as u32).cloned()
+                {
+                    self.add_pickup(super::pickups::Taken::Orb(Box::new(orb)), collector);
                 }
                 self.remove_entity(p.item);
             }
@@ -2276,6 +2303,21 @@ impl Game<'_> {
             m.limb_position += m.limb_speed;
             if m.species() == horizon_client::mobs::Species::Rabbit {
                 horizon_client::mobs::rabbit::post_tick(m);
+            }
+        }
+        for o in self.orbs.iter_mut().filter(|_| running) {
+            o.previous = o.position;
+            o.age += 1;
+            if let Some(l) = lerps.get_mut(&(o.id as i32))
+                && l.steps > 0
+            {
+                let n = f64::from(l.steps);
+                o.position = Vec3::new(
+                    o.position.x + (l.target[0] - o.position.x) / n,
+                    o.position.y + (l.target[1] - o.position.y) / n,
+                    o.position.z + (l.target[2] - o.position.z) / n,
+                );
+                l.steps -= 1;
             }
         }
         for d in self.dropped.iter_mut().filter(|_| running) {

@@ -7352,7 +7352,9 @@ impl Game<'_> {
         let mut r = dispenser::entity_random();
         let _yaw = r.next_float();
         let p = Vec3::new(at[0], at[1], at[2]);
+        self.next_entity += 1;
         self.orbs.push(ExperienceOrb {
+            id: self.next_entity,
             position: p,
             previous: p,
             velocity: Vec3::new(
@@ -7416,13 +7418,29 @@ impl Game<'_> {
             .player
             .as_ref()
             .filter(|p| !p.health.dead_or_dying() && !spectator);
-        let target = player.map(|p| {
-            [
-                p.position.x,
-                p.position.y + f64::from(p.dimensions.eye_height) / 2.0,
-                p.position.z,
-            ]
-        });
+        // ExperienceOrb.followNearbyPlayer: each orb goes for the nearest
+        // living player within 8 blocks, the host's own or a guest.
+        let mut followed: Vec<([f64; 3], [f64; 3])> = player
+            .map(|p| {
+                let feet = [p.position.x, p.position.y, p.position.z];
+                let eye = f64::from(p.dimensions.eye_height);
+                (feet, [feet[0], feet[1] + eye / 2.0, feet[2]])
+            })
+            .into_iter()
+            .collect();
+        if let Some(host) = self.lan.as_ref() {
+            followed.extend(
+                host.hub
+                    .guests
+                    .iter()
+                    .filter(|g| g.placed && g.loaded && !g.dead && g.health > 0.0)
+                    .filter(|g| !g.spectator())
+                    .map(|g| {
+                        let p = g.position;
+                        (p, [p[0], p[1] + g.eye_height() / 2.0, p[2]])
+                    }),
+            );
+        }
         let bounds = player.map(|p| {
             let w = f64::from(p.dimensions.width) / 2.0;
             (
@@ -7435,7 +7453,19 @@ impl Game<'_> {
             )
         });
         let mut orbs = std::mem::take(&mut self.orbs);
-        orbs.retain_mut(|o| o.tick(&self.world, &self.res.facts, self.collision, target));
+        orbs.retain_mut(|o| {
+            let distance = |feet: &[f64; 3]| -> f64 {
+                (feet[0] - o.position.x).powi(2)
+                    + (feet[1] - o.position.y).powi(2)
+                    + (feet[2] - o.position.z).powi(2)
+            };
+            let target = followed
+                .iter()
+                .filter(|(feet, _)| distance(feet) < 64.0)
+                .min_by(|a, b| distance(&a.0).total_cmp(&distance(&b.0)))
+                .map(|(_, target)| *target);
+            o.tick(&self.world, &self.res.facts, self.collision, target)
+        });
         let mut gained = 0;
         let mut taken = Vec::new();
         if let Some((min, max)) = bounds {
@@ -7469,19 +7499,25 @@ impl Game<'_> {
                 (self.world.random.next_float() - self.world.random.next_float()) * 0.35 + 0.9;
             self.audio
                 .play("minecraft:entity.experience_orb.pickup", at, 0.1, pitch);
-            if self.experience.give(gained as i32)
-                && self.experience.level % 5 == 0
-                && self.ticks > self.last_level_up + 100
-            {
-                self.last_level_up = self.ticks;
-                let volume = if self.experience.level > 30 {
-                    1.0
-                } else {
-                    self.experience.level as f32 / 30.0
-                };
-                self.audio
-                    .play("minecraft:entity.player.levelup", at, volume * 0.75, 1.0);
-            }
+            self.give_orb_points(gained);
+        }
+    }
+    /// `Player.giveExperiencePoints`, and `giveExperienceLevels`' level-up
+    /// sound every fifth level (at most every 100 ticks).
+    pub(super) fn give_orb_points(&mut self, gained: u32) {
+        let at = self.eye_position();
+        if self.experience.give(gained as i32)
+            && self.experience.level % 5 == 0
+            && self.ticks > self.last_level_up + 100
+        {
+            self.last_level_up = self.ticks;
+            let volume = if self.experience.level > 30 {
+                1.0
+            } else {
+                self.experience.level as f32 / 30.0
+            };
+            self.audio
+                .play("minecraft:entity.player.levelup", at, volume * 0.75, 1.0);
         }
     }
     /// BowItem.releaseUsing: power from charge time, arrows at power * 3.

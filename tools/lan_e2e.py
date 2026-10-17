@@ -20,6 +20,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - containers: the guest's ender chest holds the guest's items, not the host's, and a double chest
              opens as 9x6 with the right half first;
 - feedback:  the guest's command feedback names the guest and shows the numbers.
+- xp:        experience orbs 4 blocks away fly to the guest, show on the guest's screen and give the
+             guest their points (not the host).
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -48,7 +50,7 @@ from agent_control_e2e import Cli, Failed, game_env  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'trials']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'trials', 'xp']
 
 
 class Game:
@@ -622,11 +624,39 @@ def check_trials(host, guest, out):
     return {'spawner': trial, 'vault': active, 'rewarded': uuid(rewarded), 'host': uuid(host_uuid)}
 
 
+def check_xp(host, guest, out):
+    for g in (host, guest):
+        g('command', command='gamemode survival')
+        g('command', command='xp set @s 0 levels')
+        g('command', command='xp set @s 0 points')
+    guest.wait(10)
+    x, y, z = pos_of(guest)
+    # Three orbs of 7 points 4 blocks east of the guest (out of reach, within the 8 blocks orbs
+    # follow from): they fly to the guest.
+    for _ in range(3):
+        guest('command', command=f'summon minecraft:experience_orb {x + 4:.2f} {y + 0.5:.2f} {z:.2f} {{Value:7s}}')
+    guest.wait(2)
+    seen = remote(guest).get('entities', {}).get('minecraft:experience_orb', 0)
+    guest.shot(out, 'xp-orbs')
+    guest.wait(60)
+    xp = guest('state')['player']['xp']
+    host_xp = host('state')['player']['xp']
+    left = remote(guest).get('entities', {}).get('minecraft:experience_orb', 0)
+    detail = {'seen': seen, 'guest': xp, 'host': host_xp, 'left': left}
+    # ExperienceOrb.scanForMerges: orbs of one value side by side can merge into one.
+    assert 1 <= seen <= 3, f'the guest saw {seen} orbs: {detail}'
+    assert xp['total'] == 21 and xp['level'] == 2, f'the guest\'s experience after three 7-point orbs: {detail}'
+    assert host_xp['total'] == 0, f'the host took the orbs: {detail}'
+    assert left == 0, f'orbs left on the guest\'s screen: {detail}'
+    return {'seen': seen, 'guest': xp, 'host': host_xp}
+
+
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
              'chest': check_chest, 'crafting': check_crafting, 'damage': check_damage,
              'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
              'containers': check_containers, 'feedback': check_feedback, 'trials': check_trials,
-             'walls': check_walls}
+             'walls': check_walls,
+             'xp': check_xp}
 
 
 def run(ctl, out, resources, checks):
