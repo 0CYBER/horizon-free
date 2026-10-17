@@ -151,6 +151,10 @@ struct Launcher {
     friend_focused: bool,
     friend_focus: FocusHandle,
     joining: Option<String>,
+    /// Settings' Game arguments field: the line, whether it has focus, and its focus handle.
+    args_input: String,
+    args_focused: bool,
+    args_focus: FocusHandle,
     console_scroll: ScrollHandle,
     /// Opt-in data collection: the player's answer and Settings' section (`collection`).
     collection: collection::Collection,
@@ -245,6 +249,9 @@ impl Launcher {
             install_error: None,
             confirm_remove: None,
             picker_open: false,
+            args_input: settings.game_args.clone(),
+            args_focused: false,
+            args_focus: cx.focus_handle(),
             settings,
             links: backend::Links::default(),
             menu_style: backend::menu_style(),
@@ -441,6 +448,7 @@ impl Launcher {
                                 self.client_error = Some(e);
                             }
                         }
+                        backend::append_game_args(&mut cmd);
                         match backend::spawn(Job::Client, cmd, self.tx.clone()) {
                             Ok(r) => self.client = Some(r),
                             Err(e) => self.client_error = Some(e),
@@ -2026,23 +2034,24 @@ impl Launcher {
                         Some(menus.into_any_element()),
                         &t,
                     ))
-                    .child(index_row(n + 4, "Horizon", Some(plain(&horizon)), horizon_action, &t))
+                    .child(self.game_args_row(n + 4, cx))
+                    .child(index_row(n + 5, "Horizon", Some(plain(&horizon)), horizon_action, &t))
                     .child(index_row(
-                        n + 5,
+                        n + 6,
                         "Launcher",
                         Some(plain(&launcher)),
                         launcher_action,
                         &t,
                     ))
                     .child(index_row(
-                        n + 6,
+                        n + 7,
                         "Data folder",
                         Some(mono(short(&backend::data_dir()))),
                         None,
                         &t,
                     ))
                     .child(index_row(
-                        n + 7,
+                        n + 8,
                         "Logs",
                         Some(mono(format!(
                             "{}  ·  crash reports beside it",
@@ -2061,7 +2070,7 @@ impl Launcher {
                     ))
                     .when(cfg!(target_os = "linux"), |d| {
                         d.child(index_row(
-                            n + 8,
+                            n + 9,
                             "Applications menu",
                             Some(plain(if self.settings.desktop_entry() {
                                 "Horizon and its icon are in your desktop's menu."
@@ -2075,6 +2084,80 @@ impl Launcher {
             )
             .child(self.collection_section(cx))
             .child(agents)
+    }
+
+    /// Settings' Game arguments row: the extra arguments the game starts with, kept in
+    /// `settings.json` and appended to the launcher's own (quotes group a word with spaces).
+    fn game_args_row(&self, n: usize, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let focused = self.args_focused;
+        let field = div()
+            .id("game-args")
+            .track_focus(&self.args_focus)
+            .flex()
+            .items_center()
+            .w(px(300.))
+            .h(px(30.))
+            .px(px(12.))
+            .overflow_hidden()
+            .rounded(px(6.))
+            .border_1()
+            .border_color(if focused { t.accent } else { t.rule })
+            .bg(t.surface)
+            .font_family(theme::MONO)
+            .text_size(px(12.))
+            .cursor_text()
+            .child(if self.args_input.is_empty() && !focused {
+                div()
+                    .text_color(t.muted)
+                    .child("For example --server-thread")
+            } else {
+                // The end of a long line stays in view while typing.
+                let chars: Vec<char> = self.args_input.chars().collect();
+                let shown: String = chars[chars.len().saturating_sub(44)..].iter().collect();
+                div().text_color(t.ink).child(shown)
+            })
+            .when(focused, |d| d.child(div().w(px(1.)).h(px(14.)).bg(t.ink)))
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                window.focus(&this.args_focus);
+                cx.notify();
+            }))
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| {
+                let k = &ev.keystroke;
+                let paste = k.key == "v" && (k.modifiers.control || k.modifiers.platform);
+                match k.key.as_str() {
+                    "backspace" => {
+                        this.args_input.pop();
+                    }
+                    _ if paste => {
+                        if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
+                            this.args_input.push_str(text.trim());
+                        }
+                    }
+                    _ if !k.modifiers.control && !k.modifiers.platform => {
+                        if let Some(ch) = &k.key_char {
+                            this.args_input.push_str(ch);
+                        }
+                    }
+                    _ => return,
+                }
+                this.args_input.truncate(1024);
+                this.settings.game_args = this.args_input.clone();
+                this.settings.save();
+                cx.stop_propagation();
+                cx.notify();
+            }));
+        index_row(
+            n,
+            "Game arguments",
+            Some(
+                div()
+                    .child("Extra arguments for the game, passed through as-is (quotes group a word with spaces). Applies the next time the game starts.")
+                    .into_any_element(),
+            ),
+            Some(field.into_any_element()),
+            &t,
+        )
     }
 
     /// Settings' Microsoft accounts: who is signed in and plays, the sign-in with its code. The
@@ -2811,6 +2894,7 @@ impl Render for Launcher {
         self.perf.frame();
         self.input_focused = self.focus.is_focused(window);
         self.friend_focused = self.friend_focus.is_focused(window);
+        self.args_focused = self.args_focus.is_focused(window);
         let content = match self.page {
             Page::Play => self.play_page(cx),
             Page::Versions => self.versions_page(cx),

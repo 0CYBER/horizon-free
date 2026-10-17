@@ -690,6 +690,10 @@ pub struct Extra {
     pub fall_fly_ticks: i32,
     pub main_hand_left: bool,
     pub elytra: ElytraAnimation,
+    pub swim: SwimAnimation,
+    /// The arm the current swing moves (`currentSwing.hand().asArm`): `Some(true)`
+    /// for the right arm.
+    pub swing_right_arm: Option<bool>,
     pub flag: bool,
     pub flag2: bool,
     /// Species scratch values (the wither's head targets and clocks).
@@ -807,6 +811,8 @@ pub struct Mob {
     /// Entity.wasEyeInWater: the eyes were in water before this tick's fluid
     /// update (`isUnderWater` reads it).
     pub was_eye_in_water: bool,
+    /// `Entity.firstTick`: no splash for a mob that appears in water.
+    pub first_tick: bool,
     pub no_gravity: bool,
     /// `Entity.mainSupportingBlockPos`: the block it stood on after its last
     /// move.
@@ -1484,6 +1490,7 @@ impl Mob {
             extra: Extra::default(),
             fluids: living::Fluids::default(),
             was_eye_in_water: false,
+            first_tick: true,
             no_gravity: false,
             supporting: None,
             no_ai: false,
@@ -2065,6 +2072,35 @@ impl ElytraAnimation {
     }
     pub fn angles(&self, partial: f32) -> [f32; 3] {
         std::array::from_fn(|i| self.old[i] + (self.angles[i] - self.old[i]) * partial)
+    }
+}
+
+/// `LivingEntity.swimAmount` and the render state the swimming pose reads
+/// (`isVisuallySwimming`, `isInWater`).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SwimAnimation {
+    pub old: f32,
+    pub amount: f32,
+    /// `isVisuallySwimming`: in the swimming pose (or still in the gliding
+    /// pose after a glide ended).
+    pub visually: bool,
+    pub in_water: bool,
+}
+impl SwimAnimation {
+    /// `LivingEntity.updateSwimAmount`.
+    pub fn tick(&mut self, visually: bool, in_water: bool) {
+        self.old = self.amount;
+        self.amount = if visually {
+            (self.amount + 0.09).min(1.0)
+        } else {
+            (self.amount - 0.09).max(0.0)
+        };
+        self.visually = visually;
+        self.in_water = in_water;
+    }
+    /// `LivingEntity.getSwimAmount`.
+    pub fn amount(&self, partial: f32) -> f32 {
+        self.old + partial * (self.amount - self.old)
     }
 }
 

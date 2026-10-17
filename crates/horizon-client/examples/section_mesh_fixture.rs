@@ -83,7 +83,7 @@ fn scene(
     for block in row["blocks"].as_array().ok_or("missing blocks")? {
         let (x, y, z) = (int(&block[0])?, int(&block[1])?, int(&block[2])?);
         let i = chunk_index(x, z)?;
-        chunks[i].set(x & 15, y, z & 15, u16::try_from(int(&block[3])?)?);
+        chunks[i].set(x & 15, y, z & 15, u32::try_from(int(&block[3])?)?);
     }
     for cell in row["lights"].as_array().ok_or("missing lights")? {
         let (x, y, z) = (int(&cell[0])?, int(&cell[1])?, int(&cell[2])?);

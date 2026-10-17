@@ -1209,7 +1209,15 @@ impl Recipes {
         for (prefix, path) in files {
             let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
             let name = format!("{prefix}{stem}");
-            let v: Value = serde_json::from_slice(&fs::read(&path)?)?;
+            // Vanilla's RecipeManager logs a file that does not parse and
+            // goes on ("Couldn't parse data file").
+            let v: Value = match serde_json::from_slice(&fs::read(&path)?) {
+                Ok(v) => v,
+                Err(e) => {
+                    log::warn!("Horizon: recipe {name} not loaded: {e}");
+                    continue;
+                }
+            };
             let text = |k: &str| v[k].as_str().unwrap_or("").to_owned();
             meta.insert(name.clone(), (text("category"), text("group")));
             let ing = |k: &str| Ingredient::parse(&v[k], items);

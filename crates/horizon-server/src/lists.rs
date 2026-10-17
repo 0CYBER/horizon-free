@@ -20,7 +20,7 @@ pub fn run(dir: &Path, command: &str, args: &[String]) -> Result<(), String> {
     let message = match (command, args.as_slice()) {
         ("op", [name]) => {
             let mut ops = load(OpList::new(ops_path))?;
-            let user = NameAndId::offline(name);
+            let user = account(name, config.server.online_mode)?;
             if ops.contains(&user) {
                 "Nothing changed. The player already is an operator".to_owned()
             } else {
@@ -34,7 +34,8 @@ pub fn run(dir: &Path, command: &str, args: &[String]) -> Result<(), String> {
         }
         ("deop", [name]) => {
             let mut ops = load(OpList::new(ops_path))?;
-            if ops.remove(&NameAndId::offline(name)) {
+            let user = listed(ops.entries().iter().map(|e| &e.user), name);
+            if user.is_some_and(|user| ops.remove(&user)) {
                 format!("Made {name} no longer a server operator")
             } else {
                 "Nothing changed. The player is not an operator".to_owned()
@@ -42,7 +43,7 @@ pub fn run(dir: &Path, command: &str, args: &[String]) -> Result<(), String> {
         }
         ("whitelist", ["add", name]) => {
             let mut white = load(WhiteList::new(white_path))?;
-            let user = NameAndId::offline(name);
+            let user = account(name, config.server.online_mode)?;
             if white.contains(&user) {
                 "Player is already whitelisted".to_owned()
             } else {
@@ -52,7 +53,8 @@ pub fn run(dir: &Path, command: &str, args: &[String]) -> Result<(), String> {
         }
         ("whitelist", ["remove", name]) => {
             let mut white = load(WhiteList::new(white_path))?;
-            if white.remove(&NameAndId::offline(name)) {
+            let user = listed(white.entries().iter().map(|e| &e.user), name);
+            if user.is_some_and(|user| white.remove(&user)) {
                 format!("Removed {name} from the whitelist")
             } else {
                 "Player is not whitelisted".to_owned()
@@ -95,6 +97,23 @@ pub fn run(dir: &Path, command: &str, args: &[String]) -> Result<(), String> {
     };
     println!("{message}");
     Ok(())
+}
+
+/// The profile a running server would store for `name`: the offline one, or in online mode the account the
+/// services know by that name.
+pub fn account(name: &str, online: bool) -> Result<NameAndId, String> {
+    horizon_server_files::profiles::resolve(name, online).ok_or_else(|| {
+        if online {
+            format!("That player does not exist (no Minecraft account is named {name}, or the services didn't answer)")
+        } else {
+            "That player does not exist".to_owned()
+        }
+    })
+}
+
+/// The entry already on a list under `name` (any case), so removing needs no lookup.
+fn listed<'a>(mut users: impl Iterator<Item = &'a NameAndId>, name: &str) -> Option<NameAndId> {
+    users.find(|u| u.name.eq_ignore_ascii_case(name)).cloned()
 }
 
 /// A list from its file; a missing file is an empty list, a broken one an error (vanilla would replace it).

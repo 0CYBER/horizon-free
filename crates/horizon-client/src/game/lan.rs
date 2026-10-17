@@ -57,6 +57,10 @@ pub(super) struct LanHost {
     pub mob_players: HashMap<u32, u32>,
     /// An integrated server's owner (game/integrated.rs).
     pub owner: Option<Owner>,
+    /// The players' locator bars (game/lan_waypoints.rs), and the guests who
+    /// are dead, whose respawn replaces their waypoint.
+    pub waypoints: lan::waypoints::Waypoints,
+    pub waypoint_dead: std::collections::HashSet<u128>,
 }
 
 /// The player who owns an integrated server's world: a guest whose state is
@@ -258,7 +262,7 @@ fn mob_meta(m: &Mob, hub: &Hub) -> Vec<(u8, i32, Value)> {
                 meta.push((
                     16,
                     serializer::OPTIONAL_BLOCK_STATE,
-                    Value::Id(i32::from(state.0 as u16)),
+                    Value::Id(state.0 as i32),
                 ));
             }
         }
@@ -502,6 +506,8 @@ impl Game<'_> {
             mob_state: HashMap::new(),
             mob_players: HashMap::new(),
             owner: None,
+            waypoints: Default::default(),
+            waypoint_dead: Default::default(),
         });
         self.audio.capture = Some(Vec::new());
         Ok(())
@@ -782,7 +788,12 @@ impl Game<'_> {
                     },
                     tick_rate: self.clock.rate(),
                     tick_frozen: self.clock.frozen(),
+                    collision: Some(self.collision),
                 };
+                host.hub.movement_checks = (
+                    self.ui.rules.bool("player_movement_check"),
+                    self.ui.rules.bool("elytra_movement_check"),
+                );
                 // A server with several levels runs a pass for each
                 // (`tick_server`): the network is read once, before the first.
                 let pass = self.level_pass;
@@ -811,6 +822,7 @@ impl Game<'_> {
                             && let Some(g) = host.hub.guest(conn)
                         {
                             // PlayerList.placeNewPlayer, then the broadcast join message.
+                            super::dedicated::player_joined(g.uuid, &g.name);
                             let [x, y, z] = g.position;
                             super::dedicated::log(
                                 "INFO",
@@ -865,6 +877,10 @@ impl Game<'_> {
                         super::dedicated::log("INFO", &format!("[Not Secure] {line}"));
                     }
                     HostEvent::Chat(line) => self.system_message(Text::literal(line)),
+                    HostEvent::Warn(line) if self.options.dedicated.is_some() => {
+                        super::dedicated::log("WARN", &line);
+                    }
+                    HostEvent::Warn(line) => log::warn!("{line}"),
                     HostEvent::Packet(conn, packet) => {
                         self.lan_guest_packet(&mut host, conn, *packet);
                     }
@@ -877,6 +893,7 @@ impl Game<'_> {
         self.lan_swings(&mut host);
         self.lan_update_streaming(&host);
         self.lan_update_models(&mut host);
+        self.lan_update_waypoints(&mut host, state.as_ref());
         drop(holding);
         for g in &host.hub.guests {
             g.sender.flush();
@@ -951,6 +968,7 @@ impl Game<'_> {
             clock_rate: self.ui.clock.rate,
             tick_rate: self.clock.rate(),
             tick_frozen: self.clock.frozen(),
+            collision: Some(self.collision),
         };
         host.hub.place_new_player(conn, &mut ctx);
         if elsewhere && let Err(e) = self.enter_level(Some(host), back) {
@@ -976,7 +994,7 @@ impl Game<'_> {
     /// `Level.blockEvent` for the guests (`ClientboundBlockEventPacket`).
     pub(super) fn lan_block_event(&mut self, pos: [i32; 3], b0: i32, b1: i32) {
         if self.audio.capture.is_some() {
-            let state = self.world.block(pos[0], pos[1], pos[2]).0 as u16;
+            let state = self.world.block(pos[0], pos[1], pos[2]).0;
             self.lan_block_events.push((pos, b0, b1, state));
         }
     }

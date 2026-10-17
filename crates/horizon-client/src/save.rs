@@ -16,7 +16,7 @@
 use crate::{
     Result,
     biome::Biomes,
-    chunk::{BIOME_STRATEGY, BLOCK_STRATEGY, Chunk, Light, MIN_Y, SECTIONS},
+    chunk::{BIOME_STRATEGY, Chunk, Light, MIN_Y, SECTIONS, block_strategy},
     streaming::ChunkGenerator,
 };
 use horizon_core::{
@@ -238,7 +238,7 @@ pub struct SaveTables {
     default_state: Vec<bool>,
     block_entity: Vec<bool>,
     heightmaps: crate::assets::Properties,
-    air: u16,
+    air: u32,
 }
 impl SaveTables {
     pub fn new(assets: &crate::assets::Assets) -> Self {
@@ -266,9 +266,7 @@ impl SaveTables {
             default_state,
             block_entity: Vec::new(),
             heightmaps: assets.properties.clone(),
-            air: registry
-                .default_state("minecraft:air")
-                .map_or(0, |s| s.0 as u16),
+            air: registry.default_state("minecraft:air").map_or(0, |s| s.0),
         }
     }
     /// Which states carry a block entity (`BlockFacts`), to drop entries for
@@ -1035,8 +1033,8 @@ fn decode_column(
             }
         }
     }
-    let air = registry.default_state("minecraft:air")?.0 as u16;
-    let mut cache: HashMap<String, u16> = HashMap::new();
+    let air = registry.default_state("minecraft:air")?.0;
+    let mut cache: HashMap<String, u32> = HashMap::new();
     let Some(Tag::List(sections)) = tag.get("sections") else {
         return Some(chunk);
     };
@@ -1051,7 +1049,7 @@ fn decode_column(
         if let Some(states) = section.get("block_states")
             && let Some(Tag::List(palette)) = states.get("palette")
         {
-            let ids: Vec<u16> = palette
+            let palette: Vec<u32> = palette
                 .iter()
                 .map(|p| {
                     let state = BlockState::from_nbt(p).ok();
@@ -1074,7 +1072,7 @@ fn decode_column(
                                     registry.id(&full).or(Some(default))
                                 })
                             })
-                            .map_or(air, |id| id.0 as u16)
+                            .map_or(air, |id| id.0)
                     })
                 })
                 .collect();
@@ -1085,9 +1083,8 @@ fn decode_column(
                 }
                 _ => None,
             };
-            let palette: Vec<u32> = ids.iter().map(|&id| u32::from(id)).collect();
             if let Ok(blocks) =
-                PalettedContainer::from_packed(BLOCK_STRATEGY, palette, data.as_deref())
+                PalettedContainer::from_packed(block_strategy(), palette, data.as_deref())
             {
                 target.blocks = blocks;
             }
@@ -1980,10 +1977,43 @@ impl Default for WorldGen {
 }
 /// Writes a new world's `world_gen_settings` (seed, options and dimensions).
 pub fn write_world_gen_settings(dir: &Path, seed: i64, options: WorldGen) -> Result<()> {
+    write_world_gen_settings_with(dir, seed, options, None)
+}
+/// [`write_world_gen_settings`] with a flat overworld's own generator
+/// settings (FlatLevelGeneratorSettings, as `flatgen::settings_from_json`
+/// reads them) instead of the Superflat preset's classic layers.
+pub fn write_world_gen_settings_with(
+    dir: &Path,
+    seed: i64,
+    options: WorldGen,
+    flat_settings: Option<Tag>,
+) -> Result<()> {
     fs::create_dir_all(dir)?;
     // worldgen/world_preset/flat.json's overworld: the classic flat layers.
     let layer = |block: &str, height: i32| {
         Tag::compound([("block", string(block)), ("height", Tag::Int(height))])
+    };
+    let classic = || {
+        Tag::compound([
+            ("biome", string("minecraft:plains")),
+            ("features", Tag::Byte(0)),
+            ("lakes", Tag::Byte(0)),
+            (
+                "layers",
+                Tag::List(vec![
+                    layer("minecraft:bedrock", 1),
+                    layer("minecraft:dirt", 2),
+                    layer("minecraft:grass_block", 1),
+                ]),
+            ),
+            (
+                "structure_overrides",
+                Tag::List(vec![
+                    string("minecraft:strongholds"),
+                    string("minecraft:villages"),
+                ]),
+            ),
+        ])
     };
     let flat = Tag::compound([
         ("type", string("minecraft:overworld")),
@@ -1991,29 +2021,7 @@ pub fn write_world_gen_settings(dir: &Path, seed: i64, options: WorldGen) -> Res
             "generator",
             Tag::compound([
                 ("type", string("minecraft:flat")),
-                (
-                    "settings",
-                    Tag::compound([
-                        ("biome", string("minecraft:plains")),
-                        ("features", Tag::Byte(0)),
-                        ("lakes", Tag::Byte(0)),
-                        (
-                            "layers",
-                            Tag::List(vec![
-                                layer("minecraft:bedrock", 1),
-                                layer("minecraft:dirt", 2),
-                                layer("minecraft:grass_block", 1),
-                            ]),
-                        ),
-                        (
-                            "structure_overrides",
-                            Tag::List(vec![
-                                string("minecraft:strongholds"),
-                                string("minecraft:villages"),
-                            ]),
-                        ),
-                    ]),
-                ),
+                ("settings", flat_settings.unwrap_or_else(classic)),
             ]),
         ),
     ]);
@@ -2143,6 +2151,18 @@ pub struct Level {
     pub player_extra: Option<Tag>,
 }
 impl Level {
+    /// Initialize the offline single-player identity before saving or dropping items.
+    pub fn ensure_player_uuid(&mut self) -> [i32; 4] {
+        *self.player_uuid.get_or_insert_with(|| {
+            let u = horizon_protocol::crypto::offline_uuid("Player");
+            [
+                (u >> 96) as u32 as i32,
+                (u >> 64) as u32 as i32,
+                (u >> 32) as u32 as i32,
+                u as u32 as i32,
+            ]
+        })
+    }
     pub fn game_rule(&self, name: &str) -> i32 {
         self.game_rules
             .get(name)
@@ -2600,17 +2620,7 @@ impl Level {
                 map.remove(&JavaString::from(key));
             }
         }
-        // A new world's player has the offline profile id of its name
-        // (UUIDUtil.createOfflinePlayerUUID), as in an offline single-player game.
-        let uuid = *self.player_uuid.get_or_insert_with(|| {
-            let u = horizon_protocol::crypto::offline_uuid("Player");
-            [
-                (u >> 96) as u32 as i32,
-                (u >> 64) as u32 as i32,
-                (u >> 32) as u32 as i32,
-                u as u32 as i32,
-            ]
-        });
+        let uuid = self.ensure_player_uuid();
         // A new world's first spawn point is its world spawn.
         if self.world_spawn.is_none() {
             self.world_spawn = self.spawn.map(|s| {

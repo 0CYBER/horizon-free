@@ -765,6 +765,17 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
             .unwrap_or_else(|| glam::Mat4::from_rotation_y((180.0 - body).to_radians())),
     };
     let mut base = origin * rotation;
+    if m.death_time > 0 && !super::creaking::tearing_down(m) {
+        let f = ((m.death_time as f32 + alpha - 1.0) / 20.0 * 1.6)
+            .sqrt()
+            .min(1.0);
+        base *= glam::Mat4::from_rotation_z(f * flip_degrees(m).to_radians());
+    } else if matches!(m.custom_name.as_deref(), Some("Dinnerbone" | "Grumm")) {
+        // isEntityUpsideDown
+        base *= glam::Mat4::from_translation(glam::Vec3::new(0.0, m.height() + 0.1, 0.0))
+            * glam::Mat4::from_rotation_z(PI);
+    }
+    // AvatarRenderer.setupRotations, after LivingEntityRenderer's.
     if m.extra.fall_flying {
         let ticks = m.extra.fall_fly_ticks as f32 + alpha;
         let scale = (ticks * ticks / 100.0).min(1.0);
@@ -785,17 +796,20 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
                 (sign * horizon_core::jmath::acos(dot.abs().min(1.0))) as f32,
             );
         }
-    }
-
-    if m.death_time > 0 && !super::creaking::tearing_down(m) {
-        let f = ((m.death_time as f32 + alpha - 1.0) / 20.0 * 1.6)
-            .sqrt()
-            .min(1.0);
-        base *= glam::Mat4::from_rotation_z(f * flip_degrees(m).to_radians());
-    } else if matches!(m.custom_name.as_deref(), Some("Dinnerbone" | "Grumm")) {
-        // isEntityUpsideDown
-        base *= glam::Mat4::from_translation(glam::Vec3::new(0.0, m.height() + 0.1, 0.0))
-            * glam::Mat4::from_rotation_z(PI);
+    } else if m.extra.swim.amount(alpha) > 0.0 {
+        // AvatarRenderer.setupRotations: tip forward with the swim amount,
+        // following the pitch in water, then lie along the swimming box.
+        let amount = m.extra.swim.amount(alpha);
+        let pitch = m.previous_head_pitch + (m.head_pitch - m.previous_head_pitch) * alpha;
+        let target = if m.extra.swim.in_water {
+            -90.0 - pitch
+        } else {
+            -90.0
+        };
+        base *= glam::Mat4::from_rotation_x((amount * target).to_radians());
+        if m.extra.swim.visually {
+            base *= glam::Mat4::from_translation(glam::Vec3::new(0.0, -1.0, 0.3));
+        }
     }
     base *= species_rotations(m, alpha);
     base *= glam::Mat4::from_scale(glam::Vec3::new(-1.0, -1.0, 1.0));
@@ -1027,17 +1041,24 @@ fn render_visible(
         .unwrap_or_else(|| m.kind.model.clone());
     let mut poses = Poses::new(&model);
     anim::setup(m, &s, &mut poses, &data.animations);
-    if let Some(uv) = atlas(&texture) {
-        draw(
-            &model,
-            base,
-            &poses,
-            uv,
-            body_color(m, alpha),
-            light,
-            body_overlay(m, alpha),
-            out,
-        );
+    let draw_body = |out: &mut Vec<Vertex>| {
+        if let Some(uv) = atlas(&texture) {
+            draw(
+                &model,
+                base,
+                &poses,
+                uv,
+                body_color(m, alpha),
+                light,
+                body_overlay(m, alpha),
+                out,
+            );
+        }
+    };
+    // The translucent shell writes depth: draw the opaque core before it.
+    let shell_last = m.species() == Species::SulfurCube;
+    if !shell_last {
+        draw_body(out);
     }
     for (part, uv, color) in extra {
         draw(part, base, &poses, *uv, *color, light, overlay, out);
@@ -1094,6 +1115,9 @@ fn render_visible(
                 vertex.normal = [0; 4];
             }
         }
+    }
+    if shell_last {
+        draw_body(out);
     }
 }
 /// The equipment slot of a `HumanoidArmorLayer` model (`zombie#helmet`).
@@ -1234,4 +1258,94 @@ pub fn held_item_transform(
     let mut poses = Poses::new(&model);
     anim::setup(m, &s, &mut poses, &data.animations);
     hand_base(m, &model, base, &poses, left)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sulfur_cube_opaque_core_is_submitted_before_its_translucent_shell() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("entity-models.json").exists() {
+            return;
+        }
+        let mut types = super::super::MobTypes::load(&root).unwrap();
+        let kind = std::sync::Arc::new(types.types.remove("minecraft:sulfur_cube").unwrap());
+        let data = MobData {
+            states: Vec::new(),
+            placements: Default::default(),
+            heightmaps: Default::default(),
+            animations: Default::default(),
+            biome_tags: Default::default(),
+            entity_tags: Default::default(),
+            villager_hats: Default::default(),
+            pois: Default::default(),
+        };
+        let atlas = |name: &str| {
+            Some(if name.contains("_inner") {
+                [0.0, 0.0, 0.25, 0.25]
+            } else {
+                [0.5, 0.5, 0.75, 0.75]
+            })
+        };
+        for baby in [false, true] {
+            let mut mob = Mob::new(1, kind.clone(), horizon_core::geometry::Vec3::ZERO, 0.0);
+            mob.extra.age = if baby { -24000 } else { 0 };
+            super::super::sulfur_cube::finalize(&mut mob);
+            assert_eq!(mob.is_baby(), baby);
+            for posed in [false, true] {
+                let mut vertices = Vec::new();
+                if posed {
+                    render_posed(
+                        &mob,
+                        0.5,
+                        glam::Mat4::IDENTITY,
+                        &atlas,
+                        0xf0f0,
+                        &data,
+                        &mut vertices,
+                    );
+                } else {
+                    render(
+                        &mob,
+                        0.5,
+                        glam::DVec3::ZERO,
+                        &atlas,
+                        0xf0f0,
+                        &data,
+                        &mut vertices,
+                    );
+                }
+                assert_eq!(
+                    vertices.len(),
+                    48,
+                    "both real six-face models must be drawn"
+                );
+                assert!(
+                    vertices[..24].iter().all(|v| v.uv[0] <= 0.25),
+                    "opaque core must precede shell"
+                );
+                assert!(vertices[24..].iter().all(|v| v.uv[0] >= 0.5));
+            }
+            mob.extra.head = Some("minecraft:stone".into());
+            let mut vertices = Vec::new();
+            render(
+                &mob,
+                0.5,
+                glam::DVec3::ZERO,
+                &atlas,
+                0xf0f0,
+                &data,
+                &mut vertices,
+            );
+            assert_eq!(
+                vertices.len(),
+                24,
+                "a swallowed block still hides the default core"
+            );
+            assert!(vertices.iter().all(|v| v.uv[0] >= 0.5));
+        }
+    }
 }

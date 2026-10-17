@@ -659,6 +659,7 @@ impl Game<'_> {
                             }),
                         );
                     }
+                    self.send_admin_feedback(host, conn);
                 }
             }
             S::Unknown(8, payload) => {
@@ -869,6 +870,32 @@ impl Game<'_> {
                 }),
             );
         }
+        self.send_admin_feedback(host, conn);
+    }
+
+    /// The `broadcastToAdmins` lines a guest's command queued: every other
+    /// operator gets them, and the console logs them as the server's own
+    /// system messages (MinecraftServer.sendSystemMessage).
+    fn send_admin_feedback(&mut self, host: &mut LanHost, source: u32) {
+        for (line, ops, console) in std::mem::take(&mut self.admin_feedback) {
+            if ops {
+                let content = horizon_client::lan::data::component_nbt(&line.component());
+                for g in host
+                    .hub
+                    .guests
+                    .iter()
+                    .filter(|g| g.conn != source && g.permission > 0)
+                {
+                    g.send(&C::SystemChat(play::SystemChat {
+                        content: content.clone(),
+                        overlay: false,
+                    }));
+                }
+            }
+            if console {
+                super::dedicated::log("INFO", &format!("System chat: {}", line.plain()));
+            }
+        }
     }
 
     /// ServerGamePacketListenerImpl.handleCustomCommandSuggestions: the
@@ -964,6 +991,7 @@ impl Game<'_> {
             },
             tick_rate: self.clock.rate(),
             tick_frozen: self.clock.frozen(),
+            collision: Some(self.collision),
         };
         host.hub.respawn(i, spawn, &ctx);
         if away && let Err(e) = self.enter_level(Some(host), back) {

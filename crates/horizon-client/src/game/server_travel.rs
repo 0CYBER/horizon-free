@@ -266,6 +266,7 @@ impl Game<'_> {
             },
             tick_rate: self.clock.rate(),
             tick_frozen: self.clock.frozen(),
+            collision: Some(self.collision),
         }
     }
 }

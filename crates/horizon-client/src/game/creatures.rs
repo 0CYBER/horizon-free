@@ -2253,6 +2253,10 @@ impl Game<'_> {
             return Ok(true);
         }
         if self.interact_sulfur_cube(index, &item) {
+            if let Some(stack) = &held {
+                let target = self.mob_entity(&self.mobs[index]);
+                self.trigger_item_entity("minecraft:player_interacted_with_entity", stack, &target);
+            }
             self.swing_arm();
             return Ok(true);
         }
@@ -2801,6 +2805,17 @@ impl Game<'_> {
             let mut packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
             if mob.fire_ticks > 0 || matches!(mob.species(), Species::Blaze | Species::MagmaCube) {
                 packed = (15 * 16) | ((15 * 16) << 8);
+            }
+            if mob.species() == Species::SulfurCube
+                && !horizon_client::mobs::trader::is_invisible(mob)
+            {
+                self.sulfur_cube_body_geometry(
+                    mob,
+                    alpha as f32,
+                    horizon_client::mobs::render::base_transform(mob, alpha as f32, camera),
+                    packed,
+                    out,
+                );
             }
             // Other players on a server: PlayerRenderer's HumanoidArmorLayer.
             let armor = if &*mob.kind.id == "minecraft:player" {
