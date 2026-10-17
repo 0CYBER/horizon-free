@@ -150,6 +150,8 @@ pub struct PlayerSender {
     pub tx: Sender<Out>,
     pub pending: Arc<AtomicUsize>,
     held: Arc<Mutex<Vec<Vec<u8>>>>,
+    /// What [`flush_all`] gave the post thread and it hasn't passed on yet.
+    posted: Arc<AtomicUsize>,
 }
 impl PlayerSender {
     pub fn new(tx: Sender<Out>, pending: Arc<AtomicUsize>) -> Self {
@@ -157,6 +159,7 @@ impl PlayerSender {
             tx,
             pending,
             held: Arc::default(),
+            posted: Arc::default(),
         }
     }
     fn held(&self) -> std::sync::MutexGuard<'_, Vec<Vec<u8>>> {
@@ -168,21 +171,91 @@ impl PlayerSender {
             self.held().push(body);
         } else {
             self.flush();
-            let _ = self.tx.send(Out::Packet(body));
+            self.deliver(Out::Packet(body));
         }
     }
     /// Hand the held packets to the writer thread.
     pub fn flush(&self) {
         let held = std::mem::take(&mut *self.held());
         if !held.is_empty() {
-            let _ = self.tx.send(Out::Packets(held));
+            self.deliver(Out::Packets(held));
         }
     }
     /// Send a play disconnect with this reason after what was sent before.
     pub fn disconnect(&self, reason: horizon_world::nbt::Tag) {
         self.flush();
-        let _ = self.tx.send(Out::Disconnect(reason));
+        self.deliver(Out::Disconnect(reason));
     }
+    /// To the writer thread, after anything still with the post thread.
+    fn deliver(&self, out: Out) {
+        if self.posted.load(Ordering::Acquire) == 0 {
+            let _ = self.tx.send(out);
+        } else {
+            post(vec![self.posting(out)]);
+        }
+    }
+    fn posting(&self, out: Out) -> Posted {
+        self.posted.fetch_add(1, Ordering::AcqRel);
+        Posted {
+            tx: self.tx.clone(),
+            out,
+            posted: self.posted.clone(),
+        }
+    }
+}
+
+/// Hand every player's held packets to their writer threads. Waking a writer
+/// costs a system call, and on a busy machine often the rest of the core's
+/// time slice; one thread of its own wakes them, so the game thread wakes one
+/// thread per tick, not one per player. Each player's packets keep their
+/// order, also with what is sent to it next.
+pub fn flush_all<'a>(senders: impl IntoIterator<Item = &'a PlayerSender>) {
+    let batch: Vec<Posted> = senders
+        .into_iter()
+        .filter_map(|s| {
+            let held = std::mem::take(&mut *s.held());
+            (!held.is_empty()).then(|| s.posting(Out::Packets(held)))
+        })
+        .collect();
+    if !batch.is_empty() {
+        post(batch);
+    }
+}
+
+/// Packets on their way through the post thread.
+struct Posted {
+    tx: Sender<Out>,
+    out: Out,
+    posted: Arc<AtomicUsize>,
+}
+impl Posted {
+    fn hand_over(self) {
+        let _ = self.tx.send(self.out);
+        self.posted.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// Give a batch to the post thread, started the first time; without one
+/// (the thread could not start) the batch is handed over here.
+fn post(batch: Vec<Posted>) {
+    static POST: std::sync::OnceLock<Option<Sender<Vec<Posted>>>> = std::sync::OnceLock::new();
+    let post = POST.get_or_init(|| {
+        let (tx, rx) = channel::<Vec<Posted>>();
+        std::thread::Builder::new()
+            .name("horizon-lan-post".to_owned())
+            .spawn(move || {
+                for batch in rx {
+                    batch.into_iter().for_each(Posted::hand_over);
+                }
+            })
+            .ok()
+            .map(|_| tx)
+    });
+    let unsent = match post {
+        Some(tx) => tx.send(batch).err().map(|e| e.0),
+        None => Some(batch),
+    };
+    unsent.into_iter().flatten().for_each(Posted::hand_over);
 }
 
 /// LegacyQueryHandler: the pre-1.7 server list ping. What the first read
@@ -819,15 +892,55 @@ fn write_loop(
 mod tests {
     use super::*;
 
+    fn unpack(out: Out) -> Vec<Vec<u8>> {
+        match out {
+            Out::Packet(body) => vec![body],
+            Out::Packets(bodies) => bodies,
+            Out::Disconnect(_) => vec![b"disconnect".to_vec()],
+            Out::Close => vec![b"close".to_vec()],
+        }
+    }
+
     fn bodies(rx: &Receiver<Out>) -> Vec<Vec<Vec<u8>>> {
-        rx.try_iter()
-            .map(|out| match out {
-                Out::Packet(body) => vec![body],
-                Out::Packets(bodies) => bodies,
-                Out::Disconnect(_) => vec![b"disconnect".to_vec()],
-                Out::Close => vec![b"close".to_vec()],
-            })
-            .collect()
+        rx.try_iter().map(unpack).collect()
+    }
+
+    #[test]
+    fn packets_sent_after_a_posted_tick_follow_it() {
+        let (tx, rx) = channel();
+        let (tx2, rx2) = channel();
+        let sender = PlayerSender::new(tx, Arc::default());
+        let other = PlayerSender::new(tx2, Arc::default());
+        for round in 0..50u8 {
+            let holding = Holding::start();
+            sender.send(vec![round, 1]);
+            sender.send(vec![round, 2]);
+            other.send(vec![round]);
+            drop(holding);
+            flush_all([&sender, &other]);
+            // Straight after the tick, while the post thread may still hold it.
+            sender.send(vec![round, 3]);
+            let next = || unpack(rx.recv_timeout(Duration::from_secs(10)).unwrap());
+            assert_eq!(next(), [vec![round, 1], vec![round, 2]]);
+            assert_eq!(next(), [vec![round, 3]]);
+            let got = unpack(rx2.recv_timeout(Duration::from_secs(10)).unwrap());
+            assert_eq!(got, [vec![round]]);
+        }
+        let holding = Holding::start();
+        sender.send(vec![9]);
+        drop(holding);
+        flush_all([&sender]);
+        sender.disconnect(horizon_world::nbt::Tag::Byte(0));
+        let next = || unpack(rx.recv_timeout(Duration::from_secs(10)).unwrap());
+        assert_eq!(next(), [vec![9]]);
+        assert_eq!(next(), [b"disconnect".to_vec()]);
+        // Nothing sent twice, nothing left with the post thread.
+        assert!(rx.try_recv().is_err());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while sender.posted.load(Ordering::Acquire) != 0 {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
     }
 
     #[test]
