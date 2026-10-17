@@ -606,18 +606,6 @@ impl Game<'_> {
 
     fn control_key_down(&mut self, key: KeyCode) -> Result<()> {
         self.physical_keys.insert(key);
-        // A server's chat input takes the keys first, as remote_chat_key does.
-        if self.remote_chat_open() {
-            use winit::keyboard::NamedKey;
-            let named = match key {
-                KeyCode::Escape => Some(NamedKey::Escape),
-                KeyCode::Enter | KeyCode::NumpadEnter => Some(NamedKey::Enter),
-                KeyCode::Backspace => Some(NamedKey::Backspace),
-                _ => None,
-            };
-            self.remote_chat_input(named, None);
-            return Ok(());
-        }
         if self.screen == Screen::Chat {
             self.chat_key_code(key, None);
             return Ok(());

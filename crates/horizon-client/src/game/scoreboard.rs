@@ -600,9 +600,7 @@ impl Game<'_> {
     /// objective.
     pub(super) fn draw_tab_list(&mut self, batch: &mut HudBatch) {
         use horizon_client::tab_list::{self, TabInputs};
-        let chatting = self.remote.is_some() && self.remote_chat_open();
         let key = self.screen == super::Screen::Playing
-            && !chatting
             && self.keys.contains(&winit::keyboard::KeyCode::Tab);
         let (players, online_mode, upside_down) = match self.remote_tab_players() {
             Some(remote) => remote,

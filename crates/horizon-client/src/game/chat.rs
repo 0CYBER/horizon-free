@@ -10,6 +10,18 @@ use horizon_client::{
     text::{ClickEvent, Style, Text},
 };
 use std::collections::BTreeMap;
+
+/// The tree the chat parses and completes with: a server's, once it has
+/// sent one (ClientPacketListener.commands), else the game's own.
+fn chat_tree<'a>(
+    remote: &'a Option<super::remote::Remote>,
+    mods: &'a super::mods::ModsState,
+) -> &'a horizon_client::command::Dispatcher {
+    match remote.as_ref().and_then(|r| r.commands.as_ref()) {
+        Some(tree) => tree,
+        None => mods.dispatcher(),
+    }
+}
 use winit::{
     event::KeyEvent,
     keyboard::{KeyCode, PhysicalKey},
@@ -378,6 +390,10 @@ impl Game<'_> {
     /// The block the player is looking at, for coordinate suggestions.
     fn refresh_dynamic_registries(&mut self) {
         self.ui.registries.target_block = self.pick().map(|h| h.pos);
+        // ClientPacketListener.getOnlinePlayerNames on a server.
+        if let Some(names) = self.remote_online_names() {
+            self.ui.registries.players = names;
+        }
     }
     pub(super) fn open_chat(&mut self, initial: &str) {
         if self.player.is_none() {
@@ -391,7 +407,7 @@ impl Game<'_> {
         let b = HudBatch::new(size);
         let m = Measure(&self.atlas.font);
         let c = Commands {
-            dispatcher: self.mods.dispatcher(),
+            dispatcher: chat_tree(&self.remote, &self.mods),
             registries: &self.ui.registries,
         };
         let mut screen = ChatScreen::new(
@@ -449,7 +465,7 @@ impl Game<'_> {
         if let Some(shortcut) = self.edit_shortcut(event) {
             let m = Measure(&self.atlas.font);
             let c = Commands {
-                dispatcher: self.mods.dispatcher(),
+                dispatcher: chat_tree(&self.remote, &self.mods),
                 registries: &self.ui.registries,
             };
             if let Some(screen) = self.ui.chat_screen.as_mut() {
@@ -495,7 +511,7 @@ impl Game<'_> {
         };
         let m = Measure(&self.atlas.font);
         let c = Commands {
-            dispatcher: self.mods.dispatcher(),
+            dispatcher: chat_tree(&self.remote, &self.mods),
             registries: &self.ui.registries,
         };
         match screen.key(&m, &c, &self.ui.chat.recent, key, shift, ctrl) {
@@ -521,7 +537,7 @@ impl Game<'_> {
     pub(super) fn chat_type(&mut self, text: &str) {
         let m = Measure(&self.atlas.font);
         let c = Commands {
-            dispatcher: self.mods.dispatcher(),
+            dispatcher: chat_tree(&self.remote, &self.mods),
             registries: &self.ui.registries,
         };
         if let Some(screen) = self.ui.chat_screen.as_mut() {
@@ -531,6 +547,11 @@ impl Game<'_> {
     /// ChatScreen.handleChatInput: history, then a command or a chat line.
     pub(super) fn handle_chat_input(&mut self, message: &str) {
         self.ui.chat.add_recent(message);
+        // On a server (single player's own included) the server runs it.
+        if self.remote.is_some() {
+            self.send_chat(message);
+            return;
+        }
         if let Some(command) = message.strip_prefix('/') {
             self.run_command(command);
         } else {
@@ -572,7 +593,7 @@ impl Game<'_> {
         });
         let m = Measure(&self.atlas.font);
         let c = Commands {
-            dispatcher: self.mods.dispatcher(),
+            dispatcher: chat_tree(&self.remote, &self.mods),
             registries: &self.ui.registries,
         };
         if let Some(screen) = self.ui.chat_screen.as_mut() {
@@ -617,7 +638,7 @@ impl Game<'_> {
         };
         let m = Measure(&self.atlas.font);
         let c = Commands {
-            dispatcher: self.mods.dispatcher(),
+            dispatcher: chat_tree(&self.remote, &self.mods),
             registries: &self.ui.registries,
         };
         screen.resize(&m, &c, batch.width as i32, batch.height as i32);

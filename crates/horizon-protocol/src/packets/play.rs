@@ -901,6 +901,177 @@ pub struct CommandNode {
     /// Custom suggestion provider (`minecraft:ask_server`).
     pub suggestions: Option<String>,
 }
+/// The `minecraft:command_argument_type` registry of 26.3 in id order
+/// (ArgumentTypeInfos.bootstrap).
+pub const ARGUMENT_TYPES: &[&str] = &[
+    "brigadier:bool",
+    "brigadier:float",
+    "brigadier:double",
+    "brigadier:integer",
+    "brigadier:long",
+    "brigadier:string",
+    "minecraft:entity",
+    "minecraft:game_profile",
+    "minecraft:block_pos",
+    "minecraft:column_pos",
+    "minecraft:vec3",
+    "minecraft:vec2",
+    "minecraft:block_state",
+    "minecraft:block_predicate",
+    "minecraft:item_stack",
+    "minecraft:item_predicate",
+    "minecraft:team_color",
+    "minecraft:hex_color",
+    "minecraft:component",
+    "minecraft:style",
+    "minecraft:message",
+    "minecraft:nbt_compound_tag",
+    "minecraft:nbt_tag",
+    "minecraft:nbt_path",
+    "minecraft:objective",
+    "minecraft:objective_criteria",
+    "minecraft:operation",
+    "minecraft:particle",
+    "minecraft:angle",
+    "minecraft:rotation",
+    "minecraft:scoreboard_slot",
+    "minecraft:score_holder",
+    "minecraft:swizzle",
+    "minecraft:team",
+    "minecraft:item_slot",
+    "minecraft:item_slots",
+    "minecraft:resource_location",
+    "minecraft:function",
+    "minecraft:entity_anchor",
+    "minecraft:int_range",
+    "minecraft:float_range",
+    "minecraft:dimension",
+    "minecraft:gamemode",
+    "minecraft:time",
+    "minecraft:resource_or_tag",
+    "minecraft:resource_or_tag_key",
+    "minecraft:resource",
+    "minecraft:resource_key",
+    "minecraft:resource_selector",
+    "minecraft:template_mirror",
+    "minecraft:template_rotation",
+    "minecraft:heightmap",
+    "minecraft:loot_table",
+    "minecraft:loot_predicate",
+    "minecraft:loot_modifier",
+    "minecraft:context_float_provider",
+    "minecraft:context_int_provider",
+    "minecraft:slot_source",
+    "minecraft:dialog",
+    "minecraft:feature",
+    "minecraft:swing_animation",
+    "minecraft:uuid",
+];
+
+/// The properties of an argument parser (`ArgumentTypeInfo.Template`) as
+/// one of the 26.3 parsers decoded from the network.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ArgumentProperties {
+    None,
+    Integer {
+        min: Option<i32>,
+        max: Option<i32>,
+    },
+    Long {
+        min: Option<i64>,
+        max: Option<i64>,
+    },
+    Float {
+        min: Option<f32>,
+        max: Option<f32>,
+    },
+    Double {
+        min: Option<f64>,
+        max: Option<f64>,
+    },
+    /// StringArgumentType.StringType: 0 word, 1 phrase, 2 greedy.
+    String(i32),
+    Entity {
+        single: bool,
+        players_only: bool,
+    },
+    ScoreHolder {
+        multiple: bool,
+    },
+    Time {
+        min: i32,
+    },
+    /// The resource arguments' registry.
+    Registry(String),
+}
+
+impl ArgumentProperties {
+    /// ArgumentTypeInfo.deserializeFromNetwork for parser `id`.
+    pub fn read(r: &mut Reader, id: i32) -> Result<Self> {
+        let name = usize::try_from(id)
+            .ok()
+            .and_then(|i| ARGUMENT_TYPES.get(i))
+            .ok_or_else(|| crate::Error::new(format!("unknown argument type {id}")))?;
+        let flagged = |r: &mut Reader| -> Result<(bool, bool)> {
+            let f = r.u8()?;
+            Ok((f & 1 != 0, f & 2 != 0))
+        };
+        Ok(match *name {
+            "brigadier:integer" => {
+                let (min, max) = flagged(r)?;
+                let min = if min { Some(r.i32()?) } else { None };
+                let max = if max { Some(r.i32()?) } else { None };
+                Self::Integer { min, max }
+            }
+            "brigadier:long" => {
+                let (min, max) = flagged(r)?;
+                let min = if min { Some(r.i64()?) } else { None };
+                let max = if max { Some(r.i64()?) } else { None };
+                Self::Long { min, max }
+            }
+            "brigadier:float" => {
+                let (min, max) = flagged(r)?;
+                let min = if min { Some(r.f32()?) } else { None };
+                let max = if max { Some(r.f32()?) } else { None };
+                Self::Float { min, max }
+            }
+            "brigadier:double" => {
+                let (min, max) = flagged(r)?;
+                let min = if min { Some(r.f64()?) } else { None };
+                let max = if max { Some(r.f64()?) } else { None };
+                Self::Double { min, max }
+            }
+            "brigadier:string" => Self::String(r.varint()?),
+            "minecraft:entity" => {
+                let f = r.u8()?;
+                Self::Entity {
+                    single: f & 1 != 0,
+                    players_only: f & 2 != 0,
+                }
+            }
+            "minecraft:score_holder" => Self::ScoreHolder {
+                multiple: r.u8()? & 1 != 0,
+            },
+            "minecraft:time" => Self::Time { min: r.i32()? },
+            "minecraft:resource"
+            | "minecraft:resource_key"
+            | "minecraft:resource_or_tag"
+            | "minecraft:resource_or_tag_key"
+            | "minecraft:resource_selector" => Self::Registry(r.string(32767)?),
+            _ => Self::None,
+        })
+    }
+    /// Decodes a node's raw `parser` bytes.
+    pub fn decode(id: i32, bytes: &[u8]) -> Result<Self> {
+        Self::read(&mut Reader::new(bytes), id)
+    }
+}
+
+/// Reads past an argument node's parser properties.
+fn read_argument_properties(r: &mut Reader, id: i32) -> Result<()> {
+    ArgumentProperties::read(r, id).map(|_| ())
+}
+
 /// The command tree: nodes and the index of the root.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Commands {
@@ -926,11 +1097,14 @@ impl Codec<Commands> for Commands {
                 name = r.string(32767)?;
             }
             if kind == 2 {
-                // Properties are parser specific; only the property-less parsers
-                // can be skipped without a table, so keep the rest of the packet.
-                return Err(crate::Error::new("argument nodes are not decoded"));
+                let id = r.varint()?;
+                let start = r.position();
+                read_argument_properties(r, id)?;
+                parser = Some((id, r.since(start).to_vec()));
+                if flags & 16 != 0 {
+                    suggestions = Some(r.string(32767)?);
+                }
             }
-            let _ = (&mut parser, &mut suggestions);
             nodes.push(CommandNode {
                 kind,
                 executable: flags & 4 != 0,

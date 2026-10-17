@@ -19,7 +19,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - pvp:       the guest and the host hit each other with a sword; with the pvp game rule off, nothing;
 - containers: the guest's ender chest holds the guest's items, not the host's, and a double chest
              opens as 9x6 with the right half first;
-- feedback:  the guest's command feedback names the guest and shows the numbers.
+- feedback:  the guest's command feedback names the guest and shows the numbers;
+- commands:  the guest's chat completes commands and their arguments over the server's command
+             tree (Tab), and runs what it completed.
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -48,7 +50,7 @@ from agent_control_e2e import Cli, Failed, game_env  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'trials']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'commands', 'trials']
 
 
 class Game:
@@ -475,6 +477,44 @@ def check_feedback(host, guest, out):
     return chat
 
 
+def chat_input(game):
+    return game('screen').get('chat_input')
+
+
+def complete(guest, text):
+    """Opens the chat on `/`, types `text` and presses Tab: the input after it."""
+    guest.raw('key', 'slash', 'tap')
+    guest.wait(3)
+    guest.raw('type', text)
+    guest.wait(2)
+    guest.raw('key', 'tab', 'tap')
+    guest.wait(2)
+    return chat_input(guest)
+
+
+def check_commands(host, guest, out):
+    literal = complete(guest, 'gamem')
+    # The first Escape hides the suggestions, the next closes the chat.
+    for _ in range(3):
+        if guest('screen').get('screen') != 'chat':
+            break
+        guest.raw('key', 'esc', 'tap')
+        guest.wait(3)
+    argument = complete(guest, 'gamemode cr')
+    guest.shot(out, 'commands')
+    guest.raw('key', 'enter', 'tap')
+    guest.wait(20)
+    mode = guest('state').get('gamemode')
+    screen = guest('state').get('screen')
+    guest('command', command='gamemode survival')
+    guest.wait(10)
+    assert literal == '/gamemode', f'Tab after /gamem: {literal!r}'
+    assert argument == '/gamemode creative', f'Tab after /gamemode cr: {argument!r}'
+    assert mode == 'creative', f'the completed command did not run: {mode}'
+    assert screen in (None, 'playing'), f'the chat did not close: {screen}'
+    return {'literal': literal, 'argument': argument, 'mode': mode}
+
+
 def png_rows(path):
     """The rows of an 8-bit RGB or RGBA PNG, unfiltered, as bytes of 4 (or 3) per pixel."""
     data = Path(path).read_bytes()
@@ -625,7 +665,8 @@ def check_trials(host, guest, out):
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
              'chest': check_chest, 'crafting': check_crafting, 'damage': check_damage,
              'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
-             'containers': check_containers, 'feedback': check_feedback, 'trials': check_trials,
+             'containers': check_containers, 'feedback': check_feedback, 'commands': check_commands,
+             'trials': check_trials,
              'walls': check_walls}
 
 
