@@ -186,16 +186,11 @@ impl Game<'_> {
     }
     /// Mouse buttons pressed while a key is being bound.
     pub(super) fn options_waiting_for_key(&self) -> bool {
-        self.ui.options.selected_key.is_some() && self.ui.options.page() == Page::KeyBinds
+        self.ui.options.selected_key.is_some()
     }
     pub(super) fn options_bind_mouse(&mut self, button: MouseButton) -> Result<()> {
-        if let Some(name) = self.ui.options.selected_key.take() {
-            self.settings
-                .keys
-                .set(name, &horizon_client::keybinds::mouse_name(button));
-            self.handle_option_events(vec![Event::Changed])?;
-        }
-        Ok(())
+        let events = self.ui.options.bind_mouse(&mut self.settings, button);
+        self.handle_option_events(events)
     }
     pub(super) fn handle_option_events(&mut self, events: Vec<Event>) -> Result<()> {
         for e in events {
