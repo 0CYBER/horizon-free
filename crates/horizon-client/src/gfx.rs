@@ -2181,6 +2181,8 @@ impl Renderer {
         );
     }
     pub fn render(&mut self, frame: &Frame) -> Result<bool> {
+        self.arena.trim();
+        self.sorted_indices.trim();
         if self.suspended {
             return Ok(false);
         }
