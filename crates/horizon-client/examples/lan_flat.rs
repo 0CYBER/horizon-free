@@ -88,6 +88,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             seed: 0,
             max_players: 8,
             dedicated: false,
+            integrated: false,
         },
     );
     let mut next_entity = 100u32;

@@ -676,6 +676,31 @@ impl Game<'_> {
             );
             return;
         }
+        // An integrated server runs every player's commands at their own
+        // permission level (`CommandSourceStack.permissions`).
+        if host.hub.config.integrated {
+            let Some(level) = host.hub.guest(conn).map(|g| g.permission) else {
+                return;
+            };
+            let command = command.trim_start_matches('/').to_owned();
+            let lines = self.as_guest(host, conn, |g| {
+                let console = std::mem::replace(&mut g.ui.registries.permission, level);
+                g.chat_capture = Some(Vec::new());
+                g.run_command(&command);
+                g.ui.registries.permission = console;
+                g.chat_capture.take().unwrap_or_default()
+            });
+            for line in lines.unwrap_or_default() {
+                host.hub.send_to(
+                    conn,
+                    &C::SystemChat(play::SystemChat {
+                        content: horizon_client::lan::data::component_nbt(&line.component()),
+                        overlay: false,
+                    }),
+                );
+            }
+            return;
+        }
         // A LAN world follows its Allow Commands; a dedicated server leaves
         // it to the ops list (the guest's permission level).
         let allowed = self.options.dedicated.is_some() || self.allow_commands();
