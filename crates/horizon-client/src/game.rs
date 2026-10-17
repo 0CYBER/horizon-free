@@ -6569,7 +6569,10 @@ impl Game<'_> {
                 res.threads,
             )
         } else {
-            let inner = Arc::new(VanillaTerrain::for_dimension(&self.options.resources.join("worldgen"), pack.assets.registry, &res.biomes, seed, dim.id()).map_err(|e| {
+            // WorldOptions.generateStructures, from the world's settings.
+            let structures =
+                horizon_client::save::WorldGen::read(world_root).is_none_or(|w| w.structures);
+            let inner = Arc::new(VanillaTerrain::for_world(&self.options.resources.join("worldgen"), pack.assets.registry, &res.biomes, seed, dim.id(), structures).map_err(|e| {
                 format!("{e}\nPrepare the worldgen bundle with the launcher, or: horizon-prepare --prepare")
             })?);
             self.end.set_locator(Some(inner.clone()));
