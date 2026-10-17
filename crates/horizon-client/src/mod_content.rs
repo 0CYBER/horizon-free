@@ -943,13 +943,73 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<()> {
 
 /// The root to load: `base` itself with no content, else the mods' overlay
 /// over it, built in `cache/mod-content`.
+///
+/// The root is built once and kept: later starts with the same build, base
+/// and mod files reuse it. With ATM10's carried mods a build takes about
+/// 25 s and peaks above 3 GB, more than everything the game keeps.
 pub fn resource_root(base: &Path, mods: &[ContentMod], cache: &Path) -> Result<PathBuf> {
     if mods.iter().all(|m| m.content.is_empty()) {
         return Ok(base.to_owned());
     }
     let out = cache.join("mod-content");
+    let stamp = stamp(base, mods)?;
+    if fs::read(out.join(STAMP)).is_ok_and(|s| s == stamp.as_bytes()) {
+        return Ok(out);
+    }
     build(base, mods, &out)?;
+    fs::write(out.join(STAMP), stamp)?;
     Ok(out)
+}
+
+/// In a root built by [`resource_root`]: what it was built from.
+const STAMP: &str = "horizon-mod-content.stamp";
+
+/// What a content root is built from: this build of the game, the base's
+/// manifest and the tables [`build`] rewrites, and every file of every mod
+/// in order. Files count by size and modification time, as build tools do.
+fn stamp(base: &Path, mods: &[ContentMod]) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let meta = |path: &Path| -> Result<String> {
+        let m = fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let modified = m
+            .modified()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        Ok(format!(
+            "{} {} {}",
+            path.display(),
+            m.len(),
+            modified.as_nanos()
+        ))
+    };
+    let mut parts = vec!["horizon mod content 1".to_owned()];
+    parts.push(meta(&std::env::current_exe()?)?);
+    let base = std::path::absolute(base)?;
+    parts.push(
+        String::from_utf8_lossy(&fs::read(base.join("horizon-resources.json"))?).into_owned(),
+    );
+    for name in JSON_TABLES.iter().chain(&NBT_TABLES).chain(&TAG_BUNDLES) {
+        if base.join(name).exists() {
+            parts.push(meta(&base.join(name))?);
+        }
+    }
+    for m in mods {
+        parts.push(m.id.clone());
+        let source = m.content.source();
+        if source.is_dir() {
+            for file in &m.content.files {
+                parts.push(meta(&source.join(file))?);
+            }
+        } else {
+            parts.push(meta(source)?);
+        }
+    }
+    let mut hasher = Sha256::new();
+    for part in &parts {
+        hasher.update((part.len() as u64).to_le_bytes());
+        hasher.update(part.as_bytes());
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 #[cfg(test)]
