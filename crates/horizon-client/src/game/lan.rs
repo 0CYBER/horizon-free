@@ -363,6 +363,12 @@ impl Game<'_> {
                 "open": true,
                 "host": h.host_name,
                 "port": h.settings.port,
+                // The server's own world: its finished chunks and how many it
+                // has generated or loaded so far.
+                "world": {
+                    "chunks": self.world.chunks.len(),
+                    "generated": self.streaming.generated_total,
+                },
                 "guests": h.hub.guests.iter().map(|g| json!({
                     "name": g.name,
                     "position": g.position,
@@ -1063,14 +1069,20 @@ impl Game<'_> {
 
     /// Keep the chunks around every guest loaded.
     fn lan_update_streaming(&mut self, host: &LanHost) {
+        // DistanceManager.PlayerTicketTracker: every chunk within the server's
+        // view distance (Chebyshev) of a player holds a PLAYER_LOADING ticket
+        // at the entity-ticking level (31), whatever the player asked for;
+        // levels rise by one a chunk, so FULL (33) reaches two chunks past
+        // it. An extra area finishes its chunks out to its radius + 1. That
+        // covers what the player tracks (`ChunkTrackingView`, within its view
+        // distance + 1) and those chunks' lit neighbours.
+        let radius = host.hub.config.view_distance + 1;
         self.streaming.extra = host
             .hub
             .guests
             .iter()
             .filter(|g| host.hub.here(g))
-            // The tracked square's corners and their lit neighbours lie
-            // within (view distance + 2) * √2 of the player's chunk.
-            .map(|g| (g.chunk(), (g.view_distance + 2) * 3 / 2 + 1))
+            .map(|g| (g.chunk(), radius))
             .collect();
     }
 

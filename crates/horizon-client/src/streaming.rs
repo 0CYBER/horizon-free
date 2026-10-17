@@ -200,8 +200,10 @@ pub struct Streaming {
     /// Chunks come from a server (`insert_remote`/`forget`): nothing is
     /// generated and columns are only unloaded when the server says so.
     pub remote: bool,
-    /// More areas to keep loaded (centre chunk, radius), e.g. around guests
-    /// of a world open to the network. They are generated and kept but not meshed.
+    /// More areas to keep loaded (centre chunk, radius), e.g. around the
+    /// players of a server. Each is a square, like vanilla's ticket levels:
+    /// chunks finish out to `radius + 1` (Chebyshev) and generation reaches
+    /// past that as around the player. They are generated and kept but not meshed.
     pub extra: Vec<((i32, i32), i32)>,
     /// Mesh the sections for drawing (false on a server thread).
     pub mesh: bool,
@@ -788,20 +790,17 @@ impl Streaming {
             world.dirty_sections.retain(|k| !far.contains(&(k.0, k.2)));
         }
         // Drop far proto chunks that are not checked out.
-        let areas: Vec<((i32, i32), i64)> =
-            std::iter::once((self.center, i64::from(self.radius + 4)))
-                .chain(self.extra.iter().map(|&(c, r)| (c, i64::from(r + 4))))
-                .collect();
-        let forced = &self.forced;
+        let (center, r4) = (self.center, i64::from(self.radius + 4));
+        let ranges = self.ranges();
         let far: Vec<(i32, i32)> = self
             .protos
             .iter()
             .filter(|&(&(x, z), p)| {
                 p.is_some()
-                    && !areas.iter().any(|&((cx, cz), r4)| {
-                        i64::from(x - cx).pow(2) + i64::from(z - cz).pow(2) <= r4 * r4
-                    })
-                    && !forced
+                    && i64::from(x - center.0).pow(2) + i64::from(z - center.1).pow(2) > r4 * r4
+                    && !ranges.in_extra(x, z, 4)
+                    && !ranges
+                        .forced
                         .iter()
                         .any(|f| (x - f.0).abs() <= 3 && (z - f.1).abs() <= 3)
             })
@@ -1277,21 +1276,21 @@ impl Ranges<'_> {
     /// circles, so a fixed margin alone misses the corners of those squares
     /// (render distance 2 never finished the chunks next to the player).
     fn near_finished(&self, x: i32, z: i32, reach: i32) -> bool {
-        let near = |c: (i32, i32), radius: i32| {
-            let gap = |d: i32| i64::from((d.abs() - reach).max(0));
-            let (dx, dz) = (gap(x - c.0), gap(z - c.1));
-            let r = i64::from(radius + 1);
-            dx * dx + dz * dz <= r * r
-        };
-        near(self.center, self.radius) || self.extra.iter().any(|&(c, r)| near(c, r))
+        let gap = |d: i32| i64::from((d.abs() - reach).max(0));
+        let (dx, dz) = (gap(x - self.center.0), gap(z - self.center.1));
+        let r = i64::from(self.radius + 1);
+        // The extra areas are squares: their finished square grown by `reach`.
+        dx * dx + dz * dz <= r * r || self.in_extra(x, z, 1 + reach)
     }
     fn in_range(&self, x: i32, z: i32, margin: i32) -> bool {
-        self.in_main_range(x, z, margin)
-            || self.extra.iter().any(|&(c, radius)| {
-                let r = i64::from(radius + margin);
-                let (dx, dz) = (i64::from(x - c.0), i64::from(z - c.1));
-                dx * dx + dz * dz <= r * r
-            })
+        self.in_main_range(x, z, margin) || self.in_extra(x, z, margin)
+    }
+    /// Within `margin` of an extra area's square (Chebyshev distance, as
+    /// vanilla's ticket levels spread).
+    fn in_extra(&self, x: i32, z: i32, margin: i32) -> bool {
+        self.extra
+            .iter()
+            .any(|&(c, radius)| (x - c.0).abs().max((z - c.1).abs()) <= radius + margin)
     }
     /// The columns meshed for drawing: those vanilla draws around the
     /// player (`in_view_distance`), and forced ones.
@@ -1771,6 +1770,60 @@ mod tests {
                             assert!(
                                 !r.unloaded(x, z, decorates),
                                 "radius {radius} (decorates: {decorates}): ({x}, {z}) is kept then unloaded"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A server player's area (`lan_update_streaming`: the server view
+    /// distance + 1) finishes vanilla's FULL square: PLAYER_LOADING tickets at
+    /// level 31 out to the view distance, FULL (33) two chunks past it. Every
+    /// chunk the player tracks has its 3x3 neighbourhood finished, so it can
+    /// be lit and sent, and generation reaches vanilla's FEATURES (34) and
+    /// TERRAIN (35) rings.
+    #[test]
+    fn server_player_areas_finish_vanillas_full_square() {
+        let forced = HashSet::new();
+        for view in 2..=32 {
+            let extra = [((40, -9), view + 1)];
+            let r = Ranges {
+                // The window's own area, far away.
+                center: (-400, 300),
+                radius: 2,
+                extra: &extra,
+                forced: &forced,
+            };
+            let level = |x: i32, z: i32| 31 + ((x - 40).abs().max((z + 9).abs()) - view).max(0);
+            for x in 40 - view - 8..=40 + view + 8 {
+                for z in -9 - view - 8..=-9 + view + 8 {
+                    assert_eq!(
+                        r.in_range(x, z, 1),
+                        level(x, z) <= 33,
+                        "view {view}: ({x}, {z})"
+                    );
+                    assert_eq!(
+                        r.requested(x, z, true),
+                        level(x, z) <= 35,
+                        "view {view}: ({x}, {z})"
+                    );
+                    assert_eq!(
+                        r.unloaded(x, z, true),
+                        level(x, z) > 35,
+                        "view {view}: ({x}, {z})"
+                    );
+                    // ChunkTrackingView.contains, at any view distance the player may ask for.
+                    let tracked = |v: i64| {
+                        let gap = |d: i32| i64::from(((d).abs() - 2).max(0));
+                        gap(x - 40).pow(2) + gap(z + 9).pow(2) < v * v
+                    };
+                    if tracked(i64::from(view)) {
+                        for (dx, dz) in (-1..=1).flat_map(|dx| (-1..=1).map(move |dz| (dx, dz))) {
+                            assert!(
+                                r.in_range(x + dx, z + dz, 1),
+                                "view {view}: ({x}, {z}) tracked, not lit"
                             );
                         }
                     }
