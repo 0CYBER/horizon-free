@@ -132,3 +132,120 @@ impl BlockRegistry {
             .ok_or_else(|| invalid("invalid block property value"))
     }
 }
+
+/// A per-state table (`occlusion.nbt`, `cached-collision.nbt`, ...) whose
+/// `states` list, the identity of every state it describes in id order, has
+/// been checked against `registry`.
+#[derive(Clone, Copy)]
+pub struct BlockTable<'t, 'r> {
+    tag: &'t Tag,
+    registry: &'r BlockRegistry,
+    /// How many levels, from this one down, [`BlockTableFile::read`] checked
+    /// while reading: their `states` lists are kept empty in the tree.
+    read_checked: u8,
+}
+impl<'t, 'r> BlockTable<'t, 'r> {
+    /// Checks that `tag`'s `states` names the registry's states in id order.
+    pub fn check(tag: &'t Tag, registry: &'r BlockRegistry, what: &str) -> io::Result<Self> {
+        Self {
+            tag,
+            registry,
+            read_checked: 0,
+        }
+        .checked(what)
+    }
+    fn checked(self, what: &str) -> io::Result<Self> {
+        let Some(Tag::List(states)) = self.tag.get("states") else {
+            return Err(invalid(format!("missing {what} state identities")));
+        };
+        if self.read_checked == 0 {
+            if states.len() != self.registry.len() {
+                return Err(invalid(format!("{what} registry size mismatch")));
+            }
+            for (id, state) in states.iter().enumerate() {
+                if self.registry.state(BlockStateId(id as u32))
+                    != Some(&BlockState::from_nbt(state)?)
+                {
+                    return Err(invalid(format!("{what} state identities differ")));
+                }
+            }
+        }
+        Ok(self)
+    }
+    /// The table nested under `key` (`block-properties.nbt`'s `occlusion`),
+    /// with its own `states`, checked the same way.
+    pub fn nested(&self, key: &str, what: &str) -> io::Result<Self> {
+        Self {
+            tag: self
+                .tag
+                .get(key)
+                .ok_or_else(|| invalid(format!("missing {what}")))?,
+            registry: self.registry,
+            read_checked: self.read_checked.saturating_sub(1),
+        }
+        .checked(what)
+    }
+    pub fn tag(&self) -> &'t Tag {
+        self.tag
+    }
+    pub fn get(&self, key: &str) -> Option<&'t Tag> {
+        self.tag.get(key)
+    }
+    pub fn registry(&self) -> &'r BlockRegistry {
+        self.registry
+    }
+}
+
+/// A per-state table read from its file with its state identities checked
+/// while reading, so they never exist as a tree: for 190,000 states (a big
+/// modpack) that tree took 300-600 MB per table.
+pub struct BlockTableFile<'r> {
+    tag: Tag,
+    registry: &'r BlockRegistry,
+}
+impl<'r> BlockTableFile<'r> {
+    /// [`Self::read`] of the file at `path`.
+    pub fn open(path: &std::path::Path, registry: &'r BlockRegistry) -> io::Result<Self> {
+        let bytes = std::fs::read(path)?;
+        Self::read(&bytes, registry).map_err(|e| invalid(format!("{}: {e}", path.display())))
+    }
+    /// Reads `bytes`, checking every `states` list of the root compound and
+    /// of the compounds directly under it against `registry`.
+    pub fn read(bytes: &[u8], registry: &'r BlockRegistry) -> io::Result<Self> {
+        let mut visit = |states: &mut crate::nbt::ListElements<'_, '_, '_>| {
+            if states.len() != registry.len() {
+                return Err(states.error("table registry size mismatch"));
+            }
+            let mut id = 0u32;
+            while let Some(tag) = states.next_element()? {
+                let state =
+                    BlockState::from_nbt(&tag).map_err(|_| states.error("invalid table state"))?;
+                if registry.state(BlockStateId(id)) != Some(&state) {
+                    return Err(states.error("table state identities differ"));
+                }
+                id += 1;
+            }
+            Ok(())
+        };
+        let (named, _) = crate::nbt::read_named_streaming(
+            bytes,
+            crate::nbt::Limits::tables(),
+            "states",
+            &mut visit,
+        )
+        .map_err(|e| invalid(e.to_string()))?;
+        Ok(Self {
+            tag: named.tag,
+            registry,
+        })
+    }
+    /// The table, checked (`what` names it in errors).
+    pub fn table(&self, what: &str) -> io::Result<BlockTable<'_, 'r>> {
+        BlockTable {
+            tag: &self.tag,
+            registry: self.registry,
+            read_checked: 2,
+        }
+        .checked(what)
+    }
+}

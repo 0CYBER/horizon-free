@@ -267,3 +267,75 @@ fn registry_scan_binding_requires_complete_canonical_metadata() {
         );
     }
 }
+
+/// A table read from its bytes checks its state identities while reading and
+/// keeps none of them, yet loads the same shapes as the tree; a nested table
+/// (`block-properties.nbt`'s `occlusion`) is checked the same way.
+#[test]
+fn streamed_tables_check_states_while_reading() {
+    use horizon_world::{
+        nbt::{self, Limits, NamedTag},
+        registry::{BlockTable, BlockTableFile},
+    };
+    let (registry_tag, collision_tag) = fixture();
+    let registry = BlockRegistry::from_nbt(&registry_tag).unwrap();
+    let bytes = |tag: &Tag| {
+        let root = NamedTag {
+            name: "".into(),
+            tag: tag.clone(),
+        };
+        nbt::write_named(&root, Limits::tables()).unwrap()
+    };
+    let file = BlockTableFile::read(&bytes(&collision_tag), &registry).unwrap();
+    let table = file.table("collision").unwrap();
+    assert_eq!(table.get("states"), Some(&Tag::List(Vec::new())));
+    let streamed = CachedCollisionRegistry::from_table(table).unwrap();
+    let tree = CachedCollisionRegistry::from_nbt(&collision_tag, &registry).unwrap();
+    for id in 0..3 {
+        let id = BlockStateId(id);
+        assert_eq!(
+            streamed.cached_shape(id).unwrap().map(|s| s.boxes()),
+            tree.cached_shape(id).unwrap().map(|s| s.boxes())
+        );
+    }
+
+    let mut outer = Tag::compound([("occlusion", collision_tag.clone())]);
+    let Tag::Compound(map) = &mut outer else {
+        unreachable!()
+    };
+    map.insert(
+        "states".into(),
+        collision_tag.get("states").unwrap().clone(),
+    );
+    let file = BlockTableFile::read(&bytes(&outer), &registry).unwrap();
+    let nested = file
+        .table("outer")
+        .unwrap()
+        .nested("occlusion", "occlusion")
+        .unwrap();
+    assert_eq!(nested.get("states"), Some(&Tag::List(Vec::new())));
+    CachedCollisionRegistry::from_table(nested).unwrap();
+    // Checked only as a tree, an emptied list is refused.
+    assert!(BlockTable::check(nested.tag(), &registry, "occlusion").is_err());
+
+    // Other states, a different count or no states at all are refused.
+    let with_states = |edit: &dyn Fn(&mut Vec<Tag>)| {
+        let mut tag = collision_tag.clone();
+        let Some(Tag::List(states)) = tag.get_mut("states") else {
+            unreachable!()
+        };
+        edit(states);
+        tag
+    };
+    let swapped = with_states(&|s| s.swap(1, 2));
+    assert!(BlockTableFile::read(&bytes(&swapped), &registry).is_err());
+    let short = with_states(&|s| drop(s.pop()));
+    assert!(BlockTableFile::read(&bytes(&short), &registry).is_err());
+    let mut swapped = swapped;
+    let Tag::Compound(map) = &mut swapped else {
+        unreachable!()
+    };
+    map.remove(&"states".into());
+    let file = BlockTableFile::read(&bytes(&swapped), &registry).unwrap();
+    assert!(file.table("collision").is_err());
+}
