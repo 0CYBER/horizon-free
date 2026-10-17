@@ -20,6 +20,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - containers: the guest's ender chest holds the guest's items, not the host's, and a double chest
              opens as 9x6 with the right half first;
 - feedback:  the guest's command feedback names the guest and shows the numbers.
+- push:      a cow standing in the guest pushes it just clear of the cow (the guest's own client
+             pushes it, as in vanilla), not ever faster across the ground.
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -48,7 +50,7 @@ from agent_control_e2e import Cli, Failed, game_env  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'trials']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'trials', 'push']
 
 
 class Game:
@@ -622,11 +624,32 @@ def check_trials(host, guest, out):
     return {'spawner': trial, 'vault': active, 'rewarded': uuid(rewarded), 'host': uuid(host_uuid)}
 
 
+def check_push(host, guest, out):
+    guest('command', command='gamemode survival')
+    x, y, z = (int(v // 1) + 0.5 for v in pos_of(guest))
+    guest('command', command=f'tp @s {x} {y - 0.5} {z}')
+    guest.wait(20)
+    x, y, z = pos_of(guest)
+    # A cow that doesn't walk, 0.3 east of the guest: the two boxes overlap until their centres are
+    # 0.75 apart, so the push stops a fraction of a block away.
+    guest('command', command=f'summon minecraft:cow {x + 0.3:.2f} {y:.2f} {z:.2f} {{NoAI:1b}}')
+    guest.wait(60)
+    nx, _, nz = pos_of(guest)
+    guest.shot(out, 'push')
+    guest('command', command='kill @e[type=minecraft:cow]')
+    moved = ((nx - x) ** 2 + (nz - z) ** 2) ** 0.5
+    detail = {'from': [round(x, 3), round(z, 3)], 'to': [round(nx, 3), round(nz, 3)], 'moved': round(moved, 3)}
+    assert nx < x, f'the cow did not push the guest west: {detail}'
+    assert moved < 1.5, f'the cow pushed the guest too far: {detail}'
+    return detail
+
+
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
              'chest': check_chest, 'crafting': check_crafting, 'damage': check_damage,
              'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
              'containers': check_containers, 'feedback': check_feedback, 'trials': check_trials,
-             'walls': check_walls}
+             'walls': check_walls,
+             'push': check_push}
 
 
 def run(ctl, out, resources, checks):

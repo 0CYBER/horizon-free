@@ -196,6 +196,7 @@ impl Game<'_> {
             hero: self.potions.effects.get("hero_of_the_village").is_some(),
             uuid: self.level.player_uuid.unwrap_or_default(),
             allies: std::sync::Arc::new(self.player_allies()),
+            remote: false,
         })
     }
     /// Biome facts at a position for finalizeSpawn and variant rules.

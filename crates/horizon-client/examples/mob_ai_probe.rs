@@ -999,6 +999,7 @@ fn main() -> horizon_client::Result<()> {
                 hero: false,
                 uuid: PLAYER_UUID,
                 allies: Default::default(),
+                remote: false,
             }
         });
         let mut scratch = LegacyRandom::new(0);
