@@ -28,5 +28,6 @@
 /horizon-player.txt
 /servers.dat
 /screenshots/
+/.horizon-cache/
 /crash-reports/
 /debug/

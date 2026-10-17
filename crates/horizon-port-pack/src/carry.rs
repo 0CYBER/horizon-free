@@ -19,6 +19,10 @@ pub struct Report {
     /// Files outside what a content mod may hold (other namespaces, vanilla
     /// data other than tags), kept in `outside/` for review.
     pub outside: Vec<String>,
+    /// Files of the mod's own content the game would refuse, kept in
+    /// `outside/` too, with why: a path vanilla does not read (upper case),
+    /// JSON that does not parse, a vanilla tag the mod replaces.
+    pub unreadable: BTreeMap<String, String>,
     pub recipes_upgraded: usize,
     pub loot_tables_upgraded: usize,
     /// Worldgen and structure files (`data/<id>/worldgen/`, `structure/`).
@@ -291,6 +295,32 @@ fn place(name: &str, id: &str) -> Option<bool> {
     Some(ns == id || shared_tags)
 }
 
+/// Why the game would refuse a file of the mod's own content, if it would.
+/// Vanilla skips such files one by one (an invalid resource path, a data
+/// file that does not parse); Horizon's content loader refuses the whole
+/// set, so they stay out of the carry.
+fn unreadable(name: &str, bytes: &mut Vec<u8>) -> Option<String> {
+    if let Err(e) = horizon_mods::content::check_path(name) {
+        return Some(e);
+    }
+    if !(name.ends_with(".json") || name.ends_with(".mcmeta")) {
+        return None;
+    }
+    // A byte-order mark: Horizon's JSON readers take the file without it.
+    if bytes.starts_with(b"\xEF\xBB\xBF") {
+        bytes.drain(..3);
+    }
+    let value: Value = match serde_json::from_slice(bytes) {
+        Ok(v) => v,
+        Err(e) => return Some(format!("does not parse as JSON: {e}")),
+    };
+    let shared_tag = name.starts_with("data/minecraft/tags/") || name.starts_with("data/c/tags/");
+    if shared_tag && value.get("replace").and_then(Value::as_bool) == Some(true) {
+        return Some("replaces a shared tag; a content mod may only add to it".into());
+    }
+    None
+}
+
 /// Carries `jar` over into `out/carry/`. With the oracle's `facts`, blocks
 /// and items are the ones the mod registers, with the templates and numbers
 /// the facts give; `allowed` says which vanilla blocks the game has.
@@ -334,6 +364,15 @@ pub fn carry(
         entry
             .read_to_end(&mut bytes)
             .map_err(|e| format!("{name}: {e}"))?;
+        let unreadable = if keep {
+            unreadable(&name, &mut bytes)
+        } else {
+            None
+        };
+        let keep = keep && unreadable.is_none();
+        if let Some(why) = unreadable {
+            report.unreadable.insert(name.clone(), why);
+        }
         let dest = if keep {
             report.copied += 1;
             inside.join(&name)
@@ -716,6 +755,17 @@ mod tests {
                 r#"{"values": ["gem:gem_block"]}"#,
             ),
             ("data/c/tags/item/gems.json", r#"{"values": ["gem:gem"]}"#),
+            // What the game would refuse: vanilla skips these files alone.
+            ("assets/gem/lang/ry_UA.json", r#"{"item.gem.gem": "Gem"}"#),
+            ("data/gem/tags/item/empty.json", ""),
+            (
+                "data/minecraft/tags/worldgen/biome/has_structure/village_plains.json",
+                r#"{"replace": true, "values": []}"#,
+            ),
+            (
+                "assets/gem/lang/de_de.json",
+                "\u{feff}{\"item.gem.gem\": \"Juwel\"}",
+            ),
         ];
         for (name, text) in files {
             zip.start_file(*name, zip::write::SimpleFileOptions::default())
@@ -732,8 +782,23 @@ mod tests {
         assert_eq!(info.census.classes, 1);
         let out = dir.join("work/mods/gem");
         let report = carry(&jar, &info, &out, None, &|_| true).unwrap();
-        assert_eq!(report.copied, 12);
-        assert!(report.outside.is_empty());
+        assert_eq!(report.copied, 13);
+        let unreadable: Vec<&str> = report.unreadable.keys().map(String::as_str).collect();
+        assert_eq!(
+            unreadable,
+            [
+                "assets/gem/lang/ry_UA.json",
+                "data/gem/tags/item/empty.json",
+                "data/minecraft/tags/worldgen/biome/has_structure/village_plains.json",
+            ]
+        );
+        assert_eq!(report.outside.len(), 3);
+        assert!(!out.join("carry/data/gem/tags/item/empty.json").exists());
+        // A byte-order mark is dropped, the file kept.
+        assert_eq!(
+            fs::read(out.join("carry/assets/gem/lang/de_de.json")).unwrap()[0],
+            b'{'
+        );
         assert_eq!((report.recipes_upgraded, report.recipes_kept.len()), (1, 1));
         assert_eq!(report.item_definitions_added, 2);
         assert_eq!(report.blocks["gem_door"], "minecraft:oak_door");

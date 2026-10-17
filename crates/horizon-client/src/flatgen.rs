@@ -4,7 +4,7 @@ use horizon_world::{nbt::Tag, registry::BlockRegistry};
 
 /// The layers of a flat generator, bottom up from the world's minimum Y.
 pub struct FlatTerrain {
-    layers: Vec<u16>,
+    layers: Vec<u32>,
     biome: u16,
 }
 impl FlatTerrain {
@@ -30,7 +30,7 @@ impl FlatTerrain {
             for layer in list {
                 let block = crate::save::text(layer.get("block"))?;
                 let height = crate::save::number(layer.get("height")).unwrap_or(0).max(0);
-                let state = registry.default_state(&block)?.0 as u16;
+                let state = registry.default_state(&block)?.0;
                 layers.extend(std::iter::repeat_n(state, height as usize));
             }
         }

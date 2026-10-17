@@ -105,7 +105,7 @@ fn fixture(mut opaque: impl FnMut(i32, i32, i32) -> bool) -> Padded {
     for y in 0..16 {
         for z in 0..16 {
             for x in 0..16 {
-                pad.blocks[pi(x, y, z)] = u16::from(opaque(x, y, z)) + 2 * ((x + y + z) as u16 & 1);
+                pad.blocks[pi(x, y, z)] = u32::from(opaque(x, y, z)) + 2 * ((x + y + z) as u32 & 1);
             }
         }
     }

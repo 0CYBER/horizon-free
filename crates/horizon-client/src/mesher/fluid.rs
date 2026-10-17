@@ -159,28 +159,28 @@ struct FlowView<'a> {
     info: &'a [Info],
 }
 impl FlowView<'_> {
-    fn id(&self, p: BlockPos) -> u16 {
+    fn id(&self, p: BlockPos) -> u32 {
         self.pad.blocks[pi(p.x, p.y, p.z)]
     }
 }
 impl FluidFlowWorld for FlowView<'_> {
     type Error = Infallible;
-    type Block = u16;
+    type Block = u32;
     fn fluid(&mut self, p: BlockPos) -> Result<FluidState, Infallible> {
         Ok(self.info[self.id(p) as usize].fluid)
     }
-    fn block(&mut self, p: BlockPos) -> Result<u16, Infallible> {
+    fn block(&mut self, p: BlockPos) -> Result<u32, Infallible> {
         Ok(self.id(p))
     }
-    fn blocks_fluid_flow(&self, state: u16) -> bool {
+    fn blocks_fluid_flow(&self, state: u32) -> bool {
         self.info[state as usize].blocks_flow
     }
-    fn is_ice_class(&self, state: u16) -> bool {
+    fn is_ice_class(&self, state: u32) -> bool {
         self.info[state as usize].ice
     }
     fn is_face_sturdy(
         &mut self,
-        state: u16,
+        state: u32,
         _: BlockPos,
         d: Direction,
     ) -> Result<bool, Infallible> {

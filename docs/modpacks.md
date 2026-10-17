@@ -237,11 +237,19 @@ How the game loads them, without touching vanilla's path:
 - Loaders that read only `data/minecraft/` (recipes, loot, tags) read every namespace, as
   vanilla does. With no mods there is only `minecraft`, so nothing changes.
 - The overlay is cached like the resource-pack overlay and rebuilt when a mod file changes.
-- **Limits.** Chunk sections store a block state in 16 bits: vanilla 26.3 has 35,723 states,
-  so mods may add 29,813. Past that the content root is refused with the states per mod
-  (Macaw's Doors, Fences, Paths and Trapdoors alone add 36,154: not all four fit). Block
-  sprites fill texture arrays of 2048 layers, four at most (8,192; vanilla takes 1,250,
-  identical textures share a layer). Wider state ids are the next step for big packs.
+- **Limits.** Chunk sections size their global palette to the registry: 16 bits for vanilla's
+  35,723 states (the same chunks, saves and packets as before), one more bit each time content
+  mods double it, up to 2^20 states (1,048,576). Past that the content root is refused with the
+  states per mod. ATM10's 42 carried mods take the registry to 193,762 states (18 bits). On the
+  network the width is the registry's: unchanged for vanilla clients as long as no content mod
+  is on, wider only between Horizons that share the same mods; a Horizon with content mods still
+  reads a vanilla server's 16-bit chunks. Block sprites fill texture arrays of 2048 layers, eight
+  at most (16,384; vanilla takes 1,250, identical textures share a layer; ATM10's 42 take 9,790).
+- **Broken mod files load as vanilla loads them.** A blockstate definition that does not bind
+  (a multipart value the block does not have), a block model that is missing or does not parse,
+  and a recipe that does not parse are logged and skipped: the block gets no model or the
+  missing model, the recipe is absent, everything else loads. Vanilla's own files never hit
+  these paths.
 - Not in 0.2: multiplayer registry sync (single player and the integrated server first), worlds
   opened without a mod they used (vanilla turns unknown blocks into air; we will ask first),
   vanilla ids redefined by a mod (refused).
@@ -267,15 +275,31 @@ inspected:
 └── coverage.json, coverage.md
 ```
 
-**Status.** `import`, `inventory`, `carry` and `report` run today:
+**Status.** `import`, `inventory`, `fetch`, `carry` and `report` run today, and `port` runs
+them all for what a player's machine can port (content mods of the data tier), as the
+launcher's "Import modpack" does:
 
 ```
 cargo run -p horizon-port-pack -- import ~/Downloads/pack.mrpack ~/.horizon/ports/pack
 cargo run -p horizon-port-pack -- inventory ~/.horizon/ports/pack     # --offline reuses modrinth.json
+cargo run -p horizon-port-pack -- fetch ~/.horizon/ports/pack         # the portable mods' jars, or name them
+#   --from <folder>: copy the player's own jars (an installed instance, a downloads folder)
 cargo run -p horizon-port-pack -- carry ~/.horizon/ports/pack         # content mods with a jar, or name them
 #   --resources <prepared root>: only templates Horizon's tables have
 cargo run -p horizon-port-pack -- report ~/.horizon/ports/pack        # coverage.json and coverage.md
+cargo run -p horizon-port-pack -- port ~/Downloads/pack.zip ~/.horizon/ports/pack [--from <folder>] [--resources <root>]
 ```
+
+`fetch` gets each jar the player's way, never from us: copied from a folder they have (matched
+by SHA-1, or through a CurseForge app instance's `minecraftinstance.json`), else downloaded from
+the link the pack itself gives (a `.mrpack`'s, on the format's hosts only) or, for a CurseForge
+pack, the same file on Modrinth's public CDN, found by its SHA-1. A jar is kept only when its
+hash matches. A file only CurseForge has is listed as needing a CurseForge API key (Ludovic's
+decision; open question below), with the player's installed instance as the way round it.
+`<work>/fetch.json` says what happened to each file. On All the Mods 10 8.3's CurseForge zip
+(2026-10-17): of the 54 data-tier content mods, 42 come from Modrinth's CDN (84 MB) and 12 need
+the key or the instance; `port` then carries the 42 over (0 ported, 42 partial: the harness is a
+dev step).
 
 `inventory` reads metadata only: Modrinth answers by file hash, and the jars only if the user's
 instance has them (an imported instance folder, or jars put in `<work>/jars/`). Without jars,
@@ -286,8 +310,12 @@ only): content 54, library 33, client-ui 26, performance 25, other 14, unknown 2
 
 `carry` copies a jar's `assets/<id>/`, `data/<id>/`, `data/minecraft/tags/` and `data/c/tags/`
 into `mods/<id>/carry/`, a folder content mod (API 0.2) the game loads with `--dev-mod`, and
-keeps what a content mod may not hold (other namespaces, vanilla data) in `outside/`. No class
-file is copied. It upgrades from 1.21.1 to 26.3: vanilla-type recipes (ingredients), loot tables
+keeps what a content mod may not hold (other namespaces, vanilla data) in `outside/`. Files of
+the mod's own content that the game's content loader would refuse whole also go to `outside/`,
+listed with the reason in the report's `unreadable`: paths vanilla does not read (upper case),
+JSON that does not parse, and shared tags with `"replace": true`. Vanilla skips them one by one.
+A byte-order mark is dropped. For ATM10's 42 mods that is 19 files in 7 mods, and the 42 load as
+carried. No class file is copied. It upgrades from 1.21.1 to 26.3: vanilla-type recipes (ingredients), loot tables
 (`conditions` lists become one `condition`, `functions` become `modifier`, kinds move to `type`,
 tool matches on silk touch or shears become `minecraft:tool/can_silk_touch` and
 `minecraft:tool/can_shear`), and the `items/` definitions 1.21.4 introduced.
@@ -310,7 +338,7 @@ block's name breaking ties (`_pane`, `_gate`, `_trapdoor`).
 | Format | Read | Jars come from |
 |---|---|---|
 | Modrinth `.mrpack` | `modrinth.index.json`: `dependencies` (minecraft, neoforge / fabric-loader / forge / quilt-loader), `files[]` with path, sha1/sha512, `env` (client/server), download URLs; `overrides/`, `client-overrides/`, `server-overrides/` | downloaded from the listed Modrinth URLs, hash-checked |
-| CurseForge zip | `manifest.json`: `minecraft.version`, `modLoaders[]`, `files[]` (`projectID`, `fileID`, `required`), `overrides` | the user's installed instance (CurseForge app `minecraftinstance.json` + `mods/`). CurseForge's API needs a key, so we take what the user already downloaded |
+| CurseForge zip | `manifest.json`: `minecraft.version`, `modLoaders[]`, `files[]` (`projectID`, `fileID`, `required`), `overrides`. When the overrides hold Crash Assistant's `config/crash_assistant/modlist.json` (All the Mods 10 does), its jar names, mod ids and SHA-1s replace the bare ids | the user's installed instance (CurseForge app `minecraftinstance.json` + `mods/`), or the same file on Modrinth by SHA-1. CurseForge's API needs a key, so we take what the user already downloaded |
 | Prism / MultiMC instance | `mmc-pack.json` components (`net.minecraft`, `net.neoforged`, `net.fabricmc.fabric-loader`), `instance.cfg`, `.minecraft/mods/*.jar`, packwiz `.pw.toml` files if present | the instance folder |
 | packwiz | `pack.toml`, `index.toml`, `mods/*.pw.toml` | as listed |
 | Crash Assistant `modlist.json` | jar name → mod id, name, version, Modrinth SHA-1; the loader entry (NeoForge `21.1.x` is Minecraft 1.21.1). Packs such as ATM10 publish it in their repository | metadata only; jars put in `<work>/jars/` |

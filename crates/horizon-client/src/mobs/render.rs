@@ -765,6 +765,17 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
             .unwrap_or_else(|| glam::Mat4::from_rotation_y((180.0 - body).to_radians())),
     };
     let mut base = origin * rotation;
+    if m.death_time > 0 && !super::creaking::tearing_down(m) {
+        let f = ((m.death_time as f32 + alpha - 1.0) / 20.0 * 1.6)
+            .sqrt()
+            .min(1.0);
+        base *= glam::Mat4::from_rotation_z(f * flip_degrees(m).to_radians());
+    } else if matches!(m.custom_name.as_deref(), Some("Dinnerbone" | "Grumm")) {
+        // isEntityUpsideDown
+        base *= glam::Mat4::from_translation(glam::Vec3::new(0.0, m.height() + 0.1, 0.0))
+            * glam::Mat4::from_rotation_z(PI);
+    }
+    // AvatarRenderer.setupRotations, after LivingEntityRenderer's.
     if m.extra.fall_flying {
         let ticks = m.extra.fall_fly_ticks as f32 + alpha;
         let scale = (ticks * ticks / 100.0).min(1.0);
@@ -785,17 +796,20 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
                 (sign * horizon_core::jmath::acos(dot.abs().min(1.0))) as f32,
             );
         }
-    }
-
-    if m.death_time > 0 && !super::creaking::tearing_down(m) {
-        let f = ((m.death_time as f32 + alpha - 1.0) / 20.0 * 1.6)
-            .sqrt()
-            .min(1.0);
-        base *= glam::Mat4::from_rotation_z(f * flip_degrees(m).to_radians());
-    } else if matches!(m.custom_name.as_deref(), Some("Dinnerbone" | "Grumm")) {
-        // isEntityUpsideDown
-        base *= glam::Mat4::from_translation(glam::Vec3::new(0.0, m.height() + 0.1, 0.0))
-            * glam::Mat4::from_rotation_z(PI);
+    } else if m.extra.swim.amount(alpha) > 0.0 {
+        // AvatarRenderer.setupRotations: tip forward with the swim amount,
+        // following the pitch in water, then lie along the swimming box.
+        let amount = m.extra.swim.amount(alpha);
+        let pitch = m.previous_head_pitch + (m.head_pitch - m.previous_head_pitch) * alpha;
+        let target = if m.extra.swim.in_water {
+            -90.0 - pitch
+        } else {
+            -90.0
+        };
+        base *= glam::Mat4::from_rotation_x((amount * target).to_radians());
+        if m.extra.swim.visually {
+            base *= glam::Mat4::from_translation(glam::Vec3::new(0.0, -1.0, 0.3));
+        }
     }
     base *= species_rotations(m, alpha);
     base *= glam::Mat4::from_scale(glam::Vec3::new(-1.0, -1.0, 1.0));
