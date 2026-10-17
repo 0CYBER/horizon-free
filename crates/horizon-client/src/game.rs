@@ -1139,6 +1139,10 @@ struct Game<'a> {
     lan_acting_uuid: Option<u128>,
     /// Command feedback to forward to a guest.
     chat_capture: Option<Vec<horizon_client::text::Text>>,
+    /// `broadcastToAdmins` lines a guest's command queued, sent once it
+    /// returns: the line, whether operators get it and whether the console
+    /// logs it.
+    admin_feedback: Vec<(horizon_client::text::Text, bool, bool)>,
     /// State of `/spectate`, `/posteffect`, `/debug`, `/waypoint` and friends.
     cmds: commands::extra::CommandExtras,
     ui: chat::UiState,
@@ -10280,6 +10284,7 @@ impl<'a> Game<'a> {
             lan_acting_name: None,
             lan_acting_uuid: None,
             chat_capture: None,
+            admin_feedback: Vec::new(),
             cmds: Default::default(),
             ui: Default::default(),
             combat: Default::default(),

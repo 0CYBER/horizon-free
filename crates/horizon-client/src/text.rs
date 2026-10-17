@@ -233,6 +233,10 @@ impl Text {
     }
     /// The `Component` as vanilla's JSON (ComponentSerialization): the one
     /// built through the constructors, else the spans as literal siblings.
+    /// The key of a `Component.translatable` built through [`Text::translate`].
+    pub fn translation_key(&self) -> Option<&str> {
+        self.source.as_deref()?.get("translate")?.as_str()
+    }
     pub fn component(&self) -> Value {
         if let Some(c) = &self.source {
             return (**c).clone();
