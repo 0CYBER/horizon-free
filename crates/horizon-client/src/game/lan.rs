@@ -895,9 +895,7 @@ impl Game<'_> {
         self.lan_update_models(&mut host);
         self.lan_update_waypoints(&mut host, state.as_ref());
         drop(holding);
-        for g in &host.hub.guests {
-            g.sender.flush();
-        }
+        lan::flush_all(host.hub.guests.iter().map(|g| &g.sender));
         self.lan = Some(host);
     }
 
