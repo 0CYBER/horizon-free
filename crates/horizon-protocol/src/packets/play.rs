@@ -75,6 +75,9 @@ packet!(BlockDestruction { id: i32 => VarInt, pos: [i32; 3] => Pos, progress: u8
 packet!(BlockEntityData { pos: [i32; 3] => Pos, kind: i32 => VarInt, tag: Tag => Nbt });
 packet!(BlockUpdate { pos: [i32; 3] => Pos, state: i32 => VarInt });
 packet!(ChangeDifficulty { difficulty: i32 => VarInt, locked: bool => Bool });
+// ResourceKey<GameRule<?>> is an identifier, followed by its string value.
+packet!(GameRuleEntry { name: String => Ident, value: String => Str });
+packet!(GameRuleValues { entries: Vec<GameRuleEntry> => List<GameRuleEntry> });
 packet!(ChunkBatchFinished { size: i32 => VarInt });
 packet!(ContainerClose { container: i32 => VarInt });
 packet!(ContainerSetContent {
@@ -574,6 +577,14 @@ packet!(
 );
 packet!(Text { text: Tag => Nbt });
 packet!(SetChunkCacheCenter { x: i32 => VarInt, z: i32 => VarInt });
+packet!(
+    /// ClientboundTickingStatePacket: the tick rate and whether the level is frozen.
+    TickingState { rate: f32 => Float, frozen: bool => Bool }
+);
+packet!(
+    /// ClientboundTickingStepPacket: the ticks a frozen level runs (`/tick step`).
+    TickingStep { steps: i32 => VarInt }
+);
 packet!(Distance { distance: i32 => VarInt });
 packet!(SetCursorItem { item: Option<Stack> => Slot });
 packet!(SetDefaultSpawnPosition { pos: GlobalPos => GlobalPos, yaw: f32 => Float, pitch: f32 => Float });
@@ -974,10 +985,200 @@ impl Codec<Commands> for Commands {
     }
 }
 
+/// `DisplayInfo` of an advancement as sent.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AdvancementDisplay {
+    pub title: Tag,
+    pub description: Tag,
+    pub icon: crate::item::Stack,
+    /// `AdvancementType` ordinal: task, challenge, goal.
+    pub frame: i32,
+    pub show_toast: bool,
+    pub hidden: bool,
+    pub background: Option<String>,
+}
+/// `ClientboundUpdateAdvancementsPacket.PositionedAdvancement`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Advancement {
+    pub id: String,
+    pub parent: Option<String>,
+    pub display: Option<AdvancementDisplay>,
+    pub requirements: Vec<Vec<String>>,
+    pub telemetry: bool,
+    pub x: f32,
+    pub y: f32,
+}
+/// `ClientboundUpdateAdvancementsPacket`: whether it replaces what the
+/// client has, the advancements added and removed, the progress of each
+/// changed one (criterion, when obtained in epoch milliseconds), and whether
+/// to show toasts.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UpdateAdvancements {
+    pub reset: bool,
+    pub added: Vec<Advancement>,
+    pub removed: Vec<String>,
+    pub progress: Vec<(String, Vec<(String, Option<i64>)>)>,
+    pub show: bool,
+}
+impl Codec<UpdateAdvancements> for UpdateAdvancements {
+    fn read(r: &mut Reader) -> Result<Self> {
+        let reset = r.bool()?;
+        let n = r.count(r.remaining())?;
+        let mut added = Vec::with_capacity(n.min(1024));
+        for _ in 0..n {
+            let id = r.string(32767)?;
+            let parent = if r.bool()? {
+                Some(r.string(32767)?)
+            } else {
+                None
+            };
+            let display = if r.bool()? {
+                let title = r.nbt()?;
+                let description = r.nbt()?;
+                let icon = crate::item::Template::read(r)?;
+                let frame = r.varint()?;
+                let flags = r.i32()?;
+                let background = if flags & 1 != 0 {
+                    Some(r.string(32767)?)
+                } else {
+                    None
+                };
+                Some(AdvancementDisplay {
+                    title,
+                    description,
+                    icon,
+                    frame,
+                    show_toast: flags & 2 != 0,
+                    hidden: flags & 4 != 0,
+                    background,
+                })
+            } else {
+                None
+            };
+            let groups = r.count(r.remaining())?;
+            let mut requirements = Vec::with_capacity(groups.min(256));
+            for _ in 0..groups {
+                let k = r.count(r.remaining())?;
+                requirements.push((0..k).map(|_| r.string(32767)).collect::<Result<_>>()?);
+            }
+            let telemetry = r.bool()?;
+            let (x, y) = (r.f32()?, r.f32()?);
+            added.push(Advancement {
+                id,
+                parent,
+                display,
+                requirements,
+                telemetry,
+                x,
+                y,
+            });
+        }
+        let n = r.count(r.remaining())?;
+        let removed = (0..n).map(|_| r.string(32767)).collect::<Result<_>>()?;
+        let n = r.count(r.remaining())?;
+        let mut progress = Vec::with_capacity(n.min(1024));
+        for _ in 0..n {
+            let id = r.string(32767)?;
+            let k = r.count(r.remaining())?;
+            let mut criteria = Vec::with_capacity(k.min(256));
+            for _ in 0..k {
+                let name = r.string(32767)?;
+                let at = if r.bool()? { Some(r.i64()?) } else { None };
+                criteria.push((name, at));
+            }
+            progress.push((id, criteria));
+        }
+        let show = r.bool()?;
+        Ok(Self {
+            reset,
+            added,
+            removed,
+            progress,
+            show,
+        })
+    }
+    fn write(v: &Self, w: &mut Writer) {
+        w.bool(v.reset);
+        w.varint(v.added.len() as i32);
+        for a in &v.added {
+            w.string(&a.id);
+            w.bool(a.parent.is_some());
+            if let Some(p) = &a.parent {
+                w.string(p);
+            }
+            w.bool(a.display.is_some());
+            if let Some(d) = &a.display {
+                w.nbt(&d.title);
+                w.nbt(&d.description);
+                crate::item::Template::write(&d.icon, w);
+                w.varint(d.frame);
+                w.i32(
+                    i32::from(d.background.is_some())
+                        | i32::from(d.show_toast) << 1
+                        | i32::from(d.hidden) << 2,
+                );
+                if let Some(b) = &d.background {
+                    w.string(b);
+                }
+            }
+            w.varint(a.requirements.len() as i32);
+            for g in &a.requirements {
+                w.varint(g.len() as i32);
+                for c in g {
+                    w.string(c);
+                }
+            }
+            w.bool(a.telemetry);
+            w.f32(a.x);
+            w.f32(a.y);
+        }
+        w.varint(v.removed.len() as i32);
+        for id in &v.removed {
+            w.string(id);
+        }
+        w.varint(v.progress.len() as i32);
+        for (id, criteria) in &v.progress {
+            w.string(id);
+            w.varint(criteria.len() as i32);
+            for (name, at) in criteria {
+                w.string(name);
+                w.bool(at.is_some());
+                if let Some(at) = at {
+                    w.i64(*at);
+                }
+            }
+        }
+        w.bool(v.show);
+    }
+}
+packet!(
+    /// ClientboundAwardStatsPacket: (stat type, value, count) by network id.
+    AwardStats { stats: Vec<(i32, i32, i32)> => StatList }
+);
+/// `Object2IntMap<Stat<?>>`: each stat's type and value ids, then its count.
+pub struct StatList;
+impl Codec<Vec<(i32, i32, i32)>> for StatList {
+    fn read(r: &mut Reader) -> Result<Vec<(i32, i32, i32)>> {
+        let n = r.count(r.remaining())?;
+        (0..n)
+            .map(|_| Ok((r.varint()?, r.varint()?, r.varint()?)))
+            .collect()
+    }
+    fn write(v: &Vec<(i32, i32, i32)>, w: &mut Writer) {
+        w.varint(v.len() as i32);
+        for &(a, b, c) in v {
+            w.varint(a);
+            w.varint(b);
+            w.varint(c);
+        }
+    }
+}
+
 packet_enum!(Clientbound, crate::ids::play::clientbound {
     BundleDelimiter(Empty) = BUNDLE_DELIMITER,
     AddEntity(AddEntity) = ADD_ENTITY,
     Animate(Animate) = ANIMATE,
+    AwardStats(AwardStats) = AWARD_STATS,
     BlockChangedAck(BlockChangedAck) = BLOCK_CHANGED_ACK,
     BlockDestruction(BlockDestruction) = BLOCK_DESTRUCTION,
     BlockEntityData(BlockEntityData) = BLOCK_ENTITY_DATA,
@@ -999,6 +1200,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     EntityPositionSync(EntityPositionSync) = ENTITY_POSITION_SYNC,
     ForgetLevelChunk(ForgetLevelChunk) = FORGET_LEVEL_CHUNK,
     GameEvent(GameEvent) = GAME_EVENT,
+    GameRuleValues(GameRuleValues) = GAME_RULE_VALUES,
     HurtAnimation(HurtAnimation) = HURT_ANIMATION,
     KeepAlive(KeepAlive) = KEEP_ALIVE,
     InitializeBorder(InitializeBorder) = INITIALIZE_BORDER,
@@ -1062,6 +1264,9 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     TabList(TabList) = TAB_LIST,
     TakeItemEntity(TakeItemEntity) = TAKE_ITEM_ENTITY,
     TeleportEntity(TeleportEntity) = TELEPORT_ENTITY,
+    TickingState(TickingState) = TICKING_STATE,
+    TickingStep(TickingStep) = TICKING_STEP,
+    UpdateAdvancements(UpdateAdvancements) = UPDATE_ADVANCEMENTS,
     UpdateMobEffect(UpdateMobEffect) = UPDATE_MOB_EFFECT,
     UpdateTags(UpdateTags) = UPDATE_TAGS,
 });
@@ -1097,6 +1302,9 @@ packet!(Chat {
     last_seen: LastSeenUpdate => LastSeenUpdate,
 });
 packet!(ChatCommand { command: String => Str });
+packet!(ChangeDifficultyRequest { difficulty: i32 => VarInt });
+packet!(LockDifficulty { locked: bool => Bool });
+packet!(SetGameRule { entries: Vec<GameRuleEntry> => List<GameRuleEntry> });
 packet!(ChunkBatchReceived { chunks_per_tick: f32 => Float });
 packet!(
     /// ServerboundClientCommandPacket.Action: 0 respawn, 1 request stats, 2 request game rules.
@@ -1180,6 +1388,9 @@ impl Codec<[f32; 3]> for Cursor {
 }
 
 packet_enum!(Serverbound, crate::ids::play::serverbound {
+    ChangeDifficulty(ChangeDifficultyRequest) = CHANGE_DIFFICULTY,
+    LockDifficulty(LockDifficulty) = LOCK_DIFFICULTY,
+    SetGameRule(SetGameRule) = SET_GAME_RULE,
     AcceptTeleportation(AcceptTeleportation) = ACCEPT_TELEPORTATION,
     Attack(Attack) = ATTACK,
     ChangeGameMode(ChangeGameMode) = CHANGE_GAME_MODE,
@@ -1219,6 +1430,46 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
 mod tests {
     use super::*;
     use crate::{chunk::BlockEntityInfo, packets::round_trip, text::literal};
+
+    #[test]
+    fn world_options_packets_match_vanilla_stream_codecs() {
+        // mcsrc.dev 26.3: difficulty is a VarInt, locking is a Boolean,
+        // rule entries are ResourceKey identifiers followed by UTF-8 values.
+        let difficulty = Serverbound::ChangeDifficulty(ChangeDifficultyRequest { difficulty: 3 });
+        assert_eq!(&difficulty.encode()[1..], &[3]);
+        round_trip(difficulty, Serverbound::encode, Serverbound::decode);
+        let lock = Serverbound::LockDifficulty(LockDifficulty { locked: true });
+        assert_eq!(&lock.encode()[1..], &[1]);
+        round_trip(lock, Serverbound::encode, Serverbound::decode);
+        let payload = b"\x01\x18minecraft:keep_inventory\x04true";
+        let entry = GameRuleEntry {
+            name: "minecraft:keep_inventory".into(),
+            value: "true".into(),
+        };
+        let set = Serverbound::SetGameRule(SetGameRule {
+            entries: vec![entry.clone()],
+        });
+        assert_eq!(&set.encode()[1..], payload);
+        assert_eq!(
+            Serverbound::decode(crate::ids::play::serverbound::SET_GAME_RULE, payload).unwrap(),
+            set
+        );
+        let values = Clientbound::GameRuleValues(GameRuleValues {
+            entries: vec![entry],
+        });
+        assert_eq!(&values.encode()[1..], payload);
+        assert_eq!(
+            Clientbound::decode(crate::ids::play::clientbound::GAME_RULE_VALUES, payload).unwrap(),
+            values
+        );
+        assert!(
+            Serverbound::decode(
+                crate::ids::play::serverbound::SET_GAME_RULE,
+                &payload[..payload.len() - 1]
+            )
+            .is_err()
+        );
+    }
 
     fn spawn() -> SpawnInfo {
         SpawnInfo {
@@ -1522,6 +1773,40 @@ mod tests {
                 pitch: 0.0,
                 relatives: 0,
                 on_ground: true,
+            }),
+            Clientbound::TickingState(TickingState {
+                rate: 40.0,
+                frozen: true,
+            }),
+            Clientbound::TickingStep(TickingStep { steps: 7 }),
+            Clientbound::AwardStats(AwardStats {
+                stats: vec![(8, 3, 120), (0, 1, 2)],
+            }),
+            Clientbound::UpdateAdvancements(UpdateAdvancements {
+                reset: true,
+                added: vec![Advancement {
+                    id: "minecraft:story/root".into(),
+                    parent: None,
+                    display: Some(AdvancementDisplay {
+                        title: literal("Minecraft"),
+                        description: literal("The heart and story of the game"),
+                        icon: crate::item::Stack::new(42, 1),
+                        frame: 0,
+                        show_toast: false,
+                        hidden: false,
+                        background: Some("minecraft:block/stone".into()),
+                    }),
+                    requirements: vec![vec!["crafting_table".into()]],
+                    telemetry: false,
+                    x: 0.0,
+                    y: 1.5,
+                }],
+                removed: vec!["minecraft:story/gone".into()],
+                progress: vec![(
+                    "minecraft:story/root".into(),
+                    vec![("crafting_table".into(), Some(1_792_216_800_000))],
+                )],
+                show: true,
             }),
         ];
         for p in packets {

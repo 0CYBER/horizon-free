@@ -1,5 +1,6 @@
-//! Step 1, import: a Modrinth `.mrpack`, a CurseForge zip, or an instance
-//! folder (Prism / MultiMC, or a plain `mods/` folder) to `pack.json`.
+//! Step 1, import: a Modrinth `.mrpack`, a CurseForge zip, an instance
+//! folder (Prism / MultiMC, or a plain `mods/` folder), or a Crash Assistant
+//! `modlist.json` (the list packs such as ATM10 publish) to `pack.json`.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -37,6 +38,13 @@ pub struct PackFile {
     /// CurseForge project and file ids.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub curseforge: Option<(u64, u64)>,
+    /// The mod id, name and version a mod list states (`modlist.json`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mod_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     /// The jar on disk (instances only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub jar: Option<PathBuf>,
@@ -62,6 +70,12 @@ const LOADERS: [(&str, &str); 4] = [
 pub fn import(path: &Path) -> Result<Pack, String> {
     if path.is_dir() {
         return instance(path);
+    }
+    if path.extension().is_some_and(|e| e == "json") {
+        let text = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let list: Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        return modlist(&list);
     }
     let file = fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -184,6 +198,54 @@ pub fn curseforge(manifest: &Value, names: &[String]) -> Pack {
         files,
         overrides: overrides(names, &[root]),
     }
+}
+
+/// Crash Assistant's `config/crash_assistant/modlist.json`: jar name → mod
+/// id, name, version and Modrinth SHA-1, with the loader as an entry of its
+/// own. NeoForge `21.1.x` runs Minecraft 1.21.1.
+pub fn modlist(list: &Value) -> Result<Pack, String> {
+    let entries = list.as_object().ok_or("modlist.json: not an object")?;
+    let mut pack = Pack {
+        name: "modlist".into(),
+        format: "modlist".into(),
+        ..Pack::default()
+    };
+    for (key, e) in entries {
+        let jar = e["jarName"].as_str().unwrap_or(key);
+        if jar.ends_with("(modloader)") {
+            let version = str_of(e, "version");
+            let (loader, v) = version.split_once('-').unwrap_or(("", &version));
+            pack.loader = loader.to_owned();
+            pack.loader_version = v.to_owned();
+            if loader == "neoforge" {
+                let mut parts = v.split('.');
+                if let (Some(a), Some(b)) = (parts.next(), parts.next()) {
+                    pack.minecraft = if b == "0" {
+                        format!("1.{a}")
+                    } else {
+                        format!("1.{a}.{b}")
+                    };
+                }
+            }
+            continue;
+        }
+        let folder = if jar.ends_with(".zip") {
+            "datapacks"
+        } else {
+            "mods"
+        };
+        let text = |k: &str| e[k].as_str().filter(|v| !v.is_empty()).map(str::to_owned);
+        pack.files.push(PackFile {
+            path: format!("{folder}/{jar}"),
+            sha1: text("modrinthHash"),
+            mod_id: text("modId"),
+            name: text("name"),
+            version: text("version"),
+            ..PackFile::default()
+        });
+    }
+    pack.files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(pack)
 }
 
 /// A Prism / MultiMC instance (`mmc-pack.json`), a game folder, or a
@@ -317,6 +379,30 @@ mod tests {
             p.overrides,
             BTreeMap::from([("config".into(), 2), ("kubejs".into(), 1)])
         );
+    }
+
+    #[test]
+    fn reads_a_crash_assistant_mod_list() {
+        let list = serde_json::json!({
+            "neoforge-21.1.259 (modloader)": {"jarName": "neoforge-21.1.259 (modloader)",
+                "modId": "neoforge", "version": "neoforge-21.1.259"},
+            "mcw-doors-1.1.2.jar": {"jarName": "mcw-doors-1.1.2.jar", "modId": "mcwdoors",
+                "modrinthHash": "0123456789abcdef0123456789abcdef01234567"},
+            "sawmill.zip": {"jarName": "sawmill.zip"}
+        });
+        let pack = modlist(&list).unwrap();
+        assert_eq!(
+            (
+                pack.minecraft.as_str(),
+                pack.loader.as_str(),
+                pack.loader_version.as_str()
+            ),
+            ("1.21.1", "neoforge", "21.1.259")
+        );
+        let paths: Vec<&str> = pack.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["datapacks/sawmill.zip", "mods/mcw-doors-1.1.2.jar"]);
+        assert!(pack.files[1].sha1.is_some());
+        assert_eq!(pack.files[1].mod_id.as_deref(), Some("mcwdoors"));
     }
 
     #[test]

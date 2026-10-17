@@ -847,6 +847,10 @@ fn red_overlay(m: &Mob) -> bool {
     m.hurt_time > 0 || (m.death_time > 0 && !super::creaking::tearing_down(m))
 }
 fn species_scale(m: &Mob, alpha: f32) -> glam::Mat4 {
+    if m.kind.id == "minecraft:player" {
+        // AvatarRenderer.scale, shared by the inventory and world renderer.
+        return glam::Mat4::from_scale(glam::Vec3::splat(0.9375));
+    }
     match m.species() {
         Species::Wither => {
             glam::Mat4::from_scale(glam::Vec3::splat(super::wither::scale(m, alpha)))

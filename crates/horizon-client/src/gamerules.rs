@@ -143,6 +143,15 @@ impl GameRules {
     pub fn bool(&self, name: &str) -> bool {
         matches!(self.get(name), Some(Value::Bool(true)))
     }
+    /// Parse a network rule value, retaining type and range validation.
+    pub fn set_string(&mut self, name: &str, text: &str) -> bool {
+        let value = match self.get(name) {
+            Some(Value::Bool(_)) => text.parse::<bool>().ok().map(Value::Bool),
+            Some(Value::Int(_)) => text.parse::<i32>().ok().map(Value::Int),
+            None => None,
+        };
+        value.is_some_and(|v| self.set(name, v))
+    }
     pub fn int(&self, name: &str) -> i32 {
         match self.get(name) {
             Some(Value::Int(v)) => v,
@@ -250,6 +259,22 @@ impl GameRules {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn network_values_validate_rule_names_types_and_bounds() {
+        let mut rules = GameRules::default();
+        assert!(rules.set_string("minecraft:keep_inventory", "true"));
+        assert!(rules.bool("keep_inventory"));
+        assert!(!rules.set_string("minecraft:keep_inventory", "1"));
+        assert!(rules.bool("keep_inventory"));
+        assert!(rules.set_string("minecraft:random_tick_speed", "7"));
+        assert_eq!(rules.int("random_tick_speed"), 7);
+        assert!(!rules.set_string("minecraft:random_tick_speed", "-1"));
+        assert!(!rules.set_string("minecraft:random_tick_speed", "999999999999"));
+        assert!(!rules.set_string("minecraft:unknown", "true"));
+        assert!(!rules.set_string("other:keep_inventory", "false"));
+        assert_eq!(rules.int("random_tick_speed"), 7);
+    }
     #[test]
     fn defaults_bounds_and_round_trip() {
         let mut rules = GameRules::default();

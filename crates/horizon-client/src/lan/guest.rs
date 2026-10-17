@@ -18,6 +18,16 @@ pub const CREATIVE: i32 = 1;
 pub const ADVENTURE: i32 = 2;
 pub const SPECTATOR: i32 = 3;
 
+/// An effect as last sent in ClientboundUpdateMobEffectPacket.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SentEffect {
+    pub id: &'static str,
+    pub amplifier: i32,
+    pub flags: i8,
+    pub duration: i32,
+    pub tick_count: i32,
+}
+
 pub struct Guest {
     pub conn: u32,
     /// The client's address (IP bans, `list`).
@@ -36,6 +46,8 @@ pub struct Guest {
     pub left_reason: String,
     pub uuid: u128,
     pub name: String,
+    /// The profile's properties, for the player list (skins).
+    pub properties: Vec<horizon_protocol::packets::login::Property>,
     pub entity_id: i32,
     pub sender: PlayerSender,
     pub latency: Arc<AtomicI32>,
@@ -92,11 +104,21 @@ pub struct Guest {
     pub xp_level: i32,
     pub xp_progress: f32,
     pub xp_total: i32,
+    /// Active status effects (`LivingEntity.activeEffects`).
+    pub effects: crate::effects::PlayerEffects,
+    /// What the client was told of each effect: id, amplifier, flags, and
+    /// the duration and `effects.tick_count` at the time, so a duration that
+    /// only counted down is not sent again (`ServerPlayer.onEffectUpdated`).
+    pub sent_effects: Vec<SentEffect>,
     /// What the client believes the inventory menu holds (for change detection).
     pub menu_sent: Vec<Option<ItemStack>>,
     pub menu_state: i32,
     pub sent_health: Option<(f32, i32, f32)>,
     pub sent_xp: Option<(f32, i32, i32)>,
+    /// Where the player last died (Player.lastDeathLocation), sent with the respawn.
+    pub last_death: Option<[i32; 3]>,
+    /// The last action sequence to acknowledge at the next tick (-1: none).
+    pub ack_up_to: std::cell::Cell<i32>,
     pub sent_selected: usize,
     pub inbox: VecDeque<play::Serverbound>,
     pub joined_tick: u64,
@@ -116,6 +138,19 @@ pub struct Guest {
     pub drag: Option<(u8, Vec<usize>)>,
     /// The compound this player was loaded from, for fields Horizon does not model.
     pub saved: Option<horizon_world::nbt::Tag>,
+    /// `ServerPlayer.recipeBook`.
+    pub recipe_book: crate::recipe_book::Settings,
+    /// `PlayerAdvancements`: the criteria obtained, whether they came from
+    /// the player's file, the advancements the client was last told it may
+    /// see (empty before the first packet), and those whose progress
+    /// changed since (`progressChanged`).
+    pub advancements: crate::advancements::Progress,
+    pub advancements_loaded: bool,
+    pub advancements_visible: Vec<bool>,
+    pub advancements_changed: std::collections::BTreeSet<usize>,
+    /// Recipes unlocked since the client was last told
+    /// (`ServerRecipeBook.addRecipes` sends them).
+    pub recipes_unlocked: Vec<String>,
 }
 
 impl Guest {
@@ -130,6 +165,7 @@ impl Guest {
             left_reason: String::new(),
             uuid: j.uuid,
             name: j.name,
+            properties: j.properties,
             entity_id,
             sender: j.sender,
             latency: j.latency,
@@ -174,10 +210,14 @@ impl Guest {
             xp_level: 0,
             xp_progress: 0.0,
             xp_total: 0,
+            effects: Default::default(),
+            sent_effects: Vec::new(),
             menu_sent: vec![None; 46],
             menu_state: 0,
             sent_health: None,
             sent_xp: None,
+            last_death: None,
+            ack_up_to: std::cell::Cell::new(-1),
             sent_selected: 0,
             inbox: VecDeque::new(),
             joined_tick: 0,
@@ -190,6 +230,12 @@ impl Guest {
             next_window: 0,
             drag: None,
             saved: None,
+            recipe_book: Default::default(),
+            advancements: Default::default(),
+            advancements_loaded: false,
+            advancements_visible: Vec::new(),
+            advancements_changed: Default::default(),
+            recipes_unlocked: Vec::new(),
         }
     }
     pub fn send(&self, packet: &play::Clientbound) {

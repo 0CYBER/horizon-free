@@ -175,6 +175,53 @@ fn parse(id: &str, v: &Value) -> Option<Advancement> {
     })
 }
 
+/// `CriterionProgress`'s date as saved, "yyyy-MM-dd HH:mm:ss Z", in UTC.
+pub fn date_text(unix_secs: i64) -> String {
+    let days = unix_secs.div_euclid(86400);
+    let rem = unix_secs.rem_euclid(86400);
+    // Civil from days (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!(
+        "{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02} +0000",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
+}
+
+/// A saved date back to milliseconds since the epoch (the network form of
+/// `CriterionProgress`), the zone offset applied.
+pub fn date_millis(text: &str) -> Option<i64> {
+    let (date, rest) = text.trim().split_once(' ')?;
+    let (time, zone) = rest.split_once(' ').unwrap_or((rest, "+0000"));
+    let mut d = date.split('-').map(|v| v.parse::<i64>().ok());
+    let (y, m, day) = (d.next()??, d.next()??, d.next()??);
+    let mut t = time.split(':').map(|v| v.parse::<i64>().ok());
+    let (h, min, sec) = (t.next()??, t.next()??, t.next()??);
+    let sign = if zone.starts_with('-') { -1 } else { 1 };
+    let zone = zone.trim_start_matches(['+', '-']);
+    let offset =
+        zone.get(0..2)?.parse::<i64>().ok()? * 3600 + zone.get(2..4)?.parse::<i64>().ok()? * 60;
+    // Days from civil (Howard Hinnant's algorithm).
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some((days * 86400 + h * 3600 + min * 60 + sec - sign * offset) * 1000)
+}
+
 /// The player's progress: advancement -> criterion -> obtained date.
 #[derive(Default, Clone)]
 pub struct Progress {
@@ -1058,5 +1105,16 @@ mod tests {
         assert_eq!(l[3], Some((2, 1.0)));
         assert_eq!(l[4], Some((1, 2.0)));
         assert_eq!(l[1], Some((2, 2.0)));
+    }
+    #[test]
+    fn saved_dates_read_back_to_their_instant() {
+        for secs in [0, 951_782_400, 1_792_216_800, 4_107_542_399] {
+            assert_eq!(date_millis(&date_text(secs)), Some(secs * 1000));
+        }
+        assert_eq!(
+            date_millis("2026-10-17 07:30:00 +0200"),
+            date_millis("2026-10-17 05:30:00 +0000")
+        );
+        assert_eq!(date_millis("not a date"), None);
     }
 }

@@ -41,6 +41,35 @@ pub fn geometry(model: &BakedModel, origin: glam::Vec3, translucent: bool, out: 
     }
 }
 
+/// Project a block entity's transformed quads onto the same destroy-stage pass.
+pub fn entity_geometry(vertices: &mut [Vertex], origin: glam::Vec3) {
+    for quad in vertices.as_chunks_mut::<4>().0 {
+        let positions = [0, 1, 2].map(|i| glam::Vec3::from(quad[i].pos));
+        let normal = (positions[1] - positions[0]).cross(positions[2] - positions[0]);
+        let mut facing = Direction::North;
+        let mut best = f32::from_bits(1);
+        for (direction, dot) in [
+            (Direction::Down, -normal.y),
+            (Direction::Up, normal.y),
+            (Direction::North, -normal.z),
+            (Direction::South, normal.z),
+            (Direction::West, -normal.x),
+            (Direction::East, normal.x),
+        ] {
+            if dot > best {
+                facing = direction;
+                best = dot;
+            }
+        }
+        for vertex in quad {
+            vertex.uv = decal_uv((glam::Vec3::from(vertex.pos) - origin).to_array(), facing);
+            vertex.layer = 11;
+            vertex.color = 0xffff_ffff;
+            vertex.light = 240 | (240 << 8);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -49,6 +78,7 @@ mod tests {
     fn slab_top() -> BakedModel {
         BakedModel {
             ambient_occlusion: true,
+            particle: None,
             cube: None,
             faces: vec![BakedFace {
                 layer: 0,
@@ -86,6 +116,24 @@ mod tests {
             assert_eq!(v.color, 0xffff_ffff);
         }
     }
+    #[test]
+    fn entity_overlay_uses_block_local_projected_uvs() {
+        let origin = glam::Vec3::new(12.0, -3.0, 8.0);
+        let mut expected = Vec::new();
+        geometry(&slab_top(), origin, false, &mut expected);
+        let mut actual = expected.clone();
+        for vertex in &mut actual {
+            vertex.uv = [0.0; 2];
+            vertex.layer = 0;
+            vertex.color = 0;
+        }
+        entity_geometry(&mut actual, origin);
+        assert_eq!(
+            bytemuck::cast_slice::<_, u8>(&actual),
+            bytemuck::cast_slice::<_, u8>(&expected)
+        );
+    }
+
     #[test]
     fn small_faces_use_projected_not_stretched_uvs() {
         let a = decal_uv([0.0, 0.0, 0.0], Direction::North);

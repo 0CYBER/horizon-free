@@ -6,6 +6,7 @@
 use super::{Game, GameLevel, Screen, dispenser::new_item_motion, storage::is_shulker_box};
 use horizon_client::{
     containers::{Banner, BlockEntity},
+    item_data,
     items::ItemStack,
 };
 use horizon_core::position::BlockPos;
@@ -15,6 +16,7 @@ use horizon_world::{
         LevelEvent,
         removal::{self, PreRemove},
     },
+    nbt::{JavaString, Tag},
     registry::BlockStateId,
 };
 use std::collections::HashMap;
@@ -80,14 +82,37 @@ impl Pending {
             stack.data_mut().pot_decorations = Some(Box::new(sides));
         }
         if stack.item.ends_with("_banner")
-            && let Some(Banner { layers, name }) = self.banner.remove(&pos)
+            && let Some(Banner {
+                layers,
+                name,
+                components,
+            }) = self.banner.remove(&pos)
         {
-            let data = stack.data_mut();
-            data.banner_patterns = layers;
-            if name.is_some() {
-                data.custom_name = name;
+            let mut patch = match item_data::encode_components(stack) {
+                Some(Tag::Compound(c)) => c,
+                _ => Default::default(),
+            };
+            // The remaining components in the banner loot table's copy_components.
+            for key in [
+                "minecraft:item_name",
+                "minecraft:rarity",
+                "minecraft:tooltip_display",
+            ] {
+                if let Some(value) = components.get(&JavaString::from(key)) {
+                    patch.insert(key.into(), value.clone());
+                }
             }
-            stack.tidy();
+            patch.insert(
+                "minecraft:banner_patterns".into(),
+                horizon_client::banner::layers_to_nbt(&layers),
+            );
+            if let Some(name) = name {
+                patch.insert(
+                    "minecraft:custom_name".into(),
+                    Tag::String(name.as_str().into()),
+                );
+            }
+            (stack.damage, stack.extra) = item_data::decode_components(Some(&Tag::Compound(patch)));
         }
     }
     /// Remember a decorated pot's sherds from its saved block entity.
@@ -550,6 +575,52 @@ impl Game<'_> {
                 self.container = None;
                 self.screen = Screen::Playing;
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_client::{block_entity_item, item_data, mobs::raider, save};
+    use horizon_world::nbt::Tag;
+
+    #[test]
+    fn ominous_banner_survives_placement_save_and_drop() {
+        let original = raider::ominous_banner();
+        let Tag::Compound(components) = item_data::encode_components(&original).unwrap() else {
+            panic!("banner components");
+        };
+        for block in ["minecraft:white_banner", "minecraft:white_wall_banner"] {
+            let pos = (1, 64, 2);
+            let fresh = BlockEntity::for_block(block).unwrap();
+            let fresh = save::encode_block_entity(pos, &fresh, block);
+            let placed = block_entity_item::place(&fresh, &components, false);
+            let (_, placed) = save::decode_block_entity(&placed).unwrap();
+            let saved = save::encode_block_entity(pos, &placed, block);
+            let (_, loaded) = save::decode_block_entity(&saved).unwrap();
+            let BlockEntity::Banner(banner) = &loaded else {
+                panic!("placed banner");
+            };
+            assert_eq!(banner.layers.len(), item_data::OMINOUS_LAYERS.len());
+            let mut pending = Pending::default();
+            pending.record([pos.0, pos.1, pos.2], &loaded, block, None);
+            let mut dropped = ItemStack::new("minecraft:white_banner", 1);
+            pending.attach([pos.0, pos.1, pos.2], &mut dropped);
+            assert!(dropped.data().unwrap().ominous_banner);
+            assert!(horizon_client::banner::tooltip_layers(&dropped).is_empty());
+            assert_eq!(
+                horizon_client::item_tooltip::name_line(&dropped, &|_| None),
+                "Ominous Banner"
+            );
+            assert_eq!(
+                horizon_client::item_tooltip::rarity(&dropped, "common"),
+                "uncommon"
+            );
+            assert_eq!(
+                item_data::encode_components(&dropped),
+                Some(Tag::Compound(components.clone()))
+            );
         }
     }
 }

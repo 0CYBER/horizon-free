@@ -4,9 +4,11 @@
 //! difficulty, LAN on/off with its port, command access for guests and
 //! forcing the game mode. Its difficulty lock asks first (PopupScreen), and
 //! Restrictions opens RestrictionsScreen.
+//! Parity reference: https://mcsrc.dev/2/26.3/net/minecraft/client/gui/screens/WorldOptionsScreen
 use super::{
     Game, Screen,
     game_rules_screen::{Exit, RulesScreen},
+    integrated::ServerOptions,
     lan::LanSettings,
 };
 use horizon_client::{
@@ -15,9 +17,12 @@ use horizon_client::{
     text::{Text, named_color},
     ui::{self, EditBox},
 };
+use horizon_protocol::packets::play::{self, Serverbound as S};
 use winit::{event::KeyEvent, keyboard::PhysicalKey};
 
 pub(super) struct WorldOptions {
+    remote: bool,
+    gamemaster: bool,
     default_mode: i32,
     personal_mode: i32,
     cheats: bool,
@@ -50,7 +55,7 @@ enum View {
     Restrictions,
     GameRules,
 }
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 struct Snapshot {
     default_mode: i32,
     personal_mode: i32,
@@ -108,6 +113,36 @@ fn labelled(key: &str, value: Text) -> Text {
 }
 
 impl WorldOptions {
+    /// Vanilla 26.3 WorldOptionsScreen.generalOptions: guests see difficulty,
+    /// game rules and restrictions; game modes, commands and LAN are host-only.
+    fn visible_buttons(&self, w: f32) -> Vec<(Button, f32, f32, f32)> {
+        if !self.remote {
+            return Self::buttons(w, self.top());
+        }
+        let x = Self::left(w);
+        let top = self.top();
+        vec![
+            (Button::Difficulty, x, top + 29.0, 130.0),
+            (Button::Lock, x + 130.0, top + 29.0, 20.0),
+            (Button::GameRules, x + 158.0, top + 29.0, 150.0),
+            (Button::Restrictions, x, top + 53.0, 150.0),
+        ]
+    }
+    fn content_height(&self) -> f32 {
+        if self.remote { 81.0 } else { CONTENT }
+    }
+    fn scroll_limit(&self, h: f32) -> f32 {
+        (self.content_height() - (h - HEADER - FOOTER)).max(0.0)
+    }
+    fn server_difficulty(&mut self, difficulty: u8, locked: bool) {
+        // A server update is the new baseline, not a local edit. In particular,
+        // the reply to Apply may arrive after the screen has already reopened.
+        self.difficulty = difficulty;
+        self.difficulty_locked = locked;
+        self.locked = locked || self.hardcore;
+        self.initial.difficulty = self.difficulty;
+        self.initial.locked = self.locked;
+    }
     fn parsed_port(&self) -> Option<u16> {
         if self.port.value.is_empty() {
             return Some(self.hint);
@@ -175,15 +210,12 @@ impl WorldOptions {
     /// scroll area.
     fn hit(&self, (x, y): (f32, f32), (w, h): (f32, f32)) -> Option<Button> {
         let inside = y >= HEADER && y < h - FOOTER;
-        Self::buttons(w, self.top())
+        self.visible_buttons(w)
             .into_iter()
             .filter(|_| inside)
             .chain(Self::footer(w, h))
             .find(|(b, bx, by, bw)| self.active(*b) && ui::hovered((x, y), *bx, *by, *bw, 20.0))
             .map(|b| b.0)
-    }
-    fn max_scroll(h: f32) -> f32 {
-        (CONTENT - (h - HEADER - FOOTER)).max(0.0)
     }
     fn label(&self, b: Button) -> Text {
         let mode = |m: i32| {
@@ -229,6 +261,17 @@ impl WorldOptions {
     }
     /// WorldOptionsScreen.updateButton and the update*Button methods.
     fn active(&self, b: Button) -> bool {
+        if self.remote {
+            return match b {
+                Button::Difficulty | Button::Lock => {
+                    self.gamemaster && !self.hardcore && !self.difficulty_locked
+                }
+                Button::GameRules => self.gamemaster,
+                Button::Restrictions | Button::Cancel => true,
+                Button::Apply => self.gamemaster && self.changed(),
+                _ => false,
+            };
+        }
         match b {
             Button::DefaultMode | Button::PersonalMode => self.cheats && !self.hardcore,
             // An owner's commands come with Allow Commands.
@@ -404,30 +447,64 @@ impl Restrictions {
 }
 
 impl Game<'_> {
+    pub(super) fn remote_world_options_permission(&mut self, permission: bool) {
+        if let Some(o) = self.world_options.as_mut() {
+            let lost = o.gamemaster && !permission;
+            o.gamemaster = permission;
+            if lost && o.remote {
+                self.close_world_options();
+            }
+        }
+    }
+    pub(super) fn remote_world_options_difficulty(&mut self, difficulty: u8, locked: bool) {
+        if let Some(o) = self.world_options.as_mut() {
+            o.server_difficulty(difficulty, locked);
+        }
+    }
+    pub(super) fn remote_world_options_rules(&mut self, entries: Vec<play::GameRuleEntry>) {
+        let Some(o) = self
+            .world_options
+            .as_mut()
+            .filter(|o| o.view == View::GameRules)
+        else {
+            return;
+        };
+        let mut rules = horizon_client::gamerules::GameRules::default();
+        for entry in entries {
+            rules.set_string(&entry.name, &entry.value);
+        }
+        o.rules = Some(RulesScreen::new(&rules));
+    }
     pub(super) fn open_world_options(&mut self) {
         let hint = horizon_client::lan::available_port();
-        let lan = self.lan.is_some();
         let mut port = EditBox::new(0.0, 0.0, 150.0, 20.0);
         port.max_length = 5;
-        let (guest_commands, force) = self.lan.as_ref().map_or((false, true), |h| {
-            (h.settings.guest_commands, h.settings.force_game_mode)
-        });
-        if let Some(p) = self.lan_port() {
+        // The world is the server thread's when there is one.
+        let state = match &self.integrated {
+            Some(server) => match server.call(|g| g.server_options()) {
+                Some(state) => state,
+                None => return,
+            },
+            None => self.local_server_options(),
+        };
+        if let Some(p) = state.port {
             port.set_value(&p.to_string());
         }
         let mut options = WorldOptions {
-            default_mode: self.level.mode(),
-            personal_mode: self.mode_id(),
-            cheats: self.allow_commands(),
-            difficulty: self.ui.difficulty,
-            lan,
+            remote: self.external_server(),
+            gamemaster: self.ui.registries.permission >= 2,
+            default_mode: state.default_mode,
+            personal_mode: state.personal_mode,
+            cheats: state.cheats,
+            difficulty: state.difficulty,
+            lan: state.port.is_some(),
             port,
             hint,
-            guest_commands,
-            force,
-            hardcore: self.level.hardcore,
-            difficulty_locked: self.level.difficulty_locked,
-            locked: self.level.difficulty_locked || self.level.hardcore,
+            guest_commands: state.guest_commands,
+            force: state.force,
+            hardcore: state.hardcore,
+            difficulty_locked: state.difficulty_locked,
+            locked: state.difficulty_locked || state.hardcore,
             scroll: 0.0,
             view: View::Options,
             rules: None,
@@ -458,7 +535,10 @@ impl Game<'_> {
     pub(super) fn world_options_escape(&mut self) {
         match self.world_options.as_mut() {
             Some(o) if o.view == View::GameRules => {
-                if let Some(exit) = o.rules.as_mut().and_then(RulesScreen::escape) {
+                if o.rules.is_none() {
+                    // A server may be slow to answer REQUEST_GAMERULE_VALUES.
+                    o.view = View::Options;
+                } else if let Some(exit) = o.rules.as_mut().and_then(RulesScreen::escape) {
                     self.close_game_rules(exit);
                 }
             }
@@ -478,6 +558,20 @@ impl Game<'_> {
         let Exit::Apply(changes) = exit else {
             return;
         };
+        if self.remote.is_some() {
+            if self.ui.registries.permission >= 2 && !changes.is_empty() {
+                self.send(S::SetGameRule(play::SetGameRule {
+                    entries: changes
+                        .into_iter()
+                        .map(|(name, value)| play::GameRuleEntry {
+                            name: format!("minecraft:{name}"),
+                            value: value.to_string(),
+                        })
+                        .collect(),
+                }));
+            }
+            return;
+        }
         if !self.allow_commands() || changes.is_empty() {
             return;
         }
@@ -503,6 +597,16 @@ impl Game<'_> {
             View::GameRules => {
                 if let Some(rules) = o.rules.as_mut() {
                     rules.draw(batch, &self.atlas, self.cursor);
+                } else {
+                    ui::menu_background(
+                        batch,
+                        &self.atlas,
+                        0.0,
+                        0.0,
+                        batch.width,
+                        batch.height,
+                        true,
+                    );
                 }
             }
         }
@@ -585,7 +689,7 @@ impl Game<'_> {
     fn draw_options_view(&self, o: &mut WorldOptions, batch: &mut HudBatch, cursor: (f32, f32)) {
         let atlas = &self.atlas;
         let (w, h) = (batch.width, batch.height);
-        o.scroll = o.scroll.clamp(0.0, WorldOptions::max_scroll(h));
+        o.scroll = o.scroll.clamp(0.0, o.scroll_limit(h));
         // extractMenuBackground: the in-world background, the list
         // background under the content, then the separators over it.
         ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
@@ -607,6 +711,9 @@ impl Game<'_> {
             ("options.worldOptions.general.title", GENERAL_TOP),
             ("options.worldOptions.multiplayer.title", MULTIPLAYER_TOP),
         ] {
+            if o.remote && key == "options.worldOptions.multiplayer.title" {
+                continue;
+            }
             // A FocusableTextWidget padded by 4, centred over both columns.
             let t = Text::translate(key, &[]).underlined().bold();
             let tw = atlas.font.width_text(&t);
@@ -614,7 +721,7 @@ impl Game<'_> {
             batch.text_styled(atlas, &t, tx, top + y + 4.0, u32::MAX, true);
         }
         let inside = cursor.1 >= HEADER && cursor.1 < h - FOOTER;
-        for (b, bx, by, bw) in WorldOptions::buttons(w, top) {
+        for (b, bx, by, bw) in o.visible_buttons(w) {
             let active = o.active(b);
             let hover = active && inside && ui::hovered(cursor, bx, by, bw, 20.0);
             if b == Button::Lock {
@@ -632,32 +739,34 @@ impl Game<'_> {
         }
         // The port box beside the LAN button: editable only with LAN on,
         // its hint the port to use (setPortError colours the text).
-        o.port.x = x + 158.0;
-        o.port.y = top + PORT_TOP;
-        o.port.focused = o.lan && o.port.focused;
-        o.port.text_color = if !o.lan {
-            rgba(0x70, 0x70, 0x70, 255)
-        } else if o.parsed_port().is_some() {
-            rgba(0xE0, 0xE0, 0xE0, 255)
-        } else {
-            rgba(0xDF, 0x50, 0x50, 255)
-        };
-        o.port.draw(batch, atlas, None);
-        if o.port.value.is_empty() && !o.port.focused {
-            let hint = if o.lan {
-                Text::literal(o.hint.to_string())
+        if !o.remote {
+            o.port.x = x + 158.0;
+            o.port.y = top + PORT_TOP;
+            o.port.focused = o.lan && o.port.focused;
+            o.port.text_color = if !o.lan {
+                rgba(0x70, 0x70, 0x70, 255)
+            } else if o.parsed_port().is_some() {
+                rgba(0xE0, 0xE0, 0xE0, 255)
             } else {
-                Text::translate("lanServer.port", &[])
+                rgba(0xDF, 0x50, 0x50, 255)
             };
-            // EditBox.DEFAULT_HINT_STYLE: dark gray.
-            batch.text_styled(
-                atlas,
-                &hint,
-                o.port.text_x(),
-                o.port.text_y(),
-                rgba(0x55, 0x55, 0x55, 255),
-                true,
-            );
+            o.port.draw(batch, atlas, None);
+            if o.port.value.is_empty() && !o.port.focused {
+                let hint = if o.lan {
+                    Text::literal(o.hint.to_string())
+                } else {
+                    Text::translate("lanServer.port", &[])
+                };
+                // EditBox.DEFAULT_HINT_STYLE: dark gray.
+                batch.text_styled(
+                    atlas,
+                    &hint,
+                    o.port.text_x(),
+                    o.port.text_y(),
+                    rgba(0x55, 0x55, 0x55, 255),
+                    true,
+                );
+            }
         }
         batch.clip_since(first, 0.0, HEADER, w, h - FOOTER);
         ui::scrollbar(
@@ -666,7 +775,7 @@ impl Game<'_> {
             (w / 2.0).floor() + 166.0,
             HEADER,
             h - FOOTER,
-            CONTENT,
+            o.content_height(),
             o.scroll.trunc(),
         );
         ui::separators(batch, atlas, HEADER, h - FOOTER, true);
@@ -682,7 +791,7 @@ impl Game<'_> {
         let h = self.gui_size().1;
         match self.world_options.as_mut() {
             Some(o) if o.view == View::Options => {
-                o.scroll = (o.scroll - delta * 10.0).clamp(0.0, WorldOptions::max_scroll(h));
+                o.scroll = (o.scroll - delta * 10.0).clamp(0.0, o.scroll_limit(h));
             }
             Some(o) => {
                 if let Some(rules) = o.rules.as_mut() {
@@ -755,7 +864,8 @@ impl Game<'_> {
             }
         }
         let inside = self.cursor.1 >= HEADER && self.cursor.1 < h - FOOTER;
-        o.port.focused = o.lan
+        o.port.focused = !o.remote
+            && o.lan
             && inside
             && ui::hovered(
                 self.cursor,
@@ -784,7 +894,12 @@ impl Game<'_> {
             Some(Button::Lock) => o.locked = !o.locked,
             Some(Button::Restrictions) => o.view = View::Restrictions,
             Some(Button::GameRules) => {
-                o.rules = Some(RulesScreen::new(&self.ui.rules));
+                if self.remote.is_some() {
+                    o.rules = None;
+                    self.send(S::ClientCommand(play::ClientCommand { action: 2 }));
+                } else {
+                    o.rules = Some(RulesScreen::new(&self.ui.rules));
+                }
                 o.view = View::GameRules;
             }
             Some(Button::Lan) => {
@@ -808,7 +923,7 @@ impl Game<'_> {
 
     fn apply_and_close_world_options(&mut self, o: WorldOptions) {
         let wanted = o.snapshot();
-        let before = o.initial.clone();
+        let before = o.initial;
         self.world_options = Some(o);
         self.apply_world_options(&before, &wanted);
         self.close_world_options();
@@ -891,7 +1006,60 @@ impl Game<'_> {
         }
     }
 
+    /// The world options of a world run in the frame.
+    fn local_server_options(&self) -> ServerOptions {
+        let (guest_commands, force) = self.lan.as_ref().map_or((false, true), |h| {
+            (h.settings.guest_commands, h.settings.force_game_mode)
+        });
+        ServerOptions {
+            default_mode: self.level.mode(),
+            personal_mode: self.mode_id(),
+            cheats: self.allow_commands(),
+            difficulty: self.ui.difficulty,
+            hardcore: self.level.hardcore,
+            difficulty_locked: self.level.difficulty_locked,
+            port: self.lan_port(),
+            guest_commands,
+            force,
+        }
+    }
+
     fn apply_world_options(&mut self, before: &Snapshot, wanted: &Snapshot) {
+        if self.external_server() {
+            if self.ui.registries.permission >= 2 {
+                if wanted.difficulty != before.difficulty {
+                    self.send(S::ChangeDifficulty(play::ChangeDifficultyRequest {
+                        difficulty: i32::from(wanted.difficulty),
+                    }));
+                }
+                if wanted.locked && !before.locked {
+                    self.send(S::LockDifficulty(play::LockDifficulty { locked: true }));
+                }
+            }
+            return;
+        }
+        if let Some(server) = &self.integrated {
+            // The server applies them; the window tells what came of
+            // Open to LAN (ShareToLanScreen's messages).
+            let (b, w) = (*before, *wanted);
+            server.call(move |g| g.apply_world_options(&b, &w));
+            if w.lan != b.lan || (w.lan && w.port != b.port) {
+                match (w.lan, self.lan_port()) {
+                    (true, Some(port)) => self.system_message(Text::translate(
+                        "menu.multiplayerOptions.publish.started.lan",
+                        &[Text::literal(port.to_string())],
+                    )),
+                    (true, None) => {
+                        self.system_message(Text::translate("commands.publish.failed", &[]));
+                    }
+                    (false, _) => self.system_message(Text::translate(
+                        "menu.multiplayerOptions.publish.stopped",
+                        &[],
+                    )),
+                }
+            }
+            return;
+        }
         if wanted.difficulty != before.difficulty {
             let name = DIFFICULTIES[usize::from(wanted.difficulty) & 3];
             self.as_console(|g| g.run_command(&format!("difficulty {name}")));
@@ -904,10 +1072,15 @@ impl Game<'_> {
             self.set_default_game_mode(wanted.default_mode);
         }
         if wanted.personal_mode != before.personal_mode {
-            self.set_mode_id(wanted.personal_mode);
+            if self.serving() {
+                self.set_owner_mode(wanted.personal_mode);
+            } else {
+                self.set_mode_id(wanted.personal_mode);
+            }
         }
         if wanted.cheats != before.cheats {
             self.set_allow_commands(wanted.cheats);
+            self.owner_allow_commands(wanted.cheats);
         }
         let settings_changed =
             wanted.guest_commands != before.guest_commands || wanted.force != before.force;
@@ -935,6 +1108,8 @@ mod tests {
 
     fn options(cheats: bool, hardcore: bool) -> WorldOptions {
         let mut o = WorldOptions {
+            remote: false,
+            gamemaster: cheats,
             default_mode: 1,
             personal_mode: 1,
             cheats,
@@ -988,8 +1163,8 @@ mod tests {
         assert_eq!(at(Button::Force), (217.0, 223.0, 150.0));
         assert_eq!(at(Button::Apply), (59.0, 213.0, 150.0));
         // 218 pixels of content over 174 between the separators.
-        assert_eq!(WorldOptions::max_scroll(240.0), 44.0);
-        assert_eq!(WorldOptions::max_scroll(400.0), 0.0);
+        assert_eq!(options(true, false).scroll_limit(240.0), 44.0);
+        assert_eq!(options(true, false).scroll_limit(400.0), 0.0);
     }
 
     #[test]
@@ -1032,5 +1207,75 @@ mod tests {
         // Hardcore shows the lock closed, and inactive.
         let o = options(true, true);
         assert!(o.locked && !o.active(Button::Lock));
+    }
+
+    #[test]
+    fn remote_options_follow_vanilla_guest_layout_and_permissions() {
+        let mut o = options(false, false);
+        o.remote = true;
+        // Vanilla omits host-only rows instead of disabling the whole screen.
+        let rows = o.visible_buttons(427.0);
+        assert_eq!(
+            rows.iter().map(|b| b.0).collect::<Vec<_>>(),
+            vec![
+                Button::Difficulty,
+                Button::Lock,
+                Button::GameRules,
+                Button::Restrictions,
+            ]
+        );
+        assert_eq!(rows[0], (Button::Difficulty, 59.0, 62.0, 130.0));
+        assert_eq!(rows[2], (Button::GameRules, 217.0, 62.0, 150.0));
+        assert_eq!(rows[3], (Button::Restrictions, 59.0, 86.0, 150.0));
+        assert_eq!(o.scroll_limit(240.0), 0.0);
+        // A non-operator cannot activate the difficulty or rule controls.
+        assert_eq!(o.hit((100.0, 70.0), (427.0, 240.0)), None);
+        assert_eq!(o.hit((240.0, 70.0), (427.0, 240.0)), None);
+        assert_eq!(
+            o.hit((100.0, 90.0), (427.0, 240.0)),
+            Some(Button::Restrictions)
+        );
+        o.gamemaster = true;
+        assert_eq!(
+            o.hit((100.0, 70.0), (427.0, 240.0)),
+            Some(Button::Difficulty)
+        );
+        assert_eq!(
+            o.hit((240.0, 70.0), (427.0, 240.0)),
+            Some(Button::GameRules)
+        );
+        o.difficulty_locked = true;
+        assert_eq!(o.hit((100.0, 70.0), (427.0, 240.0)), None);
+        // Remote hardcore does not hide an operator's Game Rules screen.
+        o.hardcore = true;
+        assert!(o.active(Button::GameRules));
+        assert!(!o.active(Button::Lock));
+        for b in [
+            Button::DefaultMode,
+            Button::PersonalMode,
+            Button::Cheats,
+            Button::Lan,
+            Button::CommandAccess,
+            Button::Force,
+        ] {
+            assert!(!o.active(b));
+        }
+    }
+
+    #[test]
+    fn a_delayed_server_reply_does_not_mark_reopened_options_as_edited() {
+        let mut o = options(false, false);
+        o.remote = true;
+        o.gamemaster = true;
+        // Reopened while the previous Apply's reply was still in flight.
+        o.server_difficulty(3, false);
+        assert_eq!(o.difficulty, 3);
+        assert!(!o.active(Button::Apply));
+        o.difficulty = 0;
+        assert!(o.active(Button::Apply));
+        o.server_difficulty(3, true);
+        assert!(!o.active(Button::Apply));
+        assert!(o.locked);
+        assert!(!o.active(Button::Difficulty));
     }
 }
