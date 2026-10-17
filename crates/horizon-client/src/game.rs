@@ -10379,7 +10379,7 @@ pub fn run() -> Result<()> {
     log::info!("load atlas: {:.2}s", started.elapsed().as_secs_f32());
     let registry_owner = assets.clone();
     let collision = collisions::load(&root, registry_owner.registry)?;
-    let motion = MotionResources::load(&root, &registry_owner)?;
+    let motion = MotionResources::load_with_facts(&root, &registry_owner, &facts)?;
     log::info!(
         "load collision+motion: {:.2}s",
         started.elapsed().as_secs_f32()

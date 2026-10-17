@@ -120,7 +120,7 @@ fn main() -> Result<()> {
     step("mesh tables");
     let collision = collisions::load(&root, assets.registry)?;
     step("collision");
-    let motion = MotionResources::load(&root, &assets)?;
+    let motion = MotionResources::load_with_facts(&root, &assets, &facts)?;
     step("motion");
     let terrain = VanillaTerrain::new(&root.join("worldgen"), assets.registry, &biomes, 1234)?;
     step("worldgen");

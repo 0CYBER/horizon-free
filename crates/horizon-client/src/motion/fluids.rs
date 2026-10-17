@@ -33,8 +33,7 @@ pub struct FluidResources {
     pub shapes: Mutex<FluidShapeCache>,
 }
 impl FluidResources {
-    pub fn load(root: &Path, assets: &Assets) -> Result<Self> {
-        let facts = crate::blocks::BlockFacts::load(root, assets.registry)?;
+    pub fn new(assets: &Assets, facts: &crate::blocks::BlockFacts) -> Result<Self> {
         Ok(Self {
             states: FluidStateTable::new(assets.registry)?,
             sturdy: facts.states.iter().map(|s| s.sturdy_full).collect(),
