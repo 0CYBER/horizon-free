@@ -1068,11 +1068,125 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     TeleportEntity(TeleportEntity) = TELEPORT_ENTITY,
     UpdateMobEffect(UpdateMobEffect) = UPDATE_MOB_EFFECT,
     UpdateTags(UpdateTags) = UPDATE_TAGS,
+    TrackedWaypoint(TrackedWaypoint) = WAYPOINT,
 });
 packet!(
     /// ClientboundClearTitlesPacket: whether to also reset the timings.
     Bool1 { value: bool => Bool }
 );
+
+/// ClientboundTrackedWaypointPacket.Operation, by ordinal.
+pub mod waypoint_operation {
+    pub const TRACK: i32 = 0;
+    pub const UNTRACK: i32 = 1;
+    pub const UPDATE: i32 = 2;
+}
+
+/// TrackedWaypoint's identifier: `Either<UUID, String>`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum WaypointId {
+    Uuid(u128),
+    Name(String),
+}
+
+/// What a TrackedWaypoint points at (its `Type` and contents).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum WaypointTarget {
+    /// `TrackedWaypoint.empty`: an untracked waypoint.
+    Empty,
+    /// A block position (`Vec3iWaypoint`).
+    Block([i32; 3]),
+    /// A chunk (`ChunkWaypoint`).
+    Chunk([i32; 2]),
+    /// An angle in radians (`AzimuthWaypoint`).
+    Azimuth(f32),
+}
+
+/// ClientboundTrackedWaypointPacket: the locator bar's waypoints.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TrackedWaypoint {
+    /// `waypoint_operation`.
+    pub operation: i32,
+    pub id: WaypointId,
+    /// Waypoint.Icon: the style (a `waypoint_style_asset` key) and an RGB colour.
+    pub style: String,
+    pub color: Option<i32>,
+    pub target: WaypointTarget,
+}
+
+impl Codec<TrackedWaypoint> for TrackedWaypoint {
+    fn read(r: &mut Reader) -> Result<TrackedWaypoint> {
+        let operation = r.varint()?;
+        if !(0..=2).contains(&operation) {
+            return Err(Error::new(format!("waypoint operation {operation}")));
+        }
+        let id = if r.bool()? {
+            WaypointId::Uuid(r.uuid()?)
+        } else {
+            WaypointId::Name(r.string(32767)?)
+        };
+        let style = Ident::read(r)?;
+        // ByteBufCodecs.RGB_COLOR: three bytes, read back as an opaque ARGB colour.
+        let color = if r.bool()? {
+            let [red, green, blue] = [r.u8()?, r.u8()?, r.u8()?].map(i32::from);
+            Some(-16_777_216 | red << 16 | green << 8 | blue)
+        } else {
+            None
+        };
+        let target = match r.varint()? {
+            0 => WaypointTarget::Empty,
+            1 => WaypointTarget::Block([r.varint()?, r.varint()?, r.varint()?]),
+            2 => WaypointTarget::Chunk([r.varint()?, r.varint()?]),
+            3 => WaypointTarget::Azimuth(r.f32()?),
+            other => return Err(Error::new(format!("waypoint type {other}"))),
+        };
+        Ok(TrackedWaypoint {
+            operation,
+            id,
+            style,
+            color,
+            target,
+        })
+    }
+    fn write(v: &TrackedWaypoint, w: &mut Writer) {
+        w.varint(v.operation);
+        match &v.id {
+            WaypointId::Uuid(uuid) => {
+                w.bool(true);
+                w.uuid(*uuid);
+            }
+            WaypointId::Name(name) => {
+                w.bool(false);
+                w.string(name);
+            }
+        }
+        w.string(&v.style);
+        w.bool(v.color.is_some());
+        if let Some(color) = v.color {
+            for shift in [16, 8, 0] {
+                w.u8((color >> shift) as u8);
+            }
+        }
+        match v.target {
+            WaypointTarget::Empty => w.varint(0),
+            WaypointTarget::Block([x, y, z]) => {
+                w.varint(1);
+                w.varint(x);
+                w.varint(y);
+                w.varint(z);
+            }
+            WaypointTarget::Chunk([x, z]) => {
+                w.varint(2);
+                w.varint(x);
+                w.varint(z);
+            }
+            WaypointTarget::Azimuth(angle) => {
+                w.varint(3);
+                w.f32(angle);
+            }
+        }
+    }
+}
 
 // ---- serverbound -------------------------------------------------------
 
@@ -1285,6 +1399,42 @@ mod tests {
             }),
             portal_cooldown: 0,
             sea_level: 63,
+        }
+    }
+
+    #[test]
+    fn tracked_waypoint_bytes() {
+        // TRACK, a UUID, the default style, red (#FF5555), a block position.
+        let track = Clientbound::TrackedWaypoint(TrackedWaypoint {
+            operation: waypoint_operation::TRACK,
+            id: WaypointId::Uuid(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10),
+            style: "minecraft:default".into(),
+            color: Some(0xFFFF_5555_u32 as i32),
+            target: WaypointTarget::Block([1, -2, 300]),
+        });
+        let mut expected = vec![141, 1, 0, 1];
+        expected.extend(1..=16u8);
+        expected.push(17);
+        expected.extend(b"minecraft:default");
+        expected.extend([
+            1, 0xFF, 0x55, 0x55, 1, 1, 0xFE, 0xFF, 0xFF, 0xFF, 0x0F, 0xAC, 0x02,
+        ]);
+        assert_eq!(track.encode(), expected);
+        assert_eq!(Clientbound::decode(141, &expected[2..]).unwrap(), track);
+        for target in [
+            WaypointTarget::Empty,
+            WaypointTarget::Chunk([-3, 4]),
+            WaypointTarget::Azimuth(-1.25),
+        ] {
+            let packet = Clientbound::TrackedWaypoint(TrackedWaypoint {
+                operation: waypoint_operation::UPDATE,
+                id: WaypointId::Name("spawn".into()),
+                style: "minecraft:bowtie".into(),
+                color: None,
+                target,
+            });
+            let bytes = packet.encode();
+            assert_eq!(Clientbound::decode(141, &bytes[2..]).unwrap(), packet);
         }
     }
 
