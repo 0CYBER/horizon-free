@@ -9,9 +9,13 @@ use super::{
     chunks::ChunkEncoder,
     data::SyncData,
     entity::EntityState,
-    guest::{Guest, stack_to_network},
+    guest::{Guest, SentEffect, stack_to_network},
 };
-use crate::{items::ItemStack, world::World};
+use crate::{
+    effects::{EffectInstance, PlayerEffects},
+    items::ItemStack,
+    world::World,
+};
 use horizon_protocol::ids::play::clientbound as ids;
 use horizon_protocol::{
     entity_data::{Value, serializer},
@@ -44,6 +48,10 @@ pub struct HubConfig {
     pub max_players: usize,
     /// A dedicated server: operators from `ops`, the dedicated-only commands.
     pub dedicated: bool,
+    /// An integrated server (`dedicated` too, since it has no host player):
+    /// the owner's level from `ops`, the others' from Allow Commands and
+    /// the guests' command access, and the integrated-only commands.
+    pub integrated: bool,
 }
 
 /// The host player as the other players see them.
@@ -441,7 +449,11 @@ impl Hub {
     /// (IntegratedServer.setGuestCommandAccess); a dedicated server its
     /// operators' level (`ops`).
     fn default_permission(&self, uuid: u128) -> u8 {
-        if self.config.dedicated {
+        if self.config.integrated {
+            // IntegratedServer.getProfilePermissions / getCustomPermissionLevel.
+            let guests = if self.config.guest_commands { 2 } else { 0 };
+            self.ops.get(&uuid).copied().unwrap_or(guests)
+        } else if self.config.dedicated {
             self.ops.get(&uuid).copied().unwrap_or(0)
         } else if self.config.guest_commands {
             2
@@ -553,9 +565,104 @@ impl Hub {
         }));
         g.center_sent = Some((cx, cz));
         g.placed_at = self.ticks;
+        self.send_active_effects(i);
         // ServerPlayer.sendPostEffects and initInventoryMenu.
         self.guests[i].send(&raw(ids::POST_EFFECTS, vec![0]));
         self.send_inventory(i);
+    }
+
+    /// ClientboundUpdateMobEffectPacket for one of the guest's effects.
+    fn send_effect(&mut self, i: usize, e: &EffectInstance, blend: bool) -> Option<SentEffect> {
+        let effect = self
+            .sync
+            .id("minecraft:mob_effect", &format!("minecraft:{}", e.id))?;
+        let flags = PlayerEffects::flags(e);
+        let g = &self.guests[i];
+        g.send(&C::UpdateMobEffect(play::UpdateMobEffect {
+            id: g.entity_id,
+            effect,
+            amplifier: e.amplifier,
+            duration: e.duration,
+            flags: flags | if blend { 8 } else { 0 },
+        }));
+        Some(SentEffect {
+            id: e.id,
+            amplifier: e.amplifier,
+            flags,
+            duration: e.duration,
+            tick_count: g.effects.tick_count,
+        })
+    }
+
+    /// PlayerList.sendActivePlayerEffects: every effect, unblended, when the
+    /// player is placed (or respawns).
+    pub fn send_active_effects(&mut self, i: usize) {
+        let effects = self.guests[i].effects.list.clone();
+        let sent = effects
+            .iter()
+            .filter_map(|e| self.send_effect(i, e, false))
+            .collect();
+        self.guests[i].sent_effects = sent;
+    }
+
+    /// ServerPlayer.onEffectAdded (blended), onEffectUpdated and
+    /// onEffectsRemoved, from what changed since the client was told: an
+    /// effect that only counted down is not sent again, except at every
+    /// 600 ticks left (`LivingEntity.tickEffects`).
+    fn sync_effects(&mut self, i: usize) {
+        let g = &self.guests[i];
+        if g.effects.list.is_empty() && g.sent_effects.is_empty() {
+            return;
+        }
+        let now = g.effects.tick_count;
+        let mut sent = Vec::with_capacity(g.effects.list.len());
+        let mut changes = Vec::new();
+        for e in &g.effects.list {
+            match g.sent_effects.iter().find(|s| s.id == e.id) {
+                None => changes.push((e.clone(), true)),
+                Some(s) => {
+                    let ticked = now.wrapping_sub(s.tick_count);
+                    let expected = if s.duration == -1 {
+                        -1
+                    } else {
+                        s.duration - ticked
+                    };
+                    let refresh = ticked > 0 && e.duration > 0 && e.duration % 600 == 0;
+                    if s.amplifier != e.amplifier
+                        || s.flags != PlayerEffects::flags(e)
+                        || e.duration != expected
+                        || refresh
+                    {
+                        changes.push((e.clone(), false));
+                    } else {
+                        sent.push(s.clone());
+                    }
+                }
+            }
+        }
+        let removed: Vec<&'static str> = g
+            .sent_effects
+            .iter()
+            .filter(|s| g.effects.get(s.id).is_none())
+            .map(|s| s.id)
+            .collect();
+        for id in removed {
+            let Some(effect) = self
+                .sync
+                .id("minecraft:mob_effect", &format!("minecraft:{id}"))
+            else {
+                continue;
+            };
+            let g = &self.guests[i];
+            g.send(&C::RemoveMobEffect(play::RemoveMobEffect {
+                id: g.entity_id,
+                effect,
+            }));
+        }
+        for (e, added) in changes {
+            sent.extend(self.send_effect(i, &e, added));
+        }
+        self.guests[i].sent_effects = sent;
     }
 
     /// PlayerList.sendPlayerPermissionLevel: the op level as an entity event
@@ -583,7 +690,10 @@ impl Hub {
     fn send_commands(&self, i: usize) {
         let g = &self.guests[i];
         let packet = match &self.sync.commands {
-            Some(tree) => tree.packet(g.permission, self.config.dedicated, &self.sync.builtin),
+            Some(tree) => {
+                let dedicated = self.config.dedicated && !self.config.integrated;
+                tree.packet(g.permission, dedicated, &self.sync.builtin)
+            }
             None => play::Commands {
                 nodes: vec![play::CommandNode {
                     kind: 0,
@@ -621,6 +731,22 @@ impl Hub {
         }));
     }
 
+    /// ClientboundSetDefaultSpawnPositionPacket for the level's respawn data.
+    fn default_spawn(&self, spawn: [f64; 3]) -> C {
+        C::SetDefaultSpawnPosition(play::SetDefaultSpawnPosition {
+            pos: play::GlobalPos {
+                dimension: self.config.dimension.clone(),
+                pos: [
+                    spawn[0].floor() as i32,
+                    spawn[1].floor() as i32,
+                    spawn[2].floor() as i32,
+                ],
+            },
+            yaw: 0.0,
+            pitch: 0.0,
+        })
+    }
+
     /// PlayerList.sendLevelInfo.
     fn send_level_info(&mut self, i: usize, ctx: &TickCtx) {
         let spawn = ctx.spawn;
@@ -637,18 +763,7 @@ impl Hub {
             warning_time: 300,
         }));
         g.send(&self.time_packet(ctx.world, ctx.clock_rate));
-        g.send(&C::SetDefaultSpawnPosition(play::SetDefaultSpawnPosition {
-            pos: play::GlobalPos {
-                dimension: self.config.dimension.clone(),
-                pos: [
-                    spawn[0].floor() as i32,
-                    spawn[1].floor() as i32,
-                    spawn[2].floor() as i32,
-                ],
-            },
-            yaw: 0.0,
-            pitch: 0.0,
-        }));
+        g.send(&self.default_spawn(spawn));
         let w = &ctx.world.weather;
         if w.raining {
             g.send(&C::GameEvent(play::GameEvent {
@@ -784,11 +899,21 @@ impl Hub {
             }
         }
         self.broadcast_block_changes(ctx.world);
+        // ServerGamePacketListenerImpl.tick: the actions handled since the last tick are
+        // acknowledged after the block changes they made were sent, so a client's predicted
+        // blocks settle on the server's states.
+        for g in &self.guests {
+            let sequence = g.ack_up_to.replace(-1);
+            if sequence >= 0 {
+                g.send(&C::BlockChangedAck(play::BlockChangedAck { sequence }));
+            }
+        }
         self.sync_containers(ctx.world);
         self.track_entities(ctx);
         for i in 0..self.guests.len() {
             if self.guests[i].placed {
                 self.sync_player_state(i);
+                self.sync_effects(i);
             }
         }
         let latencies: Vec<_> = self
@@ -1297,7 +1422,8 @@ impl Hub {
             let g = &self.guests[i];
             (g.health, g.food, g.saturation)
         };
-        if self.guests[i].sent_health != Some(health) {
+        // A dead player's health isn't sent (the death screen shows from the combat kill).
+        if self.guests[i].sent_health != Some(health) && !self.guests[i].dead {
             let g = &mut self.guests[i];
             g.send(&C::SetHealth(play::SetHealth {
                 health: health.0,
@@ -1478,11 +1604,13 @@ impl Hub {
     }
 
     /// Acknowledge a block interaction (ClientboundBlockChangedAckPacket).
+    /// ServerGamePacketListenerImpl.ackBlockChangesUpTo: sent with the next tick's block
+    /// changes (`tick`).
     pub fn ack(&self, conn: u32, sequence: i32) {
         if sequence >= 0
             && let Some(g) = self.guest(conn)
         {
-            g.send(&C::BlockChangedAck(play::BlockChangedAck { sequence }));
+            g.ack_up_to.set(g.ack_up_to.get().max(sequence));
         }
     }
 
@@ -1547,23 +1675,81 @@ impl Hub {
             .map(str::to_owned)
     }
 
-    /// ServerPlayer.respawn: back to `at` with a fresh start.
-    pub fn respawn(&mut self, i: usize, at: [f64; 3]) {
+    /// PlayerList.respawn: back to `at` with a fresh start. The vanilla client waits on its
+    /// level loading screen from the Respawn packet until the level info's "level chunks load
+    /// start" event and the chunk under the player, so the packets follow vanilla's order.
+    pub fn respawn(&mut self, i: usize, at: [f64; 3], ctx: &TickCtx) {
         let mode = self.guests[i].game_mode;
-        let info = self.spawn_info(mode);
+        let mut info = self.spawn_info(mode);
+        // Player.getLastDeathLocation, set where the player died.
+        info.last_death = self.guests[i].last_death.map(|pos| play::GlobalPos {
+            dimension: self.config.dimension.clone(),
+            pos,
+        });
         self.close_container_for(i);
         let g = &mut self.guests[i];
+        // ServerLevel.removePlayerImmediately: every entity paired with the dead player is
+        // removed (ServerEntity.removePairing, one packet each). Its chunks are dropped
+        // without ForgetLevelChunk (PlayerChunkSender.dropChunk skips dead players): the
+        // client keeps them and they are all sent again.
+        for id in g.tracker.ids() {
+            g.send(&C::RemoveEntities(play::RemoveEntities { ids: vec![id] }));
+        }
+        g.tracker.clear();
+        g.sent_chunks.clear();
+        g.chunk_queue.clear();
+        // ServerPlayer.restoreFrom: the game mode again (onUpdateAbilities).
+        g.send(&C::PlayerAbilities(play::PlayerAbilities {
+            flags: g.ability_flags(),
+            flying_speed: 0.05,
+            walking_speed: 0.1,
+        }));
+        // The new player faces the level's respawn direction (snapTo).
+        g.yaw = 0.0;
+        g.pitch = 0.0;
         g.position = at;
         g.previous_position = at;
         g.send(&C::Respawn(play::Respawn {
             spawn: info,
             keep: 0,
         }));
+        // The respawned player is a new one, without effects; so is the
+        // client's (ClientPacketListener.handleRespawn).
+        g.effects = Default::default();
+        g.sent_effects.clear();
         g.center = None;
         g.sent_chunks.clear();
         g.chunk_queue.clear();
         g.tracker.clear();
         self.teleport(i, None);
+        let spawn = self.default_spawn(ctx.spawn);
+        let g = &mut self.guests[i];
+        g.send(&spawn);
+        g.send(&C::ChangeDifficulty(play::ChangeDifficulty {
+            difficulty: ctx.difficulty,
+            locked: ctx.difficulty_locked,
+        }));
+        let xp = (g.xp_progress, g.xp_level, g.xp_total);
+        g.send(&C::SetExperience(play::SetExperience {
+            progress: xp.0,
+            level: xp.1,
+            total: xp.2,
+        }));
+        g.sent_xp = Some(xp);
+        // ServerPlayer.sendPostEffects.
+        g.send(&raw(ids::POST_EFFECTS, vec![0]));
+        self.send_level_info(i, ctx);
+        self.send_permission_level(i);
+        // ServerLevel.addRespawnedPlayer: the chunk tracking starts again at the player.
+        let g = &mut self.guests[i];
+        let (cx, cz) = g.chunk();
+        g.send(&C::SetChunkCacheCenter(play::SetChunkCacheCenter {
+            x: cx,
+            z: cz,
+        }));
+        g.center = None;
+        g.center_sent = Some((cx, cz));
+        // ServerPlayer.initInventoryMenu.
         self.send_inventory(i);
     }
 }

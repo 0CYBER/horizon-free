@@ -38,7 +38,7 @@ impl DebugHost for Host<'_, '_> {
         // the menu as it always has (key_pressed).
         let g = &mut *self.game;
         if without_menu && g.screen == Screen::Playing {
-            g.pause_menu = !(g.remote.is_none() && g.lan.is_none());
+            g.pause_menu = !(g.has_singleplayer_server() && !g.is_published());
             g.screen = Screen::Paused;
             g.capture(false);
             g.mining = None;
@@ -194,15 +194,17 @@ impl Game<'_> {
             }
             return;
         };
-        let received = r
-            .session
-            .counters
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|c| c.bytes_in.load(std::sync::atomic::Ordering::Relaxed));
-        if let Some(total) = received {
-            self.debug_charts.log_bandwidth(total);
+        let received = r.session.counters.lock().unwrap().as_ref().map(|c| {
+            let order = std::sync::atomic::Ordering::Relaxed;
+            [
+                c.bytes_in.load(order),
+                c.sent.load(order),
+                c.received.load(order),
+            ]
+        });
+        if let Some([bytes, sent, received]) = received {
+            self.debug_charts.log_bandwidth(bytes);
+            self.debug_charts.log_packets([sent, received]);
         }
         if shown {
             use horizon_protocol::packets::{play::Serverbound, status::Ping};
@@ -403,8 +405,9 @@ impl Game<'_> {
                 ],
             );
         }
-        // tps: DebugEntryTps for the integrated server (it counts no packets).
-        if self.player.is_some() && self.remote.is_none() {
+        // tps: DebugEntryTps for local and remote connections.
+        if self.player.is_some() {
+            let [tx, rx] = self.debug_charts.packet_rates.map(|n| n.round() as i64);
             let (target, status) = if self.clock.sprinting() {
                 ("-".to_owned(), " (sprinting)")
             } else if self.clock.stepping() {
@@ -417,10 +420,22 @@ impl Game<'_> {
             } else {
                 (format!("{:.1}", 1000.0 / self.clock.rate()), "")
             };
-            d.line(format!(
-                "Integrated server @ {:.1}/{target} ms{status}, 0 tx, 0 rx",
-                self.debug_charts.smoothed_tick_ms
-            ));
+            if self.remote.is_none() || self.integrated.is_some() {
+                let tick_ms = self
+                    .integrated
+                    .as_ref()
+                    .map_or(self.debug_charts.smoothed_tick_ms, |server| {
+                        server.smoothed_tick_ms()
+                    });
+                d.line(format!(
+                    "Integrated server @ {tick_ms:.1}/{target} ms{status}, {tx} tx, {rx} rx",
+                ));
+            } else if let Some(remote) = &self.remote {
+                d.line(format!(
+                    "\"{}\" server{status}, {tx} tx, {rx} rx",
+                    remote.brand
+                ));
+            }
         }
         let (left, right) = d.columns(&self.debug_chart_lines());
         let atlas = &self.atlas;

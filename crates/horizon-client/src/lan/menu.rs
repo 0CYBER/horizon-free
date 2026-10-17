@@ -28,6 +28,8 @@ pub struct Menu {
     pub sent: Vec<Option<ItemStack>>,
     /// An unfinished drag: (mode, slots).
     pub drag: Option<(u8, Vec<usize>)>,
+    /// The data slots the client was last sent (ContainerSetData), a furnace's progress.
+    pub sent_data: Vec<i16>,
 }
 
 /// Where the slots of a container menu live.

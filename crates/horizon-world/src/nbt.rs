@@ -97,6 +97,18 @@ impl Default for Limits {
         }
     }
 }
+impl Limits {
+    /// The prepared per-state block tables (`cached-collision.nbt`,
+    /// `block-properties.nbt`, ...): trusted files with a row per block
+    /// state, which content mods' states grow past the default caps.
+    pub fn tables() -> Self {
+        Self {
+            max_bytes: 1 << 28,
+            max_nodes: 16_000_000,
+            max_depth: 512,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Error {

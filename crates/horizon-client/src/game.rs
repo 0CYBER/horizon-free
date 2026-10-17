@@ -1087,6 +1087,8 @@ struct Game<'a> {
     lan: Option<lan::LanHost>,
     /// Single player's server thread, which `remote` is connected to.
     integrated: Option<integrated::Integrated>,
+    /// This game is that server thread's (game/integrated.rs).
+    serving: Option<integrated::Serving>,
     /// The open world is shared behind an invite code (game/friends.rs).
     friends: Option<friends::Sharing>,
     world_options: Option<lan_screen::WorldOptions>,
@@ -1447,9 +1449,13 @@ impl Game<'_> {
             .iter()
             .flat_map(|(_, m)| m.faces.iter())
             .find(|f| f.quad.facing == horizon_assets::model::Direction::Up)
-            .or_else(|| models.iter().flat_map(|(_, m)| m.faces.iter()).next())?;
-        let name = self.pack.layer_names.get(&face.layer)?.clone();
-        let tint = if face.quad.tint_index >= 0 {
+            .or_else(|| models.iter().flat_map(|(_, m)| m.faces.iter()).next());
+        // Entity-rendered blocks may have a particle texture without any faces.
+        let layer = face
+            .map(|face| face.layer)
+            .or_else(|| models.iter().find_map(|(_, model)| model.particle))?;
+        let name = self.pack.layer_names.get(&layer)?.clone();
+        let tint = if face.is_some_and(|face| face.quad.tint_index >= 0) {
             let n = &self.res.facts.get(state).name;
             if n.contains("leaves") || n.contains("vine") {
                 0x48B518
@@ -1774,6 +1780,12 @@ impl Game<'_> {
                 state,
                 level_flags::UPDATE_ALL,
             );
+        });
+        self.process_level_events()
+    }
+    fn attack_block(&mut self, pos: [i32; 3]) -> Result<()> {
+        self.with_level(|b, level, ticks| {
+            b.attack_block(level, ticks, BlockPos::new(pos[0], pos[1], pos[2]));
         });
         self.process_level_events()
     }
@@ -2885,6 +2897,7 @@ impl Game<'_> {
             return Ok(());
         }
         if self.mining.as_ref().is_none_or(|m| m.pos != hit.pos) {
+            self.attack_block(hit.pos)?;
             self.mining = Some(Mining {
                 pos: hit.pos,
                 progress: 0.0,
@@ -3634,8 +3647,8 @@ impl Game<'_> {
     }
     /// `Minecraft.pause`: a single-player game with a pausing screen open.
     fn pauses_game(&self) -> bool {
-        (self.remote.is_none() || self.integrated.is_some())
-            && self.lan.is_none()
+        self.has_singleplayer_server()
+            && !self.is_published()
             && self.title.is_none()
             && (matches!(
                 self.screen,
@@ -3648,6 +3661,9 @@ impl Game<'_> {
             ) || self.book.is_some())
     }
     fn capture(&mut self, capture: bool) {
+        if !capture {
+            self.stop_mining();
+        }
         // The real pointer takes over from an agent's.
         self.agent_pointer = false;
         let Some(window) = &self.window else { return };
@@ -3840,7 +3856,9 @@ impl Game<'_> {
         let spectator = self.spectator();
         let (wi, hi) = (w as i32, h as i32);
         // Horizon's pause menu sits over the blurred world alone.
-        if !self.ui.hide_gui && !self.horizon_pause() {
+        let horizon_pause = self.horizon_pause();
+        let show_hud = !self.ui.hide_gui && !horizon_pause;
+        if show_hud {
             self.draw_spyglass(&mut batch);
             // Hud.extractCrosshair / extractItemHotbar / extractPlayerHealth /
             // extractVehicleHealth and the experience bar, laid out by hud_layout.
@@ -3890,7 +3908,7 @@ impl Game<'_> {
             let draws = hud_overlays::sleep_overlay(wi, hi, ticks as i32);
             hud_layout::paint(&mut batch, &self.atlas, &draws);
         }
-        if !self.ui.hide_gui {
+        if show_hud {
             self.draw_titles(&mut batch);
             self.draw_scoreboard(&mut batch);
             self.draw_subtitles(&mut batch);
@@ -3966,15 +3984,17 @@ impl Game<'_> {
             }
         }
         let atlas = &self.atlas;
-        if !self.ui.hide_gui
+        if show_hud
             && let Some((text, at)) = &self.message
             && at.elapsed() < Duration::from_secs(3)
         {
             let tw = HudBatch::text_width(atlas, text);
             batch.text(atlas, text, (w - tw) / 2.0, h - 59.0, u32::MAX, true);
         }
-        self.draw_chat(&mut batch);
-        self.draw_tab_list(&mut batch);
+        if !horizon_pause {
+            self.draw_chat(&mut batch);
+            self.draw_tab_list(&mut batch);
+        }
         match self.screen {
             Screen::Paused if self.pause_menu => self.draw_pause_menu(&mut batch),
             // PauseScreen(false): only its title, at the top.
@@ -4333,14 +4353,7 @@ impl Game<'_> {
                     } else {
                         ("Crafting", 97.0)
                     };
-                    batch.text(
-                        atlas,
-                        title,
-                        ox + tx,
-                        oy + if self.craft_size == 3 { 6.0 } else { 8.0 },
-                        grey,
-                        false,
-                    );
+                    batch.text(atlas, title, ox + tx, oy + 6.0, grey, false);
                     if self.craft_size == 3 {
                         batch.text(atlas, "Inventory", ox + 8.0, oy + 72.0, grey, false);
                     }
@@ -5575,6 +5588,20 @@ impl Game<'_> {
                 self.res
                     .block_entity_render
                     .render(&scene, visible, &mut out);
+            }
+            if let Some(mining) = &self.mining
+                && mining.progress > 0.0
+                && self.atlas.sprites.contains_key(&format!(
+                    "block/destroy_stage_{}",
+                    ((mining.progress * 10.0) as u32).min(9)
+                ))
+            {
+                let state = self
+                    .world
+                    .block(mining.pos[0], mining.pos[1], mining.pos[2]);
+                self.res
+                    .block_entity_render
+                    .render_banner_breaking(&scene, mining.pos, state.0, &mut out);
             }
         }
         // Experience orbs (ExperienceOrbRenderer): pulsing billboards from a 4x4 icon sheet.
@@ -7645,7 +7672,15 @@ impl Game<'_> {
     /// The renderer for the window, with the current block sprites, shared
     /// atlas and world border texture.
     fn new_renderer(&self, window: Arc<Window>) -> Result<Renderer> {
-        let assets = &self.pack.assets;
+        self.renderer_for(window, &self.pack, &self.atlas)
+    }
+    fn renderer_for(
+        &self,
+        window: Arc<Window>,
+        pack: &PackResources,
+        atlas: &HudAtlas,
+    ) -> Result<Renderer> {
+        let assets = &pack.assets;
         let mut renderer = pollster::block_on(Renderer::new(
             window,
             self.options.offscreen,
@@ -7655,12 +7690,12 @@ impl Game<'_> {
             assets.texture_layers,
             &assets.sprite_mips,
             &assets.animations,
-            (&self.atlas.pixels, self.atlas.width, self.atlas.height),
-            (&self.pack.forcefield.2, self.pack.forcefield.0),
-            &self.pack.panorama,
+            (&atlas.pixels, atlas.width, atlas.height),
+            (&pack.forcefield.2, pack.forcefield.0),
+            &pack.panorama,
+            self.renderer.as_ref(),
         ))?;
-        renderer.hud.fire_animations = self
-            .atlas
+        renderer.hud.fire_animations = atlas
             .fire_animations
             .iter()
             .map(|(rect, animation)| (*rect, animation.clone(), usize::MAX))
@@ -8061,7 +8096,7 @@ impl Game<'_> {
                 self.creative_screen.search_focused.elapsed().as_millis(),
             );
         }
-        let mut hovered: Option<String> = None;
+        let mut hovered: Option<ItemStack> = None;
         if tab.inventory {
             self.draw_player_preview(
                 batch,
@@ -8111,7 +8146,7 @@ impl Game<'_> {
                         && self.cursor.1 < y + 16.0
                     {
                         batch.fill(&self.atlas, x, y, 16.0, 16.0, rgba(255, 255, 255, 128));
-                        hovered = Some(stack.item.to_string());
+                        hovered = Some(stack.clone());
                     }
                 }
             }
@@ -8126,7 +8161,7 @@ impl Game<'_> {
                     && self.cursor.1 >= y
                     && self.cursor.1 < y + 16.0
                 {
-                    hovered = Some(stack.item.to_string());
+                    hovered = Some(stack);
                 }
             }
             let scrollable = self.creative_screen.rows(&self.pack.names) > 5;
@@ -8162,8 +8197,8 @@ impl Game<'_> {
         } else if self.carried.is_none()
             && let Some(item) = hovered
         {
-            let name = self.pack.names.item(&item);
-            self.tooltip(batch, &name, self.cursor.0, self.cursor.1);
+            let lines = self.stack_tooltip(&item);
+            self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
         }
         self.draw_inventory_effects(batch, (ox, oy), Creative::WIDTH as i32);
     }
@@ -8307,21 +8342,7 @@ impl Game<'_> {
             self.ender_items = items.clone();
         }
         level.ender_items = self.ender_items.clone();
-        level.active_effects = self
-            .potions
-            .effects
-            .list
-            .iter()
-            .map(|e| {
-                (
-                    format!("minecraft:{}", e.id),
-                    e.duration,
-                    e.amplifier,
-                    e.ambient,
-                    e.visible,
-                )
-            })
-            .collect();
+        level.active_effects = self.potions.effects.saved();
     }
     fn save_game(&mut self) -> Result<()> {
         self.save_game_with(true)
@@ -8857,7 +8878,13 @@ impl Game<'_> {
                 }
                 _ => {}
             },
-            // key.swapOffhand: ServerboundPlayerActionPacket SWAP_ITEM_WITH_OFFHAND.
+            // key.swapOffhand: on a server, ServerboundPlayerActionPacket SWAP_ITEM_WITH_OFFHAND
+            // (the server swaps the hands and sends both slots back; spectators can't).
+            KeyCode::KeyF if self.screen == Screen::Playing && self.remote.is_some() => {
+                if !self.spectator() {
+                    self.remote_swap_hands();
+                }
+            }
             KeyCode::KeyF if self.screen == Screen::Playing => {
                 std::mem::swap(&mut self.offhand, &mut self.inventory[self.selected]);
                 self.using = None;
@@ -9360,6 +9387,21 @@ impl ApplicationHandler for Game<'_> {
                 }
                 WindowEvent::MouseInput { state, button, .. } => {
                     let pressed = state == ElementState::Pressed;
+                    if matches!(self.screen, Screen::Inventory | Screen::Creative)
+                        && let Some(key) = self
+                            .settings
+                            .keys
+                            .container_mouse_key(button, self.creative)
+                    {
+                        if pressed && self.carried.is_none() {
+                            self.inventory_hotkey(key);
+                        }
+                        // Neither edge of a bound button is an ordinary slot click.
+                        return Ok(());
+                    }
+                    if pressed && self.sort_mouse_press(button) {
+                        return Ok(());
+                    }
                     match self.screen {
                         Screen::Playing => {
                             if pressed && !self.captured {
@@ -10083,6 +10125,7 @@ impl<'a> Game<'a> {
             remote: None,
             lan: None,
             integrated: None,
+            serving: None,
             world_options: None,
             options_to_world_options: false,
             command_block_screen: None,
@@ -10147,7 +10190,13 @@ pub fn run() -> Result<()> {
     // Snapshots of derived tables live in the game folder, never beside the
     // shared resources.
     Behaviours::set_cache_dir(std::env::current_dir()?.join(".horizon-cache"));
-    options.resources = packs::startup_root(&vanilla_root, &early_settings.resource_packs);
+    let mut pack_error = None;
+    options.resources = packs::startup_root(&vanilla_root, &early_settings.resource_packs)
+        .unwrap_or_else(|e| {
+            log::warn!("Horizon: resource packs not applied: {e}");
+            pack_error = Some(e.to_string());
+            vanilla_root.clone()
+        });
     options.resources = mods::content_root(
         &options.resources,
         &early_settings.mods.enabled,
@@ -10159,6 +10208,7 @@ pub fn run() -> Result<()> {
         // with the game's own resources.
         Err(e) if options.resources != vanilla_root => {
             log::warn!("Horizon: resource packs failed to load ({e}); using the default resources");
+            pack_error = Some(e.to_string());
             options.resources = vanilla_root.clone();
             Assets::load(&vanilla_root)?
         }
@@ -10265,6 +10315,10 @@ pub fn run() -> Result<()> {
     }
     let mut game = Game::new(&resources, pack, atlas, options, settings, audio)?;
     game.ui.vanilla_root = vanilla_root;
+    if let Some(error) = pack_error {
+        game.open_options_at(true, horizon_client::options_ui::Page::Packs);
+        game.ui.options.resource_error = Some(error);
+    }
     if game.options.benchmark.is_some() {
         // The same conditions on every machine: no VSync, no frame cap, no
         // pause or idle limit without focus. In memory only, never saved.

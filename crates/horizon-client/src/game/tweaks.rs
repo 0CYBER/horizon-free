@@ -28,7 +28,7 @@ use horizon_client::{
     menu::Input,
     stations::hover_name,
 };
-use winit::keyboard::KeyCode;
+use winit::{event::MouseButton, keyboard::KeyCode};
 
 /// A sort button's side in GUI pixels.
 const SORT_BUTTON: f32 = 9.0;
@@ -377,8 +377,14 @@ impl Game<'_> {
     /// The sort key: sorts the part under the cursor (the container when
     /// the cursor is over no slot).
     pub(super) fn sort_key_press(&mut self, key: KeyCode) -> bool {
+        keybinds::key_name(key).is_some_and(|name| self.sort_input(name))
+    }
+    pub(super) fn sort_mouse_press(&mut self, button: MouseButton) -> bool {
+        self.sort_input(&keybinds::mouse_name(button))
+    }
+    fn sort_input(&mut self, name: &str) -> bool {
         let e = &self.settings.extras;
-        if !e.sort || keybinds::key_code(&e.sort_key) != Some(key) || self.recipe_search_focused() {
+        if !e.sort || e.sort_key != name || self.recipe_search_focused() {
             return false;
         }
         let buttons = self.sort_buttons();

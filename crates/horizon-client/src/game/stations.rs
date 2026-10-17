@@ -1860,18 +1860,10 @@ impl Game<'_> {
     pub(super) fn stack_tooltip(&self, stack: &ItemStack) -> Vec<(String, u32)> {
         let e: &Enchantments = &self.res.stations.enchantments;
         let props = e.props(&stack.item);
-        let mut rarity = props.map_or("common", |p| p.rarity.as_str());
-        // The ominous banner's rarity component.
-        if stack.data().is_some_and(|d| d.ominous_banner) {
-            rarity = "uncommon";
-        }
-        if !stack.enchantments().is_empty() {
-            rarity = match rarity {
-                "common" | "uncommon" => "rare",
-                "rare" => "epic",
-                r => r,
-            };
-        }
+        let rarity = horizon_client::item_tooltip::rarity(
+            stack,
+            props.map_or("common", |p| p.rarity.as_str()),
+        );
         let color = match rarity {
             "uncommon" => rgba(255, 255, 85, 255),
             "rare" => rgba(85, 255, 255, 255),
@@ -1952,7 +1944,7 @@ impl Game<'_> {
             ));
         }
         // BannerPatternLayers.addToTooltip: up to six layer names.
-        for layer in horizon_client::banner::layers(stack).iter().take(6) {
+        for layer in horizon_client::banner::tooltip_layers(stack).iter().take(6) {
             let key = self.res.stations.banners.layer_key(layer);
             lines.push((self.translate(&key, &key), rgba(170, 170, 170, 255)));
         }
@@ -1976,6 +1968,34 @@ impl Game<'_> {
                     lines.push((format!(" {desc2}"), rgba(85, 85, 255, 255)));
                 }
             }
+        }
+        if let Some(info) = self.res.items.get(&stack.item) {
+            let base = |name: &str, default| {
+                self.player
+                    .as_ref()
+                    .and_then(|player| {
+                        let key = player.attributes.key(name)?;
+                        let handle = player.attributes.lookup(Some(&key))?;
+                        player
+                            .attributes
+                            .instance(&handle)
+                            .ok()
+                            .map(|value| value.base_value())
+                    })
+                    .unwrap_or(default)
+            };
+            let player_base = [
+                base("minecraft:attack_damage", 1.0),
+                base(
+                    "minecraft:attack_speed",
+                    horizon_client::attack_strength::BASE_ATTACK_SPEED,
+                ),
+            ];
+            lines.extend(horizon_client::item_tooltip::attribute_lines(
+                &info.modifiers,
+                Some(player_base),
+                &translate,
+            ));
         }
         if let Some(info) = self.res.items.get(&stack.item)
             && info.max_damage > 0
