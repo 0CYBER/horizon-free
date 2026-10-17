@@ -3856,7 +3856,9 @@ impl Game<'_> {
         let spectator = self.spectator();
         let (wi, hi) = (w as i32, h as i32);
         // Horizon's pause menu sits over the blurred world alone.
-        if !self.ui.hide_gui && !self.horizon_pause() {
+        let horizon_pause = self.horizon_pause();
+        let show_hud = !self.ui.hide_gui && !horizon_pause;
+        if show_hud {
             self.draw_spyglass(&mut batch);
             // Hud.extractCrosshair / extractItemHotbar / extractPlayerHealth /
             // extractVehicleHealth and the experience bar, laid out by hud_layout.
@@ -3906,7 +3908,7 @@ impl Game<'_> {
             let draws = hud_overlays::sleep_overlay(wi, hi, ticks as i32);
             hud_layout::paint(&mut batch, &self.atlas, &draws);
         }
-        if !self.ui.hide_gui {
+        if show_hud {
             self.draw_titles(&mut batch);
             self.draw_scoreboard(&mut batch);
             self.draw_subtitles(&mut batch);
@@ -3982,15 +3984,17 @@ impl Game<'_> {
             }
         }
         let atlas = &self.atlas;
-        if !self.ui.hide_gui
+        if show_hud
             && let Some((text, at)) = &self.message
             && at.elapsed() < Duration::from_secs(3)
         {
             let tw = HudBatch::text_width(atlas, text);
             batch.text(atlas, text, (w - tw) / 2.0, h - 59.0, u32::MAX, true);
         }
-        self.draw_chat(&mut batch);
-        self.draw_tab_list(&mut batch);
+        if !horizon_pause {
+            self.draw_chat(&mut batch);
+            self.draw_tab_list(&mut batch);
+        }
         match self.screen {
             Screen::Paused if self.pause_menu => self.draw_pause_menu(&mut batch),
             // PauseScreen(false): only its title, at the top.
