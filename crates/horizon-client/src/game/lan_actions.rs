@@ -402,10 +402,15 @@ impl Game<'_> {
                         }
                     });
                 }
-                7 => {
+                // SWAP_ITEM_WITH_OFFHAND: the hands swap and the item in use stops
+                // (ServerGamePacketListenerImpl.handlePlayerAction), not for spectators.
+                7 if !spectator => {
                     let g = &mut host.hub.guests[gi];
                     let slot = g.selected;
                     std::mem::swap(&mut g.inventory[slot], &mut g.offhand);
+                    if let Some(play) = host.play.get_mut(&conn) {
+                        play.using = None;
+                    }
                 }
                 _ => {}
             },

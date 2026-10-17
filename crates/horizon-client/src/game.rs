@@ -8878,7 +8878,13 @@ impl Game<'_> {
                 }
                 _ => {}
             },
-            // key.swapOffhand: ServerboundPlayerActionPacket SWAP_ITEM_WITH_OFFHAND.
+            // key.swapOffhand: on a server, ServerboundPlayerActionPacket SWAP_ITEM_WITH_OFFHAND
+            // (the server swaps the hands and sends both slots back; spectators can't).
+            KeyCode::KeyF if self.screen == Screen::Playing && self.remote.is_some() => {
+                if !self.spectator() {
+                    self.remote_swap_hands();
+                }
+            }
             KeyCode::KeyF if self.screen == Screen::Playing => {
                 std::mem::swap(&mut self.offhand, &mut self.inventory[self.selected]);
                 self.using = None;
