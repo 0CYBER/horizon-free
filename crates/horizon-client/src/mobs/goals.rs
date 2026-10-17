@@ -94,6 +94,10 @@ impl GoalSelector {
             .map(|g| g.goal.name())
             .collect()
     }
+    /// Whether a goal of this name is registered, running or not.
+    pub fn has(&self, name: &str) -> bool {
+        self.goals.iter().any(|g| g.goal.name() == name)
+    }
     pub fn is_running(&self, name: &str) -> bool {
         self.goals
             .iter()

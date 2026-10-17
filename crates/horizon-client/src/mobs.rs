@@ -807,6 +807,8 @@ pub struct Mob {
     /// Entity.wasEyeInWater: the eyes were in water before this tick's fluid
     /// update (`isUnderWater` reads it).
     pub was_eye_in_water: bool,
+    /// `Entity.firstTick`: no splash for a mob that appears in water.
+    pub first_tick: bool,
     pub no_gravity: bool,
     /// `Entity.mainSupportingBlockPos`: the block it stood on after its last
     /// move.
@@ -1484,6 +1486,7 @@ impl Mob {
             extra: Extra::default(),
             fluids: living::Fluids::default(),
             was_eye_in_water: false,
+            first_tick: true,
             no_gravity: false,
             supporting: None,
             no_ai: false,
