@@ -97,6 +97,8 @@ pub struct Guest {
     pub menu_state: i32,
     pub sent_health: Option<(f32, i32, f32)>,
     pub sent_xp: Option<(f32, i32, i32)>,
+    /// Where the player last died (Player.lastDeathLocation), sent with the respawn.
+    pub last_death: Option<[i32; 3]>,
     pub sent_selected: usize,
     pub inbox: VecDeque<play::Serverbound>,
     pub joined_tick: u64,
@@ -178,6 +180,7 @@ impl Guest {
             menu_state: 0,
             sent_health: None,
             sent_xp: None,
+            last_death: None,
             sent_selected: 0,
             inbox: VecDeque::new(),
             joined_tick: 0,

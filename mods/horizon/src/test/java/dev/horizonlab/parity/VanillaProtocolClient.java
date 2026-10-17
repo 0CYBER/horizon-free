@@ -430,6 +430,16 @@ public final class VanillaProtocolClient {
         long deadline = System.currentTimeMillis() + 90_000;
         int step = 0;
         long stepAt = 0;
+        // The death the console deals and the respawn after it (PlayerList.respawn): from the
+        // client's PERFORM_RESPAWN until its level is loaded again (LevelLoadTracker: the level
+        // info's "level chunks load start" event, then the chunk under the player).
+        boolean respawning = false;
+        boolean respawned = false;
+        boolean loadStart = false;
+        boolean respawnChunk = false;
+        String runType = null;
+        int run = 0;
+        PositionMoveRotation respawnAt = null;
         // The villager the server's console summoned beside the spawn.
         int villager = -1;
         net.minecraft.world.phys.Vec3 villagerAt = null;
@@ -445,6 +455,22 @@ public final class VanillaProtocolClient {
                 Packet<?> packet = r.packet;
                 counts.merge(r.type, 1, Integer::sum);
                 if (r.type.equals("minecraft:chunk_batch_start")) ordered = false;
+                if (respawning && !respawned) {
+                    String line = respawnLine(r);
+                    // PlayerList.respawn ends with initInventoryMenu: what follows is the
+                    // next ticks' (health, entity data, chunks), in each server's own order.
+                    respawned = r.type.equals("minecraft:container_set_content") && respawnAt != null;
+                    if (line != null && !line.equals(runType)) {
+                        if (runType != null) record("play-respawn", runLine(runType, run));
+                        runType = line;
+                        run = 0;
+                    }
+                    if (line != null) run++;
+                    if (packet instanceof net.minecraft.network.protocol.game.ClientboundGameEventPacket p
+                        && p.getEvent() == net.minecraft.network.protocol.game.ClientboundGameEventPacket.LEVEL_CHUNKS_LOAD_START) {
+                        loadStart = true;
+                    }
+                }
                 if (packet instanceof ClientboundKeepAlivePacket p) {
                     send(new ServerboundKeepAlivePacket(p.getId()));
                 } else if (packet instanceof ClientboundPingPacket p) {
@@ -452,9 +478,14 @@ public final class VanillaProtocolClient {
                 } else if (packet instanceof ClientboundPlayerPositionPacket p) {
                     position = PositionMoveRotation.calculateAbsolute(position, p.change(), p.relatives());
                     record("play-move", text(position.position()) + " " + position.yRot() + " " + position.xRot());
+                    if (respawning) respawnAt = position;
                     send(new ServerboundAcceptTeleportationPacket(p.id(), position.position().x, position.position().y, position.position().z,
                         position.yRot(), position.xRot()));
-                    send(new ServerboundMovePlayerPacket.PosRot(position.position(), position.yRot(), position.xRot(), false, false));
+                    // The 26.3 client answers with the acceptance alone; a second position in the
+                    // same tick is an invalid move to vanilla's server once the player is loaded.
+                    if (!respawning) {
+                        send(new ServerboundMovePlayerPacket.PosRot(position.position(), position.yRot(), position.xRot(), false, false));
+                    }
                     if (!loaded) {
                         send(new ServerboundPlayerLoadedPacket());
                         loaded = true;
@@ -467,15 +498,27 @@ public final class VanillaProtocolClient {
                     lastChunk = now;
                     int px = (int) Math.floor(position.position().x) >> 4;
                     int pz = (int) Math.floor(position.position().z) >> 4;
-                    if (p.x() == px && p.z() == pz) chunkParts(p);
-                } else if (packet instanceof ClientboundSystemChatPacket p && step > 0) {
+                    if (p.x() == px && p.z() == pz && !respawning) chunkParts(p);
+                    if (p.x() == px && p.z() == pz && respawnAt != null) respawnChunk = true;
+                } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundEntityEventPacket p
+                    && step == 5 + REPLIES.length && (int) (byte) field(p, "eventId") == 28) {
+                    // Operator (level 4, as the console made it): it may run /kill on itself.
+                    send(new ServerboundChatCommandPacket("kill"));
+                    step++;
+                } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundPlayerCombatKillPacket p && step > 0) {
+                    // The death message is left out: guests' death messages aren't Horizon's yet.
+                    record("play-death", "death screen");
+                    send(new net.minecraft.network.protocol.game.ServerboundClientCommandPacket(
+                        net.minecraft.network.protocol.game.ServerboundClientCommandPacket.Action.PERFORM_RESPAWN));
+                    respawning = true;
+                } else if (packet instanceof ClientboundSystemChatPacket p && step > 0 && step < 5 + REPLIES.length) {
                     record("play-chat", "system " + p.overlay() + " " + json(p.content()));
-                } else if (packet instanceof ClientboundPlayerChatPacket p && step > 0) {
+                } else if (packet instanceof ClientboundPlayerChatPacket p && step > 0 && step < 5 + REPLIES.length) {
                     record("play-chat", "player " + p.sender() + " " + p.index() + " " + p.body().content() + " " + p.signature().isPresent()
                         + " " + p.unsignedContent().map(VanillaProtocolClient::json) + " " + text(p.filterMask()) + " "
                         + p.chatType().chatType().getRegisteredName() + " " + json(p.chatType().name()) + " "
                         + p.chatType().targetName().map(VanillaProtocolClient::json));
-                } else if (packet instanceof ClientboundDisguisedChatPacket p && step > 0) {
+                } else if (packet instanceof ClientboundDisguisedChatPacket p && step > 0 && step < 5 + REPLIES.length) {
                     record("play-chat", "disguised " + json(p.message()) + " " + p.chatType().chatType().getRegisteredName());
                 } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundAddEntityPacket p
                     && p.getType() == net.minecraft.world.entity.EntityTypes.VILLAGER) {
@@ -561,10 +604,69 @@ public final class VanillaProtocolClient {
             } else if (step == 4 + REPLIES.length && now - stepAt > 1500) {
                 send(new net.minecraft.network.protocol.game.ServerboundContainerClosePacket(1));
                 record("play-counts", "chunks " + counts.getOrDefault("minecraft:level_chunk_with_light", 0));
+                // The harness's console makes the player an operator once it reads this line.
+                send(new ServerboundChatPacket("ready to respawn", Instant.now(), 0L, Optional.empty(),
+                    new LastSeenMessages.Update(0, new BitSet(), (byte) 0)));
+                step++;
+                stepAt = now;
+            } else if (step == 6 + REPLIES.length && loadStart && respawnChunk) {
+                // LevelLoadTracker is done: the vanilla client leaves the loading screen.
+                if (runType != null) record("play-respawn", runLine(runType, run));
+                record("play-respawn", "level loaded at " + text(respawnAt.position()));
+                send(new ServerboundPlayerLoadedPacket());
                 return;
             }
         }
+        if (respawning) {
+            if (runType != null) record("play-respawn", runLine(runType, run));
+            record("play-respawn", "level never loaded: load start " + loadStart + ", chunk under the player " + respawnChunk);
+        }
         record("error", "timed out in play, step " + step + ", chunks " + chunks.size());
+    }
+
+    /**
+     * A run of the same packet: counted, but for the entities removed with the dead player
+     * (which mobs are tracked near the spawn at that moment varies).
+     */
+    private static String runLine(String type, int run) {
+        return type + (run > 1 && !type.equals("minecraft:remove_entities") ? " x" + run : "");
+    }
+
+    /**
+     * A packet after the respawn request, as compared: entity ids and periodic or streamed
+     * packets (time, keep-alive, chunk data and light, whose batching follows each server's
+     * timing) left out; null to skip it.
+     */
+    private String respawnLine(Received r) {
+        String t = r.type;
+        // Entities moving and the dead player's health land in the window between the death
+        // and the respawn as each server's ticks fall: left out.
+        if (t.startsWith("minecraft:move_entity") || t.equals("minecraft:rotate_head") || t.equals("minecraft:set_entity_motion")
+            || t.equals("minecraft:set_entity_data") || t.equals("minecraft:entity_position_sync") || t.equals("minecraft:set_health")) {
+            return null;
+        }
+        if (t.equals("minecraft:keep_alive") || t.equals("minecraft:ping") || t.equals("minecraft:level_chunk_with_light")
+            || t.equals("minecraft:chunk_batch_start") || t.equals("minecraft:chunk_batch_finished")
+            || t.equals("minecraft:light_update") || t.equals("minecraft:bundle_delimiter")
+            // Chat (the death message and /kill's feedback) is compared before the death.
+            || t.equals("minecraft:system_chat") || t.equals("minecraft:player_chat") || t.equals("minecraft:disguised_chat")) {
+            return null;
+        }
+        if (r.packet instanceof net.minecraft.network.protocol.game.ClientboundSetTimePacket p && p.clockUpdates().isEmpty()) {
+            return null;
+        }
+        if (r.packet instanceof net.minecraft.network.protocol.game.ClientboundEntityEventPacket p) {
+            return t + " " + field(p, "eventId");
+        }
+        if (r.packet instanceof net.minecraft.network.protocol.game.ClientboundRemoveEntitiesPacket p) {
+            return t;
+        }
+        if (t.equals("minecraft:respawn") || t.equals("minecraft:game_event") || t.equals("minecraft:set_default_spawn_position")
+            || t.equals("minecraft:change_difficulty") || t.equals("minecraft:set_experience") || t.equals("minecraft:set_health")
+            || t.equals("minecraft:set_chunk_cache_center") || t.equals("minecraft:initialize_border")) {
+            return t + " " + text(r.packet);
+        }
+        return t;
     }
 
     /**

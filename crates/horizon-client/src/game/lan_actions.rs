@@ -13,6 +13,7 @@ use horizon_client::{
     items::ItemStack,
     lan::{
         guest::SPECTATOR,
+        hub::TickCtx,
         menu::{Rules, Slots},
     },
     motion::{MotionEvent, MotionWorld, PlayerMotion},
@@ -683,9 +684,14 @@ impl Game<'_> {
             return;
         }
         let command = command.trim_start_matches('/').to_owned();
+        // The guest's own level (Commands.performCommand with the player's source): an
+        // operator's on a dedicated server, never the host's.
+        let permission = host.hub.guest(conn).map_or(0, |g| g.permission);
         let lines = self.as_guest(host, conn, |g| {
             g.chat_capture = Some(Vec::new());
+            let level = std::mem::replace(&mut g.ui.registries.permission, permission);
             g.run_command(&command);
+            g.ui.registries.permission = level;
             g.chat_capture
                 .take()
                 .unwrap_or_default()
@@ -759,7 +765,23 @@ impl Game<'_> {
         g.saturation = 5.0;
         g.sent_health = None;
         g.motion = None;
-        host.hub.respawn(i, spawn);
+        let ctx = TickCtx {
+            world: &mut self.world,
+            host: None,
+            entities: &[],
+            next_entity: &mut self.next_entity,
+            spawn,
+            difficulty: i32::from(self.ui.difficulty),
+            difficulty_locked: self.level.difficulty_locked,
+            clock_rate: if self.ui.rules.bool("advance_time") {
+                self.ui.clock.rate
+            } else {
+                0.0
+            },
+            tick_rate: self.clock.rate(),
+            tick_frozen: self.clock.frozen(),
+        };
+        host.hub.respawn(i, spawn, &ctx);
     }
 
     /// Per tick, for every guest: dig, use items, pick up drops, die.
@@ -812,14 +834,15 @@ impl Game<'_> {
             let g = &mut host.hub.guests[gi];
             if g.health <= 0.0 && !g.dead {
                 g.dead = true;
+                g.last_death = Some(g.position.map(|v| v.floor() as i32));
+                let (id, at) = (g.entity_id, g.position);
                 let message = literal(&format!("{} died", g.name));
                 host.hub.send_to(
                     conn,
-                    &C::PlayerCombatKill(play::PlayerCombatKill {
-                        id: host.hub.guests[gi].entity_id,
-                        message,
-                    }),
+                    &C::PlayerCombatKill(play::PlayerCombatKill { id, message }),
                 );
+                // LivingEntity.die: the death animation, the dying player included.
+                host.hub.entity_event(id, 3, at);
             }
         }
     }
