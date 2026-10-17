@@ -38,6 +38,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              gets up with Escape, and once the host sleeps too the night ends and both wake.
 - push:      a cow standing in the guest pushes it just clear of the cow (the guest's own client
              pushes it, as in vanilla), not ever faster across the ground.
+- eat:       holding right click with bread, the guest's own screen plays the eating (the item in use
+             counts up) and the server eats one loaf and feeds the guest.
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -58,6 +60,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import zlib
 from pathlib import Path
@@ -69,7 +72,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'push', 'effects', 'portals']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'push', 'eat', 'effects', 'portals']
 
 
 class Game:
@@ -978,6 +981,33 @@ def check_push(host, guest, out):
     detail = {'from': [round(x, 3), round(z, 3)], 'to': [round(nx, 3), round(nz, 3)], 'moved': round(moved, 3)}
     assert nx < x, f'the cow did not push the guest west: {detail}'
     assert moved < 1.5, f'the cow pushed the guest too far: {detail}'
+def check_eat(host, guest, out):
+    guest('command', command='clear @s')
+    # Hungry: the eating needs food below 20 (Player.canEat).
+    guest('command', command='effect give @s minecraft:hunger 3 255')
+    guest.wait(70)
+    guest('command', command='effect clear @s')
+    guest('command', command='give @s minecraft:bread 3')
+    guest.wait(5)
+    guest.raw('select', 'minecraft:bread')
+    hungry = guest('state')['player']['food']
+    # use-item --hold returns once released: watch the guest's screen meanwhile.
+    hold = threading.Thread(target=guest.raw, args=('use-item', '--hold', 2.2))
+    hold.start()
+    using = []
+    for _ in range(4):
+        time.sleep(0.2)
+        using.append(guest('state').get('using'))
+    guest.shot(out, 'eat')
+    hold.join()
+    fed = guest('state')['player']['food']
+    left = guest('inventory')['counts'].get('minecraft:bread', 0)
+    detail = {'hungry': hungry, 'fed': fed, 'bread': left, 'using': using, 'after': guest('state').get('using')}
+    assert hungry < 20, f'the guest is not hungry: {detail}'
+    ticks = [u['ticks'] for u in using if u]
+    assert len(ticks) >= 3 and ticks == sorted(ticks) and ticks[-1] > ticks[0], f'no eating on the guest\'s screen: {detail}'
+    assert left == 2 and fed > hungry, f'the server did not eat one loaf: {detail}'
+    assert detail['after'] is None, f'still eating after the release: {detail}'
     return detail
 
 
@@ -987,7 +1017,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'containers': check_containers, 'feedback': check_feedback, 'commands': check_commands,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,
              'effects': check_effects, 'portals': check_portals, 'clicks': check_clicks,
-             'sleep': check_sleep, 'push': check_push}
+             'sleep': check_sleep, 'push': check_push, 'eat': check_eat}
 
 
 def run(ctl, out, resources, checks):
