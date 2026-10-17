@@ -4,6 +4,7 @@
 use crate::{
     chunk::{Chunk, Light, MIN_Y, SECTIONS, Section},
     containers::BlockEntity,
+    fast_hash::FxHashMap,
 };
 use horizon_protocol::{
     buf::set_bit,
@@ -91,7 +92,7 @@ pub struct ChunkEncoder {
     /// The save's tables, for the heightmaps.
     pub tables: Option<Arc<crate::save::SaveTables>>,
     /// Sections already looked at, by address (see `Encoded`).
-    cache: std::sync::Mutex<HashMap<usize, Encoded>>,
+    cache: std::sync::Mutex<FxHashMap<usize, Encoded>>,
     /// Each column's heightmaps, with the sections they were made from.
     heights: std::sync::Mutex<HashMap<(i32, i32), Heights>>,
     /// The level's sections among a column's: all of them in the Overworld,
@@ -258,22 +259,29 @@ impl ChunkEncoder {
 
     /// The cached entry for a section, made with `non_air` when missing.
     fn cached<T>(&self, section: &Arc<Section>, read: impl FnOnce(&mut Encoded) -> T) -> T {
-        let mut cache = self.cache.lock().unwrap();
+        read(self.entry(&mut self.cache.lock().unwrap(), section))
+    }
+
+    /// A section's entry in the locked cache, made with `non_air` when missing.
+    fn entry<'a>(
+        &self,
+        cache: &'a mut FxHashMap<usize, Encoded>,
+        section: &Arc<Section>,
+    ) -> &'a mut Encoded {
         if cache.len() >= CACHE_SWEEP {
             cache.retain(|_, e| e.section.strong_count() > 0);
             if cache.len() >= CACHE_SWEEP / 2 {
                 cache.clear();
             }
         }
-        let entry = cache
+        cache
             .entry(Arc::as_ptr(section) as usize)
             .or_insert_with(|| Encoded {
                 section: Arc::downgrade(section),
                 non_air: self.non_air(section),
                 wire: None,
                 light: None,
-            });
-        read(entry)
+            })
     }
 
     /// LevelChunkSection.hasOnlyAir, negated.
@@ -382,8 +390,10 @@ impl ChunkEncoder {
     /// The non-air sections of a column as bits (LevelChunkSection.hasOnlyAir).
     fn occupied(&self, chunk: &Chunk) -> u64 {
         let mut bits = 0u64;
+        // One lock for the column: encode_in asks for nine columns' sections.
+        let mut cache = self.cache.lock().unwrap();
         for (i, s) in chunk.sections[self.sections.clone()].iter().enumerate() {
-            if self.cached(s, |e| e.non_air) {
+            if self.entry(&mut cache, s).non_air {
                 bits |= 1 << i;
             }
         }
