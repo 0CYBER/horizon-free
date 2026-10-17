@@ -348,6 +348,8 @@ pub struct Renderer {
     pub screenshot_result: Option<std::result::Result<[u32; 2], String>>,
     /// Brightness option (lightmap gamma), 0..1.
     pub gamma: f32,
+    /// Optional full-light lightmap (Horizon Extras).
+    pub fullbright: bool,
     /// Advance animated block textures (Horizon setting; vanilla always does).
     pub animated_textures: bool,
     present_modes: Vec<wgpu::PresentMode>,
@@ -1616,6 +1618,7 @@ impl Renderer {
             screenshot: None,
             screenshot_result: None,
             gamma: 0.5,
+            fullbright: false,
             animated_textures: true,
             present_modes,
         })
@@ -1971,6 +1974,9 @@ impl Renderer {
                 pixels[i + 2] = (color.z * 255.0) as u8;
                 pixels[i + 3] = 255;
             }
+        }
+        if self.fullbright {
+            pixels.fill(255);
         }
         // The lightmap changes with the time of day, flicker and effects,
         // not every frame: upload only what differs from the texture.
