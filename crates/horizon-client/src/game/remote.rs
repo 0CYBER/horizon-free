@@ -1707,11 +1707,6 @@ impl Game<'_> {
                 self.drop_remote_chunks_out_of_range();
             }
             C::BlockEntityData(p) => self.remote_block_entity_data(p.pos, p.kind, &p.tag),
-            // handleChangeDifficulty: the level data's difficulty and lock.
-            C::ChangeDifficulty(p) => {
-                self.ui.difficulty = p.difficulty.clamp(0, 3) as u8;
-                self.level.difficulty_locked = p.locked;
-            }
             // handleSetSpawn: ClientLevel.setRespawnData, which spawn compasses point at.
             C::SetDefaultSpawnPosition(p) => {
                 let [x, y, z] = p.pos.pos;
