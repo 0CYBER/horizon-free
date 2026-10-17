@@ -41,7 +41,7 @@ impl HiveHost for GameHive<'_, '_> {
         if !self
             .game
             .res
-            .mob_data
+            .mob_data()
             .entity_has("minecraft:beehive_inhabitors", &kind)
         {
             return None;
@@ -72,10 +72,10 @@ impl Game<'_> {
     /// The hive's honey level and front, from its block state.
     pub(super) fn hive_state(&self, at: [i32; 3]) -> Option<(Option<i32>, [i32; 2])> {
         let state = self.world.block(at[0], at[1], at[2]);
-        let name = &self.res.facts.get(state).name;
+        let name = &self.res.facts().get(state).name;
         if !self
             .res
-            .items
+            .items()
             .block_tags
             .get("minecraft:beehives")
             .is_some_and(|t| t.contains(&**name))
@@ -118,7 +118,7 @@ impl Game<'_> {
             .iter()
             .any(|d| {
                 let state = self.world.block(at[0] + d[0], at[1] + d[1], at[2] + d[2]);
-                &*self.res.facts.get(state).name == "minecraft:fire"
+                &*self.res.facts().get(state).name == "minecraft:fire"
             });
             let mut host = GameHive { game: self };
             if fire && !hive.bees.is_empty() {

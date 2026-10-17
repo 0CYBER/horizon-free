@@ -335,7 +335,7 @@ impl Game<'_> {
                 };
                 let info = self
                     .res
-                    .items
+                    .items()
                     .get(&item)
                     .ok_or_else(|| format!("unknown item {item}"))?;
                 let count: u32 = words.get(2).map_or(Ok(1), |c| c.parse())?;
@@ -663,7 +663,7 @@ impl Game<'_> {
         });
         let target = self.pick().map(|hit| {
             let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-            json!({ "pos": hit.pos, "block": &*self.res.facts.get(state).name })
+            json!({ "pos": hit.pos, "block": &*self.res.facts().get(state).name })
         });
         let renderer = self.renderer.as_ref().map(|r| {
             let [arena_bytes, section_vertex_bytes] = r.section_vertex_bytes();

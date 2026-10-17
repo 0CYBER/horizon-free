@@ -93,7 +93,7 @@ impl Game<'_> {
                 self.particles.push(particle);
             }
             if self.mobs[i].age.is_multiple_of(10) {
-                let hit = self.res.facts.get(below).sounds.hit.clone();
+                let hit = self.res.facts().get(below).sounds.hit.clone();
                 self.audio.play(&hit, Some(at), 0.5, 0.5);
             }
         }

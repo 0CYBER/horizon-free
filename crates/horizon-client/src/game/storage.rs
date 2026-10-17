@@ -22,7 +22,7 @@ impl Game<'_> {
         (300..400).contains(&slot)
             && is_shulker_box(&stack.item)
             && self.container.is_some_and(|k| {
-                is_shulker_box(&self.res.facts.get(self.world.block(k.0, k.1, k.2)).name)
+                is_shulker_box(&self.res.facts().get(self.world.block(k.0, k.1, k.2)).name)
             })
     }
     /// Opening an ender chest shows the player's ender inventory in its place.
@@ -160,7 +160,7 @@ impl Game<'_> {
         let k = self.container?;
         Some(
             self.res
-                .facts
+                .facts()
                 .get(self.world.block(k.0, k.1, k.2))
                 .name
                 .clone(),

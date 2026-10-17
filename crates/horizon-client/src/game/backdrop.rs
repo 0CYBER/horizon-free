@@ -139,7 +139,7 @@ impl Game<'_> {
         }
     }
     fn surface_y(&self, x: i32, z: i32) -> Option<i32> {
-        let air = self.res.facts.air;
+        let air = self.res.facts().air;
         (-60..320).rev().find(|&y| self.world.block(x, y, z) != air)
     }
     fn start_backdrop(&mut self) -> Result<()> {
@@ -155,7 +155,7 @@ impl Game<'_> {
             VanillaTerrain::new(
                 &self.options.resources.join("worldgen"),
                 pack.assets.registry,
-                &res.biomes,
+                res.biomes(),
                 seed,
             )
             .map_err(|e| format!("title backdrop: {e}"))?,
@@ -165,10 +165,10 @@ impl Game<'_> {
                 inner: inner.clone(),
                 save: save.clone(),
                 registry: pack.assets.clone(),
-                biomes: res.biomes.clone(),
+                biomes: res.biomes().clone(),
             }),
             pack.context.clone(),
-            res.threads.min(6),
+            res.threads().min(6),
         );
         streaming.radius = self.settings.render_distance.clamp(4, 10);
         streaming.biome_blend = self.settings.biome_blend;
@@ -179,7 +179,7 @@ impl Game<'_> {
         streaming.paused = true;
         self.streaming = streaming;
         self.save = save;
-        let mut world = World::new(self.res.facts.air, seed);
+        let mut world = World::new(self.res.facts().air, seed);
         world.day_time = DAY_TIME;
         world.game_time = 6000;
         // Light snow: the weather renders as snow in frozen biomes.
@@ -237,7 +237,7 @@ impl Game<'_> {
     }
     fn stop_backdrop(&mut self) {
         self.streaming.paused = true;
-        self.world = World::new(self.res.facts.air, 0);
+        self.world = World::new(self.res.facts().air, 0);
         if let Some(r) = self.renderer.as_mut() {
             r.clear_sections();
         }

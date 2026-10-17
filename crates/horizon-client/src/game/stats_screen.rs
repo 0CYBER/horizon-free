@@ -347,8 +347,12 @@ impl Game<'_> {
                     };
                     for (c, (ty, _)) in COLUMNS.iter().enumerate() {
                         let x = left + 75.0 + 40.0 * c as f32;
-                        let block =
-                            c == 0 && self.res.items.get(item).is_some_and(|i| i.block.is_some());
+                        let block = c == 0
+                            && self
+                                .res
+                                .items()
+                                .get(item)
+                                .is_some_and(|i| i.block.is_some());
                         let text = if c == 0 && !block {
                             Text::translate("stats.none", &[]).plain()
                         } else {

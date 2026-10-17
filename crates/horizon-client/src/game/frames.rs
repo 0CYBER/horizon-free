@@ -110,7 +110,7 @@ impl Game<'_> {
             return false;
         }
         let s = f.step();
-        let behind = self.res.facts.get(self.world.block(
+        let behind = self.res.facts().get(self.world.block(
             f.pos[0] - s[0],
             f.pos[1] - s[1],
             f.pos[2] - s[2],

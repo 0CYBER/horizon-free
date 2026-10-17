@@ -208,7 +208,7 @@ impl Game<'_> {
                                 fall_distance,
                                 damage: horizon_client::falling_block::Damage::from_nbt(
                                     &tag,
-                                    self.res.facts.get(state).name.ends_with("anvil"),
+                                    self.res.facts().get(state).name.ends_with("anvil"),
                                 ),
                                 saved: uuid.map(|u| Box::new((u, tag.clone()))),
                             });
@@ -297,7 +297,7 @@ impl Game<'_> {
                             self.persist.unknown.entry(key).or_default().push(tag);
                         }
                     }
-                    _ if self.res.mob_types.contains_key(&kind) => {
+                    _ if self.res.mob_types().contains_key(&kind) => {
                         self.load_mob(tag, None);
                     }
                     _ if !kind.is_empty() && entity_nbt::position(&tag).is_some() => {
@@ -322,7 +322,7 @@ impl Game<'_> {
             if let Some(Tag::List(list)) = c.remove(&"Passengers".into()) {
                 for p in list {
                     let known =
-                        entity_nbt::kind(&p).is_some_and(|k| self.res.mob_types.contains_key(&k));
+                        entity_nbt::kind(&p).is_some_and(|k| self.res.mob_types().contains_key(&k));
                     if known {
                         riders.push(p);
                     } else {
@@ -334,7 +334,7 @@ impl Game<'_> {
                 c.insert("Passengers".into(), Tag::List(unknown));
             }
         }
-        let mut m = entity_nbt::mob_from_nbt(&tag, &self.res.mob_types, self.next_entity)?;
+        let mut m = entity_nbt::mob_from_nbt(&tag, self.res.mob_types(), self.next_entity)?;
         m.extra.mount = mount;
         m.extra.passenger = mount.is_some();
         if finalize {

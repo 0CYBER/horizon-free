@@ -226,14 +226,18 @@ impl Game<'_> {
     fn biome_name_at(&self, p: Vec3) -> Option<String> {
         let (x, y, z) = (p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32);
         let c = self.world.chunks.get(&(x >> 4, z >> 4))?;
-        Some(self.res.biomes.list[c.biome(x, y, z) as usize].name.clone())
+        Some(
+            self.res.biomes().list[c.biome(x, y, z) as usize]
+                .name
+                .clone(),
+        )
     }
     fn water_height(&self, x: i32, y: i32, z: i32) -> Option<(f32, bool)> {
-        let f = self.res.facts.get(self.world.block(x, y, z));
+        let f = self.res.facts().get(self.world.block(x, y, z));
         if f.fluid != Fluid::Water {
             return None;
         }
-        let above = self.res.facts.get(self.world.block(x, y + 1, z));
+        let above = self.res.facts().get(self.world.block(x, y + 1, z));
         let h = if above.fluid == Fluid::Water {
             1.0
         } else {
@@ -243,7 +247,7 @@ impl Game<'_> {
     }
     /// getOpenWaterTypeForBlock: 0 above water, 1 inside water, 2 invalid.
     fn open_water_type(&self, x: i32, y: i32, z: i32) -> u8 {
-        let f = self.res.facts.get(self.world.block(x, y, z));
+        let f = self.res.facts().get(self.world.block(x, y, z));
         if self.world.is_air(self.world.block(x, y, z)) || &*f.name == "minecraft:lily_pad" {
             return 0;
         }
@@ -390,7 +394,7 @@ impl Game<'_> {
             (fish[1] - 1.0).floor() as i32,
             fish[2].floor() as i32,
         );
-        &*self.res.facts.get(state).name == "minecraft:water"
+        &*self.res.facts().get(state).name == "minecraft:water"
     }
     /// `ServerLevel.sendParticles` of a simple particle.
     fn send_particles(

@@ -110,7 +110,7 @@ impl Game<'_> {
         let mut next_entity = self.next_entity;
         let mut random = self.world.random.clone();
         let spawning = self.spawning_monsters();
-        let creaking = self.res.mob_types.get("minecraft:creaking").cloned();
+        let creaking = self.res.mob_types().get("minecraft:creaking").cloned();
         let player_uuid = self.level.player_uuid;
         let snapshot: Vec<_> = mobs.iter().map(|m| seen(m, player_uuid)).collect();
         let mut events = Vec::new();
@@ -266,7 +266,7 @@ impl Game<'_> {
                 continue;
             };
             let state = self.world.block(key.0, key.1, key.2);
-            if &*self.res.facts.get(state).name != "minecraft:creaking_heart" {
+            if &*self.res.facts().get(state).name != "minecraft:creaking_heart" {
                 // The block is gone: preRemoveSideEffects.
                 self.with_heart(key, &mut heart, |h, _, _, host, out| {
                     creaking_heart::remove_protector(h, host, false, out);
@@ -319,7 +319,7 @@ impl Game<'_> {
             if self.creaking.hearts.is_empty() {
                 self.creaking.hearts = self
                     .res
-                    .facts
+                    .facts()
                     .states
                     .iter()
                     .map(|f| &*f.name == "minecraft:creaking_heart")

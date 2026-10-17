@@ -102,7 +102,7 @@ impl Game<'_> {
         let (min, max) = (super::MIN_Y, super::MIN_Y + super::HEIGHT);
         (min..max)
             .rev()
-            .find(|&y| !self.res.facts.is_air(self.world.block(x, y, z)))
+            .find(|&y| !self.res.facts().is_air(self.world.block(x, y, z)))
             .map_or(min, |y| y + 1)
     }
     /// `BeaconBlockEntity.tick` for every beacon.
@@ -136,7 +136,7 @@ impl Game<'_> {
         let mut i = 0;
         while i < 10 && check <= surface {
             let state = self.world.block(x, check, z);
-            let f = self.res.facts.get(state);
+            let f = self.res.facts().get(state);
             if let Some(color) = self.beam_color(&f.name) {
                 if b.checking.len() <= 1 {
                     b.checking.push((color, 1));
@@ -197,7 +197,7 @@ impl Game<'_> {
     fn beacon_base(&self, x: i32, y: i32, z: i32) -> i32 {
         let base = self
             .res
-            .items
+            .items()
             .block_tags
             .get("minecraft:beacon_base_blocks");
         let mut levels = 0;
@@ -208,7 +208,7 @@ impl Game<'_> {
             }
             let ok = (x - step..=x + step).all(|lx| {
                 (z - step..=z + step).all(|lz| {
-                    let name = &self.res.facts.get(self.world.block(lx, ly, lz)).name;
+                    let name = &self.res.facts().get(self.world.block(lx, ly, lz)).name;
                     base.is_some_and(|t| t.contains(&**name))
                 })
             });

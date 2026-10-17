@@ -51,7 +51,7 @@ impl Game<'_> {
     pub(super) fn use_jukebox(&mut self, pos: [i32; 3], held: Option<&ItemStack>) -> bool {
         if &*self
             .res
-            .facts
+            .facts()
             .get(self.world.block(pos[0], pos[1], pos[2]))
             .name
             != "minecraft:jukebox"
@@ -65,7 +65,7 @@ impl Game<'_> {
         let Some(stack) = held else { return false };
         let Some(song) = self
             .res
-            .items
+            .items()
             .get(&stack.item)
             .and_then(|i| i.jukebox_song.clone())
         else {
@@ -95,7 +95,7 @@ impl Game<'_> {
     /// Level event 1010: the song from the jukebox, and the "Now Playing" overlay.
     fn start_song(&mut self, pos: [i32; 3], song: &str) {
         self.stop_song(pos);
-        let Some(s) = self.res.items.songs.get(song).cloned() else {
+        let Some(s) = self.res.items().songs.get(song).cloned() else {
             return;
         };
         // LevelRenderer.playJukeboxSong: SimpleSoundInstance.forJukeboxSong.
@@ -150,7 +150,7 @@ impl Game<'_> {
                 BlockEntity::Jukebox(j) if j.playing => {
                     let song = self
                         .res
-                        .items
+                        .items()
                         .get(&j.record.as_ref()?.item)?
                         .jukebox_song
                         .clone()?;
@@ -161,7 +161,7 @@ impl Game<'_> {
             .collect();
         for (key, song, ticks) in playing {
             let pos = [key.0, key.1, key.2];
-            let Some(s) = self.res.items.songs.get(&song).cloned() else {
+            let Some(s) = self.res.items().songs.get(&song).cloned() else {
                 continue;
             };
             if s.finished(ticks) {

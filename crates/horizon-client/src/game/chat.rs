@@ -207,12 +207,18 @@ impl Game<'_> {
         .map(|a| format!("minecraft:{a}"))
         .collect();
         let reg = &mut self.ui.registries;
-        let mut items: Vec<String> = self.res.items.order.iter().map(|s| s.to_string()).collect();
+        let mut items: Vec<String> = self
+            .res
+            .items()
+            .order
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         items.sort();
         reg.items = items;
         reg.item_tags = self
             .res
-            .items
+            .items()
             .item_tags
             .keys()
             .map(|k| horizon_client::command::args::normalize(k))
@@ -220,7 +226,7 @@ impl Game<'_> {
         reg.item_tags.sort();
         reg.block_tags = self
             .res
-            .items
+            .items()
             .block_tags
             .keys()
             .map(|k| horizon_client::command::args::normalize(k))
@@ -247,7 +253,7 @@ impl Game<'_> {
             .collect();
         let mut summonable: Vec<String> = self
             .res
-            .mob_types
+            .mob_types()
             .keys()
             .map(|k| horizon_client::command::args::normalize(k))
             .collect();

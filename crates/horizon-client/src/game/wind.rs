@@ -141,7 +141,7 @@ impl Game<'_> {
     fn wind_positions(&mut self, center: [f64; 3], radius: f32) -> Vec<[i32; 3]> {
         let stops = self
             .res
-            .items
+            .items()
             .block_tags
             .get("minecraft:blocks_wind_charge_explosions")
             .cloned()
@@ -176,7 +176,7 @@ impl Game<'_> {
                         }
                         let name = &self
                             .res
-                            .facts
+                            .facts()
                             .get(self.world.block(pos[0], pos[1], pos[2]))
                             .name;
                         if stops.contains(&**name) {
@@ -402,7 +402,7 @@ impl Game<'_> {
     /// buttons, levers and bells react as if used; candles go out.
     fn wind_trigger_block(&mut self, pos: [i32; 3]) -> Result<()> {
         let state = self.world.block(pos[0], pos[1], pos[2]);
-        let name = self.res.facts.get(state).name.clone();
+        let name = self.res.facts().get(state).name.clone();
         let prop = |game: &Self, key: &str| {
             game.pack
                 .assets

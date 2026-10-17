@@ -119,7 +119,7 @@ impl Game<'_> {
                 let key = (int(1)?, int(2)?, int(3)?);
                 let name = self
                     .res
-                    .facts
+                    .facts()
                     .get(self.world.block(key.0, key.1, key.2))
                     .name
                     .clone();

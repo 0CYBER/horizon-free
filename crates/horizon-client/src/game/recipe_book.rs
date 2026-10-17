@@ -205,7 +205,7 @@ impl Game<'_> {
             return;
         }
         self.ensure_book();
-        let index = &self.res.stations.recipe_index;
+        let index = &self.res.stations().recipe_index;
         let book = self.recipe_ui.book.as_ref();
         // SmithingTrimDemoSlotDisplay draws from a random of its own.
         let mut random = super::dispenser::entity_random();
@@ -224,8 +224,8 @@ impl Game<'_> {
                     })
                     .or_else(|| index.result(id).map(|r| ItemStack::new(r, 1)))
                     .or_else(|| {
-                        self.res.stations.recipes.trim_demo(
-                            &self.res.stations.enchantments,
+                        self.res.stations().recipes.trim_demo(
+                            &self.res.stations().enchantments,
                             id,
                             &mut |n| {
                                 horizon_core::random::RandomSource::next_int_bound(
@@ -275,7 +275,7 @@ impl Game<'_> {
     /// one goes in id order), then each unlock and removal.
     fn sync_client_book(&mut self) {
         let known = &self.level.recipe_book.recipes;
-        let index = &self.res.stations.recipe_index;
+        let index = &self.res.stations().recipe_index;
         let ui = &mut self.recipe_ui;
         match ui.client_known.as_ref() {
             Some(previous) if previous == known => return,
@@ -305,8 +305,8 @@ impl Game<'_> {
     }
     fn ensure_book(&mut self) {
         if self.recipe_ui.book.is_none() {
-            let mut book = Book::build(&self.res.recipes, &self.res.items);
-            book.set_display_ids(&self.res.stations.recipe_index);
+            let mut book = Book::build(self.res.recipes(), self.res.items());
+            book.set_display_ids(&self.res.stations().recipe_index);
             self.recipe_ui.book = Some(book);
         }
         if self.recipe_ui.search.is_none() {
@@ -466,7 +466,7 @@ impl Game<'_> {
                 && !book.collection_matches(&c.entries, &query, &|stack| {
                     horizon_client::item_tooltip::lines(
                         stack,
-                        self.res.items.get(&stack.item),
+                        self.res.items().get(&stack.item),
                         &|k| self.pack.names.get(k).map(str::to_owned),
                     )
                 })
@@ -838,7 +838,7 @@ impl Game<'_> {
             return;
         };
         let ghost = book
-            .ghost(entry, book_type, grid, fuel_empty, &self.res.items)
+            .ghost(entry, book_type, grid, fuel_empty, self.res.items())
             .into_iter()
             .map(|g| Ghost {
                 slot: match (g.target, book_type) {

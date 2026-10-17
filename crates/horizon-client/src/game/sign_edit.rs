@@ -175,7 +175,7 @@ impl Game<'_> {
         batch.text(atlas, title, (w - tw) / 2.0, 40.0, u32::MAX, true);
         let name = self
             .res
-            .facts
+            .facts()
             .get(self.world.block(edit.pos.0, edit.pos.1, edit.pos.2))
             .name
             .clone();

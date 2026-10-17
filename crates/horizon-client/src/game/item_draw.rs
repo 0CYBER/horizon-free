@@ -176,7 +176,7 @@ impl Game<'_> {
     }
     pub(super) fn item_host(&self) -> Host<'_> {
         Host {
-            banners: &self.res.stations.banners,
+            banners: &self.res.stations().banners,
         }
     }
     /// The client level as item models read it.

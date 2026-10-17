@@ -397,7 +397,7 @@ impl Game<'_> {
         let key = (pos[0], pos[1], pos[2]);
         if &*self
             .res
-            .facts
+            .facts()
             .get(self.world.block(pos[0], pos[1], pos[2]))
             .name
             != "minecraft:lectern"

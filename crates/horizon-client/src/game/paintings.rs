@@ -94,7 +94,7 @@ impl Game<'_> {
         for x in slo[0].floor() as i32..=shi[0].floor() as i32 {
             for y in slo[1].floor() as i32..=shi[1].floor() as i32 {
                 for z in slo[2].floor() as i32..=shi[2].floor() as i32 {
-                    let f = self.res.facts.get(self.world.block(x, y, z));
+                    let f = self.res.facts().get(self.world.block(x, y, z));
                     if !(f.legacy_solid || f.has_class("DiodeBlock")) {
                         return false;
                     }

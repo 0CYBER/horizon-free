@@ -10,14 +10,22 @@ use horizon_client::{
 
 impl Game<'_> {
     fn is_wither_skull(&self, p: [i32; 3]) -> bool {
-        let name = &*self.res.facts.get(self.world.block(p[0], p[1], p[2])).name;
+        let name = &*self
+            .res
+            .facts()
+            .get(self.world.block(p[0], p[1], p[2]))
+            .name;
         matches!(
             name,
             "minecraft:wither_skeleton_skull" | "minecraft:wither_skeleton_wall_skull"
         )
     }
     fn is_soul_base(&self, p: [i32; 3]) -> bool {
-        let name = &*self.res.facts.get(self.world.block(p[0], p[1], p[2])).name;
+        let name = &*self
+            .res
+            .facts()
+            .get(self.world.block(p[0], p[1], p[2]))
+            .name;
         matches!(name, "minecraft:soul_sand" | "minecraft:soul_soil")
     }
     /// After a wither skeleton skull is placed: the T of soul sand (or soul
@@ -36,7 +44,7 @@ impl Game<'_> {
                     && self.is_soul_base(at(1, 2))
                     && [0, 2].iter().all(|&c| {
                         let p = at(c, 2);
-                        self.res.facts.is_air(self.world.block(p[0], p[1], p[2]))
+                        self.res.facts().is_air(self.world.block(p[0], p[1], p[2]))
                     });
                 if !ok {
                     continue;

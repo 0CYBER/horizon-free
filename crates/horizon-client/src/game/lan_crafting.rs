@@ -84,10 +84,10 @@ fn place_back(menu: &mut Menu, env: &Env, stacks: Vec<ItemStack>) {
 impl Game<'_> {
     fn menu_env(&self) -> Env<'_> {
         Env {
-            items: &self.res.items,
-            recipes: &self.res.recipes,
-            brewing: &self.res.stations.brewing,
-            banners: &self.res.stations.banners,
+            items: self.res.items(),
+            recipes: self.res.recipes(),
+            brewing: &self.res.stations().brewing,
+            banners: &self.res.stations().banners,
             trade: None,
         }
     }
@@ -218,7 +218,7 @@ impl Game<'_> {
                 f.items[k] = menu.slot(k).cloned();
             }
             // AbstractFurnaceBlockEntity.setItem: only a new input restarts cooking.
-            f.input_clicked(&self.res.recipes, items[0].clone());
+            f.input_clicked(self.res.recipes(), items[0].clone());
         }
         host.play.entry(conn).or_default().crafting.furnace = Some((p.container, menu));
         host.hub.inventory_clicked(conn, p, &self.world, &changed);

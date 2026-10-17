@@ -131,7 +131,7 @@ impl Game<'_> {
             root,
             self.pack.assets.clone(),
             render,
-            &self.res.facts,
+            self.res.facts(),
             self.pack.context.biomes.clone(),
             self.pack.context.light.clone(),
         )?;
@@ -167,7 +167,7 @@ impl Game<'_> {
         // Villager hats come from the pack's texture metadata (shared data, swapped in place).
         *self
             .res
-            .mob_data
+            .mob_data()
             .villager_hats
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) =

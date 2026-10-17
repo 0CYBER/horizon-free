@@ -10,7 +10,7 @@ impl Game<'_> {
     /// Load the configured/placed feature registry used by saplings, fungi
     /// and bone meal (once per process; shares the generator's bundle).
     pub(super) fn install_live_features(&self) {
-        if self.res.behaviours.live_features().is_some() {
+        if self.res.behaviours().live_features().is_some() {
             return;
         }
         let dir = self.options.resources.join("worldgen");
@@ -20,7 +20,7 @@ impl Game<'_> {
             .and_then(|data| LiveFeatures::new(&data).map_err(|e| e.to_string()));
         match features {
             Ok(Some(features)) => {
-                self.res.behaviours.set_live_features(Arc::new(features));
+                self.res.behaviours().set_live_features(Arc::new(features));
                 log::info!("Horizon: live features ready in {:?}", started.elapsed());
             }
             Ok(None) => {

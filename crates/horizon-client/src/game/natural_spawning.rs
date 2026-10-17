@@ -35,7 +35,7 @@ pub(super) struct GameLevel<'g, 'a> {
 impl GameLevel<'_, '_> {
     fn biome(&self, x: i32, y: i32, z: i32) -> Option<&BiomeInfo> {
         let chunk = self.game.world.chunks.get(&(x >> 4, z >> 4))?;
-        Some(self.game.res.biomes.get(chunk.biome(x, y, z)))
+        Some(self.game.res.biomes().get(chunk.biome(x, y, z)))
     }
 }
 impl SpawnLevel for GameLevel<'_, '_> {
@@ -106,7 +106,7 @@ impl NaturalLevel for GameLevel<'_, '_> {
         self.game.dim == Dim::Nether
     }
     fn mob_type(&self, entity: &str) -> Option<(Species, f32, f32, Category)> {
-        let t = self.game.res.mob_types.get(entity)?;
+        let t = self.game.res.mob_types().get(entity)?;
         Some((
             t.species,
             t.width as f32,
@@ -234,7 +234,7 @@ impl horizon_client::mobs::spawner::SpawnerLevel for GameLevel<'_, '_> {
         self.game.ui.rules.bool("spawner_blocks_work")
     }
     fn entity_exists(&self, id: &str) -> bool {
-        self.game.res.mob_types.contains_key(id) || self.game.entity_type_exists(id)
+        self.game.res.mob_types().contains_key(id) || self.game.entity_type_exists(id)
     }
     fn count_entities(&self, id: &str, bounds: Aabb) -> usize {
         let mobs = self
@@ -264,7 +264,7 @@ impl<'a> Game<'a> {
     /// Creates a mob the spawner accepted, finalized the game's way; the
     /// caller adds it with [`Game::add_spawned`].
     fn finalize_spawned(&self, r: &SpawnRequest, pending: &mut Vec<Mob>) -> Option<Spawned> {
-        let kind = self.res.mob_types.get(r.entity)?.clone();
+        let kind = self.res.mob_types().get(r.entity)?.clone();
         let [x, y, z] = r.position;
         let mut mob = Mob::new(0, kind, Vec3::new(x, y, z), r.yaw);
         let facts = self.biome_facts(x.floor() as i32, y.floor() as i32, z.floor() as i32);

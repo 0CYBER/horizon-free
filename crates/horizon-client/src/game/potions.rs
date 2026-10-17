@@ -169,7 +169,7 @@ impl Game<'_> {
                     return Ok(false);
                 };
                 let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-                if self.res.facts.get(state).fluid != horizon_client::blocks::Fluid::Water {
+                if self.res.facts().get(state).fluid != horizon_client::blocks::Fluid::Water {
                     return Ok(false);
                 }
                 let at = [
@@ -348,11 +348,11 @@ impl Game<'_> {
         let armor: Vec<Option<ItemStack>> = self.armor.to_vec();
         if self.potions.protection_for.as_ref() != Some(&armor) {
             let mut table = Vec::new();
-            let e = &self.res.stations.enchantments;
+            let e = &self.res.stations().enchantments;
             let mut random = horizon_core::random::LegacyRandom::new(0);
             for (_, def) in self.motion.health.damage.entries() {
                 let ctx = horizon_client::enchant::EffectContext {
-                    items: Some(&self.res.items),
+                    items: Some(self.res.items()),
                     damage_type: Some(&def.name),
                     this: Some("minecraft:player"),
                     ..Default::default()
@@ -408,7 +408,7 @@ impl Game<'_> {
                 let state =
                     self.world
                         .block(p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32);
-                if self.res.facts.get(state).full_collision
+                if self.res.facts().get(state).full_collision
                     || self.mobs.iter().any(|m| {
                         m.alive()
                             && (m.position.x - p.x).abs() < m.kind.width / 2.0 + 0.125
@@ -556,7 +556,7 @@ impl Game<'_> {
             }
         }
         // Mobs take the instant effects (undead invert healing and harming).
-        let undead = &self.res.stations.enchantments.entity_tags;
+        let undead = &self.res.stations().enchantments.entity_tags;
         let mut hits = Vec::new();
         for (i, m) in self.mobs.iter().enumerate() {
             let d2 = (m.position.x - at.x).powi(2)

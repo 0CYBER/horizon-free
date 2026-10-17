@@ -668,12 +668,23 @@ struct FallingBlock {
 /// recipes, biomes, mobs, collision and motion. Read-only and `Send + Sync`,
 /// so the client and an integrated server thread can share one copy.
 pub struct Resources {
+    core: WorldCore,
+    rest: std::sync::OnceLock<WorldRest>,
+}
+
+struct WorldCore {
     facts: BlockFacts,
+    biomes: Arc<Biomes>,
+    environment: Environment,
+    collision: BlockCollisionRegistry<'static>,
+    motion: MotionResources,
+    threads: usize,
+}
+
+struct WorldRest {
     items: Items,
     recipes: Recipes,
     transformers: horizon_client::block_transform::Transformers,
-    biomes: Arc<Biomes>,
-    environment: Environment,
     mob_types: HashMap<String, Arc<MobType>>,
     mob_data: horizon_client::mobs::MobData,
     providers: Providers,
@@ -685,14 +696,88 @@ pub struct Resources {
     nether_environment: Environment,
     end_environment: Environment,
     behaviours: Behaviours,
-    collision: BlockCollisionRegistry<'static>,
-    motion: MotionResources,
-    threads: usize,
     player_arm: Option<horizon_client::mobs::Part>,
     player_type: Option<Arc<horizon_client::mobs::MobType>>,
-    /// Enchantments, workstation recipes and brewing (game/stations.rs).
     stations: horizon_client::stations::StationData,
 }
+
+impl Resources {
+    fn rest(&self) -> &WorldRest {
+        self.rest
+            .get()
+            .expect("world resources joined before entry")
+    }
+    fn facts(&self) -> &BlockFacts {
+        &self.core.facts
+    }
+    fn items(&self) -> &Items {
+        &self.rest().items
+    }
+    fn recipes(&self) -> &Recipes {
+        &self.rest().recipes
+    }
+    fn transformers(&self) -> &horizon_client::block_transform::Transformers {
+        &self.rest().transformers
+    }
+    fn biomes(&self) -> &Arc<Biomes> {
+        &self.core.biomes
+    }
+    fn environment(&self) -> &Environment {
+        &self.core.environment
+    }
+    fn mob_types(&self) -> &HashMap<String, Arc<MobType>> {
+        &self.rest().mob_types
+    }
+    fn mob_data(&self) -> &horizon_client::mobs::MobData {
+        &self.rest().mob_data
+    }
+    fn providers(&self) -> &Providers {
+        &self.rest().providers
+    }
+    fn block_entity_render(&self) -> &horizon_client::block_entity_render::BlockEntityRenderer {
+        &self.rest().block_entity_render
+    }
+    fn animate(&self) -> &horizon_client::animate_tick::AnimateTables {
+        &self.rest().animate
+    }
+    fn fog(&self) -> &horizon_client::fog::FogTables {
+        &self.rest().fog
+    }
+    fn music(&self) -> &horizon_client::music::MusicTables {
+        &self.rest().music
+    }
+    fn ambient(&self) -> &horizon_client::ambience::AmbientTables {
+        &self.rest().ambient
+    }
+    fn nether_environment(&self) -> &Environment {
+        &self.rest().nether_environment
+    }
+    fn end_environment(&self) -> &Environment {
+        &self.rest().end_environment
+    }
+    fn behaviours(&self) -> &Behaviours {
+        &self.rest().behaviours
+    }
+    fn collision(&self) -> &BlockCollisionRegistry<'static> {
+        &self.core.collision
+    }
+    fn motion(&self) -> &MotionResources {
+        &self.core.motion
+    }
+    fn threads(&self) -> usize {
+        self.core.threads
+    }
+    fn player_arm(&self) -> &Option<horizon_client::mobs::Part> {
+        &self.rest().player_arm
+    }
+    fn player_type(&self) -> &Option<Arc<horizon_client::mobs::MobType>> {
+        &self.rest().player_type
+    }
+    fn stations(&self) -> &horizon_client::stations::StationData {
+        &self.rest().stations
+    }
+}
+
 /// Everything the title and menus draw: the GUI atlas with its font and the
 /// title panorama. Kept apart from the world bundle so the title can appear
 /// before the block sprites, models and gameplay tables are ready.
@@ -1270,7 +1355,7 @@ impl Game<'_> {
     /// A block's outline boxes in world space (`getShape` plus the random offset).
     fn outline_boxes(&self, pos: [i32; 3]) -> Vec<[f64; 6]> {
         let state = self.world.block(pos[0], pos[1], pos[2]);
-        let f = self.res.facts.get(state);
+        let f = self.res.facts().get(state);
         let o = if f.outline_offset {
             self.pack
                 .context
@@ -1332,8 +1417,8 @@ impl Game<'_> {
         let mut t = 0.0;
         while t <= reach {
             let state = self.world.block(pos[0], pos[1], pos[2]);
-            let f = self.res.facts.get(state);
-            if !self.res.facts.is_air(state)
+            let f = self.res.facts().get(state);
+            if !self.res.facts().is_air(state)
                 && !(f.fluid != Fluid::None
                     && !f.waterlogged
                     && &*f.name != "minecraft:kelp"
@@ -1435,7 +1520,11 @@ impl Game<'_> {
     }
     /// Inventory.add: returns the stack that did not fit.
     fn give(&mut self, mut stack: ItemStack) -> Option<ItemStack> {
-        let max = self.res.items.get(&stack.item).map_or(64, |i| i.max_stack);
+        let max = self
+            .res
+            .items()
+            .get(&stack.item)
+            .map_or(64, |i| i.max_stack);
         // Prefer the selected slot, then the hotbar, then the main inventory.
         let order: Vec<usize> = std::iter::once(self.selected)
             .chain((0..36).filter(|&i| i != self.selected))
@@ -1486,7 +1575,7 @@ impl Game<'_> {
             .or_else(|| models.iter().find_map(|(_, model)| model.particle))?;
         let name = self.pack.layer_names.get(&layer)?.clone();
         let tint = if face.is_some_and(|face| face.quad.tint_index >= 0) {
-            let n = &self.res.facts.get(state).name;
+            let n = &self.res.facts().get(state).name;
             if n.contains("leaves") || n.contains("vine") {
                 0x48B518
             } else {
@@ -1498,7 +1587,7 @@ impl Game<'_> {
         Some((name, tint))
     }
     fn particle_shape(&self, pos: [i32; 3], state: BlockStateId) -> Vec<[f64; 6]> {
-        let f = self.res.facts.get(state);
+        let f = self.res.facts().get(state);
         let offset = if f.outline_offset {
             self.pack
                 .context
@@ -1576,14 +1665,14 @@ impl Game<'_> {
     ) -> Vec<ItemStack> {
         let registry = self.pack.assets.registry;
         let dynamic = self.pending.dynamic(pos);
-        match self.res.items.block_loot_sequence(registry, state) {
+        match self.res.items().block_loot_sequence(registry, state) {
             Some(sequence) => {
                 let random = self.rand_sequences.get(&sequence, self.level.seed);
                 self.res
-                    .items
+                    .items()
                     .block_drops_with(registry, state, held, &dynamic, random)
             }
-            None => self.res.items.block_drops_with(
+            None => self.res.items().block_drops_with(
                 registry,
                 state,
                 held,
@@ -1653,14 +1742,14 @@ impl Game<'_> {
             ) {
                 return true;
             }
-            if !item.tick(&self.world, &self.res.facts, self.collision) {
+            if !item.tick(&self.world, self.res.facts(), self.collision) {
                 return false;
             }
             let environment = item.environment_tick(
                 &self.world,
-                &self.res.facts,
+                self.res.facts(),
                 self.pack.assets.registry,
-                &self.res.items,
+                self.res.items(),
             );
             // shortcut: age is the fresh-drop clock; use entity ticks for saved/frozen-age phase parity.
             if environment.should_play_lava_hurt_sound(item.age) {
@@ -1783,17 +1872,17 @@ impl Game<'_> {
         let mut level = GameLevel {
             cart_boxes,
             world: &mut self.world,
-            facts: &self.res.facts,
+            facts: self.res.facts(),
             events: &mut self.level_events,
             dimension,
             darken,
             raining: rain > 0.2,
             thundering: thunder > 0.9,
             player_box,
-            biomes: &self.res.biomes,
+            biomes: self.res.biomes(),
             seed: self.level.seed,
-            behaviours: &self.res.behaviours,
-            items: &self.res.items,
+            behaviours: self.res.behaviours(),
+            items: self.res.items(),
             loot: horizon_client::structure_blocks::loot_data(&self.options.resources),
             registry: self.pack.assets.registry,
             rules,
@@ -1801,7 +1890,7 @@ impl Game<'_> {
             pending: &mut self.pending,
             spill: &mut self.spill,
         };
-        let result = f(&self.res.behaviours, &mut level, &mut self.block_ticks);
+        let result = f(self.res.behaviours(), &mut level, &mut self.block_ticks);
         self.flush_spill();
         result
     }
@@ -1854,7 +1943,7 @@ impl Game<'_> {
         );
         let simulation = self.settings.render_distance.min(8);
         let mut ticking = Vec::new();
-        let facts = &self.res.facts;
+        let facts = self.res.facts();
         for (&(x, z), chunk) in &self.world.chunks {
             if (x - pcx).abs() > simulation || (z - pcz).abs() > simulation || !chunk.lit {
                 continue;
@@ -1956,10 +2045,10 @@ impl Game<'_> {
                     let state = BlockStateId(data as u32);
                     let p = [pos.x, pos.y, pos.z];
                     self.destroy_particles(p, state);
-                    if self.res.facts.is_air(state) {
+                    if self.res.facts().is_air(state) {
                         continue;
                     }
-                    let sounds = self.res.facts.get(state).sounds.clone();
+                    let sounds = self.res.facts().get(state).sounds.clone();
                     let c = [
                         f64::from(pos.x) + 0.5,
                         f64::from(pos.y) + 0.5,
@@ -2070,7 +2159,7 @@ impl Game<'_> {
                         no_gravity: false,
                         drop_item: true,
                         fall_distance: 0.0,
-                        damage: if self.res.facts.get(state).name.ends_with("anvil") {
+                        damage: if self.res.facts().get(state).name.ends_with("anvil") {
                             horizon_client::falling_block::Damage::anvil()
                         } else {
                             Default::default()
@@ -2183,7 +2272,7 @@ impl Game<'_> {
     fn open_menu(&mut self, pos: [i32; 3]) {
         let name = self
             .res
-            .facts
+            .facts()
             .get(self.world.block(pos[0], pos[1], pos[2]))
             .name
             .clone();
@@ -2307,7 +2396,7 @@ impl Game<'_> {
                 next.y.floor() as i32,
                 next.z.floor() as i32,
             );
-            let below_facts = self.res.facts.get(below);
+            let below_facts = self.res.facts().get(below);
             // PowderSnowBlock.getCollisionShape for a FallingBlockEntity: the
             // whole block, or 0.9 high after a fall of more than 2.5 blocks,
             // where the block it rests in is the snow itself.
@@ -2359,7 +2448,7 @@ impl Game<'_> {
         self.falling = falling;
         for (state, at) in dropped {
             // Entity.spawnAtLocation: an item entity where the block was.
-            let item = self.res.facts.get(state).item.clone();
+            let item = self.res.facts().get(state).item.clone();
             if &*item != "minecraft:air" {
                 let r = &mut self.world.random;
                 let v = [
@@ -2388,7 +2477,7 @@ impl Game<'_> {
         self.pad_rumble(horizon_client::gamepad::Rumble::BlockBroken);
         // ServerPlayerGameMode.destroyBlock.
         let state = self.world.block(pos[0], pos[1], pos[2]);
-        let facts = self.res.facts.get(state).clone();
+        let facts = self.res.facts().get(state).clone();
         // Block.playerWillDestroy: mining their gold angers all nearby piglins.
         if self.guarded_by_piglins(&facts.name) {
             self.anger_piglins(false);
@@ -2425,7 +2514,7 @@ impl Game<'_> {
                 && let Some(stack) = self.inventory[self.selected].clone()
                 && let Some(max) = self
                     .res
-                    .items
+                    .items()
                     .get(&stack.item)
                     .filter(|i| i.max_damage > 0 && !i.tool.is_empty())
                     .map(|i| i.max_damage)
@@ -2439,7 +2528,10 @@ impl Game<'_> {
                 }
             }
             let harvest = !facts.requires_tool
-                || self.res.items.correct_for_drops(held.as_ref(), &facts.name);
+                || self
+                    .res
+                    .items()
+                    .correct_for_drops(held.as_ref(), &facts.name);
             if harvest {
                 // Block.playerDestroy: the mined statistic, the exhaustion and the drops.
                 self.stats.add("mined", &facts.name, 1);
@@ -2610,7 +2702,7 @@ impl Game<'_> {
         let Some(stack) = self.held().cloned() else {
             return Ok(false);
         };
-        let Some(info) = self.res.items.get(&stack.item).cloned() else {
+        let Some(info) = self.res.items().get(&stack.item).cloned() else {
             return Ok(false);
         };
         if block_hit.is_some() && (self.use_bone_meal(&stack)? || self.ignite_tnt(&stack)?) {
@@ -2721,7 +2813,7 @@ impl Game<'_> {
             return Ok(true);
         };
         let target = [pos.x, pos.y, pos.z];
-        if let Some(entity) = BlockEntity::for_block(&self.res.facts.get(state).name) {
+        if let Some(entity) = BlockEntity::for_block(&self.res.facts().get(state).name) {
             let key = (target[0], target[1], target[2]);
             self.world.block_entities.insert(key, entity);
             let game_master = self.can_use_game_master_blocks();
@@ -2826,7 +2918,7 @@ impl Game<'_> {
             self.using = None;
             return;
         }
-        let Some(info) = self.res.items.get(&stack.item).cloned() else {
+        let Some(info) = self.res.items().get(&stack.item).cloned() else {
             self.using = None;
             return;
         };
@@ -2940,13 +3032,13 @@ impl Game<'_> {
             });
         }
         let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-        let facts = self.res.facts.get(state);
+        let facts = self.res.facts().get(state);
         if facts.hardness < 0.0 {
             return Ok(());
         }
         // Player.getDestroySpeed / BlockBehaviour.getDestroyProgress.
         let held = self.held();
-        let mut speed = self.res.items.mining_speed(held, &facts.name);
+        let mut speed = self.res.items().mining_speed(held, &facts.name);
         speed = self.modify_destroy_speed(speed);
         let player = self.player.as_ref().ok_or("no player")?;
         if !player.ground.on_ground {
@@ -2955,7 +3047,7 @@ impl Game<'_> {
         let eye = self.eye_position().unwrap_or_default();
         if self
             .res
-            .facts
+            .facts()
             .get(self.world.block(
                 eye[0].floor() as i32,
                 eye[1].floor() as i32,
@@ -2966,7 +3058,7 @@ impl Game<'_> {
         {
             speed *= self.submerged_mining_speed();
         }
-        let harvest = !facts.requires_tool || self.res.items.correct_for_drops(held, &facts.name);
+        let harvest = !facts.requires_tool || self.res.items().correct_for_drops(held, &facts.name);
         let progress = if facts.hardness == 0.0 {
             1.0
         } else {
@@ -3006,11 +3098,11 @@ impl Game<'_> {
         if self.dim == Dim::Nether {
             // Below the bedrock ceiling: a solid floor with two air blocks above.
             for y in (32..120).rev() {
-                let floor = self.res.facts.get(self.world.block(x, y - 1, z));
+                let floor = self.res.facts().get(self.world.block(x, y - 1, z));
                 if floor.full_collision
                     && floor.fluid == Fluid::None
-                    && self.res.facts.is_air(self.world.block(x, y, z))
-                    && self.res.facts.is_air(self.world.block(x, y + 1, z))
+                    && self.res.facts().is_air(self.world.block(x, y, z))
+                    && self.res.facts().is_air(self.world.block(x, y + 1, z))
                 {
                     return Some(y);
                 }
@@ -3020,8 +3112,8 @@ impl Game<'_> {
         let mut y = MIN_Y + HEIGHT - 1;
         while y > MIN_Y {
             let s = self.world.block(x, y, z);
-            if !self.res.facts.is_air(s) {
-                let f = self.res.facts.get(s);
+            if !self.res.facts().is_air(s) {
+                let f = self.res.facts().get(s);
                 let ok = f.full_collision
                     && f.fluid == Fluid::None
                     && !f.name.contains("leaves")
@@ -3122,7 +3214,7 @@ impl Game<'_> {
         // LivingEntity.canGlideUsing: a glider in its slot that will not break next.
         player.glider = self.armor[1].as_ref().is_some_and(|s| {
             self.res
-                .items
+                .items()
                 .get(&s.item)
                 .is_some_and(|i| i.glider && (i.max_damage == 0 || s.damage + 1 < i.max_damage))
         });
@@ -3244,7 +3336,7 @@ impl Game<'_> {
         // LivingEntity.canGlideUsing: a glider in its slot that will not break next.
         player.glider = self.armor[1].as_ref().is_some_and(|s| {
             self.res
-                .items
+                .items()
                 .get(&s.item)
                 .is_some_and(|i| i.glider && (i.max_damage == 0 || s.damage + 1 < i.max_damage))
         });
@@ -3258,7 +3350,7 @@ impl Game<'_> {
                     self.inventory.get(slot)?.as_ref()
                 }
             })
-            .and_then(|s| self.res.items.get(&s.item))
+            .and_then(|s| self.res.items().get(&s.item))
             .map(|i| i.use_speed);
         // PowderSnowBlock.canEntityWalkOnPowderSnow and LivingEntity.canFreeze.
         player.leather_boots = self.armor[3]
@@ -3266,7 +3358,7 @@ impl Game<'_> {
             .is_some_and(|s| &*s.item == "minecraft:leather_boots");
         let immune = self
             .res
-            .items
+            .items()
             .item_tags
             .get("minecraft:freeze_immune_wearables");
         player.freeze_immune = self
@@ -3323,7 +3415,7 @@ impl Game<'_> {
                 MotionEvent::Emission {
                     state, in_water, ..
                 } if !crouching => {
-                    let sounds = self.res.facts.get(state).sounds.clone();
+                    let sounds = self.res.facts().get(state).sounds.clone();
                     // Entity.playStepSound: the block's step sound at 0.15 volume,
                     // muffled under the swim sound in water.
                     let (volume, pitch) = if in_water {
@@ -3840,7 +3932,7 @@ impl Game<'_> {
         // moved to (x, y). Horizon tracks no item cooldowns to shade yet.
         let max_damage = self
             .res
-            .items
+            .items()
             .get(&stack.item)
             .map_or(0, |info| info.max_damage as i32);
         let decorations = hud_overlays::ItemDecorations {
@@ -3998,7 +4090,7 @@ impl Game<'_> {
                 let eye = p.position.y + f64::from(p.dimensions.eye_height);
                 let under_water = self
                     .res
-                    .facts
+                    .facts()
                     .get(self.world.block(
                         p.position.x.floor() as i32,
                         eye.floor() as i32,
@@ -4261,7 +4353,7 @@ impl Game<'_> {
     /// `RecipeCraftingHolder.awardUsedRecipes`: a crafted recipe becomes known
     /// (special ones never do).
     fn award_crafted(&mut self, recipes: &[String]) {
-        let index = &self.res.stations.recipe_index;
+        let index = &self.res.stations().recipe_index;
         let (_, unlocked) = self.level.recipe_book.add_recipes(index, recipes);
         self.recipe_unlocked(&unlocked);
     }
@@ -4270,7 +4362,7 @@ impl Game<'_> {
         let grid: Vec<Option<ItemStack>> = (0..n * n).map(|i| self.craft_grid[i].clone()).collect();
         let scale = |id: i32| self.maps.data.get(&id).map(|m| m.scale);
         self.res
-            .recipes
+            .recipes()
             .find_with(&grid, n, &scale)
             .map(|(name, result)| (name.to_owned(), result))
     }
@@ -4470,7 +4562,7 @@ impl Game<'_> {
             );
             let name = self
                 .res
-                .facts
+                .facts()
                 .get(self.world.block(key.0, key.1, key.2))
                 .name
                 .clone();
@@ -4543,7 +4635,7 @@ impl Game<'_> {
         let items = self.creative_screen.items(&self.pack.names);
         let first = self.creative_screen.first_row(&self.pack.names);
         let shown = items.get(first * 9 + slot - Creative::DISPLAY);
-        let catalog = &self.res.items;
+        let catalog = self.res.items();
         let max = |s: &ItemStack| catalog.get(&s.item).map_or(64, |i| i.max_stack);
         match click_display(&mut self.carried, shown, max, button, input) {
             DisplayClick::Hotbar(i, stack) => self.inventory[i] = Some(stack),
@@ -4699,7 +4791,7 @@ impl Game<'_> {
                     Some(BlockEntity::Chest(_)) => {
                         let shulker = self.container.is_some_and(|k| {
                             let id = self.world.block(k.0, k.1, k.2);
-                            storage::is_shulker_box(&self.res.facts.get(id).name)
+                            storage::is_shulker_box(&self.res.facts().get(id).name)
                         });
                         let kind = match size {
                             5 => Kind::Hopper,
@@ -4792,15 +4884,15 @@ impl Game<'_> {
             next_id: std::cell::Cell::new(next_map),
         };
         let trade_env = horizon_client::merchant::TradeEnv {
-            trades: &self.res.stations.trades,
-            enchantments: &self.res.stations.enchantments,
+            trades: &self.res.stations().trades,
+            enchantments: &self.res.stations().enchantments,
             maps: Some(&maps),
         };
         let env = Env {
-            items: &self.res.items,
-            recipes: &self.res.recipes,
-            brewing: &self.res.stations.brewing,
-            banners: &self.res.stations.banners,
+            items: self.res.items(),
+            recipes: self.res.recipes(),
+            brewing: &self.res.stations().brewing,
+            banners: &self.res.stations().banners,
             trade: Some(&trade_env),
         };
         menu.creative = creative;
@@ -4888,7 +4980,7 @@ impl Game<'_> {
                 .and_then(|k| self.world.block_entities.get_mut(&k))
         {
             // AbstractFurnaceBlockEntity.setItem: only a new input restarts cooking.
-            f.input_clicked(&self.res.recipes, before[0].clone());
+            f.input_clicked(self.res.recipes(), before[0].clone());
         }
         self.apply_equipment();
         true
@@ -5287,7 +5379,7 @@ impl Game<'_> {
                 None => self.carried = Some(result),
                 Some(c)
                     if c.item == result.item
-                        && c.count + result.count <= max(&self.res.items, c) =>
+                        && c.count + result.count <= max(self.res.items(), c) =>
                 {
                     c.count += result.count
                 }
@@ -5303,7 +5395,7 @@ impl Game<'_> {
             while let Some((recipe, result)) = self.craft_recipe() {
                 let made = (result.item.clone(), result.count);
                 let cells = self.craft_size * self.craft_size;
-                let remainders = self.res.recipes.remainders(
+                let remainders = self.res.recipes().remainders(
                     &recipe,
                     &self.craft_grid[..cells],
                     self.craft_size,
@@ -5317,7 +5409,7 @@ impl Game<'_> {
                         None => self.carried = Some(result),
                         Some(c)
                             if c.item == result.item
-                                && c.count + result.count <= max(&self.res.items, c) =>
+                                && c.count + result.count <= max(self.res.items(), c) =>
                         {
                             c.count += result.count
                         }
@@ -5359,7 +5451,7 @@ impl Game<'_> {
             let wanted = ["head", "chest", "legs", "feet"][slot - 500];
             let fits = self.carried.as_ref().is_none_or(|c| {
                 self.res
-                    .items
+                    .items()
                     .get(&c.item)
                     .and_then(|i| i.equip_slot.as_deref())
                     == Some(wanted)
@@ -5373,7 +5465,7 @@ impl Game<'_> {
         }
         let carried = self.carried.take();
         let current = self.slot_mut(slot).take();
-        let items = &self.res.items;
+        let items = self.res.items();
         let (new_slot, new_carried) = match (carried, current) {
             (None, Some(mut s)) if right => {
                 let half = s.count.div_ceil(2);
@@ -5414,7 +5506,7 @@ impl Game<'_> {
                 .container
                 .and_then(|k| self.world.block_entities.get_mut(&k))
         {
-            f.input_clicked(&self.res.recipes, before);
+            f.input_clicked(self.res.recipes(), before);
         }
     }
     /// `Camera.setRotation`: the camera's orientation, turned round in
@@ -5490,7 +5582,7 @@ impl Game<'_> {
             if item.fire_ticks > 0
                 && !self
                     .res
-                    .items
+                    .items()
                     .resists_fire(&item.stack, "minecraft:in_fire")
             {
                 let at = item.previous.lerp(item.position, alpha);
@@ -5574,7 +5666,7 @@ impl Game<'_> {
                 let (radius, strength) = horizon_client::shadows::shadow_params(id);
                 horizon_client::shadows::shadow(
                     &self.world,
-                    &self.res.facts,
+                    self.res.facts(),
                     sprite,
                     camera,
                     pos,
@@ -5615,7 +5707,7 @@ impl Game<'_> {
             // Beams and structure outlines reach far outside their block
             // (BlockEntityRenderer.shouldRenderOffScreen): never culled.
             let off_screen = |state: u32| {
-                let name = &*self.res.facts.get(BlockStateId(state)).name;
+                let name = &*self.res.facts().get(BlockStateId(state)).name;
                 matches!(
                     name,
                     "minecraft:beacon"
@@ -5638,7 +5730,7 @@ impl Game<'_> {
                 for block in visible {
                     let start = out.len();
                     self.res
-                        .block_entity_render
+                        .block_entity_render()
                         .render(&scene, std::iter::once(block), &mut out);
                     if !off_screen(block.1) {
                         self.cull_entity_vertices(&mut out, start);
@@ -5646,7 +5738,7 @@ impl Game<'_> {
                 }
             } else {
                 self.res
-                    .block_entity_render
+                    .block_entity_render()
                     .render(&scene, visible, &mut out);
             }
             if let Some(mining) = &self.mining
@@ -5660,7 +5752,7 @@ impl Game<'_> {
                     .world
                     .block(mining.pos[0], mining.pos[1], mining.pos[2]);
                 self.res
-                    .block_entity_render
+                    .block_entity_render()
                     .render_breaking(&scene, mining.pos, state.0, &mut out);
             }
         }
@@ -5796,7 +5888,7 @@ impl Game<'_> {
                 ) - camera)
                     .as_vec3();
                 let state = self.world.block(m.pos[0], m.pos[1], m.pos[2]);
-                if self.res.facts.get(state).render_shape
+                if self.res.facts().get(state).render_shape
                     == horizon_client::blocks::RenderShape::Model
                     && let Ok(models) = self
                         .pack
@@ -5830,7 +5922,7 @@ impl Game<'_> {
         if self.dim == Dim::End {
             let sky = self
                 .res
-                .end_environment
+                .end_environment()
                 .sample(self.world.day_time, None, None);
             return (15.0 - 15.0 * sky.sky_light_level).round() as i32;
         }
@@ -5842,7 +5934,10 @@ impl Game<'_> {
         {
             return darken;
         }
-        let mut sky = self.res.environment.sample(self.world.day_time, None, None);
+        let mut sky = self
+            .res
+            .environment()
+            .sample(self.world.day_time, None, None);
         horizon_client::environment::apply_weather(&mut sky, rain, thunder);
         // Level.updateSkyBrightness: darkening from the sky light level.
         let darken = (15.0 - 15.0 * sky.sky_light_level).round() as i32;
@@ -5874,7 +5969,7 @@ impl Game<'_> {
         let hand_damage = 1.0
             + self
                 .held()
-                .and_then(|h| self.res.items.get(&h.item))
+                .and_then(|h| self.res.items().get(&h.item))
                 .map_or(0.0, |i| i.attack_damage);
         let damage = hand_damage + self.effect_attack_bonus();
         let scale = self.attack_strength_scale();
@@ -5897,7 +5992,7 @@ impl Game<'_> {
     fn attack_strength_scale(&self) -> f32 {
         let speed = self
             .held()
-            .and_then(|h| self.res.items.get(&h.item))
+            .and_then(|h| self.res.items().get(&h.item))
             .map_or(0.0, |i| i.attack_speed);
         let delay = 20.0 / (4.0 + speed).max(0.1);
         ((self.attack_ticks as f32 + 0.5) / delay).clamp(0.0, 1.0)
@@ -5907,7 +6002,7 @@ impl Game<'_> {
         let p = self.player.as_ref()?;
         let sword = self.held().is_some_and(|s| {
             self.res
-                .items
+                .items()
                 .item_tags
                 .get("minecraft:swords")
                 .is_some_and(|tag| tag.contains(&*s.item))
@@ -5979,7 +6074,7 @@ impl Game<'_> {
         let hand_damage = 1.0
             + self
                 .held()
-                .and_then(|h| self.res.items.get(&h.item))
+                .and_then(|h| self.res.items().get(&h.item))
                 .map_or(0.0, |i| i.attack_damage);
         if self.attack_frame()
             || self.attack_armor_stand()
@@ -6112,7 +6207,8 @@ impl Game<'_> {
         let mut lit_changes = Vec::new();
         for (pos, entity) in self.world.block_entities.iter_mut() {
             if let BlockEntity::Furnace(f) = entity
-                && let Some(lit) = f.tick(&self.res.recipes, &self.res.items, &self.res.providers)
+                && let Some(lit) =
+                    f.tick(self.res.recipes(), self.res.items(), self.res.providers())
             {
                 lit_changes.push((*pos, lit));
             }
@@ -6322,7 +6418,7 @@ impl Game<'_> {
         let dim = Dim::from_id(&level.dimension);
         let (mut streaming, save) = self.make_streaming(&save_root, dim, level.seed)?;
         streaming.radius = self.settings.render_distance;
-        let mut world = World::new(self.res.facts.air, level.seed);
+        let mut world = World::new(self.res.facts().air, level.seed);
         world.fast_lava = dim == Dim::Nether;
         world.game_time = level.time;
         world.day_time = self.options.time.unwrap_or(level.day_time);
@@ -6400,7 +6496,7 @@ impl Game<'_> {
         self.save = save;
         self.level = level;
         // ServerRecipeBook.loadUntrusted: recipes the manager does not have are dropped.
-        let index = &self.res.stations.recipe_index;
+        let index = &self.res.stations().recipe_index;
         let book = &mut self.level.recipe_book;
         book.recipes.retain(|r| index.contains(r));
         book.to_be_displayed.retain(|r| index.contains(r));
@@ -6480,7 +6576,7 @@ impl Game<'_> {
                 horizon_client::flatgen::FlatTerrain::from_settings(
                     &s,
                     pack.assets.registry,
-                    &res.biomes,
+                    res.biomes(),
                 )
             });
         let mut streaming = if let Some(inner) = flat {
@@ -6489,25 +6585,25 @@ impl Game<'_> {
                     inner: Arc::new(inner),
                     save: save.clone(),
                     registry: pack.assets.clone(),
-                    biomes: res.biomes.clone(),
+                    biomes: res.biomes().clone(),
                 }),
                 pack.context.clone(),
-                res.threads,
+                res.threads(),
             )
         } else if self.options.test_terrain && dim == Dim::Overworld {
-            let inner = Arc::new(TestTerrain::new(pack.assets.registry, &res.biomes)?);
+            let inner = Arc::new(TestTerrain::new(pack.assets.registry, res.biomes())?);
             Streaming::new(
                 Arc::new(Persistent {
                     inner,
                     save: save.clone(),
                     registry: pack.assets.clone(),
-                    biomes: res.biomes.clone(),
+                    biomes: res.biomes().clone(),
                 }),
                 pack.context.clone(),
-                res.threads,
+                res.threads(),
             )
         } else {
-            let inner = Arc::new(VanillaTerrain::for_dimension(&self.options.resources.join("worldgen"), pack.assets.registry, &res.biomes, seed, dim.id()).map_err(|e| {
+            let inner = Arc::new(VanillaTerrain::for_dimension(&self.options.resources.join("worldgen"), pack.assets.registry, res.biomes(), seed, dim.id()).map_err(|e| {
                 format!("{e}\nPrepare the worldgen bundle with the launcher, or: horizon-prepare --prepare")
             })?);
             self.end.set_locator(Some(inner.clone()));
@@ -6516,10 +6612,10 @@ impl Game<'_> {
                     inner,
                     save: save.clone(),
                     registry: pack.assets.clone(),
-                    biomes: res.biomes.clone(),
+                    biomes: res.biomes().clone(),
                 }),
                 pack.context.clone(),
-                res.threads,
+                res.threads(),
             )
         };
         streaming.radius = self.settings.render_distance;
@@ -6556,7 +6652,7 @@ impl Game<'_> {
         let keys: Vec<_> = self.world.modified.drain().collect();
         let chunks = self.with_entities(keys.iter().filter_map(|k| self.world.chunks.get(k)));
         self.save
-            .save(&chunks, self.pack.assets.registry, &self.res.biomes)?;
+            .save(&chunks, self.pack.assets.registry, self.res.biomes())?;
         self.save_dimension_entities()?;
         // Coordinates scale by 8 between the Overworld and the Nether.
         let scale = match (self.dim, target) {
@@ -6572,7 +6668,7 @@ impl Game<'_> {
         ));
         let (streaming, save) =
             self.make_streaming(&self.world_root.clone(), target, self.level.seed)?;
-        let mut world = World::new(self.res.facts.air, self.level.seed);
+        let mut world = World::new(self.res.facts().air, self.level.seed);
         world.fast_lava = target == Dim::Nether;
         world.game_time = self.world.game_time;
         world.day_time = self.world.day_time;
@@ -6607,7 +6703,7 @@ impl Game<'_> {
     fn portal_shape(&self, start: [i32; 3], x_axis: bool) -> Option<([i32; 3], i32, i32)> {
         let name = |p: [i32; 3]| {
             self.res
-                .facts
+                .facts()
                 .get(self.world.block(p[0], p[1], p[2]))
                 .name
                 .clone()
@@ -6769,7 +6865,7 @@ impl Game<'_> {
         horizon_client::crash::clear_detail("World");
         self.debug_charts.reset();
         self.streaming.paused = true;
-        self.world = World::new(self.res.facts.air, 0);
+        self.world = World::new(self.res.facts().air, 0);
         self.player = None;
         self.sleeping = None;
         self.sleep_timer = 0;
@@ -6832,7 +6928,7 @@ impl Game<'_> {
             .collect();
         equipped.push((self.inventory[self.selected].as_ref(), "mainhand"));
         for (stack, slot) in equipped {
-            let Some(info) = stack.and_then(|s| self.res.items.get(&s.item)) else {
+            let Some(info) = stack.and_then(|s| self.res.items().get(&s.item)) else {
                 continue;
             };
             for (attribute, id, amount, op, group) in &info.modifiers {
@@ -6867,7 +6963,7 @@ impl Game<'_> {
             .collect();
         for (slot, amount) in self.armor.iter_mut().zip(losses) {
             if let Some(stack) = slot.as_mut()
-                && let Some(info) = self.res.items.get(&stack.item)
+                && let Some(info) = self.res.items().get(&stack.item)
                 && info.max_damage > 0
             {
                 stack.damage += amount;
@@ -6904,7 +7000,7 @@ impl Game<'_> {
             let b = p.map(|v| v.floor() as i32);
             if b != last {
                 let state = self.world.block(b[0], b[1], b[2]);
-                let f = self.res.facts.get(state);
+                let f = self.res.facts().get(state);
                 let face = [last[0] - b[0], last[1] - b[1], last[2] - b[2]];
                 if f.fluid != Fluid::None
                     && f.fluid_level == 8
@@ -6918,7 +7014,7 @@ impl Game<'_> {
                         point: p,
                     });
                 }
-                if !self.res.facts.is_air(state) && f.fluid == Fluid::None {
+                if !self.res.facts().is_air(state) && f.fluid == Fluid::None {
                     return Some(Hit {
                         pos: b,
                         face,
@@ -6975,7 +7071,7 @@ impl Game<'_> {
         let Some(held) = self.held() else {
             return Ok(false);
         };
-        let removes_dye = cauldron::removes_dye(&self.res.items, &held.item);
+        let removes_dye = cauldron::removes_dye(self.res.items(), &held.item);
         let above = self.world.block(pos[0], pos[1] + 1, pos[2]);
         let under_water = registry
             .state(above)
@@ -7031,7 +7127,7 @@ impl Game<'_> {
         }
         let Some(id) = self
             .res
-            .items
+            .items()
             .get(&stack.item)
             .and_then(|i| i.block_transformer.clone())
         else {
@@ -7042,7 +7138,7 @@ impl Game<'_> {
         let shield = self
             .offhand
             .as_ref()
-            .and_then(|s| self.res.items.get(&s.item))
+            .and_then(|s| self.res.items().get(&s.item))
             .is_some_and(|i| i.blocks_attacks.is_some());
         if shield && !self.keys.contains(&KeyCode::ShiftLeft) {
             return Ok(false);
@@ -7064,8 +7160,8 @@ impl Game<'_> {
             };
             let Some((_, t, state)) =
                 self.res
-                    .transformers
-                    .apply(&self.res.items, registry, &id, face_name, &around)
+                    .transformers()
+                    .apply(self.res.items(), registry, &id, face_name, &around)
             else {
                 return Ok(false);
             };
@@ -7136,7 +7232,7 @@ impl Game<'_> {
         };
         let max = self
             .held()
-            .and_then(|s| self.res.items.get(&s.item))
+            .and_then(|s| self.res.items().get(&s.item))
             .map_or(0, |i| i.max_damage);
         let cell = self.held_mut();
         if let Some(stack) = cell.as_mut()
@@ -7201,7 +7297,7 @@ impl Game<'_> {
                 return Ok(UseResult::Pass);
             };
             let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-            let f = self.res.facts.get(state).clone();
+            let f = self.res.facts().get(state).clone();
             if f.fluid == Fluid::None || f.fluid_level != 8 || f.fluid_falling {
                 return Ok(UseResult::Pass);
             }
@@ -7249,7 +7345,7 @@ impl Game<'_> {
             if !self.may_build() {
                 return Ok(UseResult::Fail);
             }
-            let target = if self.res.facts.get(clicked).replaceable {
+            let target = if self.res.facts().get(clicked).replaceable {
                 hit.pos
             } else {
                 [
@@ -7291,7 +7387,7 @@ impl Game<'_> {
         if item == "honeycomb" {
             let registry = self.pack.assets.registry;
             let old = registry.state(clicked).cloned();
-            if let Some(waxed) = old.and_then(|old| self.res.transformers.waxed(registry, &old))
+            if let Some(waxed) = old.and_then(|old| self.res.transformers().waxed(registry, &old))
                 && let Ok(state) = registry.resolve(&waxed)
             {
                 self.level_set(hit.pos, state)?;
@@ -7312,7 +7408,7 @@ impl Game<'_> {
             if !self.may_build() {
                 return Ok(UseResult::Fail);
             }
-            let name = self.res.facts.get(clicked).name.clone();
+            let name = self.res.facts().get(clicked).name.clone();
             if self.can_light(clicked, &name) {
                 let registry = self.pack.assets.registry;
                 let mut state = registry
@@ -7467,7 +7563,7 @@ impl Game<'_> {
             )
         });
         let mut orbs = std::mem::take(&mut self.orbs);
-        orbs.retain_mut(|o| o.tick(&self.world, &self.res.facts, self.collision, target));
+        orbs.retain_mut(|o| o.tick(&self.world, self.res.facts(), self.collision, target));
         let mut gained = 0;
         let mut taken = Vec::new();
         if let Some((min, max)) = bounds {
@@ -7661,7 +7757,7 @@ impl Game<'_> {
                 if hand == Hand::Off {
                     continue;
                 }
-                let Some(arm) = self.res.player_arm.clone() else {
+                let Some(arm) = self.res.player_arm().clone() else {
                     continue;
                 };
                 let Some(r) = self
@@ -7859,7 +7955,7 @@ impl Game<'_> {
     /// base temperature lowered above y 80) or none (no precipitation).
     fn precipitation(&self, x: i32, y: i32, z: i32) -> Option<bool> {
         let chunk = self.world.chunks.get(&(x >> 4, z >> 4))?;
-        let b = self.res.biomes.get(chunk.biome(x, y, z));
+        let b = self.res.biomes().get(chunk.biome(x, y, z));
         if !b.precipitation {
             return None;
         }
@@ -7875,7 +7971,7 @@ impl Game<'_> {
         let mut y = from;
         while y > MIN_Y {
             let s = self.world.block(x, y, z);
-            let f = self.res.facts.get(s);
+            let f = self.res.facts().get(s);
             if f.full_collision || f.fluid != Fluid::None || f.name.contains("leaves") {
                 return y + 1;
             }
@@ -8476,7 +8572,7 @@ impl Game<'_> {
         let keys: Vec<_> = self.world.modified.drain().collect();
         let chunks = self.with_entities(keys.iter().filter_map(|k| self.world.chunks.get(k)));
         self.save
-            .save_later(&chunks, self.pack.assets.registry, &self.res.biomes)?;
+            .save_later(&chunks, self.pack.assets.registry, self.res.biomes())?;
         if wait {
             self.save.flush();
         }
@@ -8521,7 +8617,7 @@ impl Game<'_> {
                 let s =
                     self.world
                         .block(c.x.floor() as i32, c.y.floor() as i32, c.z.floor() as i32);
-                (c, self.res.facts.get(s).fluid == Fluid::Water, yaw, pitch)
+                (c, self.res.facts().get(s).fluid == Fluid::Water, yaw, pitch)
             }
             None => (
                 glam::DVec3::new(0.5, 100.0, 0.5),
@@ -8543,7 +8639,7 @@ impl Game<'_> {
             .get(&(block[0] >> 4, block[2] >> 4))
             .map(|c| c.biome(block[0], block[1], block[2]))
             .unwrap_or(0);
-        let info = self.res.biomes.get(biome).clone();
+        let info = self.res.biomes().get(biome).clone();
         let environment = self.dim_environment();
         let mut sky = environment.sample(self.world.day_time, info.sky, info.fog);
         let (rain, thunder) = if self.dim == Dim::Overworld {
@@ -8584,7 +8680,7 @@ impl Game<'_> {
             self.pick()
                 .map(|h| {
                     let state = self.world.block(h.pos[0], h.pos[1], h.pos[2]);
-                    let f = self.res.facts.get(state);
+                    let f = self.res.facts().get(state);
                     outline_after_terrain = self
                         .pack
                         .render
@@ -8729,7 +8825,7 @@ impl Game<'_> {
             cave_culling: self.settings.horizon.cave_culling
                 && !self
                     .res
-                    .facts
+                    .facts()
                     .get(self.world.block(block[0], block[1], block[2]))
                     .solid_render,
             water_fog,
@@ -9143,7 +9239,7 @@ impl Game<'_> {
         if !modified.is_empty()
             && let Err(e) = horizon_client::spans::time("save_chunks", || {
                 self.save
-                    .save_later(&modified, self.pack.assets.registry, &self.res.biomes)
+                    .save_later(&modified, self.pack.assets.registry, self.res.biomes())
             })
         {
             log::warn!("Horizon: failed to save unloaded chunks: {e}");
@@ -10019,7 +10115,7 @@ impl<'a> Game<'a> {
         let registry = pack.assets.registry;
         // Until a world is opened the streamer is idle.
         let mut streaming = Streaming::new(
-            Arc::new(TestTerrain::new(registry, &res.biomes)?),
+            Arc::new(TestTerrain::new(registry, res.biomes())?),
             pack.context.clone(),
             1,
         );
@@ -10039,7 +10135,7 @@ impl<'a> Game<'a> {
                 minecarts::CartModels::load(document.as_ref()),
             )
         };
-        let world = World::new(res.facts.air, 0);
+        let world = World::new(res.facts().air, 0);
         let creative = options.creative;
         let inventory = vec![None; 36];
         let now = Instant::now();
@@ -10047,8 +10143,8 @@ impl<'a> Game<'a> {
         let particles = horizon_client::particles::ParticleEngine::new(&root, &gui.atlas.sprites);
         Ok(Game {
             res: res.clone(),
-            collision: &res.collision,
-            motion: &res.motion,
+            collision: res.collision(),
+            motion: res.motion(),
             pack,
             gui,
             fog: Default::default(),
@@ -10542,42 +10638,46 @@ fn load_resources(
         horizon_client::animate_tick::AnimateTables::load(&root, registry_owner.registry, &biomes)?;
     let fog = horizon_client::fog::FogTables::load(&root, &biomes);
     let resources = Resources {
-        stations,
-        facts,
-        items,
-        recipes,
-        transformers,
-        biomes,
-        environment,
-        collision,
-        motion,
-        providers: Providers::load(&root),
-        block_entity_render: horizon_client::block_entity_render::BlockEntityRenderer::load(
-            &root,
-            registry_owner.registry,
-        )?,
-        animate,
-        fog,
-        music: horizon_client::music::MusicTables::load(&root),
-        ambient: horizon_client::ambience::AmbientTables::load(&root),
-        nether_environment: Environment::load_dimension(&root, "the_nether", false)?,
-        end_environment: Environment::load_dimension(&root, "the_end", false)?,
-        behaviours: Behaviours::load_with_gameplay(
-            registry_owner.registry,
-            &root,
-            &behaviour_json,
-            &gameplay_projection,
-        )?,
-        mob_types: MobTypes::load(&root)?
-            .types
-            .into_iter()
-            .map(|(k, v)| (k, Arc::new(v)))
-            .collect(),
-        mob_data,
-        threads,
-        player_type: perspective::player_type(&root),
-        player_arm: horizon_client::mobs::load_model(&root, "minecraft:player#main")
-            .and_then(|m| m.children.into_iter().find(|c| c.name == "right_arm")),
+        core: WorldCore {
+            facts,
+            biomes,
+            environment,
+            collision,
+            motion,
+            threads,
+        },
+        rest: std::sync::OnceLock::from(WorldRest {
+            stations,
+            items,
+            recipes,
+            transformers,
+            providers: Providers::load(&root),
+            block_entity_render: horizon_client::block_entity_render::BlockEntityRenderer::load(
+                &root,
+                registry_owner.registry,
+            )?,
+            animate,
+            fog,
+            music: horizon_client::music::MusicTables::load(&root),
+            ambient: horizon_client::ambience::AmbientTables::load(&root),
+            nether_environment: Environment::load_dimension(&root, "the_nether", false)?,
+            end_environment: Environment::load_dimension(&root, "the_end", false)?,
+            behaviours: Behaviours::load_with_gameplay(
+                registry_owner.registry,
+                &root,
+                &behaviour_json,
+                &gameplay_projection,
+            )?,
+            mob_types: MobTypes::load(&root)?
+                .types
+                .into_iter()
+                .map(|(k, v)| (k, Arc::new(v)))
+                .collect(),
+            mob_data,
+            player_type: perspective::player_type(&root),
+            player_arm: horizon_client::mobs::load_model(&root, "minecraft:player#main")
+                .and_then(|m| m.children.into_iter().find(|c| c.name == "right_arm")),
+        }),
     };
     // Both inputs are needed only while constructing the behaviour tables.
     // Release their owned JSON/Arc buffers before entering the long-lived game loop.

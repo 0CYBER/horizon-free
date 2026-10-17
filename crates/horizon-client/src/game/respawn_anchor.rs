@@ -63,7 +63,7 @@ pub(super) enum AnchorUse {
 
 impl Game<'_> {
     fn is_anchor(&self, state: BlockStateId) -> bool {
-        &*self.res.facts.get(state).name == "minecraft:respawn_anchor"
+        &*self.res.facts().get(state).name == "minecraft:respawn_anchor"
     }
     fn anchor_charges(&self, state: BlockStateId) -> i32 {
         self.pack
@@ -177,7 +177,7 @@ impl Game<'_> {
     }
     /// `RespawnAnchorBlock.isWaterThatWouldFlow`.
     fn water_would_flow(&self, p: [i32; 3]) -> bool {
-        let f = self.res.facts.get(self.world.block(p[0], p[1], p[2]));
+        let f = self.res.facts().get(self.world.block(p[0], p[1], p[2]));
         if f.fluid != Fluid::Water {
             return false;
         }
@@ -188,7 +188,7 @@ impl Game<'_> {
             return false;
         }
         self.res
-            .facts
+            .facts()
             .get(self.world.block(p[0], p[1] - 1, p[2]))
             .fluid
             != Fluid::Water
@@ -203,7 +203,7 @@ impl Game<'_> {
             .any(|d| self.water_would_flow([pos[0] + d[0], pos[1], pos[2] + d[2]]));
         let above = self
             .res
-            .facts
+            .facts()
             .get(self.world.block(pos[0], pos[1] + 1, pos[2]))
             .fluid
             == Fluid::Water;
@@ -225,7 +225,7 @@ impl Game<'_> {
     /// halves and explodes; `StrawBedBlock` just falls apart.
     pub(super) fn destroy_bed_on_use(&mut self, head: [i32; 3]) -> Result<()> {
         let state = self.world.block(head[0], head[1], head[2]);
-        let name = self.res.facts.get(state).name.clone();
+        let name = self.res.facts().get(state).name.clone();
         let center = [
             f64::from(head[0]) + 0.5,
             f64::from(head[1]) + 0.5,
@@ -259,7 +259,7 @@ impl Game<'_> {
         let foot = [head[0] + back[0], head[1], head[2] + back[2]];
         if self
             .res
-            .facts
+            .facts()
             .get(self.world.block(foot[0], foot[1], foot[2]))
             .name
             == name
@@ -297,7 +297,7 @@ impl Game<'_> {
     /// climbable blocks and open trapdoors.
     fn non_climbable_shape(&self, p: [i32; 3]) -> VoxelShape {
         let state = self.world.block(p[0], p[1], p[2]);
-        let name = &self.res.facts.get(state).name;
+        let name = &self.res.facts().get(state).name;
         let open_trapdoor = name.ends_with("_trapdoor")
             && self
                 .pack
@@ -326,7 +326,7 @@ impl Game<'_> {
     }
     fn block_in_tag(&self, tag: &str, block: &str) -> bool {
         self.res
-            .items
+            .items()
             .block_tags
             .get(tag)
             .is_some_and(|s| s.contains(block))
@@ -334,7 +334,7 @@ impl Game<'_> {
     /// `EntityType.isBlockDangerous` for the player.
     fn dangerous_for_player(&self, p: [i32; 3]) -> bool {
         let state = self.world.block(p[0], p[1], p[2]);
-        let name = &*self.res.facts.get(state).name;
+        let name = &*self.res.facts().get(state).name;
         let lit_campfire = (name == "minecraft:campfire" || name == "minecraft:soul_campfire")
             && self
                 .pack
@@ -397,7 +397,7 @@ impl Game<'_> {
         }
         let name = |q: [i32; 3]| {
             self.res
-                .facts
+                .facts()
                 .get(self.world.block(q[0], q[1], q[2]))
                 .name
                 .clone()

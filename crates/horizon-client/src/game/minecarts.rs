@@ -210,7 +210,7 @@ impl CartModels {
 impl Game<'_> {
     pub(super) fn rail(&self, x: i32, y: i32, z: i32) -> Option<Rail> {
         let state = self.world.block(x, y, z);
-        let name = self.res.facts.get(state).name.clone();
+        let name = self.res.facts().get(state).name.clone();
         if !matches!(
             &*name,
             "minecraft:rail"
@@ -239,11 +239,14 @@ impl Game<'_> {
         }
     }
     fn conductor(&self, x: i32, y: i32, z: i32) -> bool {
-        self.res.facts.get(self.world.block(x, y, z)).full_collision
+        self.res
+            .facts()
+            .get(self.world.block(x, y, z))
+            .full_collision
     }
     fn cart_in_water(&self, c: &Minecart) -> bool {
         let p = c.position;
-        let f = self.res.facts.get(self.world.block(
+        let f = self.res.facts().get(self.world.block(
             p.x.floor() as i32,
             (p.y + 0.1).floor() as i32,
             p.z.floor() as i32,
@@ -653,7 +656,7 @@ impl Game<'_> {
                         stack.count = 0;
                     }
                     Some(s) if s.same_item_same_components(&stack) => {
-                        let max = self.res.items.get(&s.item).map_or(64, |i| i.max_stack);
+                        let max = self.res.items().get(&s.item).map_or(64, |i| i.max_stack);
                         let moved = stack.count.min(max.saturating_sub(s.count));
                         s.count += moved;
                         stack.count -= moved;
@@ -881,9 +884,9 @@ impl Game<'_> {
                 (-1, 1),
             ] {
                 let (x, y, z) = (bx + dx, by + dy, bz + dz);
-                let below = self.res.facts.get(self.world.block(x, y - 1, z));
-                let here = self.res.facts.get(self.world.block(x, y, z));
-                let head = self.res.facts.get(self.world.block(x, y + 1, z));
+                let below = self.res.facts().get(self.world.block(x, y - 1, z));
+                let here = self.res.facts().get(self.world.block(x, y, z));
+                let head = self.res.facts().get(self.world.block(x, y + 1, z));
                 if (below.full_collision || below.legacy_solid)
                     && !here.full_collision
                     && !head.full_collision
@@ -1351,7 +1354,7 @@ impl Game<'_> {
             glyph: &|c| self.gui.atlas.glyph_cell(c),
         };
         self.res
-            .block_entity_render
+            .block_entity_render()
             .render_state(&scene, state.0, m, light, out);
     }
 }

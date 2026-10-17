@@ -649,7 +649,7 @@ impl Game<'_> {
             if state == self.world.air {
                 continue;
             }
-            let facts = self.res.facts.get(state);
+            let facts = self.res.facts().get(state);
             let blocks = facts.legacy_solid || facts.fluid != horizon_client::blocks::Fluid::None;
             let leaves = self
                 .pack
@@ -941,7 +941,7 @@ impl Game<'_> {
         let chunk = self.world.chunks.get(&(p[0] >> 4, p[2] >> 4))?;
         Some(
             self.res
-                .biomes
+                .biomes()
                 .get(chunk.biome(p[0], p[1], p[2]))
                 .name
                 .clone(),
@@ -964,7 +964,7 @@ impl Game<'_> {
             .resources
             .join(format!("data/{ns}/tags/worldgen/biome/{path}.json"));
         let Ok(bytes) = std::fs::read(file) else {
-            return self.res.mob_data.biome_has(tag, biome);
+            return self.res.mob_data().biome_has(tag, biome);
         };
         let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
         v["values"].as_array().is_some_and(|a| {

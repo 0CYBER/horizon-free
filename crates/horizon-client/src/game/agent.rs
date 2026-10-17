@@ -318,7 +318,7 @@ impl Game<'_> {
         let state = self.world.block(pos[0], pos[1], pos[2]);
         let mut v = json!({
             "pos": pos,
-            "block": &*self.res.facts.get(state).name,
+            "block": &*self.res.facts().get(state).name,
             "state": self.state_string(state),
             "loaded": self.world.chunks.contains_key(&(pos[0] >> 4, pos[2] >> 4)),
         });
@@ -651,17 +651,25 @@ impl Game<'_> {
 
     /// Whether a block stops movement, for the path finder.
     fn blocks_motion(&self, pos: [i32; 3]) -> bool {
-        let f = self.res.facts.get(self.world.block(pos[0], pos[1], pos[2]));
+        let f = self
+            .res
+            .facts()
+            .get(self.world.block(pos[0], pos[1], pos[2]));
         f.full_collision || f.legacy_solid
     }
     fn walkable(&self, n: Node) -> bool {
         let below = self.world.block(n[0], n[1] - 1, n[2]);
         let lava = |p: [i32; 3]| {
-            &*self.res.facts.get(self.world.block(p[0], p[1], p[2])).name == "minecraft:lava"
+            &*self
+                .res
+                .facts()
+                .get(self.world.block(p[0], p[1], p[2]))
+                .name
+                == "minecraft:lava"
         };
         self.world.chunks.contains_key(&(n[0] >> 4, n[2] >> 4))
             && (self.blocks_motion([n[0], n[1] - 1, n[2]])
-                || self.res.facts.get(below).fluid != horizon_client::blocks::Fluid::None)
+                || self.res.facts().get(below).fluid != horizon_client::blocks::Fluid::None)
             && !self.blocks_motion(n)
             && !self.blocks_motion([n[0], n[1] + 1, n[2]])
             && !lava(n)
@@ -722,7 +730,11 @@ impl Game<'_> {
                     if !clear || !self.walkable(m) {
                         continue;
                     }
-                    let water = self.res.facts.get(self.world.block(m[0], m[1], m[2])).fluid
+                    let water = self
+                        .res
+                        .facts()
+                        .get(self.world.block(m[0], m[1], m[2]))
+                        .fluid
                         != horizon_client::blocks::Fluid::None;
                     let step = 10 + if dy != 0 { 5 } else { 0 } + if water { 30 } else { 0 };
                     let c = base + step;
@@ -932,10 +944,10 @@ impl Game<'_> {
                     for z in lo[2]..=hi[2] {
                         for x in lo[0]..=hi[0] {
                             let state = self.world.block(x, y, z);
-                            if self.res.facts.is_air(state) {
+                            if self.res.facts().is_air(state) {
                                 continue;
                             }
-                            let name = self.res.facts.get(state).name.to_string();
+                            let name = self.res.facts().get(state).name.to_string();
                             *census.entry(name).or_insert(0) += 1;
                             list.push(json!([x, y, z, self.state_string(state)]));
                         }
@@ -958,7 +970,7 @@ impl Game<'_> {
                     for z in c[2] - radius..=c[2] + radius {
                         for x in c[0] - radius..=c[0] + radius {
                             let state = self.world.block(x, y, z);
-                            if *self.res.facts.get(state).name == *want {
+                            if *self.res.facts().get(state).name == *want {
                                 let d = dist(eye, [x, y, z].map(|v| f64::from(v) + 0.5));
                                 found.push((d, [x, y, z]));
                             }
@@ -1166,7 +1178,7 @@ impl Game<'_> {
                 self.playing()?;
                 let pos = a.block_pos(0)?;
                 let before = self.world.block(pos[0], pos[1], pos[2]);
-                if self.res.facts.is_air(before) {
+                if self.res.facts().is_air(before) {
                     return Err(format!("there is no block at {pos:?}").into());
                 }
                 self.aim_block(pos, None)?;
@@ -1195,24 +1207,24 @@ impl Game<'_> {
                     .ok_or("nothing in hand to place; select an item")?;
                 let held = held.item.clone();
                 let before = self.world.block(pos[0], pos[1], pos[2]);
-                if !self.res.facts.get(before).replaceable && !self.res.facts.is_air(before) {
+                if !self.res.facts().get(before).replaceable && !self.res.facts().is_air(before) {
                     return Err(format!(
                         "{pos:?} holds {}; break it first",
-                        self.res.facts.get(before).name
+                        self.res.facts().get(before).name
                     )
                     .into());
                 }
                 // A replaceable block there (grass, snow) is clicked itself, as
                 // a player would; otherwise the face of a neighbour touching it.
-                let mut aimed = !self.res.facts.is_air(before)
-                    && !self.res.facts.get(before).outline.is_empty()
+                let mut aimed = !self.res.facts().is_air(before)
+                    && !self.res.facts().get(before).outline.is_empty()
                     && self.aim_block(pos, None).is_ok();
                 for (_, d) in FACES.iter().filter(|_| !aimed) {
                     let d = *d;
                     let support = add(pos, d);
                     let state = self.world.block(support[0], support[1], support[2]);
-                    let f = self.res.facts.get(state);
-                    if self.res.facts.is_air(state)
+                    let f = self.res.facts().get(state);
+                    if self.res.facts().is_air(state)
                         || f.replaceable
                         || f.fluid != horizon_client::blocks::Fluid::None && !f.waterlogged
                     {
@@ -1878,7 +1890,10 @@ impl Game<'_> {
         // Step up onto the next block, or out of water.
         let in_water = {
             let b = p.map(|v| v.floor() as i32);
-            self.res.facts.get(self.world.block(b[0], b[1], b[2])).fluid
+            self.res
+                .facts()
+                .get(self.world.block(b[0], b[1], b[2]))
+                .fluid
                 != horizon_client::blocks::Fluid::None
         };
         if aim[1] > p[1] + 0.5 && horizontal(p, aim) < 1.6 && on_ground {

@@ -673,17 +673,18 @@ impl Game<'_> {
                             } else {
                                 loop {
                                     y -= 1;
-                                    color = self.res.facts.get(self.world.block(x, y, z)).map_color;
+                                    color =
+                                        self.res.facts().get(self.world.block(x, y, z)).map_color;
                                     if color != 0 || y <= min_y {
                                         break;
                                     }
                                 }
-                                let f = self.res.facts.get(self.world.block(x, y, z));
+                                let f = self.res.facts().get(self.world.block(x, y, z));
                                 if y > min_y && f.fluid != Fluid::None {
                                     let mut solid = y - 1;
                                     loop {
                                         let below =
-                                            self.res.facts.get(self.world.block(x, solid, z));
+                                            self.res.facts().get(self.world.block(x, solid, z));
                                         solid -= 1;
                                         water_depth += 1;
                                         if solid <= min_y || below.fluid == Fluid::None {

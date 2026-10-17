@@ -266,7 +266,7 @@ impl Game<'_> {
                 binding: self.collision,
                 subject: None,
             },
-            facts: &self.res.facts,
+            facts: self.res.facts(),
             context,
         };
         view.align_with_entity(&entity, partial, kind, |from, to| {
@@ -296,7 +296,7 @@ impl Game<'_> {
             return;
         };
         if self.player_model.is_none() {
-            let Some(kind) = self.res.player_type.clone() else {
+            let Some(kind) = self.res.player_type().clone() else {
                 return;
             };
             self.player_model = Some(Mob::new(0, kind, p.position, self.yaw));
@@ -429,7 +429,7 @@ impl Game<'_> {
             camera,
             &lookup,
             packed,
-            &self.res.mob_data,
+            self.res.mob_data(),
             &self.player_armor_layers(),
             out,
         );
@@ -484,7 +484,7 @@ impl Game<'_> {
             camera,
             &lookup,
             240 | 240 << 8,
-            &self.res.mob_data,
+            self.res.mob_data(),
             &self.player_armor_layers(),
             &mut verts,
         );
@@ -537,7 +537,7 @@ impl Game<'_> {
     ) {
         let Some(asset) = self.armor[1]
             .as_ref()
-            .and_then(|s| self.res.items.get(&s.item))
+            .and_then(|s| self.res.items().get(&s.item))
             .and_then(|i| i.equip_asset.as_ref())
         else {
             return;

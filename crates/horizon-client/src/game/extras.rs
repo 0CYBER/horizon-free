@@ -188,7 +188,7 @@ impl Game<'_> {
         let radius = ((reach / 16.0).ceil() as i32 + 1).min(self.settings.render_distance.max(2));
         self.extras.minimap.update(
             &self.world,
-            &self.res.facts,
+            self.res.facts(),
             (bx >> 4, bz >> 4),
             radius,
             layer,

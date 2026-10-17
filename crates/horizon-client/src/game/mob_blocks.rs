@@ -75,7 +75,7 @@ impl Game<'_> {
         if left <= 0 {
             return;
         }
-        let Some(kind) = self.res.mob_types.get("minecraft:elder_guardian") else {
+        let Some(kind) = self.res.mob_types().get("minecraft:elder_guardian") else {
             return;
         };
         let Some(r) = self.gui.atlas.sprites.get("entity/guardian_elder").copied() else {
@@ -142,7 +142,7 @@ impl Game<'_> {
             return;
         };
         let Some(head) =
-            render::part_transform(mob, alpha as f32, camera, &self.res.mob_data, "head")
+            render::part_transform(mob, alpha as f32, camera, self.res.mob_data(), "head")
         else {
             return;
         };
@@ -260,7 +260,7 @@ impl Game<'_> {
         for (item, left) in [(&mob.extra.main_hand, false), (&mob.extra.off_hand, true)] {
             let Some(item) = item else { continue };
             let Some(t) =
-                render::held_item_transform(mob, alpha as f32, camera, &self.res.mob_data, left)
+                render::held_item_transform(mob, alpha as f32, camera, self.res.mob_data(), left)
             else {
                 continue;
             };

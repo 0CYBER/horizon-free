@@ -47,7 +47,7 @@ impl Game<'_> {
         format!("{}[{}]", s.name, props.join(","))
     }
     fn put_block(&mut self, pos: [i32; 3], state: BlockStateId) -> Result<()> {
-        let name = self.res.facts.get(state).name.clone();
+        let name = self.res.facts().get(state).name.clone();
         self.world.block_entities.remove(&(pos[0], pos[1], pos[2]));
         self.level_set(pos, state)?;
         if let Some(entity) = BlockEntity::for_block(&name) {

@@ -263,7 +263,7 @@ fn argb(c: i32) -> u32 {
 
 impl Game<'_> {
     fn data(&self) -> &stations::StationData {
-        &self.res.stations
+        self.res.stations()
     }
     pub(super) fn translate(&self, key: &str, fallback: &str) -> String {
         self.data()
@@ -376,9 +376,13 @@ impl Game<'_> {
         }
     }
     fn count_bookshelves(&self, pos: [i32; 3]) -> i32 {
-        let tags = &self.res.items.block_tags;
+        let tags = &self.res.items().block_tags;
         let is = |p: [i32; 3], tag: &str| {
-            let name = &self.res.facts.get(self.world.block(p[0], p[1], p[2])).name;
+            let name = &self
+                .res
+                .facts()
+                .get(self.world.block(p[0], p[1], p[2]))
+                .name;
             tags.get(tag).is_some_and(|t| t.contains(&**name))
         };
         stations::bookshelf_offsets()
@@ -412,8 +416,8 @@ impl Game<'_> {
             return;
         };
         let creative = self.creative;
-        let data = &self.res.stations;
-        let items = &self.res.items;
+        let data = self.res.stations();
+        let items = self.res.items();
         match s.kind {
             Kind::Enchanting => {
                 s.bookcases = self.count_bookshelves(s.pos);
@@ -494,7 +498,10 @@ impl Game<'_> {
         self.station = Some(s);
     }
     pub(super) fn max_stack(&self, stack: &ItemStack) -> u32 {
-        self.res.items.get(&stack.item).map_or(64, |i| i.max_stack)
+        self.res
+            .items()
+            .get(&stack.item)
+            .map_or(64, |i| i.max_stack)
     }
     /// `Slot.mayPlace` and `getMaxStackSize` for station and brewing slots.
     fn slot_rules(&self, slot: usize, stack: &ItemStack) -> (bool, u32) {
@@ -518,7 +525,7 @@ impl Game<'_> {
                 3 => (data.brewing.is_reagent(stack), 64),
                 _ => (
                     self.res
-                        .items
+                        .items()
                         .get(&stack.item)
                         .is_some_and(|i| i.brewing_fuel.is_some()),
                     64,
@@ -548,7 +555,7 @@ impl Game<'_> {
                 64,
             ),
             Kind::Enchanting => (&*stack.item == "minecraft:lapis_lazuli", 64),
-            Kind::Grindstone => (stations::grindstone_accepts(&self.res.items, stack), 64),
+            Kind::Grindstone => (stations::grindstone_accepts(self.res.items(), stack), 64),
             Kind::Smithing => (data.recipes.smithing_accepts(i, stack), 64),
             _ => (true, 64),
         }
@@ -667,7 +674,7 @@ impl Game<'_> {
             let data = self.data();
             let fuel = self
                 .res
-                .items
+                .items()
                 .get(&stack.item)
                 .is_some_and(|i| i.brewing_fuel.is_some());
             let (reagent, bottle) = (
@@ -818,7 +825,7 @@ impl Game<'_> {
                 if !self.creative && self.world.random.next_float() < 0.12 {
                     // AnvilBlock.damage
                     let state = self.world.block(pos[0], pos[1], pos[2]);
-                    let name = self.res.facts.get(state).name.clone();
+                    let name = self.res.facts().get(state).name.clone();
                     let next = match &*name {
                         "minecraft:anvil" => Some("minecraft:chipped_anvil"),
                         "minecraft:chipped_anvil" => Some("minecraft:damaged_anvil"),
@@ -848,7 +855,7 @@ impl Game<'_> {
                 let (a, b) = (s.inputs[0].take(), s.inputs[1].take());
                 let mut random = LegacyRandom::new(self.world.random.next_long());
                 let xp = stations::grindstone_experience(
-                    &self.res.stations.enchantments,
+                    &self.res.stations().enchantments,
                     &mut random,
                     a.as_ref(),
                     b.as_ref(),
@@ -945,7 +952,7 @@ impl Game<'_> {
                     Some(c)
                         if c.same_item_same_components(&result)
                             && c.count + result.count
-                                <= self.res.items.get(&c.item).map_or(64, |i| i.max_stack) =>
+                                <= self.res.items().get(&c.item).map_or(64, |i| i.max_stack) =>
                     {
                         c.count += result.count
                     }
@@ -988,8 +995,8 @@ impl Game<'_> {
             return;
         }
         let Some(enchanted) = stations::apply_enchantment(
-            &self.res.stations.enchantments,
-            &self.res.items,
+            &self.res.stations().enchantments,
+            self.res.items(),
             self.level.xp_seed,
             button,
             cost,
@@ -1566,7 +1573,7 @@ impl Game<'_> {
                         if inside(local, bx, by, bw, 17.0)
                             && let Some((id, l)) = &offers.clues[i]
                         {
-                            let e = &self.res.stations.enchantments;
+                            let e = &self.res.stations().enchantments;
                             let (name, _) = e.full_name(id, *l);
                             let clue = self
                                 .translate("container.enchant.clue", "%s . . . ?")
@@ -1766,7 +1773,7 @@ impl Game<'_> {
                                     i,
                                     ItemStack {
                                         count: 1,
-                                        ..self.res.stations.recipes.stonecutting[s.recipes[i]]
+                                        ..self.res.stations().recipes.stonecutting[s.recipes[i]]
                                             .result
                                             .clone()
                                     },
@@ -1858,7 +1865,7 @@ impl Game<'_> {
     /// `ItemStack.getTooltipLines` subset: name in rarity colour, potion
     /// effects, enchantments (gray, curses red), stored enchantments, trims.
     pub(super) fn stack_tooltip(&self, stack: &ItemStack) -> Vec<(String, u32)> {
-        let e: &Enchantments = &self.res.stations.enchantments;
+        let e: &Enchantments = &self.res.stations().enchantments;
         let props = e.props(&stack.item);
         let rarity = horizon_client::item_tooltip::rarity(
             stack,
@@ -1945,7 +1952,7 @@ impl Game<'_> {
         }
         // BannerPatternLayers.addToTooltip: up to six layer names.
         for layer in horizon_client::banner::tooltip_layers(stack).iter().take(6) {
-            let key = self.res.stations.banners.layer_key(layer);
+            let key = self.res.stations().banners.layer_key(layer);
             lines.push((self.translate(&key, &key), rgba(170, 170, 170, 255)));
         }
         // Spawner.appendHoverText: what a spawner or trial spawner item spawns.
@@ -1969,7 +1976,7 @@ impl Game<'_> {
                 }
             }
         }
-        if let Some(info) = self.res.items.get(&stack.item) {
+        if let Some(info) = self.res.items().get(&stack.item) {
             let base = |name: &str, default| {
                 self.player
                     .as_ref()
@@ -1997,7 +2004,7 @@ impl Game<'_> {
                 &translate,
             ));
         }
-        if let Some(info) = self.res.items.get(&stack.item)
+        if let Some(info) = self.res.items().get(&stack.item)
             && info.max_damage > 0
             && stack.damage > 0
             && self.options_advanced_tooltips()
@@ -2039,7 +2046,7 @@ impl Game<'_> {
                 _ => serde_json::Value::Null,
             };
         };
-        let recipes = &self.res.stations.recipes.stonecutting;
+        let recipes = &self.res.stations().recipes.stonecutting;
         serde_json::json!({
             "costs": s.offers.costs,
             "clues": s.offers.clues.iter().map(|c| c.as_ref().map(|(e, l)| format!("{e} {l}"))).collect::<Vec<_>>(),
@@ -2150,9 +2157,9 @@ impl Game<'_> {
         for (pos, entity) in self.world.block_entities.iter_mut() {
             if let BlockEntity::Brewing(b) = entity {
                 let out = b.tick(
-                    &self.res.stations.brewing,
-                    &self.res.items,
-                    &self.res.providers,
+                    &self.res.stations().brewing,
+                    self.res.items(),
+                    self.res.providers(),
                 );
                 if out != brewing::BrewTick::default() {
                     changes.push((*pos, out));

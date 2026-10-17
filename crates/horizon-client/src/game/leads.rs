@@ -220,11 +220,11 @@ impl Game<'_> {
         };
         let name = self
             .res
-            .facts
+            .facts()
             .get(self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]));
         if !self
             .res
-            .items
+            .items()
             .block_tags
             .get("minecraft:fences")
             .is_some_and(|s| s.contains(&*name.name))

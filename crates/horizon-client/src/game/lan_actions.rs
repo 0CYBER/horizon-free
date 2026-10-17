@@ -299,7 +299,7 @@ impl Game<'_> {
     fn lan_open_container(&mut self, host: &mut LanHost, conn: u32, pos: (i32, i32, i32)) -> bool {
         let name = &self
             .res
-            .facts
+            .facts()
             .get(self.world.block(pos.0, pos.1, pos.2))
             .name;
         let (menu, title, slots) = if &**name == "minecraft:ender_chest" {
@@ -543,7 +543,7 @@ impl Game<'_> {
                 }
             }
             S::ContainerClick(p) => {
-                let rules = ItemRules(&self.res.items);
+                let rules = ItemRules(self.res.items());
                 let drops = host.hub.container_click(conn, &p, &mut self.world, &rules);
                 self.drop_guest_items(host, gi, drops);
             }
@@ -675,7 +675,7 @@ impl Game<'_> {
             }
             S::PickItemFromBlock(p) => {
                 let state = self.world.block(p.pos[0], p.pos[1], p.pos[2]);
-                let item = self.res.facts.get(state).item.clone();
+                let item = self.res.facts().get(state).item.clone();
                 let g = &mut host.hub.guests[gi];
                 if g.creative() && &*item != "minecraft:air" {
                     let slot = g.selected;
@@ -1148,7 +1148,7 @@ impl Game<'_> {
         let range = |v: f64| (v - half).floor() as i32..=(v + half).floor() as i32;
         range(at[0]).any(|x| {
             range(at[2]).any(|z| {
-                let f = self.res.facts.get(self.world.block(x, y, z));
+                let f = self.res.facts().get(self.world.block(x, y, z));
                 f.full_collision && f.solid_render
             })
         })
@@ -1166,7 +1166,7 @@ impl Game<'_> {
         play.mining = None;
         let start = play.dig_start;
         let state = self.world.block(pos[0], pos[1], pos[2]);
-        if !dug || self.res.facts.is_air(state) {
+        if !dug || self.res.facts().is_air(state) {
             return;
         }
         let progress = self
@@ -1190,7 +1190,7 @@ impl Game<'_> {
         };
         let ticks = host.hub.ticks;
         let state = self.world.block(pos[0], pos[1], pos[2]);
-        let progress = if self.res.facts.is_air(state) {
+        let progress = if self.res.facts().is_air(state) {
             None
         } else {
             self.as_guest(host, conn, |g| g.destroy_progress(pos))

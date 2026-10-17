@@ -385,7 +385,7 @@ impl Game<'_> {
             camera,
             &lookup,
             240 | 240 << 8,
-            &self.res.mob_data,
+            self.res.mob_data(),
             &[],
             &mut verts,
         );

@@ -303,8 +303,8 @@ impl Game<'_> {
     }
 
     fn sculk_fixture_reset(&mut self, s: &Scenario) -> Result<()> {
-        self.world = World::new(self.res.facts.air, 0);
-        let plains = u32::from(self.res.biomes.id("minecraft:plains"));
+        self.world = World::new(self.res.facts().air, 0);
+        let plains = u32::from(self.res.biomes().id("minecraft:plains"));
         let layers = [
             self.fixture_state("minecraft:bedrock")?,
             self.fixture_state("minecraft:dirt")?,
@@ -439,7 +439,7 @@ impl Game<'_> {
         for spec in &s.mobs {
             let kind = self
                 .res
-                .mob_types
+                .mob_types()
                 .get(&spec.kind)
                 .cloned()
                 .ok_or_else(|| format!("unknown mob {}", spec.kind))?;

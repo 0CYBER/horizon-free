@@ -203,8 +203,8 @@ impl Game<'_> {
         let Some(chunk) = self.world.chunks.get(&(x >> 4, z >> 4)) else {
             return BiomeFacts::default();
         };
-        let b = self.res.biomes.get(chunk.biome(x, y, z));
-        let tags = &self.res.mob_data;
+        let b = self.res.biomes().get(chunk.biome(x, y, z));
+        let tags = self.res.mob_data();
         let has = |t: &str| tags.biome_has(t, &b.name);
         let climate = if has("minecraft:spawns_warm_variant_farm_animals") {
             Climate::Warm
@@ -254,7 +254,7 @@ impl Game<'_> {
         } else {
             format!("minecraft:{kind}")
         };
-        let t = self.res.mob_types.get(&kind).cloned()?;
+        let t = self.res.mob_types().get(&kind).cloned()?;
         self.next_entity += 1;
         let yaw = self.world.random.next_float() * 360.0;
         let mut mob = Mob::new(self.next_entity, t, Vec3::new(at[0], at[1], at[2]), yaw);
@@ -367,7 +367,7 @@ impl Game<'_> {
     pub(super) fn motion_top(&self, x: i32, z: i32) -> i32 {
         let top = if self.dim == Dim::Nether { 127 } else { 319 };
         for y in (horizon_client::chunk::MIN_Y..=top).rev() {
-            let f = self.res.facts.get(self.world.block(x, y, z));
+            let f = self.res.facts().get(self.world.block(x, y, z));
             if (f.full_collision || f.fluid != Fluid::None) && !f.name.ends_with("leaves") {
                 return y + 1;
             }
@@ -379,10 +379,10 @@ impl Game<'_> {
         MobWorld {
             world: &self.world,
             registry: self.pack.assets.registry,
-            facts: &self.res.facts,
+            facts: self.res.facts(),
             movement: &self.motion.blocks,
             collision: self.collision,
-            data: &self.res.mob_data,
+            data: self.res.mob_data(),
             player: self.player_view(),
             others,
             others_grid: None,
@@ -392,14 +392,14 @@ impl Game<'_> {
             raining: rain > 0.2,
             thundering: thunder > 0.9,
             nether: self.dim == Dim::Nether,
-            block_tags: &self.res.items.block_tags,
-            biomes: &self.res.biomes,
+            block_tags: &self.res.items().block_tags,
+            biomes: self.res.biomes(),
             mob_griefing: self.ui.rules.bool("mob_griefing"),
             end: self.dim == Dim::End,
             world_seed: self.level.seed,
             sea_level: if self.dim == Dim::Nether { 32 } else { 63 },
             teams: self.mob_teams(),
-            items: Some(&self.res.items),
+            items: Some(self.res.items()),
             difficulty: self.local_difficulty(
                 self.player
                     .as_ref()
@@ -983,7 +983,7 @@ impl Game<'_> {
                     if effect {
                         let old = self.world.block(pos[0], pos[1], pos[2]);
                         self.destroy_particles(pos, old);
-                        let s = self.res.facts.get(old).sounds.break_sound.clone();
+                        let s = self.res.facts().get(old).sounds.break_sound.clone();
                         self.audio.play(
                             &s,
                             Some([
@@ -1003,7 +1003,7 @@ impl Game<'_> {
                     let old = self.world.block(pos[0], pos[1], pos[2]);
                     self.destroy_particles(pos, old);
                     if drop {
-                        let drops = self.res.items.block_drops_in(
+                        let drops = self.res.items().block_drops_in(
                             self.pack.assets.registry,
                             old,
                             None,
@@ -1157,7 +1157,7 @@ impl Game<'_> {
                 MobEvent::GiftLoot { table, at } => {
                     let drops =
                         self.res
-                            .items
+                            .items()
                             .loot_table(table, false, None, &mut self.world.random);
                     for d in drops {
                         self.spawn_item(d, at, [0.0, 0.2, 0.0], 10);
@@ -1393,7 +1393,7 @@ impl Game<'_> {
         }
         let projectile = self
             .res
-            .stations
+            .stations()
             .enchantments
             .damage_tags
             .get("minecraft:is_projectile")
@@ -1753,7 +1753,7 @@ impl Game<'_> {
         horizon_client::arrows::ArrowScene {
             world: &self.world,
             registry: self.pack.assets.registry,
-            facts: &self.res.facts,
+            facts: self.res.facts(),
             collision: self.collision,
             fluids: &self.motion.fluids,
             raining: rain,
@@ -2005,7 +2005,7 @@ impl Game<'_> {
                     let fire = [pos[0] + face[0], pos[1] + face[1], pos[2] + face[2]];
                     if self
                         .res
-                        .facts
+                        .facts()
                         .is_air(self.world.block(fire[0], fire[1], fire[2]))
                         && let Some(state) =
                             self.pack.assets.registry.default_state("minecraft:fire")
@@ -2331,7 +2331,7 @@ impl Game<'_> {
             Species::Sheep if item == "minecraft:shears" && !m.extra.sheared && !m.is_baby() => {
                 m.extra.sheared = true;
                 let color = horizon_client::mobs::render::DYE_NAMES[m.extra.color as usize & 15];
-                let stacks = self.res.items.loot_table(
+                let stacks = self.res.items().loot_table(
                     &format!("minecraft:shearing/sheep/{color}"),
                     false,
                     None,
@@ -2363,7 +2363,7 @@ impl Game<'_> {
             Species::Wolf if m.extra.tame && is_food && m.health < m.attrs.max_health => {
                 let heal = self
                     .res
-                    .items
+                    .items()
                     .get(&item)
                     .and_then(|i| i.food.as_ref())
                     .map_or(2.0, |f| f.0 as f32);
@@ -2467,7 +2467,7 @@ impl Game<'_> {
             Species::Cat if m.extra.tame && is_food && m.health < m.attrs.max_health => {
                 let heal = self
                     .res
-                    .items
+                    .items()
                     .get(&item)
                     .and_then(|i| i.food.as_ref())
                     .map_or(1.0, |f| f.0 as f32);
@@ -2634,7 +2634,7 @@ impl Game<'_> {
             return;
         }
         if let Some(stack) = self.inventory[self.selected].as_mut()
-            && let Some(info) = self.res.items.get(&stack.item)
+            && let Some(info) = self.res.items().get(&stack.item)
             && info.max_damage > 0
         {
             stack.damage += 1;
@@ -2707,7 +2707,7 @@ impl Game<'_> {
         // EntityType.canSpawn: no monsters in peaceful (FAIL ends the click).
         let id = format!("minecraft:{}", kind.trim_start_matches("minecraft:"));
         if self.ui.difficulty == 0
-            && let Some(t) = self.res.mob_types.get(&id)
+            && let Some(t) = self.res.mob_types().get(&id)
             && !horizon_client::mobs::spawn_rules::allowed_in_peaceful(t.species)
         {
             return Ok(true);
@@ -2829,7 +2829,7 @@ impl Game<'_> {
                 camera,
                 &lookup,
                 packed,
-                &self.res.mob_data,
+                self.res.mob_data(),
                 &armor,
                 out,
             );
@@ -3073,13 +3073,17 @@ impl Game<'_> {
             return;
         }
         let mut y = pos[1];
-        while &*self.res.facts.get(self.world.block(pos[0], y, pos[2])).name
+        while &*self
+            .res
+            .facts()
+            .get(self.world.block(pos[0], y, pos[2]))
+            .name
             == "minecraft:nether_portal"
         {
             y -= 1;
         }
         // isValidSpawn: a sturdy top face (portal frames emit no light).
-        let below = self.res.facts.get(self.world.block(pos[0], y, pos[2]));
+        let below = self.res.facts().get(self.world.block(pos[0], y, pos[2]));
         if below.sturdy_full & (1 << 1) == 0 {
             return;
         }

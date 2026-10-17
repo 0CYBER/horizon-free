@@ -159,7 +159,7 @@ impl Game<'_> {
                 &self.world,
                 self.collision,
                 &self.pack.assets,
-                &self.res.facts,
+                self.res.facts(),
             )?;
             if t.fuse <= 0 {
                 let center = [
@@ -186,7 +186,7 @@ impl Game<'_> {
             return Ok(false);
         };
         let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-        if &*self.res.facts.get(state).name != "minecraft:tnt" {
+        if &*self.res.facts().get(state).name != "minecraft:tnt" {
             return Ok(false);
         }
         let pos = BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]);

@@ -114,9 +114,9 @@ impl Game<'_> {
     }
 
     fn fixture_reset(&mut self, seed: i64) {
-        self.world = World::new(self.res.facts.air, seed);
+        self.world = World::new(self.res.facts().air, seed);
         // The oracle level is plains everywhere (bone meal's flowers, freezing).
-        let plains = u32::from(self.res.biomes.id("minecraft:plains"));
+        let plains = u32::from(self.res.biomes().id("minecraft:plains"));
         for cx in -2..=2 {
             for cz in -2..=2 {
                 let mut chunk = Chunk::empty(cx, cz);
@@ -198,7 +198,7 @@ impl Game<'_> {
             let state = BlockStateId(cell[3].as_u64().unwrap_or(0) as u32);
             self.world.set(p.0, p.1, p.2, state)?;
             before.insert(p, state.0);
-            if let Some(entity) = BlockEntity::for_block(&self.res.facts.get(state).name) {
+            if let Some(entity) = BlockEntity::for_block(&self.res.facts().get(state).name) {
                 self.world.block_entities.insert(p, entity);
             }
         }
@@ -329,7 +329,7 @@ impl Game<'_> {
         changed.dedup();
         for p in changed {
             let now = self.world.block(p.0, p.1, p.2).0;
-            if before.get(&p).copied().unwrap_or(self.res.facts.air.0) != now {
+            if before.get(&p).copied().unwrap_or(self.res.facts().air.0) != now {
                 out.push(format!("set {},{},{} {now}", p.0, p.1, p.2));
             }
         }
@@ -696,7 +696,7 @@ impl Game<'_> {
     /// lectern's book, or the items of a block entity Horizon keeps as saved.
     fn fixture_fill(&mut self, p: (i32, i32, i32), slot: usize, stack: Option<ItemStack>) {
         let jukebox =
-            &*self.res.facts.get(self.world.block(p.0, p.1, p.2)).name == "minecraft:jukebox";
+            &*self.res.facts().get(self.world.block(p.0, p.1, p.2)).name == "minecraft:jukebox";
         match self.world.block_entities.get_mut(&p) {
             Some(BlockEntity::Jukebox(j)) => j.record = stack,
             Some(BlockEntity::Lectern(l)) => l.book = stack,
@@ -725,7 +725,7 @@ impl Game<'_> {
         use horizon_world::nbt::Tag;
         let name = self
             .res
-            .facts
+            .facts()
             .get(self.world.block(p.0, p.1, p.2))
             .name
             .clone();
@@ -819,7 +819,7 @@ impl Game<'_> {
         }
         let t = self
             .res
-            .mob_types
+            .mob_types()
             .get(kind)
             .cloned()
             .ok_or_else(|| format!("no mob type {kind}"))?;
