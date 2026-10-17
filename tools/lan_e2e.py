@@ -30,7 +30,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              tree (Tab), and runs what it completed;
 - recipes:   the guest's recipe book lists the planks recipe the logs unlock, and clicking it
              places a log in the inventory's crafting grid (the server places it).
-- feedback:  the guest's command feedback names the guest and shows the numbers.
+- feedback:  the guest's command feedback names the guest and shows the numbers, and the host (an
+             operator) is told of it as `[Guest: ...]`.
 - clicks:    with real mouse presses (not click-slot, which skips the screen's press and drag
              handling), the guest puts a stack into a chest and a furnace, drags planks across
              its crafting grid and gathers a stack with a double click; the server has each.
@@ -688,6 +689,8 @@ def check_feedback(host, guest, out):
     guest('command', command=f'tp @s {x:.1f} {y:.1f} {z:.1f}')
     guest.wait(10)
     chat = guest.raw('messages', 5)['chat']
+    # The host is an operator: broadcastToAdmins tells it, as `[Guest: ...]`.
+    host_chat = host.raw('messages', 5)['chat']
     guest.raw('key', 't', 'tap')
     guest.wait(5)
     guest.shot(out, 'feedback')
@@ -698,7 +701,9 @@ def check_feedback(host, guest, out):
     assert any(replaced in line for line in chat), f'no "{replaced}" in {chat}'
     assert any(line.startswith(f'Teleported {GUEST_NAME} to {x:.6f}') for line in chat), f'teleport feedback: {chat}'
     assert screen in (None, 'playing'), f'the chat did not close: {screen}'
-    return chat
+    told = f'[{GUEST_NAME}: Teleported {GUEST_NAME} to {x:.6f}'
+    assert any(line.startswith(told) for line in host_chat), f'no "{told}" for the host: {host_chat}'
+    return chat + host_chat
 
 
 def chat_input(game):

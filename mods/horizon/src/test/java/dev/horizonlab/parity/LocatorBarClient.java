@@ -76,11 +76,13 @@ import net.minecraft.world.phys.Vec3;
  * line at a time: {@code step LABEL} (the label the next packets are recorded
  * under), {@code join NAME}, {@code cmd NAME COMMAND...}, {@code shift NAME
  * on|off} (the shift key, as ServerboundPlayerInputPacket), {@code fly NAME
- * on|off} (ServerboundPlayerAbilitiesPacket), {@code quit NAME} and {@code
- * end}, which writes each player's lines to OUT.
+ * on|off} (ServerboundPlayerAbilitiesPacket), {@code quit NAME}, {@code chat
+ * on|off} (whether the system chat each player receives is recorded too, as
+ * component JSON) and {@code end}, which writes each player's lines to OUT.
  */
 public final class LocatorBarClient {
     private static volatile String step = "start";
+    private static volatile boolean chat;
     private static final Map<UUID, String> NAMES = new LinkedHashMap<>();
 
     public static void main(String[] args) throws Exception {
@@ -111,6 +113,7 @@ public final class LocatorBarClient {
                         players.get(w[1]).send(new net.minecraft.network.protocol.game.ServerboundPlayerAbilitiesPacket(abilities));
                     }
                     case "quit" -> players.get(w[1]).close();
+                    case "chat" -> chat = w[1].equals("on");
                     case "end" -> {
                         try (PrintWriter out = new PrintWriter(Files.newBufferedWriter(output, StandardCharsets.UTF_8))) {
                             for (Player p : players.values()) {
@@ -268,7 +271,12 @@ public final class LocatorBarClient {
                     Packet<?> p = r.packet;
                     if (p instanceof ClientboundTrackedWaypointPacket) {
                         record(waypoint(r.payload));
-                    } else if (p instanceof ClientboundSystemChatPacket) {
+                    } else if (p instanceof ClientboundSystemChatPacket c) {
+                        if (chat) {
+                            record("chat " + (c.overlay() ? "overlay " : "") + net.minecraft.network.chat.ComponentSerialization.CODEC
+                                .encodeStart(ParityData.access.createSerializationContext(com.mojang.serialization.JsonOps.INSTANCE), c.content())
+                                .getOrThrow());
+                        }
                         synchronized (replyLock) {
                             replies++;
                             replyLock.notifyAll();

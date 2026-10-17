@@ -725,7 +725,7 @@ impl Game<'_> {
                             }),
                         );
                     }
-                    self.send_admin_feedback(host, conn);
+                    self.send_admin_feedback(host, Some(conn));
                 }
             }
             S::Unknown(8, payload) => {
@@ -937,13 +937,19 @@ impl Game<'_> {
                 }),
             );
         }
-        self.send_admin_feedback(host, conn);
+        self.send_admin_feedback(host, Some(conn));
     }
 
-    /// The `broadcastToAdmins` lines a guest's command queued: every other
+    /// The `broadcastToAdmins` lines a command queued (`source`: the guest
+    /// whose it was; none for the host's or the console's): every other
     /// operator gets them, and the console logs them as the server's own
     /// system messages (MinecraftServer.sendSystemMessage).
-    fn send_admin_feedback(&mut self, host: &mut LanHost, source: u32) {
+    pub(super) fn send_admin_feedback(&mut self, host: &mut LanHost, source: Option<u32>) {
+        // PlayerList.isOp for the host of a world open to LAN: the owner when
+        // the world allows commands, everyone when the LAN does.
+        let host_op = source.is_some()
+            && !host.hub.config.dedicated
+            && (self.allow_commands() || host.hub.config.guest_commands);
         for (line, ops, console) in std::mem::take(&mut self.admin_feedback) {
             if ops {
                 let content = horizon_client::lan::data::component_nbt(&line.component());
@@ -951,12 +957,15 @@ impl Game<'_> {
                     .hub
                     .guests
                     .iter()
-                    .filter(|g| g.conn != source && g.permission > 0)
+                    .filter(|g| Some(g.conn) != source && g.permission > 0)
                 {
                     g.send(&C::SystemChat(play::SystemChat {
                         content: content.clone(),
                         overlay: false,
                     }));
+                }
+                if host_op {
+                    self.system_message(line.clone());
                 }
             }
             if console {

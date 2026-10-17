@@ -780,6 +780,10 @@ impl Game<'_> {
         };
         // What the tick sends a guest goes to its connection at the end.
         let holding = lan::Holding::start();
+        // The host's own commands' broadcastToAdmins lines.
+        if !self.admin_feedback.is_empty() {
+            self.send_admin_feedback(&mut host, None);
+        }
         let state = self.lan_host_state(&host);
         // A dedicated server runs the hub without a host player.
         if state.is_some() || host.hub.config.dedicated {
