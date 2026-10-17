@@ -15,12 +15,13 @@ use horizon_client::{
     hud::{HudBatch, rgba},
     items::ItemStack,
     menu::Input,
-    mobs::{Mob, MobType},
+    mobs::{Mob, MobType, Who},
     motion::{MotionWorld, PlayerMotion},
     net::{Event, Session},
     save::SaveDir,
     sprint::Keys,
     streaming::{ChunkGenerator, Proto, Streaming},
+    tab_list::SPECTATOR,
     world::World,
 };
 use horizon_core::{
@@ -2225,6 +2226,7 @@ impl Game<'_> {
         // Player.tick's sleep counter (the darkening and the wake-up fade).
         self.sleep_timer = super::tick_sleep_timer(self.sleep_timer, self.sleeping.is_some());
         let ghast_collisions = self.happy_ghast_player_collisions();
+        let pushed = self.remote_pushes();
         let Some(player) = self.player.as_mut() else {
             return Ok(());
         };
@@ -2284,6 +2286,7 @@ impl Game<'_> {
             );
             player.velocity = Vec3::ZERO;
         } else if !dead {
+            player.velocity = player.velocity.add_vector(pushed);
             MotionWorld {
                 entities: &ghast_collisions,
                 player,
@@ -2335,6 +2338,70 @@ impl Game<'_> {
         self.remote_send_state(input);
         self.send(S::ClientTickEnd(Empty));
         Ok(())
+    }
+    /// The local player's share of every touching entity's
+    /// `LivingEntity.pushEntities`: on a client `EntitySelector.pushableBy`
+    /// lets entities push only the local player, so the server never sends
+    /// these pushes. `doPush(player)` is `player.push(entity)`.
+    fn remote_pushes(&self) -> Vec3 {
+        let (Some(p), Some(r)) = (self.player.as_ref(), self.remote.as_ref()) else {
+            return Vec3::ZERO;
+        };
+        // LivingEntity.isPushable: alive, no spectator, off ladders.
+        let feet = [
+            p.position.x.floor() as i32,
+            p.position.y.floor() as i32,
+            p.position.z.floor() as i32,
+        ];
+        if self.screen == Screen::Dead
+            || p.spectator
+            || self.block_in_tag("minecraft:climbable", &self.block_name(feet))
+        {
+            return Vec3::ZERO;
+        }
+        let bounds = p.bounds();
+        let teams = self.mob_teams();
+        let mut push = Vec3::ZERO;
+        for m in &self.mobs {
+            let spectator = r
+                .level_players
+                .get(&(m.id as i32))
+                .and_then(|uuid| r.tab_players.get(uuid))
+                .is_some_and(|t| t.game_mode == SPECTATOR);
+            // Bats never push; a spectator has no physics; passengers of the
+            // same vehicle never push each other.
+            if !m.alive()
+                || spectator
+                || m.species() == horizon_client::mobs::Species::Bat
+                || self
+                    .riding
+                    .is_some_and(|v| v == m.id || m.extra.mount == Some(v))
+                || !m.bounds().intersects(bounds)
+                || !horizon_client::scoreboard::pushable_by(
+                    teams.of(Who::Mob(m.id)),
+                    teams.of(Who::Player),
+                    true,
+                )
+            {
+                continue;
+            }
+            // Entity.push(Entity), `this` the player.
+            let (mut xa, mut za) = (m.position.x - p.position.x, m.position.z - p.position.z);
+            let mut dd = xa.abs().max(za.abs());
+            if dd < f64::from(0.01_f32) {
+                continue;
+            }
+            dd = dd.sqrt();
+            xa /= dd;
+            za /= dd;
+            let pow = (1.0 / dd).min(1.0);
+            xa *= pow;
+            za *= pow;
+            xa *= f64::from(0.05_f32);
+            za *= f64::from(0.05_f32);
+            push = Vec3::new(push.x - xa, push.y, push.z - za);
+        }
+        push
     }
     /// ClientLevel.tickEntities; a frozen level only ticks the players
     /// (`TickRateManager.isEntityFrozen`).

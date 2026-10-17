@@ -36,6 +36,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              its crafting grid and gathers a stack with a double click; the server has each.
 - sleep:     at night the guest lies down in its own bed (not the host); alone it stays night, it
              gets up with Escape, and once the host sleeps too the night ends and both wake.
+- push:      a cow standing in the guest pushes it just clear of the cow (the guest's own client
+             pushes it, as in vanilla), not ever faster across the ground.
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -67,7 +69,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'effects', 'portals']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'push', 'effects', 'portals']
 
 
 class Game:
@@ -959,6 +961,23 @@ def check_sleep(host, guest, out):
     assert 13000 < night < 23000, f'one of two players asleep ended the night: {detail}'
     assert up is None, f'Escape did not get the guest up: {detail}'
     assert after['guest'] is None and after['host'] is None and after['time'] < 1000, f'no morning: {detail}'
+def check_push(host, guest, out):
+    guest('command', command='gamemode survival')
+    x, y, z = (int(v // 1) + 0.5 for v in pos_of(guest))
+    guest('command', command=f'tp @s {x} {y - 0.5} {z}')
+    guest.wait(20)
+    x, y, z = pos_of(guest)
+    # A cow that doesn't walk, 0.3 east of the guest: the two boxes overlap until their centres are
+    # 0.75 apart, so the push stops a fraction of a block away.
+    guest('command', command=f'summon minecraft:cow {x + 0.3:.2f} {y:.2f} {z:.2f} {{NoAI:1b}}')
+    guest.wait(60)
+    nx, _, nz = pos_of(guest)
+    guest.shot(out, 'push')
+    guest('command', command='kill @e[type=minecraft:cow]')
+    moved = ((nx - x) ** 2 + (nz - z) ** 2) ** 0.5
+    detail = {'from': [round(x, 3), round(z, 3)], 'to': [round(nx, 3), round(nz, 3)], 'moved': round(moved, 3)}
+    assert nx < x, f'the cow did not push the guest west: {detail}'
+    assert moved < 1.5, f'the cow pushed the guest too far: {detail}'
     return detail
 
 
@@ -968,7 +987,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'containers': check_containers, 'feedback': check_feedback, 'commands': check_commands,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,
              'effects': check_effects, 'portals': check_portals, 'clicks': check_clicks,
-             'sleep': check_sleep}
+             'sleep': check_sleep, 'push': check_push}
 
 
 def run(ctl, out, resources, checks):

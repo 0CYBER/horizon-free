@@ -1400,6 +1400,9 @@ pub struct PlayerView {
     /// The mobs on the player's team (`isAlliedTo`): combat targeting
     /// leaves the player alone.
     pub allies: std::sync::Arc<std::collections::HashSet<u32>>,
+    /// A LAN guest: its own client moves it, and touching mobs push it there
+    /// (`EntitySelector.pushableBy` on the client).
+    pub remote: bool,
 }
 pub struct MobWorld<'a> {
     pub world: &'a World,
