@@ -13,12 +13,12 @@ fn leaf_culling_removes_only_internal_leaf_and_root_faces() {
     let visibility = crate::models::load_visibility(&root, assets.registry).unwrap();
     let tables = MeshTables::new(&assets, &facts, visibility.clone()).unwrap();
     let biomes = Biomes::load(&root).unwrap();
-    let state = |name| assets.registry.default_state(name).unwrap().0 as u16;
+    let state = |name| assets.registry.default_state(name).unwrap().0;
     let oak = state("minecraft:oak_leaves");
     let birch = state("minecraft:birch_leaves");
     let roots = state("minecraft:mangrove_roots");
     let stone = state("minecraft:stone");
-    let mesh = |blocks: &[([i32; 3], u16)], cull_leaves, cutout_leaves| {
+    let mesh = |blocks: &[([i32; 3], u32)], cull_leaves, cutout_leaves| {
         let mut center = Chunk::empty(0, 0);
         let mut east = Chunk::empty(1, 0);
         for &([x, y, z], state) in blocks {
@@ -51,7 +51,7 @@ fn leaf_culling_removes_only_internal_leaf_and_root_faces() {
         let vertices = mesh(&[(at, id)], false, true);
         let models = assets
             .model_catalog
-            .collect(BlockStateId(id.into()), BlockPos::new(at[0], at[1], at[2]))
+            .collect(BlockStateId(id), BlockPos::new(at[0], at[1], at[2]))
             .unwrap();
         let faces: Vec<_> = models.iter().flat_map(|(_, model)| &model.faces).collect();
         assert_eq!(vertices.len(), faces.len() * 4);

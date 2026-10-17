@@ -189,6 +189,9 @@ impl Assets {
                 .default_state(&format!("minecraft:{name}"))
                 .ok_or_else(|| invalid("missing test-scene material"))?;
         }
+        // Chunks hold every state of this registry: content mods can take it
+        // past vanilla's 16-bit global palette.
+        crate::chunk::set_block_states(registry.len());
         let registry: &'static BlockRegistry = Box::leak(Box::new(registry));
         Self::with_models(
             root,

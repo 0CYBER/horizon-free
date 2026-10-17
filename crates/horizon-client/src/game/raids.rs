@@ -39,6 +39,17 @@ pub(super) struct Raiding {
     homes: HashMap<i32, (i64, std::sync::Arc<Vec<[i32; 3]>>)>,
 }
 
+impl Raiding {
+    /// Exchange the level-held parts (`ServerLevel.getRaids`) with another
+    /// level's (game/levels.rs).
+    pub(super) fn swap_level(&mut self, other: &mut Self) {
+        std::mem::swap(&mut self.raids, &mut other.raids);
+        std::mem::swap(&mut self.loaded, &mut other.loaded);
+        std::mem::swap(&mut self.bar_hurts, &mut other.bar_hurts);
+        std::mem::swap(&mut self.homes, &mut other.homes);
+    }
+}
+
 /// `SectionPos` of a block position.
 pub(super) fn section(p: [i32; 3]) -> (i32, i32, i32) {
     (p[0] >> 4, p[1] >> 4, p[2] >> 4)

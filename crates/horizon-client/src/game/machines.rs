@@ -506,11 +506,15 @@ impl Game<'_> {
             .default_state("minecraft:hopper")
             .map(|s| self.res.facts.get(s).name.clone());
         let Some(hopper) = hopper else { return Ok(()) };
+        // A hopper's block entity is a plain container (`Chest`): only those
+        // need their block looked up (the ticker runs for a HopperBlockEntity
+        // whose block is still a hopper, `BlockEntityType.isValid`).
         let mut positions: Vec<Pos> = self
             .world
             .block_entities
-            .keys()
-            .copied()
+            .iter()
+            .filter(|(_, e)| matches!(e, BlockEntity::Chest(_)))
+            .map(|(p, _)| *p)
             .filter(|p| self.res.facts.get(self.world.block(p.0, p.1, p.2)).name == hopper)
             .collect();
         positions.sort_unstable();

@@ -385,7 +385,7 @@ fn sprite_split() -> u32 {
         .unwrap_or(SPRITE_SPLIT)
 }
 /// Sprite arrays terrain.wgsl binds (`sprites`, `sprites_1`...).
-const SPRITE_ARRAYS: u32 = 4;
+const SPRITE_ARRAYS: u32 = 8;
 /// The views of terrain.wgsl's sprite arrays, the unused ones a 1-layer
 /// stand-in.
 fn sprite_views(
@@ -441,6 +441,10 @@ fn terrain_group(
             view(5, &sprites[1]),
             view(6, &sprites[2]),
             view(7, &sprites[3]),
+            view(8, &sprites[4]),
+            view(9, &sprites[5]),
+            view(10, &sprites[6]),
+            view(11, &sprites[7]),
         ],
     })
 }
@@ -743,6 +747,10 @@ impl Renderer {
                 entry(5, vf, sprite_array),
                 entry(6, vf, sprite_array),
                 entry(7, vf, sprite_array),
+                entry(8, vf, sprite_array),
+                entry(9, vf, sprite_array),
+                entry(10, vf, sprite_array),
+                entry(11, vf, sprite_array),
             ],
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {

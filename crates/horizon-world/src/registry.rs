@@ -5,7 +5,8 @@ use crate::{DATA_VERSION, chunk::BlockState, compression::invalid, nbt::Tag};
 pub use json::BlockStateJsonCodec;
 pub(crate) use json::java_integer;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
+    hash::{DefaultHasher, Hash, Hasher},
     io,
 };
 
@@ -14,8 +15,24 @@ pub struct BlockStateId(pub u32);
 
 pub struct BlockRegistry {
     states: Vec<BlockState>,
-    ids: BTreeMap<BlockState, BlockStateId>,
+    /// Ids by a hash of their state, checked against `states`: 12 bytes per
+    /// state instead of a second copy of every name and property map (about
+    /// 125 MB for a registry of 190,000 states).
+    ids: HashMap<u64, u32>,
+    /// States whose hash an earlier state already took (none in vanilla).
+    collided: BTreeMap<BlockState, BlockStateId>,
     defaults: BTreeMap<String, BlockStateId>,
+}
+/// The hash [`BlockRegistry`] indexes states by (fixed keys: the same in
+/// every process).
+fn state_key(state: &BlockState) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    state.name.hash(&mut hasher);
+    for (key, value) in &state.properties {
+        key.hash(&mut hasher);
+        value.hash(&mut hasher);
+    }
+    hasher.finish()
 }
 impl BlockRegistry {
     pub fn from_nbt(tag: &Tag) -> io::Result<Self> {
@@ -33,17 +50,24 @@ impl BlockRegistry {
         }
         let mut result = Self {
             states: Vec::with_capacity(entries.len()),
-            ids: BTreeMap::new(),
+            ids: HashMap::with_capacity(entries.len()),
+            collided: BTreeMap::new(),
             defaults: BTreeMap::new(),
         };
         for (i, entry) in entries.iter().enumerate() {
             let state = BlockState::from_nbt(entry)?;
-            if result
-                .ids
-                .insert(state.clone(), BlockStateId(i as u32))
-                .is_some()
-            {
+            if result.id(&state).is_some() {
                 return Err(invalid("duplicate block registry state"));
+            }
+            match result.ids.entry(state_key(&state)) {
+                std::collections::hash_map::Entry::Vacant(slot) => {
+                    slot.insert(i as u32);
+                }
+                std::collections::hash_map::Entry::Occupied(_) => {
+                    result
+                        .collided
+                        .insert(state.clone(), BlockStateId(i as u32));
+                }
             }
             result.states.push(state);
         }
@@ -82,7 +106,10 @@ impl BlockRegistry {
         self.states.get(id.0 as usize)
     }
     pub fn id(&self, state: &BlockState) -> Option<BlockStateId> {
-        self.ids.get(state).copied()
+        match self.ids.get(&state_key(state)) {
+            Some(&id) if self.states[id as usize] == *state => Some(BlockStateId(id)),
+            _ => self.collided.get(state).copied(),
+        }
     }
     pub fn default_state(&self, name: &str) -> Option<BlockStateId> {
         self.defaults.get(name).copied()

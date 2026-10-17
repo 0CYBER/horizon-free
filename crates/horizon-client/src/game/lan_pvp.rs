@@ -32,7 +32,7 @@ impl Game<'_> {
         host.hub
             .guests
             .iter()
-            .filter(|g| g.placed && g.loaded && !g.dead && !g.spectator())
+            .filter(|g| host.hub.here(g) && g.loaded && !g.dead && !g.spectator())
             .filter_map(|g| Some((g.conn, ray_box(eye, dir, reach, guest_bounds(g))?)))
             .min_by(|a, b| a.1.total_cmp(&b.1))
     }
@@ -64,7 +64,7 @@ impl Game<'_> {
         host.hub
             .guests
             .iter()
-            .find(|g| g.entity_id == id && g.conn != conn && g.placed && !g.dead)
+            .find(|g| g.entity_id == id && g.conn != conn && host.hub.here(g) && !g.dead)
             .map(|g| Victim::Guest(g.conn))
     }
 

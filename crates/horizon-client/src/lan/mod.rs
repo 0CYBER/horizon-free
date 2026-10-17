@@ -20,6 +20,7 @@ pub mod menu;
 pub mod playerdata;
 mod recipes;
 pub mod tracking;
+pub mod waypoints;
 
 pub use conn::{Holding, PlayerSender};
 use horizon_protocol::packets::play;

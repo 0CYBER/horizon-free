@@ -13,7 +13,8 @@ the same files), chats, runs /list and commands that fail (`/random value
 7..7`, `/random value x`, `/trigger nope`), trades, is made an operator by
 the console, runs /kill, respawns (as vanilla's LevelLoadTracker waits: until the "level
 chunks load start" event and the chunk under the player), sets a furnace
-beside itself, gives itself raw iron and coal, opens the furnace, shift-clicks
+beside itself, gives itself raw iron and coal, sets and asks its own score
+(`@s`), opens the furnace, shift-clicks
 the ore and the coal in and the ingot out, and leaves. The
 console then runs `list` and `say` and `stop`. Compared, all of them
 exactly:
@@ -33,9 +34,12 @@ exactly:
   player respawned (guests' death messages aren't Horizon's yet: left out);
 - the furnace menu: its type and title, its contents, the slots each
   shift-click changes and its lit and cooking totals;
-- the console lines about the player, the chat, `list`, `say` and `stop`;
+- the console lines about the player (an operator's command feedback, which
+  vanilla broadcasts to the console, included), the chat, `list`, `say` and
+  `stop`;
 - the files the servers leave: server.properties (but the date line),
-  eula.txt, ops.json, whitelist.json, banned-players.json, banned-ips.json.
+  eula.txt, ops.json, whitelist.json, banned-players.json, banned-ips.json,
+  usercache.json (but the date the player's entry expires).
 
 Online mode needs Mojang's session servers and is not tested.
 """
@@ -208,10 +212,9 @@ CONSOLE_LINE = re.compile(r'^\[\d\d:\d\d:\d\d\] \[([^\]]+)\]: (.*)$')
 KEPT = re.compile(r'Tester|\[Server\]|\[Not Secure\]|There are|Stopping|Saving|ThreadedAnvilChunkStorage|All dimensions|Unknown or incomplete')
 
 
-# Guests' death messages, the op's command feedback broadcast to the console and guests'
-# advancement announcements aren't Horizon's yet (the client's own transcript leaves the
-# death message out as well).
-NOT_YET = re.compile(r'Tester was killed|Killed Tester|System chat: \[Tester: |Tester has made the advancement')
+# Guests' death messages and advancement announcements aren't Horizon's yet (the client's
+# own transcript leaves the death message out as well).
+NOT_YET = re.compile(r'Tester was killed|Tester has made the advancement')
 
 
 def console_lines(lines):
@@ -238,7 +241,8 @@ def console_lines(lines):
 
 def server_files(directory):
     out = []
-    for name in ['server.properties', 'eula.txt', 'ops.json', 'whitelist.json', 'banned-players.json', 'banned-ips.json']:
+    for name in ['server.properties', 'eula.txt', 'ops.json', 'whitelist.json', 'banned-players.json', 'banned-ips.json',
+                 'usercache.json']:
         path = directory / name
         if not path.exists():
             out.append(f'{name}: missing')
@@ -249,6 +253,9 @@ def server_files(directory):
             text = re.sub(r'^(#[^\n]*\n)#[^\n]*\n', r'\1#<date>\n', text)
             # Random per server, and each side has its own port.
             text = re.sub(r'\n(management-server-secret|server-port)=[^\n]*', r'\n\1=<varies>', text)
+        if name == 'usercache.json':
+            # A month from when the player joined.
+            text = re.sub(r'"expiresOn":"[^"]*"', '"expiresOn":"<a month on>"', text)
         out.append(f'{name}: {text!r}')
     return out
 

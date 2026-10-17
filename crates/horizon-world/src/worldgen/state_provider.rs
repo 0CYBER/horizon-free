@@ -93,7 +93,7 @@ impl<'r> StateProviderBindings<'r> {
         }
         let mut bound_tags = BTreeMap::new();
         for (name, entries) in tags {
-            if entries.len() > 8192 {
+            if entries.len() > MAX_TAG_BLOCKS {
                 return Err(DecodeError::Field("provider tag size"));
             }
             let values = entries
@@ -557,6 +557,11 @@ impl BlockStateProvider {
         }
     }
 }
+
+/// Blocks a bound block tag may list (8,192 before content mods, vanilla's
+/// tags fit well within it): content mods' blocks join the shared tags
+/// (`mineable/pickaxe` takes every stone block of a pack).
+pub(crate) const MAX_TAG_BLOCKS: usize = 1 << 20;
 
 /// Bind the pinned registry's full-axis/full-facing/horizontal-facing property
 /// families. A five-way facing or two-axis property is a different property and

@@ -237,11 +237,19 @@ How the game loads them, without touching vanilla's path:
 - Loaders that read only `data/minecraft/` (recipes, loot, tags) read every namespace, as
   vanilla does. With no mods there is only `minecraft`, so nothing changes.
 - The overlay is cached like the resource-pack overlay and rebuilt when a mod file changes.
-- **Limits.** Chunk sections store a block state in 16 bits: vanilla 26.3 has 35,723 states,
-  so mods may add 29,813. Past that the content root is refused with the states per mod
-  (Macaw's Doors, Fences, Paths and Trapdoors alone add 36,154: not all four fit). Block
-  sprites fill texture arrays of 2048 layers, four at most (8,192; vanilla takes 1,250,
-  identical textures share a layer). Wider state ids are the next step for big packs.
+- **Limits.** Chunk sections size their global palette to the registry: 16 bits for vanilla's
+  35,723 states (the same chunks, saves and packets as before), one more bit each time content
+  mods double it, up to 2^20 states (1,048,576). Past that the content root is refused with the
+  states per mod. ATM10's 42 carried mods take the registry to 193,762 states (18 bits). On the
+  network the width is the registry's: unchanged for vanilla clients as long as no content mod
+  is on, wider only between Horizons that share the same mods; a Horizon with content mods still
+  reads a vanilla server's 16-bit chunks. Block sprites fill texture arrays of 2048 layers, eight
+  at most (16,384; vanilla takes 1,250, identical textures share a layer; ATM10's 42 take 9,790).
+- **Broken mod files load as vanilla loads them.** A blockstate definition that does not bind
+  (a multipart value the block does not have), a block model that is missing or does not parse,
+  and a recipe that does not parse are logged and skipped: the block gets no model or the
+  missing model, the recipe is absent, everything else loads. Vanilla's own files never hit
+  these paths.
 - Not in 0.2: multiplayer registry sync (single player and the integrated server first), worlds
   opened without a mod they used (vanilla turns unknown blocks into air; we will ask first),
   vanilla ids redefined by a mod (refused).
@@ -577,6 +585,43 @@ intervals are as wide as the means (`perf_bench.py --table`); Horizon's frames a
 the display's 144 Hz at 8 chunks; Horizon's title time includes building the content overlay on
 a first start (about 5 s, cached afterwards); and the pack runs 1.21.1 against Horizon's 26.3.
 A quiet rerun with more games is the next measurement.
+
+**Where the RAM goes (2026-10-17).** RSS overstates it on macOS. `ps` counts pages the allocator
+freed and marked reusable, and the content tables free a lot at load. `perf_bench.py` now also
+samples the physical footprint (`footprint`, what the OS charges the process). The machine was
+shared and very busy (load average 90-138 on 14 threads). RD 8, the same six mods, one or two
+games per row:
+
+| game | RSS steady MB | footprint steady MB |
+|---|---:|---:|
+| Horizon | 1,598-1,636 | 1,277-1,295 |
+| Horizon + 6 mods | 2,996-3,052 | 1,736-1,869 |
+
+So the six mods cost about 0.5 GB of footprint, not 1.1-1.4 GB. ATM10's 42 mods (193,762
+states) take the game to 7.7 GB RSS but 3.9 GB footprint. The rest is startup garbage the
+allocator keeps.
+
+`crates/horizon-client/examples/resource_memory.rs` breaks it down per loader: the live heap
+(a counting allocator), each step's peak, RSS and the footprint. Live heap after every loader,
+vanilla against ATM10's 42 mods:
+
+| loader | vanilla MB | ATM10 42 mods MB |
+|---|---:|---:|
+| block registry | 24 | 125 |
+| assets (registry, models, sprites: 153 MB of pixels for 9,790 layers) | 94 | 657 |
+| block facts and behaviours | +29 | +75 |
+| items, recipes | +14 | +82 |
+| light, mesh, collision, motion | +24 | +53 |
+| worldgen | +79 | +182 |
+| **live** / **footprint** | **240 / 551** | **1,049 / 2,724** |
+
+The block registry kept a second copy of every state as the key of its id map; it now
+indexes ids by a hash checked against the states: -22 MB live for vanilla, -124 MB for
+ATM10's, -30 MB and -140 MB of footprint. The startup peaks are what is left. Each step parses
+its per-state tables whole: as JSON trees, or as NBT trees of 300-600 MB each for ATM10
+(`block-properties.nbt`, the collision, support, occlusion and movement tables). The peak
+reaches 3.9 GB during worldgen loading, and the footprint stays near the peak. Typed, streaming
+readers for those tables are the next cut.
 
 ## The working version for 2026-10-23
 

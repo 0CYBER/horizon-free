@@ -90,8 +90,21 @@ fn resolve_with(
         &|_| {},
     )? {
         Resolved::Folder(dir) => Ok(dir),
-        Resolved::NotFound(checked) => Err(not_found("26.3", &checked)),
+        Resolved::NotFound(checked) => Err(not_found("26.3", &checked, chosen)),
     }
+}
+
+/// Whether `a` and `b` are one file, as a symlink (Unix) or a hard link (Windows) makes them:
+/// a byte written through `a` shows in `b`. Both are left as they were.
+fn same_file(a: &Path, b: &Path) -> bool {
+    use std::io::Write;
+    let (before_a, before_b) = (fs::read(a).unwrap(), fs::read(b).unwrap());
+    let mut file = fs::OpenOptions::new().write(true).open(a).unwrap();
+    file.write_all(&[!before_a[0]]).unwrap();
+    drop(file);
+    let same = fs::read(b).unwrap() != before_b;
+    fs::write(a, &before_a).unwrap();
+    same
 }
 
 /// The linked folder is the official layout, pointing at the launcher's files.
@@ -99,15 +112,25 @@ fn assert_linked(linked: &Path, base: &Path, jar: &str) {
     let v = linked.join("versions/26.3");
     assert_eq!(fs::read(v.join("26.3.jar")).unwrap(), CLIENT);
     assert_eq!(fs::read(v.join("26.3.json")).unwrap(), MANIFEST);
-    assert_eq!(
-        fs::canonicalize(v.join("26.3.jar")).unwrap(),
-        fs::canonicalize(base.join(jar)).unwrap()
-    );
+    assert!(same_file(&v.join("26.3.jar"), &base.join(jar)));
     assert_eq!(
         fs::read(linked.join("libraries/org/lib/1/lib-1.jar")).unwrap(),
         b"lib"
     );
     assert!(linked.join("assets/indexes/30.json").is_file());
+}
+
+/// Folders whose names cmd would read as its own syntax unquoted are still linked (Windows makes
+/// a junction through `mklink /J`; a name without spaces isn't quoted by itself).
+#[test]
+fn folders_with_ampersands_are_linked() {
+    let s = Scratch::new("a&b(c)");
+    let jar = "libraries/com/mojang/minecraft/26.3/minecraft-26.3-client.jar";
+    let dir = s.launcher("Prism&Co", "", jar);
+    let linked = s.0.join("linked&here");
+    let got = resolve_with(&dir, &[], &linked, &Mojang::new(MANIFEST)).unwrap();
+    assert_eq!(got, linked);
+    assert_linked(&linked, &dir, jar);
 }
 
 #[test]
@@ -250,6 +273,75 @@ fn an_instance_folder_may_be_chosen() {
     assert_linked(&linked, &dir, jar);
 }
 
+/// Every folder a Prism or MultiMC player naturally picks: the instance list, one instance, an
+/// instance's game folder and a folder below it. The shared `libraries` are in the launcher
+/// root, which the chosen folder's ancestors do not always reach (#693).
+#[test]
+fn a_prism_instances_folder_finds_the_launcher_root() {
+    for (name, chosen) in [
+        ("list", "instances"),
+        ("instance", "instances/26.3"),
+        ("game", "instances/26.3/minecraft"),
+        // Deeper than the four folders above it: only the `instances` root helps here.
+        ("deeper", "instances/26.3/minecraft/saves"),
+    ] {
+        let s = Scratch::new(&format!("prism-tree-{name}"));
+        let jar = "libraries/com/mojang/minecraft/26.3/minecraft-26.3-client.jar";
+        let dir = s.launcher("PrismLauncher", "", jar);
+        s.write(
+            "PrismLauncher/meta/net.minecraft/26.3.json",
+            br#"{"mainJar": {"name": "com.mojang:minecraft:26.3:client"}}"#,
+        );
+        fs::create_dir_all(dir.join(chosen)).unwrap();
+        let linked = s.0.join("linked");
+        let got = resolve_with(&dir.join(chosen), &[], &linked, &Mojang::new(MANIFEST)).unwrap();
+        assert_eq!(got, linked, "{chosen}");
+        assert_linked(&linked, &dir, jar);
+    }
+}
+
+#[test]
+fn a_multimc_instances_folder_finds_the_launcher_root() {
+    let s = Scratch::new("multimc-tree");
+    let jar = "libraries/com/mojang/minecraft/26.3/minecraft-26.3-client.jar";
+    let dir = s.launcher("multimc", "", jar);
+    s.write(
+        "multimc/meta/net.minecraft/26.3.json",
+        br#"{"mainJar": {"name": "com.mojang:minecraft:26.3:client"}}"#,
+    );
+    let chosen = dir.join("instances/26.3/.minecraft");
+    fs::create_dir_all(&chosen).unwrap();
+    let linked = s.0.join("linked");
+    let got = resolve_with(&chosen, &[], &linked, &Mojang::new(MANIFEST)).unwrap();
+    assert_eq!(got, linked);
+    assert_linked(&linked, &dir, jar);
+}
+
+/// When the chosen folder is inside a launcher tree, the error names it and says to launch the
+/// instance once, instead of listing every launcher (#693).
+#[test]
+fn the_not_found_message_names_the_launcher_that_was_chosen() {
+    let s = Scratch::new("prism-hint");
+    let dir = s.0.join("PrismLauncher");
+    let chosen = dir.join("instances/26.3/minecraft");
+    fs::create_dir_all(&chosen).unwrap();
+    let error =
+        resolve_with(&chosen, &[], &s.0.join("linked"), &Mojang::new(MANIFEST)).unwrap_err();
+    assert!(
+        error.contains("Launch the 26.3 instance once in Prism Launcher"),
+        "{error}"
+    );
+    assert!(!error.contains("or in Prism Launcher, MultiMC"), "{error}");
+    // An unknown folder keeps the advice that names every launcher.
+    let other = s.0.join("elsewhere");
+    fs::create_dir_all(&other).unwrap();
+    let error = resolve_with(&other, &[], &s.0.join("linked"), &Mojang::new(MANIFEST)).unwrap_err();
+    assert!(
+        error.contains("Prism Launcher, MultiMC, the Modrinth App, ATLauncher or GDLauncher"),
+        "{error}"
+    );
+}
+
 #[test]
 fn the_known_folders_are_searched_after_the_chosen_one() {
     let s = Scratch::new("known");
@@ -295,10 +387,9 @@ fn relinking_follows_the_launcher_the_files_now_come_from() {
     let modrinth = s.0.join("ModrinthApp");
     s.write("ModrinthApp/meta/versions/26.3/26.3.jar", CLIENT);
     resolve_with(&modrinth, &[], &linked, &mojang).unwrap();
-    assert_eq!(
-        fs::canonicalize(linked.join("versions/26.3/26.3.jar")).unwrap(),
-        fs::canonicalize(modrinth.join("meta/versions/26.3/26.3.jar")).unwrap()
-    );
+    let jar = linked.join("versions/26.3/26.3.jar");
+    assert!(same_file(&jar, &modrinth.join("meta/versions/26.3/26.3.jar")));
+    assert!(!same_file(&jar, &prism.join(prism_jar)));
     // The Modrinth App folder has no libraries or assets: the old links are gone, and the
     // folders they pointed at are untouched.
     assert!(fs::symlink_metadata(linked.join("libraries")).is_err());

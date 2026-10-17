@@ -80,6 +80,15 @@ pub(super) struct SculkState {
     ticks: u32,
     pub tracker_loaded: bool,
 }
+
+impl SculkState {
+    /// Exchange the level-held parts (its sculk block entities and the
+    /// chunks scanned for them) with another level's (game/levels.rs).
+    pub(super) fn swap_level(&mut self, other: &mut Self) {
+        std::mem::swap(&mut self.index, &mut other.index);
+        std::mem::swap(&mut self.known, &mut other.known);
+    }
+}
 /// An insertion-ordered set of block positions (`Level.blockEntityTickers`
 /// keeps the order block entities were added in).
 #[derive(Default)]
@@ -301,11 +310,11 @@ impl Game<'_> {
         self.world.watched = t.kinds.iter().map(|k| *k != 0).collect();
         self.sculk.tables = t;
     }
-    fn kind_of_state(&self, state: u16) -> u8 {
+    fn kind_of_state(&self, state: u32) -> u8 {
         self.sculk
             .tables
             .kinds
-            .get(usize::from(state))
+            .get(state as usize)
             .copied()
             .unwrap_or(0)
     }
@@ -345,10 +354,10 @@ impl Game<'_> {
             // SculkShriekerBlockEntity.preRemoveSideEffects.
             if old_kind == KIND_SHRIEKER
                 && let Some(BlockEntity::Sculk(e)) = self.world.block_entities.get(&key)
-                && self.shrieker_shrieking(BlockStateId(u32::from(old)))
+                && self.shrieker_shrieking(BlockStateId(old))
             {
                 let warning = e.warning_level;
-                self.shrieker_respond(key, BlockStateId(u32::from(old)), warning);
+                self.shrieker_respond(key, BlockStateId(old), warning);
             }
             if matches!(
                 self.world.block_entities.get(&key),
@@ -375,17 +384,14 @@ impl Game<'_> {
             let y0 = MIN_Y + s as i32 * 16;
             // Without a sculk state in its palette, no block of the section
             // is one: most sections are passed over without reading a block.
-            if !section
-                .blocks
-                .maybe_has(|v| u16::try_from(v).is_ok_and(|v| self.kind_of_state(v) != 0))
-            {
+            if !section.blocks.maybe_has(|v| self.kind_of_state(v) != 0) {
                 continue;
             }
             if section.blocks.uniform().is_some() {
                 // A uniform section of sculk blocks does not exist.
                 continue;
             }
-            let mut a = [0u16; 4096];
+            let mut a = [0u32; 4096];
             section.unpack(&mut a);
             for (i, v) in a.iter().enumerate() {
                 if self.kind_of_state(*v) != 0 {
@@ -855,12 +861,12 @@ impl Game<'_> {
             let state = self.world.block(key.0, key.1, key.2);
             let is_warden = matches!(who, Who::Mob(id)
                 if self.mobs.iter().any(|m| m.id == id && m.species() == Species::Warden));
-            match self.kind_of_state(state.0 as u16) {
+            match self.kind_of_state(state.0) {
                 KIND_SENSOR | KIND_CALIBRATED => {
                     if is_warden || !self.res.behaviours.sculk_sensor_can_activate(state) {
                         continue;
                     }
-                    let calibrated = self.kind_of_state(state.0 as u16) == KIND_CALIBRATED;
+                    let calibrated = self.kind_of_state(state.0) == KIND_CALIBRATED;
                     if calibrated {
                         let back = self.calibrated_signal(key);
                         if back != 0 && back != 1 {

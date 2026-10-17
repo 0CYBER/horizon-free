@@ -225,6 +225,22 @@ pub fn register(m: &mut Mob) {
         Family::Bat => super::bat::register(m),
         Family::Bee => super::bee::register(m),
     }
+    // FloatGoal's constructor lets the navigation float, as do the
+    // constructors of these brain-driven and flying mobs. A floater rises
+    // 0.04 a tick in Mob.jumpInLiquid, the others 0.3 (the bounce of #542).
+    if m.ai.goals.has("Float")
+        || matches!(
+            m.species(),
+            Species::Allay
+                | Species::Armadillo
+                | Species::Camel
+                | Species::Goat
+                | Species::Parrot
+                | Species::Wither
+        )
+    {
+        m.ai.nav.can_float = true;
+    }
 }
 /// Mob.tick additions that run before the entity tick (creeper fuse, puffing).
 fn pre_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
@@ -428,10 +444,7 @@ fn tick_swing(m: &mut Mob) {
 /// Entity.baseTick + LivingEntity.baseTick + Mob.baseTick.
 fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     m.was_eye_in_water = m.fluids.eye_in_water;
-    m.fluids = w.fluids(m.bounds(), m.eye_y());
-    if m.fluids.in_water {
-        m.fall_distance = 0.0;
-    }
+    m.update_fluids(w, events);
     let fire = crate::motion::environment::fire_contact(w.world, w.registry, m.bounds());
     if fire > 0.0 {
         m.ticks_frozen = 0;
@@ -474,6 +487,7 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if m.position.y < f64::from(crate::chunk::MIN_Y - 64) {
         m.damage(4.0, Damage::of(DamageKind::OutOfWorld));
     }
+    m.first_tick = false;
     if m.alive() {
         // LivingEntity.baseTick: suffocation inside full blocks.
         let (ex, ey, ez) = (
