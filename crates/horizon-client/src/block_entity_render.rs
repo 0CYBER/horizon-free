@@ -898,15 +898,9 @@ impl BlockEntityRenderer {
     pub fn renders(&self, state: u32) -> bool {
         !matches!(self.kind(state), Kind::None)
     }
-    /// BannerRenderer submits the support and animated flag once for crumbling.
-    pub fn render_banner_breaking(
-        &self,
-        scene: &Scene,
-        pos: [i32; 3],
-        state: u32,
-        out: &mut Vec<Vertex>,
-    ) {
-        if !matches!(self.kind(state), Kind::Banner { .. }) {
+    /// ChestRenderer and BannerRenderer submit their animated models for crumbling.
+    pub fn render_breaking(&self, scene: &Scene, pos: [i32; 3], state: u32, out: &mut Vec<Vertex>) {
+        if !matches!(self.kind(state), Kind::Banner { .. } | Kind::Chest { .. }) {
             return;
         }
         let origin = (DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]))
@@ -1098,7 +1092,7 @@ impl BlockEntityRenderer {
                     ChestPart::Left => "double_chest_left",
                     ChestPart::Right => "double_chest_right",
                 };
-                let (Some(model), Some(_)) = (self.models.get(model), sprite(texture)) else {
+                let Some(model) = self.models.get(model) else {
                     return;
                 };
                 let (open, other) = self.chest_openness(
@@ -1719,18 +1713,28 @@ mod tests {
     use super::*;
     #[test]
     #[ignore = "requires prepared models/textures in HORIZON_TEST_RESOURCES"]
-    fn banner_particle_and_breaking_use_exported_models() -> crate::Result<()> {
+    fn entity_block_particles_and_breaking_use_exported_models() -> crate::Result<()> {
         use crate::{models::catalog::StateModels, sprites::Sprites};
         use horizon_world::{DATA_VERSION, chunk::BlockState, nbt::Tag};
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),
         );
-        let names = ["white_banner", "white_wall_banner"];
+        let names = [
+            "white_banner",
+            "white_wall_banner",
+            "chest",
+            "trapped_chest",
+            "ender_chest",
+            "copper_chest",
+        ];
         let mut facts: std::collections::BTreeMap<String, Value> =
             serde_json::from_slice(&std::fs::read(root.join("model-states.json"))?)?;
         let states = names.map(|name| {
             let name = format!("minecraft:{name}");
-            let first = facts[&name]["states"][0].clone();
+            let mut first = facts[&name]["states"][0].clone();
+            if first.get("type").is_some() {
+                first["type"] = serde_json::json!("single");
+            }
             facts.get_mut(&name).unwrap()["states"] = serde_json::json!([first.clone()]);
             BlockState {
                 name,
@@ -1743,24 +1747,28 @@ mod tests {
             ("states", Tag::List(states.into())),
             (
                 "defaults",
-                Tag::compound([
-                    ("minecraft:white_banner", Tag::Int(0)),
-                    ("minecraft:white_wall_banner", Tag::Int(1)),
-                ]),
+                Tag::compound(names.iter().enumerate().map(|(id, name)| {
+                    (
+                        horizon_world::nbt::JavaString::from(format!("minecraft:{name}").as_str()),
+                        Tag::Int(id as i32),
+                    )
+                })),
             ),
         ]))?;
         let mut sprites = Sprites::default();
         let catalog = StateModels::from_facts(&root, &registry, &names, &mut sprites, &facts)?;
-        for id in 0..2 {
+        for (id, name) in names.iter().enumerate() {
             let models = catalog.collect(
-                BlockStateId(id),
+                BlockStateId(id as u32),
                 horizon_core::position::BlockPos::default(),
             )?;
             assert!(models.iter().all(|(_, model)| model.faces.is_empty()));
-            assert_eq!(
-                models[0].1.particle,
-                Some(sprites.layers["minecraft:block/oak_planks"])
-            );
+            let particle = match *name {
+                "ender_chest" => "minecraft:block/obsidian",
+                "copper_chest" => "minecraft:block/copper_block",
+                _ => "minecraft:block/oak_planks",
+            };
+            assert_eq!(models[0].1.particle, Some(sprites.layers[particle]));
         }
         let all: Value = serde_json::from_slice(&std::fs::read(root.join("entity-models.json"))?)?;
         let renderer = BlockEntityRenderer::new(
@@ -1771,17 +1779,28 @@ mod tests {
             &registry,
         );
         let world = World::new(BlockStateId(0), 1);
-        let base_sprites = HashMap::from([(
-            "entity/banner/banner_base".to_owned(),
-            Rect {
-                u0: 0.0,
-                v0: 0.0,
-                u1: 1.0,
-                v1: 1.0,
-                w: 16,
-                h: 16,
-            },
-        )]);
+        let base_sprites = [
+            "entity/banner/banner_base",
+            "entity/chest/normal",
+            "entity/chest/trapped",
+            "entity/chest/ender",
+            "entity/chest/copper",
+        ]
+        .into_iter()
+        .map(|name| {
+            (
+                name.to_owned(),
+                Rect {
+                    u0: 0.0,
+                    v0: 0.0,
+                    u1: 1.0,
+                    v1: 1.0,
+                    w: 16,
+                    h: 16,
+                },
+            )
+        })
+        .collect();
         let mut scene = Scene {
             camera: DVec3::ZERO,
             orientation: Quat::IDENTITY,
@@ -1798,11 +1817,11 @@ mod tests {
             banner: &|_| Vec::new(),
             glyph: &|_| (None, 0.0),
         };
-        for state in 0..2 {
+        for state in 0..names.len() as u32 {
             let mut base = Vec::new();
             renderer.render_block(&scene, [0; 3], state, Mat4::IDENTITY, 0xff, &mut base);
             let mut cracks = Vec::new();
-            renderer.render_banner_breaking(&scene, [0; 3], state, &mut cracks);
+            renderer.render_breaking(&scene, [0; 3], state, &mut cracks);
             assert!(!cracks.is_empty());
             assert_eq!(
                 base.iter().map(|v| v.pos).collect::<Vec<_>>(),
@@ -1812,10 +1831,14 @@ mod tests {
                 && v.color == u32::MAX
                 && v.uv.iter().all(|u| u.is_finite())));
             scene.game_time = 20;
+            if state >= 2 {
+                scene.lid = &|_| 1.0;
+            }
             let mut animated = Vec::new();
-            renderer.render_banner_breaking(&scene, [0; 3], state, &mut animated);
+            renderer.render_breaking(&scene, [0; 3], state, &mut animated);
             assert!(cracks.iter().zip(&animated).any(|(a, b)| a.pos != b.pos));
             scene.game_time = 0;
+            scene.lid = &|_| 0.0;
         }
         Ok(())
     }

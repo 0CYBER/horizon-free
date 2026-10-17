@@ -822,6 +822,13 @@ impl Game<'_> {
         g.saturation = 5.0;
         g.sent_health = None;
         g.motion = None;
+        let mut xp = Experience {
+            level: g.xp_level,
+            progress: g.xp_progress,
+            total: g.xp_total,
+        };
+        xp.respawn(self.ui.rules.bool("keep_inventory") || g.game_mode == SPECTATOR);
+        (g.xp_level, g.xp_progress, g.xp_total) = (xp.level, xp.progress, xp.total);
         // A new body: nothing given to the old one carries over.
         if let Some(play) = host.play.get_mut(&conn) {
             play.potions = Default::default();
@@ -898,6 +905,12 @@ impl Game<'_> {
                 g.dead = true;
                 g.last_death = Some(g.position.map(|v| v.floor() as i32));
                 let (id, at) = (g.entity_id, g.position);
+                let reward = Experience {
+                    level: g.xp_level,
+                    progress: g.xp_progress,
+                    total: g.xp_total,
+                }
+                .death_reward(self.ui.rules.bool("keep_inventory") || g.game_mode == SPECTATOR);
                 let message = literal(&format!("{} died", g.name));
                 host.hub.send_to(
                     conn,
@@ -905,6 +918,7 @@ impl Game<'_> {
                 );
                 // LivingEntity.die: the death animation, the dying player included.
                 host.hub.entity_event(id, 3, at);
+                self.spawn_orbs(at, reward);
             }
         }
     }

@@ -3420,11 +3420,8 @@ impl Game<'_> {
         }
         if player.health.dead_or_dying() && self.screen != Screen::Dead {
             // Inventory.dropAll: every stack thrown in a random direction.
-            let at = [
-                player.position.x,
-                player.position.y + 1.32,
-                player.position.z,
-            ];
+            let feet = [player.position.x, player.position.y, player.position.z];
+            let at = [feet[0], feet[1] + 1.32, feet[2]];
             let killer = self.combat_killer_kind();
             self.death_message();
             // ServerPlayer.die: deaths, and the time-since counters restart.
@@ -3440,6 +3437,10 @@ impl Game<'_> {
             }
             self.stats.reset("custom", "minecraft:time_since_death");
             self.stats.reset("custom", "minecraft:time_since_rest");
+            let reward = self
+                .experience
+                .death_reward(self.ui.rules.bool("keep_inventory") || self.spectator());
+            self.spawn_orbs(feet, reward);
             if !self.creative && !self.ui.rules.bool("keep_inventory") {
                 // Inventory.dropAll: slots 0..36, armor feet to head (36..39), off hand (40).
                 let mut stacks: Vec<ItemStack> =
@@ -5616,7 +5617,7 @@ impl Game<'_> {
                     .block(mining.pos[0], mining.pos[1], mining.pos[2]);
                 self.res
                     .block_entity_render
-                    .render_banner_breaking(&scene, mining.pos, state.0, &mut out);
+                    .render_breaking(&scene, mining.pos, state.0, &mut out);
             }
         }
         // Experience orbs (ExperienceOrbRenderer): pulsing billboards from a 4x4 icon sheet.
