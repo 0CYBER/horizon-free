@@ -7,6 +7,7 @@ pub mod configuration;
 pub mod handshake;
 pub mod login;
 pub mod play;
+pub mod recipes;
 pub mod status;
 
 use crate::buf::{Codec, Reader, Writer};

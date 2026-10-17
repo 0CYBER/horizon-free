@@ -838,6 +838,20 @@ impl Hub {
     }
 
     /// ServerPlayer.initInventoryMenu / sendAllDataToRemote for the inventory menu.
+    /// ClientboundPlaceGhostRecipePacket: the recipe `id` faded into the
+    /// guest's menu `container`, whose items were missing.
+    pub fn send_ghost_recipe(&mut self, conn: u32, container: i32, id: &str) {
+        let Some(display) = self.sync.advancements.ghost_display(id, &self.sync) else {
+            return;
+        };
+        self.send_to(
+            conn,
+            &C::PlaceGhostRecipe(horizon_protocol::packets::recipes::PlaceGhostRecipe {
+                container,
+                display,
+            }),
+        );
+    }
     pub fn send_inventory(&mut self, i: usize) {
         let items: Vec<Option<ItemStack>> = (0..46).map(|s| self.guests[i].menu_slot(s)).collect();
         let net: Vec<_> = items.iter().map(|s| self.stack(s)).collect();

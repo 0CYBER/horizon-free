@@ -478,6 +478,13 @@ impl Game<'_> {
         names.sort();
         Some(names)
     }
+    /// The open menu's window id (0: the inventory).
+    pub(super) fn remote_menu_id(&self) -> i32 {
+        self.remote
+            .as_ref()
+            .and_then(|r| r.menu.as_ref())
+            .map_or(0, |m| m.0)
+    }
     /// The server's last `n` chat lines, newest first.
     pub(super) fn remote_chat(&self, n: usize) -> Option<Vec<String>> {
         let r = self.remote.as_ref()?;
@@ -1525,6 +1532,10 @@ impl Game<'_> {
                 }
             }
             C::OpenScreen(p) => self.remote_open_screen(p),
+            C::RecipeBookAdd(p) => self.remote_recipe_book_add(p),
+            C::RecipeBookRemove(p) => self.remote_recipe_book_remove(p),
+            C::RecipeBookSettings(p) => self.remote_recipe_book_settings(p),
+            C::PlaceGhostRecipe(p) => self.remote_ghost_recipe(p),
             C::MerchantOffers(p) => self.remote_merchant_offers(p),
             C::ContainerClose(_) => {
                 if self.screen == Screen::Inventory {

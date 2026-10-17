@@ -282,6 +282,20 @@ impl ServerAdvancements {
         book_add(entries, true)
     }
 
+    /// The recipe's display for ClientboundPlaceGhostRecipePacket (the
+    /// recipes the book lists).
+    pub fn ghost_display(
+        &self,
+        id: &str,
+        sync: &SyncData,
+    ) -> Option<horizon_protocol::packets::recipes::RecipeDisplay> {
+        let bytes = self.book_entries(id, sync, 0).into_iter().next()?;
+        let mut r = horizon_protocol::buf::Reader::new(&bytes);
+        horizon_protocol::packets::recipes::RecipeBookEntry::read(&mut r)
+            .ok()
+            .map(|e| e.display)
+    }
+
     /// ClientboundRecipeBookAddPacket.Entry for each display of a recipe:
     /// highlighted, and with a notification unless the recipe turns it off.
     fn book_entries(&self, id: &str, sync: &SyncData, flags: i8) -> Vec<Vec<u8>> {
