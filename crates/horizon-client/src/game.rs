@@ -5603,6 +5603,9 @@ impl Game<'_> {
                 )
             };
             let visible = r.block_entities().filter(|(p, state)| {
+                if !self.res.block_entity_render.renders(*state) {
+                    return false;
+                }
                 off_screen(*state)
                     || view.is_none_or(|v| {
                         let o =
