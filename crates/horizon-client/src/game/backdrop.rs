@@ -129,6 +129,10 @@ impl Game<'_> {
                 .is_some_and(|r| r.section_count() > 40)
         {
             self.backdrop.ready = Some(Instant::now());
+            log::info!(
+                "Horizon: title backdrop ready; world rest ready: {}",
+                self.res.rest.get().is_some()
+            );
         }
         Ok(())
     }
