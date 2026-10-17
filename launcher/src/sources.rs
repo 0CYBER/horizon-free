@@ -207,6 +207,33 @@ pub(crate) fn sha1_file(path: &Path) -> Option<String> {
     Some(hash.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
+/// The Prism or MultiMC launcher root above `dir` (#693). Their instances live in
+/// `instances/<name>/` (Prism's game folder is `minecraft`, MultiMC's `.minecraft`) and the
+/// shared `libraries` and assets sit in the launcher root above `instances`, two or three
+/// folders above what players naturally pick.
+fn instance_root(dir: &Path) -> Option<PathBuf> {
+    dir.ancestors()
+        .find(|a| a.file_name() == Some(std::ffi::OsStr::new("instances")))
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+}
+
+/// The launcher whose tree `path` is inside, when its folder name is one Horizon knows, so the
+/// not-found message can name it (#693).
+fn launcher_of(path: &Path) -> Option<&'static str> {
+    path.ancestors()
+        .filter_map(Path::file_name)
+        .filter_map(|name| name.to_str())
+        .find_map(|name| match name {
+            "PrismLauncher" => Some("Prism Launcher"),
+            "multimc" | "MultiMC" => Some("MultiMC"),
+            "ModrinthApp" | "com.modrinth.theseus" => Some("the Modrinth App"),
+            "atlauncher" | "ATLauncher" => Some("ATLauncher"),
+            "gdlauncher_carbon" | "gdlauncher_next" => Some("GDLauncher"),
+            _ => None,
+        })
+}
+
 /// The pinned version in one launcher folder, or what the folder lacks. The folder holding
 /// `libraries` is the folder itself or its `meta` (Modrinth App), `data` (GDLauncher) or
 /// `datastore` (GDLauncher Next).
@@ -248,19 +275,29 @@ pub fn find(dir: &Path, pins: &Pins) -> Result<Found, String> {
 }
 
 /// The error when no folder has the pinned version: every folder looked in with what it
-/// lacks, and what the player can do about it (#419).
-pub fn not_found(version: &str, checked: &[(PathBuf, String)]) -> String {
+/// lacks, and what the player can do about it (#419, #693). When the chosen folder is inside a
+/// launcher Horizon knows, the advice names it: a Prism or MultiMC instance downloads the game
+/// only when it is launched once.
+pub fn not_found(version: &str, checked: &[(PathBuf, String)], chosen: &Path) -> String {
     let mut text = format!("Minecraft {version} was not found. Horizon looked in:");
     for (dir, missing) in checked {
         text += &format!("\n  {} ({missing})", dir.display());
     }
-    text += &format!(
-        "\nTo fix it:\n  \
-         • Play {version} once in the official Minecraft launcher, or in Prism Launcher, MultiMC, \
-         the Modrinth App, ATLauncher or GDLauncher, then prepare again.\n  \
-         • Or choose the folder where your launcher keeps Minecraft {version} (Minecraft folder › \
-         Choose… in the launcher, --minecraft on the command line)."
-    );
+    text += "\nTo fix it:";
+    text += &match launcher_of(chosen) {
+        Some(launcher) => format!(
+            "\n  • Launch the {version} instance once in {launcher} so it downloads the game, \
+             then prepare again.\n  \
+             • Or choose the folder {launcher} keeps Minecraft {version} in (Minecraft folder › \
+             Choose… in the launcher, --minecraft on the command line)."
+        ),
+        None => format!(
+            "\n  • Play {version} once in the official Minecraft launcher, or in Prism Launcher, \
+             MultiMC, the Modrinth App, ATLauncher or GDLauncher, then prepare again.\n  \
+             • Or choose the folder where your launcher keeps Minecraft {version} (Minecraft \
+             folder › Choose… in the launcher, --minecraft on the command line)."
+        ),
+    };
     text
 }
 
@@ -277,9 +314,9 @@ pub enum Resolved {
 }
 
 /// A Minecraft folder in the official launcher's layout holding the pinned version: the
-/// chosen folder when it is one, else the files found in the chosen folder (or a folder above
-/// it: a launcher's instance folder may be chosen) or any launcher's default folder, linked into
-/// `linked`.
+/// chosen folder when it is one, else the files found in the chosen folder, a folder above it
+/// (a launcher's instance folder may be chosen, and the launcher root above a Prism or MultiMC
+/// `instances` folder is looked in too) or any launcher's default folder, linked into `linked`.
 pub fn resolve(
     chosen: &Path,
     pins: &Pins,
@@ -290,13 +327,22 @@ pub fn resolve(
 ) -> Result<Resolved, String> {
     let mut checked = Vec::new();
     let mut found = None;
-    for dir in chosen.ancestors().take(4) {
-        match find(dir, pins) {
+    // The chosen folder, the folders above it (an instance's own folder may be chosen), and,
+    // when it is inside a Prism or MultiMC instance tree, the launcher root above `instances`
+    // that holds their shared `libraries` (#693).
+    let mut dirs: Vec<PathBuf> = chosen.ancestors().take(4).map(Path::to_path_buf).collect();
+    if let Some(root) = instance_root(chosen) {
+        if !dirs.contains(&root) {
+            dirs.push(root);
+        }
+    }
+    for dir in dirs {
+        match find(&dir, pins) {
             Ok(f) => {
                 found = Some(("the chosen folder", f));
                 break;
             }
-            Err(missing) if dir == chosen => checked.push((dir.to_path_buf(), missing)),
+            Err(missing) if dir.as_path() == chosen => checked.push((dir, missing)),
             Err(_) => {}
         }
     }
