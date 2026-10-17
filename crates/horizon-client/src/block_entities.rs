@@ -24,7 +24,7 @@
 //! registry; whether a slot is made is decided when the slot is promoted at
 //! the start of the next tick, from the block state then.
 use crate::containers::BlockEntity;
-use crate::fast_hash::FxHashMap;
+use crate::fast_hash::{FxHashMap, FxHashSet};
 use std::collections::HashMap;
 
 pub type Pos = (i32, i32, i32);
@@ -57,6 +57,12 @@ pub struct BlockEntities {
     /// not here any more was cancelled.
     pending: FxHashMap<Pos, u32>,
     next_slot: u32,
+    /// Whether a slot was freed since the list was last swept: otherwise
+    /// every slot in it is still live, unless its block entity is `out`.
+    freed: bool,
+    /// Positions whose block entity `take` took and `put` has not brought
+    /// back.
+    out: FxHashSet<Pos>,
     /// `Ticking` by block state id; empty until the game builds it.
     states: Vec<Ticking>,
 }
@@ -158,7 +164,7 @@ impl BlockEntities {
     }
     /// `removeBlockEntityTicker`: no slot, made or pending.
     fn cancel(&mut self, pos: &Pos) {
-        self.live.remove(pos);
+        self.freed |= self.live.remove(pos).is_some();
         self.pending.remove(pos);
     }
 
@@ -199,10 +205,15 @@ impl BlockEntities {
     /// The block entity at `pos`, out of the map for a while: its slot stays
     /// for `put` to bring it back (a tick working on it).
     pub fn take(&mut self, pos: &Pos) -> Option<BlockEntity> {
-        self.map.remove(pos)
+        let taken = self.map.remove(pos);
+        if taken.is_some() {
+            self.out.insert(*pos);
+        }
+        taken
     }
     /// Brings back what `take` took, in its slot.
     pub fn put(&mut self, pos: Pos, entity: BlockEntity) {
+        self.out.remove(&pos);
         if self.map.insert(pos, entity).is_none()
             && !self.live.contains_key(&pos)
             && !self.pending.contains_key(&pos)
@@ -213,11 +224,11 @@ impl BlockEntities {
     /// Removes the block entities `keep` refuses, and their slots
     /// (`clearAllBlockEntities` of unloaded chunks).
     pub fn retain(&mut self, mut keep: impl FnMut(&Pos, &mut BlockEntity) -> bool) {
-        let (live, pending) = (&mut self.live, &mut self.pending);
+        let (live, pending, freed) = (&mut self.live, &mut self.pending, &mut self.freed);
         self.map.retain(|p, e| {
             let kept = keep(p, e);
             if !kept {
-                live.remove(p);
+                *freed |= live.remove(p).is_some();
                 pending.remove(p);
             }
             kept
@@ -229,6 +240,8 @@ impl BlockEntities {
         self.live.clear();
         self.added.clear();
         self.pending.clear();
+        self.out.clear();
+        self.freed = false;
     }
     /// A loaded or generated chunk's block entities, in the order the chunk
     /// lists them; they tick in its block entity map's order
@@ -280,6 +293,10 @@ impl BlockEntities {
             self.live.insert(pos, slot);
             self.tickers.push((pos, slot));
         }
+        if !std::mem::take(&mut self.freed) && self.out.is_empty() {
+            return self.tickers.clone();
+        }
+        self.out.clear();
         let (live, map) = (&mut self.live, &self.map);
         self.tickers.retain(|(p, slot)| {
             let mine = live.get(p) == Some(slot);
@@ -348,6 +365,10 @@ mod tests {
         let slots = b.tickers(|p| s.get(&p).copied().unwrap_or(0));
         b.retain(|p, _| *p != (1, 0, 0));
         assert!(b.is_live(slots[0]) && !b.is_live(slots[1]));
+        // A block entity taken and never brought back loses its slot.
+        b.take(&(0, 0, 0));
+        assert_eq!(order(&mut b, &s), [(2, 0, 0)]);
+        assert_eq!(order(&mut b, &s), [(2, 0, 0)]);
     }
 
     #[test]
