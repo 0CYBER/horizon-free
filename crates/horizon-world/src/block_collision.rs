@@ -111,7 +111,8 @@ impl<'r> BlockCollisionRegistry<'r> {
             scan_flags.push(
                 u8::from(large)
                     | (u8::from(state.name == "minecraft:moving_piston") << 1)
-                    | (u8::from(empty) << 2),
+                    | (u8::from(empty) << 2)
+                    | (u8::from(contextual.contains_key(&id)) << 3),
             );
             if cached.cached_shape(id)?.is_none() {
                 if let Some(rule) =
@@ -183,7 +184,12 @@ impl<'r> BlockCollisionRegistry<'r> {
             + LiquidCollisionWorld<Error = E>
             + PowderSnowWorld<Error = E>,
     {
-        match self.contextual.get(&state) {
+        // Most states have no contextual rule: their flag spares the lookup.
+        let contextual = self
+            .scan_flags
+            .get(state.0 as usize)
+            .is_none_or(|flags| flags & 8 != 0);
+        match contextual.then(|| self.contextual.get(&state)).flatten() {
             Some(ContextualRule::Scaffolding(rule)) => Ok(rule.shape(context, position)),
             Some(ContextualRule::Liquid(rule)) => rule
                 .shape(world, position, context)
