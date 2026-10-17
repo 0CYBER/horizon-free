@@ -115,6 +115,8 @@ pub struct Guest {
     pub sent_xp: Option<(f32, i32, i32)>,
     /// Where the player last died (Player.lastDeathLocation), sent with the respawn.
     pub last_death: Option<[i32; 3]>,
+    /// The last action sequence to acknowledge at the next tick (-1: none).
+    pub ack_up_to: std::cell::Cell<i32>,
     pub sent_selected: usize,
     pub inbox: VecDeque<play::Serverbound>,
     pub joined_tick: u64,
@@ -199,6 +201,7 @@ impl Guest {
             sent_health: None,
             sent_xp: None,
             last_death: None,
+            ack_up_to: std::cell::Cell::new(-1),
             sent_selected: 0,
             inbox: VecDeque::new(),
             joined_tick: 0,

@@ -89,6 +89,11 @@ pub(super) struct Remote {
     was_sprinting: bool,
     carried: Option<usize>,
     loaded_sent: bool,
+    /// BlockStatePredictionHandler: blocks changed ahead of the server (a predicted break),
+    /// with the sequence of the last action that changed them and the state the server
+    /// last said they have. Until the server acknowledges that sequence its block updates
+    /// only replace the remembered state; then the block takes it.
+    predictions: HashMap<[i32; 3], (i32, i32)>,
     /// Open container: (window id, menu name).
     menu: Option<(i32, String)>,
     /// The open menu's title as the server named it.
@@ -273,6 +278,7 @@ impl Game<'_> {
             was_sprinting: false,
             carried: None,
             loaded_sent: false,
+            predictions: HashMap::new(),
             menu: None,
             menu_title: None,
             state_id: 0,
@@ -541,6 +547,7 @@ impl Game<'_> {
         r.dimension = dimension;
         r.game_mode = spawn.game_type;
         r.loaded_sent = false;
+        r.predictions.clear();
         self.set_mode_id(spawn.game_type);
         self.dim = if spawn.dimension == "minecraft:the_nether" {
             Dim::Nether
@@ -665,6 +672,42 @@ impl Game<'_> {
             }
             None => {
                 self.world.block_entities.remove(&pos);
+            }
+        }
+    }
+    /// ClientLevel.setServerVerifiedBlockState: a block the client predicted keeps its
+    /// predicted state until the server acknowledges the action; the server's state is
+    /// remembered for then.
+    fn server_block(&mut self, pos: [i32; 3], state: i32) {
+        if let Some((_, known)) = self
+            .remote
+            .as_mut()
+            .and_then(|r| r.predictions.get_mut(&pos))
+        {
+            *known = state;
+            return;
+        }
+        self.set_block(pos, state);
+    }
+    /// BlockStatePredictionHandler.endPredictionsUpTo (ClientboundBlockChangedAckPacket): the
+    /// actions up to `sequence` are settled, so the blocks they predicted take the state the
+    /// server gave them (a break the server refused comes back).
+    fn end_predictions(&mut self, sequence: i32) {
+        let Some(r) = self.remote.as_mut() else {
+            return;
+        };
+        let settled: Vec<_> = r
+            .predictions
+            .iter()
+            .filter(|(_, (s, _))| *s <= sequence)
+            .map(|(&pos, &(_, state))| (pos, state))
+            .collect();
+        for (pos, state) in settled {
+            if let Some(r) = self.remote.as_mut() {
+                r.predictions.remove(&pos);
+            }
+            if self.world.block(pos[0], pos[1], pos[2]).0 as i32 != state {
+                self.set_block(pos, state);
             }
         }
     }
@@ -913,7 +956,7 @@ impl Game<'_> {
                     chunks_per_tick: 64.0,
                 }));
             }
-            C::BlockUpdate(p) => self.set_block(p.pos, p.state),
+            C::BlockUpdate(p) => self.server_block(p.pos, p.state),
             C::SectionBlocksUpdate(p) => {
                 let [sx, sy, sz] = p.section;
                 for change in p.changes {
@@ -923,10 +966,10 @@ impl Game<'_> {
                         sy * 16 + (local & 15),
                         sz * 16 + (local >> 4 & 15),
                     ];
-                    self.set_block(pos, (change >> 12) as i32);
+                    self.server_block(pos, (change >> 12) as i32);
                 }
             }
-            C::BlockChangedAck(_) => {}
+            C::BlockChangedAck(p) => self.end_predictions(p.sequence),
             // ClientLevel.blockEvent: BlockEntity.triggerEvent (chest lids,
             // shulker boxes, bells) when the block is still the one it names.
             C::BlockEvent(p) => {
@@ -2163,7 +2206,7 @@ impl Game<'_> {
         self.send(S::Punch(Empty));
         if self.creative {
             let seq = self.next_sequence();
-            self.predict_break(hit.pos, state);
+            self.predict_break(hit.pos, state, seq);
             self.send(S::PlayerAction(play::PlayerAction {
                 action: 0,
                 pos: hit.pos,
@@ -2212,7 +2255,7 @@ impl Game<'_> {
                 sequence: seq,
             }));
             if progress >= 1.0 {
-                self.predict_break(hit.pos, state);
+                self.predict_break(hit.pos, state, seq);
                 if let Some(r) = self.remote.as_mut() {
                     r.destroy_delay = 5;
                 }
@@ -2249,7 +2292,7 @@ impl Game<'_> {
         self.crack_particle(pos, hit.face, state);
         if done >= 1.0 {
             let seq = self.next_sequence();
-            self.predict_break(pos, state);
+            self.predict_break(pos, state, seq);
             self.send(S::PlayerAction(play::PlayerAction {
                 action: 3,
                 pos,
@@ -2281,7 +2324,14 @@ impl Game<'_> {
         }
     }
     /// MultiPlayerGameMode.destroyBlock: the predicted break.
-    fn predict_break(&mut self, pos: [i32; 3], state: BlockStateId) {
+    fn predict_break(&mut self, pos: [i32; 3], state: BlockStateId, sequence: i32) {
+        // BlockStatePredictionHandler.retainKnownServerState.
+        if let Some(r) = self.remote.as_mut() {
+            r.predictions
+                .entry(pos)
+                .and_modify(|p| p.0 = sequence)
+                .or_insert((sequence, state.0 as i32));
+        }
         let s = self.res.facts.get(state).sounds.clone();
         let at = [
             f64::from(pos[0]) + 0.5,
