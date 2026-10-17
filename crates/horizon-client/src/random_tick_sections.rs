@@ -155,7 +155,7 @@ mod tick_parity {
         position::{BlockPos, ChunkPos},
         random::{LegacyRandom, RandomSource},
     };
-    use horizon_world::level::{Behaviours, LevelAccess, LevelEvent, Ticks, data};
+    use horizon_world::level::{LevelAccess, LevelEvent, Ticks, data};
     use std::{cell::RefCell, path::PathBuf};
 
     #[derive(Clone)]
@@ -218,8 +218,7 @@ mod tick_parity {
             return;
         }
         let registry = data::load_registry(&root).unwrap();
-        let mut facts = BlockFacts::load(&root, &registry).unwrap();
-        let behaviours = Behaviours::load(&registry, &root).unwrap();
+        let (mut facts, behaviours) = BlockFacts::load_pair(&root, &registry).unwrap();
         let grass = registry.default_state("minecraft:grass_block").unwrap();
         let chunk = |x| {
             let mut c = Chunk::empty(x, 0);

@@ -110,6 +110,107 @@ impl StateFacts {
         self.classes.iter().any(|c| &**c == name)
     }
 }
+/// Compact, owned behaviour inputs retained until the normal behaviour startup stage.
+/// No borrowed gameplay JSON or process-wide cache survives the fact loader.
+pub struct GameplayProjection {
+    flags: u16,
+    emission: u64,
+    dampening: u64,
+    hardness: f64,
+    push: Box<str>,
+    volume: f64,
+    pitch: f64,
+    place: Box<str>,
+    break_sound: Box<str>,
+    fall: Box<str>,
+}
+
+impl GameplayProjection {
+    fn from_entry(entry: &decode::Entry<'_>) -> Self {
+        const FLAGS: [&str; 11] = [
+            "replaceable",
+            "random_ticks",
+            "solid_render",
+            "liquid",
+            "block_entity",
+            "ignited_by_lava",
+            "can_occlude",
+            "full_collision",
+            "skylight_down",
+            "requires_tool",
+            "shape_occlusion",
+        ];
+        Self {
+            flags: FLAGS.iter().enumerate().fold(0, |flags, (i, name)| {
+                flags | ((u16::from(entry.flag(name))) << i)
+            }),
+            emission: entry.unsigned("emission"),
+            dampening: entry.unsigned("dampening"),
+            hardness: entry.number("hardness"),
+            push: entry.text("push").into(),
+            volume: entry.sound_number("volume"),
+            pitch: entry.sound_number("pitch"),
+            place: entry.sound_id("place").into(),
+            break_sound: entry.sound_id("break").into(),
+            fall: entry.sound_id("fall").into(),
+        }
+    }
+}
+
+impl GameplayStateSource for GameplayProjection {
+    fn flag(&self, name: &str) -> bool {
+        const FLAGS: [&str; 11] = [
+            "replaceable",
+            "random_ticks",
+            "solid_render",
+            "liquid",
+            "block_entity",
+            "ignited_by_lava",
+            "can_occlude",
+            "full_collision",
+            "skylight_down",
+            "requires_tool",
+            "shape_occlusion",
+        ];
+        FLAGS
+            .iter()
+            .position(|field| *field == name)
+            .is_some_and(|index| self.flags & (1 << index) != 0)
+    }
+    fn unsigned(&self, name: &str) -> u64 {
+        match name {
+            "emission" => self.emission,
+            "dampening" => self.dampening,
+            _ => 0,
+        }
+    }
+    fn number(&self, name: &str) -> f64 {
+        if name == "hardness" {
+            self.hardness
+        } else {
+            0.0
+        }
+    }
+    fn text(&self, name: &str) -> &str {
+        if name == "push" { &self.push } else { "" }
+    }
+    fn sound_number(&self, name: &str) -> f64 {
+        match name {
+            "volume" => self.volume,
+            "pitch" => self.pitch,
+            _ => 1.0,
+        }
+    }
+    fn sound_id(&self, name: &str) -> &str {
+        match name {
+            "place" => &self.place,
+            "break" => &self.break_sound,
+            "fall" => &self.fall,
+            _ => "",
+        }
+    }
+}
+
 pub struct BlockFacts {
     pub states: Vec<StateFacts>,
     pub air: BlockStateId,
@@ -120,6 +221,26 @@ impl BlockFacts {
             root.join("block-behaviours.json"),
         )?))?;
         Self::load_with_behaviour_json(root, registry, &behaviours)
+    }
+
+    /// Load both tables from one resource root, sharing each JSON decode.
+    /// No data is cached across calls: changes to prepared packs or mods are read again.
+    pub fn load_pair(root: &Path, registry: &BlockRegistry) -> Result<(Self, Behaviours)> {
+        let behaviours: Value = serde_json::from_reader(BufReader::new(File::open(
+            root.join("block-behaviours.json"),
+        )?))?;
+        Self::load_with_behaviours(root, registry, &behaviours)
+    }
+
+    /// Decode state facts once, retaining only the small owned fields needed later.
+    pub fn load_with_projection(
+        root: &Path,
+        registry: &BlockRegistry,
+        behaviours: &Value,
+    ) -> Result<(Self, Vec<GameplayProjection>)> {
+        Self::load_with_callback(root, registry, behaviours, |entries| {
+            Ok(entries.iter().map(GameplayProjection::from_entry).collect())
+        })
     }
 
     pub fn load_with_behaviour_json(

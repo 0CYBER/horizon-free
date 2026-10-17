@@ -149,9 +149,27 @@ fn content_root_loads_with_every_table() {
     let (shared_facts, shared_behaviours) =
         BlockFacts::load_with_behaviours(&root, new, &shared_json).unwrap();
     let independent_behaviours = horizon_world::level::Behaviours::load(new, &root).unwrap();
+    let (deferred_facts, gameplay) =
+        BlockFacts::load_with_projection(&root, new, &shared_json).unwrap();
+    let deferred_behaviours =
+        horizon_world::level::Behaviours::load_with_gameplay(new, &root, &shared_json, &gameplay)
+            .unwrap();
     assert_eq!(shared_facts.states.len(), facts.states.len());
     for state in [ruby, ruby_door, BlockStateId(n + 65)] {
         assert_eq!(shared_facts.get(state).hardness, facts.get(state).hardness);
+        assert_eq!(
+            deferred_facts.get(state).hardness,
+            facts.get(state).hardness
+        );
+        assert_eq!(deferred_facts.get(state).classes, facts.get(state).classes);
+        assert_eq!(
+            deferred_behaviours.facts(state).flags,
+            independent_behaviours.facts(state).flags
+        );
+        assert_eq!(
+            deferred_behaviours.data(state).sounds.place,
+            independent_behaviours.data(state).sounds.place
+        );
         assert_eq!(shared_facts.get(state).emission, facts.get(state).emission);
         assert_eq!(shared_facts.get(state).classes, facts.get(state).classes);
         assert_eq!(
@@ -254,6 +272,16 @@ fn shared_behaviour_document_matches_independent_loaders() {
     .unwrap();
     let original = BlockFacts::load(&root, assets.registry).unwrap();
     let (shared, b) = BlockFacts::load_with_behaviours(&root, assets.registry, &doc).unwrap();
+    let (deferred_facts, projection) =
+        BlockFacts::load_with_projection(&root, assets.registry, &doc).unwrap();
+    let deferred = horizon_world::level::Behaviours::load_with_gameplay(
+        assets.registry,
+        &root,
+        &doc,
+        &projection,
+    )
+    .unwrap();
+    assert_eq!(deferred_facts.states.len(), shared.states.len());
     assert_eq!(original.states.len(), shared.states.len());
     for (a, b) in original.states.iter().zip(&shared.states) {
         assert_eq!(a.classes, b.classes);
@@ -269,6 +297,12 @@ fn shared_behaviour_document_matches_independent_loaders() {
     for id in 0..assets.registry.len() {
         let state = horizon_world::registry::BlockStateId(id as u32);
         let (a_state, b_state) = (a.facts(state), b.facts(state));
+        let deferred_state = deferred.facts(state);
+        assert_eq!(b_state.flags, deferred_state.flags);
+        assert_eq!(b_state.emission, deferred_state.emission);
+        assert_eq!(b_state.dampening, deferred_state.dampening);
+        assert_eq!(b_state.hardness, deferred_state.hardness);
+        assert_eq!(b_state.push, deferred_state.push);
         assert_eq!(a_state.flags, b_state.flags);
         assert_eq!(a_state.sturdy, b_state.sturdy);
         assert_eq!(a_state.weak, b_state.weak);
@@ -287,4 +321,74 @@ fn shared_behaviour_document_matches_independent_loaders() {
         assert_eq!(a_sound.break_, b_sound.break_);
         assert_eq!(a_sound.fall, b_sound.fall);
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn independent_reloads_read_changed_behaviour_json_and_report_invalid_files() {
+    let Some(base) = prepared() else { return };
+    let scratch = std::env::temp_dir().join(format!("horizon-json-reloads-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    fs::create_dir_all(&scratch).unwrap();
+    // Keep the remaining resource tree intact without copying a huge prepared client.
+    for entry in fs::read_dir(&base).unwrap() {
+        let entry = entry.unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(entry.path(), scratch.join(entry.file_name())).unwrap();
+    }
+    let assets = Assets::load(&base).unwrap();
+    let registry = assets.registry;
+    let original = fs::read(base.join("block-behaviours.json")).unwrap();
+    fs::remove_file(scratch.join("block-behaviours.json")).unwrap();
+    fs::write(scratch.join("block-behaviours.json"), &original).unwrap();
+    let (facts, _) = BlockFacts::load_pair(&scratch, registry).unwrap();
+    assert_eq!(facts.states.len(), registry.len());
+    assert_eq!(
+        BlockFacts::load(&scratch, registry).unwrap().states.len(),
+        registry.len()
+    );
+    assert!(horizon_world::level::Behaviours::load(registry, &scratch).is_ok());
+
+    fs::write(scratch.join("block-behaviours.json"), b"{").unwrap();
+    assert!(BlockFacts::load_pair(&scratch, registry).is_err());
+    assert!(BlockFacts::load(&scratch, registry).is_err());
+    assert!(horizon_world::level::Behaviours::load(registry, &scratch).is_err());
+
+    fs::write(scratch.join("block-behaviours.json"), b"{}").unwrap();
+    assert!(BlockFacts::load_pair(&scratch, registry).is_err());
+    assert!(BlockFacts::load(&scratch, registry).is_err());
+    assert!(horizon_world::level::Behaviours::load(registry, &scratch).is_err());
+
+    fs::write(scratch.join("block-behaviours.json"), original).unwrap();
+    assert_eq!(
+        BlockFacts::load_pair(&scratch, registry)
+            .unwrap()
+            .0
+            .states
+            .len(),
+        registry.len()
+    );
+    fs::remove_file(scratch.join("gameplay-facts.json")).unwrap();
+    fs::write(scratch.join("gameplay-facts.json"), b"{\"states\":[]}").unwrap();
+    assert!(BlockFacts::load_pair(&scratch, registry).is_err());
+    assert!(BlockFacts::load(&scratch, registry).is_err());
+    assert!(horizon_world::level::Behaviours::load(registry, &scratch).is_err());
+    fs::write(scratch.join("gameplay-facts.json"), b"{").unwrap();
+    assert!(BlockFacts::load_pair(&scratch, registry).is_err());
+    assert!(BlockFacts::load(&scratch, registry).is_err());
+    assert!(horizon_world::level::Behaviours::load(registry, &scratch).is_err());
+    fs::write(
+        scratch.join("gameplay-facts.json"),
+        fs::read(base.join("gameplay-facts.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        BlockFacts::load_pair(&scratch, registry)
+            .unwrap()
+            .0
+            .states
+            .len(),
+        registry.len()
+    );
+    fs::remove_dir_all(&scratch).unwrap();
 }

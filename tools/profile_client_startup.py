@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Compare baseline and shared JSON parsing in the client startup table phase.
+"""Compare four JSON loading sequences in the client startup table phase.
 
 Build first with `cargo build --release -p horizon-client --example shared_json_startup_profile`.
-This covers Assets::load plus BlockFacts::load and Behaviours::load, not full game
-startup, rendering, resource pack setup, or first frame. Peak RSS includes Assets.
+Modes: baseline uses independent public loaders, pr607 reproduces a01d47f2,
+shared uses the paired wrapper, and deferred retains the projection until the
+normal behaviour stage. All modes use one optimized executable. This covers
+Assets::load plus BlockFacts and Behaviours loading; it excludes full startup,
+rendering, resource-pack resolution and first frame. Peak RSS includes Assets.
 """
 import argparse
 import json
@@ -44,9 +47,9 @@ def main():
     binary, resources = args.binary.resolve(), args.resources.resolve()
     if not binary.is_file() or not resources.is_dir():
         parser.error("binary or resources missing; build the example and prepare resources first")
-    samples = {"baseline": [], "shared": []}
+    samples = {"baseline": [], "pr607": [], "shared": [], "deferred": []}
     for i in range(args.repeats):
-        for mode in (("baseline", "shared") if i % 2 == 0 else ("shared", "baseline")):
+        for mode in (("baseline", "pr607", "shared", "deferred") if i % 2 == 0 else ("deferred", "shared", "pr607", "baseline")):
             samples[mode].append(run(binary, resources, mode))
     result = {
         "scope": "Assets + block facts + behaviours loader only; excludes full startup",
