@@ -78,6 +78,7 @@ pub fn build(pack: &Pack, cache: &Cache, work: &Path) -> Vec<Record> {
             .as_ref()
             .map(|i| i.mod_id.clone())
             .filter(|k| !k.is_empty())
+            .or_else(|| f.mod_id.clone())
             .or_else(|| Some(p("slug")).filter(|s| !s.is_empty()))
             .unwrap_or(stem);
         let (client, server) = match project {
@@ -97,7 +98,9 @@ pub fn build(pack: &Pack, cache: &Cache, work: &Path) -> Vec<Record> {
             .as_ref()
             .map(|i| i.name.clone())
             .filter(|n| !n.is_empty())
-            .unwrap_or_else(|| p("title"));
+            .or_else(|| Some(p("title")).filter(|t| !t.is_empty()))
+            .or_else(|| f.name.clone())
+            .unwrap_or_default();
         let (class, tier, confidence) =
             match known.get(&[key.as_str(), p("slug").as_str(), name.as_str()]) {
                 Some((c, t)) => (c.clone(), t.clone(), "known".to_owned()),
@@ -123,8 +126,9 @@ pub fn build(pack: &Pack, cache: &Cache, work: &Path) -> Vec<Record> {
                     .versions
                     .get(sha1)
                     .and_then(|v| v["version_number"].as_str())
-                    .unwrap_or("")
-                    .to_owned()
+                    .map(str::to_owned)
+                    .or_else(|| f.version.clone())
+                    .unwrap_or_default()
             }),
             path: f.path.clone(),
             class,
