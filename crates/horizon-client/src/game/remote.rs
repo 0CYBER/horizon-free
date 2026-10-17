@@ -132,6 +132,8 @@ pub(super) struct Remote {
     decode_errors: u32,
     clock: Option<i32>,
     clock_rate: f32,
+    /// `ClientChunkCache.Storage`'s view centre (ClientboundSetChunkCacheCenterPacket).
+    chunk_center: (i32, i32),
 }
 
 fn face_direction(face: [i32; 3]) -> u8 {
@@ -307,7 +309,10 @@ impl Game<'_> {
             decode_errors: 0,
             clock: None,
             clock_rate: 1.0,
+            chunk_center: (0, 0),
         });
+        // The level's TickRateManager follows the server's ticking packets.
+        self.clock = horizon_client::clock::FixedStep::client();
         Ok(())
     }
 
@@ -330,6 +335,7 @@ impl Game<'_> {
             None => false,
         };
         horizon_client::crash::clear_detail("Server");
+        self.clock = Default::default();
         self.debug_charts.reset();
         self.tab_list.reset();
         self.score.board = Default::default();
@@ -580,6 +586,8 @@ impl Game<'_> {
                 r.entities.clear();
                 r.lerps.clear();
                 r.pending_items.clear();
+                // A new ClientLevel: a new chunk storage, centred on 0, 0.
+                r.chunk_center = (0, 0);
             }
             if let Some(renderer) = self.renderer.as_mut() {
                 renderer.clear_sections();
@@ -655,6 +663,128 @@ impl Game<'_> {
             }
         }
         Ok(chunk)
+    }
+    /// `ClientChunkCache.Storage.inRange`: within the storage around the
+    /// view centre, `calculateStorageRange` (the server's radius, at least
+    /// two, plus three) chunks each way.
+    fn remote_chunk_in_range(&self, x: i32, z: i32) -> bool {
+        self.remote.as_ref().is_none_or(|r| {
+            let range = r.view_distance.max(2) + 3;
+            (x - r.chunk_center.0).abs() <= range && (z - r.chunk_center.1).abs() <= range
+        })
+    }
+    /// The columns a moved or resized storage no longer holds.
+    fn drop_remote_chunks_out_of_range(&mut self) {
+        let gone: Vec<(i32, i32)> = self
+            .world
+            .chunks
+            .keys()
+            .copied()
+            .filter(|&(x, z)| !self.remote_chunk_in_range(x, z))
+            .collect();
+        for (x, z) in gone {
+            self.streaming.forget(&mut self.world, x, z);
+            self.world
+                .block_entities
+                .retain(|k, _| (k.0 >> 4, k.2 >> 4) != (x, z));
+            if let Some(renderer) = self.renderer.as_mut() {
+                for sy in 0..SECTIONS as i32 {
+                    renderer.remove((x, sy, z));
+                }
+            }
+        }
+    }
+    /// `handleBlockEntityData`: the block entity at `pos`, when it is of the
+    /// packet's type, loads the tag (`loadWithComponents`); an empty tag
+    /// changes nothing.
+    fn remote_block_entity_data(&mut self, pos: [i32; 3], kind: i32, tag: &Tag) {
+        let key = (pos[0], pos[1], pos[2]);
+        let Some(name) = self
+            .remote
+            .as_ref()
+            .and_then(|r| r.builtin.get("minecraft:block_entity_type")?.name(kind))
+        else {
+            return;
+        };
+        let Some(entity) = self.world.block_entities.get(&key) else {
+            return;
+        };
+        let Tag::Compound(fields) = tag else {
+            return;
+        };
+        if entity.id() != name || fields.is_empty() {
+            return;
+        }
+        let mut full = fields.clone();
+        full.insert("id".into(), Tag::String(name.into()));
+        for (k, v) in ["x", "y", "z"].into_iter().zip(pos) {
+            full.insert(k.into(), Tag::Int(v));
+        }
+        if let Some((_, loaded)) = horizon_client::save::decode_block_entity(&Tag::Compound(full)) {
+            self.world.block_entities.insert(key, loaded);
+            // The section is drawn again with what the block entity shows.
+            let state = self.world.block(pos[0], pos[1], pos[2]);
+            let _ = self.world.set(pos[0], pos[1], pos[2], state);
+        }
+    }
+    /// `handleAnimate`: a player wakes up, or an entity gets the critical
+    /// hit (`CRIT`) or magic critical hit (`ENCHANTED_HIT`) emitter.
+    fn remote_animate(&mut self, id: i32, action: u8) {
+        use horizon_client::particles::{ParticleOptions, ParticleType};
+        let me = self.remote.as_ref().is_some_and(|r| r.entity_id == id);
+        let body = if me {
+            self.player.as_ref().map(|p| {
+                let d = p.dimensions;
+                (
+                    [p.position.x, p.position.y, p.position.z],
+                    f64::from(d.width),
+                    f64::from(d.height),
+                )
+            })
+        } else {
+            self.mobs.iter().find(|m| m.id == id as u32).map(|m| {
+                (
+                    [m.position.x, m.position.y, m.position.z],
+                    m.kind.width,
+                    m.kind.height,
+                )
+            })
+        };
+        let Some((feet, width, height)) = body else {
+            return;
+        };
+        let particle = match action {
+            // Player.stopSleepInBed.
+            0 => {
+                if me {
+                    self.sleeping = None;
+                }
+                return;
+            }
+            1 => ParticleType::Crit,
+            2 => ParticleType::EnchantedHit,
+            _ => return,
+        };
+        self.particles
+            .tracking_emitter(ParticleOptions::simple(particle), feet, width, height);
+    }
+    /// `handleServerData`: the server list entry of the server joined keeps
+    /// the icon the server sends (`ServerList.saveSingleServer`). Single
+    /// player has no entry.
+    fn remote_server_data(&mut self, icon: Option<&[u8]>) {
+        let (Some(r), Some(png)) = (self.remote.as_ref(), icon) else {
+            return;
+        };
+        if self.integrated.is_some() {
+            return;
+        }
+        if let Ok(dir) = std::env::current_dir() {
+            horizon_client::multiplayer::save_server_icon(
+                &dir.join("saves"),
+                &r.session.address,
+                png,
+            );
+        }
     }
     /// Keep the renderable block entities (chests, furnaces) in step with blocks.
     fn sync_block_entity(&mut self, pos: (i32, i32, i32), state: BlockStateId) {
@@ -921,6 +1051,15 @@ impl Game<'_> {
                 })
                 .clamp(-90.0, 90.0);
             }
+            // ClientChunkCache.replaceWithPacketData: a column outside the
+            // storage around the view centre is ignored.
+            C::LevelChunkWithLight(p) if !self.remote_chunk_in_range(p.x, p.z) => {
+                log::warn!(
+                    "Ignoring chunk since it's not in the view range: {}, {}",
+                    p.x,
+                    p.z
+                );
+            }
             C::LevelChunkWithLight(p) => match self.remote_chunk(&p) {
                 Ok(chunk) => {
                     let (x, z) = (p.x, p.z);
@@ -936,6 +1075,8 @@ impl Game<'_> {
                         );
                         let state = self.world.block(pos.0, pos.1, pos.2);
                         self.sync_block_entity(pos, state);
+                        // LevelChunk.replaceWithPacketData: the block entity loads its update tag.
+                        self.remote_block_entity_data([pos.0, pos.1, pos.2], info.kind, &info.tag);
                     }
                 }
                 Err(e) => log::warn!("Horizon: chunk {} {}: {e}", p.x, p.z),
@@ -1220,7 +1361,7 @@ impl Game<'_> {
                     m.health = 0.0;
                 }
             }
-            C::Animate(p) if p.action == 0 => {}
+            C::Animate(p) => self.remote_animate(p.id, p.action),
             C::UpdateMobEffect(p) => self.remote_effect(&p),
             C::RemoveMobEffect(p) => {
                 if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id)
@@ -1549,7 +1690,34 @@ impl Game<'_> {
                 if let Some(r) = self.remote.as_mut() {
                     r.view_distance = p.distance;
                 }
+                // ClientChunkCache.updateViewRadius: a new storage of that size.
+                self.drop_remote_chunks_out_of_range();
             }
+            C::SetChunkCacheCenter(p) => {
+                if let Some(r) = self.remote.as_mut() {
+                    r.chunk_center = (p.x, p.z);
+                }
+                self.drop_remote_chunks_out_of_range();
+            }
+            C::BlockEntityData(p) => self.remote_block_entity_data(p.pos, p.kind, &p.tag),
+            // handleChangeDifficulty: the level data's difficulty and lock.
+            C::ChangeDifficulty(p) => {
+                self.ui.difficulty = p.difficulty.clamp(0, 3) as u8;
+                self.level.difficulty_locked = p.locked;
+            }
+            // handleSetSpawn: ClientLevel.setRespawnData, which spawn compasses point at.
+            C::SetDefaultSpawnPosition(p) => {
+                let [x, y, z] = p.pos.pos;
+                self.spawn = (p.pos.dimension == "minecraft:overworld")
+                    .then(|| Vec3::new(f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5));
+            }
+            C::ServerData(p) => self.remote_server_data(p.icon.as_deref()),
+            // handleTickingState / handleTickingStep: the level's TickRateManager.
+            C::TickingState(p) => {
+                self.clock.set_rate(p.rate);
+                self.clock.set_frozen(p.frozen);
+            }
+            C::TickingStep(p) => self.clock.set_frozen_ticks_to_run(p.steps),
             C::SetActionBarText(p) | C::SetTitleText(p) => {
                 let lang = self
                     .remote
@@ -1881,10 +2049,15 @@ impl Game<'_> {
     /// One client tick while connected (Minecraft.tick with a ClientLevel).
     pub(super) fn tick_remote(&mut self) -> Result<()> {
         self.ticks += 1;
-        self.world.game_time += 1;
-        let rate = self.remote.as_ref().map_or(1.0, |r| r.clock_rate);
-        if rate > 0.0 {
-            self.world.day_time += rate.round() as i64;
+        // Minecraft.tick: TickRateManager.tick; ClientLevel.tick advances
+        // the time only while the level runs normally.
+        let running = self.clock.world_runs();
+        if running {
+            self.world.game_time += 1;
+            let rate = self.remote.as_ref().map_or(1.0, |r| r.clock_rate);
+            if rate > 0.0 {
+                self.world.day_time += rate.round() as i64;
+            }
         }
         // Weather levels drift toward their targets between server updates.
         let w = &mut self.world.weather;
@@ -1895,7 +2068,7 @@ impl Game<'_> {
         }
         // ClientLevel.tick: the border's size change.
         self.border.tick();
-        self.tick_remote_entities();
+        self.tick_remote_entities(running);
         // ClientLevel.tickBlockEntities: chest lids, shulker boxes, bells.
         self.tick_block_entity_anims();
         self.tick_hand();
@@ -2005,12 +2178,18 @@ impl Game<'_> {
         self.send(S::ClientTickEnd(Empty));
         Ok(())
     }
-    fn tick_remote_entities(&mut self) {
+    /// ClientLevel.tickEntities; a frozen level only ticks the players
+    /// (`TickRateManager.isEntityFrozen`).
+    fn tick_remote_entities(&mut self, running: bool) {
         let Some(r) = self.remote.as_mut() else {
             return;
         };
         let mut lerps = std::mem::take(&mut r.lerps);
+        let players = &r.level_players;
         for m in &mut self.mobs {
+            if !running && !players.contains_key(&(m.id as i32)) {
+                continue;
+            }
             m.previous = m.position;
             m.previous_yaw = m.yaw;
             m.previous_body_yaw = m.body_yaw;
@@ -2048,7 +2227,7 @@ impl Game<'_> {
                 horizon_client::mobs::rabbit::post_tick(m);
             }
         }
-        for d in &mut self.dropped {
+        for d in self.dropped.iter_mut().filter(|_| running) {
             d.previous = d.position;
             d.age += 1;
             if let Some(l) = lerps.get_mut(&(d.id as i32))
