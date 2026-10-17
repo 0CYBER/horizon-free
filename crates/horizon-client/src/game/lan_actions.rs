@@ -540,6 +540,70 @@ impl Game<'_> {
                 }
             }
             S::ChatCommand(c) => self.guest_command(host, conn, &c.command),
+            S::ChangeDifficulty(p) if host.hub.guests[gi].permission >= 2 => {
+                if !self.level.difficulty_locked && (0..=3).contains(&p.difficulty) {
+                    self.ui.difficulty = if self.level.hardcore {
+                        3
+                    } else {
+                        p.difficulty as u8
+                    };
+                    self.sync_rules();
+                    if self.ui.difficulty == 0 {
+                        self.mobs.retain(|m| !m.hostile());
+                    }
+                    host.hub
+                        .broadcast(&C::ChangeDifficulty(play::ChangeDifficulty {
+                            difficulty: i32::from(self.ui.difficulty),
+                            locked: self.level.difficulty_locked,
+                        }));
+                }
+            }
+            S::LockDifficulty(p) if host.hub.guests[gi].permission >= 2 => {
+                self.level.difficulty_locked = p.locked;
+                host.hub
+                    .broadcast(&C::ChangeDifficulty(play::ChangeDifficulty {
+                        difficulty: i32::from(self.ui.difficulty),
+                        locked: self.level.difficulty_locked,
+                    }));
+            }
+            S::ClientCommand(p) if p.action == 2 && host.hub.guests[gi].permission >= 2 => {
+                host.hub.send_to(
+                    conn,
+                    &C::GameRuleValues(play::GameRuleValues {
+                        entries: horizon_client::gamerules::RULES
+                            .iter()
+                            .map(|r| play::GameRuleEntry {
+                                name: format!("minecraft:{}", r.name),
+                                value: self.ui.rules.get(r.name).unwrap_or(r.default).to_string(),
+                            })
+                            .collect(),
+                    }),
+                );
+            }
+            S::SetGameRule(p) if host.hub.guests[gi].permission >= 2 => {
+                for entry in p.entries {
+                    if self.ui.rules.set_string(&entry.name, &entry.value) {
+                        let message = horizon_client::text::Text::tr(
+                            "commands.gamerule.set",
+                            &[&entry.name, &entry.value],
+                        );
+                        let content =
+                            horizon_client::lan::data::component_nbt(&message.component());
+                        for g in &host.hub.guests {
+                            if g.permission >= 2 {
+                                g.send(&C::SystemChat(play::SystemChat {
+                                    content: content.clone(),
+                                    overlay: false,
+                                }));
+                            }
+                        }
+                        if self.options.dedicated.is_none() && self.allow_commands() {
+                            self.system_message(message);
+                        }
+                    }
+                }
+                self.sync_rules();
+            }
             S::ChangeGameMode(p) if host.hub.guests[gi].permission >= 2 => {
                 if let Some(mode) = usize::try_from(p.mode)
                     .ok()
