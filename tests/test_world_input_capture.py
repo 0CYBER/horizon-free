@@ -47,7 +47,7 @@ class WorldInputCaptureTests(unittest.TestCase):
         fixture = r'''
 use std::cell::Cell;
 #[derive(Clone, Copy, PartialEq)]
-enum Screen { Playing, Paused, Inventory }
+enum Screen { Playing, Paused, Inventory, Chat }
 enum CursorGrabMode { Locked, Confined, None }
 #[derive(Default)]
 struct Window { grabs: Cell<u32>, visible: Cell<bool>, fail: bool }
@@ -63,7 +63,7 @@ impl Window {
 #[derive(Default)]
 struct Mouse { ignore_first: bool }
 impl Mouse { fn set_ignore_first_move(&mut self) { self.ignore_first = true; } }
-struct Remote { chat_input: Option<()> }
+struct Remote;
 struct Game {
     focused: bool, agent_pointer: bool, window: Option<Window>, mouse: Mouse,
     captured: bool, title: Option<()>, screen: Screen, remote: Option<Remote>,
@@ -84,7 +84,7 @@ fn main() {
     // New and existing worlds, returning to title, and reopening a world.
     for remote in [false, true] {
         let mut game = Game::default();
-        if remote { game.remote = Some(Remote { chat_input: None }); }
+        if remote { game.remote = Some(Remote); }
         for _ in 0..3 {
             game.title = Some(());
             game.capture(false);
@@ -128,11 +128,14 @@ fn main() {
         assert!(game.captured);
     }
     let mut game = Game::default();
-    game.remote = Some(Remote { chat_input: Some(()) });
+    // On a server the chat is ChatScreen (#708): loading never grabs over it.
+    game.remote = Some(Remote);
+    game.screen = Screen::Chat;
     game.capture_loaded_world();
     assert!(!game.captured);
     assert_eq!(game.window.as_ref().unwrap().grabs.get(), 0);
     game.remote = None;
+    game.screen = Screen::Playing;
     game.window.as_mut().unwrap().fail = true;
     game.capture_loaded_world();
     assert!(!game.captured);
