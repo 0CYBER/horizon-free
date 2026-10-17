@@ -760,6 +760,7 @@ impl Game<'_> {
             0 => {
                 if me {
                     self.sleeping = None;
+                    self.sleep_timer = 100;
                 }
                 return;
             }
@@ -1268,6 +1269,18 @@ impl Game<'_> {
                             (17, Value::Bool(powered)) => m.extra.charged = *powered,
                             (18, Value::Bool(ignited)) => m.extra.flag = *ignited,
                             _ => {}
+                        }
+                    }
+                }
+                // LivingEntity.onSyncedDataUpdated(SLEEPING_POS_ID): this
+                // player lies down in the bed, or gets up.
+                if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) {
+                    for (index, _, value) in &p.values {
+                        if let (14, Value::OptPos(bed)) = (index, value) {
+                            if bed.is_some() && self.sleeping.is_none() {
+                                self.sleep_timer = 0;
+                            }
+                            self.sleeping = *bed;
                         }
                     }
                 }
@@ -2124,6 +2137,8 @@ impl Game<'_> {
         self.tick_hand();
         self.tick_particles();
         self.tick_client_effects();
+        // Player.tick's sleep counter (the darkening and the wake-up fade).
+        self.sleep_timer = super::tick_sleep_timer(self.sleep_timer, self.sleeping.is_some());
         let ghast_collisions = self.happy_ghast_player_collisions();
         let Some(player) = self.player.as_mut() else {
             return Ok(());
@@ -2176,7 +2191,15 @@ impl Game<'_> {
         );
         player.yaw = self.yaw;
         let dead = self.screen == Screen::Dead;
-        if !dead {
+        // LivingEntity.isImmobile: a sleeper lies still in the bed.
+        if let Some(head) = self.sleeping {
+            player.position = Vec3::new(
+                f64::from(head[0]) + 0.5,
+                f64::from(head[1]) + 0.5625,
+                f64::from(head[2]) + 0.5,
+            );
+            player.velocity = Vec3::ZERO;
+        } else if !dead {
             MotionWorld {
                 entities: &ghast_collisions,
                 player,
@@ -3133,6 +3156,15 @@ impl Game<'_> {
             .parse()
             .ok()?;
         Some((rows, r.menu_title.clone().unwrap_or_default()))
+    }
+    /// ServerboundPlayerCommandPacket STOP_SLEEPING.
+    pub(super) fn remote_stop_sleeping(&mut self) {
+        let id = self.remote.as_ref().map_or(0, |r| r.entity_id);
+        self.send(S::PlayerCommand(play::PlayerCommand {
+            id,
+            action: 0,
+            data: 0,
+        }));
     }
     pub(super) fn remote_respawn(&mut self) {
         self.send(S::ClientCommand(play::ClientCommand { action: 0 }));

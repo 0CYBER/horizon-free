@@ -370,6 +370,7 @@ impl Game<'_> {
                     "loaded": g.loaded,
                     "game_mode": g.game_mode,
                     "sneaking": g.sneaking,
+                    "sleeping": g.bed,
                     "health": g.health,
                     // FoodData: food level, saturation and exhaustion.
                     "food": [

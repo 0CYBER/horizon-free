@@ -69,6 +69,14 @@ pub struct Guest {
     pub fall_flying: bool,
     pub flying: bool,
     pub sleeping: bool,
+    /// The bed (its head) the player sleeps in (`LivingEntity.getSleepingPos`),
+    /// `Player.sleepCounter`, and the bed last told to the player itself.
+    pub bed: Option<[i32; 3]>,
+    pub sleep_timer: u32,
+    pub sent_bed: Option<[i32; 3]>,
+    /// Where the player respawns (a bed's spot; `ServerPlayer.respawnConfig`),
+    /// None for the world spawn.
+    pub spawn: Option<[f64; 3]>,
     /// Pending ClientboundPlayerPositionPacket id; movement is ignored until
     /// the client accepts it (ServerGamePacketListenerImpl.awaitingPositionFromClient).
     pub awaiting_teleport: Option<(i32, [f64; 3])>,
@@ -201,6 +209,10 @@ impl Guest {
             fall_flying: false,
             flying: false,
             sleeping: false,
+            bed: None,
+            sleep_timer: 0,
+            sent_bed: None,
+            spawn: None,
             awaiting_teleport: None,
             teleport_counter: 0,
             teleport_tick: 0,

@@ -8057,40 +8057,48 @@ impl Game<'_> {
         self.stats.reset("custom", "minecraft:time_since_rest");
     }
     fn wake_up(&mut self) {
+        if self.remote.is_some() {
+            // InBedChatScreen.sendWakeUp: the server wakes the player.
+            self.remote_stop_sleeping();
+            return;
+        }
         self.sleeping = None;
         self.sleep_timer = 100;
     }
     fn tick_sleep(&mut self) {
         self.sleep_timer = tick_sleep_timer(self.sleep_timer, self.sleeping.is_some());
-        let Some(head) = self.sleeping else {
-            return;
-        };
-        if self.keys.contains(&KeyCode::ShiftLeft)
-            || self
-                .player
-                .as_ref()
-                .is_none_or(|p| p.health.dead_or_dying())
-        {
-            self.wake_up();
-            return;
+        if let Some(head) = self.sleeping {
+            if self.keys.contains(&KeyCode::ShiftLeft)
+                || self
+                    .player
+                    .as_ref()
+                    .is_none_or(|p| p.health.dead_or_dying())
+            {
+                self.wake_up();
+                return;
+            }
+            if let Some(p) = self.player.as_mut() {
+                p.position = Vec3::new(
+                    f64::from(head[0]) + 0.5,
+                    f64::from(head[1]) + 0.5625,
+                    f64::from(head[2]) + 0.5,
+                );
+                p.velocity = Vec3::ZERO;
+            }
         }
-        if let Some(p) = self.player.as_mut() {
-            p.position = Vec3::new(
-                f64::from(head[0]) + 0.5,
-                f64::from(head[1]) + 0.5625,
-                f64::from(head[2]) + 0.5,
-            );
-            p.velocity = Vec3::ZERO;
-        }
-        // ServerLevel: once everyone has slept 100 ticks, skip to morning and clear weather.
-        if self.sleep_timer >= 100 {
+        // ServerLevel.tick: once enough of the players have slept 100 ticks,
+        // skip to morning, clear the weather and wake everyone.
+        if self.enough_slept() {
             let t = self.world.day_time;
             self.world.day_time = t + 24000 - t.rem_euclid(24000);
             self.world.weather.raining = false;
             self.world.weather.thundering = false;
             self.world.weather.rain_time = 0;
             self.world.weather.thunder_time = 0;
-            self.wake_up();
+            if self.sleeping.is_some() {
+                self.wake_up();
+            }
+            self.wake_guests();
         }
     }
     fn creative_origin(batch: &HudBatch) -> (f32, f32) {
