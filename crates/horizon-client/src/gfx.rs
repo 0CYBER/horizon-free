@@ -222,6 +222,7 @@ struct BorderUniform {
 }
 pub struct Renderer {
     instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
     /// The window's swapchain; `None` when rendering offscreen (`--offscreen`).
     surface: Option<wgpu::Surface<'static>>,
     /// The offscreen colour target, sized like `config`.
@@ -454,8 +455,14 @@ impl Renderer {
         hud_atlas: (&[u8], u32, u32),
         forcefield: (&[u8], u32),
         panorama_faces: &panorama::Faces,
+        previous: Option<&Self>,
     ) -> Result<Self> {
-        let instance = wgpu::Instance::new(instance_descriptor());
+        // Reload resources on the same device; replacing live Vulkan devices
+        // can invalidate the driver's swapchain state on the same window.
+        let instance = previous.map_or_else(
+            || wgpu::Instance::new(instance_descriptor()),
+            |renderer| renderer.instance.clone(),
+        );
         // Offscreen rendering needs no surface, so it can use a GPU the
         // window's display cannot present from (a headless compositor).
         let surface = if offscreen {
@@ -463,15 +470,18 @@ impl Renderer {
         } else {
             Some(instance.create_surface(window.clone())?)
         };
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: surface.as_ref(),
-                force_fallback_adapter: false,
-                ..Default::default()
-            })
-            .await
-            .map_err(|e| format!("{NO_GPU_DRIVER} ({e})"))?;
+        let adapter = match previous {
+            Some(renderer) => renderer.adapter.clone(),
+            None => instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    compatible_surface: surface.as_ref(),
+                    force_fallback_adapter: false,
+                    ..Default::default()
+                })
+                .await
+                .map_err(|e| format!("{NO_GPU_DRIVER} ({e})"))?,
+        };
         let info = adapter.get_info();
         log::info!(
             "Horizon renderer: {} ({:?}, {:?})",
@@ -501,15 +511,20 @@ impl Renderer {
             )
             .into());
         }
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("Horizon device"),
-                required_features: timing::GpuTimer::features(&adapter)
-                    | (adapter.features() & wgpu::Features::INDIRECT_FIRST_INSTANCE),
-                required_limits: limits.clone(),
-                ..Default::default()
-            })
-            .await?;
+        let (device, queue) = match previous {
+            Some(renderer) => (renderer.device.clone(), renderer.queue.clone()),
+            None => {
+                adapter
+                    .request_device(&wgpu::DeviceDescriptor {
+                        label: Some("Horizon device"),
+                        required_features: timing::GpuTimer::features(&adapter)
+                            | (adapter.features() & wgpu::Features::INDIRECT_FIRST_INSTANCE),
+                        required_limits: limits.clone(),
+                        ..Default::default()
+                    })
+                    .await?
+            }
+        };
         let size = window.inner_size();
         let (config, present_modes) = if let Some(surface) = &surface {
             let mut config = surface
@@ -528,11 +543,16 @@ impl Renderer {
             if caps.usages.contains(wgpu::TextureUsages::COPY_SRC) {
                 config.usage |= wgpu::TextureUsages::COPY_SRC;
             }
-            config.present_mode = if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
-                wgpu::PresentMode::Mailbox
-            } else {
-                wgpu::PresentMode::Fifo
-            };
+            config.present_mode = previous
+                .map(|renderer| renderer.config.present_mode)
+                .filter(|mode| caps.present_modes.contains(mode))
+                .unwrap_or_else(|| {
+                    if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
+                        wgpu::PresentMode::Mailbox
+                    } else {
+                        wgpu::PresentMode::Fifo
+                    }
+                });
             surface.configure(&device, &config);
             (config, caps.present_modes.clone())
         } else {
@@ -1523,6 +1543,7 @@ impl Renderer {
         );
         Ok(Self {
             instance,
+            adapter,
             surface,
             offscreen,
             in_flight: std::collections::VecDeque::new(),

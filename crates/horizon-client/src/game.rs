@@ -7671,6 +7671,7 @@ impl Game<'_> {
             (&atlas.pixels, atlas.width, atlas.height),
             (&pack.forcefield.2, pack.forcefield.0),
             &pack.panorama,
+            self.renderer.as_ref(),
         ))?;
         renderer.hud.fire_animations = atlas
             .fire_animations
