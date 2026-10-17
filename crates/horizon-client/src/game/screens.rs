@@ -260,6 +260,10 @@ impl Game<'_> {
             .into_iter()
             .find(|d| ui::hovered(self.cursor, d.0, d.1, 200.0, 20.0))
             .map(|d| d.3);
+        if hit == Some(0) && self.remote.is_none() {
+            let keep = self.ui.rules.bool("keep_inventory") || self.spectator();
+            self.experience.respawn(keep);
+        }
         match hit {
             Some(0) if self.remote.is_some() => {
                 self.ui.death_text = None;
