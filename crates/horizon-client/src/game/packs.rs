@@ -130,11 +130,28 @@ impl Game<'_> {
             self.pack.context.biomes.clone(),
             self.pack.context.light.clone(),
         )?;
-        let renderer = self
+        // Keep the working GPU resources, but release its exclusive window surface.
+        if let Some(renderer) = &mut self.renderer {
+            renderer.release_surface();
+        }
+        let renderer = match self
             .window
             .clone()
             .map(|window| self.renderer_for(window, &pack, &atlas))
-            .transpose()?;
+            .transpose()
+        {
+            Ok(renderer) => renderer,
+            Err(error) => {
+                if let Some(renderer) = &mut self.renderer {
+                    renderer.recreate_surface().map_err(|restore| {
+                        format!(
+                            "{error}; could not restore the previous rendering surface: {restore}"
+                        )
+                    })?;
+                }
+                return Err(error);
+            }
+        };
         // Everything loaded: switch over.
         self.random_tick_sections.clear();
         self.options.resources = root.to_path_buf();

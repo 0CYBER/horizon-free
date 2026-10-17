@@ -1656,6 +1656,22 @@ impl Renderer {
     pub fn is_offscreen(&self) -> bool {
         self.surface.is_none()
     }
+    /// Release the window surface before another renderer uses the same window.
+    pub fn release_surface(&mut self) {
+        self.surface = None;
+    }
+    /// Reattach a window after surface loss or a failed renderer replacement.
+    pub fn recreate_surface(&mut self) -> Result<()> {
+        if self.offscreen.is_some() {
+            return Ok(());
+        }
+        // Wayland allows only one tearing-control object per window surface.
+        self.release_surface();
+        let surface = self.instance.create_surface(self.window.clone())?;
+        surface.configure(&self.device, &self.config);
+        self.surface = Some(surface);
+        Ok(())
+    }
     fn depth(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> wgpu::TextureView {
         device
             .create_texture(&wgpu::TextureDescriptor {
@@ -2039,9 +2055,7 @@ impl Renderer {
                 return Ok(false);
             }
             Some(wgpu::CurrentSurfaceTexture::Lost) => {
-                let surface = self.instance.create_surface(self.window.clone())?;
-                surface.configure(&self.device, &self.config);
-                self.surface = Some(surface);
+                self.recreate_surface()?;
                 return Ok(false);
             }
             Some(wgpu::CurrentSurfaceTexture::Validation) => {
