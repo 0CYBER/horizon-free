@@ -1869,7 +1869,7 @@ impl OptionsUi {
         if self.page() == Page::Language {
             let mut search = self.language_search.clone();
             search.draw(batch, atlas, None);
-            if search.value.is_empty() {
+            if search.value.is_empty() && !search.focused {
                 batch.text_styled(
                     atlas,
                     &tr("gui.language.search").with_color(text::GRAY).italic(),
@@ -2978,6 +2978,35 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    #[test]
+    fn language_search_hint_does_not_overlap_the_focused_caret() {
+        let atlas = atlas();
+        let settings = Settings::default();
+        let mut ui = OptionsUi::default();
+        ui.show(Page::Language);
+        let draw_hint = |ui: &mut OptionsUi| {
+            let mut batch = HudBatch::new([960, 640]);
+            ui.draw(&settings, &mut batch, &atlas, (-1.0, -1.0));
+            let search = &ui.language_search;
+            batch.vertices.iter().any(|v| {
+                v.color == rgba(170, 170, 170, 255)
+                    && v.pos[0] >= search.text_x()
+                    && v.pos[0] < search.x + search.width
+                    && v.pos[1] >= search.text_y()
+                    && v.pos[1] < search.y + search.height
+            })
+        };
+        ui.language_search.focused = false;
+        assert!(draw_hint(&mut ui));
+        ui.language_search.focused = true;
+        assert!(!draw_hint(&mut ui));
+        ui.language_search.focused = false;
+        ui.language_search.set_value("english");
+        assert!(!draw_hint(&mut ui));
+        ui.language_search.set_value("");
+        assert!(draw_hint(&mut ui));
     }
 
     fn languages() -> Vec<LanguageInfo> {
