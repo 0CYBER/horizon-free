@@ -18,6 +18,16 @@ pub const CREATIVE: i32 = 1;
 pub const ADVENTURE: i32 = 2;
 pub const SPECTATOR: i32 = 3;
 
+/// An effect as last sent in ClientboundUpdateMobEffectPacket.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SentEffect {
+    pub id: &'static str,
+    pub amplifier: i32,
+    pub flags: i8,
+    pub duration: i32,
+    pub tick_count: i32,
+}
+
 pub struct Guest {
     pub conn: u32,
     /// The client's address (IP bans, `list`).
@@ -92,6 +102,12 @@ pub struct Guest {
     pub xp_level: i32,
     pub xp_progress: f32,
     pub xp_total: i32,
+    /// Active status effects (`LivingEntity.activeEffects`).
+    pub effects: crate::effects::PlayerEffects,
+    /// What the client was told of each effect: id, amplifier, flags, and
+    /// the duration and `effects.tick_count` at the time, so a duration that
+    /// only counted down is not sent again (`ServerPlayer.onEffectUpdated`).
+    pub sent_effects: Vec<SentEffect>,
     /// What the client believes the inventory menu holds (for change detection).
     pub menu_sent: Vec<Option<ItemStack>>,
     pub menu_state: i32,
@@ -174,6 +190,8 @@ impl Guest {
             xp_level: 0,
             xp_progress: 0.0,
             xp_total: 0,
+            effects: Default::default(),
+            sent_effects: Vec::new(),
             menu_sent: vec![None; 46],
             menu_state: 0,
             sent_health: None,

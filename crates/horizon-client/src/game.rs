@@ -8310,21 +8310,7 @@ impl Game<'_> {
             self.ender_items = items.clone();
         }
         level.ender_items = self.ender_items.clone();
-        level.active_effects = self
-            .potions
-            .effects
-            .list
-            .iter()
-            .map(|e| {
-                (
-                    format!("minecraft:{}", e.id),
-                    e.duration,
-                    e.amplifier,
-                    e.ambient,
-                    e.visible,
-                )
-            })
-            .collect();
+        level.active_effects = self.potions.effects.saved();
     }
     fn save_game(&mut self) -> Result<()> {
         self.save_game_with(true)

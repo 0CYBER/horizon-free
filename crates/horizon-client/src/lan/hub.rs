@@ -9,9 +9,13 @@ use super::{
     chunks::ChunkEncoder,
     data::SyncData,
     entity::EntityState,
-    guest::{Guest, stack_to_network},
+    guest::{Guest, SentEffect, stack_to_network},
 };
-use crate::{items::ItemStack, world::World};
+use crate::{
+    effects::{EffectInstance, PlayerEffects},
+    items::ItemStack,
+    world::World,
+};
 use horizon_protocol::ids::play::clientbound as ids;
 use horizon_protocol::{
     entity_data::{Value, serializer},
@@ -553,9 +557,104 @@ impl Hub {
         }));
         g.center_sent = Some((cx, cz));
         g.placed_at = self.ticks;
+        self.send_active_effects(i);
         // ServerPlayer.sendPostEffects and initInventoryMenu.
         self.guests[i].send(&raw(ids::POST_EFFECTS, vec![0]));
         self.send_inventory(i);
+    }
+
+    /// ClientboundUpdateMobEffectPacket for one of the guest's effects.
+    fn send_effect(&mut self, i: usize, e: &EffectInstance, blend: bool) -> Option<SentEffect> {
+        let effect = self
+            .sync
+            .id("minecraft:mob_effect", &format!("minecraft:{}", e.id))?;
+        let flags = PlayerEffects::flags(e);
+        let g = &self.guests[i];
+        g.send(&C::UpdateMobEffect(play::UpdateMobEffect {
+            id: g.entity_id,
+            effect,
+            amplifier: e.amplifier,
+            duration: e.duration,
+            flags: flags | if blend { 8 } else { 0 },
+        }));
+        Some(SentEffect {
+            id: e.id,
+            amplifier: e.amplifier,
+            flags,
+            duration: e.duration,
+            tick_count: g.effects.tick_count,
+        })
+    }
+
+    /// PlayerList.sendActivePlayerEffects: every effect, unblended, when the
+    /// player is placed (or respawns).
+    pub fn send_active_effects(&mut self, i: usize) {
+        let effects = self.guests[i].effects.list.clone();
+        let sent = effects
+            .iter()
+            .filter_map(|e| self.send_effect(i, e, false))
+            .collect();
+        self.guests[i].sent_effects = sent;
+    }
+
+    /// ServerPlayer.onEffectAdded (blended), onEffectUpdated and
+    /// onEffectsRemoved, from what changed since the client was told: an
+    /// effect that only counted down is not sent again, except at every
+    /// 600 ticks left (`LivingEntity.tickEffects`).
+    fn sync_effects(&mut self, i: usize) {
+        let g = &self.guests[i];
+        if g.effects.list.is_empty() && g.sent_effects.is_empty() {
+            return;
+        }
+        let now = g.effects.tick_count;
+        let mut sent = Vec::with_capacity(g.effects.list.len());
+        let mut changes = Vec::new();
+        for e in &g.effects.list {
+            match g.sent_effects.iter().find(|s| s.id == e.id) {
+                None => changes.push((e.clone(), true)),
+                Some(s) => {
+                    let ticked = now.wrapping_sub(s.tick_count);
+                    let expected = if s.duration == -1 {
+                        -1
+                    } else {
+                        s.duration - ticked
+                    };
+                    let refresh = ticked > 0 && e.duration > 0 && e.duration % 600 == 0;
+                    if s.amplifier != e.amplifier
+                        || s.flags != PlayerEffects::flags(e)
+                        || e.duration != expected
+                        || refresh
+                    {
+                        changes.push((e.clone(), false));
+                    } else {
+                        sent.push(s.clone());
+                    }
+                }
+            }
+        }
+        let removed: Vec<&'static str> = g
+            .sent_effects
+            .iter()
+            .filter(|s| g.effects.get(s.id).is_none())
+            .map(|s| s.id)
+            .collect();
+        for id in removed {
+            let Some(effect) = self
+                .sync
+                .id("minecraft:mob_effect", &format!("minecraft:{id}"))
+            else {
+                continue;
+            };
+            let g = &self.guests[i];
+            g.send(&C::RemoveMobEffect(play::RemoveMobEffect {
+                id: g.entity_id,
+                effect,
+            }));
+        }
+        for (e, added) in changes {
+            sent.extend(self.send_effect(i, &e, added));
+        }
+        self.guests[i].sent_effects = sent;
     }
 
     /// PlayerList.sendPlayerPermissionLevel: the op level as an entity event
@@ -789,6 +888,7 @@ impl Hub {
         for i in 0..self.guests.len() {
             if self.guests[i].placed {
                 self.sync_player_state(i);
+                self.sync_effects(i);
             }
         }
         let latencies: Vec<_> = self
@@ -1559,6 +1659,10 @@ impl Hub {
             spawn: info,
             keep: 0,
         }));
+        // The respawned player is a new one, without effects; so is the
+        // client's (ClientPacketListener.handleRespawn).
+        g.effects = Default::default();
+        g.sent_effects.clear();
         g.center = None;
         g.sent_chunks.clear();
         g.chunk_queue.clear();

@@ -43,6 +43,8 @@ pub(super) struct GuestPlay {
     pub(super) merchant: Option<super::lan_trading::GuestMerchant>,
     /// The inventory menu and the crafting table the guest crafts in.
     pub(super) crafting: super::lan_crafting::GuestCrafting,
+    /// What the guest's body was given for its effects and enchantments.
+    potions: super::potions::BodyPotions,
 }
 
 struct ItemRules<'a>(&'a horizon_client::items::Items);
@@ -92,7 +94,11 @@ impl Game<'_> {
         let mut play = host.play.remove(&conn).unwrap_or_default();
         let g = &mut host.hub.guests[i];
         // The guest's body.
-        let mut motion = g.motion.take()?;
+        let Some(mut motion) = g.motion.take() else {
+            host.play.insert(conn, play);
+            return None;
+        };
+        self.potions.swap_player(&mut g.effects, &mut play.potions);
         motion.position = Vec3::new(g.position[0], g.position[1], g.position[2]);
         motion.ground.on_ground = g.on_ground;
         motion.yaw = g.yaw;
@@ -188,6 +194,7 @@ impl Game<'_> {
         }
         let g = &mut host.hub.guests[i];
         std::mem::swap(&mut self.ender_items, &mut g.ender_items);
+        self.potions.swap_player(&mut g.effects, &mut play.potions);
         if let Some(key) = host_ender {
             self.world
                 .block_entities
@@ -759,6 +766,10 @@ impl Game<'_> {
         g.saturation = 5.0;
         g.sent_health = None;
         g.motion = None;
+        // A new body: nothing given to the old one carries over.
+        if let Some(play) = host.play.get_mut(&conn) {
+            play.potions = Default::default();
+        }
         host.hub.respawn(i, spawn);
     }
 
@@ -846,12 +857,17 @@ impl Game<'_> {
             g.moves_from_ground
         };
         if g.spectator() {
+            // Spectators' effects still run (LivingEntity.baseTick).
+            if !g.effects.list.is_empty() {
+                self.as_guest(host, conn, |game| game.tick_mob_effects());
+            }
             return;
         }
         let in_wall = !g.sleeping && self.in_wall(g.position, g.eye_height());
         let at = g.position;
         let sounds = self.as_guest(host, conn, |game| {
-            let (rules, health) = (game.world.health_rules, &game.motion.health);
+            let (rules, motion) = (game.world.health_rules, game.motion);
+            let health = &motion.health;
             let Some(player) = game.player.as_mut() else {
                 return Vec::new();
             };
@@ -889,9 +905,16 @@ impl Game<'_> {
             let _ = w.tick_environment_damage();
             let _ = w.apply_fire_contact();
             let _ = w.server_hazards_tick(in_wall);
-            let _ = w.player.peaceful_regeneration(rules);
-            let _ = w.player.food_tick(health, rules);
-            std::mem::take(&mut w.player.events)
+            let mut events = std::mem::take(&mut w.player.events);
+            // LivingEntity.baseTick ends with tickEffects.
+            game.tick_mob_effects();
+            let Some(player) = game.player.as_mut() else {
+                return Vec::new();
+            };
+            let _ = player.peaceful_regeneration(rules);
+            let _ = player.food_tick(health, rules);
+            events.append(&mut player.events);
+            events
                 .into_iter()
                 .filter_map(|e| match e {
                     MotionEvent::HurtSound(sound) => Some(sound),
