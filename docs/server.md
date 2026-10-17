@@ -33,6 +33,12 @@ The dedicated server is the game itself, run headless:
   `whitelist on|off|list|reload|add|remove`, `ban`, `ban-ip`, `pardon`, `pardon-ip`, `banlist`, `kick` and
   `say` behave as in `DedicatedServer`. Every other command goes to the game's own dispatcher as the server
   (permission level 4). The log follows vanilla's Log4j pattern, in `logs/latest.log` and on stdout.
+- **Player names.** `usercache.json` in the universe folder works as vanilla's `CachedUserNameToIdResolver`.
+  Players are added when they join and kept for a month, and the file keeps the 1000 most recently used,
+  newest first. The console finds a player by name in it, in any case. A name it doesn't hold is asked of the
+  profile service (`getByName`). If the service doesn't know the name, an offline server uses the offline
+  player of the lower-case name; an online server answers "That player does not exist".
+  `tools/test_user_cache_parity.py` checks this against vanilla, with a mock profile service.
 
 ### Measured (2026-10-16, Mac mini M4 Pro, main at bd8dff20, release build)
 

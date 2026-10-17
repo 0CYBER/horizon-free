@@ -799,7 +799,7 @@ impl Game<'_> {
                             && let Some(g) = host.hub.guest(conn)
                         {
                             // PlayerList.placeNewPlayer, then the broadcast join message.
-                            super::dedicated::remember(&g.name, g.uuid);
+                            super::dedicated::player_joined(g.uuid, &g.name);
                             let [x, y, z] = g.position;
                             super::dedicated::log(
                                 "INFO",
