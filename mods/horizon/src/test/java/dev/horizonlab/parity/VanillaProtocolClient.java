@@ -643,6 +643,11 @@ public final class VanillaProtocolClient {
                     + " minecraft:furnace"));
                 send(new ServerboundChatCommandPacket("give @s minecraft:raw_iron"));
                 send(new ServerboundChatCommandPacket("give @s minecraft:coal"));
+                // A score on @s is the player's own (its feedback reaches the console: broadcast);
+                // a query's reply doesn't.
+                send(new ServerboundChatCommandPacket("scoreboard objectives add parity dummy"));
+                send(new ServerboundChatCommandPacket("scoreboard players set @s parity 3"));
+                send(new ServerboundChatCommandPacket("scoreboard players get @s parity"));
                 step++;
                 stepAt = now;
             } else if (step == 7 + REPLIES.length && now - stepAt > 1500) {
