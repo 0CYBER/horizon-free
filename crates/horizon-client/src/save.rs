@@ -2789,6 +2789,9 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
         chunk.entities = self.save.load_entities(x, z);
         Some(chunk)
     }
+    fn prepare_loaded(&self, worker: &mut G::Worker, chunk: &Chunk) {
+        self.inner.prepare_loaded(worker, chunk);
+    }
     fn proto(&self, worker: &mut G::Worker, x: i32, z: i32) -> crate::streaming::Proto {
         let mut proto = self.inner.proto(worker, x, z);
         if let Some(saved) = self

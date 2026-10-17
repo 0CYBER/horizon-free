@@ -36,6 +36,9 @@ pub trait ChunkGenerator: Send + Sync + 'static {
     fn load(&self, _x: i32, _z: i32) -> Option<Chunk> {
         None
     }
+    /// What a loaded chunk needs from the generator before the game uses it,
+    /// on the worker that loaded it.
+    fn prepare_loaded(&self, _worker: &mut Self::Worker, _chunk: &Chunk) {}
     fn proto(&self, worker: &mut Self::Worker, x: i32, z: i32) -> Proto;
     fn decorates(&self) -> bool {
         false
@@ -369,7 +372,10 @@ impl Streaming {
                             };
                             let done = match job {
                                 Job::Generate(x, z) => match generator.load(x, z) {
-                                    Some(chunk) => Done::Generated(chunk),
+                                    Some(chunk) => {
+                                        generator.prepare_loaded(&mut worker, &chunk);
+                                        Done::Generated(chunk)
+                                    }
                                     None => {
                                         let proto = generator.proto(&mut worker, x, z);
                                         let decorated = generator.is_decorated(&proto);
