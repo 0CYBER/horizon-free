@@ -2764,7 +2764,7 @@ impl Game<'_> {
             || !self
                 .player
                 .as_ref()
-                .is_some_and(|p| p.health.food.food < 20 || self.creative)
+                .is_some_and(|p| info.can_always_eat || p.health.food.food < 20 || self.creative)
         {
             return false;
         }
@@ -2772,6 +2772,56 @@ impl Game<'_> {
             self.using = Some((self.held_slot(), 0));
         }
         true
+    }
+    fn apply_consume_effect(
+        &mut self,
+        effect: &horizon_client::items::ConsumeEffect,
+        eye: [f64; 3],
+    ) {
+        use horizon_client::items::ConsumeEffect;
+        match effect {
+            ConsumeEffect::ApplyEffects {
+                effects,
+                probability,
+            } => {
+                if *probability >= 1.0 || self.world.random.next_float() <= *probability {
+                    for eff in effects {
+                        if let Some(def) = horizon_client::brewing::effect(&eff.id) {
+                            if def.instant {
+                                if let Some(a) =
+                                    horizon_client::effects::instant(def.id, eff.amplifier, 1.0)
+                                {
+                                    self.apply_effect_action(a);
+                                }
+                            } else {
+                                self.add_player_effect(
+                                    horizon_client::effects::EffectInstance::new(
+                                        def.id,
+                                        eff.duration,
+                                        eff.amplifier,
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            ConsumeEffect::ClearAllEffects => {
+                self.potions.effects.clear();
+                self.apply_effect_status();
+            }
+            ConsumeEffect::RemoveEffects(to_remove) => {
+                for target in to_remove {
+                    let id = target.trim_start_matches("minecraft:");
+                    self.potions.effects.list.retain(|e| e.id != id);
+                }
+                self.apply_effect_status();
+            }
+            ConsumeEffect::TeleportRandomly => {}
+            ConsumeEffect::PlaySound(sound) => {
+                self.audio.play(sound, Some(eye), 1.0, 1.0);
+            }
+        }
     }
     fn consume_held(&mut self) {
         if self.creative {
@@ -2875,19 +2925,22 @@ impl Game<'_> {
             self.eat_particles(&stack, 16);
             // Consumable.onConsume.
             self.post_entity_event("minecraft:eat", horizon_client::mobs::Who::Player);
-            if let Some((nutrition, saturation)) = info.food
-                && let Some(p) = self.player.as_mut()
-            {
-                // FoodData.eat(nutrition, saturation)
-                let food = &mut p.health.food;
-                food.food = (food.food + nutrition as i32).clamp(0, 20);
-                food.saturation = (food.saturation + saturation).clamp(0.0, food.food as f32);
+            if let Some((nutrition, saturation)) = info.food {
+                if let Some(p) = self.player.as_mut() {
+                    // FoodData.eat(nutrition, saturation)
+                    let food = &mut p.health.food;
+                    food.food = (food.food + nutrition as i32).clamp(0, 20);
+                    food.saturation = (food.saturation + saturation).clamp(0.0, food.food as f32);
+                }
                 self.audio.play(
                     "minecraft:entity.player.burp",
                     Some(eye),
                     0.5,
                     self.world.random.next_float() * 0.1 + 0.9,
                 );
+                for effect in &info.consume_effects {
+                    self.apply_consume_effect(effect, eye);
+                }
                 self.trigger_item("minecraft:consume_item", &stack);
                 self.consume_held();
             }
