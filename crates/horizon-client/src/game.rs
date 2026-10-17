@@ -197,7 +197,12 @@ use horizon_world::{
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+        mpsc::{Receiver, TryRecvError},
+    },
+    thread::JoinHandle,
     time::{Duration, Instant},
 };
 use winit::{
@@ -7788,27 +7793,13 @@ impl Game<'_> {
         pack: &PackResources,
         atlas: &HudAtlas,
     ) -> Result<Renderer> {
-        let assets = &pack.assets;
-        let mut renderer = pollster::block_on(Renderer::new(
+        build_renderer(
             window,
             self.options.offscreen,
-            &assets.pixels,
-            assets.sprite_size,
-            assets.sprite_minimum_size,
-            assets.texture_layers,
-            &assets.sprite_mips,
-            &assets.animations,
-            (&atlas.pixels, atlas.width, atlas.height),
-            (&pack.forcefield.2, pack.forcefield.0),
-            &pack.panorama,
+            pack,
+            atlas,
             self.renderer.as_ref(),
-        ))?;
-        renderer.hud.fire_animations = atlas
-            .fire_animations
-            .iter()
-            .map(|(rect, animation)| (*rect, animation.clone(), usize::MAX))
-            .collect();
-        Ok(renderer)
+        )
     }
     fn apply_settings(&mut self) {
         if let Some(r) = &self.renderer {
@@ -10326,41 +10317,83 @@ impl<'a> Game<'a> {
     }
 }
 
-pub fn run() -> Result<()> {
-    let Some(mut options) = Options::read()? else {
-        return Ok(());
-    };
-    if options.dedicated.is_some() && !dedicated::preflight(&mut options)? {
-        return Ok(());
+/// The data the background loader produces for `Game::new`.
+struct Loaded {
+    root: PathBuf,
+    pack_error: Option<String>,
+    resources: Resources,
+    pack: PackResources,
+    atlas: HudAtlas,
+}
+
+/// The loader's checkpoints, in order; the loading screen reports them.
+const STAGES: u32 = 9;
+const STAGE_LINES: [&str; 9] = [
+    "Loading assets",
+    "Loading block facts",
+    "Loading items",
+    "Loading biomes",
+    "Loading pack tables",
+    "Loading atlas",
+    "Loading collision",
+    "Loading resources",
+    "Starting audio",
+];
+
+/// The background loader's checkpoint, read by the loading screen each frame.
+#[derive(Clone)]
+struct Progress(Arc<AtomicU32>);
+impl Progress {
+    fn new() -> Self {
+        Self(Arc::new(AtomicU32::new(0)))
     }
-    let started = Instant::now();
-    horizon_client::spans::enable(options.spikes.is_some());
-    let vanilla_root = options.resources.clone();
-    let early_settings = Settings::load(&std::env::current_dir()?.join("options.txt"));
-    // Snapshots of derived tables live in the game folder, never beside the
-    // shared resources.
-    Behaviours::set_cache_dir(std::env::current_dir()?.join(".horizon-cache"));
+    fn set(&self, stage: u32) {
+        self.0.store(stage, Ordering::Relaxed);
+    }
+    fn fraction(&self) -> f32 {
+        self.0.load(Ordering::Relaxed) as f32 / (STAGES - 1) as f32
+    }
+    fn line(&self) -> &'static str {
+        STAGE_LINES[(self.0.load(Ordering::Relaxed) as usize).min(STAGE_LINES.len() - 1)]
+    }
+}
+
+/// Harness and dedicated runs keep the fully-synchronous startup so their
+/// output stays byte-identical; only an ordinary launch shows the window first.
+fn synchronous_startup(options: &Options) -> bool {
+    let classic = std::env::var("HORIZON_MENU_STYLE").ok().as_deref() == Some("classic");
+    options.frames.is_some()
+        || options.world_frames.is_some()
+        || options.benchmark.is_some()
+        || options.control.is_some()
+        || options.dedicated.is_some()
+        || classic
+        || std::env::var_os("HORIZON_DISPENSE_FIXTURE").is_some()
+        || std::env::var_os("HORIZON_SCULK_FIXTURE").is_some()
+        || std::env::var_os("HORIZON_COMMAND_SCRIPT").is_some()
+        || std::env::var_os("HORIZON_NET_REPORT").is_some()
+}
+
+/// The current loading sequence, unchanged, as a function so the synchronous
+/// launch can run it on the main thread and an ordinary launch on a worker.
+/// `on_stage` reports [`STAGES`] checkpoints to the loading screen.
+fn load_resources(
+    mut root: PathBuf,
+    vanilla_root: &std::path::Path,
+    settings: &Settings,
+    started: Instant,
+    on_stage: &(dyn Fn(u32) + Sync),
+) -> Result<Loaded> {
     let mut pack_error = None;
-    options.resources = packs::startup_root(&vanilla_root, &early_settings.resource_packs)
-        .unwrap_or_else(|e| {
-            log::warn!("Horizon: resource packs not applied: {e}");
-            pack_error = Some(e.to_string());
-            vanilla_root.clone()
-        });
-    options.resources = mods::content_root(
-        &options.resources,
-        &early_settings.mods.enabled,
-        &options.dev_mods,
-    );
-    let assets = match Assets::load(&options.resources) {
+    let assets = match Assets::load(&root) {
         Ok(assets) => assets,
         // Minecraft.rollbackResourcePacks: the packs break loading, start
         // with the game's own resources.
-        Err(e) if options.resources != vanilla_root => {
+        Err(e) if root != vanilla_root => {
             log::warn!("Horizon: resource packs failed to load ({e}); using the default resources");
             pack_error = Some(e.to_string());
-            options.resources = vanilla_root.clone();
-            Assets::load(&vanilla_root)?
+            root = vanilla_root.to_path_buf();
+            Assets::load(vanilla_root)?
         }
         Err(e) => {
             return Err(format!(
@@ -10369,9 +10402,9 @@ pub fn run() -> Result<()> {
             .into());
         }
     };
-    let root = options.resources.clone();
     let assets = Arc::new(assets);
     log::info!("load assets: {:.2}s", started.elapsed().as_secs_f32());
+    on_stage(0);
     let behaviour_json: serde_json::Value = serde_json::from_reader(std::io::BufReader::new(
         std::fs::File::open(root.join("block-behaviours.json"))?,
     ))?;
@@ -10380,23 +10413,28 @@ pub fn run() -> Result<()> {
     let mob_data = horizon_client::mobs::MobData::load(&root, &facts);
     horizon_client::mobs::trial_spawner::load_registry(&root);
     log::info!("load facts: {:.2}s", started.elapsed().as_secs_f32());
+    on_stage(1);
     let items = Items::load(&root, assets.registry, &facts)?;
     log::info!("load items: {:.2}s", started.elapsed().as_secs_f32());
+    on_stage(2);
     let recipes = Recipes::load(&root, &items)?;
     let transformers = horizon_client::block_transform::Transformers::load(&root, assets.registry)?;
     let biomes = Arc::new(Biomes::load(&root)?);
     let environment = Environment::load(&root)?;
     log::info!("load biomes+env: {:.2}s", started.elapsed().as_secs_f32());
+    on_stage(3);
     let light = Arc::new(LightTables::load(&root, assets.registry, &facts)?);
     let pack = PackResources::load(&root, assets.clone(), &facts, biomes.clone(), light)?;
     log::info!("load pack tables: {:.2}s", started.elapsed().as_secs_f32());
+    on_stage(4);
     let atlas = HudAtlas::build(&root)?;
     horizon_client::ui::load_metadata(&root);
     horizon_client::lang::set(horizon_client::lang::Language::load(
         &[&root],
-        &early_settings.language,
+        &settings.language,
     ));
     log::info!("load atlas: {:.2}s", started.elapsed().as_secs_f32());
+    on_stage(5);
     let registry_owner = assets.clone();
     let collision = collisions::load(&root, registry_owner.registry)?;
     let motion = MotionResources::load(&root, &registry_owner)?;
@@ -10404,7 +10442,8 @@ pub fn run() -> Result<()> {
         "load collision+motion: {:.2}s",
         started.elapsed().as_secs_f32()
     );
-    let threads = early_settings.horizon.worker_threads();
+    on_stage(6);
+    let threads = settings.horizon.worker_threads();
     log::info!(
         "Horizon: resources loaded in {:.1}s; {} block states, {} items, {} biomes; {} worker threads",
         started.elapsed().as_secs_f32(),
@@ -10413,16 +10452,11 @@ pub fn run() -> Result<()> {
         biomes.list.len(),
         threads
     );
-    let audio = if options.dedicated.is_some() {
-        Audio::silent(&root)
-    } else {
-        Audio::new(&root)
-    };
     let stations = horizon_client::stations::StationData::load(&root, &items);
     let animate =
         horizon_client::animate_tick::AnimateTables::load(&root, registry_owner.registry, &biomes)?;
     let fog = horizon_client::fog::FogTables::load(&root, &biomes);
-    let resources = Arc::new(Resources {
+    let resources = Resources {
         stations,
         facts,
         items,
@@ -10459,11 +10493,159 @@ pub fn run() -> Result<()> {
         player_type: perspective::player_type(&root),
         player_arm: horizon_client::mobs::load_model(&root, "minecraft:player#main")
             .and_then(|m| m.children.into_iter().find(|c| c.name == "right_arm")),
-    });
+    };
     // Both inputs are needed only while constructing the behaviour tables.
     // Release their owned JSON/Arc buffers before entering the long-lived game loop.
     drop(gameplay_projection);
     drop(behaviour_json);
+    on_stage(7);
+    Ok(Loaded {
+        root,
+        pack_error,
+        resources,
+        pack,
+        atlas,
+    })
+}
+
+/// The renderer from a pack's block sprites, its shared atlas and its border
+/// texture; `previous` shares the device and window surface with an old one.
+fn build_renderer(
+    window: Arc<Window>,
+    offscreen: bool,
+    pack: &PackResources,
+    atlas: &HudAtlas,
+    previous: Option<&Renderer>,
+) -> Result<Renderer> {
+    let assets = &pack.assets;
+    let mut renderer = pollster::block_on(Renderer::new(
+        window,
+        offscreen,
+        &assets.pixels,
+        assets.sprite_size,
+        assets.sprite_minimum_size,
+        assets.texture_layers,
+        &assets.sprite_mips,
+        &assets.animations,
+        (&atlas.pixels, atlas.width, atlas.height),
+        (&pack.forcefield.2, pack.forcefield.0),
+        &pack.panorama,
+        previous,
+    ))?;
+    renderer.hud.fire_animations = atlas
+        .fire_animations
+        .iter()
+        .map(|(rect, animation)| (*rect, animation.clone(), usize::MAX))
+        .collect();
+    Ok(renderer)
+}
+
+/// The loading screen's renderer: the real HUD atlas and font over one opaque
+/// white block-sprite layer, an empty border texture and an empty panorama.
+fn loading_renderer(
+    window: Arc<Window>,
+    offscreen: bool,
+    atlas: Option<&HudAtlas>,
+) -> Result<Renderer> {
+    static FORCEFIELD: [u8; 4] = [0; 4];
+    static EMPTY_HUD: [u8; 4] = [0, 0, 0, 255];
+    let panorama = horizon_client::gfx::panorama::Faces {
+        size: 1,
+        pixels: [0u8; 4].repeat(6),
+    };
+    let (pixels, width, height) = match atlas {
+        Some(atlas) => (atlas.pixels.as_slice(), atlas.width, atlas.height),
+        None => (EMPTY_HUD.as_slice(), 1, 1),
+    };
+    let mut renderer = pollster::block_on(Renderer::new(
+        window,
+        offscreen,
+        &[255, 255, 255, 255],
+        1,
+        1,
+        1,
+        &[],
+        &[],
+        (pixels, width, height),
+        (&FORCEFIELD[..], 1),
+        &panorama,
+        None,
+    ))?;
+    if let Some(atlas) = atlas {
+        renderer.hud.fire_animations = atlas
+            .fire_animations
+            .iter()
+            .map(|(rect, animation)| (*rect, animation.clone(), usize::MAX))
+            .collect();
+    }
+    Ok(renderer)
+}
+
+/// A title-shaped frame: black clear and panorama, only the HUD is drawn.
+fn loading_frame(hud: &HudBatch) -> Frame<'_> {
+    Frame {
+        camera: glam::DVec3::new(0.5, 100.0, 0.5),
+        yaw: 0.0,
+        pitch: 10.0,
+        fov_degrees: 85.0,
+        bob: glam::Mat4::IDENTITY,
+        sky: horizon_client::environment::Sky::default(),
+        distance: 12.0,
+        depth_far: 1000.0,
+        underwater: false,
+        cave_culling: false,
+        title: true,
+        skybox: false,
+        end_sky: false,
+        environment_fog: None,
+        water_fog: [0.0; 3],
+        fog: None,
+        dark_disc: false,
+        outline: Vec::new(),
+        outline_after_terrain: false,
+        debug_lines: &[],
+        debug_lines_on_top: &[],
+        debug_crosshair: &[],
+        hud,
+        nether_lighting: false,
+        entities: &[],
+        clouds: None,
+        additive: &[],
+        see_through: &[],
+        celestial: &[],
+        hand: &[],
+        hand_fov_degrees: 70.0,
+        screen: &[],
+        border: None,
+        game_time: 0.0,
+        shader_game_time: 0.0,
+        end_portal_sprites: [[0.0; 4]; 2],
+        crumbling_sprite: [0.0; 4],
+        ticks: 0,
+        darkness: (0.0, 0.0),
+        night_vision: 0.0,
+        block_flicker: 0.0,
+        post: None,
+        menu_blur: None,
+        shader: Default::default(),
+    }
+}
+
+/// The post-load setup once the resources are ready: `Game::new` and the
+/// options, packs, mods, control socket, benchmark and world selection the
+/// old `run` did after loading. `None` means a harness or dedicated run
+/// finished here instead.
+#[allow(clippy::too_many_arguments)]
+fn start_game<'a>(
+    res: &'a Arc<Resources>,
+    pack: PackResources,
+    atlas: HudAtlas,
+    options: Options,
+    pack_error: Option<String>,
+    audio: Audio,
+    vanilla_root: PathBuf,
+    started: Instant,
+) -> Result<Option<Game<'a>>> {
     let mut settings = Settings::load(&std::env::current_dir()?.join("options.txt"));
     horizon_client::ui_theme::load_preferences(&std::env::current_dir()?);
     // Scripted and frame-limited runs (the parity harnesses) see vanilla's
@@ -10476,7 +10658,7 @@ pub fn run() -> Result<()> {
     if let Some(d) = options.distance_override {
         settings.render_distance = d;
     }
-    let mut game = Game::new(&resources, pack, atlas, options, settings, audio)?;
+    let mut game = Game::new(res, pack, atlas, options, settings, audio)?;
     game.ui.vanilla_root = vanilla_root;
     if let Some(error) = pack_error {
         game.open_options_at(true, horizon_client::options_ui::Page::Packs);
@@ -10526,13 +10708,16 @@ pub fn run() -> Result<()> {
         );
     }
     if let Ok(spec) = std::env::var("HORIZON_DISPENSE_FIXTURE") {
-        return game.dispense_fixture(&spec);
+        game.dispense_fixture(&spec)?;
+        return Ok(None);
     }
     if let Ok(spec) = std::env::var("HORIZON_SCULK_FIXTURE") {
-        return game.sculk_fixture(&spec);
+        game.sculk_fixture(&spec)?;
+        return Ok(None);
     }
     if game.options.dedicated.is_some() {
-        return game.run_dedicated();
+        game.run_dedicated()?;
+        return Ok(None);
     }
     match game.options.world.clone() {
         _ if game.options.server.is_some() => {
@@ -10542,7 +10727,8 @@ pub fn run() -> Result<()> {
             );
             game.connect_server(&address, &name)?;
             if let Some(report) = std::env::var_os("HORIZON_NET_REPORT") {
-                return game.run_net_harness(report.as_ref());
+                game.run_net_harness(report.as_ref())?;
+                return Ok(None);
             }
         }
         Some(folder) => {
@@ -10568,9 +10754,13 @@ pub fn run() -> Result<()> {
         std::env::var_os("HORIZON_COMMAND_SCRIPT"),
         std::env::var_os("HORIZON_COMMAND_OUTPUT"),
     ) {
-        return game.run_command_harness(script.as_ref(), output.as_ref());
+        game.run_command_harness(script.as_ref(), output.as_ref())?;
+        return Ok(None);
     }
-    EventLoop::new()?.run_app(&mut game)?;
+    Ok(Some(game))
+}
+
+fn write_report(game: &Game<'_>) -> Result<()> {
     if let Some(path) = &game.options.report {
         let report = serde_json::json!({
             "frames": game.frames,
@@ -10583,8 +10773,384 @@ pub fn run() -> Result<()> {
         });
         std::fs::write(path, serde_json::to_vec_pretty(&report)?)?;
     }
-    if let Some(e) = game.error {
+    Ok(())
+}
+
+fn run_event_loop(mut game: Game<'_>) -> Result<()> {
+    EventLoop::new()?.run_app(&mut game)?;
+    write_report(&game)?;
+    if let Some(e) = game.error.take() {
         return Err(e);
+    }
+    Ok(())
+}
+
+/// The loading screen's state while the worker loads the resources.
+struct Loading {
+    window: Option<Arc<Window>>,
+    renderer: Option<Renderer>,
+    atlas: Option<HudAtlas>,
+    settings: Settings,
+    fullscreen: horizon_client::window::FullscreenState,
+    options: Option<Options>,
+    vanilla_root: PathBuf,
+    pack_error: Option<String>,
+    started: Instant,
+    progress: Progress,
+    receiver: Receiver<std::result::Result<Loaded, String>>,
+    loaded: Option<std::result::Result<Loaded, String>>,
+    handle: Option<JoinHandle<()>>,
+    shown: bool,
+    error: Option<Box<dyn std::error::Error>>,
+}
+impl Loading {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.window.is_some() {
+            return;
+        }
+        // The Window constructor: created fullscreen when options.txt says so.
+        let fullscreen = self.settings.fullscreen;
+        self.fullscreen = horizon_client::window::FullscreenState::new(fullscreen);
+        let attributes = Window::default_attributes()
+            .with_title("Horizon")
+            .with_window_icon(horizon_client::window::icon());
+        // Wayland names the window by its app id, which the horizon.desktop entry matches.
+        #[cfg(target_os = "linux")]
+        let attributes = winit::platform::wayland::WindowAttributesExtWayland::with_name(
+            attributes, "horizon", "horizon",
+        );
+        let window = match event_loop.create_window(
+            attributes
+                .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0))
+                .with_fullscreen(fullscreen.then_some(winit::window::Fullscreen::Borderless(None))),
+        ) {
+            Ok(w) => Arc::new(w),
+            Err(e) => {
+                self.error = Some(e.into());
+                event_loop.exit();
+                return;
+            }
+        };
+        let offscreen = self.options.as_ref().is_some_and(|o| o.offscreen);
+        match loading_renderer(window.clone(), offscreen, self.atlas.as_ref()) {
+            Ok(r) => self.renderer = Some(r),
+            Err(e) => {
+                self.error = Some(e);
+                event_loop.exit();
+                return;
+            }
+        }
+        if let Some(r) = &self.renderer {
+            self.settings
+                .clamp_gui_scale([r.config.width as i32, r.config.height as i32]);
+        }
+        horizon_client::hud::GUI_SCALE.store(self.settings.gui_scale, Ordering::Relaxed);
+        self.window = Some(window);
+    }
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        if self.window.as_ref().is_none_or(|w| w.id() != id) {
+            return;
+        }
+        match event {
+            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::Resized(size) => {
+                if let Some(r) = &mut self.renderer {
+                    r.resize(size.width, size.height);
+                }
+            }
+            WindowEvent::RedrawRequested => self.draw(),
+            _ => {}
+        }
+    }
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.loaded.is_none() {
+            match self.receiver.try_recv() {
+                Ok(result) => self.loaded = Some(result),
+                Err(TryRecvError::Disconnected) => {
+                    if let Some(handle) = self.handle.take() {
+                        let _ = handle.join();
+                    }
+                    self.error = Some("resource loader stopped before finishing".into());
+                    event_loop.exit();
+                    return;
+                }
+                Err(TryRecvError::Empty) => {}
+            }
+        }
+        if let Some(w) = &self.window {
+            if self.options.as_ref().is_some_and(|o| o.offscreen) {
+                self.draw();
+            } else {
+                w.request_redraw();
+            }
+        }
+        event_loop.set_control_flow(ControlFlow::Poll);
+    }
+    fn draw(&mut self) {
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
+        let size = [renderer.config.width, renderer.config.height];
+        let mut batch = HudBatch::new(size);
+        if let Some(atlas) = &self.atlas {
+            horizon_client::level_loading::draw_progress(
+                &mut batch,
+                atlas,
+                self.progress.line(),
+                self.progress.fraction(),
+            );
+        }
+        let frame = loading_frame(&batch);
+        if let Err(e) = renderer.render(&frame) {
+            log::warn!("Horizon: loading screen frame failed: {e}");
+        }
+        if !self.shown {
+            self.shown = true;
+            log::info!(
+                "Horizon: loading screen shown after {} ms",
+                self.started.elapsed().as_millis()
+            );
+        }
+    }
+    fn finish(&mut self, loaded: Loaded) -> Result<Option<Game<'static>>> {
+        let mut options = self.options.take().ok_or("loading already finished")?;
+        options.resources = loaded.root.clone();
+        self.progress.set(STAGES - 1);
+        // Audio is created on the main thread, after the join.
+        let audio = if options.dedicated.is_some() {
+            Audio::silent(&options.resources)
+        } else {
+            Audio::new(&options.resources)
+        };
+        let window = self.window.clone().ok_or("window closed")?;
+        // Keep the loader's device and swap in the real textures in one step.
+        if let Some(renderer) = &mut self.renderer {
+            renderer.release_surface();
+        }
+        let renderer = build_renderer(
+            window.clone(),
+            options.offscreen,
+            &loaded.pack,
+            &loaded.atlas,
+            self.renderer.as_ref(),
+        )?;
+        let pack_error = loaded.pack_error.or_else(|| self.pack_error.take());
+        // The game borrows its shared resources for the process's lifetime,
+        // like the single copy an integrated server would share.
+        let res: &'static Arc<Resources> = Box::leak(Box::new(Arc::new(loaded.resources)));
+        let Some(mut game) = start_game(
+            res,
+            loaded.pack,
+            loaded.atlas,
+            options,
+            pack_error,
+            audio,
+            self.vanilla_root.clone(),
+            self.started,
+        )?
+        else {
+            return Ok(None);
+        };
+        game.window = Some(window);
+        game.renderer = Some(renderer);
+        game.fullscreen = self.fullscreen;
+        game.apply_settings();
+        game.previous = Instant::now();
+        Ok(Some(game))
+    }
+}
+
+/// The application: the loading screen until the resources are ready, then
+/// the game itself, on the same event loop and window.
+enum App {
+    Loading(Box<Loading>),
+    Ready(Box<Game<'static>>),
+}
+impl ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        match self {
+            App::Loading(loading) => loading.resumed(event_loop),
+            App::Ready(game) => game.resumed(event_loop),
+        }
+    }
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        match self {
+            App::Loading(loading) => loading.window_event(event_loop, id, event),
+            App::Ready(game) => game.window_event(event_loop, id, event),
+        }
+    }
+    fn device_event(&mut self, event_loop: &ActiveEventLoop, id: DeviceId, event: DeviceEvent) {
+        if let App::Ready(game) = self {
+            game.device_event(event_loop, id, event);
+        }
+    }
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        enum Step {
+            Waiting,
+            Ready(Box<Game<'static>>),
+            Done,
+            Failed(Box<dyn std::error::Error>),
+        }
+        let step = match self {
+            App::Ready(game) => {
+                game.about_to_wait(event_loop);
+                return;
+            }
+            App::Loading(loading) => {
+                loading.about_to_wait(event_loop);
+                if loading.error.is_some() {
+                    event_loop.exit();
+                    return;
+                }
+                match loading.loaded.take() {
+                    None => Step::Waiting,
+                    Some(Err(e)) => Step::Failed(e.into()),
+                    Some(Ok(loaded)) => match loading.finish(loaded) {
+                        Ok(Some(game)) => Step::Ready(Box::new(game)),
+                        Ok(None) => Step::Done,
+                        Err(e) => Step::Failed(e),
+                    },
+                }
+            }
+        };
+        match step {
+            Step::Waiting => {}
+            Step::Ready(game) => *self = App::Ready(game),
+            Step::Done => event_loop.exit(),
+            Step::Failed(e) => {
+                if let App::Loading(loading) = self {
+                    loading.error = Some(e);
+                }
+                event_loop.exit();
+            }
+        }
+    }
+    fn exiting(&mut self, event_loop: &ActiveEventLoop) {
+        if let App::Ready(game) = self {
+            game.exiting(event_loop);
+        }
+    }
+}
+
+/// The ordinary launch: load the resources on a worker while the window shows
+/// the loading screen, then swap in the game on the main thread.
+fn run_loading(
+    options: Options,
+    settings: Settings,
+    vanilla_root: PathBuf,
+    pack_error: Option<String>,
+    started: Instant,
+) -> Result<()> {
+    let progress = Progress::new();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let loader = {
+        let progress = progress.clone();
+        let settings = settings.clone();
+        let vanilla_root = vanilla_root.clone();
+        let root = options.resources.clone();
+        std::thread::Builder::new()
+            .name("resource-loader".into())
+            .spawn(move || {
+                let result = load_resources(root, &vanilla_root, &settings, started, &|stage| {
+                    progress.set(stage)
+                })
+                .map_err(|e| e.to_string());
+                let _ = sender.send(result);
+            })?
+    };
+    let atlas = HudAtlas::build(&options.resources).ok();
+    let loading = Loading {
+        window: None,
+        renderer: None,
+        atlas,
+        settings,
+        fullscreen: horizon_client::window::FullscreenState::new(false),
+        options: Some(options),
+        vanilla_root,
+        pack_error,
+        started,
+        progress,
+        receiver,
+        loaded: None,
+        handle: Some(loader),
+        shown: false,
+        error: None,
+    };
+    let mut app = App::Loading(Box::new(loading));
+    EventLoop::new()?.run_app(&mut app)?;
+    match app {
+        App::Ready(mut game) => {
+            write_report(&game)?;
+            if let Some(e) = game.error.take() {
+                return Err(e);
+            }
+        }
+        App::Loading(loading) => {
+            if let Some(e) = loading.error {
+                return Err(e);
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn run() -> Result<()> {
+    let Some(mut options) = Options::read()? else {
+        return Ok(());
+    };
+    if options.dedicated.is_some() && !dedicated::preflight(&mut options)? {
+        return Ok(());
+    }
+    let started = Instant::now();
+    horizon_client::spans::enable(options.spikes.is_some());
+    let vanilla_root = options.resources.clone();
+    let early_settings = Settings::load(&std::env::current_dir()?.join("options.txt"));
+    // Snapshots of derived tables live in the game folder, never beside the
+    // shared resources.
+    Behaviours::set_cache_dir(std::env::current_dir()?.join(".horizon-cache"));
+    let mut pack_error = None;
+    options.resources = packs::startup_root(&vanilla_root, &early_settings.resource_packs)
+        .unwrap_or_else(|e| {
+            log::warn!("Horizon: resource packs not applied: {e}");
+            pack_error = Some(e.to_string());
+            vanilla_root.clone()
+        });
+    options.resources = mods::content_root(
+        &options.resources,
+        &early_settings.mods.enabled,
+        &options.dev_mods,
+    );
+    // Harnesses and dedicated runs stay synchronous; a normal launch enters
+    // the event loop at once and loads the resources on a worker.
+    if !synchronous_startup(&options) {
+        return run_loading(options, early_settings, vanilla_root, pack_error, started);
+    }
+    let loaded = load_resources(
+        options.resources.clone(),
+        &vanilla_root,
+        &early_settings,
+        started,
+        &|_| {},
+    )?;
+    options.resources = loaded.root.clone();
+    let audio = if options.dedicated.is_some() {
+        Audio::silent(&options.resources)
+    } else {
+        Audio::new(&options.resources)
+    };
+    let resources = Arc::new(loaded.resources);
+    let game = start_game(
+        &resources,
+        loaded.pack,
+        loaded.atlas,
+        options,
+        loaded.pack_error.or(pack_error),
+        audio,
+        vanilla_root,
+        started,
+    )?;
+    if let Some(game) = game {
+        run_event_loop(game)?;
     }
     Ok(())
 }
