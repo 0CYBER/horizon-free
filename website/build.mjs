@@ -29,6 +29,10 @@ async function repoFile(path) {
 
 // The README: required, a site with a stale or missing parity table is worse than no deploy.
 const [readme, readmeFrom] = await repoFile("README.md");
+// The server guide (/server) is docs/hosting.md from its first section on: the page has its own title and lede.
+const [hosting] = await repoFile("docs/hosting.md");
+const guideStart = hosting.search(/^## /m);
+if (guideStart < 0) throw new Error("docs/hosting.md: no '## ' section");
 
 let links = { ...DEFAULT_LINKS };
 try {
@@ -198,9 +202,11 @@ const values = {
   CONTRIBUTORS_HIDDEN: contributors.length ? "" : " hidden",
   BAKED: JSON.stringify(baked).replace(/</g, "\\u003c"),
   YEAR: String(new Date().getUTCFullYear()),
+  SERVER_GUIDE: markdown(hosting.slice(guideStart)),
 };
 
-for (const page of ["index.html", "404.html", "privacy.html"]) {
+const pages = ["index.html", "404.html", "privacy.html", "server.html"];
+for (const page of pages) {
   let html = await readFile(join(site, "src", page), "utf8");
   html = html.replace(/\{\{(\w+)\}\}/g, (all, key) => {
     if (!(key in values)) throw new Error(`${page}: unknown placeholder ${all}`);
@@ -210,10 +216,10 @@ for (const page of ["index.html", "404.html", "privacy.html"]) {
   await writeFile(join(dist, page), html);
 }
 
-// The page's inline script (it marks the page as scripted before CSS applies) and its
-// inlined stylesheet: the Content-Security-Policy in the Caddyfile allows them by hash.
-const indexHtml = await readFile(join(dist, "index.html"), "utf8");
-const hashes = (re) => [...new Set([...indexHtml.matchAll(re)].map((m) => `'sha256-${createHash("sha256").update(m[1]).digest("base64")}'`))].join(" ");
+// The pages' inline scripts (they mark the page as scripted and apply the saved theme before CSS
+// applies) and the inlined stylesheet: the Content-Security-Policy in the Caddyfile allows them by hash.
+const allHtml = (await Promise.all(pages.map((page) => readFile(join(dist, page), "utf8")))).join("\n");
+const hashes = (re) => [...new Set([...allHtml.matchAll(re)].map((m) => `'sha256-${createHash("sha256").update(m[1]).digest("base64")}'`))].join(" ");
 await writeFile(join(dist, ".csp-script"), hashes(/<script>([\s\S]*?)<\/script>/g));
 await writeFile(join(dist, ".csp-style"), hashes(/<style>([\s\S]*?)<\/style>/g));
 

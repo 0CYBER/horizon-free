@@ -18,6 +18,7 @@ serve.mjs          a tiny static server for local checks
 src/index.html     the page, with {{placeholders}} build.mjs fills
 src/404.html       the not-found page
 src/privacy.html   what the launcher can send when players allow it, retention, deletion (/privacy)
+src/server.html    host a server (/server): docs/hosting.md rendered into the page
 src/tokens.css     the design tokens, generated from crates/horizon-theme (do not edit)
 src/style.css      every style, on top of the tokens
 src/main.js        download buttons, patch notes, links, contributors, nav and menu, tabs, lightbox, motion
@@ -35,7 +36,7 @@ shots/             (gitignored) full-page screenshots at 360–1920 px, a 1250×
 ## What comes from where
 
 - **Built in** (`build.mjs`): the parity table, its score, harness count and audit date,
-  all from `README.md`; the Discord and Sponsor links from
+  all from `README.md`; the server guide (`/server`) from `docs/hosting.md`; the Discord and Sponsor links from
   `launcher/links.json`; the latest releases and the contributors (`/repos/ludovic111/horizon/contributors`,
   bots left out, the owner first), when GitHub answers; without an answer the build still succeeds and
   the Contributors block and its menu entries stay hidden until the page loads them. Locally these come from
