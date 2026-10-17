@@ -21,6 +21,8 @@ use std::{
     path::Path,
     sync::Arc,
 };
+#[path = "data/cache.rs"]
+mod cache;
 
 /// Per-state flags read from vanilla accessors over an empty level.
 pub mod state_flags {
@@ -251,7 +253,7 @@ macro_rules! named_blocks {
         #[derive(Clone, Copy, Debug)]
         pub struct Named { $(pub $field: BlockId,)* }
         impl Named {
-            fn resolve(table: &StateTable) -> io::Result<Self> {
+            pub(super) fn resolve(table: &StateTable) -> io::Result<Self> {
                 Ok(Self { $($field: table.block_by_name(concat!("minecraft:", $name)).ok_or_else(|| invalid(concat!("missing block ", $name)))?,)* })
             }
         }
@@ -393,7 +395,7 @@ macro_rules! tags {
         #[derive(Clone, Debug, Default)]
         pub struct Tags { $(pub $field: Arc<BlockSet>,)* }
         impl Tags {
-            fn resolve(all: &HashMap<String, Arc<BlockSet>>) -> Self {
+            pub(super) fn resolve(all: &HashMap<String, Arc<BlockSet>>) -> Self {
                 Self { $($field: all.get(concat!("minecraft:", $name)).cloned().unwrap_or_default(),)* }
             }
         }
@@ -487,7 +489,7 @@ macro_rules! props {
         #[derive(Clone, Copy, Debug)]
         pub struct Props { $(pub $field: PropKey,)* }
         impl Props {
-            fn resolve(table: &mut StateTable) -> Self {
+            pub(super) fn resolve(table: &mut StateTable) -> Self {
                 Self { $($field: table.key($name),)* }
             }
         }
@@ -653,6 +655,15 @@ pub fn load_registry(root: &Path) -> io::Result<BlockRegistry> {
 }
 
 pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviours> {
+    if let Some(behaviours) = cache::load(registry, root) {
+        return Ok(behaviours);
+    }
+    let behaviours = load_uncached(registry, root)?;
+    cache::store(registry, root, &behaviours);
+    Ok(behaviours)
+}
+
+fn load_uncached(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviours> {
     let mut table = StateTable::new(registry)?;
     let props = Props::resolve(&mut table);
     let named = Named::resolve(&table)?;
