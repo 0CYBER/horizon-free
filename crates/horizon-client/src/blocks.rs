@@ -2,7 +2,10 @@
 //! (`gameplay-facts.json`), indexed by registry state ID.
 mod decode;
 use crate::Result;
-use horizon_world::registry::{BlockRegistry, BlockStateId};
+use horizon_world::{
+    level::{Behaviours, GameplayStateSource},
+    registry::{BlockRegistry, BlockStateId},
+};
 use serde_json::Value;
 use std::{
     collections::HashMap,
@@ -113,6 +116,39 @@ pub struct BlockFacts {
 }
 impl BlockFacts {
     pub fn load(root: &Path, registry: &BlockRegistry) -> Result<Self> {
+        let behaviours: Value = serde_json::from_reader(BufReader::new(File::open(
+            root.join("block-behaviours.json"),
+        )?))?;
+        Self::load_with_behaviour_json(root, registry, &behaviours)
+    }
+
+    pub fn load_with_behaviour_json(
+        root: &Path,
+        registry: &BlockRegistry,
+        behaviours: &Value,
+    ) -> Result<Self> {
+        Ok(Self::load_with_callback(root, registry, behaviours, |_| Ok(()))?.0)
+    }
+
+    /// Build both tables from the same behaviour document and gameplay decoder.
+    pub fn load_with_behaviours(
+        root: &Path,
+        registry: &BlockRegistry,
+        behaviours: &Value,
+    ) -> Result<(Self, Behaviours)> {
+        Self::load_with_callback(root, registry, behaviours, |entries| {
+            Ok(Behaviours::load_with_gameplay(
+                registry, root, behaviours, entries,
+            )?)
+        })
+    }
+
+    fn load_with_callback<T>(
+        root: &Path,
+        registry: &BlockRegistry,
+        behaviours: &Value,
+        callback: impl FnOnce(&[decode::Entry<'_>]) -> Result<T>,
+    ) -> Result<(Self, T)> {
         let bytes = fs::read(root.join("gameplay-facts.json"))?;
         serde_json::from_slice::<decode::Validate>(&bytes)?;
         let raw: decode::Gameplay<'_> = serde_json::from_slice(&bytes)?;
@@ -125,9 +161,6 @@ impl BlockFacts {
             return Err("gameplay facts do not match the block registry".into());
         }
         // Class chains and per-state behaviour flags exported from the actual block objects.
-        let behaviours: Value = serde_json::from_reader(BufReader::new(File::open(
-            root.join("block-behaviours.json"),
-        )?))?;
         let behaviour_states = behaviours["states"]
             .as_array()
             .filter(|s| s.len() == registry.len())
@@ -221,13 +254,13 @@ impl BlockFacts {
                 outline,
                 outline_edges,
                 name: intern(&state.name),
-                emission: entry.emission as u8,
-                dampening: entry.dampening as u8,
+                emission: entry.emission.as_f64().unwrap_or(0.0) as u8,
+                dampening: entry.dampening.as_f64().unwrap_or(0.0) as u8,
                 skylight_down: entry.skylight_down,
                 shape_occlusion: entry.shape_occlusion,
                 can_occlude: entry.can_occlude,
                 solid_render: entry.solid_render,
-                hardness: entry.hardness as f32,
+                hardness: entry.hardness.as_f64().unwrap_or(0.0) as f32,
                 requires_tool: entry.requires_tool,
                 replaceable: entry.replaceable,
                 random_ticks: entry.random_ticks,
@@ -264,12 +297,16 @@ impl BlockFacts {
                     .ok_or("missing block behaviour class chain")?,
             });
         }
-        Ok(Self {
-            states,
-            air: registry
-                .default_state("minecraft:air")
-                .ok_or("missing air")?,
-        })
+        let extra = callback(entries)?;
+        Ok((
+            Self {
+                states,
+                air: registry
+                    .default_state("minecraft:air")
+                    .ok_or("missing air")?,
+            },
+            extra,
+        ))
     }
     pub fn get(&self, id: BlockStateId) -> &StateFacts {
         &self.states[id.0 as usize]
@@ -279,5 +316,58 @@ impl BlockFacts {
             &*self.states[id.0 as usize].name,
             "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
         )
+    }
+}
+
+impl GameplayStateSource for decode::Entry<'_> {
+    fn flag(&self, name: &str) -> bool {
+        match name {
+            "replaceable" => self.replaceable,
+            "random_ticks" => self.random_ticks,
+            "solid_render" => self.solid_render,
+            "liquid" => self.liquid,
+            "block_entity" => self.block_entity,
+            "ignited_by_lava" => self.ignited_by_lava,
+            "can_occlude" => self.can_occlude,
+            "full_collision" => self.full_collision,
+            "skylight_down" => self.skylight_down,
+            "requires_tool" => self.requires_tool,
+            "shape_occlusion" => self.shape_occlusion,
+            _ => false,
+        }
+    }
+    fn unsigned(&self, name: &str) -> u64 {
+        match name {
+            "emission" => self.emission.as_u64().unwrap_or(0),
+            "dampening" => self.dampening.as_u64().unwrap_or(0),
+            _ => 0,
+        }
+    }
+    fn number(&self, name: &str) -> f64 {
+        match name {
+            "hardness" => self.hardness.as_f64().unwrap_or(0.0),
+            _ => 0.0,
+        }
+    }
+    fn text(&self, name: &str) -> &str {
+        match name {
+            "push" => self.push.as_deref().unwrap_or(""),
+            _ => "",
+        }
+    }
+    fn sound_number(&self, name: &str) -> f64 {
+        match name {
+            "volume" => self.sound.volume,
+            "pitch" => self.sound.pitch,
+            _ => 1.0,
+        }
+    }
+    fn sound_id(&self, name: &str) -> &str {
+        match name {
+            "place" => self.sound.place.id.as_deref().unwrap_or(""),
+            "break" => self.sound.r#break.id.as_deref().unwrap_or(""),
+            "fall" => self.sound.fall.id.as_deref().unwrap_or(""),
+            _ => "",
+        }
     }
 }

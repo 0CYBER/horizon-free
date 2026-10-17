@@ -49,8 +49,13 @@ fn tags_merge_without_repeats() {
 }
 
 fn prepared() -> Option<PathBuf> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
-    root.join("gameplay-facts.json").exists().then_some(root)
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    [
+        manifest.join("../../.local/horizon-client/26.3"),
+        manifest.join("../../../../.local/horizon-client/26.3"),
+    ]
+    .into_iter()
+    .find(|root| root.join("gameplay-facts.json").exists())
 }
 
 /// A content mod folder: a full block, a door and an item-less glass from
@@ -137,6 +142,28 @@ fn content_root_loads_with_every_table() {
 
     let old_facts = BlockFacts::load(&base, old).unwrap();
     let facts = BlockFacts::load(&root, new).unwrap();
+    let shared_json: serde_json::Value = serde_json::from_reader(std::io::BufReader::new(
+        fs::File::open(root.join("block-behaviours.json")).unwrap(),
+    ))
+    .unwrap();
+    let (shared_facts, shared_behaviours) =
+        BlockFacts::load_with_behaviours(&root, new, &shared_json).unwrap();
+    let independent_behaviours = horizon_world::level::Behaviours::load(new, &root).unwrap();
+    assert_eq!(shared_facts.states.len(), facts.states.len());
+    for state in [ruby, ruby_door, BlockStateId(n + 65)] {
+        assert_eq!(shared_facts.get(state).hardness, facts.get(state).hardness);
+        assert_eq!(shared_facts.get(state).emission, facts.get(state).emission);
+        assert_eq!(shared_facts.get(state).classes, facts.get(state).classes);
+        assert_eq!(
+            shared_behaviours.facts(state).flags,
+            independent_behaviours.facts(state).flags,
+        );
+        assert_eq!(
+            shared_behaviours.data(state).sounds.place,
+            independent_behaviours.data(state).sounds.place,
+        );
+    }
+
     let (a, b) = (old_facts.get(iron), facts.get(ruby));
     assert_eq!((b.hardness, b.emission, b.friction), (4.0, 3, 0.8));
     assert_eq!(b.explosion_resistance, a.explosion_resistance);
@@ -216,3 +243,48 @@ fn no_content_keeps_the_base_root() {
 }
 
 use horizon_world::registry::BlockStateId;
+
+#[test]
+fn shared_behaviour_document_matches_independent_loaders() {
+    let Some(root) = prepared() else { return };
+    let assets = Assets::load(&root).expect("assets");
+    let doc: serde_json::Value = serde_json::from_reader(std::io::BufReader::new(
+        std::fs::File::open(root.join("block-behaviours.json")).unwrap(),
+    ))
+    .unwrap();
+    let original = BlockFacts::load(&root, assets.registry).unwrap();
+    let (shared, b) = BlockFacts::load_with_behaviours(&root, assets.registry, &doc).unwrap();
+    assert_eq!(original.states.len(), shared.states.len());
+    for (a, b) in original.states.iter().zip(&shared.states) {
+        assert_eq!(a.classes, b.classes);
+        assert_eq!(a.legacy_solid, b.legacy_solid);
+        assert_eq!(a.sturdy_full, b.sturdy_full);
+        assert_eq!(a.emission, b.emission);
+        assert_eq!(a.dampening, b.dampening);
+        assert_eq!(a.hardness, b.hardness);
+        assert_eq!(a.sounds.volume, b.sounds.volume);
+        assert_eq!(a.sounds.pitch, b.sounds.pitch);
+    }
+    let a = horizon_world::level::Behaviours::load(assets.registry, &root).unwrap();
+    for id in 0..assets.registry.len() {
+        let state = horizon_world::registry::BlockStateId(id as u32);
+        let (a_state, b_state) = (a.facts(state), b.facts(state));
+        assert_eq!(a_state.flags, b_state.flags);
+        assert_eq!(a_state.sturdy, b_state.sturdy);
+        assert_eq!(a_state.weak, b_state.weak);
+        assert_eq!(a_state.strong, b_state.strong);
+        assert_eq!(a_state.fluid, b_state.fluid);
+        assert_eq!(a_state.emission, b_state.emission);
+        assert_eq!(a_state.dampening, b_state.dampening);
+        assert_eq!(a_state.hardness, b_state.hardness);
+        assert_eq!(a_state.push, b_state.push);
+        assert_eq!(a_state.instrument, b_state.instrument);
+        assert_eq!(a_state.shape, b_state.shape);
+        let (a_sound, b_sound) = (&a.data(state).sounds, &b.data(state).sounds);
+        assert_eq!(a_sound.volume, b_sound.volume);
+        assert_eq!(a_sound.pitch, b_sound.pitch);
+        assert_eq!(a_sound.place, b_sound.place);
+        assert_eq!(a_sound.break_, b_sound.break_);
+        assert_eq!(a_sound.fall, b_sound.fall);
+    }
+}
