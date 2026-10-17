@@ -208,7 +208,14 @@ mod tick_parity {
         let root = std::env::var_os("HORIZON_RESOURCES")
             .map(PathBuf::from)
             .unwrap_or_else(|| {
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3")
+                let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+                let local = manifest.join("../../.local/horizon-client/26.3");
+                if local.join("gameplay-facts.json").exists() {
+                    local
+                } else {
+                    // The branch worktree lives below the main checkout.
+                    manifest.join("../../../../.local/horizon-client/26.3")
+                }
             });
         if !root.join("gameplay-facts.json").exists() {
             eprintln!(
