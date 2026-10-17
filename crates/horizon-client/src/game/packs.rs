@@ -74,6 +74,15 @@ fn vanilla_info() -> PackInfo {
         fixed: false,
     }
 }
+/// Shared by the startup menu, which has no world resources yet.
+pub(super) fn pack_infos(vanilla: &Path) -> Vec<PackInfo> {
+    let mut infos: Vec<PackInfo> = packs::discover(vanilla, &packs_dir())
+        .iter()
+        .map(info)
+        .collect();
+    infos.push(vanilla_info());
+    infos
+}
 impl Game<'_> {
     fn vanilla_root(&self) -> PathBuf {
         if self.ui.vanilla_root.as_os_str().is_empty() {
@@ -85,9 +94,7 @@ impl Game<'_> {
     /// The packs the pack screen offers and the current selection
     /// (`PackSelectionScreen` makes its `PackSelectionModel` from them).
     pub(super) fn refresh_pack_lists(&mut self) {
-        let all = packs::discover(&self.vanilla_root(), &packs_dir());
-        let mut infos: Vec<PackInfo> = all.iter().map(info).collect();
-        infos.push(vanilla_info());
+        let infos = pack_infos(&self.vanilla_root());
         let o = &mut self.ui.options;
         o.pack_infos = infos;
         o.pack_selection = self.settings.resource_packs.clone();
@@ -100,6 +107,12 @@ impl Game<'_> {
     /// particle and font textures), item models, sounds, languages, GUI
     /// metadata and the cloud and world border textures.
     pub(super) fn reload_packs(&mut self) {
+        // Pack reload updates tail-owned mob metadata. Keep menus responsive
+        // until those resources exist, then apply the latest selection once.
+        if self.rest_loader.is_some() {
+            self.pending_pack_reload = true;
+            return;
+        }
         let vanilla = self.vanilla_root();
         if self.ui.vanilla_root.as_os_str().is_empty() {
             self.ui.vanilla_root = vanilla.clone();

@@ -186,6 +186,11 @@ impl Session {
         self.opening.get_or_insert_with(Instant::now);
     }
 
+    /// An entry queued during startup was cancelled before opening a world.
+    pub fn cancel_world_opening(&mut self) {
+        self.opening = None;
+    }
+
     /// A frame drawn while playing (not in menus or loading).
     pub fn frame(&mut self, ms: f32) {
         if let Some(opening) = self.opening.take()
@@ -416,6 +421,20 @@ mod tests {
         let pending = outbox::pending(&home);
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].1.kind(), Kind::Crash);
+    }
+
+    #[test]
+    fn cancelled_startup_entry_does_not_time_menu_browsing() {
+        let mut session = Session::default();
+        session.world_opening();
+        assert!(session.opening.is_some());
+        session.cancel_world_opening();
+        assert!(session.opening.is_none());
+        session.frame(16.0);
+        assert!(session.to_world_ms.is_none());
+        session.world_opening();
+        session.frame(16.0);
+        assert!(session.to_world_ms.is_some());
     }
 
     #[test]
