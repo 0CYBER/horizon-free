@@ -106,7 +106,7 @@ impl Game<'_> {
         let hurt = &p.health.hurt;
         let state = BobState {
             living: Some(HurtBob {
-                hurt_time: hurt.hurt_time as f32 - partial,
+                hurt_time: p.health.hurt_animation_time as f32 - partial,
                 hurt_duration: hurt.hurt_duration,
                 hurt_dir: 0.0,
                 death_time: self.death_time().map(|t| t as f32 + partial),

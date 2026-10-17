@@ -319,7 +319,7 @@ impl Game<'_> {
             .map(|s| s.item.clone());
         let off = self.offhand.as_ref().map(|s| s.item.clone());
         let riding = self.riding.is_some();
-        let hurt = p.health.hurt.hurt_time;
+        let hurt = p.health.hurt_animation_time;
         let Some(m) = self.player_model.as_mut() else {
             return;
         };

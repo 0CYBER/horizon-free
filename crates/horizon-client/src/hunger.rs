@@ -55,6 +55,7 @@ impl PlayerMotion {
             data: &mut h.data,
             ids: h.ids,
             hurt: &mut h.hurt,
+            hurt_animation_time: &mut h.hurt_animation_time,
             dead: &mut h.dead,
             sync_velocity: &mut h.sync_velocity,
             game_time: h.game_time,
@@ -70,6 +71,7 @@ struct TickWorld<'a> {
     data: &'a mut SyncedFloats,
     ids: PlayerFloatIds,
     hurt: &'a mut State,
+    hurt_animation_time: &'a mut i32,
     dead: &'a mut bool,
     sync_velocity: &'a mut bool,
     game_time: i64,
@@ -142,8 +144,11 @@ impl FoodWorld for TickWorld<'_> {
             totem: false,
             totem_fired: false,
         };
-        ServerPlayerCombat::new(self.attributes, self.data, food, self.ids, &mut environment)?
-            .hurt(self.hurt, amount)?;
+        if ServerPlayerCombat::new(self.attributes, self.data, food, self.ids, &mut environment)?
+            .hurt(self.hurt, amount)?
+        {
+            *self.hurt_animation_time = self.hurt.hurt_time;
+        }
         Ok(())
     }
 }
