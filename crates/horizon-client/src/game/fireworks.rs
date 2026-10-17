@@ -35,6 +35,29 @@ pub(super) struct Rocket {
     pub(super) item: ItemStack,
 }
 impl Rocket {
+    /// A rocket a server sent (`handleAddEntity`): placed and moved by it.
+    pub(super) fn remote(id: u32, position: Vec3, velocity: Vec3) -> Self {
+        let item = ItemStack::new("minecraft:firework_rocket", 1);
+        let (_, explosions) = fireworks_of(&item);
+        Self {
+            id,
+            position,
+            previous: position,
+            velocity,
+            life: 0,
+            lifetime: i32::MAX,
+            explosions,
+            attached: false,
+            angled: false,
+            item,
+        }
+    }
+    /// One tick of a server's client: the previous position, then `step`.
+    pub(super) fn remote_step(&mut self, step: impl FnOnce(Vec3) -> Vec3) {
+        self.previous = self.position;
+        self.life += 1;
+        self.position = step(self.position);
+    }
     /// Position and motion (the dispenser parity fixture).
     pub(super) fn motion(&self) -> (Vec3, Vec3) {
         (self.position, self.velocity)

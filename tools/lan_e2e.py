@@ -44,6 +44,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              guest their points (not the host).
 - objects:   boats, minecarts, armor stands, item frames and paintings the host summons reach the
              guest as the host has them (kind, place, rotation, what they hold or wear, the variant).
+- projectiles: primed TNT (one falling), an end crystal and an arrow that lands reach the guest where
+             the host has them; a falling block lands on both sides.
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -77,7 +79,7 @@ GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
 CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'push', 'eat', 'xp', 'effects', 'portals',
-          'objects']
+          'objects', 'projectiles']
 
 
 class Game:
@@ -1047,10 +1049,10 @@ def check_xp(host, guest, out):
     return {'seen': seen, 'guest': xp, 'host': host_xp}
 
 
-def objects_near(game, centre):
+def objects_near(game, centre, key='objects'):
     """`status`'s objects within 8 blocks of centre, without their ids (each side numbers its own)."""
     out = []
-    for o in game('status')['objects']:
+    for o in game('status')[key]:
         if all(abs(o['position'][i] - centre[i]) <= 8 for i in (0, 2)):
             o = dict(o)
             o.pop('id')
@@ -1100,6 +1102,35 @@ def check_objects(host, guest, out):
     return f'{len(theirs)} objects identical'
 
 
+def check_projectiles(host, guest, out):
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    commands = [
+        f'summon minecraft:tnt {x + 4.5} {y} {z + 4.5} {{fuse:2000s}}',
+        f'summon minecraft:end_crystal {x - 4.5} {y} {z + 4.5} {{ShowBottom:0b}}',
+        f'summon minecraft:tnt {x + 2.5} {y + 5} {z - 3.5} {{fuse:2000s}}',
+        f'summon minecraft:arrow {x - 2.5} {y + 4} {z - 2.5} {{Motion:[0.2d,0d,0d]}}',
+        f'summon minecraft:falling_block {x - 0.5} {y + 6} {z - 4.5} {{BlockState:{{Name:"minecraft:sand"}}}}',
+    ]
+    try:
+        for command in commands:
+            host('command', command=command)
+        host.wait(80)
+        guest.raw('look-at', x, y, z)
+        guest.wait(5)
+        guest.shot(out, 'projectiles')
+        mine = objects_near(host, (x, y, z), 'projectiles')
+        theirs = objects_near(guest, (x, y, z), 'projectiles')
+    finally:
+        host('command', command=f'kill @e[type=!minecraft:player,x={x - 8},y={y - 2},z={z - 8},dx=16,dy=10,dz=16]')
+        host('command', command=f'setblock {x - 1} {y} {z - 5} minecraft:air')
+    assert len(mine) == len(commands) - 1, f'the host has {len(mine)}: {mine}'
+    # The fuse counts down every tick: the guest's, read a moment later, may be a tick or two behind.
+    fuses = [(m.pop('fuse', 0), t.pop('fuse', 0)) for m, t in zip(mine, theirs)]
+    assert theirs == mine, f'the guest sees {theirs}\nthe host has {mine}'
+    assert all(abs(a - b) <= 2 for a, b in fuses), f'fuses (host, guest): {fuses}'
+    return f'{len(theirs)} identical, fuses (host, guest) {fuses}'
+
+
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
              'chest': check_chest, 'crafting': check_crafting, 'sign': check_sign, 'damage': check_damage,
              'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
@@ -1107,7 +1138,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,
              'effects': check_effects, 'portals': check_portals, 'clicks': check_clicks,
              'sleep': check_sleep, 'push': check_push, 'eat': check_eat,
-             'xp': check_xp, 'objects': check_objects}
+             'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles}
 
 
 def run(ctl, out, resources, checks):

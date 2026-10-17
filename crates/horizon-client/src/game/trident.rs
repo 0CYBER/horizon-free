@@ -31,6 +31,32 @@ pub(super) struct ThrownTrident {
     returning: u32,
     creative_only: bool,
 }
+impl ThrownTrident {
+    /// A trident a server sent (`handleAddEntity`): placed and moved by it.
+    pub(super) fn remote(id: u32, position: Vec3, yaw: f32, pitch: f32) -> Self {
+        Self {
+            id,
+            stack: ItemStack::new("minecraft:trident", 1),
+            position,
+            previous: position,
+            velocity: Vec3::ZERO,
+            yaw,
+            pitch,
+            in_ground: false,
+            in_ground_time: 0,
+            dealt_damage: false,
+            loyalty: 0,
+            no_physics: false,
+            returning: 0,
+            creative_only: false,
+        }
+    }
+    /// One tick of a server's client: the previous position, then `step`.
+    pub(super) fn remote_step(&mut self, step: impl FnOnce(Vec3) -> Vec3) {
+        self.previous = self.position;
+        self.position = step(self.position);
+    }
+}
 const HALF: f64 = 0.25;
 fn bounds(p: Vec3) -> Aabb {
     Aabb::new(
