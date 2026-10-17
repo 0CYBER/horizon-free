@@ -73,6 +73,7 @@ impl Game<'_> {
     pub(super) fn update_backdrop(&mut self) -> Result<()> {
         let wanted = self.title.is_some()
             && horizon_client::ui_theme::horizon()
+            && self.world_renderer_ready
             && self.renderer.is_some()
             && self.options.frames.is_none();
         if !wanted {
@@ -143,6 +144,10 @@ impl Game<'_> {
         (-60..320).rev().find(|&y| self.world.block(x, y, z) != air)
     }
     fn start_backdrop(&mut self) -> Result<()> {
+        log::info!(
+            "Horizon: starting title backdrop after {} ms",
+            self.started.elapsed().as_millis()
+        );
         let seed = seed();
         let root = std::env::current_dir()?
             .join("saves")

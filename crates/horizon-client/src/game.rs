@@ -879,6 +879,8 @@ fn select_creative_tab(
 struct Game<'a> {
     /// Shared with an integrated server; `collision` and `motion` borrow from it.
     res: Arc<Resources>,
+    rest_loader: Option<WorldRestLoader>,
+    world_renderer_ready: bool,
     collision: &'a BlockCollisionRegistry<'a>,
     motion: &'a MotionResources,
     /// This game's resource packs (`reload_packs` replaces them).
@@ -6357,6 +6359,7 @@ impl Game<'_> {
         creative: bool,
         create: Option<&horizon_client::title::WorldOptions>,
     ) -> Result<()> {
+        self.join_world_rest()?;
         let save_root = std::env::current_dir()?.join("saves").join(folder);
         if integrated::wanted(&self.options, &save_root) {
             return self.open_integrated(folder, name, seed, creative, create);
@@ -9326,7 +9329,10 @@ impl ApplicationHandler for Game<'_> {
             }
         };
         match self.new_renderer(window.clone()) {
-            Ok(r) => self.renderer = Some(r),
+            Ok(r) => {
+                self.renderer = Some(r);
+                self.world_renderer_ready = true;
+            }
             Err(e) => {
                 self.error = Some(e);
                 event_loop.exit();
@@ -10051,6 +10057,11 @@ impl ApplicationHandler for Game<'_> {
         }
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if let Err(error) = self.poll_world_rest() {
+            self.error = Some(error);
+            event_loop.exit();
+            return;
+        }
         self.poll_control(event_loop);
         self.poll_pads(event_loop);
         if self.options.frames.is_some() && self.started.elapsed() > self.options.timeout {
@@ -10143,6 +10154,8 @@ impl<'a> Game<'a> {
         let particles = horizon_client::particles::ParticleEngine::new(&root, &gui.atlas.sprites);
         Ok(Game {
             res: res.clone(),
+            rest_loader: None,
+            world_renderer_ready: false,
             collision: res.collision(),
             motion: res.motion(),
             pack,
@@ -10425,7 +10438,8 @@ impl<'a> Game<'a> {
 struct Loaded {
     root: PathBuf,
     pack_error: Option<String>,
-    resources: Resources,
+    resources: Arc<Resources>,
+    rest_loader: Option<WorldRestLoader>,
     pack: PackResources,
     /// The menu bundle, for the synchronous launch; the loading screen receives
     /// it earlier through its own channel.
@@ -10433,23 +10447,80 @@ struct Loaded {
 }
 
 /// What the background loader publishes: the menu bundle as soon as it is
-/// ready, then the world bundle.
+/// ready, then the core bundle with a handle to the rest worker.
 enum LoaderMsg {
     Ui(UiResources),
     Done(std::result::Result<Loaded, String>),
 }
 
-/// The loader's checkpoints, in order; the loading screen reports them.
-const STAGES: u32 = 9;
-const STAGE_LINES: [&str; 9] = [
+struct WorldRestLoader {
+    handle: JoinHandle<std::result::Result<(), String>>,
+    started: Instant,
+}
+
+impl WorldRestLoader {
+    fn finish(self) -> Result<()> {
+        self.handle
+            .join()
+            .map_err(|_| "world resource loader panicked")?
+            .map_err(Into::into)
+    }
+}
+
+impl Game<'_> {
+    fn poll_world_rest(&mut self) -> Result<()> {
+        if self
+            .rest_loader
+            .as_ref()
+            .is_some_and(|loader| loader.handle.is_finished())
+        {
+            self.rest_loader
+                .take()
+                .ok_or("missing world loader")?
+                .finish()?;
+        } else if self
+            .rest_loader
+            .as_ref()
+            .is_some_and(|loader| loader.started.elapsed() > Duration::from_secs(120))
+        {
+            return Err("world resource loading timed out after 120 seconds".into());
+        }
+        Ok(())
+    }
+
+    fn join_world_rest(&mut self) -> Result<()> {
+        if self.rest_loader.is_some() {
+            let waited = Instant::now();
+            log::info!("Horizon: waiting for world resources");
+            while self.rest_loader.is_some() {
+                self.poll_world_rest()?;
+                if self.rest_loader.is_some() {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+            log::info!(
+                "Horizon: world resources joined after {} ms",
+                waited.elapsed().as_millis()
+            );
+        }
+        if self.res.rest.get().is_none() {
+            return Err("world resources are unavailable".into());
+        }
+        Ok(())
+    }
+}
+
+const STAGES: u32 = 10;
+const STAGE_LINES: [&str; 10] = [
     "Loading menu",
     "Loading assets",
     "Loading block facts",
-    "Loading items",
     "Loading biomes",
     "Loading pack tables",
     "Loading collision",
-    "Loading resources",
+    "Loading items",
+    "Loading recipes",
+    "Loading world resources",
     "Starting audio",
 ];
 
@@ -10487,16 +10558,15 @@ fn synchronous_startup(options: &Options) -> bool {
         || std::env::var_os("HORIZON_NET_REPORT").is_some()
 }
 
-/// The current loading sequence, unchanged, as a function so the synchronous
-/// launch can run it on the main thread and an ordinary launch on a worker.
-/// `on_stage` reports [`STAGES`] checkpoints to the loading screen.
+/// The synchronous launch loads both phases; an ordinary launch returns the
+/// core bundle while the rest worker keeps loading.
 fn load_resources(
     mut root: PathBuf,
     vanilla_root: &std::path::Path,
     settings: &Settings,
     started: Instant,
     menu: bool,
-    on_stage: &(dyn Fn(u32) + Sync),
+    progress: &Progress,
     publish: &mut dyn FnMut(UiResources),
 ) -> Result<Loaded> {
     let requested_root = root.clone();
@@ -10519,7 +10589,7 @@ fn load_resources(
         }
         ui_ready = true;
     }
-    on_stage(0);
+    progress.set(0);
     let mut pack_error = None;
     let (assets, render) = match Assets::load(&root).and_then(|assets| {
         let render = assets.reload(&root)?;
@@ -10560,7 +10630,7 @@ fn load_resources(
         }
     }
     log::info!("load assets: {:.2}s", started.elapsed().as_secs_f32());
-    on_stage(1);
+    progress.set(1);
     let behaviour_json: serde_json::Value = serde_json::from_reader(std::io::BufReader::new(
         std::fs::File::open(root.join("block-behaviours.json"))?,
     ))?;
@@ -10591,21 +10661,14 @@ fn load_resources(
         facts.map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     let biomes = Arc::new(biomes.map_err(|e| -> Box<dyn std::error::Error> { e.into() })?);
     let environment = environment.map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    let mob_data = horizon_client::mobs::MobData::load(&root, &facts);
-    horizon_client::mobs::trial_spawner::load_registry(&root);
     log::info!("load facts: {:.2}s", started.elapsed().as_secs_f32());
-    on_stage(2);
-    let items = Items::load(&root, assets.registry, &facts)?;
-    log::info!("load items: {:.2}s", started.elapsed().as_secs_f32());
-    on_stage(3);
-    let recipes = Recipes::load(&root, &items)?;
-    let transformers = horizon_client::block_transform::Transformers::load(&root, assets.registry)?;
+    progress.set(2);
     log::info!("load biomes+env: {:.2}s", started.elapsed().as_secs_f32());
-    on_stage(4);
+    progress.set(3);
     let light = Arc::new(LightTables::load(&root, assets.registry, &facts)?);
     let pack = PackResources::load(&root, assets.clone(), render, &facts, biomes.clone(), light)?;
     log::info!("load pack tables: {:.2}s", started.elapsed().as_secs_f32());
-    on_stage(5);
+    progress.set(4);
     horizon_client::ui::load_metadata(&root);
     horizon_client::lang::set(horizon_client::lang::Language::load(
         &[&root],
@@ -10618,13 +10681,106 @@ fn load_resources(
         "load collision+motion: {:.2}s",
         started.elapsed().as_secs_f32()
     );
-    on_stage(6);
+    progress.set(5);
+    let resources = Resources {
+        core: WorldCore {
+            facts,
+            biomes: biomes.clone(),
+            environment,
+            collision,
+            motion,
+            threads,
+        },
+        rest: std::sync::OnceLock::new(),
+    };
+    let resources = Arc::new(resources);
     if menu {
+        horizon_client::telemetry::mark_core_ready();
         log::info!(
-            "Horizon: world bundle ready after {} ms",
+            "Horizon: core-ready after {} ms",
             started.elapsed().as_millis()
         );
     }
+    let rest_loader = if menu {
+        let resources = resources.clone();
+        let root = root.clone();
+        let progress = progress.clone();
+        let handle = std::thread::Builder::new()
+            .name("world-rest-loader".into())
+            .spawn(move || {
+                let rest = load_world_rest(
+                    &root,
+                    &resources,
+                    &assets,
+                    &behaviour_json,
+                    &gameplay_projection,
+                    &progress,
+                    started,
+                )
+                .map_err(|error| error.to_string())?;
+                resources
+                    .rest
+                    .set(rest)
+                    .map_err(|_| "world resources already loaded".to_owned())?;
+                horizon_client::telemetry::mark_rest_ready();
+                log::info!(
+                    "Horizon: rest-ready after {} ms",
+                    started.elapsed().as_millis()
+                );
+                Ok(())
+            })?;
+        Some(WorldRestLoader {
+            handle,
+            started: Instant::now(),
+        })
+    } else {
+        let rest = load_world_rest(
+            &root,
+            &resources,
+            &assets,
+            &behaviour_json,
+            &gameplay_projection,
+            progress,
+            started,
+        )?;
+        resources
+            .rest
+            .set(rest)
+            .map_err(|_| "world resources already loaded")?;
+        None
+    };
+    Ok(Loaded {
+        root,
+        pack_error,
+        resources,
+        rest_loader,
+        pack,
+        gui: loaded_gui,
+    })
+}
+
+fn load_world_rest(
+    root: &std::path::Path,
+    resources: &Resources,
+    assets: &Assets,
+    behaviour_json: &serde_json::Value,
+    gameplay_projection: &[horizon_client::blocks::GameplayProjection],
+    progress: &Progress,
+    started: Instant,
+) -> Result<WorldRest> {
+    let facts = resources.facts();
+    let biomes = resources.biomes();
+    let threads = resources.threads();
+    let registry_owner = assets;
+    let mob_data = horizon_client::mobs::MobData::load(root, facts);
+    horizon_client::mobs::trial_spawner::load_registry(root);
+
+    let items = Items::load(root, assets.registry, facts)?;
+    log::info!("load items: {:.2}s", started.elapsed().as_secs_f32());
+    progress.set(6);
+    let recipes = Recipes::load(root, &items)?;
+    progress.set(7);
+    let transformers = horizon_client::block_transform::Transformers::load(root, assets.registry)?;
     log::info!(
         "Horizon: resources loaded in {:.1}s; {} block states, {} items, {} biomes; {} worker threads",
         started.elapsed().as_secs_f32(),
@@ -10633,63 +10789,42 @@ fn load_resources(
         biomes.list.len(),
         threads
     );
-    let stations = horizon_client::stations::StationData::load(&root, &items);
+    progress.set(8);
+    let stations = horizon_client::stations::StationData::load(root, &items);
     let animate =
-        horizon_client::animate_tick::AnimateTables::load(&root, registry_owner.registry, &biomes)?;
-    let fog = horizon_client::fog::FogTables::load(&root, &biomes);
-    let resources = Resources {
-        core: WorldCore {
-            facts,
-            biomes,
-            environment,
-            collision,
-            motion,
-            threads,
-        },
-        rest: std::sync::OnceLock::from(WorldRest {
-            stations,
-            items,
-            recipes,
-            transformers,
-            providers: Providers::load(&root),
-            block_entity_render: horizon_client::block_entity_render::BlockEntityRenderer::load(
-                &root,
-                registry_owner.registry,
-            )?,
-            animate,
-            fog,
-            music: horizon_client::music::MusicTables::load(&root),
-            ambient: horizon_client::ambience::AmbientTables::load(&root),
-            nether_environment: Environment::load_dimension(&root, "the_nether", false)?,
-            end_environment: Environment::load_dimension(&root, "the_end", false)?,
-            behaviours: Behaviours::load_with_gameplay(
-                registry_owner.registry,
-                &root,
-                &behaviour_json,
-                &gameplay_projection,
-            )?,
-            mob_types: MobTypes::load(&root)?
-                .types
-                .into_iter()
-                .map(|(k, v)| (k, Arc::new(v)))
-                .collect(),
-            mob_data,
-            player_type: perspective::player_type(&root),
-            player_arm: horizon_client::mobs::load_model(&root, "minecraft:player#main")
-                .and_then(|m| m.children.into_iter().find(|c| c.name == "right_arm")),
-        }),
-    };
-    // Both inputs are needed only while constructing the behaviour tables.
-    // Release their owned JSON/Arc buffers before entering the long-lived game loop.
-    drop(gameplay_projection);
-    drop(behaviour_json);
-    on_stage(7);
-    Ok(Loaded {
-        root,
-        pack_error,
-        resources,
-        pack,
-        gui: loaded_gui,
+        horizon_client::animate_tick::AnimateTables::load(root, registry_owner.registry, biomes)?;
+    let fog = horizon_client::fog::FogTables::load(root, biomes);
+    Ok(WorldRest {
+        stations,
+        items,
+        recipes,
+        transformers,
+        providers: Providers::load(root),
+        block_entity_render: horizon_client::block_entity_render::BlockEntityRenderer::load(
+            root,
+            registry_owner.registry,
+        )?,
+        animate,
+        fog,
+        music: horizon_client::music::MusicTables::load(root),
+        ambient: horizon_client::ambience::AmbientTables::load(root),
+        nether_environment: Environment::load_dimension(root, "the_nether", false)?,
+        end_environment: Environment::load_dimension(root, "the_end", false)?,
+        behaviours: Behaviours::load_with_gameplay(
+            registry_owner.registry,
+            root,
+            behaviour_json,
+            gameplay_projection,
+        )?,
+        mob_types: MobTypes::load(root)?
+            .types
+            .into_iter()
+            .map(|(k, v)| (k, Arc::new(v)))
+            .collect(),
+        mob_data,
+        player_type: perspective::player_type(root),
+        player_arm: horizon_client::mobs::load_model(root, "minecraft:player#main")
+            .and_then(|m| m.children.into_iter().find(|c| c.name == "right_arm")),
     })
 }
 
@@ -10835,6 +10970,7 @@ fn start_game<'a>(
     audio: Audio,
     vanilla_root: PathBuf,
     started: Instant,
+    rest_loader: Option<WorldRestLoader>,
 ) -> Result<Option<Game<'a>>> {
     let mut settings = Settings::load(&std::env::current_dir()?.join("options.txt"));
     horizon_client::ui_theme::load_preferences(&std::env::current_dir()?);
@@ -10849,6 +10985,7 @@ fn start_game<'a>(
         settings.render_distance = d;
     }
     let mut game = Game::new(res, pack, gui, options, settings, audio)?;
+    game.rest_loader = rest_loader;
     game.ui.vanilla_root = vanilla_root;
     if let Some(error) = pack_error {
         game.open_options_at(true, horizon_client::options_ui::Page::Packs);
@@ -11140,8 +11277,7 @@ impl Loading {
         let mut options = self.options.take().ok_or("loading already finished")?;
         options.resources = loaded.root.clone();
         let gui = self.gui.take().ok_or("missing menu bundle")?;
-        self.progress.set(STAGES - 1);
-        // Audio is created on the main thread, after the join.
+        // Audio is created on the main thread, after the core is ready.
         let audio = if options.dedicated.is_some() {
             Audio::silent(&options.resources)
         } else {
@@ -11159,10 +11295,14 @@ impl Loading {
             &gui,
             self.renderer.as_ref(),
         )?;
+        log::info!(
+            "Horizon: world renderer ready after {} ms",
+            self.started.elapsed().as_millis()
+        );
         let pack_error = loaded.pack_error.or_else(|| self.pack_error.take());
         // The game borrows its shared resources for the process's lifetime,
         // like the single copy an integrated server would share.
-        let res: &'static Arc<Resources> = Box::leak(Box::new(Arc::new(loaded.resources)));
+        let res: &'static Arc<Resources> = Box::leak(Box::new(loaded.resources));
         let Some(mut game) = start_game(
             res,
             loaded.pack,
@@ -11172,12 +11312,14 @@ impl Loading {
             audio,
             self.vanilla_root.clone(),
             self.started,
+            loaded.rest_loader,
         )?
         else {
             return Ok(None);
         };
         game.window = Some(window);
         game.renderer = Some(renderer);
+        game.world_renderer_ready = true;
         game.fullscreen = self.fullscreen;
         game.apply_settings();
         game.previous = Instant::now();
@@ -11282,7 +11424,7 @@ fn run_loading(
                     &settings,
                     started,
                     true,
-                    &|stage| progress.set(stage),
+                    &progress,
                     &mut |gui| {
                         let _ = sender.send(LoaderMsg::Ui(gui));
                     },
@@ -11363,7 +11505,7 @@ pub fn run() -> Result<()> {
         &early_settings,
         started,
         false,
-        &|_| {},
+        &Progress::new(),
         &mut |_| {},
     )?;
     let gui = loaded.gui.ok_or("missing menu bundle")?;
@@ -11373,7 +11515,7 @@ pub fn run() -> Result<()> {
     } else {
         Audio::new(&options.resources)
     };
-    let resources = Arc::new(loaded.resources);
+    let resources = loaded.resources;
     let game = start_game(
         &resources,
         loaded.pack,
@@ -11383,6 +11525,7 @@ pub fn run() -> Result<()> {
         audio,
         vanilla_root,
         started,
+        loaded.rest_loader,
     )?;
     if let Some(game) = game {
         run_event_loop(game)?;
@@ -11462,6 +11605,30 @@ mod tests {
         }
         assert_eq!(timer, 0);
         assert!(hud_overlays::sleep_overlay(320, 240, timer as i32).is_empty());
+    }
+
+    #[test]
+    fn world_rest_worker_failure_reaches_the_client() {
+        let loader = WorldRestLoader {
+            handle: std::thread::spawn(|| Err("missing world table".to_owned())),
+            started: Instant::now(),
+        };
+        assert_eq!(
+            loader.finish().unwrap_err().to_string(),
+            "missing world table"
+        );
+    }
+
+    #[test]
+    fn world_rest_worker_panic_reaches_the_client() {
+        let loader = WorldRestLoader {
+            handle: std::thread::spawn(|| panic!("broken loader")),
+            started: Instant::now(),
+        };
+        assert_eq!(
+            loader.finish().unwrap_err().to_string(),
+            "world resource loader panicked"
+        );
     }
 
     /// An integrated server thread shares the loaded resources with the client.

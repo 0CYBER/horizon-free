@@ -21,6 +21,8 @@ const CRASH_DETAILS: [&str; 3] = ["Horizon Version", "Graphics Adapter", "Render
 static STARTED: OnceLock<Instant> = OnceLock::new();
 /// When the menu bundle became ready, so the time to the title screen measures
 /// the menu and not the world bundle loaded behind it.
+static CORE_READY_MS: AtomicU32 = AtomicU32::new(u32::MAX);
+static REST_READY_MS: AtomicU32 = AtomicU32::new(u32::MAX);
 static UI_READY_MS: AtomicU32 = AtomicU32::new(u32::MAX);
 /// The GPU's name, driver and backend, once the renderer has its adapter.
 static GPU: Mutex<Option<(String, String, String)>> = Mutex::new(None);
@@ -36,6 +38,26 @@ pub fn mark_ui_ready() {
         let ms = started.elapsed().as_millis() as u32;
         let _ = UI_READY_MS.compare_exchange(u32::MAX, ms, Ordering::Relaxed, Ordering::Relaxed);
     }
+}
+
+pub fn mark_core_ready() {
+    mark_ready(&CORE_READY_MS);
+}
+
+pub fn mark_rest_ready() {
+    mark_ready(&REST_READY_MS);
+}
+
+fn mark_ready(mark: &AtomicU32) {
+    if let Some(started) = STARTED.get() {
+        let ms = started.elapsed().as_millis().min(u128::from(u32::MAX - 1)) as u32;
+        let _ = mark.compare_exchange(u32::MAX, ms, Ordering::Relaxed, Ordering::Relaxed);
+    }
+}
+
+fn readiness_ms(mark: &AtomicU32) -> Option<u32> {
+    let ms = mark.load(Ordering::Relaxed);
+    (ms != u32::MAX).then_some(ms)
 }
 
 pub fn set_gpu(name: &str, driver: String, backend: String) {
@@ -192,6 +214,8 @@ impl Session {
             peak_ram_mb: peak_ram_mb(),
             to_title_ms: self.to_title_ms,
             to_world_ms: self.to_world_ms,
+            to_core_ms: self.to_title_ms.and_then(|_| readiness_ms(&CORE_READY_MS)),
+            to_rest_ms: self.to_title_ms.and_then(|_| readiness_ms(&REST_READY_MS)),
         })
     }
 

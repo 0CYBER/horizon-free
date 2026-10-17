@@ -190,6 +190,7 @@ impl Game<'_> {
         options.server = None;
         options.world = None;
         options.dev_mods.clear();
+        self.join_world_rest()?;
         let (res, pack, settings) = (self.res.clone(), self.pack.clone(), self.settings.clone());
         let flags = Arc::new(Flags::default());
         let (ready_tx, ready) = channel();

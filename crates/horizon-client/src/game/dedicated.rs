@@ -335,6 +335,7 @@ struct ServerState {
 impl Game<'_> {
     /// DedicatedServer.initServer and MinecraftServer.runServer.
     pub(super) fn run_dedicated(&mut self) -> Result<()> {
+        self.join_world_rest()?;
         let Setup {
             props,
             universe,

@@ -73,8 +73,14 @@ impl Game<'_> {
         } else {
             (0.0, 0.0)
         };
+        let title_fog = horizon_client::fog::FogTables::default();
+        let tables = if self.title.is_some() {
+            &title_fog
+        } else {
+            self.res.fog()
+        };
         horizon_client::fog::setup_fog(
-            self.res.fog(),
+            tables,
             &self.fog,
             &FogInputs {
                 fog_type,
