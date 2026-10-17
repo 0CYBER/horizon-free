@@ -253,20 +253,27 @@ def scenario(d, out):
 
     # 5. Place a plank beside the player and read it back.
     p = d('state')['player']['block_pos']
-    target = None
+    hotbar = d('inventory')['hotbar']
+    if not any(s.get('item') == planks_id for s in hotbar):
+        raise Failed(f'{planks_id} did not land in the hotbar: {hotbar}')
+    target = placed = None
     for dx, dz in [(2, 0), (-2, 0), (0, 2), (0, -2), (2, 1), (1, 2), (-2, -1), (-1, -2)]:
         at = (p[0] + dx, p[1], p[2] + dz)
         here = d('block', x=at[0], y=at[1], z=at[2])['block']
         below = d('block', x=at[0], y=at[1] - 1, z=at[2])['block']
-        if here in ('minecraft:air', 'minecraft:short_grass') and below not in ('minecraft:air', 'minecraft:water'):
-            target = at
-            break
+        if here not in ('minecraft:air', 'minecraft:short_grass') or below in ('minecraft:air', 'minecraft:water'):
+            continue
+        # The tree's trunk above the broken log can hide a spot's faces: try the next one.
+        try:
+            placed = d('place', x=at[0], y=at[1], z=at[2], item=planks_id)
+        except Failed as e:
+            if 'no visible face' in str(e):
+                continue
+            raise
+        target = at
+        break
     if target is None:
         raise Failed(f'no free spot beside {p} to place a block')
-    hotbar = d('inventory')['hotbar']
-    if not any(s.get('item') == planks_id for s in hotbar):
-        raise Failed(f'{planks_id} did not land in the hotbar: {hotbar}')
-    placed = d('place', x=target[0], y=target[1], z=target[2], item=planks_id)
     assert placed['changed'], placed
     back = d('block', x=target[0], y=target[1], z=target[2])
     assert back['block'] == planks_id, back
