@@ -1977,10 +1977,43 @@ impl Default for WorldGen {
 }
 /// Writes a new world's `world_gen_settings` (seed, options and dimensions).
 pub fn write_world_gen_settings(dir: &Path, seed: i64, options: WorldGen) -> Result<()> {
+    write_world_gen_settings_with(dir, seed, options, None)
+}
+/// [`write_world_gen_settings`] with a flat overworld's own generator
+/// settings (FlatLevelGeneratorSettings, as `flatgen::settings_from_json`
+/// reads them) instead of the Superflat preset's classic layers.
+pub fn write_world_gen_settings_with(
+    dir: &Path,
+    seed: i64,
+    options: WorldGen,
+    flat_settings: Option<Tag>,
+) -> Result<()> {
     fs::create_dir_all(dir)?;
     // worldgen/world_preset/flat.json's overworld: the classic flat layers.
     let layer = |block: &str, height: i32| {
         Tag::compound([("block", string(block)), ("height", Tag::Int(height))])
+    };
+    let classic = || {
+        Tag::compound([
+            ("biome", string("minecraft:plains")),
+            ("features", Tag::Byte(0)),
+            ("lakes", Tag::Byte(0)),
+            (
+                "layers",
+                Tag::List(vec![
+                    layer("minecraft:bedrock", 1),
+                    layer("minecraft:dirt", 2),
+                    layer("minecraft:grass_block", 1),
+                ]),
+            ),
+            (
+                "structure_overrides",
+                Tag::List(vec![
+                    string("minecraft:strongholds"),
+                    string("minecraft:villages"),
+                ]),
+            ),
+        ])
     };
     let flat = Tag::compound([
         ("type", string("minecraft:overworld")),
@@ -1988,29 +2021,7 @@ pub fn write_world_gen_settings(dir: &Path, seed: i64, options: WorldGen) -> Res
             "generator",
             Tag::compound([
                 ("type", string("minecraft:flat")),
-                (
-                    "settings",
-                    Tag::compound([
-                        ("biome", string("minecraft:plains")),
-                        ("features", Tag::Byte(0)),
-                        ("lakes", Tag::Byte(0)),
-                        (
-                            "layers",
-                            Tag::List(vec![
-                                layer("minecraft:bedrock", 1),
-                                layer("minecraft:dirt", 2),
-                                layer("minecraft:grass_block", 1),
-                            ]),
-                        ),
-                        (
-                            "structure_overrides",
-                            Tag::List(vec![
-                                string("minecraft:strongholds"),
-                                string("minecraft:villages"),
-                            ]),
-                        ),
-                    ]),
-                ),
+                ("settings", flat_settings.unwrap_or_else(classic)),
             ]),
         ),
     ]);
