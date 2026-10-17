@@ -708,6 +708,7 @@ pub enum Page {
     Language,
     Font,
     Packs,
+    Mods,
     /// Horizon's graphics settings (`graphics_ui`).
     Graphics,
     GraphicsAdvanced,
@@ -730,6 +731,7 @@ enum Act {
     ResetPadKeys,
     /// Back to Horizon's own menus (Horizon only, see `list_rows`).
     HorizonMenus,
+    ToggleMod(usize),
 }
 enum WKind {
     Button {
@@ -971,6 +973,7 @@ impl OptionsUi {
             Page::Language => "options.language.title",
             Page::Font => "options.font.title",
             Page::Packs => "resourcePack.title",
+            Page::Mods => "Mods",
             Page::Graphics | Page::GraphicsAdvanced => "options.videoTitle",
             Page::Controller => "Controller Settings",
             Page::PadBinds => "Controller Binds",
@@ -1161,6 +1164,36 @@ impl OptionsUi {
                 Opt::AutoJump,
             ]),
             Page::Font => pairs(&[Opt::ForceUnicode, Opt::JapaneseGlyphs]),
+            Page::Mods => {
+                if s.mods.installed.is_empty() {
+                    return vec![Row::Header(
+                        "No mods: put .hmod files in the horizon-mods folder",
+                    )];
+                }
+                s.mods
+                    .installed
+                    .iter()
+                    .enumerate()
+                    .map(|(i, installed)| {
+                        let mut label = Text::literal(format!("{}: ", installed.title))
+                            .append(on_off(s.mods.is_on(i)));
+                        if installed.problem.is_some() {
+                            label = label.append(" (Stopped)");
+                        } else if installed.dev {
+                            label = label.append(" (Dev)");
+                        }
+                        let widget = button(0.0, 0.0, 310.0, label, Act::ToggleMod(i));
+                        Row::Buttons(
+                            if installed.dev || installed.id.is_empty() {
+                                inactive(widget)
+                            } else {
+                                widget
+                            },
+                            None,
+                        )
+                    })
+                    .collect()
+            }
             _ => {
                 let _ = s;
                 Vec::new()
@@ -1206,7 +1239,7 @@ impl OptionsUi {
                     ("options.chat", Some(Page::Chat)),
                     ("options.resourcepack", Some(Page::Packs)),
                     ("options.accessibility", Some(Page::Accessibility)),
-                    ("options.telemetry", None),
+                    ("Mods...", Some(Page::Mods)),
                     ("options.credits_and_attribution", None),
                 ];
                 let gy = (61.0 + 30.0f32).min(h - 33.0 - 120.0);
@@ -1650,6 +1683,21 @@ impl OptionsUi {
                 if let Some(key) = key.filter(|key| lang::has(key)) {
                     tooltip = Some(atlas.font.split(&tr(&key), 170.0));
                 }
+                if let WKind::Button {
+                    act: Act::ToggleMod(i),
+                    ..
+                } = &wd.kind
+                    && let Some(installed) = s.mods.installed.get(*i)
+                {
+                    let description = installed
+                        .problem
+                        .as_deref()
+                        .unwrap_or(&installed.description);
+                    tooltip = Some(atlas.font.split(
+                        &Text::literal(format!("{}\n{description}", installed.title)),
+                        170.0,
+                    ));
+                }
             }
             match &wd.kind {
                 WKind::Button { label, active, act } => {
@@ -1944,6 +1992,10 @@ impl OptionsUi {
                                 crate::ui_theme::save_preferences(&dir);
                             }
                         }
+                        Act::ToggleMod(i) => {
+                            s.mods.toggle(i);
+                            events.push(Event::Changed);
+                        }
                         Act::None => {}
                     }
                 }
@@ -2199,6 +2251,88 @@ mod tests {
 
     fn atlas() -> HudAtlas {
         HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets")).unwrap()
+    }
+
+    #[test]
+    fn classic_mods_page_toggles_mods_and_keeps_dev_and_invalid_entries_inactive() {
+        let atlas = atlas();
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        let size = (480.0, 240.0);
+        assert!(ui.layout(&s, size.0, size.1).0.iter().any(|w| {
+            matches!(
+                w.kind,
+                WKind::Button {
+                    active: true,
+                    act: Act::Push(Page::Mods),
+                    ..
+                }
+            )
+        }));
+        ui.show(Page::Mods);
+        let empty = ui.layout(&s, size.0, size.1).0;
+        assert!(empty.iter().any(|w| {
+            matches!(&w.kind, WKind::Text { text, .. } if text.plain().contains(".hmod"))
+        }));
+        for (id, dev) in [("normal", false), ("dev", true), ("", false)] {
+            s.mods.installed.push(crate::mod_list::Installed {
+                id: id.into(),
+                title: id.into(),
+                description: "May show HUD panels.".into(),
+                problem: id.is_empty().then(|| "Invalid package".into()),
+                dev,
+            });
+        }
+        let (widgets, ..) = ui.layout(&s, size.0, size.1);
+        let rows: Vec<_> = widgets
+            .iter()
+            .filter(|w| {
+                matches!(
+                    w.kind,
+                    WKind::Button {
+                        act: Act::ToggleMod(_),
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert_eq!(rows.len(), 3);
+        for (i, row) in rows.iter().enumerate() {
+            let events = ui.click(
+                &mut s,
+                &atlas,
+                row.x + 1.0,
+                row.y + 1.0,
+                size,
+                [480, 240],
+                false,
+                false,
+            );
+            if i == 0 {
+                assert!(events.contains(&Event::Changed));
+                assert!(events.contains(&Event::ButtonClick));
+            } else {
+                assert!(events.is_empty());
+            }
+        }
+        assert!(s.mods.is_on(0));
+        assert!(s.mods.is_on(1));
+        assert!(!s.mods.is_on(2));
+        assert_eq!(s.mods.serialize(), "mod.normal:true\n");
+        let row = rows[0];
+        ui.click(
+            &mut s,
+            &atlas,
+            row.x + 1.0,
+            row.y + 1.0,
+            size,
+            [480, 240],
+            false,
+            false,
+        );
+        assert!(!s.mods.is_on(0));
+        assert!(!ui.back(&mut s).contains(&Event::Close));
+        assert_eq!(ui.page(), Page::Main);
     }
 
     #[test]
