@@ -399,8 +399,51 @@ A **harness per mod**, generated from the tier:
 | deep | entity scenarios (spawn, tick N, positions and states, drops), and render captures where the look is the point, compared as images with a tolerance |
 
 The comparison skips vanilla 1.21.1-versus-26.3 differences: it normalises ids and components
-through the step-4 upgrader and compares only the mod's own ids and effects. The harness format
-is `tools/parity.py`'s, so the same runner, local or CI, runs vanilla and mod harnesses.
+through the step-4 upgrader and compares only the mod's own ids and effects.
+
+**Status: the data-tier harness runs.**
+
+```
+python3 tools/neoforge_oracle.py export --jars <mods> --deps <their libraries> --out <work>/oracle/facts.json
+cargo run -p horizon-port-pack -- carry <work> --resources .local/horizon-client/26.3
+python3 tools/mod_port_harness.py --work <work>      # or --jars/--deps to export first
+```
+
+- `tools/neoforge_oracle.py` installs a NeoForge server (21.1.259, ATM10's) under
+  `.local/neoforge-oracle/`, builds the exporter mod in `mods/horizon/src/neoforge-oracle/` (our code, dev
+  only), starts the server headless with the jars and writes, for every block of the mods'
+  namespaces and every vanilla block: the class chain, states, per-state hardness, light, tool
+  need, map colour, sounds, outline and collision shapes; drops for hand, diamond tools, shears
+  and silk touch; placement on a floor and a wall; BlockSetType and WoodType. Then items (class,
+  stack size, rarity, food), recipes (type, result, count, resolved ingredients) and tags. One run
+  with the seven mods below takes about 30 s.
+- `crates/horizon-client/examples/mod_port_probe.rs` builds the content root from the carried
+  mods and dumps what Horizon's loaders make of the same blocks, drops, recipes and tags.
+- `tools/mod_port_harness.py` compares them per mod (blocks, properties, sounds, shapes, drops,
+  placement against the template's in the oracle, vanilla tags, recipes, items) and writes
+  `<work>/mods/<id>/harness/result.json`. It maps 1.21.1 sound events to 26.3's through the
+  vanilla blocks both versions have (`block.metal.*` became `block.iron.*`) and ignores vanilla
+  items 1.21.1 did not have (pale oak in `#minecraft:logs`).
+
+The oracle needs the mods' jars, so it is not a `tools/parity.py` harness: it runs where the
+user's jars are, and its facts and results stay in the work folder. The first real mods
+(ATM10's own jars from Modrinth, all MIT; checks passed / compared):
+
+| mod | blocks | properties | sounds | shapes | drops | placement | tags | recipes | items |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Macaw's Trapdoors 1.1.5 | 179/179 | 11456/11456 | 11456/11456 | 11456/11456 | 10024/10024 | 358/358 | 534/534 | 191/191 | 191/191 |
+| Macaw's Doors 1.1.5 | 239/245 | 15296/15296 | 15296/15296 | 12352/15296 | 13384/13384 | 478/478 | 941/941 | 257/257 | 251/257 |
+| Macaw's Fences and Walls 1.2.1 | 150/180 | 4800/4800 | 4800/4800 | 4032/4800 | 33600/33600 | 300/300 | 432/432 | 222/222 | 150/180 |
+| Macaw's Paths and Pavings 1.1.1 | 234/315 | 4602/4602 | 4602/4602 | 4472/4602 | 6734/6734 | 468/468 | 416/416 | 315/315 | 234/315 |
+| Glassential-renewed 3.4.7 | 105/114 | 5177/5177 | 5177/5177 | 4727/5177 | 6447/6447 | 210/210 | 105/105 | 143/143 | 106/115 |
+| Factory Blocks 1.4.0 | 42/49 | 42/42 | 0/42 | 42/42 | 294/294 | 84/84 | 42/42 | 1/1 | 42/49 |
+| Cloud Glass 1.1.0 | 16/16 | 16/16 | 16/16 | 0/16 | 112/112 | 32/32 | – | 31/31 | 16/16 |
+
+What fails is what API 0.2 cannot express yet: shapes of their own (Japanese doors, hedges,
+paths a sixteenth high, glass without collision), sound events of the mod's own
+(`factory_blocks:metal_sound`), and blocks whose vanilla class has no vanilla block with the
+same states (garage doors, double gates, engraved and facing paths, fans). Every drop, recipe
+and tag of the declared blocks matches.
 
 ### 7. Coverage report
 
