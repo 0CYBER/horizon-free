@@ -2794,7 +2794,7 @@ impl Game<'_> {
                                     self.apply_effect_action(a);
                                 }
                             } else {
-                                self.potions.effects.add(
+                                self.add_player_effect(
                                     horizon_client::effects::EffectInstance::new(
                                         def.id,
                                         eff.duration,
@@ -2808,12 +2808,14 @@ impl Game<'_> {
             }
             ConsumeEffect::ClearAllEffects => {
                 self.potions.effects.clear();
+                self.apply_effect_status();
             }
             ConsumeEffect::RemoveEffects(to_remove) => {
                 for target in to_remove {
                     let id = target.trim_start_matches("minecraft:");
                     self.potions.effects.list.retain(|e| e.id != id);
                 }
+                self.apply_effect_status();
             }
             ConsumeEffect::TeleportRandomly => {}
             ConsumeEffect::PlaySound(sound) => {
