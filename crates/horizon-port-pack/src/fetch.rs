@@ -139,6 +139,28 @@ pub fn fetch(
         }
         fetched.files.push(o);
     }
+    // The loader's own data (its convention tags), from its own repository.
+    if let Some((dest, url)) = crate::worldgen::loader_jar(work, &pack.loader, &pack.loader_version)
+        .filter(|(dest, _)| !dest.exists())
+    {
+        let sha1 = ureq::get(&format!("{url}.sha1"))
+            .set("User-Agent", modrinth::AGENT)
+            .call()
+            .ok()
+            .and_then(|r| r.into_string().ok())
+            .map(|s| s.trim().to_owned());
+        let made = dest.parent().map(fs::create_dir_all);
+        match made
+            .unwrap_or(Ok(()))
+            .map_err(|e| e.to_string())
+            .and_then(|()| download(&url, sha1.as_deref(), &dest))
+        {
+            Ok(()) => log(format!("loader: {}", dest.display())),
+            Err(e) => log(format!(
+                "loader: {e} (structures keep only vanilla biome tags)"
+            )),
+        }
+    }
     write_json(&work.join("fetch.json"), &fetched)?;
     log(format!(
         "jars: {} downloaded, {} copied, {} already here, {} need a CurseForge key, {} not found, {} failed",
