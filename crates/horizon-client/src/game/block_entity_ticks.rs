@@ -57,9 +57,13 @@ impl Game<'_> {
         }
         self.update_song_volumes();
         self.scan_for_hearts();
-        self.client_tick_spawners(&spawners);
-        for key in trial_spawners {
-            self.client_tick_trial_spawner(key);
+        // The client ticks (particles, sounds, the turning mob) are for a
+        // window; a dedicated or integrated server has none.
+        if self.options.dedicated.is_none() {
+            self.client_tick_spawners(&spawners);
+            for key in trial_spawners {
+                self.client_tick_trial_spawner(key);
+            }
         }
         Ok(())
     }

@@ -121,7 +121,8 @@ impl Game<'_> {
             .put(key, BlockEntity::Vault(vault));
         Some(self.vault_events(key, events).map(|()| out))
     }
-    /// The server tick of the vault at `key`, then its client tick.
+    /// The server tick of the vault at `key`, then its client tick when there
+    /// is a window.
     pub(super) fn tick_vault(&mut self, key: Pos) -> Result<()> {
         let pos = [key.0, key.1, key.2];
         let ticked = self.with_vault(key, |v, l, random, state, ominous, roll, events| {
@@ -130,7 +131,9 @@ impl Game<'_> {
         if let Some(result) = ticked {
             result?;
         }
-        self.client_tick_vault(key);
+        if self.options.dedicated.is_none() {
+            self.client_tick_vault(key);
+        }
         Ok(())
     }
     /// `VaultBlock.useItemOn` with `held` in the hand that acts: true when the
