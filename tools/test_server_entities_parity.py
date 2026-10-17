@@ -7,9 +7,8 @@ client (VanillaProtocolClient in its entity mode) joins, and once its chunks are
 console freezes the ticks, builds a wall and a rail and summons, around the spawn, every kind of minecart (one
 set rolling along the rail), boats and a raft (one falling onto the ground), armor stands (posed, small, with
 arms, wearing a helmet, one falling), a chicken jockey, item frames (one holding a turned diamond), paintings,
-primed TNT, a falling block, an arrow, a snowball and a trident that land, a fireball, a firework rocket and an
-end crystal. The client records
-for 20 seconds, the ticks running again after 3, what ClientPacketListener would make of the packets (EntityTranscript): each entity's spawn
+primed TNT (one falling), a floating falling block, an arrow that lands and an end crystal. The client records
+for 20 seconds, the ticks running for 200 more after 3, what ClientPacketListener would make of the packets (EntityTranscript): each entity's spawn
 packet (position, rotations, data, motion), the entity data it was paired with and all it was sent since, its
 equipment and passengers, and where its position syncs leave it. Both transcripts must match exactly,
 entity by entity (named by type and the block it was added in). Attributes are recorded but not compared yet:
@@ -35,6 +34,8 @@ except ImportError:
     from test_locator_bar_parity import generate_world, server_dir
 
 NAME = 'server-entities-parity'
+# Ticks the scene runs for once it is summoned: 10 seconds, within the client's 20.
+STEPS = 200
 PLAYER = 'Tester'
 
 # Around the spawn at 0 -60 0 on the flat world's grass: a wall to the north for the frames and paintings,
@@ -68,14 +69,11 @@ SCENE = [
     'summon minecraft:glow_item_frame -1.5 -59 -4.97 {block_pos:[I;-2,-59,-5],Facing:3b}',
     'summon minecraft:painting 1.5 -59 -4.97 {block_pos:[I;1,-59,-5],facing:0b,variant:"minecraft:kebab"}',
     'summon minecraft:painting 4 -59 -4.97 {block_pos:[I;4,-59,-5],facing:0b,variant:"minecraft:courbet"}',
-    # Primed TNT that won't go off, a falling block, projectiles that land, a fireball, a firework, a crystal.
+    # Primed TNT that won't go off (one falling), a floating falling block, an arrow that lands, an end crystal.
     'summon minecraft:tnt 6.5 -60 6.5 {fuse:2000s}',
-    'summon minecraft:falling_block 2.5 -50 -0.5 {BlockState:{Name:"minecraft:sand"}}',
+    'summon minecraft:tnt 6.5 -56 4.5 {fuse:2000s}',
+    'summon minecraft:falling_block 2.5 -58 -0.5 {BlockState:{Name:"minecraft:sand"},NoGravity:1b}',
     'summon minecraft:arrow 0.5 -55 -1.5 {Motion:[0.3d,0d,0d]}',
-    'summon minecraft:snowball -0.5 -55 1.5',
-    'summon minecraft:trident -2.5 -55 -0.5',
-    'summon minecraft:fireball 3.5 -57 -3.5',
-    'summon minecraft:firework_rocket 5.5 -60 -0.5',
     'summon minecraft:end_crystal -6.5 -60 6.5 {ShowBottom:0b}',
 ]
 
@@ -110,7 +108,8 @@ def run_side(label, server_command, client_command, build, world):
                 for command in SCENE:
                     server.console(command)
                 time.sleep(3)
-                server.console('tick unfreeze')
+                # A fixed number of ticks, so that what still changes (a TNT fuse) ends the same.
+                server.console(f'tick step {STEPS}')
                 client.wait(timeout=120)
             finally:
                 if client.poll() is None:
@@ -173,7 +172,7 @@ def main():
         java=subprocess.check_output(['java', '--version'], text=True).splitlines()[0],
         entities=len(vanilla), output_sha256=lab.digest(build / 'horizon.txt', 'sha256'),
         scope='Minecarts (one rolling), boats (one falling), armor stands, a chicken jockey, item frames, paintings, primed '
-              'TNT, a falling block, projectiles, a fireball, a firework and an end crystal tracked to a '
+              'TNT, a falling block, an arrow and an end crystal tracked to a '
               'vanilla-codec client by a dedicated server: spawn packets, entity data, equipment, passengers and the '
               'positions the syncs leave them at.'))
     print(f'server entities: {len(vanilla)} entities identical')

@@ -221,6 +221,23 @@ impl Game<'_> {
                             });
                         }
                     }
+                    // PrimedTnt.readAdditionalSaveData: its fuse (80 when absent) and motion.
+                    "minecraft:tnt" => {
+                        if let Some(position) = entity_nbt::position(&tag) {
+                            let fuse = match tag.get("fuse") {
+                                Some(Tag::Short(f)) => i32::from(*f),
+                                _ => 80,
+                            };
+                            self.tnts.push(super::tnt::PrimedTnt {
+                                id: 0,
+                                position,
+                                previous: position,
+                                velocity: entity_nbt::motion(&tag),
+                                fuse,
+                                on_ground: matches!(tag.get("OnGround"), Some(Tag::Byte(1))),
+                            });
+                        }
+                    }
                     k if super::boats::any_boat_wood(k)
                         .is_some_and(|(wood, chest)| self.boat_models.has(wood, chest)) =>
                     {

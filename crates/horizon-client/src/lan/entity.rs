@@ -457,6 +457,52 @@ mod tests {
     }
 
     #[test]
+    fn fireballs_bundle_their_motion_with_their_power() {
+        let mut t = Tracker::default();
+        let mut e = state(0.0);
+        e.kind = "minecraft:fireball".into();
+        e.on_ground = false;
+        t.spawn(&e, 100, &Riding::default());
+        e.velocity = [0.0, 0.0, 0.5];
+        let out = t.update(&e, &Riding::default());
+        assert!(matches!(
+            out[..],
+            [
+                play::Clientbound::BundleDelimiter(_),
+                play::Clientbound::SetEntityMotion(_),
+                play::Clientbound::ProjectilePower(play::ProjectilePower { power, .. }),
+                play::Clientbound::BundleDelimiter(_),
+                play::Clientbound::MoveEntityPos(_),
+            ] if power == 0.1
+        ));
+    }
+
+    #[test]
+    fn arrows_send_position_and_rotation_every_update() {
+        let mut t = Tracker::default();
+        let mut e = state(0.0);
+        e.kind = "minecraft:arrow".into();
+        t.spawn(&e, 100, &Riding::default());
+        assert!(matches!(
+            t.update(&e, &Riding::default())[..],
+            [play::Clientbound::MoveEntityPosRot(_)]
+        ));
+    }
+
+    #[test]
+    fn precise_entities_sync_their_position() {
+        let mut t = Tracker::default();
+        let mut e = state(0.0);
+        e.kind = "minecraft:tnt".into();
+        e.precise = true;
+        t.spawn(&e, 100, &Riding::default());
+        assert!(matches!(
+            t.update(&e, &Riding::default())[..],
+            [play::Clientbound::EntityPositionSync(_)]
+        ));
+    }
+
+    #[test]
     fn landing_sends_a_position_sync() {
         let mut t = Tracker::default();
         let mut e = state(0.0);
