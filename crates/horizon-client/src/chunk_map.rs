@@ -76,7 +76,7 @@ impl<'a> IntoIterator for &'a ChunkMap {
     }
 }
 impl crate::light::LightWorld for ChunkMap {
-    fn state(&self, x: i32, y: i32, z: i32) -> Option<u16> {
+    fn state(&self, x: i32, y: i32, z: i32) -> Option<u32> {
         self.columns.state(x, y, z)
     }
     fn light(&self, x: i32, y: i32, z: i32) -> Option<u8> {

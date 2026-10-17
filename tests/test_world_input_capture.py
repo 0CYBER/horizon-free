@@ -67,13 +67,13 @@ struct Remote;
 struct Game {
     focused: bool, agent_pointer: bool, window: Option<Window>, mouse: Mouse,
     captured: bool, title: Option<()>, screen: Screen, remote: Option<Remote>,
-    mining: bool,
+    mining: bool, lan_acting: Option<u32>,
 }
 impl Default for Game {
     fn default() -> Self {
         Self { focused: true, agent_pointer: false, window: Some(Window::default()),
             mouse: Mouse::default(), captured: false, title: None,
-            screen: Screen::Playing, remote: None, mining: false }
+            screen: Screen::Playing, remote: None, mining: false, lan_acting: None }
     }
 }
 impl Game {

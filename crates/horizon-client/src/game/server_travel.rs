@@ -1,59 +1,81 @@
-//! A server's player between dimensions.
+//! A server's players between dimensions.
 //!
-//! The server holds one level at a time, as the in-frame game does. While a
-//! single player is online (single player on the server thread, or a world
-//! with one player in it) that level follows the player through Nether and
-//! End portals, and back to the Overworld when the player respawns. The swap
-//! is the in-frame path's (`switch_level`, the portal plans, the arrival
-//! search); the player hears it as `ServerPlayer.teleport` into another
-//! level: a Respawn packet keeping all data, then a teleport to the exit once
-//! the destination has loaded. With several players online the portals do
-//! not take anyone yet: that needs the server to hold every level.
+//! A server holds a level per dimension (game/levels.rs). A player who steps
+//! into a Nether or End portal moves to the destination's level, which opens
+//! if nobody was there: the swap is the in-frame path's portal plans and
+//! arrival search, and the player hears it as `ServerPlayer.teleport` into
+//! another level: a Respawn packet keeping all data, then a teleport to the
+//! exit once the destination has loaded around them.
 
-use super::nether_portal::PLAYER_DELAY;
+use super::nether_portal::{PLAYER_DELAY, Plan};
 use super::{Dim, Game, lan::LanHost};
 use horizon_client::lan::hub::TickCtx;
 use horizon_core::{geometry::Vec3, position::BlockPos};
 
-/// A trip under way: the level has changed and its chunks are loading
-/// around `target`.
+/// A trip under way: the player is in the destination's level, whose
+/// chunks are loading around `target`.
 pub(super) struct Trip {
     conn: u32,
+    dim: Dim,
     target: Vec3,
-    /// Through an End portal (or out of the End by respawning).
+    /// Through an End portal.
     end: bool,
+    /// The Nether portal plan, whose exit is found or built on arrival.
+    plan: Option<Plan>,
 }
 
-/// The lone player's box: Player's standing dimensions.
+/// A player's box: Player's standing dimensions.
 const WIDTH: f64 = 0.6;
 const HEIGHT: f64 = 1.8;
+
+impl Trip {
+    pub(super) fn is(&self, conn: u32) -> bool {
+        self.conn == conn
+    }
+}
 
 impl Game<'_> {
     /// Whether `conn` is between two levels: the server leaves its body
     /// alone until it arrives.
     pub(super) fn on_server_trip(&self, conn: u32) -> bool {
-        self.server_trip.as_ref().is_some_and(|t| t.conn == conn)
+        self.server_trips.iter().any(|t| t.conn == conn)
     }
 
-    /// Per server tick, after the guests' own: `Entity.handlePortal` for the
-    /// lone player (Nether portals count up their transition time, End
-    /// portals take it at once), or the arrival of the trip under way.
+    /// Per server tick in each level, after the guests' own: the arrivals of
+    /// the trips into this level, then `Entity.handlePortal` for each player
+    /// in it (Nether portals count up their transition time, End portals
+    /// take them at once).
     pub(super) fn tick_server_travel(&mut self, host: &mut LanHost) {
         if self.options.dedicated.is_none() {
             return;
         }
-        if self.server_trip.is_some() {
-            self.arrive_server_trip(host);
-            return;
+        self.arrive_server_trips(host);
+        let conns: Vec<u32> = host
+            .hub
+            .guests
+            .iter()
+            .filter(|g| host.hub.here(g) && g.loaded && !g.dead && !g.spectator())
+            .map(|g| g.conn)
+            .collect();
+        for conn in conns {
+            if self.on_server_trip(conn) {
+                continue;
+            }
+            // `Entity.portalProcess` and `portalCooldown` are the player's own.
+            let mut portal = host.play.entry(conn).or_default().portal;
+            std::mem::swap(&mut self.portals.player, &mut portal);
+            self.handle_server_portal(host, conn);
+            std::mem::swap(&mut self.portals.player, &mut portal);
+            host.play.entry(conn).or_default().portal = portal;
         }
-        let [g] = host.hub.guests.as_slice() else {
+    }
+
+    /// `Entity.handlePortal` for one player, whose portal state is in place.
+    fn handle_server_portal(&mut self, host: &mut LanHost, conn: u32) {
+        let Some(g) = host.hub.guest(conn) else {
             return;
         };
-        if !g.placed || !g.loaded || g.dead || g.spectator() {
-            return;
-        }
-        let (conn, at, invulnerable, sleeping) = (
-            g.conn,
+        let (at, invulnerable, sleeping) = (
             Vec3::new(g.position[0], g.position[1], g.position[2]),
             g.creative(),
             g.sleeping,
@@ -70,7 +92,7 @@ impl Game<'_> {
                 } else {
                     Dim::End
                 };
-                self.start_server_trip(host, conn, target, true);
+                self.start_server_trip(host, conn, target, None);
             }
             // Entity.setAsInsidePortal while cooling down restarts the cooldown.
             self.portals.player.cooldown = 10;
@@ -93,11 +115,10 @@ impl Game<'_> {
         if !self.may_enter(plan.dim) {
             return;
         }
-        self.portals.travel = Some(plan);
-        self.start_server_trip(host, conn, plan.dim, false);
+        self.start_server_trip(host, conn, plan.dim, Some(plan));
     }
 
-    /// A Nether portal block the lone player's box is in.
+    /// A Nether portal block a player's box is in.
     fn nether_portal_inside(&self, at: Vec3) -> Option<BlockPos> {
         let w = WIDTH / 2.0 - 1.0e-5;
         let lo = [at.x - w, at.y + 1.0e-5, at.z - w];
@@ -114,9 +135,16 @@ impl Game<'_> {
         None
     }
 
-    /// The level swap, and the player told it is in the new level at the
-    /// approximate exit while it loads.
-    fn start_server_trip(&mut self, host: &mut LanHost, conn: u32, target: Dim, end: bool) {
+    /// The player moves to `target`'s level (opened if nobody was there)
+    /// and is told it is there, at the approximate exit, while it loads. The
+    /// level whose tick is running is put back in place afterwards.
+    fn start_server_trip(
+        &mut self,
+        host: &mut LanHost,
+        conn: u32,
+        target: Dim,
+        plan: Option<Plan>,
+    ) {
         let Some(i) = host.hub.guests.iter().position(|g| g.conn == conn) else {
             return;
         };
@@ -124,105 +152,100 @@ impl Game<'_> {
         let from = Vec3::new(g.position[0], g.position[1], g.position[2]);
         let yaw = g.yaw;
         let source = self.dim;
+        let end = plan.is_none();
+        // Coordinates scale by 8 between the Overworld and the Nether; an
+        // End portal has fixed destinations.
+        let scale = match (source, target) {
+            (Dim::Overworld, Dim::Nether) | (Dim::End, Dim::Nether) => 1.0 / 8.0,
+            (Dim::Nether, Dim::Overworld) => 8.0,
+            _ => 1.0,
+        };
         self.end_portal_travel = end;
-        let switched = self.switch_level(target, from);
+        let scaled = self.end_destination(target).unwrap_or(Vec3::new(
+            from.x * scale,
+            from.y,
+            from.z * scale,
+        ));
         self.end_portal_travel = false;
-        let destination = match switched {
-            Ok(d) => d,
-            Err(e) => {
-                log::error!("could not open {}: {e}", target.id());
-                return;
-            }
+        if let Err(e) = self.enter_level(Some(host), target) {
+            log::error!("could not open {}: {e}", target.id());
+            return;
+        }
+        let destination = match plan {
+            Some(plan) => self.arrival_centre(&plan),
+            None => scaled,
         };
-        let destination = match self.portals.travel {
-            Some(plan) if !end => self.arrival_centre(&plan),
-            _ => destination,
-        };
-        host.hub.set_dimension(target.id());
         let at = [destination.x, destination.y, destination.z];
         let ctx = self.server_ctx();
         host.hub.change_level(i, at, yaw, &ctx);
         self.as_guest(host, conn, |g| g.trigger_dimension(source, target));
-        self.server_trip = Some(Trip {
+        self.server_trips.push(Trip {
             conn,
+            dim: target,
             target: destination,
             end,
+            plan,
         });
+        if let Err(e) = self.enter_level(Some(host), source) {
+            log::error!("could not reopen {}: {e}", source.id());
+        }
     }
 
-    /// Once the destination has loaded around the trip's target: the exit
-    /// (the Nether portal found or built, the End platform, the Overworld's
-    /// spawn column) and the teleport there.
-    fn arrive_server_trip(&mut self, host: &mut LanHost) {
-        let Some(trip) = self.server_trip.as_ref() else {
-            return;
-        };
-        let Some(i) = host.hub.guests.iter().position(|g| g.conn == trip.conn) else {
-            // They left on the way.
-            self.server_trip = None;
-            self.portals.travel = None;
-            return;
-        };
-        let (cx, cz) = (
-            (trip.target.x.floor() as i32) >> 4,
-            (trip.target.z.floor() as i32) >> 4,
-        );
-        if !(-2..=2).all(|dz| (-2..=2).all(|dx| self.streaming.is_lit(cx + dx, cz + dz))) {
-            return;
-        }
-        let Some(trip) = self.server_trip.take() else {
-            return;
-        };
-        self.resolve_arrivals();
-        let (position, yaw) = if trip.end {
-            match self.end_arrival(trip.target) {
-                Ok((at, yaw)) => (at, yaw.unwrap_or(host.hub.guests[i].yaw)),
-                Err(e) => {
-                    log::error!("End arrival: {e}");
-                    (trip.target, host.hub.guests[i].yaw)
-                }
+    /// The trips into the level in place whose destination has loaded
+    /// around their target: the exit (the Nether portal found or built, the
+    /// End platform, the Overworld's spawn column) and the teleport there.
+    fn arrive_server_trips(&mut self, host: &mut LanHost) {
+        let mut k = 0;
+        while k < self.server_trips.len() {
+            let trip = &self.server_trips[k];
+            let Some(i) = host.hub.guests.iter().position(|g| g.conn == trip.conn) else {
+                // They left on the way.
+                self.server_trips.remove(k);
+                continue;
+            };
+            let (cx, cz) = (
+                (trip.target.x.floor() as i32) >> 4,
+                (trip.target.z.floor() as i32) >> 4,
+            );
+            if trip.dim != self.dim
+                || !(-2..=2).all(|dz| (-2..=2).all(|dx| self.streaming.is_lit(cx + dx, cz + dz)))
+            {
+                k += 1;
+                continue;
             }
-        } else {
-            let plan = self.portals.travel.take();
-            let exit = plan.as_ref().and_then(|plan| self.nether_exit_portal(plan));
-            match (plan, exit) {
-                (Some(plan), Some(exit)) => {
-                    let (at, rotation) = self.arrival(&plan, exit);
-                    (at, host.hub.guests[i].yaw + rotation)
+            let trip = self.server_trips.remove(k);
+            self.resolve_arrivals();
+            let yaw = host.hub.guests[i].yaw;
+            let (position, yaw) = if trip.end {
+                match self.end_arrival(trip.target) {
+                    Ok((at, turned)) => (at, turned.unwrap_or(yaw)),
+                    Err(e) => {
+                        log::error!("End arrival: {e}");
+                        (trip.target, yaw)
+                    }
                 }
-                _ => (trip.target, host.hub.guests[i].yaw),
-            }
-        };
-        // Player.getDimensionChangingDelay.
-        self.portals.player.cooldown = 10;
-        let g = &mut host.hub.guests[i];
-        g.yaw = yaw;
-        // A new body at the exit: no fall distance or motion carried over.
-        g.motion = None;
-        host.hub
-            .teleport(i, Some([position.x, position.y, position.z]));
-    }
-
-    /// `PlayerList.respawn` away from the Overworld: the lone player's level
-    /// goes back to the Overworld first, where the world spawn is.
-    pub(super) fn respawn_level(&mut self, host: &mut LanHost) {
-        if self.options.dedicated.is_none() || self.dim == Dim::Overworld {
-            return;
+            } else {
+                let exit = trip
+                    .plan
+                    .as_ref()
+                    .and_then(|plan| self.nether_exit_portal(plan));
+                match (trip.plan, exit) {
+                    (Some(plan), Some(exit)) => {
+                        let (at, rotation) = self.arrival(&plan, exit);
+                        (at, yaw + rotation)
+                    }
+                    _ => (trip.target, yaw),
+                }
+            };
+            // Player.getDimensionChangingDelay.
+            host.play.entry(trip.conn).or_default().portal.cooldown = 10;
+            let g = &mut host.hub.guests[i];
+            g.yaw = yaw;
+            // A new body at the exit: no fall distance or motion carried over.
+            g.motion = None;
+            host.hub
+                .teleport(i, Some([position.x, position.y, position.z]));
         }
-        if host.hub.guests.len() != 1 {
-            return;
-        }
-        self.server_trip = None;
-        self.portals.travel = None;
-        self.end_portal_travel = true;
-        let from = self.spawn.unwrap_or(Vec3::ZERO);
-        let switched = self.switch_level(Dim::Overworld, from);
-        self.end_portal_travel = false;
-        if let Err(e) = switched {
-            log::error!("could not open the Overworld: {e}");
-            return;
-        }
-        host.hub.set_dimension(Dim::Overworld.id());
     }
 
     /// The hub's view of the server for packets sent outside its own tick.
@@ -243,6 +266,7 @@ impl Game<'_> {
             },
             tick_rate: self.clock.rate(),
             tick_frozen: self.clock.frozen(),
+            collision: Some(self.collision),
         }
     }
 }

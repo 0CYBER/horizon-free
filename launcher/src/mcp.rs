@@ -37,7 +37,8 @@ fn tools() -> Value {
           "inputSchema": { "type": "object", "properties": { "version": version,
             "world": { "type": "string", "description": "Open or create this world (a folder under saves) at once." },
             "creative": { "type": "boolean", "description": "Creative mode for a new world." },
-            "offscreen": { "type": "boolean", "description": "Render without showing a window (game_screenshot still works)." } } } },
+            "offscreen": { "type": "boolean", "description": "Render without showing a window (game_screenshot still works)." },
+            "args": { "type": "array", "items": { "type": "string" }, "description": "Extra game arguments, passed through as-is (for example \"--server-thread\")." } } } },
         { "name": "start_server", "description": "Start a Horizon dedicated server. It runs until stop_server or the end of this MCP session. Requires agreeing to the Minecraft EULA.",
           "inputSchema": { "type": "object", "properties": { "version": version, "dir": { "type": "string", "description": "The server's folder. Default: the launcher's server folder." }, "accept_eula": { "type": "boolean", "description": "Agree to the Minecraft EULA (https://aka.ms/MinecraftEULA) on the player's behalf. Only with their consent." } } } },
         { "name": "server_command", "description": "Send a console command to the running server (for example \"list\" or \"say hello\"), and return the lines it printed in reply.",
@@ -165,6 +166,9 @@ impl Session {
                     if args.get(flag).and_then(Value::as_bool).unwrap_or(false) {
                         cmd.arg(format!("--{flag}"));
                     }
+                }
+                if let Some(extra) = args.get("args").and_then(Value::as_array) {
+                    cmd.args(extra.iter().filter_map(Value::as_str));
                 }
                 let client = Logged::start(Job::Client, cmd)?;
                 // Started once its control socket answers, as horizon-ctl launch waits.

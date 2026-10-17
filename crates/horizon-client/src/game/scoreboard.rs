@@ -130,7 +130,7 @@ impl Game<'_> {
     /// `ScoreHolder.getScoreboardName`: the player's name, an entity's UUID.
     pub(super) fn holder_name(&mut self, t: Target) -> Option<String> {
         match t {
-            Target::Player => Some(PLAYER_NAME.to_owned()),
+            Target::Player => Some(self.acting_player_name().to_owned()),
             Target::Mob(id) | Target::Item(id) => Some(uuid_text(self.uuid_for(id))),
             _ => None,
         }
@@ -146,7 +146,7 @@ impl Game<'_> {
     }
     /// The entity with the given scoreboard name.
     fn target_of_holder(&self, name: &str) -> Option<Target> {
-        if name == PLAYER_NAME {
+        if name == self.acting_player_name() {
             return Some(Target::Player);
         }
         let uuid = uuid_from_text(name).filter(|_| name.len() == 36)?;
@@ -379,8 +379,9 @@ impl Game<'_> {
     /// `ServerPlayer.die`: the death count.
     pub(super) fn score_player_died(&mut self) {
         let display = self.player_display_comp();
+        let me = self.acting_player_name().to_owned();
         let board = &mut self.score.board;
-        board.for_all_objectives_with(sb::CRITERIA_DEATH_COUNT, PLAYER_NAME, Some(&display), |v| {
+        board.for_all_objectives_with(sb::CRITERIA_DEATH_COUNT, &me, Some(&display), |v| {
             v.wrapping_add(1)
         });
         // A respawned player has everything to record again.
@@ -390,25 +391,21 @@ impl Game<'_> {
     pub(super) fn score_player_killed(&mut self, victim: Target) {
         let victim_name = self.holder_name(victim);
         let display = self.player_display_comp();
+        let me = self.acting_player_name().to_owned();
         let board = &mut self.score.board;
         let inc = |v: i32| v.wrapping_add(1);
-        board.for_all_objectives_with(sb::CRITERIA_TOTAL_KILLS, PLAYER_NAME, Some(&display), inc);
+        board.for_all_objectives_with(sb::CRITERIA_TOTAL_KILLS, &me, Some(&display), inc);
         if victim == Target::Player {
-            board.for_all_objectives_with(
-                sb::CRITERIA_PLAYER_KILLS,
-                PLAYER_NAME,
-                Some(&display),
-                inc,
-            );
+            board.for_all_objectives_with(sb::CRITERIA_PLAYER_KILLS, &me, Some(&display), inc);
         }
         let color_of =
             |board: &Scoreboard, name: &str| board.players_team(name).and_then(|t| t.color.clone());
         if let Some(victim_name) = victim_name {
             if let Some(color) = color_of(board, &victim_name) {
                 let criteria = format!("teamkill.{color}");
-                board.for_all_objectives_with(&criteria, PLAYER_NAME, Some(&display), inc);
+                board.for_all_objectives_with(&criteria, &me, Some(&display), inc);
             }
-            if let Some(color) = color_of(board, PLAYER_NAME) {
+            if let Some(color) = color_of(board, &me) {
                 let criteria = format!("killedByTeam.{color}");
                 board.for_all_objectives(&criteria, &victim_name, inc);
             }
@@ -430,7 +427,7 @@ impl Game<'_> {
         self.score.board.players_team(&uuid_text(*uuid))
     }
     pub(super) fn player_team(&self) -> Option<&sb::Team> {
-        self.score.board.players_team(PLAYER_NAME)
+        self.score.board.players_team(self.acting_player_name())
     }
     /// The teams of the player and of the mobs on one (empty without teams).
     pub(super) fn mob_teams(&self) -> horizon_client::mobs::Teams {
@@ -464,16 +461,17 @@ impl Game<'_> {
     }
     /// `Player.getDisplayName`: the name with the team's prefix, suffix and colour.
     pub(super) fn player_display_comp(&self) -> Comp {
-        let name = literal(PLAYER_NAME);
+        let name = literal(self.acting_player_name());
         match self.player_team() {
             Some(t) => t.formatted_name_comp(&name),
             None => name,
         }
     }
     pub(super) fn player_display_text(&self) -> Text {
+        let name = Text::literal(self.acting_player_name());
         match self.player_team() {
-            Some(t) => t.formatted_name(Text::literal(PLAYER_NAME)),
-            None => Text::literal(PLAYER_NAME),
+            Some(t) => t.formatted_name(name),
+            None => name,
         }
     }
 
@@ -686,7 +684,7 @@ impl Env for GameEnv<'_, '_> {
             .collect()
     }
     fn named(&mut self, name: &str) -> Holder {
-        if name.eq_ignore_ascii_case(PLAYER_NAME) && self.g.player.is_some() {
+        if name.eq_ignore_ascii_case(self.g.acting_player_name()) && self.g.player.is_some() {
             return self
                 .g
                 .holder_for(Target::Player)
@@ -703,7 +701,7 @@ impl Env for GameEnv<'_, '_> {
             None => Some(Target::Player),
         }?;
         let name = match entity {
-            Target::Player => PLAYER_NAME.to_owned(),
+            Target::Player => self.g.acting_player_name().to_owned(),
             Target::Mob(id) | Target::Item(id) => uuid_text(self.g.uuid_for(id)),
             _ => return None,
         };

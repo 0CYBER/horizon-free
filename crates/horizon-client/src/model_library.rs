@@ -42,25 +42,52 @@ impl ParsedModels {
 
     /// Blocks require every referenced resource, including parents. Items instead
     /// skip broken resources and use the resolver's missing-model fallback.
-    pub(crate) fn block_library(
+    pub(crate) fn block_library(&self, root: &Path, pending: Vec<String>) -> Result<ModelLibrary> {
+        self.block_models(root, pending, false)
+    }
+    /// [`Self::block_library`], but a model that does not read takes the
+    /// built-in missing model, logged, as vanilla's model discovery does
+    /// ("Missing block model"). Mods' content gets this; vanilla's resources
+    /// always read.
+    pub(crate) fn block_library_or_missing(
+        &self,
+        root: &Path,
+        pending: Vec<String>,
+    ) -> Result<ModelLibrary> {
+        self.block_models(root, pending, true)
+    }
+    fn block_models(
         &self,
         root: &Path,
         mut pending: Vec<String>,
+        or_missing: bool,
     ) -> Result<ModelLibrary> {
         let mut models = BTreeMap::new();
+        let mut skipped = std::collections::BTreeSet::new();
         while let Some(name) = pending.pop() {
-            if models.contains_key(&name) {
+            if models.contains_key(&name) || skipped.contains(&name) {
                 continue;
             }
             let model = match self.models.get(&name) {
                 Some(model) => Arc::clone(model),
                 None => {
-                    let (namespace, path) =
-                        name.split_once(':').ok_or("invalid model identifier")?;
-                    let text = fs::read_to_string(
-                        root.join(format!("assets/{namespace}/models/{path}.json")),
-                    )?;
-                    Arc::new(CuboidModel::from_json(&text)?)
+                    let read = || -> Result<CuboidModel> {
+                        let (namespace, path) =
+                            name.split_once(':').ok_or("invalid model identifier")?;
+                        let text = fs::read_to_string(
+                            root.join(format!("assets/{namespace}/models/{path}.json")),
+                        )?;
+                        Ok(CuboidModel::from_json(&text)?)
+                    };
+                    match read() {
+                        Ok(model) => Arc::new(model),
+                        Err(e) if or_missing => {
+                            log::warn!("Horizon: missing block model {name}: {e}");
+                            skipped.insert(name);
+                            continue;
+                        }
+                        Err(e) => return Err(e),
+                    }
                 }
             };
             if let Some(parent) = &model.parent {
@@ -141,6 +168,13 @@ mod tests {
                     .to_string()
             };
             assert_eq!(load(&direct), load(&parsed));
+            // Mods' content: vanilla's missing model instead of an error.
+            let lenient = parsed.block_library_or_missing(&fixture.0, vec![name.into()])?;
+            assert_eq!(
+                format!("{:?}", lenient.resolve(name)?.elements()),
+                format!("{:?}", lenient.resolve(MISSING_MODEL)?.elements()),
+                "{name}"
+            );
         }
         let items = parsed.into_item_library()?;
         let block = shared.resolve("horizon:nested/child")?;

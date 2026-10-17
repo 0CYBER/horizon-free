@@ -53,7 +53,9 @@ impl Preset {
 /// How the swapchain presents frames.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum PresentMode {
-    /// Follow vanilla's VSync option (Mailbox or Fifo on, Immediate off).
+    /// Vanilla's choice: Fifo with VSync on, else the first of Immediate,
+    /// Mailbox and Fifo the surface supports. The other modes apply only
+    /// with VSync off: VSync on always presents with Fifo.
     #[default]
     Auto,
     Fifo,

@@ -266,17 +266,17 @@ fn refuses_unknown_templates_and_vanilla_ids() {
 }
 
 #[test]
-fn refuses_more_states_than_chunks_hold() {
+fn refuses_more_states_than_a_world_holds() {
     let Some(base) = prepared() else {
         return;
     };
     let scratch = std::env::temp_dir().join(format!("horizon-mod-states-{}", std::process::id()));
     let _ = fs::remove_dir_all(&scratch);
     let mut m = ruby_mod(&scratch.join("ruby"));
-    // Redstone wire has 1296 states: 40 copies pass any game's 65536.
+    // Redstone wire has 1296 states: 810 copies pass 2^20 with any game.
     let mut wire = m.content.blocks[0].clone();
     wire.template = "minecraft:redstone_wire".into();
-    for i in 0..40 {
+    for i in 0..810 {
         let mut b = wire.clone();
         b.id = format!("ruby:wire_{i}");
         m.content.blocks.push(b);
@@ -284,10 +284,30 @@ fn refuses_more_states_than_chunks_hold() {
     let e = build(&base, std::slice::from_ref(&m), &scratch.join("out")).unwrap_err();
     assert!(
         e.to_string()
-            .contains("more than the 65536 chunks can hold"),
+            .contains("more than the 1048576 a world can hold"),
         "{e}"
     );
     assert!(e.to_string().contains("the mods: ruby "), "{e}");
+    fs::remove_dir_all(&scratch).unwrap();
+}
+
+#[test]
+fn builds_past_sixteen_bit_states() {
+    let Some(base) = prepared() else {
+        return;
+    };
+    let scratch = std::env::temp_dir().join(format!("horizon-mod-wide-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    let mut m = ruby_mod(&scratch.join("ruby"));
+    // 40 redstone wires: 51,840 states, past 65,536 with vanilla's 35,723.
+    let mut wire = m.content.blocks[0].clone();
+    wire.template = "minecraft:redstone_wire".into();
+    for i in 0..40 {
+        let mut b = wire.clone();
+        b.id = format!("ruby:wire_{i}");
+        m.content.blocks.push(b);
+    }
+    build(&base, std::slice::from_ref(&m), &scratch.join("out")).unwrap();
     fs::remove_dir_all(&scratch).unwrap();
 }
 

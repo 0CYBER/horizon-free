@@ -314,14 +314,12 @@ impl Game<'_> {
         let mut next = Instant::now();
         while !flags.stop.load(Ordering::Relaxed) {
             self.run_tasks();
-            self.update_dedicated_streaming();
-            self.update_world();
             if flags.paused.load(Ordering::Relaxed) {
                 // Only the connections run.
-                self.tick_lan();
+                self.tick_server(true)?;
             } else {
                 let started = Instant::now();
-                self.tick()?;
+                self.tick_server(false)?;
                 self.debug_charts.log_tick(started, started.elapsed());
                 flags.smoothed_tick_ms.store(
                     self.debug_charts.smoothed_tick_ms.to_bits(),

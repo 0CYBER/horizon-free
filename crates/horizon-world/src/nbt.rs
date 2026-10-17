@@ -100,11 +100,13 @@ impl Default for Limits {
 impl Limits {
     /// The prepared per-state block tables (`cached-collision.nbt`,
     /// `block-properties.nbt`, ...): trusted files with a row per block
-    /// state, which content mods' states grow past the default caps.
+    /// state, which content mods' states grow past the default caps
+    /// (vanilla's 35,723 states fill about a tenth of these; ATM10's ported
+    /// mods, 193,762 states, about half).
     pub fn tables() -> Self {
         Self {
-            max_bytes: 1 << 28,
-            max_nodes: 16_000_000,
+            max_bytes: 1 << 30,
+            max_nodes: 128_000_000,
             max_depth: 512,
         }
     }

@@ -2,8 +2,11 @@
 //! a frame binds it once and draws every section with indirect multi-draw.
 use std::collections::BTreeMap;
 
-/// Ranges are rounded up to this many vertices to limit fragmentation.
-const GRAIN: u64 = 256;
+/// Ranges are rounded up to this many vertices to limit fragmentation, and
+/// start at multiples of it (`flat` names sections by these blocks).
+pub const GRAIN: u64 = 256;
+/// The largest page, in bytes.
+pub const PAGE_BYTES: u64 = 256 << 20;
 
 /// Free vertex ranges: start -> length, never adjacent.
 #[derive(Debug, PartialEq)]
@@ -65,8 +68,14 @@ impl Arena {
     pub fn new(device: &wgpu::Device, stride: u64, capacity: u64) -> Self {
         Self::with_usage(device, stride, capacity, wgpu::BufferUsages::VERTEX)
     }
-    pub fn indices(device: &wgpu::Device, capacity: u64) -> Self {
-        Self::with_usage(device, 4, capacity, wgpu::BufferUsages::INDEX)
+    /// Sorted translucent indices; `storage` when compute passes read them.
+    pub fn indices(device: &wgpu::Device, capacity: u64, storage: bool) -> Self {
+        let usage = if storage {
+            wgpu::BufferUsages::INDEX | wgpu::BufferUsages::STORAGE
+        } else {
+            wgpu::BufferUsages::INDEX
+        };
+        Self::with_usage(device, 4, capacity, usage)
     }
     fn with_usage(
         device: &wgpu::Device,
@@ -75,7 +84,7 @@ impl Arena {
         usage: wgpu::BufferUsages,
     ) -> Self {
         // 256 MiB pages, or less where the device's buffers are smaller.
-        let bytes = device.limits().max_buffer_size.min(256 << 20);
+        let bytes = device.limits().max_buffer_size.min(PAGE_BYTES);
         let page_limit = (bytes / stride) / GRAIN * GRAIN;
         let capacity = capacity.next_multiple_of(GRAIN).min(page_limit);
         Self {
@@ -131,6 +140,13 @@ impl Arena {
     /// Bytes of every page's buffer.
     pub fn bytes(&self) -> u64 {
         self.pages.iter().flatten().map(|p| p.capacity).sum::<u64>() * self.stride
+    }
+    /// The most vertices a page holds.
+    pub fn page_vertices(&self) -> u64 {
+        self.page_limit
+    }
+    pub fn has_page(&self, page: u32) -> bool {
+        self.pages.get(page as usize).is_some_and(Option::is_some)
     }
     pub fn buffer(&self, page: u32) -> &wgpu::Buffer {
         &self.pages[page as usize]
@@ -338,7 +354,7 @@ mod tests {
         };
         for mut arena in [
             Arena::new(&device, 28, GRAIN),
-            Arena::indices(&device, GRAIN),
+            Arena::indices(&device, GRAIN, false),
         ] {
             arena.alloc(&device, &queue, GRAIN).unwrap();
             assert_eq!(arena.bytes(), arena.stride * GRAIN);
@@ -397,7 +413,7 @@ mod tests {
         {
             return;
         }
-        let mut arena = Arena::indices(&device, GRAIN);
+        let mut arena = Arena::indices(&device, GRAIN, false);
         let (page, start) = arena.alloc(&device, &queue, GRAIN).unwrap();
         queue.write_buffer(arena.buffer(page), start * 4, &7u32.to_le_bytes());
         arena.video_memory_full = true;
@@ -422,7 +438,7 @@ mod tests {
         let Some((device, queue)) = device() else {
             return;
         };
-        let mut arena = Arena::indices(&device, GRAIN);
+        let mut arena = Arena::indices(&device, GRAIN, false);
         arena.alloc(&device, &queue, GRAIN).unwrap();
         arena.video_memory_full = true;
         // Without mappable primary buffers nothing can spill: the request
