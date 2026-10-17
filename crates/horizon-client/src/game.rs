@@ -5617,7 +5617,7 @@ impl Game<'_> {
                     .block(mining.pos[0], mining.pos[1], mining.pos[2]);
                 self.res
                     .block_entity_render
-                    .render_banner_breaking(&scene, mining.pos, state.0, &mut out);
+                    .render_breaking(&scene, mining.pos, state.0, &mut out);
             }
         }
         // Experience orbs (ExperienceOrbRenderer): pulsing billboards from a 4x4 icon sheet.
